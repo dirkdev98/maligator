@@ -23,6 +23,7 @@ import type {
 	SemanticEpochFamily,
 	WorldFactId,
 } from "../shared/compiler-facts.ts";
+import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import {
 	authorityFallback,
 	normalizeFactRequirements,
@@ -68,6 +69,16 @@ import {
 import type { CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
+	CORE_CALL_EFFECT_SUMMARY_FACT,
+	analyzeCoreProgramSummaries,
+	coreCallSummaryDigest,
+	coreCallSummaryFactValue,
+	coreFunctionEffectSummaries,
+	coreModuleEffectSummaries,
+	deriveCoreCallEffectRefinement,
+} from "./core-ir-summaries.ts";
+import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
+import {
 	CoreIrVerificationError,
 	verifyCoreFunction,
 	verifyCoreProgram,
@@ -82,6 +93,8 @@ import type {
 	CoreAttributeValue,
 	CoreEdge,
 	CoreEffectDomain,
+	CoreFact,
+	CoreFactId,
 	CoreFunction,
 	CoreImmediate,
 	CoreInstruction,
@@ -4785,6 +4798,21 @@ export class CoreAnalysisManager {
 	readonly #memory = new WeakMap<CoreFunction, CoreMemoryVersions>();
 	readonly #provenance = new WeakMap<CoreFunction, CoreProvenance>();
 	readonly #loopInductions = new WeakMap<CoreFunction, CoreLoopInductionAnalysis>();
+	/**
+	 * Program-level analyses cannot key on the program or its function array: the
+	 * driver rebuilds both for every pass, so a `WeakMap` would never hit. The
+	 * cache first recognizes the exact per-pass program object in O(1), then
+	 * compares function identities once when the driver constructs the next pass's
+	 * program. That retains an analysis across unchanged passes without turning N
+	 * function callbacks into N whole-array scans.
+	 */
+	#summaries:
+		| {
+				readonly program: CoreProgram;
+				readonly functions: ReadonlyArray<CoreFunction>;
+				readonly analysis: CoreProgramSummaries;
+		  }
+		| undefined;
 
 	constructor(stringConstants: ReadonlyArray<ReadonlyArray<number>> = []) {
 		this.#stringConstants = stringConstants;
@@ -4823,6 +4851,22 @@ export class CoreAnalysisManager {
 			analysis = coreMemoryVersions(fn, this.controlFlow(fn), memoryResolution(this, fn));
 			this.#memory.set(fn, analysis);
 		}
+		return analysis;
+	}
+
+	summaries(program: CoreProgram): CoreProgramSummaries {
+		const cached = this.#summaries;
+		if (cached?.program === program) return cached.analysis;
+		if (
+			cached !== undefined &&
+			cached.functions.length === program.functions.length &&
+			cached.functions.every((fn, index) => fn === program.functions[index])
+		) {
+			this.#summaries = { ...cached, program };
+			return cached.analysis;
+		}
+		const analysis = analyzeCoreProgramSummaries(program, coreOpcodeRegistry);
+		this.#summaries = { program, functions: program.functions, analysis };
 		return analysis;
 	}
 
@@ -6996,6 +7040,120 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 };
 
 /**
+ * Narrow an ordinary call to what its callee provably does.
+ *
+ * The proof is the joined summary of a finite, closed target set: every function
+ * the bounded target lattice says this site can reach, with the call's own frame
+ * cost folded in. `deriveCoreCallEffectRefinement` decides which baseline
+ * components that claim licenses dropping, per component, and refuses when the
+ * summary is not strictly narrower than the opcode's baseline.
+ *
+ * Placed before the memory passes on purpose: the whole consumer surface is code
+ * that already exists. `coreInstructionEffects` is the single funnel, so a call
+ * that no longer claims to run user code stops being a universal barrier for
+ * memory SSA, which is what lets forwarding, dead-store elimination, loop
+ * invariance, and partial redundancy cross it without any of them learning about
+ * summaries.
+ *
+ * The pass also revalidates its own earlier refinements, so a graph the optimizer
+ * changed converges on refinements the current summaries still license instead of
+ * carrying a claim to the verifier that has since gone stale.
+ */
+const refineDirectCallEffects: CoreFunctionPass = {
+	name: "refine-direct-call-effects",
+	ablation: "interprocedural",
+	run(fn, analyses, program) {
+		const summaries = analyses.summaries(program);
+		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const retained = new Set<CoreFactId>();
+		const added: Array<CoreFact> = [];
+		let nextFact = nextFactId(fn);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					const current = instruction.effectRefinement;
+					const ownsCurrent =
+						current !== undefined &&
+						facts.get(current.proof)?.kind === CORE_CALL_EFFECT_SUMMARY_FACT;
+					// A region certificate proves a property of this exact instruction, and
+					// another producer's refinement is not this pass's to reconsider.
+					if (protectedInstructions.has(instruction.id)) {
+						if (ownsCurrent) retained.add(current.proof);
+						return instruction;
+					}
+					if (current !== undefined && !ownsCurrent) return instruction;
+					const claim =
+						instruction.opcode === "call"
+							? summaries.callSite(fn.functionIndex, instruction.id)
+							: undefined;
+					const baseline = coreOpcodeRegistry.require(instruction.opcode).effects;
+					const refined =
+						claim === undefined
+							? undefined
+							: deriveCoreCallEffectRefinement(baseline, claim);
+					if (refined === undefined || claim === undefined) {
+						if (current === undefined) return instruction;
+						changed = true;
+						return withoutEffectRefinement(instruction);
+					}
+					const digest = coreCallSummaryDigest(claim);
+					if (current !== undefined) {
+						const fact = facts.get(current.proof)!;
+						if (
+							fact.validity.kind === "summary" &&
+							fact.validity.digest === digest &&
+							effectSummariesEqual(current.effects, refined)
+						) {
+							retained.add(current.proof);
+							return instruction;
+						}
+					}
+					const proof = coreFactId(nextFact++);
+					added.push({
+						id: proof,
+						kind: CORE_CALL_EFFECT_SUMMARY_FACT,
+						value: coreCallSummaryFactValue(claim),
+						validity: { kind: "summary", digest },
+						obligations: [],
+						origin: "core-callee-summary",
+					});
+					changed = true;
+					return { ...instruction, effectRefinement: { effects: refined, proof } };
+				}),
+			}),
+		);
+		if (!changed) return fn;
+		return {
+			...fn,
+			blocks,
+			facts: [
+				...fn.facts.filter(
+					(fact) => fact.kind !== CORE_CALL_EFFECT_SUMMARY_FACT || retained.has(fact.id),
+				),
+				...added,
+			],
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
+function withoutEffectRefinement(instruction: CoreInstruction): CoreInstruction {
+	return {
+		id: instruction.id,
+		opcode: instruction.opcode,
+		inputs: instruction.inputs,
+		outputs: instruction.outputs,
+		attributes: instruction.attributes,
+		...(instruction.sourcePosition === undefined
+			? {}
+			: { sourcePosition: instruction.sourcePosition }),
+	};
+}
+
+/**
  * Families whose cells can carry a value from one program point to another.
  *
  * A global slot, a captured slot, and the activation's `this` binding are
@@ -9166,6 +9324,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	canonicalizeLoops,
 	foldStaticPropertyKeys,
 	refineOwnDataCellAccesses,
+	refineDirectCallEffects,
 	forwardMemoryAccesses,
 	eliminateDeadStores,
 	loopInvariantCodeMotion,
@@ -9462,6 +9621,66 @@ export function executeCoreOptimizations(
 		}
 		if (!roundChanged) break;
 	}
+	// A later pass in the last allowed round can change a callee value or make a
+	// transitive summary more precise after the round's summary pass has run. Give
+	// summary-owned facts one final refresh before region selection freezes exact
+	// instruction snapshots. This is proof maintenance only: the normal in-round
+	// invocation is the one whose refinements feed the memory optimizers.
+	if (options.ablations?.has("interprocedural") !== true) {
+		const refreshBefore = tracedMetrics;
+		const refreshProgram = { ...workingProgram, functions };
+		let refreshChanged = false;
+		functions = functions.map((fn) => {
+			const candidate = acceptPassResult(
+				fn,
+				refineDirectCallEffects.run(fn, analyses, refreshProgram),
+				verification,
+				{
+					stage: "fixpoint",
+					pass: "refresh-direct-call-effects",
+					round: maxRounds,
+					functionIndex: fn.functionIndex,
+				},
+			);
+			const functionChanged = candidate !== fn;
+			traces.push({
+				name: "refresh-direct-call-effects",
+				round: maxRounds,
+				changed: functionChanged,
+			});
+			if (functionChanged) refreshChanged = true;
+			return candidate;
+		});
+		if (refreshChanged) {
+			changed = true;
+			verifyMutatedProgram(
+				{ ...workingProgram, functions },
+				{
+					stage: "fixpoint",
+					pass: "refresh-direct-call-effects",
+					round: maxRounds,
+				},
+			);
+		}
+		if (refreshBefore !== undefined) {
+			const refreshAfter = coreOptimizationMetrics({ ...workingProgram, functions });
+			tracedMetrics = refreshAfter;
+			optimizationTrace.push(
+				optimizationPassDelta(
+					{
+						pass: "refresh-direct-call-effects",
+						stage: "fixpoint",
+						round: maxRounds,
+						status: "executed",
+						changed: refreshChanged,
+						ablation: "interprocedural",
+					},
+					refreshBefore,
+					refreshAfter,
+				),
+			);
+		}
+	}
 	for (const pass of CORE_FINALIZATION_PASSES) {
 		const beforeProgram = { ...workingProgram, functions };
 		const before = tracedMetrics;
@@ -9513,6 +9732,14 @@ export function executeCoreOptimizations(
 			);
 		}
 	}
+	// Published on the final graph, so a recorded summary describes the program the
+	// backend consumes rather than an intermediate round. These maps stay in
+	// process: function indices are compilation-local, so nothing derived from them
+	// may be serialized or carried into another compilation.
+	const summaries =
+		options.ablations?.has("interprocedural") === true
+			? undefined
+			: analyses.summaries({ ...workingProgram, functions });
 	const optimized: CoreProgram = {
 		...workingProgram,
 		functions,
@@ -9522,6 +9749,15 @@ export function executeCoreOptimizations(
 					compilation: {
 						...workingProgram.compilation,
 						...(collectOptimizationTrace ? { optimizationTrace } : {}),
+						...(summaries === undefined
+							? {}
+							: {
+									facts: {
+										...workingProgram.compilation.facts,
+										functionEffects: coreFunctionEffectSummaries(summaries),
+										moduleEffects: coreModuleEffectSummaries(summaries),
+									},
+								}),
 					},
 				}),
 	};

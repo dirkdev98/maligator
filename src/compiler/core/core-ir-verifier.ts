@@ -1,3 +1,4 @@
+import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import {
 	coreMemoryAccesses,
@@ -9,6 +10,14 @@ import {
 	coreOwnCellsEqual,
 	coreProvenance,
 } from "./core-ir-provenance.ts";
+import {
+	CORE_CALL_EFFECT_SUMMARY_FACT,
+	analyzeCoreProgramSummaries,
+	coreCallSummaryClaimFromFactValue,
+	coreCallSummaryClaimHolds,
+	coreCallSummaryDigest,
+	deriveCoreCallEffectRefinement,
+} from "./core-ir-summaries.ts";
 import type {
 	CoreBlock,
 	CoreBlockId,
@@ -16,6 +25,7 @@ import type {
 	CoreEffectDomain,
 	CoreFact,
 	CoreFunction,
+	CoreInstruction,
 	CoreInstructionEffects,
 	CoreInstructionId,
 	CoreOpcodeRegistry,
@@ -882,6 +892,83 @@ function verifyCoreFunctionGraph(
 	}
 }
 
+/**
+ * Re-prove every summary-derived call refinement from the current graph.
+ *
+ * A summary refinement is the one narrowing no dominating guard licenses, so this
+ * boundary is its whole proof. Nothing here trusts the refinement it finds: the
+ * callee-target lattice and the summary solver run again on this program, and the
+ * refinement must be exactly what the recorded claim licenses, the claim must
+ * still cover what the callee provably does, and the claim's digest must match its
+ * own contents. A refinement whose fact says `summary` but whose claim no longer
+ * holds — a callee that grew an effect, a call site that no longer resolves to a
+ * closed target set, or a hand-written fact — fails here rather than reaching a
+ * backend that would honour it.
+ *
+ * The claim may be weaker than what the graph now proves: a later pass that makes
+ * a callee more precise must not invalidate a sound refinement derived from the
+ * older, wider claim.
+ */
+function verifySummaryEffectRefinements(
+	program: CoreProgram,
+	registry: CoreOpcodeRegistry,
+): void {
+	const refined: Array<{
+		readonly functionIndex: number;
+		readonly instruction: CoreInstruction;
+		readonly fact: CoreFact;
+	}> = [];
+	for (const fn of program.functions) {
+		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const refinement = instruction.effectRefinement;
+				if (refinement === undefined) continue;
+				const fact = facts.get(refinement.proof);
+				if (fact?.kind !== CORE_CALL_EFFECT_SUMMARY_FACT) continue;
+				refined.push({ functionIndex: fn.functionIndex, instruction, fact });
+			}
+		}
+	}
+	if (refined.length === 0) return;
+	const summaries = analyzeCoreProgramSummaries(program, registry);
+	for (const { functionIndex, instruction, fact } of refined) {
+		const where = `instruction @${instruction.id} in function ${functionIndex}`;
+		if (instruction.opcode !== "call") {
+			fail(`${where} carries a callee-summary refinement on ${instruction.opcode}`);
+		}
+		if (fact.validity.kind !== "summary") {
+			fail(`${where} names a callee-summary fact whose validity is not a summary`);
+		}
+		const claim = coreCallSummaryClaimFromFactValue(fact.value);
+		if (claim === undefined) {
+			fail(`${where} names a callee-summary fact with an unreadable claim`);
+		}
+		if (fact.validity.digest !== coreCallSummaryDigest(claim)) {
+			fail(`${where} names a callee-summary fact whose digest does not match its claim`);
+		}
+		const current = summaries.callSite(functionIndex, instruction.id);
+		if (current === undefined) {
+			fail(
+				`${where} claims callee targets [${claim.targets.join(", ")}] the current graph does not prove closed`,
+			);
+		}
+		if (!coreCallSummaryClaimHolds(claim, current)) {
+			fail(`${where} carries a callee summary the current graph no longer proves`);
+		}
+		const licensed = deriveCoreCallEffectRefinement(
+			registry.require(instruction.opcode).effects,
+			claim,
+		);
+		if (
+			licensed === undefined ||
+			!effectSummariesEqual(instruction.effectRefinement!.effects, licensed)
+		) {
+			fail(`${where} refines further than its callee summary licenses`);
+		}
+	}
+}
+
 /** Verify function graphs together with the immutable metadata they index. */
 export function verifyCoreProgram(
 	program: CoreProgram,
@@ -960,4 +1047,5 @@ function verifyCoreProgramGraph(
 			},
 		);
 	}
+	verifySummaryEffectRefinements(program, registry);
 }

@@ -31,6 +31,7 @@ export const OPTIMIZATION_ABLATIONS = [
 	"constant-folding",
 	"escape",
 	"inlining",
+	"interprocedural",
 	"static-properties",
 ] as const;
 

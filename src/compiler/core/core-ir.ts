@@ -13,6 +13,8 @@ import type {
 	OptimizationPassDelta,
 } from "../shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import { EFFECT_DOMAINS, NO_EFFECT_SUMMARY } from "../shared/effect-summary.ts";
+import type { EffectDomain, EffectSummary } from "../shared/effect-summary.ts";
 
 declare const coreBlockIdBrand: unique symbol;
 declare const coreInstructionIdBrand: unique symbol;
@@ -47,37 +49,19 @@ export function coreFactId(value: number): CoreFactId {
 	return checkedId(value, "Core fact id") as CoreFactId;
 }
 
-export const CORE_EFFECT_DOMAINS = [
-	"captured-slot",
-	"local-slot",
-	"activation-this",
-	"global-slot",
-	"global-property",
-	"object-property",
-	"array-element",
-	"host",
-	"io",
-] as const;
+/**
+ * Core's effect vocabulary is the shared summary vocabulary. Instruction
+ * descriptors and interprocedural summaries therefore speak in the same domains,
+ * which is what lets a summary license an instruction refinement without a
+ * translation step in between.
+ */
+export const CORE_EFFECT_DOMAINS = EFFECT_DOMAINS;
 
-export type CoreEffectDomain = (typeof CORE_EFFECT_DOMAINS)[number];
+export type CoreEffectDomain = EffectDomain;
 
-export interface CoreInstructionEffects {
-	readonly reads: ReadonlyArray<CoreEffectDomain>;
-	readonly writes: ReadonlyArray<CoreEffectDomain>;
-	readonly mayThrow: boolean;
-	readonly maySuspend: boolean;
-	readonly mayGc: boolean;
-	readonly callsUserCode: boolean;
-}
+export type CoreInstructionEffects = EffectSummary;
 
-export const CORE_NO_EFFECTS: CoreInstructionEffects = Object.freeze({
-	reads: Object.freeze([]),
-	writes: Object.freeze([]),
-	mayThrow: false,
-	maySuspend: false,
-	mayGc: false,
-	callsUserCode: false,
-});
+export const CORE_NO_EFFECTS: CoreInstructionEffects = NO_EFFECT_SUMMARY;
 
 /**
  * Memory families Core can name. Deliberately absent: strings, whose values are

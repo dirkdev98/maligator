@@ -1,6 +1,11 @@
 import type { ResolvedBuildConfig } from "../../build-config.ts";
 import { builtinOperations, primordialGlobalBindings } from "./builtin-registry.ts";
 import type {
+	FunctionEffectSummary,
+	ModuleEffectSummary,
+	ValueEscapeFact,
+} from "./effect-summary.ts";
+import type {
 	FactDependency,
 	FactObligation,
 	SemanticEpochFamily,
@@ -20,6 +25,22 @@ export type {
 	SemanticEpochFamily,
 	WorldFactId,
 } from "./fact-implication.ts";
+
+/**
+ * Summary contracts and the effect vocabulary they share with Core. Declared in
+ * `effect-summary.ts` so neither the fact system nor Core owns the vocabulary;
+ * consumers keep importing them from here.
+ */
+export type {
+	EffectDomain,
+	EffectSummary,
+	FunctionEffectSummary,
+	ModuleEffectSummary,
+	ReturnProvenance,
+	ReturnRepresentation,
+	SummaryRootReason,
+	ValueEscapeFact,
+} from "./effect-summary.ts";
 
 export type FactScope =
 	| { kind: "world" }
@@ -272,6 +293,12 @@ export function worldFactsFromConfig(config: ResolvedBuildConfig): WorldFacts {
 	};
 }
 
+/**
+ * Coarse builtin-registry effect vocabulary. It describes a declared builtin
+ * operation for diagnostics and identity checking, not memory dependence:
+ * interprocedural summaries and Core instruction descriptors use
+ * `EffectSummary`'s domains instead.
+ */
 export type EffectKind =
 	| "read-global"
 	| "write-global"
@@ -287,67 +314,6 @@ export type EffectKind =
 	| "safepoint"
 	| "unknown-call"
 	| "eval-visible";
-
-export interface FunctionEffectSummary {
-	readonly id: string;
-	readonly effects: ReadonlyArray<EffectKind>;
-	readonly callees: ReadonlyArray<string>;
-	readonly externallyReachable: boolean;
-	readonly parameterEscape: ReadonlyArray<"none" | "invoked" | "returned" | "retained">;
-	readonly restParameterEscape: "none" | "invoked" | "returned" | "retained";
-	readonly receiverEscape: "none" | "invoked" | "returned" | "retained";
-	readonly returnProvenance: "fresh" | "primitive" | "param" | "unknown";
-}
-
-export interface ModuleEffectSummary {
-	readonly id: string;
-	readonly effects: ReadonlyArray<EffectKind>;
-	readonly functions: ReadonlyArray<string>;
-	readonly externallyReachable: boolean;
-}
-
-/** Monotone summary merge used by the existing program-wide fixed-point driver. */
-export function mergeEffectSummaries(
-	left: FunctionEffectSummary,
-	right: FunctionEffectSummary,
-): FunctionEffectSummary {
-	if (left.id !== right.id) {
-		throw new Error(`cannot merge summaries for ${left.id} and ${right.id}`);
-	}
-	return {
-		id: left.id,
-		effects: [...new Set([...left.effects, ...right.effects])].sort(),
-		callees: [...new Set([...left.callees, ...right.callees])].sort(),
-		externallyReachable: left.externallyReachable || right.externallyReachable,
-		parameterEscape: left.parameterEscape.map((escape, index) => {
-			const rightEscape = right.parameterEscape[index] ?? right.restParameterEscape;
-			const rank = { none: 0, invoked: 1, returned: 2, retained: 3 } as const;
-			return rank[escape] >= rank[rightEscape] ? escape : rightEscape;
-		}),
-		restParameterEscape:
-			left.restParameterEscape === "retained" || right.restParameterEscape === "retained"
-				? "retained"
-				: left.restParameterEscape === "returned" ||
-					  right.restParameterEscape === "returned"
-					? "returned"
-					: left.restParameterEscape === "invoked" ||
-						  right.restParameterEscape === "invoked"
-						? "invoked"
-						: "none",
-		receiverEscape:
-			left.receiverEscape === "retained" || right.receiverEscape === "retained"
-				? "retained"
-				: left.receiverEscape === "returned" || right.receiverEscape === "returned"
-					? "returned"
-					: left.receiverEscape === "invoked" || right.receiverEscape === "invoked"
-						? "invoked"
-						: "none",
-		returnProvenance:
-			left.returnProvenance === right.returnProvenance
-				? left.returnProvenance
-				: "unknown",
-	};
-}
 
 export interface KnownBuiltinCall {
 	readonly operation: string;
@@ -417,8 +383,6 @@ export function compilerFactIsWorldInvariant<T>(
 		fact.proof.dependencies.every((dependency) => dependency.kind === "world")
 	);
 }
-
-export type ValueEscapeFact = "none" | "invoked" | "returned" | "retained";
 
 export type ShapeFact =
 	| { readonly kind: "object"; readonly keys: ReadonlyArray<string> }
