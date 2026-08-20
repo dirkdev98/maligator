@@ -66,28 +66,6 @@ to restore; generic passes may naturally rediscover their useful results.
 
 ## Common SSA optimizations
 
-### Loop optimizations
-
-- [ ] Canonicalize reducible loops with explicit preheaders, stable headers,
-      identifiable latches, and dedicated exits. Detect irreducible loops and retain a
-      correct unspecialized form.
-
-- [ ] Implement loop-invariant code motion for pure operations and effect-qualified
-      loads. Account for exceptions, safepoints, root lifetime, code size, and newly
-      executed paths.
-
-- [ ] Build induction-variable and affine-recurrence analysis over block arguments.
-      Derive ranges only for operations whose overflow, signed-zero, and coercion
-      behavior is represented explicitly.
-
-- [ ] Use range and induction facts for strength reduction, comparison
-      simplification, bounds-check elimination, and redundant length-load removal.
-      Require a proof of the relevant identity, mutation, and representation conditions.
-
-- [ ] Add partial redundancy elimination after GVN and LICM have stable effect
-      semantics. Apply a cost model so edge computations, roots, or generated C do not
-      grow without a measured benefit.
-
 ## World-knowledge ladder
 
 | Level             | Available knowledge                                                                   | Intended result                                                             |
