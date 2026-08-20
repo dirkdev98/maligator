@@ -1748,7 +1748,16 @@ export function lowerCoreProgramToVmDefinition(
 		).map((family) => {
 			const plan = compilerGuardPlan(
 				[compilation.facts.protectors.get(family)],
-				[{ kind: "fallback", id: `semantic-protector:${family}` }],
+				// The runtime's protector fact always keeps the generic operation as its
+				// twin, in both worlds: a locked build proves the family cannot be
+				// invalidated, never that a post-wire analysis may drop the ordinary path.
+				[
+					{
+						kind: "fallback",
+						id: `semantic-protector:${family}`,
+						cause: "runtime-contract",
+					},
+				],
 			);
 			const guard = plan === undefined ? undefined : lowerGuardPlan(plan);
 			if (guard === undefined || !guard.obligations.includes("fallback")) {

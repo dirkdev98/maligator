@@ -16,6 +16,17 @@ import {
 	knownFact,
 	sourceSiteId,
 } from "../shared/compiler-facts.ts";
+import type {
+	FactDependency,
+	FactObligation,
+	FactObligationCause,
+	SemanticEpochFamily,
+	WorldFactId,
+} from "../shared/compiler-facts.ts";
+import {
+	authorityFallback,
+	normalizeFactRequirements,
+} from "../shared/fact-implication.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -429,6 +440,9 @@ function optimizationPassDelta(
 const BUILTIN_OPERATION_BY_KEY = new Map(
 	builtinOperations.map((operation) => [operation.key, operation] as const),
 );
+const BUILTIN_OPERATION_BY_ID = new Map(
+	builtinOperations.map((operation) => [operation.id, operation] as const),
+);
 const MATH_UNARY_OPERATIONS: ReadonlySet<string> = new Set(
 	mathUnaryOperationKeys.map(([operation]) => operation),
 );
@@ -465,9 +479,10 @@ function builtinSourceSite(
 
 /**
  * Attach guarded builtin identity and semantics to an ordinary property call.
- * Static method names are globally unique in the registry. The loaded callee
- * remains an SSA input and the fact retains a fallback obligation, so mutable
- * worlds still perform the exact runtime identity check before specializing.
+ * Static method names are globally unique in the registry. Where the loaded
+ * callee remains an SSA input, the fact keeps a `loaded-callee` fallback in
+ * every world: a locked prototype slot proves nothing about an own shadowing
+ * property on the receiver, so the runtime identity check must stay.
  */
 const annotateKnownBuiltinCalls: CoreFunctionPass = {
 	name: "annotate-known-builtin-calls",
@@ -540,23 +555,89 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 						descriptor.id,
 					);
 					const sharedIdentity = compilation.facts.builtinIdentities.get(descriptor.id);
+					const worldInvariantIdentity = compilerFactIsWorldInvariant(sharedIdentity);
+					const arguments_ = instruction.inputs.slice(2);
+					const mathOpcode = MATH_UNARY_OPERATIONS.has(descriptor.id)
+						? "mathUnaryNumber"
+						: descriptor.id === "Math.min" || descriptor.id === "Math.max"
+							? "mathBinaryNumber"
+							: undefined;
+					const calleeIsSoleUse =
+						property.outputs.length === 1 && useCounts.get(property.outputs[0]!) === 1;
+					const numericRewrite =
+						mathOpcode !== undefined &&
+						worldInvariantIdentity &&
+						descriptor.nativeNumberArity === arguments_.length &&
+						arguments_.every((argument) => representations.get(argument) === "f64") &&
+						instruction.outputs.length === 1
+							? mathOpcode
+							: undefined;
+					const exact = exactBuiltinCallDescriptor(descriptor.id);
+					const receiver = definitions.get(
+						canonical.get(instruction.inputs[1]!) ?? instruction.inputs[1]!,
+					);
+					const exactReceiver =
+						exact?.receiverProof === "primitive-string"
+							? receiver?.opcode === "createString"
+							: exact?.receiverProof === "intrinsic-object"
+								? receiver?.opcode === "loadIntrinsic" &&
+									receiver.attributes.intrinsic === descriptor.owner
+								: false;
+					const exactRewrite =
+						exact !== undefined &&
+						exactReceiver &&
+						worldInvariantIdentity &&
+						calleeIsSoleUse
+							? exact
+							: undefined;
+					const calleeObligationId = `generic-call:${site ?? `${fn.functionIndex}:${guardOrdinal}`}`;
+					// Three different duties shared one obligation until now. An exact
+					// intrinsic-receiver rewrite proves both callee identity and the current
+					// Realm, so it owes only primordial authority. Every other site keeps an
+					// ordinary loaded callee: a locked prototype slot never disproves an own
+					// shadowing property, and realm-sensitive operations separately retain
+					// their calling-Realm duty.
+					const calleeObligations: ReadonlyArray<FactObligation> =
+						exactRewrite !== undefined
+							? [
+									authorityFallback(calleeObligationId, {
+										kind: "world",
+										fact: "primordials.locked",
+									}),
+								]
+							: [
+									{
+										kind: "fallback",
+										id: calleeObligationId,
+										cause: "loaded-callee",
+									},
+									...(descriptor.realm === "realm-object-identity"
+										? ([
+												{
+													kind: "fallback",
+													id: calleeObligationId,
+													cause: "realm",
+												},
+											] as const)
+										: []),
+								];
 					const identity =
 						sharedIdentity?.kind === "known"
-							? knownFact(sharedIdentity.value, {
-									scope:
-										site === undefined
-											? { kind: "function" as const, id: fn.functionIndex }
-											: { kind: "site" as const, id: site },
-									dependencies: sharedIdentity.proof.dependencies,
-									obligations: [
-										...sharedIdentity.proof.obligations,
-										{
-											kind: "fallback" as const,
-											id: `generic-call:${site ?? `${fn.functionIndex}:${guardOrdinal}`}`,
-										},
-									],
-									origin: `guarded-builtin-site-analysis:${sharedIdentity.proof.origin}`,
-								})
+							? knownFact(
+									sharedIdentity.value,
+									normalizeFactRequirements({
+										scope:
+											site === undefined
+												? { kind: "function" as const, id: fn.functionIndex }
+												: { kind: "site" as const, id: site },
+										dependencies: sharedIdentity.proof.dependencies,
+										obligations: [
+											...sharedIdentity.proof.obligations,
+											...calleeObligations,
+										],
+										origin: `guarded-builtin-site-analysis:${sharedIdentity.proof.origin}`,
+									}),
+								)
 							: (sharedIdentity ?? {
 									kind: "unknown" as const,
 									reason: "not-analyzed" as const,
@@ -582,64 +663,32 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 								: identity,
 						...(site === undefined ? {} : { sourceSite: site }),
 					};
-					const arguments_ = instruction.inputs.slice(2);
-					const mathOpcode = MATH_UNARY_OPERATIONS.has(descriptor.id)
-						? "mathUnaryNumber"
-						: descriptor.id === "Math.min" || descriptor.id === "Math.max"
-							? "mathBinaryNumber"
-							: undefined;
-					if (
-						mathOpcode !== undefined &&
-						compilerFactIsWorldInvariant(identity) &&
-						descriptor.nativeNumberArity === arguments_.length &&
-						arguments_.every((argument) => representations.get(argument) === "f64") &&
-						instruction.outputs.length === 1
-					) {
-						if (
-							property.outputs.length === 1 &&
-							useCounts.get(property.outputs[0]!) === 1
-						) {
+					if (numericRewrite !== undefined) {
+						if (calleeIsSoleUse) {
 							removedInstructions.add(property.id);
 							for (const output of property.outputs) removedValues.add(output);
 						}
 						numericOutputs.add(instruction.outputs[0]!);
 						return {
 							...instruction,
-							opcode: mathOpcode,
+							opcode: numericRewrite,
 							inputs: arguments_,
 							attributes: { operation: descriptor.id },
 						};
 					}
-					const exact = exactBuiltinCallDescriptor(descriptor.id);
-					const receiver = definitions.get(
-						canonical.get(instruction.inputs[1]!) ?? instruction.inputs[1]!,
-					);
-					const exactReceiver =
-						exact?.receiverProof === "primitive-string"
-							? receiver?.opcode === "createString"
-							: exact?.receiverProof === "intrinsic-object"
-								? receiver?.opcode === "loadIntrinsic" &&
-									receiver.attributes.intrinsic === descriptor.owner
-								: false;
-					if (
-						exact !== undefined &&
-						exactReceiver &&
-						compilerFactIsWorldInvariant(identity) &&
-						property.outputs.length === 1 &&
-						useCounts.get(property.outputs[0]!) === 1
-					) {
+					if (exactRewrite !== undefined) {
 						removedInstructions.add(property.id);
 						for (const output of property.outputs) removedValues.add(output);
 						const forwardedArguments =
-							exact.forwardedArgumentLimit === undefined
+							exactRewrite.forwardedArgumentLimit === undefined
 								? arguments_
-								: arguments_.slice(0, exact.forwardedArgumentLimit);
+								: arguments_.slice(0, exactRewrite.forwardedArgumentLimit);
 						return {
 							...instruction,
 							opcode: "callBuiltin",
 							inputs: [instruction.inputs[1]!, ...forwardedArguments],
 							attributes: {
-								operation: exact.id,
+								operation: exactRewrite.id,
 								knownBuiltinCall: coreAttribute(knownBuiltinCall, "knownBuiltinCall"),
 							},
 						};
@@ -1549,10 +1598,12 @@ function stackObjectRegion(
 				{
 					kind: "fallback",
 					id: `stack-object:${fn.functionIndex}:${allocation.id}`,
+					cause: "escape",
 				},
 				{
 					kind: "materialize",
 					id: `stack-object-inherited:${fn.functionIndex}:${allocation.id}`,
+					cause: "escape",
 				},
 			],
 		);
@@ -1578,6 +1629,7 @@ function stackObjectRegion(
 	const materializeObligations = materializations.map(({ id }) => ({
 		kind: "materialize" as const,
 		id: `stack-object-return:${fn.functionIndex}:${id}`,
+		cause: "escape" as const,
 	}));
 	const materializes = inheritedAccess !== undefined || materializations.length > 0;
 	return {
@@ -1595,6 +1647,7 @@ function stackObjectRegion(
 							{
 								kind: "fallback",
 								id: `stack-object:${fn.functionIndex}:${allocation.id}`,
+								cause: "escape",
 							},
 							...materializeObligations,
 						],
@@ -2167,6 +2220,100 @@ function unknownArray(value: unknown): ReadonlyArray<unknown> | undefined {
 	return Array.isArray(value) ? (value as ReadonlyArray<unknown>) : undefined;
 }
 
+/**
+ * Core stores proofs as opaque attribute values, so implication has to reify them
+ * first. An unrecognized world fact or epoch family reifies as itself and simply
+ * implies nothing, which is the conservative answer.
+ */
+function coreFactDependency(value: unknown): FactDependency | undefined {
+	const object = attributeObject(value);
+	switch (object?.kind) {
+		case "world":
+			return typeof object.fact === "string"
+				? { kind: "world", fact: object.fact as WorldFactId }
+				: undefined;
+		case "epoch":
+			return typeof object.family === "string"
+				? { kind: "epoch", family: object.family as SemanticEpochFamily }
+				: undefined;
+		case "guard":
+			return typeof object.id === "string" ? { kind: "guard", id: object.id } : undefined;
+		case "summary":
+			return typeof object.id === "string"
+				? { kind: "summary", id: object.id }
+				: undefined;
+		default:
+			return undefined;
+	}
+}
+
+function coreFactObligation(value: unknown): FactObligation | undefined {
+	const object = attributeObject(value);
+	if (typeof object?.id !== "string" || typeof object.cause !== "string")
+		return undefined;
+	const cause = object.cause as FactObligationCause;
+	if (object.kind === "materialize") {
+		return { kind: "materialize", id: object.id, cause };
+	}
+	if (object.kind !== "fallback") return undefined;
+	if (object.dischargedBy === undefined) {
+		return { kind: "fallback", id: object.id, cause };
+	}
+	const witness = coreFactDependency(object.dischargedBy);
+	return witness === undefined
+		? undefined
+		: { kind: "fallback", id: object.id, cause, dischargedBy: witness };
+}
+
+/**
+ * Canonicalize a Core-side requirement pair. Anything that does not reify into
+ * the shared vocabulary falls back to a stable dedupe that never discharges,
+ * so an unrecognized attribute shape can only cost precision, never soundness.
+ */
+function normalizeCoreRequirements(
+	dependencies: ReadonlyArray<unknown>,
+	obligations: ReadonlyArray<unknown>,
+): CoreKnownBuiltinProof["proof"] {
+	const reifiedDependencies = dependencies
+		.map(coreFactDependency)
+		.filter((dependency) => dependency !== undefined);
+	const reifiedObligations = obligations
+		.map(coreFactObligation)
+		.filter((obligation) => obligation !== undefined);
+	if (
+		reifiedDependencies.length === dependencies.length &&
+		reifiedObligations.length === obligations.length
+	) {
+		return normalizeFactRequirements({
+			dependencies: reifiedDependencies,
+			obligations: reifiedObligations,
+		});
+	}
+	const uniqueDependencies = new Map<string, unknown>();
+	const uniqueObligations = new Map<string, unknown>();
+	for (const dependency of dependencies) {
+		uniqueDependencies.set(stableAttributeValue(dependency), dependency);
+	}
+	for (const obligation of obligations) {
+		uniqueObligations.set(stableAttributeValue(obligation), obligation);
+	}
+	return {
+		dependencies: [...uniqueDependencies.entries()]
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([, dependency]) => dependency),
+		obligations: [...uniqueObligations.entries()]
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([, obligation]) => obligation),
+	};
+}
+
+/**
+ * Admit a call to a specialized lowering. Admission validates known identity,
+ * registry-matching semantics, and a non-empty dependency set — never the
+ * presence of a fallback obligation, which is a residual duty and not a token
+ * saying the annotation was checked. A site whose authority obligation a locked
+ * world has discharged is still a fully proven site.
+ */
 function coreKnownBuiltinProof(
 	instruction: CoreInstruction,
 	operation: string,
@@ -2175,6 +2322,8 @@ function coreKnownBuiltinProof(
 		readonly result?: string;
 	} = {},
 ): CoreKnownBuiltinProof | undefined {
+	const descriptor = BUILTIN_OPERATION_BY_ID.get(operation);
+	if (descriptor === undefined) return undefined;
 	const call = attributeObject(instruction.attributes.knownBuiltinCall);
 	if (call?.operation !== operation) return undefined;
 	const identity = attributeObject(call.identity);
@@ -2186,40 +2335,35 @@ function coreKnownBuiltinProof(
 	const identityObligations = unknownArray(identityProof?.obligations);
 	const semanticsDependencies = unknownArray(semanticsProof?.dependencies);
 	const semanticsObligations = unknownArray(semanticsProof?.obligations);
+	const effects = unknownArray(semanticValue?.effects);
 	const lowerings = unknownArray(semanticValue?.lowerings);
 	if (
 		identity?.kind !== "known" ||
+		identity.value !== operation ||
 		semantics?.kind !== "known" ||
 		identityDependencies === undefined ||
 		identityObligations === undefined ||
 		semanticsDependencies === undefined ||
 		semanticsObligations === undefined ||
-		![...identityObligations, ...semanticsObligations].some(
-			(obligation) => attributeObject(obligation)?.kind === "fallback",
-		) ||
-		(options.lowering !== undefined &&
-			(lowerings === undefined || !lowerings.includes(options.lowering))) ||
+		identityDependencies.length === 0 ||
+		semanticsDependencies.length === 0 ||
+		effects === undefined ||
+		effects.length !== descriptor.effects.length ||
+		effects.some((effect, index) => effect !== descriptor.effects[index]) ||
+		semanticValue?.result !== descriptor.result ||
+		lowerings === undefined ||
+		lowerings.length !== descriptor.lowerings.length ||
+		lowerings.some((lowering, index) => lowering !== descriptor.lowerings[index]) ||
+		(options.lowering !== undefined && !lowerings.includes(options.lowering)) ||
 		(options.result !== undefined && semanticValue?.result !== options.result)
 	) {
 		return undefined;
 	}
-	const dependencies = new Map<string, unknown>();
-	const obligations = new Map<string, unknown>();
-	for (const dependency of [...identityDependencies, ...semanticsDependencies]) {
-		dependencies.set(stableAttributeValue(dependency), dependency);
-	}
-	for (const obligation of [...identityObligations, ...semanticsObligations]) {
-		obligations.set(stableAttributeValue(obligation), obligation);
-	}
 	return {
-		proof: {
-			dependencies: [...dependencies.entries()]
-				.sort(([left], [right]) => left.localeCompare(right))
-				.map(([, dependency]) => dependency),
-			obligations: [...obligations.entries()]
-				.sort(([left], [right]) => left.localeCompare(right))
-				.map(([, obligation]) => obligation),
-		},
+		proof: normalizeCoreRequirements(
+			[...identityDependencies, ...semanticsDependencies],
+			[...identityObligations, ...semanticsObligations],
+		),
 		...(typeof call.sourceSite === "string" ? { sourceSite: call.sourceSite } : {}),
 	};
 }
@@ -2311,27 +2455,29 @@ function corePropertyPlacement(
 		: "in-place";
 }
 
+/**
+ * A speculative region always keeps its ordinary twin: the region replaces a
+ * whole instruction group with a virtual representation that a local guard,
+ * an escape, or a materialization can still send back to generic code. Stating
+ * that duty here, instead of borrowing whichever identity fallback the region's
+ * builtin happened to carry, is what lets an identity obligation be discharged
+ * without silently retiring the twin.
+ */
+function regionGenericTwin(kind: string, site: string | number): FactObligation {
+	return {
+		kind: "fallback",
+		id: `region-twin:${kind}:${site}`,
+		cause: "materialization",
+	};
+}
+
 function mergeCoreBuiltinProofs(
 	proofs: ReadonlyArray<CoreKnownBuiltinProof["proof"]>,
 ): CoreKnownBuiltinProof["proof"] {
-	const dependencies = new Map<string, unknown>();
-	const obligations = new Map<string, unknown>();
-	for (const proof of proofs) {
-		for (const dependency of proof.dependencies) {
-			dependencies.set(stableAttributeValue(dependency), dependency);
-		}
-		for (const obligation of proof.obligations) {
-			obligations.set(stableAttributeValue(obligation), obligation);
-		}
-	}
-	return {
-		dependencies: [...dependencies.entries()]
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([, dependency]) => dependency),
-		obligations: [...obligations.entries()]
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([, obligation]) => obligation),
-	};
+	return normalizeCoreRequirements(
+		proofs.flatMap((proof) => [...proof.dependencies]),
+		proofs.flatMap((proof) => [...proof.obligations]),
+	);
 }
 
 /**
@@ -2864,8 +3010,14 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 				const obligations = [
 					...builtin.proof.obligations,
 					{
+						kind: "fallback",
+						id: `regexp-exec-projection-twin:${builtin.sourceSite ?? fn.functionIndex}`,
+						cause: "materialization",
+					},
+					{
 						kind: "materialize",
 						id: `regexp-exec-projection:${builtin.sourceSite ?? fn.functionIndex}`,
+						cause: "materialization",
 					},
 				];
 				regions.push({
@@ -3004,10 +3156,12 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 				{
 					kind: "fallback",
 					id: `regexp-iterator-projection:${fn.functionIndex}`,
+					cause: "materialization",
 				},
 				{
 					kind: "materialize",
 					id: `regexp-iterator-projection:${fn.functionIndex}`,
+					cause: "materialization",
 				},
 			],
 		);
@@ -3571,15 +3725,16 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 			const materialization = {
 				kind: "materialize",
 				id: `string-split-cursor:${splitProof.sourceSite ?? fn.functionIndex}`,
+				cause: "materialization",
 			};
-			const obligations = [...proof.obligations, materialization];
-			if (
-				!obligations.some(
-					(obligation) => attributeObject(obligation)?.kind === "fallback",
-				)
-			) {
-				continue;
-			}
+			const obligations = [
+				...proof.obligations,
+				regionGenericTwin(
+					"string-split-cursor",
+					splitProof.sourceSite ?? fn.functionIndex,
+				),
+				materialization,
+			];
 			const claimed = [
 				...(splitProperty === undefined ? [] : [splitProperty]),
 				splitCall,
@@ -3868,9 +4023,14 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 				}
 				const obligations = [
 					...builtin.proof.obligations,
+					regionGenericTwin(
+						"string-split-projection",
+						builtin.sourceSite ?? fn.functionIndex,
+					),
 					{
 						kind: "materialize",
 						id: `string-split-projection:${builtin.sourceSite ?? fn.functionIndex}`,
+						cause: "materialization",
 					},
 				];
 				const claimedInstructions = claimed.map(({ id }) => id);
@@ -4064,7 +4224,16 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 					data: coreAttributeObject(
 						{
 							license: {
-								guard: builtin.proof,
+								guard: {
+									dependencies: builtin.proof.dependencies,
+									obligations: [
+										...builtin.proof.obligations,
+										regionGenericTwin(
+											"string-slice-number",
+											builtin.sourceSite ?? fn.functionIndex,
+										),
+									],
+								},
 								genericTwin: "retained",
 								materialization: "none",
 							},

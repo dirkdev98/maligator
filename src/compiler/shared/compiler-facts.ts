@@ -1,23 +1,25 @@
 import type { ResolvedBuildConfig } from "../../build-config.ts";
 import { builtinOperations, primordialGlobalBindings } from "./builtin-registry.ts";
+import type {
+	FactDependency,
+	FactObligation,
+	SemanticEpochFamily,
+} from "./fact-implication.ts";
+import { authorityFallback, normalizeFactRequirements } from "./fact-implication.ts";
 
-/** Stable identifiers used by proofs instead of pass-local object identity. */
-export type WorldFactId =
-	| "primordials.locked"
-	| "authority.closed"
-	| "source.closed"
-	| "eval.disabled"
-	| "realms.disabled"
-	| "regexp.enabled"
-	| "temporal.enabled"
-	| "intl.enabled";
-
-export type SemanticEpochFamily =
-	| "primitive-methods"
-	| "watched-methods"
-	| "array-elements"
-	| "global-bindings"
-	| "object-shapes";
+/**
+ * Stable identifiers used by proofs instead of pass-local object identity. The
+ * vocabulary and its implication order live in `fact-implication.ts`; every
+ * consumer keeps importing them from here.
+ */
+export type {
+	FactDependency,
+	FactObligation,
+	FactObligationCause,
+	FactRequirements,
+	SemanticEpochFamily,
+	WorldFactId,
+} from "./fact-implication.ts";
 
 export type FactScope =
 	| { kind: "world" }
@@ -25,16 +27,6 @@ export type FactScope =
 	| { kind: "module"; path: string }
 	| { kind: "function"; id: number }
 	| { kind: "site"; id: SourceSiteId };
-
-export type FactDependency =
-	| { kind: "world"; fact: WorldFactId }
-	| { kind: "epoch"; family: SemanticEpochFamily }
-	| { kind: "guard"; id: string }
-	| { kind: "summary"; id: string };
-
-export type FactObligation =
-	| { kind: "fallback"; id: string }
-	| { kind: "materialize"; id: string };
 
 export interface FactProof {
 	readonly scope: FactScope;
@@ -74,41 +66,22 @@ export function unknownFact<T>(reason: UnknownFactReason): CompilerFact<T> {
 	return { kind: "unknown", reason };
 }
 
-function dependencyKey(dependency: FactDependency): string {
-	switch (dependency.kind) {
-		case "world":
-			return `world:${dependency.fact}`;
-		case "epoch":
-			return `epoch:${dependency.family}`;
-		case "guard":
-			return `guard:${dependency.id}`;
-		case "summary":
-			return `summary:${dependency.id}`;
-	}
-}
-
+/**
+ * Join two proofs of the same value in the same scope. The union of both
+ * requirement sets is normalized, so a branch proving the value from the locked
+ * world and a branch proving it from a covered epoch join to the world proof
+ * rather than carrying both plus the epoch's invalidation fallback.
+ */
 function mergedProof(left: FactProof, right: FactProof): FactProof | undefined {
 	if (JSON.stringify(left.scope) !== JSON.stringify(right.scope)) {
 		return undefined;
 	}
-	const dependencies = new Map<string, FactDependency>();
-	for (const dependency of [...left.dependencies, ...right.dependencies]) {
-		dependencies.set(dependencyKey(dependency), dependency);
-	}
-	const obligations = new Map<string, FactObligation>();
-	for (const obligation of [...left.obligations, ...right.obligations]) {
-		obligations.set(`${obligation.kind}:${obligation.id}`, obligation);
-	}
-	return {
+	return normalizeFactRequirements({
 		scope: left.scope,
-		dependencies: [...dependencies.entries()]
-			.sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
-			.map(([, dependency]) => dependency),
-		obligations: [...obligations.entries()]
-			.sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
-			.map(([, obligation]) => obligation),
+		dependencies: [...left.dependencies, ...right.dependencies],
+		obligations: [...left.obligations, ...right.obligations],
 		origin: left.origin === right.origin ? left.origin : `${left.origin}+${right.origin}`,
-	};
+	});
 }
 
 /** Conservative control-flow join: retain only equal payloads in the same scope. */
@@ -405,28 +378,15 @@ export function compilerGuardPlan(
 	facts: ReadonlyArray<CompilerFact<unknown> | undefined>,
 	additionalObligations: ReadonlyArray<FactObligation> = [],
 ): CompilerGuardPlan | undefined {
-	const dependencies = new Map<string, FactDependency>();
-	const obligations = new Map<string, FactObligation>();
+	const dependencies: Array<FactDependency> = [];
+	const obligations: Array<FactObligation> = [];
 	for (const fact of facts) {
 		if (fact?.kind !== "known") return undefined;
-		for (const dependency of fact.proof.dependencies) {
-			dependencies.set(dependencyKey(dependency), dependency);
-		}
-		for (const obligation of fact.proof.obligations) {
-			obligations.set(`${obligation.kind}:${obligation.id}`, obligation);
-		}
+		dependencies.push(...fact.proof.dependencies);
+		obligations.push(...fact.proof.obligations);
 	}
-	for (const obligation of additionalObligations) {
-		obligations.set(`${obligation.kind}:${obligation.id}`, obligation);
-	}
-	return {
-		dependencies: [...dependencies.entries()]
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([, dependency]) => dependency),
-		obligations: [...obligations.entries()]
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([, obligation]) => obligation),
-	};
+	obligations.push(...additionalObligations);
+	return normalizeFactRequirements({ dependencies, obligations });
 }
 
 /** True only when the call's canonical identity fact proves this exact operation. */
@@ -508,11 +468,17 @@ function worldProof(origin: string): FactProof {
 	};
 }
 
+/**
+ * An invalidatable epoch owes the generic operation as its twin. The witness is
+ * the epoch dependency itself: only a world dependency that covers this exact
+ * family retires the fallback, so `global-bindings` and `object-shapes` keep it
+ * even in a locked build.
+ */
 function epochProof(family: SemanticEpochFamily, origin: string): FactProof {
 	return {
 		scope: { kind: "world" },
 		dependencies: [{ kind: "epoch", family }],
-		obligations: [{ kind: "fallback", id: "generic-operation" }],
+		obligations: [authorityFallback("generic-operation", { kind: "epoch", family })],
 		origin,
 	};
 }
