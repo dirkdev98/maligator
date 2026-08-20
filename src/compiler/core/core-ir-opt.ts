@@ -29,9 +29,15 @@ import {
 	coreMemoryPartition,
 	coreMemoryVersions,
 } from "./core-ir-memory.ts";
-import type { CoreMemoryPartition, CoreMemoryVersions } from "./core-ir-memory.ts";
+import type {
+	CoreMemoryPartition,
+	CoreMemoryResolution,
+	CoreMemoryVersions,
+} from "./core-ir-memory.ts";
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { CORE_OWN_DATA_SLOT_FACT, coreProvenance } from "./core-ir-provenance.ts";
+import type { CoreProvenance } from "./core-ir-provenance.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
 	CoreIrVerificationError,
@@ -56,7 +62,7 @@ import type {
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreInstructionId, coreValueId } from "./core-ir.ts";
+import { coreFactId, coreInstructionId, coreValueId } from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
 	readonly maxRounds?: number;
@@ -4679,6 +4685,22 @@ function instructionAttribute(instruction: CoreInstruction, name: string): unkno
 }
 
 /** Per-function analysis cache keyed by the immutable function snapshot. */
+/**
+ * Exact heap locations are only as trustworthy as the escape proof behind them.
+ * A slot is named exactly when the base must-aliases one contained allocation and
+ * the key is one of its own writable data slots; a contained allocation's shape
+ * can no longer change, so that slot is a plain cell for the rest of its life.
+ */
+function memoryResolution(
+	analyses: CoreAnalysisManager,
+	fn: CoreFunction,
+): CoreMemoryResolution {
+	const provenance = analyses.provenance(fn);
+	return {
+		ownDataSlot: (base, key) => provenance.ownDataSlot(base, key)?.instruction,
+	};
+}
+
 export class CoreAnalysisManager {
 	readonly #controlFlow = new WeakMap<CoreFunction, CoreControlFlow>();
 	readonly #canonicalValues = new WeakMap<
@@ -4686,6 +4708,7 @@ export class CoreAnalysisManager {
 		ReadonlyMap<CoreValueId, CoreValueId>
 	>();
 	readonly #memory = new WeakMap<CoreFunction, CoreMemoryVersions>();
+	readonly #provenance = new WeakMap<CoreFunction, CoreProvenance>();
 
 	controlFlow(fn: CoreFunction): CoreControlFlow {
 		let analysis = this.#controlFlow.get(fn);
@@ -4705,10 +4728,19 @@ export class CoreAnalysisManager {
 		return analysis;
 	}
 
+	provenance(fn: CoreFunction): CoreProvenance {
+		let analysis = this.#provenance.get(fn);
+		if (analysis === undefined) {
+			analysis = coreProvenance(fn, this.controlFlow(fn));
+			this.#provenance.set(fn, analysis);
+		}
+		return analysis;
+	}
+
 	memory(fn: CoreFunction): CoreMemoryVersions {
 		let analysis = this.#memory.get(fn);
 		if (analysis === undefined) {
-			analysis = coreMemoryVersions(fn, this.controlFlow(fn));
+			analysis = coreMemoryVersions(fn, this.controlFlow(fn), memoryResolution(this, fn));
 			this.#memory.set(fn, analysis);
 		}
 		return analysis;
@@ -6611,38 +6643,145 @@ function isLoopInvariantCandidate(instruction: CoreInstruction): boolean {
 	);
 }
 
+function nextFactId(fn: CoreFunction): number {
+	return (fn.facts.at(-1)?.id ?? -1) + 1;
+}
+
 /**
- * Families whose cells a compiler owns rather than JavaScript: a global slot, a
- * captured slot, and the activation's `this` binding. None is a JavaScript
- * property, so reading one has no observable effect and reading it twice is
- * indistinguishable from reading it once.
+ * Narrow a property access on a contained fresh aggregate to what it actually
+ * does.
  *
- * Heap families are excluded until an alias oracle can prove a base's shape
- * carries the key as an own data property; without that proof, dropping a
- * property read could skip an accessor, a Proxy trap, or a coercion. `local-slot`
- * is excluded too: the frontend turns locals into SSA, so its opcodes only appear
- * in hand-built graphs, and a direct eval can address a real frame slot
- * dynamically.
+ * A contained allocation's shape is fixed: every use of it names one of its own
+ * writable data slots, so nothing can convert a slot to an accessor, install a
+ * Proxy, delete a key, or replace the prototype. Reading or writing such a slot
+ * therefore runs no user code, which is the property every later memory analysis
+ * needs — an access that may call user code is a barrier for every partition.
+ *
+ * `callsUserCode`, the `host` domain it implies, and `mayThrow` are refined. The
+ * own-slot proof excludes every JavaScript path that can call or throw: there is
+ * no accessor, Proxy trap, prototype lookup, shape transition, or failed
+ * writability check. `mayGc` stays as the opcode declared it because collection
+ * points are a lowering/runtime property, not a JavaScript-semantic one.
+ */
+const refineOwnDataSlotAccesses: CoreFunctionPass = {
+	name: "refine-own-data-slot-accesses",
+	changesControlFlow: true,
+	run(fn, analyses) {
+		const provenance = analyses.provenance(fn);
+		if (provenance.layouts.length === 0) return fn;
+		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const facts = [...fn.facts];
+		let nextFact = nextFactId(fn);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (
+						instruction.effectRefinement !== undefined ||
+						protectedInstructions.has(instruction.id)
+					) {
+						return instruction;
+					}
+					const effects = coreInstructionEffects(instruction);
+					if (!effects.callsUserCode) return instruction;
+					const accesses = coreMemoryAccesses(instruction);
+					// One fact names one exact access. Multi-location operations remain
+					// conservative until the fact schema can describe every location.
+					if (accesses.length !== 1) return instruction;
+					const proven = accesses.every((access) => {
+						if (coreMemoryLocationFamily(access.location) !== "object-slot") return false;
+						return (
+							access.base !== undefined &&
+							access.key !== undefined &&
+							provenance.ownDataSlot(access.base, access.key) !== undefined
+						);
+					});
+					if (!proven) return instruction;
+					const slot = provenance.ownDataSlot(accesses[0]!.base!, accesses[0]!.key!)!;
+					const proof = coreFactId(nextFact++);
+					facts.push({
+						id: proof,
+						kind: CORE_OWN_DATA_SLOT_FACT,
+						value: {
+							allocation: slot.instruction,
+							key: accesses[0]!.key!,
+						},
+						validity: {
+							kind: "summary",
+							digest: `contained-allocation:${slot.instruction}`,
+						},
+						obligations: [],
+						origin: "core-allocation-provenance",
+					});
+					changed = true;
+					return {
+						...instruction,
+						effectRefinement: {
+							effects: {
+								reads: effects.reads.filter((domain) => domain !== "host"),
+								writes: effects.writes.filter((domain) => domain !== "host"),
+								mayThrow: false,
+								maySuspend: effects.maySuspend,
+								mayGc: effects.mayGc,
+								callsUserCode: false,
+							},
+							proof,
+						},
+					};
+				}),
+			}),
+		);
+		return changed
+			? pruneVacuousHandlers({
+					...fn,
+					blocks,
+					facts,
+					mutationEpoch: fn.mutationEpoch + 1,
+				})
+			: fn;
+	},
+};
+
+/**
+ * Families whose cells can carry a value from one program point to another.
+ *
+ * A global slot, a captured slot, and the activation's `this` binding are
+ * compiler-owned rather than JavaScript properties, so reading one has no
+ * observable effect. An `object-slot` location only exists when the memory model
+ * resolved it against the escape proof, which means the key is an own writable
+ * data slot of a contained allocation — no accessor, Proxy trap, prototype walk,
+ * or coercion is reachable through it.
+ *
+ * `local-slot` is excluded: the frontend turns locals into SSA, so its opcodes
+ * only appear in hand-built graphs, and a direct eval can address a real frame
+ * slot dynamically.
  */
 const FORWARDABLE_MEMORY_FAMILIES: ReadonlySet<CoreMemoryFamily> =
-	new Set<CoreMemoryFamily>(["global-slot", "captured-slot", "activation-this"]);
+	new Set<CoreMemoryFamily>([
+		"activation-this",
+		"captured-slot",
+		"global-slot",
+		"object-slot",
+	]);
 
-function forwardableMemoryAccesses(instruction: CoreInstruction): ReadonlyArray<{
+interface ForwardableAccess {
 	readonly partition: CoreMemoryPartition;
 	readonly mode: "read" | "write";
 	readonly value: CoreValueId;
-}> {
-	const forwardable: Array<{
-		readonly partition: CoreMemoryPartition;
-		readonly mode: "read" | "write";
-		readonly value: CoreValueId;
-	}> = [];
+}
+
+function forwardableMemoryAccesses(
+	instruction: CoreInstruction,
+	resolution: CoreMemoryResolution | undefined,
+): ReadonlyArray<ForwardableAccess> {
+	const forwardable: Array<ForwardableAccess> = [];
 	const effects = coreInstructionEffects(instruction);
 	// An operation that also runs user code or suspends may leave the slot holding
 	// something other than the value it stored, so its store is not forwardable
 	// even though the version it installs is fresh.
 	if (effects.callsUserCode || effects.maySuspend) return forwardable;
-	for (const access of coreMemoryAccesses(instruction)) {
+	for (const access of coreMemoryAccesses(instruction, resolution)) {
 		if (!coreMemoryLocationIsExact(access.location)) continue;
 		if (!FORWARDABLE_MEMORY_FAMILIES.has(coreMemoryLocationFamily(access.location))) {
 			continue;
@@ -6658,13 +6797,32 @@ function forwardableMemoryAccesses(instruction: CoreInstruction): ReadonlyArray<
 	return forwardable;
 }
 
-/** A slot read can only be redundant when the same slot is written or read twice. */
-function mayForwardMemoryAccesses(fn: CoreFunction): boolean {
+/**
+ * A slot read can only be redundant when the same slot is written, initialized by
+ * its allocation, or read twice.
+ */
+function mayForwardMemoryAccesses(
+	fn: CoreFunction,
+	resolution: CoreMemoryResolution | undefined,
+	provenance: CoreProvenance,
+): boolean {
 	const read = new Set<CoreMemoryPartition>();
 	const written = new Set<CoreMemoryPartition>();
+	for (const layout of provenance.layouts) {
+		if (provenance.escape(layout.instruction) === "escaped") continue;
+		for (const key of layout.keys) {
+			written.add(
+				coreMemoryPartition({
+					kind: "object-slot",
+					allocation: layout.instruction,
+					key,
+				}),
+			);
+		}
+	}
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			for (const access of forwardableMemoryAccesses(instruction)) {
+			for (const access of forwardableMemoryAccesses(instruction, resolution)) {
 				if (access.mode === "write") {
 					written.add(access.partition);
 					continue;
@@ -6697,10 +6855,16 @@ function mayForwardMemoryAccesses(fn: CoreFunction): boolean {
  */
 const forwardMemoryAccesses: CoreFunctionPass = {
 	name: "forward-memory-accesses",
+	changesControlFlow: true,
 	run(fn, analyses) {
-		if (!mayForwardMemoryAccesses(fn)) return fn;
+		const provenance = analyses.provenance(fn);
+		const resolution = memoryResolution(analyses, fn);
+		if (!mayForwardMemoryAccesses(fn, resolution, provenance)) return fn;
 		const cfg = analyses.controlFlow(fn);
 		const memory = analyses.memory(fn);
+		const initialValues = new Map(
+			provenance.layouts.map((layout) => [layout.instruction, layout] as const),
+		);
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
 			regionProtectedValues(fn);
 		const representations = new Map(
@@ -6715,19 +6879,24 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 		}
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removedInstructions = new Set<CoreInstructionId>();
+		const replacementInstructions = new Map<CoreInstructionId, CoreInstruction>();
 		const visited = new Set<CoreBlockId>();
+		interface AvailableValue {
+			readonly value: CoreValueId;
+			readonly block: CoreBlockId;
+		}
 		type Undo = {
 			readonly key: string;
-			readonly previous: CoreValueId | undefined;
+			readonly previous: AvailableValue | undefined;
 		};
 		type Frame =
 			| { readonly kind: "enter"; readonly block: CoreBlockId }
 			| { readonly kind: "exit"; readonly marker: number };
-		const available = new Map<string, CoreValueId>();
+		const available = new Map<string, AvailableValue>();
 		const undo: Array<Undo> = [];
-		const record = (key: string, value: CoreValueId): void => {
+		const record = (key: string, entry: AvailableValue): void => {
 			undo.push({ key, previous: available.get(key) });
-			available.set(key, value);
+			available.set(key, entry);
 		};
 		const processTree = (root: CoreBlockId): void => {
 			const stack: Array<Frame> = [{ kind: "enter", block: root }];
@@ -6747,14 +6916,48 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 				const block = fn.blocks[frame.block]!;
 				for (const instruction of block.instructions) {
 					if (protectedInstructions.has(instruction.id)) continue;
-					const accesses = forwardableMemoryAccesses(instruction);
+					// A fresh literal's own slots start out holding its operands, so the
+					// allocation is a definition every dominated read of those slots can
+					// use, without the allocation being a write to anyone else's memory.
+					const initialized = memory.initializations.get(instruction.id);
+					const layout = initialValues.get(instruction.id);
+					if (initialized !== undefined && layout !== undefined) {
+						for (const [index, key] of layout.keys.entries()) {
+							const partition = coreMemoryPartition({
+								kind: "object-slot",
+								allocation: instruction.id,
+								key,
+							});
+							const version = initialized.get(partition);
+							const initial = layout.initialValues[index];
+							if (version === undefined || initial === undefined) continue;
+							record(`${partition}\0${version}`, {
+								value: initial,
+								block: frame.block,
+							});
+						}
+					}
+					const accesses = forwardableMemoryAccesses(instruction, resolution);
 					if (accesses.length === 0) continue;
+					// Replacing an instruction by one SSA value is only valid for a
+					// single-read operation whose sole output is that read. A future
+					// multi-location opcode may still participate in memory analysis, but
+					// forwarding one of its accesses must not erase its other effects.
+					if (
+						accesses.some(({ mode }) => mode === "read") &&
+						(accesses.length !== 1 ||
+							accesses[0]!.mode !== "read" ||
+							instruction.outputs.length !== 1 ||
+							instruction.outputs[0] !== accesses[0]!.value)
+					) {
+						continue;
+					}
 					const readVersions = memory.reads.get(instruction.id)?.exact;
 					for (const access of accesses) {
 						if (access.mode === "write") {
 							record(
 								`${access.partition}\0${memory.writeVersion(instruction.id, access.partition)}`,
-								access.value,
+								{ value: access.value, block: frame.block },
 							);
 							continue;
 						}
@@ -6764,14 +6967,47 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 						const hit = available.get(key);
 						if (
 							hit !== undefined &&
-							representations.get(hit) === representations.get(access.value) &&
+							// An exceptional edge leaves a block before its instructions, so
+							// ordinary dominance is not enough to make the recorded value
+							// available here.
+							(hit.block === frame.block ||
+								cfg.instructionDominatesBlock(hit.block, frame.block)) &&
 							!protectedInputs.has(access.value)
 						) {
-							replacements.set(access.value, hit);
-							removedInstructions.add(instruction.id);
-							continue;
+							const sourceRepresentation = representations.get(hit.value);
+							const destinationRepresentation = representations.get(access.value);
+							if (sourceRepresentation === destinationRepresentation) {
+								replacements.set(access.value, hit.value);
+								removedInstructions.add(instruction.id);
+								continue;
+							}
+							// Target lowering defines `move` as a representation conversion when
+							// an unboxed primitive flows into a boxed destination. Retain the
+							// load's output in that case: consumers keep their declared class,
+							// while the property operation and its effects disappear.
+							if (
+								destinationRepresentation === "boxed" &&
+								(sourceRepresentation === "f64" ||
+									sourceRepresentation === "i32" ||
+									sourceRepresentation === "boolean")
+							) {
+								const { effectRefinement: _refinement, ...withoutRefinement } =
+									instruction;
+								replacementInstructions.set(instruction.id, {
+									...withoutRefinement,
+									opcode: "move",
+									inputs: [hit.value],
+									attributes: {},
+								});
+								record(key, { value: access.value, block: frame.block });
+								continue;
+							}
 						}
-						if (hit === undefined) record(key, access.value);
+						// The earlier definition may have the wrong representation or may be
+						// unavailable on exceptional flow. This load is nevertheless the
+						// current block's value for the version, so later dominated reads can
+						// reuse it.
+						record(key, { value: access.value, block: frame.block });
 					}
 				}
 				stack.push({ kind: "exit", marker });
@@ -6784,8 +7020,167 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 		for (const block of fn.blocks) {
 			if (!visited.has(block.id)) processTree(block.id);
 		}
-		if (removedInstructions.size === 0) return fn;
-		return rewriteFunction(fn, fn.blocks, replacements, removedInstructions);
+		if (removedInstructions.size === 0 && replacementInstructions.size === 0) return fn;
+		const blocks = fn.blocks.map((block) => ({
+			...block,
+			instructions: block.instructions.map(
+				(instruction) => replacementInstructions.get(instruction.id) ?? instruction,
+			),
+		}));
+		// A forwarded read can be the last throwing instruction covered by the
+		// block's handler. Core represents exceptional flow on the block rather
+		// than on an individual instruction, so restore the CFG invariant as part
+		// of the same transformation.
+		return pruneVacuousHandlers(
+			rewriteFunction(fn, blocks, replacements, removedInstructions),
+		);
+	},
+};
+
+/**
+ * Remove stores to a contained aggregate that nothing can read.
+ *
+ * A contained allocation's reference never leaves the activation, so the only
+ * operations that can observe one of its slots are the accesses to it that this
+ * function already contains. Two conservative shapes are removed:
+ *
+ *  - a slot no access anywhere reads, so every store to it is unobservable. This
+ *    needs no control-flow reasoning at all, and it is what makes forwarding pay
+ *    off: once the reads are gone, the stores that fed them are dead.
+ *  - a store overwritten later in the same block with no read of that slot in
+ *    between. The block must have no handler, since a handler is a reader inside
+ *    this activation that the linear scan does not cover.
+ *
+ * ## Reachability is part of the semantics
+ *
+ * Dropping a store changes what the slot references, in both directions: the
+ * dropped value is never reachable through the slot, and whatever the slot held
+ * before stays reachable through it for longer. `WeakRef.prototype.deref` and
+ * `FinalizationRegistry` callbacks make both directions observable, and they are
+ * ordinary operations rather than a timing artefact, so "the collector might not
+ * have run" is not a justification.
+ *
+ * The proof is therefore per partition, not per store: every value that can ever
+ * occupy the slot — the literal's initial value for that key and the stored value
+ * of every store to it — must be one `CanBeHeldWeakly` rejects. Then no `WeakRef`
+ * can be pointed at it and no registry can be given it, so how long the slot
+ * references it is not observable. A single unproven value retains the whole
+ * partition.
+ *
+ * ## Why the baseline effects do not block it
+ *
+ * `storePropertyStatic` declares `mayThrow` and `mayGc` because in general a
+ * property store can hit a setter, a Proxy trap, a frozen object, a prototype
+ * setter, or a shape transition that allocates. The containment proof refutes
+ * every one of those for this site: the key is an own writable data property of an
+ * ordinary object that has existed since the literal was built, so the runtime
+ * invariant this relies on is that such a store is exactly one slot write —
+ * `object->slots[index] = value` plus a write barrier, with no lookup, no
+ * transition, no allocation, and no user code. Removing the instruction therefore
+ * removes a throw that cannot happen and a collection point that cannot allocate;
+ * both are pure reductions, and dropping the safepoint only shrinks the root set.
+ * The refinement pass has already removed the impossible `mayThrow`; surviving
+ * stores retain `mayGc`, so root liveness remains conservative.
+ */
+const eliminateDeadStores: CoreFunctionPass = {
+	name: "eliminate-dead-stores",
+	changesControlFlow: true,
+	run(fn, analyses) {
+		const provenance = analyses.provenance(fn);
+		const contained = provenance.layouts.filter(
+			({ instruction }) => provenance.escape(instruction) === "contained",
+		);
+		if (contained.length === 0) return fn;
+		const resolution = memoryResolution(analyses, fn);
+		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+
+		// Values that can occupy each partition, starting with what the literal put
+		// there. A partition is only a candidate while every one of them is proven
+		// unable to be a finalization target.
+		const weaklyHoldable = new Set<CoreMemoryPartition>();
+		const described = new Set<CoreMemoryPartition>();
+		const note = (
+			partition: CoreMemoryPartition,
+			value: CoreValueId | undefined,
+		): void => {
+			if (value === undefined || !provenance.cannotBeHeldWeakly(value)) {
+				weaklyHoldable.add(partition);
+			}
+		};
+		for (const layout of contained) {
+			for (const [index, key] of layout.keys.entries()) {
+				const partition = coreMemoryPartition({
+					kind: "object-slot",
+					allocation: layout.instruction,
+					key,
+				});
+				described.add(partition);
+				note(partition, layout.initialValues[index]);
+			}
+		}
+		const readPartitions = new Set<CoreMemoryPartition>();
+		const storesByPartition = new Map<CoreMemoryPartition, Array<CoreInstructionId>>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const access of coreMemoryAccesses(instruction, resolution)) {
+					if (access.location.kind !== "object-slot") continue;
+					const partition = coreMemoryPartition(access.location);
+					if (access.mode === "read") {
+						readPartitions.add(partition);
+						continue;
+					}
+					const stores = storesByPartition.get(partition) ?? [];
+					stores.push(instruction.id);
+					storesByPartition.set(partition, stores);
+					note(partition, access.value);
+				}
+			}
+		}
+		if (storesByPartition.size === 0) return fn;
+		// A partition this pass never described has no proven set of occupants, so it
+		// is not removable either.
+		const removable = (partition: CoreMemoryPartition): boolean =>
+			described.has(partition) && !weaklyHoldable.has(partition);
+
+		const dead = new Set<CoreInstructionId>();
+		for (const [partition, stores] of storesByPartition) {
+			if (readPartitions.has(partition) || !removable(partition)) continue;
+			for (const store of stores) {
+				if (!protectedInstructions.has(store)) dead.add(store);
+			}
+		}
+		for (const block of fn.blocks) {
+			if (block.handler !== undefined) continue;
+			const pending = new Map<CoreMemoryPartition, CoreInstructionId>();
+			for (const instruction of block.instructions) {
+				for (const access of coreMemoryAccesses(instruction, resolution)) {
+					if (access.location.kind !== "object-slot") continue;
+					const partition = coreMemoryPartition(access.location);
+					if (access.mode === "read") {
+						pending.delete(partition);
+						continue;
+					}
+					const previous = pending.get(partition);
+					if (
+						previous !== undefined &&
+						removable(partition) &&
+						!protectedInstructions.has(previous)
+					) {
+						dead.add(previous);
+					}
+					pending.set(partition, instruction.id);
+				}
+			}
+		}
+		if (dead.size === 0) return fn;
+		return pruneVacuousHandlers({
+			...fn,
+			blocks: fn.blocks.map((block) => ({
+				...block,
+				instructions: block.instructions.filter(({ id }) => !dead.has(id)),
+			})),
+			mutationEpoch: fn.mutationEpoch + 1,
+		});
 	},
 };
 
@@ -7676,7 +8071,9 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldEmptyForwardingBlocks,
 	combineLinearBlocks,
 	foldStaticPropertyKeys,
+	refineOwnDataSlotAccesses,
 	forwardMemoryAccesses,
+	eliminateDeadStores,
 	loopInvariantCodeMotion,
 	copyAndValueNumber,
 	deadInstructionElimination,

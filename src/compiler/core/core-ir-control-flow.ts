@@ -35,10 +35,7 @@ export interface CoreControlFlow {
 	 * Exceptional edges leave a protected block before any instruction-defined
 	 * value, so ordinary block dominance alone is insufficient.
 	 */
-	instructionDominatesBlock(
-		dominator: CoreBlockId,
-		block: CoreBlockId,
-	): boolean;
+	instructionDominatesBlock(dominator: CoreBlockId, block: CoreBlockId): boolean;
 }
 
 /**
@@ -363,9 +360,7 @@ function buildDominatorPredicate(
 		const entry = entries[dominator] ?? -1;
 		const candidate = entries[block] ?? -1;
 		return (
-			entry >= 0 &&
-			candidate >= entry &&
-			(exits[block] ?? -1) <= (exits[dominator] ?? -1)
+			entry >= 0 && candidate >= entry && (exits[block] ?? -1) <= (exits[dominator] ?? -1)
 		);
 	};
 }
@@ -422,7 +417,9 @@ export function buildCoreControlFlow(
 	// Dominance from source exit to destination entry is therefore the exact
 	// cross-block availability rule for instruction results.
 	let instructionDominatesBlock = dominates;
-	if (successors.some((outgoing) => outgoing.some(({ kind }) => kind === "exceptional"))) {
+	if (
+		successors.some((outgoing) => outgoing.some(({ kind }) => kind === "exceptional"))
+	) {
 		const entryNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2);
 		const exitNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2 + 1);
 		const splitSuccessors = Array.from(
@@ -446,9 +443,7 @@ export function buildCoreControlFlow(
 				);
 			}
 		}
-		const splitPredecessors = splitSuccessors.map(
-			() => new Array<CoreControlEdge>(),
-		);
+		const splitPredecessors = splitSuccessors.map(() => new Array<CoreControlEdge>());
 		for (const outgoing of splitSuccessors) {
 			for (const edge of outgoing) splitPredecessors[edge.to]!.push(edge);
 		}

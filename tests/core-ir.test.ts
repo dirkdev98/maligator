@@ -199,6 +199,47 @@ describe("Core IR", () => {
 		);
 	});
 
+	it("declares a fresh aggregate's layout and which results cannot be held weakly", () => {
+		const shaped = coreOpcodeRegistry.require("createObjectShaped");
+		expect(shaped.allocation).toStrictEqual({
+			keysAttribute: "keyStringIndices",
+			firstValueOperand: 0,
+		});
+		expect(coreOpcodeRegistry.require("createObject").allocation).toBeUndefined();
+		// No JavaScript operator evaluates to an object or a symbol, so an operator
+		// result's reachability is never observable; an intrinsic can be a well-known
+		// symbol, which a registry accepts.
+		expect(coreOpcodeRegistry.require("binary").resultCannotBeHeldWeakly).toBe(true);
+		expect(coreOpcodeRegistry.require("unary").resultCannotBeHeldWeakly).toBe(true);
+		expect(
+			coreOpcodeRegistry.require("loadIntrinsic").resultCannotBeHeldWeakly,
+		).toBeUndefined();
+		expect(
+			coreOpcodeRegistry.require("createObjectShaped").resultCannotBeHeldWeakly,
+		).toBeUndefined();
+		const opcodes = new CoreOpcodeRegistry();
+		expect(() =>
+			opcodes.define({
+				opcode: "unnamedLayout",
+				inputs: coreArity(0, 4),
+				outputs: coreArity(1),
+				effects: CORE_NO_EFFECTS,
+				discardable: false,
+				allocation: { keysAttribute: "", firstValueOperand: 0 },
+			}),
+		).toThrow(/allocation with no key attribute/);
+		expect(() =>
+			opcodes.define({
+				opcode: "referencelessLayout",
+				inputs: coreArity(0, 4),
+				outputs: coreArity(0),
+				effects: CORE_NO_EFFECTS,
+				discardable: false,
+				allocation: { keysAttribute: "keys", firstValueOperand: 0 },
+			}),
+		).toThrow(/without producing a reference/);
+	});
+
 	it("builds, verifies, prints, and analyzes block-parameter SSA", () => {
 		const opcodes = registry();
 		const builder = new CoreFunctionBuilder(3, opcodes, { parameterCount: 1 });
@@ -406,11 +447,9 @@ describe("Core IR", () => {
 		const direct = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
 		const directEntry = direct.createBlock([{ representation: "boxed" }]);
 		const directHandler = direct.createBlock([{ role: "exception" }]);
-		const [directLate] = direct.appendInstruction(
-			directEntry,
-			"call",
-			[direct.block(directEntry).parameters[0]!.value],
-		);
+		const [directLate] = direct.appendInstruction(directEntry, "call", [
+			direct.block(directEntry).parameters[0]!.value,
+		]);
 		direct.setHandler(directEntry, directHandler);
 		direct.setTerminator(directEntry, { kind: "return", value: directLate! });
 		direct.setTerminator(directHandler, { kind: "return", value: directLate! });

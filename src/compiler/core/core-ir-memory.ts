@@ -4,10 +4,11 @@
  *
  * Locations come from the opcode registry's declared accesses, never from a
  * per-pass opcode switch. Activation and program slots are named exactly, so a
- * write to one slot leaves every other slot's version alone. Heap families are
- * still named as a whole, because proving two bases distinct needs an alias
- * oracle Core does not have yet; naming them keeps their invalidation flowing
- * through the shared effect domains rather than through a pass's memory.
+ * write to one slot leaves every other slot's version alone. A heap access is
+ * named exactly only when a caller supplies a resolution that proves its base and
+ * key address one allocation's own data slot; otherwise the access covers its
+ * whole family, so its invalidation still flows through the shared effect
+ * domains.
  *
  * Two things deliberately absent: strings, whose values are immutable so there is
  * no string cell to alias, and epochs, whose validity belongs to the fact system.
@@ -38,6 +39,11 @@ export type CoreMemoryLocation =
 	| { readonly kind: "local-slot"; readonly slot: number }
 	| { readonly kind: "captured-slot"; readonly owner: number; readonly index: number }
 	| { readonly kind: "activation-this" }
+	| {
+			readonly kind: "object-slot";
+			readonly allocation: CoreInstructionId;
+			readonly key: number;
+	  }
 	| { readonly kind: "family"; readonly family: CoreMemoryFamily };
 
 export type CoreExactMemoryLocation = Exclude<
@@ -77,6 +83,8 @@ export function coreMemoryPartition(
 			return `slot\0captured-slot\0${location.owner}\0${location.index}` as CoreMemoryPartition;
 		case "activation-this":
 			return "slot\0activation-this" as CoreMemoryPartition;
+		case "object-slot":
+			return `slot\0object-slot\0${location.allocation}\0${location.key}` as CoreMemoryPartition;
 	}
 }
 
@@ -85,10 +93,27 @@ export function coreMemoryDomainPartition(domain: CoreEffectDomain): CoreMemoryP
 	return `domain\0${domain}` as CoreMemoryPartition;
 }
 
+/**
+ * Proof supplier for heap locations. Naming an exact object slot requires knowing
+ * that the base must-aliases one allocation and that the key is one of its own
+ * writable data slots; that knowledge is a whole-function analysis, so the memory
+ * model takes it as an argument instead of guessing.
+ *
+ * Contract: a resolution may only name a slot exactly when no code outside this
+ * function can hold a reference to the allocation. The memory model relies on it —
+ * an exactly named object slot survives effects it cannot attribute to a base,
+ * because nothing an unknown call or a suspension runs can reach a reference this
+ * activation never handed out. Naming a slot on a reference that escapes would
+ * make every such effect silently invisible to it.
+ */
+export interface CoreMemoryResolution {
+	ownDataSlot(base: CoreValueId, key: number): CoreInstructionId | undefined;
+}
+
 export interface CoreMemoryAccess {
 	readonly mode: CoreAccessMode;
 	readonly location: CoreMemoryLocation;
-	/** Declared heap base, for the future alias oracle. Not used for aliasing yet. */
+	/** Declared heap base, when the descriptor names one. */
 	readonly base?: CoreValueId;
 	readonly key?: number;
 	/** Value a write stores; the forwarding source for a later read. */
@@ -113,9 +138,23 @@ function integerAttribute(
 function exactLocation(
 	access: CoreOpcodeAccess,
 	instruction: CoreInstruction,
+	resolution: CoreMemoryResolution | undefined,
 ): CoreExactMemoryLocation | undefined {
 	const attributes = access.attributes ?? [];
 	switch (access.family) {
+		case "object-slot": {
+			if (resolution === undefined || access.baseOperand === undefined) return undefined;
+			const base = instruction.inputs[access.baseOperand];
+			const key =
+				access.keyAttribute === undefined
+					? undefined
+					: integerAttribute(instruction, access.keyAttribute);
+			if (base === undefined || key === undefined) return undefined;
+			const allocation = resolution.ownDataSlot(base, key);
+			return allocation === undefined
+				? undefined
+				: { kind: "object-slot", allocation, key };
+		}
 		case "activation-this":
 			return { kind: "activation-this" };
 		case "global-slot":
@@ -146,6 +185,7 @@ function exactLocation(
  */
 export function coreMemoryAccesses(
 	instruction: CoreInstruction,
+	resolution?: CoreMemoryResolution,
 ): ReadonlyArray<CoreMemoryAccess> {
 	const declared = coreOpcodeRegistry.require(instruction.opcode).accesses;
 	if (declared === undefined || declared.length === 0) return [];
@@ -170,7 +210,7 @@ export function coreMemoryAccesses(
 		accesses.push({
 			mode: access.mode,
 			location:
-				exactLocation(access, instruction) ??
+				exactLocation(access, instruction, resolution) ??
 				({ kind: "family", family: access.family } as const),
 			...(base === undefined ? {} : { base }),
 			...(key === undefined ? {} : { key }),
@@ -189,10 +229,12 @@ export function coreMemoryAccesses(
  * invalidation set, and therefore the whole analysis, linear in the instruction
  * count for any function.
  */
-const MAX_EXACT_PARTITIONS_PER_FAMILY = 64;
+const MAX_EXACT_PARTITIONS_PER_FAMILY = 256;
 
 interface InstructionMemoryFacts {
 	readonly reads: ReadonlyArray<CoreMemoryPartition>;
+	/** Own slots this instruction brings into existence with an initial value. */
+	readonly initializes: ReadonlyArray<CoreMemoryPartition>;
 	readonly exactReads: ReadonlyArray<CoreMemoryPartition>;
 	readonly exactWrites: ReadonlyArray<CoreMemoryPartition>;
 	/** Domains an exact write must announce to whole-family readers. */
@@ -202,10 +244,37 @@ interface InstructionMemoryFacts {
 	readonly universal: boolean;
 }
 
+/**
+ * Partitions a fresh aggregate's own slots occupy, when the resolution proves the
+ * layout. These are not writes: the cells did not exist before, so no earlier read
+ * can be observing them, and modelling them as a write to the family would make
+ * every allocation a barrier for unrelated property reads.
+ */
+function initializedPartitions(
+	instruction: CoreInstruction,
+	resolution: CoreMemoryResolution | undefined,
+): ReadonlyArray<CoreMemoryPartition> {
+	const allocation = coreOpcodeRegistry.require(instruction.opcode).allocation;
+	if (allocation === undefined || resolution === undefined) return [];
+	const result = instruction.outputs[0];
+	if (result === undefined) return [];
+	const keys = instruction.attributes[allocation.keysAttribute];
+	if (!Array.isArray(keys)) return [];
+	const partitions: Array<CoreMemoryPartition> = [];
+	for (const key of keys) {
+		if (typeof key !== "number") continue;
+		const owner = resolution.ownDataSlot(result, key);
+		if (owner === undefined) continue;
+		partitions.push(coreMemoryPartition({ kind: "object-slot", allocation: owner, key }));
+	}
+	return partitions;
+}
+
 function instructionMemoryFacts(
 	instruction: CoreInstruction,
 	exactFamilies: ReadonlySet<CoreMemoryFamily>,
 	familyOfPartition: Map<CoreMemoryPartition, CoreMemoryFamily>,
+	resolution: CoreMemoryResolution | undefined,
 ): InstructionMemoryFacts {
 	const effects = coreInstructionEffects(instruction);
 	const reads = new Set<CoreMemoryPartition>();
@@ -217,7 +286,7 @@ function instructionMemoryFacts(
 		read: new Set<CoreEffectDomain>(),
 		write: new Set<CoreEffectDomain>(),
 	};
-	for (const access of coreMemoryAccesses(instruction)) {
+	for (const access of coreMemoryAccesses(instruction, resolution)) {
 		const location = access.location;
 		const family = coreMemoryLocationFamily(location);
 		const domains = CORE_MEMORY_FAMILY_DOMAINS[family];
@@ -251,8 +320,11 @@ function instructionMemoryFacts(
 	for (const domain of effects.writes) {
 		if (!covered.write.has(domain)) wholeDomains.add(domain);
 	}
+	const initializes = initializedPartitions(instruction, resolution);
+	for (const partition of initializes) familyOfPartition.set(partition, "object-slot");
 	return {
 		reads: [...reads],
+		initializes,
 		exactReads: [...exactReads],
 		exactWrites: [...exactWrites],
 		notifiedDomains: [...notifiedDomains],
@@ -261,11 +333,14 @@ function instructionMemoryFacts(
 	};
 }
 
-function exactPartitionFamilies(fn: CoreFunction): ReadonlySet<CoreMemoryFamily> {
+function exactPartitionFamilies(
+	fn: CoreFunction,
+	resolution: CoreMemoryResolution | undefined,
+): ReadonlySet<CoreMemoryFamily> {
 	const counts = new Map<CoreMemoryFamily, Set<CoreMemoryPartition>>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			for (const access of coreMemoryAccesses(instruction)) {
+			for (const access of coreMemoryAccesses(instruction, resolution)) {
 				if (!coreMemoryLocationIsExact(access.location)) continue;
 				const family = coreMemoryLocationFamily(access.location);
 				const partitions = counts.get(family) ?? new Set<CoreMemoryPartition>();
@@ -322,6 +397,14 @@ export interface CoreInstructionMemoryVersions {
 
 export interface CoreMemoryVersions {
 	readonly reads: ReadonlyMap<CoreInstructionId, CoreInstructionMemoryVersions>;
+	/**
+	 * Version each own slot of a fresh aggregate carries immediately after its
+	 * allocation, so the literal's initial value can be forwarded to a later read.
+	 */
+	readonly initializations: ReadonlyMap<
+		CoreInstructionId,
+		ReadonlyMap<CoreMemoryPartition, CoreMemoryVersion>
+	>;
 	/** Version an instruction's exact write installs, for a following reader. */
 	writeVersion(
 		instruction: CoreInstructionId,
@@ -362,8 +445,9 @@ function sameState(
 export function coreMemoryVersions(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
+	resolution?: CoreMemoryResolution,
 ): CoreMemoryVersions {
-	const exactFamilies = exactPartitionFamilies(fn);
+	const exactFamilies = exactPartitionFamilies(fn, resolution);
 	const facts = new Map<CoreInstructionId, InstructionMemoryFacts>();
 	const familyOfPartition = new Map<CoreMemoryPartition, CoreMemoryFamily>();
 	const tracked = new Set<CoreMemoryPartition>();
@@ -373,12 +457,17 @@ export function coreMemoryVersions(
 				instruction,
 				exactFamilies,
 				familyOfPartition,
+				resolution,
 			);
 			facts.set(instruction.id, instructionFacts);
 			for (const partition of instructionFacts.reads) tracked.add(partition);
 		}
 	}
 	const reads = new Map<CoreInstructionId, CoreInstructionMemoryVersions>();
+	const initializations = new Map<
+		CoreInstructionId,
+		ReadonlyMap<CoreMemoryPartition, CoreMemoryVersion>
+	>();
 	const exactWrites = new Map<CoreInstructionId, ReadonlyArray<CoreMemoryPartition>>();
 	for (const [instruction, instructionFacts] of facts) {
 		const forwardable = instructionFacts.exactWrites.filter((partition) =>
@@ -388,6 +477,7 @@ export function coreMemoryVersions(
 	}
 	const versions: CoreMemoryVersions = {
 		reads,
+		initializations,
 		writeVersion,
 		exactWrites: (instruction) => exactWrites.get(instruction) ?? [],
 	};
@@ -408,6 +498,18 @@ export function coreMemoryVersions(
 		}
 	}
 
+	// Slots of an allocation this activation never handed out. Only the exact
+	// accesses this function performs on them can change their contents, so an
+	// effect the model cannot attribute to a base leaves them alone. This is the
+	// resolution contract above, and it is the difference between a coercion or a
+	// call being a barrier for one slot and being a barrier for all memory.
+	const activationPrivate = new Set(
+		partitions.filter((partition) => familyOfPartition.get(partition) === "object-slot"),
+	);
+	const unattributable = partitions.filter(
+		(partition) => !activationPrivate.has(partition),
+	);
+
 	/** Partitions one instruction invalidates, computed once per instruction. */
 	const invalidated = new Map<CoreInstructionId, ReadonlyArray<CoreMemoryPartition>>();
 	const invalidatedBy = (
@@ -418,7 +520,16 @@ export function coreMemoryVersions(
 		const instructionFacts = facts.get(instruction)!;
 		let result: Array<CoreMemoryPartition>;
 		if (instructionFacts.universal) {
-			result = partitions;
+			// A universal effect cannot reach another instruction's contained
+			// allocation, but it must still perform its own resolved writes. This
+			// distinction matters for an access carrying a pre-existing refinement:
+			// it may remain conservatively universal while still naming the exact
+			// private slot it updates.
+			const killed = new Set<CoreMemoryPartition>(unattributable);
+			for (const partition of instructionFacts.exactWrites) {
+				if (tracked.has(partition)) killed.add(partition);
+			}
+			result = [...killed];
 		} else {
 			const killed = new Set<CoreMemoryPartition>();
 			for (const partition of instructionFacts.exactWrites) {
@@ -433,7 +544,7 @@ export function coreMemoryVersions(
 			}
 			for (const domain of instructionFacts.wholeDomains) {
 				for (const partition of exactPartitionsForDomain.get(domain) ?? []) {
-					killed.add(partition);
+					if (!activationPrivate.has(partition)) killed.add(partition);
 				}
 			}
 			result = [...killed];
@@ -525,6 +636,14 @@ export function coreMemoryVersions(
 						.join("|"),
 					exact,
 				});
+			}
+			if (instructionFacts.initializes.length > 0) {
+				const initialized = new Map<CoreMemoryPartition, CoreMemoryVersion>();
+				for (const partition of instructionFacts.initializes) {
+					const version = state.get(partition);
+					if (version !== undefined) initialized.set(partition, version);
+				}
+				if (initialized.size > 0) initializations.set(instruction.id, initialized);
 			}
 			for (const partition of invalidatedBy(instruction.id)) {
 				state.set(partition, writeVersion(instruction.id, partition));

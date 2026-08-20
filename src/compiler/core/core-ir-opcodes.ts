@@ -11,6 +11,7 @@ import type {
 	CoreInstructionEffects,
 	CoreMemoryFamily,
 	CoreOpcodeAccess,
+	CoreOpcodeAllocation,
 } from "./core-ir.ts";
 
 /**
@@ -354,6 +355,61 @@ const OPCODE_ACCESSES = {
 	withSet: [write("object-slot")],
 } as const satisfies Partial<Record<CoreOpcode, ReadonlyArray<CoreOpcodeAccess>>>;
 
+/**
+ * Fresh aggregates whose own data slots Core knows without asking the runtime.
+ * The frontend only emits `createObjectShaped` for a literal made entirely of
+ * static, non-index, non-`__proto__`, unique data properties, so every declared
+ * key is an own writable data slot of an ordinary object from the moment it
+ * exists — the property that lets an analysis skip a prototype walk.
+ */
+const OPCODE_ALLOCATIONS = {
+	createObjectShaped: { keysAttribute: "keyStringIndices", firstValueOperand: 0 },
+} as const satisfies Partial<Record<CoreOpcode, CoreOpcodeAllocation>>;
+
+/** Operands inspected without anything retaining the reference passed in. */
+const OBSERVES_OPERANDS = new Set<CoreOpcode>([
+	"isEmpty",
+	"move",
+	"throwIfTdz",
+	"typeofCompare",
+]);
+
+/**
+ * Opcodes whose result `CanBeHeldWeakly` rejects, so no `WeakRef` or
+ * `FinalizationRegistry` can observe when it becomes unreachable.
+ *
+ * `binary` and `unary` are here because no JavaScript operator evaluates to an
+ * object or a symbol: every arithmetic, bitwise, comparison, `typeof`, `void`,
+ * `delete`, and increment result is a number, string, bigint, boolean,
+ * `undefined`, or `null`. Well-known symbols are deliberately excluded — the
+ * registry rejects only symbols with a global-registry key, so `Symbol.iterator`
+ * can be held weakly and `loadIntrinsic` therefore cannot join this set.
+ */
+const RESULT_CANNOT_BE_HELD_WEAKLY = new Set<CoreOpcode>([
+	"binary",
+	"createBigint",
+	"createBoolean",
+	"createEmpty",
+	"createF64",
+	"createNull",
+	"createNumber",
+	"createString",
+	"createUndefined",
+	"guardFunctionIndex",
+	"isEmpty",
+	"loadArgumentCount",
+	"mathBinaryNumber",
+	"mathUnaryNumber",
+	"typeofCompare",
+	"unary",
+]);
+
+function opcodeAllocation(opcode: CoreOpcode): CoreOpcodeAllocation | undefined {
+	return (OPCODE_ALLOCATIONS as Partial<Record<CoreOpcode, CoreOpcodeAllocation>>)[
+		opcode
+	];
+}
+
 function opcodeAccesses(opcode: CoreOpcode): ReadonlyArray<CoreOpcodeAccess> {
 	return (
 		(OPCODE_ACCESSES as Partial<Record<CoreOpcode, ReadonlyArray<CoreOpcodeAccess>>>)[
@@ -509,6 +565,7 @@ for (const opcode of CORE_OPCODES) {
 	const outputs = NO_OUTPUT.has(opcode) ? 0 : TWO_OUTPUTS.has(opcode) ? 2 : 1;
 	const [minimumInputs, maximumInputs] = INPUT_ARITIES[opcode];
 	const accesses = opcodeAccesses(opcode);
+	const allocation = opcodeAllocation(opcode);
 	coreOpcodeRegistry.define({
 		opcode,
 		inputs: coreArity(minimumInputs, maximumInputs),
@@ -516,6 +573,11 @@ for (const opcode of CORE_OPCODES) {
 		effects: effectsFor(opcode),
 		discardable: DISCARDABLE.has(opcode),
 		...(accesses.length === 0 ? {} : { accesses }),
+		...(allocation === undefined ? {} : { allocation }),
+		...(OBSERVES_OPERANDS.has(opcode) ? { observesOperands: true } : {}),
+		...(RESULT_CANNOT_BE_HELD_WEAKLY.has(opcode)
+			? { resultCannotBeHeldWeakly: true }
+			: {}),
 	});
 }
 

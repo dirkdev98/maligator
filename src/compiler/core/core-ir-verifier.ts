@@ -1,4 +1,6 @@
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import { CORE_OWN_DATA_SLOT_FACT, coreProvenance } from "./core-ir-provenance.ts";
+import { CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
 import type {
 	CoreBlock,
 	CoreBlockId,
@@ -352,6 +354,79 @@ function verifyRegionReferences(
 	}
 }
 
+/**
+ * A property access may only claim it runs no user code while its base still
+ * must-aliases a contained allocation and its key is one of that allocation's own
+ * writable data slots. That is the whole content of the claim: lose containment
+ * and the same access could reach an accessor, a Proxy trap, or a prototype.
+ *
+ * Checking it here rather than trusting the pass that made the claim means a later
+ * transform that lets the reference escape fails at the boundary that produced the
+ * graph instead of miscompiling.
+ *
+ * Only refinements whose proof is an own-data-slot fact are re-proved. A guard or
+ * epoch fact establishes the same narrowing from a different premise, and holding
+ * it to a containment it never claimed would reject a sound graph.
+ */
+function verifyOwnDataSlotRefinements(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+	cfg: ReturnType<typeof buildCoreControlFlow>,
+	facts: ReadonlyMap<CoreFact["id"], CoreFact>,
+): void {
+	const refined = fn.blocks.flatMap(({ instructions }) =>
+		instructions.filter((instruction) => {
+			const refinement = instruction.effectRefinement;
+			return (
+				refinement !== undefined &&
+				facts.get(refinement.proof)?.kind === CORE_OWN_DATA_SLOT_FACT
+			);
+		}),
+	);
+	if (refined.length === 0) return;
+	const provenance = coreProvenance(fn, cfg);
+	for (const instruction of refined) {
+		const fact = facts.get(instruction.effectRefinement!.proof)!;
+		const factValue =
+			typeof fact.value === "object" && fact.value !== null
+				? (fact.value as Record<string, unknown>)
+				: undefined;
+		const accesses = (registry.require(instruction.opcode).accesses ?? []).filter(
+			(access) => CORE_MEMORY_FAMILY_DOMAINS[access.family].includes("object-property"),
+		);
+		if (accesses.length !== 1 || accesses[0]!.family !== "object-slot") {
+			fail(
+				`instruction @${instruction.id} carries an own-data-slot proof for ${accesses.length} object-property accesses`,
+			);
+		}
+		for (const access of accesses) {
+			const base =
+				access.baseOperand === undefined
+					? undefined
+					: instruction.inputs[access.baseOperand];
+			const key =
+				access.keyAttribute === undefined
+					? undefined
+					: instruction.attributes[access.keyAttribute];
+			const slot =
+				base === undefined || typeof key !== "number"
+					? undefined
+					: provenance.ownDataSlot(base, key);
+			if (
+				base === undefined ||
+				typeof key !== "number" ||
+				slot === undefined ||
+				factValue?.allocation !== slot.instruction ||
+				factValue.key !== key
+			) {
+				fail(
+					`instruction @${instruction.id} carries an own-data-slot proof without a contained own data slot`,
+				);
+			}
+		}
+	}
+}
+
 /** Throws CoreIrVerificationError when any canonical middle-end invariant is broken. */
 export function verifyCoreFunction(
 	fn: CoreFunction,
@@ -620,6 +695,7 @@ function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry)
 	}
 
 	const cfg = buildCoreControlFlow(fn, registry);
+	verifyOwnDataSlotRefinements(fn, registry, cfg, facts);
 	if (cfg.predecessors[fn.entry]!.length !== 0) {
 		fail(`entry block b${fn.entry} has predecessors`);
 	}

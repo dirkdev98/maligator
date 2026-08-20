@@ -145,6 +145,18 @@ export interface CoreOpcodeAccess {
 	readonly valueOperand?: number;
 }
 
+/**
+ * Layout of a fresh aggregate whose own data slots this opcode initializes. Every
+ * declared key is an own writable, enumerable, configurable data property of the
+ * new object, and the operands starting at `firstValueOperand` hold their initial
+ * values in the same order. Without this metadata an analysis has no way to know
+ * a slot exists without consulting the runtime's shape tree.
+ */
+export interface CoreOpcodeAllocation {
+	readonly keysAttribute: string;
+	readonly firstValueOperand: number;
+}
+
 export interface CoreArity {
 	readonly minimum: number;
 	readonly maximum: number;
@@ -177,6 +189,22 @@ export interface CoreOpcodeDescriptor<Name extends string = string> {
 	 * domain for and the two can never drift apart.
 	 */
 	readonly accesses?: ReadonlyArray<CoreOpcodeAccess>;
+	/** Fresh aggregate this opcode produces, when its layout is compiler-known. */
+	readonly allocation?: CoreOpcodeAllocation;
+	/**
+	 * Every operand is inspected without anything retaining it, so passing a
+	 * reference here does not let it be reached again. Operators whose observation
+	 * depends on an attribute — strict equality, `typeof` — are narrowed by the
+	 * escape analysis instead, since a positional flag cannot express them.
+	 */
+	readonly observesOperands?: boolean;
+	/**
+	 * The result is neither an object nor a symbol, so `CanBeHeldWeakly` rejects it
+	 * and no `WeakRef` or `FinalizationRegistry` can observe when it stops being
+	 * reachable. A transform may only change how long such a value is referenced;
+	 * for anything else, reachability is observable program behaviour.
+	 */
+	readonly resultCannotBeHeldWeakly?: boolean;
 }
 
 function validateEffectDomains(
@@ -258,6 +286,27 @@ function validateAccesses(descriptor: CoreOpcodeDescriptor): void {
 	}
 }
 
+function validateAllocation(descriptor: CoreOpcodeDescriptor): void {
+	const allocation = descriptor.allocation;
+	if (allocation === undefined) return;
+	const opcode = descriptor.opcode;
+	if (allocation.keysAttribute.length === 0) {
+		throw new Error(`${opcode} declares an allocation with no key attribute`);
+	}
+	if (descriptor.outputs.minimum < 1) {
+		throw new Error(`${opcode} declares an allocation without producing a reference`);
+	}
+	if (
+		!Number.isSafeInteger(allocation.firstValueOperand) ||
+		allocation.firstValueOperand < 0 ||
+		allocation.firstValueOperand > descriptor.inputs.maximum
+	) {
+		throw new Error(
+			`${opcode} declares initial values at operand ${allocation.firstValueOperand}, outside its ${descriptor.inputs.minimum}..${descriptor.inputs.maximum} inputs`,
+		);
+	}
+}
+
 export class CoreOpcodeRegistry {
 	readonly #descriptors = new Map<string, CoreOpcodeDescriptor>();
 
@@ -271,6 +320,7 @@ export class CoreOpcodeRegistry {
 		validateEffectDomains(descriptor.opcode, "read", descriptor.effects.reads);
 		validateEffectDomains(descriptor.opcode, "write", descriptor.effects.writes);
 		validateAccesses(descriptor);
+		validateAllocation(descriptor);
 		const frozen: CoreOpcodeDescriptor<Name> = Object.freeze({
 			...descriptor,
 			inputs: Object.freeze({ ...descriptor.inputs }),
@@ -280,6 +330,9 @@ export class CoreOpcodeRegistry {
 				reads: Object.freeze([...descriptor.effects.reads]),
 				writes: Object.freeze([...descriptor.effects.writes]),
 			}),
+			...(descriptor.allocation === undefined
+				? {}
+				: { allocation: Object.freeze({ ...descriptor.allocation }) }),
 			...(descriptor.accesses === undefined
 				? {}
 				: {

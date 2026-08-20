@@ -815,6 +815,432 @@ describe("Core IR optimizer", () => {
 		expect(opcodes(1)).toContain("throwIfTdz");
 	});
 
+	it("forwards own data slots of a contained shaped literal", () => {
+		// { f0: a, f1: b }; o.f1 = a; return o.f0 + o.f1
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 2 });
+		const entry = builder.createBlock([{}, {}]);
+		const [first, second] = builder.block(entry).parameters.map(({ value }) => value);
+		const [object] = builder.appendInstruction(
+			entry,
+			"createObjectShaped",
+			[first!, second!],
+			{ attributes: { keyStringIndices: [1, 2] } },
+		);
+		builder.appendInstruction(entry, "storePropertyStatic", [object!, first!], {
+			attributes: { stringIndex: 2 },
+		});
+		const [readFirst] = builder.appendInstruction(
+			entry,
+			"loadPropertyStatic",
+			[object!],
+			{
+				attributes: { stringIndex: 1 },
+			},
+		);
+		const [readSecond] = builder.appendInstruction(
+			entry,
+			"loadPropertyStatic",
+			[object!],
+			{ attributes: { stringIndex: 2 } },
+		);
+		const [sum] = builder.appendInstruction(entry, "binary", [readFirst!, readSecond!], {
+			attributes: { operator: "+" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: sum! });
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), stringConstants: [[], [102], [103]] },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		const instructions = fn.blocks.flatMap(({ instructions: list }) => list);
+		expect(instructions.map(({ opcode }) => opcode)).not.toContain("loadPropertyStatic");
+		// Both reads resolve to the same parameter, so the sum adds it to itself.
+		expect(instructions.find(({ opcode }) => opcode === "binary")?.inputs).toStrictEqual([
+			fn.parameters[0],
+			fn.parameters[0],
+		]);
+	});
+
+	it("preserves boxing while forwarding a primitive literal slot", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [initial] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 41 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 1 },
+		});
+		const [one] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [sum] = builder.appendInstruction(entry, "binary", [loaded!, one!], {
+			attributes: { operator: "+" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: sum! });
+
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), stringConstants: [[], [102]] },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		expect(
+			fn.blocks.flatMap(({ instructions }) => instructions).map(({ opcode }) => opcode),
+		).not.toContain("loadPropertyStatic");
+	});
+
+	it("prunes a handler when an own-slot proof removes its last possible throw", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const initial = builder.block(entry).parameters[0]!.value;
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const body = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }]);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: body, arguments: [] },
+		});
+		const [loaded] = builder.appendInstruction(body, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setHandler(body, handler);
+		builder.setTerminator(body, { kind: "return", value: loaded! });
+		builder.setTerminator(handler, {
+			kind: "throw",
+			value: builder.block(handler).parameters[0]!.value,
+		});
+
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), stringConstants: [[], [102]] },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		expect(
+			fn.blocks.flatMap(({ instructions }) => instructions).map(({ opcode }) => opcode),
+		).not.toContain("loadPropertyStatic");
+		expect(fn.blocks.every(({ handler: candidate }) => candidate === undefined)).toBe(
+			true,
+		);
+	});
+
+	it("keeps property accesses a prototype or a foreign reference could observe", () => {
+		const build = (
+			functionIndex: number,
+			variant: "outside-shape" | "returned" | "passed-to-call",
+		): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const parameter = builder.block(entry).parameters[0]!.value;
+			const [object] = builder.appendInstruction(
+				entry,
+				"createObjectShaped",
+				[parameter],
+				{ attributes: { keyStringIndices: [1] } },
+			);
+			if (variant === "passed-to-call") {
+				const [callee] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+					attributes: { intrinsic: "Object" },
+				});
+				builder.appendInstruction(entry, "call", [callee!, parameter, object!]);
+			}
+			// A key the literal never declared reaches the prototype chain.
+			const key = variant === "outside-shape" ? 2 : 1;
+			const [firstRead] = builder.appendInstruction(
+				entry,
+				"loadPropertyStatic",
+				[object!],
+				{ attributes: { stringIndex: key } },
+			);
+			const [secondRead] = builder.appendInstruction(
+				entry,
+				"loadPropertyStatic",
+				[object!],
+				{ attributes: { stringIndex: key } },
+			);
+			const [sum] = builder.appendInstruction(
+				entry,
+				"binary",
+				[firstRead!, secondRead!],
+				{
+					attributes: { operator: "+" },
+				},
+			);
+			builder.setTerminator(entry, {
+				kind: "return",
+				value: variant === "returned" ? object! : sum!,
+			});
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations(
+			{
+				...coreProgram([
+					build(0, "outside-shape"),
+					build(1, "returned"),
+					build(2, "passed-to-call"),
+				]),
+				stringConstants: [[], [102], [103]],
+			},
+			{ verification: "per-pass" },
+		);
+		for (const fn of outcome.program.functions) {
+			expect(
+				fn.blocks
+					.flatMap(({ instructions }) => instructions)
+					.filter(({ opcode }) => opcode === "loadPropertyStatic"),
+			).toHaveLength(2);
+		}
+	});
+
+	it("keeps a contained slot across a call and reloads it after a store", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const parameter = builder.block(entry).parameters[0]!.value;
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [parameter], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const [callee] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+			attributes: { intrinsic: "Object" },
+		});
+		builder.appendInstruction(entry, "call", [callee!, parameter]);
+		const [afterCall] = builder.appendInstruction(
+			entry,
+			"loadPropertyStatic",
+			[object!],
+			{ attributes: { stringIndex: 1 } },
+		);
+		builder.appendInstruction(entry, "storePropertyStatic", [object!, afterCall!], {
+			attributes: { stringIndex: 1 },
+		});
+		const [afterStore] = builder.appendInstruction(
+			entry,
+			"loadPropertyStatic",
+			[object!],
+			{ attributes: { stringIndex: 1 } },
+		);
+		builder.setTerminator(entry, { kind: "return", value: afterStore! });
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), stringConstants: [[], [102]] },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		// The call cannot reach a reference this activation never handed out, so the
+		// literal's initial value is still the slot's value; the store then makes the
+		// following read the stored value, which is that same parameter.
+		expect(
+			fn.blocks.flatMap(({ instructions }) => instructions).map(({ opcode }) => opcode),
+		).not.toContain("loadPropertyStatic");
+		expect(fn.blocks[0]!.terminator).toMatchObject({
+			kind: "return",
+			value: fn.parameters[0],
+		});
+	});
+
+	it("does not forward across an otherwise universal exact write", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 2,
+		});
+		const entry = builder.createBlock([{}, {}]);
+		const [initial, stored] = builder.block(entry).parameters.map(({ value }) => value);
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const proof = builder.addFact({
+			kind: "pre-existing-refinement",
+			value: true,
+			validity: { kind: "summary", digest: "test-pre-existing-refinement" },
+			obligations: [],
+			origin: "test",
+		});
+		builder.appendInstruction(entry, "storePropertyStatic", [object!, stored!], {
+			attributes: { stringIndex: 1 },
+			effectRefinement: {
+				effects: coreOpcodeRegistry.require("storePropertyStatic").effects,
+				proof,
+			},
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), stringConstants: [[], [102]] },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		expect(
+			fn.blocks.flatMap(({ instructions }) => instructions).map(({ opcode }) => opcode),
+		).toContain("loadPropertyStatic");
+		expect(fn.blocks[0]!.terminator).not.toMatchObject({ value: fn.parameters[0] });
+	});
+
+	it("removes stores to a contained slot nothing reads", () => {
+		// Both variants store a proven primitive into a contained literal; only the
+		// second has a read that no store dominates, so its stores are the slot's
+		// only definition.
+		const build = (functionIndex: number, read: boolean): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const condition = builder.block(entry).parameters[0]!.value;
+			const left = builder.createBlock();
+			const right = builder.createBlock();
+			const join = builder.createBlock();
+			const [zero] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 0 },
+			});
+			const [one] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1 },
+			});
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [zero!], {
+				attributes: { keyStringIndices: [1] },
+			});
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition,
+				consequent: { block: left, arguments: [] },
+				alternate: { block: right, arguments: [] },
+			});
+			builder.appendInstruction(left, "storePropertyStatic", [object!, one!], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.setTerminator(left, { kind: "jump", edge: { block: join, arguments: [] } });
+			builder.appendInstruction(right, "storePropertyStatic", [object!, zero!], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.setTerminator(right, {
+				kind: "jump",
+				edge: { block: join, arguments: [] },
+			});
+			if (!read) {
+				builder.setTerminator(join, { kind: "return", value: condition });
+				return builder.finish(entry);
+			}
+			const [loaded] = builder.appendInstruction(join, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.setTerminator(join, { kind: "return", value: loaded! });
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations(
+			{
+				...coreProgram([build(0, false), build(1, true)]),
+				stringConstants: [[], [102]],
+			},
+			{ verification: "per-pass" },
+		);
+		const count = (functionIndex: number, opcode: string) =>
+			outcome.program.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter((instruction) => instruction.opcode === opcode),
+			).length;
+		expect(count(0, "storePropertyStatic")).toBe(0);
+		// Neither store dominates the join, so both must survive to define the slot
+		// the surviving load reads.
+		expect(count(1, "storePropertyStatic")).toBe(2);
+		expect(count(1, "loadPropertyStatic")).toBe(1);
+	});
+
+	it("retains a slot whose values a WeakRef or a registry could observe", () => {
+		// Same unread slot as above, but the values that occupy it are not proven
+		// primitives, so how long the slot references them stays observable through
+		// WeakRef.deref and FinalizationRegistry callbacks.
+		const build = (
+			functionIndex: number,
+			occupant: "parameter" | "number",
+		): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const parameter = builder.block(entry).parameters[0]!.value;
+			const [initial] =
+				occupant === "parameter"
+					? [parameter]
+					: builder.appendInstruction(entry, "createNumber", [], {
+							attributes: { value: 0 },
+						});
+			const [object] = builder.appendInstruction(
+				entry,
+				"createObjectShaped",
+				[initial!],
+				{ attributes: { keyStringIndices: [1] } },
+			);
+			const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			builder.appendInstruction(entry, "storePropertyStatic", [object!, stored!], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: parameter });
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations(
+			{
+				...coreProgram([build(0, "parameter"), build(1, "number")]),
+				stringConstants: [[], [102]],
+			},
+			{ verification: "per-pass" },
+		);
+		const stores = (functionIndex: number) =>
+			outcome.program.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "storePropertyStatic"),
+			).length;
+		// The literal's initial value is an unproven reference, so dropping the store
+		// that replaced it would keep that reference alive for longer.
+		expect(stores(0)).toBe(1);
+		// Every value the slot can hold is a number, so its reachability is not
+		// observable and the store goes.
+		expect(stores(1)).toBe(0);
+	});
+	it("keeps an overwritten store whose block can transfer to a reader", () => {
+		// o.f0 = a; <may throw>; o.f0 = b, with the handler reading the slot. The
+		// handler is a reader inside this activation, so the first store is still
+		// observable even though a later store overwrites it.
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 2 });
+		const entry = builder.createBlock([{}, {}]);
+		const [first, second] = builder.block(entry).parameters.map(({ value }) => value);
+		const [zero] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [zero!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const body = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }]);
+		builder.setTerminator(entry, { kind: "jump", edge: { block: body, arguments: [] } });
+		builder.appendInstruction(body, "storePropertyStatic", [object!, first!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.appendInstruction(body, "requireCoercible", [second!]);
+		builder.appendInstruction(body, "storePropertyStatic", [object!, second!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setHandler(body, handler);
+		builder.setTerminator(body, { kind: "return", value: zero! });
+		const [rescued] = builder.appendInstruction(
+			handler,
+			"loadPropertyStatic",
+			[object!],
+			{
+				attributes: { stringIndex: 1 },
+			},
+		);
+		builder.setTerminator(handler, { kind: "return", value: rescued! });
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), stringConstants: [[], [102]] },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		expect(
+			fn.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "storePropertyStatic"),
+			),
+		).toHaveLength(2);
+	});
+
 	it("invalidates GVN across environment and derived-this rebinding", () => {
 		const captured = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const capturedEntry = captured.createBlock();
