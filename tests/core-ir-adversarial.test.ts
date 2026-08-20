@@ -591,8 +591,8 @@ describe("adversarial Core graphs", () => {
 		expect(terminator).toMatchObject({
 			kind: "guard",
 			fact: provenFact,
-			success: { block: fast, arguments: [input] },
-			fallback: { block: slow, arguments: [input] },
+			success: { block: fast, arguments: [] },
+			fallback: { block: slow, arguments: [] },
 		});
 		expect(fn.facts.find(({ id }) => id === provenFact)?.validity).toEqual({
 			kind: "guard",
@@ -602,10 +602,14 @@ describe("adversarial Core graphs", () => {
 			validity: { kind: "epoch", family: "object-shapes" },
 			obligations: [{ kind: "fallback", id: "shape-deopt" }],
 		});
-		expect(
-			fn.blocks[fast]!.instructions.find(({ opcode }) => opcode === "call")
-				?.effectRefinement,
-		).toEqual({ effects: REFINED_CALL_EFFECTS, proof: provenFact });
+		const fastCall = fn.blocks[fast]!.instructions.find(
+			({ opcode }) => opcode === "call",
+		);
+		expect(fastCall?.inputs).toEqual([input, input]);
+		expect(fastCall?.effectRefinement).toEqual({
+			effects: REFINED_CALL_EFFECTS,
+			proof: provenFact,
+		});
 		expect(opcodesOf(fn)).not.toContain("move");
 		expect(definesValue(fn, deadInEntry!)).toBe(false);
 		expect(definesValue(fn, copiedInput!)).toBe(false);

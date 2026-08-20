@@ -232,6 +232,103 @@ describe("Core empty forwarding blocks", () => {
 	});
 });
 
+describe("Core SSA and CFG cleanup", () => {
+	it("removes a join parameter when every reachable edge provides one value", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const flag = blockParameters(builder, entry)[0]!;
+		const [value] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{}]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: flag,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [value!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [value!] },
+		});
+		builder.setTerminator(join, {
+			kind: "return",
+			value: blockParameters(builder, join)[0]!,
+		});
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]));
+		const result = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "eliminate-trivial-block-arguments" && changed,
+			),
+		).toBe(true);
+		expect(
+			result.values.some(
+				({ definition }) =>
+					definition.kind === "block-parameter" && definition.block !== result.entry,
+			),
+		).toBe(false);
+		expect(result.blocks).toHaveLength(1);
+		expect(result.blocks[0]!.terminator).toMatchObject({ kind: "return", value });
+	});
+
+	it("removes unused parameters and their mismatched incoming arguments", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const flag = blockParameters(builder, entry)[0]!;
+		const [leftValue] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [rightValue] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		const join = builder.createBlock([{}]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: flag,
+			consequent: { block: join, arguments: [leftValue!] },
+			alternate: { block: join, arguments: [rightValue!] },
+		});
+		builder.setTerminator(join, { kind: "return", value: flag });
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]));
+		const result = outcome.program.functions[0]!;
+		expect(result.blocks).toHaveLength(1);
+		expect(result.blocks[0]!.terminator).toMatchObject({ kind: "return", value: flag });
+		expect(() =>
+			verifyCoreProgram(coreProgram([result]), coreOpcodeRegistry),
+		).not.toThrow();
+	});
+
+	it("drops an exceptional edge when its protected block can no longer throw", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const handler = builder.createBlock([{ role: "exception" }]);
+		const value = blockParameters(builder, entry)[0]!;
+		builder.appendInstruction(entry, "unary", [value], {
+			attributes: { operator: "typeof" },
+		});
+		builder.setHandler(entry, handler);
+		builder.setTerminator(entry, { kind: "return", value });
+		builder.setTerminator(handler, {
+			kind: "throw",
+			value: blockParameters(builder, handler)[0]!,
+		});
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]));
+		const result = outcome.program.functions[0]!;
+		expect(result.blocks).toHaveLength(1);
+		expect(result.blocks[0]!.handler).toBeUndefined();
+	});
+});
+
 describe("Core to target boundary", () => {
 	it("emits every Core block instead of absorbing forwarding arms", () => {
 		// Unoptimized Core keeps the empty branch arms that target lowering used to

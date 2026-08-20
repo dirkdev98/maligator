@@ -4650,6 +4650,92 @@ function rewriteFunction(
 	};
 }
 
+function sameEdge(left: CoreEdge, right: CoreEdge): boolean {
+	return (
+		left.block === right.block &&
+		left.arguments.length === right.arguments.length &&
+		left.arguments.every((argument, index) => argument === right.arguments[index])
+	);
+}
+
+/**
+ * Remove selected ordinary block parameters and the matching argument on every
+ * incoming edge. Handler arguments omit the implicit exception parameter, so
+ * their index space is adjusted explicitly rather than treated like an ordinary
+ * edge. Remaining parameter definitions are re-indexed in the same transaction.
+ */
+function removeBlockParameters(
+	fn: CoreFunction,
+	removedIndices: ReadonlyMap<CoreBlockId, ReadonlySet<number>>,
+	replacements: ReadonlyMap<CoreValueId, CoreValueId> = new Map(),
+): CoreFunction {
+	const removedValues = new Set<CoreValueId>();
+	for (const [blockId, indices] of removedIndices) {
+		for (const index of indices) {
+			const parameter = fn.blocks[blockId]?.parameters[index];
+			if (parameter !== undefined) removedValues.add(parameter.value);
+		}
+	}
+	const rewriteIncomingEdge = (edge: CoreEdge): CoreEdge => {
+		const removed = removedIndices.get(edge.block);
+		return {
+			...edge,
+			arguments: edge.arguments
+				.map((value) => resolveValue(value, replacements))
+				.filter((_, index) => removed?.has(index) !== true),
+		};
+	};
+	const blocks = fn.blocks.map((block): CoreBlock => {
+		const removed = removedIndices.get(block.id);
+		const parameters = block.parameters.filter(
+			(_, index) => removed?.has(index) !== true,
+		);
+		let handler = block.handler;
+		if (handler !== undefined) {
+			const target = fn.blocks[handler.block]!;
+			const targetRemoved = removedIndices.get(handler.block);
+			const exceptionOffset = target.parameters[0]?.role === "exception" ? 1 : 0;
+			handler = {
+				...handler,
+				arguments: handler.arguments
+					.map((value) => resolveValue(value, replacements))
+					.filter((_, index) => targetRemoved?.has(index + exceptionOffset) !== true),
+			};
+		}
+		return {
+			...block,
+			parameters,
+			instructions: block.instructions.map((instruction) => ({
+				...instruction,
+				inputs: instruction.inputs.map((value) => resolveValue(value, replacements)),
+			})),
+			terminator: remapTerminatorEdges(
+				rewriteTerminator(block.terminator, replacements),
+				rewriteIncomingEdge,
+			),
+			...(handler === undefined ? { handler: undefined } : { handler }),
+		};
+	});
+	return {
+		...fn,
+		blocks,
+		values: fn.values
+			.filter(({ id }) => !removedValues.has(id))
+			.map((value) => {
+				if (value.definition.kind !== "block-parameter") return value;
+				const parameters = blocks[value.definition.block]!.parameters;
+				const index = parameters.findIndex(({ value: id }) => id === value.id);
+				return index === value.definition.index
+					? value
+					: {
+							...value,
+							definition: { ...value.definition, index },
+						};
+			}),
+		mutationEpoch: fn.mutationEpoch + 1,
+	};
+}
+
 function stableAttributeValue(value: unknown): string {
 	if (value === undefined) return "u";
 	if (value === null) return "n";
@@ -5010,7 +5096,37 @@ const simplifyControlFlow: CoreFunctionPass = {
 		let changed = false;
 		const blocks = fn.blocks.map((block): CoreBlock => {
 			const terminator = block.terminator;
+			let handler = block.handler;
+			if (
+				handler !== undefined &&
+				terminator.kind !== "throw" &&
+				!block.instructions.some(
+					(instruction) =>
+						(
+							instruction.effectRefinement?.effects ??
+							coreOpcodeRegistry.require(instruction.opcode).effects
+						).mayThrow,
+				)
+			) {
+				handler = undefined;
+				changed = true;
+			}
 			if (terminator.kind === "branch") {
+				if (sameEdge(terminator.consequent, terminator.alternate)) {
+					changed = true;
+					return {
+						...block,
+						...(handler === undefined ? { handler: undefined } : { handler }),
+						terminator: {
+							kind: "jump",
+							id: terminator.id,
+							edge: terminator.consequent,
+							...(terminator.sourcePosition === undefined
+								? {}
+								: { sourcePosition: terminator.sourcePosition }),
+						},
+					};
+				}
 				const condition = constants.get(terminator.condition);
 				const truthy =
 					condition === undefined ? undefined : immediateTruthiness(condition);
@@ -5018,6 +5134,7 @@ const simplifyControlFlow: CoreFunctionPass = {
 				changed = true;
 				return {
 					...block,
+					...(handler === undefined ? { handler: undefined } : { handler }),
 					terminator: {
 						kind: "jump",
 						id: terminator.id,
@@ -5029,6 +5146,21 @@ const simplifyControlFlow: CoreFunctionPass = {
 				};
 			}
 			if (terminator.kind === "switch") {
+				if (terminator.cases.every(({ edge }) => sameEdge(edge, terminator.default))) {
+					changed = true;
+					return {
+						...block,
+						...(handler === undefined ? { handler: undefined } : { handler }),
+						terminator: {
+							kind: "jump",
+							id: terminator.id,
+							edge: terminator.default,
+							...(terminator.sourcePosition === undefined
+								? {}
+								: { sourcePosition: terminator.sourcePosition }),
+						},
+					};
+				}
 				const discriminant = constants.get(terminator.discriminant);
 				if (discriminant === undefined) return block;
 				const matched = terminator.cases.find(({ value }) =>
@@ -5037,6 +5169,7 @@ const simplifyControlFlow: CoreFunctionPass = {
 				changed = true;
 				return {
 					...block,
+					...(handler === undefined ? { handler: undefined } : { handler }),
 					terminator: {
 						kind: "jump",
 						id: terminator.id,
@@ -5047,7 +5180,9 @@ const simplifyControlFlow: CoreFunctionPass = {
 					},
 				};
 			}
-			return block;
+			return handler === block.handler
+				? block
+				: { ...block, ...(handler === undefined ? { handler: undefined } : { handler }) };
 		});
 		if (!changed) return fn;
 		return removeUnreachableCoreBlocks({
@@ -5156,6 +5291,62 @@ function collectUses(fn: CoreFunction): Set<CoreValueId> {
 	}
 	return uses;
 }
+
+/**
+ * Collapse ordinary phi-like parameters whose reachable inputs have one
+ * canonical producer, and delete parameters that no instruction or control
+ * operation consumes. Exception parameters remain owned by the unwinder.
+ */
+const eliminateTrivialBlockArguments: CoreFunctionPass = {
+	name: "eliminate-trivial-block-arguments",
+	changesControlFlow: true,
+	run(fn, analyses) {
+		const cfg = analyses.controlFlow(fn);
+		const canonical = analyses.canonicalValues(fn);
+		const uses = collectUses(fn);
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		const removedIndices = new Map<CoreBlockId, Set<number>>();
+		const replacements = new Map<CoreValueId, CoreValueId>();
+		for (const block of fn.blocks) {
+			if (
+				block.id === fn.entry ||
+				block.parameters.some(({ role }) => role === "exception")
+			) {
+				continue;
+			}
+			const incoming = cfg.predecessors[block.id]!.filter(({ from }) =>
+				cfg.reachable.has(from),
+			);
+			if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
+				continue;
+			}
+			for (const [index, parameter] of block.parameters.entries()) {
+				if (!uses.has(parameter.value)) {
+					let indices = removedIndices.get(block.id);
+					if (indices === undefined) removedIndices.set(block.id, (indices = new Set()));
+					indices.add(index);
+					continue;
+				}
+				const root = canonical.get(parameter.value) ?? parameter.value;
+				if (
+					root === parameter.value ||
+					representations.get(root) !== parameter.representation
+				) {
+					continue;
+				}
+				let indices = removedIndices.get(block.id);
+				if (indices === undefined) removedIndices.set(block.id, (indices = new Set()));
+				indices.add(index);
+				replacements.set(parameter.value, root);
+			}
+		}
+		return removedIndices.size === 0
+			? fn
+			: removeBlockParameters(fn, removedIndices, replacements);
+	},
+};
 
 const deadInstructionElimination: CoreFunctionPass = {
 	name: "dead-instruction-elimination",
@@ -5336,6 +5527,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldTypeofComparisons,
 	foldExactObjectObservations,
 	eliminateRedundantTdzChecks,
+	eliminateTrivialBlockArguments,
 	foldPrimitiveConstants,
 	simplifyControlFlow,
 	foldEmptyForwardingBlocks,
