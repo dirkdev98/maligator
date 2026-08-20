@@ -37,6 +37,11 @@ export const OPTIMIZATION_ABLATIONS = [
 export type OptimizationAblation = (typeof OPTIMIZATION_ABLATIONS)[number];
 
 export interface OptimizationMetrics {
+	readonly instructions: number;
+	readonly blocks: number;
+	readonly values: number;
+	readonly facts: number;
+	readonly regions: number;
 	readonly allocationSites: number;
 	readonly dynamicCalls: number;
 	readonly boxedOperations: number;

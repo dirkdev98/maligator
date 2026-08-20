@@ -179,6 +179,11 @@ function carriesWorldGuard(instruction: CoreInstruction): boolean {
 /** Measure the residual Core program itself, never a reconstructed frontend graph. */
 export function coreOptimizationMetrics(program: CoreProgram): OptimizationMetrics {
 	const metrics = {
+		instructions: 0,
+		blocks: 0,
+		values: 0,
+		facts: 0,
+		regions: 0,
 		allocationSites: 0,
 		dynamicCalls: 0,
 		boxedOperations: 0,
@@ -187,7 +192,13 @@ export function coreOptimizationMetrics(program: CoreProgram): OptimizationMetri
 		safepoints: 0,
 	};
 	for (const fn of program.functions) {
+		metrics.blocks += fn.blocks.length;
+		metrics.values += fn.values.length;
+		metrics.facts += fn.facts.length;
+		metrics.regions += fn.regions.length;
 		for (const block of fn.blocks) {
+			// Terminators are instructions with stable Core instruction identities too.
+			metrics.instructions += block.instructions.length + 1;
 			for (const instruction of block.instructions) {
 				if (ALLOCATION_OPCODES.has(instruction.opcode)) metrics.allocationSites++;
 				if (isDynamicCall(instruction)) metrics.dynamicCalls++;
@@ -207,6 +218,11 @@ function metricDelta(
 	after: OptimizationMetrics,
 ): OptimizationMetrics {
 	return {
+		instructions: after.instructions - before.instructions,
+		blocks: after.blocks - before.blocks,
+		values: after.values - before.values,
+		facts: after.facts - before.facts,
+		regions: after.regions - before.regions,
 		allocationSites: after.allocationSites - before.allocationSites,
 		dynamicCalls: after.dynamicCalls - before.dynamicCalls,
 		boxedOperations: after.boxedOperations - before.boxedOperations,

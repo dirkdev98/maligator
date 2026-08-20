@@ -61,6 +61,30 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 
 	expect(sites.length).toBeGreaterThan(0);
 	expect(definition.optimizationTrace?.length).toBeGreaterThan(0);
+	const trace = definition.optimizationTrace!;
+	expect(
+		trace.every(({ before, after, delta }) => {
+			for (const metric of [
+				"instructions",
+				"blocks",
+				"values",
+				"facts",
+				"regions",
+				"allocationSites",
+				"dynamicCalls",
+				"boxedOperations",
+				"propertyHelpers",
+				"worldGuards",
+				"safepoints",
+			] as const) {
+				if (after[metric] - before[metric] !== delta[metric]) return false;
+			}
+			return true;
+		}),
+	).toBe(true);
+	expect(trace.some(({ delta }) => delta.instructions < 0 && delta.values < 0)).toBe(
+		true,
+	);
 	expect(sites.map((site) => site.id)).toEqual(sites.map((_, index) => index));
 	expect(
 		definition.functions
