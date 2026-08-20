@@ -1783,12 +1783,9 @@ const annotateFreshDenseIndexedReserves: CoreFunctionPass = {
 					}
 					const bodyEdge = header.terminator.consequent;
 					const exitEdge = header.terminator.alternate;
-					if (
-						!loop.blocks.has(bodyEdge.block) ||
-						loop.blocks.has(exitEdge.block) ||
-						cfg.predecessors[exitEdge.block]!.filter(({ kind }) => kind === "ordinary")
-							.length !== 1
-					) {
+					// CFG cleanup may make the exit the next loop's header, whose backedge is
+					// another predecessor; dominance still proves every later array use follows fill.
+					if (!loop.blocks.has(bodyEdge.block) || loop.blocks.has(exitEdge.block)) {
 						continue;
 					}
 

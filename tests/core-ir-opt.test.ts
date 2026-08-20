@@ -810,6 +810,33 @@ describe("Core IR optimizer", () => {
 		});
 	});
 
+	it("preserves a dense-fill reserve when its exit is the next loop header", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function fillAndRead() {
+				let total = 0;
+				for (let outer = 0; outer < 8; outer++) {
+					const values = [];
+					for (let index = 0; index < 32; index++) values[index] = index;
+					for (let index = 0; index < 32; index++) total += values[index];
+				}
+				return total;
+			}`,
+			"core-dense-fill-consecutive-loops.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const allocation = optimized!.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions }) => instructions)
+			.find(({ opcode }) => opcode === "createArray");
+		expect(allocation?.attributes.freshDenseReserveLength).toBe(32);
+	});
+
 	it("erases exact primitive builtin dispatch only with a locked-world proof", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			'function first() { return "alpha,beta".split(",")[0]; }',
