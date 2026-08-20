@@ -285,7 +285,7 @@ describe("adversarial Core graphs", () => {
 		expect(definesValue(fn, deadInBody!)).toBe(false);
 	});
 
-	it("keeps a two-entry irreducible component with swapped block arguments", () => {
+	it("keeps irreducible control flow while canonicalizing its cyclic arguments", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 2 });
 		const entry = builder.createBlock([
 			{ representation: "boxed" },
@@ -354,13 +354,22 @@ describe("adversarial Core graphs", () => {
 		expect(ordinaryPredecessorCount(fn, second)).toBe(2);
 		expect(fn.blocks[first]!.terminator).toMatchObject({
 			kind: "branch",
-			consequent: { block: second, arguments: [firstRight, firstLeft] },
-			alternate: { block: exit, arguments: [firstLeft] },
+			condition: outerLeft,
+			consequent: { block: second, arguments: [] },
+			alternate: { block: exit, arguments: [] },
 		});
 		expect(fn.blocks[second]!.terminator).toMatchObject({
 			kind: "branch",
-			consequent: { block: first, arguments: [secondRight, secondLeft] },
-			alternate: { block: exit, arguments: [secondRight] },
+			condition: outerRight,
+			consequent: { block: first, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		expect(fn.blocks[first]!.parameters).toEqual([]);
+		expect(fn.blocks[second]!.parameters).toEqual([]);
+		expect(fn.blocks[exit]!.parameters).toEqual([]);
+		expect(fn.blocks[exit]!.terminator).toMatchObject({
+			kind: "return",
+			value: outerLeft,
 		});
 	});
 

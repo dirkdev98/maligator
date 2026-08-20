@@ -32,28 +32,20 @@ export interface CoreControlFlow {
 	dominates(dominator: CoreBlockId, block: CoreBlockId): boolean;
 }
 
-/** Canonical producer identity through moves and all-ordinary single-value phis. */
+/**
+ * Canonical producer identity through moves and all-ordinary single-value phis.
+ *
+ * Phi equivalences form a directed graph because loop-carried arguments can refer
+ * back to one another. Condense that graph into SCCs, then solve its DAG from
+ * dependencies to users. This collapses mutually recursive phis when their only
+ * external producer is one value, in O(values + phi inputs) time.
+ */
 export function coreCanonicalValueRoots(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
 ): ReadonlyMap<CoreValueId, CoreValueId> {
-	const parent = new Int32Array((fn.values.at(-1)?.id ?? -1) + 1);
-	parent.fill(-1);
-	for (const { id } of fn.values) parent[id] = id;
-	const root = (value: CoreValueId): CoreValueId => {
-		let current: number = value;
-		while (parent[current] !== current) current = parent[current]!;
-		const result = coreValueId(current);
-		current = value;
-		while (parent[current] !== current) {
-			const next = parent[current]!;
-			parent[current] = result;
-			current = next;
-		}
-		return result;
-	};
-	// Moves are unconditional aliases. Point their producer class at the source
-	// class so the representative remains the original producer when possible.
+	const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
+	const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(valueCount);
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (
@@ -63,47 +55,126 @@ export function coreCanonicalValueRoots(
 			) {
 				continue;
 			}
-			const output = root(instruction.outputs[0]!);
-			const source = root(instruction.inputs[0]!);
-			if (output !== source) parent[output] = source;
+			dependencies[instruction.outputs[0]!] = instruction.inputs;
 		}
 	}
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const block of fn.blocks) {
-			const incoming = cfg.predecessors[block.id]!;
-			if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
+	for (const block of fn.blocks) {
+		const incoming = cfg.predecessors[block.id]!;
+		if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
+			continue;
+		}
+		for (const [index, parameter] of block.parameters.entries()) {
+			const sources = incoming.map(({ arguments: arguments_ }) => arguments_[index]);
+			if (sources.some((source) => source === undefined)) continue;
+			dependencies[parameter.value] = sources as ReadonlyArray<CoreValueId>;
+		}
+	}
+
+	const nodes = fn.values
+		.map(({ id }) => id)
+		.filter((value) => dependencies[value] !== undefined);
+	if (nodes.length === 0) {
+		return new Map(fn.values.map(({ id }) => [id, id] as const));
+	}
+	const reverse = Array.from({ length: valueCount }, () => new Array<CoreValueId>());
+	for (const value of nodes) {
+		for (const dependency of dependencies[value]!) {
+			if (dependencies[dependency] !== undefined) reverse[dependency]!.push(value);
+		}
+	}
+
+	const visited = new Uint8Array(valueCount);
+	const postorder: Array<CoreValueId> = [];
+	for (const start of nodes) {
+		if (visited[start] !== 0) continue;
+		visited[start] = 1;
+		const stack: Array<{ readonly value: CoreValueId; next: number }> = [
+			{ value: start, next: 0 },
+		];
+		while (stack.length > 0) {
+			const frame = stack[stack.length - 1]!;
+			const outgoing = dependencies[frame.value]!;
+			if (frame.next < outgoing.length) {
+				const dependency = outgoing[frame.next++]!;
+				if (dependencies[dependency] !== undefined && visited[dependency] === 0) {
+					visited[dependency] = 1;
+					stack.push({ value: dependency, next: 0 });
+				}
 				continue;
 			}
-			for (const [index, parameter] of block.parameters.entries()) {
-				const current = root(parameter.value);
-				let externalSource: CoreValueId | undefined;
-				let complete = true;
-				for (const edge of incoming) {
-					const argument = edge.arguments[index];
-					if (argument === undefined) {
-						complete = false;
-						break;
-					}
-					const source = root(argument);
-					// A loop-carried copy cycle contributes no new value. Collapse the
-					// cycle only when every value entering it from outside has one root.
-					if (source === current) continue;
-					if (externalSource === undefined) externalSource = source;
-					else if (externalSource !== source) {
-						complete = false;
-						break;
-					}
-				}
-				if (complete && externalSource !== undefined) {
-					parent[current] = externalSource;
-					changed = true;
-				}
+			postorder.push(frame.value);
+			stack.pop();
+		}
+	}
+
+	const componentOf = new Int32Array(valueCount);
+	componentOf.fill(-1);
+	const components: Array<Array<CoreValueId>> = [];
+	for (let index = postorder.length - 1; index >= 0; index--) {
+		const start = postorder[index]!;
+		if (componentOf[start]! >= 0) continue;
+		const component = components.length;
+		const members: Array<CoreValueId> = [];
+		components.push(members);
+		componentOf[start] = component;
+		const pending = [start];
+		while (pending.length > 0) {
+			const value = pending.pop()!;
+			members.push(value);
+			for (const user of reverse[value]!) {
+				if (componentOf[user]! >= 0) continue;
+				componentOf[user] = component;
+				pending.push(user);
 			}
 		}
 	}
-	return new Map(fn.values.map(({ id }) => [id, root(id)]));
+
+	const componentDependencies = components.map(() => new Set<number>());
+	const componentUsers = components.map(() => new Array<number>());
+	for (const value of nodes) {
+		const component = componentOf[value]!;
+		for (const dependency of dependencies[value]!) {
+			const dependencyComponent = componentOf[dependency] ?? -1;
+			if (dependencyComponent >= 0 && dependencyComponent !== component) {
+				componentDependencies[component]!.add(dependencyComponent);
+			}
+		}
+	}
+	for (const [component, dependencyComponents] of componentDependencies.entries()) {
+		for (const dependency of dependencyComponents) {
+			componentUsers[dependency]!.push(component);
+		}
+	}
+
+	const canonical = new Int32Array(valueCount);
+	for (const { id } of fn.values) canonical[id] = id;
+	const remainingDependencies = new Uint32Array(
+		componentDependencies.map(({ size }) => size),
+	);
+	const ready = components
+		.map((_, component) => component)
+		.filter((component) => remainingDependencies[component] === 0);
+	while (ready.length > 0) {
+		const component = ready.pop()!;
+		let externalRoot: number | undefined;
+		let singleRoot = true;
+		for (const value of components[component]!) {
+			for (const dependency of dependencies[value]!) {
+				if (componentOf[dependency] === component) continue;
+				const root = canonical[dependency]!;
+				if (externalRoot === undefined) externalRoot = root;
+				else if (externalRoot !== root) singleRoot = false;
+			}
+		}
+		if (singleRoot && externalRoot !== undefined) {
+			for (const value of components[component]!) canonical[value] = externalRoot;
+		}
+		for (const user of componentUsers[component]!) {
+			remainingDependencies[user]!--;
+			if (remainingDependencies[user] === 0) ready.push(user);
+		}
+	}
+	return new Map(fn.values.map(({ id }) => [id, coreValueId(canonical[id]!)] as const));
 }
 
 export function coreTerminatorEdges(

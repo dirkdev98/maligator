@@ -171,6 +171,47 @@ describe("Core IR", () => {
 		expect(canonical.get(result)).toBe(input);
 	});
 
+	it("canonicalizes a mutually recursive phi component with one external producer", () => {
+		const opcodes = registry();
+		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const header = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const body = builder.createBlock();
+		const exit = builder.createBlock([{ representation: "boxed" }]);
+		const [condition, input] = builder.block(entry).parameters.map(({ value }) => value);
+		const [left, right] = builder.block(header).parameters.map(({ value }) => value);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [input!, input!] },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [left!] },
+		});
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [right!, left!] },
+		});
+		builder.setTerminator(exit, {
+			kind: "return",
+			value: builder.block(exit).parameters[0]!.value,
+		});
+		const fn = builder.finish(entry);
+
+		expect(() => verifyCoreFunction(fn, opcodes)).not.toThrow();
+		const canonical = coreCanonicalValueRoots(fn, buildCoreControlFlow(fn, opcodes));
+		expect(canonical.get(left!)).toBe(input);
+		expect(canonical.get(right!)).toBe(input);
+	});
+
 	it("rejects values that do not dominate an incoming edge", () => {
 		const opcodes = registry();
 		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
