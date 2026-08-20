@@ -3160,20 +3160,6 @@ function lowerFunctionToVmFunction(
 		regions: regions.length > 0 ? regions : undefined,
 		registerRepresentations: [...fn.registerRepresentations],
 	};
-	if (
-		fn.registerRepresentations.length !== fn.registerCount ||
-		fn.registerRepresentations.some(
-			(representation, register) =>
-				(representation !== "boxed" &&
-					representation !== "number" &&
-					representation !== "boolean") ||
-				(register < fn.parameterCount && representation !== "boxed"),
-		)
-	) {
-		throw new Error(
-			`Invalid Core register representation plan for function ${fileIndex}`,
-		);
-	}
 	return lowered;
 }
 

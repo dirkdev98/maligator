@@ -18,15 +18,42 @@ import type {
 	CoreValueId,
 } from "../core/core-ir.ts";
 import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
+import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
+import { verifyCoreTargetProgram } from "./core-target-verifier.ts";
 
 export interface CoreTargetProgram {
 	readonly core: CoreProgram;
 	readonly functions: Array<CoreTargetFunction>;
 	readonly gcRootRegisters: ReadonlyArray<ReadonlyArray<number> | undefined>;
+}
+
+export type CoreTargetMove = Extract<CompilerInstruction, { type: "move" }>;
+
+/**
+ * Simultaneous register assignment lowered from one Core edge or exception-handler
+ * input list. The declared assignments are the contract; `moves` is the sequential
+ * implementation, which may route a cycle through `temporaries`.
+ */
+export interface CoreTargetParallelCopy {
+	readonly kind: "edge" | "handler-input";
+	readonly assignments: ReadonlyArray<{
+		readonly destination: number;
+		readonly source: number;
+	}>;
+	readonly moves: ReadonlyArray<CoreTargetMove>;
+	readonly temporaries: ReadonlyArray<number>;
+}
+
+export interface CoreTargetSafepoint {
+	/** Core instruction that emitted `instruction`. */
+	readonly coreInstruction: CoreInstructionId;
+	/** Core collection points realized while this target instruction executes. */
+	readonly realizedCoreInstructions: ReadonlyArray<CoreInstructionId>;
+	readonly instruction: CompilerInstruction;
 }
 
 export interface CoreTargetFunction {
@@ -42,6 +69,8 @@ export interface CoreTargetFunction {
 	readonly mappedArguments: boolean;
 	readonly length: number;
 	readonly registerCount: number;
+	/** First register introduced by target lowering rather than Core allocation. */
+	readonly allocatedRegisterCount: number;
 	/** Physical register classes selected from canonical Core value representations. */
 	readonly registerRepresentations: ReadonlyArray<"boxed" | "number" | "boolean">;
 	readonly capturedCount: number;
@@ -49,24 +78,39 @@ export interface CoreTargetFunction {
 	readonly isClassConstructor: boolean;
 	readonly isDerivedConstructor: boolean;
 	readonly hasPrototype: boolean;
+	/**
+	 * Target collection points with their Core provenance. Target lowering also
+	 * emits comparisons and copies with no Core effects, while embedded immediates
+	 * can realize an omitted Core producer at their consuming call.
+	 */
+	readonly safepoints: ReadonlyArray<CoreTargetSafepoint>;
+	readonly parallelCopies: ReadonlyArray<CoreTargetParallelCopy>;
+	/** Registers introduced after allocation, for copy cycles and target constraints. */
+	readonly temporaryRegisters: ReadonlyArray<number>;
+}
+
+interface LoweredParallelCopy {
+	readonly moves: Array<CoreTargetMove>;
+	readonly temporaries: Array<number>;
 }
 
 function parallelMoves(
 	assignments: ReadonlyArray<{ readonly destination: number; readonly source: number }>,
 	nextRegister: { value: number },
 	registerRepresentations: Map<number, CoreRepresentation>,
-): Array<CompilerInstruction> {
+): LoweredParallelCopy {
 	const pending = assignments
 		.filter(({ destination, source }) => destination !== source)
 		.map((assignment) => ({ ...assignment }));
-	const result: Array<CompilerInstruction> = [];
+	const moves: Array<CoreTargetMove> = [];
+	const temporaries: Array<number> = [];
 	while (pending.length > 0) {
 		const ready = pending.findIndex(
 			({ destination }) => !pending.some(({ source }) => source === destination),
 		);
 		if (ready >= 0) {
 			const [assignment] = pending.splice(ready, 1);
-			result.push({
+			moves.push({
 				type: "move",
 				registers: [assignment!.destination, assignment!.source],
 			});
@@ -79,12 +123,21 @@ function parallelMoves(
 			throw new Error(`Parallel move has no Core representation for r${saved}`);
 		}
 		registerRepresentations.set(temporary, representation);
-		result.push({ type: "move", registers: [temporary, saved] });
+		temporaries.push(temporary);
+		moves.push({ type: "move", registers: [temporary, saved] });
 		for (const assignment of pending) {
 			if (assignment.source === saved) assignment.source = temporary;
 		}
 	}
-	return result;
+	return { moves, temporaries };
+}
+
+/** Physical register class selected for a canonical Core representation. */
+function physicalRegisterClass(
+	representation: CoreRepresentation,
+): "boxed" | "number" | "boolean" {
+	if (representation === "f64" || representation === "i32") return "number";
+	return representation === "boolean" ? "boolean" : "boxed";
 }
 
 function rebuildInstruction(
@@ -273,6 +326,8 @@ export function coreRegisterClasses(
 	readonly registers: Map<CoreValueId, number>;
 	readonly gcRootRegisters: ReadonlyArray<number>;
 	readonly registerRepresentations: Map<number, CoreRepresentation>;
+	/** Core instructions whose effects made them collection points for the root set. */
+	readonly safepoints: ReadonlySet<CoreInstructionId>;
 } {
 	const representations = new Map(
 		core.values.map(({ id, representation }) => [id, representation]),
@@ -643,6 +698,7 @@ export function coreRegisterClasses(
 		active.push(interval);
 	}
 	const gcRootValues = new Set<CoreValueId>();
+	const safepoints = new Set<CoreInstructionId>();
 	const loopBackedges = new Set(controlFlow.loops.map(({ backedge }) => backedge));
 	for (const block of core.blocks) {
 		const live = new Set(liveOut[block.id]);
@@ -663,6 +719,7 @@ export function coreRegisterClasses(
 				instruction.effectRefinement?.effects ??
 				coreOpcodeRegistry.require(instruction.opcode).effects;
 			if (effects.mayGc) {
+				safepoints.add(instruction.id);
 				for (const value of live) gcRootValues.add(value);
 				for (const value of instruction.inputs) gcRootValues.add(value);
 			}
@@ -674,14 +731,24 @@ export function coreRegisterClasses(
 			gcRootValues.add(block.parameters[0].value);
 		}
 	}
+	// Only boxed registers can hold a heap pointer, so unboxed classes are never
+	// part of the root frame the collector scans.
 	const gcRootRegisters = [
-		...new Set([...gcRootValues].map((value) => registers.get(roots.get(value)!)!)),
+		...new Set(
+			[...gcRootValues]
+				.map((value) => registers.get(roots.get(value)!)!)
+				.filter(
+					(register) =>
+						physicalRegisterClass(colorRepresentations.get(register)!) === "boxed",
+				),
+		),
 	].sort((left, right) => left - right);
 	return {
 		roots,
 		registers,
 		gcRootRegisters,
 		registerRepresentations: colorRepresentations,
+		safepoints,
 	};
 }
 
@@ -900,12 +967,17 @@ function lowerFunctionToTarget(
 	const {
 		roots,
 		registers: allocatedRegisters,
-		gcRootRegisters,
+		gcRootRegisters: allocatedGcRootRegisters,
 		registerRepresentations,
+		safepoints: coreSafepoints,
 	} = coreRegisterClasses(core, reuseRegisters);
+	const gcRootRegisters = new Set(allocatedGcRootRegisters);
+	const parallelCopies: Array<CoreTargetParallelCopy> = [];
+	const temporaryRegisters: Array<number> = [];
 	const nextRegister = {
 		value: Math.max(-1, ...allocatedRegisters.values()) + 1,
 	};
+	const allocatedRegisterCount = nextRegister.value;
 	const registerForValue = (value: CoreValueId): number => {
 		const root = roots.get(value)!;
 		let register = allocatedRegisters.get(root);
@@ -926,18 +998,17 @@ function lowerFunctionToTarget(
 		if (target.parameters[0]?.role === "exception") {
 			throw new Error(`Ordinary Core edge targets exception block ${edge.block}`);
 		}
-		const instructions = parallelMoves(
-			target.parameters.map((parameter, index) => ({
-				destination: registerForValue(parameter.value),
-				source: registerForValue(edge.arguments[index]!),
-			})),
-			nextRegister,
-			registerRepresentations,
-		);
-		if (instructions.length === 0) return loweredTarget;
+		const assignments = target.parameters.map((parameter, index) => ({
+			destination: registerForValue(parameter.value),
+			source: registerForValue(edge.arguments[index]!),
+		}));
+		const copy = parallelMoves(assignments, nextRegister, registerRepresentations);
+		if (copy.moves.length === 0) return loweredTarget;
+		parallelCopies.push({ kind: "edge", assignments, ...copy });
+		temporaryRegisters.push(...copy.temporaries);
 		const index = blocks.length;
 		blocks.push({
-			instructions: [...instructions, { type: "jump", blocks: [loweredTarget] }],
+			instructions: [...copy.moves, { type: "jump", blocks: [loweredTarget] }],
 		});
 		return index;
 	};
@@ -970,6 +1041,10 @@ function lowerFunctionToTarget(
 			: lowered + 1;
 	};
 
+	const safepoints: Array<CoreTargetSafepoint> = [];
+	const coreValueDefinitions = new Map(
+		core.values.map(({ id, definition }) => [id, definition] as const),
+	);
 	for (const coreBlock of blockOrder) {
 		const block = core.blocks[coreBlock]!;
 		const loweredBlock = loweredBlockForCore.get(block.id)!;
@@ -985,16 +1060,16 @@ function lowerFunctionToTarget(
 				type: "tryBegin",
 				blocks: [loweredHandler, loweredBlock],
 			});
-			instructions.push(
-				...parallelMoves(
-					explicitParameters.map((parameter, index) => ({
-						destination: registerForValue(parameter.value),
-						source: registerForValue(block.handler!.arguments[index]!),
-					})),
-					nextRegister,
-					registerRepresentations,
-				),
-			);
+			const assignments = explicitParameters.map((parameter, index) => ({
+				destination: registerForValue(parameter.value),
+				source: registerForValue(block.handler!.arguments[index]!),
+			}));
+			const copy = parallelMoves(assignments, nextRegister, registerRepresentations);
+			if (copy.moves.length > 0) {
+				parallelCopies.push({ kind: "handler-input", assignments, ...copy });
+				temporaryRegisters.push(...copy.temporaries);
+			}
+			instructions.push(...copy.moves);
 		}
 		if (block.parameters[0]?.role === "exception") {
 			instructions.push({
@@ -1009,33 +1084,70 @@ function lowerFunctionToTarget(
 			const compilerSite = instructionSites?.get(instruction);
 			if (compilerSite !== undefined) instructionSites?.set(lowered, compilerSite);
 			let resultMove: CompilerInstruction | undefined;
-			if (lowered.type === "constructSuperExplicit") {
-				// Core models current-this as an ordinary SSA input. The compact VM op is
-				// two-address. A fresh register is required when the allocated result and
-				// current-this differ: reusing the result register for the input can clobber
-				// another live operand, such as the parent constructor.
-				const destination = lowered.registers[0];
-				const currentThis = lowered.registers[4];
-				if (destination !== currentThis) {
+			const twoAddress = COMPILER_TWO_ADDRESS_OPERANDS[lowered.type];
+			if (twoAddress !== undefined) {
+				// Core models the reused operand as an ordinary SSA input, so allocation may
+				// place it anywhere. A fresh register is required when the allocated result
+				// and that operand differ: reusing the result register for the input can
+				// clobber another live operand, such as the parent constructor.
+				const registers = (lowered as { readonly registers: Array<number> }).registers;
+				const destination = registers[twoAddress.result]!;
+				const operand = registers[twoAddress.operand]!;
+				for (const register of [destination, operand]) {
+					if (physicalRegisterClass(registerRepresentations.get(register)!) !== "boxed") {
+						throw new Error(
+							`Two-address ${lowered.type} operand r${register} is not boxed`,
+						);
+					}
+				}
+				if (destination !== operand) {
 					const constrained = nextRegister.value++;
 					registerRepresentations.set(constrained, "boxed");
+					temporaryRegisters.push(constrained);
+					// The constrained register holds the incoming operand across the operation
+					// and its result afterwards, both across a collection point.
+					gcRootRegisters.add(constrained);
 					instructions.push({
 						type: "move",
-						registers: [constrained, currentThis],
+						registers: [constrained, operand],
 					});
-					lowered.registers[0] = constrained;
-					lowered.registers[4] = constrained;
+					registers[twoAddress.result] = constrained;
+					registers[twoAddress.operand] = constrained;
 					resultMove = {
 						type: "move",
 						registers: [destination, constrained],
 					};
 				} else {
-					lowered.registers[4] = destination;
+					registers[twoAddress.operand] = destination;
 				}
 			}
 			instructions.push(lowered);
 			if (resultMove !== undefined) instructions.push(resultMove);
 			loweredInstructions.set(instruction.id, lowered);
+			const immediateValues = (
+				lowered as { readonly immediateValues?: ReadonlyArray<unknown> }
+			).immediateValues;
+			const realizedCoreInstructions = new Set<CoreInstructionId>();
+			if (coreSafepoints.has(instruction.id)) {
+				realizedCoreInstructions.add(instruction.id);
+			}
+			for (const [index, input] of instruction.inputs.entries()) {
+				if (immediateValues?.[instruction.outputs.length + index] === undefined) continue;
+				const definition = coreValueDefinitions.get(input);
+				if (
+					definition?.kind === "instruction" &&
+					coreSafepoints.has(definition.instruction)
+				) {
+					realizedCoreInstructions.add(definition.instruction);
+				}
+			}
+			if (realizedCoreInstructions.size > 0) {
+				safepoints.push({
+					coreInstruction: instruction.id,
+					realizedCoreInstructions: [...realizedCoreInstructions],
+					instruction: lowered,
+				});
+			}
 		}
 		instructions.push(...sourcePositionMarker(block.terminator.sourcePosition));
 		switch (block.terminator.kind) {
@@ -1110,6 +1222,7 @@ function lowerFunctionToTarget(
 				for (const switchCase of block.terminator.cases) {
 					const immediate = nextRegister.value++;
 					const matches = nextRegister.value++;
+					temporaryRegisters.push(immediate, matches);
 					registerRepresentations.set(
 						immediate,
 						switchCase.value.kind === "number"
@@ -1155,11 +1268,7 @@ function lowerFunctionToTarget(
 			if (representation === undefined) {
 				throw new Error(`Core allocation left r${register} without a representation`);
 			}
-			return representation === "f64" || representation === "i32"
-				? "number"
-				: representation === "boolean"
-					? "boolean"
-					: "boxed";
+			return physicalRegisterClass(representation);
 		},
 	);
 	return {
@@ -1182,14 +1291,18 @@ function lowerFunctionToTarget(
 			mappedArguments: core.metadata.mappedArguments,
 			length: core.metadata.length,
 			registerCount: nextRegister.value,
+			allocatedRegisterCount,
 			registerRepresentations: physicalRepresentations,
 			capturedCount: core.metadata.capturedCount,
 			strict: core.metadata.strict,
 			isClassConstructor: core.metadata.isClassConstructor,
 			isDerivedConstructor: core.metadata.isDerivedConstructor,
 			hasPrototype: core.metadata.hasPrototype,
+			safepoints,
+			parallelCopies,
+			temporaryRegisters,
 		},
-		gcRootRegisters,
+		gcRootRegisters: [...gcRootRegisters].sort((left, right) => left - right),
 	};
 }
 
@@ -1215,7 +1328,7 @@ export function lowerCoreProgramToTarget(
 			options.reuseRegisters ?? true,
 		),
 	);
-	return {
+	const program: CoreTargetProgram = {
 		core,
 		functions: lowered.map(({ fn }) => fn),
 		gcRootRegisters: lowered.map(({ gcRootRegisters }, index) =>
@@ -1224,4 +1337,7 @@ export function lowerCoreProgramToTarget(
 				: gcRootRegisters,
 		),
 	};
+	// Owned boundary: no lower-vm consumer may observe an unverified target program.
+	verifyCoreTargetProgram(program);
+	return program;
 }

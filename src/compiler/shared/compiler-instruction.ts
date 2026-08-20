@@ -893,6 +893,36 @@ export type CompilerInstruction =
 			negated: boolean;
 	  };
 
+/**
+ * Packed VM operations that read and write one register. The operation reads only
+ * the `result` position at run time, so target lowering must make `operand` name
+ * the same register and the target verifier proves that it did; the duplicated
+ * operand exists to keep the read-before-write dependency explicit to Core.
+ */
+export const COMPILER_TWO_ADDRESS_OPERANDS: Readonly<
+	Partial<
+		Record<
+			CompilerInstruction["type"],
+			{
+				readonly result: number;
+				readonly operand: number;
+				readonly requirement: string;
+			}
+		>
+	>
+> = {
+	constructSuperExplicit: {
+		result: 0,
+		operand: 4,
+		requirement: "one register for its current-this operand and its result",
+	},
+	loadStaticArgument: {
+		result: 1,
+		operand: 3,
+		requirement: "one register for both of its fallback-cache operands",
+	},
+};
+
 export type CompilerBinaryOperator = Extract<
 	CompilerInstruction,
 	{ type: "binary" }

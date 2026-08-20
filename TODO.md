@@ -78,10 +78,6 @@ to restore; generic passes may naturally rediscover their useful results.
       lowering, including exceptional control flow, suspension, handlers, mutable and
       locked primordials, and GC stress.
 
-- [ ] Add a CoreTargetProgram verifier covering register bounds and representations,
-      boxed parameter ABI, parallel edge moves, handler inputs, GC-root liveness,
-      two-address constraints, region translation, and temporary registers.
-
 - [ ] Audit target lowering and C emission for optimizations inferred from adjacency,
       source positions, register reuse, or reconstructed control flow. Move any such
       decision into an explicit Core pass or delete it.
