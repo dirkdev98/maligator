@@ -32,6 +32,7 @@ import { compileSemanticProgramToVmDefinition } from "./compiler/pipeline/compil
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import { emitVmDefinition } from "./compiler/target/emit-vm.ts";
+import type { VmDefinition } from "./compiler/target/lower-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
@@ -161,9 +162,20 @@ export function buildNativeBinary(options: BuildOptions): string {
 
 /** Compile and link a fixture, retaining the exact context and linked artifacts. */
 export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinaryResult {
+	const config = resolveHarnessBuildConfig(options);
+	return linkDefinition(
+		options,
+		config,
+		compileFixtureDefinition(options, config),
+		options.compiled ?? true,
+		options.name,
+	);
+}
+
+function resolveHarnessBuildConfig(options: BuildOptions): ResolvedBuildConfig {
 	// Reuse the real build-config resolution so semantic capabilities and
 	// output suffix, Cargo features, and C defines match the CLI exactly.
-	const config =
+	return (
 		options.config ??
 		resolveBuildConfig({
 			engine: {
@@ -181,40 +193,50 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 				webPlatform: options.webPlatformEnabled ?? true,
 				node: options.nodeEnabled ?? false,
 			},
-		});
+		})
+	);
+}
+
+function compileFixtureDefinition(
+	options: BuildOptions,
+	config: ResolvedBuildConfig,
+): VmDefinition {
 	const entrypoint = path.resolve(options.fixture);
 	const canReuseFrontend =
 		options.entryGoal === undefined && options.profileEnabled !== true;
-	const definition = canReuseFrontend
-		? (() => {
-				const frontend = compileBuildFrontend({
-					entrypoint,
-					config,
-					stripTypes: stripCompactTypes,
-					stripperIdentity: TYPE_STRIPPER_IDENTITY,
-					enforcePolicies: false,
-				});
-				options.onFrontendCacheEvent?.({
-					cache: frontend.cache,
-					entrypoint,
-				});
-				return frontend.definition;
-			})()
-		: (() => {
-				const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypoint, {
-					buildConfig: config,
-					stripTypes: stripCompactTypes,
-					entryGoal: options.entryGoal,
-				});
-				// Tests intentionally bypass build policy so disabled-feature fixtures can
-				// compile and assert the runtime behavior of the reduced engine.
-				return compileSemanticProgramToVmDefinition(semanticProgram, {
-					facts: compilerProgramFactsFromConfig(config),
-					profile: options.profileEnabled,
-				});
-			})();
+	if (canReuseFrontend) {
+		const frontend = compileBuildFrontend({
+			entrypoint,
+			config,
+			stripTypes: stripCompactTypes,
+			stripperIdentity: TYPE_STRIPPER_IDENTITY,
+			enforcePolicies: false,
+		});
+		options.onFrontendCacheEvent?.({ cache: frontend.cache, entrypoint });
+		return frontend.definition;
+	}
+	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypoint, {
+		buildConfig: config,
+		stripTypes: stripCompactTypes,
+		entryGoal: options.entryGoal,
+	});
+	// Tests intentionally bypass build policy so disabled-feature fixtures can
+	// compile and assert the runtime behavior of the reduced engine.
+	return compileSemanticProgramToVmDefinition(semanticProgram, {
+		facts: compilerProgramFactsFromConfig(config),
+		profile: options.profileEnabled,
+	});
+}
+
+function linkDefinition(
+	options: BuildOptions,
+	config: ResolvedBuildConfig,
+	definition: VmDefinition,
+	compiled: boolean,
+	name: string,
+): BuildNativeBinaryResult {
 	const cSource = emitVmDefinition(definition, {
-		compiled: options.compiled ?? true,
+		compiled,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
 	});
@@ -238,13 +260,46 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 	});
 	return buildLocalBinary({
 		context,
-		name: options.name,
+		name,
 		cSource,
 		verbose: false,
 		mainFile: options.mainFile,
 		outDir: options.outDir,
 		cacheSuffix: derivation.cacheSuffix,
 	});
+}
+
+export interface BackendPairResult {
+	compiled: string;
+	interpreted: string;
+}
+
+/**
+ * Emit and link both backends from one in-memory optimized definition, so a
+ * compiled/interpreted difference can only come from emission — never from two
+ * independent frontend, optimizer, or cache-restore runs producing different IR.
+ */
+export function buildBackendPairFromOneDefinition(
+	options: Omit<BuildOptions, "compiled">,
+): BackendPairResult {
+	const config = resolveHarnessBuildConfig(options);
+	const definition = compileFixtureDefinition(options, config);
+	return {
+		compiled: linkDefinition(
+			options,
+			config,
+			definition,
+			true,
+			`${options.name}-compiled`,
+		).binaryPath,
+		interpreted: linkDefinition(
+			options,
+			config,
+			definition,
+			false,
+			`${options.name}-interpreted`,
+		).binaryPath,
+	};
 }
 
 export interface RunOptions {
