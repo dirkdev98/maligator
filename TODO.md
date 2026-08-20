@@ -64,40 +64,7 @@ Performance recovery should come from standard SSA, dataflow, effect, representa
 and whole-program optimizations. Do not maintain a queue of retired optimizer patterns
 to restore; generic passes may naturally rediscover their useful results.
 
-## Validate the direct Core cut-over
-
-- [ ] Make pass traces report instruction, block, value, fact, region, allocation,
-      dynamic-call, boxed-operation, property-helper, guard, root, and safepoint
-      deltas. Preserve stable decline reasons so lost opportunities remain attributable.
-
 ## Common SSA optimizations
-
-### SSA and control-flow cleanup
-
-- [ ] Eliminate trivial block arguments when all reachable incoming edges provide the
-      same canonical value. Remove unused parameters and corresponding edge arguments
-      so later passes see the simplest SSA graph.
-
-- [ ] Implement sparse conditional constant propagation across instructions, block
-      arguments, branches, switches, and executable edges. Propagate primitive
-      constants and impossible paths without evaluating observable coercions or effects.
-
-- [ ] Extend copy propagation and value numbering from individual blocks to
-      dominance-scoped global value numbering. Common pure instructions globally and
-      include effect-qualified operations only when alias facts prove them unchanged.
-
-- [ ] Add representation-aware algebraic simplification for identities, annihilators,
-      comparison normalization, and typed numeric operations. Preserve JavaScript
-      behavior for coercion, NaN, signed zero, overflow, BigInt mixing, and exceptions.
-
-- [ ] Strengthen CFG simplification with jump threading, empty-block forwarding,
-      redundant branch removal, identical-successor folding, and unreachable
-      exceptional-edge cleanup. Maintain correct block-argument substitution after
-      every rewrite.
-
-- [ ] Add aggressive dead-code elimination based on value liveness and control
-      dependence. Remove dead branches, facts, guards, block parameters, and pure
-      computations while preserving throws, GC effects, suspension, and termination.
 
 ### Effects and memory
 
