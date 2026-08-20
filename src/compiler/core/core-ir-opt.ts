@@ -7226,67 +7226,65 @@ const foldEmptyForwardingBlocks: CoreFunctionPass = {
 	},
 };
 
-/** Merge dominance-safe linear chains to a true local fixpoint. */
+/** Merge every dominance-safe linear chain in one O(blocks + edges + instructions) pass. */
 const combineLinearBlocks: CoreFunctionPass = {
 	name: "combine-linear-blocks",
 	changesControlFlow: true,
-	run(fn) {
-		if (
-			!fn.blocks.some((predecessor) => {
-				if (predecessor.handler !== undefined || predecessor.terminator.kind !== "jump") {
-					return false;
-				}
-				const targetId = predecessor.terminator.edge.block;
-				if (
-					targetId === predecessor.id ||
-					targetId === fn.entry ||
-					targetId === fn.bodyEntry
-				) {
-					return false;
-				}
-				const target = fn.blocks[targetId];
-				return target !== undefined && target.handler === undefined;
-			})
-		) {
-			return fn;
+	run(fn, analyses) {
+		const cfg = analyses.controlFlow(fn);
+		const mergeSuccessors = new Map<CoreBlockId, CoreBlockId>();
+		const mergeTargets = new Set<CoreBlockId>();
+		for (const predecessor of fn.blocks) {
+			if (predecessor.handler !== undefined || predecessor.terminator.kind !== "jump") {
+				continue;
+			}
+			const targetId = predecessor.terminator.edge.block;
+			if (
+				targetId === predecessor.id ||
+				targetId === fn.entry ||
+				targetId === fn.bodyEntry
+			) {
+				continue;
+			}
+			const target = fn.blocks[targetId];
+			if (target === undefined || target.handler !== undefined) continue;
+			const incoming = cfg.predecessors[targetId]!;
+			if (
+				incoming.length !== 1 ||
+				incoming[0]!.kind !== "ordinary" ||
+				incoming[0]!.from !== predecessor.id
+			) {
+				continue;
+			}
+			mergeSuccessors.set(predecessor.id, targetId);
+			mergeTargets.add(targetId);
 		}
-		let result = fn;
-		for (;;) {
-			const cfg = buildCoreControlFlow(result, coreOpcodeRegistry);
-			let mergedFunction: CoreFunction | undefined;
-			for (const predecessor of result.blocks) {
-				if (predecessor.handler !== undefined || predecessor.terminator.kind !== "jump") {
-					continue;
+		if (mergeTargets.size === 0) return fn;
+
+		const replacements = new Map<CoreValueId, CoreValueId>();
+		const blocks = [...fn.blocks];
+		for (const root of fn.blocks) {
+			if (mergeTargets.has(root.id)) continue;
+			let merged = root;
+			let tail = root.id;
+			for (;;) {
+				const targetId = mergeSuccessors.get(tail);
+				if (targetId === undefined) break;
+				const predecessor = fn.blocks[tail]!;
+				if (predecessor.terminator.kind !== "jump") {
+					throw new Error(`Core linear merge predecessor b${tail} is not a jump`);
 				}
-				const targetId = predecessor.terminator.edge.block;
-				if (
-					targetId === predecessor.id ||
-					targetId === result.entry ||
-					targetId === result.bodyEntry
-				) {
-					continue;
-				}
-				const target = result.blocks[targetId];
-				if (target === undefined || target.handler !== undefined) continue;
-				const incoming = cfg.predecessors[targetId]!;
-				if (
-					incoming.length !== 1 ||
-					incoming[0]!.kind !== "ordinary" ||
-					incoming[0]!.from !== predecessor.id
-				) {
-					continue;
-				}
-				const replacements = new Map<CoreValueId, CoreValueId>();
+				const target = fn.blocks[targetId]!;
 				for (const [index, parameter] of target.parameters.entries()) {
 					replacements.set(
 						parameter.value,
-						predecessor.terminator.edge.arguments[index]!,
+						resolveValue(predecessor.terminator.edge.arguments[index]!, replacements),
 					);
 				}
-				const merged: CoreBlock = {
-					...predecessor,
+				merged = {
+					...merged,
 					instructions: [
-						...predecessor.instructions,
+						...merged.instructions,
 						...target.instructions.map((instruction) => ({
 							...instruction,
 							inputs: instruction.inputs.map((value) =>
@@ -7296,19 +7294,17 @@ const combineLinearBlocks: CoreFunctionPass = {
 					],
 					terminator: rewriteTerminator(target.terminator, replacements),
 				};
-				const blocks = result.blocks.map((block) =>
-					block.id === predecessor.id ? merged : block,
-				);
-				// The target parameter dominates blocks beyond the target itself. Rewrite
-				// those uses in the same transaction before normalization deletes its phi.
-				mergedFunction = removeUnreachableCoreBlocks(
-					rewriteFunction(result, blocks, replacements, new Set()),
-				);
-				break;
+				tail = targetId;
 			}
-			if (mergedFunction === undefined) return result;
-			result = mergedFunction;
+			blocks[root.id] = merged;
 		}
+
+		// A removed target parameter can be used by blocks dominated by the whole
+		// chain. Rewrite every such use once before dense normalization deletes the
+		// old blocks and their parameter definitions.
+		return removeUnreachableCoreBlocks(
+			rewriteFunction(fn, blocks, replacements, new Set()),
+		);
 	},
 };
 
