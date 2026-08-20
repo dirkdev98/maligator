@@ -121,8 +121,8 @@ export const CORE_MEMORY_FAMILY_DOMAINS: Readonly<
 	prototype: Object.freeze<Array<CoreEffectDomain>>(["object-property"]),
 });
 
-/** Families whose cells belong to one activation and cannot be reached by a call. */
-export const CORE_ACTIVATION_MEMORY_FAMILIES: ReadonlySet<CoreMemoryFamily> =
+/** Families addressed by compiler attributes alone, never by a heap base or key. */
+export const CORE_ATTRIBUTE_ONLY_MEMORY_FAMILIES: ReadonlySet<CoreMemoryFamily> =
 	new Set<CoreMemoryFamily>(["local-slot", "captured-slot", "activation-this"]);
 
 export type CoreAccessMode = "read" | "write";
@@ -131,9 +131,8 @@ export type CoreAccessMode = "read" | "write";
  * How one opcode names the memory it touches. `attributes` lists the instruction
  * attributes that identify an exact cell inside the family; an access without
  * them covers the family as a whole. `baseOperand` and `keyAttribute` are
- * declared for the alias oracle that will narrow heap families later — the
- * partition model does not consume them yet, so declaring one cannot make an
- * analysis more optimistic than the family it belongs to.
+ * declared for the alias oracle that narrows proven heap locations. Without such
+ * a proof, declaring a base or key remains conservative at whole-family scope.
  */
 export interface CoreOpcodeAccess {
 	readonly family: CoreMemoryFamily;
@@ -258,7 +257,7 @@ function validateAccesses(descriptor: CoreOpcodeDescriptor): void {
 			throw new Error(`${opcode} repeats a ${access.family} attribute`);
 		}
 		if (
-			CORE_ACTIVATION_MEMORY_FAMILIES.has(access.family) &&
+			CORE_ATTRIBUTE_ONLY_MEMORY_FAMILIES.has(access.family) &&
 			(access.baseOperand !== undefined || access.keyAttribute !== undefined)
 		) {
 			throw new Error(

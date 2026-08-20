@@ -217,6 +217,21 @@ describe("Core IR", () => {
 		expect(
 			coreOpcodeRegistry.require("createObjectShaped").resultCannotBeHeldWeakly,
 		).toBeUndefined();
+		const generatorStart = coreOpcodeRegistry.require("generatorStart").effects;
+		expect(generatorStart).toMatchObject({
+			maySuspend: true,
+			mayGc: true,
+			mayThrow: true,
+			callsUserCode: true,
+		});
+		expect(generatorStart.reads).toContain("object-property");
+		const asyncStart = coreOpcodeRegistry.require("asyncStart").effects;
+		expect(asyncStart).toMatchObject({
+			maySuspend: false,
+			mayGc: true,
+			mayThrow: false,
+			callsUserCode: false,
+		});
 		const opcodes = new CoreOpcodeRegistry();
 		expect(() =>
 			opcodes.define({
@@ -455,6 +470,44 @@ describe("Core IR", () => {
 		direct.setTerminator(directHandler, { kind: "return", value: directLate! });
 		expect(() => verifyCoreFunction(direct.finish(directEntry), opcodes)).toThrow(
 			/not available on exceptional flow/,
+		);
+
+		// A defining block can dominate a protected block even though an exception
+		// leaves it before the definition and later reaches that block. Handler
+		// arguments need instruction-exit dominance, not ordinary block dominance.
+		const exceptional = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const defining = exceptional.createBlock([{ representation: "boxed" }]);
+		const recovery = exceptional.createBlock([{ role: "exception" }]);
+		const protectedBlock = exceptional.createBlock();
+		const protectedHandler = exceptional.createBlock([
+			{ role: "exception" },
+			{ representation: "boxed" },
+		]);
+		const exceptionalInput = exceptional.block(defining).parameters[0]!.value;
+		const [exceptionalLate] = exceptional.appendInstruction(defining, "call", [
+			exceptionalInput,
+		]);
+		exceptional.setHandler(defining, recovery);
+		exceptional.setTerminator(defining, {
+			kind: "jump",
+			edge: { block: protectedBlock, arguments: [] },
+		});
+		exceptional.setTerminator(recovery, {
+			kind: "jump",
+			edge: { block: protectedBlock, arguments: [] },
+		});
+		exceptional.appendInstruction(protectedBlock, "call", [exceptionalInput]);
+		exceptional.setHandler(protectedBlock, protectedHandler, [exceptionalLate!]);
+		exceptional.setTerminator(protectedBlock, {
+			kind: "return",
+			value: exceptionalInput,
+		});
+		exceptional.setTerminator(protectedHandler, {
+			kind: "return",
+			value: exceptional.block(protectedHandler).parameters[1]!.value,
+		});
+		expect(() => verifyCoreFunction(exceptional.finish(defining), opcodes)).toThrow(
+			/not available at block entry/,
 		);
 	});
 

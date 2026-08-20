@@ -160,14 +160,12 @@ const TWO_OUTPUTS = new Set<CoreOpcode>([
 ]);
 
 const GC_FREE = new Set<CoreOpcode>([
-	"asyncStart",
 	"createBoolean",
 	"createEmpty",
 	"createF64",
 	"createNull",
 	"createNumber",
 	"createUndefined",
-	"generatorStart",
 	"guardFunctionIndex",
 	"isEmpty",
 	"loadCaptured",
@@ -188,6 +186,9 @@ const GC_FREE = new Set<CoreOpcode>([
 
 const NO_THROW = new Set<CoreOpcode>([
 	...GC_FREE,
+	// The async prologue allocates its hidden state and result promise but keeps
+	// executing synchronously and cannot surface a JavaScript throw.
+	"asyncStart",
 	"createArray",
 	"createBigint",
 	"createFunction",
@@ -223,6 +224,8 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"defineProperty",
 	"deleteProperty",
 	"forInKeys",
+	// GetPrototypeFromConstructor reads the mutable callee.prototype property.
+	"generatorStart",
 	"getAsyncIterator",
 	"getIterator",
 	"hasPrivate",
@@ -299,6 +302,8 @@ const write = (
  * whole-family partitioning.
  */
 const OPCODE_ACCESSES = {
+	// The callee is implicit in the activation rather than an SSA operand.
+	generatorStart: [read("prototype")],
 	loadLocal: [read("local-slot", { attributes: ["index"] })],
 	storeLocal: [write("local-slot", { attributes: ["index"], valueOperand: 0 })],
 	loadCaptured: [read("captured-slot", { attributes: ["functionIndex", "index"] })],
@@ -554,7 +559,7 @@ function effectsFor(opcode: CoreOpcode): CoreInstructionEffects {
 		reads,
 		writes,
 		mayThrow: !NO_THROW.has(opcode),
-		maySuspend: opcode === "await" || opcode === "yield" || opcode === "asyncStart",
+		maySuspend: opcode === "await" || opcode === "yield" || opcode === "generatorStart",
 		mayGc: !GC_FREE.has(opcode),
 		callsUserCode: CALLS_USER_CODE.has(opcode),
 	};

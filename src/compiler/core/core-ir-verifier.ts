@@ -822,7 +822,9 @@ function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry)
 				if (
 					definition.block === block.id
 						? definition.instructionIndex !== -1
-						: !cfg.dominates(definition.block, block.id)
+						: definition.instructionIndex === -1
+							? !cfg.dominates(definition.block, block.id)
+							: !cfg.instructionDominatesBlock(definition.block, block.id)
 				) {
 					fail(
 						`handler edge from b${block.id} uses ${argument}, which is not available at block entry`,
