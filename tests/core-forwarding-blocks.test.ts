@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
@@ -44,23 +45,6 @@ function blockParameters(
 	block: CoreBlockId,
 ): ReadonlyArray<CoreValueId> {
 	return builder.block(block).parameters.map(({ value }) => value);
-}
-
-function terminatorTargets(
-	fn: CoreFunction,
-	block: CoreBlockId,
-): ReadonlyArray<CoreBlockId> {
-	const terminator = fn.blocks[block]!.terminator;
-	switch (terminator.kind) {
-		case "jump":
-			return [terminator.edge.block];
-		case "branch":
-			return [terminator.consequent.block, terminator.alternate.block];
-		case "guard":
-			return [terminator.success.block, terminator.fallback.block];
-		default:
-			return [];
-	}
 }
 
 /** Entry branches through two single-parameter forwarding blocks into one join. */
@@ -163,7 +147,7 @@ describe("Core empty forwarding blocks", () => {
 		).not.toThrow();
 	});
 
-	it("leaves a forwarding cycle alone and stays at its fixpoint", () => {
+	it("terminates on a forwarding cycle and preserves the cycle", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
 		const entry = builder.createBlock([{}]);
 		const flag = blockParameters(builder, entry)[0];
@@ -182,14 +166,13 @@ describe("Core empty forwarding blocks", () => {
 
 		const { result, folded } = optimize(builder.finish(entry));
 		expect(folded).toBe(false);
-		const entryTargets = terminatorTargets(result, result.entry);
-		expect(entryTargets).toHaveLength(2);
-		// The cycle is still entered and still spins through both of its blocks.
-		const head = entryTargets[0]!;
-		expect(terminatorTargets(result, head)).toHaveLength(1);
-		expect(terminatorTargets(result, terminatorTargets(result, head)[0]!)).toEqual([
-			head,
-		]);
+		const cfg = buildCoreControlFlow(result, coreOpcodeRegistry);
+		// CFG normalization may change the number of forwarding blocks, but it must
+		// preserve a reachable cycle instead of chasing it forever.
+		expect(cfg.loops).toHaveLength(1);
+		expect(() =>
+			verifyCoreProgram(coreProgram([result]), coreOpcodeRegistry),
+		).not.toThrow();
 	});
 
 	it("never folds a handler entry whose parameter the unwinder binds", () => {
