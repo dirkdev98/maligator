@@ -224,6 +224,31 @@ export function valueEscapeCovers(
 }
 
 /**
+ * Whether a value can cross the function without losing a caller-owned exact
+ * allocation proof. `preserved` permits forwarding, strict identity/typeof
+ * observation, and returning the exact reference. `unknown` covers every
+ * property, reflection, invocation, retention, throw, host, or unmodelled use.
+ *
+ * This is deliberately independent of escape: a value can remain unretained yet
+ * still have its shape mutated, and scalar/alias consumers need both proofs.
+ */
+export type ValueContainmentFact = "preserved" | "unknown";
+
+export function joinValueContainment(
+	left: ValueContainmentFact,
+	right: ValueContainmentFact,
+): ValueContainmentFact {
+	return left === "unknown" || right === "unknown" ? "unknown" : "preserved";
+}
+
+export function valueContainmentCovers(
+	claim: ValueContainmentFact,
+	actual: ValueContainmentFact,
+): boolean {
+	return claim === "unknown" || actual === "preserved";
+}
+
+/**
  * Where a function's result comes from. `none` is the bottom — no reachable
  * return was observed — and `unknown` is the top. `parameter` and `receiver`
  * describe this function's own frame, so a caller must substitute its argument
@@ -328,6 +353,9 @@ export interface FunctionEffectSummary {
 	/** Covers every argument past the declared formals, however it is observed. */
 	readonly restParameterEscape: ValueEscapeFact;
 	readonly receiverEscape: ValueEscapeFact;
+	readonly parameterContainment: ReadonlyArray<ValueContainmentFact>;
+	readonly restParameterContainment: ValueContainmentFact;
+	readonly receiverContainment: ValueContainmentFact;
 	readonly returnProvenance: ReturnProvenance;
 	readonly returnRepresentation: ReturnRepresentation;
 }

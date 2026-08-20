@@ -53,6 +53,7 @@ import type {
 	ReturnProvenance,
 	ReturnRepresentation,
 	SummaryRootReason,
+	ValueContainmentFact,
 	ValueEscapeFact,
 } from "../shared/effect-summary.ts";
 import {
@@ -68,6 +69,7 @@ import {
 	joinEffectSummaries,
 	joinReturnProvenance,
 	joinReturnRepresentation,
+	joinValueContainment,
 	joinValueEscape,
 	moduleSummaryId,
 	normalizeEffectDomains,
@@ -208,6 +210,9 @@ export interface CoreFunctionSummary {
 	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
 	readonly restParameterEscape: ValueEscapeFact;
 	readonly receiverEscape: ValueEscapeFact;
+	readonly parameterContainment: ReadonlyArray<ValueContainmentFact>;
+	readonly restParameterContainment: ValueContainmentFact;
+	readonly receiverContainment: ValueContainmentFact;
 	readonly returnProvenance: ReturnProvenance;
 	readonly returnRepresentation: ReturnRepresentation;
 }
@@ -228,6 +233,8 @@ export interface CoreCallSummaryClaim {
 	/** Escape of the ordinary call's receiver and each supplied argument. */
 	readonly receiverEscape: ValueEscapeFact;
 	readonly argumentEscape: ReadonlyArray<ValueEscapeFact>;
+	readonly receiverContainment: ValueContainmentFact;
+	readonly argumentContainment: ReadonlyArray<ValueContainmentFact>;
 	/** Joined result facts before substituting the caller's actual operands. */
 	readonly returnProvenance: ReturnProvenance;
 	readonly returnRepresentation: ReturnRepresentation;
@@ -306,6 +313,8 @@ interface LocalFacts {
 	/** `value` is at least as escaped as every value it forwards into. */
 	readonly escapeForward: ReadonlyMap<CoreValueId, ReadonlyArray<CoreValueId>>;
 	readonly escapeArguments: ReadonlyArray<ArgumentUse>;
+	/** Values whose uses invalidate a caller-owned exact allocation proof. */
+	readonly containmentBase: ReadonlySet<CoreValueId>;
 	readonly receiverValues: ReadonlyArray<CoreValueId>;
 	readonly restValues: ReadonlyArray<CoreValueId>;
 	/** Provenance of returned values that needs no callee summary. */
@@ -435,6 +444,18 @@ function localReturnProvenance(
 	return RETURN_PROVENANCE_UNKNOWN;
 }
 
+function summaryObservesOperands(
+	instruction: CoreInstruction,
+	registry: CoreOpcodeRegistry,
+): boolean {
+	if (registry.get(instruction.opcode)?.observesOperands === true) return true;
+	const operator = instruction.attributes.operator;
+	return (
+		(instruction.opcode === "binary" && (operator === "===" || operator === "!==")) ||
+		(instruction.opcode === "unary" && operator === "typeof")
+	);
+}
+
 /**
  * Collect everything about one function that does not depend on a callee.
  *
@@ -455,6 +476,7 @@ function collectLocalFacts(
 	const escapeBase = new Map<CoreValueId, ValueEscapeFact>();
 	const escapeForward = new Map<CoreValueId, Array<CoreValueId>>();
 	const escapeArguments: Array<ArgumentUse> = [];
+	const containmentBase = new Set<CoreValueId>();
 	const receiverValues: Array<CoreValueId> = [];
 	const restValues: Array<CoreValueId> = [];
 	const returnedCallSites: Array<CallSite> = [];
@@ -480,6 +502,9 @@ function collectLocalFacts(
 		const existing = escapeForward.get(from);
 		if (existing === undefined) escapeForward.set(from, [to]);
 		else existing.push(to);
+	};
+	const breakContainment = (value: CoreValueId): void => {
+		containmentBase.add(value);
 	};
 
 	for (const block of fn.blocks) {
@@ -533,12 +558,13 @@ function collectLocalFacts(
 				continue;
 			}
 			// An operand the registry declares as merely observed is not retained.
-			if (registry.get(instruction.opcode)?.observesOperands === true) continue;
+			if (summaryObservesOperands(instruction, registry)) continue;
 			for (const [position, input] of instruction.inputs.entries()) {
 				if (isCall && position === 0) {
 					// Being invoked is not being kept: the reference lives on the stack for
 					// the duration of the call and nothing here stores it.
 					raiseBase(input, "invoked");
+					breakContainment(input);
 					continue;
 				}
 				const mapped =
@@ -548,6 +574,7 @@ function collectLocalFacts(
 					continue;
 				}
 				raiseBase(input, "retained");
+				breakContainment(input);
 			}
 		}
 
@@ -575,6 +602,7 @@ function collectLocalFacts(
 		} else if (terminator.kind === "throw") {
 			// A thrown reference leaves this frame through the handler chain.
 			raiseBase(terminator.value, "retained");
+			breakContainment(terminator.value);
 			effects = joinEffectSummaries(effects, { ...NO_EFFECT_SUMMARY, mayThrow: true });
 		}
 		for (const edge of outgoingEdges(block)) {
@@ -595,6 +623,7 @@ function collectLocalFacts(
 		escapeBase,
 		escapeForward,
 		escapeArguments,
+		containmentBase,
 		receiverValues,
 		restValues,
 		returnProvenanceBase,
@@ -612,6 +641,9 @@ interface MutableSummary {
 	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
 	readonly restParameterEscape: ValueEscapeFact;
 	readonly receiverEscape: ValueEscapeFact;
+	readonly parameterContainment: ReadonlyArray<ValueContainmentFact>;
+	readonly restParameterContainment: ValueContainmentFact;
+	readonly receiverContainment: ValueContainmentFact;
 	readonly returnProvenance: ReturnProvenance;
 	readonly returnRepresentation: ReturnRepresentation;
 }
@@ -622,6 +654,9 @@ function summaryKey(summary: MutableSummary): string {
 		summary.parameterEscape.join(","),
 		summary.restParameterEscape,
 		summary.receiverEscape,
+		summary.parameterContainment.join(","),
+		summary.restParameterContainment,
+		summary.receiverContainment,
 		returnProvenanceKey(summary.returnProvenance),
 		summary.returnRepresentation,
 	].join("|");
@@ -633,6 +668,11 @@ function bottomSummary(parameterCount: number): MutableSummary {
 		parameterEscape: new Array<ValueEscapeFact>(parameterCount).fill("none"),
 		restParameterEscape: "none",
 		receiverEscape: "none",
+		parameterContainment: new Array<ValueContainmentFact>(parameterCount).fill(
+			"preserved",
+		),
+		restParameterContainment: "preserved",
+		receiverContainment: "preserved",
 		returnProvenance: RETURN_PROVENANCE_NONE,
 		returnRepresentation: "none",
 	};
@@ -644,6 +684,9 @@ function saturatedSummary(parameterCount: number): MutableSummary {
 		parameterEscape: new Array<ValueEscapeFact>(parameterCount).fill("retained"),
 		restParameterEscape: "retained",
 		receiverEscape: "retained",
+		parameterContainment: new Array<ValueContainmentFact>(parameterCount).fill("unknown"),
+		restParameterContainment: "unknown",
+		receiverContainment: "unknown",
 		returnProvenance: RETURN_PROVENANCE_UNKNOWN,
 		returnRepresentation: "boxed",
 	};
@@ -657,6 +700,16 @@ function calleeEscape(
 	return position.kind === "receiver"
 		? callee.receiverEscape
 		: (callee.parameterEscape[position.index] ?? callee.restParameterEscape);
+}
+
+function calleeContainment(
+	callee: MutableSummary | undefined,
+	position: ArgumentPosition,
+): ValueContainmentFact {
+	if (callee === undefined) return "unknown";
+	return position.kind === "receiver"
+		? callee.receiverContainment
+		: (callee.parameterContainment[position.index] ?? callee.restParameterContainment);
 }
 
 /**
@@ -715,6 +768,27 @@ function transferSummary(
 		}
 	}
 
+	const containmentUnknown = new Set(local.containmentBase);
+	for (const use of local.escapeArguments) {
+		let containment: ValueContainmentFact = "preserved";
+		for (const target of use.site.targets) {
+			containment = joinValueContainment(
+				containment,
+				calleeContainment(state[target], use.position),
+			);
+		}
+		if (containment === "unknown") containmentUnknown.add(use.value);
+	}
+	const pendingContainment = [...containmentUnknown];
+	while (pendingContainment.length > 0) {
+		const value = pendingContainment.pop()!;
+		for (const source of sourcesOf.get(value) ?? []) {
+			if (containmentUnknown.has(source)) continue;
+			containmentUnknown.add(source);
+			pendingContainment.push(source);
+		}
+	}
+
 	const escapeOf = (value: CoreValueId): ValueEscapeFact =>
 		local.frameOutlivesCall ? "retained" : (levels.get(value) ?? "none");
 	const parameterEscape = fn.parameters.map((value) => escapeOf(value));
@@ -727,6 +801,24 @@ function transferSummary(
 	let receiverEscape: ValueEscapeFact = local.frameOutlivesCall ? "retained" : "none";
 	for (const value of local.receiverValues) {
 		receiverEscape = joinValueEscape(receiverEscape, escapeOf(value));
+	}
+	const containmentOf = (value: CoreValueId): ValueContainmentFact =>
+		local.frameOutlivesCall || containmentUnknown.has(value) ? "unknown" : "preserved";
+	const parameterContainment = fn.parameters.map((value) => containmentOf(value));
+	let restParameterContainment: ValueContainmentFact = local.frameOutlivesCall
+		? "unknown"
+		: "preserved";
+	for (const value of local.restValues) {
+		restParameterContainment = joinValueContainment(
+			restParameterContainment,
+			containmentOf(value),
+		);
+	}
+	let receiverContainment: ValueContainmentFact = local.frameOutlivesCall
+		? "unknown"
+		: "preserved";
+	for (const value of local.receiverValues) {
+		receiverContainment = joinValueContainment(receiverContainment, containmentOf(value));
 	}
 
 	let returnProvenance = local.returnProvenanceBase;
@@ -756,6 +848,9 @@ function transferSummary(
 		parameterEscape,
 		restParameterEscape,
 		receiverEscape,
+		parameterContainment,
+		restParameterContainment,
+		receiverContainment,
 		returnProvenance: fn.isGenerator || fn.isAsync ? { kind: "fresh" } : returnProvenance,
 		// The result of calling a generator or async function is the generator or
 		// promise object, never the value its body returns.
@@ -787,6 +882,21 @@ function joinedCallEscape(
 		escape = joinValueEscape(escape, calleeEscape(state[target], position));
 	}
 	return escape;
+}
+
+function joinedCallContainment(
+	site: CallSite,
+	state: ReadonlyArray<MutableSummary | undefined>,
+	position: ArgumentPosition,
+): ValueContainmentFact {
+	let containment: ValueContainmentFact = "preserved";
+	for (const target of site.targets) {
+		containment = joinValueContainment(
+			containment,
+			calleeContainment(state[target], position),
+		);
+	}
+	return containment;
 }
 
 function joinedCallProvenance(
@@ -923,10 +1033,12 @@ export function coreCallSummaryDigest(claim: CoreCallEffectSummaryClaim): string
 /** Digest for value facts, independent of effect precision. */
 export function coreCallValueSummaryDigest(claim: CoreCallValueSummaryClaim): string {
 	return [
-		"callee-values:v1",
+		"callee-values:v2",
 		`[${claim.targets.join(",")}]`,
 		claim.receiverEscape,
 		`[${claim.argumentEscape.join(",")}]`,
+		claim.receiverContainment,
+		`[${claim.argumentContainment.join(",")}]`,
 		returnProvenanceKey(claim.returnProvenance),
 		claim.returnRepresentation,
 	].join(":");
@@ -941,6 +1053,8 @@ export function coreCallSummaryAttribute(
 		targets: [...claim.targets],
 		receiverEscape: claim.receiverEscape,
 		argumentEscape: [...claim.argumentEscape],
+		receiverContainment: claim.receiverContainment,
+		argumentContainment: [...claim.argumentContainment],
 		returnProvenance: { ...claim.returnProvenance },
 		returnRepresentation: claim.returnRepresentation,
 	};
@@ -1196,6 +1310,9 @@ export function analyzeCoreProgramSummaries(
 			parameterEscape: solved.parameterEscape,
 			restParameterEscape: solved.restParameterEscape,
 			receiverEscape: solved.receiverEscape,
+			parameterContainment: solved.parameterContainment,
+			restParameterContainment: solved.restParameterContainment,
+			receiverContainment: solved.receiverContainment,
 			returnProvenance: solved.returnProvenance,
 			returnRepresentation: solved.returnRepresentation,
 		};
@@ -1231,6 +1348,14 @@ export function analyzeCoreProgramSummaries(
 					.slice(2)
 					.map((_input, index) =>
 						joinedCallEscape(site, state, { kind: "parameter", index }),
+					),
+				receiverContainment: joinedCallContainment(site, state, {
+					kind: "receiver",
+				}),
+				argumentContainment: site.inputs
+					.slice(2)
+					.map((_input, index) =>
+						joinedCallContainment(site, state, { kind: "parameter", index }),
 					),
 				returnProvenance: joinedCallProvenance(site, state),
 				returnRepresentation: joinedCallRepresentation(site, state),
@@ -1292,6 +1417,9 @@ export function coreFunctionEffectSummaries(
 					parameterEscape: summary.parameterEscape,
 					restParameterEscape: summary.restParameterEscape,
 					receiverEscape: summary.receiverEscape,
+					parameterContainment: summary.parameterContainment,
+					restParameterContainment: summary.restParameterContainment,
+					receiverContainment: summary.receiverContainment,
 					returnProvenance: summary.returnProvenance,
 					returnRepresentation: summary.returnRepresentation,
 				},
@@ -1404,6 +1532,10 @@ function valueEscapeFact(value: unknown): ValueEscapeFact | undefined {
 		: undefined;
 }
 
+function valueContainmentFact(value: unknown): ValueContainmentFact | undefined {
+	return value === "preserved" || value === "unknown" ? value : undefined;
+}
+
 function returnRepresentationFact(value: unknown): ReturnRepresentation | undefined {
 	return value === "none" ||
 		value === "boxed" ||
@@ -1443,17 +1575,22 @@ export function coreCallSummaryClaimFromAttribute(
 		typeof record.digest !== "string" ||
 		!Array.isArray(record.targets) ||
 		record.targets.some((target) => !Number.isSafeInteger(target) || target < 0) ||
-		!Array.isArray(record.argumentEscape)
+		!Array.isArray(record.argumentEscape) ||
+		!Array.isArray(record.argumentContainment)
 	) {
 		return undefined;
 	}
 	const receiverEscape = valueEscapeFact(record.receiverEscape);
 	const argumentEscape = record.argumentEscape.map(valueEscapeFact);
+	const receiverContainment = valueContainmentFact(record.receiverContainment);
+	const argumentContainment = record.argumentContainment.map(valueContainmentFact);
 	const returnProvenance = returnProvenanceFact(record.returnProvenance);
 	const returnRepresentation = returnRepresentationFact(record.returnRepresentation);
 	if (
 		receiverEscape === undefined ||
 		argumentEscape.some((escape) => escape === undefined) ||
+		receiverContainment === undefined ||
+		argumentContainment.some((containment) => containment === undefined) ||
 		returnProvenance === undefined ||
 		returnRepresentation === undefined
 	) {
@@ -1464,6 +1601,8 @@ export function coreCallSummaryClaimFromAttribute(
 		targets: record.targets as ReadonlyArray<number>,
 		receiverEscape,
 		argumentEscape: argumentEscape as ReadonlyArray<ValueEscapeFact>,
+		receiverContainment,
+		argumentContainment: argumentContainment as ReadonlyArray<ValueContainmentFact>,
 		returnProvenance,
 		returnRepresentation,
 	};

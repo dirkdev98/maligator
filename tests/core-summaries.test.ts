@@ -84,6 +84,60 @@ function writeGlobal(functionIndex: number, slot = 0): CoreFunction {
 	return builder.finish(entry);
 }
 
+function ignoreParameter(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const [result] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 2 },
+		outputRepresentations: ["f64"],
+	});
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	return builder.finish(entry);
+}
+
+function mutateParameter(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const parameter = builder.block(entry).parameters[0]!.value;
+	const [value] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 2 },
+		outputRepresentations: ["f64"],
+	});
+	builder.appendInstruction(entry, "storePropertyStatic", [parameter, value!], {
+		attributes: { stringIndex: 1 },
+	});
+	builder.setTerminator(entry, { kind: "return", value: value! });
+	return builder.finish(entry);
+}
+
+function objectCaller(
+	functionIndex: number,
+	target: number,
+	throughResult: boolean,
+): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const initial = builder.block(entry).parameters[0]!.value;
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial], {
+		attributes: { keyStringIndices: [1] },
+	});
+	const { result } = appendDirectCall(builder, entry, target, object);
+	const [loaded] = builder.appendInstruction(
+		entry,
+		"loadPropertyStatic",
+		[throughResult ? result : object!],
+		{ attributes: { stringIndex: 1 } },
+	);
+	builder.setTerminator(entry, { kind: "return", value: loaded! });
+	return builder.finish(entry);
+}
+
 function appendDirectCall(
 	builder: CoreFunctionBuilder,
 	block: CoreBlockId,
@@ -130,6 +184,7 @@ describe("interprocedural summary lattices", () => {
 		);
 		expect(analysis.summary(0)).toMatchObject({
 			parameterEscape: ["returned"],
+			parameterContainment: ["preserved"],
 			returnProvenance: { kind: "parameter", index: 0 },
 			returnRepresentation: "boxed",
 		});
@@ -391,6 +446,41 @@ describe("summary consumers and proof boundary", () => {
 		).toBe(false);
 	});
 
+	it("keeps exact allocation provenance only across containment-preserving callees", () => {
+		const program: CoreProgram = {
+			...coreProgram([
+				ignoreParameter(0),
+				returnParameter(1),
+				mutateParameter(2),
+				objectCaller(3, 0, false),
+				objectCaller(4, 1, true),
+				objectCaller(5, 2, false),
+			]),
+			stringConstants: [[], [102]],
+		};
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const ablated = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining", "interprocedural"]),
+			verification: "per-pass",
+		}).program;
+		const loads = (candidate: CoreProgram, functionIndex: number) =>
+			candidate.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "loadPropertyStatic"),
+			).length;
+		expect(loads(optimized, 3)).toBe(0);
+		expect(loads(optimized, 4)).toBe(0);
+		expect(loads(optimized, 5)).toBe(1);
+		expect(loads(ablated, 3)).toBe(1);
+		expect(loads(ablated, 4)).toBe(1);
+		expect(loads(ablated, 5)).toBe(1);
+		expect(analyzeCoreProgramSummaries(program).summary(2)).toMatchObject({
+			parameterContainment: ["unknown"],
+		});
+	});
+
 	it("propagates a pure effect summary transitively to memory consumers", () => {
 		const caller = new CoreFunctionBuilder(2, coreOpcodeRegistry, {
 			parameterCount: 1,
@@ -499,6 +589,29 @@ describe("summary consumers and proof boundary", () => {
 		};
 		expect(() => verifyCoreProgram(stale, coreOpcodeRegistry)).toThrow(
 			/callee value facts|licenses boxed/,
+		);
+	});
+
+	it("rejects a containment claim after the callee starts mutating its argument", () => {
+		const program: CoreProgram = {
+			...coreProgram([ignoreParameter(0), objectCaller(1, 0, false)]),
+			stringConstants: [[], [102]],
+		};
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(
+			optimized.functions[1]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "loadPropertyStatic"),
+			),
+		).toHaveLength(0);
+		const stale: CoreProgram = {
+			...optimized,
+			functions: [mutateParameter(0), optimized.functions[1]!],
+		};
+		expect(() => verifyCoreProgram(stale, coreOpcodeRegistry)).toThrow(
+			/callee summary the current graph no longer proves/,
 		);
 	});
 

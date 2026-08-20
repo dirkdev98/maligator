@@ -17,6 +17,11 @@
 import { coreCanonicalValueRoots, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import {
+	CORE_CALL_SUMMARY_ATTRIBUTE,
+	coreCallSummaryClaimFromAttribute,
+} from "./core-ir-summaries.ts";
+import type { CoreCallValueSummaryClaim } from "./core-ir-summaries.ts";
 import { CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
 import type {
 	CoreAccessMode,
@@ -364,6 +369,7 @@ export function coreProvenance(
 	const roots = coreCanonicalValueRoots(fn, cfg);
 	const canonical = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const definitions = new Map<CoreValueId, CoreInstruction>();
+	const callClaims = new Map<CoreInstructionId, CoreCallValueSummaryClaim>();
 	const positions = new Map<
 		CoreInstructionId,
 		{ readonly block: CoreBlockId; readonly index: number }
@@ -372,6 +378,12 @@ export function coreProvenance(
 		for (const [index, instruction] of block.instructions.entries()) {
 			positions.set(instruction.id, { block: block.id, index });
 			for (const output of instruction.outputs) definitions.set(output, instruction);
+			const claim = coreCallSummaryClaimFromAttribute(
+				instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE],
+			);
+			if (instruction.opcode === "call" && claim !== undefined) {
+				callClaims.set(instruction.id, claim);
+			}
 		}
 	}
 	const canonicalStrings = canonicalStringIndices(stringConstants);
@@ -446,8 +458,35 @@ export function coreProvenance(
 		if (layoutByRoot.has(root)) ambiguousRoots.add(root);
 		layoutByRoot.set(root, layout);
 	}
+	const returnedInput = (
+		instruction: CoreInstruction,
+		claim: CoreCallValueSummaryClaim,
+	): CoreValueId | undefined => {
+		if (claim.returnProvenance.kind === "receiver") return instruction.inputs[1];
+		return claim.returnProvenance.kind === "parameter"
+			? instruction.inputs[claim.returnProvenance.index + 2]
+			: undefined;
+	};
+	const summaryAliases = new Map<CoreValueId, CoreValueId>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			const claim = callClaims.get(instruction.id);
+			const output = instruction.outputs[0];
+			const input = claim === undefined ? undefined : returnedInput(instruction, claim);
+			if (output !== undefined && input !== undefined) {
+				summaryAliases.set(canonical(output), canonical(input));
+			}
+		}
+	}
 	const layoutOf = (value: CoreValueId): CoreAllocationLayout | undefined => {
-		const root = canonical(value);
+		let root = canonical(value);
+		const seen = new Set<CoreValueId>();
+		while (!seen.has(root)) {
+			seen.add(root);
+			const alias = summaryAliases.get(root);
+			if (alias === undefined) break;
+			root = canonical(alias);
+		}
 		return ambiguousRoots.has(root) ? undefined : layoutByRoot.get(root);
 	};
 	const invalidIndexedLayouts = new Set<CoreInstructionId>();
@@ -538,6 +577,32 @@ export function coreProvenance(
 					const layout = layoutOf(input);
 					if (layout === undefined) continue;
 					if (observes) continue;
+					const claim = callClaims.get(instruction.id);
+					const callEscape =
+						claim === undefined
+							? undefined
+							: operand === 1
+								? claim.receiverEscape
+								: operand >= 2
+									? claim.argumentEscape[operand - 2]
+									: undefined;
+					const callContainment =
+						claim === undefined
+							? undefined
+							: operand === 1
+								? claim.receiverContainment
+								: operand >= 2
+									? claim.argumentContainment[operand - 2]
+									: undefined;
+					if (
+						callContainment === "preserved" &&
+						(callEscape === "none" ||
+							(callEscape === "returned" &&
+								instruction.outputs[0] !== undefined &&
+								layoutOf(instruction.outputs[0]) === layout))
+					) {
+						continue;
+					}
 					const use = bases.get(operand);
 					if (use === undefined) {
 						escaped.add(layout.instruction);
@@ -638,6 +703,8 @@ export function coreProvenance(
 				return true;
 			}
 			const producer = definitions.get(root);
+			const callClaim = producer === undefined ? undefined : callClaims.get(producer.id);
+			if (callClaim?.returnProvenance.kind === "primitive") return true;
 			// A block parameter merging several proven primitives stays unproven; the
 			// conjunction needs its own fixed point, which no consumer needs yet.
 			return (

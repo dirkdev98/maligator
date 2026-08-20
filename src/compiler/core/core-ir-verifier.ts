@@ -1020,7 +1020,7 @@ function verifySummaryClaims(program: CoreProgram, registry: CoreOpcodeRegistry)
 			fail(`${where} carries callee value facts the current graph no longer proves`);
 		}
 		const licensed = coreCallResultRepresentation(current);
-		if (representation !== licensed) {
+		if (representation !== "boxed" && representation !== licensed) {
 			fail(
 				`${where} uses ${representation} for a result whose callee summary licenses ${licensed}`,
 			);

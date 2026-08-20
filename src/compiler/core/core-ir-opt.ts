@@ -7087,20 +7087,41 @@ const refineDirectCallEffects: CoreFunctionPass = {
 						if (ownsCurrent) retained.add(current.proof);
 						return instruction;
 					}
-					if (current !== undefined && !ownsCurrent) return instruction;
 					const claim =
 						instruction.opcode === "call"
 							? summaries.callSite(fn.functionIndex, instruction.id)
 							: undefined;
+					let next = instruction;
+					if (claim !== undefined) {
+						const attribute = coreCallSummaryAttribute(claim);
+						if (
+							stableAttributeValue(
+								instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE],
+							) !== stableAttributeValue(attribute)
+						) {
+							next = {
+								...instruction,
+								attributes: {
+									...instruction.attributes,
+									[CORE_CALL_SUMMARY_ATTRIBUTE]: attribute,
+								},
+							};
+							changed = true;
+						}
+					} else if (CORE_CALL_SUMMARY_ATTRIBUTE in instruction.attributes) {
+						next = withoutInstructionAttribute(instruction, CORE_CALL_SUMMARY_ATTRIBUTE);
+						changed = true;
+					}
+					if (current !== undefined && !ownsCurrent) return next;
 					const baseline = coreOpcodeRegistry.require(instruction.opcode).effects;
 					const refined =
 						claim === undefined
 							? undefined
 							: deriveCoreCallEffectRefinement(baseline, claim);
 					if (refined === undefined || claim === undefined) {
-						if (current === undefined) return instruction;
+						if (current === undefined) return next;
 						changed = true;
-						return withoutEffectRefinement(instruction);
+						return withoutEffectRefinement(next);
 					}
 					const digest = coreCallSummaryDigest(claim);
 					if (current !== undefined) {
@@ -7111,7 +7132,7 @@ const refineDirectCallEffects: CoreFunctionPass = {
 							effectSummariesEqual(current.effects, refined)
 						) {
 							retained.add(current.proof);
-							return instruction;
+							return next;
 						}
 					}
 					const proof = coreFactId(nextFact++);
@@ -7124,7 +7145,7 @@ const refineDirectCallEffects: CoreFunctionPass = {
 						origin: "core-callee-summary",
 					});
 					changed = true;
-					return { ...instruction, effectRefinement: { effects: refined, proof } };
+					return { ...next, effectRefinement: { effects: refined, proof } };
 				}),
 			}),
 		);
