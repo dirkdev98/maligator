@@ -5,7 +5,7 @@ import {
 } from "../core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../core/core-ir-opcodes.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
-import { verifyCoreFunction } from "../core/core-ir-verifier.ts";
+import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
@@ -858,7 +858,6 @@ function lowerFunctionToTarget(
 	instructionSites?: WeakMap<object, CompilerSiteFacts>,
 	reuseRegisters = true,
 ): LoweredCoreFunction {
-	verifyCoreFunction(core, coreOpcodeRegistry);
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
 	const protectedInstructions = coreRegionInstructionIds(core);
 	const omittedInstructions = immediateOnlyInstructions(core, protectedInstructions);
@@ -1207,6 +1206,8 @@ export function lowerCoreProgramToTarget(
 	if (compilation === undefined) {
 		throw new Error("Core program is missing product compilation metadata");
 	}
+	// Owned boundary: lowering may consume Core decisions but never repairs them.
+	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "pre-target" });
 	const lowered = core.functions.map((fn) =>
 		lowerFunctionToTarget(
 			fn,

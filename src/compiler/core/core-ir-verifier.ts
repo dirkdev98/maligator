@@ -15,15 +15,74 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 
+/**
+ * Verification stages, in pipeline order. Every stage is a proof boundary: the
+ * program entering it is already verified, so a failure names the transform that
+ * produced the broken graph rather than the place that later noticed it.
+ */
+export type CoreVerificationStage =
+	| "construction"
+	| "pre-optimization"
+	| "normalization"
+	| "fixpoint"
+	| "finalization"
+	| "final-region-selection"
+	| "pre-target";
+
+export interface CoreVerificationContext {
+	readonly stage: CoreVerificationStage;
+	readonly pass?: string;
+	readonly round?: number;
+	readonly functionIndex?: number;
+}
+
+/**
+ * `boundary` verifies only the optimizer's input and output. `per-pass` adds a
+ * whole-program verification after every mutating pass, which is what makes an
+ * invalid graph attributable to the pass that produced it.
+ */
+export type CoreVerificationProfile = "boundary" | "per-pass";
+
+function formatVerificationContext(context: CoreVerificationContext | undefined): string {
+	if (context === undefined) return "";
+	const parts = [`stage=${context.stage}`];
+	if (context.pass !== undefined) parts.push(`pass=${context.pass}`);
+	if (context.round !== undefined) parts.push(`round=${context.round}`);
+	if (context.functionIndex !== undefined)
+		parts.push(`function=${context.functionIndex}`);
+	return ` [${parts.join(" ")}]`;
+}
+
 export class CoreIrVerificationError extends Error {
-	constructor(message: string) {
-		super(`Core IR verification failed: ${message}`);
+	/** Invariant text without the stage prefix, so contexts nest without repeating. */
+	readonly detail: string;
+	readonly context: CoreVerificationContext | undefined;
+
+	constructor(detail: string, context?: CoreVerificationContext) {
+		super(`Core IR verification failed${formatVerificationContext(context)}: ${detail}`);
 		this.name = "CoreIrVerificationError";
+		this.detail = detail;
+		this.context = context;
 	}
 }
 
 function fail(message: string): never {
 	throw new CoreIrVerificationError(message);
+}
+
+function withVerificationContext<T>(
+	context: CoreVerificationContext | undefined,
+	run: () => T,
+): T {
+	if (context === undefined) return run();
+	try {
+		return run();
+	} catch (error) {
+		if (error instanceof CoreIrVerificationError && error.context === undefined) {
+			throw new CoreIrVerificationError(error.detail, context);
+		}
+		throw error;
+	}
 }
 
 function checkArity(kind: string, count: number, minimum: number, maximum: number): void {
@@ -230,7 +289,18 @@ function verifyRegionReferences(
 }
 
 /** Throws CoreIrVerificationError when any canonical middle-end invariant is broken. */
-export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistry): void {
+export function verifyCoreFunction(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+	context?: CoreVerificationContext,
+): void {
+	withVerificationContext(
+		context === undefined ? undefined : { ...context, functionIndex: fn.functionIndex },
+		() => verifyCoreFunctionGraph(fn, registry),
+	);
+}
+
+function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry): void {
 	if (!Number.isSafeInteger(fn.functionIndex) || fn.functionIndex < 0) {
 		fail(`invalid function index ${fn.functionIndex}`);
 	}
@@ -586,6 +656,17 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 export function verifyCoreProgram(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
+	context?: CoreVerificationContext,
+): void {
+	withVerificationContext(context, () =>
+		verifyCoreProgramGraph(program, registry, context),
+	);
+}
+
+function verifyCoreProgramGraph(
+	program: CoreProgram,
+	registry: CoreOpcodeRegistry,
+	context: CoreVerificationContext | undefined,
 ): void {
 	if (!Number.isSafeInteger(program.globalCount) || program.globalCount < 0) {
 		fail(`invalid global count ${program.globalCount}`);
@@ -630,18 +711,23 @@ export function verifyCoreProgram(
 		if (fn.metadata.nameStringIndex >= program.stringConstants.length) {
 			fail(`function ${index} has unknown name string ${fn.metadata.nameStringIndex}`);
 		}
-		verifyCoreFunction(fn, registry);
-		for (const block of fn.blocks) {
-			for (const instruction of [...block.instructions, block.terminator]) {
-				if (
-					instruction.sourcePosition !== undefined &&
-					instruction.sourcePosition >= program.sourcePositions.length
-				) {
-					fail(
-						`instruction @${instruction.id} has unknown source position ${instruction.sourcePosition}`,
-					);
+		verifyCoreFunction(fn, registry, context);
+		withVerificationContext(
+			context === undefined ? undefined : { ...context, functionIndex: index },
+			() => {
+				for (const block of fn.blocks) {
+					for (const instruction of [...block.instructions, block.terminator]) {
+						if (
+							instruction.sourcePosition !== undefined &&
+							instruction.sourcePosition >= program.sourcePositions.length
+						) {
+							fail(
+								`instruction @${instruction.id} has unknown source position ${instruction.sourcePosition}`,
+							);
+						}
+					}
 				}
-			}
-		}
+			},
+		);
 	}
 }

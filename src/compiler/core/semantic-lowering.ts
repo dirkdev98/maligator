@@ -864,7 +864,7 @@ export function constructSemanticProgramCore(
 	if (debugEnabled) {
 		log.debug(core.functions.map((fn) => formatCoreFunction(fn)).join("\n"));
 	}
-	verifyCoreProgram(core, coreOpcodeRegistry);
+	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "construction" });
 	return core;
 }
 

@@ -24,7 +24,15 @@ import {
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import { verifyCoreFunction } from "./core-ir-verifier.ts";
+import {
+	CoreIrVerificationError,
+	verifyCoreFunction,
+	verifyCoreProgram,
+} from "./core-ir-verifier.ts";
+import type {
+	CoreVerificationContext,
+	CoreVerificationProfile,
+} from "./core-ir-verifier.ts";
 import type {
 	CoreBlock,
 	CoreBlockId,
@@ -45,6 +53,8 @@ export interface CoreOptimizationOptions {
 	readonly ablations?: ReadonlySet<OptimizationAblation>;
 	/** Run Core's value simplifiers. Disable only while importing an already optimized graph. */
 	readonly simplifyValues?: boolean;
+	/** Development profile: verify the whole program after every mutating pass. */
+	readonly verification?: CoreVerificationProfile;
 }
 
 const ALLOCATION_OPCODES = new Set([
@@ -1033,7 +1043,10 @@ function inlineLinearCall(
 	);
 }
 
-function inlineSimpleCoreFunctions(program: CoreProgram): InlineProgramResult {
+function inlineSimpleCoreFunctions(
+	program: CoreProgram,
+	verification: CoreVerificationProfile,
+): InlineProgramResult {
 	const compilation = program.compilation;
 	const decisions =
 		compilation?.optimizationDecisions === undefined
@@ -1076,7 +1089,12 @@ function inlineSimpleCoreFunctions(program: CoreProgram): InlineProgramResult {
 					next = inlineLinearCall(fn, block, call, target, linear, positions);
 					if (next !== undefined) {
 						recordInlineDecision(decisions, fn, call, "applied", "inline");
-						verifyCoreFunction(next, coreOpcodeRegistry);
+						if (verification === "per-pass") {
+							verifyCoreFunction(next, coreOpcodeRegistry, {
+								stage: "normalization",
+								pass: "inline-small-functions",
+							});
+						}
 					}
 					break;
 				}
@@ -5080,12 +5098,14 @@ const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectNumericFusionRegions,
 ];
 
-function claimedInstructionSnapshots(fn: CoreFunction): ReadonlyMap<number, string> {
+function claimedInstructionSnapshots(
+	fn: CoreFunction,
+): ReadonlyMap<CoreInstructionId, string> {
 	const claimed = new Set(
 		fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
 	);
 	if (claimed.size === 0) return new Map();
-	const snapshots = new Map<number, string>();
+	const snapshots = new Map<CoreInstructionId, string>();
 	for (const block of fn.blocks) {
 		for (const instruction of [...block.instructions, block.terminator]) {
 			if (!claimed.has(instruction.id)) continue;
@@ -5095,17 +5115,55 @@ function claimedInstructionSnapshots(fn: CoreFunction): ReadonlyMap<number, stri
 	return snapshots;
 }
 
-function preservesClaimedInstructions(
-	before: ReadonlyMap<number, string>,
-	fn: CoreFunction,
-): boolean {
-	if (before.size === 0) return true;
-	const after = claimedInstructionSnapshots(fn);
-	if (after.size !== before.size) return false;
-	for (const [instruction, snapshot] of before) {
-		if (after.get(instruction) !== snapshot) return false;
+function claimingRegionKinds(fn: CoreFunction, instruction: CoreInstructionId): string {
+	return fn.regions
+		.filter(({ claimedInstructions }) => claimedInstructions.includes(instruction))
+		.map(({ kind }) => kind)
+		.join(", ");
+}
+
+/**
+ * A region certificate proves a property of exact instructions in exact blocks,
+ * so any later edit to one of them invalidates the proof it licenses. Returns the
+ * broken claim, or undefined when every previously claimed instruction survived
+ * unchanged; newly claimed instructions are how region selection makes progress.
+ */
+function claimedRegionViolation(
+	before: CoreFunction,
+	after: CoreFunction,
+): string | undefined {
+	if (before === after || before.regions.length === 0) return undefined;
+	const claimedBefore = claimedInstructionSnapshots(before);
+	if (claimedBefore.size === 0) return undefined;
+	const claimedAfter = claimedInstructionSnapshots(after);
+	for (const [instruction, snapshot] of claimedBefore) {
+		const current = claimedAfter.get(instruction);
+		if (current === snapshot) continue;
+		const regions = claimingRegionKinds(before, instruction);
+		if (current !== undefined) {
+			return `pass mutated instruction @${instruction} claimed by region ${regions}`;
+		}
+		return coreInstructionBlock(after, instruction) === undefined
+			? `pass deleted instruction @${instruction} claimed by region ${regions}`
+			: `pass dropped the region ${regions} claim on instruction @${instruction}`;
 	}
-	return true;
+	return undefined;
+}
+
+/**
+ * Development verification reports the pass that invalidated a certificate; the
+ * release profile keeps the last graph whose certificates were still proven.
+ */
+function acceptPassResult(
+	fn: CoreFunction,
+	candidate: CoreFunction,
+	verification: CoreVerificationProfile,
+	context: CoreVerificationContext,
+): CoreFunction {
+	const violation = claimedRegionViolation(fn, candidate);
+	if (violation === undefined) return candidate;
+	if (verification === "per-pass") throw new CoreIrVerificationError(violation, context);
+	return fn;
 }
 
 export function executeCoreOptimizations(
@@ -5116,6 +5174,17 @@ export function executeCoreOptimizations(
 	if (!Number.isSafeInteger(maxRounds) || maxRounds < 1) {
 		throw new Error(`Invalid Core optimization round limit ${maxRounds}`);
 	}
+	const verification = options.verification ?? "boundary";
+	// Owned boundary: no caller can hand an unverified graph to the optimizer.
+	verifyCoreProgram(program, coreOpcodeRegistry, { stage: "pre-optimization" });
+	const verifyMutatedProgram = (
+		candidate: CoreProgram,
+		context: CoreVerificationContext,
+	): void => {
+		if (verification === "per-pass") {
+			verifyCoreProgram(candidate, coreOpcodeRegistry, context);
+		}
+	};
 	const analyses = new CoreAnalysisManager();
 	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
 	const optimizationTrace: Array<OptimizationPassDelta> = [];
@@ -5126,11 +5195,23 @@ export function executeCoreOptimizations(
 	const inlineAblated = options.ablations?.has("inlining") === true;
 	const inlineResult = inlineAblated
 		? { program, changed: false }
-		: inlineSimpleCoreFunctions(program);
+		: inlineSimpleCoreFunctions(program, verification);
+	if (inlineResult.changed) {
+		verifyMutatedProgram(inlineResult.program, {
+			stage: "normalization",
+			pass: "inline-small-functions",
+		});
+	}
 	const directBefore = collectOptimizationTrace
 		? coreOptimizationMetrics(inlineResult.program)
 		: undefined;
 	const directResult = annotateCoreDirectCallTargets(inlineResult.program);
+	if (directResult.changed) {
+		verifyMutatedProgram(directResult.program, {
+			stage: "normalization",
+			pass: "annotate-direct-call-targets",
+		});
+	}
 	const workingProgram = directResult.program;
 	let changed = inlineResult.changed || directResult.changed;
 	let functions = [...workingProgram.functions];
@@ -5240,19 +5321,27 @@ export function executeCoreOptimizations(
 					traces.push({ name: pass.name, round, changed: false });
 					return fn;
 				}
-				const claimed = claimedInstructionSnapshots(fn);
-				const candidate = pass.run(fn, analyses, beforeProgram);
-				const next = preservesClaimedInstructions(claimed, candidate) ? candidate : fn;
+				const next = acceptPassResult(
+					fn,
+					pass.run(fn, analyses, beforeProgram),
+					verification,
+					{ stage: "fixpoint", pass: pass.name, round, functionIndex: fn.functionIndex },
+				);
 				const functionChanged = next !== fn;
 				traces.push({ name: pass.name, round, changed: functionChanged });
 				if (functionChanged) {
-					verifyCoreFunction(next, coreOpcodeRegistry);
 					passChanged = true;
 					roundChanged = true;
 					changed = true;
 				}
 				return next;
 			});
+			if (passChanged) {
+				verifyMutatedProgram(
+					{ ...workingProgram, functions },
+					{ stage: "fixpoint", pass: pass.name, round },
+				);
+			}
 			if (before !== undefined) {
 				const after = coreOptimizationMetrics({ ...workingProgram, functions });
 				optimizationTrace.push(
@@ -5283,16 +5372,26 @@ export function executeCoreOptimizations(
 		let passChanged = false;
 		if (!ablated) {
 			functions = functions.map((fn) => {
-				const candidate = pass.run(fn, analyses, beforeProgram);
+				const candidate = acceptPassResult(
+					fn,
+					pass.run(fn, analyses, beforeProgram),
+					verification,
+					{ stage: "finalization", pass: pass.name, functionIndex: fn.functionIndex },
+				);
 				const functionChanged = candidate !== fn;
 				traces.push({ name: pass.name, round: maxRounds, changed: functionChanged });
 				if (functionChanged) {
-					verifyCoreFunction(candidate, coreOpcodeRegistry);
 					passChanged = true;
 					changed = true;
 				}
 				return candidate;
 			});
+			if (passChanged) {
+				verifyMutatedProgram(
+					{ ...workingProgram, functions },
+					{ stage: "finalization", pass: pass.name },
+				);
+			}
 		} else {
 			for (const _fn of functions) {
 				traces.push({ name: pass.name, round: maxRounds, changed: false });
@@ -5315,20 +5414,20 @@ export function executeCoreOptimizations(
 			);
 		}
 	}
-	return {
-		program: {
-			...workingProgram,
-			functions,
-			...(workingProgram.compilation === undefined
-				? {}
-				: {
-						compilation: {
-							...workingProgram.compilation,
-							...(collectOptimizationTrace ? { optimizationTrace } : {}),
-						},
-					}),
-		},
-		changed,
-		passes: traces,
+	const optimized: CoreProgram = {
+		...workingProgram,
+		functions,
+		...(workingProgram.compilation === undefined
+			? {}
+			: {
+					compilation: {
+						...workingProgram.compilation,
+						...(collectOptimizationTrace ? { optimizationTrace } : {}),
+					},
+				}),
 	};
+	// Owned boundary: region selection is final, so every certificate this program
+	// carries must still describe the graph the backend will consume.
+	verifyCoreProgram(optimized, coreOpcodeRegistry, { stage: "final-region-selection" });
+	return { program: optimized, changed, passes: traces };
 }

@@ -457,6 +457,9 @@ function compileAndBuild(
 								optimizationAblations: new Set(command.internal.optimizationAblations),
 							}
 						: {}),
+					// Debug builds pay per-pass Core verification so a broken transform
+					// names its own pass instead of surfacing at a later boundary.
+					...(debugEnabled ? { coreVerification: "per-pass" as const } : {}),
 					profile: command.profile,
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined

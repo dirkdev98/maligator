@@ -20,6 +20,7 @@ import {
 	compilerConfigurationIdentity,
 	compilerProducerIdentity,
 } from "./compiler-cache-identity.ts";
+import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.ts";
 import type { CoreProgram } from "./compiler/core/core-ir.ts";
 import type {
 	BuildModuleGraphOptions,
@@ -129,6 +130,11 @@ export interface CompileBuildFrontendOptions {
 	nodeGlobalsSource?: string;
 	optimization?: "development" | "full";
 	optimizationAblations?: ReadonlySet<OptimizationAblation>;
+	/**
+	 * Core verification depth. Not part of cache identity: verification observes
+	 * the compilation without changing the artifact it produces.
+	 */
+	coreVerification?: CoreVerificationProfile;
 	/** Include source-site identities and compiler remarks in the live definition. */
 	profile?: boolean;
 	cacheDirectory?: string;
@@ -648,6 +654,7 @@ function compileDefinition(
 		facts,
 		optimization: options.optimization,
 		optimizationAblations: options.optimizationAblations,
+		coreVerification: options.coreVerification,
 		profile: options.profile,
 		afterCoreOptimization: options.afterCoreOptimization,
 		runPhase(phase, run) {

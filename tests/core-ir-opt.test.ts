@@ -36,7 +36,7 @@ function programWithConstants(): CoreProgram {
 function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 	return {
 		functions,
-		stringConstants: [],
+		stringConstants: [[]],
 		bigintConstants: [],
 		literalTemplateData: [],
 		sourcePositions: [],

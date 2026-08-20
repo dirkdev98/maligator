@@ -73,6 +73,11 @@ create or wait on a global performance lock.
 MAL_DEBUG=true node ./src/index.ts build ./tests/local/runtime-mechanics.mjs
 ```
 
+`MAL_DEBUG=true` also selects the per-pass Core verification profile, so an invalid
+graph names the stage, pass, and function that produced it instead of surfacing at a
+later boundary. Core verification at the pre-optimization, final-region-selection,
+and pre-target boundaries is unconditional.
+
 Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
 
 ## Importing fix queues

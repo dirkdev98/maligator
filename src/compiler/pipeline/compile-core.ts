@@ -1,6 +1,7 @@
 import { attachCoreCompilerSiteFacts } from "../core/compiler-site-facts.ts";
 import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
 import { executeCoreOptimizations } from "../core/core-ir-opt.ts";
+import type { CoreVerificationProfile } from "../core/core-ir-verifier.ts";
 import type { CoreProgram } from "../core/core-ir.ts";
 import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
@@ -24,6 +25,11 @@ export interface CompileCoreOptions {
 	profile?: boolean;
 	/** Bounded pass groups disabled only for controlled attribution builds. */
 	optimizationAblations?: ReadonlySet<OptimizationAblation>;
+	/**
+	 * Core verification depth. Boundary verification is unconditional; `per-pass`
+	 * additionally attributes an invalid graph to the pass that produced it.
+	 */
+	coreVerification?: CoreVerificationProfile;
 	semanticLowering?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -52,6 +58,9 @@ export function compileSemanticProgramToVmDefinition(
 	const optimized = runPhase("core ir optimizations", () => {
 		const result = executeCoreOptimizations(core, {
 			ablations: options.optimizationAblations,
+			...(options.coreVerification === undefined
+				? {}
+				: { verification: options.coreVerification }),
 		}).program;
 		return options.profile === true ? attachCoreCompilerSiteFacts(result) : result;
 	});
