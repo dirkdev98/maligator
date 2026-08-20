@@ -66,24 +66,6 @@ to restore; generic passes may naturally rediscover their useful results.
 
 ## Common SSA optimizations
 
-### Effects and memory
-
-- [ ] Define alias and effect partitions for globals, shapes, object slots, array
-      elements, strings, epochs, and unknown calls. Use the narrowest safe invalidation
-      unit instead of treating every effect as a universal memory barrier.
-
-- [ ] Add store-to-load forwarding and redundant-load elimination for proven
-      identities, shapes, and slots. Stop at coercions, accessors, proxies, unknown
-      calls, mutation epochs, or other operations that may observe or change them.
-
-- [ ] Eliminate overwritten or otherwise unobservable stores to nonescaping objects
-      and proven private aggregates. Retain stores required by materialization,
-      identity observation, finalization, exceptions, or escaping aliases.
-
-- [ ] Consider lightweight memory SSA or effect tokens if partitioned GVN and store
-      forwarding become difficult to compose. Adopt them only when they simplify
-      multiple measured optimizations.
-
 ### Loop optimizations
 
 - [ ] Canonicalize reducible loops with explicit preheaders, stable headers,
