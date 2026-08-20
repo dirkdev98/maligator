@@ -514,6 +514,71 @@ describe("Core IR optimizer", () => {
 		expect(loadCount(outcome.program.functions[1]!)).toBe(2);
 	});
 
+	it("keeps distinct memory versions around a conditional store in a loop", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 2,
+		});
+		const entry = builder.createBlock([{}, {}]);
+		const [storeCondition, repeatCondition] = builder
+			.block(entry)
+			.parameters.map(({ value }) => value);
+		const header = builder.createBlock();
+		const store = builder.createBlock();
+		const skip = builder.createBlock();
+		const join = builder.createBlock();
+		const exit = builder.createBlock();
+		const [replacement] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		const [before] = builder.appendInstruction(header, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(header, "storeLocal", [before!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: storeCondition!,
+			consequent: { block: store, arguments: [] },
+			alternate: { block: skip, arguments: [] },
+		});
+		builder.appendInstruction(store, "storeGlobal", [replacement!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(store, {
+			kind: "jump",
+			edge: { block: join, arguments: [] },
+		});
+		builder.setTerminator(skip, {
+			kind: "jump",
+			edge: { block: join, arguments: [] },
+		});
+		const [after] = builder.appendInstruction(join, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(join, {
+			kind: "branch",
+			condition: repeatCondition!,
+			consequent: { block: header, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: after! });
+
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), globalCount: 1 },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		expect(
+			fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.filter(({ opcode }) => opcode === "loadGlobal"),
+		).toHaveLength(2);
+	});
+
 	it("invalidates GVN across environment and derived-this rebinding", () => {
 		const captured = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const capturedEntry = captured.createBlock();

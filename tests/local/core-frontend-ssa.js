@@ -48,6 +48,21 @@ function increment(value) {
 	return ++value;
 }
 
+let effectGlobal = 1;
+function conditionalGlobalStore(store, repeat) {
+	let before;
+	do {
+		before = effectGlobal;
+		if (store) effectGlobal = 7;
+		const after = effectGlobal;
+		if (repeat) {
+			repeat = false;
+			continue;
+		}
+		return after * 10 + before;
+	} while (true);
+}
+
 assert(numericLoop(1000) === 499500, "numeric induction variable");
 assert(denseFill(100) === 9900, "dense indexed fill");
 assert(exceptionLocal(null) === 2, "exception-edge local");
@@ -57,5 +72,9 @@ assert(mixedJoin(true) === "value1", "boxed join");
 assert(mixedLoop(true) === 3, "loop representation widening");
 assert(increment(2) === 3, "number increment");
 assert(increment(2n) === 3n, "bigint increment");
+assert(
+	conditionalGlobalStore(true, false) === 71,
+	"conditional loop store reaches the following global load",
+);
 
 console.log("core-frontend-ssa PASS");

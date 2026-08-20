@@ -6495,35 +6495,33 @@ function invalidatedEffectDomains(
 	return invalidated;
 }
 
-function sameVersionSet(left: ReadonlySet<number>, right: ReadonlySet<number>): boolean {
-	return left.size === right.size && [...left].every((version) => right.has(version));
-}
+type CoreMemoryVersion = string;
+type CoreMemoryState = ReadonlyMap<CoreEffectDomain, CoreMemoryVersion>;
 
 function sameMemoryState(
-	left: ReadonlyMap<CoreEffectDomain, ReadonlySet<number>> | undefined,
-	right: ReadonlyMap<CoreEffectDomain, ReadonlySet<number>>,
+	left: CoreMemoryState | undefined,
+	right: CoreMemoryState,
 	domains: ReadonlyArray<CoreEffectDomain>,
 ): boolean {
 	return (
 		left !== undefined &&
-		domains.every((domain) =>
-			sameVersionSet(left.get(domain) ?? new Set(), right.get(domain) ?? new Set()),
-		)
+		domains.every((domain) => left.get(domain) === right.get(domain))
 	);
 }
 
 function cloneMemoryState(
-	state: ReadonlyMap<CoreEffectDomain, ReadonlySet<number>>,
-	domains: ReadonlyArray<CoreEffectDomain>,
-): Map<CoreEffectDomain, Set<number>> {
-	return new Map(domains.map((domain) => [domain, new Set(state.get(domain) ?? [])]));
+	state: CoreMemoryState,
+): Map<CoreEffectDomain, CoreMemoryVersion> {
+	return new Map(state);
 }
 
 /**
- * Give each instruction the set of writes that can reach it in every effect
- * partition. Union at joins is deliberately conservative; a loop write remains
- * visible beside the entry version, so a preheader load cannot leak into a
- * mutating iteration.
+ * Give each instruction an analysis-only memory-SSA version for every effect
+ * partition it reads. A merge with unequal incoming versions receives a stable
+ * block-local phi version. Retaining the phi's identity is essential: the set
+ * of reaching writes is not a sound value-numbering key in a loop because two
+ * program points can see the same set while observing different writes on one
+ * concrete iteration.
  */
 function reachingMemoryVersions(
 	fn: CoreFunction,
@@ -6540,57 +6538,55 @@ function reachingMemoryVersions(
 	];
 	if (domains.length === 0) return new Map();
 	const domainSet = new Set(domains);
-	const entry = new Map<CoreEffectDomain, ReadonlySet<number>>(
-		domains.map((domain) => [domain, new Set([0])]),
+	const entry = new Map<CoreEffectDomain, CoreMemoryVersion>(
+		domains.map((domain) => [domain, `entry:${domain}`]),
 	);
-	const entries = new Array<
-		ReadonlyMap<CoreEffectDomain, ReadonlySet<number>> | undefined
-	>(fn.blocks.length);
-	const exits = new Array<ReadonlyMap<CoreEffectDomain, ReadonlySet<number>> | undefined>(
-		fn.blocks.length,
-	);
+	const entries = new Array<CoreMemoryState | undefined>(fn.blocks.length);
+	const exits = new Array<CoreMemoryState | undefined>(fn.blocks.length);
 	let progress = true;
 	while (progress) {
 		progress = false;
 		for (const blockId of cfg.reversePostorder) {
 			const block = fn.blocks[blockId]!;
-			let incoming: Map<CoreEffectDomain, Set<number>> | undefined;
-			if (block.id === fn.entry) incoming = cloneMemoryState(entry, domains);
-			const mergeIncoming = (
-				state: ReadonlyMap<CoreEffectDomain, ReadonlySet<number>> | undefined,
-			): void => {
-				if (state === undefined) return;
-				if (incoming === undefined) incoming = cloneMemoryState(state, domains);
-				else {
-					for (const domain of domains) {
-						const versions = incoming.get(domain)!;
-						for (const version of state.get(domain) ?? []) versions.add(version);
-					}
-				}
-			};
+			const predecessors: Array<CoreMemoryState> = [];
+			if (block.id === fn.entry) predecessors.push(entry);
 			for (const predecessor of cfg.predecessors[block.id]!) {
-				mergeIncoming(exits[predecessor.from]);
-				if (predecessor.kind !== "exceptional") continue;
-				// A protected instruction may throw before any later write in its block.
-				// Retain the entry version and every possible write event, not just the
-				// ordinary block exit's final version.
-				mergeIncoming(entries[predecessor.from]);
-				if (incoming === undefined) continue;
-				for (const instruction of fn.blocks[predecessor.from]!.instructions) {
-					for (const domain of invalidatedEffectDomains(instruction)) {
-						if (domainSet.has(domain)) incoming.get(domain)!.add(instruction.id + 1);
-					}
+				const state = exits[predecessor.from];
+				if (state === undefined) continue;
+				if (predecessor.kind === "ordinary") {
+					predecessors.push(state);
+					continue;
 				}
+				// Core's exceptional CFG edge is block-wide: any throwing instruction
+				// can transfer control after a different prefix of writes. Give it a
+				// stable opaque version rather than pretending the ordinary exit ran.
+				predecessors.push(
+					new Map(
+						domains.map((domain) => [domain, `exception:${predecessor.from}:${domain}`]),
+					),
+				);
 			}
-			if (incoming === undefined) continue;
+			if (predecessors.length === 0) continue;
+			const incoming = new Map<CoreEffectDomain, CoreMemoryVersion>();
+			for (const domain of domains) {
+				const first = predecessors[0]!.get(domain)!;
+				incoming.set(
+					domain,
+					predecessors.every((state) => state.get(domain) === first)
+						? first
+						: `phi:${block.id}:${domain}`,
+				);
+			}
 			if (!sameMemoryState(entries[block.id], incoming, domains)) {
 				entries[block.id] = incoming;
 				progress = true;
 			}
-			const outgoing = cloneMemoryState(incoming, domains);
+			const outgoing = cloneMemoryState(incoming);
 			for (const instruction of block.instructions) {
 				for (const domain of invalidatedEffectDomains(instruction)) {
-					if (domainSet.has(domain)) outgoing.set(domain, new Set([instruction.id + 1]));
+					if (domainSet.has(domain)) {
+						outgoing.set(domain, `write:${instruction.id}:${domain}`);
+					}
 				}
 			}
 			if (!sameMemoryState(exits[block.id], outgoing, domains)) {
@@ -6604,25 +6600,20 @@ function reachingMemoryVersions(
 	for (const block of fn.blocks) {
 		const initial =
 			entries[block.id] ??
-			new Map<CoreEffectDomain, ReadonlySet<number>>(
-				domains.map((domain) => [domain, new Set([-(block.id + 1)])]),
+			new Map<CoreEffectDomain, CoreMemoryVersion>(
+				domains.map((domain) => [domain, `unreachable:${block.id}:${domain}`]),
 			);
-		const state = cloneMemoryState(initial, domains);
+		const state = cloneMemoryState(initial);
 		for (const instruction of block.instructions) {
 			const reads = effectiveInstructionEffects(instruction).reads;
 			if (reads.length > 0) {
 				versions.set(
 					instruction.id,
-					reads
-						.map(
-							(domain) =>
-								`${domain}:${[...(state.get(domain) ?? [])].sort((a, b) => a - b).join(",")}`,
-						)
-						.join("|"),
+					reads.map((domain) => `${domain}:${state.get(domain)}`).join("|"),
 				);
 			}
 			for (const domain of invalidatedEffectDomains(instruction)) {
-				if (domainSet.has(domain)) state.set(domain, new Set([instruction.id + 1]));
+				if (domainSet.has(domain)) state.set(domain, `write:${instruction.id}:${domain}`);
 			}
 		}
 	}
