@@ -78,11 +78,6 @@ to restore; generic passes may naturally rediscover their useful results.
       lowering, including exceptional control flow, suspension, handlers, mutable and
       locked primordials, and GC stress.
 
-- [ ] Add adversarial Core tests for block arguments, loops, irreducible control flow,
-      handlers, suspension points, facts, guards, representations, and optimization
-      regions. Generate valid graph variations where practical so pass composition is
-      tested beyond frontend-produced examples.
-
 - [ ] Add a CoreTargetProgram verifier covering register bounds and representations,
       boxed parameter ABI, parallel edge moves, handler inputs, GC-root liveness,
       two-address constraints, region translation, and temporary registers.
