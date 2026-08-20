@@ -215,6 +215,43 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("does not relocate argument reads into the caller activation", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`
+			function nested(value) {
+				function inner() { return arguments.length; }
+				return value + inner(1, 2);
+			}
+			nested(3);
+			`,
+			"core-inline-arguments.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const caller = optimized!.functions[1]!;
+		const callee = optimized!.functions[2]!;
+		expect(
+			caller.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(({ opcode }) => opcode === "call"),
+		).toBe(true);
+		expect(
+			caller.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(({ opcode }) => opcode === "loadArgumentCount"),
+		).toBe(false);
+		expect(
+			callee.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(({ opcode }) => opcode === "loadArgumentCount"),
+		).toBe(true);
+	});
+
 	it("selects a fixed-shape Core stack object with explicit materialization", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function choose(value, escape) {
