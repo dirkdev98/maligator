@@ -16,6 +16,7 @@
 
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import type { CoreAccessKey, CoreOwnCell } from "./core-ir-provenance.ts";
 import {
 	CORE_EFFECT_DOMAINS,
 	CORE_MEMORY_FAMILIES,
@@ -47,6 +48,11 @@ export type CoreMemoryLocation =
 			readonly kind: "object-slot";
 			readonly allocation: CoreInstructionId;
 			readonly key: number;
+	  }
+	| {
+			readonly kind: "element";
+			readonly allocation: CoreInstructionId;
+			readonly index: number;
 	  }
 	| { readonly kind: "family"; readonly family: CoreMemoryFamily };
 
@@ -95,6 +101,8 @@ export function coreMemoryPartition(
 			return "slot\0activation-this" as CoreMemoryPartition;
 		case "object-slot":
 			return `slot\0object-slot\0${location.allocation}\0${location.key}` as CoreMemoryPartition;
+		case "element":
+			return `slot\0element\0${location.allocation}\0${location.index}` as CoreMemoryPartition;
 	}
 }
 
@@ -117,7 +125,11 @@ export function coreMemoryDomainPartition(domain: CoreEffectDomain): CoreMemoryP
  * make every such effect silently invisible to it.
  */
 export interface CoreMemoryResolution {
-	ownDataSlot(base: CoreValueId, key: number): CoreInstructionId | undefined;
+	ownCell(
+		base: CoreValueId,
+		key: CoreAccessKey,
+		mode: CoreAccessMode,
+	): { readonly allocation: CoreInstructionId; readonly cell: CoreOwnCell } | undefined;
 }
 
 export interface CoreMemoryAccess {
@@ -125,7 +137,7 @@ export interface CoreMemoryAccess {
 	readonly location: CoreMemoryLocation;
 	/** Declared heap base, when the descriptor names one. */
 	readonly base?: CoreValueId;
-	readonly key?: number;
+	readonly key?: CoreAccessKey;
 	/** Value a write stores; the forwarding source for a later read. */
 	readonly value?: CoreValueId;
 	/** Value a read produces; the redundancy target. */
@@ -208,6 +220,21 @@ function integerAttribute(
 	return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
 }
 
+function declaredAccessKey(
+	access: CoreOpcodeAccess,
+	instruction: CoreInstruction,
+): CoreAccessKey | undefined {
+	if (access.keyAttribute !== undefined) {
+		const index = integerAttribute(instruction, access.keyAttribute);
+		return index === undefined ? undefined : { kind: "string-constant", index };
+	}
+	if (access.keyOperand !== undefined) {
+		const value = instruction.inputs[access.keyOperand];
+		return value === undefined ? undefined : { kind: "operand", value };
+	}
+	return undefined;
+}
+
 /**
  * Resolve an access to an exact cell, or to nothing when the instruction does not
  * carry the attributes the descriptor promised. A malformed attribute degrades to
@@ -223,15 +250,21 @@ function exactLocation(
 		case "object-slot": {
 			if (resolution === undefined || access.baseOperand === undefined) return undefined;
 			const base = instruction.inputs[access.baseOperand];
-			const key =
-				access.keyAttribute === undefined
-					? undefined
-					: integerAttribute(instruction, access.keyAttribute);
+			const key = declaredAccessKey(access, instruction);
 			if (base === undefined || key === undefined) return undefined;
-			const allocation = resolution.ownDataSlot(base, key);
-			return allocation === undefined
-				? undefined
-				: { kind: "object-slot", allocation, key };
+			const resolved = resolution.ownCell(base, key, access.mode);
+			if (resolved === undefined) return undefined;
+			return resolved.cell.kind === "element"
+				? {
+						kind: "element",
+						allocation: resolved.allocation,
+						index: resolved.cell.index,
+					}
+				: {
+						kind: "object-slot",
+						allocation: resolved.allocation,
+						key: resolved.cell.key,
+					};
 		}
 		case "activation-this":
 			return { kind: "activation-this" };
@@ -273,10 +306,7 @@ export function coreMemoryAccesses(
 			access.valueOperand === undefined
 				? undefined
 				: instruction.inputs[access.valueOperand];
-		const key =
-			access.keyAttribute === undefined
-				? undefined
-				: integerAttribute(instruction, access.keyAttribute);
+		const key = declaredAccessKey(access, instruction);
 		accesses.push({
 			mode: access.mode,
 			location:
@@ -302,6 +332,10 @@ export function coreMemoryAccesses(
  * analysis, linear in the instruction count for any function.
  */
 const MAX_EXACT_PARTITIONS_PER_FAMILY = 256;
+const CONTAINED_MEMORY_FAMILIES: ReadonlySet<CoreMemoryFamily> = new Set([
+	"object-slot",
+	"element",
+]);
 
 /**
  * Families whose exactly read cells still fit under the precision bound.
@@ -627,7 +661,10 @@ export function coreMemoryVersions(
 	}
 	const unattributable: Array<number> = [];
 	for (let slot = 0; slot < slots; slot += 1) {
-		if (slotFamilies[slot] !== "object-slot") unattributable.push(slot);
+		const family = slotFamilies[slot];
+		if (family === undefined || !CONTAINED_MEMORY_FAMILIES.has(family)) {
+			unattributable.push(slot);
+		}
 	}
 	const domainSlots = new Int32Array(CORE_EFFECT_DOMAINS.length);
 	for (let domain = 0; domain < CORE_EFFECT_DOMAINS.length; domain += 1) {
@@ -638,7 +675,7 @@ export function coreMemoryVersions(
 	const domainExactSlots = CORE_EFFECT_DOMAINS.map((): Array<number> => []);
 	for (let slot = 0; slot < slots; slot += 1) {
 		const family = slotFamilies[slot];
-		if (family === undefined || family === "object-slot") continue;
+		if (family === undefined || CONTAINED_MEMORY_FAMILIES.has(family)) continue;
 		for (let mask = FAMILY_DOMAIN_MASK[family]; mask !== 0; ) {
 			const bit = mask & -mask;
 			domainExactSlots[lowestSetBitIndex(bit)]!.push(slot);
@@ -934,15 +971,31 @@ function collectInitializedPartitions(
 	into: PackedLists,
 ): void {
 	const allocation = coreOpcodeRegistry.require(instruction.opcode).allocation;
-	if (allocation === undefined || resolution === undefined) return;
+	if (
+		allocation === undefined ||
+		allocation.kind !== "named-slots" ||
+		resolution === undefined
+	) {
+		return;
+	}
 	const result = instruction.outputs[0];
 	if (result === undefined) return;
 	const keys = instruction.attributes[allocation.keysAttribute];
 	if (!Array.isArray(keys)) return;
 	for (const key of keys) {
 		if (typeof key !== "number") continue;
-		const owner = resolution.ownDataSlot(result, key);
-		if (owner === undefined) continue;
-		into.push(internExact({ kind: "object-slot", allocation: owner, key }));
+		const resolved = resolution.ownCell(
+			result,
+			{ kind: "string-constant", index: key },
+			"write",
+		);
+		if (resolved === undefined || resolved.cell.kind !== "object-slot") continue;
+		into.push(
+			internExact({
+				kind: "object-slot",
+				allocation: resolved.allocation,
+				key: resolved.cell.key,
+			}),
+		);
 	}
 }

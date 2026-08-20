@@ -19,9 +19,12 @@ import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
 import type {
+	CoreAccessMode,
+	CoreBlockId,
 	CoreFunction,
 	CoreInstruction,
 	CoreInstructionId,
+	CoreOpcodeAccess,
 	CoreValueId,
 } from "./core-ir.ts";
 
@@ -31,21 +34,54 @@ import type {
  * epoch refinement of the same opcode is not held to a containment it never
  * claimed.
  */
-export const CORE_OWN_DATA_SLOT_FACT = "own-data-slot";
+export const CORE_OWN_DATA_CELL_FACT = "own-data-cell";
+
+/** Key spelling carried by an opcode before `ToPropertyKey` normalization. */
+export type CoreAccessKey =
+	| { readonly kind: "string-constant"; readonly index: number }
+	| { readonly kind: "operand"; readonly value: CoreValueId };
+
+/** Canonical own cell identity after numeric and string key spellings converge. */
+export type CoreOwnCell =
+	| { readonly kind: "object-slot"; readonly key: number }
+	| { readonly kind: "element"; readonly index: number };
 
 /**
  * A fresh ordinary object whose own data slots Core knows exactly. Every key is
  * an own writable data property from the moment the object exists, so an access
  * naming one of them consults no prototype, accessor, or Proxy trap.
  */
-export interface CoreAllocationLayout {
+interface CoreAllocationLayoutBase {
 	readonly instruction: CoreInstructionId;
 	readonly result: CoreValueId;
+	readonly kind: "named-slots" | "indexed";
+}
+
+export interface CoreNamedAllocationLayout extends CoreAllocationLayoutBase {
+	readonly kind: "named-slots";
 	/** Own data keys as string-constant indices, in slot order. */
 	readonly keys: ReadonlyArray<number>;
 	/** Initial value of each key, in the same order. */
 	readonly initialValues: ReadonlyArray<CoreValueId>;
 }
+
+export interface CoreArrayElementLayout {
+	readonly index: number;
+	readonly value: CoreValueId;
+	/** The own-data define that makes this non-hole element present. */
+	readonly definition: CoreInstructionId;
+}
+
+export interface CoreIndexedAllocationLayout extends CoreAllocationLayoutBase {
+	readonly kind: "indexed";
+	readonly length: number;
+	/** Elements proven present, keyed by their canonical array index. */
+	readonly elements: ReadonlyMap<number, CoreArrayElementLayout>;
+}
+
+export type CoreAllocationLayout =
+	| CoreNamedAllocationLayout
+	| CoreIndexedAllocationLayout;
 
 /**
  * `contained` means no reference to the object can be reached from outside this
@@ -63,11 +99,15 @@ export interface CoreProvenance {
 	allocationOf(value: CoreValueId): CoreAllocationLayout | undefined;
 	escape(allocation: CoreInstructionId): CoreAllocationEscape;
 	/**
-	 * The contained allocation whose own writable data slot this base and key
-	 * name. Undefined whenever an accessor, Proxy, prototype walk, shape change,
-	 * or foreign reference could be involved.
+	 * The contained allocation and own writable data cell this base and key name.
+	 * Undefined whenever an accessor, Proxy, hole/prototype walk, shape change, or
+	 * foreign reference could be involved. Array length is read-only here.
 	 */
-	ownDataSlot(base: CoreValueId, key: number): CoreAllocationLayout | undefined;
+	ownCell(
+		base: CoreValueId,
+		key: CoreAccessKey,
+		mode: CoreAccessMode,
+	): { readonly layout: CoreAllocationLayout; readonly cell: CoreOwnCell } | undefined;
 	/**
 	 * Whether `CanBeHeldWeakly` rejects this value, so no `WeakRef` or
 	 * `FinalizationRegistry` can observe when it stops being reachable. A transform
@@ -91,6 +131,24 @@ function allocationLayout(
 	const descriptor = coreOpcodeRegistry.require(instruction.opcode);
 	const allocation = descriptor.allocation;
 	if (allocation === undefined || instruction.outputs.length !== 1) return undefined;
+	if (allocation.kind === "indexed") {
+		const length = instruction.attributes[allocation.lengthAttribute];
+		if (
+			typeof length !== "number" ||
+			!Number.isSafeInteger(length) ||
+			length < 0 ||
+			length > 0xffff_ffff
+		) {
+			return undefined;
+		}
+		return {
+			kind: "indexed",
+			instruction: instruction.id,
+			result: instruction.outputs[0]!,
+			length,
+			elements: new Map(),
+		};
+	}
 	const keys = numberArray(instruction.attributes[allocation.keysAttribute]);
 	if (keys === undefined || new Set(keys).size !== keys.length) return undefined;
 	const initialValues = instruction.inputs.slice(allocation.firstValueOperand);
@@ -98,6 +156,7 @@ function allocationLayout(
 	// this analysis can describe, so it stays an opaque allocation.
 	if (initialValues.length !== keys.length) return undefined;
 	return {
+		kind: "named-slots",
 		instruction: instruction.id,
 		result: instruction.outputs[0]!,
 		keys,
@@ -122,10 +181,47 @@ function observesOperands(instruction: CoreInstruction): boolean {
 
 interface BaseUse {
 	readonly operand: number;
-	/** Own-slot key when the access names one exactly. */
-	readonly key: number | undefined;
+	readonly key: CoreAccessKey | undefined;
 	/** A read of an existing own slot cannot run a getter; a shape edit can. */
-	readonly kind: "slot-read" | "slot-write" | "shape-edit" | "prototype-read";
+	readonly kind:
+		| "slot-read"
+		| "slot-write"
+		| "slot-define"
+		| "shape-edit"
+		| "prototype-read";
+	readonly establishesOwnDataSlot: boolean;
+}
+
+function accessKey(
+	access: CoreOpcodeAccess,
+	instruction: CoreInstruction,
+): CoreAccessKey | undefined {
+	if (access.keyAttribute !== undefined) {
+		const index = instruction.attributes[access.keyAttribute];
+		return typeof index === "number" && Number.isSafeInteger(index)
+			? { kind: "string-constant", index }
+			: undefined;
+	}
+	if (access.keyOperand !== undefined) {
+		const value = instruction.inputs[access.keyOperand];
+		return value === undefined ? undefined : { kind: "operand", value };
+	}
+	return undefined;
+}
+
+function sameAccessKey(
+	left: CoreAccessKey | undefined,
+	right: CoreAccessKey | undefined,
+): boolean {
+	return (
+		left?.kind === right?.kind &&
+		(left?.kind === "string-constant"
+			? left.index ===
+				(right as Extract<CoreAccessKey, { kind: "string-constant" }>).index
+			: left?.kind === "operand"
+				? left.value === (right as Extract<CoreAccessKey, { kind: "operand" }>).value
+				: true)
+	);
 }
 
 /**
@@ -140,15 +236,10 @@ function baseUses(instruction: CoreInstruction): ReadonlyArray<BaseUse> {
 	for (const access of declared) {
 		if (access.baseOperand === undefined) continue;
 		if (!CORE_MEMORY_FAMILY_DOMAINS[access.family].includes("object-property")) continue;
-		const key =
-			access.keyAttribute === undefined
-				? undefined
-				: typeof instruction.attributes[access.keyAttribute] === "number"
-					? (instruction.attributes[access.keyAttribute] as number)
-					: undefined;
 		uses.push({
 			operand: access.baseOperand,
-			key,
+			key: accessKey(access, instruction),
+			establishesOwnDataSlot: access.establishesOwnDataSlot === true,
 			kind:
 				access.family === "prototype"
 					? access.mode === "read"
@@ -179,19 +270,166 @@ function baseUsesByOperand(instruction: CoreInstruction): ReadonlyMap<number, Ba
 			result.set(use.operand, use);
 			continue;
 		}
-		if (previous.kind === use.kind && previous.key === use.key) continue;
+		if (
+			previous.kind === use.kind &&
+			sameAccessKey(previous.key, use.key) &&
+			previous.establishesOwnDataSlot === use.establishesOwnDataSlot
+		) {
+			continue;
+		}
+		if (
+			sameAccessKey(previous.key, use.key) &&
+			((previous.kind === "slot-write" &&
+				previous.establishesOwnDataSlot &&
+				use.kind === "shape-edit") ||
+				(use.kind === "slot-write" &&
+					use.establishesOwnDataSlot &&
+					previous.kind === "shape-edit") ||
+				(previous.kind === "slot-define" && use.kind === "shape-edit") ||
+				(previous.kind === "slot-define" &&
+					use.kind === "slot-write" &&
+					use.establishesOwnDataSlot))
+		) {
+			result.set(use.operand, {
+				operand: use.operand,
+				key: use.key,
+				kind: "slot-define",
+				establishesOwnDataSlot: true,
+			});
+			continue;
+		}
 		result.set(use.operand, {
 			operand: use.operand,
 			key: undefined,
 			kind: "shape-edit",
+			establishesOwnDataSlot: false,
 		});
 	}
 	return result;
 }
 
-export function coreProvenance(fn: CoreFunction, cfg: CoreControlFlow): CoreProvenance {
+const canonicalStringIndexCache = new WeakMap<
+	ReadonlyArray<ReadonlyArray<number>>,
+	ReadonlyMap<number, number>
+>();
+
+function canonicalStringIndices(
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): ReadonlyMap<number, number> {
+	const cached = canonicalStringIndexCache.get(stringConstants);
+	if (cached !== undefined) return cached;
+	const canonical = new Map<string, number>();
+	const byIndex = new Map<number, number>();
+	for (const [index, units] of stringConstants.entries()) {
+		const key = units.join(",");
+		let first = canonical.get(key);
+		if (first === undefined) {
+			first = index;
+			canonical.set(key, index);
+		}
+		byIndex.set(index, first);
+	}
+	canonicalStringIndexCache.set(stringConstants, byIndex);
+	return byIndex;
+}
+
+function canonicalArrayIndex(
+	units: ReadonlyArray<number> | undefined,
+): number | undefined {
+	if (units === undefined || units.length === 0) return undefined;
+	if (units.length > 1 && units[0] === 0x30) return undefined;
+	let value = 0;
+	for (const unit of units) {
+		if (unit < 0x30 || unit > 0x39) return undefined;
+		value = value * 10 + (unit - 0x30);
+		if (value > 0xffff_ffff) return undefined;
+	}
+	return value === 0xffff_ffff ? undefined : value;
+}
+
+export function coreOwnCellsEqual(left: CoreOwnCell, right: CoreOwnCell): boolean {
+	return (
+		left.kind === right.kind &&
+		(left.kind === "element"
+			? left.index === (right as Extract<CoreOwnCell, { kind: "element" }>).index
+			: left.key === (right as Extract<CoreOwnCell, { kind: "object-slot" }>).key)
+	);
+}
+
+export function coreProvenance(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+): CoreProvenance {
 	const roots = coreCanonicalValueRoots(fn, cfg);
 	const canonical = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	const definitions = new Map<CoreValueId, CoreInstruction>();
+	const positions = new Map<
+		CoreInstructionId,
+		{ readonly block: CoreBlockId; readonly index: number }
+	>();
+	for (const block of fn.blocks) {
+		for (const [index, instruction] of block.instructions.entries()) {
+			positions.set(instruction.id, { block: block.id, index });
+			for (const output of instruction.outputs) definitions.set(output, instruction);
+		}
+	}
+	const canonicalStrings = canonicalStringIndices(stringConstants);
+	const cellForString = (index: number): CoreOwnCell | undefined => {
+		const canonicalIndex =
+			canonicalStrings.get(index) ??
+			(Number.isSafeInteger(index) && index >= 0 ? index : undefined);
+		if (canonicalIndex === undefined) return undefined;
+		const units = stringConstants[canonicalIndex];
+		const element = canonicalArrayIndex(units);
+		return element === undefined
+			? { kind: "object-slot", key: canonicalIndex }
+			: { kind: "element", index: element };
+	};
+	const normalized = new Map<CoreValueId, CoreOwnCell | null>();
+	const cellForValue = (value: CoreValueId): CoreOwnCell | undefined => {
+		const root = canonical(value);
+		const cached = normalized.get(root);
+		if (cached !== undefined) return cached === null ? undefined : cached;
+		const seen = new Set<CoreValueId>();
+		let current = root;
+		while (!seen.has(current)) {
+			seen.add(current);
+			const definition = definitions.get(current);
+			if (definition === undefined) break;
+			if (definition.opcode === "move" && definition.inputs.length === 1) {
+				current = canonical(definition.inputs[0]!);
+				continue;
+			}
+			if (definition.opcode === "createString") {
+				const index = definition.attributes.stringIndex;
+				const cell = typeof index === "number" ? cellForString(index) : undefined;
+				normalized.set(root, cell ?? null);
+				return cell;
+			}
+			if (definition.opcode === "createNumber" || definition.opcode === "createF64") {
+				const number = definition.attributes.value;
+				const index =
+					typeof number === "number" &&
+					Number.isInteger(number) &&
+					number >= 0 &&
+					number <= 0xffff_fffe
+						? Object.is(number, -0)
+							? 0
+							: number
+						: undefined;
+				const cell =
+					index === undefined ? undefined : ({ kind: "element", index } as const);
+				normalized.set(root, cell ?? null);
+				return cell;
+			}
+			break;
+		}
+		normalized.set(root, null);
+		return undefined;
+	};
+	const cellForKey = (key: CoreAccessKey): CoreOwnCell | undefined =>
+		key.kind === "string-constant" ? cellForString(key.index) : cellForValue(key.value);
 	const layouts: Array<CoreAllocationLayout> = [];
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -212,11 +450,84 @@ export function coreProvenance(fn: CoreFunction, cfg: CoreControlFlow): CoreProv
 		const root = canonical(value);
 		return ambiguousRoots.has(root) ? undefined : layoutByRoot.get(root);
 	};
+	const invalidIndexedLayouts = new Set<CoreInstructionId>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			for (const access of coreOpcodeRegistry.require(instruction.opcode).accesses ??
+				[]) {
+				if (
+					access.establishesOwnDataSlot !== true ||
+					access.baseOperand === undefined ||
+					access.valueOperand === undefined
+				) {
+					continue;
+				}
+				const base = instruction.inputs[access.baseOperand];
+				const value = instruction.inputs[access.valueOperand];
+				const key = accessKey(access, instruction);
+				const layout = base === undefined ? undefined : layoutOf(base);
+				const cell = key === undefined ? undefined : cellForKey(key);
+				if (
+					layout?.kind !== "indexed" ||
+					cell?.kind !== "element" ||
+					cell.index >= layout.length ||
+					value === undefined
+				) {
+					continue;
+				}
+				const elements = layout.elements as Map<number, CoreArrayElementLayout>;
+				if (elements.has(cell.index)) {
+					invalidIndexedLayouts.add(layout.instruction);
+					continue;
+				}
+				elements.set(cell.index, {
+					index: cell.index,
+					value,
+					definition: instruction.id,
+				});
+			}
+		}
+	}
 	const escaped = new Set<CoreInstructionId>(
 		layouts
-			.filter(({ result }) => ambiguousRoots.has(canonical(result)))
+			.filter(
+				({ instruction, result }) =>
+					ambiguousRoots.has(canonical(result)) || invalidIndexedLayouts.has(instruction),
+			)
 			.map(({ instruction }) => instruction),
 	);
+	const instructionDominates = (
+		dominator: CoreInstructionId,
+		instruction: CoreInstructionId,
+	): boolean => {
+		const left = positions.get(dominator);
+		const right = positions.get(instruction);
+		if (left === undefined || right === undefined) return false;
+		return left.block === right.block
+			? left.index <= right.index
+			: cfg.instructionDominatesBlock(left.block, right.block);
+	};
+	const cellBelongsToLayout = (
+		layout: CoreAllocationLayout,
+		cell: CoreOwnCell,
+		mode: CoreAccessMode,
+		instruction: CoreInstructionId,
+	): boolean => {
+		if (layout.kind === "named-slots") {
+			return cell.kind === "object-slot" && layout.keys.includes(cell.key);
+		}
+		if (cell.kind === "object-slot") {
+			const units = stringConstants[cell.key];
+			const isLength =
+				units?.length === 6 &&
+				units.every(
+					(unit, index) => unit === [0x6c, 0x65, 0x6e, 0x67, 0x74, 0x68][index],
+				);
+			return isLength && mode === "read";
+		}
+		const element = layout.elements.get(cell.index);
+		return element !== undefined && instructionDominates(element.definition, instruction);
+	};
 
 	if (layouts.length > 0) {
 		for (const block of fn.blocks) {
@@ -238,14 +549,37 @@ export function coreProvenance(fn: CoreFunction, cfg: CoreControlFlow): CoreProv
 							// receiver to nothing.
 							break;
 						case "slot-read":
-						case "slot-write":
-							// A key outside the layout reaches the prototype chain, where an
-							// accessor would receive this object, or adds a property and changes
-							// the shape this analysis relies on.
-							if (use.key === undefined || !layout.keys.includes(use.key)) {
+						case "slot-write": {
+							// A hole or a key outside the layout reaches the prototype chain, where
+							// an accessor would receive this object, or edits its shape. A present
+							// array element is usable only after its own-data define dominates.
+							const cell = use.key === undefined ? undefined : cellForKey(use.key);
+							if (
+								cell === undefined ||
+								!cellBelongsToLayout(
+									layout,
+									cell,
+									use.kind === "slot-read" ? "read" : "write",
+									instruction.id,
+								)
+							) {
 								escaped.add(layout.instruction);
 							}
 							break;
+						}
+						case "slot-define": {
+							const cell = use.key === undefined ? undefined : cellForKey(use.key);
+							if (
+								cell === undefined ||
+								!cellBelongsToLayout(layout, cell, "write", instruction.id) ||
+								(layout.kind === "indexed" &&
+									(cell.kind !== "element" ||
+										layout.elements.get(cell.index)?.definition !== instruction.id))
+							) {
+								escaped.add(layout.instruction);
+							}
+							break;
+						}
 						case "shape-edit":
 							escaped.add(layout.instruction);
 							break;
@@ -284,12 +618,6 @@ export function coreProvenance(fn: CoreFunction, cfg: CoreControlFlow): CoreProv
 		}
 	}
 
-	const definitions = new Map<CoreValueId, CoreInstruction>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			for (const output of instruction.outputs) definitions.set(output, instruction);
-		}
-	}
 	const representations = new Map(
 		fn.values.map(({ id, representation }) => [id, representation] as const),
 	);
@@ -318,10 +646,26 @@ export function coreProvenance(fn: CoreFunction, cfg: CoreControlFlow): CoreProv
 			);
 		},
 		escape: (allocation) => (escaped.has(allocation) ? "escaped" : "contained"),
-		ownDataSlot: (base, key) => {
+		ownCell: (base, key, mode) => {
 			const layout = layoutOf(base);
 			if (layout === undefined || escaped.has(layout.instruction)) return undefined;
-			return layout.keys.includes(key) ? layout : undefined;
+			const cell = cellForKey(key);
+			if (cell === undefined) return undefined;
+			if (layout.kind === "named-slots") {
+				return cell.kind === "object-slot" && layout.keys.includes(cell.key)
+					? { layout, cell }
+					: undefined;
+			}
+			if (cell.kind === "element") {
+				return layout.elements.has(cell.index) ? { layout, cell } : undefined;
+			}
+			const units = stringConstants[cell.key];
+			const isLength =
+				units?.length === 6 &&
+				units.every(
+					(unit, index) => unit === [0x6c, 0x65, 0x6e, 0x67, 0x74, 0x68][index],
+				);
+			return isLength && mode === "read" ? { layout, cell } : undefined;
 		},
 	};
 }

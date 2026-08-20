@@ -36,8 +36,12 @@ import type {
 } from "./core-ir-memory.ts";
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import { CORE_OWN_DATA_SLOT_FACT, coreProvenance } from "./core-ir-provenance.ts";
-import type { CoreProvenance } from "./core-ir-provenance.ts";
+import {
+	CORE_OWN_DATA_CELL_FACT,
+	coreOwnCellsEqual,
+	coreProvenance,
+} from "./core-ir-provenance.ts";
+import type { CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
 	CoreIrVerificationError,
@@ -57,7 +61,6 @@ import type {
 	CoreImmediate,
 	CoreInstruction,
 	CoreInstructionId,
-	CoreMemoryFamily,
 	CoreProgram,
 	CoreTerminator,
 	CoreValueId,
@@ -4697,11 +4700,17 @@ function memoryResolution(
 ): CoreMemoryResolution {
 	const provenance = analyses.provenance(fn);
 	return {
-		ownDataSlot: (base, key) => provenance.ownDataSlot(base, key)?.instruction,
+		ownCell: (base, key, mode) => {
+			const resolved = provenance.ownCell(base, key, mode);
+			return resolved === undefined
+				? undefined
+				: { allocation: resolved.layout.instruction, cell: resolved.cell };
+		},
 	};
 }
 
 export class CoreAnalysisManager {
+	readonly #stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly #controlFlow = new WeakMap<CoreFunction, CoreControlFlow>();
 	readonly #canonicalValues = new WeakMap<
 		CoreFunction,
@@ -4709,6 +4718,10 @@ export class CoreAnalysisManager {
 	>();
 	readonly #memory = new WeakMap<CoreFunction, CoreMemoryVersions>();
 	readonly #provenance = new WeakMap<CoreFunction, CoreProvenance>();
+
+	constructor(stringConstants: ReadonlyArray<ReadonlyArray<number>> = []) {
+		this.#stringConstants = stringConstants;
+	}
 
 	controlFlow(fn: CoreFunction): CoreControlFlow {
 		let analysis = this.#controlFlow.get(fn);
@@ -4731,7 +4744,7 @@ export class CoreAnalysisManager {
 	provenance(fn: CoreFunction): CoreProvenance {
 		let analysis = this.#provenance.get(fn);
 		if (analysis === undefined) {
-			analysis = coreProvenance(fn, this.controlFlow(fn));
+			analysis = coreProvenance(fn, this.controlFlow(fn), this.#stringConstants);
 			this.#provenance.set(fn, analysis);
 		}
 		return analysis;
@@ -6663,12 +6676,13 @@ function nextFactId(fn: CoreFunction): number {
  * writability check. `mayGc` stays as the opcode declared it because collection
  * points are a lowering/runtime property, not a JavaScript-semantic one.
  */
-const refineOwnDataSlotAccesses: CoreFunctionPass = {
-	name: "refine-own-data-slot-accesses",
+const refineOwnDataCellAccesses: CoreFunctionPass = {
+	name: "refine-own-data-cell-accesses",
 	changesControlFlow: true,
 	run(fn, analyses) {
 		const provenance = analyses.provenance(fn);
 		if (provenance.layouts.length === 0) return fn;
+		const resolution = memoryResolution(analyses, fn);
 		const { instructions: protectedInstructions } = regionProtectedValues(fn);
 		const facts = [...fn.facts];
 		let nextFact = nextFactId(fn);
@@ -6685,31 +6699,44 @@ const refineOwnDataSlotAccesses: CoreFunctionPass = {
 					}
 					const effects = coreInstructionEffects(instruction);
 					if (!effects.callsUserCode) return instruction;
-					const accesses = coreMemoryAccesses(instruction);
-					// One fact names one exact access. Multi-location operations remain
-					// conservative until the fact schema can describe every location.
-					if (accesses.length !== 1) return instruction;
-					const proven = accesses.every((access) => {
-						if (coreMemoryLocationFamily(access.location) !== "object-slot") return false;
-						return (
-							access.base !== undefined &&
-							access.key !== undefined &&
-							provenance.ownDataSlot(access.base, access.key) !== undefined
-						);
-					});
-					if (!proven) return instruction;
-					const slot = provenance.ownDataSlot(accesses[0]!.base!, accesses[0]!.key!)!;
+					const accesses = coreMemoryAccesses(instruction, resolution).filter((access) =>
+						["object-slot", "element", "shape", "prototype"].includes(
+							coreMemoryLocationFamily(access.location),
+						),
+					);
+					let proven:
+						| { readonly allocation: CoreInstructionId; readonly cell: CoreOwnCell }
+						| undefined;
+					let exactCells = 0;
+					for (const access of accesses) {
+						if (access.base === undefined || access.key === undefined) {
+							return instruction;
+						}
+						const cell = provenance.ownCell(access.base, access.key, access.mode);
+						if (cell === undefined) return instruction;
+						const current = { allocation: cell.layout.instruction, cell: cell.cell };
+						if (
+							proven !== undefined &&
+							(proven.allocation !== current.allocation ||
+								!coreOwnCellsEqual(proven.cell, current.cell))
+						) {
+							return instruction;
+						}
+						proven = current;
+						if (coreMemoryLocationIsExact(access.location)) exactCells += 1;
+					}
+					if (proven === undefined || exactCells !== 1) return instruction;
 					const proof = coreFactId(nextFact++);
 					facts.push({
 						id: proof,
-						kind: CORE_OWN_DATA_SLOT_FACT,
+						kind: CORE_OWN_DATA_CELL_FACT,
 						value: {
-							allocation: slot.instruction,
-							key: accesses[0]!.key!,
+							allocation: proven.allocation,
+							cell: proven.cell,
 						},
 						validity: {
 							kind: "summary",
-							digest: `contained-allocation:${slot.instruction}`,
+							digest: `contained-allocation:${proven.allocation}`,
 						},
 						obligations: [],
 						origin: "core-allocation-provenance",
@@ -6757,13 +6784,13 @@ const refineOwnDataSlotAccesses: CoreFunctionPass = {
  * only appear in hand-built graphs, and a direct eval can address a real frame
  * slot dynamically.
  */
-const FORWARDABLE_MEMORY_FAMILIES: ReadonlySet<CoreMemoryFamily> =
-	new Set<CoreMemoryFamily>([
-		"activation-this",
-		"captured-slot",
-		"global-slot",
-		"object-slot",
-	]);
+const FORWARDABLE_MEMORY_LOCATION_KINDS: ReadonlySet<string> = new Set([
+	"activation-this",
+	"captured-slot",
+	"element",
+	"global-slot",
+	"object-slot",
+]);
 
 interface ForwardableAccess {
 	readonly partition: CoreMemoryPartition;
@@ -6783,7 +6810,7 @@ function forwardableMemoryAccesses(
 	if (effects.callsUserCode || effects.maySuspend) return forwardable;
 	for (const access of coreMemoryAccesses(instruction, resolution)) {
 		if (!coreMemoryLocationIsExact(access.location)) continue;
-		if (!FORWARDABLE_MEMORY_FAMILIES.has(coreMemoryLocationFamily(access.location))) {
+		if (!FORWARDABLE_MEMORY_LOCATION_KINDS.has(access.location.kind)) {
 			continue;
 		}
 		const value = access.mode === "read" ? access.result : access.value;
@@ -6810,6 +6837,7 @@ function mayForwardMemoryAccesses(
 	const written = new Set<CoreMemoryPartition>();
 	for (const layout of provenance.layouts) {
 		if (provenance.escape(layout.instruction) === "escaped") continue;
+		if (layout.kind !== "named-slots") continue;
 		for (const key of layout.keys) {
 			written.add(
 				coreMemoryPartition({
@@ -6863,7 +6891,9 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 		const cfg = analyses.controlFlow(fn);
 		const memory = analyses.memory(fn);
 		const initialValues = new Map(
-			provenance.layouts.map((layout) => [layout.instruction, layout] as const),
+			provenance.layouts
+				.filter((layout) => layout.kind === "named-slots")
+				.map((layout) => [layout.instruction, layout] as const),
 		);
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
 			regionProtectedValues(fn);
@@ -7102,6 +7132,7 @@ const eliminateDeadStores: CoreFunctionPass = {
 		// unable to be a finalization target.
 		const weaklyHoldable = new Set<CoreMemoryPartition>();
 		const described = new Set<CoreMemoryPartition>();
+		const establishingStores = new Set<CoreInstructionId>();
 		const note = (
 			partition: CoreMemoryPartition,
 			value: CoreValueId | undefined,
@@ -7111,14 +7142,27 @@ const eliminateDeadStores: CoreFunctionPass = {
 			}
 		};
 		for (const layout of contained) {
-			for (const [index, key] of layout.keys.entries()) {
+			if (layout.kind === "named-slots") {
+				for (const [index, key] of layout.keys.entries()) {
+					const partition = coreMemoryPartition({
+						kind: "object-slot",
+						allocation: layout.instruction,
+						key,
+					});
+					described.add(partition);
+					note(partition, layout.initialValues[index]);
+				}
+				continue;
+			}
+			for (const element of layout.elements.values()) {
 				const partition = coreMemoryPartition({
-					kind: "object-slot",
+					kind: "element",
 					allocation: layout.instruction,
-					key,
+					index: element.index,
 				});
 				described.add(partition);
-				note(partition, layout.initialValues[index]);
+				establishingStores.add(element.definition);
+				note(partition, element.value);
 			}
 		}
 		const readPartitions = new Set<CoreMemoryPartition>();
@@ -7126,7 +7170,12 @@ const eliminateDeadStores: CoreFunctionPass = {
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				for (const access of coreMemoryAccesses(instruction, resolution)) {
-					if (access.location.kind !== "object-slot") continue;
+					if (
+						access.location.kind !== "object-slot" &&
+						access.location.kind !== "element"
+					) {
+						continue;
+					}
 					const partition = coreMemoryPartition(access.location);
 					if (access.mode === "read") {
 						readPartitions.add(partition);
@@ -7157,7 +7206,12 @@ const eliminateDeadStores: CoreFunctionPass = {
 			const pending = new Map<CoreMemoryPartition, CoreInstructionId>();
 			for (const instruction of block.instructions) {
 				for (const access of coreMemoryAccesses(instruction, resolution)) {
-					if (access.location.kind !== "object-slot") continue;
+					if (
+						access.location.kind !== "object-slot" &&
+						access.location.kind !== "element"
+					) {
+						continue;
+					}
 					const partition = coreMemoryPartition(access.location);
 					if (access.mode === "read") {
 						pending.delete(partition);
@@ -7166,6 +7220,7 @@ const eliminateDeadStores: CoreFunctionPass = {
 					const previous = pending.get(partition);
 					if (
 						previous !== undefined &&
+						!establishingStores.has(previous) &&
 						removable(partition) &&
 						!protectedInstructions.has(previous)
 					) {
@@ -8074,7 +8129,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldEmptyForwardingBlocks,
 	combineLinearBlocks,
 	foldStaticPropertyKeys,
-	refineOwnDataSlotAccesses,
+	refineOwnDataCellAccesses,
 	forwardMemoryAccesses,
 	eliminateDeadStores,
 	loopInvariantCodeMotion,
@@ -8181,7 +8236,7 @@ export function executeCoreOptimizations(
 			verifyCoreProgram(candidate, coreOpcodeRegistry, context);
 		}
 	};
-	const analyses = new CoreAnalysisManager();
+	const analyses = new CoreAnalysisManager(program.stringConstants);
 	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
 	const optimizationTrace: Array<OptimizationPassDelta> = [];
 	const collectOptimizationTrace = program.compilation?.optimizationTrace !== undefined;

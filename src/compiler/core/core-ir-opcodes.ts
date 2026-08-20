@@ -326,11 +326,13 @@ const OPCODE_ACCESSES = {
 	storeGlobalProperty: [
 		write("global-property", { keyAttribute: "nameStringIndex", valueOperand: 0 }),
 	],
-	loadProperty: [read("object-slot", { baseOperand: 0 })],
+	loadProperty: [read("object-slot", { baseOperand: 0, keyOperand: 1 })],
 	loadPropertyStatic: [
 		read("object-slot", { baseOperand: 0, keyAttribute: "stringIndex" }),
 	],
-	storeProperty: [write("object-slot", { baseOperand: 0, valueOperand: 2 })],
+	storeProperty: [
+		write("object-slot", { baseOperand: 0, keyOperand: 1, valueOperand: 2 }),
+	],
 	storePropertyStatic: [
 		write("object-slot", {
 			baseOperand: 0,
@@ -341,11 +343,22 @@ const OPCODE_ACCESSES = {
 	loadPrototype: [read("prototype", { baseOperand: 0 })],
 	setPrototype: [write("prototype", { baseOperand: 0, valueOperand: 1 })],
 	deleteProperty: [
-		write("object-slot", { baseOperand: 0 }),
-		write("shape", { baseOperand: 0 }),
+		write("object-slot", { baseOperand: 0, keyOperand: 1 }),
+		write("shape", { baseOperand: 0, keyOperand: 1 }),
 	],
-	defineProperty: [write("object-slot"), write("shape")],
-	defineAccessor: [write("object-slot"), write("shape")],
+	defineProperty: [
+		write("object-slot", {
+			baseOperand: 0,
+			keyOperand: 1,
+			valueOperand: 2,
+			establishesOwnDataSlot: true,
+		}),
+		write("shape", { baseOperand: 0, keyOperand: 1 }),
+	],
+	defineAccessor: [
+		write("object-slot", { baseOperand: 0, keyOperand: 1, valueOperand: 2 }),
+		write("shape", { baseOperand: 0, keyOperand: 1 }),
+	],
 	definePrivate: [write("object-slot"), write("shape")],
 	initPrivateFields: [write("object-slot"), write("shape")],
 	copyDataProperties: [write("object-slot"), write("shape")],
@@ -368,7 +381,16 @@ const OPCODE_ACCESSES = {
  * exists — the property that lets an analysis skip a prototype walk.
  */
 const OPCODE_ALLOCATIONS = {
-	createObjectShaped: { keysAttribute: "keyStringIndices", firstValueOperand: 0 },
+	createObjectShaped: {
+		kind: "named-slots",
+		keysAttribute: "keyStringIndices",
+		firstValueOperand: 0,
+	},
+	createArray: {
+		kind: "indexed",
+		lengthAttribute: "length",
+		initialElements: "none",
+	},
 } as const satisfies Partial<Record<CoreOpcode, CoreOpcodeAllocation>>;
 
 /** Operands inspected without anything retaining the reference passed in. */
@@ -522,10 +544,9 @@ const INPUT_ARITIES = {
 } as const satisfies Record<CoreOpcode, readonly [number, number]>;
 
 /**
- * `array-element` is reachable only through the `element` family, which no opcode
- * declares yet: indexed access still lowers to a dynamic-key `object-slot`
- * access. Keeping the domain in the family table means the first `element`
- * producer automatically overlaps existing `object-property` readers.
+ * Indexed access still shares the ordinary property opcodes. The alias oracle
+ * can refine those declarations to an exact `element` location, whose family
+ * overlaps both domains, without introducing an array-specific opcode.
  */
 function domainsFor(
 	opcode: CoreOpcode,

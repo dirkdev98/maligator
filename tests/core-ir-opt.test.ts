@@ -763,6 +763,84 @@ describe("Core IR optimizer", () => {
 		expect(globalLoadCount(outcome.program.functions[1]!)).toBe(overBound);
 	});
 
+	it("forwards present array elements across numeric and string key aliases", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function read(seed) {
+				const values = [seed];
+				const before = values[0];
+				values["0"] = seed + 1;
+				return before + values[0] + values.length + values.length;
+			}`,
+			"core-array-element-aliases.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const loads = optimized!.functions[1]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		).filter(
+			({ opcode }) => opcode === "loadProperty" || opcode === "loadPropertyStatic",
+		);
+		expect(loads).toHaveLength(1);
+		const stringIndex = loads[0]!.attributes.stringIndex;
+		expect(
+			typeof stringIndex === "number"
+				? String.fromCharCode(...optimized!.stringConstants[stringIndex]!)
+				: undefined,
+		).toBe("length");
+	});
+
+	it("retains repeated hole reads that can reach an inherited accessor", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function read(seed) {
+				const values = [seed, ,];
+				return values[1] + values[1];
+			}`,
+			"core-array-hole-reads.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		expect(
+			optimized!.functions[1]!.blocks.flatMap(({ instructions }) => instructions).filter(
+				({ opcode }) => opcode === "loadProperty" || opcode === "loadPropertyStatic",
+			),
+		).toHaveLength(2);
+	});
+
+	it("removes unobservable primitive stores to a private array element", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function write(seed) {
+				const values = [seed > 0];
+				values[0] = seed + 1;
+				values["0"] = seed + 2;
+				return seed;
+			}`,
+			"core-array-dead-stores.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		expect(
+			optimized!.functions[1]!.blocks.flatMap(({ instructions }) => instructions).filter(
+				({ opcode }) =>
+					["defineProperty", "storeProperty", "storePropertyStatic"].includes(opcode),
+			),
+		).toHaveLength(0);
+	});
+
 	it("forwards a compiler-slot store to a dominated load", () => {
 		const build = (
 			functionIndex: number,

@@ -130,9 +130,11 @@ export type CoreAccessMode = "read" | "write";
 /**
  * How one opcode names the memory it touches. `attributes` lists the instruction
  * attributes that identify an exact cell inside the family; an access without
- * them covers the family as a whole. `baseOperand` and `keyAttribute` are
- * declared for the alias oracle that narrows proven heap locations. Without such
- * a proof, declaring a base or key remains conservative at whole-family scope.
+ * them covers the family as a whole. `baseOperand`, `keyAttribute`, and
+ * `keyOperand` are declared for the alias oracle that narrows proven heap
+ * locations. Attribute keys name interned strings; operand keys still need
+ * `ToPropertyKey` normalization. Without a proof, either form remains
+ * conservative at whole-family scope.
  */
 export interface CoreOpcodeAccess {
 	readonly family: CoreMemoryFamily;
@@ -140,8 +142,11 @@ export interface CoreOpcodeAccess {
 	readonly attributes?: ReadonlyArray<string>;
 	readonly baseOperand?: number;
 	readonly keyAttribute?: string;
+	readonly keyOperand?: number;
 	/** Operand holding the value a write stores, when the opcode has one. */
 	readonly valueOperand?: number;
+	/** This write creates the named own data cell instead of requiring it to exist. */
+	readonly establishesOwnDataSlot?: boolean;
 }
 
 /**
@@ -151,10 +156,17 @@ export interface CoreOpcodeAccess {
  * values in the same order. Without this metadata an analysis has no way to know
  * a slot exists without consulting the runtime's shape tree.
  */
-export interface CoreOpcodeAllocation {
-	readonly keysAttribute: string;
-	readonly firstValueOperand: number;
-}
+export type CoreOpcodeAllocation =
+	| {
+			readonly kind: "named-slots";
+			readonly keysAttribute: string;
+			readonly firstValueOperand: number;
+	  }
+	| {
+			readonly kind: "indexed";
+			readonly lengthAttribute: string;
+			readonly initialElements: "none";
+	  };
 
 export interface CoreArity {
 	readonly minimum: number;
@@ -258,7 +270,9 @@ function validateAccesses(descriptor: CoreOpcodeDescriptor): void {
 		}
 		if (
 			CORE_ATTRIBUTE_ONLY_MEMORY_FAMILIES.has(access.family) &&
-			(access.baseOperand !== undefined || access.keyAttribute !== undefined)
+			(access.baseOperand !== undefined ||
+				access.keyAttribute !== undefined ||
+				access.keyOperand !== undefined)
 		) {
 			throw new Error(
 				`${opcode} names a base or key for the activation-local family ${access.family}`,
@@ -267,8 +281,15 @@ function validateAccesses(descriptor: CoreOpcodeDescriptor): void {
 		if (access.valueOperand !== undefined && access.mode !== "write") {
 			throw new Error(`${opcode} names a value operand on a ${access.mode} access`);
 		}
+		if (access.keyAttribute !== undefined && access.keyOperand !== undefined) {
+			throw new Error(`${opcode} names both a key attribute and a key operand`);
+		}
+		if (access.establishesOwnDataSlot === true && access.mode !== "write") {
+			throw new Error(`${opcode} establishes an own data slot on a read access`);
+		}
 		for (const [role, operand] of [
 			["base", access.baseOperand],
+			["key", access.keyOperand],
 			["value", access.valueOperand],
 		] as const) {
 			if (operand === undefined) continue;
@@ -289,20 +310,26 @@ function validateAllocation(descriptor: CoreOpcodeDescriptor): void {
 	const allocation = descriptor.allocation;
 	if (allocation === undefined) return;
 	const opcode = descriptor.opcode;
-	if (allocation.keysAttribute.length === 0) {
-		throw new Error(`${opcode} declares an allocation with no key attribute`);
-	}
 	if (descriptor.outputs.minimum < 1) {
 		throw new Error(`${opcode} declares an allocation without producing a reference`);
 	}
-	if (
-		!Number.isSafeInteger(allocation.firstValueOperand) ||
-		allocation.firstValueOperand < 0 ||
-		allocation.firstValueOperand > descriptor.inputs.maximum
-	) {
-		throw new Error(
-			`${opcode} declares initial values at operand ${allocation.firstValueOperand}, outside its ${descriptor.inputs.minimum}..${descriptor.inputs.maximum} inputs`,
-		);
+	if (allocation.kind === "named-slots") {
+		if (allocation.keysAttribute.length === 0) {
+			throw new Error(`${opcode} declares an allocation with no key attribute`);
+		}
+		if (
+			!Number.isSafeInteger(allocation.firstValueOperand) ||
+			allocation.firstValueOperand < 0 ||
+			allocation.firstValueOperand > descriptor.inputs.maximum
+		) {
+			throw new Error(
+				`${opcode} declares initial values at operand ${allocation.firstValueOperand}, outside its ${descriptor.inputs.minimum}..${descriptor.inputs.maximum} inputs`,
+			);
+		}
+		return;
+	}
+	if (allocation.lengthAttribute.length === 0) {
+		throw new Error(`${opcode} declares an indexed allocation with no length attribute`);
 	}
 }
 

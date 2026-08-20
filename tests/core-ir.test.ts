@@ -190,7 +190,10 @@ describe("Core IR", () => {
 		expect(coreMemoryLocationFamily(heap.location)).toBe("object-slot");
 		// The declared base and key are recorded for the future alias oracle without
 		// making the partition itself narrower than the whole family.
-		expect(heap).toMatchObject({ base: self, key: 0 });
+		expect(heap).toMatchObject({
+			base: self,
+			key: { kind: "string-constant", index: 0 },
+		});
 		expect(coreMemoryPartition({ kind: "global-slot", slot: 4 })).not.toBe(
 			coreMemoryPartition({ kind: "global-slot", slot: 5 }),
 		);
@@ -202,6 +205,7 @@ describe("Core IR", () => {
 	it("declares a fresh aggregate's layout and which results cannot be held weakly", () => {
 		const shaped = coreOpcodeRegistry.require("createObjectShaped");
 		expect(shaped.allocation).toStrictEqual({
+			kind: "named-slots",
 			keysAttribute: "keyStringIndices",
 			firstValueOperand: 0,
 		});
@@ -240,7 +244,11 @@ describe("Core IR", () => {
 				outputs: coreArity(1),
 				effects: CORE_NO_EFFECTS,
 				discardable: false,
-				allocation: { keysAttribute: "", firstValueOperand: 0 },
+				allocation: {
+					kind: "named-slots",
+					keysAttribute: "",
+					firstValueOperand: 0,
+				},
 			}),
 		).toThrow(/allocation with no key attribute/);
 		expect(() =>
@@ -250,7 +258,11 @@ describe("Core IR", () => {
 				outputs: coreArity(0),
 				effects: CORE_NO_EFFECTS,
 				discardable: false,
-				allocation: { keysAttribute: "keys", firstValueOperand: 0 },
+				allocation: {
+					kind: "named-slots",
+					keysAttribute: "keys",
+					firstValueOperand: 0,
+				},
 			}),
 		).toThrow(/without producing a reference/);
 	});
