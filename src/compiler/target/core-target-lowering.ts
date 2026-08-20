@@ -285,7 +285,6 @@ function lowerCoreRegionData(
 function lowerCoreRegions(
 	regions: ReadonlyArray<CoreRegion>,
 	instructions: ReadonlyMap<CoreInstructionId, CompilerInstruction>,
-	omittedBlocks: ReadonlySet<CoreBlockId>,
 	blocks: ReadonlyMap<CoreBlockId, number>,
 	values: ReadonlyMap<CoreValueId, number>,
 ): ReadonlyArray<CoreAllocatedRegion> | undefined {
@@ -308,12 +307,8 @@ function lowerCoreRegions(
 		anchors: region.anchors.map(requireInstruction),
 		claimedInstructions: region.claimedInstructions.map(requireInstruction),
 		controlFlow: {
-			ordinaryBlocks: region.ordinaryBlocks
-				.filter((block) => !omittedBlocks.has(block))
-				.map(requireBlock),
-			exceptionalBlocks: region.exceptionalBlocks
-				.filter((block) => !omittedBlocks.has(block))
-				.map(requireBlock),
+			ordinaryBlocks: region.ordinaryBlocks.map(requireBlock),
+			exceptionalBlocks: region.exceptionalBlocks.map(requireBlock),
 		},
 	})) as unknown as ReadonlyArray<CoreAllocatedRegion>;
 }
@@ -775,6 +770,14 @@ function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructi
 	return result;
 }
 
+/**
+ * Constant producers whose every consumer embeds them as a call operand. Encoding
+ * only: the operand still realizes the same constant at the same call, so the
+ * omission removes no Core operation and grants no license. Instructions named by
+ * a region certificate stay materialized, so an embedded operand can never change
+ * which optimization a certificate describes. `CoreTargetSafepoint` re-attributes
+ * an omitted producer's collection point to the consuming call.
+ */
 function immediateOnlyInstructions(
 	core: CoreFunction,
 	protectedInstructions: ReadonlySet<CoreInstructionId>,
@@ -834,49 +837,34 @@ function immediateOnlyInstructions(
 	);
 }
 
-function coreBlockLayout(
-	core: CoreFunction,
-	omitted: ReadonlySet<CoreBlockId>,
-): Array<CoreBlockId> {
-	const forwardingTarget = (block: CoreBlockId): CoreBlockId => {
-		let current = block;
-		const seen = new Set<CoreBlockId>();
-		while (omitted.has(current)) {
-			if (seen.has(current)) throw new Error(`Cyclic omitted Core block b${current}`);
-			seen.add(current);
-			const forwarding = core.blocks[current]!;
-			if (forwarding.terminator.kind !== "jump") {
-				throw new Error(`Omitted Core block b${current} is not a forwarding block`);
-			}
-			current = forwarding.terminator.edge.block;
-		}
-		return current;
-	};
+/**
+ * Reverse-postorder layout of every Core block. Layout only decides which block is
+ * emitted next; it never removes a block or retargets an edge, so no optimization
+ * decision can depend on it. Empty-block forwarding belongs to Core.
+ */
+function coreBlockLayout(core: CoreFunction): Array<CoreBlockId> {
 	const successors = (block: CoreFunction["blocks"][number]): Array<CoreBlockId> => {
-		const exceptional =
-			block.handler === undefined ? [] : [forwardingTarget(block.handler.block)];
+		const exceptional = block.handler === undefined ? [] : [block.handler.block];
 		switch (block.terminator.kind) {
 			case "jump":
-				return [...exceptional, forwardingTarget(block.terminator.edge.block)];
+				return [...exceptional, block.terminator.edge.block];
 			case "branch":
 				return [
 					...exceptional,
-					forwardingTarget(block.terminator.alternate.block),
-					forwardingTarget(block.terminator.consequent.block),
+					block.terminator.alternate.block,
+					block.terminator.consequent.block,
 				];
 			case "guard":
 				return [
 					...exceptional,
-					forwardingTarget(block.terminator.fallback.block),
-					forwardingTarget(block.terminator.success.block),
+					block.terminator.fallback.block,
+					block.terminator.success.block,
 				];
 			case "switch":
 				return [
 					...exceptional,
-					forwardingTarget(block.terminator.default.block),
-					...block.terminator.cases
-						.toReversed()
-						.map(({ edge }) => forwardingTarget(edge.block)),
+					block.terminator.default.block,
+					...block.terminator.cases.toReversed().map(({ edge }) => edge.block),
 				];
 			case "return":
 			case "throw":
@@ -888,7 +876,7 @@ function coreBlockLayout(
 	const visited = new Set<CoreBlockId>();
 	const order: Array<CoreBlockId> = [];
 	const visit = (start: CoreBlockId): void => {
-		if (omitted.has(start) || visited.has(start)) return;
+		if (visited.has(start)) return;
 		const postorder: Array<CoreBlockId> = [];
 		visited.add(start);
 		const stack: Array<{
@@ -904,7 +892,7 @@ function coreBlockLayout(
 				continue;
 			}
 			const next = frame.successors[frame.index++]!;
-			if (omitted.has(next) || visited.has(next)) continue;
+			if (visited.has(next)) continue;
 			visited.add(next);
 			stack.push({ block: next, successors: successors(core.blocks[next]!), index: 0 });
 		}
@@ -928,36 +916,7 @@ function lowerFunctionToTarget(
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
 	const protectedInstructions = coreRegionInstructionIds(core);
 	const omittedInstructions = immediateOnlyInstructions(core, protectedInstructions);
-	const predecessorCounts = core.blocks.map(() => 0);
-	for (const block of core.blocks) {
-		for (const edge of coreTerminatorEdges(block.terminator)) {
-			predecessorCounts[edge.block]!++;
-		}
-		if (block.handler !== undefined) predecessorCounts[block.handler.block]!++;
-	}
-	const absorbedAlternateBlocks = new Set<CoreBlockId>();
-	for (const block of core.blocks) {
-		const alternate =
-			block.terminator.kind === "branch"
-				? block.terminator.alternate
-				: block.terminator.kind === "guard"
-					? block.terminator.fallback
-					: undefined;
-		if (alternate === undefined) continue;
-		const forwarding = core.blocks[alternate.block]!;
-		if (
-			predecessorCounts[forwarding.id] === 1 &&
-			forwarding.id !== core.entry &&
-			forwarding.id !== core.bodyEntry &&
-			forwarding.parameters[0]?.role !== "exception" &&
-			forwarding.instructions.length === 0 &&
-			forwarding.handler === undefined &&
-			forwarding.terminator.kind === "jump"
-		) {
-			absorbedAlternateBlocks.add(forwarding.id);
-		}
-	}
-	const blockOrder = coreBlockLayout(core, absorbedAlternateBlocks);
+	const blockOrder = coreBlockLayout(core);
 	const loweredBlockForCore = new Map<CoreBlockId, number>(
 		blockOrder.map((block, index) => [block, index]),
 	);
@@ -1011,28 +970,6 @@ function lowerFunctionToTarget(
 			instructions: [...copy.moves, { type: "jump", blocks: [loweredTarget] }],
 		});
 		return index;
-	};
-	const absorbAlternate = (
-		edge: CoreEdge,
-	): { readonly edge: CoreEdge; readonly terminator: CoreInstructionId } | undefined => {
-		if (!absorbedAlternateBlocks.has(edge.block)) return undefined;
-		const forwarding = core.blocks[edge.block]!;
-		if (forwarding.terminator.kind !== "jump") return undefined;
-		const substitutions = new Map(
-			forwarding.parameters.map((parameter, index) => [
-				parameter.value,
-				edge.arguments[index]!,
-			]),
-		);
-		return {
-			edge: {
-				block: forwarding.terminator.edge.block,
-				arguments: forwarding.terminator.edge.arguments.map(
-					(argument) => substitutions.get(argument) ?? argument,
-				),
-			},
-			terminator: forwarding.terminator.id,
-		};
 	};
 	const nextEmittedBlock = (block: CoreBlockId): number | undefined => {
 		const lowered = loweredBlockForCore.get(block);
@@ -1154,6 +1091,11 @@ function lowerFunctionToTarget(
 			case "jump":
 				{
 					const target = edgeBlock(block.terminator.edge);
+					// Fallthrough encoding only: the omitted jump transfers control exactly
+					// where the next emitted block starts, and a jump neither throws nor
+					// ends the protected range that closes after it. Region certificates
+					// name instructions, so a claimed terminator keeps its own encoding and
+					// no region's shape can depend on where layout placed its successor.
 					if (
 						block.handler !== undefined &&
 						!protectedInstructions.has(block.terminator.id) &&
@@ -1171,26 +1113,21 @@ function lowerFunctionToTarget(
 				break;
 			case "branch":
 				{
-					const absorbed = absorbAlternate(block.terminator.alternate);
 					const lowered: CompilerInstruction = {
 						type: "jumpIf",
 						registers: [registerForValue(block.terminator.condition)],
 						blocks: [edgeBlock(block.terminator.consequent)],
 					};
-					const alternate: CompilerInstruction = {
+					const alternateJump: CompilerInstruction = {
 						type: "jump",
-						blocks: [edgeBlock(absorbed?.edge ?? block.terminator.alternate)],
+						blocks: [edgeBlock(block.terminator.alternate)],
 					};
-					instructions.push(lowered, alternate);
+					instructions.push(lowered, alternateJump);
 					loweredInstructions.set(block.terminator.id, lowered);
-					if (absorbed !== undefined) {
-						loweredInstructions.set(absorbed.terminator, alternate);
-					}
 				}
 				break;
 			case "guard":
 				{
-					const absorbed = absorbAlternate(block.terminator.fallback);
 					const lowered: CompilerInstruction = {
 						type: "jumpIf",
 						registers: [registerForValue(block.terminator.condition)],
@@ -1198,13 +1135,10 @@ function lowerFunctionToTarget(
 					};
 					const fallback: CompilerInstruction = {
 						type: "jump",
-						blocks: [edgeBlock(absorbed?.edge ?? block.terminator.fallback)],
+						blocks: [edgeBlock(block.terminator.fallback)],
 					};
 					instructions.push(lowered, fallback);
 					loweredInstructions.set(block.terminator.id, lowered);
-					if (absorbed !== undefined) {
-						loweredInstructions.set(absorbed.terminator, fallback);
-					}
 				}
 				break;
 			case "return":
@@ -1280,7 +1214,6 @@ function lowerFunctionToTarget(
 			regions: lowerCoreRegions(
 				core.regions,
 				loweredInstructions,
-				absorbedAlternateBlocks,
 				loweredBlockForCore,
 				new Map(core.values.map(({ id }) => [id, registerForValue(id)])),
 			),

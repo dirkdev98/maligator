@@ -1,7 +1,9 @@
+import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
 	decodeVmValueOperand,
+	vmGuardIsWorldInvariant,
 	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_GUARDED_BUILTIN_OPERATIONS,
@@ -33,7 +35,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 14;
+export const WIRE_VERSION = 15;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -678,6 +680,48 @@ function regexpIteratorProjectionGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+/**
+ * Re-check a decoded `call-fallback` placement. Core owns the proof that the load
+ * is dead on the fast path; the wire boundary re-proves only what a corrupt or
+ * stale image could break — that the deferred load produces the call's callee and
+ * shares its handler coverage, so its throw is still caught in the same place.
+ */
+function propertyPlacementHolds(
+	fn: VmFunction,
+	placement: CorePropertyPlacement,
+	propertyIp: number,
+	callIp: number,
+): boolean {
+	if (placement === "in-place") return true;
+	if (placement !== "call-fallback") return false;
+	const property = fn.instructions[propertyIp];
+	const call = fn.instructions[callIp];
+	if (property?.opcode !== "LOAD_PROPERTY_STATIC" || call?.opcode !== "CALL")
+		return false;
+	if (call.callee !== property.dst) return false;
+	const covering = (ip: number): string =>
+		fn.handlers
+			.filter((handler) => ip >= handler.startIp && ip < handler.endIp)
+			.map((handler) => handler.handlerIp)
+			.sort((left, right) => left - right)
+			.join(",");
+	return covering(propertyIp) === covering(callIp);
+}
+
+/** Core's property-producer placement travels as a closed two-value tag. */
+function readPropertyPlacement(r: Reader): CorePropertyPlacement {
+	const tag = r.u8();
+	if (tag > 1) throw new RangeError("serialize-vm: invalid region property placement");
+	return tag === 1 ? "call-fallback" : "in-place";
+}
+
+function writePropertyPlacement(w: Writer, placement: CorePropertyPlacement): void {
+	if (placement !== "in-place" && placement !== "call-fallback") {
+		throw new RangeError("serialize-vm: invalid region property placement");
+	}
+	w.u8(placement === "call-fallback" ? 1 : 0);
+}
+
 function stringSliceNumberGuardMasks(
 	license: Extract<VmRegion, { kind: "string-slice-number" }>["license"],
 ): { dependencyMask: number; obligationMask: number } {
@@ -1072,6 +1116,7 @@ export function serializeVmDefinition(
 			switch (region.kind) {
 				case "string-split-cursor":
 					w.i32(region.propertyIp);
+					writePropertyPlacement(w, region.propertyPlacement);
 					w.i32(region.callee);
 					w.i32(region.receiver);
 					w.i32(region.separator);
@@ -1086,6 +1131,7 @@ export function serializeVmDefinition(
 					break;
 				case "string-split-projection":
 					w.i32(region.propertyIp);
+					writePropertyPlacement(w, region.propertyPlacement);
 					w.i32(region.callIp);
 					w.i32(region.callee);
 					w.i32(region.receiver);
@@ -1110,6 +1156,7 @@ export function serializeVmDefinition(
 					break;
 				case "regexp-exec-projection":
 					w.i32(region.propertyIp);
+					writePropertyPlacement(w, region.propertyPlacement);
 					w.i32(region.callIp);
 					w.u8(region.lockedFreshLiteral ? 1 : 0);
 					w.i32(region.lockedLiteral?.constructorIntrinsicIp ?? -1);
@@ -1186,6 +1233,7 @@ export function serializeVmDefinition(
 					break;
 				case "string-slice-number":
 					w.i32(region.propertyIp);
+					writePropertyPlacement(w, region.propertyPlacement);
 					w.i32(region.sliceCallIp);
 					w.i32(region.sliceStartIp);
 					w.i32(region.numberIntrinsicIp);
@@ -1616,6 +1664,12 @@ function validateStringSliceNumberRegion(
 		numberCall.arguments.length !== 1 ||
 		numberArgument?.kind !== "register" ||
 		numberArgument.register !== sliceCall.dst ||
+		!propertyPlacementHolds(
+			fn,
+			region.propertyPlacement,
+			region.propertyIp,
+			region.sliceCallIp,
+		) ||
 		region.receiver !== sliceCall.thisValue ||
 		region.result !== numberCall.dst ||
 		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
@@ -1650,7 +1704,17 @@ function validateRegExpExecProjectionRegion(
 		call.arguments.length === 1 &&
 		property.dst === call.callee &&
 		property.object === call.thisValue &&
-		region.propertyIp + 1 === region.callIp &&
+		// Encoding invariant, not a placement decision: reverse-postorder layout emits a
+		// producer's block before its consumer's, so an in-place load precedes its call.
+		// Whether the load runs there at all is `propertyPlacement`, checked next.
+		region.propertyIp < region.callIp &&
+		propertyPlacementHolds(
+			fn,
+			region.propertyPlacement,
+			region.propertyIp,
+			region.callIp,
+		) &&
+		(region.propertyPlacement !== "call-fallback" || region.lockedFreshLiteral) &&
 		region.callee === call.callee &&
 		region.receiver === call.thisValue &&
 		region.input === call.arguments[0] &&
@@ -1808,6 +1872,8 @@ function validateRegExpIteratorProjectionRegion(
 		region.anchors[2] === region.loads[0]?.ip &&
 		step?.opcode === "ITERATOR_STEP" &&
 		doneBranch?.opcode === "JUMP_IF" &&
+		// Encoding only: Core certifies the step as the last instruction of its block and
+		// the branch as that block's terminator, so the pair is emitted back to back.
 		region.doneBranchIp === region.stepIp + 1 &&
 		doneBranch.cond === step.doneDst &&
 		doneBranch.targetIp === region.exitIp &&
@@ -1903,6 +1969,8 @@ function validateStringSplitProjectionRegion(
 	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
 	const registerValid = (register: number) =>
 		Number.isInteger(register) && register >= 0 && register < fn.registerCount;
+	// Re-reads the emitted producer to check the decoded certificate's own separator
+	// and element indices. A miss rejects the image; nothing here selects code.
 	const latestDefinition = (
 		register: number,
 		beforeIp: number,
@@ -2021,6 +2089,8 @@ function validateStringSplitProjectionRegion(
 		region.separatorStringIndex >= stringConstants.length ||
 		stringConstants[region.separatorStringIndex]?.length === 0 ||
 		!separatorMatches ||
+		!propertyPlacementHolds(fn, region.propertyPlacement, region.propertyIp, callIp) ||
+		(region.propertyPlacement === "call-fallback" && dependencyMask !== 1) ||
 		elementLoads.length === 0 ||
 		elementLoads.length > 8 ||
 		lengthLoads.length > 1 ||
@@ -2053,6 +2123,10 @@ function validateStringSplitCursorRegion(
 	const headerBranch = fn.instructions[headerBranchIp];
 	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
 	const length = fn.instructions[lengthIp];
+	// Encoding only: Core's cursor certificate fixes the header and latch shape, so
+	// the wire form names the length load, header branch, and backedge and derives the
+	// compare, exit jump, and increment from their fixed offsets. A shape that does not
+	// match rejects the image; nothing here decides whether the region applies.
 	const compare = fn.instructions[lengthIp + 1];
 	const exitJump = fn.instructions[headerBranchIp + 1];
 	const element = fn.instructions[region.elementIp];
@@ -2163,6 +2237,11 @@ function validateStringSplitCursorRegion(
 		region.exitIp > fn.instructions.length ||
 		region.primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS ||
 		!primitiveLengthsValid ||
+		!propertyPlacementHolds(fn, region.propertyPlacement, region.propertyIp, callIp) ||
+		(region.propertyPlacement === "call-fallback" &&
+			(call.opcode !== "CALL" ||
+				call.guardedBuiltinCall === undefined ||
+				!vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard))) ||
 		new Set(operationIps).size !== operationIps.length ||
 		operationIps.length !== region.claimedIps.length ||
 		operationIps.some(
@@ -2967,6 +3046,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				let region: VmRegion;
 				if (kindTag === 2) {
 					const propertyIp = r.i32();
+					const propertyPlacement = readPropertyPlacement(r);
 					const callee = r.i32();
 					const receiver = r.i32();
 					const separator = r.i32();
@@ -3010,6 +3090,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
 						propertyIp,
+						propertyPlacement,
 						callee,
 						receiver,
 						separator,
@@ -3024,6 +3105,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					};
 				} else if (kindTag === 4) {
 					const propertyIp = r.i32();
+					const propertyPlacement = readPropertyPlacement(r);
 					const callIp = r.i32();
 					const callee = r.i32();
 					const receiver = r.i32();
@@ -3080,6 +3162,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
 						propertyIp,
+						propertyPlacement,
 						callIp,
 						callee,
 						receiver,
@@ -3089,6 +3172,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					};
 				} else if (kindTag === 5) {
 					const propertyIp = r.i32();
+					const propertyPlacement = readPropertyPlacement(r);
 					const callIp = r.i32();
 					const lockedFreshLiteral = r.u8();
 					const constructorIntrinsicIp = r.i32();
@@ -3187,6 +3271,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
 						propertyIp,
+						propertyPlacement,
 						callIp,
 						lockedFreshLiteral: lockedFreshLiteral === 1,
 						...(lockedFreshLiteral === 0
@@ -3263,6 +3348,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					};
 				} else if (kindTag === 7) {
 					const propertyIp = r.i32();
+					const propertyPlacement = readPropertyPlacement(r);
 					const sliceCallIp = r.i32();
 					const sliceStartIp = r.i32();
 					const numberIntrinsicIp = r.i32();
@@ -3290,6 +3376,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
 						propertyIp,
+						propertyPlacement,
 						sliceCallIp,
 						sliceStartIp,
 						numberIntrinsicIp,

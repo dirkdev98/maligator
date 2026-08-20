@@ -34,6 +34,18 @@ export interface CoreAllocatedRegionEnvelope<
 	};
 }
 
+/**
+ * Core's placement decision for a region's ordinary property producer.
+ * `call-fallback` licenses a backend to run the load only on the path where the
+ * region's fast operation declines; Core owns the proof that the load is
+ * unobservable, dead on the fast path, and covered by the call's handler.
+ * `in-place` keeps the load exactly where Core scheduled it.
+ *
+ * A backend must read this field instead of inferring the same choice from the
+ * emitted distance between the producer and its call.
+ */
+export type CorePropertyPlacement = "in-place" | "call-fallback";
+
 /** Closed String#split projected-result certificate after register allocation. */
 export interface CoreAllocatedStringSplitProjectionRegion extends CoreAllocatedRegionEnvelope<
 	"string-split-projection",
@@ -46,6 +58,7 @@ export interface CoreAllocatedStringSplitProjectionRegion extends CoreAllocatedR
 > {
 	/** Ordinary property producer retained by a dynamic-call twin. */
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly propertyPlacement: CorePropertyPlacement;
 	readonly separatorStringIndex: number;
 	/** Allocated registers for every Core SSA alias licensed as the call result. */
 	readonly resultRegisters: ReadonlyArray<number>;
@@ -76,6 +89,7 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 	]
 > {
 	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly propertyPlacement: CorePropertyPlacement;
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly nullChecks: ReadonlyArray<{
 		readonly comparison: Extract<CompilerInstruction, { type: "binary" }>;
@@ -168,6 +182,7 @@ export interface CoreAllocatedStringSliceNumberRegion extends CoreAllocatedRegio
 	]
 > {
 	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly propertyPlacement: CorePropertyPlacement;
 	readonly sliceStartInstruction: Extract<
 		CompilerInstruction,
 		{ type: "createNumber" | "createF64" }
@@ -191,6 +206,7 @@ export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegio
 > {
 	/** Ordinary property producer retained by a dynamic-call twin. */
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly propertyPlacement: CorePropertyPlacement;
 	readonly compare: Extract<CompilerInstruction, { type: "binary" }>;
 	readonly element: Extract<CompilerInstruction, { type: "loadProperty" }>;
 	readonly trimProperty: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;

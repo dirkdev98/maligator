@@ -47,14 +47,6 @@ Use focused tests while developing, the smoke tier as a quick repository-wide si
 and test:check as the normal local gate. Full Test262, test:full, and test:full:report
 remain approval-only.
 
-- [ ] Keep improving cache diagnostics, sandbox guidance, test failure messages, and
-      local command discoverability as new failure modes appear. Development tooling
-      should identify the owning layer and a concrete recovery action.
-
-- [ ] Keep representative smoke and integration fixtures close to real product use,
-      including cold caches and execution outside the repository where relevant.
-      Prefer end-to-end behavior over mocks of compiler or runtime internals.
-
 # Compiler and Core IR
 
 ## Core IR contract
@@ -73,14 +65,6 @@ and whole-program optimizations. Do not maintain a queue of retired optimizer pa
 to restore; generic passes may naturally rediscover their useful results.
 
 ## Validate the direct Core cut-over
-
-- [ ] Validate the same optimized Core program through compiled and interpreted
-      lowering, including exceptional control flow, suspension, handlers, mutable and
-      locked primordials, and GC stress.
-
-- [ ] Audit target lowering and C emission for optimizations inferred from adjacency,
-      source positions, register reuse, or reconstructed control flow. Move any such
-      decision into an explicit Core pass or delete it.
 
 - [ ] Make pass traces report instruction, block, value, fact, region, allocation,
       dynamic-call, boxed-operation, property-helper, guard, root, and safepoint

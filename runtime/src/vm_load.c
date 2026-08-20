@@ -18,7 +18,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 14u
+#define WIRE_VERSION 15u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in
@@ -1261,6 +1261,35 @@ static const MalInstruction *mal_loaded_latest_definition(
     return nullptr;
 }
 
+/*
+ * Re-check a region's Core property placement. Placement is Core metadata: only a
+ * compiled backend acts on it by skipping the load on the fast path, so the
+ * interpreter needs no behavior here. What the image must still prove is what
+ * corruption or a stale writer could break — a deferred load produces the call's
+ * callee and shares its handler coverage, so its throw is caught where it was.
+ */
+static bool mal_loaded_property_placement_holds(
+    const MalFunction *fn, u8 placement, i32 property_ip, i32 call_ip
+) {
+    if (placement == 0) return true;
+    if (placement != 1) return false;
+    if (property_ip < 0 || property_ip >= fn->instruction_count) return false;
+    if (call_ip < 0 || call_ip >= fn->instruction_count) return false;
+    const MalInstruction *property = &fn->instructions[property_ip];
+    const MalInstruction *call = &fn->instructions[call_ip];
+    if (property->opcode != MAL_OP_LOAD_PROPERTY_STATIC || call->opcode != MAL_OP_CALL) {
+        return false;
+    }
+    if (call->as.call.callee != property->as.load_property_static.dst) return false;
+    for (i32 handler = 0; handler < fn->handler_count; handler++) {
+        const MalExceptionHandler *entry = &fn->handlers[handler];
+        bool covers_property = property_ip >= entry->start_ip && property_ip < entry->end_ip;
+        bool covers_call = call_ip >= entry->start_ip && call_ip < entry->end_ip;
+        if (covers_property != covers_call) return false;
+    }
+    return true;
+}
+
 static i32 argument_retention_limit(const MalFunction *fn) {
     i32 limit = -1;
     for (i32 i = fn->argument_snapshot_count; i < fn->instruction_count; i++) {
@@ -1981,6 +2010,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             } while (0)
             if (r.ok && kind == 2) {
                 i32 property_ip = rd_i32(&r);
+                u8 property_placement = rd_u8(&r);
                 i32 callee = rd_i32(&r);
                 i32 receiver = rd_i32(&r);
                 i32 separator = rd_i32(&r);
@@ -2037,7 +2067,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     (call_is_generic && !property_ok) ||
                     (call_is_builtin && (property_ip != -1 || callee != -1)) ||
                     !call_result_found || index < 0 || index >= fn->register_count ||
-                    !fixed_ips_ok) {
+                    !fixed_ips_ok ||
+                    !mal_loaded_property_placement_holds(
+                        fn, property_placement, property_ip, call_ip) ||
+                    (property_placement == 1 && dependency_mask != 1)) {
                     r.ok = false;
                 }
                 if (r.ok) {
@@ -2179,6 +2212,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 if (metadata_operations != payload_count) r.ok = false;
             } else if (r.ok && kind == 4) {
                 i32 property_ip = rd_i32(&r);
+                u8 property_placement = rd_u8(&r);
                 i32 call_ip = rd_i32(&r);
                 i32 callee = rd_i32(&r);
                 i32 receiver = rd_i32(&r);
@@ -2226,7 +2260,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     separator_string_index >= 0 &&
                     separator_string_index < (i32) string_count &&
                     strings[separator_string_index].length > 0 &&
-                    receiver >= 0 && receiver < fn->register_count;
+                    receiver >= 0 && receiver < fn->register_count &&
+                    mal_loaded_property_placement_holds(
+                        fn, property_placement, property_ip, call_ip) &&
+                    (property_placement != 1 || dependency_mask == 1);
                 if (header_ok && generic) {
                     const MalInstruction *call = &fn->instructions[call_ip];
                     const MalInstruction *property = property_ok
@@ -2351,6 +2388,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
             } else if (r.ok && kind == 5) {
                 i32 property_ip = rd_i32(&r);
+                u8 property_placement = rd_u8(&r);
                 i32 call_ip = rd_i32(&r);
                 u8 locked = rd_u8(&r);
                 i32 constructor_intrinsic_ip = rd_i32(&r);
@@ -2432,8 +2470,11 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     fn->instructions[call_ip].opcode == MAL_OP_CALL;
                 bool header_ok = anchor_count == 2 && anchors[0] == call_ip &&
                     anchors[1] == (load_count > 0 ? load_ips[0] : -1) &&
-                    property_ok && call_ok && property_ip + 1 == call_ip &&
-                    locked <= 1 && last_index_effect == 1 && result_register_found;
+                    property_ok && call_ok && property_ip < call_ip &&
+                    locked <= 1 && last_index_effect == 1 && result_register_found &&
+                    mal_loaded_property_placement_holds(
+                        fn, property_placement, property_ip, call_ip) &&
+                    (property_placement != 1 || (locked == 1 && dependency_mask == 1));
                 if (header_ok) {
                     const MalInstruction *property = &fn->instructions[property_ip];
                     const MalInstruction *call = &fn->instructions[call_ip];
@@ -2735,6 +2776,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 if (metadata_operations != payload_count) r.ok = false;
             } else if (r.ok && kind == 7) {
                 i32 property_ip = rd_i32(&r);
+                u8 property_placement = rd_u8(&r);
                 i32 slice_call_ip = rd_i32(&r);
                 i32 slice_start_ip = rd_i32(&r);
                 i32 number_intrinsic_ip = rd_i32(&r);
@@ -2770,7 +2812,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     fn->instructions[number_intrinsic_ip].opcode == MAL_OP_LOAD_INTRINSIC &&
                     fn->instructions[number_intrinsic_ip].as.load_intrinsic.intrinsic ==
                         MAL_INTRINSIC_NUMBER_CONSTRUCTOR &&
-                    fn->instructions[number_call_ip].opcode == MAL_OP_CALL;
+                    fn->instructions[number_call_ip].opcode == MAL_OP_CALL &&
+                    mal_loaded_property_placement_holds(
+                        fn, property_placement, property_ip, slice_call_ip) &&
+                    (property_placement != 1 || dependency_mask == 1);
                 if (header_ok) {
                     const MalInstruction *property = &fn->instructions[property_ip];
                     const MalInstruction *slice_call = &fn->instructions[slice_call_ip];

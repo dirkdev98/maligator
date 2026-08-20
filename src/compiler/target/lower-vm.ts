@@ -1,3 +1,4 @@
+import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import type { CoreProgram } from "../core/core-ir.ts";
 import {
 	builtinOperationDescriptor,
@@ -336,6 +337,36 @@ export function vmRegionLicense(
 	};
 }
 
+/**
+ * Check a Core `call-fallback` property placement against the emitted stream.
+ * Core owns the proof that the load is unobservable and dead on the fast path;
+ * what target lowering still owes is that a load deferred into the call really
+ * produces that call's callee and runs under the same exception handlers, so
+ * moving it cannot change where its own throw is caught.
+ */
+function vmPropertyPlacementHolds(
+	placement: CorePropertyPlacement,
+	propertyIp: number,
+	callIp: number,
+	instructions: ReadonlyArray<VmInstruction>,
+	handlers: ReadonlyArray<VmExceptionHandler>,
+): boolean {
+	if (placement === "in-place") return true;
+	if (placement !== "call-fallback") return false;
+	const property = instructions[propertyIp];
+	const call = instructions[callIp];
+	if (property?.opcode !== "LOAD_PROPERTY_STATIC" || call?.opcode !== "CALL")
+		return false;
+	if (call.callee !== property.dst) return false;
+	const covering = (ip: number): string =>
+		handlers
+			.filter((handler) => ip >= handler.startIp && ip < handler.endIp)
+			.map((handler) => handler.handlerIp)
+			.sort((left, right) => left - right)
+			.join(",");
+	return covering(propertyIp) === covering(callIp);
+}
+
 export function vmGuardIsWorldInvariant(guard: VmGuardPlan): boolean {
 	return (
 		guard.dependencies.length > 0 &&
@@ -371,6 +402,7 @@ export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	"on-demand"
 > & {
 	readonly propertyIp: number;
+	readonly propertyPlacement: CorePropertyPlacement;
 	readonly callee: number;
 	readonly receiver: number;
 	readonly separator: number;
@@ -390,6 +422,7 @@ export type VmStringSplitProjectionRegion = VmRegionEnvelope<
 	"whole-region"
 > & {
 	readonly propertyIp: number;
+	readonly propertyPlacement: CorePropertyPlacement;
 	readonly callIp: number;
 	readonly callee: number;
 	readonly receiver: number;
@@ -409,6 +442,7 @@ export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
 	"whole-region"
 > & {
 	readonly propertyIp: number;
+	readonly propertyPlacement: CorePropertyPlacement;
 	readonly callIp: number;
 	readonly lockedFreshLiteral: boolean;
 	readonly lockedLiteral?: {
@@ -487,6 +521,7 @@ export type VmStringSliceNumberRegion = VmRegionEnvelope<
 	"none"
 > & {
 	readonly propertyIp: number;
+	readonly propertyPlacement: CorePropertyPlacement;
 	readonly sliceCallIp: number;
 	readonly sliceStartIp: number;
 	readonly numberIntrinsicIp: number;
@@ -2518,6 +2553,15 @@ function lowerFunctionToVmFunction(
 				if (
 					!operationsValid ||
 					loweredCall?.opcode !== "CALL" ||
+					!vmPropertyPlacementHolds(
+						region.propertyPlacement,
+						resolvedPropertyIp,
+						callIp!,
+						instructions,
+						handlers,
+					) ||
+					(region.propertyPlacement === "call-fallback" &&
+						resolvedLockedLiteral === undefined) ||
 					firstLoadIp !== resolvedLoads[0]?.ip ||
 					resultRegisters.some(
 						(register) =>
@@ -2546,6 +2590,7 @@ function lowerFunctionToVmFunction(
 					},
 					cost: region.cost,
 					propertyIp: resolvedPropertyIp,
+					propertyPlacement: region.propertyPlacement,
 					callIp: callIp!,
 					lockedFreshLiteral: resolvedLockedLiteral !== undefined,
 					...(resolvedLockedLiteral === undefined
@@ -2608,6 +2653,10 @@ function lowerFunctionToVmFunction(
 					step?.opcode === "ITERATOR_STEP" &&
 					aliases.has(step.valueDst) &&
 					doneBranch?.opcode === "JUMP_IF" &&
+					// Encoding only: Core certifies the step as the last instruction of its
+					// block and the branch as that block's terminator, so the two must be
+					// emitted back to back. Both are named anchors; this rejects a mismatch
+					// instead of discovering the region from the distance.
 					doneBranchIp === stepIp! + 1 &&
 					doneBranch.cond === step.doneDst &&
 					doneBranch.targetIp === exitIp;
@@ -2751,6 +2800,15 @@ function lowerFunctionToVmFunction(
 					numberCall.arguments.length !== 1 ||
 					numberArgument?.kind !== "register" ||
 					numberArgument.register !== sliceCall.dst ||
+					!vmPropertyPlacementHolds(
+						region.propertyPlacement,
+						propertyIp,
+						sliceCallIp!,
+						instructions,
+						handlers,
+					) ||
+					(region.propertyPlacement === "call-fallback" &&
+						!vmGuardIsWorldInvariant(guard)) ||
 					region.cost.metadataOperations !== payloadIps.size ||
 					payloadIps.size !== resolvedClaimedIps.length ||
 					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
@@ -2770,6 +2828,7 @@ function lowerFunctionToVmFunction(
 					},
 					cost: region.cost,
 					propertyIp,
+					propertyPlacement: region.propertyPlacement,
 					sliceCallIp: sliceCallIp!,
 					sliceStartIp,
 					numberIntrinsicIp,
@@ -2822,6 +2881,10 @@ function lowerFunctionToVmFunction(
 						constant.every((codeUnit, offset) => codeUnit === value.charCodeAt(offset))
 					);
 				};
+				// Core already states the separator and element indices in the certificate;
+				// this walk only re-reads the emitted producer to check the certificate
+				// against the stream. A miss rejects the whole region with an error, so no
+				// optimization is ever selected or declined by what this scan finds.
 				const latestDefinition = (
 					register: number,
 					beforeIp: number,
@@ -2941,6 +3004,15 @@ function lowerFunctionToVmFunction(
 							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
 					) ||
 					!separatorMatches ||
+					!vmPropertyPlacementHolds(
+						region.propertyPlacement,
+						propertyIp,
+						callIp!,
+						instructions,
+						handlers,
+					) ||
+					(region.propertyPlacement === "call-fallback" &&
+						!vmGuardIsWorldInvariant(guard)) ||
 					region.separatorStringIndex < 0 ||
 					(stringConstants[region.separatorStringIndex]?.length ?? 0) === 0 ||
 					firstLoadIp !== resolvedLoads[0]?.ip ||
@@ -2973,6 +3045,7 @@ function lowerFunctionToVmFunction(
 					},
 					cost: region.cost,
 					propertyIp,
+					propertyPlacement: region.propertyPlacement,
 					callIp: callIp!,
 					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
 					receiver: loweredCall.thisValue,
@@ -3077,6 +3150,21 @@ function lowerFunctionToVmFunction(
 				) {
 					throw coreRegionError(region.kind, "claim or cost contract");
 				}
+				if (
+					!vmPropertyPlacementHolds(
+						region.propertyPlacement,
+						propertyIp,
+						callIp!,
+						instructions,
+						handlers,
+					) ||
+					(region.propertyPlacement === "call-fallback" &&
+						(loweredCall.opcode !== "CALL" ||
+							loweredCall.guardedBuiltinCall === undefined ||
+							!vmGuardIsWorldInvariant(loweredCall.guardedBuiltinCall.guard)))
+				) {
+					throw coreRegionError(region.kind, "property placement contract");
+				}
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
 					kind: "string-split-cursor",
@@ -3094,6 +3182,7 @@ function lowerFunctionToVmFunction(
 					},
 					cost: region.cost,
 					propertyIp,
+					propertyPlacement: region.propertyPlacement,
 					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
 					receiver: loweredCall.thisValue,
 					separator: loweredCall.arguments[0]!,

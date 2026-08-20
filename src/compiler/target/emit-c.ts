@@ -1,3 +1,4 @@
+import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
@@ -141,6 +142,38 @@ interface CoroutineContext {
 	isAsyncFunction: boolean;
 	/** `async function*`: GENERATOR_START-based, but its yields await + settle requests. */
 	isAsyncGenerator: boolean;
+}
+
+/**
+ * The property producer a region's declining fast path must run for itself, or
+ * undefined when Core kept the load in place. The choice is Core's — the emitter
+ * reads `propertyPlacement` and never rediscovers it from the distance between
+ * the load and its call, which would make an optimization depend on layout.
+ *
+ * A deferred load leaves its callee register unwritten on the fast path, so the
+ * region must also hold a locked identity whose fast form never reads that
+ * register. Core proves this and the target boundary re-checks it; a mismatch here
+ * is a broken certificate rather than a reason to emit the load anyway.
+ */
+function regionFallbackPropertyLoad(
+	fn: VmFunction,
+	placement: CorePropertyPlacement,
+	propertyIp: number,
+	lockedIdentity: boolean,
+): Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }> | undefined {
+	if (placement !== "call-fallback") return undefined;
+	const instruction = fn.instructions[propertyIp];
+	if (instruction?.opcode !== "LOAD_PROPERTY_STATIC") {
+		throw new Error(
+			`Deferred region property at instruction ${propertyIp} is not a load`,
+		);
+	}
+	if (!lockedIdentity) {
+		throw new Error(
+			`Deferred region property at instruction ${propertyIp} has no locked identity`,
+		);
+	}
+	return instruction;
 }
 
 /**
@@ -1320,15 +1353,12 @@ function emitBody(
 		NativeStringSplitProjectionAction
 	>();
 	for (const site of stringSplitProjectionSites.values()) {
-		const propertyInstruction = fn.instructions[site.projection.propertyIp];
-		const propertyLoad =
-			site.lockedIdentity &&
-			site.projection.propertyIp + 1 === site.projection.callIp &&
-			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
-			handlerTargets[site.projection.propertyIp] ===
-				handlerTargets[site.projection.callIp]
-				? propertyInstruction
-				: undefined;
+		const propertyLoad = regionFallbackPropertyLoad(
+			fn,
+			site.projection.propertyPlacement,
+			site.projection.propertyIp,
+			site.lockedIdentity,
+		);
 		nativeStringSplitProjectionActionByIp.set(site.projection.callIp, {
 			site,
 			role: "call",
@@ -1355,14 +1385,12 @@ function emitBody(
 	>();
 	for (const site of stringSplitCursorSites.values()) {
 		const cursor = site.cursor;
-		const propertyInstruction = fn.instructions[cursor.propertyIp];
-		const propertyLoad =
-			site.lockedIdentity &&
-			cursor.propertyIp + 1 === site.callIp &&
-			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
-			handlerTargets[cursor.propertyIp] === handlerTargets[site.callIp]
-				? propertyInstruction
-				: undefined;
+		const propertyLoad = regionFallbackPropertyLoad(
+			fn,
+			cursor.propertyPlacement,
+			cursor.propertyIp,
+			site.lockedIdentity,
+		);
 		nativeStringSplitCursorActionByIp.set(site.callIp, {
 			site,
 			role: "call",
@@ -1391,16 +1419,13 @@ function emitBody(
 		NativeRegExpExecProjectionAction
 	>();
 	for (const site of regexpExecProjectionSites.values()) {
-		const propertyInstruction = fn.instructions[site.projection.propertyIp];
-		const propertyLoad =
+		const propertyLoad = regionFallbackPropertyLoad(
+			fn,
+			site.projection.propertyPlacement,
+			site.projection.propertyIp,
 			site.projection.lockedFreshLiteral &&
-			vmGuardIsWorldInvariant(site.projection.license.guard) &&
-			site.projection.propertyIp + 1 === site.projection.callIp &&
-			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
-			handlerTargets[site.projection.propertyIp] ===
-				handlerTargets[site.projection.callIp]
-				? propertyInstruction
-				: undefined;
+				vmGuardIsWorldInvariant(site.projection.license.guard),
+		);
 		nativeRegExpExecProjectionActionByIp.set(site.projection.callIp, {
 			site,
 			role: "call",
@@ -1486,15 +1511,13 @@ function emitBody(
 			region.kind === "string-slice-number",
 	);
 	for (const fusion of stringSliceNumberRegions) {
-		const propertyInstruction = fn.instructions[fusion.propertyIp];
 		const lockedIdentity = vmGuardIsWorldInvariant(fusion.license.guard);
-		const propertyLoad =
-			lockedIdentity &&
-			fusion.propertyIp + 1 === fusion.sliceCallIp &&
-			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
-			handlerTargets[fusion.propertyIp] === handlerTargets[fusion.sliceCallIp]
-				? propertyInstruction
-				: undefined;
+		const propertyLoad = regionFallbackPropertyLoad(
+			fn,
+			fusion.propertyPlacement,
+			fusion.propertyIp,
+			lockedIdentity,
+		);
 		nativeStringSliceNumberFusionActionByIp.set(fusion.sliceCallIp, {
 			fusion,
 			role: "slice",

@@ -24,6 +24,7 @@ import {
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
 	CoreIrVerificationError,
 	verifyCoreFunction,
@@ -2012,6 +2013,84 @@ function coreProofIsWorldInvariant(proof: CoreKnownBuiltinProof["proof"]): boole
 	);
 }
 
+/** True when any terminator, edge, or handler argument observes `value`. */
+function coreValueUsedByControlFlow(
+	fn: CoreFunction,
+	root: (value: CoreValueId) => CoreValueId,
+	value: CoreValueId,
+): boolean {
+	const target = root(value);
+	const observes = (candidate: CoreValueId): boolean => root(candidate) === target;
+	for (const block of fn.blocks) {
+		if (block.handler?.arguments.some(observes) === true) return true;
+		for (const edge of coreTerminatorEdges(block.terminator)) {
+			if (edge.arguments.some(observes)) return true;
+		}
+		switch (block.terminator.kind) {
+			case "branch":
+			case "guard":
+				if (observes(block.terminator.condition)) return true;
+				break;
+			case "switch":
+				if (observes(block.terminator.discriminant)) return true;
+				break;
+			case "return":
+			case "throw":
+				if (observes(block.terminator.value)) return true;
+				break;
+			case "jump":
+			case "unreachable":
+				break;
+		}
+	}
+	return false;
+}
+
+/**
+ * Decide where a region's ordinary property producer runs. `call-fallback` needs
+ * three facts, all established here: `locked` says a world-invariant guard pins
+ * the method table, so the lookup is a pure read that neither throws nor runs user
+ * code; the producer's only consumer is the call's callee operand, so no fast path
+ * can observe a skipped load; and both live in one block, so a deferred load keeps
+ * the call's handler scope and execution frequency. Distance between the two is
+ * irrelevant, and no later stage may re-derive the answer from emitted layout.
+ */
+function corePropertyPlacement(
+	fn: CoreFunction,
+	property: CoreInstruction | undefined,
+	call: CoreInstruction,
+	locations: ReadonlyMap<
+		CoreInstructionId,
+		{ readonly block: CoreBlock; readonly index: number }
+	>,
+	uses: ReadonlyMap<
+		CoreValueId,
+		ReadonlyArray<{ readonly instruction: CoreInstruction; readonly position: number }>
+	>,
+	root: (value: CoreValueId) => CoreValueId,
+	locked: boolean,
+): CorePropertyPlacement {
+	if (property === undefined || !locked || property.outputs.length !== 1)
+		return "in-place";
+	const producer = locations.get(property.id);
+	const consumer = locations.get(call.id);
+	if (
+		producer === undefined ||
+		consumer === undefined ||
+		producer.block.id !== consumer.block.id
+	) {
+		return "in-place";
+	}
+	const callee = property.outputs[0]!;
+	const consumers = uses.get(root(callee)) ?? [];
+	return consumers.length === 1 &&
+		consumers[0]!.instruction === call &&
+		consumers[0]!.position === 0 &&
+		!coreValueUsedByControlFlow(fn, root, callee)
+		? "call-fallback"
+		: "in-place";
+}
+
 function mergeCoreBuiltinProofs(
 	proofs: ReadonlyArray<CoreKnownBuiltinProof["proof"]>,
 ): CoreKnownBuiltinProof["proof"] {
@@ -2613,6 +2692,17 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 								metadataOperations: claimedInstructions.length,
 							},
 							property: { $coreInstruction: property.id },
+							// A locked fresh literal is the only receiver whose `exec` lookup a
+							// declining fast path may skip.
+							propertyPlacement: corePropertyPlacement(
+								fn,
+								property,
+								call,
+								locations,
+								uses,
+								root,
+								lockedLiteral !== undefined,
+							),
 							resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
 							nullChecks: nullChecks.map(({ comparison, nullValue }) => ({
 								comparison: { $coreInstruction: comparison.id },
@@ -3328,6 +3418,17 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 						...(splitProperty === undefined
 							? {}
 							: { property: { $coreInstruction: splitProperty.id } }),
+						// The split call's own identity proof, not the merged trim proof, is
+						// what pins the `split` lookup a declining fast path may skip.
+						propertyPlacement: corePropertyPlacement(
+							fn,
+							splitProperty,
+							splitCall,
+							locations,
+							uses,
+							root,
+							coreProofIsWorldInvariant(splitProof.proof),
+						),
 						compare: { $coreInstruction: compare.id },
 						element: { $coreInstruction: element.id },
 						trimProperty: { $coreInstruction: trimProperty.id },
@@ -3594,6 +3695,15 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 							...(property === undefined
 								? {}
 								: { property: { $coreInstruction: property.id } }),
+							propertyPlacement: corePropertyPlacement(
+								fn,
+								property,
+								call,
+								locations,
+								uses,
+								root,
+								coreProofIsWorldInvariant(builtin.proof),
+							),
 							separatorStringIndex,
 							resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
 							loads: loads.map((load) => ({
@@ -3633,10 +3743,15 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 			CoreValueId,
 			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
 		>();
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
 		const blocksByInstruction = new Map<CoreInstructionId, CoreBlock>();
 		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
+			for (const [index, instruction] of block.instructions.entries()) {
 				blocksByInstruction.set(instruction.id, block);
+				locations.set(instruction.id, { block, index });
 				for (const [position, input] of instruction.inputs.entries()) {
 					const key = root(input);
 					const entries = uses.get(key) ?? [];
@@ -3750,6 +3865,15 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 							representation: "primitive-string-span-number",
 							cost: { score: 16, metadataOperations: claimedInstructions.length },
 							property: { $coreInstruction: property.id },
+							propertyPlacement: corePropertyPlacement(
+								fn,
+								property,
+								sliceCall,
+								locations,
+								uses,
+								root,
+								coreProofIsWorldInvariant(builtin.proof),
+							),
 							sliceStartInstruction: { $coreInstruction: start.id },
 							numberIntrinsic: { $coreInstruction: numberIntrinsic.id },
 							numberCall: { $coreInstruction: numberCall.id },
@@ -4405,6 +4529,38 @@ function rewriteEdge(
 	};
 }
 
+function remapTerminatorEdges(
+	terminator: CoreTerminator,
+	remap: (edge: CoreEdge) => CoreEdge,
+): CoreTerminator {
+	switch (terminator.kind) {
+		case "jump":
+			return { ...terminator, edge: remap(terminator.edge) };
+		case "branch":
+			return {
+				...terminator,
+				consequent: remap(terminator.consequent),
+				alternate: remap(terminator.alternate),
+			};
+		case "guard":
+			return {
+				...terminator,
+				success: remap(terminator.success),
+				fallback: remap(terminator.fallback),
+			};
+		case "switch":
+			return {
+				...terminator,
+				cases: terminator.cases.map((entry) => ({ ...entry, edge: remap(entry.edge) })),
+				default: remap(terminator.default),
+			};
+		case "return":
+		case "throw":
+		case "unreachable":
+			return terminator;
+	}
+}
+
 function rewriteTerminator(
 	terminator: CoreTerminator,
 	replacements: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -5019,6 +5175,89 @@ const deadInstructionElimination: CoreFunctionPass = {
 	},
 };
 
+/**
+ * Retarget every edge that lands on a parameter-only block whose whole body is a
+ * jump. Core owns empty-block forwarding so no later stage has to rediscover it:
+ * target lowering would otherwise have to read the emitted block layout to notice
+ * that a branch arm does nothing but jump on.
+ *
+ * A forwarded jump argument is either one of the block's parameters, substituted
+ * with the incoming edge's argument, or a value that dominates the empty block.
+ * The block holds no definition, so such a value also dominates every predecessor
+ * and stays available on the retargeted edge.
+ */
+const foldEmptyForwardingBlocks: CoreFunctionPass = {
+	name: "fold-empty-forwarding-blocks",
+	changesControlFlow: true,
+	run(fn) {
+		const forwarding = new Map<CoreBlockId, CoreBlock>();
+		for (const block of fn.blocks) {
+			if (
+				block.id === fn.entry ||
+				block.id === fn.bodyEntry ||
+				block.instructions.length > 0 ||
+				block.handler !== undefined ||
+				// An exception parameter is bound by the unwinder, not by an edge.
+				block.parameters.some(({ role }) => role === "exception") ||
+				block.terminator.kind !== "jump" ||
+				block.terminator.edge.block === block.id
+			) {
+				continue;
+			}
+			forwarding.set(block.id, block);
+		}
+		if (forwarding.size === 0) return fn;
+		// A chain that closes into a cycle has no non-forwarding target, so the walk
+		// gives the edge back unchanged and the pass reaches its fixpoint.
+		const forwardEdge = (edge: CoreEdge): CoreEdge => {
+			const seen = new Set<CoreBlockId>();
+			let current = edge;
+			for (;;) {
+				const block = forwarding.get(current.block);
+				if (block === undefined || seen.has(current.block)) return current;
+				seen.add(current.block);
+				if (block.terminator.kind !== "jump") return current;
+				const substitutions = new Map<CoreValueId, CoreValueId>(
+					block.parameters.map((parameter, index) => [
+						parameter.value,
+						current.arguments[index]!,
+					]),
+				);
+				current = {
+					block: block.terminator.edge.block,
+					arguments: block.terminator.edge.arguments.map(
+						(argument) => substitutions.get(argument) ?? argument,
+					),
+				};
+			}
+		};
+		const sameEdge = (left: CoreEdge, right: CoreEdge): boolean =>
+			left.block === right.block &&
+			left.arguments.length === right.arguments.length &&
+			left.arguments.every((argument, index) => argument === right.arguments[index]);
+		let changed = false;
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			if (forwarding.has(block.id)) return block;
+			let blockChanged = false;
+			const terminator = remapTerminatorEdges(block.terminator, (edge) => {
+				const forwarded = forwardEdge(edge);
+				if (sameEdge(edge, forwarded)) return edge;
+				blockChanged = true;
+				return forwarded;
+			});
+			if (!blockChanged) return block;
+			changed = true;
+			return { ...block, terminator };
+		});
+		if (!changed) return fn;
+		return removeUnreachableCoreBlocks({
+			...fn,
+			blocks,
+			mutationEpoch: fn.mutationEpoch + 1,
+		});
+	},
+};
+
 /** Merge one dominance-safe linear edge at a time, substituting block arguments. */
 const combineLinearBlocks: CoreFunctionPass = {
 	name: "combine-linear-blocks",
@@ -5083,6 +5322,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	eliminateRedundantTdzChecks,
 	foldPrimitiveConstants,
 	simplifyControlFlow,
+	foldEmptyForwardingBlocks,
 	combineLinearBlocks,
 	foldStaticPropertyKeys,
 	copyAndValueNumber,

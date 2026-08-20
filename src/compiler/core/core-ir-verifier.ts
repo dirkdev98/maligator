@@ -10,6 +10,7 @@ import type {
 	CoreInstructionId,
 	CoreOpcodeRegistry,
 	CoreProgram,
+	CoreRegion,
 	CoreTerminator,
 	CoreValue,
 	CoreValueId,
@@ -144,6 +145,12 @@ function terminatorUses(terminator: CoreTerminator): ReadonlyArray<CoreValueId> 
 	}
 }
 
+/** Input position of a `call` callee; a deferred property producer feeds only this. */
+const CORE_CALLEE_POSITION = 0;
+
+/** Control-flow uses carry no input position and must never satisfy a placement. */
+const CORE_CONTROL_FLOW_POSITION = -1;
+
 interface ValueDefinitionLocation {
 	readonly block: CoreBlockId;
 	/** -1 for a block parameter, otherwise the instruction's in-block index. */
@@ -236,6 +243,63 @@ function verifyAttributeValue(
 	}
 	for (const [key, entry] of Object.entries(value as Readonly<Record<string, unknown>>)) {
 		verifyAttributeValue(entry, `${path}.${key}`, nextAncestors);
+	}
+}
+
+/**
+ * Verify a region's `propertyPlacement` decision. Placement is semantic Core
+ * metadata: it tells a backend whether the region's ordinary property producer may
+ * be skipped on the fast path and re-run only where the region declines. A
+ * placement-carrying certificate names the consuming call as its first anchor, so
+ * the proof obligations checkable from the graph alone are that the producer is
+ * claimed, defined in the anchor's block, and observed by nothing but the anchor's
+ * callee operand. The pinned-method-table half of the license is kind-specific and
+ * stays with the selecting pass and the target boundary.
+ */
+function verifyRegionPropertyPlacement(
+	region: CoreRegion,
+	instructionBlocks: ReadonlyMap<CoreInstructionId, CoreBlockId>,
+	instructionOutputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreValueId>>,
+	valueUses: ReadonlyMap<
+		CoreValueId,
+		ReadonlyArray<{ readonly instruction: CoreInstructionId; readonly position: number }>
+	>,
+): void {
+	const data = region.data as Readonly<Record<string, unknown>>;
+	const placement = data.propertyPlacement;
+	if (placement === undefined) return;
+	if (placement !== "in-place" && placement !== "call-fallback") {
+		const description = typeof placement === "string" ? placement : typeof placement;
+		fail(`region ${region.kind} has invalid property placement ${description}`);
+	}
+	if (placement === "in-place") return;
+	const reference = data.property as
+		| Readonly<{ readonly $coreInstruction?: unknown }>
+		| undefined;
+	const named = reference?.$coreInstruction;
+	if (typeof named !== "number") {
+		fail(`region ${region.kind} defers a property producer it does not name`);
+	}
+	const property = named as CoreInstructionId;
+	const call = region.anchors[0]!;
+	if (instructionBlocks.get(property) !== instructionBlocks.get(call)) {
+		fail(
+			`region ${region.kind} defers @${property} across the block of its call @${call}`,
+		);
+	}
+	const outputs = instructionOutputs.get(property) ?? [];
+	if (outputs.length !== 1) {
+		fail(`region ${region.kind} defers @${property}, which is not a single producer`);
+	}
+	const uses = valueUses.get(outputs[0]!) ?? [];
+	if (
+		uses.length !== 1 ||
+		uses[0]?.instruction !== call ||
+		uses[0]?.position !== CORE_CALLEE_POSITION
+	) {
+		fail(
+			`region ${region.kind} defers @${property}, which is not consumed only as the callee of @${call}`,
+		);
 	}
 }
 
@@ -358,6 +422,21 @@ function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry)
 	);
 	const facts = new Map(fn.facts.map((fact) => [fact.id, fact]));
 	const guards = new Map<CoreInstructionId, GuardLocation>();
+	const instructionBlocks = new Map<CoreInstructionId, CoreBlockId>();
+	const instructionOutputs = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
+	const valueUses = new Map<
+		CoreValueId,
+		Array<{ readonly instruction: CoreInstructionId; readonly position: number }>
+	>();
+	const recordUse = (
+		value: CoreValueId,
+		instruction: CoreInstructionId,
+		position: number,
+	): void => {
+		const entries = valueUses.get(value) ?? [];
+		entries.push({ instruction, position });
+		valueUses.set(value, entries);
+	};
 
 	for (const block of fn.blocks) {
 		let exceptionParameters = 0;
@@ -389,6 +468,11 @@ function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry)
 			if (instructionIds.has(instruction.id))
 				fail(`duplicate instruction id @${instruction.id}`);
 			instructionIds.add(instruction.id);
+			instructionBlocks.set(instruction.id, block.id);
+			instructionOutputs.set(instruction.id, instruction.outputs);
+			for (const [position, input] of instruction.inputs.entries()) {
+				recordUse(input, instruction.id, position);
+			}
 			for (const [key, value] of Object.entries(instruction.attributes)) {
 				verifyAttributeValue(value, `instruction @${instruction.id}.${key}`);
 			}
@@ -444,6 +528,13 @@ function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry)
 			fail(`duplicate instruction id @${block.terminator.id}`);
 		}
 		instructionIds.add(block.terminator.id);
+		instructionBlocks.set(block.terminator.id, block.id);
+		for (const value of terminatorUses(block.terminator)) {
+			recordUse(value, block.terminator.id, CORE_CONTROL_FLOW_POSITION);
+		}
+		for (const value of block.handler?.arguments ?? []) {
+			recordUse(value, block.terminator.id, CORE_CONTROL_FLOW_POSITION);
+		}
 		if (block.terminator.kind === "guard") {
 			if (!facts.has(block.terminator.fact)) {
 				fail(
@@ -519,6 +610,12 @@ function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry)
 			instructionIds,
 			claimed,
 			blocks,
+		);
+		verifyRegionPropertyPlacement(
+			region,
+			instructionBlocks,
+			instructionOutputs,
+			valueUses,
 		);
 	}
 
