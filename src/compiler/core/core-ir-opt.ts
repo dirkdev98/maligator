@@ -443,6 +443,18 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 	run(fn, analyses, program) {
 		const compilation = program.compilation;
 		if (compilation === undefined) return fn;
+		if (
+			!fn.blocks.some((block) =>
+				block.instructions.some(
+					(instruction) =>
+						instruction.opcode === "call" &&
+						instruction.attributes.knownBuiltinCall === undefined &&
+						instruction.inputs.length >= 2,
+				),
+			)
+		) {
+			return fn;
+		}
 		const definitions = new Map<CoreValueId, CoreInstruction>();
 		const canonical = analyses.canonicalValues(fn);
 		const representations = new Map(
@@ -4284,6 +4296,7 @@ const foldExactObjectObservations: CoreFunctionPass = {
 				}
 			}
 		}
+		if (origins.size === 0) return fn;
 		const cfg = analyses.controlFlow(fn);
 		let propagated = true;
 		while (propagated) {
@@ -4406,6 +4419,13 @@ const eliminateRedundantTdzChecks: CoreFunctionPass = {
 	name: "eliminate-redundant-tdz-checks",
 	changesControlFlow: true,
 	run(fn, analyses) {
+		if (
+			!fn.blocks.some((block) =>
+				block.instructions.some(({ opcode }) => opcode === "throwIfTdz"),
+			)
+		) {
+			return fn;
+		}
 		const cfg = analyses.controlFlow(fn);
 		const maybeEmpty = new Set<CoreValueId>();
 		for (const block of fn.blocks) {
@@ -5308,6 +5328,101 @@ function constantInstruction(
 	return foldedInstruction(prototype, value);
 }
 
+/** SCCP needs no worklist for an acyclic chain with no constant block argument. */
+function foldLinearPrimitiveConstants(
+	fn: CoreFunction,
+	protectedInstructions: ReadonlySet<CoreInstructionId>,
+	program: CoreProgram,
+): CoreFunction | undefined {
+	if (fn.regions.length > 0) return undefined;
+	const predecessorCounts = new Uint32Array(fn.blocks.length);
+	for (const block of fn.blocks) {
+		if (block.handler !== undefined) return undefined;
+		switch (block.terminator.kind) {
+			case "jump": {
+				const target = block.terminator.edge.block;
+				predecessorCounts[target] = (predecessorCounts[target] ?? 0) + 1;
+				break;
+			}
+			case "return":
+			case "throw":
+			case "unreachable":
+				break;
+			case "branch":
+			case "guard":
+			case "switch":
+				return undefined;
+		}
+	}
+	if (predecessorCounts[fn.entry] !== 0) return undefined;
+	for (const block of fn.blocks) {
+		if (block.id !== fn.entry && predecessorCounts[block.id] !== 1) return undefined;
+	}
+	const order: Array<CoreBlockId> = [];
+	const visited = new Set<CoreBlockId>();
+	let next: CoreBlockId | undefined = fn.entry;
+	while (next !== undefined && !visited.has(next)) {
+		const current: CoreBlockId = next;
+		visited.add(current);
+		order.push(current);
+		const terminator: CoreTerminator = fn.blocks[current]!.terminator;
+		next = terminator.kind === "jump" ? terminator.edge.block : undefined;
+	}
+	if (order.length !== fn.blocks.length || next !== undefined) return undefined;
+
+	const states = new Map<CoreValueId, ConstantLattice>();
+	for (const parameter of fn.blocks[fn.entry]!.parameters) {
+		states.set(parameter.value, OVERDEFINED_CONSTANT);
+	}
+	const representations = new Map<
+		CoreValueId,
+		CoreFunction["values"][number]["representation"]
+	>();
+	let changed = false;
+	const blocks = [...fn.blocks];
+	for (const blockId of order) {
+		const block = fn.blocks[blockId]!;
+		const instructions = block.instructions.map((instruction): CoreInstruction => {
+			const state = evaluateConstantInstruction(instruction, states, program);
+			for (const output of instruction.outputs) states.set(output, state);
+			if (
+				protectedInstructions.has(instruction.id) ||
+				instruction.outputs.length !== 1 ||
+				(instruction.opcode !== "unary" && instruction.opcode !== "binary") ||
+				state.kind !== "constant"
+			) {
+				return instruction;
+			}
+			const replacement = foldedInstruction(instruction, state.value);
+			if (replacement === undefined) return instruction;
+			changed = true;
+			representations.set(instruction.outputs[0]!, replacement.representation);
+			return replacement.instruction;
+		});
+		blocks[blockId] = { ...block, instructions };
+		if (block.terminator.kind !== "jump") continue;
+		const target = fn.blocks[block.terminator.edge.block]!;
+		for (const [index, argument] of block.terminator.edge.arguments.entries()) {
+			const parameter = target.parameters[index];
+			if (parameter === undefined) continue;
+			const state = states.get(argument) ?? UNKNOWN_CONSTANT;
+			// Generic SCCP materializes constant phis. Keep that path authoritative.
+			if (state.kind === "constant") return undefined;
+			states.set(parameter.value, state);
+		}
+	}
+	if (!changed) return fn;
+	return {
+		...fn,
+		blocks,
+		values: fn.values.map((value) => {
+			const representation = representations.get(value.id);
+			return representation === undefined ? value : { ...value, representation };
+		}),
+		mutationEpoch: fn.mutationEpoch + 1,
+	};
+}
+
 /** Sparse conditional constant propagation over executable ordinary and exceptional edges. */
 const sparseConditionalConstantPropagation: CoreFunctionPass = {
 	name: "sparse-conditional-constant-propagation",
@@ -5316,6 +5431,8 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 		const protectedInstructions = new Set(
 			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
 		);
+		const linear = foldLinearPrimitiveConstants(fn, protectedInstructions, program);
+		if (linear !== undefined) return linear;
 		const cfg = analyses.controlFlow(fn);
 		const states = new Map<CoreValueId, ConstantLattice>(
 			fn.values.map(({ id }) => [id, UNKNOWN_CONSTANT] as const),
@@ -5651,10 +5768,80 @@ function immediateForValue(
 const refineValueRepresentations: CoreFunctionPass = {
 	name: "refine-value-representations",
 	run(fn, analyses) {
-		const cfg = analyses.controlFlow(fn);
 		const representations = new Map(
 			fn.values.map(({ id, representation }) => [id, representation] as const),
 		);
+		const ordinaryIncoming = fn.blocks.map(() => new Array<CoreEdge>());
+		const handlerTargets = new Set<CoreBlockId>();
+		for (const source of fn.blocks) {
+			for (const edge of coreTerminatorEdges(source.terminator)) {
+				ordinaryIncoming[edge.block]!.push(edge);
+			}
+			if (source.handler !== undefined) handlerTargets.add(source.handler.block);
+		}
+		const hasCandidate = fn.blocks.some((block) => {
+			if (
+				block.id !== fn.entry &&
+				!block.parameters.some(({ role }) => role === "exception") &&
+				block.parameters.some(({ value }, index) => {
+					if (representations.get(value) !== "boxed") return false;
+					if (handlerTargets.has(block.id)) return true;
+					const candidates = new Set(
+						ordinaryIncoming[block.id]!.map(({ arguments: arguments_ }) =>
+							representations.get(arguments_[index]!),
+						),
+					);
+					if (candidates.size !== 1) return false;
+					const candidate = [...candidates][0];
+					return candidate === "f64" || candidate === "boolean";
+				})
+			) {
+				return true;
+			}
+			return block.instructions.some((instruction) => {
+				const operator = instructionAttribute(instruction, "operator");
+				return instruction.outputs.some((output, index) => {
+					if (representations.get(output) !== "boxed") return false;
+					if (
+						instruction.opcode === "createF64" ||
+						instruction.opcode === "createNumber" ||
+						instruction.opcode === "mathUnaryNumber" ||
+						instruction.opcode === "mathBinaryNumber"
+					) {
+						return true;
+					}
+					if (
+						index === 0 &&
+						(instruction.opcode === "createBoolean" ||
+							instruction.opcode === "guardFunctionIndex" ||
+							instruction.opcode === "hasPrivate" ||
+							instruction.opcode === "isEmpty" ||
+							instruction.opcode === "typeofCompare" ||
+							(instruction.opcode === "binary" &&
+								COMPARISON_REPRESENTATION_OPERATORS.has(String(operator))) ||
+							(instruction.opcode === "unary" && operator === "!"))
+					) {
+						return true;
+					}
+					if (index !== 0 || instruction.inputs.length === 0) return false;
+					if (instruction.opcode === "move" && instruction.inputs.length === 1) {
+						const input = representations.get(instruction.inputs[0]!);
+						return input === "f64" || input === "boolean";
+					}
+					return (
+						((instruction.opcode === "binary" &&
+							NUMERIC_BINARY_REPRESENTATION_OPERATORS.has(String(operator))) ||
+							(instruction.opcode === "unary" &&
+								["-", "+", "~", "tonumeric", "increment", "decrement"].includes(
+									String(operator),
+								))) &&
+						instruction.inputs.every((input) => representations.get(input) === "f64")
+					);
+				});
+			});
+		});
+		if (!hasCandidate) return fn;
+		const cfg = analyses.controlFlow(fn);
 		let changed = false;
 		let progress = true;
 		const narrow = (
@@ -5770,15 +5957,28 @@ const simplifyAlgebraicValues: CoreFunctionPass = {
 	name: "simplify-algebraic-values",
 	ablation: "constant-folding",
 	run(fn) {
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		if (
+			!fn.blocks.some((block) =>
+				block.instructions.some(
+					(instruction) =>
+						(instruction.opcode === "binary" ||
+							instruction.opcode === "mathUnaryNumber" ||
+							instruction.opcode === "mathBinaryNumber") &&
+						instruction.outputs.some((output) => representations.get(output) !== "boxed"),
+				),
+			)
+		) {
+			return fn;
+		}
 		const definitions = new Map<CoreValueId, CoreInstruction>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				for (const output of instruction.outputs) definitions.set(output, instruction);
 			}
 		}
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
 		const protectedInstructions = new Set(
 			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
 		);
@@ -5958,6 +6158,17 @@ const simplifyControlFlow: CoreFunctionPass = {
 	name: "simplify-control-flow",
 	changesControlFlow: true,
 	run(fn) {
+		if (
+			!fn.blocks.some(
+				(block) =>
+					block.handler !== undefined ||
+					block.terminator.kind === "branch" ||
+					block.terminator.kind === "switch" ||
+					block.terminator.kind === "guard",
+			)
+		) {
+			return fn;
+		}
 		const constants = new Map<CoreValueId, CoreImmediate>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -6317,9 +6528,14 @@ function valueNumberingKey(
 	instruction: CoreInstruction,
 	memoryVersion: string,
 ): string | undefined {
+	if (!isValueNumberingCandidate(instruction)) return undefined;
+	return `${instruction.opcode}\0${instruction.inputs.join(",")}\0${stableAttributes(instruction)}\0${memoryVersion}`;
+}
+
+function isValueNumberingCandidate(instruction: CoreInstruction): boolean {
 	const descriptor = coreOpcodeRegistry.require(instruction.opcode);
 	const effects = effectiveInstructionEffects(instruction);
-	if (
+	return !(
 		instruction.outputs.length === 0 ||
 		!descriptor.discardable ||
 		IDENTITY_PRODUCING_OPCODES.has(instruction.opcode) ||
@@ -6328,18 +6544,121 @@ function valueNumberingKey(
 		effects.writes.length > 0 ||
 		effects.callsUserCode ||
 		effects.maySuspend
+	);
+}
+
+/** A duplicate GVN key requires two eligible instructions with the same opcode. */
+function mayCopyOrValueNumber(fn: CoreFunction): boolean {
+	const candidates = new Set<string>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				instruction.opcode === "move" &&
+				instruction.inputs.length === 1 &&
+				instruction.outputs.length === 1
+			) {
+				return true;
+			}
+			if (!isValueNumberingCandidate(instruction)) continue;
+			if (candidates.has(instruction.opcode)) return true;
+			candidates.add(instruction.opcode);
+		}
+	}
+	return false;
+}
+
+/** Use the local form when every candidate shares one block and reads no memory. */
+function localCopyAndValueNumber(fn: CoreFunction): CoreFunction | undefined {
+	if (fn.regions.length > 0) return undefined;
+	const candidateBlocks = fn.blocks.filter((block) =>
+		block.instructions.some(
+			(instruction) =>
+				(instruction.opcode === "move" &&
+					instruction.inputs.length === 1 &&
+					instruction.outputs.length === 1) ||
+				isValueNumberingCandidate(instruction),
+		),
+	);
+	if (candidateBlocks.length !== 1) return undefined;
+	const candidateBlock = candidateBlocks[0]!;
+	if (
+		candidateBlock.instructions.some(
+			(instruction) =>
+				isValueNumberingCandidate(instruction) &&
+				effectiveInstructionEffects(instruction).reads.length > 0,
+		)
 	) {
 		return undefined;
 	}
-	return `${instruction.opcode}\0${instruction.inputs.join(",")}\0${stableAttributes(instruction)}\0${memoryVersion}`;
+	const replacements = new Map<CoreValueId, CoreValueId>();
+	const removedInstructions = new Set<CoreInstructionId>();
+	const available = new Map<string, ReadonlyArray<CoreValueId>>();
+	const representations = new Map(
+		fn.values.map(({ id, representation }) => [id, representation] as const),
+	);
+	const instructions: Array<CoreInstruction> = [];
+	for (const original of candidateBlock.instructions) {
+		const instruction: CoreInstruction = {
+			...original,
+			inputs: original.inputs.map((value) => resolveValue(value, replacements)),
+		};
+		if (
+			instruction.opcode === "move" &&
+			instruction.inputs.length === 1 &&
+			instruction.outputs.length === 1
+		) {
+			replacements.set(instruction.outputs[0]!, instruction.inputs[0]!);
+			removedInstructions.add(instruction.id);
+			continue;
+		}
+		const key = valueNumberingKey(instruction, "");
+		if (key !== undefined) {
+			const previous = available.get(key);
+			if (
+				previous !== undefined &&
+				previous.length === instruction.outputs.length &&
+				instruction.outputs.every(
+					(output, index) =>
+						representations.get(output) === representations.get(previous[index]!),
+				)
+			) {
+				for (const [index, output] of instruction.outputs.entries()) {
+					replacements.set(output, previous[index]!);
+				}
+				removedInstructions.add(instruction.id);
+				continue;
+			}
+			available.set(key, instruction.outputs);
+		}
+		instructions.push(instruction);
+	}
+	if (removedInstructions.size === 0) return fn;
+	const blocks = fn.blocks.map((block) =>
+		block.id === candidateBlock.id ? { ...block, instructions } : block,
+	);
+	return pruneVacuousHandlers(
+		rewriteFunction(fn, blocks, replacements, removedInstructions),
+	);
 }
 
 const copyAndValueNumber: CoreFunctionPass = {
 	name: "copy-and-value-number",
 	ablation: "constant-folding",
 	run(fn, analyses) {
+		if (!mayCopyOrValueNumber(fn)) return fn;
+		const local = localCopyAndValueNumber(fn);
+		if (local !== undefined) return local;
 		const cfg = analyses.controlFlow(fn);
-		const memoryVersions = reachingMemoryVersions(fn, cfg);
+		const needsMemoryVersions = fn.blocks.some((block) =>
+			block.instructions.some(
+				(instruction) =>
+					isValueNumberingCandidate(instruction) &&
+					effectiveInstructionEffects(instruction).reads.length > 0,
+			),
+		);
+		const memoryVersions = needsMemoryVersions
+			? reachingMemoryVersions(fn, cfg)
+			: new Map<CoreInstructionId, string>();
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removedInstructions = new Set<number>();
 		const protectedInstructions = new Set(
@@ -6552,6 +6871,17 @@ const eliminateTrivialBlockArguments: CoreFunctionPass = {
 	name: "eliminate-trivial-block-arguments",
 	changesControlFlow: true,
 	run(fn, analyses) {
+		if (
+			!fn.blocks.some(
+				(block) =>
+					block.id !== fn.entry &&
+					block.id !== fn.bodyEntry &&
+					block.parameters.length > 0 &&
+					!block.parameters.some(({ role }) => role === "exception"),
+			)
+		) {
+			return fn;
+		}
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const uses = collectUses(fn);
@@ -6742,6 +7072,7 @@ const foldEmptyForwardingBlocks: CoreFunctionPass = {
 	name: "fold-empty-forwarding-blocks",
 	changesControlFlow: true,
 	run(fn, _analyses, program) {
+		if (fn.blocks.length <= 1) return fn;
 		const useSites = new Map<CoreValueId, Set<string>>();
 		const addUse = (value: CoreValueId, site: string): void => {
 			const sites = useSites.get(value) ?? new Set<string>();
@@ -6900,6 +7231,25 @@ const combineLinearBlocks: CoreFunctionPass = {
 	name: "combine-linear-blocks",
 	changesControlFlow: true,
 	run(fn) {
+		if (
+			!fn.blocks.some((predecessor) => {
+				if (predecessor.handler !== undefined || predecessor.terminator.kind !== "jump") {
+					return false;
+				}
+				const targetId = predecessor.terminator.edge.block;
+				if (
+					targetId === predecessor.id ||
+					targetId === fn.entry ||
+					targetId === fn.bodyEntry
+				) {
+					return false;
+				}
+				const target = fn.blocks[targetId];
+				return target !== undefined && target.handler === undefined;
+			})
+		) {
+			return fn;
+		}
 		let result = fn;
 		for (;;) {
 			const cfg = buildCoreControlFlow(result, coreOpcodeRegistry);
