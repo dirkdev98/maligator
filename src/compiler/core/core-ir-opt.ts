@@ -21,7 +21,7 @@ import {
 	coreCanonicalValueRoots,
 	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
 import {
 	coreMemoryAccesses,
 	coreMemoryLocationFamily,
@@ -65,7 +65,7 @@ import type {
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreFactId, coreInstructionId, coreValueId } from "./core-ir.ts";
+import { coreBlockId, coreFactId, coreInstructionId, coreValueId } from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
 	readonly maxRounds?: number;
@@ -304,7 +304,7 @@ function coreRootedValueCount(fn: CoreFunction): number {
 		}
 	}
 	const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
-	const loopBackedges = new Set(cfg.loops.flatMap(({ backedges }) => [...backedges]));
+	const loopBackedges = new Set(cfg.loops.flatMap(({ latches }) => [...latches]));
 	const rooted = new Set<CoreValueId>();
 	for (const block of fn.blocks) {
 		const live = new Set(liveOut[block.id]);
@@ -1769,14 +1769,14 @@ const annotateFreshDenseIndexedReserves: CoreFunctionPass = {
 				for (const loop of cfg.loops) {
 					if (
 						loop.blocks.size !== 2 ||
-						loop.backedges.size !== 1 ||
+						loop.latches.size !== 1 ||
 						loop.blocks.has(block.id) ||
 						!cfg.dominates(block.id, loop.header)
 					) {
 						continue;
 					}
 					const header = fn.blocks[loop.header]!;
-					const backedgeBlock = [...loop.backedges][0]!;
+					const backedgeBlock = [...loop.latches][0]!;
 					const backedge = cfg.predecessors[loop.header]!.find(
 						(edge) => edge.kind === "ordinary" && edge.from === backedgeBlock,
 					);
@@ -2337,8 +2337,8 @@ const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
 		const boundedCalls = new Set<CoreInstructionId>();
 		const primitiveLengths = new Set<CoreInstructionId>();
 		for (const loop of cfg.loops) {
-			if (loop.backedges.size !== 1) continue;
-			const backedge = [...loop.backedges][0]!;
+			if (loop.latches.size !== 1) continue;
+			const backedge = [...loop.latches][0]!;
 			const header = fn.blocks[loop.header]!;
 			const branch = header.terminator;
 			if (
@@ -3336,8 +3336,8 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 		);
 		const regions = [...fn.regions];
 		for (const loop of cfg.loops) {
-			if (loop.backedges.size !== 1) continue;
-			const backedge = [...loop.backedges][0]!;
+			if (loop.latches.size !== 1) continue;
+			const backedge = [...loop.latches][0]!;
 			const header = fn.blocks[loop.header]!;
 			const backedgeBlock = fn.blocks[backedge]!;
 			const branch = header.terminator;
@@ -7242,10 +7242,160 @@ const eliminateDeadStores: CoreFunctionPass = {
 	},
 };
 
+function loopHasExceptionalControl(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+	loop: CoreNaturalLoop,
+): boolean {
+	return [...loop.blocks].some(
+		(block) =>
+			fn.blocks[block]!.handler !== undefined ||
+			cfg.predecessors[block]!.some(({ kind }) => kind === "exceptional"),
+	);
+}
+
 /**
- * Hoist speculatable SSA expressions from reducible loops with an existing
- * preheader. The sparse dependency worklist visits each candidate input once;
- * cyclic phis and values produced by effectful instructions remain variant.
+ * Split the ordinary edges that keep one reducible loop from canonical form.
+ * Forwarding blocks mirror the destination's parameters, so the transform never
+ * invents a value merge or changes an existing phi-like block argument.
+ */
+function canonicalizeNaturalLoop(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+	loop: CoreNaturalLoop,
+): CoreFunction | undefined {
+	if (
+		loop.canonical ||
+		loop.header === fn.entry ||
+		loopHasExceptionalControl(fn, cfg, loop) ||
+		cfg.irreducibleCycles.some(({ blocks }) =>
+			[...loop.blocks].some((block) => blocks.has(block)),
+		)
+	) {
+		return undefined;
+	}
+	const headerIncoming = cfg.predecessors[loop.header]!.filter(
+		({ kind }) => kind === "ordinary",
+	);
+	const outside = headerIncoming.filter(({ from }) => !loop.blocks.has(from));
+	if (outside.length === 0) return undefined;
+
+	const retarget = new Map<string, CoreBlockId>();
+	const blocks = [...fn.blocks];
+	const values = [...fn.values];
+	let nextInstruction = nextInstructionId(fn);
+	let nextValue = (fn.values.at(-1)?.id ?? -1) + 1;
+	const edgeKey = (from: CoreBlockId, to: CoreBlockId): string => `${from}\0${to}`;
+	const appendForwarder = (target: CoreBlockId): CoreBlockId | undefined => {
+		const destination = blocks[target];
+		if (
+			destination === undefined ||
+			destination.parameters.some(({ role }) => role === "exception")
+		) {
+			return undefined;
+		}
+		const id = coreBlockId(blocks.length);
+		const parameters = destination.parameters.map((parameter, index) => {
+			const value = coreValueId(nextValue++);
+			values.push({
+				id: value,
+				representation: parameter.representation,
+				definition: { kind: "block-parameter", block: id, index },
+			});
+			return { ...parameter, value };
+		});
+		blocks.push({
+			id,
+			parameters,
+			instructions: [],
+			terminator: {
+				kind: "jump",
+				id: coreInstructionId(nextInstruction++),
+				edge: { block: target, arguments: parameters.map(({ value }) => value) },
+			},
+		});
+		return id;
+	};
+
+	if (loop.preheader === undefined) {
+		const preheader = appendForwarder(loop.header);
+		if (preheader === undefined) return undefined;
+		for (const { from } of outside) retarget.set(edgeKey(from, loop.header), preheader);
+	}
+	const existingLatch = loop.latches.size === 1 ? [...loop.latches][0]! : undefined;
+	const existingLatchTerminator =
+		existingLatch === undefined ? undefined : fn.blocks[existingLatch]!.terminator;
+	const canonicalLatch =
+		existingLatch !== undefined &&
+		existingLatchTerminator?.kind === "jump" &&
+		existingLatchTerminator.edge.block === loop.header &&
+		cfg.successors[existingLatch]!.length === 1;
+	if (!canonicalLatch) {
+		const latch = appendForwarder(loop.header);
+		if (latch === undefined) return undefined;
+		for (const from of loop.latches) retarget.set(edgeKey(from, loop.header), latch);
+	}
+	const sharedExitTargets = new Set(
+		loop.exits.filter(({ dedicated }) => !dedicated).map(({ to }) => to),
+	);
+	for (const target of sharedExitTargets) {
+		if (target === fn.entry) return undefined;
+		const exit = appendForwarder(target);
+		if (exit === undefined) return undefined;
+		for (const { from, to } of loop.exits) {
+			if (to === target) retarget.set(edgeKey(from, to), exit);
+		}
+	}
+	if (retarget.size === 0) return undefined;
+	for (const block of fn.blocks) {
+		const terminator = remapTerminatorEdges(block.terminator, (edge) => {
+			const target = retarget.get(edgeKey(block.id, edge.block));
+			return target === undefined ? edge : { ...edge, block: target };
+		});
+		if (terminator !== block.terminator) blocks[block.id] = { ...block, terminator };
+	}
+	return {
+		...fn,
+		blocks,
+		values,
+		mutationEpoch: fn.mutationEpoch + 1,
+	};
+}
+
+/**
+ * Give every ordinary reducible loop one preheader, one latch, and dedicated
+ * exits. Irreducible and exceptional cycles deliberately remain in their correct
+ * unspecialized form. Rebuilding the linear-time CFG after each changed loop
+ * keeps nested-loop membership exact instead of transforming against stale sets.
+ */
+const canonicalizeLoops: CoreFunctionPass = {
+	name: "canonicalize-loops",
+	changesControlFlow: true,
+	run(fn) {
+		let current = fn;
+		const maximumTransforms = fn.blocks.length * 2 + 16;
+		for (let iteration = 0; iteration < maximumTransforms; iteration += 1) {
+			const cfg = buildCoreControlFlow(current, coreOpcodeRegistry);
+			let transformed: CoreFunction | undefined;
+			for (const loop of [...cfg.loops].sort(
+				(left, right) => left.blocks.size - right.blocks.size,
+			)) {
+				transformed = canonicalizeNaturalLoop(current, cfg, loop);
+				if (transformed !== undefined) break;
+			}
+			if (transformed === undefined) return current;
+			current = transformed;
+		}
+		throw new Error(
+			`Core loop canonicalization did not converge after ${maximumTransforms} transforms`,
+		);
+	},
+};
+
+/**
+ * Hoist speculatable SSA expressions from canonical reducible loops. The sparse
+ * dependency worklist visits each candidate input once; cyclic phis and values
+ * produced by effectful instructions remain variant.
  */
 const loopInvariantCodeMotion: CoreFunctionPass = {
 	name: "loop-invariant-code-motion",
@@ -8128,6 +8278,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	simplifyControlFlow,
 	foldEmptyForwardingBlocks,
 	combineLinearBlocks,
+	canonicalizeLoops,
 	foldStaticPropertyKeys,
 	refineOwnDataCellAccesses,
 	forwardMemoryAccesses,

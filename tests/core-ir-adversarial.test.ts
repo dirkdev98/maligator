@@ -272,7 +272,7 @@ describe("adversarial Core graphs", () => {
 
 		expect(cfg.loops).toHaveLength(1);
 		expect(cfg.loops[0]!.header).toBe(header);
-		expect(cfg.loops[0]!.backedges).toEqual(new Set([body]));
+		expect(cfg.loops[0]!.latches).toEqual(new Set([body]));
 		expect(fn.blocks[header]!.parameters).toEqual([
 			{ value: carried, representation: "boxed", role: "value" },
 		]);
@@ -337,6 +337,8 @@ describe("adversarial Core graphs", () => {
 		const source = builder.finish(entry);
 		const cfgBefore = buildCoreControlFlow(source, coreOpcodeRegistry);
 		expect(cfgBefore.loops).toHaveLength(0);
+		expect(cfgBefore.irreducibleCycles).toHaveLength(1);
+		expect(cfgBefore.irreducibleCycles[0]!.entries).toEqual(new Set([first, second]));
 		expect(cfgBefore.dominates(first, second)).toBe(false);
 		expect(cfgBefore.dominates(second, first)).toBe(false);
 
@@ -346,6 +348,7 @@ describe("adversarial Core graphs", () => {
 
 		expect(fn.blocks).toHaveLength(4);
 		expect(cfg.loops).toHaveLength(0);
+		expect(cfg.irreducibleCycles).toHaveLength(1);
 		expect(cfg.dominates(entry, first)).toBe(true);
 		expect(cfg.dominates(entry, second)).toBe(true);
 		expect(cfg.dominates(first, second)).toBe(false);

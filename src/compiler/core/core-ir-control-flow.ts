@@ -18,8 +18,25 @@ export interface CoreControlEdge {
 
 export interface CoreNaturalLoop {
 	readonly header: CoreBlockId;
-	readonly backedges: ReadonlySet<CoreBlockId>;
+	/** Ordinary predecessors whose edge closes the loop at `header`. */
+	readonly latches: ReadonlySet<CoreBlockId>;
 	readonly blocks: ReadonlySet<CoreBlockId>;
+	/** Unique ordinary entry block when the loop already has canonical form. */
+	readonly preheader?: CoreBlockId;
+	readonly exits: ReadonlyArray<{
+		readonly from: CoreBlockId;
+		readonly to: CoreBlockId;
+		/** The target has no predecessor from outside this loop. */
+		readonly dedicated: boolean;
+	}>;
+	/** Preheader, one identifiable latch, and dedicated ordinary exits. */
+	readonly canonical: boolean;
+}
+
+/** A cyclic ordinary SCC that has no single dominating entry. */
+export interface CoreIrreducibleCycle {
+	readonly blocks: ReadonlySet<CoreBlockId>;
+	readonly entries: ReadonlySet<CoreBlockId>;
 }
 
 export interface CoreControlFlow {
@@ -29,6 +46,7 @@ export interface CoreControlFlow {
 	readonly reversePostorder: ReadonlyArray<CoreBlockId>;
 	readonly immediateDominators: ReadonlyArray<CoreBlockId | null>;
 	readonly loops: ReadonlyArray<CoreNaturalLoop>;
+	readonly irreducibleCycles: ReadonlyArray<CoreIrreducibleCycle>;
 	dominates(dominator: CoreBlockId, block: CoreBlockId): boolean;
 	/**
 	 * Whether a value produced inside `dominator` is available at `block` entry.
@@ -365,6 +383,97 @@ function buildDominatorPredicate(
 	};
 }
 
+/**
+ * Find cyclic ordinary SCCs that cannot be represented by one natural-loop
+ * header. Two iterative Kosaraju walks keep the analysis linear without putting
+ * a source-sized CFG on the JavaScript call stack.
+ */
+function findIrreducibleCycles(
+	entry: CoreBlockId,
+	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	reachable: ReadonlySet<CoreBlockId>,
+	dominates: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
+): ReadonlyArray<CoreIrreducibleCycle> {
+	const visited = new Uint8Array(successors.length);
+	const postorder: Array<CoreBlockId> = [];
+	for (const start of reachable) {
+		if (visited[start] !== 0) continue;
+		visited[start] = 1;
+		const stack: Array<{ readonly block: CoreBlockId; next: number }> = [
+			{ block: start, next: 0 },
+		];
+		while (stack.length > 0) {
+			const frame = stack[stack.length - 1]!;
+			const outgoing = successors[frame.block]!;
+			let advanced = false;
+			while (frame.next < outgoing.length) {
+				const edge = outgoing[frame.next++]!;
+				if (
+					edge.kind !== "ordinary" ||
+					!reachable.has(edge.to) ||
+					visited[edge.to] !== 0
+				) {
+					continue;
+				}
+				visited[edge.to] = 1;
+				stack.push({ block: edge.to, next: 0 });
+				advanced = true;
+				break;
+			}
+			if (advanced) continue;
+			postorder.push(frame.block);
+			stack.pop();
+		}
+	}
+
+	const assigned = new Uint8Array(successors.length);
+	const irreducible: Array<CoreIrreducibleCycle> = [];
+	for (let order = postorder.length - 1; order >= 0; order -= 1) {
+		const start = postorder[order]!;
+		if (assigned[start] !== 0) continue;
+		assigned[start] = 1;
+		const blocks = new Set<CoreBlockId>();
+		const pending: Array<CoreBlockId> = [start];
+		while (pending.length > 0) {
+			const block = pending.pop()!;
+			blocks.add(block);
+			for (const edge of predecessors[block]!) {
+				if (
+					edge.kind !== "ordinary" ||
+					!reachable.has(edge.from) ||
+					assigned[edge.from] !== 0
+				) {
+					continue;
+				}
+				assigned[edge.from] = 1;
+				pending.push(edge.from);
+			}
+		}
+		const cyclic =
+			blocks.size > 1 ||
+			successors[start]!.some((edge) => edge.kind === "ordinary" && edge.to === start);
+		if (!cyclic) continue;
+		const entries = new Set<CoreBlockId>();
+		if (blocks.has(entry)) entries.add(entry);
+		for (const block of blocks) {
+			for (const edge of predecessors[block]!) {
+				if (!blocks.has(edge.from)) entries.add(block);
+			}
+		}
+		const header = entries.size === 1 ? [...entries][0]! : undefined;
+		if (header === undefined || [...blocks].some((block) => !dominates(header, block))) {
+			irreducible.push({ blocks, entries });
+		}
+	}
+	const firstBlock = (cycle: CoreIrreducibleCycle): number => {
+		let first = Number.POSITIVE_INFINITY;
+		for (const block of cycle.blocks) first = Math.min(first, block);
+		return first;
+	};
+	return irreducible.sort((left, right) => firstBlock(left) - firstBlock(right));
+}
+
 export interface BuildCoreControlFlowOptions {
 	readonly exceptions?: boolean;
 }
@@ -461,19 +570,19 @@ export function buildCoreControlFlow(
 			splitDominates(exitNode(dominator), entryNode(block));
 	}
 
-	const backedgesByHeader = new Map<CoreBlockId, Set<CoreBlockId>>();
+	const latchesByHeader = new Map<CoreBlockId, Set<CoreBlockId>>();
 	for (const from of reachable) {
 		for (const edge of successors[from]!) {
 			if (edge.kind !== "ordinary" || !dominates(edge.to, from)) continue;
-			const backedges = backedgesByHeader.get(edge.to) ?? new Set<CoreBlockId>();
-			backedges.add(from);
-			backedgesByHeader.set(edge.to, backedges);
+			const latches = latchesByHeader.get(edge.to) ?? new Set<CoreBlockId>();
+			latches.add(from);
+			latchesByHeader.set(edge.to, latches);
 		}
 	}
 	const loops: Array<CoreNaturalLoop> = [];
-	for (const [header, backedges] of backedgesByHeader) {
-		const blocks = new Set<CoreBlockId>([header, ...backedges]);
-		const pending = [...backedges].filter((backedge) => backedge !== header);
+	for (const [header, latches] of latchesByHeader) {
+		const blocks = new Set<CoreBlockId>([header, ...latches]);
+		const pending = [...latches].filter((latch) => latch !== header);
 		while (pending.length > 0) {
 			const current = pending.pop()!;
 			for (const predecessor of predecessors[current]!) {
@@ -488,8 +597,66 @@ export function buildCoreControlFlow(
 				if (predecessor.from !== header) pending.push(predecessor.from);
 			}
 		}
-		loops.push({ header, backedges, blocks });
+		const incoming = predecessors[header]!;
+		const outside = incoming.filter(
+			(edge) => edge.kind === "ordinary" && !blocks.has(edge.from),
+		);
+		const outsideSource = outside.length === 1 ? outside[0]!.from : undefined;
+		const outsideTerminator =
+			outsideSource === undefined ? undefined : fn.blocks[outsideSource]!.terminator;
+		const preheader =
+			outsideSource !== undefined &&
+			incoming.length === outside.length + latches.size &&
+			outsideTerminator?.kind === "jump" &&
+			outsideTerminator.edge.block === header &&
+			successors[outsideSource]!.length === 1
+				? outsideSource
+				: undefined;
+		const exitByEdge = new Map<
+			string,
+			{ readonly from: CoreBlockId; readonly to: CoreBlockId }
+		>();
+		for (const from of blocks) {
+			for (const edge of successors[from]!) {
+				if (edge.kind !== "ordinary" || blocks.has(edge.to)) continue;
+				exitByEdge.set(`${from}\0${edge.to}`, { from, to: edge.to });
+			}
+		}
+		const exits = [...exitByEdge.values()].map(({ from, to }) => ({
+			from,
+			to,
+			dedicated: predecessors[to]!.every(
+				(edge) => edge.kind === "ordinary" && blocks.has(edge.from),
+			),
+		}));
+		const latch = latches.size === 1 ? [...latches][0]! : undefined;
+		const latchTerminator =
+			latch === undefined ? undefined : fn.blocks[latch]!.terminator;
+		const canonicalLatch =
+			latch !== undefined &&
+			latchTerminator?.kind === "jump" &&
+			latchTerminator.edge.block === header &&
+			successors[latch]!.length === 1;
+		loops.push({
+			header,
+			latches,
+			blocks,
+			...(preheader === undefined ? {} : { preheader }),
+			exits,
+			canonical:
+				preheader !== undefined &&
+				canonicalLatch &&
+				exits.every(({ dedicated }) => dedicated),
+		});
 	}
+	loops.sort((left, right) => left.header - right.header);
+	const irreducibleCycles = findIrreducibleCycles(
+		fn.entry,
+		successors,
+		predecessors,
+		reachable,
+		dominates,
+	);
 
 	return {
 		successors,
@@ -498,6 +665,7 @@ export function buildCoreControlFlow(
 		reversePostorder,
 		immediateDominators: parents,
 		loops,
+		irreducibleCycles,
 		dominates,
 		instructionDominatesBlock,
 	};

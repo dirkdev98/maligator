@@ -694,9 +694,7 @@ export function coreRegisterClasses(
 	}
 	const gcRootValues = new Set<CoreValueId>();
 	const safepoints = new Set<CoreInstructionId>();
-	const loopBackedges = new Set(
-		controlFlow.loops.flatMap(({ backedges }) => [...backedges]),
-	);
+	const loopBackedges = new Set(controlFlow.loops.flatMap(({ latches }) => [...latches]));
 	for (const block of core.blocks) {
 		const live = new Set(liveOut[block.id]);
 		// Successor liveness is expressed in the successor's SSA parameters, while

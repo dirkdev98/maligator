@@ -1882,13 +1882,14 @@ describe("Core IR optimizer", () => {
 		const original = builder.finish(entry);
 		const originalLoop = buildCoreControlFlow(original, coreOpcodeRegistry).loops;
 		expect(originalLoop).toHaveLength(1);
-		expect(originalLoop[0]!.backedges).toEqual(new Set([leftLatch, rightLatch]));
+		expect(originalLoop[0]!.latches).toEqual(new Set([leftLatch, rightLatch]));
 
 		const outcome = executeCoreOptimizations(
 			{ ...coreProgram([original]), globalCount: 1 },
 			{ verification: "per-pass" },
 		);
 		const fn = outcome.program.functions[0]!;
+		const optimizedLoop = buildCoreControlFlow(fn, coreOpcodeRegistry).loops;
 		expect(
 			outcome.passes.some(
 				({ name, changed }) => name === "loop-invariant-code-motion" && changed,
@@ -1898,6 +1899,67 @@ describe("Core IR optimizer", () => {
 			"createF64",
 			"mathUnaryNumber",
 		]);
+		expect(optimizedLoop).toHaveLength(1);
+		expect(optimizedLoop[0]).toMatchObject({ canonical: true });
+		expect(optimizedLoop[0]!.preheader).toBeDefined();
+		expect(optimizedLoop[0]!.latches.size).toBe(1);
+		expect(optimizedLoop[0]!.exits.every(({ dedicated }) => dedicated)).toBe(true);
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("forms a preheader and dedicated exit for a reducible shared-edge loop", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 3 });
+		const entry = builder.createBlock([{}, {}, {}]);
+		const [path, enter, iterate] = builder
+			.block(entry)
+			.parameters.map(({ value }) => value);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const header = builder.createBlock();
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: path!,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.setTerminator(left, {
+			kind: "branch",
+			condition: enter!,
+			consequent: { block: header, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: iterate!,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: path! });
+		const source = builder.finish(entry);
+		const before = buildCoreControlFlow(source, coreOpcodeRegistry).loops[0]!;
+		expect(before.preheader).toBeUndefined();
+		expect(before.exits.some(({ dedicated }) => !dedicated)).toBe(true);
+
+		const outcome = executeCoreOptimizations(coreProgram([source]), {
+			verification: "per-pass",
+		});
+		const fn = outcome.program.functions[0]!;
+		const loops = buildCoreControlFlow(fn, coreOpcodeRegistry).loops;
+		expect(loops).toHaveLength(1);
+		expect(loops[0]).toMatchObject({ canonical: true });
+		expect(loops[0]!.preheader).toBeDefined();
+		expect(loops[0]!.latches.size).toBe(1);
+		expect(loops[0]!.exits.every(({ dedicated }) => dedicated)).toBe(true);
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 	});
 
