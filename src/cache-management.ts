@@ -25,6 +25,8 @@ const PRUNE_LOCK = ".prune-lock";
 const MAINTENANCE_FILE = ".maintenance.json";
 const TEST_SUITE_SMOKE_FILE = "test-suite-smoke.json";
 const GLOBAL_CLEAR_LOCK = ".clear-lock";
+const LEASE_HEARTBEAT_MS = 30_000;
+const LEASE_STALE_AFTER_MS = 10 * 60 * 1000;
 
 interface CacheFamilyPolicy {
 	path: string;
@@ -193,10 +195,13 @@ function activeCacheCommands(
 		const leasePath = path.join(directory, name);
 		try {
 			const record = JSON.parse(readFileSync(leasePath, "utf8")) as CacheLeaseRecord;
+			const heartbeatIsRecent =
+				Date.now() - statSync(leasePath).mtimeMs <= LEASE_STALE_AFTER_MS;
 			if (
 				Number.isInteger(record.pid) &&
 				typeof record.startedAt === "number" &&
 				typeof record.command === "string" &&
+				heartbeatIsRecent &&
 				processIsAlive(record.pid)
 			) {
 				active.push(record);
@@ -268,12 +273,22 @@ export function createCacheLease(
 			"Maligator cache maintenance started concurrently; retry the command",
 		);
 	}
+	const heartbeat = setInterval(() => {
+		try {
+			const now = new Date();
+			utimesSync(leasePath, now, now);
+		} catch {
+			// A concurrent maintenance failure or external removal must not abort the command.
+		}
+	}, LEASE_HEARTBEAT_MS);
+	heartbeat.unref();
 	let released = false;
 	return {
 		path: leasePath,
 		release() {
 			if (released) return;
 			released = true;
+			clearInterval(heartbeat);
 			rmSync(leasePath, { force: true });
 		},
 	};

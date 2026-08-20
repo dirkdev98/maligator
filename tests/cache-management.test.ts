@@ -101,6 +101,19 @@ describe("Maligator cache management", () => {
 		}
 	});
 
+	it("rejects a reused live pid after its lease heartbeat expires", () => {
+		const root = cacheRoot();
+		const lease = createCacheLease("build", root);
+		if (lease.path === undefined) throw new Error("expected cache lease path");
+		try {
+			const stale = new Date(Date.now() - 11 * 60 * 1000);
+			utimesSync(lease.path, stale, stale);
+			expect(inspectMaligatorCache(root).activeLeases).toBe(0);
+		} finally {
+			lease.release();
+		}
+	});
+
 	it("refuses to lease or inspect a cache root that is a file", () => {
 		const root = path.join(cacheRoot(), "cache-file");
 		writeFileSync(root, "not a directory\n");
