@@ -22,6 +22,8 @@ import {
 	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
+import { analyzeCoreLoopInductions } from "./core-ir-loops.ts";
+import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import {
 	coreMemoryAccesses,
 	coreMemoryLocationFamily,
@@ -4726,6 +4728,7 @@ export class CoreAnalysisManager {
 	>();
 	readonly #memory = new WeakMap<CoreFunction, CoreMemoryVersions>();
 	readonly #provenance = new WeakMap<CoreFunction, CoreProvenance>();
+	readonly #loopInductions = new WeakMap<CoreFunction, CoreLoopInductionAnalysis>();
 
 	constructor(stringConstants: ReadonlyArray<ReadonlyArray<number>> = []) {
 		this.#stringConstants = stringConstants;
@@ -4763,6 +4766,19 @@ export class CoreAnalysisManager {
 		if (analysis === undefined) {
 			analysis = coreMemoryVersions(fn, this.controlFlow(fn), memoryResolution(this, fn));
 			this.#memory.set(fn, analysis);
+		}
+		return analysis;
+	}
+
+	loopInductions(fn: CoreFunction): CoreLoopInductionAnalysis {
+		let analysis = this.#loopInductions.get(fn);
+		if (analysis === undefined) {
+			analysis = analyzeCoreLoopInductions(
+				fn,
+				this.controlFlow(fn),
+				this.canonicalValues(fn),
+			);
+			this.#loopInductions.set(fn, analysis);
 		}
 		return analysis;
 	}

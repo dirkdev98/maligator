@@ -6,6 +6,7 @@ import {
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
+	CoreAnalysisManager,
 	coreOptimizationMetrics,
 	executeCoreOptimizations,
 } from "../src/compiler/core/core-ir-opt.ts";
@@ -2056,6 +2057,72 @@ describe("Core IR optimizer", () => {
 		expect(loops[0]!.latches.size).toBe(1);
 		expect(loops[0]!.exits.every(({ dedicated }) => dedicated)).toBe(true);
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("derives exact ranges only for safe additive block-argument inductions", () => {
+		const build = (initial: number) => {
+			const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+			const entry = builder.createBlock();
+			const header = builder.createBlock([{ representation: "f64" }]);
+			const body = builder.createBlock();
+			const exit = builder.createBlock([{ representation: "f64" }]);
+			const [seed] = builder.appendInstruction(entry, "createF64", [], {
+				attributes: { value: initial },
+				outputRepresentations: ["f64"],
+			});
+			const [bound] = builder.appendInstruction(entry, "createF64", [], {
+				attributes: { value: 10 },
+				outputRepresentations: ["f64"],
+			});
+			builder.setTerminator(entry, {
+				kind: "jump",
+				edge: { block: header, arguments: [seed!] },
+			});
+			const counter = builder.block(header).parameters[0]!.value;
+			const [condition] = builder.appendInstruction(header, "binary", [counter, bound!], {
+				attributes: { operator: "<" },
+				outputRepresentations: ["boolean"],
+			});
+			builder.setTerminator(header, {
+				kind: "branch",
+				condition: condition!,
+				consequent: { block: body, arguments: [] },
+				alternate: { block: exit, arguments: [counter] },
+			});
+			const [next] = builder.appendInstruction(body, "unary", [counter], {
+				attributes: { operator: "increment" },
+				outputRepresentations: ["f64"],
+			});
+			builder.setTerminator(body, {
+				kind: "jump",
+				edge: { block: header, arguments: [next!] },
+			});
+			builder.setTerminator(exit, {
+				kind: "return",
+				value: builder.block(exit).parameters[0]!.value,
+			});
+			return { fn: builder.finish(entry), counter };
+		};
+		const ascending = build(0);
+		const analysis = new CoreAnalysisManager().loopInductions(ascending.fn);
+		expect(analysis.induction(ascending.counter)).toMatchObject({
+			step: 1,
+			representation: "f64",
+			comparison: { operator: "<" },
+			range: {
+				minimum: 0,
+				maximum: 9,
+				iterations: 10,
+				exactSafeIntegers: true,
+				excludesNegativeZero: true,
+			},
+		});
+		const negativeZero = build(-0);
+		expect(
+			new CoreAnalysisManager()
+				.loopInductions(negativeZero.fn)
+				.induction(negativeZero.counter)?.range,
+		).toBeUndefined();
 	});
 
 	it("eliminates a deep dead value graph in one liveness pass", () => {
