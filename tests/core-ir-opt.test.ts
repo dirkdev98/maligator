@@ -1907,6 +1907,101 @@ describe("Core IR optimizer", () => {
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 	});
 
+	it("hoists a contained array length read out of its canonical loop", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function sum() {
+				const values = [1, 2, 3];
+				let total = 0;
+				for (let index = 0; index < values.length; index++) total += index;
+				return total;
+			}`,
+			"core-loop-array-length.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		const fn = optimized!.functions[1]!;
+		const loop = buildCoreControlFlow(fn, coreOpcodeRegistry).loops[0]!;
+		const lengthLoads = fn.blocks.flatMap((block) =>
+			block.instructions
+				.filter(({ opcode, attributes }) => {
+					if (opcode !== "loadPropertyStatic") return false;
+					const index = attributes.stringIndex;
+					return (
+						typeof index === "number" &&
+						String.fromCharCode(...optimized!.stringConstants[index]!) === "length"
+					);
+				})
+				.map((instruction) => ({ block: block.id, instruction })),
+		);
+		expect(lengthLoads).toHaveLength(1);
+		expect(lengthLoads[0]!.block).toBe(loop.preheader);
+		expect(loop.blocks.has(lengthLoads[0]!.block)).toBe(false);
+	});
+
+	it("hoists only effect-qualified loads whose exact partition is invariant", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const header = builder.createBlock();
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		const [changing] = builder.appendInstruction(header, "loadGlobal", [], {
+			attributes: { index: 0 },
+			outputRepresentations: ["f64"],
+		});
+		const [stable] = builder.appendInstruction(header, "loadGlobal", [], {
+			attributes: { index: 1 },
+			outputRepresentations: ["f64"],
+		});
+		const [result] = builder.appendInstruction(
+			header,
+			"mathBinaryNumber",
+			[changing!, stable!],
+			{
+				attributes: { operation: "Math.max" },
+				outputRepresentations: ["f64"],
+			},
+		);
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.appendInstruction(body, "storeGlobal", [changing!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: result! });
+
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), globalCount: 2 },
+			{ verification: "per-pass" },
+		);
+		const fn = outcome.program.functions[0]!;
+		const loop = buildCoreControlFlow(fn, coreOpcodeRegistry).loops[0]!;
+		const loadBlocks = new Map(
+			fn.blocks.flatMap((block) =>
+				block.instructions
+					.filter(({ opcode }) => opcode === "loadGlobal")
+					.map((instruction) => [instruction.attributes.index, block.id] as const),
+			),
+		);
+		expect(loadBlocks.get(0)).toBe(loop.header);
+		expect(loadBlocks.get(1)).toBe(loop.preheader);
+	});
+
 	it("forms a preheader and dedicated exit for a reducible shared-edge loop", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 3 });
 		const entry = builder.createBlock([{}, {}, {}]);

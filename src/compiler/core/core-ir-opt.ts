@@ -30,6 +30,7 @@ import {
 	coreMemoryVersions,
 } from "./core-ir-memory.ts";
 import type {
+	CoreMemoryAccess,
 	CoreMemoryPartition,
 	CoreMemoryResolution,
 	CoreMemoryVersions,
@@ -57,6 +58,7 @@ import type {
 	CoreBlockId,
 	CoreAttributeValue,
 	CoreEdge,
+	CoreEffectDomain,
 	CoreFunction,
 	CoreImmediate,
 	CoreInstruction,
@@ -65,7 +67,13 @@ import type {
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreBlockId, coreFactId, coreInstructionId, coreValueId } from "./core-ir.ts";
+import {
+	CORE_MEMORY_FAMILY_DOMAINS,
+	coreBlockId,
+	coreFactId,
+	coreInstructionId,
+	coreValueId,
+} from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
 	readonly maxRounds?: number;
@@ -6636,23 +6644,174 @@ function mayCopyOrValueNumber(fn: CoreFunction): boolean {
 	return false;
 }
 
-function isLoopInvariantCandidate(instruction: CoreInstruction): boolean {
+interface LoopInvariantCandidate {
+	readonly kind: "pure" | "load";
+	/** Relative compile-time/code-generation price used by the structural budget. */
+	readonly cost: number;
+	/** Boxed primitive kept live across the loop after hoisting. */
+	readonly addedRootSlots: number;
+}
+
+const LOOP_UNROOTED_REPRESENTATIONS = new Set(["f64", "i32", "boolean"]);
+
+function isContainedArrayLengthRead(
+	instruction: CoreInstruction,
+	provenance: CoreProvenance,
+): boolean {
+	for (const access of coreMemoryAccesses(instruction)) {
+		if (access.mode !== "read" || access.base === undefined || access.key === undefined) {
+			continue;
+		}
+		const resolved = provenance.ownCell(access.base, access.key, "read");
+		if (resolved?.layout.kind === "indexed" && resolved.cell.kind === "object-slot") {
+			return true;
+		}
+	}
+	return false;
+}
+
+function loopInvariantCandidate(
+	instruction: CoreInstruction,
+	provenance: CoreProvenance,
+	representations: ReadonlyMap<CoreValueId, string>,
+): LoopInvariantCandidate | undefined {
+	const descriptor = coreOpcodeRegistry.require(instruction.opcode);
+	const arrayLength = isContainedArrayLengthRead(instruction, provenance);
 	if (
 		instruction.outputs.length === 0 ||
-		!IMMUTABLE_VALUE_NUMBERING_OPCODES.has(instruction.opcode) ||
 		IDENTITY_PRODUCING_OPCODES.has(instruction.opcode) ||
-		!coreOpcodeRegistry.require(instruction.opcode).discardable
+		(!descriptor.discardable && !arrayLength)
 	) {
-		return false;
+		return undefined;
 	}
 	const effects = coreInstructionEffects(instruction);
-	return (
+	if (
+		IMMUTABLE_VALUE_NUMBERING_OPCODES.has(instruction.opcode) &&
 		effects.reads.length === 0 &&
 		effects.writes.length === 0 &&
 		!effects.mayThrow &&
 		!effects.maySuspend &&
 		!effects.mayGc &&
 		!effects.callsUserCode
+	) {
+		const addedRootSlots = instruction.outputs.filter(
+			(output) => !LOOP_UNROOTED_REPRESENTATIONS.has(representations.get(output) ?? ""),
+		).length;
+		return {
+			kind: "pure",
+			cost:
+				instruction.opcode === "mathUnaryNumber" ||
+				instruction.opcode === "mathBinaryNumber"
+					? 4
+					: 1,
+			addedRootSlots,
+		};
+	}
+	if (
+		instruction.outputs.length !== 1 ||
+		effects.reads.length === 0 ||
+		effects.writes.length > 0 ||
+		effects.mayThrow ||
+		effects.maySuspend ||
+		effects.callsUserCode
+	) {
+		return undefined;
+	}
+	const accesses = coreMemoryAccesses(instruction, {
+		ownCell: (base, key, mode) => {
+			const resolved = provenance.ownCell(base, key, mode);
+			return resolved === undefined
+				? undefined
+				: { allocation: resolved.layout.instruction, cell: resolved.cell };
+		},
+	});
+	if (
+		accesses.length === 0 ||
+		accesses.some(
+			(access) => access.mode !== "read" || !coreMemoryLocationIsExact(access.location),
+		)
+	) {
+		return undefined;
+	}
+	const outputRepresentation = representations.get(instruction.outputs[0]!);
+	if (!LOOP_UNROOTED_REPRESENTATIONS.has(outputRepresentation ?? "") && !arrayLength) {
+		return undefined;
+	}
+	// A generic property helper may contain a collection point. It is movable only
+	// when provenance proves the result is the contained array's numeric length;
+	// the caller additionally requires the original load to execute on loop entry.
+	if (effects.mayGc && !arrayLength) return undefined;
+	return {
+		kind: "load",
+		cost: 2,
+		addedRootSlots: LOOP_UNROOTED_REPRESENTATIONS.has(outputRepresentation ?? "") ? 0 : 1,
+	};
+}
+
+interface LoopWriteSummary {
+	readonly exactPartitions: ReadonlySet<CoreMemoryPartition>;
+	readonly exactDomains: ReadonlySet<CoreEffectDomain>;
+	readonly impreciseDomains: ReadonlySet<CoreEffectDomain>;
+	readonly universal: boolean;
+}
+
+/** Summarize every loop write once, keeping LICM linear in accesses plus reads. */
+function summarizeLoopWrites(
+	instructions: ReadonlyArray<CoreInstruction>,
+	resolution: CoreMemoryResolution,
+): LoopWriteSummary {
+	const exactPartitions = new Set<CoreMemoryPartition>();
+	const exactDomains = new Set<CoreEffectDomain>();
+	const impreciseDomains = new Set<CoreEffectDomain>();
+	let universal = false;
+	for (const instruction of instructions) {
+		const effects = coreInstructionEffects(instruction);
+		universal ||= effects.callsUserCode || effects.maySuspend;
+		const writes = coreMemoryAccesses(instruction, resolution).filter(
+			(access) => access.mode === "write",
+		);
+		const covered = new Set<CoreEffectDomain>();
+		for (const write of writes) {
+			const domains =
+				CORE_MEMORY_FAMILY_DOMAINS[coreMemoryLocationFamily(write.location)];
+			for (const domain of domains) covered.add(domain);
+			if (coreMemoryLocationIsExact(write.location)) {
+				exactPartitions.add(coreMemoryPartition(write.location));
+				for (const domain of domains) exactDomains.add(domain);
+			} else {
+				for (const domain of domains) impreciseDomains.add(domain);
+			}
+		}
+		for (const domain of effects.writes) {
+			if (!covered.has(domain)) impreciseDomains.add(domain);
+		}
+	}
+	return { exactPartitions, exactDomains, impreciseDomains, universal };
+}
+
+/** Whether the loop summary can change the cell observed by one invariant read. */
+function loopWritesInvalidateRead(
+	read: CoreMemoryAccess,
+	summary: LoopWriteSummary,
+): boolean {
+	const containedRead =
+		coreMemoryLocationIsExact(read.location) &&
+		(read.location.kind === "object-slot" || read.location.kind === "element");
+	if (
+		coreMemoryLocationIsExact(read.location) &&
+		summary.exactPartitions.has(coreMemoryPartition(read.location))
+	) {
+		return true;
+	}
+	// An unattributed effect cannot reach a contained allocation whose reference
+	// never escaped this activation. This is the same contract memory SSA uses.
+	if (containedRead) return false;
+	if (summary.universal) return true;
+	const domains = CORE_MEMORY_FAMILY_DOMAINS[coreMemoryLocationFamily(read.location)];
+	return domains.some(
+		(domain) =>
+			summary.impreciseDomains.has(domain) ||
+			(!coreMemoryLocationIsExact(read.location) && summary.exactDomains.has(domain)),
 	);
 }
 
@@ -7407,6 +7566,11 @@ const loopInvariantCodeMotion: CoreFunctionPass = {
 			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
 		);
 		const definitionBlocks = new Map<CoreValueId, CoreBlockId>();
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		const provenance = analyses.provenance(fn);
+		const resolution = memoryResolution(analyses, fn);
 		for (const block of fn.blocks) {
 			for (const parameter of block.parameters)
 				definitionBlocks.set(parameter.value, block.id);
@@ -7421,38 +7585,58 @@ const loopInvariantCodeMotion: CoreFunctionPass = {
 			(left, right) => left.blocks.size - right.blocks.size,
 		);
 		for (const loop of loops) {
-			if (
-				[...loop.blocks].some(
-					(block) =>
-						blocks[block]!.handler !== undefined ||
-						cfg.predecessors[block]!.some(({ kind }) => kind === "exceptional"),
-				)
-			) {
-				continue;
-			}
-			const headerPredecessors = cfg.predecessors[loop.header]!;
-			if (headerPredecessors.some(({ kind }) => kind !== "ordinary")) continue;
-			const outside = headerPredecessors.filter(({ from }) => !loop.blocks.has(from));
-			if (outside.length !== 1) continue;
-			const preheader = blocks[outside[0]!.from]!;
-			if (
-				!cfg.dominates(preheader.id, loop.header) ||
-				preheader.terminator.kind !== "jump" ||
-				preheader.terminator.edge.block !== loop.header
-			) {
-				continue;
-			}
+			if (!loop.canonical || loop.preheader === undefined) continue;
+			if (loopHasExceptionalControl(fn, cfg, loop)) continue;
+			const preheader = blocks[loop.preheader]!;
+			const loopInstructions = [...loop.blocks].flatMap(
+				(block) => blocks[block]!.instructions,
+			);
+			const writes = summarizeLoopWrites(loopInstructions, resolution);
 
 			const candidates: Array<CoreInstruction> = [];
+			let selectedCost = 0;
+			let selectedRootSlots = 0;
 			for (const blockId of cfg.reversePostorder) {
 				if (!loop.blocks.has(blockId)) continue;
 				for (const instruction of blocks[blockId]!.instructions) {
-					if (
-						!protectedInstructions.has(instruction.id) &&
-						isLoopInvariantCandidate(instruction)
-					) {
-						candidates.push(instruction);
+					if (protectedInstructions.has(instruction.id)) continue;
+					const candidate = loopInvariantCandidate(
+						instruction,
+						provenance,
+						representations,
+					);
+					if (candidate === undefined) continue;
+					const executesEveryIteration = [...loop.latches].every((latch) =>
+						cfg.dominates(blockId, latch),
+					);
+					if (candidate.addedRootSlots > 0 && !executesEveryIteration) continue;
+					if (candidate.kind === "load") {
+						if (!executesEveryIteration) continue;
+						const effects = coreInstructionEffects(instruction);
+						if (
+							(effects.mayGc || candidate.addedRootSlots > 0) &&
+							blockId !== loop.header
+						) {
+							continue;
+						}
+						const reads = coreMemoryAccesses(instruction, resolution).filter(
+							(access) => access.mode === "read",
+						);
+						if (reads.some((read) => loopWritesInvalidateRead(read, writes))) continue;
+					} else if (candidate.cost > 1 && !executesEveryIteration) {
+						continue;
 					}
+					// Hoisting never duplicates an instruction. The budget limits compile-time
+					// work and, more importantly, prevents an unbounded increase in live roots.
+					if (
+						selectedCost + candidate.cost > 64 ||
+						selectedRootSlots + candidate.addedRootSlots > 2
+					) {
+						continue;
+					}
+					selectedCost += candidate.cost;
+					selectedRootSlots += candidate.addedRootSlots;
+					candidates.push(instruction);
 				}
 			}
 			if (candidates.length === 0) continue;
