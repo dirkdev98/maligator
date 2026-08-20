@@ -28,6 +28,12 @@ import {
 	normalizeFactRequirements,
 } from "../shared/fact-implication.ts";
 import {
+	CORE_CALLEE_TARGETS_ATTRIBUTE,
+	analyzeCoreCalleeTargets,
+	coreCalleeTargetsAttribute,
+	coreCalleeTargetsSingleFunction,
+} from "./core-ir-call-targets.ts";
+import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
 	coreTerminatorEdges,
@@ -827,148 +833,31 @@ function exactFunctionValue(
 	return undefined;
 }
 
-interface CoreDirectCallFacts {
-	readonly functions: ReadonlyMap<string, number>;
-}
-
-function programValueKey(functionIndex: number, value: CoreValueId): string {
-	return `${functionIndex}:${value}`;
-}
-
 /**
- * Resolve immutable function provenance through Core SSA and the frontend's
- * closed lexical/global slots. Reassignable global properties never
- * participate. TDZ sentinel stores are ignored only for lexical global slots.
+ * Annotate call and construct sites from the program's bounded callee-target
+ * lattice.
+ *
+ * Every attribute written here is a speculation the runtime re-checks before it
+ * specializes: `mal_vm_call_direct` and `mal_vm_construct_direct` compare the
+ * live callee's function index against the named target and fall back to fully
+ * generic dispatch on a mismatch, the native prologue does the same through
+ * `mal_vm_callee_has_index`, and `mal_vm_call_function_call_direct` enters its
+ * fast path only for the realm's retained %Function.prototype.call%. A singleton
+ * target set is therefore safe to lower whether or not an open possibility
+ * remains, and the lattice's overflow and opacity bits are recorded separately
+ * so a later consumer can tell a closed proof from a speculation. Bounded
+ * multi-target sets stay Core-only metadata.
  */
-function coreDirectCallFacts(program: CoreProgram): CoreDirectCallFacts {
-	interface Store {
-		readonly source: string;
-	}
-	const capturedStores = new Map<string, Array<Store>>();
-	const globalStores = new Map<number, Array<Store>>();
-	const functions = new Map<string, number>();
-	const empty = new Set<string>();
-	const addStore = <K>(map: Map<K, Array<Store>>, slot: K, source: string): void => {
-		const stores = map.get(slot) ?? [];
-		stores.push({ source });
-		map.set(slot, stores);
-	};
-	for (const fn of program.functions) {
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				for (const output of instruction.outputs) {
-					const key = programValueKey(fn.functionIndex, output);
-					if (instruction.opcode === "createFunction") {
-						const target = instruction.attributes.functionIndex;
-						if (typeof target === "number") functions.set(key, target);
-					} else if (instruction.opcode === "createEmpty") {
-						empty.add(key);
-					}
-				}
-				if (instruction.inputs.length !== 1) continue;
-				const source = programValueKey(fn.functionIndex, instruction.inputs[0]!);
-				if (instruction.opcode === "storeGlobal") {
-					const index = instruction.attributes.index;
-					if (typeof index === "number") addStore(globalStores, index, source);
-				} else if (instruction.opcode === "storeCaptured") {
-					const owner = instruction.attributes.functionIndex;
-					const index = instruction.attributes.index;
-					if (typeof owner === "number" && typeof index === "number") {
-						addStore(capturedStores, `${owner}:${index}`, source);
-					}
-				}
-			}
-		}
-	}
-
-	let changed = true;
-	while (changed) {
-		changed = false;
-		const capturedFunctions = new Map<string, number>();
-		for (const [slot, stores] of capturedStores) {
-			if (stores.length !== 1) continue;
-			const target = functions.get(stores[0]!.source);
-			if (target !== undefined) capturedFunctions.set(slot, target);
-		}
-		const globalFunctions = new Map<number, number>();
-		for (const [slot, stores] of globalStores) {
-			const values = stores.filter(({ source }) => !empty.has(source));
-			if (values.length !== 1) continue;
-			const target = functions.get(values[0]!.source);
-			if (target !== undefined) globalFunctions.set(slot, target);
-		}
-
-		for (const fn of program.functions) {
-			const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry, { exceptions: false });
-			for (const block of fn.blocks) {
-				for (const instruction of block.instructions) {
-					const output = instruction.outputs[0];
-					if (output === undefined) continue;
-					const destination = programValueKey(fn.functionIndex, output);
-					const sourceValue = instruction.inputs[0];
-					const source =
-						sourceValue === undefined
-							? undefined
-							: programValueKey(fn.functionIndex, sourceValue);
-					let target: number | undefined;
-					if (instruction.opcode === "move" && source !== undefined) {
-						target = functions.get(source);
-						if (empty.has(source) && !empty.has(destination)) {
-							empty.add(destination);
-							changed = true;
-						}
-					} else if (instruction.opcode === "loadGlobal") {
-						const index = instruction.attributes.index;
-						if (typeof index === "number") {
-							target = globalFunctions.get(index);
-						}
-					} else if (instruction.opcode === "loadCaptured") {
-						const owner = instruction.attributes.functionIndex;
-						const index = instruction.attributes.index;
-						if (typeof owner === "number" && typeof index === "number") {
-							const slot = `${owner}:${index}`;
-							target = capturedFunctions.get(slot);
-						}
-					}
-					if (target !== undefined && !functions.has(destination)) {
-						functions.set(destination, target);
-						changed = true;
-					}
-				}
-
-				const incoming = cfg.predecessors[block.id]!;
-				if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
-					continue;
-				}
-				for (const [index, parameter] of block.parameters.entries()) {
-					const destination = programValueKey(fn.functionIndex, parameter.value);
-					const sources = incoming.map((edge) =>
-						programValueKey(fn.functionIndex, edge.arguments[index]!),
-					);
-					const target = functions.get(sources[0]!);
-					if (
-						target !== undefined &&
-						sources.every((source) => functions.get(source) === target) &&
-						!functions.has(destination)
-					) {
-						functions.set(destination, target);
-						changed = true;
-					}
-				}
-			}
-		}
-	}
-	return { functions };
-}
-
 function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResult {
-	const facts = coreDirectCallFacts(program);
+	const analysis = analyzeCoreCalleeTargets(program);
 	const functionsByIndex = new Map(
 		program.functions.map((fn) => [fn.functionIndex, fn] as const),
 	);
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
 		const definitions = functionDefinitions(fn);
+		const singleTarget = (value: CoreValueId): number | undefined =>
+			coreCalleeTargetsSingleFunction(analysis.targets(fn.functionIndex, value));
 		const moveRoot = (initial: CoreValueId): CoreValueId => {
 			let value = initial;
 			const seen = new Set<CoreValueId>();
@@ -990,7 +879,8 @@ function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResul
 					}
 					const callee = instruction.inputs[0];
 					if (callee === undefined) return instruction;
-					const target = facts.functions.get(programValueKey(fn.functionIndex, callee));
+					const targets = analysis.targets(fn.functionIndex, callee);
+					const target = coreCalleeTargetsSingleFunction(targets);
 					const targetFunction =
 						target === undefined ? undefined : functionsByIndex.get(target);
 					const attributes: Record<string, CoreAttributeValue> = {
@@ -1004,6 +894,10 @@ function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResul
 								targetFunction.metadata.hasPrototype))
 					) {
 						attributes.directFunctionIndex = targetFunction.functionIndex;
+					}
+					if (targets.functions.length > 0) {
+						attributes[CORE_CALLEE_TARGETS_ATTRIBUTE] =
+							coreCalleeTargetsAttribute(targets);
 					}
 					if (instruction.opcode === "call" && instruction.inputs.length >= 2) {
 						const calleeDefinition = definitions.get(moveRoot(callee));
@@ -1030,10 +924,7 @@ function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResul
 							receiver !== undefined &&
 							moveRoot(receiver) === moveRoot(thisValue)
 						) {
-							const receiverKey = programValueKey(fn.functionIndex, thisValue);
-							const receiverTarget =
-								facts.functions.get(receiverKey) ??
-								facts.functions.get(programValueKey(fn.functionIndex, receiver));
+							const receiverTarget = singleTarget(thisValue) ?? singleTarget(receiver);
 							// The runtime validates the loaded method against the realm's exact
 							// %Function.prototype.call% object. A miss invokes the original
 							// method with the original receiver and arguments, so no static

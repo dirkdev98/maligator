@@ -1,3 +1,4 @@
+import { CORE_INTERNAL_TARGET_ATTRIBUTES } from "../core/core-ir-call-targets.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -11,6 +12,7 @@ import type {
 	CoreEdge,
 	CoreFunction,
 	CoreImmediate,
+	CoreInstructionAttributes,
 	CoreInstructionId,
 	CoreProgram,
 	CoreRegion,
@@ -140,6 +142,25 @@ function physicalRegisterClass(
 	return representation === "boolean" ? "boolean" : "boxed";
 }
 
+/**
+ * Attributes a target instruction may carry. Core-internal analysis metadata,
+ * such as a call site's bounded target set, stops here: the only target-visible
+ * product of that analysis is the guarded `directFunctionIndex` lowering.
+ */
+function targetAttributes(
+	attributes: CoreInstructionAttributes,
+): CoreInstructionAttributes {
+	for (const key of CORE_INTERNAL_TARGET_ATTRIBUTES) {
+		if (!(key in attributes)) continue;
+		return Object.fromEntries(
+			Object.entries(attributes).filter(
+				([entry]) => !CORE_INTERNAL_TARGET_ATTRIBUTES.has(entry),
+			),
+		);
+	}
+	return attributes;
+}
+
 function rebuildInstruction(
 	core: CoreFunction,
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
@@ -158,7 +179,7 @@ function rebuildInstruction(
 	}
 	return {
 		type: instruction.opcode,
-		...instruction.attributes,
+		...targetAttributes(instruction.attributes),
 		...(immediateValues.length === 0 ? {} : { immediateValues }),
 		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}
