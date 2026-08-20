@@ -6939,6 +6939,38 @@ const deadInstructionElimination: CoreFunctionPass = {
 				for (const output of instruction.outputs) definitions.set(output, instruction);
 			}
 		}
+		const parameterSources = new Map<CoreValueId, Array<CoreValueId>>();
+		const hasNonEntryParameters = fn.blocks.some(
+			(block) =>
+				block.id !== fn.entry &&
+				block.parameters.some(({ role }) => role !== "exception"),
+		);
+		if (hasNonEntryParameters) {
+			const addParameterSource = (
+				block: CoreBlockId,
+				index: number,
+				source: CoreValueId,
+			): void => {
+				const parameter = fn.blocks[block]?.parameters[index];
+				if (parameter === undefined) return;
+				const sources = parameterSources.get(parameter.value) ?? [];
+				sources.push(source);
+				parameterSources.set(parameter.value, sources);
+			};
+			for (const block of fn.blocks) {
+				for (const edge of coreTerminatorEdges(block.terminator)) {
+					for (const [index, argument] of edge.arguments.entries()) {
+						addParameterSource(edge.block, index, argument);
+					}
+				}
+				if (block.handler === undefined) continue;
+				const handler = fn.blocks[block.handler.block]!;
+				const exceptionOffset = handler.parameters[0]?.role === "exception" ? 1 : 0;
+				for (const [index, argument] of block.handler.arguments.entries()) {
+					addParameterSource(block.handler.block, index + exceptionOffset, argument);
+				}
+			}
+		}
 		const liveInstructions = new Set<CoreInstructionId>();
 		const liveValues = new Set<CoreValueId>();
 		const pending: Array<CoreValueId> = [];
@@ -6961,30 +6993,17 @@ const deadInstructionElimination: CoreFunctionPass = {
 						instructionAttribute(instruction, "operator") === "typeof");
 				if (!discardable) markInstruction(instruction);
 			}
-			if (block.handler !== undefined) {
-				for (const value of block.handler.arguments) markValue(value);
-			}
-			const markEdge = (edge: CoreEdge) => {
-				for (const value of edge.arguments) markValue(value);
-			};
 			switch (block.terminator.kind) {
 				case "jump":
-					markEdge(block.terminator.edge);
 					break;
 				case "branch":
 					markValue(block.terminator.condition);
-					markEdge(block.terminator.consequent);
-					markEdge(block.terminator.alternate);
 					break;
 				case "guard":
 					markValue(block.terminator.condition);
-					markEdge(block.terminator.success);
-					markEdge(block.terminator.fallback);
 					break;
 				case "switch":
 					markValue(block.terminator.discriminant);
-					for (const { edge } of block.terminator.cases) markEdge(edge);
-					markEdge(block.terminator.default);
 					break;
 				case "return":
 				case "throw":
@@ -6994,9 +7013,16 @@ const deadInstructionElimination: CoreFunctionPass = {
 					break;
 			}
 		}
+		for (const parameter of fn.blocks[fn.entry]!.parameters) markValue(parameter.value);
+		if (fn.bodyEntry !== undefined && fn.bodyEntry !== fn.entry) {
+			for (const parameter of fn.blocks[fn.bodyEntry]!.parameters)
+				markValue(parameter.value);
+		}
 		while (pending.length > 0) {
-			const producer = definitions.get(pending.pop()!);
+			const value = pending.pop()!;
+			const producer = definitions.get(value);
 			if (producer !== undefined) markInstruction(producer);
+			for (const source of parameterSources.get(value) ?? []) markValue(source);
 		}
 		const removedInstructions = new Set<number>();
 		const removedValues = new Set<CoreValueId>();
@@ -7044,8 +7070,26 @@ const deadInstructionElimination: CoreFunctionPass = {
 				liveFacts.has(fact.id) || fact.obligations.some(({ kind }) => kind !== "guard")
 			);
 		});
-		if (removedInstructions.size === 0 && facts.length === fn.facts.length) return fn;
-		return pruneVacuousHandlers({
+		const removedIndices = new Map<CoreBlockId, Set<number>>();
+		if (fn.regions.length === 0 && hasNonEntryParameters) {
+			for (const block of fn.blocks) {
+				if (block.id === fn.entry || block.id === fn.bodyEntry) continue;
+				for (const [index, parameter] of block.parameters.entries()) {
+					if (parameter.role === "exception" || liveValues.has(parameter.value)) continue;
+					const indices = removedIndices.get(block.id) ?? new Set<number>();
+					indices.add(index);
+					removedIndices.set(block.id, indices);
+				}
+			}
+		}
+		if (
+			removedInstructions.size === 0 &&
+			facts.length === fn.facts.length &&
+			removedIndices.size === 0
+		) {
+			return fn;
+		}
+		let result: CoreFunction = {
 			...fn,
 			blocks: fn.blocks.map((block) => ({
 				...block,
@@ -7054,7 +7098,9 @@ const deadInstructionElimination: CoreFunctionPass = {
 			values: fn.values.filter(({ id }) => !removedValues.has(id)),
 			facts,
 			mutationEpoch: fn.mutationEpoch + 1,
-		});
+		};
+		if (removedIndices.size > 0) result = removeBlockParameters(result, removedIndices);
+		return pruneVacuousHandlers(result);
 	},
 };
 

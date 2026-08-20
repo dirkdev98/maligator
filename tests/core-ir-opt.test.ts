@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { coreTerminatorEdges } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	coreOptimizationMetrics,
@@ -714,6 +715,64 @@ describe("Core IR optimizer", () => {
 			expect.objectContaining({ opcode: "createUndefined", outputs: [returned] }),
 		]);
 		expect(fn.values.some(({ id }) => id === dead)).toBe(false);
+	});
+
+	it("removes dead phi inputs and their pure producers in one liveness pass", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const [returned] = builder.appendInstruction(entry, "createUndefined", []);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "f64" }]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftValue] = builder.appendInstruction(left, "createF64", [], {
+			attributes: { value: 1 },
+			outputRepresentations: ["f64"],
+		});
+		const [rightValue] = builder.appendInstruction(right, "createF64", [], {
+			attributes: { value: 2 },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftValue!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightValue!] },
+		});
+		const joined = builder.block(join).parameters[0]!.value;
+		builder.appendInstruction(join, "mathUnaryNumber", [joined], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(join, { kind: "return", value: returned! });
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			maxRounds: 1,
+			verification: "per-pass",
+		});
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "dead-instruction-elimination" && changed,
+			),
+		).toBe(true);
+		expect(fn.blocks.flatMap(({ instructions }) => instructions)).toEqual([
+			expect.objectContaining({ opcode: "createUndefined", outputs: [returned] }),
+		]);
+		expect(fn.values.some(({ id }) => id === joined)).toBe(false);
+		for (const block of fn.blocks) {
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				expect(edge.arguments).toEqual([]);
+			}
+		}
 	});
 
 	it("retains observable allocation and call effects when their results are unused", () => {
