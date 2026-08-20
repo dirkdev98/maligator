@@ -1,4 +1,4 @@
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreReachableBlocks } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { coreBlockId } from "./core-ir.ts";
 import type {
@@ -71,20 +71,20 @@ function factSurvives(fact: CoreFact, liveInstructions: ReadonlySet<number>): bo
 
 /** Restore Core's dense, reachable block space after construction or CFG rewrites. */
 export function removeUnreachableCoreBlocks(fn: CoreFunction): CoreFunction {
-	const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
-	if (cfg.reachable.size === fn.blocks.length) return fn;
+	const reachable = coreReachableBlocks(fn, coreOpcodeRegistry);
+	if (reachable.size === fn.blocks.length) return fn;
 	const blockIds = new Map<CoreBlockId, CoreBlockId>();
 	for (const block of fn.blocks) {
-		if (cfg.reachable.has(block.id)) blockIds.set(block.id, coreBlockId(blockIds.size));
+		if (reachable.has(block.id)) blockIds.set(block.id, coreBlockId(blockIds.size));
 	}
 	const liveInstructions = new Set<number>();
 	for (const block of fn.blocks) {
-		if (!cfg.reachable.has(block.id)) continue;
+		if (!reachable.has(block.id)) continue;
 		for (const instruction of block.instructions) liveInstructions.add(instruction.id);
 		liveInstructions.add(block.terminator.id);
 	}
 	const blocks = fn.blocks
-		.filter((block) => cfg.reachable.has(block.id))
+		.filter((block) => reachable.has(block.id))
 		.map((block): CoreBlock => {
 			const id = blockIds.get(block.id)!;
 			const handlerTarget =

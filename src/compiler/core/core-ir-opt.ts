@@ -287,7 +287,7 @@ function coreRootedValueCount(fn: CoreFunction): number {
 		}
 	}
 	const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
-	const loopBackedges = new Set(cfg.loops.map(({ backedge }) => backedge));
+	const loopBackedges = new Set(cfg.loops.flatMap(({ backedges }) => [...backedges]));
 	const rooted = new Set<CoreValueId>();
 	for (const block of fn.blocks) {
 		const live = new Set(liveOut[block.id]);
@@ -1752,17 +1752,19 @@ const annotateFreshDenseIndexedReserves: CoreFunctionPass = {
 				for (const loop of cfg.loops) {
 					if (
 						loop.blocks.size !== 2 ||
+						loop.backedges.size !== 1 ||
 						loop.blocks.has(block.id) ||
 						!cfg.dominates(block.id, loop.header)
 					) {
 						continue;
 					}
 					const header = fn.blocks[loop.header]!;
+					const backedgeBlock = [...loop.backedges][0]!;
 					const backedge = cfg.predecessors[loop.header]!.find(
-						(edge) => edge.kind === "ordinary" && edge.from === loop.backedge,
+						(edge) => edge.kind === "ordinary" && edge.from === backedgeBlock,
 					);
 					const entryEdges = cfg.predecessors[loop.header]!.filter(
-						(edge) => edge.kind === "ordinary" && edge.from !== loop.backedge,
+						(edge) => edge.kind === "ordinary" && edge.from !== backedgeBlock,
 					);
 					if (backedge === undefined || entryEdges.length !== 1) continue;
 					const entryEdge = entryEdges[0]!;
@@ -2318,6 +2320,8 @@ const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
 		const boundedCalls = new Set<CoreInstructionId>();
 		const primitiveLengths = new Set<CoreInstructionId>();
 		for (const loop of cfg.loops) {
+			if (loop.backedges.size !== 1) continue;
+			const backedge = [...loop.backedges][0]!;
 			const header = fn.blocks[loop.header]!;
 			const branch = header.terminator;
 			if (
@@ -2363,11 +2367,7 @@ const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
 			);
 			const outside = incoming.filter(({ from }) => !loop.blocks.has(from));
 			const inside = incoming.filter(({ from }) => loop.blocks.has(from));
-			if (
-				outside.length !== 1 ||
-				inside.length !== 1 ||
-				inside[0]!.from !== loop.backedge
-			) {
+			if (outside.length !== 1 || inside.length !== 1 || inside[0]!.from !== backedge) {
 				continue;
 			}
 			const initial = outside[0]!.arguments[positionParameter];
@@ -2382,7 +2382,7 @@ const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
 				increment?.opcode !== "unary" ||
 				increment.attributes.operator !== "increment" ||
 				increment.inputs.length !== 1 ||
-				locations.get(increment.id)?.block.id !== loop.backedge
+				locations.get(increment.id)?.block.id !== backedge
 			) {
 				continue;
 			}
@@ -3319,8 +3319,10 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 		);
 		const regions = [...fn.regions];
 		for (const loop of cfg.loops) {
+			if (loop.backedges.size !== 1) continue;
+			const backedge = [...loop.backedges][0]!;
 			const header = fn.blocks[loop.header]!;
-			const backedgeBlock = fn.blocks[loop.backedge]!;
+			const backedgeBlock = fn.blocks[backedge]!;
 			const branch = header.terminator;
 			if (
 				branch.kind !== "branch" ||
@@ -3335,7 +3337,8 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 			}
 			const containedLoops = cfg.loops.filter(
 				(candidate) =>
-					loop.blocks.has(candidate.header) && loop.blocks.has(candidate.backedge),
+					loop.blocks.has(candidate.header) &&
+					[...candidate.blocks].every((block) => loop.blocks.has(block)),
 			);
 			const headerPredecessors = cfg.predecessors[header.id]!.filter(
 				({ kind }) => kind === "ordinary",
@@ -6700,10 +6703,6 @@ const loopInvariantCodeMotion: CoreFunctionPass = {
 		if (fn.blocks.length <= 1) return fn;
 		const cfg = analyses.controlFlow(fn);
 		if (cfg.loops.length === 0) return fn;
-		const loopsPerHeader = new Map<CoreBlockId, number>();
-		for (const loop of cfg.loops) {
-			loopsPerHeader.set(loop.header, (loopsPerHeader.get(loop.header) ?? 0) + 1);
-		}
 		const protectedInstructions = new Set(
 			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
 		);
@@ -6718,9 +6717,9 @@ const loopInvariantCodeMotion: CoreFunctionPass = {
 
 		let changed = false;
 		const blocks = [...fn.blocks];
-		const loops = [...cfg.loops]
-			.filter((loop) => loopsPerHeader.get(loop.header) === 1)
-			.sort((left, right) => left.blocks.size - right.blocks.size);
+		const loops = [...cfg.loops].sort(
+			(left, right) => left.blocks.size - right.blocks.size,
+		);
 		for (const loop of loops) {
 			if (
 				[...loop.blocks].some(
@@ -6737,6 +6736,7 @@ const loopInvariantCodeMotion: CoreFunctionPass = {
 			if (outside.length !== 1) continue;
 			const preheader = blocks[outside[0]!.from]!;
 			if (
+				!cfg.dominates(preheader.id, loop.header) ||
 				preheader.terminator.kind !== "jump" ||
 				preheader.terminator.edge.block !== loop.header
 			) {

@@ -18,7 +18,7 @@ export interface CoreControlEdge {
 
 export interface CoreNaturalLoop {
 	readonly header: CoreBlockId;
-	readonly backedge: CoreBlockId;
+	readonly backedges: ReadonlySet<CoreBlockId>;
 	readonly blocks: ReadonlySet<CoreBlockId>;
 }
 
@@ -76,10 +76,13 @@ export function coreCanonicalValueRoots(
 	if (nodes.length === 0) {
 		return new Map(fn.values.map(({ id }) => [id, id] as const));
 	}
-	const reverse = Array.from({ length: valueCount }, () => new Array<CoreValueId>());
+	const reverse = new Array<Array<CoreValueId> | undefined>(valueCount);
 	for (const value of nodes) {
 		for (const dependency of dependencies[value]!) {
-			if (dependencies[dependency] !== undefined) reverse[dependency]!.push(value);
+			if (dependencies[dependency] === undefined) continue;
+			const users = reverse[dependency] ?? [];
+			users.push(value);
+			reverse[dependency] = users;
 		}
 	}
 
@@ -121,7 +124,7 @@ export function coreCanonicalValueRoots(
 		while (pending.length > 0) {
 			const value = pending.pop()!;
 			members.push(value);
-			for (const user of reverse[value]!) {
+			for (const user of reverse[value] ?? []) {
 				if (componentOf[user]! >= 0) continue;
 				componentOf[user] = component;
 				pending.push(user);
@@ -212,6 +215,39 @@ function blockHasExceptionalExit(
 	);
 }
 
+/** Reachability-only O(blocks + edges) traversal for normalization paths. */
+export function coreReachableBlocks(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+	options: BuildCoreControlFlowOptions = {},
+): ReadonlySet<CoreBlockId> {
+	const includeExceptions = options.exceptions !== false;
+	const visited = new Uint8Array(fn.blocks.length);
+	const reachable = new Set<CoreBlockId>();
+	const pending = [fn.entry];
+	visited[fn.entry] = 1;
+	while (pending.length > 0) {
+		const blockId = pending.pop()!;
+		const block = fn.blocks[blockId]!;
+		reachable.add(blockId);
+		for (const edge of coreTerminatorEdges(block.terminator)) {
+			if (visited[edge.block] !== 0) continue;
+			visited[edge.block] = 1;
+			pending.push(edge.block);
+		}
+		if (
+			includeExceptions &&
+			block.handler !== undefined &&
+			blockHasExceptionalExit(fn, blockId, registry) &&
+			visited[block.handler.block] === 0
+		) {
+			visited[block.handler.block] = 1;
+			pending.push(block.handler.block);
+		}
+	}
+	return reachable;
+}
+
 function buildImmediateDominators(
 	entry: CoreBlockId,
 	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
@@ -266,14 +302,12 @@ function buildImmediateDominators(
 		changed = false;
 		for (let index = 1; index < reversePostorder.length; index++) {
 			const block = reversePostorder[index]!;
-			const incoming = predecessors[block]!.map(({ from }) => from).filter(
-				(predecessor) => parents[predecessor] !== null,
-			);
-			if (incoming.length === 0) continue;
-			let parent = incoming[0]!;
-			for (let incomingIndex = 1; incomingIndex < incoming.length; incomingIndex++) {
-				parent = intersect(parent, incoming[incomingIndex]!);
+			let parent: CoreBlockId | undefined;
+			for (const { from } of predecessors[block]!) {
+				if (parents[from] === null) continue;
+				parent = parent === undefined ? from : intersect(parent, from);
 			}
+			if (parent === undefined) continue;
 			if (parents[block] !== parent) {
 				parents[block] = parent;
 				changed = true;
@@ -366,28 +400,34 @@ export function buildCoreControlFlow(
 		);
 	};
 
-	const loops: Array<CoreNaturalLoop> = [];
+	const backedgesByHeader = new Map<CoreBlockId, Set<CoreBlockId>>();
 	for (const from of reachable) {
 		for (const edge of successors[from]!) {
 			if (edge.kind !== "ordinary" || !dominates(edge.to, from)) continue;
-			const blocks = new Set<CoreBlockId>([edge.to, from]);
-			const pending = from === edge.to ? [] : [from];
-			while (pending.length > 0) {
-				const current = pending.pop()!;
-				for (const predecessor of predecessors[current]!) {
-					if (
-						predecessor.kind !== "ordinary" ||
-						!reachable.has(predecessor.from) ||
-						blocks.has(predecessor.from)
-					) {
-						continue;
-					}
-					blocks.add(predecessor.from);
-					if (predecessor.from !== edge.to) pending.push(predecessor.from);
-				}
-			}
-			loops.push({ header: edge.to, backedge: from, blocks });
+			const backedges = backedgesByHeader.get(edge.to) ?? new Set<CoreBlockId>();
+			backedges.add(from);
+			backedgesByHeader.set(edge.to, backedges);
 		}
+	}
+	const loops: Array<CoreNaturalLoop> = [];
+	for (const [header, backedges] of backedgesByHeader) {
+		const blocks = new Set<CoreBlockId>([header, ...backedges]);
+		const pending = [...backedges].filter((backedge) => backedge !== header);
+		while (pending.length > 0) {
+			const current = pending.pop()!;
+			for (const predecessor of predecessors[current]!) {
+				if (
+					predecessor.kind !== "ordinary" ||
+					!reachable.has(predecessor.from) ||
+					blocks.has(predecessor.from)
+				) {
+					continue;
+				}
+				blocks.add(predecessor.from);
+				if (predecessor.from !== header) pending.push(predecessor.from);
+			}
+		}
+		loops.push({ header, backedges, blocks });
 	}
 
 	return {

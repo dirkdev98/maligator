@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { coreTerminatorEdges } from "../src/compiler/core/core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreTerminatorEdges,
+} from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	coreOptimizationMetrics,
@@ -806,6 +809,75 @@ describe("Core IR optimizer", () => {
 			"storeGlobal",
 			"createObject",
 			"storeGlobal",
+		]);
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("hoists invariants from a natural loop with multiple backedges", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 2 });
+		const entry = builder.createBlock([{}, {}]);
+		const exitCondition = builder.block(entry).parameters[0]!.value;
+		const latchCondition = builder.block(entry).parameters[1]!.value;
+		const header = builder.createBlock();
+		const body = builder.createBlock();
+		const leftLatch = builder.createBlock();
+		const rightLatch = builder.createBlock();
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: exitCondition,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [constant] = builder.appendInstruction(body, "createF64", [], {
+			attributes: { value: 0.5 },
+			outputRepresentations: ["f64"],
+		});
+		const [sine] = builder.appendInstruction(body, "mathUnaryNumber", [constant!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(body, "storeGlobal", [sine!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(body, {
+			kind: "branch",
+			condition: latchCondition,
+			consequent: { block: leftLatch, arguments: [] },
+			alternate: { block: rightLatch, arguments: [] },
+		});
+		for (const latch of [leftLatch, rightLatch]) {
+			builder.appendInstruction(latch, "storeGlobal", [latchCondition], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(latch, {
+				kind: "jump",
+				edge: { block: header, arguments: [] },
+			});
+		}
+		builder.setTerminator(exit, { kind: "return", value: exitCondition });
+		const original = builder.finish(entry);
+		const originalLoop = buildCoreControlFlow(original, coreOpcodeRegistry).loops;
+		expect(originalLoop).toHaveLength(1);
+		expect(originalLoop[0]!.backedges).toEqual(new Set([leftLatch, rightLatch]));
+
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([original]), globalCount: 1 },
+			{ verification: "per-pass" },
+		);
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "loop-invariant-code-motion" && changed,
+			),
+		).toBe(true);
+		expect(fn.blocks[entry]!.instructions.map(({ opcode }) => opcode)).toEqual([
+			"createF64",
+			"mathUnaryNumber",
 		]);
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 	});

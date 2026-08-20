@@ -272,7 +272,7 @@ describe("adversarial Core graphs", () => {
 
 		expect(cfg.loops).toHaveLength(1);
 		expect(cfg.loops[0]!.header).toBe(header);
-		expect(cfg.loops[0]!.backedge).toBe(body);
+		expect(cfg.loops[0]!.backedges).toEqual(new Set([body]));
 		expect(fn.blocks[header]!.parameters).toEqual([
 			{ value: carried, representation: "boxed", role: "value" },
 		]);
