@@ -351,6 +351,38 @@ describe("Core empty forwarding blocks", () => {
 		).toHaveLength(20);
 	});
 
+	it("rewrites dominated uses when a linear merge deletes a narrowed phi", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: true },
+			outputRepresentations: ["boolean"],
+		});
+		// The initially boxed parameter prevents the earlier trivial-argument pass
+		// from collapsing it; representation refinement narrows it before block merge.
+		const target = builder.createBlock([{}]);
+		const exit = builder.createBlock();
+		const parameter = blockParameters(builder, target)[0]!;
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: target, arguments: [value!] },
+		});
+		builder.setTerminator(target, {
+			kind: "jump",
+			edge: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: parameter });
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			maxRounds: 1,
+			verification: "per-pass",
+		});
+		const fn = outcome.program.functions[0]!;
+		expect(fn.blocks).toHaveLength(1);
+		expect(fn.blocks[0]!.terminator).toMatchObject({ kind: "return", value });
+		expect(fn.values.some(({ id }) => id === parameter)).toBe(false);
+	});
+
 	it("reaches a stable fixpoint on a second optimization run", () => {
 		const first = optimize(functionWithForwardedArguments());
 		const second = executeCoreOptimizations(first.program);

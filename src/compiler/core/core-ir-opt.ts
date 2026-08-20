@@ -6952,11 +6952,11 @@ const combineLinearBlocks: CoreFunctionPass = {
 				const blocks = result.blocks.map((block) =>
 					block.id === predecessor.id ? merged : block,
 				);
-				mergedFunction = removeUnreachableCoreBlocks({
-					...result,
-					blocks,
-					mutationEpoch: result.mutationEpoch + 1,
-				});
+				// The target parameter dominates blocks beyond the target itself. Rewrite
+				// those uses in the same transaction before normalization deletes its phi.
+				mergedFunction = removeUnreachableCoreBlocks(
+					rewriteFunction(result, blocks, replacements, new Set()),
+				);
 				break;
 			}
 			if (mergedFunction === undefined) return result;
