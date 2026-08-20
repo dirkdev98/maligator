@@ -63,6 +63,44 @@ function conditionalGlobalStore(store, repeat) {
 	} while (true);
 }
 
+let forwarded = 0;
+function reassignForwarded() {
+	forwarded = 99;
+	return 1;
+}
+function storeThenCall() {
+	forwarded = 5;
+	const extra = reassignForwarded();
+	return forwarded + extra;
+}
+
+let doubled = 0;
+function storeThenRead(value) {
+	doubled = value * 2;
+	return doubled + 1;
+}
+
+let getterReads = 0;
+const accessor = {
+	get probe() {
+		getterReads += 1;
+		return getterReads;
+	},
+};
+function readAccessorTwice() {
+	return accessor.probe + accessor.probe;
+}
+
+function capturedAcrossCall() {
+	let cell = 1;
+	const bump = () => {
+		cell += 10;
+	};
+	cell = 2;
+	bump();
+	return cell;
+}
+
 assert(numericLoop(1000) === 499500, "numeric induction variable");
 assert(denseFill(100) === 9900, "dense indexed fill");
 assert(exceptionLocal(null) === 2, "exception-edge local");
@@ -75,6 +113,14 @@ assert(increment(2n) === 3n, "bigint increment");
 assert(
 	conditionalGlobalStore(true, false) === 71,
 	"conditional loop store reaches the following global load",
+);
+assert(storeThenRead(3) === 7, "store forwarded to the following global load");
+assert(storeThenCall() === 100, "call between store and load reassigns the global");
+assert(readAccessorTwice() === 3, "repeated accessor read runs the getter twice");
+assert(getterReads === 2, "accessor reads are not shared");
+assert(
+	capturedAcrossCall() === 12,
+	"call between store and load mutates the captured cell",
 );
 
 console.log("core-frontend-ssa PASS");

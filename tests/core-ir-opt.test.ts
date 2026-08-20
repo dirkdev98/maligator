@@ -579,6 +579,242 @@ describe("Core IR optimizer", () => {
 		).toHaveLength(2);
 	});
 
+	it("forwards a compiler-slot store to a dominated load", () => {
+		const build = (
+			functionIndex: number,
+			barrier: "none" | "call" | "suspend",
+		): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+				isGenerator: barrier === "suspend",
+			});
+			const entry = builder.createBlock([{}]);
+			const stored = builder.block(entry).parameters[0]!.value;
+			if (barrier === "suspend") builder.appendInstruction(entry, "generatorStart", []);
+			builder.appendInstruction(entry, "storeGlobal", [stored], {
+				attributes: { index: 0 },
+			});
+			if (barrier === "call") {
+				const [callee] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+					attributes: { intrinsic: "Object" },
+				});
+				builder.appendInstruction(entry, "call", [callee!, stored]);
+			}
+			if (barrier === "suspend") {
+				builder.appendInstruction(entry, "yield", [stored], { outputCount: 2 });
+			}
+			const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			return builder.finish(entry);
+		};
+		// A scope-chain edit rebinds captured cells, not global slots, so the
+		// captured variant is the one that must stop at `envCopy`.
+		const buildCaptured = (functionIndex: number, edited: boolean): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const stored = builder.block(entry).parameters[0]!.value;
+			builder.appendInstruction(entry, "storeCaptured", [stored], {
+				attributes: { functionIndex: 0, index: 2 },
+			});
+			if (edited) {
+				builder.appendInstruction(entry, "envCopy", [], {
+					attributes: { scopeId: -1, slotCount: 1 },
+				});
+			}
+			const [loaded] = builder.appendInstruction(entry, "loadCaptured", [], {
+				attributes: { functionIndex: 0, index: 2 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations(
+			{
+				...coreProgram([
+					build(0, "none"),
+					build(1, "call"),
+					build(2, "suspend"),
+					buildCaptured(3, false),
+					buildCaptured(4, true),
+				]),
+				globalCount: 1,
+			},
+			{ verification: "per-pass" },
+		);
+		const loads = (functionIndex: number, opcode: string) =>
+			outcome.program.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter((instruction) => instruction.opcode === opcode),
+			).length;
+		expect(loads(0, "loadGlobal")).toBe(0);
+		expect(loads(1, "loadGlobal")).toBe(1);
+		expect(loads(2, "loadGlobal")).toBe(1);
+		expect(loads(3, "loadCaptured")).toBe(0);
+		expect(loads(4, "loadCaptured")).toBe(1);
+		// The forwarded function returns the stored parameter itself.
+		const forwarded = outcome.program.functions[0]!;
+		expect(forwarded.blocks[0]!.terminator).toMatchObject({
+			kind: "return",
+			value: forwarded.parameters[0],
+		});
+	});
+
+	it("keeps one exact slot available across a store to a different slot", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 2,
+		});
+		const entry = builder.createBlock([{}, {}]);
+		const [kept, other] = builder.block(entry).parameters.map(({ value }) => value);
+		builder.appendInstruction(entry, "storeGlobal", [kept!], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(entry, "storeCaptured", [other!], {
+			attributes: { functionIndex: 0, index: 3 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [other!], {
+			attributes: { index: 1 },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), globalCount: 2 },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		expect(
+			fn.blocks.flatMap(({ instructions }) => instructions).map(({ opcode }) => opcode),
+		).not.toContain("loadGlobal");
+		expect(fn.blocks[0]!.terminator).toMatchObject({
+			kind: "return",
+			value: fn.parameters[0],
+		});
+	});
+
+	it("does not forward a slot into a handler or around an irreducible cycle", () => {
+		const guarded = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const guardedEntry = guarded.createBlock([{}]);
+		const handler = guarded.createBlock([{ role: "exception" }]);
+		const stored = guarded.block(guardedEntry).parameters[0]!.value;
+		guarded.appendInstruction(guardedEntry, "storeGlobal", [stored], {
+			attributes: { index: 0 },
+		});
+		const [callee] = guarded.appendInstruction(guardedEntry, "loadIntrinsic", [], {
+			attributes: { intrinsic: "Object" },
+		});
+		guarded.appendInstruction(guardedEntry, "call", [callee!, stored]);
+		guarded.setHandler(guardedEntry, handler);
+		guarded.setTerminator(guardedEntry, { kind: "return", value: stored });
+		const [rescued] = guarded.appendInstruction(handler, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		guarded.setTerminator(handler, { kind: "return", value: rescued! });
+
+		// Two mutually reachable blocks with no dominating header: neither entry
+		// version is a pass-through, so no slot value crosses the cycle.
+		const irreducible = new CoreFunctionBuilder(1, coreOpcodeRegistry, {
+			parameterCount: 2,
+		});
+		const irreducibleEntry = irreducible.createBlock([{}, {}]);
+		const left = irreducible.createBlock();
+		const right = irreducible.createBlock();
+		const exit = irreducible.createBlock();
+		const [value, condition] = irreducible
+			.block(irreducibleEntry)
+			.parameters.map(({ value: parameter }) => parameter);
+		irreducible.appendInstruction(irreducibleEntry, "storeGlobal", [value!], {
+			attributes: { index: 0 },
+		});
+		irreducible.setTerminator(irreducibleEntry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [fromLeft] = irreducible.appendInstruction(left, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		irreducible.appendInstruction(left, "storeGlobal", [fromLeft!], {
+			attributes: { index: 1 },
+		});
+		irreducible.setTerminator(left, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: right, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [fromRight] = irreducible.appendInstruction(right, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		irreducible.appendInstruction(right, "storeGlobal", [fromRight!], {
+			attributes: { index: 0 },
+		});
+		irreducible.setTerminator(right, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		irreducible.setTerminator(exit, { kind: "return", value: value! });
+
+		const outcome = executeCoreOptimizations(
+			{
+				...coreProgram([
+					guarded.finish(guardedEntry),
+					irreducible.finish(irreducibleEntry),
+				]),
+				globalCount: 2,
+			},
+			{ verification: "per-pass" },
+		);
+		const loads = (functionIndex: number) =>
+			outcome.program.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "loadGlobal"),
+			).length;
+		expect(loads(0)).toBe(1);
+		expect(loads(1)).toBe(2);
+	});
+
+	it("leaves a forwarded slot value to the ordinary TDZ proof", () => {
+		const build = (functionIndex: number, initialized: boolean): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const parameter = builder.block(entry).parameters[0]!.value;
+			const [source] = initialized
+				? builder.appendInstruction(entry, "move", [parameter])
+				: builder.appendInstruction(entry, "createEmpty", []);
+			builder.appendInstruction(entry, "storeGlobal", [source!], {
+				attributes: { index: 0 },
+			});
+			const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			builder.appendInstruction(entry, "throwIfTdz", [loaded!], {
+				attributes: { nameStringIndex: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([build(0, true), build(1, false)]), globalCount: 1 },
+			{ verification: "per-pass" },
+		);
+		const opcodes = (functionIndex: number) =>
+			outcome.program.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.map(({ opcode }) => opcode),
+			);
+		// Forwarding a definitely-initialized value lets the existing Empty-provenance
+		// proof retire the check; forwarding a possible Empty sentinel must not.
+		expect(opcodes(0)).not.toContain("throwIfTdz");
+		expect(opcodes(1)).toContain("throwIfTdz");
+	});
+
 	it("invalidates GVN across environment and derived-this rebinding", () => {
 		const captured = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const capturedEntry = captured.createBlock();

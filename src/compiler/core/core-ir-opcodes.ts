@@ -1,5 +1,17 @@
-import { CORE_NO_EFFECTS, CoreOpcodeRegistry, coreArity } from "./core-ir.ts";
-import type { CoreEffectDomain, CoreInstructionEffects } from "./core-ir.ts";
+import {
+	CORE_MEMORY_FAMILY_DOMAINS,
+	CORE_NO_EFFECTS,
+	CoreOpcodeRegistry,
+	coreArity,
+} from "./core-ir.ts";
+import type {
+	CoreAccessMode,
+	CoreEffectDomain,
+	CoreInstruction,
+	CoreInstructionEffects,
+	CoreMemoryFamily,
+	CoreOpcodeAccess,
+} from "./core-ir.ts";
 
 /**
  * Canonical Core operations. Control flow, exception entry, and source-position
@@ -264,34 +276,91 @@ const DISCARDABLE = new Set<CoreOpcode>([
 	"typeofCompare",
 ]);
 
-const PROPERTY_READS = new Set<CoreOpcode>([
-	"hasPrivate",
-	"loadGlobalProperty",
-	"loadPrivate",
-	"loadProperty",
-	"loadPropertyStatic",
-	"loadPrototype",
-	"loadSuperProperty",
-	"withGet",
-	"withResolveBase",
-]);
+const read = (
+	family: CoreMemoryFamily,
+	rest: Omit<CoreOpcodeAccess, "family" | "mode"> = {},
+) => ({ family, mode: "read", ...rest }) as const satisfies CoreOpcodeAccess;
 
-const PROPERTY_WRITES = new Set<CoreOpcode>([
-	"copyDataProperties",
-	"defineAccessor",
-	"definePrivate",
-	"defineProperty",
-	"deleteProperty",
-	"initPrivateFields",
-	"mergeDataProperties",
-	"setPrototype",
-	"storeGlobalProperty",
-	"storePrivate",
-	"storeProperty",
-	"storePropertyStatic",
-	"storeSuperProperty",
-	"withSet",
-]);
+const write = (
+	family: CoreMemoryFamily,
+	rest: Omit<CoreOpcodeAccess, "family" | "mode"> = {},
+) => ({ family, mode: "write", ...rest }) as const satisfies CoreOpcodeAccess;
+
+/**
+ * The single declaration of which memory each opcode names. Effect domains are
+ * derived from this table, so a new memory operation cannot declare an effect
+ * domain and a location that disagree, and no pass needs its own opcode switch
+ * to recognize a load or a store.
+ *
+ * Heap families are named without a base until the alias oracle can prove two
+ * bases distinct; `baseOperand` and `keyAttribute` are recorded where the operand
+ * order is unambiguous so that oracle has them, and are ignored by the current
+ * whole-family partitioning.
+ */
+const OPCODE_ACCESSES = {
+	loadLocal: [read("local-slot", { attributes: ["index"] })],
+	storeLocal: [write("local-slot", { attributes: ["index"], valueOperand: 0 })],
+	loadCaptured: [read("captured-slot", { attributes: ["functionIndex", "index"] })],
+	storeCaptured: [
+		write("captured-slot", { attributes: ["functionIndex", "index"], valueOperand: 0 }),
+	],
+	// A scope-chain edit rebinds every captured cell reachable from this activation.
+	envPush: [write("captured-slot")],
+	envCopy: [write("captured-slot")],
+	envPop: [write("captured-slot")],
+	createPrivateNames: [write("captured-slot")],
+	loadThis: [read("activation-this")],
+	setThis: [write("activation-this", { valueOperand: 0 })],
+	constructSuper: [write("activation-this")],
+	constructSuperExplicit: [write("activation-this")],
+	loadGlobal: [read("global-slot", { attributes: ["index"] })],
+	storeGlobal: [write("global-slot", { attributes: ["index"], valueOperand: 0 })],
+	initGlobalVars: [write("global-slot")],
+	loadGlobalProperty: [read("global-property", { keyAttribute: "nameStringIndex" })],
+	storeGlobalProperty: [
+		write("global-property", { keyAttribute: "nameStringIndex", valueOperand: 0 }),
+	],
+	loadProperty: [read("object-slot", { baseOperand: 0 })],
+	loadPropertyStatic: [
+		read("object-slot", { baseOperand: 0, keyAttribute: "stringIndex" }),
+	],
+	storeProperty: [write("object-slot", { baseOperand: 0, valueOperand: 2 })],
+	storePropertyStatic: [
+		write("object-slot", {
+			baseOperand: 0,
+			keyAttribute: "stringIndex",
+			valueOperand: 1,
+		}),
+	],
+	loadPrototype: [read("prototype", { baseOperand: 0 })],
+	setPrototype: [write("prototype", { baseOperand: 0, valueOperand: 1 })],
+	deleteProperty: [
+		write("object-slot", { baseOperand: 0 }),
+		write("shape", { baseOperand: 0 }),
+	],
+	defineProperty: [write("object-slot"), write("shape")],
+	defineAccessor: [write("object-slot"), write("shape")],
+	definePrivate: [write("object-slot"), write("shape")],
+	initPrivateFields: [write("object-slot"), write("shape")],
+	copyDataProperties: [write("object-slot"), write("shape")],
+	mergeDataProperties: [write("object-slot"), write("shape")],
+	hasPrivate: [read("object-slot")],
+	loadPrivate: [read("object-slot")],
+	storePrivate: [write("object-slot")],
+	loadSuperProperty: [read("object-slot")],
+	storeSuperProperty: [write("object-slot")],
+	withGet: [read("object-slot")],
+	withResolveBase: [read("object-slot")],
+	withSet: [write("object-slot")],
+} as const satisfies Partial<Record<CoreOpcode, ReadonlyArray<CoreOpcodeAccess>>>;
+
+function opcodeAccesses(opcode: CoreOpcode): ReadonlyArray<CoreOpcodeAccess> {
+	return (
+		(OPCODE_ACCESSES as Partial<Record<CoreOpcode, ReadonlyArray<CoreOpcodeAccess>>>)[
+			opcode
+		] ?? []
+	);
+}
 
 const INPUT_ARITIES = {
 	arrayRest: [1, 1],
@@ -391,44 +460,21 @@ const INPUT_ARITIES = {
 	yield: [1, 1],
 } as const satisfies Record<CoreOpcode, readonly [number, number]>;
 
+/**
+ * `array-element` is reachable only through the `element` family, which no opcode
+ * declares yet: indexed access still lowers to a dynamic-key `object-slot`
+ * access. Keeping the domain in the family table means the first `element`
+ * producer automatically overlaps existing `object-property` readers.
+ */
 function domainsFor(
 	opcode: CoreOpcode,
 	kind: "reads" | "writes",
 ): Array<CoreEffectDomain> {
+	const mode: CoreAccessMode = kind === "reads" ? "read" : "write";
 	const domains = new Set<CoreEffectDomain>();
-	if (kind === "reads" && opcode === "loadCaptured") domains.add("captured-slot");
-	if (kind === "writes" && opcode === "storeCaptured") domains.add("captured-slot");
-	if (
-		kind === "writes" &&
-		(opcode === "createPrivateNames" ||
-			opcode === "envPush" ||
-			opcode === "envCopy" ||
-			opcode === "envPop")
-	) {
-		domains.add("captured-slot");
-	}
-	if (kind === "reads" && opcode === "loadLocal") domains.add("local-slot");
-	if (kind === "writes" && opcode === "storeLocal") domains.add("local-slot");
-	if (kind === "reads" && opcode === "loadThis") domains.add("activation-this");
-	if (
-		kind === "writes" &&
-		(opcode === "setThis" ||
-			opcode === "constructSuper" ||
-			opcode === "constructSuperExplicit")
-	) {
-		domains.add("activation-this");
-	}
-	if (kind === "reads" && opcode === "loadGlobal") domains.add("global-slot");
-	if (kind === "writes" && (opcode === "storeGlobal" || opcode === "initGlobalVars")) {
-		domains.add("global-slot");
-	}
-	if (kind === "reads" && PROPERTY_READS.has(opcode)) {
-		domains.add("object-property");
-		if (opcode === "loadGlobalProperty") domains.add("global-property");
-	}
-	if (kind === "writes" && PROPERTY_WRITES.has(opcode)) {
-		domains.add("object-property");
-		if (opcode === "storeGlobalProperty") domains.add("global-property");
+	for (const access of opcodeAccesses(opcode)) {
+		if (access.mode !== mode) continue;
+		for (const domain of CORE_MEMORY_FAMILY_DOMAINS[access.family]) domains.add(domain);
 	}
 	if (CALLS_USER_CODE.has(opcode)) domains.add("host");
 	return [...domains];
@@ -462,13 +508,30 @@ export const coreOpcodeRegistry = new CoreOpcodeRegistry();
 for (const opcode of CORE_OPCODES) {
 	const outputs = NO_OUTPUT.has(opcode) ? 0 : TWO_OUTPUTS.has(opcode) ? 2 : 1;
 	const [minimumInputs, maximumInputs] = INPUT_ARITIES[opcode];
+	const accesses = opcodeAccesses(opcode);
 	coreOpcodeRegistry.define({
 		opcode,
 		inputs: coreArity(minimumInputs, maximumInputs),
 		outputs: coreArity(outputs),
 		effects: effectsFor(opcode),
 		discardable: DISCARDABLE.has(opcode),
+		...(accesses.length === 0 ? {} : { accesses }),
 	});
+}
+
+/**
+ * Effects an instruction actually has: its opcode's baseline, narrowed by a
+ * verified refinement when one is attached. Every consumer of Core effects reads
+ * them through here so a refinement can never be honoured in one analysis and
+ * ignored in another.
+ */
+export function coreInstructionEffects(
+	instruction: CoreInstruction,
+): CoreInstructionEffects {
+	return (
+		instruction.effectRefinement?.effects ??
+		coreOpcodeRegistry.require(instruction.opcode).effects
+	);
 }
 
 const CORE_OPCODE_SET: ReadonlySet<string> = new Set(CORE_OPCODES);

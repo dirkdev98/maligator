@@ -79,6 +79,72 @@ export const CORE_NO_EFFECTS: CoreInstructionEffects = Object.freeze({
 	callsUserCode: false,
 });
 
+/**
+ * Memory families Core can name. Deliberately absent: strings, whose values are
+ * immutable so there is no string memory to alias, and epochs, whose validity is
+ * a fact-system property rather than a memory dependence.
+ */
+export const CORE_MEMORY_FAMILIES = [
+	"global-slot",
+	"global-property",
+	"local-slot",
+	"captured-slot",
+	"activation-this",
+	"object-slot",
+	"element",
+	"shape",
+	"prototype",
+] as const;
+
+export type CoreMemoryFamily = (typeof CORE_MEMORY_FAMILIES)[number];
+
+/**
+ * Effect domains each family participates in. Families that can alias share a
+ * domain, so an analysis never has to remember that `global-property` and
+ * `object-slot` describe the same cells; invalidation flows through the shared
+ * domain instead.
+ */
+export const CORE_MEMORY_FAMILY_DOMAINS: Readonly<
+	Record<CoreMemoryFamily, ReadonlyArray<CoreEffectDomain>>
+> = Object.freeze({
+	"global-slot": Object.freeze<Array<CoreEffectDomain>>(["global-slot"]),
+	"global-property": Object.freeze<Array<CoreEffectDomain>>([
+		"global-property",
+		"object-property",
+	]),
+	"local-slot": Object.freeze<Array<CoreEffectDomain>>(["local-slot"]),
+	"captured-slot": Object.freeze<Array<CoreEffectDomain>>(["captured-slot"]),
+	"activation-this": Object.freeze<Array<CoreEffectDomain>>(["activation-this"]),
+	"object-slot": Object.freeze<Array<CoreEffectDomain>>(["object-property"]),
+	element: Object.freeze<Array<CoreEffectDomain>>(["object-property", "array-element"]),
+	shape: Object.freeze<Array<CoreEffectDomain>>(["object-property"]),
+	prototype: Object.freeze<Array<CoreEffectDomain>>(["object-property"]),
+});
+
+/** Families whose cells belong to one activation and cannot be reached by a call. */
+export const CORE_ACTIVATION_MEMORY_FAMILIES: ReadonlySet<CoreMemoryFamily> =
+	new Set<CoreMemoryFamily>(["local-slot", "captured-slot", "activation-this"]);
+
+export type CoreAccessMode = "read" | "write";
+
+/**
+ * How one opcode names the memory it touches. `attributes` lists the instruction
+ * attributes that identify an exact cell inside the family; an access without
+ * them covers the family as a whole. `baseOperand` and `keyAttribute` are
+ * declared for the alias oracle that will narrow heap families later — the
+ * partition model does not consume them yet, so declaring one cannot make an
+ * analysis more optimistic than the family it belongs to.
+ */
+export interface CoreOpcodeAccess {
+	readonly family: CoreMemoryFamily;
+	readonly mode: CoreAccessMode;
+	readonly attributes?: ReadonlyArray<string>;
+	readonly baseOperand?: number;
+	readonly keyAttribute?: string;
+	/** Operand holding the value a write stores, when the opcode has one. */
+	readonly valueOperand?: number;
+}
+
 export interface CoreArity {
 	readonly minimum: number;
 	readonly maximum: number;
@@ -105,6 +171,12 @@ export interface CoreOpcodeDescriptor<Name extends string = string> {
 	readonly effects: CoreInstructionEffects;
 	/** Removing an unused result cannot change observable JavaScript behavior. */
 	readonly discardable: boolean;
+	/**
+	 * Memory this opcode names. The registry checks every access against
+	 * `effects`, so a descriptor cannot name memory it does not declare an effect
+	 * domain for and the two can never drift apart.
+	 */
+	readonly accesses?: ReadonlyArray<CoreOpcodeAccess>;
 }
 
 function validateEffectDomains(
@@ -124,6 +196,68 @@ function validateEffectDomains(
 	}
 }
 
+function validateAccesses(descriptor: CoreOpcodeDescriptor): void {
+	const opcode = descriptor.opcode;
+	const seen = new Set<string>();
+	for (const access of descriptor.accesses ?? []) {
+		if (!CORE_MEMORY_FAMILIES.includes(access.family)) {
+			throw new Error(`Unknown memory family ${access.family} for ${opcode}`);
+		}
+		if (access.mode !== "read" && access.mode !== "write") {
+			throw new Error(`Unknown access mode ${String(access.mode)} for ${opcode}`);
+		}
+		const signature = `${access.family}\0${access.mode}`;
+		if (seen.has(signature)) {
+			throw new Error(
+				`Duplicate ${access.mode} access to ${access.family} for ${opcode}`,
+			);
+		}
+		seen.add(signature);
+		const declared =
+			access.mode === "read" ? descriptor.effects.reads : descriptor.effects.writes;
+		for (const domain of CORE_MEMORY_FAMILY_DOMAINS[access.family]) {
+			if (!declared.includes(domain)) {
+				throw new Error(
+					`${opcode} ${access.mode}s ${access.family} without declaring the ${domain} effect domain`,
+				);
+			}
+		}
+		const attributes = access.attributes ?? [];
+		if (attributes.some((attribute) => attribute.length === 0)) {
+			throw new Error(`${opcode} names an empty ${access.family} attribute`);
+		}
+		if (new Set(attributes).size !== attributes.length) {
+			throw new Error(`${opcode} repeats a ${access.family} attribute`);
+		}
+		if (
+			CORE_ACTIVATION_MEMORY_FAMILIES.has(access.family) &&
+			(access.baseOperand !== undefined || access.keyAttribute !== undefined)
+		) {
+			throw new Error(
+				`${opcode} names a base or key for the activation-local family ${access.family}`,
+			);
+		}
+		if (access.valueOperand !== undefined && access.mode !== "write") {
+			throw new Error(`${opcode} names a value operand on a ${access.mode} access`);
+		}
+		for (const [role, operand] of [
+			["base", access.baseOperand],
+			["value", access.valueOperand],
+		] as const) {
+			if (operand === undefined) continue;
+			if (
+				!Number.isSafeInteger(operand) ||
+				operand < 0 ||
+				operand >= descriptor.inputs.maximum
+			) {
+				throw new Error(
+					`${opcode} names ${role} operand ${operand} outside its ${descriptor.inputs.minimum}..${descriptor.inputs.maximum} inputs`,
+				);
+			}
+		}
+	}
+}
+
 export class CoreOpcodeRegistry {
 	readonly #descriptors = new Map<string, CoreOpcodeDescriptor>();
 
@@ -136,6 +270,7 @@ export class CoreOpcodeRegistry {
 		}
 		validateEffectDomains(descriptor.opcode, "read", descriptor.effects.reads);
 		validateEffectDomains(descriptor.opcode, "write", descriptor.effects.writes);
+		validateAccesses(descriptor);
 		const frozen: CoreOpcodeDescriptor<Name> = Object.freeze({
 			...descriptor,
 			inputs: Object.freeze({ ...descriptor.inputs }),
@@ -145,6 +280,20 @@ export class CoreOpcodeRegistry {
 				reads: Object.freeze([...descriptor.effects.reads]),
 				writes: Object.freeze([...descriptor.effects.writes]),
 			}),
+			...(descriptor.accesses === undefined
+				? {}
+				: {
+						accesses: Object.freeze(
+							descriptor.accesses.map((access) =>
+								Object.freeze({
+									...access,
+									...(access.attributes === undefined
+										? {}
+										: { attributes: Object.freeze([...access.attributes]) }),
+								}),
+							),
+						),
+					}),
 		});
 		this.#descriptors.set(descriptor.opcode, frozen);
 		return frozen;

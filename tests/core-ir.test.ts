@@ -4,11 +4,19 @@ import {
 	coreCanonicalValueRoots,
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import {
+	coreMemoryAccesses,
+	coreMemoryLocationFamily,
+	coreMemoryLocationIsExact,
+	coreMemoryPartition,
+} from "../src/compiler/core/core-ir-memory.ts";
+import {
 	CORE_OPCODES,
 	coreOpcodeRegistry,
 } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import {
+	CORE_MEMORY_FAMILIES,
+	CORE_MEMORY_FAMILY_DOMAINS,
 	CORE_NO_EFFECTS,
 	CoreFunctionBuilder,
 	CoreOpcodeRegistry,
@@ -85,6 +93,110 @@ describe("Core IR", () => {
 				builder.block(entry).parameters[0]!.value,
 			]),
 		).toThrow(/binary expects 2\.\.2 inputs/);
+	});
+
+	it("names every declared access against the effect domains it belongs to", () => {
+		for (const descriptor of coreOpcodeRegistry.entries()) {
+			for (const access of descriptor.accesses ?? []) {
+				const declared =
+					access.mode === "read" ? descriptor.effects.reads : descriptor.effects.writes;
+				for (const domain of CORE_MEMORY_FAMILY_DOMAINS[access.family]) {
+					expect(declared).toContain(domain);
+				}
+			}
+		}
+		// Families that can describe the same cell must share a domain, so one
+		// family's write is never invisible to another family's reader.
+		for (const family of CORE_MEMORY_FAMILIES) {
+			expect(CORE_MEMORY_FAMILY_DOMAINS[family].length).toBeGreaterThan(0);
+		}
+		expect(CORE_MEMORY_FAMILY_DOMAINS["global-property"]).toContain("object-property");
+		expect(CORE_MEMORY_FAMILY_DOMAINS.element).toContain("object-property");
+		expect(CORE_MEMORY_FAMILIES).not.toContain("string");
+		expect(CORE_MEMORY_FAMILIES).not.toContain("epoch");
+	});
+
+	it("rejects a descriptor whose access and effect domains disagree", () => {
+		const opcodes = new CoreOpcodeRegistry();
+		expect(() =>
+			opcodes.define({
+				opcode: "undeclaredSlotWrite",
+				inputs: coreArity(1),
+				outputs: coreArity(0),
+				effects: CORE_NO_EFFECTS,
+				discardable: false,
+				accesses: [{ family: "global-slot", mode: "write", valueOperand: 0 }],
+			}),
+		).toThrow(/without declaring the global-slot effect domain/);
+		expect(() =>
+			opcodes.define({
+				opcode: "outOfRangeValueOperand",
+				inputs: coreArity(1),
+				outputs: coreArity(0),
+				effects: { ...CORE_NO_EFFECTS, writes: ["global-slot"] },
+				discardable: false,
+				accesses: [{ family: "global-slot", mode: "write", valueOperand: 3 }],
+			}),
+		).toThrow(/value operand 3 outside its 1\.\.1 inputs/);
+		expect(() =>
+			opcodes.define({
+				opcode: "basedActivationSlot",
+				inputs: coreArity(1),
+				outputs: coreArity(1),
+				effects: { ...CORE_NO_EFFECTS, reads: ["captured-slot"] },
+				discardable: true,
+				accesses: [{ family: "captured-slot", mode: "read", baseOperand: 0 }],
+			}),
+		).toThrow(/base or key for the activation-local family captured-slot/);
+	});
+
+	it("resolves exact compiler-slot locations and degrades heap accesses to a family", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [slot] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 4 },
+		});
+		builder.appendInstruction(entry, "loadCaptured", [], {
+			attributes: { functionIndex: 2, index: 1 },
+		});
+		const [self] = builder.appendInstruction(entry, "loadThis", []);
+		// A store keeps its exact slot identity and names the value it forwards.
+		builder.appendInstruction(entry, "storeGlobal", [slot!], {
+			attributes: { index: 4 },
+		});
+		// A malformed slot attribute must widen to the family, never guess a cell.
+		builder.appendInstruction(entry, "storeGlobal", [slot!], {
+			attributes: { index: "four" },
+		});
+		const [property] = builder.appendInstruction(entry, "loadPropertyStatic", [self!], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: property! });
+		const fn = builder.finish(entry);
+		const instructions = fn.blocks[0]!.instructions;
+		const locationOf = (index: number) => coreMemoryAccesses(instructions[index]!)[0]!;
+
+		expect(locationOf(0).location).toEqual({ kind: "global-slot", slot: 4 });
+		expect(locationOf(1).location).toEqual({
+			kind: "captured-slot",
+			owner: 2,
+			index: 1,
+		});
+		expect(locationOf(2).location).toEqual({ kind: "activation-this" });
+		expect(locationOf(3)).toMatchObject({ mode: "write", value: slot });
+		expect(locationOf(4).location).toEqual({ kind: "family", family: "global-slot" });
+		const heap = locationOf(5);
+		expect(coreMemoryLocationIsExact(heap.location)).toBe(false);
+		expect(coreMemoryLocationFamily(heap.location)).toBe("object-slot");
+		// The declared base and key are recorded for the future alias oracle without
+		// making the partition itself narrower than the whole family.
+		expect(heap).toMatchObject({ base: self, key: 0 });
+		expect(coreMemoryPartition({ kind: "global-slot", slot: 4 })).not.toBe(
+			coreMemoryPartition({ kind: "global-slot", slot: 5 }),
+		);
+		expect(coreMemoryPartition({ kind: "local-slot", slot: 4 })).not.toBe(
+			coreMemoryPartition({ kind: "global-slot", slot: 4 }),
+		);
 	});
 
 	it("builds, verifies, prints, and analyzes block-parameter SSA", () => {
@@ -289,6 +401,21 @@ describe("Core IR", () => {
 		});
 		expect(() => verifyCoreFunction(invalid.finish(invalidEntry), opcodes)).toThrow(
 			/not available at block entry/,
+		);
+
+		const direct = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const directEntry = direct.createBlock([{ representation: "boxed" }]);
+		const directHandler = direct.createBlock([{ role: "exception" }]);
+		const [directLate] = direct.appendInstruction(
+			directEntry,
+			"call",
+			[direct.block(directEntry).parameters[0]!.value],
+		);
+		direct.setHandler(directEntry, directHandler);
+		direct.setTerminator(directEntry, { kind: "return", value: directLate! });
+		direct.setTerminator(directHandler, { kind: "return", value: directLate! });
+		expect(() => verifyCoreFunction(direct.finish(directEntry), opcodes)).toThrow(
+			/not available on exceptional flow/,
 		);
 	});
 

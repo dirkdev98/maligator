@@ -22,8 +22,16 @@ import {
 	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import {
+	coreMemoryAccesses,
+	coreMemoryLocationFamily,
+	coreMemoryLocationIsExact,
+	coreMemoryPartition,
+	coreMemoryVersions,
+} from "./core-ir-memory.ts";
+import type { CoreMemoryPartition, CoreMemoryVersions } from "./core-ir-memory.ts";
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
-import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
 	CoreIrVerificationError,
@@ -38,17 +46,17 @@ import type {
 	CoreBlock,
 	CoreBlockId,
 	CoreAttributeValue,
-	CoreEffectDomain,
 	CoreEdge,
 	CoreFunction,
 	CoreImmediate,
 	CoreInstruction,
 	CoreInstructionId,
+	CoreMemoryFamily,
 	CoreProgram,
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
-import { CORE_EFFECT_DOMAINS, coreInstructionId, coreValueId } from "./core-ir.ts";
+import { coreInstructionId, coreValueId } from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
 	readonly maxRounds?: number;
@@ -4677,6 +4685,7 @@ export class CoreAnalysisManager {
 		CoreFunction,
 		ReadonlyMap<CoreValueId, CoreValueId>
 	>();
+	readonly #memory = new WeakMap<CoreFunction, CoreMemoryVersions>();
 
 	controlFlow(fn: CoreFunction): CoreControlFlow {
 		let analysis = this.#controlFlow.get(fn);
@@ -4692,6 +4701,15 @@ export class CoreAnalysisManager {
 		if (analysis === undefined) {
 			analysis = coreCanonicalValueRoots(fn, this.controlFlow(fn));
 			this.#canonicalValues.set(fn, analysis);
+		}
+		return analysis;
+	}
+
+	memory(fn: CoreFunction): CoreMemoryVersions {
+		let analysis = this.#memory.get(fn);
+		if (analysis === undefined) {
+			analysis = coreMemoryVersions(fn, this.controlFlow(fn));
+			this.#memory.set(fn, analysis);
 		}
 		return analysis;
 	}
@@ -6454,13 +6472,6 @@ const IMMUTABLE_VALUE_NUMBERING_OPCODES = new Set([
 	"typeofCompare",
 ]);
 
-function effectiveInstructionEffects(instruction: CoreInstruction) {
-	return (
-		instruction.effectRefinement?.effects ??
-		coreOpcodeRegistry.require(instruction.opcode).effects
-	);
-}
-
 function pruneVacuousHandlers(fn: CoreFunction): CoreFunction {
 	let changed = false;
 	const blocks = fn.blocks.map((block): CoreBlock => {
@@ -6468,7 +6479,7 @@ function pruneVacuousHandlers(fn: CoreFunction): CoreFunction {
 			block.handler === undefined ||
 			block.terminator.kind === "throw" ||
 			block.instructions.some(
-				(instruction) => effectiveInstructionEffects(instruction).mayThrow,
+				(instruction) => coreInstructionEffects(instruction).mayThrow,
 			)
 		) {
 			return block;
@@ -6484,142 +6495,6 @@ function pruneVacuousHandlers(fn: CoreFunction): CoreFunction {
 	});
 }
 
-function invalidatedEffectDomains(
-	instruction: CoreInstruction,
-): ReadonlySet<CoreEffectDomain> {
-	const effects = effectiveInstructionEffects(instruction);
-	const invalidated = new Set(effects.writes);
-	if (effects.callsUserCode || effects.maySuspend) {
-		for (const domain of CORE_EFFECT_DOMAINS) invalidated.add(domain);
-	}
-	return invalidated;
-}
-
-type CoreMemoryVersion = string;
-type CoreMemoryState = ReadonlyMap<CoreEffectDomain, CoreMemoryVersion>;
-
-function sameMemoryState(
-	left: CoreMemoryState | undefined,
-	right: CoreMemoryState,
-	domains: ReadonlyArray<CoreEffectDomain>,
-): boolean {
-	return (
-		left !== undefined &&
-		domains.every((domain) => left.get(domain) === right.get(domain))
-	);
-}
-
-function cloneMemoryState(
-	state: CoreMemoryState,
-): Map<CoreEffectDomain, CoreMemoryVersion> {
-	return new Map(state);
-}
-
-/**
- * Give each instruction an analysis-only memory-SSA version for every effect
- * partition it reads. A merge with unequal incoming versions receives a stable
- * block-local phi version. Retaining the phi's identity is essential: the set
- * of reaching writes is not a sound value-numbering key in a loop because two
- * program points can see the same set while observing different writes on one
- * concrete iteration.
- */
-function reachingMemoryVersions(
-	fn: CoreFunction,
-	cfg: CoreControlFlow,
-): ReadonlyMap<CoreInstructionId, string> {
-	const domains = [
-		...new Set(
-			fn.blocks.flatMap(({ instructions }) =>
-				instructions.flatMap(
-					(instruction) => effectiveInstructionEffects(instruction).reads,
-				),
-			),
-		),
-	];
-	if (domains.length === 0) return new Map();
-	const domainSet = new Set(domains);
-	const entry = new Map<CoreEffectDomain, CoreMemoryVersion>(
-		domains.map((domain) => [domain, `entry:${domain}`]),
-	);
-	const entries = new Array<CoreMemoryState | undefined>(fn.blocks.length);
-	const exits = new Array<CoreMemoryState | undefined>(fn.blocks.length);
-	let progress = true;
-	while (progress) {
-		progress = false;
-		for (const blockId of cfg.reversePostorder) {
-			const block = fn.blocks[blockId]!;
-			const predecessors: Array<CoreMemoryState> = [];
-			if (block.id === fn.entry) predecessors.push(entry);
-			for (const predecessor of cfg.predecessors[block.id]!) {
-				const state = exits[predecessor.from];
-				if (state === undefined) continue;
-				if (predecessor.kind === "ordinary") {
-					predecessors.push(state);
-					continue;
-				}
-				// Core's exceptional CFG edge is block-wide: any throwing instruction
-				// can transfer control after a different prefix of writes. Give it a
-				// stable opaque version rather than pretending the ordinary exit ran.
-				predecessors.push(
-					new Map(
-						domains.map((domain) => [domain, `exception:${predecessor.from}:${domain}`]),
-					),
-				);
-			}
-			if (predecessors.length === 0) continue;
-			const incoming = new Map<CoreEffectDomain, CoreMemoryVersion>();
-			for (const domain of domains) {
-				const first = predecessors[0]!.get(domain)!;
-				incoming.set(
-					domain,
-					predecessors.every((state) => state.get(domain) === first)
-						? first
-						: `phi:${block.id}:${domain}`,
-				);
-			}
-			if (!sameMemoryState(entries[block.id], incoming, domains)) {
-				entries[block.id] = incoming;
-				progress = true;
-			}
-			const outgoing = cloneMemoryState(incoming);
-			for (const instruction of block.instructions) {
-				for (const domain of invalidatedEffectDomains(instruction)) {
-					if (domainSet.has(domain)) {
-						outgoing.set(domain, `write:${instruction.id}:${domain}`);
-					}
-				}
-			}
-			if (!sameMemoryState(exits[block.id], outgoing, domains)) {
-				exits[block.id] = outgoing;
-				progress = true;
-			}
-		}
-	}
-
-	const versions = new Map<CoreInstructionId, string>();
-	for (const block of fn.blocks) {
-		const initial =
-			entries[block.id] ??
-			new Map<CoreEffectDomain, CoreMemoryVersion>(
-				domains.map((domain) => [domain, `unreachable:${block.id}:${domain}`]),
-			);
-		const state = cloneMemoryState(initial);
-		for (const instruction of block.instructions) {
-			const reads = effectiveInstructionEffects(instruction).reads;
-			if (reads.length > 0) {
-				versions.set(
-					instruction.id,
-					reads.map((domain) => `${domain}:${state.get(domain)}`).join("|"),
-				);
-			}
-			for (const domain of invalidatedEffectDomains(instruction)) {
-				if (domainSet.has(domain)) state.set(domain, `write:${instruction.id}:${domain}`);
-			}
-		}
-	}
-	return versions;
-}
-
 function valueNumberingKey(
 	instruction: CoreInstruction,
 	memoryVersion: string,
@@ -6630,7 +6505,7 @@ function valueNumberingKey(
 
 function isValueNumberingCandidate(instruction: CoreInstruction): boolean {
 	const descriptor = coreOpcodeRegistry.require(instruction.opcode);
-	const effects = effectiveInstructionEffects(instruction);
+	const effects = coreInstructionEffects(instruction);
 	return !(
 		instruction.outputs.length === 0 ||
 		!descriptor.discardable ||
@@ -6641,6 +6516,59 @@ function isValueNumberingCandidate(instruction: CoreInstruction): boolean {
 		effects.callsUserCode ||
 		effects.maySuspend
 	);
+}
+
+/**
+ * Instructions a region certificate pins, and the values they consume. A pass may
+ * neither rewrite a pinned instruction nor replace one of its operands, because
+ * the certificate is a proof about those exact identities.
+ */
+function regionProtectedValues(fn: CoreFunction): {
+	readonly instructions: ReadonlySet<CoreInstructionId>;
+	readonly inputs: ReadonlySet<CoreValueId>;
+} {
+	const instructions = new Set(
+		fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
+	);
+	const inputs = new Set<CoreValueId>();
+	if (instructions.size === 0) return { instructions, inputs };
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!instructions.has(instruction.id)) continue;
+			for (const input of instruction.inputs) inputs.add(input);
+		}
+		if (!instructions.has(block.terminator.id)) continue;
+		const addEdge = (edge: CoreEdge) => {
+			for (const argument of edge.arguments) inputs.add(argument);
+		};
+		switch (block.terminator.kind) {
+			case "jump":
+				addEdge(block.terminator.edge);
+				break;
+			case "branch":
+				inputs.add(block.terminator.condition);
+				addEdge(block.terminator.consequent);
+				addEdge(block.terminator.alternate);
+				break;
+			case "guard":
+				inputs.add(block.terminator.condition);
+				addEdge(block.terminator.success);
+				addEdge(block.terminator.fallback);
+				break;
+			case "switch":
+				inputs.add(block.terminator.discriminant);
+				for (const { edge } of block.terminator.cases) addEdge(edge);
+				addEdge(block.terminator.default);
+				break;
+			case "return":
+			case "throw":
+				inputs.add(block.terminator.value);
+				break;
+			case "unreachable":
+				break;
+		}
+	}
+	return { instructions, inputs };
 }
 
 /** A duplicate GVN key requires two eligible instructions with the same opcode. */
@@ -6672,7 +6600,7 @@ function isLoopInvariantCandidate(instruction: CoreInstruction): boolean {
 	) {
 		return false;
 	}
-	const effects = effectiveInstructionEffects(instruction);
+	const effects = coreInstructionEffects(instruction);
 	return (
 		effects.reads.length === 0 &&
 		effects.writes.length === 0 &&
@@ -6682,6 +6610,184 @@ function isLoopInvariantCandidate(instruction: CoreInstruction): boolean {
 		!effects.callsUserCode
 	);
 }
+
+/**
+ * Families whose cells a compiler owns rather than JavaScript: a global slot, a
+ * captured slot, and the activation's `this` binding. None is a JavaScript
+ * property, so reading one has no observable effect and reading it twice is
+ * indistinguishable from reading it once.
+ *
+ * Heap families are excluded until an alias oracle can prove a base's shape
+ * carries the key as an own data property; without that proof, dropping a
+ * property read could skip an accessor, a Proxy trap, or a coercion. `local-slot`
+ * is excluded too: the frontend turns locals into SSA, so its opcodes only appear
+ * in hand-built graphs, and a direct eval can address a real frame slot
+ * dynamically.
+ */
+const FORWARDABLE_MEMORY_FAMILIES: ReadonlySet<CoreMemoryFamily> =
+	new Set<CoreMemoryFamily>(["global-slot", "captured-slot", "activation-this"]);
+
+function forwardableMemoryAccesses(instruction: CoreInstruction): ReadonlyArray<{
+	readonly partition: CoreMemoryPartition;
+	readonly mode: "read" | "write";
+	readonly value: CoreValueId;
+}> {
+	const forwardable: Array<{
+		readonly partition: CoreMemoryPartition;
+		readonly mode: "read" | "write";
+		readonly value: CoreValueId;
+	}> = [];
+	const effects = coreInstructionEffects(instruction);
+	// An operation that also runs user code or suspends may leave the slot holding
+	// something other than the value it stored, so its store is not forwardable
+	// even though the version it installs is fresh.
+	if (effects.callsUserCode || effects.maySuspend) return forwardable;
+	for (const access of coreMemoryAccesses(instruction)) {
+		if (!coreMemoryLocationIsExact(access.location)) continue;
+		if (!FORWARDABLE_MEMORY_FAMILIES.has(coreMemoryLocationFamily(access.location))) {
+			continue;
+		}
+		const value = access.mode === "read" ? access.result : access.value;
+		if (value === undefined) continue;
+		forwardable.push({
+			partition: coreMemoryPartition(access.location),
+			mode: access.mode,
+			value,
+		});
+	}
+	return forwardable;
+}
+
+/** A slot read can only be redundant when the same slot is written or read twice. */
+function mayForwardMemoryAccesses(fn: CoreFunction): boolean {
+	const read = new Set<CoreMemoryPartition>();
+	const written = new Set<CoreMemoryPartition>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			for (const access of forwardableMemoryAccesses(instruction)) {
+				if (access.mode === "write") {
+					written.add(access.partition);
+					continue;
+				}
+				if (read.has(access.partition)) return true;
+				read.add(access.partition);
+			}
+		}
+	}
+	return [...written].some((partition) => read.has(partition));
+}
+
+/**
+ * Reuse the value already in a compiler slot instead of loading it again: forward
+ * a store to a later load, and remove a load the same load already performed.
+ *
+ * Two obligations, discharged separately. Memory equality comes from the
+ * analysis-only memory-SSA version of the slot's own partition, so a load is only
+ * a hit when the exact same memory-SSA definition reaches both points; unknown
+ * calls, suspension, scope-chain edits, derived-`this` rebinding, and every
+ * backedge or exceptional entry that could reach a different definition give the
+ * later point a different version. Value availability comes from walking the
+ * dominator tree with a scoped map, so the value the pass substitutes always
+ * dominates its new use. TDZ checks are untouched: forwarding replaces a value
+ * and never removes a check, leaving `eliminate-redundant-tdz-checks` to decide
+ * on its own Empty-provenance proof.
+ *
+ * Each block is entered once, so the walk terminates on cyclic and irreducible
+ * control flow alike, in O(instructions) map operations.
+ */
+const forwardMemoryAccesses: CoreFunctionPass = {
+	name: "forward-memory-accesses",
+	run(fn, analyses) {
+		if (!mayForwardMemoryAccesses(fn)) return fn;
+		const cfg = analyses.controlFlow(fn);
+		const memory = analyses.memory(fn);
+		const { instructions: protectedInstructions, inputs: protectedInputs } =
+			regionProtectedValues(fn);
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		const children = fn.blocks.map(() => new Array<CoreBlockId>());
+		for (const block of fn.blocks) {
+			const parent = cfg.immediateDominators[block.id];
+			if (parent !== undefined && parent !== null && parent !== block.id) {
+				children[parent]!.push(block.id);
+			}
+		}
+		const replacements = new Map<CoreValueId, CoreValueId>();
+		const removedInstructions = new Set<CoreInstructionId>();
+		const visited = new Set<CoreBlockId>();
+		type Undo = {
+			readonly key: string;
+			readonly previous: CoreValueId | undefined;
+		};
+		type Frame =
+			| { readonly kind: "enter"; readonly block: CoreBlockId }
+			| { readonly kind: "exit"; readonly marker: number };
+		const available = new Map<string, CoreValueId>();
+		const undo: Array<Undo> = [];
+		const record = (key: string, value: CoreValueId): void => {
+			undo.push({ key, previous: available.get(key) });
+			available.set(key, value);
+		};
+		const processTree = (root: CoreBlockId): void => {
+			const stack: Array<Frame> = [{ kind: "enter", block: root }];
+			while (stack.length > 0) {
+				const frame = stack.pop()!;
+				if (frame.kind === "exit") {
+					while (undo.length > frame.marker) {
+						const entry = undo.pop()!;
+						if (entry.previous === undefined) available.delete(entry.key);
+						else available.set(entry.key, entry.previous);
+					}
+					continue;
+				}
+				if (visited.has(frame.block)) continue;
+				visited.add(frame.block);
+				const marker = undo.length;
+				const block = fn.blocks[frame.block]!;
+				for (const instruction of block.instructions) {
+					if (protectedInstructions.has(instruction.id)) continue;
+					const accesses = forwardableMemoryAccesses(instruction);
+					if (accesses.length === 0) continue;
+					const readVersions = memory.reads.get(instruction.id)?.exact;
+					for (const access of accesses) {
+						if (access.mode === "write") {
+							record(
+								`${access.partition}\0${memory.writeVersion(instruction.id, access.partition)}`,
+								access.value,
+							);
+							continue;
+						}
+						const version = readVersions?.get(access.partition);
+						if (version === undefined) continue;
+						const key = `${access.partition}\0${version}`;
+						const hit = available.get(key);
+						if (
+							hit !== undefined &&
+							representations.get(hit) === representations.get(access.value) &&
+							!protectedInputs.has(access.value)
+						) {
+							replacements.set(access.value, hit);
+							removedInstructions.add(instruction.id);
+							continue;
+						}
+						if (hit === undefined) record(key, access.value);
+					}
+				}
+				stack.push({ kind: "exit", marker });
+				for (const child of [...children[frame.block]!].reverse()) {
+					stack.push({ kind: "enter", block: child });
+				}
+			}
+		};
+		processTree(fn.entry);
+		for (const block of fn.blocks) {
+			if (!visited.has(block.id)) processTree(block.id);
+		}
+		if (removedInstructions.size === 0) return fn;
+		return rewriteFunction(fn, fn.blocks, replacements, removedInstructions);
+	},
+};
 
 /**
  * Hoist speculatable SSA expressions from reducible loops with an existing
@@ -6818,7 +6924,7 @@ function localCopyAndValueNumber(fn: CoreFunction): CoreFunction | undefined {
 		candidateBlock.instructions.some(
 			(instruction) =>
 				isValueNumberingCandidate(instruction) &&
-				effectiveInstructionEffects(instruction).reads.length > 0,
+				coreInstructionEffects(instruction).reads.length > 0,
 		)
 	) {
 		return undefined;
@@ -6886,55 +6992,14 @@ const copyAndValueNumber: CoreFunctionPass = {
 			block.instructions.some(
 				(instruction) =>
 					isValueNumberingCandidate(instruction) &&
-					effectiveInstructionEffects(instruction).reads.length > 0,
+					coreInstructionEffects(instruction).reads.length > 0,
 			),
 		);
-		const memoryVersions = needsMemoryVersions
-			? reachingMemoryVersions(fn, cfg)
-			: new Map<CoreInstructionId, string>();
+		const memoryVersions = needsMemoryVersions ? analyses.memory(fn) : undefined;
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removedInstructions = new Set<number>();
-		const protectedInstructions = new Set(
-			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
-		);
-		const protectedInputs = new Set<CoreValueId>();
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (!protectedInstructions.has(instruction.id)) continue;
-				for (const input of instruction.inputs) protectedInputs.add(input);
-			}
-			if (protectedInstructions.has(block.terminator.id)) {
-				const addEdge = (edge: CoreEdge) => {
-					for (const argument of edge.arguments) protectedInputs.add(argument);
-				};
-				switch (block.terminator.kind) {
-					case "jump":
-						addEdge(block.terminator.edge);
-						break;
-					case "branch":
-						protectedInputs.add(block.terminator.condition);
-						addEdge(block.terminator.consequent);
-						addEdge(block.terminator.alternate);
-						break;
-					case "guard":
-						protectedInputs.add(block.terminator.condition);
-						addEdge(block.terminator.success);
-						addEdge(block.terminator.fallback);
-						break;
-					case "switch":
-						protectedInputs.add(block.terminator.discriminant);
-						for (const { edge } of block.terminator.cases) addEdge(edge);
-						addEdge(block.terminator.default);
-						break;
-					case "return":
-					case "throw":
-						protectedInputs.add(block.terminator.value);
-						break;
-					case "unreachable":
-						break;
-				}
-			}
-		}
+		const { instructions: protectedInstructions, inputs: protectedInputs } =
+			regionProtectedValues(fn);
 		const representations = new Map(
 			fn.values.map(({ id, representation }) => [id, representation] as const),
 		);
@@ -7000,7 +7065,7 @@ const copyAndValueNumber: CoreFunctionPass = {
 					}
 					const key = valueNumberingKey(
 						instruction,
-						memoryVersions.get(instruction.id) ?? "",
+						memoryVersions?.reads.get(instruction.id)?.key ?? "",
 					);
 					if (key !== undefined) {
 						const previous = frame.available.get(key);
@@ -7601,6 +7666,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldEmptyForwardingBlocks,
 	combineLinearBlocks,
 	foldStaticPropertyKeys,
+	forwardMemoryAccesses,
 	loopInvariantCodeMotion,
 	copyAndValueNumber,
 	deadInstructionElimination,
