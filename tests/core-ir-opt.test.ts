@@ -168,6 +168,70 @@ describe("Core IR optimizer", () => {
 		).toBe(1);
 	});
 
+	it("retains both paths when an executable join stops being constant", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "boolean" }]);
+		const success = builder.createBlock();
+		const failure = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftTrue] = builder.appendInstruction(left, "createBoolean", [], {
+			attributes: { value: true },
+			outputRepresentations: ["boolean"],
+		});
+		const [rightFalse] = builder.appendInstruction(right, "createBoolean", [], {
+			attributes: { value: false },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftTrue!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightFalse!] },
+		});
+		builder.setTerminator(join, {
+			kind: "branch",
+			condition: builder.block(join).parameters[0]!.value,
+			consequent: { block: success, arguments: [] },
+			alternate: { block: failure, arguments: [] },
+		});
+		const [one] = builder.appendInstruction(success, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [zero] = builder.appendInstruction(failure, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		builder.setTerminator(success, { kind: "return", value: one! });
+		builder.setTerminator(failure, { kind: "return", value: zero! });
+
+		const fn = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			verification: "per-pass",
+		}).program.functions[0]!;
+		const branches = fn.blocks
+			.map(({ terminator }) => terminator)
+			.filter((terminator) => terminator.kind === "branch");
+		expect(branches).toHaveLength(1);
+		expect(branches[0]!.consequent.block).not.toBe(branches[0]!.alternate.block);
+		expect(
+			fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.filter(({ opcode }) => opcode === "createNumber")
+				.map(({ attributes }) => attributes.value)
+				.sort(),
+		).toEqual([0, 1]);
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
 	it("preserves coercions, BigInt mixing, NaN, and signed-zero behavior", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const entry = builder.createBlock();

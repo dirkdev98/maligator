@@ -5440,39 +5440,81 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 		const executableBlocks = new Set<CoreBlockId>([fn.entry]);
 		const executableEdges = new Set<CoreEdge>();
 		const executableExceptionalSources = new Set<CoreBlockId>();
-		const incoming = new Map<
-			CoreBlockId,
-			Array<
-				| { readonly kind: "ordinary"; readonly arguments: ReadonlyArray<CoreValueId> }
-				| { readonly kind: "exceptional"; readonly arguments: ReadonlyArray<CoreValueId> }
-			>
-		>();
 		for (const parameter of fn.blocks[fn.entry]!.parameters) {
 			states.set(parameter.value, OVERDEFINED_CONSTANT);
 		}
-		const dependentBlocks = new Map<CoreValueId, Set<CoreBlockId>>();
-		const addDependency = (value: CoreValueId, block: CoreBlockId): void => {
-			const blocks = dependentBlocks.get(value) ?? new Set<CoreBlockId>();
-			blocks.add(block);
-			dependentBlocks.set(value, blocks);
+
+		type OrdinaryParameterBinding = {
+			readonly edge: CoreEdge;
+			readonly parameter: CoreValueId;
+		};
+		type ExceptionalParameterBinding = {
+			readonly source: CoreBlockId;
+			readonly parameter: CoreValueId;
+		};
+		type InstructionUser = {
+			readonly instruction: CoreInstruction;
+			readonly block: CoreBlockId;
+		};
+		const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
+		const instructionUsers = new Array<Array<InstructionUser> | undefined>(valueCount);
+		const terminatorUsers = new Array<Array<CoreBlockId> | undefined>(valueCount);
+		const ordinaryParameterBindings = new Array<
+			Array<OrdinaryParameterBinding> | undefined
+		>(valueCount);
+		const exceptionalParameterBindings = new Array<
+			Array<ExceptionalParameterBinding> | undefined
+		>(valueCount);
+		const addInstructionUser = (
+			value: CoreValueId,
+			instruction: CoreInstruction,
+			block: CoreBlockId,
+		): void => {
+			const users = instructionUsers[value] ?? (instructionUsers[value] = []);
+			users.push({ instruction, block });
+		};
+		const addTerminatorUser = (value: CoreValueId, block: CoreBlockId): void => {
+			const users = terminatorUsers[value] ?? (terminatorUsers[value] = []);
+			users.push(block);
+		};
+		const addOrdinaryBinding = (
+			value: CoreValueId,
+			binding: OrdinaryParameterBinding,
+		): void => {
+			const bindings =
+				ordinaryParameterBindings[value] ?? (ordinaryParameterBindings[value] = []);
+			bindings.push(binding);
+		};
+		const addExceptionalBinding = (
+			value: CoreValueId,
+			binding: ExceptionalParameterBinding,
+		): void => {
+			const bindings =
+				exceptionalParameterBindings[value] ?? (exceptionalParameterBindings[value] = []);
+			bindings.push(binding);
 		};
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				for (const input of instruction.inputs) addDependency(input, block.id);
+				for (const input of instruction.inputs) {
+					addInstructionUser(input, instruction, block.id);
+				}
 			}
 			for (const edge of coreTerminatorEdges(block.terminator)) {
-				for (const argument of edge.arguments) addDependency(argument, edge.block);
-			}
-			for (const argument of block.handler?.arguments ?? []) {
-				addDependency(argument, block.handler!.block);
+				const target = fn.blocks[edge.block]!;
+				for (const [index, argument] of edge.arguments.entries()) {
+					const parameter = target.parameters[index];
+					if (parameter !== undefined) {
+						addOrdinaryBinding(argument, { edge, parameter: parameter.value });
+					}
+				}
 			}
 			switch (block.terminator.kind) {
 				case "branch":
 				case "guard":
-					addDependency(block.terminator.condition, block.id);
+					addTerminatorUser(block.terminator.condition, block.id);
 					break;
 				case "switch":
-					addDependency(block.terminator.discriminant, block.id);
+					addTerminatorUser(block.terminator.discriminant, block.id);
 					break;
 				case "jump":
 				case "return":
@@ -5480,30 +5522,64 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 				case "unreachable":
 					break;
 			}
+			const exceptional = cfg.successors[block.id]!.find(
+				({ kind }) => kind === "exceptional",
+			);
+			if (exceptional !== undefined) {
+				const target = fn.blocks[exceptional.to]!;
+				const offset = target.parameters[0]?.role === "exception" ? 1 : 0;
+				for (const [index, argument] of exceptional.arguments.entries()) {
+					const parameter = target.parameters[index + offset];
+					if (parameter !== undefined) {
+						addExceptionalBinding(argument, {
+							source: block.id,
+							parameter: parameter.value,
+						});
+					}
+				}
+			}
 		}
-		const pendingBlocks: Array<CoreBlockId> = [];
-		const scheduled = new Set<CoreBlockId>();
-		const enqueue = (block: CoreBlockId): void => {
-			if (!executableBlocks.has(block) || scheduled.has(block)) return;
-			scheduled.add(block);
-			pendingBlocks.push(block);
+
+		const pendingBlocks: Array<CoreBlockId> = [fn.entry];
+		const pendingValues: Array<CoreValueId> = [];
+		const pendingInstructions: Array<CoreInstruction> = [];
+		const pendingTerminators: Array<CoreBlockId> = [];
+		const scheduledInstructions = new Set<CoreInstructionId>();
+		const scheduledTerminators = new Set<CoreBlockId>();
+		const enqueueInstruction = ({ instruction, block }: InstructionUser): void => {
+			if (!executableBlocks.has(block) || scheduledInstructions.has(instruction.id)) {
+				return;
+			}
+			scheduledInstructions.add(instruction.id);
+			pendingInstructions.push(instruction);
+		};
+		const enqueueTerminator = (block: CoreBlockId): void => {
+			if (!executableBlocks.has(block) || scheduledTerminators.has(block)) return;
+			scheduledTerminators.add(block);
+			pendingTerminators.push(block);
 		};
 		const mergeValue = (value: CoreValueId, state: ConstantLattice): boolean => {
 			const current = states.get(value) ?? UNKNOWN_CONSTANT;
 			const merged = mergeConstantLattice(current, state);
 			if (merged === current) return false;
 			states.set(value, merged);
-			for (const block of dependentBlocks.get(value) ?? []) enqueue(block);
+			pendingValues.push(value);
 			return true;
 		};
 		const markOrdinary = (edge: CoreEdge): boolean => {
 			if (executableEdges.has(edge)) return false;
 			executableEdges.add(edge);
-			executableBlocks.add(edge.block);
-			let values = incoming.get(edge.block);
-			if (values === undefined) incoming.set(edge.block, (values = []));
-			values.push({ kind: "ordinary", arguments: edge.arguments });
-			enqueue(edge.block);
+			if (!executableBlocks.has(edge.block)) {
+				executableBlocks.add(edge.block);
+				pendingBlocks.push(edge.block);
+			}
+			const target = fn.blocks[edge.block]!;
+			for (const [index, argument] of edge.arguments.entries()) {
+				const parameter = target.parameters[index];
+				if (parameter !== undefined) {
+					mergeValue(parameter.value, states.get(argument) ?? UNKNOWN_CONSTANT);
+				}
+			}
 			return true;
 		};
 		const markExceptional = (
@@ -5513,44 +5589,27 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 		): boolean => {
 			if (executableExceptionalSources.has(from)) return false;
 			executableExceptionalSources.add(from);
-			executableBlocks.add(to);
-			let values = incoming.get(to);
-			if (values === undefined) incoming.set(to, (values = []));
-			values.push({ kind: "exceptional", arguments: arguments_ });
-			enqueue(to);
+			if (!executableBlocks.has(to)) {
+				executableBlocks.add(to);
+				pendingBlocks.push(to);
+			}
+			const target = fn.blocks[to]!;
+			const offset = target.parameters[0]?.role === "exception" ? 1 : 0;
+			if (offset === 1) mergeValue(target.parameters[0]!.value, OVERDEFINED_CONSTANT);
+			for (const [index, argument] of arguments_.entries()) {
+				const parameter = target.parameters[index + offset];
+				if (parameter !== undefined) {
+					mergeValue(parameter.value, states.get(argument) ?? UNKNOWN_CONSTANT);
+				}
+			}
 			return true;
 		};
-
-		enqueue(fn.entry);
-		while (pendingBlocks.length > 0) {
-			const blockId = pendingBlocks.pop()!;
-			scheduled.delete(blockId);
+		const visitInstruction = (instruction: CoreInstruction): void => {
+			const state = evaluateConstantInstruction(instruction, states, program);
+			for (const output of instruction.outputs) mergeValue(output, state);
+		};
+		const visitTerminator = (blockId: CoreBlockId): void => {
 			const block = fn.blocks[blockId]!;
-			for (const edge of incoming.get(blockId) ?? []) {
-				if (edge.kind === "exceptional") {
-					if (block.parameters[0]?.role === "exception") {
-						mergeValue(block.parameters[0].value, OVERDEFINED_CONSTANT);
-					}
-					const offset = block.parameters[0]?.role === "exception" ? 1 : 0;
-					for (const [index, argument] of edge.arguments.entries()) {
-						const parameter = block.parameters[index + offset];
-						if (parameter !== undefined) {
-							mergeValue(parameter.value, states.get(argument) ?? UNKNOWN_CONSTANT);
-						}
-					}
-					continue;
-				}
-				for (const [index, argument] of edge.arguments.entries()) {
-					const parameter = block.parameters[index];
-					if (parameter !== undefined) {
-						mergeValue(parameter.value, states.get(argument) ?? UNKNOWN_CONSTANT);
-					}
-				}
-			}
-			for (const instruction of block.instructions) {
-				const state = evaluateConstantInstruction(instruction, states, program);
-				for (const output of instruction.outputs) mergeValue(output, state);
-			}
 			const terminator = block.terminator;
 			switch (terminator.kind) {
 				case "jump":
@@ -5595,10 +5654,53 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 				case "unreachable":
 					break;
 			}
-			for (const edge of cfg.successors[block.id]!) {
-				if (edge.kind === "exceptional") {
-					markExceptional(block.id, edge.to, edge.arguments);
+		};
+
+		// Wegman-Zadeck style dual worklists: CFG edges become executable once,
+		// and each monotone SSA lattice change visits only its explicit users.
+		// Expected work is O(blocks + CFG edges + instructions + SSA uses).
+		while (
+			pendingBlocks.length > 0 ||
+			pendingValues.length > 0 ||
+			pendingInstructions.length > 0 ||
+			pendingTerminators.length > 0
+		) {
+			while (pendingBlocks.length > 0) {
+				const blockId = pendingBlocks.pop()!;
+				const block = fn.blocks[blockId]!;
+				for (const instruction of block.instructions) visitInstruction(instruction);
+				visitTerminator(blockId);
+				for (const edge of cfg.successors[block.id]!) {
+					if (edge.kind === "exceptional") {
+						markExceptional(block.id, edge.to, edge.arguments);
+					}
 				}
+			}
+			while (pendingValues.length > 0) {
+				const value = pendingValues.pop()!;
+				const state = states.get(value)!;
+				for (const user of instructionUsers[value] ?? []) {
+					enqueueInstruction(user);
+				}
+				for (const block of terminatorUsers[value] ?? []) enqueueTerminator(block);
+				for (const binding of ordinaryParameterBindings[value] ?? []) {
+					if (executableEdges.has(binding.edge)) mergeValue(binding.parameter, state);
+				}
+				for (const binding of exceptionalParameterBindings[value] ?? []) {
+					if (executableExceptionalSources.has(binding.source)) {
+						mergeValue(binding.parameter, state);
+					}
+				}
+			}
+			while (pendingInstructions.length > 0) {
+				const instruction = pendingInstructions.pop()!;
+				scheduledInstructions.delete(instruction.id);
+				visitInstruction(instruction);
+			}
+			while (pendingTerminators.length > 0) {
+				const block = pendingTerminators.pop()!;
+				scheduledTerminators.delete(block);
+				visitTerminator(block);
 			}
 		}
 
