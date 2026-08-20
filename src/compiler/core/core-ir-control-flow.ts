@@ -599,13 +599,26 @@ export function buildCoreControlFlow(
 			splitDominates(exitNode(dominator), entryNode(block));
 	}
 
+	const reversePostorderIndex = new Int32Array(fn.blocks.length);
+	reversePostorderIndex.fill(-1);
+	for (const [index, block] of reversePostorder.entries()) {
+		reversePostorderIndex[block] = index;
+	}
 	const latchesByHeader = new Map<CoreBlockId, Set<CoreBlockId>>();
+	let hasNonNaturalRetreatingEdge = false;
 	for (const from of reachable) {
 		for (const edge of successors[from]!) {
-			if (edge.kind !== "ordinary" || !dominates(edge.to, from)) continue;
-			const latches = latchesByHeader.get(edge.to) ?? new Set<CoreBlockId>();
-			latches.add(from);
-			latchesByHeader.set(edge.to, latches);
+			if (edge.kind !== "ordinary") continue;
+			if (dominates(edge.to, from)) {
+				const latches = latchesByHeader.get(edge.to) ?? new Set<CoreBlockId>();
+				latches.add(from);
+				latchesByHeader.set(edge.to, latches);
+			} else if (reversePostorderIndex[edge.to]! <= reversePostorderIndex[from]!) {
+				// Removing natural backedges makes every reducible CFG acyclic. A
+				// remaining retreating edge is therefore the cheap signal that the
+				// full SCC decomposition may have an irreducible cycle to classify.
+				hasNonNaturalRetreatingEdge = true;
+			}
 		}
 	}
 	const loops: Array<CoreNaturalLoop> = [];
@@ -685,13 +698,9 @@ export function buildCoreControlFlow(
 		});
 	}
 	loops.sort((left, right) => left.header - right.header);
-	const irreducibleCycles = findIrreducibleCycles(
-		fn.entry,
-		successors,
-		predecessors,
-		reachable,
-		dominates,
-	);
+	const irreducibleCycles = hasNonNaturalRetreatingEdge
+		? findIrreducibleCycles(fn.entry, successors, predecessors, reachable, dominates)
+		: [];
 
 	return {
 		successors,
