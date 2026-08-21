@@ -73,6 +73,7 @@ describe("Core IR optimizer", () => {
 		const proof = refined.addFact({
 			kind: "no-gc",
 			value: true,
+			claims: [],
 			validity: { kind: "summary", digest: "metrics-no-gc" },
 			obligations: [],
 			origin: "metrics-test",
@@ -94,7 +95,7 @@ describe("Core IR optimizer", () => {
 			condition,
 			success: { block: success, arguments: [] },
 			fallback: { block: fallback, arguments: [] },
-			fact: { kind: "metrics-guard", value: true, origin: "metrics-test" },
+			fact: { kind: "metrics-guard", value: true, claims: [], origin: "metrics-test" },
 		});
 		guarded.setTerminator(success, { kind: "return", value: condition });
 		guarded.setTerminator(fallback, { kind: "return", value: condition });
@@ -1314,6 +1315,7 @@ describe("Core IR optimizer", () => {
 		const proof = builder.addFact({
 			kind: "pre-existing-refinement",
 			value: true,
+			claims: [],
 			validity: { kind: "summary", digest: "test-pre-existing-refinement" },
 			obligations: [],
 			origin: "test",
@@ -2555,11 +2557,12 @@ describe("Core IR optimizer", () => {
 			condition,
 			success: { block: exit, arguments: [] },
 			fallback: { block: exit, arguments: [] },
-			fact: { kind: "unused-proof", value: true, origin: "dce-test" },
+			fact: { kind: "unused-proof", value: true, claims: [], origin: "dce-test" },
 		});
 		builder.addFact({
 			kind: "unused-summary",
 			value: true,
+			claims: [],
 			validity: { kind: "summary", digest: "unused-dce-test" },
 			obligations: [],
 			origin: "dce-test",

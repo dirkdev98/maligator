@@ -40,6 +40,11 @@ import {
 	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
+import {
+	coreFactFamilyKeys,
+	coreFactImplies,
+	normalizeCoreFact,
+} from "./core-ir-fact-implication.ts";
 import { analyzeCoreLoopInductions } from "./core-ir-loops.ts";
 import type {
 	CoreInductionVariable,
@@ -97,6 +102,7 @@ import type {
 	CoreEdge,
 	CoreEffectDomain,
 	CoreFact,
+	CoreFactClaim,
 	CoreFactId,
 	CoreFunction,
 	CoreImmediate,
@@ -4982,6 +4988,24 @@ function rewriteTerminator(
 	}
 }
 
+function rewriteFactClaimSubjects(
+	facts: ReadonlyArray<CoreFact>,
+	replacements: ReadonlyMap<CoreValueId, CoreValueId>,
+): ReadonlyArray<CoreFact> {
+	if (replacements.size === 0) return facts;
+	return facts.map((fact) => {
+		let changed = false;
+		const claims = fact.claims.map((claim): CoreFactClaim => {
+			if (claim.kind === "effect") return claim;
+			const subject = resolveValue(claim.subject, replacements);
+			if (subject === claim.subject) return claim;
+			changed = true;
+			return { ...claim, subject };
+		});
+		return changed ? { ...fact, claims } : fact;
+	});
+}
+
 function rewriteFunction(
 	fn: CoreFunction,
 	blocks: ReadonlyArray<CoreBlock>,
@@ -5012,6 +5036,7 @@ function rewriteFunction(
 					}),
 		})),
 		values: fn.values.filter(({ id }) => !removedValues.has(id)),
+		facts: rewriteFactClaimSubjects(fn.facts, replacements),
 		mutationEpoch: fn.mutationEpoch + 1,
 	};
 }
@@ -5092,6 +5117,7 @@ function removeBlockParameters(
 	return {
 		...fn,
 		blocks,
+		facts: rewriteFactClaimSubjects(fn.facts, replacements),
 		values: fn.values
 			.filter(({ id }) => !removedValues.has(id) || retainedDefinitions.has(id))
 			.map((value) => {
@@ -6448,6 +6474,360 @@ const simplifyAlgebraicValues: CoreFunctionPass = {
 	},
 };
 
+/**
+ * The verifier re-proves an effect refinement from scratch when its proof has one
+ * of these kinds: `verifyOwnDataCellRefinements` re-derives containment, and the
+ * program-level callee-summary check re-derives the call summary. Both select the
+ * work by proof kind, so moving a refinement onto or off one of them would
+ * silently change which independent check runs. Proofs of these kinds are never
+ * rewired.
+ */
+const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
+	CORE_OWN_DATA_CELL_FACT,
+	CORE_CALL_EFFECT_SUMMARY_FACT,
+]);
+
+function coreFactValidityRank(fact: CoreFact): number {
+	switch (fact.validity.kind) {
+		case "world":
+			return 0;
+		case "summary":
+			return 1;
+		case "guard":
+			return 2;
+		case "epoch":
+			return 3;
+		case "asserted":
+			return 4;
+	}
+}
+
+/**
+ * Total order over interchangeable replacements: a strictly stronger fact first,
+ * then the cheapest authority, then the fewest obligations, then the lowest id so
+ * the choice never depends on visit order.
+ */
+function preferCoreFactReplacement(candidate: CoreFact, incumbent: CoreFact): boolean {
+	const stronger = coreFactImplies(candidate, incumbent);
+	const weaker = coreFactImplies(incumbent, candidate);
+	if (stronger !== weaker) return stronger;
+	const validity = coreFactValidityRank(candidate) - coreFactValidityRank(incumbent);
+	if (validity !== 0) return validity < 0;
+	const obligations = candidate.obligations.length - incumbent.obligations.length;
+	return obligations !== 0 ? obligations < 0 : candidate.id < incumbent.id;
+}
+
+interface CoreFactSubsumption {
+	/** Canonicalized facts, in the function's fact order. */
+	readonly facts: ReadonlyArray<CoreFact>;
+	readonly canonicalized: boolean;
+	fact(id: CoreFactId): CoreFact | undefined;
+	/** Instructions naming the fact as their effect-refinement proof. */
+	refinementUses(id: CoreFactId): number;
+	/** Facts this guard instruction establishes or keeps alive. */
+	guardFacts(guard: CoreInstructionId): number;
+	/**
+	 * The preferred available fact that establishes everything `weak` states at
+	 * the given point, or undefined when no other fact does.
+	 */
+	replacementFor(
+		weak: CoreFact,
+		block: CoreBlockId,
+		point: number,
+		excluded?: ReadonlySet<CoreFactId>,
+	): CoreFact | undefined;
+}
+
+/**
+ * Index the function's facts for implication queries.
+ *
+ * Availability is deliberately strict. A guard establishes its fact on the
+ * success *edge*, so the proof is only usable where that edge dominates the
+ * consumer; success-block dominance would also hold on a path that bypassed the
+ * guard entirely. A claim about a value additionally needs that value to be
+ * defined at the consumer, because a claim carries no program point of its own.
+ *
+ * Cost is one pass over blocks, instructions, and claims to build the indexes.
+ * A lookup scans the smallest family one of `weak`'s claims belongs to — facts
+ * that share a subject value or a claimed instruction — so it is bounded by that
+ * family rather than by the function's fact count.
+ */
+function coreFactSubsumption(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+	canonicalValues: ReadonlyMap<CoreValueId, CoreValueId>,
+): CoreFactSubsumption {
+	let canonicalized = false;
+	const facts = fn.facts.map((fact) => {
+		let subjectsChanged = false;
+		const claims = fact.claims.map((claim): CoreFactClaim => {
+			if (claim.kind === "effect") return claim;
+			const subject = canonicalValues.get(claim.subject) ?? claim.subject;
+			if (subject === claim.subject) return claim;
+			subjectsChanged = true;
+			return { ...claim, subject };
+		});
+		const normalized = normalizeCoreFact(subjectsChanged ? { ...fact, claims } : fact);
+		if (normalized !== fact) canonicalized = true;
+		return normalized;
+	});
+	const byId = new Map(facts.map((fact) => [fact.id, fact] as const));
+	const familyKeys = new Map<CoreFactId, ReadonlyArray<string>>();
+	const byFamily = new Map<string, Array<CoreFact>>();
+	const factGuards = new Map<CoreFactId, ReadonlyArray<CoreInstructionId>>();
+	const guardFactCounts = new Map<CoreInstructionId, number>();
+	for (const fact of facts) {
+		const keys = coreFactFamilyKeys(fact);
+		familyKeys.set(fact.id, keys);
+		for (const key of keys) {
+			const family = byFamily.get(key);
+			if (family === undefined) byFamily.set(key, [fact]);
+			else family.push(fact);
+		}
+		const guards = new Set<CoreInstructionId>();
+		if (fact.validity.kind === "guard") guards.add(fact.validity.instruction);
+		for (const obligation of fact.obligations) {
+			if (obligation.kind === "guard") guards.add(obligation.instruction);
+		}
+		factGuards.set(fact.id, [...guards]);
+		for (const guard of guards) {
+			guardFactCounts.set(guard, (guardFactCounts.get(guard) ?? 0) + 1);
+		}
+	}
+
+	const guardEdges = new Map<
+		CoreInstructionId,
+		{ readonly block: CoreBlockId; readonly success: CoreBlockId }
+	>();
+	const definitions = new Map<
+		CoreValueId,
+		{ readonly block: CoreBlockId; readonly point: number }
+	>();
+	const refinementUses = new Map<CoreFactId, number>();
+	for (const block of fn.blocks) {
+		for (const parameter of block.parameters) {
+			definitions.set(parameter.value, { block: block.id, point: -1 });
+		}
+		for (const [point, instruction] of block.instructions.entries()) {
+			for (const output of instruction.outputs) {
+				definitions.set(output, { block: block.id, point });
+			}
+			const proof = instruction.effectRefinement?.proof;
+			if (proof !== undefined) {
+				refinementUses.set(proof, (refinementUses.get(proof) ?? 0) + 1);
+			}
+		}
+		if (block.terminator.kind === "guard") {
+			guardEdges.set(block.terminator.id, {
+				block: block.id,
+				success: block.terminator.success.block,
+			});
+		}
+	}
+
+	const subjectAvailable = (
+		subject: CoreValueId,
+		block: CoreBlockId,
+		point: number,
+	): boolean => {
+		const definition = definitions.get(subject);
+		if (definition === undefined) return false;
+		if (definition.block === block) return definition.point < point;
+		return definition.point < 0
+			? cfg.dominates(definition.block, block)
+			: cfg.instructionDominatesBlock(definition.block, block);
+	};
+
+	const available = (fact: CoreFact, block: CoreBlockId, point: number): boolean => {
+		const guards = factGuards.get(fact.id) ?? [];
+		if (guards.length === 0) {
+			// Nothing in the graph re-establishes an epoch or asserted fact, so only a
+			// world or summary premise holds without a guard to point at.
+			if (fact.validity.kind !== "world" && fact.validity.kind !== "summary") {
+				return false;
+			}
+		}
+		for (const guard of guards) {
+			const edge = guardEdges.get(guard);
+			if (edge === undefined || !cfg.dominatesEdge(edge.block, edge.success, block)) {
+				return false;
+			}
+		}
+		return fact.claims.every(
+			(claim) => claim.kind === "effect" || subjectAvailable(claim.subject, block, point),
+		);
+	};
+
+	return {
+		facts,
+		canonicalized,
+		fact: (id) => byId.get(id),
+		refinementUses: (id) => refinementUses.get(id) ?? 0,
+		guardFacts: (guard) => guardFactCounts.get(guard) ?? 0,
+		replacementFor: (weak, block, point, excluded) => {
+			let smallest: ReadonlyArray<CoreFact> | undefined;
+			for (const key of familyKeys.get(weak.id) ?? []) {
+				const family = byFamily.get(key) ?? [];
+				if (smallest === undefined || family.length < smallest.length) smallest = family;
+			}
+			let best: CoreFact | undefined;
+			for (const candidate of smallest ?? []) {
+				if (
+					candidate.id === weak.id ||
+					excluded?.has(candidate.id) === true ||
+					!coreFactImplies(candidate, weak) ||
+					!available(candidate, block, point)
+				) {
+					continue;
+				}
+				if (best === undefined || preferCoreFactReplacement(candidate, best)) {
+					best = candidate;
+				}
+			}
+			return best;
+		},
+	};
+}
+
+/**
+ * Canonicalize fact claims and move each effect refinement onto a strictly better
+ * proof already available where it is consumed. Nothing here changes control flow,
+ * so it also runs on functions that already carry region certificates.
+ */
+const subsumeCoreFactProofs: CoreFunctionPass = {
+	name: "subsume-core-fact-proofs",
+	run(fn, analyses) {
+		if (fn.facts.length === 0) return fn;
+		const subsumption = coreFactSubsumption(
+			fn,
+			analyses.controlFlow(fn),
+			analyses.canonicalValues(fn),
+		);
+		// A region certificate is proven against exact instructions, and the proof a
+		// refinement names is part of one.
+		const { instructions: claimed } = regionProtectedValues(fn);
+		let changed = false;
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			let blockChanged = false;
+			const instructions = block.instructions.map(
+				(instruction, point): CoreInstruction => {
+					const refinement = instruction.effectRefinement;
+					if (refinement === undefined) return instruction;
+					const weak = subsumption.fact(refinement.proof);
+					if (
+						weak === undefined ||
+						claimed.has(instruction.id) ||
+						CORE_REPROVED_FACT_KINDS.has(weak.kind)
+					) {
+						return instruction;
+					}
+					const replacement = subsumption.replacementFor(weak, block.id, point);
+					// Only a strictly better proof is worth moving to. Two interchangeable
+					// facts would otherwise trade the refinement back and forth for as many
+					// rounds as the fixpoint allows.
+					if (
+						replacement === undefined ||
+						CORE_REPROVED_FACT_KINDS.has(replacement.kind) ||
+						!preferCoreFactReplacement(replacement, weak)
+					) {
+						return instruction;
+					}
+					blockChanged = true;
+					return {
+						...instruction,
+						effectRefinement: { ...refinement, proof: replacement.id },
+					};
+				},
+			);
+			if (!blockChanged) return block;
+			changed = true;
+			return { ...block, instructions };
+		});
+		return changed || subsumption.canonicalized
+			? {
+					...fn,
+					blocks,
+					facts: subsumption.facts,
+					mutationEpoch: fn.mutationEpoch + 1,
+				}
+			: fn;
+	},
+};
+
+/**
+ * Fold a guard whose fact is already established by another available proof.
+ *
+ * Decisions are taken in reverse postorder and are never justified by a fact this
+ * run already removed, so the set of folds is deterministic and the justification
+ * relation cannot cycle. Success-edge dominance already rules such a cycle out —
+ * two guards cannot each run only after the other has succeeded — but the
+ * exclusion keeps a future dominance bug from deleting both checks of a pair that
+ * proves itself.
+ */
+const foldSubsumedCoreGuards: CoreFunctionPass = {
+	name: "fold-subsumed-core-guards",
+	changesControlFlow: true,
+	run(fn, analyses) {
+		// `removeUnreachableCoreBlocks` renumbers blocks and does not remap region
+		// block lists. The driver already skips control-flow passes on region-bearing
+		// functions; this keeps the coupling true if that ever changes.
+		if (fn.facts.length < 2 || fn.regions.length > 0) return fn;
+		const cfg = analyses.controlFlow(fn);
+		const subsumption = coreFactSubsumption(fn, cfg, analyses.canonicalValues(fn));
+		const removedFacts = new Set<CoreFactId>();
+		const foldedGuards = new Set<CoreInstructionId>();
+		for (const blockId of cfg.reversePostorder) {
+			const block = fn.blocks[blockId];
+			if (block?.terminator.kind !== "guard") continue;
+			const terminator = block.terminator;
+			const weak = subsumption.fact(terminator.fact);
+			if (weak === undefined) continue;
+			// A non-guard obligation is a promise to another layer that no dominating
+			// proof discharges; only the guard itself becomes redundant.
+			if (weak.obligations.some(({ kind }) => kind !== "guard")) continue;
+			// The guard also establishes another fact, or a refinement still names
+			// this one. Folding would strand a proof either way.
+			if (subsumption.guardFacts(terminator.id) > 1) continue;
+			if (subsumption.refinementUses(weak.id) > 0) continue;
+			const replacement = subsumption.replacementFor(
+				weak,
+				blockId,
+				block.instructions.length,
+				removedFacts,
+			);
+			if (replacement === undefined) continue;
+			removedFacts.add(weak.id);
+			foldedGuards.add(terminator.id);
+		}
+		if (foldedGuards.size === 0) {
+			return subsumption.canonicalized
+				? { ...fn, facts: subsumption.facts, mutationEpoch: fn.mutationEpoch + 1 }
+				: fn;
+		}
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			const terminator = block.terminator;
+			if (terminator.kind !== "guard" || !foldedGuards.has(terminator.id)) return block;
+			return {
+				...block,
+				terminator: {
+					kind: "jump",
+					id: terminator.id,
+					edge: terminator.success,
+					...(terminator.sourcePosition === undefined
+						? {}
+						: { sourcePosition: terminator.sourcePosition }),
+				},
+			};
+		});
+		return removeUnreachableCoreBlocks({
+			...fn,
+			blocks,
+			facts: subsumption.facts.filter((fact) => !removedFacts.has(fact.id)),
+			mutationEpoch: fn.mutationEpoch + 1,
+		});
+	},
+};
+
 /** Resolve primitive branches and switches, then restore Core's dense reachable CFG. */
 const simplifyControlFlow: CoreFunctionPass = {
 	name: "simplify-control-flow",
@@ -6998,6 +7378,14 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 						if (coreMemoryLocationIsExact(access.location)) exactCells += 1;
 					}
 					if (proven === undefined || exactCells !== 1) return instruction;
+					const refined = {
+						reads: effects.reads.filter((domain) => domain !== "host"),
+						writes: effects.writes.filter((domain) => domain !== "host"),
+						mayThrow: false,
+						maySuspend: effects.maySuspend,
+						mayGc: effects.mayGc,
+						callsUserCode: false,
+					};
 					const proof = coreFactId(nextFact++);
 					facts.push({
 						id: proof,
@@ -7006,6 +7394,7 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 							allocation: proven.allocation,
 							cell: proven.cell,
 						},
+						claims: [{ kind: "effect", instruction: instruction.id, effects: refined }],
 						validity: {
 							kind: "summary",
 							digest: `contained-allocation:${proven.allocation}`,
@@ -7016,17 +7405,7 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 					changed = true;
 					return {
 						...instruction,
-						effectRefinement: {
-							effects: {
-								reads: effects.reads.filter((domain) => domain !== "host"),
-								writes: effects.writes.filter((domain) => domain !== "host"),
-								mayThrow: false,
-								maySuspend: effects.maySuspend,
-								mayGc: effects.mayGc,
-								callsUserCode: false,
-							},
-							proof,
-						},
+						effectRefinement: { effects: refined, proof },
 					};
 				}),
 			}),
@@ -7140,6 +7519,7 @@ const refineDirectCallEffects: CoreFunctionPass = {
 						id: proof,
 						kind: CORE_CALL_EFFECT_SUMMARY_FACT,
 						value: coreCallSummaryFactValue(claim),
+						claims: [{ kind: "effect", instruction: instruction.id, effects: refined }],
 						validity: { kind: "summary", digest },
 						obligations: [],
 						origin: "core-callee-summary",
@@ -9432,6 +9812,8 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	sparseConditionalConstantPropagation,
 	refineValueRepresentations,
 	simplifyAlgebraicValues,
+	subsumeCoreFactProofs,
+	foldSubsumedCoreGuards,
 	simplifyControlFlow,
 	foldEmptyForwardingBlocks,
 	combineLinearBlocks,

@@ -401,10 +401,63 @@ export type CoreFactObligation =
 	| { readonly kind: "fallback"; readonly id: string }
 	| { readonly kind: "materialize"; readonly id: string };
 
+/**
+ * A semantic statement a Core fact establishes. Claims are deliberately small,
+ * closed lattices: implication is decidable without interpreting a producer's
+ * descriptive `kind`/`value` payload.
+ *
+ * A claim carries no program point of its own. A claim about a subject value
+ * holds wherever the fact is available and that value is already defined; a
+ * claim about an instruction is pinned to that instruction.
+ */
+export type CoreFactClaim =
+	| {
+			readonly kind: "identity";
+			readonly subject: CoreValueId;
+			/** Finite identities still possible; a smaller set is a stronger fact. */
+			readonly identities: ReadonlyArray<string | number | boolean | null>;
+	  }
+	| {
+			readonly kind: "shape";
+			readonly subject: CoreValueId;
+			/** Stable shape identifiers still possible; a smaller set is stronger. */
+			readonly shapes: ReadonlyArray<string>;
+	  }
+	| {
+			/**
+			 * The subject is one of: a value in `[minimum, maximum]` (restricted to
+			 * integers when `integer`), NaN when `mayBeNaN`, or `-0` when
+			 * `mayBeNegativeZero`. The reading is a disjunction, not a filter over the
+			 * interval: `-0` and NaN membership is decided by the flag alone, because
+			 * `-0` compares equal to `0` and NaN compares false against both bounds.
+			 * A claim no value satisfies is invalid — it would imply every claim about
+			 * its subject. Canonical form is defined by `canonicalRangeBounds`.
+			 */
+			readonly kind: "range";
+			readonly subject: CoreValueId;
+			/** `null` is the corresponding unbounded end, as is that infinity. */
+			readonly minimum: number | null;
+			readonly maximum: number | null;
+			readonly integer: boolean;
+			readonly mayBeNaN: boolean;
+			readonly mayBeNegativeZero: boolean;
+	  }
+	| {
+			/**
+			 * Upper bound on everything the named instruction may do. The claim goes
+			 * inert rather than invalid when a transform deletes that instruction, so
+			 * only a live consumer of the fact has to be covered by it.
+			 */
+			readonly kind: "effect";
+			readonly instruction: CoreInstructionId;
+			readonly effects: CoreInstructionEffects;
+	  };
+
 export interface CoreFact {
 	readonly id: CoreFactId;
 	readonly kind: string;
 	readonly value: unknown;
+	readonly claims: ReadonlyArray<CoreFactClaim>;
 	readonly validity: CoreFactValidity;
 	readonly obligations: ReadonlyArray<CoreFactObligation>;
 	readonly origin: string;
@@ -921,6 +974,7 @@ export class CoreFunctionBuilder {
 		this.#facts.push({
 			...input.fact,
 			id: fact,
+			claims: [...input.fact.claims],
 			validity: { kind: "guard", instruction },
 			obligations: [{ kind: "guard", instruction }, ...(input.fact.obligations ?? [])],
 		});
@@ -941,7 +995,12 @@ export class CoreFunctionBuilder {
 
 	addFact(fact: Omit<CoreFact, "id">): CoreFactId {
 		const id = coreFactId(this.#facts.length);
-		this.#facts.push({ ...fact, id, obligations: [...fact.obligations] });
+		this.#facts.push({
+			...fact,
+			id,
+			claims: [...fact.claims],
+			obligations: [...fact.obligations],
+		});
 		this.#mutationEpoch++;
 		return id;
 	}

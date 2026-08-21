@@ -1,5 +1,10 @@
-import { effectSummariesEqual } from "../shared/effect-summary.ts";
+import { effectSummariesEqual, effectSummaryCovers } from "../shared/effect-summary.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import {
+	CORE_FACT_ALTERNATIVE_LIMIT,
+	CORE_FACT_CLAIM_LIMIT,
+	coreFactClaimIsSatisfiable,
+} from "./core-ir-fact-implication.ts";
 import {
 	coreMemoryAccesses,
 	coreMemoryLocationFamily,
@@ -388,7 +393,9 @@ function verifyRegionReferences(
  *
  * Only refinements whose proof is an own-data-cell fact are re-proved. A guard or
  * epoch fact establishes the same narrowing from a different premise, and holding
- * it to a containment it never claimed would reject a sound graph.
+ * it to a containment it never claimed would reject a sound graph. Selecting the
+ * work by proof kind is what makes this check skippable, so no transform may move
+ * a refinement off such a proof: see `CORE_REPROVED_FACT_KINDS`.
  */
 function verifyOwnDataCellRefinements(
 	fn: CoreFunction,
@@ -559,6 +566,7 @@ function verifyCoreFunctionGraph(
 	const facts = new Map(fn.facts.map((fact) => [fact.id, fact]));
 	const guards = new Map<CoreInstructionId, GuardLocation>();
 	const instructionBlocks = new Map<CoreInstructionId, CoreBlockId>();
+	const instructions = new Map<CoreInstructionId, CoreInstruction>();
 	const instructionOutputs = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
 	const valueUses = new Map<
 		CoreValueId,
@@ -604,6 +612,7 @@ function verifyCoreFunctionGraph(
 			if (instructionIds.has(instruction.id))
 				fail(`duplicate instruction id @${instruction.id}`);
 			instructionIds.add(instruction.id);
+			instructions.set(instruction.id, instruction);
 			instructionBlocks.set(instruction.id, block.id);
 			instructionOutputs.set(instruction.id, instruction.outputs);
 			for (const [position, input] of instruction.inputs.entries()) {
@@ -766,6 +775,46 @@ function verifyCoreFunctionGraph(
 	}
 
 	for (const fact of fn.facts) {
+		if (fact.claims.length > CORE_FACT_CLAIM_LIMIT) {
+			fail(`fact ${fact.id} has too many semantic claims`);
+		}
+		for (const [claimIndex, claim] of fact.claims.entries()) {
+			const where = `fact ${fact.id} claim ${claimIndex}`;
+			switch (claim.kind) {
+				case "identity":
+					if (
+						claim.identities.length === 0 ||
+						claim.identities.length > CORE_FACT_ALTERNATIVE_LIMIT
+					) {
+						fail(`${where} has an invalid finite identity set`);
+					}
+					break;
+				case "shape":
+					if (
+						claim.shapes.length === 0 ||
+						claim.shapes.length > CORE_FACT_ALTERNATIVE_LIMIT ||
+						claim.shapes.some((shape) => shape.length === 0)
+					) {
+						fail(`${where} has an invalid finite shape set`);
+					}
+					break;
+				case "range":
+					// A NaN endpoint is not an ordering constraint, and a claim no value
+					// satisfies would establish every claim about the same subject.
+					if (
+						(claim.minimum !== null && Number.isNaN(claim.minimum)) ||
+						(claim.maximum !== null && Number.isNaN(claim.maximum)) ||
+						!coreFactClaimIsSatisfiable(claim)
+					) {
+						fail(`${where} has an invalid numeric interval`);
+					}
+					break;
+				case "effect":
+					// Claims become inert when a transform deletes or changes their subject;
+					// the live-consumer check below requires an exact current instruction.
+					break;
+			}
+		}
 		const guardObligations = fact.obligations.filter(
 			(
 				obligation,
@@ -800,6 +849,28 @@ function verifyCoreFunctionGraph(
 		}
 	}
 
+	// A fact that states anything at all must state the effects of every refinement
+	// it licenses. Claims naming a deleted instruction stay inert rather than
+	// invalid, so only live consumers have to be covered.
+	for (const instruction of instructions.values()) {
+		const refinement = instruction.effectRefinement;
+		if (refinement === undefined) continue;
+		const fact = facts.get(refinement.proof)!;
+		if (
+			fact.claims.length > 0 &&
+			!fact.claims.some(
+				(claim) =>
+					claim.kind === "effect" &&
+					claim.instruction === instruction.id &&
+					effectSummaryCovers(refinement.effects, claim.effects),
+			)
+		) {
+			fail(
+				`fact ${fact.id} does not license the effect refinement on @${instruction.id}`,
+			);
+		}
+	}
+
 	const verifyFactAvailable = (
 		fact: CoreFact,
 		block: CoreBlock,
@@ -819,9 +890,12 @@ function verifyCoreFunctionGraph(
 		}
 		for (const obligation of guardObligations) {
 			const guard = guards.get(obligation.instruction)!;
-			if (!cfg.dominates(guard.success, block.id)) {
+			// The guard establishes its fact on the success edge, not in the success
+			// block: a block the guard's target also reaches from elsewhere is entered
+			// on paths that never ran the check.
+			if (!cfg.dominatesEdge(guard.block, guard.success, block.id)) {
 				fail(
-					`guard @${guard.instruction} for fact ${fact.id} does not dominate @${instructionId}`,
+					`guard @${guard.instruction} for fact ${fact.id} does not dominate @${instructionId} through its success edge`,
 				);
 			}
 		}

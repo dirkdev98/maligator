@@ -149,6 +149,7 @@ describe("adversarial Core graphs", () => {
 		const fact = builder.addFact({
 			kind: "locked-primordials",
 			value: null,
+			claims: [],
 			validity: { kind: "world", fact: "primordials.locked" },
 			obligations: [{ kind: "fallback", id: "generic-call" }],
 			origin: "adversarial-core-test",
@@ -610,6 +611,7 @@ describe("adversarial Core graphs", () => {
 			fact: {
 				kind: "exact-call-target",
 				value: 3,
+				claims: [],
 				origin: "adversarial-core-test",
 				obligations: [{ kind: "fallback", id: "generic-call" }],
 			},
@@ -619,6 +621,7 @@ describe("adversarial Core graphs", () => {
 		const epochFact = builder.addFact({
 			kind: "shape-epoch",
 			value: "object-shapes",
+			claims: [],
 			validity: { kind: "epoch", family: "object-shapes" },
 			obligations: [{ kind: "fallback", id: "shape-deopt" }],
 			origin: "adversarial-core-test",

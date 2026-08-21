@@ -14,6 +14,7 @@ import {
 	coreOpcodeRegistry,
 } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
+import type { CoreFactClaim, CoreFunction } from "../src/compiler/core/core-ir.ts";
 import {
 	CORE_MEMORY_FAMILIES,
 	CORE_MEMORY_FAMILY_DOMAINS,
@@ -21,6 +22,7 @@ import {
 	CoreFunctionBuilder,
 	CoreOpcodeRegistry,
 	coreArity,
+	coreValueId,
 	formatCoreFunction,
 } from "../src/compiler/core/core-ir.ts";
 
@@ -530,6 +532,7 @@ describe("Core IR", () => {
 		const fact = builder.addFact({
 			kind: "typescript-type",
 			value: "number",
+			claims: [],
 			validity: { kind: "asserted", source: "fixture.ts" },
 			obligations: [],
 			origin: "test",
@@ -564,6 +567,7 @@ describe("Core IR", () => {
 			fact: {
 				kind: "exact-call-target",
 				value: 7,
+				claims: [],
 				origin: "test",
 				obligations: [{ kind: "fallback", id: "generic-call" }],
 			},
@@ -599,7 +603,7 @@ describe("Core IR", () => {
 			condition: condition!,
 			success: { block: success, arguments: [input!] },
 			fallback: { block: merge, arguments: [input!] },
-			fact: { kind: "exact-call-target", value: 7, origin: "test" },
+			fact: { kind: "exact-call-target", value: 7, claims: [], origin: "test" },
 		});
 		builder.setTerminator(success, {
 			kind: "jump",
@@ -619,6 +623,99 @@ describe("Core IR", () => {
 		expect(() => verifyCoreFunction(builder.finish(entry), opcodes)).toThrow(
 			/does not dominate/,
 		);
+	});
+
+	it("rejects a guarded fact in a block another predecessor also enters", () => {
+		const opcodes = registry();
+		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 3 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const guarded = builder.createBlock();
+		const bypass = builder.createBlock();
+		const join = builder.createBlock();
+		const fallback = builder.createBlock();
+		const [selector, condition, input] = builder
+			.block(entry)
+			.parameters.map(({ value }) => value);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: selector!,
+			consequent: { block: guarded, arguments: [] },
+			alternate: { block: bypass, arguments: [] },
+		});
+		const fact = builder.setGuardTerminator(guarded, {
+			condition: condition!,
+			success: { block: join, arguments: [] },
+			fallback: { block: fallback, arguments: [] },
+			fact: { kind: "exact-call-target", value: 7, claims: [], origin: "test" },
+		});
+		builder.setTerminator(bypass, { kind: "jump", edge: { block: join, arguments: [] } });
+		const [result] = builder.appendInstruction(join, "call", [input!], {
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact },
+		});
+		builder.setTerminator(join, { kind: "return", value: result! });
+		builder.setTerminator(fallback, { kind: "return", value: input! });
+
+		expect(() => verifyCoreFunction(builder.finish(entry), opcodes)).toThrow(
+			/does not dominate/,
+		);
+	});
+
+	it("rejects a range claim no value satisfies", () => {
+		const opcodes = registry();
+		const build = (claim: CoreFactClaim): CoreFunction => {
+			const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const value = builder.block(entry).parameters[0]!.value;
+			builder.addFact({
+				kind: "numeric-range",
+				value: null,
+				claims: [claim],
+				validity: { kind: "summary", digest: "range-test" },
+				obligations: [],
+				origin: "test",
+			});
+			builder.setTerminator(entry, { kind: "return", value });
+			return builder.finish(entry);
+		};
+		const subject = coreValueId(0);
+		const range = (
+			bounds: Partial<
+				Omit<Extract<CoreFactClaim, { kind: "range" }>, "kind" | "subject">
+			>,
+		): CoreFactClaim => ({
+			kind: "range",
+			subject,
+			minimum: null,
+			maximum: null,
+			integer: false,
+			mayBeNaN: false,
+			mayBeNegativeZero: false,
+			...bounds,
+		});
+
+		expect(() =>
+			verifyCoreFunction(build(range({ minimum: 5, maximum: 4 })), opcodes),
+		).toThrow(/invalid numeric interval/);
+		expect(() =>
+			verifyCoreFunction(
+				build(range({ minimum: 0.2, maximum: 0.8, integer: true })),
+				opcodes,
+			),
+		).toThrow(/invalid numeric interval/);
+		expect(() =>
+			verifyCoreFunction(build(range({ minimum: Number.NaN })), opcodes),
+		).toThrow(/invalid numeric interval/);
+		// An empty interval still denotes NaN when the claim admits it.
+		expect(() =>
+			verifyCoreFunction(
+				build(range({ minimum: 5, maximum: 4, mayBeNaN: true })),
+				opcodes,
+			),
+		).not.toThrow();
 	});
 
 	it("requires certificate data references to belong to the claimed slice", () => {

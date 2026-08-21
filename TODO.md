@@ -81,10 +81,6 @@ Runtime eval may remove source closure without invalidating authority closure.
 
 ## Maligator-specific analysis opportunities
 
-- [ ] Add fact implication and subsumption so stronger world, identity, shape, range,
-      and effect facts satisfy weaker consumers automatically. Remove duplicate facts
-      and guards when one dominating proof already establishes the condition.
-
 - [ ] Version guarded regions once and replace repeated epoch reads, protector checks,
       cache probes, and identity tests with unchecked operations inside the region.
       Keep one explicit generic twin for mutable invalidation.

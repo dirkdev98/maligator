@@ -55,6 +55,18 @@ export interface CoreControlFlow {
 	 * value, so ordinary block dominance alone is insufficient.
 	 */
 	instructionDominatesBlock(dominator: CoreBlockId, block: CoreBlockId): boolean;
+	/**
+	 * Whether every path from the entry to `block` traverses the edge `from`→`to`.
+	 * This is the availability rule for anything an edge rather than a block
+	 * establishes: a guard's success edge proves its fact only where that edge ran,
+	 * and `to` dominating `block` does not imply the edge ran, because another
+	 * predecessor may enter `to` without it.
+	 *
+	 * Parallel edges leave the traversed edge ambiguous — a guard whose success and
+	 * fallback both target `to` proves nothing there — so the query is false unless
+	 * `from` reaches `to` through exactly one edge.
+	 */
+	dominatesEdge(from: CoreBlockId, to: CoreBlockId, block: CoreBlockId): boolean;
 }
 
 /**
@@ -599,6 +611,27 @@ export function buildCoreControlFlow(
 			splitDominates(exitNode(dominator), entryNode(block));
 	}
 
+	// Dominating `to` is necessary but not sufficient for an edge: another
+	// predecessor could enter `to` without this edge ever running. It becomes
+	// sufficient once every other reachable predecessor is itself dominated by
+	// `to`, because a path's first arrival at `to` must then use this edge. The
+	// per-edge half is block independent, so one memo serves every query.
+	const uniqueEntryEdges = new Map<string, boolean>();
+	const edgeUniquelyEnters = (from: CoreBlockId, to: CoreBlockId): boolean => {
+		const key = `${from}\0${to}`;
+		const cached = uniqueEntryEdges.get(key);
+		if (cached !== undefined) return cached;
+		const unique =
+			reachable.has(from) &&
+			(successors[from] ?? []).filter((edge) => edge.to === to).length === 1 &&
+			(predecessors[to] ?? []).every(
+				(edge) =>
+					edge.from === from || !reachable.has(edge.from) || dominates(to, edge.from),
+			);
+		uniqueEntryEdges.set(key, unique);
+		return unique;
+	};
+
 	const reversePostorderIndex = new Int32Array(fn.blocks.length);
 	reversePostorderIndex.fill(-1);
 	for (const [index, block] of reversePostorder.entries()) {
@@ -712,5 +745,7 @@ export function buildCoreControlFlow(
 		irreducibleCycles,
 		dominates,
 		instructionDominatesBlock,
+		dominatesEdge: (from, to, block) =>
+			dominates(to, block) && edgeUniquelyEnters(from, to),
 	};
 }
