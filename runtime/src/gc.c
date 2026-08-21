@@ -1578,7 +1578,9 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 }
 
 #if !MAL_GC_CONCURRENT
-void mal_gc_collect(MalVm *vm) {
+/** Collection selected by the automatic/stress cadence: minor generations stay
+ * cheap while every `major_every` turn reclaims the whole heap. */
+static void mal_gc_collect_scheduled(MalVm *vm) {
     g_gc_vm = vm;
 #if MAL_GC_GENERATIONAL
     bool major = (g_gc->collection_index++ % g_gc->major_every) == 0;
@@ -1586,6 +1588,17 @@ void mal_gc_collect(MalVm *vm) {
     bool major = true;
 #endif
     mal_gc_collect_sync(vm, major);
+}
+
+/* The public host/test hook promises one complete collection. Do not route it
+ * through the generational cadence: a target promoted by earlier stress minors
+ * must still be reclaimable by the explicit `gc()` that observes its death. */
+void mal_gc_collect(MalVm *vm) {
+    g_gc_vm = vm;
+#if MAL_GC_GENERATIONAL
+    g_gc->collection_index++;
+#endif
+    mal_gc_collect_sync(vm, true);
 }
 #endif
 
@@ -1921,14 +1934,14 @@ void mal_gc_safepoint(MalVm *vm) {
     if (g_gc->stress_interval != 0) {
         if (++g_gc->stress_counter >= g_gc->stress_interval) {
             g_gc->stress_counter = 0;
-            mal_gc_collect(vm);
+            mal_gc_collect_scheduled(vm);
         }
     } else if (mal_gc_poll) {
         // Auto mode: collect only if actually due. The poll may also have been
         // raised purely to force a preemption safepoint (below), so don't assume a
         // collection is owed just because we were polled.
         if (vm->heap.bytes_allocated >= mal_gc_next_at) {
-            mal_gc_collect(vm); // advances mal_gc_next_at past the surviving set
+            mal_gc_collect_scheduled(vm); // advances past the surviving set
         }
         mal_gc_poll = false;
     }
