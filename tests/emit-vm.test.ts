@@ -1158,6 +1158,7 @@ describe("native update-expression representation", () => {
 		expect(projections[0]).toMatchObject({
 			kind: "string-split-projection",
 			representation: "projected-elements",
+			splitIdentity: "runtime-guarded",
 			license: {
 				genericTwin: "retained",
 				materialization: "whole-region",
@@ -1166,6 +1167,17 @@ describe("native update-expression representation", () => {
 					obligations: ["fallback", "materialize"],
 				},
 			},
+		});
+		const lockedProjections = compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		}).functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "string-split-projection") ?? [],
+		);
+		expect(lockedProjections).toHaveLength(1);
+		expect(lockedProjections[0]).toMatchObject({
+			splitIdentity: "authority-invariant",
+			propertyPlacement: "call-fallback",
 		});
 
 		const cached = deserializeVmDefinition(
@@ -1203,6 +1215,19 @@ describe("native update-expression representation", () => {
 			}),
 		};
 		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid String\.split projection region metadata/,
+		);
+		const invalidIdentity: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, {
+					...region,
+					splitIdentity: "authority-invariant",
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(invalidIdentity)).toThrow(
 			/invalid String\.split projection region metadata/,
 		);
 		const invalidForEmission: VmDefinition = {
@@ -1299,6 +1324,131 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("preserves Core's projected String method-identity decision through wire", () => {
+		const source = `globalThis.parse = function parse(regexp, value) {
+			const match = regexp.exec(value);
+			if (match === null) return -1;
+			return match[1].charCodeAt(0) + match[2].toUpperCase().toLowerCase().length;
+		};`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"regexp-projected-string-method-identity.js",
+			parseScript(source, { strict: false }),
+		);
+		const projectedIdentities = (lowered: VmDefinition) => {
+			const region = lowered.functions
+				.flatMap((fn) => fn.regions ?? [])
+				.find((candidate) => candidate.kind === "regexp-exec-projection");
+			if (region?.kind !== "regexp-exec-projection") {
+				throw new Error("missing RegExp.exec projection region");
+			}
+			return {
+				region,
+				identities: region.loads.flatMap(({ consumer }) =>
+					consumer?.kind === "charCodeAtZero" || consumer?.kind === "asciiCaseLength"
+						? [consumer.methodIdentity]
+						: [],
+				),
+			};
+		};
+
+		const mutable = compileSemanticProgramToVmDefinition(semantic);
+		const mutableProjection = projectedIdentities(mutable);
+		expect(mutableProjection.identities).toEqual(["runtime-guarded", "runtime-guarded"]);
+
+		const locked = compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
+		const lockedProjection = projectedIdentities(locked);
+		expect(lockedProjection.identities).toEqual([
+			"authority-invariant",
+			"authority-invariant",
+		]);
+		expect(
+			projectedIdentities(
+				deserializeVmDefinition(serializeVmDefinition(locked, { debugInfo: false })),
+			).identities,
+		).toEqual(lockedProjection.identities);
+
+		const firstLoad = lockedProjection.region.loads[0]!;
+		if (firstLoad.consumer?.kind !== "charCodeAtZero") {
+			throw new Error("missing charCodeAtZero consumer");
+		}
+		const charConsumer = firstLoad.consumer;
+		const malformed: VmDefinition = {
+			...locked,
+			functions: locked.functions.map((fn) => ({
+				...fn,
+				regions: fn.regions?.map((region) =>
+					region === lockedProjection.region
+						? {
+								...region,
+								loads: region.loads.with(0, {
+									...firstLoad,
+									consumer: {
+										...charConsumer,
+										methodIdentity: "runtime-guarded",
+									},
+								}),
+							}
+						: region,
+				),
+			})),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid RegExp\.exec projection region/,
+		);
+
+		const ownerIndex = locked.functions.findIndex((fn) =>
+			fn.regions?.includes(lockedProjection.region),
+		);
+		const owner = locked.functions[ownerIndex]!;
+		const charCall = owner.instructions[charConsumer.callIp];
+		if (charCall?.opcode !== "CALL") throw new Error("missing projected char call");
+		const invalidZero: VmDefinition = {
+			...locked,
+			functions: locked.functions.with(ownerIndex, {
+				...owner,
+				instructions: owner.instructions.with(charConsumer.callIp, {
+					...charCall,
+					arguments: [-4],
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(invalidZero)).toThrow(
+			/invalid RegExp\.exec projection region/,
+		);
+
+		const asciiLoad = lockedProjection.region.loads.find(
+			({ consumer }) => consumer?.kind === "asciiCaseLength",
+		);
+		if (asciiLoad?.consumer?.kind !== "asciiCaseLength") {
+			throw new Error("missing projected ASCII case consumer");
+		}
+		const asciiConsumer = asciiLoad.consumer;
+		const lowerProperty = owner.instructions[asciiConsumer.lowerPropertyIp];
+		const upperProperty = owner.instructions[asciiConsumer.upperPropertyIp];
+		if (
+			lowerProperty?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			upperProperty?.opcode !== "LOAD_PROPERTY_STATIC"
+		) {
+			throw new Error("missing projected case properties");
+		}
+		const invalidCaseChain: VmDefinition = {
+			...locked,
+			functions: locked.functions.with(ownerIndex, {
+				...owner,
+				instructions: owner.instructions.with(asciiConsumer.lowerPropertyIp, {
+					...lowerProperty,
+					stringIndex: upperProperty.stringIndex,
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(invalidCaseChain)).toThrow(
+			/invalid RegExp\.exec projection region/,
+		);
+	});
+
 	it("carries Core-selected String.slice Number regions through lowering and wire", () => {
 		const source = `globalThis.parse = function parse(value) {
 			try {
@@ -1320,6 +1470,7 @@ describe("native update-expression representation", () => {
 		expect(regions[0]).toMatchObject({
 			kind: "string-slice-number",
 			representation: "primitive-string-span-number",
+			builtinIdentities: "runtime-guarded",
 			sliceStart: 1,
 			license: {
 				genericTwin: "retained",
@@ -1331,6 +1482,15 @@ describe("native update-expression representation", () => {
 			},
 		});
 		expect(regions[0]!.controlFlow.exceptionalHandlerIps).not.toHaveLength(0);
+		const lockedRegions = compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		}).functions.flatMap(
+			(fn) => fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+		);
+		expect(lockedRegions).toHaveLength(1);
+		expect(lockedRegions[0]).toMatchObject({
+			builtinIdentities: "authority-invariant",
+		});
 
 		const cached = deserializeVmDefinition(
 			serializeVmDefinition(lowered, { debugInfo: false }),
@@ -1369,6 +1529,19 @@ describe("native update-expression representation", () => {
 		expect(() => serializeVmDefinition(malformed)).toThrow(
 			/invalid String\.slice Number region/,
 		);
+		const invalidIdentity: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, {
+					...region,
+					builtinIdentities: "authority-invariant",
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(invalidIdentity)).toThrow(
+			/invalid String\.slice Number region/,
+		);
 	});
 
 	it("carries Core-selected RegExp iterator projections through lowering and wire", () => {
@@ -1397,6 +1570,7 @@ describe("native update-expression representation", () => {
 			license: {
 				genericTwin: "retained",
 				materialization: "on-demand",
+				admission: { validity: "per-use" },
 				guard: {
 					dependencies: [{ kind: "epoch", family: "watched-methods" }],
 					obligations: ["fallback", "materialize"],
@@ -1478,9 +1652,12 @@ describe("native update-expression representation", () => {
 		expect(cursors[0]).toMatchObject({
 			kind: "string-split-cursor",
 			representation: "split-cursor-spans",
+			splitIdentity: "runtime-guarded",
+			trimIdentity: "runtime-guarded",
 			license: {
 				genericTwin: "retained",
 				materialization: "on-demand",
+				admission: { validity: "per-use" },
 				guard: {
 					dependencies: [{ kind: "epoch", family: "watched-methods" }],
 					obligations: ["fallback", "materialize"],
@@ -1488,6 +1665,18 @@ describe("native update-expression representation", () => {
 			},
 		});
 		expect(cursors[0]?.primitiveStringLengthIps).toHaveLength(1);
+		const lockedCursors = compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		}).functions.flatMap(
+			(fn) => fn.regions?.filter((region) => region.kind === "string-split-cursor") ?? [],
+		);
+		expect(lockedCursors).toHaveLength(1);
+		expect(lockedCursors[0]).toMatchObject({
+			splitIdentity: "authority-invariant",
+			trimIdentity: "authority-invariant",
+			propertyPlacement: "call-fallback",
+			license: { admission: { validity: "once" } },
+		});
 
 		const cached = deserializeVmDefinition(
 			serializeVmDefinition(lowered, { debugInfo: false }),
@@ -1505,6 +1694,20 @@ describe("native update-expression representation", () => {
 		const cursor = owner.regions!.find(
 			(region) => region.kind === "string-split-cursor",
 		)!;
+		const cursorIndex = owner.regions!.indexOf(cursor);
+		const invalidIdentity: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(cursorIndex, {
+					...cursor,
+					trimIdentity: "authority-invariant",
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(invalidIdentity)).toThrow(
+			/invalid String\.split cursor region metadata/,
+		);
 		const element = owner.instructions[cursor.elementIp]!;
 		expect(element.opcode).toBe("LOAD_PROPERTY");
 		if (element.opcode !== "LOAD_PROPERTY")
@@ -1757,6 +1960,21 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_regexp_exec_capture_projection(vm,");
 	});
 
+	it("erases locked projected charCodeAt identity checks", () => {
+		const output = emitLocked(`
+			function firstCodeUnit(value) {
+				const match = /([a-z]+)/.exec(value);
+				if (match === null) return -1;
+				return match[1].charCodeAt(0);
+			}
+			globalThis.firstCodeUnit = firstCodeUnit;
+		`);
+		expect(output).toContain("mal_regexp_exec_capture_projection_locked(vm,");
+		expect(output).not.toContain("mal_vm_local_watched_primitive_value_try_load_static");
+		expect(output).not.toContain("u64 __watched_methods_epoch");
+		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm,");
+	});
+
 	it("summarizes a closed ASCII capture case chain to its terminal length", () => {
 		const output = emit(`
 			function normalizedLength(regexp, value) {
@@ -1771,6 +1989,24 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_string_ascii_case_chain_length_span(vm,");
 		expect(output).toContain("mal_regexp_materialize_capture_span(vm,");
 		expect(output).toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("erases locked projected ASCII case method checks", () => {
+		const output = emitLocked(`
+			function normalizedLength(value) {
+				const match = /([a-z]+)/.exec(value);
+				if (match === null) return -1;
+				return match[1].toUpperCase().toLowerCase().length;
+			}
+			globalThis.normalizedLength = normalizedLength;
+		`);
+		expect(output).toContain("mal_regexp_exec_capture_projection_locked(vm,");
+		expect(output).toContain(
+			"mal_builtin_string_ascii_case_chain_length_span_locked(vm,",
+		);
+		expect(output).not.toContain("mal_vm_local_watched_primitive_value_try_load_static");
+		expect(output).not.toContain("u64 __watched_methods_epoch");
+		expect(output).not.toContain("mal_builtin_string_ascii_case_chain_length_span(vm,");
 	});
 
 	it("keeps capture case intermediates materialized when they escape", () => {

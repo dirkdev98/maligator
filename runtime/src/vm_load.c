@@ -18,7 +18,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 16u
+#define WIRE_VERSION 18u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in
@@ -1261,6 +1261,29 @@ static const MalInstruction *mal_loaded_latest_definition(
     return nullptr;
 }
 
+static bool mal_loaded_static_property_matches(
+    const MalFunction *fn,
+    const MalString *strings,
+    u32 string_count,
+    i32 ip,
+    i32 object,
+    const char *name
+) {
+    if (ip < 0 || ip >= fn->instruction_count) return false;
+    const MalInstruction *property = &fn->instructions[ip];
+    if (property->opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
+        property->as.load_property_static.object != object) return false;
+    i32 string_index = property->as.load_property_static.string_index;
+    if (string_index < 0 || string_index >= (i32) string_count) return false;
+    const MalString *string = &strings[string_index];
+    usize length = strlen(name);
+    if (string->length != length) return false;
+    for (usize index = 0; index < length; index++) {
+        if (string->code_units[index] != (u8) name[index]) return false;
+    }
+    return true;
+}
+
 /*
  * Re-check a region's Core property placement. Placement is Core metadata: only a
  * compiled backend acts on it by skipping the load on the fast path, so the
@@ -2022,6 +2045,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             if (r.ok && kind == 2) {
                 i32 property_ip = rd_i32(&r);
                 u8 property_placement = rd_u8(&r);
+                u8 split_identity = rd_u8(&r);
+                u8 trim_identity = rd_u8(&r);
                 i32 callee = rd_i32(&r);
                 i32 receiver = rd_i32(&r);
                 i32 separator = rd_i32(&r);
@@ -2073,7 +2098,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     trim_call_ip == trim_property_ip + 1 && trim_call_ip < backedge_ip &&
                     exit_ip == backedge_ip + 1 && exit_ip <= fn->instruction_count &&
                     backedge_ip < fn->instruction_count;
-                if (anchor_count != 4 || !call_ip_ok ||
+                if (anchor_count != 4 || split_identity > 1 || trim_identity > 1 ||
+                    (split_identity == 1) != (dependency_mask == 1) ||
+                    (trim_identity == 1) != (dependency_mask == 1) || !call_ip_ok ||
                     (!call_is_generic && !call_is_builtin) ||
                     (call_is_generic && !property_ok) ||
                     (call_is_builtin && (property_ip != -1 || callee != -1)) ||
@@ -2081,7 +2108,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     !fixed_ips_ok ||
                     !mal_loaded_property_placement_holds(
                         fn, property_placement, property_ip, call_ip) ||
-                    (property_placement == 1 && dependency_mask != 1)) {
+                    (property_placement == 1 && split_identity != 1)) {
                     r.ok = false;
                 }
                 if (r.ok) {
@@ -2224,6 +2251,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             } else if (r.ok && kind == 4) {
                 i32 property_ip = rd_i32(&r);
                 u8 property_placement = rd_u8(&r);
+                u8 split_identity = rd_u8(&r);
                 i32 call_ip = rd_i32(&r);
                 i32 callee = rd_i32(&r);
                 i32 receiver = rd_i32(&r);
@@ -2265,7 +2293,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 for (u32 result_index = 0; result_index < result_register_count; result_index++) {
                     if (result_registers[result_index] == call_result) call_result_found = true;
                 }
-                bool header_ok = anchor_count == 2 && anchors[0] == call_ip &&
+                bool header_ok = split_identity <= 1 &&
+                    (split_identity == 1) == (dependency_mask == 1) &&
+                    anchor_count == 2 && anchors[0] == call_ip &&
                     load_count > 0 && anchors[1] == load_ips[0] &&
                     (generic || direct) && call_result_found &&
                     separator_string_index >= 0 &&
@@ -2274,7 +2304,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     receiver >= 0 && receiver < fn->register_count &&
                     mal_loaded_property_placement_holds(
                         fn, property_placement, property_ip, call_ip) &&
-                    (property_placement != 1 || dependency_mask == 1);
+                    (property_placement != 1 || split_identity == 1);
                 if (header_ok && generic) {
                     const MalInstruction *call = &fn->instructions[call_ip];
                     const MalInstruction *property = property_ok
@@ -2438,6 +2468,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 i32 capture_indices[8];
                 i32 load_dsts[8];
                 u8 consumer_tags[8];
+                u8 consumer_method_identities[8];
                 i32 consumer_ips[8][7];
                 i32 consumer_move_ips[8][64];
                 u32 consumer_move_counts[8];
@@ -2455,6 +2486,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         consumer_ips[load][0] = rd_i32(&r);
                         consumer_ips[load][1] = rd_i32(&r);
                         consumer_ips[load][2] = rd_i32(&r);
+                        consumer_method_identities[load] = rd_u8(&r);
                     } else if (consumer_tags[load] == 3) {
                         consumer_ips[load][0] = rd_i32(&r);
                         consumer_ips[load][1] = rd_i32(&r);
@@ -2470,6 +2502,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                             consumer_move_ips[load][move] = rd_i32(&r);
                         }
                         consumer_ips[load][5] = rd_i32(&r);
+                        consumer_method_identities[load] = rd_u8(&r);
                     } else if (consumer_tags[load] != 0) {
                         r.ok = false;
                     }
@@ -2564,40 +2597,130 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     u8 tag = consumer_tags[load];
                     if (tag == 1) {
                         i32 consumer_ip = consumer_ips[load][0];
-                        if (consumer_ip < 0 || consumer_ip >= fn->instruction_count ||
-                            fn->instructions[consumer_ip].opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
-                            fn->instructions[consumer_ip].as.load_property_static.object !=
-                                load_dsts[load]) r.ok = false;
+                        if (!mal_loaded_static_property_matches(
+                                fn, strings, string_count, consumer_ip,
+                                load_dsts[load], "length")) r.ok = false;
                     } else if (tag == 2) {
                         i32 property = consumer_ips[load][0];
                         i32 call = consumer_ips[load][1];
                         i32 zero = consumer_ips[load][2];
-                        if (property < 0 || property >= fn->instruction_count || call < 0 ||
-                            call >= fn->instruction_count ||
-                            fn->instructions[property].opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
-                            fn->instructions[call].opcode != MAL_OP_CALL ||
+                        const MalInstruction *property_instruction =
+                            property >= 0 && property < fn->instruction_count
+                            ? &fn->instructions[property] : nullptr;
+                        const MalInstruction *call_instruction =
+                            call >= 0 && call < fn->instruction_count
+                            ? &fn->instructions[call] : nullptr;
+                        i32 call_data = call_instruction != nullptr &&
+                            call_instruction->opcode == MAL_OP_CALL
+                            ? call_instruction->as.call.data_offset : -1;
+                        i32 argument = call_data >= 0 &&
+                            call_data + 1 < fn->instruction_data_count &&
+                            fn->instruction_data[call_data] == 1
+                            ? fn->instruction_data[call_data + 1] : INT32_MAX;
+                        bool zero_argument = argument == MAL_VALUE_OPERAND_I28_BASE;
+                        if (zero >= 0 && zero < fn->instruction_count &&
+                            fn->instructions[zero].opcode == MAL_OP_CREATE_NUMBER &&
+                            fn->instructions[zero].as.create_number.value == 0 &&
+                            argument == fn->instructions[zero].as.create_number.dst) {
+                            zero_argument = true;
+                        }
+                        if (consumer_method_identities[load] > 1 ||
+                            (consumer_method_identities[load] == 1) !=
+                                (dependency_mask == 1) ||
+                            !mal_loaded_static_property_matches(
+                                fn, strings, string_count, property,
+                                load_dsts[load], "charCodeAt") ||
+                            call_instruction == nullptr ||
+                            call_instruction->opcode != MAL_OP_CALL ||
+                            call_instruction->as.call.callee !=
+                                property_instruction->as.load_property_static.dst ||
+                            call_instruction->as.call.this_value != load_dsts[load] ||
+                            !zero_argument ||
                             (zero >= 0 && (zero >= fn->instruction_count ||
-                             fn->instructions[zero].opcode != MAL_OP_CREATE_NUMBER))) r.ok = false;
+                             fn->instructions[zero].opcode != MAL_OP_CREATE_NUMBER ||
+                             fn->instructions[zero].as.create_number.value != 0))) r.ok = false;
                     } else if (tag == 3) {
                         i32 intrinsic = consumer_ips[load][0];
                         i32 call = consumer_ips[load][1];
+                        i32 call_data = call >= 0 && call < fn->instruction_count &&
+                            fn->instructions[call].opcode == MAL_OP_CALL
+                            ? fn->instructions[call].as.call.data_offset : -1;
                         if (intrinsic < 0 || intrinsic >= fn->instruction_count || call < 0 ||
                             call >= fn->instruction_count ||
                             fn->instructions[intrinsic].opcode != MAL_OP_LOAD_INTRINSIC ||
-                            fn->instructions[call].opcode != MAL_OP_CALL) r.ok = false;
+                            fn->instructions[intrinsic].as.load_intrinsic.intrinsic !=
+                                MAL_INTRINSIC_NUMBER_CONSTRUCTOR ||
+                            fn->instructions[call].opcode != MAL_OP_CALL ||
+                            fn->instructions[call].as.call.callee !=
+                                fn->instructions[intrinsic].as.load_intrinsic.dst ||
+                            call_data < 0 || call_data + 1 >= fn->instruction_data_count ||
+                            fn->instruction_data[call_data] != 1 ||
+                            fn->instruction_data[call_data + 1] != load_dsts[load]) r.ok = false;
                     } else if (tag == 4) {
+                        if (consumer_method_identities[load] > 1 ||
+                            (consumer_method_identities[load] == 1) !=
+                                (dependency_mask == 1)) {
+                            r.ok = false;
+                        }
                         for (u32 consumer = 0; r.ok && consumer < 6; consumer++) {
                             i32 consumer_ip = consumer_ips[load][consumer];
                             if (consumer_ip < 0 || consumer_ip >= fn->instruction_count) r.ok = false;
                         }
-                        if (r.ok &&
-                            (fn->instructions[consumer_ips[load][0]].opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
-                             fn->instructions[consumer_ips[load][1]].opcode != MAL_OP_CALL ||
-                             fn->instructions[consumer_ips[load][2]].opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
-                             fn->instructions[consumer_ips[load][4]].opcode != MAL_OP_CALL ||
-                             fn->instructions[consumer_ips[load][5]].opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
-                             consumer_ips[load][3] < 0 ||
-                             consumer_ips[load][3] >= fn->property_ic_count)) r.ok = false;
+                        if (r.ok) {
+                            const MalInstruction *upper_property =
+                                &fn->instructions[consumer_ips[load][0]];
+                            const MalInstruction *upper_call =
+                                &fn->instructions[consumer_ips[load][1]];
+                            const MalInstruction *lower_property =
+                                &fn->instructions[consumer_ips[load][2]];
+                            const MalInstruction *lower_call =
+                                &fn->instructions[consumer_ips[load][4]];
+                            i32 upper_data = upper_call->opcode == MAL_OP_CALL
+                                ? upper_call->as.call.data_offset : -1;
+                            i32 lower_data = lower_call->opcode == MAL_OP_CALL
+                                ? lower_call->as.call.data_offset : -1;
+                            i32 lower_result = lower_call->opcode == MAL_OP_CALL
+                                ? lower_call->as.call.dst : -1;
+                            bool structure_ok =
+                                mal_loaded_static_property_matches(
+                                    fn, strings, string_count, consumer_ips[load][0],
+                                    load_dsts[load], "toUpperCase") &&
+                                upper_call->opcode == MAL_OP_CALL &&
+                                upper_call->as.call.callee ==
+                                    upper_property->as.load_property_static.dst &&
+                                upper_call->as.call.this_value == load_dsts[load] &&
+                                upper_data >= 0 && upper_data < fn->instruction_data_count &&
+                                fn->instruction_data[upper_data] == 0 &&
+                                mal_loaded_static_property_matches(
+                                    fn, strings, string_count, consumer_ips[load][2],
+                                    upper_call->as.call.dst, "toLowerCase") &&
+                                lower_call->opcode == MAL_OP_CALL &&
+                                lower_call->as.call.callee ==
+                                    lower_property->as.load_property_static.dst &&
+                                lower_call->as.call.this_value == upper_call->as.call.dst &&
+                                lower_data >= 0 && lower_data < fn->instruction_data_count &&
+                                fn->instruction_data[lower_data] == 0 &&
+                                consumer_ips[load][3] >= 0 &&
+                                consumer_ips[load][3] < fn->property_ic_count;
+                            for (u32 move = 0; structure_ok &&
+                                 move < consumer_move_counts[load]; move++) {
+                                i32 move_ip = consumer_move_ips[load][move];
+                                if (move_ip < 0 || move_ip >= fn->instruction_count) {
+                                    structure_ok = false;
+                                    break;
+                                }
+                                const MalInstruction *move_instruction =
+                                    &fn->instructions[move_ip];
+                                structure_ok = move_instruction->opcode == MAL_OP_MOVE &&
+                                    move_instruction->as.move.src == lower_result;
+                                lower_result = move_instruction->as.move.dst;
+                            }
+                            structure_ok = structure_ok &&
+                                mal_loaded_static_property_matches(
+                                    fn, strings, string_count, consumer_ips[load][5],
+                                    lower_result, "length");
+                            if (!structure_ok) r.ok = false;
+                        }
                         for (u32 move = 0; r.ok && move < consumer_move_counts[load]; move++) {
                             i32 move_ip = consumer_move_ips[load][move];
                             if (move_ip < 0 || move_ip >= fn->instruction_count ||
@@ -2788,6 +2911,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             } else if (r.ok && kind == 7) {
                 i32 property_ip = rd_i32(&r);
                 u8 property_placement = rd_u8(&r);
+                u8 builtin_identities = rd_u8(&r);
                 i32 slice_call_ip = rd_i32(&r);
                 i32 slice_start_ip = rd_i32(&r);
                 i32 number_intrinsic_ip = rd_i32(&r);
@@ -2813,7 +2937,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         slice_start_ok = false;
                     }
                 }
-                bool header_ok = anchor_count == 2 && anchors[0] == slice_call_ip &&
+                bool header_ok = builtin_identities <= 1 &&
+                    (builtin_identities == 1) == (dependency_mask == 1) &&
+                    anchor_count == 2 && anchors[0] == slice_call_ip &&
                     anchors[1] == number_call_ip && property_ip >= 0 &&
                     property_ip < fn->instruction_count && slice_start_ok &&
                     number_call_ip < fn->instruction_count && number_intrinsic_ip >= 0 &&
@@ -2826,7 +2952,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     fn->instructions[number_call_ip].opcode == MAL_OP_CALL &&
                     mal_loaded_property_placement_holds(
                         fn, property_placement, property_ip, slice_call_ip) &&
-                    (property_placement != 1 || dependency_mask == 1);
+                    (property_placement != 1 || builtin_identities == 1);
                 if (header_ok) {
                     const MalInstruction *property = &fn->instructions[property_ip];
                     const MalInstruction *slice_call = &fn->instructions[slice_call_ip];

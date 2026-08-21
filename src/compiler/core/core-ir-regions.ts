@@ -56,6 +56,13 @@ export interface CoreAllocatedRegionEnvelope<
  */
 export type CorePropertyPlacement = "in-place" | "call-fallback";
 
+/**
+ * Core's decision about a builtin identity used by a selected region.
+ * `authority-invariant` permits a backend to erase the property identity check;
+ * `runtime-guarded` requires the ordinary watched-method lookup and fallback.
+ */
+export type CoreBuiltinIdentityDecision = "authority-invariant" | "runtime-guarded";
+
 /** Closed String#split projected-result certificate after register allocation. */
 export interface CoreAllocatedStringSplitProjectionRegion extends CoreAllocatedRegionEnvelope<
 	"string-split-projection",
@@ -69,6 +76,7 @@ export interface CoreAllocatedStringSplitProjectionRegion extends CoreAllocatedR
 	/** Ordinary property producer retained by a dynamic-call twin. */
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
+	readonly splitIdentity: CoreBuiltinIdentityDecision;
 	readonly separatorStringIndex: number;
 	/** Allocated registers for every Core SSA alias licensed as the call result. */
 	readonly resultRegisters: ReadonlyArray<number>;
@@ -124,6 +132,7 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 			  }
 			| {
 					readonly kind: "charCodeAtZero";
+					readonly methodIdentity: CoreBuiltinIdentityDecision;
 					readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 					readonly call: Extract<CompilerInstruction, { type: "call" }>;
 					readonly zero?: Extract<CompilerInstruction, { type: "createNumber" }>;
@@ -135,6 +144,7 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 			  }
 			| {
 					readonly kind: "asciiCaseLength";
+					readonly methodIdentity: CoreBuiltinIdentityDecision;
 					readonly upperProperty: Extract<
 						CompilerInstruction,
 						{ type: "loadPropertyStatic" }
@@ -193,6 +203,8 @@ export interface CoreAllocatedStringSliceNumberRegion extends CoreAllocatedRegio
 > {
 	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
+	/** Covers both the exact slice method and the exact intrinsic Number consumer. */
+	readonly builtinIdentities: CoreBuiltinIdentityDecision;
 	readonly sliceStartInstruction: Extract<
 		CompilerInstruction,
 		{ type: "createNumber" | "createF64" }
@@ -217,6 +229,8 @@ export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegio
 	/** Ordinary property producer retained by a dynamic-call twin. */
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
+	readonly splitIdentity: CoreBuiltinIdentityDecision;
+	readonly trimIdentity: CoreBuiltinIdentityDecision;
 	readonly compare: Extract<CompilerInstruction, { type: "binary" }>;
 	readonly element: Extract<CompilerInstruction, { type: "loadProperty" }>;
 	readonly trimProperty: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;

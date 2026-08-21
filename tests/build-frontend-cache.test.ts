@@ -292,7 +292,8 @@ describe("normal build frontend cache", () => {
 		write(path.join(root, "package.json"), `{"type":"module"}\n`);
 		write(
 			entrypoint,
-			`export function fill() { const array = []; for (let i = 0; i < 1000; i++) array[i] = i; return array; }\n`,
+			`function fill() { const array = []; for (let i = 0; i < 1000; i++) array[i] = i; return array; }
+			globalThis.result = fill().length;\n`,
 		);
 
 		const cold = compile(entrypoint, cacheDirectory);

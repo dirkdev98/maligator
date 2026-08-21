@@ -1,0 +1,431 @@
+import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import {
+	analyzeCoreFunctionReachability,
+	compactCoreProgramFunctions,
+} from "../src/compiler/core/core-ir-reachability.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
+import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
+import { parseModule } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import type { CompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
+
+function moduleFacts(path: string, sourceClosed: boolean): CompilerProgramFacts {
+	const configured = compilerProgramFactsFromConfig(
+		resolveBuildConfig({ engine: { eval: sourceClosed ? false : true } }),
+	);
+	return sourceClosed
+		? withProgramClosure(
+				configured,
+				programClosureCertificate(
+					{ kind: "whole-program", entry: path },
+					[{ kind: "entry-module", module: path }],
+					[],
+				),
+			)
+		: configured;
+}
+
+function coreModule(source: string, sourceClosed: boolean): CoreProgram {
+	const path = sourceClosed ? "closed-reachability.mjs" : "open-reachability.mjs";
+	return lowerSemanticProgramToCore(
+		analyzeSourceAndRunSemanticAnalysis(source, path, parseModule(source)),
+		{ facts: moduleFacts(path, sourceClosed) },
+	);
+}
+
+const DEAD_CYCLE = `
+	function deadA() { return deadB(); }
+	function deadB() { return deadA(); }
+	function live() { return 41; }
+	globalThis.answer = live() + 1;
+`;
+
+function leafFunction(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [value] = builder.appendInstruction(entry, "createUndefined", []);
+	builder.setTerminator(entry, { kind: "return", value: value! });
+	return builder.finish(entry);
+}
+
+function closedProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
+	const shell = coreModule("", true);
+	return { ...shell, functions };
+}
+
+function finitePlusOpaqueProgram(): CoreProgram {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+		parameterCount: 2,
+	});
+	const entry = builder.createBlock([{}, {}]);
+	const [opaque, condition] = builder.block(entry).parameters.map(({ value }) => value);
+	const left = builder.createBlock();
+	const right = builder.createBlock();
+	const join = builder.createBlock([{}]);
+	const [finite] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: 1 },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: left, arguments: [] },
+		alternate: { block: right, arguments: [] },
+	});
+	builder.setTerminator(left, {
+		kind: "jump",
+		edge: { block: join, arguments: [finite!] },
+	});
+	builder.setTerminator(right, {
+		kind: "jump",
+		edge: { block: join, arguments: [opaque!] },
+	});
+	const callee = builder.block(join).parameters[0]!.value;
+	const [receiver] = builder.appendInstruction(join, "createUndefined", []);
+	const [result] = builder.appendInstruction(join, "call", [callee, receiver!]);
+	builder.setTerminator(join, { kind: "return", value: result! });
+	return closedProgram([builder.finish(entry), leafFunction(1), leafFunction(2)]);
+}
+
+function anyScriptProgram(): CoreProgram {
+	const functionCount = 7;
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const discriminant = builder.block(entry).parameters[0]!.value;
+	const join = builder.createBlock([{}]);
+	const candidates = Array.from(
+		{ length: 5 },
+		(_unused, index) =>
+			builder.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex: index + 1 },
+			})[0]!,
+	);
+	builder.setTerminator(entry, {
+		kind: "switch",
+		discriminant,
+		cases: candidates.slice(0, -1).map((candidate, index) => ({
+			value: { kind: "number" as const, value: index },
+			edge: { block: join, arguments: [candidate] },
+		})),
+		default: { block: join, arguments: [candidates.at(-1)!] },
+	});
+	const callee = builder.block(join).parameters[0]!.value;
+	const [receiver] = builder.appendInstruction(join, "createUndefined", []);
+	const [result] = builder.appendInstruction(join, "call", [callee, receiver!]);
+	builder.setTerminator(join, { kind: "return", value: result! });
+	return closedProgram([
+		builder.finish(entry),
+		...Array.from({ length: functionCount - 1 }, (_unused, index) =>
+			leafFunction(index + 1),
+		),
+	]);
+}
+
+function installedFunctionProgram(kind: "host" | "namespace"): CoreProgram {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [created] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: 1 },
+	});
+	builder.appendInstruction(entry, "storeGlobal", [created!], {
+		attributes: { index: 0 },
+	});
+	const [result] =
+		kind === "namespace"
+			? builder.appendInstruction(entry, "createModuleNamespace", [], {
+					attributes: { exports: [{ nameStringIndex: 0, slot: 0 }] },
+				})
+			: builder.appendInstruction(entry, "createUndefined", []);
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	const shell = closedProgram([builder.finish(entry), leafFunction(1), leafFunction(2)]);
+	return {
+		...shell,
+		stringConstants: [[120]],
+		globalCount: 1,
+		compilation: {
+			...shell.compilation!,
+			hostInstallCandidates:
+				kind === "host"
+					? [{ installer: "test", exports: [{ name: "installed", slot: 0 }] }]
+					: [],
+		},
+	};
+}
+
+describe("Core whole-program function reachability", () => {
+	it("removes an unreachable recursive cycle from a source-closed module", () => {
+		const program = coreModule(DEAD_CYCLE, true);
+		const analysis = analyzeCoreFunctionReachability(program);
+		const result = compactCoreProgramFunctions(program, analysis);
+
+		expect(program.functions).toHaveLength(4);
+		expect([...analysis.executable].sort((left, right) => left - right)).toEqual([0, 3]);
+		expect([...analysis.retained].sort((left, right) => left - right)).toEqual([0, 3]);
+		expect(result.changed).toBe(true);
+		expect(result.program.functions).toHaveLength(2);
+		expect(result.program.functions.map(({ functionIndex }) => functionIndex)).toEqual([
+			0, 1,
+		]);
+		expect(result.oldToNew).toEqual(
+			new Map([
+				[0, 0],
+				[3, 1],
+			]),
+		);
+	});
+
+	it("does not activate publication edges in an unreachable body", () => {
+		const program = coreModule(
+			`
+				function hidden() { return 7; }
+				function deadPublisher() { globalThis.hidden = hidden; }
+				globalThis.answer = 1;
+			`,
+			true,
+		);
+		const analysis = analyzeCoreFunctionReachability(program);
+
+		expect([...analysis.executable]).toEqual([0]);
+		expect([...analysis.retained]).toEqual([0]);
+		expect(compactCoreProgramFunctions(program, analysis).program.functions).toHaveLength(
+			1,
+		);
+	});
+
+	it("activates publication from an executable body", () => {
+		const program = coreModule(
+			`
+				function published() { return 7; }
+				globalThis.published = published;
+			`,
+			true,
+		);
+		const analysis = analyzeCoreFunctionReachability(program);
+
+		expect([...analysis.executable].sort((left, right) => left - right)).toEqual([0, 1]);
+		expect(compactCoreProgramFunctions(program, analysis).changed).toBe(false);
+	});
+
+	it("traverses callees entered through direct Function.prototype.call dispatch", () => {
+		const optimized = executeCoreOptimizations(
+			coreModule(
+				`
+					function dead() { return 0; }
+					function leaf(value) { return value + 1; }
+					function throughCall(value) { return leaf(value); }
+					globalThis.answer = throughCall.call(undefined, 41);
+				`,
+				true,
+			),
+			{ ablations: new Set(["inlining"]), verification: "per-pass" },
+		).program;
+		const flattenedCall = optimized.functions[0]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		).find(({ attributes }) => attributes.directFunctionCall === true);
+
+		expect(optimized.functions).toHaveLength(3);
+		expect(flattenedCall?.attributes.directCallTargetFunctionIndex).toBe(2);
+		expect(() => verifyCoreProgram(optimized, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("keeps every function when no graph proves source closure", () => {
+		const program = coreModule(DEAD_CYCLE, false);
+		const analysis = analyzeCoreFunctionReachability(program);
+		const result = compactCoreProgramFunctions(program, analysis);
+
+		expect(analysis.sourceClosed).toBe(false);
+		expect(analysis.executable.size).toBe(program.functions.length);
+		expect(analysis.retained.size).toBe(program.functions.length);
+		expect(result).toMatchObject({ program, changed: false });
+	});
+
+	it("keeps finite script candidates without widening an opaque alternative", () => {
+		const program = finitePlusOpaqueProgram();
+		const analysis = analyzeCoreFunctionReachability(program);
+
+		expect([...analysis.executable].sort((left, right) => left - right)).toEqual([0, 1]);
+		expect([...analysis.retained].sort((left, right) => left - right)).toEqual([0, 1]);
+		expect(compactCoreProgramFunctions(program, analysis).program.functions).toHaveLength(
+			2,
+		);
+	});
+
+	it("widens an any-script call edge to every in-image function", () => {
+		const program = anyScriptProgram();
+		const analysis = analyzeCoreFunctionReachability(program);
+
+		expect(analysis.executable.size).toBe(program.functions.length);
+		expect(analysis.retained.size).toBe(program.functions.length);
+		expect(compactCoreProgramFunctions(program, analysis).changed).toBe(false);
+	});
+
+	it("keeps a CommonJS module wrapper as an explicit image entry", () => {
+		const shell = closedProgram([leafFunction(0), leafFunction(1), leafFunction(2)]);
+		const program: CoreProgram = {
+			...shell,
+			compilation: {
+				...shell.compilation!,
+				cjsModuleFunctionIndices: [1],
+			},
+		};
+
+		expect(
+			[...analyzeCoreFunctionReachability(program).executable].sort(
+				(left, right) => left - right,
+			),
+		).toEqual([0, 1]);
+	});
+
+	it("keeps functions exposed through host-installed global slots", () => {
+		const analysis = analyzeCoreFunctionReachability(installedFunctionProgram("host"));
+
+		expect([...analysis.executable].sort((left, right) => left - right)).toEqual([0, 1]);
+		expect(analysis.reasons.get(1)).toContain("host-install");
+	});
+
+	it("keeps functions exposed through a reachable module namespace", () => {
+		const analysis = analyzeCoreFunctionReachability(
+			installedFunctionProgram("namespace"),
+		);
+
+		expect([...analysis.executable].sort((left, right) => left - right)).toEqual([0, 1]);
+		expect(analysis.reasons.get(1)).toContain("module-namespace");
+	});
+
+	it("restores a removed summary's narrowed call result before verification", () => {
+		const optimized = executeCoreOptimizations(
+			coreModule(
+				`
+          function live() { return 1.5; }
+          globalThis.answer = live();
+        `,
+				true,
+			),
+			{ ablations: new Set(["inlining"]), verification: "per-pass" },
+		).program;
+		const expanded: CoreProgram = {
+			...optimized,
+			functions: [...optimized.functions, leafFunction(optimized.functions.length)],
+		};
+		const compacted = compactCoreProgramFunctions(expanded);
+		const call = compacted.program.functions[0]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		).find(({ opcode }) => opcode === "call")!;
+
+		expect(compacted.changed).toBe(true);
+		expect(
+			compacted.program.functions[0]!.values.find(({ id }) => id === call.outputs[0])!
+				.representation,
+		).toBe("boxed");
+		expect(() => verifyCoreProgram(compacted.program, coreOpcodeRegistry)).not.toThrow();
+		expect(() =>
+			executeCoreOptimizations(expanded, {
+				ablations: new Set(["inlining", "interprocedural"]),
+				verification: "per-pass",
+			}),
+		).not.toThrow();
+	});
+
+	it("retains inline source owners named only by a live optimization decision", () => {
+		const shell = closedProgram([leafFunction(0), leafFunction(1), leafFunction(2)]);
+		const program: CoreProgram = {
+			...shell,
+			sourcePositions: [
+				{ line: 1, column: 1, inlinedFunctionIndex: 2, callerPosId: 1 },
+				{ line: 2, column: 1 },
+			],
+			compilation: {
+				...shell.compilation!,
+				optimizationDecisions: [
+					{
+						functionIndex: 0,
+						positionId: 0,
+						operation: "call",
+						phase: "optimization",
+						code: "optimization.applied.test",
+						outcome: "applied",
+					},
+				],
+			},
+		};
+		const analysis = analyzeCoreFunctionReachability(program);
+		const compacted = compactCoreProgramFunctions(program, analysis);
+
+		expect([...analysis.executable]).toEqual([0]);
+		expect([...analysis.retained].sort((left, right) => left - right)).toEqual([0, 2]);
+		expect(compacted.program.sourcePositions[0]!.inlinedFunctionIndex).toBe(1);
+	});
+
+	it("rebases nested function scopes in retained builtin proofs", () => {
+		const builder = new CoreFunctionBuilder(2, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [callee] = builder.appendInstruction(entry, "loadIntrinsic", [], {
+			attributes: { intrinsic: "Math" },
+		});
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		const [result] = builder.appendInstruction(entry, "call", [callee!, receiver!], {
+			attributes: {
+				knownBuiltinCall: {
+					identity: { proof: { scope: { kind: "function", id: 2 } } },
+					semantics: { proof: { scope: { kind: "function", id: 2 } } },
+				},
+			},
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const shell = closedProgram([
+			leafFunction(0),
+			leafFunction(1),
+			builder.finish(entry),
+		]);
+		const program: CoreProgram = {
+			...shell,
+			compilation: {
+				...shell.compilation!,
+				cjsModuleFunctionIndices: [2],
+			},
+		};
+		const compacted = compactCoreProgramFunctions(program);
+		const known = compacted.program.functions[1]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		)
+			.map(({ attributes }) => attributes.knownBuiltinCall)
+			.find((attribute) => attribute !== undefined);
+
+		expect(compacted.program.functions).toHaveLength(2);
+		expect(known).toMatchObject({
+			identity: { proof: { scope: { kind: "function", id: 1 } } },
+			semantics: { proof: { scope: { kind: "function", id: 1 } } },
+		});
+	});
+
+	it("publishes the compact function table to VM lowering", () => {
+		const path = "closed-reachability-product.mjs";
+		let optimized: CoreProgram | undefined;
+		const definition = compileSemanticProgramToVmDefinition(
+			analyzeSourceAndRunSemanticAnalysis(DEAD_CYCLE, path, parseModule(DEAD_CYCLE)),
+			{
+				facts: moduleFacts(path, true),
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		expect(optimized!.functions).toHaveLength(2);
+		expect(definition.functionCount).toBe(2);
+		expect(definition.functions).toHaveLength(2);
+	});
+});

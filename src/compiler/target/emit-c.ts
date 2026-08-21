@@ -10,7 +10,6 @@ import {
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
-	vmGuardIsWorldInvariant,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
@@ -503,7 +502,6 @@ export function emitCompiledFunction(
 		(region): region is NativeStringSplitProjection =>
 			region.kind === "string-split-projection",
 	)) {
-		const call = fn.instructions[projection.callIp];
 		const elementLoads = projection.loads
 			.filter(
 				(
@@ -527,9 +525,7 @@ export function emitCompiledFunction(
 			projection,
 			slotsOffset: nextStackSlot,
 			elementLoads,
-			lockedIdentity:
-				call?.opcode === "CALL_BUILTIN" ||
-				(call?.opcode === "CALL" && vmGuardIsWorldInvariant(projection.license.guard)),
+			lockedIdentity: projection.splitIdentity === "authority-invariant",
 		});
 		nextStackSlot += elementLoads.length;
 	}
@@ -544,10 +540,7 @@ export function emitCompiledFunction(
 		if (stringSplitCursorSites.has(callIp)) {
 			throw new Error(`Duplicate Core string-split cursor at instruction ${callIp}`);
 		}
-		const call = fn.instructions[callIp];
-		const trimCall = fn.instructions[cursor.trimCallIp];
-		const lockedLicense = vmGuardIsWorldInvariant(cursor.license.guard);
-		const hoistTrimIdentity = !lockedLicense;
+		const hoistTrimIdentity = cursor.trimIdentity === "runtime-guarded";
 		stringSplitCursorSites.set(callIp, {
 			cursor,
 			callIp,
@@ -558,15 +551,8 @@ export function emitCompiledFunction(
 			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
 			semanticEpochStable: cursor.license.admission.validity === "once",
 			epochName: `__string_split_cursor_${callIp}_semantic_epoch`,
-			lockedIdentity:
-				call?.opcode === "CALL_BUILTIN" ||
-				(call?.opcode === "CALL" &&
-					call.guardedBuiltinCall !== undefined &&
-					vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard)),
-			lockedTrimIdentity:
-				trimCall?.opcode === "CALL" &&
-				trimCall.guardedBuiltinCall !== undefined &&
-				vmGuardIsWorldInvariant(trimCall.guardedBuiltinCall.guard),
+			lockedIdentity: cursor.splitIdentity === "authority-invariant",
+			lockedTrimIdentity: cursor.trimIdentity === "authority-invariant",
 		});
 		nextStackSlot += hoistTrimIdentity ? 3 : 2;
 	}
@@ -1422,8 +1408,7 @@ function emitBody(
 			fn,
 			site.projection.propertyPlacement,
 			site.projection.propertyIp,
-			site.projection.lockedFreshLiteral &&
-				vmGuardIsWorldInvariant(site.projection.license.guard),
+			site.projection.lockedFreshLiteral,
 		);
 		nativeRegExpExecProjectionActionByIp.set(site.projection.callIp, {
 			site,
@@ -1510,7 +1495,7 @@ function emitBody(
 			region.kind === "string-slice-number",
 	);
 	for (const fusion of stringSliceNumberRegions) {
-		const lockedIdentity = vmGuardIsWorldInvariant(fusion.license.guard);
+		const lockedIdentity = fusion.builtinIdentities === "authority-invariant";
 		const propertyLoad = regionFallbackPropertyLoad(
 			fn,
 			fusion.propertyPlacement,
@@ -1597,8 +1582,9 @@ function emitBody(
 		[...regexpExecProjectionSites.values()].some((site) =>
 			site.loads.some(
 				(load) =>
-					load.consumer?.kind === "charCodeAtZero" ||
-					load.consumer?.kind === "asciiCaseLength",
+					(load.consumer?.kind === "charCodeAtZero" ||
+						load.consumer?.kind === "asciiCaseLength") &&
+					load.consumer.methodIdentity === "runtime-guarded",
 			),
 		)
 	) {
@@ -2363,9 +2349,15 @@ function emitInstruction(
 					const length = `__regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_length`;
 					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
 					const end = `__regexp_exec_${site.projection.callIp}_ends[${slot}]`;
+					const authorityInvariant =
+						load.consumer.methodIdentity === "authority-invariant";
+					const lower = `__regexp_exec_${site.projection.callIp}_case_lower_${load.consumer.upperCallIp}`;
+					const summary = authorityInvariant
+						? `mal_builtin_string_ascii_case_chain_length_span_locked(vm, __gc_slots[${site.subjectSlot}], ${start}, ${end}, &${length})`
+						: `mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst}) && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${load.consumer.lowerIcIndex}], &${lower}) && mal_builtin_string_ascii_case_chain_length_span(vm, r${instruction.dst}, ${lower}, __gc_slots[${site.subjectSlot}], ${start}, ${end}, &${length})`;
 					return [
-						`MalValue __regexp_exec_${site.projection.callIp}_case_lower_${load.consumer.upperCallIp};`,
-						`${fast} = __regexp_exec_${site.projection.callIp}_projected && ${start} >= 0 && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst}) && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${load.consumer.lowerIcIndex}], &__regexp_exec_${site.projection.callIp}_case_lower_${load.consumer.upperCallIp}) && mal_builtin_string_ascii_case_chain_length_span(vm, r${instruction.dst}, __regexp_exec_${site.projection.callIp}_case_lower_${load.consumer.upperCallIp}, __gc_slots[${site.subjectSlot}], ${start}, ${end}, &${length});`,
+						...(authorityInvariant ? [] : [`MalValue ${lower};`]),
+						`${fast} = __regexp_exec_${site.projection.callIp}_projected && ${start} >= 0 && ${summary};`,
 						`if (!${fast}) {`,
 						`  if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0) {`,
 						`    __gc_slots[${site.slotsOffset + slot}] = mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, ${end});`,
@@ -2465,9 +2457,13 @@ function emitInstruction(
 				if (slot >= 0 && load?.consumer?.kind === "charCodeAtZero") {
 					const fast = `__regexp_exec_${site.projection.callIp}_char_${load.consumer.callIp}_fast`;
 					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
+					const identityCheck =
+						load.consumer.methodIdentity === "authority-invariant"
+							? ""
+							: ` && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst})`;
 					return [
 						`${fast} = false;`,
-						`if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0 && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst})) {`,
+						`if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0${identityCheck}) {`,
 						`  ${fast} = true;`,
 						`} else {`,
 						`  if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0) {`,

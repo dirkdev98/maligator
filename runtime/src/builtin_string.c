@@ -1358,29 +1358,32 @@ static MalValue mal_builtin_string_prototype_to_lower_case(MalVm *vm, MalValue t
     return mal_builtin_string_case_impl(vm, this_value, false);
 }
 
-bool mal_builtin_string_ascii_case_chain_length_span(
+static bool mal_builtin_string_ascii_case_chain_length_span_impl(
     MalVm *vm,
     MalValue upper_callee,
     MalValue lower_callee,
     MalValue subject,
     i32 start,
     i32 end,
-    u32 *length_out
+    u32 *length_out,
+    bool authority_invariant
 ) {
-    if (!mal_value_is_native_function_object(upper_callee) ||
-        !mal_value_is_native_function_object(lower_callee) ||
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(upper_callee)) !=
-            mal_builtin_string_prototype_to_upper_case ||
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(lower_callee)) !=
-            mal_builtin_string_prototype_to_lower_case ||
+    if ((!authority_invariant &&
+         (!mal_value_is_native_function_object(upper_callee) ||
+          !mal_value_is_native_function_object(lower_callee) ||
+          mal_native_function_object_callback(
+              mal_value_to_native_function_object(upper_callee)) !=
+              mal_builtin_string_prototype_to_upper_case ||
+          mal_native_function_object_callback(
+              mal_value_to_native_function_object(lower_callee)) !=
+              mal_builtin_string_prototype_to_lower_case)) ||
         !mal_value_is_string(subject) || start < 0 || end < start || end - start > 64) {
         return false;
     }
 #if MAL_REALMS
-    if (mal_vm_callee_realm(vm, upper_callee) != vm->current_realm ||
-        mal_vm_callee_realm(vm, lower_callee) != vm->current_realm) {
+    if (!authority_invariant &&
+        (mal_vm_callee_realm(vm, upper_callee) != vm->current_realm ||
+         mal_vm_callee_realm(vm, lower_callee) != vm->current_realm)) {
         return false;
     }
 #else
@@ -1399,6 +1402,37 @@ bool mal_builtin_string_ascii_case_chain_length_span(
     }
     *length_out = (u32) (end - start);
     return true;
+}
+
+bool mal_builtin_string_ascii_case_chain_length_span(
+    MalVm *vm,
+    MalValue upper_callee,
+    MalValue lower_callee,
+    MalValue subject,
+    i32 start,
+    i32 end,
+    u32 *length_out
+) {
+    return mal_builtin_string_ascii_case_chain_length_span_impl(
+        vm, upper_callee, lower_callee, subject, start, end, length_out, false);
+}
+
+bool mal_builtin_string_ascii_case_chain_length_span_locked(
+    MalVm *vm,
+    MalValue subject,
+    i32 start,
+    i32 end,
+    u32 *length_out
+) {
+    return mal_builtin_string_ascii_case_chain_length_span_impl(
+        vm,
+        MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED,
+        subject,
+        start,
+        end,
+        length_out,
+        true);
 }
 
 // A code unit is a surrogate paired with its neighbour, a lone surrogate, or an

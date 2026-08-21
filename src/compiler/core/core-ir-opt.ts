@@ -78,6 +78,10 @@ import {
 } from "./core-ir-provenance.ts";
 import type { CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
 import {
+	analyzeCoreFunctionReachability,
+	compactCoreProgramFunctions,
+} from "./core-ir-reachability.ts";
+import {
 	coreRegionAdmission,
 	coreRegionAdmissionQuery,
 	coreRegionAdmissionValidity,
@@ -843,8 +847,10 @@ function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction
  * multi-target sets stay Core-only metadata until the guarded inliner either
  * consumes the complete finite set or declines its fixed expansion budget.
  */
-function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResult {
-	const analysis = analyzeCoreCalleeTargets(program);
+function annotateCoreDirectCallTargets(
+	program: CoreProgram,
+	analysis: CoreCalleeTargetAnalysis = analyzeCoreCalleeTargets(program),
+): InlineProgramResult {
 	const functionsByIndex = new Map(
 		program.functions.map((fn) => [fn.functionIndex, fn] as const),
 	);
@@ -1490,7 +1496,9 @@ function inlineSimpleCoreFunctions(
 		compilation?.optimizationDecisions === undefined
 			? undefined
 			: [...compilation.optimizationDecisions];
-	const positions = program.sourcePositions.map((position) => ({ ...position }));
+	const positions = program.sourcePositions.map((position) => ({
+		...position,
+	}));
 	const calleeTargets = analyzeCoreCalleeTargets(program);
 	const functionsByIndex = new Map(
 		program.functions.map((fn) => [fn.functionIndex, fn] as const),
@@ -1796,12 +1804,20 @@ function stackObjectRegion(
 		}
 		const allocationLocation = fn.blocks
 			.flatMap((block) =>
-				block.instructions.map((instruction, index) => ({ block, instruction, index })),
+				block.instructions.map((instruction, index) => ({
+					block,
+					instruction,
+					index,
+				})),
 			)
 			.find(({ instruction }) => instruction === allocation);
 		const inheritedLocation = fn.blocks
 			.flatMap((block) =>
-				block.instructions.map((instruction, index) => ({ block, instruction, index })),
+				block.instructions.map((instruction, index) => ({
+					block,
+					instruction,
+					index,
+				})),
 			)
 			.find(({ instruction }) => instruction === inheritedAccess);
 		if (
@@ -2669,7 +2685,10 @@ function corePropertyPlacement(
 	>,
 	uses: ReadonlyMap<
 		CoreValueId,
-		ReadonlyArray<{ readonly instruction: CoreInstruction; readonly position: number }>
+		ReadonlyArray<{
+			readonly instruction: CoreInstruction;
+			readonly position: number;
+		}>
 	>,
 	root: (value: CoreValueId) => CoreValueId,
 	locked: boolean,
@@ -2860,6 +2879,11 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 		if (fn.regions.filter(({ kind }) => kind === "regexp-exec-projection").length >= 8) {
 			return fn;
 		}
+		const projectedStringMethodIdentity = compilerFactIsWorldInvariant(
+			program.compilation?.facts.protectors.get("watched-methods"),
+		)
+			? "authority-invariant"
+			: "runtime-guarded";
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
@@ -2870,7 +2894,10 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 		>();
 		const uses = new Map<
 			CoreValueId,
-			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+			Array<{
+				readonly instruction: CoreInstruction;
+				readonly position: number;
+			}>
 		>();
 		const escapingValues = new Set<CoreValueId>();
 		const markEscape = (value: CoreValueId) => escapingValues.add(root(value));
@@ -2986,6 +3013,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 						| { readonly kind: "length"; readonly property: CoreInstruction }
 						| {
 								readonly kind: "charCodeAtZero";
+								readonly methodIdentity: typeof projectedStringMethodIdentity;
 								readonly property: CoreInstruction;
 								readonly call: CoreInstruction;
 								readonly zero?: CoreInstruction;
@@ -2997,6 +3025,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 						  }
 						| {
 								readonly kind: "asciiCaseLength";
+								readonly methodIdentity: typeof projectedStringMethodIdentity;
 								readonly upperProperty: CoreInstruction;
 								readonly upperCall: CoreInstruction;
 								readonly lowerProperty: CoreInstruction;
@@ -3137,6 +3166,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 							) {
 								load.consumer = {
 									kind: "asciiCaseLength",
+									methodIdentity: projectedStringMethodIdentity,
 									upperProperty,
 									upperCall,
 									lowerProperty,
@@ -3171,6 +3201,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 					if (zero?.opcode === "createNumber" && Object.is(zero.attributes.value, 0)) {
 						load.consumer = {
 							kind: "charCodeAtZero",
+							methodIdentity: projectedStringMethodIdentity,
 							property: charProperty,
 							call: charCall,
 							zero,
@@ -3269,7 +3300,10 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 					data: coreAttributeObject(
 						{
 							license: {
-								guard: { dependencies: builtin.proof.dependencies, obligations },
+								guard: {
+									dependencies: builtin.proof.dependencies,
+									obligations,
+								},
 								genericTwin: "retained",
 								materialization: "whole-region",
 							},
@@ -3290,7 +3324,9 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 								root,
 								lockedLiteral !== undefined,
 							),
-							resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
+							resultRegisters: resultValues.map((value) => ({
+								$coreValue: value,
+							})),
 							nullChecks: nullChecks.map(({ comparison, nullValue }) => ({
 								comparison: { $coreInstruction: comparison.id },
 								nullValue: { $coreInstruction: nullValue.id },
@@ -3302,7 +3338,9 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 											constructorIntrinsic: {
 												$coreInstruction: lockedLiteral.constructorIntrinsic.id,
 											},
-											construct: { $coreInstruction: lockedLiteral.construct.id },
+											construct: {
+												$coreInstruction: lockedLiteral.construct.id,
+											},
 										},
 									}),
 							lastIndexEffect: "retained-call-twin",
@@ -3327,15 +3365,20 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 																intrinsic: {
 																	$coreInstruction: load.consumer.intrinsic.id,
 																},
-																call: { $coreInstruction: load.consumer.call.id },
+																call: {
+																	$coreInstruction: load.consumer.call.id,
+																},
 															}
 														: load.consumer.kind === "charCodeAtZero"
 															? {
 																	kind: "charCodeAtZero",
+																	methodIdentity: load.consumer.methodIdentity,
 																	property: {
 																		$coreInstruction: load.consumer.property.id,
 																	},
-																	call: { $coreInstruction: load.consumer.call.id },
+																	call: {
+																		$coreInstruction: load.consumer.call.id,
+																	},
 																	...(load.consumer.zero === undefined
 																		? {}
 																		: {
@@ -3346,6 +3389,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 																}
 															: {
 																	kind: "asciiCaseLength",
+																	methodIdentity: load.consumer.methodIdentity,
 																	upperProperty: {
 																		$coreInstruction: load.consumer.upperProperty.id,
 																	},
@@ -3421,7 +3465,10 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 		>();
 		const uses = new Map<
 			CoreValueId,
-			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+			Array<{
+				readonly instruction: CoreInstruction;
+				readonly position: number;
+			}>
 		>();
 		const terminatorUses = new Set<CoreValueId>();
 		for (const block of fn.blocks) {
@@ -3604,7 +3651,9 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 						},
 						doneBranch: { $coreInstruction: doneBranch.id },
 						exitBlock: { $coreBlock: doneBranch.consequent.block },
-						resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
+						resultRegisters: resultValues.map((value) => ({
+							$coreValue: value,
+						})),
 						statefulEffect: "iterator-last-index-retained-step",
 						runtimeGuard: "exact-brand-next-realm-regexp",
 						loads: loads.map((load) => ({
@@ -3648,7 +3697,10 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 		>();
 		const uses = new Map<
 			CoreValueId,
-			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+			Array<{
+				readonly instruction: CoreInstruction;
+				readonly position: number;
+			}>
 		>();
 		for (const block of fn.blocks) {
 			for (const [index, instruction] of block.instructions.entries()) {
@@ -4030,12 +4082,20 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 							root,
 							coreProofIsWorldInvariant(splitProof.proof),
 						),
+						splitIdentity: coreProofIsWorldInvariant(splitProof.proof)
+							? "authority-invariant"
+							: "runtime-guarded",
+						trimIdentity: coreProofIsWorldInvariant(trimProof.proof)
+							? "authority-invariant"
+							: "runtime-guarded",
 						compare: { $coreInstruction: compare.id },
 						element: { $coreInstruction: element.id },
 						trimProperty: { $coreInstruction: trimProperty.id },
 						trimCall: { $coreInstruction: trimCall.id },
 						increment: { $coreInstruction: increment.id },
-						resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
+						resultRegisters: resultValues.map((value) => ({
+							$coreValue: value,
+						})),
 						primitiveStringLengths: primitiveStringLengths.map(({ id }) => ({
 							$coreInstruction: id,
 						})),
@@ -4310,8 +4370,13 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 								root,
 								coreProofIsWorldInvariant(builtin.proof),
 							),
+							splitIdentity: coreProofIsWorldInvariant(builtin.proof)
+								? "authority-invariant"
+								: "runtime-guarded",
 							separatorStringIndex,
-							resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
+							resultRegisters: resultValues.map((value) => ({
+								$coreValue: value,
+							})),
 							loads: loads.map((load) => ({
 								instruction: { $coreInstruction: load.instruction.id },
 								kind: load.kind,
@@ -4347,7 +4412,10 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const uses = new Map<
 			CoreValueId,
-			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+			Array<{
+				readonly instruction: CoreInstruction;
+				readonly position: number;
+			}>
 		>();
 		const locations = new Map<
 			CoreInstructionId,
@@ -4478,7 +4546,10 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 								materialization: "none",
 							},
 							representation: "primitive-string-span-number",
-							cost: { score: 16, metadataOperations: claimedInstructions.length },
+							cost: {
+								score: 16,
+								metadataOperations: claimedInstructions.length,
+							},
 							property: { $coreInstruction: property.id },
 							propertyPlacement: corePropertyPlacement(
 								fn,
@@ -4489,6 +4560,9 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 								root,
 								coreProofIsWorldInvariant(builtin.proof),
 							),
+							builtinIdentities: coreProofIsWorldInvariant(builtin.proof)
+								? "authority-invariant"
+								: "runtime-guarded",
 							sliceStartInstruction: { $coreInstruction: start.id },
 							numberIntrinsic: { $coreInstruction: numberIntrinsic.id },
 							numberCall: { $coreInstruction: numberCall.id },
@@ -5277,7 +5351,10 @@ function remapTerminatorEdges(
 		case "switch":
 			return {
 				...terminator,
-				cases: terminator.cases.map((entry) => ({ ...entry, edge: remap(entry.edge) })),
+				cases: terminator.cases.map((entry) => ({
+					...entry,
+					edge: remap(entry.edge),
+				})),
 				default: remap(terminator.default),
 			};
 		case "return":
@@ -5293,7 +5370,10 @@ function rewriteTerminator(
 ): CoreTerminator {
 	switch (terminator.kind) {
 		case "jump":
-			return { ...terminator, edge: rewriteEdge(terminator.edge, replacements) };
+			return {
+				...terminator,
+				edge: rewriteEdge(terminator.edge, replacements),
+			};
 		case "branch":
 			return {
 				...terminator,
@@ -5320,7 +5400,10 @@ function rewriteTerminator(
 			};
 		case "return":
 		case "throw":
-			return { ...terminator, value: resolveValue(terminator.value, replacements) };
+			return {
+				...terminator,
+				value: resolveValue(terminator.value, replacements),
+			};
 		case "unreachable":
 			return terminator;
 	}
@@ -6656,7 +6739,12 @@ const simplifyAlgebraicValues: CoreFunctionPass = {
 					const outputRepresentation = representations.get(output);
 					const move = (value: CoreValueId): CoreInstruction | undefined => {
 						if (representations.get(value) !== outputRepresentation) return undefined;
-						return { ...instruction, opcode: "move", inputs: [value], attributes: {} };
+						return {
+							...instruction,
+							opcode: "move",
+							inputs: [value],
+							attributes: {},
+						};
 					};
 					const constant = (value: CoreImmediate): CoreInstruction | undefined => {
 						const replacement = foldedInstruction(instruction, value);
@@ -6794,7 +6882,10 @@ const simplifyAlgebraicValues: CoreFunctionPass = {
 									replacement = {
 										...instruction,
 										inputs: [left!, right!],
-										attributes: { ...instruction.attributes, operator: reversed },
+										attributes: {
+											...instruction.attributes,
+											operator: reversed,
+										},
 									};
 								}
 							}
@@ -6807,7 +6898,11 @@ const simplifyAlgebraicValues: CoreFunctionPass = {
 			}),
 		);
 		return changed
-			? pruneVacuousHandlers({ ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 })
+			? pruneVacuousHandlers({
+					...fn,
+					blocks,
+					mutationEpoch: fn.mutationEpoch + 1,
+				})
 			: fn;
 	},
 };
@@ -7139,7 +7234,11 @@ const foldSubsumedCoreGuards: CoreFunctionPass = {
 		}
 		if (foldedGuards.size === 0) {
 			return subsumption.canonicalized
-				? { ...fn, facts: subsumption.facts, mutationEpoch: fn.mutationEpoch + 1 }
+				? {
+						...fn,
+						facts: subsumption.facts,
+						mutationEpoch: fn.mutationEpoch + 1,
+					}
 				: fn;
 		}
 		const blocks = fn.blocks.map((block): CoreBlock => {
@@ -7314,7 +7413,10 @@ const simplifyControlFlow: CoreFunctionPass = {
 			}
 			return handler === block.handler
 				? block
-				: { ...block, ...(handler === undefined ? { handler: undefined } : { handler }) };
+				: {
+						...block,
+						...(handler === undefined ? { handler: undefined } : { handler }),
+					};
 		});
 		if (!changed) return fn;
 		return removeUnreachableCoreBlocks({
@@ -7695,7 +7797,10 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 						),
 					);
 					let proven:
-						| { readonly allocation: CoreInstructionId; readonly cell: CoreOwnCell }
+						| {
+								readonly allocation: CoreInstructionId;
+								readonly cell: CoreOwnCell;
+						  }
 						| undefined;
 					let exactCells = 0;
 					for (const access of accesses) {
@@ -7704,7 +7809,10 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 						}
 						const cell = provenance.ownCell(access.base, access.key, access.mode);
 						if (cell === undefined) return instruction;
-						const current = { allocation: cell.layout.instruction, cell: cell.cell };
+						const current = {
+							allocation: cell.layout.instruction,
+							cell: cell.cell,
+						};
 						if (
 							proven !== undefined &&
 							(proven.allocation !== current.allocation ||
@@ -8576,7 +8684,10 @@ function canonicalizeNaturalLoop(
 			terminator: {
 				kind: "jump",
 				id: coreInstructionId(nextInstruction++),
-				edge: { block: target, arguments: parameters.map(({ value }) => value) },
+				edge: {
+					block: target,
+					arguments: parameters.map(({ value }) => value),
+				},
 			},
 		});
 		return id;
@@ -9500,7 +9611,11 @@ function eliminateOnePartialRedundancy(
 			const key = valueNumberingKey(instruction, "");
 			if (key === undefined) continue;
 			const entries = availableByKey.get(key) ?? [];
-			entries.push({ block: block.id, instruction, output: instruction.outputs[0]! });
+			entries.push({
+				block: block.id,
+				instruction,
+				output: instruction.outputs[0]!,
+			});
 			availableByKey.set(key, entries);
 		}
 	}
@@ -9698,7 +9813,11 @@ function eliminateOnePartialRedundancy(
 				values = values.concat({
 					id: valueId,
 					representation: representations.get(output)!,
-					definition: { kind: "instruction", instruction: instructionId, index: 0 },
+					definition: {
+						kind: "instruction",
+						instruction: instructionId,
+						index: 0,
+					},
 				});
 			}
 			return { ...fn, blocks, values, mutationEpoch: fn.mutationEpoch + 1 };
@@ -10374,7 +10493,7 @@ export function executeCoreOptimizations(
 			verifyCoreProgram(candidate, coreOpcodeRegistry, context);
 		}
 	};
-	const analyses = new CoreAnalysisManager(program.stringConstants);
+	let analyses = new CoreAnalysisManager(program.stringConstants);
 	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
 	const optimizationTrace: Array<OptimizationPassDelta> = [];
 	const collectOptimizationTrace = program.compilation?.optimizationTrace !== undefined;
@@ -10405,7 +10524,7 @@ export function executeCoreOptimizations(
 			pass: "annotate-direct-call-targets",
 		});
 	}
-	const workingProgram = directResult.program;
+	let workingProgram = directResult.program;
 	let changed = inlineResult.changed || directResult.changed;
 	let functions = [...workingProgram.functions];
 	for (const fn of inlineResult.program.functions) {
@@ -10518,7 +10637,12 @@ export function executeCoreOptimizations(
 					fn,
 					pass.run(fn, analyses, beforeProgram),
 					verification,
-					{ stage: "fixpoint", pass: pass.name, round, functionIndex: fn.functionIndex },
+					{
+						stage: "fixpoint",
+						pass: pass.name,
+						round,
+						functionIndex: fn.functionIndex,
+					},
 				);
 				const functionChanged = next !== fn;
 				traces.push({ name: pass.name, round, changed: functionChanged });
@@ -10562,6 +10686,95 @@ export function executeCoreOptimizations(
 		}
 		if (!roundChanged) break;
 	}
+	// Local passes can expose a stable callee after the normalization-time solve.
+	// Solve the final graph once, then share that exact analysis between advisory
+	// dispatch annotation and reachability. Compaction only removes unreachable
+	// rows, so it can rebase singleton dispatch decisions without a second solve.
+	{
+		const targetRefreshBefore = tracedMetrics;
+		const targetRefreshInput = { ...workingProgram, functions };
+		const targetAnalysis = analyzeCoreCalleeTargets(targetRefreshInput);
+		const targetRefresh = annotateCoreDirectCallTargets(
+			targetRefreshInput,
+			targetAnalysis,
+		);
+		for (const [index, fn] of targetRefresh.program.functions.entries()) {
+			traces.push({
+				name: "refresh-direct-call-targets",
+				round: maxRounds,
+				changed: fn !== functions[index],
+			});
+		}
+		if (targetRefresh.changed) {
+			changed = true;
+			verifyMutatedProgram(targetRefresh.program, {
+				stage: "fixpoint",
+				pass: "refresh-direct-call-targets",
+				round: maxRounds,
+			});
+		}
+		workingProgram = targetRefresh.program;
+		functions = [...targetRefresh.program.functions];
+		if (targetRefreshBefore !== undefined) {
+			const targetRefreshAfter = coreOptimizationMetrics(targetRefresh.program);
+			tracedMetrics = targetRefreshAfter;
+			optimizationTrace.push(
+				optimizationPassDelta(
+					{
+						pass: "refresh-direct-call-targets",
+						stage: "fixpoint",
+						round: maxRounds,
+						status: "executed",
+						changed: targetRefresh.changed,
+					},
+					targetRefreshBefore,
+					targetRefreshAfter,
+				),
+			);
+		}
+
+		const beforeCompaction = targetRefresh.program;
+		const reachability = analyzeCoreFunctionReachability(
+			beforeCompaction,
+			targetAnalysis,
+		);
+		const compaction = compactCoreProgramFunctions(beforeCompaction, reachability);
+		if (compaction.changed) {
+			const compactionBefore = tracedMetrics;
+			const refreshed = compaction.program;
+			verifyCoreProgram(refreshed, coreOpcodeRegistry, {
+				stage: "fixpoint",
+				pass: "eliminate-unreachable-functions",
+				round: maxRounds,
+			});
+			traces.push({
+				name: "eliminate-unreachable-functions",
+				round: maxRounds,
+				changed: true,
+			});
+			workingProgram = refreshed;
+			functions = [...refreshed.functions];
+			analyses = new CoreAnalysisManager(refreshed.stringConstants);
+			changed = true;
+			if (compactionBefore !== undefined) {
+				const compactionAfter = coreOptimizationMetrics(refreshed);
+				tracedMetrics = compactionAfter;
+				optimizationTrace.push(
+					optimizationPassDelta(
+						{
+							pass: "eliminate-unreachable-functions",
+							stage: "fixpoint",
+							round: maxRounds,
+							status: "executed",
+							changed: true,
+						},
+						compactionBefore,
+						compactionAfter,
+					),
+				);
+			}
+		}
+	}
 	// A later pass in the last allowed round can change a callee value or make a
 	// transitive summary more precise after the round's summary pass has run. Give
 	// summary-owned facts one final refresh before region selection freezes exact
@@ -10604,7 +10817,10 @@ export function executeCoreOptimizations(
 			);
 		}
 		if (refreshBefore !== undefined) {
-			const refreshAfter = coreOptimizationMetrics({ ...workingProgram, functions });
+			const refreshAfter = coreOptimizationMetrics({
+				...workingProgram,
+				functions,
+			});
 			tracedMetrics = refreshAfter;
 			optimizationTrace.push(
 				optimizationPassDelta(
@@ -10679,50 +10895,6 @@ export function executeCoreOptimizations(
 			);
 		}
 	}
-	// Local memory, value, and shape passes can expose a stable callee only after
-	// the normalization-time target solve (for example, a contained object literal
-	// becomes `createObjectShaped`). Refresh the advisory call targets on the final
-	// fixed-point graph. The annotator owns and retracts its attributes, so this is
-	// also proof maintenance for a target that became less precise.
-	const targetRefreshBefore = tracedMetrics;
-	const targetRefreshInput = { ...workingProgram, functions };
-	const targetRefresh = annotateCoreDirectCallTargets(targetRefreshInput);
-	for (const [index, fn] of targetRefresh.program.functions.entries()) {
-		traces.push({
-			name: "refresh-direct-call-targets",
-			round: maxRounds,
-			changed: fn !== functions[index],
-		});
-	}
-	if (targetRefresh.changed) {
-		changed = true;
-		functions = [...targetRefresh.program.functions];
-		verifyMutatedProgram(
-			{ ...workingProgram, functions },
-			{
-				stage: "fixpoint",
-				pass: "refresh-direct-call-targets",
-				round: maxRounds,
-			},
-		);
-	}
-	if (targetRefreshBefore !== undefined) {
-		const targetRefreshAfter = coreOptimizationMetrics({ ...workingProgram, functions });
-		tracedMetrics = targetRefreshAfter;
-		optimizationTrace.push(
-			optimizationPassDelta(
-				{
-					pass: "refresh-direct-call-targets",
-					stage: "fixpoint",
-					round: maxRounds,
-					status: "executed",
-					changed: targetRefresh.changed,
-				},
-				targetRefreshBefore,
-				targetRefreshAfter,
-			),
-		);
-	}
 	for (const pass of CORE_FINALIZATION_PASSES) {
 		const beforeProgram = { ...workingProgram, functions };
 		const before = tracedMetrics;
@@ -10735,10 +10907,18 @@ export function executeCoreOptimizations(
 					fn,
 					pass.run(fn, analyses, beforeProgram),
 					verification,
-					{ stage: "finalization", pass: pass.name, functionIndex: fn.functionIndex },
+					{
+						stage: "finalization",
+						pass: pass.name,
+						functionIndex: fn.functionIndex,
+					},
 				);
 				const functionChanged = candidate !== fn;
-				traces.push({ name: pass.name, round: maxRounds, changed: functionChanged });
+				traces.push({
+					name: pass.name,
+					round: maxRounds,
+					changed: functionChanged,
+				});
 				if (functionChanged) {
 					passChanged = true;
 					changed = true;
@@ -10805,6 +10985,8 @@ export function executeCoreOptimizations(
 	};
 	// Owned boundary: region selection is final, so every certificate this program
 	// carries must still describe the graph the backend will consume.
-	verifyCoreProgram(optimized, coreOpcodeRegistry, { stage: "final-region-selection" });
+	verifyCoreProgram(optimized, coreOpcodeRegistry, {
+		stage: "final-region-selection",
+	});
 	return { program: optimized, changed, passes: traces };
 }

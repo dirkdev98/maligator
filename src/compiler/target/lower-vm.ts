@@ -1,4 +1,7 @@
-import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
+import type {
+	CoreBuiltinIdentityDecision,
+	CorePropertyPlacement,
+} from "../core/core-ir-regions.ts";
 import type { CoreProgram } from "../core/core-ir.ts";
 import {
 	builtinOperationDescriptor,
@@ -416,6 +419,8 @@ export type VmStringSplitCursorRegion = VmRegionEnvelope<
 > & {
 	readonly propertyIp: number;
 	readonly propertyPlacement: CorePropertyPlacement;
+	readonly splitIdentity: CoreBuiltinIdentityDecision;
+	readonly trimIdentity: CoreBuiltinIdentityDecision;
 	readonly callee: number;
 	readonly receiver: number;
 	readonly separator: number;
@@ -436,6 +441,7 @@ export type VmStringSplitProjectionRegion = VmRegionEnvelope<
 > & {
 	readonly propertyIp: number;
 	readonly propertyPlacement: CorePropertyPlacement;
+	readonly splitIdentity: CoreBuiltinIdentityDecision;
 	readonly callIp: number;
 	readonly callee: number;
 	readonly receiver: number;
@@ -481,6 +487,7 @@ export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
 			| { readonly kind: "length"; readonly propertyIp: number }
 			| {
 					readonly kind: "charCodeAtZero";
+					readonly methodIdentity: CoreBuiltinIdentityDecision;
 					readonly propertyIp: number;
 					readonly callIp: number;
 					readonly zeroIp?: number;
@@ -492,6 +499,7 @@ export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
 			  }
 			| {
 					readonly kind: "asciiCaseLength";
+					readonly methodIdentity: CoreBuiltinIdentityDecision;
 					readonly upperPropertyIp: number;
 					readonly upperCallIp: number;
 					readonly lowerPropertyIp: number;
@@ -535,6 +543,7 @@ export type VmStringSliceNumberRegion = VmRegionEnvelope<
 > & {
 	readonly propertyIp: number;
 	readonly propertyPlacement: CorePropertyPlacement;
+	readonly builtinIdentities: CoreBuiltinIdentityDecision;
 	readonly sliceCallIp: number;
 	readonly sliceStartIp: number;
 	readonly numberIntrinsicIp: number;
@@ -2409,6 +2418,7 @@ function lowerFunctionToVmFunction(
 									: consumer.kind === "charCodeAtZero"
 										? {
 												kind: consumer.kind,
+												methodIdentity: consumer.methodIdentity,
 												propertyIp: instructionIndexByTargetInstruction.get(
 													consumer.property,
 												),
@@ -2431,6 +2441,7 @@ function lowerFunctionToVmFunction(
 												}
 											: {
 													kind: consumer.kind,
+													methodIdentity: consumer.methodIdentity,
 													upperPropertyIp: instructionIndexByTargetInstruction.get(
 														consumer.upperProperty,
 													),
@@ -2499,12 +2510,24 @@ function lowerFunctionToVmFunction(
 				const loweredCall = instructions[callIp!];
 				const loweredProperty = instructions[resolvedPropertyIp];
 				const aliases = new Set(resultRegisters);
+				const staticPropertyMatches = (
+					instruction: VmInstruction | undefined,
+					object: number,
+					name: string,
+				): instruction is Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }> =>
+					instruction?.opcode === "LOAD_PROPERTY_STATIC" &&
+					instruction.object === object &&
+					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) ===
+						name;
+				const expectedProjectedStringMethodIdentity = vmGuardIsWorldInvariant(guard)
+					? "authority-invariant"
+					: "runtime-guarded";
 				let operationsValid =
 					loweredCall?.opcode === "CALL" &&
 					aliases.has(loweredCall.dst) &&
 					loweredCall.arguments.length === 1 &&
 					loweredCall.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
-					loweredProperty?.opcode === "LOAD_PROPERTY_STATIC" &&
+					staticPropertyMatches(loweredProperty, loweredCall.thisValue, "exec") &&
 					loweredProperty.dst === loweredCall.callee &&
 					loweredProperty.object === loweredCall.thisValue;
 				for (const check of resolvedNullChecks) {
@@ -2540,36 +2563,76 @@ function lowerFunctionToVmFunction(
 					const consumer = load.consumer;
 					if (consumer?.kind === "length") {
 						const property = instructions[consumer.propertyIp];
-						operationsValid &&=
-							property?.opcode === "LOAD_PROPERTY_STATIC" && property.object === load.dst;
+						operationsValid &&= staticPropertyMatches(property, load.dst, "length");
 					} else if (consumer?.kind === "charCodeAtZero") {
 						const property = instructions[consumer.propertyIp];
 						const call = instructions[consumer.callIp];
+						const argument =
+							call?.opcode === "CALL" && call.arguments[0] !== undefined
+								? decodeVmValueOperand(call.arguments[0])
+								: undefined;
+						const zero =
+							consumer.zeroIp === undefined ? undefined : instructions[consumer.zeroIp];
+						const zeroArgument =
+							argument?.kind === "number" && Object.is(argument.value, 0)
+								? true
+								: argument?.kind === "register" &&
+									zero?.opcode === "CREATE_NUMBER" &&
+									Object.is(zero.value, 0) &&
+									argument.register === zero.dst;
 						operationsValid &&=
-							property?.opcode === "LOAD_PROPERTY_STATIC" &&
-							property.object === load.dst &&
+							consumer.methodIdentity === expectedProjectedStringMethodIdentity &&
+							staticPropertyMatches(property, load.dst, "charCodeAt") &&
 							call?.opcode === "CALL" &&
 							call.callee === property.dst &&
 							call.thisValue === load.dst &&
-							call.arguments.length === 1;
+							call.arguments.length === 1 &&
+							zeroArgument;
 					} else if (consumer?.kind === "number") {
 						const intrinsic = instructions[consumer.intrinsicIp];
 						const call = instructions[consumer.callIp];
+						const argument =
+							call?.opcode === "CALL" && call.arguments[0] !== undefined
+								? decodeVmValueOperand(call.arguments[0])
+								: undefined;
 						operationsValid &&=
 							intrinsic?.opcode === "LOAD_INTRINSIC" &&
 							intrinsic.intrinsic === "Number" &&
 							call?.opcode === "CALL" &&
 							call.callee === intrinsic.dst &&
-							call.arguments.length === 1;
+							call.arguments.length === 1 &&
+							argument?.kind === "register" &&
+							argument.register === load.dst;
 					} else if (consumer?.kind === "asciiCaseLength") {
+						const upperProperty = instructions[consumer.upperPropertyIp];
+						const upperCall = instructions[consumer.upperCallIp];
+						const lowerProperty = instructions[consumer.lowerPropertyIp];
+						const lowerCall = instructions[consumer.lowerCallIp];
+						let lowerResult = lowerCall?.opcode === "CALL" ? lowerCall.dst : -1;
+						let movesValid = lowerResult >= 0;
+						for (const ip of consumer.resultMoveIps) {
+							const move = instructions[ip];
+							if (move?.opcode !== "MOVE" || move.src !== lowerResult) {
+								movesValid = false;
+								break;
+							}
+							lowerResult = move.dst;
+						}
+						const lengthProperty = instructions[consumer.lengthPropertyIp];
 						operationsValid &&=
-							instructions[consumer.upperPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
-							instructions[consumer.upperCallIp]?.opcode === "CALL" &&
-							instructions[consumer.lowerPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
-							instructions[consumer.lowerCallIp]?.opcode === "CALL" &&
-							instructions[consumer.lengthPropertyIp]?.opcode ===
-								"LOAD_PROPERTY_STATIC" &&
-							consumer.resultMoveIps.every((ip) => instructions[ip]?.opcode === "MOVE");
+							consumer.methodIdentity === expectedProjectedStringMethodIdentity &&
+							staticPropertyMatches(upperProperty, load.dst, "toUpperCase") &&
+							upperCall?.opcode === "CALL" &&
+							upperCall.callee === upperProperty.dst &&
+							upperCall.thisValue === load.dst &&
+							upperCall.arguments.length === 0 &&
+							staticPropertyMatches(lowerProperty, upperCall.dst, "toLowerCase") &&
+							lowerCall?.opcode === "CALL" &&
+							lowerCall.callee === lowerProperty.dst &&
+							lowerCall.thisValue === upperCall.dst &&
+							lowerCall.arguments.length === 0 &&
+							movesValid &&
+							staticPropertyMatches(lengthProperty, lowerResult, "length");
 					}
 				}
 				if (resolvedLockedLiteral !== undefined) {
@@ -2838,6 +2901,12 @@ function lowerFunctionToVmFunction(
 					numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
 						? decodeVmValueOperand(numberCall.arguments[0])
 						: undefined;
+				const expectedBuiltinIdentities =
+					sliceCall?.opcode === "CALL" &&
+					sliceCall.guardedBuiltinCall !== undefined &&
+					vmGuardIsWorldInvariant(sliceCall.guardedBuiltinCall.guard)
+						? "authority-invariant"
+						: "runtime-guarded";
 				const payloadIps = new Set([
 					propertyIp,
 					sliceCallIp!,
@@ -2869,6 +2938,7 @@ function lowerFunctionToVmFunction(
 					numberCall.arguments.length !== 1 ||
 					numberArgument?.kind !== "register" ||
 					numberArgument.register !== sliceCall.dst ||
+					region.builtinIdentities !== expectedBuiltinIdentities ||
 					!vmPropertyPlacementHolds(
 						region.propertyPlacement,
 						propertyIp,
@@ -2877,7 +2947,7 @@ function lowerFunctionToVmFunction(
 						handlers,
 					) ||
 					(region.propertyPlacement === "call-fallback" &&
-						!vmGuardIsWorldInvariant(guard)) ||
+						region.builtinIdentities !== "authority-invariant") ||
 					region.cost.metadataOperations !== payloadIps.size ||
 					payloadIps.size !== resolvedClaimedIps.length ||
 					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
@@ -2898,6 +2968,7 @@ function lowerFunctionToVmFunction(
 					cost: region.cost,
 					propertyIp,
 					propertyPlacement: region.propertyPlacement,
+					builtinIdentities: region.builtinIdentities,
 					sliceCallIp: sliceCallIp!,
 					sliceStartIp,
 					numberIntrinsicIp,
@@ -2999,6 +3070,13 @@ function lowerFunctionToVmFunction(
 							guard.dependencies[0]?.kind === "world" &&
 							propertyIp === -1 &&
 							loweredCall.operation === "String.prototype.split";
+				const expectedSplitIdentity =
+					loweredCall?.opcode === "CALL_BUILTIN" ||
+					(loweredCall?.opcode === "CALL" &&
+						loweredCall.guardedBuiltinCall !== undefined &&
+						vmGuardIsWorldInvariant(loweredCall.guardedBuiltinCall.guard))
+						? "authority-invariant"
+						: "runtime-guarded";
 				const separator =
 					(loweredCall?.opcode === "CALL" || loweredCall?.opcode === "CALL_BUILTIN") &&
 					loweredCall.arguments.length === 1
@@ -3073,6 +3151,7 @@ function lowerFunctionToVmFunction(
 							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
 					) ||
 					!separatorMatches ||
+					region.splitIdentity !== expectedSplitIdentity ||
 					!vmPropertyPlacementHolds(
 						region.propertyPlacement,
 						propertyIp,
@@ -3081,7 +3160,7 @@ function lowerFunctionToVmFunction(
 						handlers,
 					) ||
 					(region.propertyPlacement === "call-fallback" &&
-						!vmGuardIsWorldInvariant(guard)) ||
+						region.splitIdentity !== "authority-invariant") ||
 					region.separatorStringIndex < 0 ||
 					(stringConstants[region.separatorStringIndex]?.length ?? 0) === 0 ||
 					firstLoadIp !== resolvedLoads[0]?.ip ||
@@ -3116,6 +3195,7 @@ function lowerFunctionToVmFunction(
 					cost: region.cost,
 					propertyIp,
 					propertyPlacement: region.propertyPlacement,
+					splitIdentity: region.splitIdentity,
 					callIp: callIp!,
 					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
 					receiver: loweredCall.thisValue,
@@ -3169,8 +3249,22 @@ function lowerFunctionToVmFunction(
 				const loweredLength = instructions[lengthIp!];
 				const loweredCompare = instructions[compareIp];
 				const loweredElement = instructions[elementIp];
+				const loweredTrimCall = instructions[trimCallIp];
 				const loweredIncrement = instructions[incrementIp];
 				const resultRegisters = [...new Set(region.resultRegisters)];
+				const expectedSplitIdentity =
+					loweredCall?.opcode === "CALL_BUILTIN" ||
+					(loweredCall?.opcode === "CALL" &&
+						loweredCall.guardedBuiltinCall !== undefined &&
+						vmGuardIsWorldInvariant(loweredCall.guardedBuiltinCall.guard))
+						? "authority-invariant"
+						: "runtime-guarded";
+				const expectedTrimIdentity =
+					loweredTrimCall?.opcode === "CALL" &&
+					loweredTrimCall.guardedBuiltinCall !== undefined &&
+					vmGuardIsWorldInvariant(loweredTrimCall.guardedBuiltinCall.guard)
+						? "authority-invariant"
+						: "runtime-guarded";
 				if (
 					(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_BUILTIN") ||
 					loweredCall.arguments.length !== 1 ||
@@ -3184,6 +3278,8 @@ function lowerFunctionToVmFunction(
 					loweredElement?.opcode !== "LOAD_PROPERTY" ||
 					!resultRegisters.includes(loweredElement.object) ||
 					loweredElement.key !== loweredCompare.left ||
+					region.splitIdentity !== expectedSplitIdentity ||
+					region.trimIdentity !== expectedTrimIdentity ||
 					loweredIncrement?.opcode !== "UNARY" ||
 					loweredIncrement.operator !== "increment" ||
 					loweredIncrement.src !== loweredCompare.left ||
@@ -3229,9 +3325,7 @@ function lowerFunctionToVmFunction(
 						handlers,
 					) ||
 					(region.propertyPlacement === "call-fallback" &&
-						(loweredCall.opcode !== "CALL" ||
-							loweredCall.guardedBuiltinCall === undefined ||
-							!vmGuardIsWorldInvariant(loweredCall.guardedBuiltinCall.guard)))
+						region.splitIdentity !== "authority-invariant")
 				) {
 					throw coreRegionError(region.kind, "property placement contract");
 				}
@@ -3254,6 +3348,8 @@ function lowerFunctionToVmFunction(
 					cost: region.cost,
 					propertyIp,
 					propertyPlacement: region.propertyPlacement,
+					splitIdentity: region.splitIdentity,
+					trimIdentity: region.trimIdentity,
 					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
 					receiver: loweredCall.thisValue,
 					separator: loweredCall.arguments[0]!,

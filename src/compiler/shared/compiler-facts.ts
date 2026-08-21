@@ -258,8 +258,6 @@ export function programClosureCertificate(
 
 export interface WorldFacts {
 	readonly primordialPolicy: "locked" | "mutable";
-	/** Independent of source closure: runtime eval never unlocks host authority. */
-	readonly authorityClosure: "closed";
 	readonly eval: "disabled" | "runtime" | "compile-check";
 	readonly realms: boolean;
 	readonly ecmaFeatures: {
@@ -281,7 +279,6 @@ export function worldFactsFromConfig(config: ResolvedBuildConfig): WorldFacts {
 				: "disabled";
 	return {
 		primordialPolicy: config.engine.primordials,
-		authorityClosure: "closed",
 		eval: evalMode,
 		realms: config.engine.realms,
 		ecmaFeatures: {
@@ -523,7 +520,6 @@ export function conservativeCompilerProgramFacts(): CompilerProgramFacts {
 	return compilerProgramFacts(
 		{
 			primordialPolicy: "mutable",
-			authorityClosure: "closed",
 			eval: "runtime",
 			realms: true,
 			ecmaFeatures: { regexp: true, temporal: true, intl: true },

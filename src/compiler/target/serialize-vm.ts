@@ -35,7 +35,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 16;
+export const WIRE_VERSION = 18;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1119,6 +1119,8 @@ export function serializeVmDefinition(
 				case "string-split-cursor":
 					w.i32(region.propertyIp);
 					writePropertyPlacement(w, region.propertyPlacement);
+					w.u8(region.splitIdentity === "authority-invariant" ? 1 : 0);
+					w.u8(region.trimIdentity === "authority-invariant" ? 1 : 0);
 					w.i32(region.callee);
 					w.i32(region.receiver);
 					w.i32(region.separator);
@@ -1134,6 +1136,7 @@ export function serializeVmDefinition(
 				case "string-split-projection":
 					w.i32(region.propertyIp);
 					writePropertyPlacement(w, region.propertyPlacement);
+					w.u8(region.splitIdentity === "authority-invariant" ? 1 : 0);
 					w.i32(region.callIp);
 					w.i32(region.callee);
 					w.i32(region.receiver);
@@ -1198,6 +1201,7 @@ export function serializeVmDefinition(
 							w.i32(consumer.propertyIp);
 							w.i32(consumer.callIp);
 							w.i32(consumer.zeroIp ?? -1);
+							w.u8(consumer.methodIdentity === "authority-invariant" ? 1 : 0);
 						} else if (consumer?.kind === "number") {
 							w.i32(consumer.intrinsicIp);
 							w.i32(consumer.callIp);
@@ -1209,6 +1213,7 @@ export function serializeVmDefinition(
 							w.i32(consumer.lowerCallIp);
 							w.i32Array([...consumer.resultMoveIps]);
 							w.i32(consumer.lengthPropertyIp);
+							w.u8(consumer.methodIdentity === "authority-invariant" ? 1 : 0);
 						}
 					}
 					break;
@@ -1236,6 +1241,7 @@ export function serializeVmDefinition(
 				case "string-slice-number":
 					w.i32(region.propertyIp);
 					writePropertyPlacement(w, region.propertyPlacement);
+					w.u8(region.builtinIdentities === "authority-invariant" ? 1 : 0);
 					w.i32(region.sliceCallIp);
 					w.i32(region.sliceStartIp);
 					w.i32(region.numberIntrinsicIp);
@@ -1629,6 +1635,12 @@ function validateStringSliceNumberRegion(
 		numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
 			? decodeVmValueOperand(numberCall.arguments[0])
 			: undefined;
+	const expectedBuiltinIdentities =
+		sliceCall?.opcode === "CALL" &&
+		sliceCall.guardedBuiltinCall !== undefined &&
+		vmGuardIsWorldInvariant(sliceCall.guardedBuiltinCall.guard)
+			? "authority-invariant"
+			: "runtime-guarded";
 	const payload = new Set([
 		region.propertyIp,
 		region.sliceCallIp,
@@ -1668,12 +1680,15 @@ function validateStringSliceNumberRegion(
 		numberCall.arguments.length !== 1 ||
 		numberArgument?.kind !== "register" ||
 		numberArgument.register !== sliceCall.dst ||
+		region.builtinIdentities !== expectedBuiltinIdentities ||
 		!propertyPlacementHolds(
 			fn,
 			region.propertyPlacement,
 			region.propertyIp,
 			region.sliceCallIp,
 		) ||
+		(region.propertyPlacement === "call-fallback" &&
+			region.builtinIdentities !== "authority-invariant") ||
 		region.receiver !== sliceCall.thisValue ||
 		region.result !== numberCall.dst ||
 		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
@@ -1773,6 +1788,19 @@ function validateRegExpExecProjectionRegion(
 		payload.add(region.lockedLiteral.constructIp);
 	}
 	const indices = new Set<number>();
+	const expectedProjectedStringMethodIdentity = vmGuardIsWorldInvariant(
+		region.license.guard,
+	)
+		? "authority-invariant"
+		: "runtime-guarded";
+	const staticPropertyMatches = (
+		instruction: VmInstruction | undefined,
+		object: number,
+		name: string,
+	): instruction is Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }> =>
+		instruction?.opcode === "LOAD_PROPERTY_STATIC" &&
+		instruction.object === object &&
+		String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) === name;
 	for (const load of region.loads) {
 		const capture = fn.instructions[load.ip];
 		const key = fn.instructions[load.keyIp];
@@ -1797,37 +1825,51 @@ function validateRegExpExecProjectionRegion(
 		if (consumer?.kind === "length") {
 			payload.add(consumer.propertyIp);
 			const length = fn.instructions[consumer.propertyIp];
-			valid &&=
-				length?.opcode === "LOAD_PROPERTY_STATIC" &&
-				length.object === load.dst &&
-				String.fromCharCode(...(stringConstants[length.stringIndex] ?? [])) === "length";
+			valid &&= staticPropertyMatches(length, load.dst, "length");
 		} else if (consumer?.kind === "charCodeAtZero") {
 			payload.add(consumer.propertyIp);
 			payload.add(consumer.callIp);
 			if (consumer.zeroIp !== undefined) payload.add(consumer.zeroIp);
 			const propertyInstruction = fn.instructions[consumer.propertyIp];
 			const callInstruction = fn.instructions[consumer.callIp];
+			const argument =
+				callInstruction?.opcode === "CALL" && callInstruction.arguments[0] !== undefined
+					? decodeVmValueOperand(callInstruction.arguments[0])
+					: undefined;
+			const zero =
+				consumer.zeroIp === undefined ? undefined : fn.instructions[consumer.zeroIp];
+			const zeroArgument =
+				argument?.kind === "number" && Object.is(argument.value, 0)
+					? true
+					: argument?.kind === "register" &&
+						zero?.opcode === "CREATE_NUMBER" &&
+						Object.is(zero.value, 0) &&
+						argument.register === zero.dst;
 			valid &&=
-				propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
-				propertyInstruction.object === load.dst &&
-				String.fromCharCode(
-					...(stringConstants[propertyInstruction.stringIndex] ?? []),
-				) === "charCodeAt" &&
+				consumer.methodIdentity === expectedProjectedStringMethodIdentity &&
+				staticPropertyMatches(propertyInstruction, load.dst, "charCodeAt") &&
 				callInstruction?.opcode === "CALL" &&
 				callInstruction.callee === propertyInstruction.dst &&
 				callInstruction.thisValue === load.dst &&
-				callInstruction.arguments.length === 1;
+				callInstruction.arguments.length === 1 &&
+				zeroArgument;
 		} else if (consumer?.kind === "number") {
 			payload.add(consumer.intrinsicIp);
 			payload.add(consumer.callIp);
 			const intrinsic = fn.instructions[consumer.intrinsicIp];
 			const numberCall = fn.instructions[consumer.callIp];
+			const argument =
+				numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+					? decodeVmValueOperand(numberCall.arguments[0])
+					: undefined;
 			valid &&=
 				intrinsic?.opcode === "LOAD_INTRINSIC" &&
 				intrinsic.intrinsic === "Number" &&
 				numberCall?.opcode === "CALL" &&
 				numberCall.callee === intrinsic.dst &&
-				numberCall.arguments.length === 1;
+				numberCall.arguments.length === 1 &&
+				argument?.kind === "register" &&
+				argument.register === load.dst;
 		} else if (consumer?.kind === "asciiCaseLength") {
 			for (const ip of [
 				consumer.upperPropertyIp,
@@ -1839,13 +1881,35 @@ function validateRegExpExecProjectionRegion(
 			]) {
 				payload.add(ip);
 			}
+			const upperProperty = fn.instructions[consumer.upperPropertyIp];
+			const upperCall = fn.instructions[consumer.upperCallIp];
+			const lowerProperty = fn.instructions[consumer.lowerPropertyIp];
+			const lowerCall = fn.instructions[consumer.lowerCallIp];
+			let lowerResult = lowerCall?.opcode === "CALL" ? lowerCall.dst : -1;
+			let movesValid = lowerResult >= 0;
+			for (const ip of consumer.resultMoveIps) {
+				const move = fn.instructions[ip];
+				if (move?.opcode !== "MOVE" || move.src !== lowerResult) {
+					movesValid = false;
+					break;
+				}
+				lowerResult = move.dst;
+			}
+			const lengthProperty = fn.instructions[consumer.lengthPropertyIp];
 			valid &&=
-				fn.instructions[consumer.upperPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
-				fn.instructions[consumer.upperCallIp]?.opcode === "CALL" &&
-				fn.instructions[consumer.lowerPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
-				fn.instructions[consumer.lowerCallIp]?.opcode === "CALL" &&
-				fn.instructions[consumer.lengthPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
-				consumer.resultMoveIps.every((ip) => fn.instructions[ip]?.opcode === "MOVE");
+				consumer.methodIdentity === expectedProjectedStringMethodIdentity &&
+				staticPropertyMatches(upperProperty, load.dst, "toUpperCase") &&
+				upperCall?.opcode === "CALL" &&
+				upperCall.callee === upperProperty.dst &&
+				upperCall.thisValue === load.dst &&
+				upperCall.arguments.length === 0 &&
+				staticPropertyMatches(lowerProperty, upperCall.dst, "toLowerCase") &&
+				lowerCall?.opcode === "CALL" &&
+				lowerCall.callee === lowerProperty.dst &&
+				lowerCall.thisValue === upperCall.dst &&
+				lowerCall.arguments.length === 0 &&
+				movesValid &&
+				staticPropertyMatches(lengthProperty, lowerResult, "length");
 		}
 	}
 	if (
@@ -2010,6 +2074,13 @@ function validateStringSplitProjectionRegion(
 				region.callee === -1 &&
 				call.operation === "String.prototype.split" &&
 				call.thisValue === region.receiver;
+	const expectedSplitIdentity =
+		call?.opcode === "CALL_BUILTIN" ||
+		(call?.opcode === "CALL" &&
+			call.guardedBuiltinCall !== undefined &&
+			vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard))
+			? "authority-invariant"
+			: "runtime-guarded";
 	const separator =
 		(call?.opcode === "CALL" || call?.opcode === "CALL_BUILTIN") &&
 		call.arguments.length === 1
@@ -2093,8 +2164,10 @@ function validateStringSplitProjectionRegion(
 		region.separatorStringIndex >= stringConstants.length ||
 		stringConstants[region.separatorStringIndex]?.length === 0 ||
 		!separatorMatches ||
+		region.splitIdentity !== expectedSplitIdentity ||
 		!propertyPlacementHolds(fn, region.propertyPlacement, region.propertyIp, callIp) ||
-		(region.propertyPlacement === "call-fallback" && dependencyMask !== 1) ||
+		(region.propertyPlacement === "call-fallback" &&
+			region.splitIdentity !== "authority-invariant") ||
 		elementLoads.length === 0 ||
 		elementLoads.length > 8 ||
 		lengthLoads.length > 1 ||
@@ -2166,6 +2239,19 @@ function validateStringSplitCursorRegion(
 				region.propertyIp === -1 &&
 				region.callee === -1 &&
 				call.operation === "String.prototype.split";
+	const expectedSplitIdentity =
+		call?.opcode === "CALL_BUILTIN" ||
+		(call?.opcode === "CALL" &&
+			call.guardedBuiltinCall !== undefined &&
+			vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard))
+			? "authority-invariant"
+			: "runtime-guarded";
+	const expectedTrimIdentity =
+		trimCall?.opcode === "CALL" &&
+		trimCall.guardedBuiltinCall !== undefined &&
+		vmGuardIsWorldInvariant(trimCall.guardedBuiltinCall.guard)
+			? "authority-invariant"
+			: "runtime-guarded";
 	const primitiveLengthIps = new Set(region.primitiveStringLengthIps);
 	let primitiveLengthsValid =
 		primitiveLengthIps.size === region.primitiveStringLengthIps.length;
@@ -2192,6 +2278,8 @@ function validateStringSplitCursorRegion(
 		region.license.materialization !== "on-demand" ||
 		region.anchors.length !== 4 ||
 		!callMatches ||
+		region.splitIdentity !== expectedSplitIdentity ||
+		region.trimIdentity !== expectedTrimIdentity ||
 		call === undefined ||
 		(call.opcode !== "CALL" && call.opcode !== "CALL_BUILTIN") ||
 		call.thisValue !== region.receiver ||
@@ -2243,9 +2331,7 @@ function validateStringSplitCursorRegion(
 		!primitiveLengthsValid ||
 		!propertyPlacementHolds(fn, region.propertyPlacement, region.propertyIp, callIp) ||
 		(region.propertyPlacement === "call-fallback" &&
-			(call.opcode !== "CALL" ||
-				call.guardedBuiltinCall === undefined ||
-				!vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard))) ||
+			region.splitIdentity !== "authority-invariant") ||
 		new Set(operationIps).size !== operationIps.length ||
 		operationIps.length !== region.claimedIps.length ||
 		operationIps.some(
@@ -3058,6 +3144,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				if (kindTag === 2) {
 					const propertyIp = r.i32();
 					const propertyPlacement = readPropertyPlacement(r);
+					const splitIdentityTag = r.u8();
+					const trimIdentityTag = r.u8();
 					const callee = r.i32();
 					const receiver = r.i32();
 					const separator = r.i32();
@@ -3069,7 +3157,11 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					const trimCallIp = r.i32();
 					const primitiveStringLengthIps = r.i32Array();
 					const exitIp = r.i32();
-					if (primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS) {
+					if (
+						splitIdentityTag > 1 ||
+						trimIdentityTag > 1 ||
+						primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS
+					) {
 						throw new RangeError("serialize-vm: invalid String.split cursor header");
 					}
 					region = {
@@ -3103,6 +3195,10 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						cost: { score, metadataOperations },
 						propertyIp,
 						propertyPlacement,
+						splitIdentity:
+							splitIdentityTag === 1 ? "authority-invariant" : "runtime-guarded",
+						trimIdentity:
+							trimIdentityTag === 1 ? "authority-invariant" : "runtime-guarded",
 						callee,
 						receiver,
 						separator,
@@ -3118,11 +3214,15 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				} else if (kindTag === 4) {
 					const propertyIp = r.i32();
 					const propertyPlacement = readPropertyPlacement(r);
+					const splitIdentityTag = r.u8();
 					const callIp = r.i32();
 					const callee = r.i32();
 					const receiver = r.i32();
 					const separatorStringIndex = r.i32();
 					const resultRegisters = r.i32Array();
+					if (splitIdentityTag > 1) {
+						throw new RangeError("serialize-vm: invalid String.split identity decision");
+					}
 					const loadCount = r.count(4);
 					const loads: Array<
 						Extract<VmRegion, { kind: "string-split-projection" }>["loads"][number]
@@ -3176,6 +3276,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						cost: { score, metadataOperations },
 						propertyIp,
 						propertyPlacement,
+						splitIdentity:
+							splitIdentityTag === 1 ? "authority-invariant" : "runtime-guarded",
 						callIp,
 						callee,
 						receiver,
@@ -3226,8 +3328,16 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							const propertyIp = r.i32();
 							const callIp = r.i32();
 							const zeroIp = r.i32();
+							const methodIdentityTag = r.u8();
+							if (methodIdentityTag > 1) {
+								throw new RangeError(
+									"serialize-vm: invalid projected String method identity",
+								);
+							}
 							consumer = {
 								kind: "charCodeAtZero",
+								methodIdentity:
+									methodIdentityTag === 1 ? "authority-invariant" : "runtime-guarded",
 								propertyIp,
 								callIp,
 								...(zeroIp < 0 ? {} : { zeroIp }),
@@ -3235,15 +3345,30 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						} else if (consumerTag === 3) {
 							consumer = { kind: "number", intrinsicIp: r.i32(), callIp: r.i32() };
 						} else if (consumerTag === 4) {
+							const upperPropertyIp = r.i32();
+							const upperCallIp = r.i32();
+							const lowerPropertyIp = r.i32();
+							const lowerIcIndex = r.i32();
+							const lowerCallIp = r.i32();
+							const resultMoveIps = r.i32Array();
+							const lengthPropertyIp = r.i32();
+							const methodIdentityTag = r.u8();
+							if (methodIdentityTag > 1) {
+								throw new RangeError(
+									"serialize-vm: invalid projected String method identity",
+								);
+							}
 							consumer = {
 								kind: "asciiCaseLength",
-								upperPropertyIp: r.i32(),
-								upperCallIp: r.i32(),
-								lowerPropertyIp: r.i32(),
-								lowerIcIndex: r.i32(),
-								lowerCallIp: r.i32(),
-								resultMoveIps: r.i32Array(),
-								lengthPropertyIp: r.i32(),
+								methodIdentity:
+									methodIdentityTag === 1 ? "authority-invariant" : "runtime-guarded",
+								upperPropertyIp,
+								upperCallIp,
+								lowerPropertyIp,
+								lowerIcIndex,
+								lowerCallIp,
+								resultMoveIps,
+								lengthPropertyIp,
 							};
 						} else if (consumerTag !== 0) {
 							throw new RangeError("serialize-vm: invalid RegExp.exec consumer tag");
@@ -3364,6 +3489,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				} else if (kindTag === 7) {
 					const propertyIp = r.i32();
 					const propertyPlacement = readPropertyPlacement(r);
+					const builtinIdentitiesTag = r.u8();
 					const sliceCallIp = r.i32();
 					const sliceStartIp = r.i32();
 					const numberIntrinsicIp = r.i32();
@@ -3372,6 +3498,9 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					const receiver = r.i32();
 					const sliceStart = r.f64();
 					const result = r.i32();
+					if (builtinIdentitiesTag > 1) {
+						throw new RangeError("serialize-vm: invalid String.slice identity decision");
+					}
 					region = {
 						kind: "string-slice-number",
 						license: {
@@ -3393,6 +3522,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						cost: { score, metadataOperations },
 						propertyIp,
 						propertyPlacement,
+						builtinIdentities:
+							builtinIdentitiesTag === 1 ? "authority-invariant" : "runtime-guarded",
 						sliceCallIp,
 						sliceStartIp,
 						numberIntrinsicIp,

@@ -292,13 +292,13 @@ describe("closure without a module graph", () => {
 	});
 });
 
-describe("authority closure independence", () => {
-	test("retains authority closure while source closure is open", () => {
+describe("world and source fact independence", () => {
+	test("retains the primordial policy while source closure is open", () => {
 		const facts = compilerProgramFactsFromConfig(
-			resolveBuildConfig({ engine: { eval: true } }),
+			resolveBuildConfig({ engine: { eval: true, primordials: "locked" } }),
 		);
 
-		expect(facts.world.authorityClosure).toBe("closed");
+		expect(facts.world.primordialPolicy).toBe("locked");
 		expect(facts.closure.sourceClosure.kind).toBe("unknown");
 	});
 });

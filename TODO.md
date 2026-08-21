@@ -91,7 +91,7 @@ performance neutral or better while specializing locked builds.
       eligible regions once and remove redundant guards, fallback paths, property
       loads, and helper calls.
 
-- [ ] Consume existing source-closure, root-reason, and reachability facts to remove
+- [x] Consume existing source-closure, root-reason, and reachability facts to remove
       provably unreachable function bodies and function objects.
 
 - [ ] Extend bounded callee discovery through remaining import, lexical,

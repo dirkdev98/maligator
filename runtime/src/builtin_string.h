@@ -91,6 +91,15 @@ bool mal_builtin_string_ascii_case_chain_length_span(
     u32 *length_out
 );
 
+/** Authority-closed variant: Core proved both String method identities. */
+bool mal_builtin_string_ascii_case_chain_length_span_locked(
+    MalVm *vm,
+    MalValue subject,
+    i32 start,
+    i32 end,
+    u32 *length_out
+);
+
 /**
  * Producer-consumer fusion for exact builtin `string.slice(start)` immediately
  * consumed by the exact Number constructor. Guard failure is side-effect-free.
