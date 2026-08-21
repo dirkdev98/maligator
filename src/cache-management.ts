@@ -281,7 +281,8 @@ export function createCacheLease(
 			// A concurrent maintenance failure or external removal must not abort the command.
 		}
 	}, LEASE_HEARTBEAT_MS);
-	heartbeat.unref();
+	const hostTimer = heartbeat as unknown as { unref?: () => void };
+	hostTimer.unref?.();
 	let released = false;
 	return {
 		path: leasePath,

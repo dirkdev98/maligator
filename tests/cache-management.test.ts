@@ -101,6 +101,25 @@ describe("Maligator cache management", () => {
 		}
 	});
 
+	it("supports hosts with numeric interval handles", () => {
+		const root = cacheRoot();
+		const setIntervalSpy = vi
+			.spyOn(globalThis, "setInterval")
+			.mockReturnValue(1 as never);
+		const clearIntervalSpy = vi
+			.spyOn(globalThis, "clearInterval")
+			.mockImplementation(() => {});
+		try {
+			const lease = createCacheLease("build", root);
+			expect(lease.path).toBeDefined();
+			lease.release();
+			expect(clearIntervalSpy).toHaveBeenCalledWith(1);
+		} finally {
+			setIntervalSpy.mockRestore();
+			clearIntervalSpy.mockRestore();
+		}
+	});
+
 	it("rejects a reused live pid after its lease heartbeat expires", () => {
 		const root = cacheRoot();
 		const lease = createCacheLease("build", root);
