@@ -2806,6 +2806,12 @@ describe("Core IR optimizer", () => {
 		);
 		const fallbackCalls = fallback.instructions.filter(({ opcode }) => opcode === "call");
 		expect(fallbackCalls).toHaveLength(1);
+		expect(fallbackCalls[0]!.attributes.directFunctionIndex).toBeUndefined();
+		expect(fallbackCalls[0]!.attributes.calleeTargets).toMatchObject({
+			functions: [handlerIndex],
+			anyScript: false,
+			opaque: true,
+		});
 		expect(guard?.inputs).toEqual([fallbackCalls[0]!.inputs[0]]);
 		expect(guard?.attributes.functionIndex).toBe(handlerIndex);
 		const inlinedBody = fast.instructions.find(
@@ -2849,7 +2855,14 @@ describe("Core IR optimizer", () => {
 		expect(
 			rerunInstructions.filter(({ opcode }) => opcode === "guardFunctionIndex"),
 		).toHaveLength(1);
-		expect(rerunInstructions.filter(({ opcode }) => opcode === "call")).toHaveLength(1);
+		const rerunCalls = rerunInstructions.filter(({ opcode }) => opcode === "call");
+		expect(rerunCalls).toHaveLength(1);
+		expect(rerunCalls[0]!.attributes.directFunctionIndex).toBeUndefined();
+		expect(rerunCalls[0]!.attributes.calleeTargets).toMatchObject({
+			functions: [handlerIndex],
+			anyScript: false,
+			opaque: true,
+		});
 	});
 
 	it("never inlines class constructors through ordinary calls", () => {
@@ -2875,16 +2888,16 @@ describe("Core IR optimizer", () => {
 			},
 		});
 
-		for (const [name, targetName] of [
-			["callClosed", "Closed"],
-			["callOpen", "Open"],
+		for (const [name, targetName, direct] of [
+			["callClosed", "Closed", true],
+			["callOpen", "Open", false],
 		] as const) {
 			const caller = optimized!.functions[functionIndexOfName(optimized!, name)]!;
 			const instructions = caller.blocks.flatMap(({ instructions }) => instructions);
 			const calls = instructions.filter(({ opcode }) => opcode === "call");
 			expect(calls).toHaveLength(1);
 			expect(calls[0]!.attributes.directFunctionIndex).toBe(
-				functionIndexOfName(optimized!, targetName),
+				direct ? functionIndexOfName(optimized!, targetName) : undefined,
 			);
 			expect(instructions.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(
 				false,

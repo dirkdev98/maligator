@@ -31,6 +31,7 @@ import type {
 	CoreProgram,
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
+import { constructSemanticProgramCore } from "../src/compiler/core/semantic-lowering.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
@@ -63,11 +64,12 @@ function leafFunction(functionIndex: number): CoreFunction {
  * global slot; a script's declarations are reassignable global properties, which
  * this analysis deliberately never trusts.
  */
-function optimizedCore(source: string, path: string): CoreProgram {
+function optimizedCore(source: string, path: string, profile = false): CoreProgram {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, path, parseModule(source));
 	const conservative = conservativeCompilerProgramFacts();
 	let optimized: CoreProgram | undefined;
 	compileSemanticProgramToVmDefinition(semantic, {
+		profile,
 		facts: { ...conservative, world: { ...conservative.world, realms: false } },
 		// Inlining runs before annotation and would consume the call sites this
 		// suite is about.
@@ -729,7 +731,28 @@ describe("callee-target annotation", () => {
 		expect(calleeTargetsAttribute(sites[0]!)?.opaque).toBe(false);
 	});
 
-	it("guards a base-class prototype method loaded from a constructed instance", () => {
+	it("keeps guarded direct construct dispatch for an open singleton", () => {
+		const program = optimizedCore(
+			`let Shape = function Shape(size) { this.size = size; };
+			function install(other) { Shape = other; }
+			globalThis.install = install;
+			function make(size) { return new Shape(size); }
+			make(2);`,
+			"call-targets-construct-open.mjs",
+		);
+		const shapeIndex = functionIndexOfName(program, "Shape");
+		const make = program.functions[functionIndexOfName(program, "make")]!;
+		const sites = callSites(make).filter(({ opcode }) => opcode === "construct");
+		expect(sites).toHaveLength(1);
+		expect(sites[0]!.attributes.directFunctionIndex).toBe(shapeIndex);
+		expect(calleeTargetsAttribute(sites[0]!)).toEqual({
+			functions: [shapeIndex],
+			anyScript: false,
+			opaque: true,
+		});
+	});
+
+	it("keeps an open constructor method candidate without residual direct dispatch", () => {
 		const program = optimizedCore(
 			`class Service { handle(value) { return value + 1; } }
 			function caller(value) { const service = new Service(); return service.handle(value); }
@@ -740,7 +763,7 @@ describe("callee-target annotation", () => {
 		const caller = program.functions[functionIndexOfName(program, "caller")]!;
 		const site = callSites(caller).find(({ opcode }) => opcode === "call");
 		expect(site).toBeDefined();
-		expect(site!.attributes.directFunctionIndex).toBe(methodIndex);
+		expect(site!.attributes.directFunctionIndex).toBeUndefined();
 		expect(calleeTargetsAttribute(site!)).toEqual({
 			functions: [methodIndex],
 			anyScript: false,
@@ -812,6 +835,26 @@ describe("callee-target annotation", () => {
 		expect(flattened[0]!.attributes.directCallTargetFunctionIndex).toBe(targetIndex);
 	});
 
+	it("flattens Function.prototype.call without speculating on an open receiver", () => {
+		const program = optimizedCore(
+			`let target = function target(value) { return value + 1; };
+			function install(other) { target = other; }
+			globalThis.install = install;
+			function caller(value) {
+				const current = target;
+				return current.call(current, value);
+			}
+			caller(1);`,
+			"call-targets-flatten-open.mjs",
+		);
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const flattened = callSites(caller).filter(
+			({ attributes }) => attributes.directFunctionCall === true,
+		);
+		expect(flattened).toHaveLength(1);
+		expect(flattened[0]!.attributes.directCallTargetFunctionIndex).toBeUndefined();
+	});
+
 	it("resolves a real ESM namespace import to its exporter", () => {
 		const root = mkdtempSync(path.join(tmpdir(), "mal-callee-namespace-"));
 		try {
@@ -865,11 +908,12 @@ describe("callee-target annotation", () => {
 		const flattened = sites.find(
 			({ attributes }) => attributes.directFunctionCall === true,
 		);
-		const returned = sites.find(
-			({ attributes }) => attributes.directFunctionIndex === innerIndex,
+		const returned = sites.find((site) =>
+			calleeTargetsAttribute(site)?.functions.includes(innerIndex),
 		);
 		expect(flattened).toBeDefined();
 		expect(returned).toBeDefined();
+		expect(returned!.attributes.directFunctionIndex).toBeUndefined();
 		expect(calleeTargetsAttribute(returned!)).toEqual({
 			functions: [innerIndex],
 			anyScript: false,
@@ -877,7 +921,7 @@ describe("callee-target annotation", () => {
 		});
 	});
 
-	it("speculates on a singleton whose slot a second writer can retarget", () => {
+	it("declines residual direct dispatch for an open singleton", () => {
 		const program = optimizedCore(
 			`let handler = function first(value) { return value; };
 			function retarget(other) { handler = other; }
@@ -885,19 +929,76 @@ describe("callee-target annotation", () => {
 			retarget(run);
 			run(1);`,
 			"call-targets-speculative.mjs",
+			true,
 		);
 		const firstIndex = functionIndexOfName(program, "first");
 		const run = program.functions[functionIndexOfName(program, "run")]!;
 		const sites = callSites(run);
 		expect(sites).toHaveLength(1);
-		// The runtime re-checks the live callee, so the guarded direct target is
-		// still lowered while the lattice records that the slot stays open.
-		expect(sites[0]!.attributes.directFunctionIndex).toBe(firstIndex);
+		expect(sites[0]!.attributes.directFunctionIndex).toBeUndefined();
 		expect(calleeTargetsAttribute(sites[0]!)).toEqual({
 			functions: [firstIndex],
 			anyScript: false,
 			opaque: true,
 		});
+		expect(program.compilation?.optimizationDecisions).toContainEqual(
+			expect.objectContaining({
+				functionIndex: run.functionIndex,
+				code: "optimization.declined.generated-code-cost",
+				outcome: "declined",
+				reason: "generated-code-cost",
+			}),
+		);
+	});
+
+	it("records generated-code decline only from the final target graph", () => {
+		const source = `function target(value) { return value + 1; }
+			function caller(open, value) {
+				let selected = open;
+				if (true) selected = target;
+				return selected(value);
+			}
+			caller(target, 1);`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"call-targets-final-decision.mjs",
+			parseModule(source),
+		);
+		const conservative = conservativeCompilerProgramFacts();
+		const initial = constructSemanticProgramCore(semantic, {
+			collectOptimizationDiagnostics: true,
+			facts: {
+				...conservative,
+				world: { ...conservative.world, realms: false },
+			},
+		});
+		const initialCaller = initial.functions[functionIndexOfName(initial, "caller")]!;
+		const [initialSite] = callSites(initialCaller);
+		expect(
+			analyzeCoreCalleeTargets(initial).targets(
+				initialCaller.functionIndex,
+				initialSite!.inputs[0]!,
+			),
+		).toMatchObject({
+			functions: [functionIndexOfName(initial, "target")],
+			opaque: true,
+		});
+
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const caller = optimized.functions[functionIndexOfName(optimized, "caller")]!;
+		const [site] = callSites(caller);
+		expect(site?.attributes.directFunctionIndex).toBe(
+			functionIndexOfName(optimized, "target"),
+		);
+		expect(optimized.compilation?.optimizationDecisions).not.toContainEqual(
+			expect.objectContaining({
+				functionIndex: caller.functionIndex,
+				code: "optimization.declined.generated-code-cost",
+			}),
+		);
 	});
 
 	it("records a bounded two-target set without naming a direct target", () => {
@@ -987,7 +1088,7 @@ describe("callee-target annotation", () => {
 		const target = functionIndexOfName(program, "run");
 		const caller = program.functions[functionIndexOfName(program, "caller")]!;
 		const [site] = callSites(caller);
-		expect(site?.attributes.directFunctionIndex).toBe(target);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
 		expect(calleeTargetsAttribute(site!)).toEqual({
 			functions: [target],
 			anyScript: false,
@@ -1006,7 +1107,7 @@ describe("callee-target annotation", () => {
 		const caller = program.functions[functionIndexOfName(program, "caller")]!;
 		const [site] = callSites(caller);
 		const target = functionIndexOfName(program, "run");
-		expect(site?.attributes.directFunctionIndex).toBe(target);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
 		expect(calleeTargetsAttribute(site!)?.functions).toEqual([target]);
 		expect(calleeTargetsAttribute(site!)?.opaque).toBe(true);
 	});
@@ -1218,11 +1319,11 @@ describe("bounded call-result targets", () => {
 			anyScript: false,
 			opaque: true,
 		});
-		// The named return still licenses a guarded direct call; the opaque bit keeps
-		// the generic fallback for the unresolved branch.
+		// The named return stays available to guarded consumers, while a residual
+		// ordinary call does not add another speculative direct path.
 		expect(
 			sites.some(({ attributes }) => attributes.directFunctionIndex === innerIndex),
-		).toBe(true);
+		).toBe(false);
 	});
 
 	it("hands back a promise rather than an async function's returned callable", () => {

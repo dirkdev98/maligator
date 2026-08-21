@@ -835,30 +835,43 @@ function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction
  * Annotate call and construct sites from the program's bounded callee-target
  * lattice.
  *
- * Every attribute written here is a speculation the runtime re-checks before it
- * specializes: `mal_vm_call_direct` and `mal_vm_construct_direct` compare the
- * live callee's function index against the named target and fall back to fully
- * generic dispatch on a mismatch, the native prologue does the same through
- * `mal_vm_callee_has_index`, and `mal_vm_call_function_call_direct` enters its
- * fast path only for the realm's retained %Function.prototype.call%. A singleton
- * target set is therefore safe to lower whether or not an open possibility
- * remains, and the lattice's overflow and opacity bits are recorded separately
- * so a later consumer can tell a closed proof from a speculation. Bounded
- * multi-target sets stay Core-only metadata until the guarded inliner either
- * consumes the complete finite set or declines its fixed expansion budget.
+ * `mal_vm_construct_direct` re-checks the live constructor's function index and
+ * falls back to generic dispatch on a mismatch, so construct keeps a guarded
+ * singleton even when the lattice remains open. Ordinary calls use a narrower
+ * generated-code admission rule: the guarded inliner consumes eligible open
+ * candidates before this pass, while a residual call receives a direct-entry hint
+ * only from a closed singleton. The backend still validates that hint against the
+ * live callee; this admission rule avoids adding that speculative guard and generic
+ * twin to an open residual path merely because the bounded lattice retained one
+ * advisory candidate.
+ *
+ * `%Function.prototype.call%` flattening remains guarded by the runtime's retained
+ * primordial identity. Its shifted script target is admitted only when the
+ * receiver is a closed singleton; otherwise flattening preserves the generic
+ * receiver dispatch without speculating on one receiver candidate. The complete
+ * bounded set and its opacity bits stay in Core metadata for other consumers.
+ * Declines are recorded only by the final refresh: the normalization-time graph
+ * may still close or eliminate a site during the optimization fixed point.
  */
 function annotateCoreDirectCallTargets(
 	program: CoreProgram,
 	analysis: CoreCalleeTargetAnalysis = analyzeCoreCalleeTargets(program),
+	recordDeclines = false,
 ): InlineProgramResult {
+	const compilation = program.compilation;
+	const decisions =
+		!recordDeclines || compilation?.optimizationDecisions === undefined
+			? undefined
+			: [...compilation.optimizationDecisions];
+	const decisionCount = decisions?.length;
 	const functionsByIndex = new Map(
 		program.functions.map((fn) => [fn.functionIndex, fn] as const),
 	);
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
 		const definitions = functionDefinitions(fn);
-		const singleTarget = (value: CoreValueId): number | undefined =>
-			coreCalleeTargetsSingleFunction(analysis.targets(fn.functionIndex, value));
+		const closedTarget = (value: CoreValueId): number | undefined =>
+			coreCalleeTargetsClosedFunction(analysis.targets(fn.functionIndex, value));
 		const moveRoot = (initial: CoreValueId): CoreValueId => {
 			let value = initial;
 			const seen = new Set<CoreValueId>();
@@ -881,7 +894,11 @@ function annotateCoreDirectCallTargets(
 					const callee = instruction.inputs[0];
 					if (callee === undefined) return instruction;
 					const targets = analysis.targets(fn.functionIndex, callee);
-					const target = coreCalleeTargetsSingleFunction(targets);
+					const singletonTarget = coreCalleeTargetsSingleFunction(targets);
+					const target =
+						instruction.opcode === "call"
+							? coreCalleeTargetsClosedFunction(targets)
+							: singletonTarget;
 					const targetFunction =
 						target === undefined ? undefined : functionsByIndex.get(target);
 					const attributes: Record<string, CoreAttributeValue> = {
@@ -894,6 +911,20 @@ function annotateCoreDirectCallTargets(
 					delete attributes.directFunctionCall;
 					delete attributes.directCallTargetFunctionIndex;
 					delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
+					if (
+						instruction.opcode === "call" &&
+						target === undefined &&
+						singletonTarget !== undefined &&
+						functionsByIndex.has(singletonTarget)
+					) {
+						recordCallOptimizationDecision(
+							decisions,
+							fn,
+							instruction,
+							"declined",
+							"generated-code-cost",
+						);
+					}
 					if (
 						targetFunction !== undefined &&
 						(instruction.opcode === "call" ||
@@ -932,7 +963,7 @@ function annotateCoreDirectCallTargets(
 							receiver !== undefined &&
 							moveRoot(receiver) === moveRoot(thisValue)
 						) {
-							const receiverTarget = singleTarget(thisValue) ?? singleTarget(receiver);
+							const receiverTarget = closedTarget(thisValue) ?? closedTarget(receiver);
 							// The runtime validates the loaded method against the realm's exact
 							// %Function.prototype.call% object. A miss invokes the original
 							// method with the original receiver and arguments, so no static
@@ -955,9 +986,20 @@ function annotateCoreDirectCallTargets(
 		changed = true;
 		return { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 };
 	});
+	const decisionsChanged =
+		decisions !== undefined &&
+		decisionCount !== undefined &&
+		decisions.length !== decisionCount;
+	const annotated = changed ? { ...program, functions } : program;
 	return {
-		program: changed ? { ...program, functions } : program,
-		changed,
+		program:
+			decisionsChanged && compilation !== undefined
+				? {
+						...annotated,
+						compilation: { ...compilation, optimizationDecisions: decisions },
+					}
+				: annotated,
+		changed: changed || decisionsChanged,
 	};
 }
 
@@ -1023,7 +1065,7 @@ function targetShapeDeclineReason(target: CoreFunction): OptimizationDecisionRea
 	return "relocation";
 }
 
-function recordInlineDecision(
+function recordCallOptimizationDecision(
 	decisions: Array<CompilerOptimizationDecision> | undefined,
 	fn: CoreFunction,
 	call: CoreInstruction,
@@ -1552,7 +1594,13 @@ function inlineSimpleCoreFunctions(
 						candidates.push({ target, linear });
 					}
 					if (declineReason !== undefined) {
-						recordInlineDecision(decisions, fn, call, "declined", declineReason);
+						recordCallOptimizationDecision(
+							decisions,
+							fn,
+							call,
+							"declined",
+							declineReason,
+						);
 						continue;
 					}
 					const guarded = closedTargetIndex === undefined || candidates.length > 1;
@@ -1564,11 +1612,23 @@ function inlineSimpleCoreFunctions(
 						0,
 					);
 					if (guarded && cost > MAX_GUARDED_INLINE_COST) {
-						recordInlineDecision(decisions, fn, call, "declined", "expansion-limit");
+						recordCallOptimizationDecision(
+							decisions,
+							fn,
+							call,
+							"declined",
+							"expansion-limit",
+						);
 						continue;
 					}
 					if (totalCost + cost > MAX_INLINE_TOTAL_COST) {
-						recordInlineDecision(decisions, fn, call, "declined", "expansion-limit");
+						recordCallOptimizationDecision(
+							decisions,
+							fn,
+							call,
+							"declined",
+							"expansion-limit",
+						);
 						continue;
 					}
 					const inlined = guarded
@@ -1603,7 +1663,7 @@ function inlineSimpleCoreFunctions(
 						for (const [value, targets] of inlined.relocatedTargets) {
 							relocatedTargets.set(value, targets);
 						}
-						recordInlineDecision(decisions, fn, call, "applied", "inline");
+						recordCallOptimizationDecision(decisions, fn, call, "applied", "inline");
 						if (verification === "per-pass") {
 							verifyCoreFunction(next, coreOpcodeRegistry, {
 								stage: "normalization",
@@ -10697,6 +10757,7 @@ export function executeCoreOptimizations(
 		const targetRefresh = annotateCoreDirectCallTargets(
 			targetRefreshInput,
 			targetAnalysis,
+			true,
 		);
 		for (const [index, fn] of targetRefresh.program.functions.entries()) {
 			traces.push({

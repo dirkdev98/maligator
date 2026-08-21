@@ -4,7 +4,10 @@ import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
+import {
+	emitVmDefinition,
+	emitVmTranslationUnits,
+} from "../src/compiler/target/emit-vm.ts";
 import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
 
 function compile(source: string) {
@@ -173,6 +176,33 @@ test("profile remarks retain applied substitutions after the call disappears", (
 	expect(remark).toMatchObject({ phase: "optimization", outcome: "applied" });
 	expect(site).toMatchObject({ operation: "call", file: "profile-fixture.js" });
 	expect(site.line).toBe(4);
+});
+
+test("profile remarks classify residual direct-call helpers as guarded compiled calls", () => {
+	const definition = compile(`
+		function outer(value) {
+			function expensive(input) {
+				${Array.from({ length: 38 }, () => "input += input;").join("\n")}
+				return input;
+			}
+			return ${Array.from({ length: 9 }, () => "expensive(value)").join(" + ")};
+		}
+		globalThis.keep = outer;
+	`);
+	const emitted = emitVmTranslationUnits(definition, {}, Number.MAX_SAFE_INTEGER).join(
+		"\n",
+	);
+	expect(emitted).toContain("mal_vm_call_direct(");
+
+	expect(definition.profileRemarks).toContainEqual(
+		expect.objectContaining({
+			phase: "native-backend",
+			operation: "call",
+			code: "call.direct-compiled",
+			outcome: "guarded",
+			reasonCode: "callee-identity-guard",
+		}),
+	);
 });
 
 test("profile remarks explain substitution barriers at the original call site", () => {

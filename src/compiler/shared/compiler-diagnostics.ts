@@ -10,6 +10,7 @@ export type OptimizationDecisionReason =
 	| "exception-region"
 	| "relocation"
 	| "expansion-limit"
+	| "generated-code-cost"
 	| "unavailable-world-fact"
 	| "unsupported-consumer"
 	| UnknownFactReason;

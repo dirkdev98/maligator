@@ -1766,6 +1766,10 @@ function profileDecisionsForInstruction(
 					"runtime-helper-owned-dispatch",
 				),
 			);
+		} else if (source.includes("mal_vm_call_direct(")) {
+			decisions.push(
+				decision("call.direct-compiled", "guarded", "callee-identity-guard"),
+			);
 		} else if (source.includes("mal_vm_call_cached(")) {
 			decisions.push(
 				decision(
