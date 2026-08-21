@@ -18,6 +18,8 @@ import {
 	CORE_OPCODES,
 	coreOpcodeRegistry,
 } from "../src/compiler/core/core-ir-opcodes.ts";
+import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type {
 	CoreAttributeObject,
@@ -29,6 +31,7 @@ import type {
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
 
 function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
@@ -58,8 +61,10 @@ function leafFunction(functionIndex: number): CoreFunction {
  */
 function optimizedCore(source: string, path: string): CoreProgram {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, path, parseModule(source));
+	const conservative = conservativeCompilerProgramFacts();
 	let optimized: CoreProgram | undefined;
 	compileSemanticProgramToVmDefinition(semantic, {
+		facts: { ...conservative, world: { ...conservative.world, realms: false } },
 		// Inlining runs before annotation and would consume the call sites this
 		// suite is about.
 		optimizationAblations: new Set(["inlining"] as const),
@@ -583,6 +588,27 @@ describe("callee-target solver", () => {
 });
 
 describe("callee-target annotation", () => {
+	it("retracts a stale direct target when the final graph is open", () => {
+		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const callee = builder.block(entry).parameters[0]!.value;
+		const [thisValue] = builder.appendInstruction(entry, "createUndefined", []);
+		const [result] = builder.appendInstruction(entry, "call", [callee, thisValue!], {
+			attributes: {
+				directFunctionIndex: 0,
+				calleeTargets: { functions: [0], anyScript: false, opaque: false },
+			},
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const optimized = executeCoreOptimizations(
+			coreProgram([leafFunction(0), builder.finish(entry)]),
+			{ ablations: new Set(["inlining"] as const) },
+		).program;
+		const [call] = callSites(optimized.functions[1]!);
+		expect(call?.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(call!)).toBeUndefined();
+	});
+
 	it("keeps an exact direct target for a closed top-level function", () => {
 		const program = optimizedCore(
 			`function target(value) { return value + 1; }
@@ -674,6 +700,134 @@ describe("callee-target annotation", () => {
 				functionIndexOfName(program, "second"),
 			].sort((left, right) => left - right),
 		);
+	});
+
+	it("resolves a method from a contained immutable service object", () => {
+		const program = optimizedCore(
+			`function run(value) { return value + 1; }
+			const service = { run };
+			function caller(value) { const callback = service.run; return callback(value); }
+			caller(1);`,
+			"call-targets-stable-service.mjs",
+		);
+		const methodIndex = functionIndexOfName(program, "run");
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const sites = callSites(caller);
+		expect(sites).toHaveLength(1);
+		expect(sites[0]!.attributes.directFunctionIndex).toBe(methodIndex);
+		expect(calleeTargetsAttribute(sites[0]!)).toEqual({
+			functions: [methodIndex],
+			anyScript: false,
+			opaque: false,
+		});
+	});
+
+	it("keeps every in-program writer of a contained method cell", () => {
+		const program = optimizedCore(
+			`function first(value) { return value + 1; }
+			function second(value) { return value + 2; }
+			const service = { run: first };
+			service.run = second;
+			function caller(value) { const callback = service.run; return callback(value); }
+			caller(1);`,
+			"call-targets-stable-service-retarget.mjs",
+		);
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const [site] = callSites(caller);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)?.functions).toEqual(
+			[
+				functionIndexOfName(program, "first"),
+				functionIndexOfName(program, "second"),
+			].sort((left, right) => left - right),
+		);
+		expect(calleeTargetsAttribute(site!)?.opaque).toBe(false);
+	});
+
+	it("leaves a mutable service binding and an escaped object open", () => {
+		for (const [name, declaration] of [
+			["mutable", "let service = { run(value) { return value + 1; } };"],
+			[
+				"escaped",
+				"const service = { run(value) { return value + 1; } }; globalThis.saved = service;",
+			],
+		] as const) {
+			const program = optimizedCore(
+				`${declaration}
+				function caller(value) { const callback = service.run; return callback(value); }
+				caller(1);`,
+				`call-targets-${name}-service.mjs`,
+			);
+			const caller = program.functions[functionIndexOfName(program, "caller")]!;
+			const [site] = callSites(caller);
+			expect(site?.attributes.directFunctionIndex).toBeUndefined();
+			expect(calleeTargetsAttribute(site!)).toBeUndefined();
+		}
+	});
+
+	it("does not treat an invoked receiver as a contained object", () => {
+		const program = optimizedCore(
+			`function run(value) { this.saved = value; return value; }
+			const service = { run };
+			function caller(value) { return service.run(value); }
+			caller(1);`,
+			"call-targets-service-receiver.mjs",
+		);
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const [site] = callSites(caller);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)).toBeUndefined();
+	});
+
+	it("keeps global object cells open when realm installers are enabled", () => {
+		const program = optimizedCore(
+			`function run(value) { return value; }
+			const service = { run };
+			function caller(value) { const callback = service.run; return callback(value); }
+			caller(1);`,
+			"call-targets-service-realms.mjs",
+		);
+		const realmsProgram: CoreProgram = {
+			...program,
+			compilation: {
+				...program.compilation!,
+				facts: {
+					...program.compilation!.facts,
+					world: { ...program.compilation!.facts.world, realms: true },
+				},
+			},
+		};
+		const caller = realmsProgram.functions[functionIndexOfName(realmsProgram, "caller")]!;
+		const property = caller.blocks
+			.flatMap(({ instructions }) => instructions)
+			.find(({ opcode }) => opcode === "loadPropertyStatic")!;
+		const targets = analyzeCoreCalleeTargets(realmsProgram).targets(
+			caller.functionIndex,
+			property.outputs[0]!,
+		);
+		expect(targets.functions).toEqual([]);
+		expect(targets.opaque).toBe(true);
+	});
+
+	it("rejects malformed immutable-cell authority metadata", () => {
+		const program = optimizedCore(
+			`const callback = function callback(value) { return value; };
+			callback(1);`,
+			"call-targets-cell-metadata.mjs",
+		);
+		expect(program.compilation).toBeDefined();
+		expect(() =>
+			verifyCoreProgram(
+				{
+					...program,
+					compilation: {
+						...program.compilation!,
+						singleAssignmentGlobalSlots: [program.globalCount],
+					},
+				},
+				coreOpcodeRegistry,
+			),
+		).toThrow(/invalid single-assignment global slot/);
 	});
 
 	it("keeps the bounded target set out of the target instruction stream", () => {

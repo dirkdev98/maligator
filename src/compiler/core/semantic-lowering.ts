@@ -62,7 +62,11 @@ import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import { formatCoreFunction } from "./core-ir.ts";
-import type { CoreHostInstallCandidate, CoreProgram } from "./core-ir.ts";
+import type {
+	CoreCapturedSlotRef,
+	CoreHostInstallCandidate,
+	CoreProgram,
+} from "./core-ir.ts";
 
 interface CoreFrontendContext {
 	/**
@@ -889,12 +893,51 @@ function finishCoreProgram(program: CoreFrontendContext): CoreProgram {
 				: { optimizationTrace: [...program.optimizationTrace] }),
 			cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
 			hostInstallCandidates: coreHostInstallCandidates(program),
+			...coreSingleAssignmentCellDeclarations(program),
 			retainedHostInstallers: [program.hostProcess, program.hostBuffer]
 				.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 				.filter(
 					(installer, index, installers) => installers.indexOf(installer) === index,
 				),
 		},
+	};
+}
+
+/**
+ * Compiler-owned cells whose binding can never be reassigned.
+ *
+ * `const` and a named function expression's own-name binding are the only two
+ * ECMAScript bindings that are initialized once and then immutable; a `var` or
+ * `let` cell, a script global property, and a local slot are all excluded. An
+ * imported name never appears here in its own right: the linker rewrites its
+ * usages onto the exporting module's binding, so the exporter's cell is the one
+ * declared and a live binding stays a single cell.
+ *
+ * This is a declaration, not a proof. It says what the source guarantees about
+ * assignment; whether the compiled graph actually contains exactly one writer
+ * and no reader outside it is checked separately against the Core graph.
+ */
+function coreSingleAssignmentCellDeclarations(program: CoreFrontendContext): {
+	singleAssignmentGlobalSlots: Array<number>;
+	singleAssignmentCapturedSlots: Array<CoreCapturedSlotRef>;
+} {
+	const globals = new Set<number>();
+	const captured = new Map<string, CoreCapturedSlotRef>();
+	for (const [binding, location] of program.bindingToStorage) {
+		if (binding.kind !== "const" && binding.immutableSelfReference !== true) continue;
+		if (location.type === "global") globals.add(location.index);
+		else if (location.type === "captured") {
+			captured.set(`${location.functionIndex}:${location.index}`, {
+				owner: location.functionIndex,
+				index: location.index,
+			});
+		}
+	}
+	return {
+		singleAssignmentGlobalSlots: [...globals].sort((left, right) => left - right),
+		singleAssignmentCapturedSlots: [...captured.values()].sort(
+			(left, right) => left.owner - right.owner || left.index - right.index,
+		),
 	};
 }
 

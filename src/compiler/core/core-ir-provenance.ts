@@ -361,6 +361,28 @@ export function coreOwnCellsEqual(left: CoreOwnCell, right: CoreOwnCell): boolea
 	);
 }
 
+/**
+ * Canonical own-cell identity for a string-constant key, shared with any analysis
+ * that must agree on which cell a key spelling names. Two spellings of the same
+ * text canonicalize to one index, and an array-index spelling becomes an element
+ * cell, so `o.0`, `o["0"]`, and `o[0]` cannot be mistaken for three cells.
+ */
+export function coreOwnCellResolver(
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): (index: number) => CoreOwnCell | undefined {
+	const canonicalStrings = canonicalStringIndices(stringConstants);
+	return (index: number): CoreOwnCell | undefined => {
+		const canonicalIndex =
+			canonicalStrings.get(index) ??
+			(Number.isSafeInteger(index) && index >= 0 ? index : undefined);
+		if (canonicalIndex === undefined) return undefined;
+		const element = canonicalArrayIndex(stringConstants[canonicalIndex]);
+		return element === undefined
+			? { kind: "object-slot", key: canonicalIndex }
+			: { kind: "element", index: element };
+	};
+}
+
 export function coreProvenance(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
@@ -386,18 +408,7 @@ export function coreProvenance(
 			}
 		}
 	}
-	const canonicalStrings = canonicalStringIndices(stringConstants);
-	const cellForString = (index: number): CoreOwnCell | undefined => {
-		const canonicalIndex =
-			canonicalStrings.get(index) ??
-			(Number.isSafeInteger(index) && index >= 0 ? index : undefined);
-		if (canonicalIndex === undefined) return undefined;
-		const units = stringConstants[canonicalIndex];
-		const element = canonicalArrayIndex(units);
-		return element === undefined
-			? { kind: "object-slot", key: canonicalIndex }
-			: { kind: "element", index: element };
-	};
+	const cellForString = coreOwnCellResolver(stringConstants);
 	const normalized = new Map<CoreValueId, CoreOwnCell | null>();
 	const cellForValue = (value: CoreValueId): CoreOwnCell | undefined => {
 		const root = canonical(value);

@@ -1211,6 +1211,53 @@ function verifyCoreProgramGraph(
 	if (!Number.isSafeInteger(program.globalCount) || program.globalCount < 0) {
 		fail(`invalid global count ${program.globalCount}`);
 	}
+	const compilation = program.compilation;
+	if (compilation !== undefined) {
+		const globalValue: unknown = compilation.singleAssignmentGlobalSlots;
+		if (!Array.isArray(globalValue))
+			fail("missing single-assignment global-slot metadata");
+		const globals = globalValue as ReadonlyArray<unknown>;
+		for (const [index, rawSlot] of globals.entries()) {
+			const slot = typeof rawSlot === "number" ? rawSlot : Number.NaN;
+			const previous = globals[index - 1];
+			if (
+				!Number.isSafeInteger(slot) ||
+				slot < 0 ||
+				slot >= program.globalCount ||
+				(index > 0 && typeof previous === "number" && previous >= slot)
+			) {
+				fail(`invalid single-assignment global slot ${slot}`);
+			}
+		}
+		const capturedValue: unknown = compilation.singleAssignmentCapturedSlots;
+		if (!Array.isArray(capturedValue))
+			fail("missing single-assignment captured-slot metadata");
+		const captured = capturedValue as ReadonlyArray<unknown>;
+		let previousOwner = 0;
+		let previousIndex = 0;
+		let hasPrevious = false;
+		for (const rawCell of captured) {
+			const cell =
+				typeof rawCell === "object" && rawCell !== null
+					? (rawCell as Record<string, unknown>)
+					: undefined;
+			const owner = typeof cell?.owner === "number" ? cell.owner : Number.NaN;
+			const index = typeof cell?.index === "number" ? cell.index : Number.NaN;
+			if (
+				!Number.isSafeInteger(owner) ||
+				owner >= program.functions.length ||
+				!Number.isSafeInteger(index) ||
+				index < 0 ||
+				(hasPrevious &&
+					(previousOwner > owner || (previousOwner === owner && previousIndex >= index)))
+			) {
+				fail(`invalid single-assignment captured slot ${String(owner)}:${String(index)}`);
+			}
+			previousOwner = owner;
+			previousIndex = index;
+			hasPrevious = true;
+		}
+	}
 	for (const [index, units] of program.stringConstants.entries()) {
 		for (const unit of units) {
 			if (!Number.isSafeInteger(unit) || unit < 0 || unit > 0xffff) {

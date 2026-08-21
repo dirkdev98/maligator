@@ -858,6 +858,13 @@ function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResul
 					const attributes: Record<string, CoreAttributeValue> = {
 						...instruction.attributes,
 					};
+					// This pass owns these advisory attributes. Re-running it on a later
+					// graph must be able to retract a target that is no longer justified,
+					// not merely add a more precise one.
+					delete attributes.directFunctionIndex;
+					delete attributes.directFunctionCall;
+					delete attributes.directCallTargetFunctionIndex;
+					delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
 					if (
 						targetFunction !== undefined &&
 						(instruction.opcode === "call" ||
@@ -10297,6 +10304,50 @@ export function executeCoreOptimizations(
 				),
 			);
 		}
+	}
+	// Local memory, value, and shape passes can expose a stable callee only after
+	// the normalization-time target solve (for example, a contained object literal
+	// becomes `createObjectShaped`). Refresh the advisory call targets on the final
+	// fixed-point graph. The annotator owns and retracts its attributes, so this is
+	// also proof maintenance for a target that became less precise.
+	const targetRefreshBefore = tracedMetrics;
+	const targetRefreshInput = { ...workingProgram, functions };
+	const targetRefresh = annotateCoreDirectCallTargets(targetRefreshInput);
+	for (const [index, fn] of targetRefresh.program.functions.entries()) {
+		traces.push({
+			name: "refresh-direct-call-targets",
+			round: maxRounds,
+			changed: fn !== functions[index],
+		});
+	}
+	if (targetRefresh.changed) {
+		changed = true;
+		functions = [...targetRefresh.program.functions];
+		verifyMutatedProgram(
+			{ ...workingProgram, functions },
+			{
+				stage: "fixpoint",
+				pass: "refresh-direct-call-targets",
+				round: maxRounds,
+			},
+		);
+	}
+	if (targetRefreshBefore !== undefined) {
+		const targetRefreshAfter = coreOptimizationMetrics({ ...workingProgram, functions });
+		tracedMetrics = targetRefreshAfter;
+		optimizationTrace.push(
+			optimizationPassDelta(
+				{
+					pass: "refresh-direct-call-targets",
+					stage: "fixpoint",
+					round: maxRounds,
+					status: "executed",
+					changed: targetRefresh.changed,
+				},
+				targetRefreshBefore,
+				targetRefreshAfter,
+			),
+		);
 	}
 	for (const pass of CORE_FINALIZATION_PASSES) {
 		const beforeProgram = { ...workingProgram, functions };

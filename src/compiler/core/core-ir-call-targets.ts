@@ -38,9 +38,16 @@
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreMemoryAccesses } from "./core-ir-memory.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { coreOwnCellResolver, coreOwnCellsEqual } from "./core-ir-provenance.ts";
+import type { CoreOwnCell } from "./core-ir-provenance.ts";
+import { CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
 import type {
+	CoreAccessMode,
 	CoreAttributeObject,
 	CoreInstruction,
+	CoreInstructionId,
+	CoreOpcodeAccess,
+	CoreOpcodeAllocation,
 	CoreOpcodeRegistry,
 	CoreProgram,
 	CoreValueId,
@@ -196,6 +203,13 @@ export interface CoreCalleeTargetStatistics {
 	 * from turning the solve into a whole-program round.
 	 */
 	readonly callActivations: number;
+	/** Declared aggregate layouts this analysis modelled, bounded by the cap. */
+	readonly trackedAllocations: number;
+	/** Those whose whole operation set this graph contains, so their cells joined it. */
+	readonly containedAllocations: number;
+	readonly ownCellNodes: number;
+	/** Compiler-owned cells whose whole read and write traffic this graph contains. */
+	readonly singleAssignmentCells: number;
 }
 
 export interface CoreCalleeTargetAnalysis {
@@ -227,6 +241,39 @@ const SLOT_WRITERS_WITHOUT_NEW_CALLABLES: ReadonlySet<string> = new Set([
 	"envPop",
 ]);
 
+/**
+ * Largest number of fresh aggregates whose own cells this analysis models. Past
+ * the cap an allocation is untracked, which costs precision only: its cells stay
+ * opaque like any property this analysis cannot name.
+ */
+export const CORE_TRACKED_ALLOCATION_CAP = 1024;
+
+/**
+ * Largest declared own-slot count of a tracked aggregate. A wider literal is not
+ * modelled at all rather than modelled partially, because a partial cell map
+ * cannot tell "no writer stored here" from "a writer we chose not to keep".
+ */
+export const CORE_OWN_CELL_KEY_CAP = 16;
+
+/**
+ * Family-level slot writers that provably leave every cell holding a value some
+ * cell-naming store already wrote, with the reason each one does.
+ *
+ * This is strictly stronger than `SLOT_WRITERS_WITHOUT_NEW_CALLABLES`, which only
+ * promises not to introduce a *callable*. Carrying an allocation identity through
+ * a cell needs the full value contract, so `createPrivateNames` and
+ * `initGlobalVars` — both of which write cells they do not name — are deliberately
+ * absent, and a newly added family writer is excluded by default.
+ */
+const SLOT_FAMILY_WRITERS_PRESERVING_CELL_VALUES: ReadonlySet<string> = new Set([
+	// A per-iteration environment is a sibling holding the same synthetic scope id
+	// and slot indices, so every cell of the copy holds a value stored through the
+	// same key as the cell it was copied from.
+	"envPush",
+	"envCopy",
+	"envPop",
+]);
+
 function attributeNumber(instruction: CoreInstruction, key: string): number | undefined {
 	const value = instruction.attributes[key];
 	return typeof value === "number" ? value : undefined;
@@ -236,17 +283,74 @@ function capturedSlotKey(owner: number, index: number): string {
 	return `${owner}:${index}`;
 }
 
-interface SlotOpacity {
+/** A compiler-owned cell a declared access names exactly. */
+type SlotCell =
+	| { readonly kind: "global"; readonly slot: number }
+	| { readonly kind: "captured"; readonly owner: number; readonly index: number };
+
+/**
+ * The cell a declared slot access names, or undefined when the instruction does
+ * not carry the attributes the descriptor promised. Decoding from the descriptor
+ * rather than from an opcode name is what keeps this from drifting away from the
+ * memory model's own answer.
+ */
+function declaredSlotCell(
+	instruction: CoreInstruction,
+	access: CoreOpcodeAccess,
+): SlotCell | undefined {
+	const attributes = access.attributes ?? [];
+	if (access.family === "global-slot") {
+		if (attributes.length !== 1) return undefined;
+		const slot = attributeNumber(instruction, attributes[0]!);
+		return slot === undefined ? undefined : { kind: "global", slot };
+	}
+	if (access.family !== "captured-slot" || attributes.length !== 2) return undefined;
+	const owner = attributeNumber(instruction, attributes[0]!);
+	const index = attributeNumber(instruction, attributes[1]!);
+	return owner === undefined || index === undefined
+		? undefined
+		: { kind: "captured", owner, index };
+}
+
+/** Key spelling a declared access carries, before own-cell normalization. */
+function declaredAccessKeyCell(
+	instruction: CoreInstruction,
+	access: CoreOpcodeAccess,
+	cellForString: (index: number) => CoreOwnCell | undefined,
+	cellForOperand: (value: CoreValueId) => CoreOwnCell | undefined,
+): CoreOwnCell | undefined {
+	if (access.keyAttribute !== undefined) {
+		const index = attributeNumber(instruction, access.keyAttribute);
+		return index === undefined ? undefined : cellForString(index);
+	}
+	if (access.keyOperand === undefined) return undefined;
+	const value = instruction.inputs[access.keyOperand];
+	return value === undefined ? undefined : cellForOperand(value);
+}
+
+interface SlotCensus {
+	/** A family write that may publish a callable into a cell it does not name. */
 	global: boolean;
 	captured: boolean;
+	/** A family write that may replace a cell's value with something unnamed. */
+	globalOverwrite: boolean;
+	capturedOverwrite: boolean;
+	/** A family read, so cells in it are served to code outside this graph. */
+	globalPublished: boolean;
+	capturedPublished: boolean;
 	/** Named global cells whose writer does not name the value it stores. */
 	readonly opaqueGlobalSlots: Set<number>;
 	readonly opaqueCapturedSlots: Map<string, readonly [number, number]>;
+	/** Cell-naming writes per cell, counted so single assignment is checkable. */
+	readonly globalWriters: Map<number, number>;
+	readonly capturedWriters: Map<string, number>;
 }
 
 /**
- * How far each slot writer forces the lattice open. Naming the cell and naming
- * the stored value are independent obligations, so they degrade independently:
+ * Census every declared slot access in the program.
+ *
+ * Naming the cell and naming the stored value are independent obligations, so
+ * they degrade independently:
  *
  * - A writer that cannot name its cell degrades its whole family, because any
  *   cell in it may now hold anything.
@@ -258,42 +362,375 @@ interface SlotOpacity {
  * decoder here, so the answer cannot drift from the opcode's declared memory and
  * a verified effect refinement that removed the write removes it here too.
  */
-function slotFamilyOpacity(
+function censusSlotAccesses(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
-): SlotOpacity {
-	const opacity: SlotOpacity = {
+): SlotCensus {
+	const census: SlotCensus = {
 		global: false,
 		captured: false,
+		globalOverwrite: false,
+		capturedOverwrite: false,
+		globalPublished: false,
+		capturedPublished: false,
 		opaqueGlobalSlots: new Set(),
 		opaqueCapturedSlots: new Map(),
+		globalWriters: new Map(),
+		capturedWriters: new Map(),
 	};
 	for (const fn of program.functions) {
+		const producers = new Map<CoreValueId, CoreInstruction>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				if (SLOT_WRITERS_WITHOUT_NEW_CALLABLES.has(instruction.opcode)) continue;
+				for (const output of instruction.outputs) producers.set(output, instruction);
+			}
+		}
+		/**
+		 * A store of the uninitialized sentinel is the frontend's TDZ setup, not an
+		 * assignment: a read that observes it throws before it can observe anything,
+		 * so it cannot be the value a later read sees and it does not make a
+		 * single-assignment binding multiply assigned.
+		 */
+		const storesSentinel = (value: CoreValueId): boolean => {
+			const seen = new Set<CoreValueId>();
+			let current = value;
+			while (!seen.has(current)) {
+				seen.add(current);
+				const producer = producers.get(current);
+				if (producer === undefined) return false;
+				if (producer.opcode === "createEmpty") return true;
+				if (producer.opcode !== "move" || producer.inputs.length !== 1) return false;
+				current = producer.inputs[0]!;
+			}
+			return false;
+		};
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const introducesCallable = !SLOT_WRITERS_WITHOUT_NEW_CALLABLES.has(
+					instruction.opcode,
+				);
+				const preservesValues = SLOT_FAMILY_WRITERS_PRESERVING_CELL_VALUES.has(
+					instruction.opcode,
+				);
 				for (const access of coreMemoryAccesses(instruction, undefined, registry)) {
-					if (access.mode !== "write") continue;
 					const location = access.location;
 					if (location.kind === "family") {
-						if (location.family === "global-slot") opacity.global = true;
-						else if (location.family === "captured-slot") opacity.captured = true;
+						const global = location.family === "global-slot";
+						if (!global && location.family !== "captured-slot") continue;
+						if (access.mode === "read") {
+							if (global) census.globalPublished = true;
+							else census.capturedPublished = true;
+							continue;
+						}
+						if (global) {
+							if (introducesCallable) census.global = true;
+							if (!preservesValues) census.globalOverwrite = true;
+						} else {
+							if (introducesCallable) census.captured = true;
+							if (!preservesValues) census.capturedOverwrite = true;
+						}
 						continue;
 					}
-					if (access.value !== undefined) continue;
+					if (access.mode !== "write") continue;
+					const assigns = access.value === undefined || !storesSentinel(access.value);
 					if (location.kind === "global-slot") {
-						opacity.opaqueGlobalSlots.add(location.slot);
+						if (assigns) {
+							census.globalWriters.set(
+								location.slot,
+								(census.globalWriters.get(location.slot) ?? 0) + 1,
+							);
+						}
+						if (access.value === undefined) census.opaqueGlobalSlots.add(location.slot);
 					} else if (location.kind === "captured-slot") {
-						opacity.opaqueCapturedSlots.set(
-							capturedSlotKey(location.owner, location.index),
-							[location.owner, location.index],
-						);
+						const key = capturedSlotKey(location.owner, location.index);
+						if (assigns) {
+							census.capturedWriters.set(key, (census.capturedWriters.get(key) ?? 0) + 1);
+						}
+						if (access.value === undefined) {
+							census.opaqueCapturedSlots.set(key, [location.owner, location.index]);
+						}
 					}
 				}
 			}
 		}
 	}
-	return opacity;
+	return census;
+}
+
+/**
+ * Compiler-owned cells whose whole read and write traffic this graph contains.
+ *
+ * The contract a member cell satisfies is: every read of it anywhere in the
+ * program is one of the reads in this graph, and every such read observes either
+ * the uninitialized sentinel or a value written by the one store the frontend
+ * emitted for its binding. That is what lets an allocation identity survive a
+ * trip through a cell instead of being lost at the function boundary.
+ *
+ * Four independent obligations, none of which a declaration alone discharges:
+ *
+ * 1. The frontend declares the binding single-assignment. Only `const` and a
+ *    named function expression's own name are; a `var` or `let` cell is not, and
+ *    an import contributes its exporter's cell because the linker aliases the two
+ *    onto one cell rather than copying a value out of it.
+ * 2. Exactly one instruction in the program writes the cell by name, and it names
+ *    the value it stores.
+ * 3. No family-level writer could replace the cell's value with something this
+ *    graph does not name.
+ * 4. Nothing serves the cell to code outside this graph: no host installer owns
+ *    it, and no family-level reader — a module namespace object resolves each
+ *    export live from its slot on every get — republishes it.
+ *
+ * Obligation 1 alone would be an inference from a declaration; obligations 2 to 4
+ * are what make it a fact about this program's graph.
+ */
+export interface CoreSingleAssignmentCells {
+	globalSlot(slot: number): boolean;
+	capturedSlot(owner: number, index: number): boolean;
+	readonly count: number;
+}
+
+function singleAssignmentCellsFromCensus(
+	program: CoreProgram,
+	census: SlotCensus,
+): CoreSingleAssignmentCells {
+	const compilation = program.compilation;
+	const hostSlots = new Set<number>();
+	for (const candidate of compilation?.hostInstallCandidates ?? []) {
+		for (const { slot } of candidate.exports) hostSlots.add(slot);
+	}
+	const globals = new Set<number>();
+	if (!census.globalOverwrite && !census.globalPublished) {
+		for (const slot of compilation?.singleAssignmentGlobalSlots ?? []) {
+			if (hostSlots.has(slot)) continue;
+			if (census.opaqueGlobalSlots.has(slot)) continue;
+			if (census.globalWriters.get(slot) !== 1) continue;
+			globals.add(slot);
+		}
+	}
+	const captured = new Set<string>();
+	if (!census.capturedOverwrite && !census.capturedPublished) {
+		for (const { owner, index } of compilation?.singleAssignmentCapturedSlots ?? []) {
+			const key = capturedSlotKey(owner, index);
+			if (census.opaqueCapturedSlots.has(key)) continue;
+			if (census.capturedWriters.get(key) !== 1) continue;
+			captured.add(key);
+		}
+	}
+	return {
+		globalSlot: (slot) => globals.has(slot),
+		capturedSlot: (owner, index) => captured.has(capturedSlotKey(owner, index)),
+		count: globals.size + captured.size,
+	};
+}
+
+/** Re-derive a program's single-assignment cells from its graph alone. */
+export function coreSingleAssignmentCells(
+	program: CoreProgram,
+	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+): CoreSingleAssignmentCells {
+	return singleAssignmentCellsFromCensus(program, censusSlotAccesses(program, registry));
+}
+
+/**
+ * A fresh aggregate whose own data slots the registry declares, identified
+ * program-wide rather than per function: an allocation reached through a
+ * compiler-owned cell is named from every function that reads that cell.
+ */
+interface TrackedAllocation {
+	readonly functionIndex: number;
+	readonly instruction: CoreInstructionId;
+	/** Canonical own-slot keys in declaration order. */
+	readonly keys: ReadonlyArray<number>;
+	/** Node holding each key's initial value, in the same order. */
+	readonly initialValues: ReadonlyArray<number>;
+	readonly owned: ReadonlySet<number>;
+}
+
+/**
+ * Layout of a declared named-slot allocation, or undefined when it is not one
+ * this analysis models exactly.
+ *
+ * Indexed allocations are deliberately excluded: an element no dominating define
+ * filled is a hole, and a hole read continues to the prototype chain, where a
+ * value this graph never saw could answer. Every declared key of a named-slot
+ * literal is an own writable data property from the moment the object exists, so
+ * no read or write of a declared key can leave the object.
+ */
+function namedSlotLayout(
+	instruction: CoreInstruction,
+	allocation: CoreOpcodeAllocation,
+	cellForString: (index: number) => CoreOwnCell | undefined,
+):
+	| { readonly keys: ReadonlyArray<number>; readonly values: ReadonlyArray<CoreValueId> }
+	| undefined {
+	if (allocation.kind !== "named-slots") return undefined;
+	const declared = instruction.attributes[allocation.keysAttribute];
+	if (
+		!Array.isArray(declared) ||
+		!declared.every((entry) => typeof entry === "number" && Number.isSafeInteger(entry))
+	) {
+		return undefined;
+	}
+	if (declared.length > CORE_OWN_CELL_KEY_CAP) return undefined;
+	const values = instruction.inputs.slice(allocation.firstValueOperand);
+	if (values.length !== declared.length) return undefined;
+	const keys: Array<number> = [];
+	for (const entry of declared as ReadonlyArray<number>) {
+		const cell = cellForString(entry);
+		// An index-shaped spelling names an element rather than a named slot, and a
+		// repeated canonical key would make two cells indistinguishable.
+		if (cell?.kind !== "object-slot" || keys.includes(cell.key)) return undefined;
+		keys.push(cell.key);
+	}
+	return { keys, values };
+}
+
+/** How an operand uses whatever allocation it holds. */
+type OperandRole =
+	| { readonly kind: "observed" }
+	| {
+			readonly kind: "own-slot";
+			readonly key: number;
+			readonly mode: CoreAccessMode;
+			readonly valueOperand: number | undefined;
+	  }
+	| { readonly kind: "cell-store"; readonly cell: SlotCell }
+	| { readonly kind: "escape" };
+
+const OPERAND_OBSERVED: OperandRole = Object.freeze({ kind: "observed" });
+const OPERAND_ESCAPE: OperandRole = Object.freeze({ kind: "escape" });
+
+/**
+ * The one place where an operand's role depends on an attribute rather than on its
+ * position: strict equality and `typeof` inspect a reference without handing it to
+ * user code. Everything else comes from the registry's declarations.
+ */
+function operandsAreObservedOnly(
+	instruction: CoreInstruction,
+	registry: CoreOpcodeRegistry,
+): boolean {
+	if (registry.require(instruction.opcode).observesOperands === true) return true;
+	const operator = instruction.attributes.operator;
+	if (instruction.opcode === "binary") return operator === "===" || operator === "!==";
+	if (instruction.opcode === "unary") return operator === "typeof";
+	return false;
+}
+
+interface BaseAccessSummary {
+	slots: number;
+	shapes: number;
+	prototypeReads: number;
+	unclassified: number;
+	slotKey: CoreOwnCell | undefined;
+	slotMode: CoreAccessMode;
+	slotValueOperand: number | undefined;
+	shapeKey: CoreOwnCell | undefined;
+	establishes: boolean;
+}
+
+/**
+ * Role of every operand of one instruction, derived from its declared accesses.
+ *
+ * A base operand keeps its allocation only when the instruction reads or writes
+ * exactly one named own data slot of it, or only reads its prototype. A shape
+ * edit, an accessor definition, a delete, a prototype replacement, or an
+ * unresolvable key is an escape: those are exactly the operations that could turn
+ * a slot into an accessor, install a Proxy, or send a later lookup to the
+ * prototype chain. A shape write is tolerated only beside the own-data define
+ * that declared it, on the same key, so declaration order cannot decide safety.
+ * Every operand the registry does not describe as addressing an object escapes,
+ * which is what keeps a newly added opcode conservative.
+ */
+function operandRoles(
+	instruction: CoreInstruction,
+	registry: CoreOpcodeRegistry,
+	keyCell: (access: CoreOpcodeAccess) => CoreOwnCell | undefined,
+): ReadonlyMap<number, OperandRole> {
+	const roles = new Map<number, OperandRole>();
+	if (operandsAreObservedOnly(instruction, registry)) {
+		for (const [operand] of instruction.inputs.entries()) {
+			roles.set(operand, OPERAND_OBSERVED);
+		}
+		return roles;
+	}
+	const bases = new Map<number, BaseAccessSummary>();
+	for (const access of registry.require(instruction.opcode).accesses ?? []) {
+		if (
+			access.valueOperand !== undefined &&
+			access.mode === "write" &&
+			(access.family === "global-slot" || access.family === "captured-slot")
+		) {
+			const cell = declaredSlotCell(instruction, access);
+			roles.set(
+				access.valueOperand,
+				cell === undefined ? OPERAND_ESCAPE : { kind: "cell-store", cell },
+			);
+		}
+		if (access.baseOperand === undefined) continue;
+		if (!CORE_MEMORY_FAMILY_DOMAINS[access.family].includes("object-property")) continue;
+		let summary = bases.get(access.baseOperand);
+		if (summary === undefined) {
+			summary = {
+				slots: 0,
+				shapes: 0,
+				prototypeReads: 0,
+				unclassified: 0,
+				slotKey: undefined,
+				slotMode: "read",
+				slotValueOperand: undefined,
+				shapeKey: undefined,
+				establishes: false,
+			};
+			bases.set(access.baseOperand, summary);
+		}
+		if (access.family === "object-slot") {
+			summary.slots += 1;
+			summary.slotKey = keyCell(access);
+			summary.slotMode = access.mode;
+			summary.slotValueOperand = access.valueOperand;
+			if (access.establishesOwnDataSlot === true) summary.establishes = true;
+		} else if (access.family === "shape" && access.mode === "write") {
+			summary.shapes += 1;
+			summary.shapeKey = keyCell(access);
+		} else if (access.family === "prototype" && access.mode === "read") {
+			summary.prototypeReads += 1;
+		} else {
+			summary.unclassified += 1;
+		}
+	}
+	for (const [operand, summary] of bases) {
+		roles.set(operand, baseOperandRole(summary));
+	}
+	for (const [operand] of instruction.inputs.entries()) {
+		if (!roles.has(operand)) roles.set(operand, OPERAND_ESCAPE);
+	}
+	return roles;
+}
+
+function baseOperandRole(summary: BaseAccessSummary): OperandRole {
+	if (summary.unclassified > 0) return OPERAND_ESCAPE;
+	if (summary.slots === 0 && summary.shapes === 0) {
+		// [[GetPrototypeOf]] on an ordinary object runs no trap and retains nothing.
+		return summary.prototypeReads > 0 ? OPERAND_OBSERVED : OPERAND_ESCAPE;
+	}
+	if (summary.slots !== 1 || summary.prototypeReads > 0) return OPERAND_ESCAPE;
+	const slot = summary.slotKey;
+	if (slot?.kind !== "object-slot") return OPERAND_ESCAPE;
+	const role: OperandRole = {
+		kind: "own-slot",
+		key: slot.key,
+		mode: summary.slotMode,
+		valueOperand: summary.slotValueOperand,
+	};
+	if (summary.shapes === 0) return role;
+	// A shape write stands only beside the own-data define that declared it, on the
+	// same key, so declaration order cannot decide safety.
+	return summary.shapes === 1 &&
+		summary.establishes &&
+		summary.shapeKey !== undefined &&
+		coreOwnCellsEqual(summary.shapeKey, slot)
+		? role
+		: OPERAND_ESCAPE;
 }
 
 /**
@@ -313,27 +750,49 @@ interface CallResultSite {
 	openRaised: "none" | "opaque" | "top";
 }
 
+/** A property read whose opaque seed an own-cell edge may replace. */
+interface DeferredOwnSlotRead {
+	readonly base: number;
+	readonly key: number;
+	readonly result: number;
+}
+
+/** No allocation has been observed in a cell yet. */
+const ORIGIN_BOTTOM = 0;
+/** More than one allocation, or a producer this analysis cannot attribute. */
+const ORIGIN_TOP = -1;
+
 /**
  * Solve the program's callee-target lattice.
  *
- * Nodes are SSA values, compiler-owned global slots, captured closure slots, and
- * one return cell per function; edges run producer to consumer. Every node's
- * state can rise at most `CORE_CALLEE_TARGET_CAP + 2` times (the set grows, then
- * widens, then opens), and every call site activates at most
- * `CORE_CALLEE_TARGET_CAP + 2` return-cell edges or open raises, so the whole
- * solve is O(cap * (nodes + edges + calls)) — near-linear in program size for
- * the fixed cap, with no round over calls or functions.
+ * Nodes are SSA values, compiler-owned global slots, captured closure slots, one
+ * return cell per function, and one cell per own data slot of a fresh aggregate
+ * this graph contains; edges run producer to consumer. Every node's target state
+ * can rise at most `CORE_CALLEE_TARGET_CAP + 2` times (the set grows, then widens,
+ * then opens), and every call site activates at most `CORE_CALLEE_TARGET_CAP + 2`
+ * return-cell edges or open raises, so the whole solve is
+ * O(cap * (nodes + edges + calls)) — near-linear in program size for the fixed
+ * cap, with no round over calls or functions.
+ *
+ * Own cells need a second, three-point component on the same graph: which single
+ * allocation a node can hold. It is solved first, over the same edges, so it costs
+ * one extra pass of the same shape; the containment sweep that reads it is one
+ * more pass over the instructions. Both are skipped entirely when the program
+ * declares no aggregate layout this analysis models.
  */
 export function analyzeCoreCalleeTargets(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 ): CoreCalleeTargetAnalysis {
-	const opacity = slotFamilyOpacity(program, registry);
+	const census = censusSlotAccesses(program, registry);
+	const stableCells = singleAssignmentCellsFromCensus(program, census);
+	const cellForString = coreOwnCellResolver(program.stringConstants);
 	const valueBase = new Map<number, number>();
 	const valueLimit = new Map<number, number>();
 	const globalNodes = new Map<number, number>();
 	const capturedNodes = new Map<string, number>();
 	const returnNodes = new Map<number, number>();
+	const ownCellNodes = new Map<string, number>();
 	const functionsByIndex = new Map(
 		program.functions.map((fn) => [fn.functionIndex, fn] as const),
 	);
@@ -367,10 +826,20 @@ export function analyzeCoreCalleeTargets(
 		}
 		return node;
 	};
+	const slotCellNode = (cell: SlotCell): number =>
+		cell.kind === "global" ? globalNode(cell.slot) : capturedNode(cell.owner, cell.index);
+	const stableSlotCell = (cell: SlotCell): boolean =>
+		cell.kind === "global"
+			? stableCells.globalSlot(cell.slot)
+			: stableCells.capturedSlot(cell.owner, cell.index);
 
 	const dependents = new Map<number, Array<number>>();
 	const seeds = new Map<number, CoreCalleeTargets>();
+	const originSeeds = new Map<number, number>();
 	const callSites = new Map<number, Array<CallResultSite>>();
+	const allocations: Array<TrackedAllocation> = [];
+	const deferredReads: Array<DeferredOwnSlotRead> = [];
+	const controlFlow = new Map<number, ReturnType<typeof buildCoreControlFlow>>();
 	let edges = 0;
 	let callActivations = 0;
 	const addEdge = (from: number, to: number): void => {
@@ -386,6 +855,13 @@ export function analyzeCoreCalleeTargets(
 			existing === undefined ? targets : joinCoreCalleeTargets(existing, targets),
 		);
 	};
+	const addOriginSeed = (node: number, origin: number): void => {
+		const existing = originSeeds.get(node);
+		originSeeds.set(
+			node,
+			existing === undefined || existing === origin ? origin : ORIGIN_TOP,
+		);
+	};
 	const addCallSite = (callee: number, result: number, construct: boolean): void => {
 		const site: CallResultSite = {
 			callee,
@@ -399,19 +875,71 @@ export function analyzeCoreCalleeTargets(
 		else existing.push(site);
 	};
 
+	const functionDefinitions = (
+		fn: (typeof program.functions)[number],
+	): Map<CoreValueId, CoreInstruction> => {
+		const definitions = new Map<CoreValueId, CoreInstruction>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) definitions.set(output, instruction);
+			}
+		}
+		return definitions;
+	};
+	/**
+	 * Own cell a key operand names. A key that is not a string constant reaching
+	 * this operand through moves alone stays unresolved, which makes its base
+	 * escape rather than name a cell.
+	 */
+	const operandKeyResolver = (definitions: ReadonlyMap<CoreValueId, CoreInstruction>) => {
+		const resolved = new Map<CoreValueId, CoreOwnCell | null>();
+		return (value: CoreValueId): CoreOwnCell | undefined => {
+			const cached = resolved.get(value);
+			if (cached !== undefined) return cached ?? undefined;
+			const seen = new Set<CoreValueId>();
+			let current = value;
+			let cell: CoreOwnCell | undefined;
+			while (!seen.has(current)) {
+				seen.add(current);
+				const definition = definitions.get(current);
+				if (definition === undefined) break;
+				if (definition.opcode === "move" && definition.inputs.length === 1) {
+					current = definition.inputs[0]!;
+					continue;
+				}
+				if (definition.opcode === "createString") {
+					const index = attributeNumber(definition, "stringIndex");
+					cell = index === undefined ? undefined : cellForString(index);
+				}
+				break;
+			}
+			resolved.set(value, cell ?? null);
+			return cell;
+		};
+	};
+
 	for (const fn of program.functions) {
 		const base = valueBase.get(fn.functionIndex)!;
 		const valueNode = (value: CoreValueId): number => base + value;
+		const definitions = functionDefinitions(fn);
+		const cellForOperand = operandKeyResolver(definitions);
+		const keyCell =
+			(instruction: CoreInstruction) =>
+			(access: CoreOpcodeAccess): CoreOwnCell | undefined =>
+				declaredAccessKeyCell(instruction, access, cellForString, cellForOperand);
 		// Incoming arguments are supplied by callers this pass does not resolve.
 		for (const parameter of fn.parameters) {
 			addSeed(valueNode(parameter), CORE_CALLEE_TARGETS_OPAQUE);
+			addOriginSeed(valueNode(parameter), ORIGIN_TOP);
 		}
 		const cfg = buildCoreControlFlow(fn, registry);
+		controlFlow.set(fn.functionIndex, cfg);
 		for (const block of fn.blocks) {
 			const incoming = cfg.predecessors[block.id] ?? [];
 			for (const [index, parameter] of block.parameters.entries()) {
 				if (parameter.role === "exception" || block.id === fn.entry) {
 					addSeed(valueNode(parameter.value), CORE_CALLEE_TARGETS_OPAQUE);
+					addOriginSeed(valueNode(parameter.value), ORIGIN_TOP);
 					continue;
 				}
 				for (const edge of incoming) {
@@ -423,6 +951,7 @@ export function analyzeCoreCalleeTargets(
 							: edge.arguments[index];
 					if (argument === undefined) {
 						addSeed(valueNode(parameter.value), CORE_CALLEE_TARGETS_OPAQUE);
+						addOriginSeed(valueNode(parameter.value), ORIGIN_TOP);
 						continue;
 					}
 					addEdge(valueNode(argument), valueNode(parameter.value));
@@ -441,11 +970,12 @@ export function analyzeCoreCalleeTargets(
 								? CORE_CALLEE_TARGETS_OPAQUE
 								: coreCalleeTargetsFunction(target),
 						);
+						addOriginSeed(valueNode(result), ORIGIN_TOP);
 						continue;
 					}
-					// The uninitialized sentinel is not a callable: reading a slot that
-					// still holds it throws before any call can observe it, so it
-					// contributes nothing to the slot's target set.
+					// The uninitialized sentinel is neither a callable nor an allocation:
+					// reading a slot that still holds it throws before any call or property
+					// access can observe it, so it contributes nothing to either component.
 					case "createEmpty":
 						continue;
 					case "move":
@@ -491,20 +1021,64 @@ export function analyzeCoreCalleeTargets(
 						// operand a control transfer enters and whether the result it hands
 						// back is related to what the callee returned at all.
 						const transfer = registry.get(instruction.opcode)?.callTransfer;
-						if (transfer === undefined || transfer.result === "unmodeled") break;
-						const callee = instruction.inputs[transfer.calleeOperand];
-						if (callee === undefined || result === undefined) break;
-						addCallSite(
-							valueNode(callee),
-							valueNode(result),
-							transfer.result === "construct-completion",
-						);
-						continue;
+						if (transfer !== undefined && transfer.result !== "unmodeled") {
+							const callee = instruction.inputs[transfer.calleeOperand];
+							if (callee !== undefined && result !== undefined) {
+								addCallSite(
+									valueNode(callee),
+									valueNode(result),
+									transfer.result === "construct-completion",
+								);
+								// A callee can hand back any object, including one this graph
+								// allocated and lost track of, so a call result names no
+								// allocation.
+								addOriginSeed(valueNode(result), ORIGIN_TOP);
+								continue;
+							}
+							break;
+						}
+						const allocation = registry.get(instruction.opcode)?.allocation;
+						if (allocation !== undefined && result !== undefined) {
+							const layout = namedSlotLayout(instruction, allocation, cellForString);
+							if (
+								layout !== undefined &&
+								allocations.length < CORE_TRACKED_ALLOCATION_CAP
+							) {
+								const index = allocations.length;
+								allocations.push({
+									functionIndex: fn.functionIndex,
+									instruction: instruction.id,
+									keys: layout.keys,
+									initialValues: layout.values.map(valueNode),
+									owned: new Set(layout.keys),
+								});
+								// A plain object is not a callable this analysis can name, so its
+								// target component stays open exactly as any other producer's.
+								addSeed(valueNode(result), CORE_CALLEE_TARGETS_OPAQUE);
+								addOriginSeed(valueNode(result), index + 1);
+								continue;
+							}
+						}
+						// A read of one named own data slot may become an edge from that cell
+						// once containment is known, so its opaque seed waits for the answer.
+						const roles = operandRoles(instruction, registry, keyCell(instruction));
+						const readBase = ownSlotReadBase(instruction, roles);
+						if (readBase !== undefined && result !== undefined) {
+							deferredReads.push({
+								base: valueNode(readBase.base),
+								key: readBase.key,
+								result: valueNode(result),
+							});
+							addOriginSeed(valueNode(result), ORIGIN_TOP);
+							continue;
+						}
+						break;
 					}
 				}
 				// A producer this analysis does not model degrades only its own results.
 				for (const output of instruction.outputs) {
 					addSeed(valueNode(output), CORE_CALLEE_TARGETS_OPAQUE);
+					addOriginSeed(valueNode(output), ORIGIN_TOP);
 				}
 			}
 			// Every ordinary return contributes to the one cell a caller reads. A
@@ -517,26 +1091,105 @@ export function analyzeCoreCalleeTargets(
 		}
 	}
 
-	if (opacity.global) {
+	if (census.global) {
 		for (const node of globalNodes.values()) addSeed(node, CORE_CALLEE_TARGETS_OPAQUE);
 	}
-	if (opacity.captured) {
+	if (census.captured) {
 		for (const node of capturedNodes.values()) {
 			addSeed(node, CORE_CALLEE_TARGETS_OPAQUE);
 		}
 	}
-	for (const slot of opacity.opaqueGlobalSlots) {
-		addSeed(globalNode(slot), CORE_CALLEE_TARGETS_OPAQUE);
+	// A realm installer can populate another realm's global-slot array outside
+	// this graph. Function indices remain useful guarded candidates, but no global
+	// cell is a closed identity or a carrier of a contained allocation while realm
+	// creation is enabled.
+	if (program.compilation?.facts.world.realms === true) {
+		for (const node of globalNodes.values()) {
+			addSeed(node, CORE_CALLEE_TARGETS_OPAQUE);
+			addOriginSeed(node, ORIGIN_TOP);
+		}
 	}
-	for (const [owner, index] of opacity.opaqueCapturedSlots.values()) {
+	// A family writer that does not preserve the values of the cells it covers can
+	// replace any of them with something this graph never named, so no cell in that
+	// family can carry an allocation identity.
+	if (census.globalOverwrite) {
+		for (const node of globalNodes.values()) addOriginSeed(node, ORIGIN_TOP);
+	}
+	if (census.capturedOverwrite) {
+		for (const node of capturedNodes.values()) addOriginSeed(node, ORIGIN_TOP);
+	}
+	for (const slot of census.opaqueGlobalSlots) {
+		addSeed(globalNode(slot), CORE_CALLEE_TARGETS_OPAQUE);
+		addOriginSeed(globalNode(slot), ORIGIN_TOP);
+	}
+	for (const [owner, index] of census.opaqueCapturedSlots.values()) {
 		addSeed(capturedNode(owner, index), CORE_CALLEE_TARGETS_OPAQUE);
+		addOriginSeed(capturedNode(owner, index), ORIGIN_TOP);
 	}
 	// The host installs its exports into these slots, so their writers are not in
 	// this graph at all.
 	for (const candidate of program.compilation?.hostInstallCandidates ?? []) {
 		for (const { slot } of candidate.exports) {
 			addSeed(globalNode(slot), CORE_CALLEE_TARGETS_OPAQUE);
+			addOriginSeed(globalNode(slot), ORIGIN_TOP);
 		}
+	}
+
+	const origins =
+		allocations.length === 0
+			? undefined
+			: solveAllocationOrigins(nodeCount, originSeeds, dependents);
+	const contained =
+		origins === undefined
+			? undefined
+			: containAllocations({
+					program,
+					registry,
+					allocations,
+					origins,
+					valueBase,
+					controlFlow,
+					cellForString,
+					functionDefinitions,
+					operandKeyResolver,
+					slotCellNode,
+					stableSlotCell,
+				});
+	const ownCellNode = (allocation: number, key: number): number => {
+		const cacheKey = `${allocation}\0${key}`;
+		let node = ownCellNodes.get(cacheKey);
+		if (node === undefined) {
+			node = nodeCount++;
+			ownCellNodes.set(cacheKey, node);
+		}
+		return node;
+	};
+	let containedAllocations = 0;
+	if (contained !== undefined && origins !== undefined) {
+		for (const [index, allocation] of allocations.entries()) {
+			if (contained.escaped[index] === 1) continue;
+			containedAllocations += 1;
+			for (const [position, key] of allocation.keys.entries()) {
+				addEdge(allocation.initialValues[position]!, ownCellNode(index, key));
+			}
+		}
+		for (const write of contained.writes) {
+			if (contained.escaped[write.allocation] === 1) continue;
+			addEdge(write.value, ownCellNode(write.allocation, write.key));
+		}
+	}
+	for (const read of deferredReads) {
+		const allocation = origins === undefined ? ORIGIN_TOP : origins[read.base]!;
+		const tracked = allocation > 0 ? allocations[allocation - 1] : undefined;
+		if (
+			tracked !== undefined &&
+			contained?.escaped[allocation - 1] === 0 &&
+			tracked.owned.has(read.key)
+		) {
+			addEdge(ownCellNode(allocation - 1, read.key), read.result);
+			continue;
+		}
+		addSeed(read.result, CORE_CALLEE_TARGETS_OPAQUE);
 	}
 
 	const state = new Array<CoreCalleeTargets>(nodeCount).fill(CORE_CALLEE_TARGETS_BOTTOM);
@@ -639,8 +1292,224 @@ export function analyzeCoreCalleeTargets(
 			const node = returnNodes.get(functionIndex);
 			return node === undefined ? CORE_CALLEE_TARGETS_BOTTOM : state[node]!;
 		},
-		statistics: { nodes: nodeCount, edges, propagations, callActivations },
+		statistics: {
+			nodes: nodeCount,
+			edges,
+			propagations,
+			callActivations,
+			trackedAllocations: allocations.length,
+			containedAllocations,
+			ownCellNodes: ownCellNodes.size,
+			singleAssignmentCells: stableCells.count,
+		},
 	};
+}
+
+/**
+ * The one base operand a property read names, when the instruction is exactly one
+ * read of one named own data slot. Anything else — a write, a shape edit, two
+ * accesses, an unresolvable key, more than one result — is not a read this
+ * analysis can replace with a cell edge.
+ */
+function ownSlotReadBase(
+	instruction: CoreInstruction,
+	roles: ReadonlyMap<number, OperandRole>,
+): { readonly base: CoreValueId; readonly key: number } | undefined {
+	if (instruction.outputs.length !== 1) return undefined;
+	let found: { readonly base: CoreValueId; readonly key: number } | undefined;
+	for (const [operand, role] of roles) {
+		if (role.kind !== "own-slot") continue;
+		if (role.mode !== "read" || found !== undefined) return undefined;
+		const base = instruction.inputs[operand];
+		if (base === undefined) return undefined;
+		found = { base, key: role.key };
+	}
+	return found;
+}
+
+/**
+ * Which single allocation each node can hold, over the same graph and the same
+ * monotone worklist as the target component.
+ *
+ * The lattice is three points high — nothing observed, one allocation, or an
+ * unattributable producer — so this costs one pass of the same shape as the
+ * target solve. Exactly one allocation is a must-alias answer, because every
+ * producer this analysis does not model seeds the top.
+ */
+function solveAllocationOrigins(
+	nodeCount: number,
+	originSeeds: ReadonlyMap<number, number>,
+	dependents: ReadonlyMap<number, ReadonlyArray<number>>,
+): Int32Array {
+	const origins = new Int32Array(nodeCount);
+	const queued = new Uint8Array(nodeCount);
+	const queue: Array<number> = [];
+	const raise = (node: number, origin: number): void => {
+		if (origin === ORIGIN_BOTTOM) return;
+		const current = origins[node]!;
+		const next =
+			current === ORIGIN_BOTTOM ? origin : current === origin ? current : ORIGIN_TOP;
+		if (next === current) return;
+		origins[node] = next;
+		if (queued[node] === 0) {
+			queued[node] = 1;
+			queue.push(node);
+		}
+	};
+	for (const [node, origin] of originSeeds) raise(node, origin);
+	while (queue.length > 0) {
+		const node = queue.pop()!;
+		queued[node] = 0;
+		const origin = origins[node]!;
+		for (const dependent of dependents.get(node) ?? []) raise(dependent, origin);
+	}
+	return origins;
+}
+
+interface OwnCellWrite {
+	readonly allocation: number;
+	readonly key: number;
+	readonly value: number;
+}
+
+interface ContainmentInput {
+	readonly program: CoreProgram;
+	readonly registry: CoreOpcodeRegistry;
+	readonly allocations: ReadonlyArray<TrackedAllocation>;
+	readonly origins: Int32Array;
+	readonly valueBase: ReadonlyMap<number, number>;
+	readonly controlFlow: ReadonlyMap<number, ReturnType<typeof buildCoreControlFlow>>;
+	readonly cellForString: (index: number) => CoreOwnCell | undefined;
+	readonly functionDefinitions: (
+		fn: CoreProgram["functions"][number],
+	) => Map<CoreValueId, CoreInstruction>;
+	readonly operandKeyResolver: (
+		definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
+	) => (value: CoreValueId) => CoreOwnCell | undefined;
+	readonly slotCellNode: (cell: SlotCell) => number;
+	readonly stableSlotCell: (cell: SlotCell) => boolean;
+}
+
+/**
+ * Decide, for every tracked allocation, whether this graph contains every
+ * operation that can reach it, and collect the writes to its own cells.
+ *
+ * An allocation stays contained only while every use of a value that must hold it
+ * is one of: an inspection that retains nothing, a read or write of one of its own
+ * declared data slots, a store into a compiler-owned cell whose whole traffic this
+ * graph contains, or a control-flow edge whose destination still holds only this
+ * allocation. Returning it, throwing it, handing it to a call — as an argument or
+ * as the receiver a method call passes — editing its shape, replacing its
+ * prototype, or naming a key outside its layout all make it reachable from code
+ * this graph does not enumerate, so its cells stop being knowable.
+ *
+ * That is what excludes the whole surprise surface at once: a Proxy or an accessor
+ * would have to be installed through an escaping reference or a shape edit, a
+ * prototype lookup cannot happen because every declared key of a named-slot
+ * literal is an own data property, and reflection needs a call.
+ */
+function containAllocations(input: ContainmentInput): {
+	readonly escaped: Uint8Array;
+	readonly writes: ReadonlyArray<OwnCellWrite>;
+} {
+	const { allocations, origins, registry } = input;
+	const escaped = new Uint8Array(allocations.length);
+	const writes: Array<OwnCellWrite> = [];
+	const escapeNode = (node: number): void => {
+		const origin = origins[node]!;
+		if (origin > 0) escaped[origin - 1] = 1;
+	};
+	for (const fn of input.program.functions) {
+		const base = input.valueBase.get(fn.functionIndex)!;
+		const valueNode = (value: CoreValueId): number => base + value;
+		const definitions = input.functionDefinitions(fn);
+		const cellForOperand = input.operandKeyResolver(definitions);
+		const cfg = input.controlFlow.get(fn.functionIndex)!;
+		for (const block of fn.blocks) {
+			// A handler argument is live on a path this sweep does not model, so it
+			// leaves the allocation reachable from a frame the graph does not follow.
+			for (const argument of block.handler?.arguments ?? []) {
+				escapeNode(valueNode(argument));
+			}
+			for (const edge of cfg.predecessors[block.id] ?? []) {
+				if (edge.kind === "exceptional") continue;
+				for (const [position, argument] of edge.arguments.entries()) {
+					const node = valueNode(argument);
+					const parameter = block.parameters[position];
+					// A join that does not collapse to this allocation loses its identity:
+					// later uses of the parameter are no longer attributable.
+					if (
+						parameter === undefined ||
+						origins[valueNode(parameter.value)] !== origins[node]
+					) {
+						escapeNode(node);
+					}
+				}
+			}
+			for (const instruction of block.instructions) {
+				const roles = operandRoles(
+					instruction,
+					registry,
+					(access: CoreOpcodeAccess): CoreOwnCell | undefined =>
+						declaredAccessKeyCell(
+							instruction,
+							access,
+							input.cellForString,
+							cellForOperand,
+						),
+				);
+				for (const [operand, value] of instruction.inputs.entries()) {
+					const node = valueNode(value);
+					const origin = origins[node]!;
+					if (origin <= 0) continue;
+					const allocation = allocations[origin - 1]!;
+					const role = roles.get(operand) ?? OPERAND_ESCAPE;
+					switch (role.kind) {
+						case "observed":
+							break;
+						case "own-slot": {
+							if (!allocation.owned.has(role.key)) {
+								escaped[origin - 1] = 1;
+								break;
+							}
+							if (role.mode !== "write") break;
+							const stored =
+								role.valueOperand === undefined
+									? undefined
+									: instruction.inputs[role.valueOperand];
+							if (stored === undefined) escaped[origin - 1] = 1;
+							else {
+								writes.push({
+									allocation: origin - 1,
+									key: role.key,
+									value: valueNode(stored),
+								});
+							}
+							break;
+						}
+						case "cell-store":
+							if (
+								!input.stableSlotCell(role.cell) ||
+								origins[input.slotCellNode(role.cell)] !== origin
+							) {
+								escaped[origin - 1] = 1;
+							}
+							break;
+						case "escape":
+							escaped[origin - 1] = 1;
+							break;
+					}
+				}
+			}
+			const terminator = block.terminator;
+			// A branch, switch, or guard condition tests the reference without
+			// retaining it, so only a completion value leaves here.
+			if (terminator.kind === "return" || terminator.kind === "throw") {
+				escapeNode(valueNode(terminator.value));
+			}
+		}
+	}
+	return { escaped, writes };
 }
 
 /**

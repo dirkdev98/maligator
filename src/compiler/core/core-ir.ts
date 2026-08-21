@@ -703,6 +703,12 @@ export interface CoreProgram {
 	readonly compilation?: CoreCompilationMetadata;
 }
 
+/** A captured cell: its function index or negative per-iteration scope id, plus slot. */
+export interface CoreCapturedSlotRef {
+	readonly owner: number;
+	readonly index: number;
+}
+
 export interface CoreHostInstallCandidate {
 	readonly installer: string;
 	readonly exports: ReadonlyArray<{ readonly name: string; readonly slot: number }>;
@@ -716,6 +722,21 @@ export interface CoreCompilationMetadata {
 	readonly cjsModuleFunctionIndices: ReadonlyArray<number>;
 	/** Host exports with assigned global slots; the backend drops unread slots. */
 	readonly hostInstallCandidates: ReadonlyArray<CoreHostInstallCandidate>;
+	/**
+	 * Compiler-owned cells the frontend declared single-assignment: the binding
+	 * behind the cell is initialized once and can never be reassigned, so every
+	 * read observes a value written by the one store the frontend emitted for it,
+	 * or the uninitialized sentinel. Import bindings alias their exporter's
+	 * binding, so an imported name contributes the exporter's cell rather than a
+	 * copy — a live alias stays one cell.
+	 *
+	 * A declaration alone proves nothing: a consumer must still check the graph
+	 * for the writers and readers the declaration cannot see (host installs,
+	 * family-level writers, namespace publication). `coreSingleAssignmentCells`
+	 * is that check.
+	 */
+	readonly singleAssignmentGlobalSlots: ReadonlyArray<number>;
+	readonly singleAssignmentCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
 	/** Slot-free installers retained by reachable global surfaces such as process. */
 	readonly retainedHostInstallers: ReadonlyArray<string>;
 }
