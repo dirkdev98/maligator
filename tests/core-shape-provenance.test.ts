@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import {
+	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_SHAPE_ORIGIN_CAP,
 	analyzeCoreShapeProvenance,
+	coreKnownOwnSlotFromAttribute,
+	selectCoreKnownOwnSlots,
 } from "../src/compiler/core/core-ir-shape-provenance.ts";
-import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
+import { CoreFunctionBuilder, coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreFunction,
@@ -14,6 +19,7 @@ import type {
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
 
 const STRINGS: ReadonlyArray<ReadonlyArray<number>> = [
 	[],
@@ -95,6 +101,160 @@ function instructions(fn: CoreFunction, opcode: string): ReadonlyArray<CoreInstr
 	return fn.blocks
 		.flatMap(({ instructions: blockInstructions }) => blockInstructions)
 		.filter((instruction) => instruction.opcode === opcode);
+}
+
+function replaceInstruction(
+	program: CoreProgram,
+	functionIndex: number,
+	instructionId: number,
+	replace: (instruction: CoreInstruction) => CoreInstruction,
+): CoreProgram {
+	return {
+		...program,
+		functions: program.functions.map((fn) =>
+			fn.functionIndex !== functionIndex
+				? fn
+				: {
+						...fn,
+						blocks: fn.blocks.map((block) => ({
+							...block,
+							instructions: block.instructions.map((instruction) =>
+								instruction.id === instructionId ? replace(instruction) : instruction,
+							),
+						})),
+					},
+		),
+	};
+}
+
+function selectKnownOwnSlots(program: CoreProgram) {
+	return selectCoreKnownOwnSlots(program, analyzeCoreShapeProvenance(program));
+}
+
+function localLoopProgram(): {
+	readonly program: CoreProgram;
+	readonly load: CoreInstruction;
+	readonly loopBlock: CoreBlockId;
+} {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const loop = builder.createBlock();
+	const latch = builder.createBlock();
+	const exit = builder.createBlock();
+	const [initial] = builder.appendInstruction(entry, "createUndefined", []);
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	builder.setTerminator(entry, {
+		kind: "jump",
+		edge: { block: loop, arguments: [] },
+	});
+	const [loaded] = builder.appendInstruction(loop, "loadPropertyStatic", [object!], {
+		attributes: { stringIndex: 1 },
+	});
+	const [condition] = builder.appendInstruction(loop, "createBoolean", [], {
+		attributes: { value: false },
+	});
+	builder.setTerminator(loop, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: latch, arguments: [] },
+		alternate: { block: exit, arguments: [] },
+	});
+	builder.setTerminator(latch, {
+		kind: "jump",
+		edge: { block: loop, arguments: [] },
+	});
+	builder.setTerminator(exit, { kind: "return", value: loaded! });
+	const fn = builder.finish(entry);
+	return {
+		program: coreProgram([fn]),
+		load: instructions(fn, "loadPropertyStatic")[0]!,
+		loopBlock: loop,
+	};
+}
+
+function crossCallProgram(): {
+	readonly program: CoreProgram;
+	readonly load: CoreInstruction;
+} {
+	const producer = shapedReturn(0, 1);
+	const caller = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+	const entry = caller.createBlock();
+	const [thisValue] = caller.appendInstruction(entry, "createUndefined", []);
+	const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: 0 },
+	});
+	const [object] = caller.appendInstruction(entry, "call", [callee!, thisValue!]);
+	const [loaded] = caller.appendInstruction(entry, "loadPropertyStatic", [object!], {
+		attributes: { stringIndex: 1 },
+	});
+	caller.setTerminator(entry, { kind: "return", value: loaded! });
+	const callerFunction = caller.finish(entry);
+	return {
+		program: coreProgram([producer.fn, callerFunction]),
+		load: instructions(callerFunction, "loadPropertyStatic")[0]!,
+	};
+}
+
+function multiOriginLoopProgram(): {
+	readonly program: CoreProgram;
+	readonly load: CoreInstruction;
+} {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const left = builder.createBlock();
+	const right = builder.createBlock();
+	const loop = builder.createBlock([{}]);
+	const latch = builder.createBlock();
+	const exit = builder.createBlock();
+	const [initial] = builder.appendInstruction(entry, "createUndefined", []);
+	const [first] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	const [second] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	const [choose] = builder.appendInstruction(entry, "createBoolean", [], {
+		attributes: { value: true },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: choose!,
+		consequent: { block: left, arguments: [] },
+		alternate: { block: right, arguments: [] },
+	});
+	builder.setTerminator(left, {
+		kind: "jump",
+		edge: { block: loop, arguments: [first!] },
+	});
+	builder.setTerminator(right, {
+		kind: "jump",
+		edge: { block: loop, arguments: [second!] },
+	});
+	const receiver = blockParameter(builder, loop);
+	const [loaded] = builder.appendInstruction(loop, "loadPropertyStatic", [receiver], {
+		attributes: { stringIndex: 1 },
+	});
+	const [repeat] = builder.appendInstruction(loop, "createBoolean", [], {
+		attributes: { value: false },
+	});
+	builder.setTerminator(loop, {
+		kind: "branch",
+		condition: repeat!,
+		consequent: { block: latch, arguments: [] },
+		alternate: { block: exit, arguments: [] },
+	});
+	builder.setTerminator(latch, {
+		kind: "jump",
+		edge: { block: loop, arguments: [receiver] },
+	});
+	builder.setTerminator(exit, { kind: "return", value: loaded! });
+	const fn = builder.finish(entry);
+	return {
+		program: coreProgram([fn]),
+		load: instructions(fn, "loadPropertyStatic")[0]!,
+	};
 }
 
 describe("Core shaped-object provenance", () => {
@@ -184,7 +344,10 @@ describe("Core shaped-object provenance", () => {
 		const [identityMove] = identity.appendInstruction(identityEntry, "move", [
 			identityParameter,
 		]);
-		identity.setTerminator(identityEntry, { kind: "return", value: identityMove! });
+		identity.setTerminator(identityEntry, {
+			kind: "return",
+			value: identityMove!,
+		});
 
 		const consumer = new CoreFunctionBuilder(2, coreOpcodeRegistry, {
 			parameterCount: 1,
@@ -201,7 +364,10 @@ describe("Core shaped-object provenance", () => {
 		consumer.appendInstruction(consumerEntry, "loadPropertyStatic", [thisValue!], {
 			attributes: { stringIndex: 1 },
 		});
-		consumer.setTerminator(consumerEntry, { kind: "return", value: parameterValue! });
+		consumer.setTerminator(consumerEntry, {
+			kind: "return",
+			value: parameterValue!,
+		});
 
 		const caller = new CoreFunctionBuilder(3, coreOpcodeRegistry);
 		const callerEntry = caller.createBlock();
@@ -369,12 +535,17 @@ describe("Core shaped-object provenance", () => {
 			]),
 		);
 		for (const result of results) {
-			expect(analysis.candidates(3, result)).toEqual({ origins: [], opaque: true });
+			expect(analysis.candidates(3, result)).toEqual({
+				origins: [],
+				opaque: true,
+			});
 		}
 	});
 
 	it("keeps entry, exceptional, memory-cell, and template producers open", () => {
-		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
 		const entry = builder.createBlock([{}]);
 		const handler = builder.createBlock([{ role: "exception" }, {}]);
 		const parameter = blockParameter(builder, entry);
@@ -405,7 +576,10 @@ describe("Core shaped-object provenance", () => {
 		builder.setTerminator(handler, { kind: "return", value: handlerArgument });
 		const analysis = analyzeCoreShapeProvenance(coreProgram([builder.finish(entry)]));
 		for (const value of [parameter, handlerArgument, loaded!, template!]) {
-			expect(analysis.candidates(0, value)).toEqual({ origins: [], opaque: true });
+			expect(analysis.candidates(0, value)).toEqual({
+				origins: [],
+				opaque: true,
+			});
 		}
 		expect(analysis.candidates(0, object!).opaque).toBe(false);
 	});
@@ -454,5 +628,261 @@ describe("Core shaped-object provenance", () => {
 			}
 		}
 		expect(candidateLoads).toBeGreaterThanOrEqual(9);
+	});
+});
+
+describe("Core known own-slot selection", () => {
+	it("selects a local loop load and is identity-idempotent", () => {
+		const built = localLoopProgram();
+		const first = selectKnownOwnSlots(built.program);
+		expect(first.changed).toBe(true);
+		const selectedLoad = instructions(
+			first.program.functions[0]!,
+			"loadPropertyStatic",
+		)[0]!;
+		const claim = coreKnownOwnSlotFromAttribute(
+			selectedLoad.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+		);
+		expect(claim).toMatchObject({ shapeFunctionIndex: 0, slot: 0 });
+		expect(
+			instructions(first.program.functions[0]!, "createObjectShaped").some(
+				({ id }) => id === claim?.shapeInstruction,
+			),
+		).toBe(true);
+
+		const second = selectKnownOwnSlots(first.program);
+		expect(second.changed).toBe(false);
+		expect(second.program).toBe(first.program);
+		expect(instructions(second.program.functions[0]!, "loadPropertyStatic")[0]).toBe(
+			selectedLoad,
+		);
+	});
+
+	it("selects a cross-call origin without requiring a local loop", () => {
+		const built = crossCallProgram();
+		const selected = selectKnownOwnSlots(built.program);
+		const load = instructions(selected.program.functions[1]!, "loadPropertyStatic")[0]!;
+		expect(
+			coreKnownOwnSlotFromAttribute(load.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]),
+		).toMatchObject({ shapeFunctionIndex: 0, slot: 0 });
+	});
+
+	it("declines a non-loop local load", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [initial] = builder.appendInstruction(entry, "createUndefined", []);
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const program = coreProgram([builder.finish(entry)]);
+		const selected = selectKnownOwnSlots(program);
+		expect(selected.changed).toBe(false);
+		expect(selected.program).toBe(program);
+		expect(
+			CORE_KNOWN_OWN_SLOT_ATTRIBUTE in
+				instructions(program.functions[0]!, "loadPropertyStatic")[0]!.attributes,
+		).toBe(false);
+	});
+
+	it("retracts a stale candidate for multiple origins", () => {
+		const built = multiOriginLoopProgram();
+		const origins = analyzeCoreShapeProvenance(built.program).origins;
+		expect(origins).toHaveLength(2);
+		const stale = replaceInstruction(built.program, 0, built.load.id, (instruction) => ({
+			...instruction,
+			attributes: {
+				...instruction.attributes,
+				[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: {
+					shapeFunctionIndex: 0,
+					shapeInstruction: origins[0]!.instruction,
+					slot: 0,
+				},
+			},
+		}));
+		const selected = selectKnownOwnSlots(stale);
+		expect(selected.changed).toBe(true);
+		expect(
+			CORE_KNOWN_OWN_SLOT_ATTRIBUTE in
+				instructions(selected.program.functions[0]!, "loadPropertyStatic")[0]!.attributes,
+		).toBe(false);
+	});
+
+	it("retracts a candidate when a region claims the load", () => {
+		const built = localLoopProgram();
+		const selected = selectKnownOwnSlots(built.program).program;
+		const fn = selected.functions[0]!;
+		const claimed: CoreFunction = {
+			...fn,
+			regions: [
+				{
+					kind: "test-known-own-slot-conflict",
+					anchors: [built.load.id],
+					claimedInstructions: [built.load.id],
+					ordinaryBlocks: [built.loopBlock],
+					exceptionalBlocks: [],
+					data: {},
+				},
+			],
+		};
+		const regionProgram: CoreProgram = {
+			...selected,
+			functions: [claimed],
+		};
+		expect(() => verifyCoreProgram(regionProgram, coreOpcodeRegistry)).toThrow(
+			"claimed by both a Core region and a known own slot",
+		);
+		const retracted = selectKnownOwnSlots(regionProgram);
+		expect(retracted.changed).toBe(true);
+		expect(
+			CORE_KNOWN_OWN_SLOT_ATTRIBUTE in
+				instructions(retracted.program.functions[0]!, "loadPropertyStatic")[0]!
+					.attributes,
+		).toBe(false);
+	});
+
+	it("rejects malformed and structurally invalid certificates", () => {
+		const built = crossCallProgram();
+		const selected = selectKnownOwnSlots(built.program).program;
+		expect(() => verifyCoreProgram(selected, coreOpcodeRegistry)).not.toThrow();
+		const load = instructions(selected.functions[1]!, "loadPropertyStatic")[0]!;
+		const valid = coreKnownOwnSlotFromAttribute(
+			load.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+		)!;
+		for (const value of [
+			undefined,
+			{ ...valid, slot: -0 },
+			{ ...valid, extra: 1 },
+		] as const) {
+			const malformed = replaceInstruction(selected, 1, load.id, (instruction) => ({
+				...instruction,
+				attributes: {
+					...instruction.attributes,
+					[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: value,
+				},
+			}));
+			expect(() => verifyCoreProgram(malformed, coreOpcodeRegistry)).toThrow(
+				"invalid known own slot",
+			);
+		}
+
+		for (const value of [
+			{ ...valid, shapeFunctionIndex: 99 },
+			{ ...valid, shapeInstruction: coreInstructionId(99_999) },
+			{ ...valid, slot: 1 },
+		] as const) {
+			const malformed = replaceInstruction(selected, 1, load.id, (instruction) => ({
+				...instruction,
+				attributes: {
+					...instruction.attributes,
+					[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: value,
+				},
+			}));
+			expect(() => verifyCoreProgram(malformed, coreOpcodeRegistry)).toThrow(
+				/invalid shaped-object origin|different static key/,
+			);
+		}
+
+		const nonLoad = selected.functions[1]!.blocks.flatMap(
+			({ instructions: blockInstructions }) => blockInstructions,
+		).find(({ opcode }) => opcode === "createUndefined")!;
+		const misplaced = replaceInstruction(selected, 1, nonLoad.id, (instruction) => ({
+			...instruction,
+			attributes: {
+				...instruction.attributes,
+				[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: {
+					shapeFunctionIndex: valid.shapeFunctionIndex,
+					shapeInstruction: valid.shapeInstruction,
+					slot: valid.slot,
+				},
+			},
+		}));
+		expect(() => verifyCoreProgram(misplaced, coreOpcodeRegistry)).toThrow(
+			"known own slot on createUndefined",
+		);
+	});
+
+	it("rejects certificates backed by malformed shaped-object origins", () => {
+		const selected = selectKnownOwnSlots(crossCallProgram().program).program;
+		const origin = instructions(selected.functions[0]!, "createObjectShaped")[0]!;
+		const duplicateStringIndex = selected.stringConstants.length;
+		const duplicateKeyProgram = replaceInstruction(
+			{
+				...selected,
+				stringConstants: [...selected.stringConstants, [...selected.stringConstants[1]!]],
+			},
+			0,
+			origin.id,
+			(instruction) => ({
+				...instruction,
+				inputs: [instruction.inputs[0]!, instruction.inputs[0]!],
+				attributes: {
+					...instruction.attributes,
+					keyStringIndices: [1, duplicateStringIndex],
+				},
+			}),
+		);
+		expect(() => verifyCoreProgram(duplicateKeyProgram, coreOpcodeRegistry)).toThrow(
+			"invalid shaped-object origin",
+		);
+
+		const mismatchedArityProgram = replaceInstruction(
+			selected,
+			0,
+			origin.id,
+			(instruction) => ({
+				...instruction,
+				attributes: {
+					...instruction.attributes,
+					keyStringIndices: [1, 2],
+				},
+			}),
+		);
+		expect(() => verifyCoreProgram(mismatchedArityProgram, coreOpcodeRegistry)).toThrow(
+			"invalid shaped-object origin",
+		);
+	});
+
+	it("carries the certificate unchanged to the target load", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function read(n, touch) {
+					const object = { x: n };
+					let sum = 0;
+					for (let index = 0; index < n; index++) {
+						touch(object);
+						sum += object.x;
+					}
+					return sum;
+				}
+				read(3, () => {});`,
+				"known-own-slot-target.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining", "interprocedural"]),
+		}).program;
+		const selected = selectKnownOwnSlots(optimized).program;
+		const coreLoad = selected.functions
+			.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
+			.find((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)!;
+		expect(coreLoad).toBeDefined();
+		const target = lowerCoreProgramToTarget(selected);
+		const targetLoad = target.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions: blockInstructions }) => blockInstructions)
+			.find(
+				(instruction) =>
+					instruction.type === "loadPropertyStatic" &&
+					instruction.knownOwnSlot !== undefined,
+			);
+		expect(targetLoad?.type).toBe("loadPropertyStatic");
+		if (targetLoad?.type !== "loadPropertyStatic") return;
+		expect(targetLoad.knownOwnSlot).toEqual(
+			coreLoad.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+		);
 	});
 });

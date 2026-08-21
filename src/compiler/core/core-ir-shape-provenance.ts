@@ -22,7 +22,10 @@ import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { coreOwnCellResolver } from "./core-ir-provenance.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type {
+	CoreAttributeValue,
+	CoreBlock,
 	CoreFunction,
 	CoreInstruction,
 	CoreInstructionId,
@@ -33,6 +36,58 @@ import type {
 
 /** Guard/code-size bound shared by every prospective shape consumer. */
 export const CORE_SHAPE_ORIGIN_CAP = 4;
+
+/** Target-visible advisory slot candidate owned by the Core shape selector. */
+export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
+
+export interface CoreKnownOwnSlot {
+	readonly shapeFunctionIndex: number;
+	readonly shapeInstruction: CoreInstructionId;
+	readonly slot: number;
+}
+
+function isNonnegativeSafeInteger(value: unknown): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isSafeInteger(value) &&
+		value >= 0 &&
+		!Object.is(value, -0)
+	);
+}
+
+/** Parse the target-visible advisory certificate without trusting attribute data. */
+export function coreKnownOwnSlotFromAttribute(
+	value: unknown,
+): CoreKnownOwnSlot | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		Object.keys(record).length !== 3 ||
+		!isNonnegativeSafeInteger(record.shapeFunctionIndex) ||
+		!isNonnegativeSafeInteger(record.shapeInstruction) ||
+		!isNonnegativeSafeInteger(record.slot)
+	) {
+		return undefined;
+	}
+	return Object.freeze({
+		shapeFunctionIndex: record.shapeFunctionIndex,
+		shapeInstruction: coreInstructionId(record.shapeInstruction),
+		slot: record.slot,
+	});
+}
+
+function knownOwnSlotsEqual(
+	left: CoreKnownOwnSlot | undefined,
+	right: CoreKnownOwnSlot | undefined,
+): boolean {
+	return (
+		left?.shapeFunctionIndex === right?.shapeFunctionIndex &&
+		left?.shapeInstruction === right?.shapeInstruction &&
+		left?.slot === right?.slot
+	);
+}
 
 const PROTO_LITERAL_KEY: ReadonlyArray<number> = Object.freeze([
 	0x5f, 0x5f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x5f, 0x5f,
@@ -92,7 +147,8 @@ export interface CoreShapeProvenanceAnalysis {
 	readonly statistics: CoreShapeProvenanceStatistics;
 }
 
-function shapedObjectKeys(
+/** Validate one shaped-literal origin and return its runtime slot-key order. */
+export function coreShapedObjectKeys(
 	program: CoreProgram,
 	instruction: CoreInstruction,
 	cellForString: ReturnType<typeof coreOwnCellResolver>,
@@ -184,7 +240,7 @@ export function analyzeCoreShapeProvenance(
 	for (const fn of program.functions) {
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				const keys = shapedObjectKeys(program, instruction, cellForString);
+				const keys = coreShapedObjectKeys(program, instruction, cellForString);
 				if (keys !== undefined) {
 					const origin = origins.length;
 					origins.push(
@@ -409,5 +465,97 @@ export function analyzeCoreShapeProvenance(
 			propagations,
 			saturatedValues,
 		}),
+	};
+}
+
+export interface CoreKnownOwnSlotSelection {
+	readonly program: CoreProgram;
+	readonly changed: boolean;
+}
+
+/**
+ * Attach guarded own-slot candidates to profitable residual static loads.
+ *
+ * This pass owns and retracts the attribute. The load remains in Core unchanged
+ * as the exact fallback; the candidate says only which initial layout a target
+ * may cheaply test before executing that fallback.
+ */
+export function selectCoreKnownOwnSlots(
+	program: CoreProgram,
+	provenance: CoreShapeProvenanceAnalysis,
+	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+): CoreKnownOwnSlotSelection {
+	let changed = false;
+	const functions = program.functions.map((fn): CoreFunction => {
+		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
+		const cfg = buildCoreControlFlow(fn, registry);
+		const loopBlocks = new Set(
+			[...cfg.loops, ...cfg.irreducibleCycles].flatMap((loop) => [...loop.blocks]),
+		);
+		let functionChanged = false;
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			let blockChanged = false;
+			const instructions = block.instructions.map((instruction): CoreInstruction => {
+				let selected: CoreKnownOwnSlot | undefined;
+				if (
+					instruction.opcode === "loadPropertyStatic" &&
+					!claimed.has(instruction.id) &&
+					instruction.inputs.length === 1
+				) {
+					const stringIndex = instruction.attributes.stringIndex;
+					const receiver = instruction.inputs[0]!;
+					const candidates = provenance.candidates(fn.functionIndex, receiver);
+					if (typeof stringIndex === "number" && candidates.origins.length === 1) {
+						const origin = candidates.origins[0]!;
+						// Raw string-index identity is conservative: the array is also the
+						// runtime slot order, so an equivalent constant at another index simply
+						// declines until a later canonical-key selector generalizes this proof.
+						const slot = origin.keyStringIndices.indexOf(stringIndex);
+						if (
+							slot >= 0 &&
+							(origin.functionIndex !== fn.functionIndex || loopBlocks.has(block.id))
+						) {
+							selected = {
+								shapeFunctionIndex: origin.functionIndex,
+								shapeInstruction: origin.instruction,
+								slot,
+							};
+						}
+					}
+				}
+				const hasExisting = CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes;
+				const existing = coreKnownOwnSlotFromAttribute(
+					instruction.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+				);
+				if (
+					selected === undefined
+						? !hasExisting
+						: hasExisting && knownOwnSlotsEqual(existing, selected)
+				) {
+					return instruction;
+				}
+				const attributes: Record<string, CoreAttributeValue> = {
+					...instruction.attributes,
+				};
+				delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+				if (selected !== undefined) {
+					attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] = {
+						shapeFunctionIndex: selected.shapeFunctionIndex,
+						shapeInstruction: selected.shapeInstruction,
+						slot: selected.slot,
+					};
+				}
+				changed = true;
+				functionChanged = true;
+				blockChanged = true;
+				return { ...instruction, attributes };
+			});
+			return blockChanged ? { ...block, instructions } : block;
+		});
+		return functionChanged ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	});
+	return {
+		program: changed ? { ...program, functions } : program,
+		changed,
 	};
 }

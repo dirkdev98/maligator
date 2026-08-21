@@ -18,6 +18,13 @@ export type CompilerTypeofResult =
 	| "bigint"
 	| "function";
 
+/** Guarded initial shaped-object slot candidate retained by target lowering. */
+export interface CompilerKnownOwnSlot {
+	readonly shapeFunctionIndex: number;
+	readonly shapeInstruction: number;
+	readonly slot: number;
+}
+
 export type CompilerInstruction =
 	| {
 			/**
@@ -408,6 +415,7 @@ export type CompilerInstruction =
 			// [destination, object]
 			registers: [number, number];
 			stringIndex: number;
+			knownOwnSlot?: CompilerKnownOwnSlot;
 			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
 			 * primitive-String consumer, so native code may try the String brand first. */
 			primitiveStringLength?: true;

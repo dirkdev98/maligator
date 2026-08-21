@@ -13,6 +13,7 @@ import {
 } from "./core-ir-memory.ts";
 import {
 	CORE_OWN_DATA_CELL_FACT,
+	coreOwnCellResolver,
 	coreOwnCellsEqual,
 	coreProvenance,
 } from "./core-ir-provenance.ts";
@@ -25,6 +26,11 @@ import {
 	coreRegionValidityModel,
 } from "./core-ir-region-validity.ts";
 import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
+import {
+	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
+	coreKnownOwnSlotFromAttribute,
+	coreShapedObjectKeys,
+} from "./core-ir-shape-provenance.ts";
 import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
 	CORE_CALL_SUMMARY_ATTRIBUTE,
@@ -301,7 +307,10 @@ function verifyRegionPropertyPlacement(
 	instructionOutputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreValueId>>,
 	valueUses: ReadonlyMap<
 		CoreValueId,
-		ReadonlyArray<{ readonly instruction: CoreInstructionId; readonly position: number }>
+		ReadonlyArray<{
+			readonly instruction: CoreInstructionId;
+			readonly position: number;
+		}>
 	>,
 ): void {
 	const data = region.data as Readonly<Record<string, unknown>>;
@@ -657,7 +666,10 @@ function verifyCoreFunctionGraph(
 	const instructionOutputs = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
 	const valueUses = new Map<
 		CoreValueId,
-		Array<{ readonly instruction: CoreInstructionId; readonly position: number }>
+		Array<{
+			readonly instruction: CoreInstructionId;
+			readonly position: number;
+		}>
 	>();
 	const recordUse = (
 		value: CoreValueId,
@@ -690,7 +702,10 @@ function verifyCoreFunctionGraph(
 					`parameter ${parameter.value} in b${block.id} has a mismatched representation`,
 				);
 			}
-			definitions.set(parameter.value, { block: block.id, instructionIndex: -1 });
+			definitions.set(parameter.value, {
+				block: block.id,
+				instructionIndex: -1,
+			});
 		}
 		if (exceptionParameters > 1)
 			fail(`block b${block.id} has multiple exception parameters`);
@@ -1203,6 +1218,66 @@ export function verifyCoreProgram(
 	);
 }
 
+function verifyKnownOwnSlotClaims(program: CoreProgram): void {
+	const cellForString = coreOwnCellResolver(program.stringConstants);
+	const instructionsByFunction = program.functions.map(
+		(fn) =>
+			new Map(
+				fn.blocks.flatMap((block) =>
+					block.instructions.map((instruction) => [instruction.id, instruction] as const),
+				),
+			),
+	);
+	for (const fn of program.functions) {
+		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (!(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)) continue;
+				if (claimed.has(instruction.id)) {
+					fail(
+						`instruction @${instruction.id} is claimed by both a Core region and a known own slot`,
+					);
+				}
+				if (instruction.opcode !== "loadPropertyStatic") {
+					fail(
+						`instruction @${instruction.id} carries a known own slot on ${instruction.opcode}`,
+					);
+				}
+				const claim = coreKnownOwnSlotFromAttribute(
+					instruction.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+				);
+				if (claim === undefined) {
+					fail(`instruction @${instruction.id} carries an invalid known own slot`);
+				}
+				const originFunction = program.functions[claim.shapeFunctionIndex];
+				const origin = instructionsByFunction[claim.shapeFunctionIndex]?.get(
+					claim.shapeInstruction,
+				);
+				if (
+					originFunction?.functionIndex !== claim.shapeFunctionIndex ||
+					origin?.opcode !== "createObjectShaped"
+				) {
+					fail(
+						`instruction @${instruction.id} carries a known own slot with an invalid shaped-object origin`,
+					);
+				}
+				const keys = coreShapedObjectKeys(program, origin, cellForString);
+				const stringIndex = instruction.attributes.stringIndex;
+				if (keys === undefined) {
+					fail(
+						`instruction @${instruction.id} carries a known own slot with an invalid shaped-object origin`,
+					);
+				}
+				if (claim.slot >= keys.length || keys[claim.slot] !== stringIndex) {
+					fail(
+						`instruction @${instruction.id} carries a known own slot for a different static key`,
+					);
+				}
+			}
+		}
+	}
+}
+
 function verifyCoreProgramGraph(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
@@ -1291,6 +1366,7 @@ function verifyCoreProgramGraph(
 			fail(`source position ${index} has invalid caller position`);
 		}
 	}
+	verifyKnownOwnSlotClaims(program);
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {
 			fail(`function index ${fn.functionIndex} is stored at program index ${index}`);
