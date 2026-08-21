@@ -171,6 +171,17 @@ function directCaller(functionIndex: number, target: number): CoreFunction {
 	return builder.finish(entry);
 }
 
+function directConstructor(functionIndex: number, target: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: target },
+	});
+	const [result] = builder.appendInstruction(entry, "construct", [callee!]);
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	return builder.finish(entry);
+}
+
 function finiteTargetCaller(
 	functionIndex: number,
 	firstTarget: number,
@@ -473,7 +484,10 @@ describe("interprocedural summary lattices", () => {
 		caller.setTerminator(entry, { kind: "return", value: result! });
 		const analysis = analyzeCoreProgramSummaries(coreProgram([caller.finish(entry)]));
 		expect(analysis.callSite(0, call.id)).toBeUndefined();
-		expect(analysis.summary(0)).toMatchObject({ openCallEdge: true });
+		expect(analysis.summary(0)).toMatchObject({
+			openCallEdge: true,
+			returnRepresentation: "boxed",
+		});
 	});
 
 	it("widens target overflow and refuses to form a summary claim", () => {
@@ -682,12 +696,14 @@ describe("summary consumers and proof boundary", () => {
 		});
 	});
 
-	it("unboxes closed script results at the boxed ABI boundary and removes roots", () => {
+	it("relays closed script result representations across the boxed ABI", () => {
 		const program = coreProgram([
 			returnF64(0),
 			directCaller(1, 0),
-			returnBoolean(2),
-			directCaller(3, 2),
+			directCaller(2, 1),
+			returnBoolean(3),
+			directCaller(4, 3),
+			directCaller(5, 4),
 		]);
 		const boxed = executeCoreOptimizations(program, {
 			ablations: new Set(["inlining", "interprocedural"]),
@@ -697,21 +713,32 @@ describe("summary consumers and proof boundary", () => {
 			ablations: new Set(["inlining"]),
 			verification: "per-pass",
 		}).program;
+		const summaries = analyzeCoreProgramSummaries(program);
+		for (const index of [0, 1, 2]) {
+			expect(summaries.summary(index)?.returnRepresentation).toBe("f64");
+		}
+		for (const index of [3, 4, 5]) {
+			expect(summaries.summary(index)?.returnRepresentation).toBe("boolean");
+		}
 		const resultRepresentation = (functionIndex: number) => {
 			const fn = optimized.functions[functionIndex]!;
 			const call = callInstructions(fn)[0]!;
 			return fn.values[call.outputs[0]!]!.representation;
 		};
 		expect(resultRepresentation(1)).toBe("f64");
-		expect(resultRepresentation(3)).toBe("boolean");
+		expect(resultRepresentation(2)).toBe("f64");
+		expect(resultRepresentation(4)).toBe("boolean");
+		expect(resultRepresentation(5)).toBe("boolean");
 		expect(coreOptimizationMetrics(optimized).rootedValues).toBeLessThan(
 			coreOptimizationMetrics(boxed).rootedValues,
 		);
 
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`{
-			 const numeric = () => 1.5;
-			 const truth = () => true;
+			 const numericLeaf = () => 1.5;
+			 const numeric = () => numericLeaf();
+			 const truthLeaf = () => true;
+			 const truth = () => truthLeaf();
 			 globalThis.__summaryResult = numeric() + (truth() ? 1 : 0);
 			 }`,
 			"summary-unboxing.js",
@@ -727,6 +754,29 @@ describe("summary consumers and proof boundary", () => {
 		const emitted = emitVmDefinition(vm, { compiled: true });
 		expect(emitted).toMatch(/mal_ops_number_as_f64\(call_result_\d+\.value\)/);
 		expect(emitted).toMatch(/mal_value_to_boolean\(call_result_\d+\.value\)/);
+		const functionIndex = (name: string): number =>
+			productCore!.functions.find(
+				(fn) =>
+					String.fromCodePoint(
+						...(productCore!.stringConstants[fn.metadata.nameStringIndex] ?? []),
+					) === name,
+			)!.functionIndex;
+		for (const name of ["numeric", "truth"]) {
+			const target = functionIndex(name);
+			const located = productCore!.functions
+				.flatMap((fn) =>
+					fn.blocks.flatMap(({ instructions }) =>
+						instructions.map((instruction) => ({ fn, instruction })),
+					),
+				)
+				.find(
+					({ instruction }) => instruction.attributes.directFunctionIndex === target,
+				)!;
+			expect(
+				located.fn.values.find(({ id }) => id === located.instruction.outputs[0])
+					?.representation,
+			).toBe(name === "numeric" ? "f64" : "boolean");
+		}
 		expect(
 			target.functions
 				.flatMap(({ blocks }) =>
@@ -736,6 +786,76 @@ describe("summary consumers and proof boundary", () => {
 				)
 				.some((instruction) => "calleeSummary" in instruction),
 		).toBe(false);
+	});
+
+	it("does not treat a constructor's primitive return as its construct result", () => {
+		const analysis = analyzeCoreProgramSummaries(
+			coreProgram([returnF64(0), directConstructor(1, 0)]),
+		);
+		expect(analysis.summary(0)?.returnRepresentation).toBe("f64");
+		expect(analysis.summary(1)).toMatchObject({
+			returnProvenance: { kind: "unknown" },
+			returnRepresentation: "boxed",
+		});
+	});
+
+	it("keeps an unread contained store of a returned construct result", () => {
+		const caller = new CoreFunctionBuilder(2, coreOpcodeRegistry);
+		const entry = caller.createBlock();
+		const [initial] = caller.appendInstruction(entry, "createUndefined", []);
+		const [holder] = caller.appendInstruction(entry, "createObjectShaped", [initial!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const { result } = appendDirectCall(caller, entry, 1);
+		caller.appendInstruction(entry, "storePropertyStatic", [holder!, result], {
+			attributes: { stringIndex: 1 },
+		});
+		const [undefinedValue] = caller.appendInstruction(entry, "createUndefined", []);
+		caller.setTerminator(entry, { kind: "return", value: undefinedValue! });
+
+		const program: CoreProgram = {
+			...coreProgram([returnF64(0), directConstructor(1, 0), caller.finish(entry)]),
+			stringConstants: [[], [102]],
+		};
+		expect(analyzeCoreProgramSummaries(program).summary(1)).toMatchObject({
+			returnProvenance: { kind: "unknown" },
+			returnRepresentation: "boxed",
+		});
+
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[2]!, "storePropertyStatic")).toHaveLength(
+			1,
+		);
+		expect(coreInstructions(optimized.functions[2]!, "createObjectShaped")).toHaveLength(
+			1,
+		);
+	});
+
+	it("joins an exact returned call with a local boxed return", () => {
+		const wrapper = new CoreFunctionBuilder(1, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = wrapper.createBlock([{}]);
+		const exact = wrapper.createBlock();
+		const local = wrapper.createBlock();
+		wrapper.setTerminator(entry, {
+			kind: "branch",
+			condition: wrapper.block(entry).parameters[0]!.value,
+			consequent: { block: exact, arguments: [] },
+			alternate: { block: local, arguments: [] },
+		});
+		const { result } = appendDirectCall(wrapper, exact, 0);
+		wrapper.setTerminator(exact, { kind: "return", value: result });
+		const [undefinedValue] = wrapper.appendInstruction(local, "createUndefined", []);
+		wrapper.setTerminator(local, { kind: "return", value: undefinedValue! });
+
+		const analysis = analyzeCoreProgramSummaries(
+			coreProgram([returnF64(0), wrapper.finish(entry)]),
+		);
+		expect(analysis.summary(1)?.returnRepresentation).toBe("boxed");
 	});
 
 	it("joins finite return representations without trusting one callee", () => {

@@ -368,7 +368,7 @@ interface LocalFacts {
 	/** Provenance of returned values that needs no callee summary. */
 	readonly returnProvenanceBase: ReturnProvenance;
 	readonly returnRepresentationBase: ReturnRepresentation;
-	/** Returned values produced by a resolvable call. */
+	/** Returned values produced directly by a resolvable ordinary call. */
 	readonly returnedCallSites: ReadonlyArray<CallSite>;
 	readonly frameOutlivesCall: boolean;
 }
@@ -684,7 +684,9 @@ function collectLocalFacts(
 		if (terminator.kind === "return") {
 			raiseBase(terminator.value, "returned");
 			const site = callSiteByResult.get(terminator.value);
-			if (site === undefined) {
+			if (site?.opcode === "call") {
+				returnedCallSites.push(site);
+			} else {
 				returnProvenanceBase = joinReturnProvenance(
 					returnProvenanceBase,
 					localReturnProvenance(
@@ -694,13 +696,19 @@ function collectLocalFacts(
 						registry,
 					),
 				);
-			} else {
-				returnedCallSites.push(site);
 			}
-			returnRepresentationBase = joinReturnRepresentation(
-				returnRepresentationBase,
-				summaryRepresentation(representations.get(terminator.value)),
-			);
+			// An ordinary call's Core output starts boxed because that is the runtime
+			// call ABI, not because the completed value has unknown machine shape. Defer
+			// an exact returned call to the callee summaries below instead of poisoning
+			// their scalar result with that transport representation. Construct and other
+			// transfer results stay local: a constructor's returned primitive is not the
+			// representation of the object produced by [[Construct]].
+			if (site?.opcode !== "call") {
+				returnRepresentationBase = joinReturnRepresentation(
+					returnRepresentationBase,
+					summaryRepresentation(representations.get(terminator.value)),
+				);
+			}
 		} else if (terminator.kind === "throw") {
 			// A thrown reference leaves this frame through the handler chain.
 			raiseBase(terminator.value, "retained");
