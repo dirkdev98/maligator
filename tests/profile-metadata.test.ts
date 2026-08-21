@@ -198,27 +198,21 @@ test("profile remarks explain substitution barriers at the original call site", 
 		}
 		globalThis.keep = outer;
 	`);
-	const escapeDefinition = compile(`
-		function run(count) {
-			function partial(value, escape) {
-				const object = { value };
-				if (escape) return object;
-				return typeof object === "object" ? object.value : 0;
+	const expansionDefinition = compile(`
+		function outer(value) {
+			function expensive(input) {
+				${Array.from({ length: 38 }, () => "input += input;").join("\n")}
+				return input;
 			}
-			let total = 0;
-			for (let index = 0; index < count; index++) {
-				const result = partial(index, index === count - 1);
-				total += typeof result === "object" ? result.value : result;
-			}
-			return total;
+			return ${Array.from({ length: 9 }, () => "expensive(value)").join(" + ")};
 		}
-		globalThis.keep = run;
+		globalThis.keep = outer;
 	`);
 
 	for (const [definition, reason] of [
 		[closureDefinition, "inner-closure"],
 		[exceptionDefinition, "exception-region"],
-		[escapeDefinition, "escape-cost-barrier"],
+		[expansionDefinition, "expansion-limit"],
 	] as const) {
 		const code = `optimization.declined.${reason}`;
 		const decisions = definition.profileRemarks!.filter((remark) => remark.code === code);

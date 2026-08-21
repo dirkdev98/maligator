@@ -1162,9 +1162,42 @@ describe("Core IR optimizer", () => {
 			{ ...coreProgram([builder.finish(entry)]), stringConstants: [[], [102]] },
 			{ verification: "per-pass" },
 		).program.functions[0]!;
-		expect(
-			fn.blocks.flatMap(({ instructions }) => instructions).map(({ opcode }) => opcode),
-		).not.toContain("loadPropertyStatic");
+		const opcodes = fn.blocks.flatMap(({ instructions }) =>
+			instructions.map(({ opcode }) => opcode),
+		);
+		expect(opcodes).not.toContain("loadPropertyStatic");
+		// Once forwarding makes the object's identity dead, the allocation itself is
+		// gone rather than merely becoming an unused non-discardable instruction.
+		expect(opcodes).not.toContain("createObjectShaped");
+	});
+
+	it("removes a dead literal whose forwarded occupant may be weakly held", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const parameter = builder.block(entry).parameters[0]!.value;
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [parameter], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+
+		const fn = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), stringConstants: [[], [102]] },
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		const opcodes = fn.blocks.flatMap(({ instructions }) =>
+			instructions.map(({ opcode }) => opcode),
+		);
+		expect(opcodes).not.toContain("loadPropertyStatic");
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(fn.blocks[0]!.terminator).toMatchObject({
+			kind: "return",
+			value: fn.parameters[0],
+		});
 	});
 
 	it("prunes a handler when an own-slot proof removes its last possible throw", () => {
@@ -1468,12 +1501,18 @@ describe("Core IR optimizer", () => {
 			outcome.program.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
 				instructions.filter(({ opcode }) => opcode === "storePropertyStatic"),
 			).length;
+		const allocations = (functionIndex: number) =>
+			outcome.program.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "createObjectShaped"),
+			).length;
 		// The literal's initial value is an unproven reference, so dropping the store
 		// that replaced it would keep that reference alive for longer.
 		expect(stores(0)).toBe(1);
+		expect(allocations(0)).toBe(1);
 		// Every value the slot can hold is a number, so its reachability is not
-		// observable and the store goes.
+		// observable; the store goes, then so does the now-dead allocation.
 		expect(stores(1)).toBe(0);
+		expect(allocations(1)).toBe(0);
 	});
 	it("keeps an overwritten store whose block can transfer to a reader", () => {
 		// o.f0 = a; <may throw>; o.f0 = b, with the handler reading the slot. The
@@ -2887,6 +2926,36 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("does not inline a closure body against the caller environment", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function outer(input) {
+				function closure() { return input + 1; }
+				return closure();
+			}
+			outer(13);`,
+			"core-inline-callee-environment.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const outer = optimized!.functions[functionIndexOfName(optimized!, "outer")]!;
+		const closure = optimized!.functions[functionIndexOfName(optimized!, "closure")]!;
+		const calls = outer.blocks
+			.flatMap(({ instructions }) => instructions)
+			.filter(({ opcode }) => opcode === "call");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.attributes.directFunctionIndex).toBe(closure.functionIndex);
+		expect(
+			closure.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(({ opcode }) => opcode === "loadCaptured"),
+		).toBe(true);
+	});
+
 	it("keeps a claimed region's call operands out of constant embedding", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			'globalThis.result = Number("x42".slice(1));',
@@ -3041,8 +3110,8 @@ describe("Core IR optimizer", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function outer() {
 				function leaf() { return 1; }
-				function middle() { return leaf(); }
-				return middle();
+				function middle(target) { return target(); }
+				return middle(leaf);
 			}`,
 			"core-inline-relocated-target.js",
 		);
@@ -3060,6 +3129,31 @@ describe("Core IR optimizer", () => {
 				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 1,
 			),
 		).toBe(true);
+	});
+
+	it("spends the inline budget on body cost rather than call count", () => {
+		const nested = Array.from({ length: 16 }, () => "leaf(").join("");
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function outer(value) {
+				function leaf(input) { return input + 1; }
+				return ${nested}value${")".repeat(16)};
+			}
+			outer(1);`,
+			"core-inline-tiny-chain.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const outer = optimized!.functions[functionIndexOfName(optimized!, "outer")]!;
+		expect(
+			outer.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(({ opcode }) => opcode === "call"),
+		).toBe(false);
 	});
 
 	it("does not relocate argument reads into the caller activation", () => {
@@ -3193,8 +3287,10 @@ describe("Core IR optimizer", () => {
 
 	it("certifies a fully local stack object without a materializer", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
-			`function read(value) {
+			`function read(value, replace) {
 				const object = { value };
+				if (replace) object.value = 1;
+				else object.value = 2;
 				return object.value;
 			}`,
 			"core-local-stack-object.js",
@@ -3233,6 +3329,7 @@ describe("Core IR optimizer", () => {
 			{ length: 41 },
 			(_, index) =>
 				`const object${index} = { value: values[${index}] };
+				if (values[${index}]) object${index}.value = values[${index}] + 1;
 				total += object${index}.value;`,
 		).join("\n");
 		const semantic = analyzeSourceAndRunSemanticAnalysis(

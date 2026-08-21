@@ -407,6 +407,8 @@ describe("closed-world obligation causes in Core", () => {
 					let sum = 0;
 					for (let index = 0; index < 4; index++) {
 						const point = { value: values[index] };
+						if (values[index]) point.value = values[index] + 1;
+						else point.value = values[index] - 1;
 						sum += point.value;
 					}
 					return sum;

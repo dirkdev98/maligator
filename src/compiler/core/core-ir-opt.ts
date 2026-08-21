@@ -764,6 +764,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 };
 
 const MAX_INLINE_INSTRUCTIONS = 40;
+const MAX_INLINE_TOTAL_COST = MAX_INLINE_INSTRUCTIONS * 8;
 const MAX_GUARDED_INLINE_COST = 48;
 const GUARDED_INLINE_TARGET_COST = 2;
 const INLINE_DISQUALIFYING_OPCODES = new Set([
@@ -773,6 +774,11 @@ const INLINE_DISQUALIFYING_OPCODES = new Set([
 	"loadArgumentCount",
 	"loadArgument",
 	"loadStaticArgument",
+	"loadCaptured",
+	"storeCaptured",
+	"envPush",
+	"envCopy",
+	"envPop",
 	"createFunction",
 	"createArgumentsObject",
 	"createRestArguments",
@@ -1009,12 +1015,6 @@ function targetShapeDeclineReason(target: CoreFunction): OptimizationDecisionRea
 		return "inner-closure";
 	}
 	return "relocation";
-}
-
-function targetAllocates(target: CoreFunction): boolean {
-	return target.blocks.some((block) =>
-		block.instructions.some(({ opcode }) => ALLOCATION_OPCODES.has(opcode)),
-	);
 }
 
 function recordInlineDecision(
@@ -1498,12 +1498,16 @@ function inlineSimpleCoreFunctions(
 	let changed = false;
 	const functions = program.functions.map((original) => {
 		let fn = original;
+		let totalCost = 0;
 		const relocatedTargets = new Map<CoreValueId, CoreCalleeTargets>();
 		const guardedFallbacks = new Set(guardedInlineFallbackCalls(original));
 		const targetsForValue = (value: CoreValueId): CoreCalleeTargets =>
 			relocatedTargets.get(value) ?? calleeTargets.targets(original.functionIndex, value);
-		for (let expansion = 0; expansion < 8; expansion++) {
-			const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
+		// Keep the same worst-case clone budget as the former eight-call ceiling,
+		// but spend it on actual body/guard cost. This admits long chains of tiny
+		// allocation helpers whose objects can disappear only after inlining while
+		// still capping growth from large bodies.
+		for (let expansion = 0; expansion < MAX_INLINE_TOTAL_COST; expansion++) {
 			let next: CoreFunction | undefined;
 			for (const block of fn.blocks) {
 				for (const call of block.instructions) {
@@ -1524,17 +1528,12 @@ function inlineSimpleCoreFunctions(
 					) {
 						continue;
 					}
-					const inLoop = cfg.loops.some((loop) => loop.blocks.has(block.id));
 					const candidates: Array<GuardedInlineCandidate> = [];
 					let declineReason: OptimizationDecisionReason | undefined;
 					for (const targetIndex of targetIndices) {
 						const target = functionsByIndex.get(targetIndex);
 						if (target === undefined) {
 							declineReason = "relocation";
-							break;
-						}
-						if (inLoop && targetAllocates(target)) {
-							declineReason = "escape-cost-barrier";
 							break;
 						}
 						const linear = linearInlineTarget(target);
@@ -1557,6 +1556,10 @@ function inlineSimpleCoreFunctions(
 						0,
 					);
 					if (guarded && cost > MAX_GUARDED_INLINE_COST) {
+						recordInlineDecision(decisions, fn, call, "declined", "expansion-limit");
+						continue;
+					}
+					if (totalCost + cost > MAX_INLINE_TOTAL_COST) {
 						recordInlineDecision(decisions, fn, call, "declined", "expansion-limit");
 						continue;
 					}
@@ -1588,6 +1591,7 @@ function inlineSimpleCoreFunctions(
 							);
 					if (inlined !== undefined) {
 						next = inlined.fn;
+						totalCost += cost;
 						for (const [value, targets] of inlined.relocatedTargets) {
 							relocatedTargets.set(value, targets);
 						}
@@ -8453,6 +8457,56 @@ const eliminateDeadStores: CoreFunctionPass = {
 	},
 };
 
+/**
+ * Remove a contained aggregate after scalar forwarding erased its identity.
+ *
+ * Allocation opcodes are deliberately non-discardable: a fresh object normally
+ * carries identity and keeps every value stored in it reachable. Provenance and
+ * liveness discharge both obligations together: the allocation must be contained
+ * and its SSA result must be dead after forwarding and store elimination. A dead
+ * result is not a root at any later safepoint, so the allocation cannot keep its
+ * occupants alive there; its inputs are still rooted at the allocation itself.
+ * Removing that safepoint can delay collection, but cannot make an occupant die
+ * sooner, including through WeakRef or FinalizationRegistry observation.
+ *
+ * Removing the allocation can expose dead moves and block arguments that still
+ * name its result. Run the ordinary liveness cleanup in the same transaction so
+ * no intermediate Core graph contains a dangling value.
+ */
+const eliminateDeadAllocations: CoreFunctionPass = {
+	name: "eliminate-dead-allocations",
+	run(fn, analyses, program) {
+		const provenance = analyses.provenance(fn);
+		if (provenance.layouts.length === 0) return fn;
+		const liveness = coreLiveness(fn);
+		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const dead = new Set<CoreInstructionId>();
+		const deadValues = new Set<CoreValueId>();
+		for (const layout of provenance.layouts) {
+			if (
+				provenance.escape(layout.instruction) !== "contained" ||
+				protectedInstructions.has(layout.instruction) ||
+				liveness.values.has(layout.result)
+			) {
+				continue;
+			}
+			dead.add(layout.instruction);
+			deadValues.add(layout.result);
+		}
+		if (dead.size === 0) return fn;
+		const withoutAllocations: CoreFunction = {
+			...fn,
+			blocks: fn.blocks.map((block) => ({
+				...block,
+				instructions: block.instructions.filter(({ id }) => !dead.has(id)),
+			})),
+			values: fn.values.filter(({ id }) => !deadValues.has(id)),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+		return deadInstructionElimination.run(withoutAllocations, analyses, program);
+	},
+};
+
 function loopHasExceptionalControl(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
@@ -10157,6 +10211,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	refineDirectCallEffects,
 	forwardMemoryAccesses,
 	eliminateDeadStores,
+	eliminateDeadAllocations,
 	loopInvariantCodeMotion,
 	optimizeLoopRanges,
 	copyAndValueNumber,

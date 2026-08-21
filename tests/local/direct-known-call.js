@@ -245,6 +245,17 @@ const makeAndInvoke = function (captured) {
 ok("first capture", makeAndInvoke(1000) === 1277);
 ok("second capture", makeAndInvoke(2000) === 2277);
 
+const invokeSmallCapture = function (captured) {
+	const closure = function () {
+		return captured + 1;
+	};
+	return closure();
+};
+ok(
+	"small captured closure keeps its environment",
+	invokeSmallCapture(1000) === 1001 && invokeSmallCapture(2000) === 2001,
+);
+
 const identityTarget = function identityTarget(expected) {
 	return this === undefined && identityTarget === expected;
 };
@@ -311,5 +322,5 @@ try {
 }
 ok("overflow", overflowed);
 
-ok("check count", checks === 25);
+ok("check count", checks === 26);
 console.log("direct-known-call PASS");

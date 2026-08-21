@@ -583,6 +583,31 @@ describe("native update-expression representation", () => {
 		});
 	}
 
+	it("consumes scalarized and sunk object plans in emitted C", () => {
+		const scalarized = emitLocked(`
+			function read(value) {
+				const object = { value, increment: 1 };
+				return object.value + object.increment;
+			}
+			globalThis.result = read(41);
+		`);
+		expect(scalarized).not.toContain("mal_vm_create_object_shaped(");
+		expect(scalarized).not.toContain("mal_vm_op_load_property_ic(");
+		expect(scalarized).not.toContain("__stack_object_");
+
+		const sunk = emitLocked(`
+			function choose(value, escape) {
+				const object = { value };
+				if (escape) return object;
+				return object.value;
+			}
+			globalThis.result = choose(41, true);
+		`);
+		expect(sunk).toContain("MalObject __stack_object_");
+		expect(sunk).toContain("mal_vm_materialize_stack_object(");
+		expect(sunk).not.toContain("mal_vm_create_object_shaped(");
+	});
+
 	it("proves numeric induction variables during direct Core construction", () => {
 		const output = emit(
 			`"use strict"; function sum(array) { let total = 0; for (let i = 0; i < array.length; i++) total += array[i]; return total; } globalThis.sum = sum;`,
