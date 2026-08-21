@@ -413,6 +413,12 @@ function verifyInstructionOperands(model: FunctionModel): void {
 
 function verifyBlockStructure(model: FunctionModel): void {
 	const { fn, functionIndex } = model;
+	if (model.handlerTargets.has(0)) {
+		fail("function entry block may not be an exception-handler block", {
+			functionIndex,
+			block: 0,
+		});
+	}
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const context: CoreTargetVerificationContext = { functionIndex, block };
 		let begins = 0;
@@ -420,6 +426,20 @@ function verifyBlockStructure(model: FunctionModel): void {
 		let catches = 0;
 		for (const [index, instruction] of instructions.entries()) {
 			const site = { ...context, instruction: index, opcode: instruction.type };
+			if (
+				(instruction.type === "jump" || instruction.type === "jumpIf") &&
+				model.handlerTargets.has(instruction.blocks[0])
+			) {
+				fail("ordinary control flow may not target an exception-handler block", site);
+			}
+			if (
+				BLOCK_TERMINATORS.has(instruction.type) &&
+				instructions
+					.slice(index + 1)
+					.some(({ type }) => type !== "sourcePos" && type !== "tryEnd")
+			) {
+				fail("unconditional control transfer must end its containing block", site);
+			}
 			if (instruction.type === "tryBegin") {
 				begins++;
 				if (index !== 0) {
@@ -454,8 +474,13 @@ function verifyBlockStructure(model: FunctionModel): void {
 				context,
 			);
 		}
-		if (fallsThrough(instructions) && block + 1 >= fn.blocks.length) {
-			fail("final block must end in a control transfer", context);
+		if (fallsThrough(instructions)) {
+			if (block + 1 >= fn.blocks.length) {
+				fail("final block must end in a control transfer", context);
+			}
+			if (model.handlerTargets.has(block + 1)) {
+				fail("ordinary fallthrough may not enter an exception-handler block", context);
+			}
 		}
 	}
 }
@@ -583,6 +608,40 @@ function verifyParallelCopies(model: FunctionModel): void {
 			}
 		}
 		simulateParallelCopy(model, copy, context);
+	}
+}
+
+/**
+ * Catch consumes VM exception state rather than an ordinary predecessor value. A
+ * handler that is itself protected may first open its nested range and initialize
+ * that range's explicit handler inputs, but no ordinary instruction may run before
+ * the catch establishes the current exception register.
+ */
+function verifyExceptionEntries(model: FunctionModel): void {
+	const { fn, functionIndex } = model;
+	const handlerInputCopies = new Map<number, CoreTargetParallelCopy>();
+	for (const copy of fn.parallelCopies) {
+		if (copy.kind !== "handler-input") continue;
+		const site = model.sites.get(copy.moves[0]!);
+		if (site !== undefined) handlerInputCopies.set(site.block, copy);
+	}
+	for (const block of model.handlerTargets) {
+		const instructions = fn.blocks[block]!.instructions;
+		let catchIndex = instructions[0]?.type === "tryBegin" ? 1 : 0;
+		const copy = handlerInputCopies.get(block);
+		if (copy !== undefined) catchIndex += copy.moves.length;
+		while (instructions[catchIndex]?.type === "sourcePos") catchIndex++;
+		if (instructions[catchIndex]?.type !== "catch") {
+			fail(
+				"exception-handler block must define its exception before ordinary instructions",
+				{
+					functionIndex,
+					block,
+					instruction: catchIndex,
+					opcode: instructions[catchIndex]?.type,
+				},
+			);
+		}
 	}
 }
 
@@ -973,6 +1032,7 @@ export function verifyCoreTargetProgram(program: CoreTargetProgram): void {
 		verifyInstructionOperands(model);
 		verifyBlockStructure(model);
 		verifyParallelCopies(model);
+		verifyExceptionEntries(model);
 		verifyTemporaryRegisters(model);
 		verifyGcRoots(model, program.gcRootRegisters[index], program.core.functions[index]!);
 		verifyRegions(model);

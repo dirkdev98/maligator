@@ -42,6 +42,175 @@ const mark = function (value) {
 ok("large target", directTarget(mark(1), (mark(2), directTarget)) === 277);
 ok("argument order", order.join(",") === "1,2");
 
+let guardedHandler = (value) => value + 10;
+const installGuardedHandler = function (other) {
+	guardedHandler = other;
+};
+const guardedRun = function (value) {
+	try {
+		return guardedHandler(value) * 2;
+	} catch (error) {
+		return error.message;
+	}
+};
+ok("guarded inline hit", guardedRun(5) === 30);
+ok(
+	"guarded inline throw",
+	guardedRun({
+		valueOf() {
+			throw new Error("guarded inline throw");
+		},
+	}) === "guarded inline throw",
+);
+installGuardedHandler((value) => value + 20);
+ok("guarded inline fallback", guardedRun(5) === 50);
+installGuardedHandler(() => {
+	throw new Error("guarded fallback throw");
+});
+ok("guarded fallback throw", guardedRun(5) === "guarded fallback throw");
+
+const firstFiniteTarget = (value) => value + 100;
+const secondFiniteTarget = (value) => value + 200;
+let finiteHandler = firstFiniteTarget;
+const selectFiniteHandler = function (second) {
+	finiteHandler = second ? secondFiniteTarget : firstFiniteTarget;
+};
+const installFiniteHandler = function (other) {
+	finiteHandler = other;
+};
+const finiteRun = function (value) {
+	try {
+		return finiteHandler(value) * 2;
+	} catch (error) {
+		return error.message;
+	}
+};
+ok("first finite inline hit", finiteRun(5) === 210);
+selectFiniteHandler(true);
+ok("second finite inline hit", finiteRun(5) === 410);
+ok(
+	"finite inline throw",
+	finiteRun({
+		valueOf() {
+			throw new Error("finite inline throw");
+		},
+	}) === "finite inline throw",
+);
+installFiniteHandler((value) => value + 300);
+ok("finite generic fallback", finiteRun(5) === 610);
+installFiniteHandler(() => {
+	throw new Error("finite fallback throw");
+});
+ok("finite fallback throw", finiteRun(5) === "finite fallback throw");
+
+const classCallMessage = "Class constructor cannot be invoked without 'new'";
+const closedClassSemantics = function (value) {
+	class ClosedClass {
+		constructor(input) {
+			return input + 1;
+		}
+	}
+	let callError;
+	try {
+		ClosedClass(value);
+	} catch (error) {
+		callError = error;
+	}
+	const instance = new ClosedClass(value);
+	return (
+		callError instanceof TypeError &&
+		callError.message === classCallMessage &&
+		instance instanceof ClosedClass
+	);
+};
+ok("closed class call throws", closedClassSemantics(1));
+
+let MutableClass = class {
+	constructor(value) {
+		return value + 2;
+	}
+};
+const installMutableClass = function (other) {
+	MutableClass = other;
+};
+let mutableClassCallError;
+let mutableClassArgumentEvaluated = false;
+try {
+	MutableClass(((mutableClassArgumentEvaluated = true), 1));
+} catch (error) {
+	mutableClassCallError = error;
+}
+ok(
+	"open class call throws",
+	mutableClassArgumentEvaluated &&
+		mutableClassCallError instanceof TypeError &&
+		mutableClassCallError.message === classCallMessage,
+);
+const mutableClassInstance = new MutableClass(1);
+ok("open class constructs", mutableClassInstance instanceof MutableClass);
+
+const classCallOrder = [];
+const classHolder = {
+	get target() {
+		classCallOrder.push("callee");
+		return MutableClass;
+	},
+};
+const classReceiver = function () {
+	classCallOrder.push("receiver");
+	return classHolder;
+};
+let orderedClassCallError;
+try {
+	classReceiver().target((classCallOrder.push("argument"), 1));
+} catch (error) {
+	orderedClassCallError = error;
+}
+ok(
+	"class call evaluation order",
+	classCallOrder.join(",") === "receiver,callee,argument" &&
+		orderedClassCallError instanceof TypeError &&
+		orderedClassCallError.message === classCallMessage,
+);
+
+class RepeatedMutableClass {
+	constructor(value) {
+		return value + 3;
+	}
+}
+installMutableClass(RepeatedMutableClass);
+let repeatedClassThrows = 0;
+for (let classCall = 0; classCall < 2; classCall++) {
+	try {
+		MutableClass(classCall);
+	} catch (error) {
+		if (error instanceof TypeError && error.message === classCallMessage) {
+			repeatedClassThrows++;
+		}
+	}
+}
+ok("repeated class calls throw", repeatedClassThrows === 2);
+const repeatedClassInstance = new MutableClass(1);
+ok("repeated class constructs", repeatedClassInstance instanceof RepeatedMutableClass);
+
+globalThis.invokeUnknown = function invokeUnknown(fn) {
+	return fn();
+};
+let genericRepeatedClassThrows = 0;
+for (let classCall = 0; classCall < 2; classCall++) {
+	try {
+		globalThis.invokeUnknown(RepeatedMutableClass);
+	} catch (error) {
+		if (error instanceof TypeError && error.message === classCallMessage) {
+			genericRepeatedClassThrows++;
+		}
+	}
+}
+ok("generic repeated class calls throw", genericRepeatedClassThrows === 2);
+
+installMutableClass((value) => value + 30);
+ok("open class fallback", MutableClass(2) === 32);
+
 const makeAndInvoke = function (captured) {
 	const closure = function closure(value, expected) {
 		"use strict";
@@ -142,5 +311,5 @@ try {
 }
 ok("overflow", overflowed);
 
-ok("check count", checks === 8);
+ok("check count", checks === 25);
 console.log("direct-known-call PASS");

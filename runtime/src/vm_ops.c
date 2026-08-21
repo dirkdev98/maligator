@@ -1608,8 +1608,9 @@ static bool mal_vm_try_interp_call_cached(
         return false;
     }
 
-    // Fill admits only a direct interpreted function. Exact identity in the same
-    // epoch means this is still that live function object and its index is immutable.
+    // Fill admits only an ordinary direct interpreted function. Exact identity in
+    // the same epoch means this is still that live function object and its index is
+    // immutable.
     i32 function_index = entry->callee_function_index;
     MalFunctionObject *function_object = mal_value_to_function_object(callee);
 
@@ -1638,7 +1639,8 @@ static void mal_vm_fill_interp_call_cache(
     }
     i32 function_index = mal_function_object_function_index(mal_value_to_function_object(callee));
     if (function_index < 0 || function_index >= vm->definition->function_count ||
-        vm->definition->functions[function_index].compiled != nullptr) {
+        vm->definition->functions[function_index].compiled != nullptr ||
+        vm->definition->functions[function_index].is_class_constructor) {
         return;
     }
 
@@ -1692,7 +1694,12 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
             MalRealm *saved_realm = vm->current_realm;
             mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, resolution.callee));
 #endif
-            if (function->compiled != nullptr) {
+            if (!mal_vm_require_ordinary_call_target(vm, function)) {
+                vm->value_stack_size = base;
+#if MAL_REALMS
+                mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+            } else if (function->compiled != nullptr) {
                 // Native-backend function: invoke directly, no bytecode frame.
                 // The C stack, not the value stack, bounds this recursion.
                 i32 caller_frame_index = vm->frame_count - 1;

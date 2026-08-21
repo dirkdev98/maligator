@@ -83,13 +83,6 @@ Prefer consuming facts already available in Core. Extend an analysis only togeth
 with the optimization that consumes the additional precision. Keep mutable-world
 performance neutral or better while specializing locked builds.
 
-- [ ] Consume existing bounded callee sets and effect summaries for direct or guarded
-      dispatch, guarded inlining, and motion across non-mutating calls.
-
-- [ ] Consume existing return-representation and return-provenance summaries to
-      propagate unboxed values, eliminate boxing and roots, and preserve returned
-      allocation identity.
-
 - [ ] Consume existing allocation-layout, own-cell, containment, and escape facts for
       property-load elimination, memory forwarding, dead-allocation elimination,
       allocation sinking, and initial scalar replacement.

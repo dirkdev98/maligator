@@ -523,12 +523,14 @@ function emitVmDefinitionSource(
 		const directCompiledTargets = new Set<number>();
 		for (const fn of definition.functions) {
 			for (const instruction of fn.instructions) {
+				if (instruction.opcode !== "CALL") continue;
+				const target = instruction.directFunctionIndex;
 				if (
-					instruction.opcode === "CALL" &&
-					instruction.directFunctionIndex !== undefined &&
-					compiledTargets.has(instruction.directFunctionIndex)
+					target !== undefined &&
+					compiledTargets.has(target) &&
+					!definition.functions[target]!.isClassConstructor
 				) {
-					directCompiledTargets.add(instruction.directFunctionIndex);
+					directCompiledTargets.add(target);
 				}
 			}
 		}

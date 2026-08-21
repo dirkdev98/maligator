@@ -3483,6 +3483,29 @@ MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue sco
                                                        : vm->completion.value;
 }
 
+/**
+ * ECMAScript class constructors have [[Construct]] but no [[Call]]. Keep this at
+ * the shared script-function entry seam so generic dispatch and compiler-proven
+ * runtime calls reject the body before it can run. Ordinary-call caches refuse
+ * to admit classes at fill time, leaving their hit paths unchanged. Callers
+ * invoke this after entering (or proving they are already in) the callee Realm,
+ * which gives the TypeError the same intrinsic provenance as every other
+ * script-call failure.
+ */
+bool mal_vm_require_ordinary_call_target(
+    MalVm *vm,
+    const MalFunction *function
+) {
+    if (!function->is_class_constructor) {
+        return true;
+    }
+    mal_vm_throw_error(
+        vm,
+        MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Class constructor cannot be invoked without 'new'");
+    return false;
+}
+
 MalCompletion mal_vm_call_value(
     MalVm *vm,
     MalValue callee,
@@ -3549,7 +3572,9 @@ MalCompletion mal_vm_call_value(
         const MalFunction *function = &vm->definition->functions[function_index];
         MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
 
-        if (function->compiled != nullptr) {
+        if (!mal_vm_require_ordinary_call_target(vm, function)) {
+            completion = vm->completion;
+        } else if (function->compiled != nullptr) {
             // Native-backend function: invoke directly (no stack marshaling). The
             // C stack, not the value stack, bounds this recursion.
             if (!mal_vm_enter_compiled(vm, function_index)) {
@@ -3693,12 +3718,14 @@ MalCompletion mal_vm_call_cached(
 
     MAL_PERF_COUNT(call_cache_dispatch_misses);
     MalCompletion completion = mal_vm_call_value(vm, callee, this_value, args, arg_count);
-    // Bound/proxy/interpreted callees stay on the dispatch path. Re-read the
-    // definition row after the call because eval/new Function may have realloc'd it.
+    // Bound/proxy/interpreted callees and class constructors stay on the dispatch
+    // path. Re-read the definition row after the call because eval/new Function may
+    // have realloc'd it.
     if (mal_value_is_function_object(callee)) {
         i32 index = mal_function_object_function_index(mal_value_to_function_object(callee));
         if (index >= 0 && index < vm->definition->function_count &&
-            vm->definition->functions[index].compiled != nullptr) {
+            vm->definition->functions[index].compiled != nullptr &&
+            !vm->definition->functions[index].is_class_constructor) {
             if (cc->heap_identity != vm->heap.identity || cc->epoch != vm->heap.epoch) {
                 cc->count = 0;
                 cc->heap_identity = vm->heap.identity;
@@ -3807,7 +3834,9 @@ MalCompletion mal_vm_call_direct(
     mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
 #endif
 
-    if (function->compiled != nullptr) {
+    if (!mal_vm_require_ordinary_call_target(vm, function)) {
+        completion = vm->completion;
+    } else if (function->compiled != nullptr) {
         if (!mal_vm_enter_compiled(vm, function_index)) {
             completion = vm->completion;
         } else {

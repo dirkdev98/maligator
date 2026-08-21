@@ -62,6 +62,17 @@ function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 	};
 }
 
+function functionIndexOfName(program: CoreProgram, name: string): number {
+	const found = program.functions.find(
+		(fn) =>
+			String.fromCodePoint(
+				...(program.stringConstants[fn.metadata.nameStringIndex] ?? []),
+			) === name,
+	);
+	expect(found, `no Core function named ${name}`).toBeDefined();
+	return found!.functionIndex;
+}
+
 describe("Core IR optimizer", () => {
 	it("counts refined safepoints, boxed roots, and guard terminators in traces", () => {
 		const rooted = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
@@ -2724,6 +2735,124 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("guards an open singleton inline and joins the generic fallback result", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function outer(value) {
+				let handler = (input) => input + 10;
+				function install(other) { handler = other; }
+				globalThis.install = install;
+				try { return handler(value) * 2; }
+				catch (error) { return error; }
+			}`,
+			"core-guarded-inline.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const outer = optimized!.functions[functionIndexOfName(optimized!, "outer")]!;
+		const handlerIndex = functionIndexOfName(optimized!, "handler");
+		const guardBlock = outer.blocks.find((block) =>
+			block.instructions.some(({ opcode }) => opcode === "guardFunctionIndex"),
+		);
+		expect(guardBlock?.terminator.kind).toBe("branch");
+		if (guardBlock?.terminator.kind !== "branch") return;
+		const fast = outer.blocks[guardBlock.terminator.consequent.block]!;
+		const fallback = outer.blocks[guardBlock.terminator.alternate.block]!;
+		const guard = guardBlock.instructions.find(
+			({ opcode }) => opcode === "guardFunctionIndex",
+		);
+		const fallbackCalls = fallback.instructions.filter(({ opcode }) => opcode === "call");
+		expect(fallbackCalls).toHaveLength(1);
+		expect(guard?.inputs).toEqual([fallbackCalls[0]!.inputs[0]]);
+		expect(guard?.attributes.functionIndex).toBe(handlerIndex);
+		const inlinedBody = fast.instructions.find(
+			({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
+		);
+		expect(inlinedBody).toBeDefined();
+		const handlerBody = optimized!.functions[handlerIndex]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		).find(({ opcode }) => opcode === "binary");
+		expect(inlinedBody?.attributes).toEqual(handlerBody?.attributes);
+		expect(
+			fast.instructions.some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 10,
+			),
+		).toBe(true);
+		expect(fast.terminator.kind).toBe("jump");
+		expect(fallback.terminator.kind).toBe("jump");
+		if (fast.terminator.kind !== "jump" || fallback.terminator.kind !== "jump") return;
+		expect(fast.terminator.edge.block).toBe(fallback.terminator.edge.block);
+		const join = outer.blocks[fast.terminator.edge.block]!;
+		expect(join.parameters).toHaveLength(1);
+		expect(fast.terminator.edge.arguments).toHaveLength(1);
+		expect(fallback.terminator.edge.arguments).toHaveLength(1);
+		// The inlined binary, generic call, and post-call multiplication all retain
+		// the source try/catch edge after the original block is split. The frontend
+		// may already have put the multiplication in the join's successor.
+		expect(fast.handler?.block).toBe(fallback.handler?.block);
+		expect(fallback.handler).toBeDefined();
+		const postCall = outer.blocks.find((block) =>
+			block.instructions.some(
+				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "*",
+			),
+		);
+		expect(postCall?.handler?.block).toBe(fallback.handler?.block);
+
+		const rerun = executeCoreOptimizations(optimized!).program;
+		const rerunOuter = rerun.functions[functionIndexOfName(rerun, "outer")]!;
+		const rerunInstructions = rerunOuter.blocks.flatMap(
+			({ instructions }) => instructions,
+		);
+		expect(
+			rerunInstructions.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(1);
+		expect(rerunInstructions.filter(({ opcode }) => opcode === "call")).toHaveLength(1);
+	});
+
+	it("never inlines class constructors through ordinary calls", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function callClosed(value) {
+				class Closed { constructor(input) { return input + 1; } }
+				return Closed(value);
+			}
+			function callOpen(value) {
+				let Current = class Open { constructor(input) { return input + 2; } };
+				function install(other) { Current = other; }
+				globalThis.installClass = install;
+				return Current(value);
+			}
+			callClosed(1);
+			callOpen(1);`,
+			"core-class-constructor-inline.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		for (const [name, targetName] of [
+			["callClosed", "Closed"],
+			["callOpen", "Open"],
+		] as const) {
+			const caller = optimized!.functions[functionIndexOfName(optimized!, name)]!;
+			const instructions = caller.blocks.flatMap(({ instructions }) => instructions);
+			const calls = instructions.filter(({ opcode }) => opcode === "call");
+			expect(calls).toHaveLength(1);
+			expect(calls[0]!.attributes.directFunctionIndex).toBe(
+				functionIndexOfName(optimized!, targetName),
+			);
+			expect(instructions.some(({ opcode }) => opcode === "guardFunctionIndex")).toBe(
+				false,
+			);
+		}
+	});
+
 	it("does not inline an activation whose bindings escape into an inner closure", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function outer(input) {
@@ -2787,7 +2916,7 @@ describe("Core IR optimizer", () => {
 		}
 	});
 
-	it("does not inline a binding a nested closure can rebind", () => {
+	it("guards every finite target a nested closure can install", () => {
 		const optimize = (setter: string) => {
 			const semantic = analyzeSourceAndRunSemanticAnalysis(
 				`function outer(reassign) {
@@ -2814,17 +2943,98 @@ describe("Core IR optimizer", () => {
 			);
 
 		// `outer(true)` must call `replacement`. A function-local scan sees one store
-		// into the captured cell and would inline `handler`'s body unguarded.
+		// into the captured cell and would inline `handler`'s body unguarded; the
+		// bounded whole-program set instead emits one guard per possible target and
+		// retains the generic call as the semantic twin.
 		const rebound = optimize(
 			`const retarget = () => { handler = replacement; };
 			if (reassign) retarget();`,
 		);
 		expect(rebound.some(({ opcode }) => opcode === "call")).toBe(true);
-		expect(inlinedHandlerBody(rebound)).toBe(false);
+		expect(rebound.filter(({ opcode }) => opcode === "guardFunctionIndex")).toHaveLength(
+			2,
+		);
+		expect(inlinedHandlerBody(rebound)).toBe(true);
+		expect(
+			rebound.some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 2,
+			),
+		).toBe(true);
 
 		const closed = optimize("void replacement;");
 		expect(closed.some(({ opcode }) => opcode === "call")).toBe(false);
 		expect(inlinedHandlerBody(closed)).toBe(true);
+	});
+
+	it("keeps an over-budget finite target set on the generic path", () => {
+		const target = (functionIndex: number): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			let value = builder.block(entry).parameters[0]!.value;
+			// Each body is independently small enough to inline, but their combined
+			// clone-and-guard cost exceeds the finite-chain budget.
+			for (let index = 0; index < 12; index++) {
+				const [constant] = builder.appendInstruction(entry, "createNumber", [], {
+					attributes: { value: index + 1 },
+				});
+				const [next] = builder.appendInstruction(entry, "binary", [value, constant!], {
+					attributes: { operator: "+" },
+				});
+				value = next!;
+			}
+			builder.setTerminator(entry, { kind: "return", value });
+			return builder.finish(entry);
+		};
+		const caller = new CoreFunctionBuilder(2, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = caller.createBlock([{}]);
+		const firstBlock = caller.createBlock();
+		const secondBlock = caller.createBlock();
+		const join = caller.createBlock([{}]);
+		const [first] = caller.appendInstruction(firstBlock, "createFunction", [], {
+			attributes: { functionIndex: 0 },
+		});
+		const [second] = caller.appendInstruction(secondBlock, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		caller.setTerminator(entry, {
+			kind: "branch",
+			condition: caller.block(entry).parameters[0]!.value,
+			consequent: { block: firstBlock, arguments: [] },
+			alternate: { block: secondBlock, arguments: [] },
+		});
+		caller.setTerminator(firstBlock, {
+			kind: "jump",
+			edge: { block: join, arguments: [first!] },
+		});
+		caller.setTerminator(secondBlock, {
+			kind: "jump",
+			edge: { block: join, arguments: [second!] },
+		});
+		const callee = caller.block(join).parameters[0]!.value;
+		const [thisValue] = caller.appendInstruction(join, "createUndefined", []);
+		const [argument] = caller.appendInstruction(join, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [result] = caller.appendInstruction(join, "call", [
+			callee,
+			thisValue!,
+			argument!,
+		]);
+		caller.setTerminator(join, { kind: "return", value: result! });
+
+		const optimized = executeCoreOptimizations(
+			coreProgram([target(0), target(1), caller.finish(entry)]),
+			{ verification: "per-pass" },
+		).program.functions[2]!;
+		const instructions = optimized.blocks.flatMap(({ instructions }) => instructions);
+		expect(instructions.filter(({ opcode }) => opcode === "call")).toHaveLength(1);
+		expect(
+			instructions.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(0);
 	});
 
 	it("retains closed callee facts across bounded inline expansions", () => {

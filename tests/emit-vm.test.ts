@@ -943,6 +943,20 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
 		expect(output).toContain("mal_vm_enter_compiled(vm, 1)");
 		expect(output).toContain("mal_vm_leave_compiled(vm)");
+		expect(output).not.toContain("mal_vm_require_ordinary_call_target");
+	});
+
+	it("routes exact class calls through the ordinary-call runtime check", () => {
+		const output = emit(`
+			"use strict";
+			class Example {
+				constructor() { return { value: 1 }; }
+			}
+			globalThis.result = Example();
+		`);
+		const entry = output.slice(output.indexOf("static MalValue mal_compiled_0("));
+		expect(entry).toContain("mal_vm_call_direct(vm,");
+		expect(entry).not.toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
 	});
 
 	it("uses the canonical boxed ABI for exact script calls", () => {

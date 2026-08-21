@@ -13,6 +13,7 @@ import type {
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
 import type { CoreTargetFunction, CoreTargetProgram } from "./core-target-lowering.ts";
+import { verifyCoreTargetProgram } from "./core-target-verifier.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 
@@ -1720,6 +1721,9 @@ export function lowerCoreProgramToVmDefinition(
 	program: CoreTargetProgram,
 	profile = false,
 ): VmDefinition {
+	// Consumer boundary: CoreTargetProgram is structurally constructible and mutable,
+	// so construction-time verification cannot license a later lower-vm call.
+	verifyCoreTargetProgram(program);
 	const core = program.core;
 	const compilation = core.compilation;
 	if (compilation === undefined) {

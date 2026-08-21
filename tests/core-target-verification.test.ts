@@ -37,6 +37,21 @@ const HANDLER_SOURCE = `
 	preserve({ value: 2 }, () => { throw new Error("x"); });
 `;
 
+const NESTED_HANDLER_SOURCE = `
+	function nested(callback, report) {
+		try {
+			try {
+				callback();
+			} catch ({ value }) {
+				return value;
+			}
+		} catch (outer) {
+			return report(outer);
+		}
+	}
+	nested(() => { throw { value: 2 }; }, (value) => String(value));
+`;
+
 /** Loop-carried rotation, so an edge copy needs a cycle-breaking temporary. */
 const LOOP_SOURCE = `
 	function rotate(count, seed) {
@@ -174,6 +189,7 @@ describe("Core target construction", () => {
 		for (const [name, source] of [
 			["branches", BRANCH_SOURCE],
 			["handlers", HANDLER_SOURCE],
+			["nested-handlers", NESTED_HANDLER_SOURCE],
 			["loops", LOOP_SOURCE],
 			["regions", REGION_SOURCE],
 			["projections", PROJECTION_SOURCE],
@@ -220,6 +236,51 @@ describe("Core target construction", () => {
 		expect(
 			protectedBlock.instructions.filter(({ type }) => type === "tryEnd"),
 		).toHaveLength(1);
+	});
+
+	it("orders handler inputs before catch when an exception entry is itself protected", () => {
+		const program = optimizedTarget(NESTED_HANDLER_SOURCE, "verified-nested-handler.js");
+		const match = program.functions
+			.flatMap((fn, functionIndex) => {
+				const handlerTargets = new Set(
+					fn.blocks.flatMap(({ instructions }) =>
+						instructions.flatMap((instruction) =>
+							instruction.type === "tryBegin" ? [instruction.blocks[0]] : [],
+						),
+					),
+				);
+				return [...handlerTargets].map((block) => ({
+					functionIndex,
+					fn,
+					block,
+					instructions: fn.blocks[block]!.instructions,
+				}));
+			})
+			.find(({ instructions }) => instructions[0]?.type === "tryBegin");
+		expect(match).toBeDefined();
+		const copy = match!.fn.parallelCopies.find(
+			(candidate) =>
+				candidate.kind === "handler-input" &&
+				match!.instructions.includes(candidate.moves[0]!),
+		);
+		expect(copy).toBeDefined();
+		expect(match!.instructions.slice(1, copy!.moves.length + 1)).toEqual(copy!.moves);
+		expect(match!.instructions[copy!.moves.length + 1]?.type).toBe("catch");
+
+		const marker = match!.instructions.find(({ type }) => type === "sourcePos");
+		if (marker?.type !== "sourcePos") throw new Error("missing source position");
+		const catchIndex = copy!.moves.length + 1;
+		const marked = withFunction(
+			program,
+			match!.functionIndex,
+			withBlock(match!.fn, match!.block, [
+				...match!.instructions.slice(0, catchIndex),
+				{ ...marker },
+				...match!.instructions.slice(catchIndex),
+			]),
+		);
+		expect(() => verifyCoreTargetProgram(marked)).not.toThrow();
+		expect(() => lowerCoreProgramToVmDefinition(marked)).not.toThrow();
 	});
 
 	it("records safepoints and boxed GC roots for allocating source", () => {
@@ -551,6 +612,28 @@ describe("Core target verification", () => {
 			opcode: "tryBegin",
 		});
 
+		const entryHandler = verificationError(
+			withFunction(
+				program,
+				match.functionIndex,
+				withBlock(
+					match.fn,
+					match.block,
+					instructions.with(0, {
+						...opening,
+						blocks: [0, match.block],
+					}),
+				),
+			),
+		);
+		expect(entryHandler.detail).toBe(
+			"function entry block may not be an exception-handler block",
+		);
+		expect(entryHandler.context).toMatchObject({
+			functionIndex: match.functionIndex,
+			block: 0,
+		});
+
 		const unbalanced = verificationError(
 			withFunction(
 				program,
@@ -594,6 +677,146 @@ describe("Core target verification", () => {
 			functionIndex: copyOwner,
 			block: copyBlock,
 			opcode: "handler-input",
+		});
+	});
+
+	it("rejects ordinary control flow into an exception entry", () => {
+		const program = optimizedTarget(HANDLER_SOURCE, "handler-entry.js");
+		const opening = findInstruction(program, ({ type }) => type === "tryBegin");
+		if (opening.instruction.type !== "tryBegin")
+			throw new Error("missing protected range");
+		const handler = opening.instruction.blocks[0];
+		const transfer = findInstruction(
+			program,
+			(instruction, fn) =>
+				fn === opening.fn &&
+				(instruction.type === "jump" || instruction.type === "jumpIf") &&
+				instruction.blocks[0] !== handler,
+		);
+		if (transfer.instruction.type !== "jump" && transfer.instruction.type !== "jumpIf") {
+			throw new Error("missing ordinary transfer");
+		}
+		const malformed = withFunction(
+			program,
+			transfer.functionIndex,
+			withBlock(
+				transfer.fn,
+				transfer.block,
+				transfer.fn.blocks[transfer.block]!.instructions.with(transfer.index, {
+					...transfer.instruction,
+					blocks: [handler],
+				}),
+			),
+		);
+		const error = verificationError(malformed);
+
+		expect(error.detail).toBe(
+			"ordinary control flow may not target an exception-handler block",
+		);
+		expect(error.context).toMatchObject({
+			functionIndex: transfer.functionIndex,
+			block: transfer.block,
+			instruction: transfer.index,
+			opcode: transfer.instruction.type,
+		});
+		expect(() => lowerCoreProgramToVmDefinition(malformed)).toThrow(
+			CoreTargetVerificationError,
+		);
+
+		const precedingBlock = handler - 1;
+		const preceding = opening.fn.blocks[precedingBlock]!.instructions;
+		const transferIndex = preceding.findLastIndex(({ type }) =>
+			["jump", "return", "throw"].includes(type),
+		);
+		expect(transferIndex).toBeGreaterThanOrEqual(0);
+		const fallthrough = withFunction(
+			program,
+			opening.functionIndex,
+			withBlock(opening.fn, precedingBlock, preceding.toSpliced(transferIndex, 1)),
+		);
+		const fallthroughError = verificationError(fallthrough);
+		expect(fallthroughError.detail).toBe(
+			"ordinary fallthrough may not enter an exception-handler block",
+		);
+		expect(fallthroughError.context).toMatchObject({
+			functionIndex: opening.functionIndex,
+			block: precedingBlock,
+		});
+	});
+
+	it("requires catch to establish handler state before ordinary instructions", () => {
+		const program = optimizedTarget(HANDLER_SOURCE, "handler-catch-order.js");
+		const opening = findInstruction(program, ({ type }) => type === "tryBegin");
+		if (opening.instruction.type !== "tryBegin")
+			throw new Error("missing protected range");
+		const handlerBlock = opening.instruction.blocks[0];
+		const instructions = opening.fn.blocks[handlerBlock]!.instructions;
+		const catchIndex = instructions.findIndex(({ type }) => type === "catch");
+		expect(catchIndex).toBeGreaterThanOrEqual(0);
+		const malformed = withFunction(
+			program,
+			opening.functionIndex,
+			withBlock(opening.fn, handlerBlock, [
+				...instructions.slice(0, catchIndex),
+				{ type: "move", registers: [0, 0] },
+				...instructions.slice(catchIndex),
+			]),
+		);
+		const error = verificationError(malformed);
+
+		expect(error.detail).toBe(
+			"exception-handler block must define its exception before ordinary instructions",
+		);
+		expect(error.context).toMatchObject({
+			functionIndex: opening.functionIndex,
+			block: handlerBlock,
+			instruction: catchIndex,
+			opcode: "move",
+		});
+	});
+
+	it("rejects executable instructions after an unconditional transfer", () => {
+		const program = optimizedTarget(BRANCH_SOURCE, "transfer-tail.js");
+		const transfer = findInstruction(
+			program,
+			(instruction, fn) => instruction.type === "jump" && fn.registerCount > 0,
+		);
+		const instructions = transfer.fn.blocks[transfer.block]!.instructions;
+		const marker = transfer.fn.blocks
+			.flatMap(({ instructions: block }) => block)
+			.find(({ type }) => type === "sourcePos");
+		if (marker?.type !== "sourcePos") throw new Error("missing source position");
+		const marked = withFunction(
+			program,
+			transfer.functionIndex,
+			withBlock(transfer.fn, transfer.block, [
+				...instructions.slice(0, transfer.index + 1),
+				{ ...marker },
+				...instructions.slice(transfer.index + 1),
+			]),
+		);
+		expect(() => verifyCoreTargetProgram(marked)).not.toThrow();
+		expect(() => lowerCoreProgramToVmDefinition(marked)).not.toThrow();
+
+		const malformed = withFunction(
+			program,
+			transfer.functionIndex,
+			withBlock(transfer.fn, transfer.block, [
+				...instructions.slice(0, transfer.index + 1),
+				{ type: "move", registers: [0, 0] },
+				...instructions.slice(transfer.index + 1),
+			]),
+		);
+		const error = verificationError(malformed);
+
+		expect(error.detail).toBe(
+			"unconditional control transfer must end its containing block",
+		);
+		expect(error.context).toMatchObject({
+			functionIndex: transfer.functionIndex,
+			block: transfer.block,
+			instruction: transfer.index,
+			opcode: "jump",
 		});
 	});
 

@@ -764,6 +764,8 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 };
 
 const MAX_INLINE_INSTRUCTIONS = 40;
+const MAX_GUARDED_INLINE_COST = 48;
+const GUARDED_INLINE_TARGET_COST = 2;
 const INLINE_DISQUALIFYING_OPCODES = new Set([
 	"loadThis",
 	"loadNewTarget",
@@ -790,9 +792,23 @@ interface LinearInlineTarget {
 	readonly instructionCount: number;
 }
 
+interface GuardedInlineCandidate {
+	readonly target: CoreFunction;
+	readonly linear: LinearInlineTarget;
+}
+
 interface InlineProgramResult {
 	readonly program: CoreProgram;
 	readonly changed: boolean;
+}
+
+interface LinearInlineClone {
+	readonly instructions: ReadonlyArray<CoreInstruction>;
+	readonly values: ReadonlyArray<CoreFunction["values"][number]>;
+	readonly returnValue: CoreValueId;
+	readonly relocatedTargets: ReadonlyMap<CoreValueId, CoreCalleeTargets>;
+	readonly nextInstruction: number;
+	readonly nextValue: number;
 }
 
 function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction> {
@@ -818,7 +834,8 @@ function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction
  * target set is therefore safe to lower whether or not an open possibility
  * remains, and the lattice's overflow and opacity bits are recorded separately
  * so a later consumer can tell a closed proof from a speculation. Bounded
- * multi-target sets stay Core-only metadata.
+ * multi-target sets stay Core-only metadata until the guarded inliner either
+ * consumes the complete finite set or declines its fixed expansion budget.
  */
 function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResult {
 	const analysis = analyzeCoreCalleeTargets(program);
@@ -936,6 +953,7 @@ function linearInlineTarget(target: CoreFunction): LinearInlineTarget | undefine
 	if (
 		target.isGenerator ||
 		target.isAsync ||
+		target.metadata.isClassConstructor ||
 		target.metadata.capturedCount > 0 ||
 		target.regions.length > 0
 	) {
@@ -1064,24 +1082,19 @@ function inlineSourcePosition(
 	);
 }
 
-function inlineLinearCall(
+function cloneLinearInlineBody(
 	fn: CoreFunction,
-	block: CoreBlock,
 	call: CoreInstruction,
 	target: CoreFunction,
 	linear: LinearInlineTarget,
 	positions: Array<CoreProgram["sourcePositions"][number]>,
 	targetAnalysis: CoreCalleeTargetAnalysis,
 	callerTargets: (value: CoreValueId) => CoreCalleeTargets,
-):
-	| {
-			readonly fn: CoreFunction;
-			readonly relocatedTargets: ReadonlyMap<CoreValueId, CoreCalleeTargets>;
-	  }
-	| undefined {
-	if (call.outputs.length !== 1 || call.inputs.length < 2) return undefined;
-	let instructionNumber = nextInstructionId(fn);
-	let valueNumber = fn.values.reduce((next, value) => Math.max(next, value.id + 1), 0);
+	instructionStart = nextInstructionId(fn),
+	valueStart = fn.values.reduce((next, value) => Math.max(next, value.id + 1), 0),
+): LinearInlineClone | undefined {
+	let instructionNumber = instructionStart;
+	let valueNumber = valueStart;
 	const values = [...fn.values];
 	const valueMap = new Map<CoreValueId, CoreValueId>();
 	const relocatedTargets = new Map<CoreValueId, CoreCalleeTargets>();
@@ -1177,38 +1190,296 @@ function inlineLinearCall(
 		}
 	}
 	if (returnValue === undefined) return undefined;
+	return {
+		instructions: cloned,
+		values,
+		returnValue,
+		relocatedTargets,
+		nextInstruction: instructionNumber,
+		nextValue: valueNumber,
+	};
+}
+
+function inlineLinearCall(
+	fn: CoreFunction,
+	block: CoreBlock,
+	call: CoreInstruction,
+	target: CoreFunction,
+	linear: LinearInlineTarget,
+	positions: Array<CoreProgram["sourcePositions"][number]>,
+	targetAnalysis: CoreCalleeTargetAnalysis,
+	callerTargets: (value: CoreValueId) => CoreCalleeTargets,
+):
+	| {
+			readonly fn: CoreFunction;
+			readonly relocatedTargets: ReadonlyMap<CoreValueId, CoreCalleeTargets>;
+	  }
+	| undefined {
+	if (call.outputs.length !== 1 || call.inputs.length < 2) return undefined;
+	const clone = cloneLinearInlineBody(
+		fn,
+		call,
+		target,
+		linear,
+		positions,
+		targetAnalysis,
+		callerTargets,
+	);
+	if (clone === undefined) return undefined;
 	const blocks = fn.blocks.map(
 		(candidate): CoreBlock =>
 			candidate.id === block.id
 				? {
 						...candidate,
 						instructions: candidate.instructions.flatMap((instruction) =>
-							instruction.id === call.id ? cloned : [instruction],
+							instruction.id === call.id ? clone.instructions : [instruction],
 						),
 					}
 				: candidate,
 	);
 	return {
 		fn: rewriteFunction(
-			{ ...fn, values },
+			{ ...fn, values: clone.values },
 			blocks,
-			new Map([[call.outputs[0]!, returnValue]]),
+			new Map([[call.outputs[0]!, clone.returnValue]]),
 			new Set([call.id]),
 		),
-		relocatedTargets,
+		relocatedTargets: clone.relocatedTargets,
 	};
 }
 
 /**
- * Replace a call with its callee's body when the callee's identity is closed.
+ * Inline one named candidate without trusting that it is the live callee.
  *
- * Inlining erases the call, so it needs the strongest form the callee-target
- * lattice offers: a singleton with both loss bits clear. That authority is
- * whole-program, which is the point — a function-local scan of the stores it can
- * see cannot know that a nested closure rebinds the same captured cell, and
- * would happily inline the stale body. A value the analysis does not cover, such
- * as one an earlier expansion in this same pass introduced, answers bottom and is
- * therefore never a closed singleton.
+ * The original call moves to a cold semantic twin. `guardFunctionIndex` checks
+ * the actual function object, so a rebinding, builtin, Proxy, or other opaque
+ * value takes that generic path with the original receiver and argument order.
+ * Both paths pass their result through one explicit join parameter; every use
+ * of the old call result therefore keeps the same SSA identity, including uses
+ * in successor blocks. Splitting the source block also copies its exceptional
+ * edge to the inlined body, generic call, and continuation so the transformation
+ * preserves the caller's catch region.
+ */
+function inlineGuardedLinearCalls(
+	fn: CoreFunction,
+	block: CoreBlock,
+	call: CoreInstruction,
+	candidates: ReadonlyArray<GuardedInlineCandidate>,
+	positions: Array<CoreProgram["sourcePositions"][number]>,
+	targetAnalysis: CoreCalleeTargetAnalysis,
+	callerTargets: (value: CoreValueId) => CoreCalleeTargets,
+):
+	| {
+			readonly fn: CoreFunction;
+			readonly relocatedTargets: ReadonlyMap<CoreValueId, CoreCalleeTargets>;
+			readonly fallbackCall: CoreInstructionId;
+	  }
+	| undefined {
+	if (candidates.length === 0 || call.outputs.length !== 1 || call.inputs.length < 2) {
+		return undefined;
+	}
+	const callIndex = block.instructions.findIndex(({ id }) => id === call.id);
+	if (callIndex < 0) return undefined;
+	const clones: Array<LinearInlineClone> = [];
+	const relocatedTargets = new Map<CoreValueId, CoreCalleeTargets>();
+	let staged = fn;
+	let instructionNumber = nextInstructionId(fn);
+	let valueNumber = fn.values.reduce((next, value) => Math.max(next, value.id + 1), 0);
+	for (const { target, linear } of candidates) {
+		const clone = cloneLinearInlineBody(
+			staged,
+			call,
+			target,
+			linear,
+			positions,
+			targetAnalysis,
+			callerTargets,
+			instructionNumber,
+			valueNumber,
+		);
+		if (clone === undefined) return undefined;
+		clones.push(clone);
+		staged = { ...staged, values: clone.values };
+		instructionNumber = clone.nextInstruction;
+		valueNumber = clone.nextValue;
+		for (const [value, targets] of clone.relocatedTargets) {
+			relocatedTargets.set(value, targets);
+		}
+	}
+
+	const fallbackOutput = coreValueId(valueNumber++);
+	const guardValues = candidates.map(() => coreValueId(valueNumber++));
+	const controls = candidates.map(() => ({
+		guard: coreInstructionId(instructionNumber++),
+		branch: coreInstructionId(instructionNumber++),
+		fastTerminator: coreInstructionId(instructionNumber++),
+	}));
+	const fallbackTerminator = coreInstructionId(instructionNumber++);
+	const blockBase = fn.blocks.length;
+	const fastBlock = (index: number): CoreBlockId => coreBlockId(blockBase + index * 2);
+	const guardBlock = (index: number): CoreBlockId =>
+		index === 0 ? block.id : coreBlockId(blockBase + index * 2 - 1);
+	const fallbackBlock = coreBlockId(blockBase + candidates.length * 2 - 1);
+	const joinBlock = coreBlockId(blockBase + candidates.length * 2);
+	const originalOutput = call.outputs[0]!;
+	const output = fn.values.find(({ id }) => id === originalOutput);
+	if (output === undefined) return undefined;
+	const handler = block.handler === undefined ? {} : { handler: block.handler };
+	const guardedBlock = (
+		index: number,
+		prefix: ReadonlyArray<CoreInstruction> = [],
+		parameters: CoreBlock["parameters"] = [],
+	): CoreBlock => {
+		const control = controls[index]!;
+		const candidate = candidates[index]!;
+		const guard: CoreInstruction = {
+			id: control.guard,
+			opcode: "guardFunctionIndex",
+			inputs: [call.inputs[0]!],
+			outputs: [guardValues[index]!],
+			attributes: { functionIndex: candidate.target.functionIndex },
+			...(call.sourcePosition === undefined
+				? {}
+				: { sourcePosition: call.sourcePosition }),
+		};
+		return {
+			id: guardBlock(index),
+			parameters,
+			instructions: [...prefix, guard],
+			terminator: {
+				id: control.branch,
+				kind: "branch",
+				condition: guardValues[index]!,
+				consequent: { block: fastBlock(index), arguments: [] },
+				alternate: {
+					block: index + 1 < candidates.length ? guardBlock(index + 1) : fallbackBlock,
+					arguments: [],
+				},
+				...(call.sourcePosition === undefined
+					? {}
+					: { sourcePosition: call.sourcePosition }),
+			},
+			...handler,
+		};
+	};
+	const fallbackCall: CoreInstruction = {
+		...call,
+		outputs: [fallbackOutput],
+	};
+	const blocks: Array<CoreBlock> = fn.blocks.map((candidate) =>
+		candidate.id === block.id
+			? guardedBlock(0, candidate.instructions.slice(0, callIndex), candidate.parameters)
+			: candidate,
+	);
+	for (const [index, clone] of clones.entries()) {
+		blocks.push({
+			id: fastBlock(index),
+			parameters: [],
+			instructions: clone.instructions,
+			terminator: {
+				id: controls[index]!.fastTerminator,
+				kind: "jump",
+				edge: { block: joinBlock, arguments: [clone.returnValue] },
+			},
+			...handler,
+		});
+		if (index + 1 < clones.length) blocks.push(guardedBlock(index + 1));
+	}
+	blocks.push(
+		{
+			id: fallbackBlock,
+			parameters: [],
+			instructions: [fallbackCall],
+			terminator: {
+				id: fallbackTerminator,
+				kind: "jump",
+				edge: { block: joinBlock, arguments: [fallbackOutput] },
+			},
+			...handler,
+		},
+		{
+			id: joinBlock,
+			parameters: [
+				{
+					value: originalOutput,
+					representation: output.representation,
+					role: "value",
+				},
+			],
+			instructions: block.instructions.slice(callIndex + 1),
+			terminator: block.terminator,
+			...handler,
+		},
+	);
+	const values = staged.values
+		.map((value) =>
+			value.id === originalOutput
+				? {
+						...value,
+						definition: {
+							kind: "block-parameter" as const,
+							block: joinBlock,
+							index: 0,
+						},
+					}
+				: value,
+		)
+		.concat([
+			{
+				id: fallbackOutput,
+				representation: output.representation,
+				definition: {
+					kind: "instruction" as const,
+					instruction: call.id,
+					index: 0,
+				},
+			},
+			...guardValues.map((guardValue, index) => ({
+				id: guardValue,
+				representation: "boolean" as const,
+				definition: {
+					kind: "instruction" as const,
+					instruction: controls[index]!.guard,
+					index: 0,
+				},
+			})),
+		]);
+	return {
+		fn: { ...fn, blocks, values, mutationEpoch: fn.mutationEpoch + 1 },
+		relocatedTargets,
+		fallbackCall: call.id,
+	};
+}
+
+/** Generic twins already protected by a function-index guard in this graph. */
+function guardedInlineFallbackCalls(fn: CoreFunction): ReadonlySet<CoreInstructionId> {
+	const definitions = functionDefinitions(fn);
+	const calls = new Set<CoreInstructionId>();
+	for (const block of fn.blocks) {
+		if (block.terminator.kind !== "branch") continue;
+		const guard = definitions.get(block.terminator.condition);
+		if (guard?.opcode !== "guardFunctionIndex") continue;
+		const fallback = fn.blocks[block.terminator.alternate.block];
+		if (
+			fallback?.instructions.length === 1 &&
+			fallback.instructions[0]!.opcode === "call" &&
+			fallback.terminator.kind === "jump"
+		) {
+			calls.add(fallback.instructions[0]!.id);
+		}
+	}
+	return calls;
+}
+
+/**
+ * Replace a call with callee bodies from its bounded target fact.
+ *
+ * A closed singleton erases the call. Every open singleton or finite multi-target
+ * set emits a live function-index guard chain and keeps the original generic call
+ * as its mismatch twin. The chain is admitted only when every named target has a
+ * relocatable linear body and their combined body-plus-guard cost fits one fixed
+ * budget. Target identity still comes from the whole-program lattice: a local
+ * scan cannot know that a nested closure rebinds the same captured cell.
  */
 function inlineSimpleCoreFunctions(
 	program: CoreProgram,
@@ -1221,10 +1492,14 @@ function inlineSimpleCoreFunctions(
 			: [...compilation.optimizationDecisions];
 	const positions = program.sourcePositions.map((position) => ({ ...position }));
 	const calleeTargets = analyzeCoreCalleeTargets(program);
+	const functionsByIndex = new Map(
+		program.functions.map((fn) => [fn.functionIndex, fn] as const),
+	);
 	let changed = false;
 	const functions = program.functions.map((original) => {
 		let fn = original;
 		const relocatedTargets = new Map<CoreValueId, CoreCalleeTargets>();
+		const guardedFallbacks = new Set(guardedInlineFallbackCalls(original));
 		const targetsForValue = (value: CoreValueId): CoreCalleeTargets =>
 			relocatedTargets.get(value) ?? calleeTargets.targets(original.functionIndex, value);
 		for (let expansion = 0; expansion < 8; expansion++) {
@@ -1232,41 +1507,85 @@ function inlineSimpleCoreFunctions(
 			let next: CoreFunction | undefined;
 			for (const block of fn.blocks) {
 				for (const call of block.instructions) {
-					if (call.opcode !== "call" || call.inputs.length < 2) continue;
-					const targetIndex = coreCalleeTargetsClosedFunction(
-						targetsForValue(call.inputs[0]!),
-					);
-					if (targetIndex === undefined || targetIndex === fn.functionIndex) continue;
-					const target = program.functions.find(
-						(candidate) => candidate.functionIndex === targetIndex,
-					);
-					if (target === undefined) continue;
+					if (
+						call.opcode !== "call" ||
+						call.inputs.length < 2 ||
+						guardedFallbacks.has(call.id)
+					) {
+						continue;
+					}
+					const targets = targetsForValue(call.inputs[0]!);
+					const closedTargetIndex = coreCalleeTargetsClosedFunction(targets);
+					const targetIndices =
+						closedTargetIndex === undefined ? targets.functions : [closedTargetIndex];
+					if (
+						targetIndices.length === 0 ||
+						targetIndices.some((targetIndex) => targetIndex === fn.functionIndex)
+					) {
+						continue;
+					}
 					const inLoop = cfg.loops.some((loop) => loop.blocks.has(block.id));
-					if (inLoop && targetAllocates(target)) {
-						recordInlineDecision(decisions, fn, call, "declined", "escape-cost-barrier");
+					const candidates: Array<GuardedInlineCandidate> = [];
+					let declineReason: OptimizationDecisionReason | undefined;
+					for (const targetIndex of targetIndices) {
+						const target = functionsByIndex.get(targetIndex);
+						if (target === undefined) {
+							declineReason = "relocation";
+							break;
+						}
+						if (inLoop && targetAllocates(target)) {
+							declineReason = "escape-cost-barrier";
+							break;
+						}
+						const linear = linearInlineTarget(target);
+						if (linear === undefined) {
+							declineReason = targetShapeDeclineReason(target);
+							break;
+						}
+						candidates.push({ target, linear });
+					}
+					if (declineReason !== undefined) {
+						recordInlineDecision(decisions, fn, call, "declined", declineReason);
 						continue;
 					}
-					const linear = linearInlineTarget(target);
-					if (linear === undefined) {
-						recordInlineDecision(
-							decisions,
-							fn,
-							call,
-							"declined",
-							targetShapeDeclineReason(target),
-						);
-						continue;
-					}
-					const inlined = inlineLinearCall(
-						fn,
-						block,
-						call,
-						target,
-						linear,
-						positions,
-						calleeTargets,
-						targetsForValue,
+					const guarded = closedTargetIndex === undefined || candidates.length > 1;
+					const cost = candidates.reduce(
+						(total, { linear }) =>
+							total +
+							linear.instructionCount +
+							(guarded ? GUARDED_INLINE_TARGET_COST : 0),
+						0,
 					);
+					if (guarded && cost > MAX_GUARDED_INLINE_COST) {
+						recordInlineDecision(decisions, fn, call, "declined", "expansion-limit");
+						continue;
+					}
+					const inlined = guarded
+						? (() => {
+								const result = inlineGuardedLinearCalls(
+									fn,
+									block,
+									call,
+									candidates,
+									positions,
+									calleeTargets,
+									targetsForValue,
+								);
+								if (result !== undefined) {
+									guardedFallbacks.add(result.fallbackCall);
+								}
+								return result;
+							})()
+						: inlineLinearCall(
+								fn,
+								block,
+								call,
+								candidates[0]!.target,
+								candidates[0]!.linear,
+								positions,
+								calleeTargets,
+								targetsForValue,
+							);
 					if (inlined !== undefined) {
 						next = inlined.fn;
 						for (const [value, targets] of inlined.relocatedTargets) {

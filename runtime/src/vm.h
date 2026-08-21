@@ -2080,6 +2080,17 @@ void mal_vm_run(MalVm *vm, MalCallable *callable);
  */
 void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode);
 
+/**
+ * Reject an ordinary [[Call]] entry into an ECMAScript class constructor.
+ * Callers invoke this after entering (or proving they are already in) the
+ * resolved callee realm and before entering either a compiled body or an
+ * interpreted frame.
+ */
+bool mal_vm_require_ordinary_call_target(
+    MalVm *vm,
+    const MalFunction *function
+);
+
 MalCompletion mal_vm_call_value(
     MalVm *vm,
     MalValue callee,

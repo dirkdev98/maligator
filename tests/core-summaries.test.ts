@@ -171,6 +171,92 @@ function directCaller(functionIndex: number, target: number): CoreFunction {
 	return builder.finish(entry);
 }
 
+function finiteTargetCaller(
+	functionIndex: number,
+	firstTarget: number,
+	secondTarget: number,
+): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const condition = builder.block(entry).parameters[0]!.value;
+	const firstBlock = builder.createBlock();
+	const secondBlock = builder.createBlock();
+	const join = builder.createBlock([{}]);
+	const [first] = builder.appendInstruction(firstBlock, "createFunction", [], {
+		attributes: { functionIndex: firstTarget },
+	});
+	const [second] = builder.appendInstruction(secondBlock, "createFunction", [], {
+		attributes: { functionIndex: secondTarget },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition,
+		consequent: { block: firstBlock, arguments: [] },
+		alternate: { block: secondBlock, arguments: [] },
+	});
+	builder.setTerminator(firstBlock, {
+		kind: "jump",
+		edge: { block: join, arguments: [first!] },
+	});
+	builder.setTerminator(secondBlock, {
+		kind: "jump",
+		edge: { block: join, arguments: [second!] },
+	});
+	const callee = builder.block(join).parameters[0]!.value;
+	const [thisValue] = builder.appendInstruction(join, "createUndefined", []);
+	const [result] = builder.appendInstruction(join, "call", [callee, thisValue!]);
+	builder.setTerminator(join, { kind: "return", value: result! });
+	return builder.finish(entry);
+}
+
+function finiteIdentityCaller(
+	functionIndex: number,
+	firstTarget: number,
+	secondTarget: number,
+): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 2,
+	});
+	const entry = builder.createBlock([{}, {}]);
+	const [condition, initial] = builder.block(entry).parameters.map(({ value }) => value);
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	const firstBlock = builder.createBlock();
+	const secondBlock = builder.createBlock();
+	const join = builder.createBlock([{}]);
+	const [first] = builder.appendInstruction(firstBlock, "createFunction", [], {
+		attributes: { functionIndex: firstTarget },
+	});
+	const [second] = builder.appendInstruction(secondBlock, "createFunction", [], {
+		attributes: { functionIndex: secondTarget },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: firstBlock, arguments: [] },
+		alternate: { block: secondBlock, arguments: [] },
+	});
+	builder.setTerminator(firstBlock, {
+		kind: "jump",
+		edge: { block: join, arguments: [first!] },
+	});
+	builder.setTerminator(secondBlock, {
+		kind: "jump",
+		edge: { block: join, arguments: [second!] },
+	});
+	const callee = builder.block(join).parameters[0]!.value;
+	const [thisValue] = builder.appendInstruction(join, "createUndefined", []);
+	const [result] = builder.appendInstruction(join, "call", [callee, thisValue!, object!]);
+	const [loaded] = builder.appendInstruction(join, "loadPropertyStatic", [result!], {
+		attributes: { stringIndex: 1 },
+	});
+	builder.setTerminator(join, { kind: "return", value: loaded! });
+	return builder.finish(entry);
+}
+
 function callInstructions(fn: CoreFunction): ReadonlyArray<CoreInstruction> {
 	return coreInstructions(fn, "call");
 }
@@ -605,6 +691,34 @@ describe("summary consumers and proof boundary", () => {
 		).toBe(false);
 	});
 
+	it("joins finite return representations without trusting one callee", () => {
+		const program = coreProgram([
+			returnF64(0),
+			returnF64(1),
+			finiteTargetCaller(2, 0, 1),
+			returnBoolean(3),
+			finiteTargetCaller(4, 0, 3),
+		]);
+		const analysis = analyzeCoreProgramSummaries(program);
+		const numericCall = callInstructions(program.functions[2]!)[0]!;
+		expect(analysis.callSite(2, numericCall.id)).toMatchObject({
+			targets: [0, 1],
+			returnRepresentation: "f64",
+		});
+
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const representation = (functionIndex: number) => {
+			const fn = optimized.functions[functionIndex]!;
+			const call = callInstructions(fn)[0]!;
+			return fn.values[call.outputs[0]!]!.representation;
+		};
+		expect(representation(2)).toBe("f64");
+		expect(representation(4)).toBe("boxed");
+	});
+
 	it("keeps exact allocation provenance only across containment-preserving callees", () => {
 		const program: CoreProgram = {
 			...coreProgram([
@@ -638,6 +752,29 @@ describe("summary consumers and proof boundary", () => {
 		expect(analyzeCoreProgramSummaries(program).summary(2)).toMatchObject({
 			parameterContainment: ["unknown"],
 		});
+	});
+
+	it("joins finite return provenance before forwarding object state", () => {
+		const program: CoreProgram = {
+			...coreProgram([
+				returnParameter(0),
+				returnParameter(1),
+				finiteIdentityCaller(2, 0, 1),
+			]),
+			stringConstants: [[], [102]],
+		};
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const ablated = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining", "interprocedural"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[2]!, "loadPropertyStatic")).toHaveLength(
+			0,
+		);
+		expect(coreInstructions(ablated.functions[2]!, "loadPropertyStatic")).toHaveLength(1);
 	});
 
 	it("propagates a pure effect summary transitively to memory consumers", () => {
