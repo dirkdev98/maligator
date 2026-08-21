@@ -729,6 +729,73 @@ describe("callee-target annotation", () => {
 		expect(calleeTargetsAttribute(sites[0]!)?.opaque).toBe(false);
 	});
 
+	it("guards a base-class prototype method loaded from a constructed instance", () => {
+		const program = optimizedCore(
+			`class Service { handle(value) { return value + 1; } }
+			function caller(value) { const service = new Service(); return service.handle(value); }
+			caller(1);`,
+			"call-targets-constructor-method.mjs",
+		);
+		const methodIndex = functionIndexOfName(program, "handle");
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const site = callSites(caller).find(({ opcode }) => opcode === "call");
+		expect(site).toBeDefined();
+		expect(site!.attributes.directFunctionIndex).toBe(methodIndex);
+		expect(calleeTargetsAttribute(site!)).toEqual({
+			functions: [methodIndex],
+			anyScript: false,
+			opaque: true,
+		});
+	});
+
+	it("does not guess a prototype method when a constructor returns an object", () => {
+		const program = optimizedCore(
+			`function alternate(value) { return value + 2; }
+			class Service {
+				constructor() { return { handle: alternate }; }
+				handle(value) { return value + 1; }
+			}
+			function caller(value) { return new Service().handle(value); }
+			caller(1);`,
+			"call-targets-constructor-object-return.mjs",
+		);
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const site = callSites(caller).find(({ opcode }) => opcode === "call");
+		expect(site).toBeDefined();
+		expect(site!.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)).toBeUndefined();
+	});
+
+	it.each([
+		{
+			name: "derived class",
+			source: `class Base {}
+				class Service extends Base { handle(value) { return value + 1; } }`,
+		},
+		{
+			name: "accessor",
+			source: `function handle(value) { return value + 1; }
+				class Service { get callback() { return handle; } }`,
+		},
+		{
+			name: "computed method",
+			source: `class Service { ["handle"](value) { return value + 1; } }`,
+		},
+	])("leaves a $name constructor property read unresolved", ({ name, source }) => {
+		const property = name === "accessor" ? "callback" : "handle";
+		const program = optimizedCore(
+			`${source}
+			function caller(value) { return new Service().${property}(value); }
+			caller(1);`,
+			`call-targets-constructor-${name.replaceAll(" ", "-")}.mjs`,
+		);
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const site = callSites(caller).find(({ opcode }) => opcode === "call");
+		expect(site).toBeDefined();
+		expect(site!.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)).toBeUndefined();
+	});
+
 	it("keeps Function.prototype.call flattening with its exact receiver target", () => {
 		const program = optimizedCore(
 			`function target(value) { return value + 1; }

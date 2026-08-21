@@ -759,6 +759,21 @@ interface CallResultSite {
 	openRaised: "none" | "opaque" | "top";
 }
 
+/**
+ * A static property read from the direct result of `new C(...)`.
+ *
+ * The result stays open: a live prototype mutation or a replacement/Proxy
+ * constructor may replace what the load observes. The compiler-created
+ * base-class prototype still contributes guarded method candidates, and every
+ * consumer must retain its generic mismatch path.
+ */
+interface ConstructorMethodSite {
+	readonly callee: number;
+	readonly result: number;
+	readonly key: number;
+	readonly activated: Set<number>;
+}
+
 /** A property read whose opaque seed an own-cell edge may replace. */
 interface DeferredOwnSlotRead {
 	readonly base: number;
@@ -846,6 +861,7 @@ export function analyzeCoreCalleeTargets(
 	const seeds = new Map<number, CoreCalleeTargets>();
 	const originSeeds = new Map<number, number>();
 	const callSites = new Map<number, Array<CallResultSite>>();
+	const constructorMethodSites = new Map<number, Array<ConstructorMethodSite>>();
 	const allocations: Array<TrackedAllocation> = [];
 	const deferredReads: Array<DeferredOwnSlotRead> = [];
 	const controlFlow = new Map<number, ReturnType<typeof buildCoreControlFlow>>();
@@ -881,6 +897,21 @@ export function analyzeCoreCalleeTargets(
 		};
 		const existing = callSites.get(callee);
 		if (existing === undefined) callSites.set(callee, [site]);
+		else existing.push(site);
+	};
+	const addConstructorMethodSite = (
+		callee: number,
+		result: number,
+		key: number,
+	): void => {
+		const site: ConstructorMethodSite = {
+			callee,
+			result,
+			key,
+			activated: new Set(),
+		};
+		const existing = constructorMethodSites.get(callee);
+		if (existing === undefined) constructorMethodSites.set(callee, [site]);
 		else existing.push(site);
 	};
 
@@ -981,6 +1012,136 @@ export function analyzeCoreCalleeTargets(
 			value[3] === 0x6c,
 	);
 	const callCell = callStringIndex < 0 ? undefined : cellForString(callStringIndex);
+	const prototypeStringIndex = program.stringConstants.findIndex(
+		(value) =>
+			value.length === 9 &&
+			value[0] === 0x70 &&
+			value[1] === 0x72 &&
+			value[2] === 0x6f &&
+			value[3] === 0x74 &&
+			value[4] === 0x6f &&
+			value[5] === 0x74 &&
+			value[6] === 0x79 &&
+			value[7] === 0x70 &&
+			value[8] === 0x65,
+	);
+	const prototypeCell =
+		prototypeStringIndex < 0 ? undefined : cellForString(prototypeStringIndex);
+	/**
+	 * Compiler-emitted method closures grouped by constructor function and static
+	 * key. The innermost map deduplicates equal function indices while retaining a
+	 * source node for the ordinary graph dependency.
+	 *
+	 * The table is deliberately advisory. Every read it serves stays opaque, so a
+	 * key with more candidates than the finite cap may retain only the first cap as
+	 * profitable guards without claiming they exhaust the live property value.
+	 */
+	const constructorMethods = new Map<number, Map<number, Map<number, number>>>();
+	const eligibleBaseConstructors = new Set<number>();
+	for (const target of program.functions) {
+		if (
+			!target.metadata.isClassConstructor ||
+			target.metadata.isDerivedConstructor ||
+			!target.metadata.hasPrototype ||
+			target.isAsync ||
+			target.isGenerator
+		) {
+			continue;
+		}
+		const definitions = functionDefinitions(target);
+		let returns = 0;
+		let implicitOnly = true;
+		for (const block of target.blocks) {
+			if (block.terminator.kind !== "return") continue;
+			returns++;
+			const returned = definitions.get(moveRoot(definitions, block.terminator.value));
+			if (returned?.opcode !== "createUndefined") {
+				implicitOnly = false;
+				break;
+			}
+		}
+		if (returns > 0 && implicitOnly) eligibleBaseConstructors.add(target.functionIndex);
+	}
+	if (prototypeCell?.kind === "object-slot") {
+		for (const setup of program.functions) {
+			const base = valueBase.get(setup.functionIndex)!;
+			const definitions = functionDefinitions(setup);
+			const cellForOperand = operandKeyResolver(definitions);
+			const prototypeOwners = new Map<CoreValueId, number>();
+			for (const block of setup.blocks) {
+				for (const instruction of block.instructions) {
+					if (
+						(instruction.opcode !== "loadProperty" &&
+							instruction.opcode !== "loadPropertyStatic") ||
+						instruction.outputs[0] === undefined ||
+						instruction.inputs[0] === undefined
+					) {
+						continue;
+					}
+					const key =
+						instruction.opcode === "loadPropertyStatic"
+							? (() => {
+									const index = attributeNumber(instruction, "stringIndex");
+									return index === undefined ? undefined : cellForString(index);
+								})()
+							: instruction.inputs[1] === undefined
+								? undefined
+								: cellForOperand(instruction.inputs[1]);
+					if (key === undefined || !coreOwnCellsEqual(key, prototypeCell)) continue;
+					const constructor = definitions.get(
+						moveRoot(definitions, instruction.inputs[0]),
+					);
+					const constructorIndex =
+						constructor?.opcode === "createFunction"
+							? attributeNumber(constructor, "functionIndex")
+							: undefined;
+					if (
+						constructorIndex !== undefined &&
+						eligibleBaseConstructors.has(constructorIndex)
+					) {
+						prototypeOwners.set(instruction.outputs[0], constructorIndex);
+					}
+				}
+			}
+			for (const block of setup.blocks) {
+				for (const instruction of block.instructions) {
+					if (
+						instruction.opcode !== "defineProperty" ||
+						instruction.attributes.enumerable !== false ||
+						instruction.inputs.length !== 3
+					) {
+						continue;
+					}
+					const constructorIndex = prototypeOwners.get(
+						moveRoot(definitions, instruction.inputs[0]!),
+					);
+					const key = cellForOperand(instruction.inputs[1]!);
+					if (constructorIndex === undefined || key?.kind !== "object-slot") continue;
+					const methodRoot = moveRoot(definitions, instruction.inputs[2]!);
+					const method = definitions.get(methodRoot);
+					const methodIndex =
+						method?.opcode === "createFunction"
+							? attributeNumber(method, "functionIndex")
+							: undefined;
+					if (methodIndex === undefined || !functionsByIndex.has(methodIndex)) continue;
+					let byKey = constructorMethods.get(constructorIndex);
+					if (byKey === undefined) {
+						byKey = new Map();
+						constructorMethods.set(constructorIndex, byKey);
+					}
+					let candidates = byKey.get(key.key);
+					if (candidates === undefined) {
+						candidates = new Map();
+						byKey.set(key.key, candidates);
+					}
+					if (candidates.has(methodIndex) || candidates.size >= CORE_CALLEE_TARGET_CAP) {
+						continue;
+					}
+					candidates.set(methodIndex, base + instruction.inputs[2]!);
+				}
+			}
+		}
+	}
 
 	for (const fn of program.functions) {
 		const base = valueBase.get(fn.functionIndex)!;
@@ -1245,6 +1406,24 @@ export function analyzeCoreCalleeTargets(
 								addOriginSeed(valueNode(result), ORIGIN_TOP);
 								continue;
 							}
+							const baseDefinition = definitions.get(
+								moveRoot(definitions, readBase.base),
+							);
+							if (
+								baseDefinition?.opcode === "construct" &&
+								baseDefinition.inputs[0] !== undefined
+							) {
+								addConstructorMethodSite(
+									valueNode(baseDefinition.inputs[0]),
+									valueNode(result),
+									readBase.key,
+								);
+								// The candidate is advisory only: [[Get]] observes the live
+								// prototype chain, which user code may have changed.
+								addSeed(valueNode(result), CORE_CALLEE_TARGETS_OPAQUE);
+								addOriginSeed(valueNode(result), ORIGIN_TOP);
+								continue;
+							}
 							deferredReads.push({
 								base: valueNode(readBase.base),
 								key: readBase.key,
@@ -1443,6 +1622,21 @@ export function analyzeCoreCalleeTargets(
 			raise(site.result, state[returnNode]!);
 		}
 	};
+	const activateConstructorMethodSite = (site: ConstructorMethodSite): void => {
+		const callee = state[site.callee]!;
+		if (callee.anyScript) return;
+		for (const target of callee.functions) {
+			if (site.activated.has(target)) continue;
+			site.activated.add(target);
+			for (const source of constructorMethods.get(target)?.get(site.key)?.values() ??
+				[]) {
+				// This dependency is discovered after seeds have been installed, so
+				// propagate the source's current state as well as wiring future rises.
+				addEdge(source, site.result);
+				raise(site.result, state[source]!);
+			}
+		}
+	};
 
 	for (const [node, targets] of seeds) raise(node, targets);
 	while (queue.length > 0) {
@@ -1451,6 +1645,9 @@ export function analyzeCoreCalleeTargets(
 		const targets = state[node]!;
 		for (const dependent of dependents.get(node) ?? []) raise(dependent, targets);
 		for (const site of callSites.get(node) ?? []) activateCallSite(site);
+		for (const site of constructorMethodSites.get(node) ?? []) {
+			activateConstructorMethodSite(site);
+		}
 	}
 
 	return {
