@@ -64,8 +64,6 @@ Performance recovery should come from standard SSA, dataflow, effect, representa
 and whole-program optimizations. Do not maintain a queue of retired optimizer patterns
 to restore; generic passes may naturally rediscover their useful results.
 
-## Common SSA optimizations
-
 ## World-knowledge ladder
 
 | Level             | Available knowledge                                                                   | Intended result                                                             |
@@ -79,64 +77,69 @@ to restore; generic passes may naturally rediscover their useful results.
 These levels are cumulative facts consumed by one optimizer, not separate pipelines.
 Runtime eval may remove source closure without invalidating authority closure.
 
-## Maligator-specific analysis opportunities
+## Fact-driven optimization
 
-- [ ] Version guarded regions once and replace repeated epoch reads, protector checks,
-      cache probes, and identity tests with unchecked operations inside the region.
-      Keep one explicit generic twin for mutable invalidation.
+Prefer consuming facts already available in Core. Extend an analysis only together
+with the optimization that consumes the additional precision. Keep mutable-world
+performance neutral or better while specializing locked builds.
 
-- [ ] In authority-closed builds, convert primordial dependencies into unconditional
-      facts and remove dead guards, fallback edges, property loads, and helper paths in
-      Core. Verify removal in optimized IR rather than relying on the C compiler.
+- [ ] Consume existing bounded callee sets and effect summaries for direct or guarded
+      dispatch, guarded inlining, and motion across non-mutating calls.
 
-- [ ] Keep mutable-world performance neutral or better while specializing locked
-      builds. Shared SSA work and entry-region versioning should improve both worlds.
+- [ ] Consume existing return-representation and return-provenance summaries to
+      propagate unboxed values, eliminate boxing and roots, and preserve returned
+      allocation identity.
 
-- [ ] Propagate representation constraints through block arguments, calls, cloned
-      instructions, and control-flow joins. Remove redundant boxing and unboxing while
-      keeping boxed ABI boundaries and materialization points explicit.
+- [ ] Consume existing allocation-layout, own-cell, containment, and escape facts for
+      property-load elimination, memory forwarding, dead-allocation elimination,
+      allocation sinking, and initial scalar replacement.
 
-- [ ] Propagate shape and value-class provenance through allocations, block arguments,
-      bounded call results, and stores. Use it for generic known-location reasoning and
-      narrower alias partitions rather than syntax-specific patterns.
+- [ ] Consume existing guarded-region admission and authority-closure facts to admit
+      eligible regions once and remove redundant guards, fallback paths, property
+      loads, and helper calls.
 
-- [ ] Extend escape analysis and scalar replacement across inlining, control-flow
-      joins, exceptions, and suspension. Materialize at the exact identity, reflection,
-      escape, host, or lifetime boundary that makes a heap object observable.
+- [ ] Consume existing source-closure, root-reason, and reachability facts to remove
+      provably unreachable function bodies and function objects.
 
-- [ ] Use precise safepoint and root liveness to shorten boxed-value lifetimes and
-      remove unnecessary root slots. Remain correct for allocations hidden in helpers,
+- [ ] Extend bounded callee discovery through remaining import, lexical,
+      constructor-derived, stable-field, and call-result paths; immediately consume
+      new finite target sets in dispatch, inlining, effect analysis, and reachability.
+
+- [ ] Extend representation constraints through parameters, arguments, block
+      arguments, clones, joins, and materialization; immediately consume them for
+      unboxing, ABI specialization, box elimination, and reduced rooting.
+
+- [ ] Collect shape and value-class provenance across allocations, block arguments,
+      call results, and stores; immediately consume it for property specialization,
+      redundant-check elimination, alias refinement, and memory optimization.
+
+- [ ] Extend escape and containment facts across inlining, joins, exceptions, and
+      suspension; immediately consume them for scalar replacement, stack allocation,
+      allocation sinking, and dead-store elimination.
+
+- [ ] Extend interprocedural summaries with identity, shape, value-class, allocation,
+      throw, and suspension facts one dimension at a time; consume each addition in
+      the call-site optimizations that motivated it.
+
+- [ ] Collect local exception-flow facts for values, handlers, completion order, stack
+      observation, and effects; consume them to lower equivalent local throw and catch
+      regions to ordinary control flow.
+
+- [ ] Complete module, export, publication, eval, reflection, Realm, host,
+      retained-identity, and open-edge reachability modeling; immediately consume the
+      closed graph to remove unreachable functions, helpers, metadata, and disabled
+      feature support.
+
+- [ ] Collect precise safepoint liveness and consume it to minimize root placement and
+      shorten rooted lifetimes while remaining correct for hidden allocations,
       exceptional exits, and every GC mode.
 
-## Interprocedural and whole-program optimization
+- [ ] Collect generated-code cost facts for helper calls, guards, boxing, root slots,
+      safepoints, duplication, loop frequency, downstream C compilation, and binary
+      size; consume them to gate region versioning, guarded dispatch, inlining, PRE,
+      specialization, and cloning.
 
-- [ ] Generalize single-assignment callee resolution to immutable imports, lexical
-      bindings, stable closure fields, constructor-derived methods, and bounded
-      call-result target sets. Preserve fallback behavior whenever identity is open.
-
-- [ ] Build a closed-program call, effect, and reachability graph from modules,
-      exports, host entries, reflection, eval capabilities, Realm creation, and
-      externally retained identities. Explain every edge that remains open.
-
-- [ ] Propagate identity, shape, value, escape, representation, throw, suspension, and
-      allocation summaries across direct calls. Use the summaries for generic
-      inlining, allocation sinking, representation selection, and root reduction.
-
-- [ ] Lower local throw and catch regions to ordinary control flow only when the value,
-      handler, completion order, stack observation, and effects cannot be observed
-      differently.
-
-- [ ] Remove helper bodies and function objects only when reachability, eval,
-      reflection, exports, host roots, and identity facts prove their absence
-      unobservable.
-
-- [ ] Make disabled eval, Realms, Intl data, web APIs, and host personalities
-      participate in reachability and output reduction. Optional features must not
-      retain unrelated helpers through registration tables.
-
-- [ ] Add a generated-code cost model covering helper calls, guards, boxing, root
-      slots, safepoints, duplication, loop frequency, downstream C compilation, and
-      binary size. Use it for inlining, PRE, specialization, and static multiversioning.
+## Compiler infrastructure
 
 - [ ] Generate compiler, VM, runtime opcode, builtin, effect, and constraint plumbing
       from shared descriptor sources. Adding an operation must not leave lowering, GC,
