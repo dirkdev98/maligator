@@ -2,15 +2,15 @@ import { expect, test } from "vitest";
 import { classifyMetricSamples, lanesForChangedFiles } from "../scripts/bench-compare.ts";
 
 test("changed source files select transparent benchmark lanes", () => {
-	const lanes = ["compiler", "language", "string", "promise", "gc", "http"];
+	const lanes = ["javascript", "http", "self-compile"];
 	expect(lanesForChangedFiles(["runtime/src/builtin_string.c"], lanes)).toEqual([
-		"language",
-		"string",
+		"javascript",
 		"http",
 	]);
 	expect(lanesForChangedFiles(["src/compiler/core/core-ir-opt.ts"], lanes)).toEqual([
-		"compiler",
-		"language",
+		"javascript",
+		"http",
+		"self-compile",
 	]);
 	expect(lanesForChangedFiles(["README.md"], lanes)).toEqual([]);
 });
@@ -24,21 +24,24 @@ test("paired comparison fails a clear slowdown and accepts a sub-threshold chang
 		base: 100 + index * 0.1,
 		head: 101 + index * 0.1,
 	}));
-	expect(classifyMetricSamples("language.malMs", slowdown)?.status).toBe("regression");
-	expect(classifyMetricSamples("language.malMs", small)?.status).toBe("unchanged");
+	expect(
+		classifyMetricSamples("javascript.modes.closed-compiled.wallMs", slowdown)?.status,
+	).toBe("regression");
+	expect(
+		classifyMetricSamples("javascript.modes.closed-compiled.wallMs", small)?.status,
+	).toBe("unchanged");
 });
 
 test("paired comparison gives time and throughput ratios opposite directions", () => {
 	const lower = Array.from({ length: 7 }, () => ({ base: 2, head: 1 }));
 	const higher = Array.from({ length: 7 }, () => ({ base: 1, head: 2 }));
-	expect(classifyMetricSamples("language.ratio", lower)?.status).toBe("improvement");
-	expect(classifyMetricSamples("prototypeCache.runtimeRatio", lower)?.status).toBe(
-		"improvement",
-	);
-	expect(classifyMetricSamples("http.ratio", higher)?.status).toBe("improvement");
-	expect(classifyMetricSamples("http.express.middleware.ratio", higher)?.status).toBe(
-		"improvement",
-	);
+	expect(
+		classifyMetricSamples("javascript.modes.closed-compiled.ratio", lower)?.status,
+	).toBe("improvement");
+	expect(classifyMetricSamples("http.bare.ratio", higher)?.status).toBe("improvement");
+	expect(
+		classifyMetricSamples("http.express.workloads.routes.ratio", higher)?.status,
+	).toBe("improvement");
 });
 
 test("paired comparison retains a confident two percent wall improvement", () => {
@@ -46,7 +49,10 @@ test("paired comparison retains a confident two percent wall improvement", () =>
 		base: 100 + index * 0.01,
 		head: 97.5 + index * 0.01,
 	}));
-	expect(classifyMetricSamples("string.malMs", improvement)?.status).toBe("improvement");
+	expect(
+		classifyMetricSamples("javascript.modes.open-interpreted.phaseMs.text", improvement)
+			?.status,
+	).toBe("improvement");
 });
 
 test("the confidence interval must exclude zero, not the full threshold", () => {
@@ -54,7 +60,10 @@ test("the confidence interval must exclude zero, not the full threshold", () => 
 		base: 100,
 		head: 100 + change,
 	}));
-	const result = classifyMetricSamples("string.malMs", improvements);
+	const result = classifyMetricSamples(
+		"javascript.modes.closed-compiled.wallMs",
+		improvements,
+	);
 	expect(result?.medianRegressionPercent).toBeLessThan(-2);
 	expect(result?.confidenceInterval[1]).toBeGreaterThan(-2);
 	expect(result?.confidenceInterval[1]).toBeLessThan(0);
@@ -70,8 +79,12 @@ test("paired comparison treats exact A/A as unchanged and noisy evidence as inco
 		{ base: 100, head: 109 },
 		{ base: 100, head: 100 },
 	];
-	expect(classifyMetricSamples("language.malMs", equal)?.status).toBe("unchanged");
-	expect(classifyMetricSamples("language.malMs", noisy)?.status).toBe("inconclusive");
+	expect(
+		classifyMetricSamples("javascript.modes.closed-compiled.wallMs", equal)?.status,
+	).toBe("unchanged");
+	expect(
+		classifyMetricSamples("javascript.modes.closed-compiled.wallMs", noisy)?.status,
+	).toBe("inconclusive");
 });
 
 test("binary size requires both percentage and practical byte movement", () => {
@@ -79,7 +92,14 @@ test("binary size requires both percentage and practical byte movement", () => {
 		base: 1_000_000,
 		head: 1_010_000,
 	}));
-	expect(classifyMetricSamples("size.full.binaryBytes", samples)?.status).toBe(
-		"unchanged",
-	);
+	expect(
+		classifyMetricSamples("javascript.modes.closed-compiled.binaryBytes", samples)
+			?.status,
+	).toBe("unchanged");
+});
+
+test("paired comparison ignores reference-engine timing noise", () => {
+	const samples = Array.from({ length: 7 }, () => ({ base: 100, head: 200 }));
+	expect(classifyMetricSamples("javascript.node.wallMs", samples)).toBeUndefined();
+	expect(classifyMetricSamples("http.bare.nodeP99Ms", samples)).toBeUndefined();
 });

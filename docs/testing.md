@@ -23,7 +23,7 @@ Use a paired comparison for Maligator changes instead of reading a single delta
 against the committed snapshot:
 
 ```sh
-npm run bench -- language --compare HEAD --runs 5
+npm run bench -- javascript --compare HEAD --runs 5
 npm run bench -- --changed --compare HEAD
 ```
 
@@ -31,7 +31,10 @@ The runner exports the requested Git revision to a temporary directory, verifies
 that its lockfile matches the working tree, warms both trees, and alternates the
 base/head execution order. `--changed` maps the Git diff to the smallest relevant
 benchmark lanes. It starts with the requested number of pairs and may collect up to
-15 while a result remains uncertain.
+15 while a result remains uncertain. The JavaScript family runs one deterministic
+ES module across the closed/open x compiled/interpreted matrix; the HTTP family
+runs the fully closed compiled bare and Express servers. `--full` adds the slower
+fully closed self-compile family.
 
 Every classified metric reports the paired median change and a bootstrapped 95%
 confidence interval. Wall time and throughput require a 3% effect; p99 latency,

@@ -35,6 +35,7 @@ export interface Test262Point extends DatedPoint {
 }
 
 export interface SelfCompileMetrics {
+	world: "closed";
 	maligatorMs: number;
 	nodeMs: number;
 	maligatorPhases: SelfCompilePhases;
@@ -66,6 +67,7 @@ export interface SelfCompilePoint extends DatedPoint, SelfCompileMetrics {
 
 function selfCompileMetrics(point: SelfCompilePoint): SelfCompileMetrics {
 	return {
+		world: point.world,
 		maligatorMs: point.maligatorMs,
 		nodeMs: point.nodeMs,
 		maligatorPhases: point.maligatorPhases,

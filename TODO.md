@@ -83,7 +83,7 @@ Prefer consuming facts already available in Core. Extend an analysis only togeth
 with the optimization that consumes the additional precision. Keep mutable-world
 performance neutral or better while specializing locked builds.
 
-- [ ] Consume existing allocation-layout, own-cell, containment, and escape facts for
+- [x] Consume existing allocation-layout, own-cell, containment, and escape facts for
       property-load elimination, memory forwarding, dead-allocation elimination,
       allocation sinking, and initial scalar replacement.
 
@@ -140,9 +140,9 @@ performance neutral or better while specializing locked builds.
 
 ## Compiler measurement and diagnostics
 
-- [ ] Split the language benchmark into loops, objects, arrays, allocation,
-      intrinsics, control flow, and application phases while retaining its aggregate
-      checksum. Use smaller lanes for attribution and the aggregate for regressions.
+- [x] Replace historical microbenchmarks with one checksummed, phase-balanced
+      JavaScript workload across the closed/open and compiled/interpreted matrix,
+      plus closed HTTP/Express and closed self-compile families.
 
 - [ ] Report cold process time separately from warmed kernel time and retain sample
       dispersion. Record host, toolchain, flags, world policy, eval policy, and runtime

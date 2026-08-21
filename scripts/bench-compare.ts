@@ -19,48 +19,20 @@ export const BENCHMARK_LANE_RULES: ReadonlyArray<{
 }> = [
 	{ pattern: /^(scripts\/bench|bench\/)/, lanes: ["*"] },
 	{
-		pattern:
-			/^src\/compiler\/(core\/(core-frontend|core-ir|semantic-lowering)|pipeline\/compile-core|target\/(emit-c|lower-vm))/,
-		lanes: ["compiler", "language", "module", "stack-object"],
+		pattern: /^src\/compiler\//,
+		lanes: ["javascript", "http", "self-compile"],
 	},
 	{
-		pattern: /^runtime\/src\/(gc|heap)/,
-		lanes: [
-			"gc",
-			"language",
-			"module",
-			"string",
-			"promise",
-			"coroutine",
-			"stack-object",
-			"http",
-		],
-	},
-	{ pattern: /^runtime\/src\/builtin_string/, lanes: ["string", "language", "http"] },
-	{
-		pattern: /^runtime\/src\/(builtin_promise|microtask|async_function)/,
-		lanes: ["promise", "coroutine", "http"],
-	},
-	{
-		pattern: /^runtime\/src\/(object|shape|property|table|key)/,
-		lanes: ["language", "module", "stack-object", "prototype-cache", "http"],
-	},
-	{
-		pattern: /^runtime\/src\/(runtime\/node_http|host\/|runtime\/web_)/,
+		pattern: /^runtime\/src\/runtime\/(node_http|web_)|^runtime\/src\/host\//,
 		lanes: ["http"],
 	},
 	{
-		pattern: /^(src\/|runtime\/)/,
-		lanes: [
-			"language",
-			"module",
-			"string",
-			"promise",
-			"coroutine",
-			"arguments",
-			"stack-object",
-			"interpreter",
-		],
+		pattern: /^runtime\//,
+		lanes: ["javascript", "http"],
+	},
+	{
+		pattern: /^src\//,
+		lanes: ["javascript", "http", "self-compile"],
 	},
 ];
 
@@ -158,6 +130,7 @@ function metricPolicy(
 ):
 	| { direction: "higher" | "lower"; thresholdPercent: number; minimumAbsolute?: number }
 	| undefined {
+	if (/(^|\.)node(?:\.|[A-Z])/.test(metricPath)) return undefined;
 	if (/(^|\.)malRps$/.test(metricPath))
 		return { direction: "higher", thresholdPercent: 2 };
 	// HTTP publishes Maligator/Node throughput, while every other ratio in the
@@ -172,6 +145,7 @@ function metricPolicy(
 	if (/(binaryBytes|ArchiveBytes)$/i.test(metricPath)) {
 		return { direction: "lower", thresholdPercent: 0.5, minimumAbsolute: 32 * 1024 };
 	}
+	if (/\.phaseMs\./.test(metricPath)) return { direction: "lower", thresholdPercent: 2 };
 	if (/(Ms|wallMs)$/i.test(metricPath))
 		return { direction: "lower", thresholdPercent: 2 };
 	return undefined;

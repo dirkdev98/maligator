@@ -502,9 +502,10 @@ npm run test:full:report
 
 npm run type-check
 npm run lint
-npm run bench                         # compare only; never updates the baseline
-npm run bench -- language --update  # update only the selected baseline lanes
-npm run bench -- language --compare HEAD --runs 5
+npm run bench                              # balanced JavaScript + closed HTTP/Express
+npm run bench -- javascript --mode open-interpreted
+npm run bench -- --full --update           # add closed self-compile; hard-cut baseline
+npm run bench -- javascript --compare HEAD --runs 5
 npm run bench -- --changed --compare HEAD
 
 # Complete standards reports without baseline updates. Ask before full Test262.

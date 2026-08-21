@@ -13,6 +13,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { parseProfileCapture } from "../src/profile-artifact.ts";
 import { buildNativeBinary, HOST_MAIN } from "../src/test-harness.ts";
 import { formatOhaDuration, parseOhaOutput } from "./bench-http.ts";
@@ -148,11 +150,36 @@ function runBinary(
 	return { wallMs, stdout: result.stdout ?? "" };
 }
 
+function semanticOutput(stdout: string): string {
+	const trimmed = stdout.trim();
+	try {
+		const output = JSON.parse(trimmed) as {
+			workload?: unknown;
+			phases?: Record<string, { checksum?: unknown }>;
+		};
+		if (output.workload !== "javascript-v1" || output.phases === undefined) {
+			return stdout;
+		}
+		return JSON.stringify({
+			workload: output.workload,
+			phases: Object.fromEntries(
+				Object.entries(output.phases).map(([name, phase]) => [
+					name,
+					{ checksum: phase.checksum },
+				]),
+			),
+		});
+	} catch {
+		return stdout;
+	}
+}
+
 function measureDirectLane(
 	name: string,
 	fixture: string,
 	runs: number,
 	directory: string,
+	config: ResolvedBuildConfig,
 	buildEnvironment: NodeJS.ProcessEnv = {},
 ): LaneResult {
 	console.log(`building ${name} images...`);
@@ -160,11 +187,13 @@ function measureDirectLane(
 	const ordinary = buildNativeBinary({
 		fixture,
 		name: `profile-overhead-${name}-ordinary`,
+		config,
 		environment,
 	});
 	const profile = buildNativeBinary({
 		fixture,
 		name: `profile-overhead-${name}-profile`,
+		config,
 		profileEnabled: true,
 		environment,
 	});
@@ -179,7 +208,9 @@ function measureDirectLane(
 		MAL_GC_VERIFY: "1",
 		MAL_PROFILE_CAPTURE: preflightCapture,
 	});
-	if (ordinaryPreflight.stdout !== profilePreflight.stdout) {
+	if (
+		semanticOutput(ordinaryPreflight.stdout) !== semanticOutput(profilePreflight.stdout)
+	) {
 		throw new Error(`${name} ordinary/profile output mismatch`);
 	}
 	let captureHealth = validateCapture(preflightCapture);
@@ -205,7 +236,7 @@ function measureDirectLane(
 			profileRun = runProfile();
 			ordinaryRun = runOrdinary();
 		}
-		if (ordinaryRun.stdout !== profileRun.stdout) {
+		if (semanticOutput(ordinaryRun.stdout) !== semanticOutput(profileRun.stdout)) {
 			throw new Error(`${name} ordinary/profile output mismatch in pair ${pair + 1}`);
 		}
 		ordinaryTimes.push(ordinaryRun.wallMs);
@@ -323,17 +354,18 @@ async function measureHttpLane(
 ): Promise<LaneResult> {
 	if (!ohaAvailable()) throw new Error("profile overhead HTTP gate requires `oha`");
 	console.log("building HTTP images...");
+	const config = resolveBuildConfig({ surface: { node: true, webPlatform: true } });
 	const ordinary = buildNativeBinary({
 		fixture: "bench/http/express-server.cjs",
 		name: "profile-overhead-http-ordinary",
 		mainFile: HOST_MAIN,
-		nodeEnabled: true,
+		config,
 	});
 	const profile = buildNativeBinary({
 		fixture: "bench/http/express-server.cjs",
 		name: "profile-overhead-http-profile",
 		mainFile: HOST_MAIN,
-		nodeEnabled: true,
+		config,
 		profileEnabled: true,
 	});
 	const ordinaryPort = await freePort();
@@ -413,21 +445,13 @@ if (options !== undefined) {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-overhead-"));
 	try {
 		const lanes: Record<string, LaneResult> = {};
-		lanes.language = measureDirectLane(
-			"language",
-			"bench/language.js",
+		lanes.javascript = measureDirectLane(
+			"javascript",
+			"bench/javascript.mjs",
 			options.runs,
 			directory,
+			resolveBuildConfig({}),
 		);
-		lanes["allocation-heavy"] = measureDirectLane(
-			"allocation-heavy",
-			"bench/stack-object.js",
-			options.runs,
-			directory,
-		);
-		lanes.gc = measureDirectLane("gc", "bench/gc/server.js", options.runs, directory, {
-			MAL_GC_GENERATIONAL: "1",
-		});
 		lanes.http = await measureHttpLane(options.runs, options.httpSeconds, directory);
 		const passed = Object.values(lanes).every(
 			(lane) =>

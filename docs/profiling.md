@@ -200,12 +200,11 @@ binaries. Exact counters are additionally
 compiled out of sampling-only profile images. Sampling images begin with small
 record/frame buffers, grow them only as evidence arrives, and allow up to 262,144
 records before reporting explicit loss. For an active sampling
-build, the acceptance target is less than 3% median overhead across language,
-allocation-heavy, GC, and HTTP lanes, with output parity, GC verification, and zero
-capture loss. Run `npm run bench:profile-overhead`; its alternating pairs and raw JSON
-make the check reproducible. The 2026-08-15 five-pair check measured 1.14%, 1.46%,
-1.14%, and 1.87% respectively. Re-measure this contract when changing the profiler
-or adding an event source.
+build, the acceptance target is less than 3% median overhead across the balanced
+closed JavaScript and flagship closed Express workloads, with output parity, GC
+verification, and zero capture loss. Run `npm run bench:profile-overhead`; its
+alternating pairs and raw JSON make the check reproducible. Re-measure this contract
+when changing the profiler or adding an event source.
 
 Compiler-census images have a separate cache identity and no low-overhead promise.
 Dense totals cover every emitted source site and are allocated only when exact
