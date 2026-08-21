@@ -152,6 +152,26 @@ export type CoreOpcodeAllocation =
 			readonly initialElements: "none";
 	  };
 
+/**
+ * How an opcode transfers control to a callable operand, and where its result
+ * comes from.
+ *
+ * `calleeOperand` is the single declaration of which operand holds the callable,
+ * so an analysis finds the callee without knowing the argument layout. The
+ * result kinds follow the object internal methods rather than the syntax:
+ *
+ * - `call-completion` — the result is the callee's [[Call]] completion value.
+ * - `construct-completion` — the result is [[Construct]]'s, which is an object
+ *   the body returned explicitly or, for anything else it returned, the object
+ *   [[Construct]] bound as `this`.
+ * - `unmodeled` — control reaches the callable, but nothing here relates the
+ *   result to what the callable returned.
+ */
+export interface CoreOpcodeCallTransfer {
+	readonly calleeOperand: number;
+	readonly result: "call-completion" | "construct-completion" | "unmodeled";
+}
+
 export interface CoreArity {
 	readonly minimum: number;
 	readonly maximum: number;
@@ -186,6 +206,12 @@ export interface CoreOpcodeDescriptor<Name extends string = string> {
 	readonly accesses?: ReadonlyArray<CoreOpcodeAccess>;
 	/** Fresh aggregate this opcode produces, when its layout is compiler-known. */
 	readonly allocation?: CoreOpcodeAllocation;
+	/**
+	 * Control transfer to a callable operand. Declaring it here is what keeps the
+	 * callee-target lattice and the interprocedural call graph from maintaining
+	 * separate ideas of which opcodes are calls.
+	 */
+	readonly callTransfer?: CoreOpcodeCallTransfer;
 	/**
 	 * Every operand is inspected without anything retaining it, so passing a
 	 * reference here does not let it be reached again. Operators whose observation
@@ -290,6 +316,27 @@ function validateAccesses(descriptor: CoreOpcodeDescriptor): void {
 	}
 }
 
+function validateCallTransfer(descriptor: CoreOpcodeDescriptor): void {
+	const transfer = descriptor.callTransfer;
+	if (transfer === undefined) return;
+	const opcode = descriptor.opcode;
+	if (!descriptor.effects.callsUserCode) {
+		throw new Error(`${opcode} declares a call transfer without entering user code`);
+	}
+	if (
+		!Number.isSafeInteger(transfer.calleeOperand) ||
+		transfer.calleeOperand < 0 ||
+		transfer.calleeOperand >= descriptor.inputs.minimum
+	) {
+		throw new Error(
+			`${opcode} names callee operand ${transfer.calleeOperand} outside its ${descriptor.inputs.minimum} required inputs`,
+		);
+	}
+	if (transfer.result !== "unmodeled" && descriptor.outputs.minimum < 1) {
+		throw new Error(`${opcode} declares a ${transfer.result} without producing a result`);
+	}
+}
+
 function validateAllocation(descriptor: CoreOpcodeDescriptor): void {
 	const allocation = descriptor.allocation;
 	if (allocation === undefined) return;
@@ -331,6 +378,7 @@ export class CoreOpcodeRegistry {
 		validateEffectDomains(descriptor.opcode, "write", descriptor.effects.writes);
 		validateAccesses(descriptor);
 		validateAllocation(descriptor);
+		validateCallTransfer(descriptor);
 		const frozen: CoreOpcodeDescriptor<Name> = Object.freeze({
 			...descriptor,
 			inputs: Object.freeze({ ...descriptor.inputs }),
@@ -343,6 +391,9 @@ export class CoreOpcodeRegistry {
 			...(descriptor.allocation === undefined
 				? {}
 				: { allocation: Object.freeze({ ...descriptor.allocation }) }),
+			...(descriptor.callTransfer === undefined
+				? {}
+				: { callTransfer: Object.freeze({ ...descriptor.callTransfer }) }),
 			...(descriptor.accesses === undefined
 				? {}
 				: {

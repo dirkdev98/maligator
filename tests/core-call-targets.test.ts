@@ -14,7 +14,10 @@ import {
 } from "../src/compiler/core/core-ir-call-targets.ts";
 import type { CoreCalleeTargets } from "../src/compiler/core/core-ir-call-targets.ts";
 import { coreMemoryAccesses } from "../src/compiler/core/core-ir-memory.ts";
-import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import {
+	CORE_OPCODES,
+	coreOpcodeRegistry,
+} from "../src/compiler/core/core-ir-opcodes.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type {
 	CoreAttributeObject,
@@ -71,6 +74,16 @@ function callSites(fn: CoreFunction): ReadonlyArray<CoreInstruction> {
 	return fn.blocks
 		.flatMap(({ instructions }) => instructions)
 		.filter(({ opcode }) => opcode === "call" || opcode === "construct");
+}
+
+/**
+ * Every instruction the registry declares as entering a callable, which is what
+ * the solver keys its call-result dependencies on.
+ */
+function callLikeSites(fn: CoreFunction): ReadonlyArray<CoreInstruction> {
+	return fn.blocks
+		.flatMap(({ instructions }) => instructions)
+		.filter(({ opcode }) => coreOpcodeRegistry.get(opcode)?.callTransfer !== undefined);
 }
 
 function functionIndexOfName(program: CoreProgram, name: string): number {
@@ -699,5 +712,291 @@ describe("callee-target annotation", () => {
 					instruction.type === "call" && instruction.directFunctionIndex !== undefined,
 			).length,
 		).toBeGreaterThan(0);
+	});
+});
+
+describe("bounded call-result targets", () => {
+	it("declares which operand each control transfer enters and what its result is", () => {
+		const declared = CORE_OPCODES.map(
+			(opcode) => [opcode, coreOpcodeRegistry.require(opcode).callTransfer] as const,
+		).filter(([, transfer]) => transfer !== undefined);
+		// The registry is the single declaration a call has: an opcode missing here is
+		// a call for neither the target lattice nor the interprocedural call graph.
+		expect(Object.fromEntries(declared)).toEqual({
+			call: { calleeOperand: 0, result: "call-completion" },
+			callSpread: { calleeOperand: 0, result: "call-completion" },
+			callSpreadIterable: { calleeOperand: 0, result: "call-completion" },
+			construct: { calleeOperand: 0, result: "construct-completion" },
+			constructSpread: { calleeOperand: 0, result: "construct-completion" },
+			constructSuper: { calleeOperand: 0, result: "unmodeled" },
+			constructSuperExplicit: { calleeOperand: 0, result: "unmodeled" },
+		});
+	});
+
+	it("resolves a factory result to the single function the factory returns", () => {
+		const program = optimizedCore(
+			`function inner(value) { return value + 1; }
+			function factory() { return inner; }
+			function run(value) { return factory()(value); }
+			run(1);`,
+			"call-results-factory.mjs",
+		);
+		const innerIndex = functionIndexOfName(program, "inner");
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		const resolved = callSites(run).filter(
+			({ attributes }) => attributes.directFunctionIndex === innerIndex,
+		);
+		expect(resolved).toHaveLength(1);
+		// A closed proof, not a speculation: nothing else can reach the result.
+		expect(calleeTargetsAttribute(resolved[0]!)).toEqual({
+			functions: [innerIndex],
+			anyScript: false,
+			opaque: false,
+		});
+	});
+
+	it("keeps a bounded set for a factory that returns one of two functions", () => {
+		const program = optimizedCore(
+			`function first(value) { return value + 1; }
+			function second(value) { return value + 2; }
+			function pick(flag) { if (flag) { return first; } return second; }
+			function run(flag, value) { return pick(flag)(value); }
+			run(true, 1);`,
+			"call-results-two.mjs",
+		);
+		const expected = [
+			functionIndexOfName(program, "first"),
+			functionIndexOfName(program, "second"),
+		].sort((left, right) => left - right);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		const site = callSites(run).find(
+			({ attributes }) => attributes.directFunctionIndex === undefined,
+		);
+		expect(site).toBeDefined();
+		expect(calleeTargetsAttribute(site!)?.functions).toEqual(expected);
+		expect(calleeTargetsAttribute(site!)?.anyScript).toBe(false);
+	});
+
+	it("forwards every spread form's result through the same declaration", () => {
+		const program = optimizedCore(
+			`function inner(value) { return value + 1; }
+			function factory() { return inner; }
+			function iterable(args) { return factory(...args)(1); }
+			function marshalled(args) { return factory(...args, 2)(1); }
+			function constructed(args) { return new factory(...args); }
+			iterable([]);
+			marshalled([]);
+			constructed([]);`,
+			"call-results-spread.mjs",
+		);
+		const innerIndex = functionIndexOfName(program, "inner");
+		const analysis = analyzeCoreCalleeTargets(program);
+		const spreadResults = new Map<string, number | undefined>();
+		for (const name of ["iterable", "marshalled", "constructed"]) {
+			const fn = program.functions[functionIndexOfName(program, name)]!;
+			for (const site of callLikeSites(fn)) {
+				if (site.opcode === "call") continue;
+				spreadResults.set(
+					site.opcode,
+					coreCalleeTargetsClosedFunction(
+						analysis.targets(fn.functionIndex, site.outputs[0]!),
+					),
+				);
+			}
+		}
+		expect(Object.fromEntries(spreadResults)).toEqual({
+			callSpreadIterable: innerIndex,
+			callSpread: innerIndex,
+			constructSpread: innerIndex,
+		});
+	});
+
+	it("keeps returned candidates alongside an unresolved callee fallback", () => {
+		const program = optimizedCore(
+			`function inner(value) { return value; }
+			function factory() { return inner; }
+			function run(flag, open, value) { return (flag ? factory : open)()(value); }
+			run(true, factory, 1);`,
+			"call-results-open.mjs",
+		);
+		const innerIndex = functionIndexOfName(program, "inner");
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		const analysis = analyzeCoreCalleeTargets(program);
+		const sites = callSites(run);
+		expect(sites).toHaveLength(2);
+		const returned = sites
+			.map((site) => analysis.targets(run.functionIndex, site.outputs[0]!))
+			.find(({ functions }) => functions.includes(innerIndex));
+		expect(returned).toEqual({
+			functions: [innerIndex],
+			anyScript: false,
+			opaque: true,
+		});
+		// The named return still licenses a guarded direct call; the opaque bit keeps
+		// the generic fallback for the unresolved branch.
+		expect(
+			sites.some(({ attributes }) => attributes.directFunctionIndex === innerIndex),
+		).toBe(true);
+	});
+
+	it("hands back a promise rather than an async function's returned callable", () => {
+		const program = optimizedCore(
+			`function inner(value) { return value; }
+			async function factory() { return inner; }
+			function run(value) { return factory()(value); }
+			run(1);`,
+			"call-results-async.mjs",
+		);
+		const innerIndex = functionIndexOfName(program, "inner");
+		const analysis = analyzeCoreCalleeTargets(program);
+		// The body's return value is in the function's return cell, ...
+		expect(analysis.returnTargets(functionIndexOfName(program, "factory"))).toEqual(
+			coreCalleeTargetsFunction(innerIndex),
+		);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		for (const site of callSites(run)) {
+			// ... but calling it produces the result promise, which is not callable.
+			expect(analysis.targets(run.functionIndex, site.outputs[0]!)).toEqual(
+				CORE_CALLEE_TARGETS_BOTTOM,
+			);
+			expect(site.attributes.directFunctionIndex).not.toBe(innerIndex);
+		}
+	});
+
+	it("hands back an iterator rather than a generator's returned callable", () => {
+		const program = optimizedCore(
+			`function inner(value) { return value; }
+			function* factory() { return inner; }
+			function run(value) { return factory()(value); }
+			run(1);`,
+			"call-results-generator.mjs",
+		);
+		const innerIndex = functionIndexOfName(program, "inner");
+		const analysis = analyzeCoreCalleeTargets(program);
+		expect(analysis.returnTargets(functionIndexOfName(program, "factory"))).toEqual(
+			coreCalleeTargetsFunction(innerIndex),
+		);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		for (const site of callSites(run)) {
+			expect(analysis.targets(run.functionIndex, site.outputs[0]!)).toEqual(
+				CORE_CALLEE_TARGETS_BOTTOM,
+			);
+			expect(site.attributes.directFunctionIndex).not.toBe(innerIndex);
+		}
+	});
+
+	it("resolves a constructor's explicitly returned callable", () => {
+		const program = optimizedCore(
+			`function made(value) { return value; }
+			function Factory() { return made; }
+			function run(value) { return new Factory()(value); }
+			run(1);`,
+			"call-results-construct.mjs",
+		);
+		const madeIndex = functionIndexOfName(program, "made");
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		const resolved = callSites(run).filter(
+			({ opcode, attributes }) =>
+				opcode === "call" && attributes.directFunctionIndex === madeIndex,
+		);
+		expect(resolved).toHaveLength(1);
+		expect(calleeTargetsAttribute(resolved[0]!)).toEqual({
+			functions: [madeIndex],
+			anyScript: false,
+			opaque: false,
+		});
+	});
+
+	it("leaves a derived constructor's completion open", () => {
+		const program = optimizedCore(
+			`class Base { constructor() { return function fromBase() { return 1; }; } }
+			class Derived extends Base { constructor() { super(); } }
+			function run() { return new Derived()(); }
+			run();`,
+			"call-results-derived.mjs",
+		);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		const analysis = analyzeCoreCalleeTargets(program);
+		const construct = callSites(run).find(({ opcode }) => opcode === "construct");
+		expect(construct).toBeDefined();
+		// [[Construct]] substitutes the object this constructor's own super() bound
+		// whenever the body returns a non-object, and no Core value names it.
+		expect(analysis.targets(run.functionIndex, construct!.outputs[0]!)).toEqual(
+			CORE_CALLEE_TARGETS_OPAQUE,
+		);
+	});
+
+	it("widens a return cell past the cap instead of picking a subset", () => {
+		const returns = Array.from(
+			{ length: CORE_CALLEE_TARGET_CAP + 1 },
+			(_, index) => `if (which === ${index}) { return candidate${index}; }`,
+		).join("\n");
+		const declarations = Array.from(
+			{ length: CORE_CALLEE_TARGET_CAP + 1 },
+			(_, index) => `function candidate${index}() { return ${index}; }`,
+		).join("\n");
+		const program = optimizedCore(
+			`${declarations}
+			function pick(which) { ${returns} return candidate0; }
+			function run(which) { return pick(which)(); }
+			run(0);`,
+			"call-results-cap.mjs",
+		);
+		const analysis = analyzeCoreCalleeTargets(program);
+		const returnCell = analysis.returnTargets(functionIndexOfName(program, "pick"));
+		expect(returnCell.functions).toEqual([]);
+		expect(returnCell.anyScript).toBe(true);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		for (const site of callSites(run)) {
+			expect(site.attributes.directFunctionIndex).not.toBe(
+				functionIndexOfName(program, "candidate0"),
+			);
+		}
+	});
+
+	it("converges on a recursive factory and bounds its call activations", () => {
+		const program = optimizedCore(
+			`function inner(value) { return value; }
+			function factory(depth) { if (depth > 0) { return factory(depth - 1); } return inner; }
+			function run(value) { return factory(3)(value); }
+			run(1);`,
+			"call-results-recursive.mjs",
+		);
+		const innerIndex = functionIndexOfName(program, "inner");
+		const analysis = analyzeCoreCalleeTargets(program);
+		expect(analysis.returnTargets(functionIndexOfName(program, "factory"))).toEqual(
+			coreCalleeTargetsFunction(innerIndex),
+		);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		expect(
+			callSites(run).filter(
+				({ attributes }) => attributes.directFunctionIndex === innerIndex,
+			),
+		).toHaveLength(1);
+		const declaredCalls = program.functions.reduce(
+			(total, fn) => total + callLikeSites(fn).length,
+			0,
+		);
+		// Each site wires at most one return cell per finite target plus one raise for
+		// each open component; a solver that rescanned calls would exceed this.
+		expect(analysis.statistics.callActivations).toBeLessThanOrEqual(
+			declaredCalls * (CORE_CALLEE_TARGET_CAP + 2),
+		);
+	});
+
+	it("opens a call whose named target is not part of this program", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		// A target index no function in the program carries: the return cell it would
+		// need does not exist, so the result cannot be narrowed at all.
+		const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 9 },
+		});
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		const [result] = builder.appendInstruction(entry, "call", [callee!, receiver!]);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+
+		const analysis = analyzeCoreCalleeTargets(coreProgram([builder.finish(entry)]));
+		expect(analysis.targets(0, result!)).toEqual(CORE_CALLEE_TARGETS_OPAQUE);
 	});
 });

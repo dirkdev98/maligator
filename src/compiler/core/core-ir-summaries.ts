@@ -90,6 +90,7 @@ import type {
 	CoreFunction,
 	CoreInstruction,
 	CoreInstructionId,
+	CoreOpcodeCallTransfer,
 	CoreOpcodeRegistry,
 	CoreProgram,
 	CoreRepresentation,
@@ -135,35 +136,31 @@ export const CORE_CALL_FRAME_EFFECTS: EffectSummary = Object.freeze({
 });
 
 /**
- * Opcodes that transfer control to the callable in operand 0.
+ * The registry's declaration of the callable an instruction enters, which is how
+ * this module decides what is a call graph edge and which sites a claim can
+ * describe.
  *
- * Only `call` participates in effect refinement. `construct` additionally reads
- * the constructor's `prototype` property and runs derived-constructor and
- * `this`-binding semantics this slice does not summarize, and the spread forms
- * marshal an argument list whose fan-out into parameters is not statically known.
- * All of them still contribute call-graph edges, so a callee reached only through
- * them is still summarized and still counted as a callee.
+ * A declared transfer is always a call-graph edge, so a callee reached only
+ * through one is still summarized and still counted as a callee. A transfer whose
+ * result the registry leaves `unmodeled` — super construction, which marshals its
+ * argument list through an array, binds its result as `this`, and maps no operand
+ * onto a formal — contributes the edge and nothing else: its effects, operands,
+ * and result stay at their conservative baseline. Deriving both from the registry
+ * is what keeps this call graph and the callee-target lattice from disagreeing
+ * about which opcodes are calls.
+ *
+ * Only `call` participates in effect refinement on top of that. `construct`
+ * additionally reads the constructor's `prototype` property and runs
+ * derived-constructor and `this`-binding semantics this slice does not summarize,
+ * and the spread forms marshal an argument list whose fan-out into parameters is
+ * not statically known.
  */
-const CALL_OPCODES: ReadonlySet<string> = new Set([
-	"call",
-	"callSpread",
-	"callSpreadIterable",
-	"construct",
-	"constructSpread",
-]);
-
-/**
- * Opcodes that enter the callable in operand 0 but are not call sites a claim can
- * describe. Super construction runs the parent's [[Construct]], binds the result
- * as `this`, and marshals its argument list through an array, so no operand maps
- * onto a formal and its result is the constructed object rather than a callee's
- * return value. Only the call-graph edge is extracted; the effects, the operands,
- * and the result stay at their conservative baseline.
- */
-const EDGE_ONLY_CALL_OPCODES: ReadonlySet<string> = new Set([
-	"constructSuper",
-	"constructSuperExplicit",
-]);
+function callTransfer(
+	instruction: CoreInstruction,
+	registry: CoreOpcodeRegistry,
+): CoreOpcodeCallTransfer | undefined {
+	return registry.get(instruction.opcode)?.callTransfer;
+}
 
 /**
  * How an opcode's results stand for the arguments this frame was handed.
@@ -601,11 +598,12 @@ function collectLocalFacts(
 				for (const output of instruction.outputs) receiverValues.push(output);
 			}
 
-			const isCall = CALL_OPCODES.has(instruction.opcode);
-			const isEdgeOnlyCall = EDGE_ONLY_CALL_OPCODES.has(instruction.opcode);
+			const transfer = callTransfer(instruction, registry);
+			const isCall = transfer !== undefined && transfer.result !== "unmodeled";
+			const isEdgeOnlyCall = transfer?.result === "unmodeled";
 			let site: CallSite | undefined;
-			if (isCall || isEdgeOnlyCall) {
-				const callee = instruction.inputs[0];
+			if (transfer !== undefined) {
+				const callee = instruction.inputs[transfer.calleeOperand];
 				const resolved =
 					callee === undefined ? undefined : targets.targets(fn.functionIndex, callee);
 				if (
@@ -664,7 +662,7 @@ function collectLocalFacts(
 			// An operand the registry declares as merely observed is not retained.
 			if (summaryObservesOperands(instruction, registry)) continue;
 			for (const [position, input] of instruction.inputs.entries()) {
-				if (isCall && position === 0) {
+				if (isCall && position === transfer.calleeOperand) {
 					// Being invoked is not being kept: the reference lives on the stack for
 					// the duration of the call and nothing here stores it.
 					raiseBase(input, "invoked");
@@ -1311,9 +1309,18 @@ function collectPublishedFunctions(
 	for (const fn of program.functions) {
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
+				const descriptor = registry.get(instruction.opcode);
+				if (descriptor?.observesOperands === true) continue;
+				// A super construction's parent operand is deliberately not exempt: its
+				// result becomes `this` and this analysis does not model where that goes,
+				// so the parent stays published.
+				const invoked =
+					descriptor?.callTransfer !== undefined &&
+					descriptor.callTransfer.result !== "unmodeled"
+						? descriptor.callTransfer.calleeOperand
+						: undefined;
 				for (const [position, input] of instruction.inputs.entries()) {
-					if (registry.get(instruction.opcode)?.observesOperands === true) continue;
-					if (CALL_OPCODES.has(instruction.opcode) && position === 0) continue;
+					if (position === invoked) continue;
 					if (
 						instruction.opcode === "storeGlobal" ||
 						instruction.opcode === "storeCaptured"

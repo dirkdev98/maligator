@@ -16,6 +16,14 @@
  * pushing a raised value along out-edges is exact, and no CFG is ever rebuilt in
  * a whole-program round.
  *
+ * Call results join the same graph through one cell per function holding
+ * everything that function returns. A call site depends on its callee cell
+ * reactively: each finite target the callee is proven to hold opens an edge from
+ * that target's return cell to the call's result exactly once, and an open callee
+ * raises the result's matching open component at most once. Because a cell's
+ * finite set only grows and only up to the cap before it widens away, the
+ * whole-program solve stays one worklist with no rescan of calls or functions.
+ *
  * Soundness rests on the registry being the single declaration of which memory
  * an opcode names. Every write to `global-slot` or `captured-slot` either names
  * its cell and its stored value (`storeGlobal`, `storeCaptured`) or appears in
@@ -115,7 +123,7 @@ export function joinCoreCalleeTargets(
 ): CoreCalleeTargets {
 	const opaque = left.opaque || right.opaque;
 	if (left.anyScript || right.anyScript) {
-		return opaque ? ANY_SCRIPT_AND_OPAQUE : CORE_CALLEE_TARGETS_ANY_SCRIPT;
+		return opaque ? CORE_CALLEE_TARGETS_TOP : CORE_CALLEE_TARGETS_ANY_SCRIPT;
 	}
 	if (left.functions.length === 0 && right.functions.length === 0) {
 		return opaque ? CORE_CALLEE_TARGETS_OPAQUE : CORE_CALLEE_TARGETS_BOTTOM;
@@ -123,7 +131,7 @@ export function joinCoreCalleeTargets(
 	const merged = new Set(left.functions);
 	for (const entry of right.functions) merged.add(entry);
 	if (merged.size > CORE_CALLEE_TARGET_CAP) {
-		return opaque ? ANY_SCRIPT_AND_OPAQUE : CORE_CALLEE_TARGETS_ANY_SCRIPT;
+		return opaque ? CORE_CALLEE_TARGETS_TOP : CORE_CALLEE_TARGETS_ANY_SCRIPT;
 	}
 	return Object.freeze({
 		functions: Object.freeze([...merged].sort((first, second) => first - second)),
@@ -132,7 +140,11 @@ export function joinCoreCalleeTargets(
 	});
 }
 
-const ANY_SCRIPT_AND_OPAQUE: CoreCalleeTargets = Object.freeze({
+/**
+ * Every callable at once: any script function and any callable this analysis
+ * cannot name. This is the lattice top.
+ */
+export const CORE_CALLEE_TARGETS_TOP: CoreCalleeTargets = Object.freeze({
 	functions: NO_FUNCTIONS,
 	anyScript: true,
 	opaque: true,
@@ -178,6 +190,12 @@ export interface CoreCalleeTargetStatistics {
 	readonly edges: number;
 	/** Times a node's state strictly rose; bounded by nodes times the height. */
 	readonly propagations: number;
+	/**
+	 * Return-cell edges and open-component raises a call site activated. Bounded by
+	 * `CORE_CALLEE_TARGET_CAP + 2` per site, which is what keeps a resolvable call
+	 * from turning the solve into a whole-program round.
+	 */
+	readonly callActivations: number;
 }
 
 export interface CoreCalleeTargetAnalysis {
@@ -185,6 +203,8 @@ export interface CoreCalleeTargetAnalysis {
 	targets(functionIndex: number, value: CoreValueId): CoreCalleeTargets;
 	globalSlot(slot: number): CoreCalleeTargets;
 	capturedSlot(owner: number, index: number): CoreCalleeTargets;
+	/** Everything this function's ordinary returns can hand back to a caller. */
+	returnTargets(functionIndex: number): CoreCalleeTargets;
 	readonly statistics: CoreCalleeTargetStatistics;
 }
 
@@ -277,13 +297,32 @@ function slotFamilyOpacity(
 }
 
 /**
+ * One call site's reactive dependency on its callee cell.
+ *
+ * `activated` and `openRaised` make the dependency bounded: a callee cell's finite
+ * set only grows and only to the cap before it widens away, so a site wires at
+ * most `CORE_CALLEE_TARGET_CAP` return cells and raises each open component at
+ * most once, however many times the callee cell rises.
+ */
+interface CallResultSite {
+	readonly callee: number;
+	readonly result: number;
+	/** [[Construct]] rather than [[Call]], which changes what the result can be. */
+	readonly construct: boolean;
+	readonly activated: Set<number>;
+	openRaised: "none" | "opaque" | "top";
+}
+
+/**
  * Solve the program's callee-target lattice.
  *
- * Nodes are SSA values, compiler-owned global slots, and captured closure slots;
- * edges run producer to consumer. Every node's state can rise at most
- * `CORE_CALLEE_TARGET_CAP + 2` times (the set grows, then widens, then opens), so
- * the whole solve is O(cap * (nodes + edges)) — near-linear in program size for
- * the fixed cap.
+ * Nodes are SSA values, compiler-owned global slots, captured closure slots, and
+ * one return cell per function; edges run producer to consumer. Every node's
+ * state can rise at most `CORE_CALLEE_TARGET_CAP + 2` times (the set grows, then
+ * widens, then opens), and every call site activates at most
+ * `CORE_CALLEE_TARGET_CAP + 2` return-cell edges or open raises, so the whole
+ * solve is O(cap * (nodes + edges + calls)) — near-linear in program size for
+ * the fixed cap, with no round over calls or functions.
  */
 export function analyzeCoreCalleeTargets(
 	program: CoreProgram,
@@ -294,6 +333,10 @@ export function analyzeCoreCalleeTargets(
 	const valueLimit = new Map<number, number>();
 	const globalNodes = new Map<number, number>();
 	const capturedNodes = new Map<string, number>();
+	const returnNodes = new Map<number, number>();
+	const functionsByIndex = new Map(
+		program.functions.map((fn) => [fn.functionIndex, fn] as const),
+	);
 	let nodeCount = 0;
 	for (const fn of program.functions) {
 		// Take the maximum rather than the last entry: a value id outside this
@@ -303,6 +346,9 @@ export function analyzeCoreCalleeTargets(
 		valueBase.set(fn.functionIndex, nodeCount);
 		valueLimit.set(fn.functionIndex, limit);
 		nodeCount += limit;
+		// Allocated for every function up front: a call site discovered mid-solve
+		// must find its target's cell without growing the node universe.
+		returnNodes.set(fn.functionIndex, nodeCount++);
 	}
 	const globalNode = (slot: number): number => {
 		let node = globalNodes.get(slot);
@@ -324,7 +370,9 @@ export function analyzeCoreCalleeTargets(
 
 	const dependents = new Map<number, Array<number>>();
 	const seeds = new Map<number, CoreCalleeTargets>();
+	const callSites = new Map<number, Array<CallResultSite>>();
 	let edges = 0;
+	let callActivations = 0;
 	const addEdge = (from: number, to: number): void => {
 		const existing = dependents.get(from);
 		if (existing === undefined) dependents.set(from, [to]);
@@ -337,6 +385,18 @@ export function analyzeCoreCalleeTargets(
 			node,
 			existing === undefined ? targets : joinCoreCalleeTargets(existing, targets),
 		);
+	};
+	const addCallSite = (callee: number, result: number, construct: boolean): void => {
+		const site: CallResultSite = {
+			callee,
+			result,
+			construct,
+			activated: new Set(),
+			openRaised: "none",
+		};
+		const existing = callSites.get(callee);
+		if (existing === undefined) callSites.set(callee, [site]);
+		else existing.push(site);
 	};
 
 	for (const fn of program.functions) {
@@ -426,13 +486,33 @@ export function analyzeCoreCalleeTargets(
 						}
 						continue;
 					}
-					default:
-						break;
+					default: {
+						// The registry, not a list of opcode names here, decides which
+						// operand a control transfer enters and whether the result it hands
+						// back is related to what the callee returned at all.
+						const transfer = registry.get(instruction.opcode)?.callTransfer;
+						if (transfer === undefined || transfer.result === "unmodeled") break;
+						const callee = instruction.inputs[transfer.calleeOperand];
+						if (callee === undefined || result === undefined) break;
+						addCallSite(
+							valueNode(callee),
+							valueNode(result),
+							transfer.result === "construct-completion",
+						);
+						continue;
+					}
 				}
 				// A producer this analysis does not model degrades only its own results.
 				for (const output of instruction.outputs) {
 					addSeed(valueNode(output), CORE_CALLEE_TARGETS_OPAQUE);
 				}
+			}
+			// Every ordinary return contributes to the one cell a caller reads. A
+			// generator's or an async function's returns land here too; what keeps a
+			// caller from reading them is the coroutine rule in `activateCallSite`,
+			// not a missing edge.
+			if (block.terminator.kind === "return") {
+				addEdge(valueNode(block.terminator.value), returnNodes.get(fn.functionIndex)!);
 			}
 		}
 	}
@@ -473,12 +553,70 @@ export function analyzeCoreCalleeTargets(
 			queue.push(node);
 		}
 	};
+	/**
+	 * Wire what one call site has learned from its callee cell.
+	 *
+	 * The rules follow [[Call]] and [[Construct]], not the call syntax:
+	 *
+	 * - An opaque callee contributes an opaque result while finite named callees
+	 *   still contribute their return cells. This preserves guarded candidates and
+	 *   their fallback. A callee widened to `anyScript` has lost those bounded
+	 *   candidates, so its result goes to top without enumerating every function.
+	 * - A generator or async target returns its coroutine's promise, generator, or
+	 *   async-generator object, never the value its body returns, and none of those
+	 *   objects is callable — so it contributes nothing. The body's return value
+	 *   reaches a consumer only through `await` or `iteratorNext`, whose results
+	 *   this analysis leaves opaque.
+	 * - `new` on a derived constructor completes with the object its own `super()`
+	 *   bound as `this` whenever the body returns anything that is not an object.
+	 *   No Core value names that object, so an opaque alternative accompanies its
+	 *   explicit return targets.
+	 * - Otherwise the result is the target's return cell. For [[Construct]] that
+	 *   covers the one callable case — an explicitly returned function object —
+	 *   because the object [[Construct]] creates for an ordinary constructor is a
+	 *   plain object and can never be called.
+	 * - A target outside this program is not a cell at all, so it is open.
+	 */
+	const activateCallSite = (site: CallResultSite): void => {
+		const callee = state[site.callee]!;
+		if (callee.anyScript) {
+			if (site.openRaised === "top") return;
+			site.openRaised = "top";
+			callActivations++;
+			raise(site.result, CORE_CALLEE_TARGETS_TOP);
+			return;
+		}
+		if (callee.opaque && site.openRaised === "none") {
+			site.openRaised = "opaque";
+			callActivations++;
+			raise(site.result, CORE_CALLEE_TARGETS_OPAQUE);
+		}
+		for (const target of callee.functions) {
+			if (site.activated.has(target)) continue;
+			site.activated.add(target);
+			callActivations++;
+			const targetFunction = functionsByIndex.get(target);
+			if (targetFunction === undefined) {
+				raise(site.result, CORE_CALLEE_TARGETS_OPAQUE);
+				continue;
+			}
+			if (targetFunction.isGenerator || targetFunction.isAsync) continue;
+			if (site.construct && targetFunction.metadata.isDerivedConstructor) {
+				raise(site.result, CORE_CALLEE_TARGETS_OPAQUE);
+			}
+			const returnNode = returnNodes.get(target)!;
+			addEdge(returnNode, site.result);
+			raise(site.result, state[returnNode]!);
+		}
+	};
+
 	for (const [node, targets] of seeds) raise(node, targets);
 	while (queue.length > 0) {
 		const node = queue.pop()!;
 		queued[node] = 0;
 		const targets = state[node]!;
 		for (const dependent of dependents.get(node) ?? []) raise(dependent, targets);
+		for (const site of callSites.get(node) ?? []) activateCallSite(site);
 	}
 
 	return {
@@ -497,7 +635,11 @@ export function analyzeCoreCalleeTargets(
 			const node = capturedNodes.get(capturedSlotKey(owner, index));
 			return node === undefined ? CORE_CALLEE_TARGETS_BOTTOM : state[node]!;
 		},
-		statistics: { nodes: nodeCount, edges, propagations },
+		returnTargets(functionIndex: number): CoreCalleeTargets {
+			const node = returnNodes.get(functionIndex);
+			return node === undefined ? CORE_CALLEE_TARGETS_BOTTOM : state[node]!;
+		},
+		statistics: { nodes: nodeCount, edges, propagations, callActivations },
 	};
 }
 

@@ -12,6 +12,7 @@ import type {
 	CoreMemoryFamily,
 	CoreOpcodeAccess,
 	CoreOpcodeAllocation,
+	CoreOpcodeCallTransfer,
 } from "./core-ir.ts";
 
 /**
@@ -407,6 +408,40 @@ const OPCODE_ALLOCATIONS = {
 	},
 } as const satisfies Partial<Record<CoreOpcode, CoreOpcodeAllocation>>;
 
+/**
+ * The single declaration of which operand each opcode enters as a callable and
+ * how its result relates to what that callable returned. Every consumer that
+ * needs a call — the callee-target lattice, the interprocedural call graph —
+ * reads this table, so an opcode cannot be a call for one of them and not the
+ * other, and a newly added control transfer is not a call anywhere until it is
+ * declared here.
+ *
+ * `callBuiltin` is deliberately absent: its callee is a builtin named by an
+ * attribute rather than an operand, so no operand holds a callable and no script
+ * function's return value is involved.
+ */
+const OPCODE_CALL_TRANSFERS = {
+	call: { calleeOperand: 0, result: "call-completion" },
+	callSpread: { calleeOperand: 0, result: "call-completion" },
+	callSpreadIterable: { calleeOperand: 0, result: "call-completion" },
+	construct: { calleeOperand: 0, result: "construct-completion" },
+	constructSpread: { calleeOperand: 0, result: "construct-completion" },
+	// Super construction enters the parent and binds the object it produces as
+	// `this`, so its result is a [[Construct]] completion like any other. It stays
+	// unmodeled because the interesting half of the chain is elsewhere: a derived
+	// constructor's own completion substitutes this object without any Core value
+	// naming it, and modeling one end while the other is conservative buys
+	// nothing.
+	constructSuper: { calleeOperand: 0, result: "unmodeled" },
+	constructSuperExplicit: { calleeOperand: 0, result: "unmodeled" },
+} as const satisfies Partial<Record<CoreOpcode, CoreOpcodeCallTransfer>>;
+
+function opcodeCallTransfer(opcode: CoreOpcode): CoreOpcodeCallTransfer | undefined {
+	return (OPCODE_CALL_TRANSFERS as Partial<Record<CoreOpcode, CoreOpcodeCallTransfer>>)[
+		opcode
+	];
+}
+
 /** Operands inspected without anything retaining the reference passed in. */
 const OBSERVES_OPERANDS = new Set<CoreOpcode>([
 	"isEmpty",
@@ -606,6 +641,7 @@ for (const opcode of CORE_OPCODES) {
 	const [minimumInputs, maximumInputs] = INPUT_ARITIES[opcode];
 	const accesses = opcodeAccesses(opcode);
 	const allocation = opcodeAllocation(opcode);
+	const callTransfer = opcodeCallTransfer(opcode);
 	coreOpcodeRegistry.define({
 		opcode,
 		inputs: coreArity(minimumInputs, maximumInputs),
@@ -614,6 +650,7 @@ for (const opcode of CORE_OPCODES) {
 		discardable: DISCARDABLE.has(opcode),
 		...(accesses.length === 0 ? {} : { accesses }),
 		...(allocation === undefined ? {} : { allocation }),
+		...(callTransfer === undefined ? {} : { callTransfer }),
 		...(OBSERVES_OPERANDS.has(opcode) ? { observesOperands: true } : {}),
 		...(RESULT_CANNOT_BE_HELD_WEAKLY.has(opcode)
 			? { resultCannotBeHeldWeakly: true }
