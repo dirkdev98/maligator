@@ -171,10 +171,17 @@ function rebuildInstruction(
 	core: CoreFunction,
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
 	registerForValue: (value: CoreValueId) => number,
+	regionNamed: boolean,
 ): CompilerInstruction {
 	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
-	if (instruction.opcode === "call" || instruction.opcode === "construct") {
+	// A region certificate's contract is stated over the instruction's operands, so
+	// embedding one of them as a constant would change the shape the certificate
+	// describes even though the producer stays materialized.
+	if (
+		!regionNamed &&
+		(instruction.opcode === "call" || instruction.opcode === "construct")
+	) {
 		for (const [index, input] of instruction.inputs.entries()) {
 			const value = coreImmediateValue(core, input);
 			if (value === undefined) continue;
@@ -800,10 +807,12 @@ function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructi
 /**
  * Constant producers whose every consumer embeds them as a call operand. Encoding
  * only: the operand still realizes the same constant at the same call, so the
- * omission removes no Core operation and grants no license. Instructions named by
- * a region certificate stay materialized, so an embedded operand can never change
- * which optimization a certificate describes. `CoreTargetSafepoint` re-attributes
- * an omitted producer's collection point to the consuming call.
+ * omission removes no Core operation and grants no license. A region certificate
+ * names both ends out of embedding — the producer so it stays materialized, and
+ * the consuming call so its operands keep the shape the certificate's contract is
+ * stated over — and both decisions read the same protected set here so they cannot
+ * disagree. `CoreTargetSafepoint` re-attributes an omitted producer's collection
+ * point to the consuming call.
  */
 function immediateOnlyInstructions(
 	core: CoreFunction,
@@ -816,6 +825,7 @@ function immediateOnlyInstructions(
 			for (const input of instruction.inputs) {
 				if (
 					(instruction.opcode === "call" || instruction.opcode === "construct") &&
+					!protectedInstructions.has(instruction.id) &&
 					coreImmediateValue(core, input) !== undefined
 				) {
 					embedded.add(input);
@@ -1044,7 +1054,12 @@ function lowerFunctionToTarget(
 		for (const instruction of block.instructions) {
 			if (omittedInstructions.has(instruction.id)) continue;
 			instructions.push(...sourcePositionMarker(instruction.sourcePosition));
-			const lowered = rebuildInstruction(core, instruction, registerForValue);
+			const lowered = rebuildInstruction(
+				core,
+				instruction,
+				registerForValue,
+				protectedInstructions.has(instruction.id),
+			);
 			const compilerSite = instructionSites?.get(instruction);
 			if (compilerSite !== undefined) instructionSites?.set(lowered, compilerSite);
 			let resultMove: CompilerInstruction | undefined;

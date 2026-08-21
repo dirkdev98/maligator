@@ -322,6 +322,20 @@ const OPCODE_ACCESSES = {
 	loadGlobal: [read("global-slot", { attributes: ["index"] })],
 	storeGlobal: [write("global-slot", { attributes: ["index"], valueOperand: 0 })],
 	initGlobalVars: [write("global-slot")],
+	// The namespace exotic object resolves each export from the global slot named
+	// in its `exports` attribute on every property get, so the object's existence
+	// keeps those slots read for as long as it is reachable. One attribute carries
+	// the whole cell list rather than one attribute per cell, so this stays a
+	// whole-family read: conservative, and never a narrower guess than the
+	// descriptor can decode.
+	createModuleNamespace: [read("global-slot")],
+	// A dedicated per-site slot the runtime fills on first evaluation and returns
+	// on every later one, which is what makes the strings object's identity stable.
+	// The stored value is the instruction's own result rather than an operand.
+	createTemplateObject: [
+		read("global-slot", { attributes: ["cacheSlot"] }),
+		write("global-slot", { attributes: ["cacheSlot"] }),
+	],
 	loadGlobalProperty: [read("global-property", { keyAttribute: "nameStringIndex" })],
 	storeGlobalProperty: [
 		write("global-property", { keyAttribute: "nameStringIndex", valueOperand: 0 }),
@@ -615,10 +629,10 @@ for (const opcode of CORE_OPCODES) {
  */
 export function coreInstructionEffects(
 	instruction: CoreInstruction,
+	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 ): CoreInstructionEffects {
 	return (
-		instruction.effectRefinement?.effects ??
-		coreOpcodeRegistry.require(instruction.opcode).effects
+		instruction.effectRefinement?.effects ?? registry.require(instruction.opcode).effects
 	);
 }
 

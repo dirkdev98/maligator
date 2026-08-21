@@ -32,7 +32,12 @@ import {
 	CORE_CALLEE_TARGETS_ATTRIBUTE,
 	analyzeCoreCalleeTargets,
 	coreCalleeTargetsAttribute,
+	coreCalleeTargetsClosedFunction,
 	coreCalleeTargetsSingleFunction,
+} from "./core-ir-call-targets.ts";
+import type {
+	CoreCalleeTargetAnalysis,
+	CoreCalleeTargets,
 } from "./core-ir-call-targets.ts";
 import {
 	buildCoreControlFlow,
@@ -782,17 +787,6 @@ interface InlineProgramResult {
 	readonly changed: boolean;
 }
 
-function storageKey(instruction: CoreInstruction): string | undefined {
-	if (instruction.opcode !== "loadCaptured" && instruction.opcode !== "storeCaptured") {
-		return undefined;
-	}
-	const owner = instruction.attributes.functionIndex;
-	const index = instruction.attributes.index;
-	return typeof owner === "number" && typeof index === "number"
-		? `${owner}:${index}`
-		: undefined;
-}
-
 function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction> {
 	const definitions = new Map<CoreValueId, CoreInstruction>();
 	for (const block of fn.blocks) {
@@ -801,58 +795,6 @@ function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction
 		}
 	}
 	return definitions;
-}
-
-function capturedStoreValues(fn: CoreFunction): Map<string, CoreValueId> {
-	const candidates = new Map<string, Array<CoreValueId>>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			if (instruction.opcode !== "storeCaptured" || instruction.inputs.length !== 1) {
-				continue;
-			}
-			const key = storageKey(instruction);
-			if (key === undefined) continue;
-			const values = candidates.get(key) ?? [];
-			values.push(instruction.inputs[0]!);
-			candidates.set(key, values);
-		}
-	}
-	return new Map(
-		[...candidates].flatMap(([key, values]) =>
-			values.length === 1 ? [[key, values[0]!] as const] : [],
-		),
-	);
-}
-
-function exactFunctionValue(
-	value: CoreValueId,
-	definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
-	stores: ReadonlyMap<string, CoreValueId>,
-): number | undefined {
-	const seen = new Set<CoreValueId>();
-	let current = value;
-	while (!seen.has(current)) {
-		seen.add(current);
-		const definition = definitions.get(current);
-		if (definition === undefined) return undefined;
-		if (definition.opcode === "createFunction") {
-			const index = definition.attributes.functionIndex;
-			return typeof index === "number" ? index : undefined;
-		}
-		if (definition.opcode === "move" && definition.inputs.length === 1) {
-			current = definition.inputs[0]!;
-			continue;
-		}
-		if (definition.opcode === "loadCaptured") {
-			const key = storageKey(definition);
-			const stored = key === undefined ? undefined : stores.get(key);
-			if (stored === undefined) return undefined;
-			current = stored;
-			continue;
-		}
-		return undefined;
-	}
-	return undefined;
 }
 
 /**
@@ -1114,12 +1056,22 @@ function inlineLinearCall(
 	target: CoreFunction,
 	linear: LinearInlineTarget,
 	positions: Array<CoreProgram["sourcePositions"][number]>,
-): CoreFunction | undefined {
+	targetAnalysis: CoreCalleeTargetAnalysis,
+	callerTargets: (value: CoreValueId) => CoreCalleeTargets,
+):
+	| {
+			readonly fn: CoreFunction;
+			readonly relocatedTargets: ReadonlyMap<CoreValueId, CoreCalleeTargets>;
+	  }
+	| undefined {
 	if (call.outputs.length !== 1 || call.inputs.length < 2) return undefined;
 	let instructionNumber = nextInstructionId(fn);
 	let valueNumber = fn.values.reduce((next, value) => Math.max(next, value.id + 1), 0);
 	const values = [...fn.values];
 	const valueMap = new Map<CoreValueId, CoreValueId>();
+	const relocatedTargets = new Map<CoreValueId, CoreCalleeTargets>();
+	const relocatedTarget = (value: CoreValueId): CoreCalleeTargets =>
+		relocatedTargets.get(value) ?? callerTargets(value);
 	const cloned: Array<CoreInstruction> = [];
 	const arguments_ = call.inputs.slice(2);
 	for (const [index, parameter] of target.parameters.entries()) {
@@ -1180,6 +1132,12 @@ function inlineLinearCall(
 					},
 				});
 				valueMap.set(output, valueId);
+				relocatedTargets.set(
+					valueId,
+					instruction.opcode === "move" && inputs[0] !== undefined
+						? relocatedTarget(inputs[0])
+						: targetAnalysis.targets(target.functionIndex, output),
+				);
 				return valueId;
 			});
 			cloned.push({
@@ -1215,14 +1173,28 @@ function inlineLinearCall(
 					}
 				: candidate,
 	);
-	return rewriteFunction(
-		{ ...fn, values },
-		blocks,
-		new Map([[call.outputs[0]!, returnValue]]),
-		new Set([call.id]),
-	);
+	return {
+		fn: rewriteFunction(
+			{ ...fn, values },
+			blocks,
+			new Map([[call.outputs[0]!, returnValue]]),
+			new Set([call.id]),
+		),
+		relocatedTargets,
+	};
 }
 
+/**
+ * Replace a call with its callee's body when the callee's identity is closed.
+ *
+ * Inlining erases the call, so it needs the strongest form the callee-target
+ * lattice offers: a singleton with both loss bits clear. That authority is
+ * whole-program, which is the point — a function-local scan of the stores it can
+ * see cannot know that a nested closure rebinds the same captured cell, and
+ * would happily inline the stale body. A value the analysis does not cover, such
+ * as one an earlier expansion in this same pass introduced, answers bottom and is
+ * therefore never a closed singleton.
+ */
 function inlineSimpleCoreFunctions(
 	program: CoreProgram,
 	verification: CoreVerificationProfile,
@@ -1233,18 +1205,22 @@ function inlineSimpleCoreFunctions(
 			? undefined
 			: [...compilation.optimizationDecisions];
 	const positions = program.sourcePositions.map((position) => ({ ...position }));
+	const calleeTargets = analyzeCoreCalleeTargets(program);
 	let changed = false;
 	const functions = program.functions.map((original) => {
 		let fn = original;
+		const relocatedTargets = new Map<CoreValueId, CoreCalleeTargets>();
+		const targetsForValue = (value: CoreValueId): CoreCalleeTargets =>
+			relocatedTargets.get(value) ?? calleeTargets.targets(original.functionIndex, value);
 		for (let expansion = 0; expansion < 8; expansion++) {
-			const definitions = functionDefinitions(fn);
-			const stores = capturedStoreValues(fn);
 			const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
 			let next: CoreFunction | undefined;
 			for (const block of fn.blocks) {
 				for (const call of block.instructions) {
 					if (call.opcode !== "call" || call.inputs.length < 2) continue;
-					const targetIndex = exactFunctionValue(call.inputs[0]!, definitions, stores);
+					const targetIndex = coreCalleeTargetsClosedFunction(
+						targetsForValue(call.inputs[0]!),
+					);
 					if (targetIndex === undefined || targetIndex === fn.functionIndex) continue;
 					const target = program.functions.find(
 						(candidate) => candidate.functionIndex === targetIndex,
@@ -1266,8 +1242,21 @@ function inlineSimpleCoreFunctions(
 						);
 						continue;
 					}
-					next = inlineLinearCall(fn, block, call, target, linear, positions);
-					if (next !== undefined) {
+					const inlined = inlineLinearCall(
+						fn,
+						block,
+						call,
+						target,
+						linear,
+						positions,
+						calleeTargets,
+						targetsForValue,
+					);
+					if (inlined !== undefined) {
+						next = inlined.fn;
+						for (const [value, targets] of inlined.relocatedTargets) {
+							relocatedTargets.set(value, targets);
+						}
 						recordInlineDecision(decisions, fn, call, "applied", "inline");
 						if (verification === "per-pass") {
 							verifyCoreFunction(next, coreOpcodeRegistry, {

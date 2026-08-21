@@ -172,9 +172,59 @@ function directCaller(functionIndex: number, target: number): CoreFunction {
 }
 
 function callInstructions(fn: CoreFunction): ReadonlyArray<CoreInstruction> {
+	return coreInstructions(fn, "call");
+}
+
+function coreInstructions(
+	fn: CoreFunction,
+	opcode: string,
+): ReadonlyArray<CoreInstruction> {
 	return fn.blocks
 		.flatMap(({ instructions }) => instructions)
-		.filter(({ opcode }) => opcode === "call");
+		.filter((instruction) => instruction.opcode === opcode);
+}
+
+/**
+ * A strict, unmapped frame that hands one `arguments` producer's result to a
+ * global slot. `mappedArguments` stays false, so the summary has to attribute the
+ * escape through the producer rather than through the mapped-frame shortcut.
+ */
+function escapingArgumentsProducer(
+	functionIndex: number,
+	opcode: "createArgumentsObject" | "createRestArguments" | "loadArgument",
+	parameterCount: number,
+	attributes: Record<string, number> = {},
+): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount,
+		metadata: { strict: true, sourceStrict: true, mappedArguments: false },
+	});
+	const entry = builder.createBlock(Array.from({ length: parameterCount }, () => ({})));
+	const [produced] = builder.appendInstruction(entry, opcode, [], { attributes });
+	builder.appendInstruction(entry, "storeGlobal", [produced!], {
+		attributes: { index: 0 },
+	});
+	const [undefinedValue] = builder.appendInstruction(entry, "createUndefined", []);
+	builder.setTerminator(entry, { kind: "return", value: undefinedValue! });
+	return builder.finish(entry);
+}
+
+/** `class Derived extends Parent { constructor(...args) { super(...args); } }` */
+function derivedConstructor(functionIndex: number, parent: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		metadata: { isClassConstructor: true, isDerivedConstructor: true },
+	});
+	const entry = builder.createBlock();
+	const [parentValue] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: parent },
+	});
+	const [args] = builder.appendInstruction(entry, "createRestArguments", [], {
+		attributes: { startIndex: 0 },
+	});
+	builder.appendInstruction(entry, "constructSuper", [parentValue!, args!]);
+	const [undefinedValue] = builder.appendInstruction(entry, "createUndefined", []);
+	builder.setTerminator(entry, { kind: "return", value: undefinedValue! });
+	return builder.finish(entry);
 }
 
 describe("interprocedural summary lattices", () => {
@@ -327,6 +377,115 @@ describe("interprocedural summary lattices", () => {
 		);
 		expect(analysis.targets.targets(5, callee!).anyScript).toBe(true);
 		expect(analysis.callSite(5, call.id)).toBeUndefined();
+	});
+
+	it("attributes an unmapped arguments object to every formal parameter", () => {
+		const analysis = analyzeCoreProgramSummaries(
+			coreProgram([escapingArgumentsProducer(0, "createArgumentsObject", 2)], 1),
+		);
+		expect(analysis.summary(0)).toMatchObject({
+			parameterEscape: ["retained", "retained"],
+			parameterContainment: ["unknown", "unknown"],
+			restParameterEscape: "retained",
+			restParameterContainment: "unknown",
+		});
+	});
+
+	it("attributes a statically indexed argument read to that formal alone", () => {
+		const analysis = analyzeCoreProgramSummaries(
+			coreProgram([escapingArgumentsProducer(0, "loadArgument", 3, { index: 1 })], 1),
+		);
+		expect(analysis.summary(0)).toMatchObject({
+			parameterEscape: ["none", "retained", "none"],
+			parameterContainment: ["preserved", "unknown", "preserved"],
+			restParameterEscape: "none",
+			restParameterContainment: "preserved",
+		});
+	});
+
+	it("attributes a rest array to the formals its start index covers", () => {
+		const analysis = analyzeCoreProgramSummaries(
+			coreProgram(
+				[escapingArgumentsProducer(0, "createRestArguments", 3, { startIndex: 1 })],
+				1,
+			),
+		);
+		expect(analysis.summary(0)).toMatchObject({
+			parameterEscape: ["none", "retained", "retained"],
+			parameterContainment: ["preserved", "unknown", "unknown"],
+			restParameterEscape: "retained",
+		});
+	});
+
+	it("attributes an argument read past the formals to the rest bucket only", () => {
+		const analysis = analyzeCoreProgramSummaries(
+			coreProgram([escapingArgumentsProducer(0, "loadArgument", 1, { index: 3 })], 1),
+		);
+		expect(analysis.summary(0)).toMatchObject({
+			parameterEscape: ["none"],
+			parameterContainment: ["preserved"],
+			restParameterEscape: "retained",
+			restParameterContainment: "unknown",
+		});
+	});
+
+	it("records a superclass constructor reached only through super construction", () => {
+		const derived = derivedConstructor(0, 1);
+		const analysis = analyzeCoreProgramSummaries(
+			coreProgram([derived, writeGlobal(1)], 1),
+		);
+		expect(analysis.summary(0)?.callees).toEqual([1]);
+		expect(analysis.summary(0)?.openCallEdge).toBe(false);
+		expect(analysis.statistics.callEdges).toBe(1);
+		// Super construction contributes the edge without becoming a claim site: no
+		// operand maps onto a formal and the result is the constructed object.
+		const construct = coreInstructions(derived, "constructSuper")[0]!;
+		expect(analysis.callSite(0, construct.id)).toBeUndefined();
+		expect(analysis.summary(0)?.effects.callsUserCode).toBe(true);
+	});
+
+	it("opens the edge set for an unresolvable super constructor", () => {
+		const derived = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = derived.createBlock([{}]);
+		const parent = derived.block(entry).parameters[0]!.value;
+		const [args] = derived.appendInstruction(entry, "createRestArguments", [], {
+			attributes: { startIndex: 0 },
+		});
+		derived.appendInstruction(entry, "constructSuper", [parent, args!]);
+		const [undefinedValue] = derived.appendInstruction(entry, "createUndefined", []);
+		derived.setTerminator(entry, { kind: "return", value: undefinedValue! });
+		const analysis = analyzeCoreProgramSummaries(coreProgram([derived.finish(entry)]));
+		expect(analysis.summary(0)).toMatchObject({ callees: [], openCallEdge: true });
+	});
+
+	it("opens the edge set for a non-call instruction that enters user code", () => {
+		const reader = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = reader.createBlock([{}]);
+		const base = reader.block(entry).parameters[0]!.value;
+		const [loaded] = reader.appendInstruction(entry, "loadPropertyStatic", [base], {
+			attributes: { stringIndex: 0 },
+		});
+		reader.setTerminator(entry, { kind: "return", value: loaded! });
+		const analysis = analyzeCoreProgramSummaries(coreProgram([reader.finish(entry)]));
+		// A getter is a call edge the lattice cannot name, so the edge set is open
+		// even though the function contains no call opcode at all.
+		expect(analysis.summary(0)).toMatchObject({ callees: [], openCallEdge: true });
+		expect(analysis.summary(0)?.effects.callsUserCode).toBe(true);
+	});
+
+	it("refuses fresh identity for a cached tagged-template strings object", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [strings] = builder.appendInstruction(entry, "createTemplateObject", [], {
+			attributes: { cacheSlot: 0, cookedIndices: [0], rawIndices: [0] },
+		});
+		builder.setTerminator(entry, { kind: "return", value: strings! });
+		const analysis = analyzeCoreProgramSummaries(coreProgram([builder.finish(entry)], 1));
+		expect(analysis.summary(0)?.returnProvenance).toEqual({ kind: "unknown" });
 	});
 
 	it("reports graph-derived open-world roots without pretending source closure", () => {

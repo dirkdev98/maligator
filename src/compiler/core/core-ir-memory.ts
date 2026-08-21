@@ -31,6 +31,7 @@ import type {
 	CoreInstructionId,
 	CoreMemoryFamily,
 	CoreOpcodeAccess,
+	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
 
@@ -198,10 +199,11 @@ function accessIsEffective(access: CoreOpcodeAccess, masks: EffectMasks): boolea
  */
 function effectiveAccesses(
 	instruction: CoreInstruction,
+	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 ): ReadonlyArray<CoreOpcodeAccess> {
-	const declared = coreOpcodeRegistry.require(instruction.opcode).accesses;
+	const declared = registry.require(instruction.opcode).accesses;
 	if (declared === undefined || declared.length === 0) return NO_ACCESSES;
-	const masks = instructionEffectMasks(coreInstructionEffects(instruction));
+	const masks = instructionEffectMasks(coreInstructionEffects(instruction, registry));
 	let kept = 0;
 	for (const access of declared) if (accessIsEffective(access, masks)) kept += 1;
 	if (kept === declared.length) return declared;
@@ -293,8 +295,9 @@ function exactLocation(
 export function coreMemoryAccesses(
 	instruction: CoreInstruction,
 	resolution?: CoreMemoryResolution,
+	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 ): ReadonlyArray<CoreMemoryAccess> {
-	const declared = effectiveAccesses(instruction);
+	const declared = effectiveAccesses(instruction, registry);
 	if (declared.length === 0) return [];
 	const accesses: Array<CoreMemoryAccess> = [];
 	for (const access of declared) {

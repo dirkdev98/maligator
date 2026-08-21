@@ -28,6 +28,7 @@
  */
 
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreMemoryAccesses } from "./core-ir-memory.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import type {
 	CoreAttributeObject,
@@ -218,35 +219,56 @@ function capturedSlotKey(owner: number, index: number): string {
 interface SlotOpacity {
 	global: boolean;
 	captured: boolean;
+	/** Named global cells whose writer does not name the value it stores. */
+	readonly opaqueGlobalSlots: Set<number>;
+	readonly opaqueCapturedSlots: Map<string, readonly [number, number]>;
 }
 
 /**
- * Whether an unnamed writer forces a whole slot family open. Derived from the
- * registry so the answer cannot drift from the opcode's declared memory.
+ * How far each slot writer forces the lattice open. Naming the cell and naming
+ * the stored value are independent obligations, so they degrade independently:
+ *
+ * - A writer that cannot name its cell degrades its whole family, because any
+ *   cell in it may now hold anything.
+ * - A writer that names its cell but stores something other than an operand —
+ *   `createTemplateObject` caches its own result in a private per-site slot —
+ *   makes exactly that cell opaque.
+ *
+ * Cells come from the shared memory-access query rather than a second attribute
+ * decoder here, so the answer cannot drift from the opcode's declared memory and
+ * a verified effect refinement that removed the write removes it here too.
  */
 function slotFamilyOpacity(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
 ): SlotOpacity {
-	const opacity: SlotOpacity = { global: false, captured: false };
+	const opacity: SlotOpacity = {
+		global: false,
+		captured: false,
+		opaqueGlobalSlots: new Set(),
+		opaqueCapturedSlots: new Map(),
+	};
 	for (const fn of program.functions) {
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (SLOT_WRITERS_WITHOUT_NEW_CALLABLES.has(instruction.opcode)) continue;
-				for (const access of registry.get(instruction.opcode)?.accesses ?? []) {
+				for (const access of coreMemoryAccesses(instruction, undefined, registry)) {
 					if (access.mode !== "write") continue;
-					if (access.family !== "global-slot" && access.family !== "captured-slot") {
+					const location = access.location;
+					if (location.kind === "family") {
+						if (location.family === "global-slot") opacity.global = true;
+						else if (location.family === "captured-slot") opacity.captured = true;
 						continue;
 					}
-					const names =
-						access.valueOperand !== undefined &&
-						(access.attributes ?? []).every(
-							(key) => attributeNumber(instruction, key) !== undefined,
-						) &&
-						(access.attributes ?? []).length > 0;
-					if (names) continue;
-					if (access.family === "global-slot") opacity.global = true;
-					else opacity.captured = true;
+					if (access.value !== undefined) continue;
+					if (location.kind === "global-slot") {
+						opacity.opaqueGlobalSlots.add(location.slot);
+					} else if (location.kind === "captured-slot") {
+						opacity.opaqueCapturedSlots.set(
+							capturedSlotKey(location.owner, location.index),
+							[location.owner, location.index],
+						);
+					}
 				}
 			}
 		}
@@ -422,6 +444,12 @@ export function analyzeCoreCalleeTargets(
 		for (const node of capturedNodes.values()) {
 			addSeed(node, CORE_CALLEE_TARGETS_OPAQUE);
 		}
+	}
+	for (const slot of opacity.opaqueGlobalSlots) {
+		addSeed(globalNode(slot), CORE_CALLEE_TARGETS_OPAQUE);
+	}
+	for (const [owner, index] of opacity.opaqueCapturedSlots.values()) {
+		addSeed(capturedNode(owner, index), CORE_CALLEE_TARGETS_OPAQUE);
 	}
 	// The host installs its exports into these slots, so their writers are not in
 	// this graph at all.

@@ -13,6 +13,7 @@ import {
 	joinCoreCalleeTargets,
 } from "../src/compiler/core/core-ir-call-targets.ts";
 import type { CoreCalleeTargets } from "../src/compiler/core/core-ir-call-targets.ts";
+import { coreMemoryAccesses } from "../src/compiler/core/core-ir-memory.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type {
@@ -480,6 +481,69 @@ describe("callee-target solver", () => {
 		expect(coreCalleeTargetsClosedFunction(analysis.targets(1, carried))).toBe(0);
 		expect(coreCalleeTargetsClosedFunction(analysis.targets(1, reloaded!))).toBe(0);
 		expect(coreCalleeTargetsClosedFunction(analysis.capturedSlot(1, 0))).toBe(0);
+	});
+
+	it("keeps a named cache-slot writer from opening the whole global family", () => {
+		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [created] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 0 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [created!], {
+			attributes: { index: 0 },
+		});
+		// The runtime, not this graph, stores the cached strings object, so the cache
+		// slot itself is opaque while every other global slot keeps its proof.
+		builder.appendInstruction(entry, "createTemplateObject", [], {
+			attributes: { cacheSlot: 1, cookedIndices: [0], rawIndices: [0] },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+
+		const analysis = analyzeCoreCalleeTargets(
+			coreProgram([leafFunction(0), builder.finish(entry)]),
+		);
+		expect(coreCalleeTargetsClosedFunction(analysis.targets(1, loaded!))).toBe(0);
+		expect(analysis.globalSlot(1)).toEqual(CORE_CALLEE_TARGETS_OPAQUE);
+	});
+
+	it("declares the memory a template cache and a namespace name", () => {
+		const template = coreOpcodeRegistry.require("createTemplateObject");
+		expect(template.effects.reads).toContain("global-slot");
+		expect(template.effects.writes).toContain("global-slot");
+		expect(template.accesses).toEqual([
+			{ family: "global-slot", mode: "read", attributes: ["cacheSlot"] },
+			{ family: "global-slot", mode: "write", attributes: ["cacheSlot"] },
+		]);
+		const namespace = coreOpcodeRegistry.require("createModuleNamespace");
+		// The export cells come from one list-valued attribute, so the read stays at
+		// whole-family scope rather than claiming a cell it cannot decode.
+		expect(namespace.effects.reads).toContain("global-slot");
+		expect(namespace.accesses).toEqual([{ family: "global-slot", mode: "read" }]);
+	});
+
+	it("resolves a template cache to its cell and a namespace to its family", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		builder.appendInstruction(entry, "createTemplateObject", [], {
+			attributes: { cacheSlot: 4, cookedIndices: [0], rawIndices: [0] },
+		});
+		const [namespace] = builder.appendInstruction(entry, "createModuleNamespace", [], {
+			attributes: { exports: [{ nameStringIndex: 0, slot: 5 }] },
+		});
+		builder.setTerminator(entry, { kind: "return", value: namespace! });
+		const instructions = builder.finish(entry).blocks[0]!.instructions;
+		const locations = (instruction: CoreInstruction) =>
+			coreMemoryAccesses(instruction).map(({ mode, location }) => ({ mode, location }));
+		expect(locations(instructions[0]!)).toEqual([
+			{ mode: "read", location: { kind: "global-slot", slot: 4 } },
+			{ mode: "write", location: { kind: "global-slot", slot: 4 } },
+		]);
+		expect(locations(instructions[1]!)).toEqual([
+			{ mode: "read", location: { kind: "family", family: "global-slot" } },
+		]);
 	});
 
 	it("bounds propagation work by the lattice height rather than by round count", () => {

@@ -29,9 +29,11 @@
  * Every dimension has fixed height — nine domains, four flags, a four-point
  * escape chain, a six-point provenance lattice, a five-point representation
  * lattice — except the per-parameter escape vector, whose height is the
- * function's arity. A function's transfer therefore runs O(height) times per
- * incoming edge, for O(cap * program + Σ_component |component| * height *
- * in-degree). No whole-program round exists.
+ * function's arity. One transfer costs O(function + arity), including the
+ * bucketed prefix join that attributes `arguments` observations to the formals,
+ * so a function's transfer runs O(height) times per incoming edge, for
+ * O(cap * program + Σ_component |component| * height * in-degree). No
+ * whole-program round exists.
  *
  * Bounded dimensions, all of which degrade rather than lie: the target-set cap
  * (`CORE_CALLEE_TARGET_CAP`) widens to `anyScript`, which makes a site
@@ -150,13 +152,48 @@ const CALL_OPCODES: ReadonlySet<string> = new Set([
 	"constructSpread",
 ]);
 
-/** Opcodes whose results stand for arguments this frame was handed. */
-const ARGUMENT_PRODUCING_OPCODES: ReadonlySet<string> = new Set([
-	"createArgumentsObject",
-	"createRestArguments",
-	"loadArgument",
-	"loadStaticArgument",
+/**
+ * Opcodes that enter the callable in operand 0 but are not call sites a claim can
+ * describe. Super construction runs the parent's [[Construct]], binds the result
+ * as `this`, and marshals its argument list through an array, so no operand maps
+ * onto a formal and its result is the constructed object rather than a callee's
+ * return value. Only the call-graph edge is extracted; the effects, the operands,
+ * and the result stay at their conservative baseline.
+ */
+const EDGE_ONLY_CALL_OPCODES: ReadonlySet<string> = new Set([
+	"constructSuper",
+	"constructSuperExplicit",
 ]);
+
+/**
+ * How an opcode's results stand for the arguments this frame was handed.
+ *
+ * `positionAttribute` names the attribute holding the first argument position the
+ * first result covers; `exact` marks a result that is that one argument rather
+ * than an aggregate of it and everything after it. Any further result is an
+ * arguments object the opcode materializes on the side — `loadStaticArgument`
+ * threads its lazily built fallback cache through its second output — so it
+ * aggregates the whole list.
+ *
+ * The invariant every attribution below rests on: for each supplied position `i`,
+ * `arguments[i]` and the initial value of formal parameter `i` are the same
+ * reference, mapped or not. Observing one is therefore observing the other, so an
+ * exact result attributes to formal `i` alone and an aggregate covering
+ * `[from, ∞)` attributes to every formal at or after `from` plus the rest bucket.
+ * A producer whose position attribute is missing or malformed degrades to
+ * `[0, ∞)`, never to a narrower guess.
+ */
+const ARGUMENT_PRODUCERS: Readonly<
+	Record<
+		string,
+		{ readonly positionAttribute?: string; readonly exact?: boolean } | undefined
+	>
+> = {
+	createArgumentsObject: {},
+	createRestArguments: { positionAttribute: "startIndex" },
+	loadArgument: { positionAttribute: "index", exact: true },
+	loadStaticArgument: { positionAttribute: "index", exact: true },
+};
 
 /**
  * Opcodes whose result is a primitive by construction, so a function returning
@@ -184,7 +221,13 @@ const PRIMITIVE_RESULT_OPCODES: ReadonlySet<string> = new Set([
 	"unary",
 ]);
 
-/** Allocations whose result is a reference no caller can already hold. */
+/**
+ * Allocations whose result is a reference no caller can already hold.
+ *
+ * `createTemplateObject` is deliberately absent: it returns the object cached in
+ * its site's global slot, so every evaluation past the first hands back an
+ * identity a caller may already hold.
+ */
 const FRESH_IDENTITY_OPCODES: ReadonlySet<string> = new Set([
 	"createArgumentsObject",
 	"createArray",
@@ -193,7 +236,6 @@ const FRESH_IDENTITY_OPCODES: ReadonlySet<string> = new Set([
 	"createObject",
 	"createObjectShaped",
 	"createRestArguments",
-	"createTemplateObject",
 	"instantiateLiteralTemplate",
 ]);
 
@@ -316,7 +358,16 @@ interface LocalFacts {
 	/** Values whose uses invalidate a caller-owned exact allocation proof. */
 	readonly containmentBase: ReadonlySet<CoreValueId>;
 	readonly receiverValues: ReadonlyArray<CoreValueId>;
-	readonly restValues: ReadonlyArray<CoreValueId>;
+	/** `arguments[index]`, one exact argument position each. */
+	readonly exactArgumentValues: ReadonlyArray<{
+		readonly value: CoreValueId;
+		readonly index: number;
+	}>;
+	/** Aggregates covering every argument position from `from` onward. */
+	readonly aggregateArgumentValues: ReadonlyArray<{
+		readonly value: CoreValueId;
+		readonly from: number;
+	}>;
 	/** Provenance of returned values that needs no callee summary. */
 	readonly returnProvenanceBase: ReturnProvenance;
 	readonly returnRepresentationBase: ReturnRepresentation;
@@ -478,7 +529,14 @@ function collectLocalFacts(
 	const escapeArguments: Array<ArgumentUse> = [];
 	const containmentBase = new Set<CoreValueId>();
 	const receiverValues: Array<CoreValueId> = [];
-	const restValues: Array<CoreValueId> = [];
+	const exactArgumentValues: Array<{
+		readonly value: CoreValueId;
+		readonly index: number;
+	}> = [];
+	const aggregateArgumentValues: Array<{
+		readonly value: CoreValueId;
+		readonly from: number;
+	}> = [];
 	const returnedCallSites: Array<CallSite> = [];
 	let returnProvenanceBase = RETURN_PROVENANCE_NONE;
 	let returnRepresentationBase: ReturnRepresentation = "none";
@@ -515,16 +573,38 @@ function collectLocalFacts(
 
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			if (ARGUMENT_PRODUCING_OPCODES.has(instruction.opcode)) {
-				for (const output of instruction.outputs) restValues.push(output);
+			const producer = ARGUMENT_PRODUCERS[instruction.opcode];
+			if (producer !== undefined) {
+				const declared =
+					producer.positionAttribute === undefined
+						? 0
+						: instruction.attributes[producer.positionAttribute];
+				const position =
+					typeof declared === "number" && Number.isSafeInteger(declared) && declared >= 0
+						? declared
+						: undefined;
+				for (const [output, value] of instruction.outputs.entries()) {
+					if (output === 0 && producer.exact === true && position !== undefined) {
+						exactArgumentValues.push({ value, index: position });
+						continue;
+					}
+					// A secondary result is the materialized arguments object, which
+					// aggregates the list from its first position regardless of the index
+					// the primary result named.
+					aggregateArgumentValues.push({
+						value,
+						from: output === 0 ? (position ?? 0) : 0,
+					});
+				}
 			}
 			if (instruction.opcode === "loadThis") {
 				for (const output of instruction.outputs) receiverValues.push(output);
 			}
 
 			const isCall = CALL_OPCODES.has(instruction.opcode);
+			const isEdgeOnlyCall = EDGE_ONLY_CALL_OPCODES.has(instruction.opcode);
 			let site: CallSite | undefined;
-			if (isCall) {
+			if (isCall || isEdgeOnlyCall) {
 				const callee = instruction.inputs[0];
 				const resolved =
 					callee === undefined ? undefined : targets.targets(fn.functionIndex, callee);
@@ -534,23 +614,47 @@ function collectLocalFacts(
 					resolved.functions.length > 0
 				) {
 					for (const target of resolved.functions) calleeEdges.add(target);
-					site = {
-						instruction: instruction.id,
-						opcode: instruction.opcode,
-						targets: resolved.functions,
-						inputs: instruction.inputs,
-						result: instruction.outputs[0],
-					};
-					if (instruction.opcode === "call") effectSites.push(site);
-					else
-						effects = joinEffectSummaries(effects, coreInstructionEffects(instruction));
-					if (site.result !== undefined) callSiteByResult.set(site.result, site);
+					if (isEdgeOnlyCall) {
+						effects = joinEffectSummaries(
+							effects,
+							coreInstructionEffects(instruction, registry),
+						);
+					} else {
+						site = {
+							instruction: instruction.id,
+							opcode: instruction.opcode,
+							targets: resolved.functions,
+							inputs: instruction.inputs,
+							result: instruction.outputs[0],
+						};
+						if (instruction.opcode === "call") effectSites.push(site);
+						else
+							effects = joinEffectSummaries(
+								effects,
+								coreInstructionEffects(instruction, registry),
+							);
+						if (site.result !== undefined) callSiteByResult.set(site.result, site);
+					}
 				} else {
 					openCallEdge = true;
-					effects = joinEffectSummaries(effects, coreInstructionEffects(instruction));
+					effects = joinEffectSummaries(
+						effects,
+						coreInstructionEffects(instruction, registry),
+					);
 				}
 			} else {
-				effects = joinEffectSummaries(effects, coreInstructionEffects(instruction));
+				effects = joinEffectSummaries(
+					effects,
+					coreInstructionEffects(instruction, registry),
+				);
+				// Any other instruction that enters user code is a call edge this
+				// analysis cannot name: a getter, a setter, a coercion hook, a builtin
+				// that takes a callback. The edge set is only closed once no such
+				// instruction is left, so the flag is derived from declared effects
+				// rather than from a list of opcodes that could fall behind them.
+				if (coreInstructionEffects(instruction, registry).callsUserCode) {
+					openCallEdge = true;
+				}
 			}
 
 			if (instruction.opcode === "move" && instruction.outputs.length === 1) {
@@ -625,7 +729,8 @@ function collectLocalFacts(
 		escapeArguments,
 		containmentBase,
 		receiverValues,
-		restValues,
+		exactArgumentValues,
+		aggregateArgumentValues,
 		returnProvenanceBase,
 		returnRepresentationBase,
 		returnedCallSites,
@@ -791,28 +896,77 @@ function transferSummary(
 
 	const escapeOf = (value: CoreValueId): ValueEscapeFact =>
 		local.frameOutlivesCall ? "retained" : (levels.get(value) ?? "none");
+	const containmentOf = (value: CoreValueId): ValueContainmentFact =>
+		local.frameOutlivesCall || containmentUnknown.has(value) ? "unknown" : "preserved";
+	const arity = fn.parameters.length;
 	const parameterEscape = fn.parameters.map((value) => escapeOf(value));
+	const parameterContainment = fn.parameters.map((value) => containmentOf(value));
 	let restParameterEscape: ValueEscapeFact = local.frameOutlivesCall
 		? "retained"
 		: "none";
-	for (const value of local.restValues) {
-		restParameterEscape = joinValueEscape(restParameterEscape, escapeOf(value));
-	}
-	let receiverEscape: ValueEscapeFact = local.frameOutlivesCall ? "retained" : "none";
-	for (const value of local.receiverValues) {
-		receiverEscape = joinValueEscape(receiverEscape, escapeOf(value));
-	}
-	const containmentOf = (value: CoreValueId): ValueContainmentFact =>
-		local.frameOutlivesCall || containmentUnknown.has(value) ? "unknown" : "preserved";
-	const parameterContainment = fn.parameters.map((value) => containmentOf(value));
 	let restParameterContainment: ValueContainmentFact = local.frameOutlivesCall
 		? "unknown"
 		: "preserved";
-	for (const value of local.restValues) {
+
+	// Every aggregate covers a suffix of the argument positions, so one bucketed
+	// scan followed by a prefix join attributes all of them to all formals in
+	// O(arity + producers) — no per-aggregate walk over the formals.
+	const aggregateEscape = new Array<ValueEscapeFact>(arity).fill("none");
+	const aggregateContainment = new Array<ValueContainmentFact>(arity).fill("preserved");
+	for (const { value, from } of local.aggregateArgumentValues) {
+		// An aggregate reaches past the declared formals by construction, so it also
+		// covers the rest bucket whatever its first position is.
+		restParameterEscape = joinValueEscape(restParameterEscape, escapeOf(value));
 		restParameterContainment = joinValueContainment(
 			restParameterContainment,
 			containmentOf(value),
 		);
+		if (from >= arity) continue;
+		aggregateEscape[from] = joinValueEscape(aggregateEscape[from]!, escapeOf(value));
+		aggregateContainment[from] = joinValueContainment(
+			aggregateContainment[from]!,
+			containmentOf(value),
+		);
+	}
+	for (let index = 0; index < arity; index += 1) {
+		if (index > 0) {
+			aggregateEscape[index] = joinValueEscape(
+				aggregateEscape[index]!,
+				aggregateEscape[index - 1]!,
+			);
+			aggregateContainment[index] = joinValueContainment(
+				aggregateContainment[index]!,
+				aggregateContainment[index - 1]!,
+			);
+		}
+		parameterEscape[index] = joinValueEscape(
+			parameterEscape[index]!,
+			aggregateEscape[index]!,
+		);
+		parameterContainment[index] = joinValueContainment(
+			parameterContainment[index]!,
+			aggregateContainment[index]!,
+		);
+	}
+	for (const { value, index } of local.exactArgumentValues) {
+		if (index >= arity) {
+			restParameterEscape = joinValueEscape(restParameterEscape, escapeOf(value));
+			restParameterContainment = joinValueContainment(
+				restParameterContainment,
+				containmentOf(value),
+			);
+			continue;
+		}
+		parameterEscape[index] = joinValueEscape(parameterEscape[index]!, escapeOf(value));
+		parameterContainment[index] = joinValueContainment(
+			parameterContainment[index]!,
+			containmentOf(value),
+		);
+	}
+
+	let receiverEscape: ValueEscapeFact = local.frameOutlivesCall ? "retained" : "none";
+	for (const value of local.receiverValues) {
+		receiverEscape = joinValueEscape(receiverEscape, escapeOf(value));
 	}
 	let receiverContainment: ValueContainmentFact = local.frameOutlivesCall
 		? "unknown"

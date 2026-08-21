@@ -16,7 +16,10 @@ import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts"
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import { coreRegisterClasses } from "../src/compiler/target/core-target-lowering.ts";
+import {
+	coreRegisterClasses,
+	lowerCoreProgramToTarget,
+} from "../src/compiler/target/core-target-lowering.ts";
 import {
 	deserializeVmDefinition,
 	serializeVmDefinition,
@@ -2753,6 +2756,100 @@ describe("Core IR optimizer", () => {
 				reason: "inner-closure",
 			}),
 		);
+	});
+
+	it("keeps a claimed region's call operands out of constant embedding", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			'globalThis.result = Number("x42".slice(1));',
+			"core-region-constant-receiver.js",
+		);
+		let optimized: CoreProgram | undefined;
+		// Lowering rejects a region whose claimed call no longer names its receiver in
+		// a register, so embedding the constant receiver would fail this compile.
+		compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		expect(
+			optimized!.functions.flatMap(({ regions }) => regions.map(({ kind }) => kind)),
+		).toContain("string-slice-number");
+		const claimed = new Set(
+			lowerCoreProgramToTarget(optimized!).functions.flatMap(
+				(fn) =>
+					fn.regions?.flatMap(({ claimedInstructions }) => claimedInstructions) ?? [],
+			),
+		);
+		expect(claimed.size).toBeGreaterThan(0);
+		for (const instruction of claimed) {
+			expect(instruction).not.toHaveProperty("immediateValues");
+		}
+	});
+
+	it("does not inline a binding a nested closure can rebind", () => {
+		const optimize = (setter: string) => {
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				`function outer(reassign) {
+					function handler() { return 1; }
+					function replacement() { return 2; }
+					${setter}
+					return handler();
+				}`,
+				"core-inline-nested-setter.js",
+			);
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToVmDefinition(semantic, {
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			});
+			return optimized!.functions[1]!.blocks.flatMap(({ instructions }) => instructions);
+		};
+		const inlinedHandlerBody = (
+			instructions: ReadonlyArray<CoreFunction["blocks"][number]["instructions"][number]>,
+		) =>
+			instructions.some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 1,
+			);
+
+		// `outer(true)` must call `replacement`. A function-local scan sees one store
+		// into the captured cell and would inline `handler`'s body unguarded.
+		const rebound = optimize(
+			`const retarget = () => { handler = replacement; };
+			if (reassign) retarget();`,
+		);
+		expect(rebound.some(({ opcode }) => opcode === "call")).toBe(true);
+		expect(inlinedHandlerBody(rebound)).toBe(false);
+
+		const closed = optimize("void replacement;");
+		expect(closed.some(({ opcode }) => opcode === "call")).toBe(false);
+		expect(inlinedHandlerBody(closed)).toBe(true);
+	});
+
+	it("retains closed callee facts across bounded inline expansions", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function outer() {
+				function leaf() { return 1; }
+				function middle() { return leaf(); }
+				return middle();
+			}`,
+			"core-inline-relocated-target.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		const outer = optimized!.functions[1]!;
+		const instructions = outer.blocks.flatMap(({ instructions }) => instructions);
+		expect(instructions.some(({ opcode }) => opcode === "call")).toBe(false);
+		expect(
+			instructions.some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 1,
+			),
+		).toBe(true);
 	});
 
 	it("does not relocate argument reads into the caller activation", () => {
