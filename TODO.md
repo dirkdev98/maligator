@@ -419,13 +419,6 @@ remains a Maligator extension and does not count as global fetch conformance.
       a CLI for rendering existing captures. Document interval overrides as expert
       diagnostics requiring overhead revalidation.
 
-- [ ] Add real help and unknown-option handling to scripts/bench.ts. Informational or
-      invalid invocations must exit before builds or benchmarks begin.
-
-- [ ] Improve paired-benchmark turnaround with adaptive progress and explicit
-      maximum-pair or inconclusive outcomes. Keep elapsed-time and throughput policies
-      distinct.
-
 - [ ] Harden the authenticated Claude and Fable review harness with a small read-only
       smoke, bounded cleanup, and explicit external-disclosure approval. Never expose
       or persist authentication material.
