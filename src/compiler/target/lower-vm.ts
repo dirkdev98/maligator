@@ -254,6 +254,16 @@ export interface VmRegionLicense {
 	readonly guard: VmGuardPlan;
 	readonly genericTwin: "retained";
 	readonly materialization: "none" | "on-demand" | "whole-region";
+	/**
+	 * Where the license's semantic-epoch dependencies are admitted, and whether
+	 * that one admission covers every licensed use. Core owns the interior proof;
+	 * a backend reads `validity` instead of rediscovering epoch stability from the
+	 * emitted distance between an admission and a use.
+	 */
+	readonly admission: {
+		readonly anchorIp: number;
+		readonly validity: "once" | "per-use";
+	};
 }
 
 export type VmRuntimeSemanticEpochFamily =
@@ -313,6 +323,7 @@ function vmSemanticDependencyKey(dependency: VmSemanticDependency): string {
 export function vmRegionLicense(
 	guards: ReadonlyArray<VmGuardPlan | undefined>,
 	materialization: VmRegionLicense["materialization"],
+	admission: VmRegionLicense["admission"],
 ): VmRegionLicense | undefined {
 	const dependencies = new Map<string, VmSemanticDependency>();
 	const obligations = new Set<VmGuardObligation>();
@@ -334,6 +345,7 @@ export function vmRegionLicense(
 		},
 		genericTwin: "retained",
 		materialization,
+		admission,
 	};
 }
 
@@ -1931,7 +1943,36 @@ function lowerFunctionToVmFunction(
 	const claimedRegionInstructions = new Set<number>();
 	const coreRegionError = (kind: string, reason: string): Error =>
 		new Error(`Invalid Core ${kind} region during VM lowering: ${reason}`);
+	/**
+	 * What target lowering still owes on an admission record. Core owns the interior
+	 * proof — it is about dominance, which the emitted instruction order does not
+	 * express once a claim legitimately sits in a dominating predecessor block — so
+	 * what only the lowered stream can show is that the anchor resolves to an
+	 * instruction this region actually claims.
+	 */
+	const checkAdmission = (
+		kind: string,
+		claimedIps: ReadonlyArray<number>,
+		admission: VmRegionLicense["admission"],
+	): void => {
+		if (!claimedIps.includes(admission.anchorIp)) {
+			throw coreRegionError(kind, "admission outside the claim set");
+		}
+	};
 	for (const region of fn.regions ?? []) {
+		// Envelope metadata: resolved once for every kind so no kind-specific branch
+		// can hand a backend a different answer.
+		const admissionAnchorIp = instructionIndexByTargetInstruction.get(
+			region.license.admission.anchor,
+		);
+		const admissionValidity = region.license.admission.validity;
+		if (
+			admissionAnchorIp === undefined ||
+			(admissionValidity !== "once" && admissionValidity !== "per-use")
+		) {
+			throw coreRegionError(region.kind, "license admission");
+		}
+		const admission = { anchorIp: admissionAnchorIp, validity: admissionValidity };
 		if (region.kind === "numeric-fusion") {
 			const anchors = region.anchors.map((instruction) =>
 				instructionIndexByTargetInstruction.get(instruction),
@@ -2020,12 +2061,14 @@ function lowerFunctionToVmFunction(
 				}
 			}
 			if (!valid) throw coreRegionError(region.kind, "instruction or cost contract");
+			checkAdmission(region.kind, resolvedClaimedIps, admission);
 			regions.push({
 				kind: "numeric-fusion",
 				license: {
 					guard: { dependencies: [], obligations: ["fallback"] },
 					genericTwin: "retained",
 					materialization: "none",
+					admission,
 				},
 				representation: "binary-pairs-f64",
 				composition: "overlay",
@@ -2218,12 +2261,14 @@ function lowerFunctionToVmFunction(
 					...site.materializations.map((materialization) => materialization.ip),
 				]);
 				for (const ip of claimedIps) claimedRegionInstructions.add(ip);
+				checkAdmission(region.kind, claimedIps, admission);
 				regions.push({
 					kind: "stack-object-plan",
 					license: {
 						guard: guard,
 						genericTwin: "retained",
 						materialization: region.license.materialization,
+						admission,
 					},
 					representation: "activation-local-fixed-shape-objects",
 					anchors: sites.map((site) => site.allocationIp),
@@ -2318,6 +2363,7 @@ function lowerFunctionToVmFunction(
 		) {
 			throw coreRegionError(region.kind, "lowered control-flow or exclusive claims");
 		}
+		checkAdmission(region.kind, resolvedClaimedIps, admission);
 
 		switch (region.kind) {
 			case "regexp-exec-projection": {
@@ -2589,7 +2635,12 @@ function lowerFunctionToVmFunction(
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
 					kind: "regexp-exec-projection",
-					license: { guard, genericTwin: "retained", materialization: "whole-region" },
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "whole-region",
+						admission,
+					},
 					representation: "regexp-capture-spans",
 					anchors: resolvedAnchors,
 					claimedIps: resolvedClaimedIps,
@@ -2724,7 +2775,12 @@ function lowerFunctionToVmFunction(
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
 					kind: "regexp-iterator-projection",
-					license: { guard, genericTwin: "retained", materialization: "on-demand" },
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "on-demand",
+						admission,
+					},
 					representation: "regexp-iterator-capture-spans",
 					anchors: resolvedAnchors,
 					claimedIps: resolvedClaimedIps,
@@ -2827,7 +2883,7 @@ function lowerFunctionToVmFunction(
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
 					kind: "string-slice-number",
-					license: { guard, genericTwin: "retained", materialization: "none" },
+					license: { guard, genericTwin: "retained", materialization: "none", admission },
 					representation: "primitive-string-span-number",
 					anchors: resolvedAnchors,
 					claimedIps: resolvedClaimedIps,
@@ -3044,6 +3100,7 @@ function lowerFunctionToVmFunction(
 						guard,
 						genericTwin: "retained",
 						materialization: "whole-region",
+						admission,
 					},
 					representation: "projected-elements",
 					anchors: resolvedAnchors,
@@ -3181,6 +3238,7 @@ function lowerFunctionToVmFunction(
 						guard,
 						genericTwin: "retained",
 						materialization: "on-demand",
+						admission,
 					},
 					representation: "split-cursor-spans",
 					anchors: resolvedAnchors,

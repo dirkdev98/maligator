@@ -923,6 +923,14 @@ function verifyRegions(model: FunctionModel): void {
 		for (const anchor of region.anchors) {
 			if (!claimed.has(anchor)) fail("region anchor is not claimed", context);
 		}
+		const admission = region.license.admission;
+		requireOwned(admission.anchor, "admission anchor");
+		if (!claimed.has(admission.anchor)) {
+			fail("region admission anchor is not claimed", context);
+		}
+		if (admission.validity !== "once" && admission.validity !== "per-use") {
+			fail("region admission has an invalid validity", context);
+		}
 		for (const [role, blocks] of [
 			["ordinary", region.controlFlow.ordinaryBlocks],
 			["exceptional", region.controlFlow.exceptionalBlocks],

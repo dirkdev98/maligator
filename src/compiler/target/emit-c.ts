@@ -556,9 +556,7 @@ export function emitCompiledFunction(
 			subjectSlot: nextStackSlot,
 			separatorSlot: nextStackSlot + 1,
 			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
-			// Semantic-epoch stability is a Core obligation. Until Core provides it,
-			// validate at each guarded use instead of rediscovering it from VM adjacency.
-			semanticEpochStable: false,
+			semanticEpochStable: cursor.license.admission.validity === "once",
 			epochName: `__string_split_cursor_${callIp}_semantic_epoch`,
 			lockedIdentity:
 				call?.opcode === "CALL_BUILTIN" ||
@@ -1096,6 +1094,7 @@ interface NativeStringSplitCursorSite {
 	subjectSlot: number;
 	separatorSlot: number;
 	trimCalleeSlot?: number;
+	/** Core's `once` admission: no licensed use re-validates the named epochs. */
 	semanticEpochStable: boolean;
 	epochName: string;
 	lockedIdentity: boolean;

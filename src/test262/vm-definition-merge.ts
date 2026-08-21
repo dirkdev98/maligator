@@ -41,6 +41,7 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 				})),
 				obligations: [...region.license.guard.obligations],
 			},
+			admission: { ...region.license.admission },
 		},
 		anchors: [...region.anchors],
 		claimedIps: [...region.claimedIps],

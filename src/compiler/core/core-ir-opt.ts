@@ -77,6 +77,14 @@ import {
 	coreProvenance,
 } from "./core-ir-provenance.ts";
 import type { CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
+import {
+	coreRegionAdmission,
+	coreRegionAdmissionQuery,
+	coreRegionAdmissionValidity,
+	coreRegionLicense,
+	coreRegionValidityModel,
+} from "./core-ir-region-validity.ts";
+import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
@@ -4796,6 +4804,7 @@ export class CoreAnalysisManager {
 	readonly #memory = new WeakMap<CoreFunction, CoreMemoryVersions>();
 	readonly #provenance = new WeakMap<CoreFunction, CoreProvenance>();
 	readonly #loopInductions = new WeakMap<CoreFunction, CoreLoopInductionAnalysis>();
+	readonly #regionValidity = new WeakMap<CoreFunction, CoreRegionValidityModel>();
 	/**
 	 * Program-level analyses cannot key on the program or its function array: the
 	 * driver rebuilds both for every pass, so a `WeakMap` would never hit. The
@@ -4821,6 +4830,16 @@ export class CoreAnalysisManager {
 		if (analysis === undefined) {
 			analysis = buildCoreControlFlow(fn, coreOpcodeRegistry);
 			this.#controlFlow.set(fn, analysis);
+		}
+		return analysis;
+	}
+
+	/** Shared epoch-transparency bits every region-selection pass reuses. */
+	regionValidity(fn: CoreFunction): CoreRegionValidityModel {
+		let analysis = this.#regionValidity.get(fn);
+		if (analysis === undefined) {
+			analysis = coreRegionValidityModel(fn, coreOpcodeRegistry);
+			this.#regionValidity.set(fn, analysis);
 		}
 		return analysis;
 	}
@@ -9819,16 +9838,72 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	deadInstructionElimination,
 ];
 
+/**
+ * Complete every certificate in `fn` with its admission record: where the
+ * license's semantic-epoch dependencies are tested, and whether that one test
+ * covers the whole interior.
+ *
+ * The question is the same for every region kind — it is about the license's
+ * epoch dependencies and the interior's effects, not about what the region does —
+ * so it is derived once here instead of restated by each selecting pass. Only
+ * `region.data` is rewritten, so no claim can be invalidated, and the Core
+ * verifier re-derives the same answer from the graph.
+ */
+function annotateRegionAdmission(
+	fn: CoreFunction,
+	analyses: CoreAnalysisManager,
+): CoreFunction {
+	if (fn.regions.length === 0) return fn;
+	const cfg = analyses.controlFlow(fn);
+	const model = analyses.regionValidity(fn);
+	let changed = false;
+	const regions = fn.regions.map((region) => {
+		const license = coreRegionLicense(region);
+		const anchor = region.anchors[0];
+		if (license === undefined || anchor === undefined) return region;
+		const validity = coreRegionAdmissionValidity(
+			fn,
+			cfg,
+			model,
+			coreRegionAdmissionQuery(region, anchor),
+		);
+		const existing = coreRegionAdmission(region);
+		if (existing?.anchor === anchor && existing.validity === validity) return region;
+		changed = true;
+		return {
+			...region,
+			data: {
+				...region.data,
+				license: {
+					...license,
+					admission: { anchor: { $coreInstruction: anchor }, validity },
+				},
+			},
+		};
+	});
+	return changed ? { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+}
+
+/** A selection pass states its certificate; the shared derivation completes it. */
+function withRegionAdmission(pass: CoreFunctionPass): CoreFunctionPass {
+	return {
+		...pass,
+		run(fn, analyses, program) {
+			return annotateRegionAdmission(pass.run(fn, analyses, program), analyses);
+		},
+	};
+}
+
 const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateFreshDenseIndexedReserves,
 	annotateBoundedStringCharCodeAtPositions,
-	selectStackObjectRegions,
-	selectRegExpExecProjectionRegions,
-	selectRegExpIteratorProjectionRegions,
-	selectStringSplitCursorRegions,
-	selectStringSplitProjectionRegions,
-	selectStringSliceNumberRegions,
-	selectNumericFusionRegions,
+	withRegionAdmission(selectStackObjectRegions),
+	withRegionAdmission(selectRegExpExecProjectionRegions),
+	withRegionAdmission(selectRegExpIteratorProjectionRegions),
+	withRegionAdmission(selectStringSplitCursorRegions),
+	withRegionAdmission(selectStringSplitProjectionRegions),
+	withRegionAdmission(selectStringSliceNumberRegions),
+	withRegionAdmission(selectNumericFusionRegions),
 ];
 
 function claimedInstructionSnapshots(

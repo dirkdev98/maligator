@@ -18,6 +18,16 @@ export interface CoreAllocatedRegionEnvelope<
 		readonly guard: Guard;
 		readonly genericTwin: "retained";
 		readonly materialization: Materialization;
+		/**
+		 * Where the license's semantic-epoch dependencies are admitted, and whether
+		 * that one admission covers every licensed use. Core owns the proof; a
+		 * backend reads the decision instead of rediscovering it from emitted
+		 * adjacency. See `core-ir-region-validity.ts`.
+		 */
+		readonly admission: {
+			readonly anchor: CompilerInstruction;
+			readonly validity: "once" | "per-use";
+		};
 	};
 	readonly representation: Representation;
 	/** Overlay regions may share instructions with an exclusive representation. */

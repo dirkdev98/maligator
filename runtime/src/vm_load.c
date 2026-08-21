@@ -18,7 +18,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 15u
+#define WIRE_VERSION 16u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in
@@ -1940,6 +1940,17 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             u8 materialization = rd_u8(&r);
             u8 dependency_mask = rd_u8(&r);
             u8 obligation_mask = rd_u8(&r);
+            u8 admission_validity = rd_u8(&r);
+            i32 admission_anchor_ip = rd_i32(&r);
+            if (admission_validity > 1 || admission_anchor_ip < 0 ||
+                admission_anchor_ip >= fn->instruction_count) {
+                r.ok = false;
+            }
+            bool admission_claimed = false;
+            for (u32 claim = 0; r.ok && claim < claim_count; claim++) {
+                if (claims[claim] == admission_anchor_ip) admission_claimed = true;
+            }
+            if (r.ok && !admission_claimed) r.ok = false;
             bool split_cursor_contract = kind == 2 && representation == 2 &&
                 materialization == 1 && (dependency_mask == 1 || dependency_mask == 4) &&
                 obligation_mask == 3;

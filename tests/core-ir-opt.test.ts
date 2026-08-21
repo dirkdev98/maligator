@@ -3324,7 +3324,18 @@ describe("Core IR optimizer", () => {
 					claimedInstructions: [call.id],
 					ordinaryBlocks: [entry],
 					exceptionalBlocks: [],
-					data: { call: { $coreInstruction: call.id } },
+					data: {
+						call: { $coreInstruction: call.id },
+						license: {
+							guard: "structural",
+							genericTwin: "retained",
+							materialization: "none",
+							admission: {
+								anchor: { $coreInstruction: call.id },
+								validity: "once",
+							},
+						},
+					},
 				},
 			],
 		};
@@ -3365,7 +3376,18 @@ describe("Core IR optimizer", () => {
 					claimedInstructions: [claimed.id],
 					ordinaryBlocks: [entry],
 					exceptionalBlocks: [],
-					data: { producer: { $coreInstruction: claimed.id } },
+					data: {
+						producer: { $coreInstruction: claimed.id },
+						license: {
+							guard: "structural",
+							genericTwin: "retained",
+							materialization: "none",
+							admission: {
+								anchor: { $coreInstruction: claimed.id },
+								validity: "once",
+							},
+						},
+					},
 				},
 			],
 		};

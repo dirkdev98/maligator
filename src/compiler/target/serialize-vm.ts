@@ -35,7 +35,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 15;
+export const WIRE_VERSION = 16;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1113,6 +1113,8 @@ export function serializeVmDefinition(
 			w.u8(materializationTag);
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
+			w.u8(region.license.admission.validity === "once" ? 1 : 0);
+			w.i32(region.license.admission.anchorIp);
 			switch (region.kind) {
 				case "string-split-cursor":
 					w.i32(region.propertyIp);
@@ -1417,7 +1419,9 @@ function validateRegionEnvelope(
 		region.cost.score > 0xffff_ffff ||
 		!Number.isSafeInteger(region.cost.metadataOperations) ||
 		region.cost.metadataOperations <= 0 ||
-		region.cost.metadataOperations > MAX_REGION_CLAIMS
+		region.cost.metadataOperations > MAX_REGION_CLAIMS ||
+		!instructionIpValid(region.license.admission.anchorIp) ||
+		!region.claimedIps.includes(region.license.admission.anchorIp)
 	) {
 		throw new RangeError("serialize-vm: invalid region envelope");
 	}
@@ -2987,6 +2991,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				const materializationTag = r.u8();
 				const dependencyMask = r.u8();
 				const obligationMask = r.u8();
+				const admissionTag = r.u8();
+				const admissionAnchorIp = r.i32();
+				const admission = {
+					anchorIp: admissionAnchorIp,
+					validity: admissionTag === 1 ? ("once" as const) : ("per-use" as const),
+				};
 				const stringSplitCursorContract =
 					kindTag === 2 &&
 					representationTag === 2 &&
@@ -3033,6 +3043,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					compositionTag > 1 ||
 					(compositionTag === 1) !== numericFusionContract ||
 					genericTwinTag !== 1 ||
+					admissionTag > 1 ||
 					(!stringSplitCursorContract &&
 						!stringSplitProjectionContract &&
 						!regexpExecProjectionContract &&
@@ -3083,6 +3094,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							},
 							genericTwin: "retained",
 							materialization: "on-demand",
+							admission,
 						},
 						representation: "split-cursor-spans",
 						anchors,
@@ -3155,6 +3167,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							},
 							genericTwin: "retained",
 							materialization: "whole-region",
+							admission,
 						},
 						representation: "projected-elements",
 						anchors,
@@ -3264,6 +3277,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							},
 							genericTwin: "retained",
 							materialization: "whole-region",
+							admission,
 						},
 						representation: "regexp-capture-spans",
 						anchors,
@@ -3328,6 +3342,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							},
 							genericTwin: "retained",
 							materialization: "on-demand",
+							admission,
 						},
 						representation: "regexp-iterator-capture-spans",
 						anchors,
@@ -3369,6 +3384,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							},
 							genericTwin: "retained",
 							materialization: "none",
+							admission,
 						},
 						representation: "primitive-string-span-number",
 						anchors,
@@ -3445,6 +3461,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							},
 							genericTwin: "retained",
 							materialization: materializationTag === 0 ? "none" : "on-demand",
+							admission,
 						},
 						representation: "activation-local-fixed-shape-objects",
 						anchors,
@@ -3477,6 +3494,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							guard: { dependencies: [], obligations: ["fallback"] },
 							genericTwin: "retained",
 							materialization: "none",
+							admission,
 						},
 						representation: "binary-pairs-f64",
 						composition: "overlay",

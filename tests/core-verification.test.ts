@@ -83,7 +83,18 @@ function programWithClaimedDeadInstruction(): CoreProgram {
 					claimedInstructions: [claimed.id],
 					ordinaryBlocks: [entry],
 					exceptionalBlocks: [],
-					data: { producer: { $coreInstruction: claimed.id } },
+					data: {
+						producer: { $coreInstruction: claimed.id },
+						license: {
+							guard: "structural",
+							genericTwin: "retained",
+							materialization: "none",
+							admission: {
+								anchor: { $coreInstruction: claimed.id },
+								validity: "once",
+							},
+						},
+					},
 				},
 			],
 		},

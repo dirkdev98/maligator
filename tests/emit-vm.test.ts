@@ -129,6 +129,7 @@ describe("emit-vm instruction packing", () => {
 				},
 			],
 			"on-demand",
+			{ anchorIp: 0, validity: "per-use" },
 		);
 		expect(license).toEqual({
 			guard: {
@@ -140,6 +141,7 @@ describe("emit-vm instruction packing", () => {
 			},
 			genericTwin: "retained",
 			materialization: "on-demand",
+			admission: { anchorIp: 0, validity: "per-use" },
 		});
 	});
 

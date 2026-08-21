@@ -1,5 +1,6 @@
 import { effectSummariesEqual, effectSummaryCovers } from "../shared/effect-summary.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
 	CORE_FACT_ALTERNATIVE_LIMIT,
 	CORE_FACT_CLAIM_LIMIT,
@@ -15,6 +16,15 @@ import {
 	coreOwnCellsEqual,
 	coreProvenance,
 } from "./core-ir-provenance.ts";
+import {
+	coreRegionAdmission,
+	coreRegionAdmissionQuery,
+	coreRegionInteriorKeepsAdmission,
+	coreRegionLicense,
+	coreRegionLicenseEpochFamilies,
+	coreRegionValidityModel,
+} from "./core-ir-region-validity.ts";
+import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
 	CORE_CALL_SUMMARY_ATTRIBUTE,
@@ -328,6 +338,83 @@ function verifyRegionPropertyPlacement(
 	) {
 		fail(
 			`region ${region.kind} defers @${property}, which is not consumed only as the callee of @${call}`,
+		);
+	}
+}
+
+/**
+ * Epoch families no native backend can lower a region license for. Rejecting them
+ * here makes an unlowerable selection a Core verification failure at the boundary
+ * that produced it, rather than a throw at C emission.
+ */
+const UNLICENSABLE_EPOCH_FAMILIES: ReadonlySet<string> = new Set([
+	"global-bindings",
+	"object-shapes",
+]);
+
+/**
+ * Verify the part of a region license every layer downstream depends on: that the
+ * license is readable, keeps its generic twin, names a lowerable set of epoch
+ * families, and carries an admission record whose `once` claim the graph actually
+ * supports.
+ *
+ * The `once` proof is recomputed here rather than trusted, following the
+ * own-data-cell precedent: a transform that lets an opaque instruction into a
+ * licensed interior fails at this boundary instead of silently keeping a stale
+ * proof. `per-use` needs no interior proof — re-testing at each use is always
+ * sound — so only the claim that removes work carries an obligation.
+ */
+function verifyRegionLicense(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+	model: CoreRegionValidityModel,
+	region: CoreRegion,
+): void {
+	const license = coreRegionLicense(region);
+	if (license === undefined) {
+		fail(`region ${region.kind} has no readable license`);
+		return;
+	}
+	if (license.genericTwin !== "retained") {
+		fail(`region ${region.kind} does not retain its generic twin`);
+	}
+	if (
+		license.materialization !== "none" &&
+		license.materialization !== "on-demand" &&
+		license.materialization !== "whole-region"
+	) {
+		fail(`region ${region.kind} has an invalid materialization plan`);
+	}
+	const families = coreRegionLicenseEpochFamilies(region);
+	if (families === undefined) {
+		fail(`region ${region.kind} has an unreadable license guard`);
+		return;
+	}
+	for (const family of families) {
+		if (UNLICENSABLE_EPOCH_FAMILIES.has(family)) {
+			fail(`region ${region.kind} depends on unlowerable epoch family ${family}`);
+		}
+	}
+	const admission = coreRegionAdmission(region);
+	if (admission === undefined) {
+		fail(`region ${region.kind} has no readable license admission`);
+		return;
+	}
+	if (!region.claimedInstructions.includes(admission.anchor)) {
+		fail(`region ${region.kind} admits at unclaimed instruction @${admission.anchor}`);
+	}
+	if (
+		admission.validity === "once" &&
+		families.size > 0 &&
+		!coreRegionInteriorKeepsAdmission(
+			fn,
+			cfg,
+			model,
+			coreRegionAdmissionQuery(region, admission.anchor),
+		)
+	) {
+		fail(
+			`region ${region.kind} claims one admission at @${admission.anchor} without an epoch-stable interior`,
 		);
 	}
 }
@@ -716,6 +803,9 @@ function verifyCoreFunctionGraph(
 		fail(`value ${missing?.id} has no definition`);
 	}
 
+	const cfg = buildCoreControlFlow(fn, registry);
+	const regionValidity =
+		fn.regions.length === 0 ? undefined : coreRegionValidityModel(fn, registry);
 	for (const [regionIndex, region] of fn.regions.entries()) {
 		if (region.kind.length === 0) fail(`region ${regionIndex} has an empty kind`);
 		if (region.anchors.length === 0) fail(`region ${region.kind} has no anchors`);
@@ -762,9 +852,9 @@ function verifyCoreFunctionGraph(
 			instructionOutputs,
 			valueUses,
 		);
+		verifyRegionLicense(fn, cfg, regionValidity!, region);
 	}
 
-	const cfg = buildCoreControlFlow(fn, registry);
 	verifyOwnDataCellRefinements(fn, cfg, facts, stringConstants);
 	if (cfg.predecessors[fn.entry]!.length !== 0) {
 		fail(`entry block b${fn.entry} has predecessors`);
