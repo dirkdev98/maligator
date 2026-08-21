@@ -529,6 +529,80 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("rejects a stack-object access slot for a different allocation key", () => {
+		const stackFn: VmFunction = {
+			...fn,
+			registerCount: 4,
+			instructions: [
+				{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
+				{
+					opcode: "CREATE_OBJECT_SHAPED",
+					dst: 2,
+					count: 2,
+					keyStringIndices: [0, 1],
+					valueRegisters: [0, 1],
+					shapeCacheIndex: 0,
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					dst: 3,
+					object: 2,
+					stringIndex: 1,
+					icIndex: 0,
+				},
+				{
+					opcode: "STORE_PROPERTY_STATIC",
+					object: 2,
+					value: 0,
+					stringIndex: 1,
+					icIndex: 1,
+				},
+				{ opcode: "RETURN", value: 3 },
+			],
+			positions: [],
+			registerRepresentations: ["boxed", "boxed", "boxed", "boxed"],
+			regions: [
+				{
+					kind: "stack-object-plan",
+					license: {
+						guard: { dependencies: [], obligations: ["fallback"] },
+						genericTwin: "retained",
+						materialization: "none",
+						admission: { anchorIp: 2, validity: "once" },
+					},
+					representation: "activation-local-fixed-shape-objects",
+					anchors: [2],
+					claimedIps: [2, 3, 4],
+					controlFlow: { ordinaryBlockIps: [2, 3, 4], exceptionalHandlerIps: [] },
+					cost: { score: 2, metadataOperations: 3 },
+					sites: [
+						{
+							allocationIp: 2,
+							slotCount: 2,
+							accesses: [
+								{ ip: 3, slot: 1 },
+								{ ip: 4, slot: 1 },
+							],
+							materializations: [],
+						},
+					],
+				},
+			],
+		};
+		const stackDefinition: VmDefinition = {
+			...definition,
+			functions: [stackFn],
+			stringConstants: [["first".charCodeAt(0)], ["second".charCodeAt(0)]],
+		};
+		const wire = serializeVmDefinition(stackDefinition, { debugInfo: false });
+		// The access-slot byte is followed by inheritedIp=-1 and an empty
+		// materialization table. Preserve the wire layout while naming slot zero.
+		expect(wire.at(-3)).toBe(2);
+		wire[wire.length - 3] = 0;
+		rejectsWire("stack-object-slot-key", wire);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

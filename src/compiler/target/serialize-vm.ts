@@ -1576,6 +1576,8 @@ function validateStackObjectPlanRegion(
 					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
 				access.slot < 0 ||
 				access.slot >= site.slotCount ||
+				allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
+				allocation.keyStringIndices[access.slot] !== instruction.stringIndex ||
 				payload.has(access.ip)
 			) {
 				valid = false;

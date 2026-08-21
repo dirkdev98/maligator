@@ -1022,6 +1022,52 @@ describe("Core target verification", () => {
 		});
 	});
 
+	it("requires stack-object access slots to name the accessed allocation key", () => {
+		const program = optimizedTarget(
+			`function read(value, replace) {
+				const object = { first: value, second: 2 };
+				if (replace) object.second = 1;
+				return object.second;
+			}
+			read(3, false);`,
+			"stack-object-slot-key.js",
+		);
+		expect(() => lowerCoreProgramToVmDefinition(program)).not.toThrow();
+		const functionIndex = program.functions.findIndex((fn) =>
+			(fn.regions ?? []).some((region) => region.kind === "stack-object-plan"),
+		);
+		const fn = program.functions[functionIndex]!;
+		const regionIndex = fn.regions!.findIndex(
+			(region) => region.kind === "stack-object-plan",
+		);
+		const region = fn.regions![regionIndex]!;
+		if (region.kind !== "stack-object-plan") throw new Error("expected stack region");
+		const site = region.sites[0]!;
+		expect(site.slotCount).toBeGreaterThan(1);
+		expect(new Set(site.accesses.map(({ instruction }) => instruction.type))).toEqual(
+			new Set(["loadPropertyStatic", "storePropertyStatic"]),
+		);
+		for (const [accessIndex, access] of site.accesses.entries()) {
+			const malformed = withFunction(program, functionIndex, {
+				regions: fn.regions!.with(regionIndex, {
+					...region,
+					sites: region.sites.with(0, {
+						...site,
+						accesses: site.accesses.with(accessIndex, {
+							...access,
+							slot: access.slot === 0 ? 1 : 0,
+						}),
+					}),
+				}),
+			});
+
+			expect(() => verifyCoreTargetProgram(malformed)).not.toThrow();
+			expect(() => lowerCoreProgramToVmDefinition(malformed)).toThrow(
+				/Invalid Core stack-object-plan region during VM lowering: site instruction metadata/,
+			);
+		}
+	});
+
 	it("rejects a temporary register read before its definition or without a class", () => {
 		const program = optimizedTarget(SUPER_SOURCE, "temporaries.js");
 		const match = findInstruction(

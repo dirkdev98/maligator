@@ -278,6 +278,80 @@ const hostDefinition: VmDefinition = {
 	],
 };
 
+function stackObjectDefinition(): VmDefinition {
+	const stackFn: VmFunction = {
+		...mainFn,
+		nameStringIndex: -1,
+		parameterCount: 0,
+		length: 0,
+		registerCount: 4,
+		needsArguments: false,
+		instructions: [
+			{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
+			{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
+			{
+				opcode: "CREATE_OBJECT_SHAPED",
+				dst: 2,
+				count: 2,
+				keyStringIndices: [0, 1],
+				valueRegisters: [0, 1],
+				shapeCacheIndex: 0,
+			},
+			{ opcode: "LOAD_PROPERTY_STATIC", dst: 3, object: 2, stringIndex: 1, icIndex: 0 },
+			{
+				opcode: "STORE_PROPERTY_STATIC",
+				object: 2,
+				value: 0,
+				stringIndex: 1,
+				icIndex: 1,
+			},
+			{ opcode: "RETURN", value: 3 },
+		],
+		handlers: [],
+		positions: [],
+		registerRepresentations: ["boxed", "boxed", "boxed", "boxed"],
+		regions: [
+			{
+				kind: "stack-object-plan",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback"] },
+					genericTwin: "retained",
+					materialization: "none",
+					admission: { anchorIp: 2, validity: "once" },
+				},
+				representation: "activation-local-fixed-shape-objects",
+				anchors: [2],
+				claimedIps: [2, 3, 4],
+				controlFlow: { ordinaryBlockIps: [2, 3, 4], exceptionalHandlerIps: [] },
+				cost: { score: 2, metadataOperations: 3 },
+				sites: [
+					{
+						allocationIp: 2,
+						slotCount: 2,
+						accesses: [
+							{ ip: 3, slot: 1 },
+							{ ip: 4, slot: 1 },
+						],
+						materializations: [],
+					},
+				],
+			},
+		],
+	};
+	return {
+		...definition,
+		functionCount: 1,
+		functions: [stackFn],
+		stringConstants: [["first".charCodeAt(0)], ["second".charCodeAt(0)]],
+		bigintConstants: [],
+		literalTemplateData: [],
+		globalCount: 0,
+		files: [],
+		sourcePositions: [],
+		cjsModuleFunctionIndices: [],
+	};
+}
+
 describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
@@ -303,6 +377,51 @@ describe("serialize-vm", () => {
 			serializeVmDefinition(definition, { debugInfo: true }),
 		);
 		expect(restored).toEqual(definition);
+	});
+
+	it("validates stack-object access keys at both wire boundaries", () => {
+		const valid = stackObjectDefinition();
+		const wire = serializeVmDefinition(valid, { debugInfo: false });
+		expect(deserializeVmDefinition(wire).functions[0]!.regions).toEqual(
+			valid.functions[0]!.regions,
+		);
+
+		const region = valid.functions[0]!.regions![0]!;
+		if (region.kind !== "stack-object-plan") throw new Error("expected stack region");
+		const malformed: VmDefinition = {
+			...valid,
+			functions: [
+				{
+					...valid.functions[0]!,
+					regions: [
+						{
+							...region,
+							sites: [
+								{
+									...region.sites[0]!,
+									accesses: [
+										{ ip: 3, slot: 1 },
+										{ ip: 4, slot: 0 },
+									],
+								},
+							],
+						},
+					],
+				},
+			],
+		};
+		expect(() => serializeVmDefinition(malformed, { debugInfo: false })).toThrow(
+			/invalid stack-object plan region/,
+		);
+
+		const tampered = wire.slice();
+		// The single site's access slot is followed by inheritedIp=-1 and an empty
+		// materialization table. Change ZigZag(1) to ZigZag(0) without changing size.
+		expect(tampered.at(-3)).toBe(2);
+		tampered[tampered.length - 3] = 0;
+		expect(() => deserializeVmDefinition(tampered)).toThrow(
+			/invalid stack-object plan region/,
+		);
 	});
 
 	it("requires one Core-selected physical representation per register", () => {

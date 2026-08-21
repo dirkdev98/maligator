@@ -2158,10 +2158,11 @@ function lowerFunctionToVmFunction(
 				const allocationIp = instructionIndexByTargetInstruction.get(site.allocation);
 				const allocation =
 					allocationIp === undefined ? undefined : instructions[allocationIp];
-				const accesses = site.accesses.map((access) => ({
-					ip: instructionIndexByTargetInstruction.get(access.instruction),
-					slot: access.slot,
-				}));
+				const accesses = site.accesses.map((access) => {
+					const ip = instructionIndexByTargetInstruction.get(access.instruction);
+					const instruction = ip === undefined ? undefined : instructions[ip];
+					return { ip, slot: access.slot, instruction };
+				});
 				const inheritedAccessIp =
 					site.inheritedAccess === undefined
 						? undefined
@@ -2177,14 +2178,18 @@ function lowerFunctionToVmFunction(
 					(allocation.opcode === "CREATE_OBJECT"
 						? site.slotCount !== 0
 						: allocation.count !== site.slotCount) ||
-					accesses.some(
-						(access) =>
+					accesses.some((access) => {
+						const property = access.instruction;
+						return (
 							access.ip === undefined ||
 							access.slot < 0 ||
 							access.slot >= site.slotCount ||
-							(instructions[access.ip]?.opcode !== "LOAD_PROPERTY_STATIC" &&
-								instructions[access.ip]?.opcode !== "STORE_PROPERTY_STATIC"),
-					) ||
+							(property?.opcode !== "LOAD_PROPERTY_STATIC" &&
+								property?.opcode !== "STORE_PROPERTY_STATIC") ||
+							allocation.opcode !== "CREATE_OBJECT_SHAPED" ||
+							allocation.keyStringIndices[access.slot] !== property.stringIndex
+						);
+					}) ||
 					(site.inheritedAccess !== undefined &&
 						(inheritedAccessIp === undefined ||
 							instructions[inheritedAccessIp]?.opcode !== "LOAD_PROPERTY_STATIC")) ||
@@ -2197,7 +2202,10 @@ function lowerFunctionToVmFunction(
 				) {
 					throw coreRegionError(region.kind, "site instruction metadata");
 				}
-				const resolvedAccesses = accesses as Array<{ ip: number; slot: number }>;
+				const resolvedAccesses = accesses.map(({ ip, slot }) => ({
+					ip: ip!,
+					slot,
+				}));
 				const resolvedMaterializations = materializations as Array<{
 					ip: number;
 					kind: "return";

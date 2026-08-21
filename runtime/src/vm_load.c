@@ -3031,6 +3031,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				for (u32 site = 0; r.ok && site < site_count; site++) {
 					i32 allocation_ip = rd_i32(&r);
 					i32 slot_count = rd_i32(&r);
+					const i32 *allocation_keys = NULL;
 					bool allocation_ok = allocation_ip >= 0 &&
 						allocation_ip < fn->instruction_count && anchors[site] == allocation_ip &&
 						slot_count >= 0 && slot_count <= 256;
@@ -3040,8 +3041,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 							allocation_ok = slot_count == 0;
 						} else if (allocation->opcode == MAL_OP_CREATE_OBJECT_SHAPED) {
 							i32 offset = allocation->as.create_object_shaped.data_offset;
-							allocation_ok = offset >= 0 && offset < fn->instruction_data_count &&
+							allocation_ok = offset >= 0 &&
+								offset <= fn->instruction_data_count - 1 - slot_count &&
 								fn->instruction_data[offset] == slot_count;
+							if (allocation_ok) allocation_keys = &fn->instruction_data[offset + 1];
 						} else {
 							allocation_ok = false;
 						}
@@ -3059,10 +3062,21 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 					for (u32 access = 0; r.ok && access < access_count; access++) {
 						i32 ip = rd_i32(&r);
 						i32 slot = rd_i32(&r);
-						if (ip < 0 || ip >= fn->instruction_count || slot < 0 ||
-							slot >= slot_count ||
-							(fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY_STATIC &&
-							 fn->instructions[ip].opcode != MAL_OP_STORE_PROPERTY_STATIC)) {
+						bool access_ok = ip >= 0 && ip < fn->instruction_count && slot >= 0 &&
+							slot < slot_count && allocation_keys != NULL;
+						if (access_ok) {
+							const MalInstruction *property = &fn->instructions[ip];
+							i32 string_index;
+							if (property->opcode == MAL_OP_LOAD_PROPERTY_STATIC) {
+								string_index = property->as.load_property_static.string_index;
+							} else if (property->opcode == MAL_OP_STORE_PROPERTY_STATIC) {
+								string_index = property->as.store_property_static.string_index;
+							} else {
+								access_ok = false;
+							}
+							if (access_ok) access_ok = allocation_keys[slot] == string_index;
+						}
+						if (!access_ok) {
 							r.ok = false;
 						}
 						MAL_REGION_PAYLOAD_REFERENCE(ip);
