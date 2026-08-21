@@ -286,7 +286,11 @@ function capturedSlotKey(owner: number, index: number): string {
 /** A compiler-owned cell a declared access names exactly. */
 type SlotCell =
 	| { readonly kind: "global"; readonly slot: number }
-	| { readonly kind: "captured"; readonly owner: number; readonly index: number };
+	| {
+			readonly kind: "captured";
+			readonly owner: number;
+			readonly index: number;
+	  };
 
 /**
  * The cell a declared slot access names, or undefined when the instruction does
@@ -539,6 +543,8 @@ export function coreSingleAssignmentCells(
 interface TrackedAllocation {
 	readonly functionIndex: number;
 	readonly instruction: CoreInstructionId;
+	/** Module namespace exotic objects cannot be mutated through an escaped alias. */
+	readonly immutable: boolean;
 	/** Canonical own-slot keys in declaration order. */
 	readonly keys: ReadonlyArray<number>;
 	/** Node holding each key's initial value, in the same order. */
@@ -561,7 +567,10 @@ function namedSlotLayout(
 	allocation: CoreOpcodeAllocation,
 	cellForString: (index: number) => CoreOwnCell | undefined,
 ):
-	| { readonly keys: ReadonlyArray<number>; readonly values: ReadonlyArray<CoreValueId> }
+	| {
+			readonly keys: ReadonlyArray<number>;
+			readonly values: ReadonlyArray<CoreValueId>;
+	  }
 	| undefined {
 	if (allocation.kind !== "named-slots") return undefined;
 	const declared = instruction.attributes[allocation.keysAttribute];
@@ -917,12 +926,111 @@ export function analyzeCoreCalleeTargets(
 			return cell;
 		};
 	};
+	const moveRoot = (
+		definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
+		initial: CoreValueId,
+	): CoreValueId => {
+		const seen = new Set<CoreValueId>();
+		let value = initial;
+		while (!seen.has(value)) {
+			seen.add(value);
+			const definition = definitions.get(value);
+			if (definition?.opcode !== "move" || definition.inputs.length !== 1) break;
+			value = definition.inputs[0]!;
+		}
+		return value;
+	};
+	const namespaceExportSlot = (
+		definition: CoreInstruction | undefined,
+		key: number,
+	): number | undefined => {
+		if (definition?.opcode !== "createModuleNamespace") return undefined;
+		const exports = definition.attributes.exports;
+		if (!Array.isArray(exports)) return undefined;
+		for (const candidate of exports) {
+			if (
+				candidate === null ||
+				typeof candidate !== "object" ||
+				Array.isArray(candidate)
+			) {
+				continue;
+			}
+			const entry = candidate as CoreAttributeObject;
+			const stringIndex = entry.nameStringIndex;
+			const slot = entry.slot;
+			const cell =
+				typeof stringIndex === "number" ? cellForString(stringIndex) : undefined;
+			if (
+				typeof slot === "number" &&
+				Number.isSafeInteger(slot) &&
+				slot >= 0 &&
+				cell?.kind === "object-slot" &&
+				cell.key === key
+			) {
+				return slot;
+			}
+		}
+		return undefined;
+	};
+	const callStringIndex = program.stringConstants.findIndex(
+		(value) =>
+			value.length === 4 &&
+			value[0] === 0x63 &&
+			value[1] === 0x61 &&
+			value[2] === 0x6c &&
+			value[3] === 0x6c,
+	);
+	const callCell = callStringIndex < 0 ? undefined : cellForString(callStringIndex);
 
 	for (const fn of program.functions) {
 		const base = valueBase.get(fn.functionIndex)!;
 		const valueNode = (value: CoreValueId): number => base + value;
 		const definitions = functionDefinitions(fn);
 		const cellForOperand = operandKeyResolver(definitions);
+		const functionCallReceiver = (
+			instruction: CoreInstruction,
+		): CoreValueId | undefined => {
+			if (
+				instruction.opcode !== "call" ||
+				instruction.inputs.length < 2 ||
+				callCell?.kind !== "object-slot"
+			) {
+				return undefined;
+			}
+			const callee = instruction.inputs[0]!;
+			const thisValue = instruction.inputs[1]!;
+			const definition = definitions.get(moveRoot(definitions, callee));
+			if (
+				definition?.opcode !== "loadPropertyStatic" &&
+				definition?.opcode !== "loadProperty"
+			) {
+				return undefined;
+			}
+			const receiver = definition.inputs[0];
+			if (
+				receiver === undefined ||
+				moveRoot(definitions, receiver) !== moveRoot(definitions, thisValue)
+			) {
+				return undefined;
+			}
+			const key =
+				definition.opcode === "loadPropertyStatic"
+					? attributeNumber(definition, "stringIndex")
+					: definition.inputs[1] === undefined
+						? undefined
+						: (() => {
+								const keyDefinition = definitions.get(
+									moveRoot(definitions, definition.inputs[1]),
+								);
+								return keyDefinition?.opcode === "createString"
+									? attributeNumber(keyDefinition, "stringIndex")
+									: undefined;
+							})();
+			const keyCell = key === undefined ? undefined : cellForString(key);
+			return keyCell?.kind === "object-slot" && keyCell.key === callCell.key
+				? receiver
+				: undefined;
+		};
 		const keyCell =
 			(instruction: CoreInstruction) =>
 			(access: CoreOpcodeAccess): CoreOwnCell | undefined =>
@@ -1024,6 +1132,14 @@ export function analyzeCoreCalleeTargets(
 						if (transfer !== undefined && transfer.result !== "unmodeled") {
 							const callee = instruction.inputs[transfer.calleeOperand];
 							if (callee !== undefined && result !== undefined) {
+								const flattenedReceiver = functionCallReceiver(instruction);
+								if (flattenedReceiver !== undefined) {
+									// The live method is still checked against the realm's retained
+									// %Function.prototype.call%. Its mismatch path may return anything,
+									// so this dependency contributes guarded candidates only.
+									addCallSite(valueNode(flattenedReceiver), valueNode(result), false);
+									addSeed(valueNode(result), CORE_CALLEE_TARGETS_OPAQUE);
+								}
 								addCallSite(
 									valueNode(callee),
 									valueNode(result),
@@ -1037,6 +1153,61 @@ export function analyzeCoreCalleeTargets(
 							}
 							break;
 						}
+						if (
+							instruction.opcode === "createModuleNamespace" &&
+							result !== undefined &&
+							allocations.length < CORE_TRACKED_ALLOCATION_CAP
+						) {
+							const entries = instruction.attributes.exports;
+							const keys: Array<number> = [];
+							const values: Array<number> = [];
+							let valid = false;
+							if (Array.isArray(entries)) {
+								valid = entries.length <= CORE_OWN_CELL_KEY_CAP;
+								for (const candidate of entries) {
+									if (
+										candidate === null ||
+										typeof candidate !== "object" ||
+										Array.isArray(candidate)
+									) {
+										valid = false;
+										break;
+									}
+									const entry = candidate as CoreAttributeObject;
+									const cell =
+										typeof entry.nameStringIndex === "number"
+											? cellForString(entry.nameStringIndex)
+											: undefined;
+									const slot = entry.slot;
+									if (
+										cell?.kind !== "object-slot" ||
+										keys.includes(cell.key) ||
+										typeof slot !== "number" ||
+										!Number.isSafeInteger(slot) ||
+										slot < 0
+									) {
+										valid = false;
+										break;
+									}
+									keys.push(cell.key);
+									values.push(globalNode(slot));
+								}
+							}
+							if (valid) {
+								const index = allocations.length;
+								allocations.push({
+									functionIndex: fn.functionIndex,
+									instruction: instruction.id,
+									immutable: true,
+									keys,
+									initialValues: values,
+									owned: new Set(keys),
+								});
+								addSeed(valueNode(result), CORE_CALLEE_TARGETS_OPAQUE);
+								addOriginSeed(valueNode(result), index + 1);
+								continue;
+							}
+						}
 						const allocation = registry.get(instruction.opcode)?.allocation;
 						if (allocation !== undefined && result !== undefined) {
 							const layout = namedSlotLayout(instruction, allocation, cellForString);
@@ -1048,6 +1219,7 @@ export function analyzeCoreCalleeTargets(
 								allocations.push({
 									functionIndex: fn.functionIndex,
 									instruction: instruction.id,
+									immutable: false,
 									keys: layout.keys,
 									initialValues: layout.values.map(valueNode),
 									owned: new Set(layout.keys),
@@ -1064,6 +1236,15 @@ export function analyzeCoreCalleeTargets(
 						const roles = operandRoles(instruction, registry, keyCell(instruction));
 						const readBase = ownSlotReadBase(instruction, roles);
 						if (readBase !== undefined && result !== undefined) {
+							const namespaceSlot = namespaceExportSlot(
+								definitions.get(moveRoot(definitions, readBase.base)),
+								readBase.key,
+							);
+							if (namespaceSlot !== undefined) {
+								addEdge(globalNode(namespaceSlot), valueNode(result));
+								addOriginSeed(valueNode(result), ORIGIN_TOP);
+								continue;
+							}
 							deferredReads.push({
 								base: valueNode(readBase.base),
 								key: readBase.key,
@@ -1167,26 +1348,26 @@ export function analyzeCoreCalleeTargets(
 	let containedAllocations = 0;
 	if (contained !== undefined && origins !== undefined) {
 		for (const [index, allocation] of allocations.entries()) {
-			if (contained.escaped[index] === 1) continue;
-			containedAllocations += 1;
+			if (contained.escaped[index] === 0) containedAllocations += 1;
 			for (const [position, key] of allocation.keys.entries()) {
 				addEdge(allocation.initialValues[position]!, ownCellNode(index, key));
 			}
 		}
 		for (const write of contained.writes) {
-			if (contained.escaped[write.allocation] === 1) continue;
 			addEdge(write.value, ownCellNode(write.allocation, write.key));
 		}
 	}
 	for (const read of deferredReads) {
 		const allocation = origins === undefined ? ORIGIN_TOP : origins[read.base]!;
 		const tracked = allocation > 0 ? allocations[allocation - 1] : undefined;
-		if (
-			tracked !== undefined &&
-			contained?.escaped[allocation - 1] === 0 &&
-			tracked.owned.has(read.key)
-		) {
+		if (tracked !== undefined && tracked.owned.has(read.key)) {
 			addEdge(ownCellNode(allocation - 1, read.key), read.result);
+			if (contained?.escaped[allocation - 1] !== 0) {
+				// The graph still names every initial/in-program value written to this
+				// exact fresh object's slot. Escaping permits additional mutation, so
+				// keep those candidates but require every consumer to retain a fallback.
+				addSeed(read.result, CORE_CALLEE_TARGETS_OPAQUE);
+			}
 			continue;
 		}
 		addSeed(read.result, CORE_CALLEE_TARGETS_OPAQUE);
@@ -1417,7 +1598,9 @@ function containAllocations(input: ContainmentInput): {
 	const writes: Array<OwnCellWrite> = [];
 	const escapeNode = (node: number): void => {
 		const origin = origins[node]!;
-		if (origin > 0) escaped[origin - 1] = 1;
+		if (origin > 0 && allocations[origin - 1]?.immutable !== true) {
+			escaped[origin - 1] = 1;
+		}
 	};
 	for (const fn of input.program.functions) {
 		const base = input.valueBase.get(fn.functionIndex)!;
@@ -1463,6 +1646,7 @@ function containAllocations(input: ContainmentInput): {
 					const origin = origins[node]!;
 					if (origin <= 0) continue;
 					const allocation = allocations[origin - 1]!;
+					if (allocation.immutable) continue;
 					const role = roles.get(operand) ?? OPERAND_ESCAPE;
 					switch (role.kind) {
 						case "observed":

@@ -286,7 +286,9 @@ function escapingArgumentsProducer(
 		metadata: { strict: true, sourceStrict: true, mappedArguments: false },
 	});
 	const entry = builder.createBlock(Array.from({ length: parameterCount }, () => ({})));
-	const [produced] = builder.appendInstruction(entry, opcode, [], { attributes });
+	const [produced] = builder.appendInstruction(entry, opcode, [], {
+		attributes,
+	});
 	builder.appendInstruction(entry, "storeGlobal", [produced!], {
 		attributes: { index: 0 },
 	});
@@ -406,6 +408,41 @@ describe("interprocedural summary lattices", () => {
 		expect(analysis.summary(2)?.callees).toEqual([0, 1]);
 	});
 
+	it("consumes a callee reached through a static module-namespace export", () => {
+		const caller = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+		const entry = caller.createBlock();
+		const [created] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 0 },
+		});
+		caller.appendInstruction(entry, "storeGlobal", [created!], {
+			attributes: { index: 0 },
+		});
+		const [namespace] = caller.appendInstruction(entry, "createModuleNamespace", [], {
+			attributes: { exports: [{ nameStringIndex: 1, slot: 0 }] },
+		});
+		const [callee] = caller.appendInstruction(entry, "loadPropertyStatic", [namespace!], {
+			attributes: { stringIndex: 1 },
+		});
+		const [thisValue] = caller.appendInstruction(entry, "createUndefined", []);
+		const [result] = caller.appendInstruction(entry, "call", [callee!, thisValue!]);
+		const call = caller.block(entry).instructions.at(-1)!;
+		caller.setTerminator(entry, { kind: "return", value: result! });
+		const shell = coreProgram([returnParameter(0), caller.finish(entry)], 1);
+		const program: CoreProgram = {
+			...shell,
+			stringConstants: [[], [..."run"].map((character) => character.codePointAt(0)!)],
+		};
+
+		const analysis = analyzeCoreProgramSummaries(program);
+		expect(analysis.callSite(1, call.id)?.targets).toEqual([0]);
+		// The generic property opcode still carries a possible user-code edge; that
+		// does not prevent the following call itself from consuming the exact target.
+		expect(analysis.summary(1)).toMatchObject({
+			callees: [0],
+			openCallEdge: true,
+		});
+	});
+
 	it("converges a recursive SCC while retaining call-frame throw and GC", () => {
 		const recursive = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const entry = recursive.createBlock();
@@ -492,7 +529,11 @@ describe("interprocedural summary lattices", () => {
 	it("attributes a rest array to the formals its start index covers", () => {
 		const analysis = analyzeCoreProgramSummaries(
 			coreProgram(
-				[escapingArgumentsProducer(0, "createRestArguments", 3, { startIndex: 1 })],
+				[
+					escapingArgumentsProducer(0, "createRestArguments", 3, {
+						startIndex: 1,
+					}),
+				],
 				1,
 			),
 		);
@@ -543,7 +584,10 @@ describe("interprocedural summary lattices", () => {
 		const [undefinedValue] = derived.appendInstruction(entry, "createUndefined", []);
 		derived.setTerminator(entry, { kind: "return", value: undefinedValue! });
 		const analysis = analyzeCoreProgramSummaries(coreProgram([derived.finish(entry)]));
-		expect(analysis.summary(0)).toMatchObject({ callees: [], openCallEdge: true });
+		expect(analysis.summary(0)).toMatchObject({
+			callees: [],
+			openCallEdge: true,
+		});
 	});
 
 	it("opens the edge set for a non-call instruction that enters user code", () => {
@@ -559,7 +603,10 @@ describe("interprocedural summary lattices", () => {
 		const analysis = analyzeCoreProgramSummaries(coreProgram([reader.finish(entry)]));
 		// A getter is a call edge the lattice cannot name, so the edge set is open
 		// even though the function contains no call opcode at all.
-		expect(analysis.summary(0)).toMatchObject({ callees: [], openCallEdge: true });
+		expect(analysis.summary(0)).toMatchObject({
+			callees: [],
+			openCallEdge: true,
+		});
 		expect(analysis.summary(0)?.effects.callsUserCode).toBe(true);
 	});
 

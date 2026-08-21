@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	CORE_CALLEE_TARGETS_ANY_SCRIPT,
@@ -30,6 +33,7 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
@@ -256,7 +260,9 @@ describe("callee-target solver", () => {
 	});
 
 	it("joins two ordinary block arguments into a two-target set", () => {
-		const builder = new CoreFunctionBuilder(2, coreOpcodeRegistry, { parameterCount: 1 });
+		const builder = new CoreFunctionBuilder(2, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
 		const entry = builder.createBlock([{}]);
 		const condition = builder.block(entry).parameters[0]!.value;
 		const left = builder.createBlock();
@@ -295,7 +301,9 @@ describe("callee-target solver", () => {
 	});
 
 	it("keeps the known candidate when one join edge is a caller-supplied argument", () => {
-		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry, { parameterCount: 1 });
+		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
 		const entry = builder.createBlock([{}]);
 		const incoming = builder.block(entry).parameters[0]!.value;
 		const left = builder.createBlock();
@@ -459,7 +467,9 @@ describe("callee-target solver", () => {
 	});
 
 	it("converges on a loop-carried value and on a self-referential slot", () => {
-		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry, { parameterCount: 1 });
+		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
 		const entry = builder.createBlock([{}]);
 		const condition = builder.block(entry).parameters[0]!.value;
 		const [seed] = builder.appendInstruction(entry, "createFunction", [], {
@@ -554,7 +564,10 @@ describe("callee-target solver", () => {
 		builder.setTerminator(entry, { kind: "return", value: namespace! });
 		const instructions = builder.finish(entry).blocks[0]!.instructions;
 		const locations = (instruction: CoreInstruction) =>
-			coreMemoryAccesses(instruction).map(({ mode, location }) => ({ mode, location }));
+			coreMemoryAccesses(instruction).map(({ mode, location }) => ({
+				mode,
+				location,
+			}));
 		expect(locations(instructions[0]!)).toEqual([
 			{ mode: "read", location: { kind: "global-slot", slot: 4 } },
 			{ mode: "write", location: { kind: "global-slot", slot: 4 } },
@@ -562,6 +575,77 @@ describe("callee-target solver", () => {
 		expect(locations(instructions[1]!)).toEqual([
 			{ mode: "read", location: { kind: "family", family: "global-slot" } },
 		]);
+	});
+
+	it("resolves a static module-namespace export through its live global cell", () => {
+		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [created] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 0 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [created!], {
+			attributes: { index: 5 },
+		});
+		const [namespace] = builder.appendInstruction(entry, "createModuleNamespace", [], {
+			attributes: { exports: [{ nameStringIndex: 1, slot: 5 }] },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [namespace!], {
+			attributes: { index: 4 },
+		});
+		const [loadedNamespace] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 4 },
+		});
+		const [loaded] = builder.appendInstruction(
+			entry,
+			"loadPropertyStatic",
+			[loadedNamespace!],
+			{
+				attributes: { stringIndex: 1 },
+			},
+		);
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const shell = coreProgram([leafFunction(0), builder.finish(entry)]);
+		const program = {
+			...shell,
+			stringConstants: [[], [..."run"].map((character) => character.codePointAt(0)!)],
+		};
+
+		const analysis = analyzeCoreCalleeTargets(program);
+		expect(coreCalleeTargetsClosedFunction(analysis.targets(1, loaded!))).toBe(0);
+	});
+
+	it("observes every function assigned to a live module-namespace export", () => {
+		const builder = new CoreFunctionBuilder(2, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		for (const functionIndex of [0, 1]) {
+			const [created] = builder.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex },
+			});
+			builder.appendInstruction(entry, "storeGlobal", [created!], {
+				attributes: { index: 5 },
+			});
+		}
+		const [namespace] = builder.appendInstruction(entry, "createModuleNamespace", [], {
+			attributes: { exports: [{ nameStringIndex: 1, slot: 5 }] },
+		});
+		const [loaded] = builder.appendInstruction(
+			entry,
+			"loadPropertyStatic",
+			[namespace!],
+			{ attributes: { stringIndex: 1 } },
+		);
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const shell = coreProgram([leafFunction(0), leafFunction(1), builder.finish(entry)]);
+		const program = {
+			...shell,
+			stringConstants: [[], [..."run"].map((character) => character.codePointAt(0)!)],
+		};
+
+		expect(analyzeCoreCalleeTargets(program).targets(2, loaded!)).toEqual({
+			functions: [0, 1],
+			anyScript: false,
+			opaque: false,
+		});
 	});
 
 	it("bounds propagation work by the lattice height rather than by round count", () => {
@@ -589,7 +673,9 @@ describe("callee-target solver", () => {
 
 describe("callee-target annotation", () => {
 	it("retracts a stale direct target when the final graph is open", () => {
-		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry, { parameterCount: 1 });
+		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
 		const entry = builder.createBlock([{}]);
 		const callee = builder.block(entry).parameters[0]!.value;
 		const [thisValue] = builder.appendInstruction(entry, "createUndefined", []);
@@ -657,6 +743,71 @@ describe("callee-target annotation", () => {
 		);
 		expect(flattened).toHaveLength(1);
 		expect(flattened[0]!.attributes.directCallTargetFunctionIndex).toBe(targetIndex);
+	});
+
+	it("resolves a real ESM namespace import to its exporter", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "mal-callee-namespace-"));
+		try {
+			const dependency = path.join(root, "dependency.mjs");
+			const entry = path.join(root, "entry.mjs");
+			writeFileSync(dependency, "export function run(value) { return value + 1; }\n");
+			writeFileSync(
+				entry,
+				'import * as service from "./dependency.mjs";\n' +
+					"export function caller(value) { return service.run(value); }\n" +
+					"caller(1);\n",
+			);
+			const semantic = loadEntrypointAndRunSemanticAnalysis(entry);
+			const conservative = conservativeCompilerProgramFacts();
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToVmDefinition(semantic, {
+				facts: {
+					...conservative,
+					world: { ...conservative.world, realms: false },
+				},
+				optimizationAblations: new Set(["inlining"] as const),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			});
+			const target = functionIndexOfName(optimized!, "run");
+			const caller = optimized!.functions[functionIndexOfName(optimized!, "caller")]!;
+			const [site] = callSites(caller);
+			expect(site?.attributes.directFunctionIndex).toBe(target);
+			expect(calleeTargetsAttribute(site!)).toEqual({
+				functions: [target],
+				anyScript: false,
+				opaque: false,
+			});
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps a factory result reached through guarded Function.prototype.call", () => {
+		const program = optimizedCore(
+			`function inner(value) { return value + 1; }
+			function factory() { return inner; }
+			function caller(value) { return factory.call(factory)(value); }
+			caller(1);`,
+			"call-targets-flatten-result.mjs",
+		);
+		const innerIndex = functionIndexOfName(program, "inner");
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const sites = callSites(caller);
+		const flattened = sites.find(
+			({ attributes }) => attributes.directFunctionCall === true,
+		);
+		const returned = sites.find(
+			({ attributes }) => attributes.directFunctionIndex === innerIndex,
+		);
+		expect(flattened).toBeDefined();
+		expect(returned).toBeDefined();
+		expect(calleeTargetsAttribute(returned!)).toEqual({
+			functions: [innerIndex],
+			anyScript: false,
+			opaque: true,
+		});
 	});
 
 	it("speculates on a singleton whose slot a second writer can retarget", () => {
@@ -744,28 +895,40 @@ describe("callee-target annotation", () => {
 		expect(calleeTargetsAttribute(site!)?.opaque).toBe(false);
 	});
 
-	it("leaves a mutable service binding and an escaped object open", () => {
-		for (const [name, declaration] of [
-			["mutable", "let service = { run(value) { return value + 1; } };"],
-			[
-				"escaped",
-				"const service = { run(value) { return value + 1; } }; globalThis.saved = service;",
-			],
-		] as const) {
-			const program = optimizedCore(
-				`${declaration}
-				function caller(value) { const callback = service.run; return callback(value); }
-				caller(1);`,
-				`call-targets-${name}-service.mjs`,
-			);
-			const caller = program.functions[functionIndexOfName(program, "caller")]!;
-			const [site] = callSites(caller);
-			expect(site?.attributes.directFunctionIndex).toBeUndefined();
-			expect(calleeTargetsAttribute(site!)).toBeUndefined();
-		}
+	it("leaves a mutable service binding open", () => {
+		const program = optimizedCore(
+			`let service = { run(value) { return value + 1; } };
+			function caller(value) { const callback = service.run; return callback(value); }
+			caller(1);`,
+			"call-targets-mutable-service.mjs",
+		);
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const [site] = callSites(caller);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)).toBeUndefined();
 	});
 
-	it("does not treat an invoked receiver as a contained object", () => {
+	it("keeps guarded candidates from an escaped service object", () => {
+		const program = optimizedCore(
+			`function run(value) { return value + 1; }
+			const service = { run };
+			globalThis.saved = service;
+			function caller(value) { const callback = service.run; return callback(value); }
+			caller(1);`,
+			"call-targets-escaped-service.mjs",
+		);
+		const target = functionIndexOfName(program, "run");
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const [site] = callSites(caller);
+		expect(site?.attributes.directFunctionIndex).toBe(target);
+		expect(calleeTargetsAttribute(site!)).toEqual({
+			functions: [target],
+			anyScript: false,
+			opaque: true,
+		});
+	});
+
+	it("guards an own method before exposing its receiver to user code", () => {
 		const program = optimizedCore(
 			`function run(value) { this.saved = value; return value; }
 			const service = { run };
@@ -775,8 +938,10 @@ describe("callee-target annotation", () => {
 		);
 		const caller = program.functions[functionIndexOfName(program, "caller")]!;
 		const [site] = callSites(caller);
-		expect(site?.attributes.directFunctionIndex).toBeUndefined();
-		expect(calleeTargetsAttribute(site!)).toBeUndefined();
+		const target = functionIndexOfName(program, "run");
+		expect(site?.attributes.directFunctionIndex).toBe(target);
+		expect(calleeTargetsAttribute(site!)?.functions).toEqual([target]);
+		expect(calleeTargetsAttribute(site!)?.opaque).toBe(true);
 	});
 
 	it("keeps global object cells open when realm installers are enabled", () => {

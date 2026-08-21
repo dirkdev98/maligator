@@ -20,6 +20,10 @@ int main(void) {
 
     // directTarget is the first nested function in the fixture.
     MalValue callee = mal_vm_op_create_function(&vm, 1, nullptr);
+    // The same function object is reused across calls that may collect. C locals are
+    // not implicit GC roots, so keep this host-held value live for the whole probe.
+    MalRootSpan callee_root;
+    mal_gc_root(&callee_root, &callee, 1);
     MalValue args[] = {mal_value_from_i32(1), callee};
     MalCallCache cache = {0};
     if (!result_is_277(mal_vm_call_direct(
@@ -43,6 +47,7 @@ int main(void) {
         return 4;
     }
 
+    mal_gc_unroot(&callee_root);
     mal_gc_collect(&vm);
     mal_vm_free_callable(entry);
     mal_vm_free(&vm);

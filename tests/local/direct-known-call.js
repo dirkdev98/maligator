@@ -103,6 +103,57 @@ installFiniteHandler(() => {
 });
 ok("finite fallback throw", finiteRun(5) === "finite fallback throw");
 
+const escapedServiceTarget = function escapedServiceTarget(value) {
+	this.last = value;
+	return value + 400;
+};
+const escapedService = { run: escapedServiceTarget };
+globalThis.exposedService = escapedService;
+const callEscapedService = function (value) {
+	try {
+		return escapedService.run(value);
+	} catch (error) {
+		return error.message;
+	}
+};
+ok("escaped service guarded hit", callEscapedService(5) === 405);
+globalThis.exposedService.run = (value) => value + 500;
+ok("escaped service mutation fallback", callEscapedService(5) === 505);
+Object.defineProperty(globalThis.exposedService, "run", {
+	configurable: true,
+	get() {
+		return () => {
+			throw new Error("escaped service accessor throw");
+		};
+	},
+});
+ok(
+	"escaped service accessor fallback",
+	callEscapedService(5) === "escaped service accessor throw",
+);
+
+const callFactoryInner = (value) => value + 600;
+const callFactory = function () {
+	return callFactoryInner;
+};
+const invokeCallFactory = function (value) {
+	try {
+		return callFactory.call(callFactory)(value);
+	} catch (error) {
+		return error.message;
+	}
+};
+ok("Function.call result guarded hit", invokeCallFactory(5) === 605);
+callFactory.call = function () {
+	return () => {
+		throw new Error("Function.call result fallback throw");
+	};
+};
+ok(
+	"Function.call result fallback",
+	invokeCallFactory(5) === "Function.call result fallback throw",
+);
+
 const classCallMessage = "Class constructor cannot be invoked without 'new'";
 const closedClassSemantics = function (value) {
 	class ClosedClass {
@@ -322,5 +373,5 @@ try {
 }
 ok("overflow", overflowed);
 
-ok("check count", checks === 26);
+ok("check count", checks === 31);
 console.log("direct-known-call PASS");

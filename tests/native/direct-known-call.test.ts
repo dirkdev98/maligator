@@ -43,6 +43,7 @@ describe("structural direct script-function calls", () => {
 
 	it("enters interpreted targets directly and falls back on guard failure", () => {
 		assertExactLines(runToStdout(interpreted), expected);
+		assertExactLines(runToStdout(interpreted, { env: STRESS_ENV }), expected);
 	});
 
 	it("reuses the shared frontend definition across backend variants", () => {
