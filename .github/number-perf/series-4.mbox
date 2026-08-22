@@ -1,0 +1,135 @@
+From 856ef8a5b58a7c69fc2fb2e737e48d5188147b8d Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:13:32 +0000
+Subject: [PATCH] perf(number): fast-path integral decimal expansion
+
+
+diff --git a/runtime/src/number_format.c b/runtime/src/number_format.c
+index a6df0dd..738ba68 100644
+--- a/runtime/src/number_format.c
++++ b/runtime/src/number_format.c
+@@ -84,7 +84,32 @@ static usize mal_decimal_write_u32(u32 value, byte *out) {
+     return length;
+ }
+ 
++static usize mal_decimal_write_u64(u64 value, byte *out) {
++    byte reversed[20];
++    usize length = 0;
++    do {
++        reversed[length++] = (byte) ('0' + value % 10u);
++        value /= 10u;
++    } while (value != 0);
++    for (usize i = 0; i < length; i++) {
++        out[i] = reversed[length - i - 1];
++    }
++    return length;
++}
++
+ static void mal_decimal_exact(f64 number, MalExactDecimal *out) {
++    // Integer-heavy formatting (toFixed on counters, explicit precision on
++    // identifiers) should not build a 5^N exact expansion. Every integer below
++    // 2^64 converts to u64 exactly; 2^64 itself is excluded so the C cast stays
++    // defined.
++    if (number < 18446744073709551616.0 && trunc(number) == number) {
++        usize length = mal_decimal_write_u64((u64) number, out->digits);
++        out->digits[length] = '\0';
++        out->length = (i32) length;
++        out->scale = 0;
++        out->exponent = (i32) length - 1;
++        return;
++    }
+     u64 bits;
+     memcpy(&bits, &number, sizeof(bits));
+     u64 fraction = bits & 0x000FFFFFFFFFFFFFull;
+-- 
+2.47.3
+
+From 3617a12a5bb87def519daff1098cdbed5604919e Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:13:52 +0000
+Subject: [PATCH] perf(number): preserve exact toString receivers
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 12a46b7..21ec285 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -374,10 +374,11 @@ static MalString *mal_builtin_number_radix_string(MalHeap *heap, f64 number, i32
+ static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+     (void) new_target;
+     (void) callee;
+-    f64 number;
+-    if (!mal_builtin_number_this(vm, this_value, &number)) {
++    MalValue number_value;
++    if (!mal_builtin_number_this_value(vm, this_value, &number_value)) {
+         return mal_value_new_undefined();
+     }
++    f64 number = mal_ops_number_as_f64(number_value);
+ 
+     // ToIntegerOrInfinity(radix) via the VM ToNumber, so a poisoned valueOf runs
+     // (and a Symbol/BigInt throws TypeError) before the range check. NaN -> 0.
+@@ -396,7 +397,7 @@ static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_
+ 
+     i32 int_radix = (i32) radix;
+     if (int_radix == 10 || !isfinite(number)) {
+-        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
++        return mal_value_from_string(mal_ops_to_string(&vm->heap, number_value));
+     }
+ 
+     return mal_value_from_string(mal_builtin_number_radix_string(&vm->heap, number, int_radix));
+-- 
+2.47.3
+
+From 6bef7f46d457f125d497196321ba1ea67ee728fd Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:14:17 +0000
+Subject: [PATCH] perf(number): format safe integer radices directly
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 21ec285..ea5e6dc 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -315,6 +315,29 @@ static MalValue mal_builtin_global_is_finite(MalVm *vm, MalValue this_value, con
+     return mal_value_new_boolean(isfinite(number));
+ }
+ 
++/** Fast exact rendering for the overwhelmingly common safe-integer case. */
++static MalString *mal_builtin_number_safe_integer_radix_string(
++    MalHeap *heap, f64 number, i32 radix
++) {
++    static const byte digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
++    bool negative = number < 0.0;
++    u64 integer = (u64) (negative ? -number : number);
++    byte reversed[54];
++    usize reversed_length = 0;
++    do {
++        reversed[reversed_length++] = digits[integer % (u64) radix];
++        integer /= (u64) radix;
++    } while (integer != 0);
++
++    byte buffer[55];
++    usize length = 0;
++    if (negative) buffer[length++] = '-';
++    while (reversed_length > 0) {
++        buffer[length++] = reversed[--reversed_length];
++    }
++    return mal_string_new_ascii(heap, buffer, length);
++}
++
+ /**
+  * Number::toString in a radix 2..36 for a finite value. Renders the integer
+  * part by repeated division and up to ~1100 fractional digits by repeated
+@@ -399,6 +422,10 @@ static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_
+     if (int_radix == 10 || !isfinite(number)) {
+         return mal_value_from_string(mal_ops_to_string(&vm->heap, number_value));
+     }
++    if (trunc(number) == number && fabs(number) <= MAL_NUMBER_MAX_SAFE_INTEGER) {
++        return mal_value_from_string(
++            mal_builtin_number_safe_integer_radix_string(&vm->heap, number, int_radix));
++    }
+ 
+     return mal_value_from_string(mal_builtin_number_radix_string(&vm->heap, number, int_radix));
+ }
+-- 
+2.47.3
