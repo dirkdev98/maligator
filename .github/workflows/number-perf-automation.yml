@@ -1,9 +1,8 @@
-name: Apply Number performance work
+name: Validate Number performance work
 
 on:
-  push:
-    branches: [number-perf-automation-20260822]
-    paths: [.github/workflows/number-perf-automation.yml]
+  pull_request:
+    branches: [things]
 
 permissions:
   contents: write
@@ -20,7 +19,7 @@ jobs:
       - name: Check out automation scripts
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           path: automation
           persist-credentials: false
 
@@ -97,9 +96,9 @@ jobs:
         working-directory: repo
         run: npm run test:check
 
-      - name: Push fast-forward commits
+      - name: Publish validated candidate
         working-directory: repo
         run: |
           set -euo pipefail
           test -z "$(git status --porcelain)"
-          git push origin HEAD:things
+          git push --force-with-lease origin HEAD:number-perf-candidate-20260822
