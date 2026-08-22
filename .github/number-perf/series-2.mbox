@@ -1,0 +1,303 @@
+From c484ee6bf6aa39149373aca9c7a2e8cf01ce5cb0 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:04:28 +0000
+Subject: [PATCH] perf(number): use exact shortest decimal formatting
+
+
+diff --git a/runtime/src/value_ops.c b/runtime/src/value_ops.c
+index 6898814..26dfe0b 100644
+--- a/runtime/src/value_ops.c
++++ b/runtime/src/value_ops.c
+@@ -2,7 +2,6 @@
+ #include "value_ops.h"
+ 
+ #include <math.h>
+-#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -10,6 +9,7 @@
+ #include "ecma_whitespace.h"
+ #include "heap_bigint.h"
+ #include "heap_string.h"
++#include "number_format.h"
+ #include "vm.h"
+ 
+ f64 mal_ops_number_to_integer_or_infinity(f64 number) {
+@@ -220,99 +220,6 @@ static MalValue mal_ops_string_to_number(MalValue value) {
+         mal_string_code_units(string), mal_string_length(string));
+ }
+ 
+-// Render a finite, non-zero f64 per ECMAScript Number::toString (7.1.12.1) into
+-// `out`, which must hold at least 32 bytes. Produces the shortest decimal digit
+-// string that round-trips to the same double (found by trying increasing
+-// precision against a correctly-rounded strtod), then places the decimal point
+-// / exponent exactly as the spec's cases 5-10 require.
+-static void mal_ops_f64_to_ecma_string(f64 value, byte *out) {
+-    byte *p = out;
+-    if (signbit(value)) {
+-        *p++ = '-';
+-        value = -value;
+-    }
+-
+-    // Shortest significant digits: the smallest precision whose decimal rounds
+-    // back to `value`. 17 significant digits always suffice for a double.
+-    char formatted[40];
+-    for (int prec = 1; prec <= 17; prec++) {
+-        snprintf(formatted, sizeof(formatted), "%.*e", prec - 1, value);
+-        if (strtod(formatted, nullptr) == value) {
+-            break;
+-        }
+-    }
+-
+-    // formatted is "d.ddde±XX" (or "de±XX" at precision 1); split it into the
+-    // significant digit run and the base-10 exponent of the leading digit.
+-    char digits[20];
+-    int k = 0;
+-    char *cursor = formatted;
+-    digits[k++] = *cursor++;
+-    if (*cursor == '.') {
+-        cursor++;
+-        while (*cursor != 'e' && *cursor != 'E') {
+-            digits[k++] = *cursor++;
+-        }
+-    }
+-    int exponent = (int) strtol(cursor + 1, nullptr, 10);
+-
+-    // Trailing zeros are never significant for round-tripping (defensive).
+-    while (k > 1 && digits[k - 1] == '0') {
+-        k--;
+-    }
+-
+-    // n is the position of the decimal point counted from before the first
+-    // significant digit (value == digits × 10^(n-k)).
+-    int n = exponent + 1;
+-
+-    if (k <= n && n <= 21) {
+-        for (int i = 0; i < k; i++) {
+-            *p++ = (byte) digits[i];
+-        }
+-        for (int i = 0; i < n - k; i++) {
+-            *p++ = '0';
+-        }
+-    } else if (0 < n && n <= 21) {
+-        for (int i = 0; i < n; i++) {
+-            *p++ = (byte) digits[i];
+-        }
+-        *p++ = '.';
+-        for (int i = n; i < k; i++) {
+-            *p++ = (byte) digits[i];
+-        }
+-    } else if (-6 < n && n <= 0) {
+-        *p++ = '0';
+-        *p++ = '.';
+-        for (int i = 0; i < -n; i++) {
+-            *p++ = '0';
+-        }
+-        for (int i = 0; i < k; i++) {
+-            *p++ = (byte) digits[i];
+-        }
+-    } else {
+-        *p++ = (byte) digits[0];
+-        if (k > 1) {
+-            *p++ = '.';
+-            for (int i = 1; i < k; i++) {
+-                *p++ = (byte) digits[i];
+-            }
+-        }
+-        *p++ = 'e';
+-        int e = n - 1;
+-        *p++ = e >= 0 ? '+' : '-';
+-        if (e < 0) {
+-            e = -e;
+-        }
+-        char exp_digits[8];
+-        snprintf(exp_digits, sizeof(exp_digits), "%d", e);
+-        for (int i = 0; exp_digits[i] != '\0'; i++) {
+-            *p++ = (byte) exp_digits[i];
+-        }
+-    }
+-
+-    *p = '\0';
+-}
+-
+ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
+     if (mal_value_is_string(value)) {
+         return mal_value_to_string(value);
+@@ -401,8 +308,8 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
+             return mal_ops_string_from_ascii(heap, "0");
+         }
+         byte buffer[32];
+-        mal_ops_f64_to_ecma_string(number, buffer);
+-        return mal_ops_string_from_ascii(heap, buffer);
++        usize length = mal_number_format_shortest(number, buffer);
++        return mal_string_new_ascii(heap, buffer, length);
+     }
+ 
+     return mal_ops_string_from_ascii(heap, "[object Object]");
+-- 
+2.47.3
+
+From 8b538dfccca50b6652f9febc2ed589bd5f2fd8f5 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:04:44 +0000
+Subject: [PATCH] fix(number): format fixed decimals exactly
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 8c15556..84d4dc1 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -9,6 +9,7 @@
+ #include "builtin_intl.h"
+ #include "ecma_whitespace.h"
+ #include "heap_string.h"
++#include "number_format.h"
+ #include "primitive_wrapper_object.h"
+ #include "value_ops.h"
+ #include "vm.h"
+@@ -431,8 +432,8 @@ static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_v
+     }
+ 
+     byte buffer[160];
+-    snprintf(buffer, sizeof(buffer), "%.*f", (i32) digits, number);
+-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, buffer, strlen(buffer)));
++    usize length = mal_number_format_fixed(number, (i32) digits, buffer);
++    return mal_value_from_string(mal_string_new_ascii(&vm->heap, buffer, length));
+ }
+ 
+ /**
+-- 
+2.47.3
+
+From 2cec66fec6f5dcf9a8cb6d80724d79f8fcb0e02b Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:05:16 +0000
+Subject: [PATCH] fix(number): format exponential decimals exactly
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 84d4dc1..e6380a1 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -436,66 +436,6 @@ static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_v
+     return mal_value_from_string(mal_string_new_ascii(&vm->heap, buffer, length));
+ }
+ 
+-/**
+- * Rewrite a C printf-formatted number (from "%g"/"%#g"/"%e") into the JS
+- * Number::toString shape: a "eXX" exponent becomes "e+X"/"e-X" with no leading
+- * zeros and a mandatory sign, and (when strip_trailing_zeros) trailing zeros in
+- * a fractional mantissa plus any dangling "." are removed. Returns the length
+- * written to out (which must hold at least sizeof(buffer) + a few bytes).
+- */
+-static usize mal_builtin_number_normalize(const byte *buffer, byte *out, bool strip_trailing_zeros) {
+-    usize mantissa_end = 0;
+-    while (buffer[mantissa_end] != '\0' && buffer[mantissa_end] != 'e' && buffer[mantissa_end] != 'E') {
+-        mantissa_end++;
+-    }
+-
+-    usize end = mantissa_end;
+-    bool has_dot = false;
+-    for (usize j = 0; j < mantissa_end; j++) {
+-        if (buffer[j] == '.') {
+-            has_dot = true;
+-        }
+-    }
+-    if (has_dot && strip_trailing_zeros) {
+-        while (end > 0 && buffer[end - 1] == '0') {
+-            end--;
+-        }
+-    }
+-    // A trailing "." with no fractional digits ("3." -> "3") is never valid JS.
+-    if (end > 0 && buffer[end - 1] == '.') {
+-        end--;
+-    }
+-
+-    usize w = 0;
+-    for (usize j = 0; j < end; j++) {
+-        out[w++] = buffer[j];
+-    }
+-
+-    if (buffer[mantissa_end] == '\0') {
+-        return w;
+-    }
+-
+-    out[w++] = 'e';
+-    usize i = mantissa_end + 1;
+-    char sign = '+';
+-    if (buffer[i] == '+' || buffer[i] == '-') {
+-        sign = (char) buffer[i];
+-        i++;
+-    }
+-    out[w++] = (byte) sign;
+-    while (buffer[i] == '0' && buffer[i + 1] >= '0' && buffer[i + 1] <= '9') {
+-        i++;
+-    }
+-    if (buffer[i] == '\0') {
+-        out[w++] = '0';
+-    }
+-    while (buffer[i] != '\0') {
+-        out[w++] = buffer[i++];
+-    }
+-
+-    return w;
+-}
+-
+ /**
+  * Exact significant digits of a positive, finite, nonzero double. macOS/glibc
+  * printf is correctly rounded, and 767 significant digits exceed the longest
+@@ -585,47 +525,10 @@ static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue
+         return mal_value_new_undefined();
+     }
+ 
+-    if (digits_undefined) {
+-        // Shortest exponential that round-trips; auto-precision strips trailing
+-        // fractional zeros during normalization.
+-        byte buffer[160];
+-        snprintf(buffer, sizeof(buffer), "%e", number);
+-        byte normalized[176];
+-        usize out = mal_builtin_number_normalize(buffer, normalized, true);
+-        return mal_value_from_string(mal_string_new_ascii(&vm->heap, normalized, out));
+-    }
+-
+-    // Explicit fractionDigits: produce f+1 significant digits with the spec's
+-    // round-half-away-from-zero (printf's %e rounds half-to-even, which disagrees
+-    // at exact ties such as (25).toExponential(0) == "3e+1").
+-    i32 f = (i32) digits;
+-    bool neg = number < 0.0;
+-    f64 ax = fabs(number);
+-
+-    byte out[256];
+-    usize w = 0;
+-    if (neg) {
+-        out[w++] = '-';
+-    }
+-    byte sig[820];
+-    i32 e10 = 0;
+-    if (ax == 0.0) {
+-        sig[0] = '0';
+-        sig[1] = '\0';
+-        mal_number_round_sig(sig, f + 1, &e10);
+-    } else {
+-        mal_number_exact_digits(ax, sig, &e10);
+-        mal_number_round_sig(sig, f + 1, &e10);
+-    }
+-    out[w++] = sig[0];
+-    if (f > 0) {
+-        out[w++] = '.';
+-        for (i32 j = 1; j <= f; j++) {
+-            out[w++] = sig[j];
+-        }
+-    }
+-    w += (usize) snprintf((char *) out + w, sizeof(out) - w, "e%+d", e10);
+-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, out, w));
++    byte out[160];
++    usize length = mal_number_format_exponential(
++        number, (i32) digits, digits_undefined, out);
++    return mal_value_from_string(mal_string_new_ascii(&vm->heap, out, length));
+ }
+ 
+ static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+-- 
+2.47.3
