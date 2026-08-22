@@ -649,11 +649,12 @@ export function selectCoreKnownOwnSlots(
 						// runtime slot order, so an equivalent constant at another index simply
 						// declines until a later canonical-key selector generalizes this proof.
 						const slot = origin.keyStringIndices.indexOf(stringIndex);
-						if (
-							slot >= 0 &&
-							(origin.functionIndex !== fn.functionIndex ||
-								provenance.isLoopBlock(fn.functionIndex, block.id))
-						) {
+						// A candidate crossing a function boundary is precision, not a
+						// frequency proof. Residual property ICs are already cheap when warm,
+						// so publish extra guarded output only where the load itself repeats.
+						// Origins may still flow through any number of ordinary calls before
+						// reaching this loop-resident consumer.
+						if (slot >= 0 && provenance.isLoopBlock(fn.functionIndex, block.id)) {
 							selected = {
 								shapeFunctionIndex: origin.functionIndex,
 								shapeInstruction: origin.instruction,

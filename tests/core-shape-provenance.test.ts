@@ -203,6 +203,46 @@ function crossCallProgram(
 	};
 }
 
+function crossCallLoopProgram(): {
+	readonly program: CoreProgram;
+	readonly load: CoreInstruction;
+} {
+	const producer = shapedReturn(0, 1);
+	const caller = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+	const entry = caller.createBlock();
+	const loop = caller.createBlock();
+	const latch = caller.createBlock();
+	const exit = caller.createBlock();
+	const [thisValue] = caller.appendInstruction(entry, "createUndefined", []);
+	const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: 0 },
+	});
+	const [object] = caller.appendInstruction(entry, "call", [callee!, thisValue!]);
+	caller.setTerminator(entry, { kind: "jump", edge: { block: loop, arguments: [] } });
+	const [loaded] = caller.appendInstruction(loop, "loadPropertyStatic", [object!], {
+		attributes: { stringIndex: 1 },
+	});
+	const [condition] = caller.appendInstruction(loop, "createBoolean", [], {
+		attributes: { value: false },
+	});
+	caller.setTerminator(loop, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: latch, arguments: [] },
+		alternate: { block: exit, arguments: [] },
+	});
+	caller.setTerminator(latch, {
+		kind: "jump",
+		edge: { block: loop, arguments: [] },
+	});
+	caller.setTerminator(exit, { kind: "return", value: loaded! });
+	const callerFunction = caller.finish(entry);
+	return {
+		program: coreProgram([producer.fn, callerFunction]),
+		load: instructions(callerFunction, "loadPropertyStatic")[0]!,
+	};
+}
+
 function multiOriginLoopProgram(): {
 	readonly program: CoreProgram;
 	readonly load: CoreInstruction;
@@ -692,19 +732,6 @@ describe("Core shaped-object provenance", () => {
 			}
 		}
 		expect(candidateLoads).toBeGreaterThanOrEqual(9);
-
-		const optimized = executeCoreOptimizations(program, {
-			ablations: new Set(["inlining", "interprocedural"]),
-		}).program;
-		let selectedLoads = 0;
-		for (const name of ["scale", "dot"]) {
-			const functionIndex = functionIndexOfName(optimized, name);
-			selectedLoads += instructions(
-				optimized.functions[functionIndex]!,
-				"loadPropertyStatic",
-			).filter(({ attributes }) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in attributes).length;
-		}
-		expect(selectedLoads).toBeGreaterThanOrEqual(9);
 	});
 });
 
@@ -735,8 +762,17 @@ describe("Core known own-slot selection", () => {
 		);
 	});
 
-	it("selects a cross-call origin without requiring a local loop", () => {
+	it("keeps cross-call provenance but declines an acyclic output site", () => {
 		const built = crossCallProgram();
+		const analysis = analyzeCoreShapeProvenance(built.program);
+		expect(analysis.candidates(1, built.load.inputs[0]!).origins).toHaveLength(1);
+		const selected = selectKnownOwnSlots(built.program);
+		expect(selected.changed).toBe(false);
+		expect(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in built.load.attributes).toBe(false);
+	});
+
+	it("selects a cross-call origin when the consumer load repeats in a loop", () => {
+		const built = crossCallLoopProgram();
 		const selected = selectKnownOwnSlots(built.program);
 		const load = instructions(selected.program.functions[1]!, "loadPropertyStatic")[0]!;
 		expect(
@@ -745,7 +781,7 @@ describe("Core known own-slot selection", () => {
 	});
 
 	it("retracts published hints once and preserves every unrelated identity", () => {
-		const selected = selectKnownOwnSlots(crossCallProgram().program).program;
+		const selected = selectKnownOwnSlots(crossCallLoopProgram().program).program;
 		const previousProducer = selected.functions[0]!;
 		const previousCaller = selected.functions[1]!;
 		const previousEpoch = previousCaller.mutationEpoch;
@@ -841,7 +877,7 @@ describe("Core known own-slot selection", () => {
 	});
 
 	it("rejects malformed and structurally invalid certificates", () => {
-		const built = crossCallProgram();
+		const built = crossCallLoopProgram();
 		const selected = selectKnownOwnSlots(built.program).program;
 		expect(() => verifyCoreProgram(selected, coreOpcodeRegistry)).not.toThrow();
 		const load = instructions(selected.functions[1]!, "loadPropertyStatic")[0]!;
@@ -902,7 +938,7 @@ describe("Core known own-slot selection", () => {
 	});
 
 	it("rejects certificates backed by malformed shaped-object origins", () => {
-		const selected = selectKnownOwnSlots(crossCallProgram().program).program;
+		const selected = selectKnownOwnSlots(crossCallLoopProgram().program).program;
 		const origin = instructions(selected.functions[0]!, "createObjectShaped")[0]!;
 		const duplicateStringIndex = selected.stringConstants.length;
 		const duplicateKeyProgram = replaceInstruction(
