@@ -15,6 +15,9 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      CC: clang-19
+      CXX: clang++-19
     steps:
       - name: Check out automation series
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -35,6 +38,11 @@ jobs:
         with:
           node-version: 24.14.1
           package-manager-cache: false
+
+      - name: Install C23 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-19
 
       - name: Install dependencies
         working-directory: repo
