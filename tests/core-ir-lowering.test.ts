@@ -2,10 +2,6 @@ import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
-import {
-	analyzeCoreShapeProvenance,
-	selectCoreKnownOwnSlots,
-} from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -146,11 +142,7 @@ describe("Core IR lowering", () => {
 			`),
 			{ ablations: new Set(["inlining", "interprocedural"]) },
 		).program;
-		const selected = selectCoreKnownOwnSlots(
-			optimized,
-			analyzeCoreShapeProvenance(optimized),
-		).program;
-		const target = lowerCoreProgramToTarget(selected);
+		const target = lowerCoreProgramToTarget(optimized);
 		const vm = lowerCoreProgramToVmDefinition(target);
 		const load = vm.functions
 			.flatMap((fn) => fn.instructions)

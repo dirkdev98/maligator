@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import type { CoreOptimizationOptions } from "../src/compiler/core/core-ir-opt.ts";
 import {
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_SHAPE_ORIGIN_CAP,
 	analyzeCoreShapeProvenance,
 	coreKnownOwnSlotFromAttribute,
+	rebaseCoreShapeProvenance,
+	retractCoreKnownOwnSlots,
 	selectCoreKnownOwnSlots,
 } from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
@@ -174,16 +177,19 @@ function localLoopProgram(): {
 	};
 }
 
-function crossCallProgram(): {
+function crossCallProgram(
+	producerIndex = 0,
+	callerIndex = 1,
+): {
 	readonly program: CoreProgram;
 	readonly load: CoreInstruction;
 } {
-	const producer = shapedReturn(0, 1);
-	const caller = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+	const producer = shapedReturn(producerIndex, 1);
+	const caller = new CoreFunctionBuilder(callerIndex, coreOpcodeRegistry);
 	const entry = caller.createBlock();
 	const [thisValue] = caller.appendInstruction(entry, "createUndefined", []);
 	const [callee] = caller.appendInstruction(entry, "createFunction", [], {
-		attributes: { functionIndex: 0 },
+		attributes: { functionIndex: producerIndex },
 	});
 	const [object] = caller.appendInstruction(entry, "call", [callee!, thisValue!]);
 	const [loaded] = caller.appendInstruction(entry, "loadPropertyStatic", [object!], {
@@ -300,6 +306,64 @@ describe("Core shaped-object provenance", () => {
 				opaque: true,
 			});
 		}
+	});
+
+	it("ignores origins and edges in unreachable blocks", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const unreachable = builder.createBlock();
+		const [result] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const [initial] = builder.appendInstruction(unreachable, "createUndefined", []);
+		const [object] = builder.appendInstruction(
+			unreachable,
+			"createObjectShaped",
+			[initial!],
+			{ attributes: { keyStringIndices: [1] } },
+		);
+		const [loaded] = builder.appendInstruction(
+			unreachable,
+			"loadPropertyStatic",
+			[object!],
+			{ attributes: { stringIndex: 1 } },
+		);
+		builder.setTerminator(unreachable, { kind: "return", value: loaded! });
+
+		const analysis = analyzeCoreShapeProvenance(coreProgram([builder.finish(entry)]));
+		expect(analysis.origins).toHaveLength(0);
+		expect(analysis.candidates(0, object!)).toEqual({ origins: [], opaque: false });
+	});
+
+	it("opens retained non-executable bodies and rebases executable origins densely", () => {
+		const dead = shapedReturn(0, 2).fn;
+		const shifted = crossCallProgram(1, 2);
+		const program = coreProgram([dead, ...shifted.program.functions]);
+		const analysis = analyzeCoreShapeProvenance(program, {
+			executableFunctions: new Set([1, 2]),
+		});
+		expect(
+			analysis.candidates(0, instructions(dead, "createObjectShaped")[0]!.outputs[0]!),
+		).toEqual({ origins: [], opaque: true });
+
+		const compactedProgram: CoreProgram = {
+			...program,
+			functions: [
+				{ ...program.functions[1]!, functionIndex: 0 },
+				{ ...program.functions[2]!, functionIndex: 1 },
+			],
+		};
+		const rebased = rebaseCoreShapeProvenance(
+			analysis,
+			new Map([
+				[1, 0],
+				[2, 1],
+			]),
+			compactedProgram,
+		);
+		const receiver = shifted.load.inputs[0]!;
+		expect(rebased.candidates(1, receiver)).toMatchObject({
+			origins: [{ functionIndex: 0, keyStringIndices: [1] }],
+		});
 	});
 
 	it("relays one allocation through moves, ordinary block arguments, returns, calls, formals, and this", () => {
@@ -628,6 +692,19 @@ describe("Core shaped-object provenance", () => {
 			}
 		}
 		expect(candidateLoads).toBeGreaterThanOrEqual(9);
+
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining", "interprocedural"]),
+		}).program;
+		let selectedLoads = 0;
+		for (const name of ["scale", "dot"]) {
+			const functionIndex = functionIndexOfName(optimized, name);
+			selectedLoads += instructions(
+				optimized.functions[functionIndex]!,
+				"loadPropertyStatic",
+			).filter(({ attributes }) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in attributes).length;
+		}
+		expect(selectedLoads).toBeGreaterThanOrEqual(9);
 	});
 });
 
@@ -665,6 +742,25 @@ describe("Core known own-slot selection", () => {
 		expect(
 			coreKnownOwnSlotFromAttribute(load.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]),
 		).toMatchObject({ shapeFunctionIndex: 0, slot: 0 });
+	});
+
+	it("retracts published hints once and preserves every unrelated identity", () => {
+		const selected = selectKnownOwnSlots(crossCallProgram().program).program;
+		const previousProducer = selected.functions[0]!;
+		const previousCaller = selected.functions[1]!;
+		const previousEpoch = previousCaller.mutationEpoch;
+		const first = retractCoreKnownOwnSlots(selected);
+		expect(first.changed).toBe(true);
+		expect(first.program.functions[0]).toBe(previousProducer);
+		expect(first.program.functions[1]!.mutationEpoch).toBe(previousEpoch + 1);
+		expect(
+			CORE_KNOWN_OWN_SLOT_ATTRIBUTE in
+				instructions(first.program.functions[1]!, "loadPropertyStatic")[0]!.attributes,
+		).toBe(false);
+
+		const second = retractCoreKnownOwnSlots(first.program);
+		expect(second.changed).toBe(false);
+		expect(second.program).toBe(first.program);
 	});
 
 	it("declines a non-loop local load", () => {
@@ -862,15 +958,15 @@ describe("Core known own-slot selection", () => {
 				"known-own-slot-target.mjs",
 			),
 		);
-		const optimized = executeCoreOptimizations(initial, {
+		const optimizationOptions: CoreOptimizationOptions = {
 			ablations: new Set(["inlining", "interprocedural"]),
-		}).program;
-		const selected = selectKnownOwnSlots(optimized).program;
-		const coreLoad = selected.functions
+		};
+		const optimized = executeCoreOptimizations(initial, optimizationOptions).program;
+		const coreLoad = optimized.functions
 			.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
 			.find((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)!;
 		expect(coreLoad).toBeDefined();
-		const target = lowerCoreProgramToTarget(selected);
+		const target = lowerCoreProgramToTarget(optimized);
 		const targetLoad = target.functions
 			.flatMap(({ blocks }) => blocks)
 			.flatMap(({ instructions: blockInstructions }) => blockInstructions)
@@ -884,5 +980,8 @@ describe("Core known own-slot selection", () => {
 		expect(targetLoad.knownOwnSlot).toEqual(
 			coreLoad.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
 		);
+
+		const rerun = executeCoreOptimizations(optimized, optimizationOptions).program;
+		expect(lowerCoreProgramToTarget(rerun).functions).toEqual(target.functions);
 	});
 });

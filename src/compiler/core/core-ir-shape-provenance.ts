@@ -20,12 +20,14 @@
 import { analyzeCoreCalleeTargets } from "./core-ir-call-targets.ts";
 import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { coreOwnCellResolver } from "./core-ir-provenance.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
 	CoreBlock,
+	CoreBlockId,
 	CoreFunction,
 	CoreInstruction,
 	CoreInstructionId,
@@ -143,8 +145,17 @@ export interface CoreShapeProvenanceStatistics {
 
 export interface CoreShapeProvenanceAnalysis {
 	candidates(functionIndex: number, value: CoreValueId): CoreShapeCandidates;
+	isLoopBlock(functionIndex: number, block: CoreBlockId): boolean;
 	readonly origins: ReadonlyArray<CoreShapeOrigin>;
 	readonly statistics: CoreShapeProvenanceStatistics;
+}
+
+export interface CoreShapeProvenanceOptions {
+	readonly registry?: CoreOpcodeRegistry;
+	readonly calleeTargets?: CoreCalleeTargetAnalysis;
+	readonly controlFlow?: (fn: CoreFunction) => CoreControlFlow;
+	/** Function bodies that reach execution in the current closed image. */
+	readonly executableFunctions?: ReadonlySet<number>;
 }
 
 /** Validate one shaped-literal origin and return its runtime slot-key order. */
@@ -213,17 +224,30 @@ function valueLimit(fn: CoreFunction): number {
  */
 export function analyzeCoreShapeProvenance(
 	program: CoreProgram,
-	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
-	calleeTargets: CoreCalleeTargetAnalysis = analyzeCoreCalleeTargets(program, registry),
+	options: CoreShapeProvenanceOptions = {},
 ): CoreShapeProvenanceAnalysis {
+	const registry = options.registry ?? coreOpcodeRegistry;
+	const calleeTargets =
+		options.calleeTargets ?? analyzeCoreCalleeTargets(program, registry);
+	const executableFunctions =
+		options.executableFunctions ??
+		new Set(program.functions.map(({ functionIndex }) => functionIndex));
+	const activeFunctions = program.functions.filter(({ functionIndex }) =>
+		executableFunctions.has(functionIndex),
+	);
+	const controlFlow =
+		options.controlFlow ?? ((fn: CoreFunction) => buildCoreControlFlow(fn, registry));
 	const functionsByIndex = new Map(
-		program.functions.map((fn) => [fn.functionIndex, fn] as const),
+		activeFunctions.map((fn) => [fn.functionIndex, fn] as const),
+	);
+	const knownFunctionIndices = new Set(
+		program.functions.map(({ functionIndex }) => functionIndex),
 	);
 	const valueBase = new Map<number, number>();
 	const valueLimits = new Map<number, number>();
 	const returnNodes = new Map<number, number>();
 	let nodeCount = 0;
-	for (const fn of program.functions) {
+	for (const fn of activeFunctions) {
 		const limit = valueLimit(fn);
 		valueBase.set(fn.functionIndex, nodeCount);
 		valueLimits.set(fn.functionIndex, limit);
@@ -236,9 +260,20 @@ export function analyzeCoreShapeProvenance(
 	const origins: Array<CoreShapeOrigin> = [];
 	const originByInstruction = new Map<string, number>();
 	const thisNodes = new Map<number, Array<number>>();
+	const controlFlowByFunction = new Map<number, CoreControlFlow>();
+	const loopBlocksByFunction = new Map<number, ReadonlySet<CoreBlockId>>();
 	const cellForString = coreOwnCellResolver(program.stringConstants);
-	for (const fn of program.functions) {
+	for (const fn of activeFunctions) {
+		const cfg = controlFlow(fn);
+		controlFlowByFunction.set(fn.functionIndex, cfg);
+		loopBlocksByFunction.set(
+			fn.functionIndex,
+			new Set(
+				[...cfg.loops, ...cfg.irreducibleCycles].flatMap(({ blocks }) => [...blocks]),
+			),
+		);
 		for (const block of fn.blocks) {
+			if (!cfg.reachable.has(block.id)) continue;
 			for (const instruction of block.instructions) {
 				const keys = coreShapedObjectKeys(program, instruction, cellForString);
 				if (keys !== undefined) {
@@ -279,16 +314,19 @@ export function analyzeCoreShapeProvenance(
 		}
 	};
 
-	for (const fn of program.functions) {
+	for (const fn of activeFunctions) {
 		const base = valueBase.get(fn.functionIndex)!;
 		const node = (value: CoreValueId): number => base + value;
-		const cfg = buildCoreControlFlow(fn, registry);
+		const cfg = controlFlowByFunction.get(fn.functionIndex)!;
 		// A function can always be entered by code this candidate graph does not name.
 		// Known calls add useful origins below, but never turn a formal into a closed
 		// current-shape proof.
 		for (const parameter of fn.parameters) opaqueSeeds.push(node(parameter));
 		for (const block of fn.blocks) {
-			const incoming = cfg.predecessors[block.id] ?? [];
+			if (!cfg.reachable.has(block.id)) continue;
+			const incoming = (cfg.predecessors[block.id] ?? []).filter(({ from }) =>
+				cfg.reachable.has(from),
+			);
 			for (const [index, parameter] of block.parameters.entries()) {
 				const destination = node(parameter.value);
 				if (block.id === fn.entry || parameter.role === "exception") {
@@ -437,6 +475,12 @@ export function analyzeCoreShapeProvenance(
 	const queryCache = new Map<number, CoreShapeCandidates>();
 	return {
 		candidates(functionIndex: number, value: CoreValueId): CoreShapeCandidates {
+			if (
+				knownFunctionIndices.has(functionIndex) &&
+				!executableFunctions.has(functionIndex)
+			) {
+				return CORE_SHAPE_CANDIDATES_OPAQUE;
+			}
 			const base = valueBase.get(functionIndex);
 			const limit = valueLimits.get(functionIndex);
 			if (base === undefined || limit === undefined || value < 0 || value >= limit) {
@@ -457,6 +501,9 @@ export function analyzeCoreShapeProvenance(
 			queryCache.set(valueNodeIndex, result);
 			return result;
 		},
+		isLoopBlock(functionIndex: number, block: CoreBlockId): boolean {
+			return loopBlocksByFunction.get(functionIndex)?.has(block) === true;
+		},
 		origins: Object.freeze(origins),
 		statistics: Object.freeze({
 			nodes: nodeCount,
@@ -468,9 +515,105 @@ export function analyzeCoreShapeProvenance(
 	};
 }
 
+/**
+ * Rebase ephemeral provenance after closed-image function compaction.
+ *
+ * Compaction preserves Core value, instruction, block, and string ids. Only the
+ * dense function row changes, so the proof stays in process and remaps that one
+ * coordinate without another callee-target solve.
+ */
+export function rebaseCoreShapeProvenance(
+	analysis: CoreShapeProvenanceAnalysis,
+	oldToNew: ReadonlyMap<number, number>,
+	compactedProgram: CoreProgram,
+): CoreShapeProvenanceAnalysis {
+	const newToOld = new Map<number, number>();
+	for (const [oldIndex, newIndex] of oldToNew) {
+		if (newToOld.has(newIndex)) {
+			throw new Error(`Duplicate compacted shape-provenance function ${newIndex}`);
+		}
+		newToOld.set(newIndex, oldIndex);
+	}
+	for (const fn of compactedProgram.functions) {
+		if (!newToOld.has(fn.functionIndex)) {
+			throw new Error(
+				`Compacted function ${fn.functionIndex} has no shape-provenance source`,
+			);
+		}
+	}
+	const remappedOrigins = new Map<CoreShapeOrigin, CoreShapeOrigin>();
+	const remapOrigin = (origin: CoreShapeOrigin): CoreShapeOrigin => {
+		const cached = remappedOrigins.get(origin);
+		if (cached !== undefined) return cached;
+		const functionIndex = oldToNew.get(origin.functionIndex);
+		if (functionIndex === undefined) {
+			throw new Error(
+				`Core compaction removed executable shaped origin ${origin.functionIndex}:${origin.instruction}`,
+			);
+		}
+		const remapped = Object.freeze({ ...origin, functionIndex });
+		remappedOrigins.set(origin, remapped);
+		return remapped;
+	};
+	const origins = Object.freeze(analysis.origins.map(remapOrigin));
+	const queryCache = new Map<string, CoreShapeCandidates>();
+	return {
+		candidates(functionIndex: number, value: CoreValueId): CoreShapeCandidates {
+			const key = `${functionIndex}\0${value}`;
+			const cached = queryCache.get(key);
+			if (cached !== undefined) return cached;
+			const oldIndex = newToOld.get(functionIndex);
+			if (oldIndex === undefined) return CORE_SHAPE_CANDIDATES_BOTTOM;
+			const previous = analysis.candidates(oldIndex, value);
+			if (previous.origins.length === 0) return previous;
+			const result = Object.freeze({
+				origins: Object.freeze(previous.origins.map(remapOrigin)),
+				opaque: previous.opaque,
+			});
+			queryCache.set(key, result);
+			return result;
+		},
+		isLoopBlock(functionIndex: number, block: CoreBlockId): boolean {
+			const oldIndex = newToOld.get(functionIndex);
+			return oldIndex !== undefined && analysis.isLoopBlock(oldIndex, block);
+		},
+		origins,
+		statistics: analysis.statistics,
+	};
+}
+
 export interface CoreKnownOwnSlotSelection {
 	readonly program: CoreProgram;
 	readonly changed: boolean;
+}
+
+/** Retract target-facing hints before transforms or region selection mutate Core. */
+export function retractCoreKnownOwnSlots(
+	program: CoreProgram,
+): CoreKnownOwnSlotSelection {
+	let changed = false;
+	const functions = program.functions.map((fn): CoreFunction => {
+		let functionChanged = false;
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			let blockChanged = false;
+			const instructions = block.instructions.map((instruction): CoreInstruction => {
+				if (!(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)) {
+					return instruction;
+				}
+				const attributes: Record<string, CoreAttributeValue> = {
+					...instruction.attributes,
+				};
+				delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+				changed = true;
+				functionChanged = true;
+				blockChanged = true;
+				return { ...instruction, attributes };
+			});
+			return blockChanged ? { ...block, instructions } : block;
+		});
+		return functionChanged ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	});
+	return { program: changed ? { ...program, functions } : program, changed };
 }
 
 /**
@@ -483,15 +626,10 @@ export interface CoreKnownOwnSlotSelection {
 export function selectCoreKnownOwnSlots(
 	program: CoreProgram,
 	provenance: CoreShapeProvenanceAnalysis,
-	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 ): CoreKnownOwnSlotSelection {
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
 		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
-		const cfg = buildCoreControlFlow(fn, registry);
-		const loopBlocks = new Set(
-			[...cfg.loops, ...cfg.irreducibleCycles].flatMap((loop) => [...loop.blocks]),
-		);
 		let functionChanged = false;
 		const blocks = fn.blocks.map((block): CoreBlock => {
 			let blockChanged = false;
@@ -513,7 +651,8 @@ export function selectCoreKnownOwnSlots(
 						const slot = origin.keyStringIndices.indexOf(stringIndex);
 						if (
 							slot >= 0 &&
-							(origin.functionIndex !== fn.functionIndex || loopBlocks.has(block.id))
+							(origin.functionIndex !== fn.functionIndex ||
+								provenance.isLoopBlock(fn.functionIndex, block.id))
 						) {
 							selected = {
 								shapeFunctionIndex: origin.functionIndex,

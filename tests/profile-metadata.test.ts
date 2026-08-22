@@ -2,10 +2,6 @@ import { expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
-import {
-	analyzeCoreShapeProvenance,
-	selectCoreKnownOwnSlots,
-} from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
@@ -145,12 +141,8 @@ test("profile remarks expose guarded known-own-slot lowering and native emission
 		),
 		{ ablations: new Set(["inlining", "interprocedural"]) },
 	).program;
-	const selected = selectCoreKnownOwnSlots(
-		optimized,
-		analyzeCoreShapeProvenance(optimized),
-	).program;
 	const definition = lowerCoreProgramToVmDefinition(
-		lowerCoreProgramToTarget(selected),
+		lowerCoreProgramToTarget(optimized),
 		true,
 	);
 	emitVmDefinition(definition, { compiled: true });

@@ -7,6 +7,7 @@ import {
 	analyzeCoreFunctionReachability,
 	compactCoreProgramFunctions,
 } from "../src/compiler/core/core-ir-reachability.ts";
+import { CORE_KNOWN_OWN_SLOT_ATTRIBUTE } from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
@@ -408,6 +409,42 @@ describe("Core whole-program function reachability", () => {
 			identity: { proof: { scope: { kind: "function", id: 1 } } },
 			semantics: { proof: { scope: { kind: "function", id: 1 } } },
 		});
+	});
+
+	it("retracts target-facing shape hints during dense compaction", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createUndefined", []);
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		const shapeInstruction = builder.block(entry).instructions.at(-1)!.id;
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: {
+				stringIndex: 0,
+				[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: {
+					shapeFunctionIndex: 0,
+					shapeInstruction,
+					slot: 0,
+				},
+			},
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const compacted = compactCoreProgramFunctions(
+			closedProgram([builder.finish(entry), leafFunction(1)]),
+			{
+				executable: new Set([0]),
+				retained: new Set([0]),
+				reasons: new Map([[0, new Set(["program-entry" as const])]]),
+				sourceClosed: true,
+			},
+		);
+		const load = compacted.program.functions[0]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		).find(({ opcode }) => opcode === "loadPropertyStatic")!;
+
+		expect(compacted.changed).toBe(true);
+		expect(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in load.attributes).toBe(false);
 	});
 
 	it("publishes the compact function table to VM lowering", () => {

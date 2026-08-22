@@ -91,6 +91,13 @@ import {
 import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
+	analyzeCoreShapeProvenance,
+	rebaseCoreShapeProvenance,
+	retractCoreKnownOwnSlots,
+	selectCoreKnownOwnSlots,
+} from "./core-ir-shape-provenance.ts";
+import type { CoreShapeProvenanceAnalysis } from "./core-ir-shape-provenance.ts";
+import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
 	CORE_CALL_SUMMARY_ATTRIBUTE,
 	analyzeCoreProgramSummaries,
@@ -10560,11 +10567,29 @@ export function executeCoreOptimizations(
 	let tracedMetrics = collectOptimizationTrace
 		? coreOptimizationMetrics(program)
 		: undefined;
+	// A previous optimizer run may have published target-facing shape hints. They
+	// describe that run's final graph and must not be cloned or carried through a
+	// new normalization/fixpoint. The final selector republishes current hints.
+	const shapeRetraction = retractCoreKnownOwnSlots(program);
+	if (shapeRetraction.changed) {
+		verifyMutatedProgram(shapeRetraction.program, {
+			stage: "normalization",
+			pass: "retract-known-own-slots",
+		});
+	}
+	for (const [index, fn] of shapeRetraction.program.functions.entries()) {
+		traces.push({
+			name: "retract-known-own-slots",
+			round: 0,
+			changed: fn !== program.functions[index],
+		});
+	}
+	const optimizationInput = shapeRetraction.program;
 	const inlineBefore = tracedMetrics;
 	const inlineAblated = options.ablations?.has("inlining") === true;
 	const inlineResult = inlineAblated
-		? { program, changed: false }
-		: inlineSimpleCoreFunctions(program, verification);
+		? { program: optimizationInput, changed: false }
+		: inlineSimpleCoreFunctions(optimizationInput, verification);
 	if (inlineResult.changed) {
 		verifyMutatedProgram(inlineResult.program, {
 			stage: "normalization",
@@ -10585,13 +10610,14 @@ export function executeCoreOptimizations(
 		});
 	}
 	let workingProgram = directResult.program;
-	let changed = inlineResult.changed || directResult.changed;
+	let changed = shapeRetraction.changed || inlineResult.changed || directResult.changed;
 	let functions = [...workingProgram.functions];
+	let shapeProvenance: CoreShapeProvenanceAnalysis | undefined;
 	for (const fn of inlineResult.program.functions) {
 		traces.push({
 			name: "inline-small-functions",
 			round: 0,
-			changed: fn !== program.functions[fn.functionIndex],
+			changed: fn !== optimizationInput.functions[fn.functionIndex],
 		});
 	}
 	for (const fn of functions) {
@@ -10799,7 +10825,21 @@ export function executeCoreOptimizations(
 			beforeCompaction,
 			targetAnalysis,
 		);
+		// Shape provenance shares the final callee-target solve and scans only bodies
+		// that can execute. It stays analysis-only: compaction remaps its function
+		// coordinate before the last selector publishes any target-facing hint.
+		shapeProvenance = analyzeCoreShapeProvenance(beforeCompaction, {
+			registry: coreOpcodeRegistry,
+			calleeTargets: targetAnalysis,
+			controlFlow: (fn) => analyses.controlFlow(fn),
+			executableFunctions: reachability.executable,
+		});
 		const compaction = compactCoreProgramFunctions(beforeCompaction, reachability);
+		shapeProvenance = rebaseCoreShapeProvenance(
+			shapeProvenance,
+			compaction.oldToNew,
+			compaction.program,
+		);
 		if (compaction.changed) {
 			const compactionBefore = tracedMetrics;
 			const refreshed = compaction.program;
@@ -11015,14 +11055,56 @@ export function executeCoreOptimizations(
 			);
 		}
 	}
+	// Publish summaries before the final shape hint. The hint is summary-transparent,
+	// but attaching it changes immutable function identities; solving first lets the
+	// selector remain the absolute last mutating phase without forcing another
+	// whole-program target/summary analysis.
+	const summaryProgram = { ...workingProgram, functions };
+	const summaries =
+		options.ablations?.has("interprocedural") === true
+			? undefined
+			: analyses.summaries(summaryProgram);
+	if (shapeProvenance === undefined) {
+		throw new Error("Final Core shape provenance was not initialized");
+	}
+	const shapeSelectionBefore = tracedMetrics;
+	const shapeSelection = selectCoreKnownOwnSlots(summaryProgram, shapeProvenance);
+	for (const [index, fn] of shapeSelection.program.functions.entries()) {
+		traces.push({
+			name: "select-known-own-slots",
+			round: maxRounds,
+			changed: fn !== functions[index],
+		});
+	}
+	if (shapeSelection.changed) {
+		changed = true;
+		verifyMutatedProgram(shapeSelection.program, {
+			stage: "finalization",
+			pass: "select-known-own-slots",
+		});
+	}
+	workingProgram = shapeSelection.program;
+	functions = [...shapeSelection.program.functions];
+	if (shapeSelectionBefore !== undefined) {
+		const shapeSelectionAfter = coreOptimizationMetrics(shapeSelection.program);
+		tracedMetrics = shapeSelectionAfter;
+		optimizationTrace.push(
+			optimizationPassDelta(
+				{
+					pass: "select-known-own-slots",
+					stage: "finalization",
+					status: "executed",
+					changed: shapeSelection.changed,
+				},
+				shapeSelectionBefore,
+				shapeSelectionAfter,
+			),
+		);
+	}
 	// Published on the final graph, so a recorded summary describes the program the
 	// backend consumes rather than an intermediate round. These maps stay in
 	// process: function indices are compilation-local, so nothing derived from them
 	// may be serialized or carried into another compilation.
-	const summaries =
-		options.ablations?.has("interprocedural") === true
-			? undefined
-			: analyses.summaries({ ...workingProgram, functions });
 	const optimized: CoreProgram = {
 		...workingProgram,
 		functions,

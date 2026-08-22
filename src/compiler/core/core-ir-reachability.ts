@@ -17,6 +17,7 @@ import type {
 	CoreCalleeTargets,
 } from "./core-ir-call-targets.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { CORE_KNOWN_OWN_SLOT_ATTRIBUTE } from "./core-ir-shape-provenance.ts";
 import { CORE_CALL_EFFECT_SUMMARY_FACT } from "./core-ir-summaries.ts";
 import { CORE_CALL_SUMMARY_ATTRIBUTE } from "./core-ir-summaries.ts";
 import type {
@@ -405,6 +406,10 @@ function remapSemanticAttributes(
 	}
 	delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
 	delete attributes[CORE_CALL_SUMMARY_ATTRIBUTE];
+	// Shape origins are analyzed on the pre-compaction executable graph and rebased
+	// in process. Retract target-facing hints here so the final selector can publish
+	// the dense function coordinate after all region ownership is settled.
+	delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
 	if (attributes.knownBuiltinCall !== undefined) {
 		attributes.knownBuiltinCall = remapProofFunctionScopes(
 			attributes.knownBuiltinCall,
