@@ -172,6 +172,29 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 	);
 }
 
+/**
+ * Link an already-lowered VM definition through the ordinary native harness.
+ * Backend boundary tests use this to share one handcrafted definition without
+ * introducing a source-only compiler hook for advisory target metadata.
+ */
+export function buildNativeDefinition(
+	definition: VmDefinition,
+	options: Omit<BuildOptions, "fixture">,
+): string {
+	const harnessOptions: BuildOptions = {
+		...options,
+		fixture: definition.entrypointPath,
+	};
+	const config = resolveHarnessBuildConfig(harnessOptions);
+	return linkDefinition(
+		harnessOptions,
+		config,
+		definition,
+		options.compiled ?? true,
+		options.name,
+	).binaryPath;
+}
+
 function resolveHarnessBuildConfig(options: BuildOptions): ResolvedBuildConfig {
 	// Reuse the real build-config resolution so semantic capabilities and
 	// output suffix, Cargo features, and C defines match the CLI exactly.

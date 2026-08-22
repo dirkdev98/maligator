@@ -265,6 +265,99 @@ describe("emit-vm instruction packing", () => {
 		);
 	});
 
+	it("emits guarded known-own-slot loads in monolithic and split outputs", () => {
+		const specializedInstructions: Array<VmInstruction> = [
+			{
+				opcode: "CREATE_OBJECT_SHAPED",
+				dst: 1,
+				count: 2,
+				keyStringIndices: [1, 2],
+				valueRegisters: [3, 4],
+				shapeCacheIndex: 0,
+			},
+			{
+				opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+				dst: 5,
+				object: 1,
+				stringIndex: 2,
+				icIndex: 0,
+				shapeFunctionIndex: 0,
+				shapeCacheIndex: 0,
+				slot: 1,
+			},
+			{ opcode: "RETURN", value: 5 },
+		];
+		const specialized: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					instructions: specializedInstructions,
+					positions: specializedInstructions.map(() => 0),
+				},
+			],
+		};
+		const interpreted = emitVmDefinition(specialized, { compiled: false });
+		const compiled = emitVmDefinition(specialized, { compiled: true });
+		const split = emitVmTranslationUnits(
+			specialized,
+			{ compiled: true },
+			Number.MAX_SAFE_INTEGER,
+		).join("\n");
+		const splitInterpreted = emitVmTranslationUnits(
+			specialized,
+			{ compiled: false },
+			Number.MAX_SAFE_INTEGER,
+		).join("\n");
+
+		for (const output of [interpreted, splitInterpreted]) {
+			expect(output).toContain("MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
+			expect(output).toContain(".load_property_static_known_own_slot");
+			expect(output).toContain("2, 0, 0, 1");
+		}
+		for (const output of [compiled, split]) {
+			expect(output).toContain("mal_vm_try_load_known_own_slot(vm,");
+			expect(output).toContain("mal_vm_op_load_property_ic(vm,");
+		}
+
+		const malformed: VmDefinition = {
+			...specialized,
+			functions: [
+				{
+					...specialized.functions[0]!,
+					instructions: specializedInstructions.map((instruction) =>
+						instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+							? { ...instruction, slot: 0 }
+							: instruction,
+					),
+				},
+			],
+		};
+		expect(() => emitVmDefinition(malformed)).toThrow(/invalid known-own-slot load/);
+		expect(() => emitVmTranslationUnits(malformed)).toThrow(
+			/invalid known-own-slot load/,
+		);
+
+		const duplicateShapeRowInstructions = [
+			specializedInstructions[0]!,
+			{ ...specializedInstructions[0]!, dst: 2 },
+			...specializedInstructions.slice(1),
+		] as Array<VmInstruction>;
+		const duplicateShapeRow: VmDefinition = {
+			...specialized,
+			functions: [
+				{
+					...specialized.functions[0]!,
+					instructions: duplicateShapeRowInstructions,
+					positions: duplicateShapeRowInstructions.map(() => 0),
+				},
+			],
+		};
+		expect(() => emitVmDefinition(duplicateShapeRow)).toThrow(
+			/invalid known-own-slot load/,
+		);
+	});
+
 	it("emits terminal yields for interpreted and compiled generators", () => {
 		const terminal = {
 			...definition,

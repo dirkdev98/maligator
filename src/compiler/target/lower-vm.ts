@@ -1232,6 +1232,19 @@ export type VmInstruction =
 			primitiveStringLength?: true;
 	  }
 	| {
+			opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT";
+			dst: number;
+			object: number;
+			stringIndex: number;
+			icIndex: number;
+			/** Function whose shaped-literal cache owns `shapeCacheIndex`. */
+			shapeFunctionIndex: number;
+			/** Dense CREATE_OBJECT_SHAPED cache row in `shapeFunctionIndex`. */
+			shapeCacheIndex: number;
+			/** Own data slot read after the exact shape pointer guard succeeds. */
+			slot: number;
+	  }
+	| {
 			opcode: "LOAD_SUPER_PROPERTY";
 			dst: number;
 			object: number;
@@ -1666,6 +1679,7 @@ export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>)
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 				count++;
@@ -1686,6 +1700,83 @@ export function countLiteralShapeSites(
 export interface VmDefinitionStats {
 	functionCount: number;
 	instructionCount: number;
+}
+
+/** Reject malformed VM-level guarded slot references at every output boundary. */
+export function validateVmKnownOwnSlotLoads(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") continue;
+			const sourceFunction = definition.functions[instruction.shapeFunctionIndex];
+			const sourceInstructions = sourceFunction?.instructions.filter(
+				(candidate) =>
+					candidate.opcode === "CREATE_OBJECT_SHAPED" &&
+					candidate.shapeCacheIndex === instruction.shapeCacheIndex,
+			);
+			const sourceInstruction = sourceInstructions?.[0];
+			if (
+				!Number.isSafeInteger(instruction.stringIndex) ||
+				!Number.isSafeInteger(instruction.shapeFunctionIndex) ||
+				!Number.isSafeInteger(instruction.shapeCacheIndex) ||
+				!Number.isSafeInteger(instruction.slot) ||
+				instruction.stringIndex < 0 ||
+				instruction.stringIndex >= definition.stringConstants.length ||
+				instruction.shapeFunctionIndex < 0 ||
+				instruction.shapeCacheIndex < 0 ||
+				instruction.slot < 0 ||
+				sourceInstructions?.length !== 1 ||
+				sourceInstruction?.opcode !== "CREATE_OBJECT_SHAPED" ||
+				sourceInstruction.count !== sourceInstruction.keyStringIndices.length ||
+				sourceInstruction.count !== sourceInstruction.valueRegisters.length ||
+				instruction.slot >= sourceInstruction.count ||
+				sourceInstruction.keyStringIndices[instruction.slot] !== instruction.stringIndex
+			) {
+				throw new RangeError("invalid known-own-slot load");
+			}
+		}
+	}
+}
+
+interface VmLiteralShapeOrigin {
+	readonly instruction: Extract<CompilerInstruction, { type: "createObjectShaped" }>;
+	readonly shapeCacheIndex: number;
+}
+
+/**
+ * Resolve Core shaped-literal instruction ids to the dense cache rows assigned by
+ * the VM backend. The Core id is only provenance: this consumer independently
+ * proves that it names a surviving CREATE_OBJECT_SHAPED target instruction.
+ */
+function buildLiteralShapeOrigins(
+	functions: ReadonlyArray<CoreTargetFunction>,
+): ReadonlyArray<ReadonlyMap<number, VmLiteralShapeOrigin>> {
+	return functions.map((fn) => {
+		const cacheIndexByInstruction = new Map<CompilerInstruction, number>();
+		let shapeCacheIndex = 0;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type === "createObjectShaped") {
+					cacheIndexByInstruction.set(instruction, shapeCacheIndex++);
+				}
+			}
+		}
+
+		const origins = new Map<number, VmLiteralShapeOrigin>();
+		for (const safepoint of fn.safepoints) {
+			if (safepoint.instruction.type !== "createObjectShaped") continue;
+			const cacheIndex = cacheIndexByInstruction.get(safepoint.instruction);
+			if (cacheIndex === undefined || origins.has(safepoint.coreInstruction)) {
+				throw new Error(
+					`Invalid shaped-literal origin ${fn.functionIndex}:${safepoint.coreInstruction}`,
+				);
+			}
+			origins.set(safepoint.coreInstruction, {
+				instruction: safepoint.instruction,
+				shapeCacheIndex: cacheIndex,
+			});
+		}
+		return origins;
+	});
 }
 
 /**
@@ -1750,11 +1841,13 @@ export function lowerCoreProgramToVmDefinition(
 		fileToIndex.set(path, index);
 		return index;
 	};
+	const literalShapeOrigins = buildLiteralShapeOrigins(program.functions);
 	const functions = program.functions.map((fn, index) =>
 		lowerFunctionToVmFunction(
 			fn,
 			fileIndexFor(fn.sourcePath),
 			core.stringConstants,
+			literalShapeOrigins,
 			profile ? compilation.facts.instructionSites : undefined,
 			program.gcRootRegisters[index],
 		),
@@ -1865,6 +1958,7 @@ function lowerFunctionToVmFunction(
 	fn: CoreTargetFunction,
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	literalShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmLiteralShapeOrigin>>,
 	instructionSites?: WeakMap<object, { id: string }>,
 	gcRootRegisters?: ReadonlyArray<number>,
 ): VmFunction {
@@ -1932,10 +2026,38 @@ function lowerFunctionToVmFunction(
 			}
 			const instructionIndex = instructions.length;
 			instructionIndexByTargetInstruction.set(instruction, instructionIndex);
-			const vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
+			let vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
+			if (instruction.type === "loadPropertyStatic" && instruction.knownOwnSlot) {
+				const { shapeFunctionIndex, shapeInstruction, slot } = instruction.knownOwnSlot;
+				const origin = literalShapeOrigins[shapeFunctionIndex]?.get(shapeInstruction);
+				if (
+					origin === undefined ||
+					!Number.isInteger(slot) ||
+					slot < 0 ||
+					slot >= origin.instruction.keyStringIndices.length ||
+					origin.instruction.registers.length !==
+						origin.instruction.keyStringIndices.length + 1 ||
+					origin.instruction.keyStringIndices[slot] !== instruction.stringIndex
+				) {
+					throw new Error(
+						`Invalid known-own-slot load origin ${shapeFunctionIndex}:${shapeInstruction}:${slot}`,
+					);
+				}
+				vmInstruction = {
+					opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+					dst: instruction.registers[0],
+					object: instruction.registers[1],
+					stringIndex: instruction.stringIndex,
+					icIndex: -1,
+					shapeFunctionIndex,
+					shapeCacheIndex: origin.shapeCacheIndex,
+					slot,
+				};
+			}
 			switch (vmInstruction.opcode) {
 				case "LOAD_PROPERTY":
 				case "LOAD_PROPERTY_STATIC":
+				case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				case "STORE_PROPERTY":
 				case "STORE_PROPERTY_STATIC":
 					vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;

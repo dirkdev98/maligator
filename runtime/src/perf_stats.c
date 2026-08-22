@@ -285,6 +285,13 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-known-own-slot-stats] probes=%llu hits=%llu fallbacks=%llu\n",
+        (unsigned long long) mal_perf_stats.known_own_slot_load_probes,
+        (unsigned long long) mal_perf_stats.known_own_slot_load_hits,
+        (unsigned long long) mal_perf_stats.known_own_slot_load_fallbacks
+    );
+    fprintf(
+        stderr,
         "[perf-map-stats] get_set_cache_checks=%llu get_set_cache_hits=%llu "
         "get_set_cache_misses=%llu direct_get_hits=%llu direct_set_hits=%llu "
         "direct_add_hits=%llu direct_fallbacks=%llu\n",

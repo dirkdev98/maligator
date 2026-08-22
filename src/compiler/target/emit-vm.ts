@@ -8,6 +8,7 @@ import {
 	computeArgumentRetentionLimit,
 	countLiteralShapeSites,
 	countPropertyIcSites,
+	validateVmKnownOwnSlotLoads,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
@@ -252,6 +253,15 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 
 	fn.instructions.forEach((instruction, index) => {
 		switch (instruction.opcode) {
+			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+				offsets[index] = data.length;
+				data.push(
+					instruction.stringIndex,
+					instruction.shapeFunctionIndex,
+					instruction.shapeCacheIndex,
+					instruction.slot,
+				);
+				break;
 			case "CREATE_OBJECT_SHAPED":
 				if (instruction.count !== instruction.keyStringIndices.length) {
 					throw new Error("instruction side-data count mismatch");
@@ -448,6 +458,7 @@ function emitVmDefinitionSource(
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
 ): EmittedVmSource {
+	validateVmKnownOwnSlotLoads(definition);
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
@@ -1328,6 +1339,8 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key}, .ic_index = ${instruction.icIndex} } }`;
 		case "LOAD_PROPERTY_STATIC":
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC, .as.load_property_static = { .dst = ${instruction.dst}, .object = ${instruction.object}, .string_index = ${instruction.stringIndex}, .ic_index = ${instruction.icIndex} } }`;
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT, .as.load_property_static_known_own_slot = { .dst = ${instruction.dst}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()}, .ic_index = ${instruction.icIndex} } }`;
 		case "STORE_PROPERTY":
 			return `{ .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value}, .ic_index = ${instruction.icIndex} } }`;
 		case "STORE_PROPERTY_STATIC":

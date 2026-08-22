@@ -3,6 +3,7 @@ import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
 	decodeVmValueOperand,
+	validateVmKnownOwnSlotLoads,
 	vmGuardIsWorldInvariant,
 	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
@@ -35,7 +36,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 18;
+export const WIRE_VERSION = 19;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -182,6 +183,7 @@ export const WIRE_OPCODES = [
 	"MATH_UNARY_NUMBER",
 	"MATH_BINARY_NUMBER",
 	"CALL_BUILTIN",
+	"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -819,6 +821,7 @@ export function serializeVmDefinition(
 	def: VmDefinition,
 	options: { debugInfo?: boolean } = {},
 ): Uint8Array {
+	validateVmKnownOwnSlotLoads(def);
 	const debug = options.debugInfo !== false;
 	const w = new Writer();
 
@@ -1362,6 +1365,7 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 				if (instruction.icIndex !== expected) {
@@ -2566,6 +2570,14 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.object);
 			w.i32(i.stringIndex);
 			return;
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			w.i32(i.dst);
+			w.i32(i.object);
+			w.i32(i.stringIndex);
+			w.i32(i.shapeFunctionIndex);
+			w.i32(i.shapeCacheIndex);
+			w.i32(i.slot);
+			return;
 		case "STORE_PROPERTY":
 		case "DEFINE_PRIVATE":
 		case "STORE_PRIVATE":
@@ -3651,7 +3663,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		throw new Error("serialize-vm: trailing data");
 	}
 
-	return {
+	const definition: VmDefinition = {
 		entrypointPath,
 		functionCount,
 		functions,
@@ -3665,6 +3677,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		sourcePositions,
 		cjsModuleFunctionIndices,
 	};
+	validateVmKnownOwnSlotLoads(definition);
+	return definition;
 }
 
 function readFunction(r: Reader): VmFunction {
@@ -3700,6 +3714,7 @@ function readFunction(r: Reader): VmFunction {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 				instruction.icIndex = propertyIcCount++;
@@ -3982,6 +3997,17 @@ function readInstruction(r: Reader): VmInstruction {
 				dst: r.i32(),
 				object: r.i32(),
 				stringIndex: r.i32(),
+				icIndex: -1,
+			};
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			return {
+				opcode,
+				dst: r.i32(),
+				object: r.i32(),
+				stringIndex: r.i32(),
+				shapeFunctionIndex: r.i32(),
+				shapeCacheIndex: r.i32(),
+				slot: r.i32(),
 				icIndex: -1,
 			};
 		case "DELETE_PROPERTY":

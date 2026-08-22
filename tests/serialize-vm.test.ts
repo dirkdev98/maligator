@@ -352,11 +352,50 @@ function stackObjectDefinition(): VmDefinition {
 	};
 }
 
+function knownOwnSlotDefinition(): VmDefinition {
+	const base = stackObjectDefinition();
+	const fn = base.functions[0]!;
+	const instructions: Array<VmInstruction> = [
+		{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
+		{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
+		{
+			opcode: "CREATE_OBJECT_SHAPED",
+			dst: 2,
+			count: 2,
+			keyStringIndices: [0, 1],
+			valueRegisters: [0, 1],
+			shapeCacheIndex: 0,
+		},
+		{
+			opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			dst: 3,
+			object: 2,
+			stringIndex: 1,
+			icIndex: 0,
+			shapeFunctionIndex: 0,
+			shapeCacheIndex: 0,
+			slot: 1,
+		},
+		{ opcode: "RETURN", value: 3 },
+	];
+	return {
+		...base,
+		functions: [
+			{
+				...fn,
+				instructions,
+				positions: instructions.map(() => 0),
+				regions: undefined,
+			},
+		],
+	};
+}
+
 describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-12)).toEqual([
+		expect(WIRE_OPCODES.slice(-13)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -369,7 +408,51 @@ describe("serialize-vm", () => {
 			"MATH_UNARY_NUMBER",
 			"MATH_BINARY_NUMBER",
 			"CALL_BUILTIN",
+			"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 		]);
+	});
+
+	it("round-trips and rejects tampered known-own-slot load metadata", () => {
+		const valid = knownOwnSlotDefinition();
+		const wire = serializeVmDefinition(valid, { debugInfo: false });
+		const restored = deserializeVmDefinition(wire);
+		expect(
+			restored.functions[0]!.instructions.find(
+				(instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			),
+		).toMatchObject({
+			stringIndex: 1,
+			shapeFunctionIndex: 0,
+			shapeCacheIndex: 0,
+			slot: 1,
+		});
+
+		const malformed = {
+			...valid,
+			functions: valid.functions.map((fn, functionIndex) => ({
+				...fn,
+				instructions: fn.instructions.map((instruction) =>
+					functionIndex === 0 &&
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+						? { ...instruction, slot: 0 }
+						: instruction,
+				),
+			})),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(/invalid known-own-slot load/);
+
+		const opcode = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
+		const encodedInstruction = [opcode, 6, 4, 2, 0, 0, 2];
+		const instructionOffset = wire.findIndex((_, offset) =>
+			encodedInstruction.every((byte, index) => wire[offset + index] === byte),
+		);
+		expect(instructionOffset).toBeGreaterThanOrEqual(0);
+		const tampered = wire.slice();
+		// Change slot ZigZag(1) to ZigZag(0); the source key at slot 0 differs.
+		tampered[instructionOffset + encodedInstruction.length - 1] = 0;
+		expect(() => deserializeVmDefinition(tampered)).toThrow(
+			/invalid known-own-slot load/,
+		);
 	});
 
 	it("round-trips a definition with debug info", () => {

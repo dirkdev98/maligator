@@ -4676,6 +4676,23 @@ void mal_op_load_property_static(MalCallable *callable, const MalInstruction *in
     );
 }
 
+void mal_op_load_property_static_known_own_slot_fallback(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.load_property_static_known_own_slot.data_offset);
+    MalValue key = mal_value_from_string(callable->vm->string_constant_atoms[data[0]]);
+    callable->registers[instruction->as.load_property_static_known_own_slot.dst] =
+        mal_vm_array_fast_load(
+            callable->vm,
+            callable->registers[
+                instruction->as.load_property_static_known_own_slot.object],
+            key,
+            mal_vm_property_ic_at(
+                callable,
+                instruction->as.load_property_static_known_own_slot.ic_index));
+}
+
 // ToPropertyKey applied once and returned as a re-keyable value, so a
 // read-modify-write member access (compound assignment, ++/--) converts the key
 // (running its @@toPrimitive / valueOf / toString) exactly once and feeds the

@@ -220,6 +220,18 @@ function remarkForInstruction(
 				code: "property.static-load",
 				outcome: "applied",
 			};
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			return {
+				phase: "lowering",
+				operation,
+				code: "property.known-own-slot",
+				outcome: "guarded",
+				details: {
+					shapeFunctionIndex: instruction.shapeFunctionIndex,
+					shapeCacheIndex: instruction.shapeCacheIndex,
+					slot: instruction.slot,
+				},
+			};
 		case "STORE_PROPERTY":
 			return {
 				phase: "lowering",

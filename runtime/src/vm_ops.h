@@ -608,6 +608,8 @@ void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, Mal
 
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_load_property_static(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_load_property_static_known_own_slot_fallback(
+    MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_store_property(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_store_property_static(MalCallable *callable, const MalInstruction *instruction);
@@ -876,6 +878,34 @@ MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm);
  */
 static inline MalObject *mal_vm_as_object(MalValue v) {
     return mal_value_is_heap_type(v, MAL_HEAP_OBJECT) ? (MalObject *) mal_value_to_heap(v) : nullptr;
+}
+
+/**
+ * Exact shaped-literal own-slot read shared by compiled and interpreted output.
+ * The source row is populated only after that literal has established its
+ * interned shape. Every miss retains the ordinary static-property IC operation.
+ */
+static inline bool mal_vm_try_load_known_own_slot(
+    MalVm *vm,
+    MalValue receiver,
+    i32 shape_function_index,
+    i32 shape_cache_index,
+    i32 slot,
+    MalValue *out
+) {
+    MAL_PERF_COUNT(known_own_slot_load_probes);
+    MalShape **row = vm->literal_shape_cache[shape_function_index];
+    MalShape *expected = row == nullptr ? nullptr : row[shape_cache_index];
+    if (expected != nullptr && mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+        MalObject *object = (MalObject *) mal_value_to_heap(receiver);
+        if (object->shape == expected) {
+            *out = object->slots[slot];
+            MAL_PERF_COUNT(known_own_slot_load_hits);
+            return true;
+        }
+    }
+    MAL_PERF_COUNT(known_own_slot_load_fallbacks);
+    return false;
 }
 
 /**

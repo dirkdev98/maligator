@@ -144,6 +144,12 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "LOAD_PROPERTY_STATIC":
 		case "STORE_PROPERTY_STATIC":
 			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			return {
+				...instruction,
+				stringIndex: instruction.stringIndex + base.string,
+				shapeFunctionIndex: instruction.shapeFunctionIndex + base.function,
+			};
 		case "CREATE_BIGINT":
 			return { ...instruction, bigintIndex: instruction.bigintIndex + base.bigint };
 		case "INSTANTIATE_LITERAL_TEMPLATE":

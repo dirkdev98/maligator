@@ -10,7 +10,10 @@ import {
 	compileEntrypointToBuffer,
 } from "../../src/compiler/pipeline/compile-program.ts";
 import type { VmDefinition, VmFunction } from "../../src/compiler/target/lower-vm.ts";
-import { serializeVmDefinition } from "../../src/compiler/target/serialize-vm.ts";
+import {
+	serializeVmDefinition,
+	WIRE_OPCODES,
+} from "../../src/compiler/target/serialize-vm.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 
 const fn: VmFunction = {
@@ -108,6 +111,51 @@ describe("wire loader side-data validation", () => {
 	it("rejects mismatched paired-array lengths", () => {
 		// Skip tag, dst, explicit count, then the first array's count and one value.
 		rejectsMutation("paired-count", afterSourceEntry(32 + 1 + 1 + 1 + 1 + 1), 2);
+	});
+
+	it("rejects known-own-slot side data that disagrees with the source shape", () => {
+		const knownSlotFunction: VmFunction = {
+			...fn,
+			registerCount: 2,
+			registerRepresentations: ["boxed", "boxed"],
+			instructions: [
+				{ opcode: "CREATE_UNDEFINED", dst: 0 },
+				{
+					opcode: "CREATE_OBJECT_SHAPED",
+					dst: 1,
+					count: 1,
+					keyStringIndices: [0],
+					valueRegisters: [0],
+					shapeCacheIndex: 0,
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+					dst: 0,
+					object: 1,
+					stringIndex: 0,
+					icIndex: 0,
+					shapeFunctionIndex: 0,
+					shapeCacheIndex: 0,
+					slot: 0,
+				},
+				{ opcode: "RETURN", value: 0 },
+			],
+		};
+		const knownSlotDefinition: VmDefinition = {
+			...definition,
+			functions: [knownSlotFunction],
+			stringConstants: [["x".charCodeAt(0)]],
+		};
+		const wire = serializeVmDefinition(knownSlotDefinition, { debugInfo: false });
+		const tag = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
+		const encodedInstruction = [tag, 0, 2, 0, 0, 0, 0];
+		const offset = wire.findIndex((_, index) =>
+			encodedInstruction.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(offset).toBeGreaterThanOrEqual(0);
+		// Change slot ZigZag(0) to ZigZag(1), outside the one-slot source shape.
+		wire[offset + encodedInstruction.length - 1] = 2;
+		rejectsWire("known-own-slot", wire);
 	});
 
 	it("rejects snapshot metadata that disagrees with the opcode prefix", () => {

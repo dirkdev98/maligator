@@ -1,13 +1,21 @@
 import { expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import {
+	analyzeCoreShapeProvenance,
+	selectCoreKnownOwnSlots,
+} from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
 import {
 	emitVmDefinition,
 	emitVmTranslationUnits,
 } from "../src/compiler/target/emit-vm.ts";
+import { lowerCoreProgramToVmDefinition } from "../src/compiler/target/lower-vm.ts";
 import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
 
 function compile(source: string) {
@@ -111,6 +119,58 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 	).toBeDefined();
 	expect(remarks).toContainEqual(
 		expect.objectContaining({ operation: "allocation", code: "allocation.heap" }),
+	);
+});
+
+test("profile remarks expose guarded known-own-slot lowering and native emission", () => {
+	const source = `
+		function read(n, touch) {
+			const object = { x: n };
+			let sum = 0;
+			for (let index = 0; index < n; index++) {
+				touch(object);
+				sum += object.x;
+			}
+			return sum;
+		}
+		read(3, () => {});
+	`;
+	const optimized = executeCoreOptimizations(
+		lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				source,
+				"/project/src/profile-known-own-slot.js",
+				parseScript(source, { strict: true }),
+			),
+		),
+		{ ablations: new Set(["inlining", "interprocedural"]) },
+	).program;
+	const selected = selectCoreKnownOwnSlots(
+		optimized,
+		analyzeCoreShapeProvenance(optimized),
+	).program;
+	const definition = lowerCoreProgramToVmDefinition(
+		lowerCoreProgramToTarget(selected),
+		true,
+	);
+	emitVmDefinition(definition, { compiled: true });
+
+	expect(definition.profileRemarks).toContainEqual(
+		expect.objectContaining({
+			phase: "lowering",
+			operation: "property",
+			code: "property.known-own-slot",
+			outcome: "guarded",
+		}),
+	);
+	expect(definition.profileRemarks).toContainEqual(
+		expect.objectContaining({
+			phase: "native-backend",
+			operation: "property",
+			code: "property.known-own-slot",
+			outcome: "guarded",
+			reasonCode: "exact-shape-fallback",
+		}),
 	);
 });
 

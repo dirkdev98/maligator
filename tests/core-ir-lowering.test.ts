@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import {
+	analyzeCoreShapeProvenance,
+	selectCoreKnownOwnSlots,
+} from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -124,6 +128,75 @@ describe("Core IR lowering", () => {
 		expect(
 			vm.functions.flatMap(({ instructions }) => instructions).length,
 		).toBeGreaterThan(10);
+	});
+
+	it("resolves known shaped origins to dense VM cache rows", () => {
+		const optimized = executeCoreOptimizations(
+			lower(`
+				function read(n, touch) {
+					const object = { x: n };
+					let sum = 0;
+					for (let index = 0; index < n; index++) {
+						touch(object);
+						sum += object.x;
+					}
+					return sum;
+				}
+				read(3, () => {});
+			`),
+			{ ablations: new Set(["inlining", "interprocedural"]) },
+		).program;
+		const selected = selectCoreKnownOwnSlots(
+			optimized,
+			analyzeCoreShapeProvenance(optimized),
+		).program;
+		const target = lowerCoreProgramToTarget(selected);
+		const vm = lowerCoreProgramToVmDefinition(target);
+		const load = vm.functions
+			.flatMap((fn) => fn.instructions)
+			.find(
+				(instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			);
+		expect(load?.opcode).toBe("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
+		if (load?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") return;
+		const source = vm.functions[load.shapeFunctionIndex]!.instructions.find(
+			(instruction) =>
+				instruction.opcode === "CREATE_OBJECT_SHAPED" &&
+				instruction.shapeCacheIndex === load.shapeCacheIndex,
+		);
+		expect(source?.opcode).toBe("CREATE_OBJECT_SHAPED");
+		if (source?.opcode !== "CREATE_OBJECT_SHAPED") return;
+		expect(source.keyStringIndices[load.slot]).toBe(load.stringIndex);
+
+		const targetLoad = target.functions
+			.flatMap((fn) => fn.blocks)
+			.flatMap((block) => block.instructions)
+			.find(
+				(instruction) =>
+					instruction.type === "loadPropertyStatic" && instruction.knownOwnSlot,
+			);
+		if (targetLoad?.type !== "loadPropertyStatic" || !targetLoad.knownOwnSlot) {
+			throw new Error("expected selected target load");
+		}
+		const original = targetLoad.knownOwnSlot;
+		const mutable = targetLoad as {
+			knownOwnSlot: {
+				shapeFunctionIndex: number;
+				shapeInstruction: number;
+				slot: number;
+			};
+		};
+		mutable.knownOwnSlot = {
+			...original,
+			shapeInstruction: Number.MAX_SAFE_INTEGER,
+		};
+		try {
+			expect(() => lowerCoreProgramToVmDefinition(target)).toThrow(
+				/Invalid known-own-slot load origin/,
+			);
+		} finally {
+			mutable.knownOwnSlot = original;
+		}
 	});
 
 	it("rejects a malformed selected Core region instead of dropping it", () => {
