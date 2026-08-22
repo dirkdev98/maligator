@@ -1,0 +1,113 @@
+From ed1d49f9d01060b278150bea5378fbdd038e029a Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:17:17 +0000
+Subject: [PATCH] perf(number): parse exact integer prefixes natively
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 27acfb0..1da5093 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -43,7 +43,9 @@ static f64 mal_builtin_parse_int_units(const c16 *code_units, usize length, f64
+         radix = 16;
+     }
+ 
+-    f64 value = 0;
++    u64 exact_value = 0;
++    f64 wide_value = 0;
++    bool wide = false;
+     bool any_digit = false;
+     for (; i < length; i++) {
+         c16 code_unit = code_units[i];
+@@ -62,10 +64,20 @@ static f64 mal_builtin_parse_int_units(const c16 *code_units, usize length, f64
+             break;
+         }
+ 
+-        value = value * radix + digit;
++        if (!wide && exact_value <=
++                ((u64) MAL_NUMBER_MAX_SAFE_INTEGER - (u32) digit) / (u32) radix) {
++            exact_value = exact_value * (u32) radix + (u32) digit;
++        } else {
++            if (!wide) {
++                wide_value = (f64) exact_value;
++                wide = true;
++            }
++            wide_value = wide_value * radix + digit;
++        }
+         any_digit = true;
+     }
+ 
++    f64 value = wide ? wide_value : (f64) exact_value;
+     return any_digit ? sign * value : NAN;
+ }
+ 
+-- 
+2.47.3
+
+From f235015075731b78993fbc46c0131ff4ee5122ca Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:17:48 +0000
+Subject: [PATCH] perf(number): parse decimal float prefixes natively
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 1da5093..ae6a33d 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -123,6 +123,32 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
+         buffer[digits_start] = '\0';
+     }
+ 
++    // Short decimal integer prefixes dominate protocol parsing. Accumulate them
++    // exactly and bypass strtod when the first non-digit cannot extend the token
++    // with a fraction or exponent. Trailing junk remains valid parseFloat input.
++    usize cursor = digits_start;
++    u64 integer = 0;
++    bool integer_exact = true;
++    bool any_digit = false;
++    while (buffer[cursor] >= '0' && buffer[cursor] <= '9') {
++        u32 digit = (u32) (buffer[cursor] - '0');
++        if (integer_exact && integer <=
++                ((u64) MAL_NUMBER_MAX_SAFE_INTEGER - digit) / 10u) {
++            integer = integer * 10u + digit;
++        } else {
++            integer_exact = false;
++        }
++        any_digit = true;
++        cursor++;
++    }
++    if (any_digit && integer_exact && buffer[cursor] != '.' &&
++        buffer[cursor] != 'e' && buffer[cursor] != 'E') {
++        f64 value = (f64) integer;
++        if (digits_start == 1 && buffer[0] == '-') value = -value;
++        if (heap_buffer) free(buffer);
++        return value;
++    }
++
+     byte *end = buffer;
+     f64 value = strtod(buffer, (char **) &end);
+     bool parsed = end != buffer;
+-- 
+2.47.3
+
+From b297c25e424c9e46ca688dc881467d0f2459dc87 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:17:49 +0000
+Subject: [PATCH] test(number): cover decimal parseFloat prefixes
+
+
+diff --git a/tests/local/number-methods.js b/tests/local/number-methods.js
+index bfa6f67..6e9c80b 100644
+--- a/tests/local/number-methods.js
++++ b/tests/local/number-methods.js
+@@ -98,6 +98,8 @@ check("parseFloat preserves infinities", Number.parseFloat(-Infinity) === -Infin
+ check("parseFloat preserves NaN", Number.isNaN(Number.parseFloat(NaN)));
+ check("parseFloat normalizes negative zero", Object.is(Number.parseFloat(-0), 0));
+ check("parseFloat retains trailing-junk grammar", Number.parseFloat("12.5tail") === 12.5);
++check("parseFloat handles integer prefix fast path", Number.parseFloat("-12345tail") === -12345);
++check("parseFloat string preserves negative zero", Object.is(Number.parseFloat("-0tail"), -0));
+ check("parseFloat rejects hexadecimal prefix", Number.parseFloat("0x10") === 0);
+ check("parseFloat accepts exact Infinity spelling", Number.parseFloat("-Infinity!") === -Infinity);
+ check("parseFloat rejects short inf spelling", Number.isNaN(Number.parseFloat("inf")));
+-- 
+2.47.3
