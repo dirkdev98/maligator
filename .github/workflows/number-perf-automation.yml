@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - name: Check out automation scripts
+      - name: Check out automation series
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -40,56 +40,66 @@ jobs:
         working-directory: repo
         run: npm ci
 
-      - name: Apply focused commits
+      - name: Apply granular Number commits
         working-directory: repo
         shell: bash
         run: |
           set -euo pipefail
           expected=367a98a84bd3751aa27c4d54461adf466268b6dc
-          git fetch origin things
+          git fetch origin things number-perf-candidate-20260822
           test "$(git rev-parse origin/things)" = "$expected"
           test "$(git rev-parse HEAD)" = "$expected"
           git config user.name "OpenAI"
           git config user.email "noreply@openai.com"
 
-          commit_stage() {
-            local script="$1"
-            local message="$2"
-            python "../automation/.github/number-perf/$script"
-            git diff --check
-            git add -A
-            git diff --cached --check
-            git commit --no-gpg-sign -m "$message"
-          }
+          for series in 1 2 3 4 5 6; do
+            git am "../automation/.github/number-perf/series-${series}.mbox"
+          done
 
-          commit_stage stage2.py "perf(number): optimize primitive and decimal methods"
-          commit_stage stage3.py "perf(number): streamline parsing"
-          commit_stage stage4.py "perf(number): accelerate integral radix strings"
-          commit_stage stage5.py "perf(number): cache the default locale formatter"
-
-          python ../automation/.github/number-perf/stage6.py
           npm run format
-          changed="$(git diff --name-only | sort)"
-          expected_changed=$'tests/local/number-methods.js\ntests/native/number-methods.test.ts'
-          test "$changed" = "$expected_changed"
-          git diff --check
-          git add tests/local/number-methods.js tests/native/number-methods.test.ts
-          git diff --cached --check
-          git commit --no-gpg-sign -m "test(number): cover primitive fast paths"
+          if ! git diff --quiet; then
+            changed="$(git diff --name-only | sort)"
+            unexpected="$(printf '%s\n' "$changed" | grep -Ev '^(tests/local/number-methods\.js|tests/native/number-methods\.test\.ts)$' || true)"
+            test -z "$unexpected"
+            git diff --check
+            git add tests/local/number-methods.js tests/native/number-methods.test.ts
+            git diff --cached --check
+            git commit --no-gpg-sign -m "style(number): format focused tests"
+          fi
 
-          python ../automation/.github/number-perf/stage7.py
+          python ../automation/.github/number-perf/locale-cache.py
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected_locale=$'runtime/src/builtin_intl.c\nruntime/src/builtin_intl.h\nruntime/src/builtin_number.c'
+          test "$changed" = "$expected_locale"
+          git add runtime/src/builtin_intl.c runtime/src/builtin_intl.h runtime/src/builtin_number.c
+          git diff --cached --check
+          git commit --no-gpg-sign -m "perf(number): cache the default locale formatter"
+
+          python ../automation/.github/number-perf/locale-tests.py
           npm run format
           changed="$(git diff --name-only | sort)"
           test "$changed" = "tests/local/number-methods.js"
           git diff --check
           git add tests/local/number-methods.js
           git diff --cached --check
-          git commit --no-gpg-sign -m "test(number): cover exact formatting"
+          git commit --no-gpg-sign -m "test(number): cover default locale formatter reuse"
 
           test -z "$(git status --porcelain)"
+          if git diff --name-only "$expected"..HEAD | grep -Eq '^(bench/|scripts/bench|benchmarks/)'; then
+            echo "Benchmark files were modified" >&2
+            exit 1
+          fi
 
       - name: Validate focused Number behavior
         working-directory: repo
+        run: npm run test:native -- tests/native/number-methods.test.ts
+
+      - name: Validate focused Number behavior under GC stress
+        working-directory: repo
+        env:
+          MAL_GC_STRESS: "1"
+          MAL_GC_VERIFY: "1"
         run: npm run test:native -- tests/native/number-methods.test.ts
 
       - name: Run normal repository gate
