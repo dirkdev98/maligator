@@ -1,0 +1,470 @@
+From b5e45406cdb9c435540fd5232d7ba05d32f3d43e Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:05:42 +0000
+Subject: [PATCH] fix(number): format precision decimals exactly
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index e6380a1..c3ed603 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -2,7 +2,6 @@
+ 
+ #include <float.h>
+ #include <math.h>
+-#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -436,66 +435,6 @@ static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_v
+     return mal_value_from_string(mal_string_new_ascii(&vm->heap, buffer, length));
+ }
+ 
+-/**
+- * Exact significant digits of a positive, finite, nonzero double. macOS/glibc
+- * printf is correctly rounded, and 767 significant digits exceed the longest
+- * exact decimal expansion of any double, so "%.766e" yields the EXACT digits
+- * with no rounding. Fills `sig` with the leading-nonzero digit string and sets
+- * *exp10 so that value == sig[0].sig[1]sig[2]... * 10^(*exp10).
+- */
+-static void mal_number_exact_digits(f64 x, byte *sig, i32 *exp10) {
+-    byte buffer[800];
+-    snprintf(buffer, sizeof(buffer), "%.766e", x);
+-    usize w = 0;
+-    usize i = 0;
+-    sig[w++] = buffer[i++];
+-    if (buffer[i] == '.') {
+-        i++;
+-        while (buffer[i] >= '0' && buffer[i] <= '9') {
+-            sig[w++] = buffer[i++];
+-        }
+-    }
+-    sig[w] = '\0';
+-    *exp10 = (i32) strtol((char *) buffer + i + 1, nullptr, 10);
+-}
+-
+-/**
+- * Round the significant-digit string `sig` to `keep` digits using
+- * round-half-away-from-zero. For a positive magnitude this is round-half-up:
+- * round up iff the first discarded digit is >= '5' (an exact .5 tie picks the
+- * larger value per the spec's "pick the larger n"). A carry out of the leading
+- * digit (999..9 -> 1000..0) bumps *exp10. Leaves exactly `keep` digits.
+- */
+-static void mal_number_round_sig(byte *sig, i32 keep, i32 *exp10) {
+-    i32 len = (i32) strlen((char *) sig);
+-    if (keep >= len) {
+-        for (i32 j = len; j < keep; j++) {
+-            sig[j] = '0';
+-        }
+-        sig[keep] = '\0';
+-        return;
+-    }
+-    bool round_up = sig[keep] >= '5';
+-    sig[keep] = '\0';
+-    if (!round_up) {
+-        return;
+-    }
+-    i32 j = keep - 1;
+-    while (j >= 0) {
+-        if (sig[j] != '9') {
+-            sig[j]++;
+-            return;
+-        }
+-        sig[j] = '0';
+-        j--;
+-    }
+-    // Carried out of the leading digit: keep "1" + (keep-1) zeros, bump exponent.
+-    memmove(sig + 1, sig, (usize) (keep - 1));
+-    sig[0] = '1';
+-    sig[keep] = '\0';
+-    (*exp10)++;
+-}
+-
+ static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+     (void) new_target;
+     (void) callee;
+@@ -559,63 +498,9 @@ static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue th
+         return mal_value_new_undefined();
+     }
+ 
+-    // Round to p significant digits half-away-from-zero (exact-expansion based),
+-    // then choose exponential vs fixed exactly as the spec does. -0 renders with
+-    // no sign (number < 0 is false for -0).
+-    i32 p = (i32) precision;
+-    bool neg = number < 0.0;
+-    f64 ax = fabs(number);
+-
+-    byte sig[820];
+-    i32 e = 0;
+-    if (ax == 0.0) {
+-        for (i32 j = 0; j < p; j++) {
+-            sig[j] = '0';
+-        }
+-        sig[p] = '\0';
+-    } else {
+-        mal_number_exact_digits(ax, sig, &e);
+-        mal_number_round_sig(sig, p, &e);
+-    }
+-
+-    byte out[256];
+-    usize w = 0;
+-    if (neg) {
+-        out[w++] = '-';
+-    }
+-    if (e < -6 || e >= p) {
+-        // Exponential form: one digit, optional fraction, signed exponent.
+-        out[w++] = sig[0];
+-        if (p > 1) {
+-            out[w++] = '.';
+-            for (i32 j = 1; j < p; j++) {
+-                out[w++] = sig[j];
+-            }
+-        }
+-        w += (usize) snprintf((char *) out + w, sizeof(out) - w, "e%+d", e);
+-    } else if (e >= 0) {
+-        // Fixed form, e+1 integer digits then any remaining as fraction.
+-        for (i32 j = 0; j <= e; j++) {
+-            out[w++] = sig[j];
+-        }
+-        if (p > e + 1) {
+-            out[w++] = '.';
+-            for (i32 j = e + 1; j < p; j++) {
+-                out[w++] = sig[j];
+-            }
+-        }
+-    } else {
+-        // -6 <= e < 0: "0." then -e-1 leading zeros then all p digits.
+-        out[w++] = '0';
+-        out[w++] = '.';
+-        for (i32 j = 0; j < -e - 1; j++) {
+-            out[w++] = '0';
+-        }
+-        for (i32 j = 0; j < p; j++) {
+-            out[w++] = sig[j];
+-        }
+-    }
+-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, out, w));
++    byte out[160];
++    usize length = mal_number_format_precision(number, (i32) precision, out);
++    return mal_value_from_string(mal_string_new_ascii(&vm->heap, out, length));
+ }
+ 
+ static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+-- 
+2.47.3
+
+From dffbbca806b46e19d0f23e084f4b69b01f1bbfd5 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:07:46 +0000
+Subject: [PATCH] perf(number): fast-path decimal parseInt numbers
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index c3ed603..12a46b7 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -247,15 +247,30 @@ static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_valu
+ static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+     (void) this_value;
+     // ToString(arg) and ToNumber(radix) run a user toString/valueOf (and unwrap
+-    // a primitive wrapper), and propagate any abrupt completion.
+-    MalString *string;
+-    if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
++    // a primitive wrapper), and propagate any abrupt completion. A primitive
++    // Number has no observable string coercion, so its common decimal case can
++    // defer allocation until after the radix has been inspected.
++    MalValue input = arg_count >= 1 ? args[0] : mal_value_new_undefined();
++    bool primitive_number = mal_ops_is_number(input);
++    MalString *string = nullptr;
++    if (!primitive_number && !mal_vm_to_string(vm, input, &string)) {
+         return mal_value_new_undefined();
+     }
+     f64 radix = 0;
+     if (arg_count >= 2 && !mal_vm_to_number(vm, args[1], &radix)) {
+         return mal_value_new_undefined();
+     }
++    i32 int_radix = mal_ops_number_to_i32(radix);
++    if (primitive_number && (int_radix == 0 || int_radix == 10)) {
++        f64 number = mal_ops_number_as_f64(input);
++        if (isfinite(number) && trunc(number) == number && fabs(number) < 1e21) {
++            // Number::toString(-0) is "0"; parseInt therefore produces +0.
++            return number == 0.0 ? mal_value_from_i32(0) : input;
++        }
++    }
++    if (string == nullptr && !mal_vm_to_string(vm, input, &string)) {
++        return mal_value_new_undefined();
++    }
+     return mal_ops_number_value(mal_builtin_parse_int_units(mal_string_code_units(string), mal_string_length(string), radix));
+ }
+ 
+-- 
+2.47.3
+
+From 87daed66043fa8abefd1559bdcc71a48c2abb62b Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:08:42 +0000
+Subject: [PATCH] test(number): cover exact formatting fast paths
+
+
+diff --git a/tests/local/number-methods.js b/tests/local/number-methods.js
+new file mode 100644
+index 0000000..4bb1586
+--- /dev/null
++++ b/tests/local/number-methods.js
+@@ -0,0 +1,228 @@
++const checks = [];
++const check = (name, condition) => {
++	checks.push(condition);
++	if (!condition) console.log("FAIL " + name);
++};
++const throws = (constructor, callback) => {
++	try {
++		callback();
++		return false;
++	} catch (error) {
++		return error instanceof constructor;
++	}
++};
++
++check("Number preserves negative zero", Object.is(Number(-0), -0));
++check("Number preserves NaN", Number.isNaN(Number(NaN)));
++check("Number preserves infinities", Number(Infinity) === Infinity && Number(-Infinity) === -Infinity);
++check("Number converts BigInt", Number(42n) === 42);
++check("Number wrapper preserves negative zero", Object.is(new Number(-0).valueOf(), -0));
++check(
++	"valueOf preserves primitive negative zero",
++	Object.is(Number.prototype.valueOf.call(-0), -0),
++);
++check(
++	"valueOf rejects foreign receiver",
++	throws(TypeError, () => Number.prototype.valueOf.call({})),
++);
++
++check("isNaN accepts only Number NaN", Number.isNaN(NaN) && !Number.isNaN("NaN"));
++check(
++	"isFinite classifies Number encodings",
++	Number.isFinite(0) &&
++		Number.isFinite(-0) &&
++		Number.isFinite(1.5) &&
++		!Number.isFinite(Infinity) &&
++		!Number.isFinite(NaN) &&
++		!Number.isFinite("1"),
++);
++check(
++	"isInteger classifies integral doubles",
++	Number.isInteger(-0) &&
++		Number.isInteger(2 ** 40) &&
++		!Number.isInteger(1.5) &&
++		!Number.isInteger(Infinity),
++);
++check(
++	"isSafeInteger respects exact bounds",
++	Number.isSafeInteger(Number.MAX_SAFE_INTEGER) &&
++		Number.isSafeInteger(Number.MIN_SAFE_INTEGER) &&
++		!Number.isSafeInteger(Number.MAX_SAFE_INTEGER + 1) &&
++		!Number.isSafeInteger(1.5),
++);
++
++check("parseInt decimal Number fast path", Number.parseInt(123456) === 123456);
++check("parseInt negative Number fast path", Number.parseInt(-123456, 10) === -123456);
++check("parseInt normalizes negative zero", Object.is(Number.parseInt(-0), 0));
++check("parseInt retains non-decimal semantics", Number.parseInt(15, 16) === 21);
++check("parseInt retains exponent spelling", Number.parseInt(1e21) === 1);
++check("parseInt handles large decimal spelling", Number.parseInt(1e20) === 1e20);
++const parseIntOrder = [];
++const parseIntInput = {
++	toString() {
++		parseIntOrder.push("string");
++		return "11";
++	},
++};
++const parseIntRadix = {
++	valueOf() {
++		parseIntOrder.push("radix");
++		return 10;
++	},
++};
++check(
++	"parseInt preserves coercion order",
++	Number.parseInt(parseIntInput, parseIntRadix) === 11 &&
++		parseIntOrder.join(",") === "string,radix",
++);
++
++check("parseFloat aliases the global", Number.parseFloat === parseFloat);
++check("parseFloat Number fast path", Number.parseFloat(12.5) === 12.5);
++check("parseFloat preserves infinities", Number.parseFloat(-Infinity) === -Infinity);
++check("parseFloat preserves NaN", Number.isNaN(Number.parseFloat(NaN)));
++check("parseFloat normalizes negative zero", Object.is(Number.parseFloat(-0), 0));
++check("parseFloat retains trailing-junk grammar", Number.parseFloat("12.5tail") === 12.5);
++check("parseFloat rejects hexadecimal prefix", Number.parseFloat("0x10") === 0);
++check("parseFloat accepts exact Infinity spelling", Number.parseFloat("-Infinity!") === -Infinity);
++check("parseFloat rejects short inf spelling", Number.isNaN(Number.parseFloat("inf")));
++check("parseFloat handles long staged strings", Number.parseFloat("1" + "0".repeat(80)) === 1e80);
++let parseFloatToStringCalls = 0;
++let parseFloatValueOfCalls = 0;
++const parseFloatInput = {
++	toString() {
++		parseFloatToStringCalls++;
++		return "19.25tail";
++	},
++	valueOf() {
++		parseFloatValueOfCalls++;
++		return 99;
++	},
++};
++check(
++	"parseFloat preserves ToString coercion",
++	Number.parseFloat(parseFloatInput) === 19.25 &&
++		parseFloatToStringCalls === 1 &&
++		parseFloatValueOfCalls === 0,
++);
++check(
++	"parseFloat still rejects Symbol",
++	throws(TypeError, () => Number.parseFloat(Symbol("number"))),
++);
++
++const shortestCases = [
++	[0.1, "0.1"],
++	[1.0000000000000002, "1.0000000000000002"],
++	[1e-6, "0.000001"],
++	[1e-7, "1e-7"],
++	[1e20, "100000000000000000000"],
++	[1e21, "1e+21"],
++	[5e-324, "5e-324"],
++	[2.2250738585072014e-308, "2.2250738585072014e-308"],
++	[1.7976931348623157e308, "1.7976931348623157e+308"],
++	[1000000000000000128, "1000000000000000100"],
++];
++for (const [number, expected] of shortestCases) {
++	check("shortest decimal " + expected, String(number) === expected && number.toString() === expected);
++}
++check("shortest decimal suppresses negative zero", (-0).toString() === "0");
++
++const fixedCases = [
++	[1.25, 1, "1.3"],
++	[2.25, 1, "2.3"],
++	[-1.25, 1, "-1.3"],
++	[1.005, 2, "1.00"],
++	[-0.0001, 2, "-0.00"],
++	[-0, 2, "0.00"],
++	[9.99, 1, "10.0"],
++	[1e20, 2, "100000000000000000000.00"],
++	[1e21, 2, "1e+21"],
++];
++for (const [number, digits, expected] of fixedCases) {
++	check("toFixed " + expected, number.toFixed(digits) === expected);
++}
++check(
++	"toFixed exact high precision",
++	(1.25).toFixed(100) ===
++		"1.2500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
++);
++
++const exponentialCases = [
++	[1.234567890123, undefined, "1.234567890123e+0"],
++	[25, 0, "3e+1"],
++	[-25, 0, "-3e+1"],
++	[0, undefined, "0e+0"],
++	[-0, undefined, "0e+0"],
++	[5e-324, undefined, "5e-324"],
++	[1.7976931348623157e308, undefined, "1.7976931348623157e+308"],
++];
++for (const [number, digits, expected] of exponentialCases) {
++	const actual = digits === undefined ? number.toExponential() : number.toExponential(digits);
++	check("toExponential " + expected, actual === expected);
++}
++check(
++	"toExponential exact high precision",
++	(1.2345).toExponential(100) ===
++		"1.2344999999999999307220832633902318775653839111328125000000000000000000000000000000000000000000000000e+0",
++);
++
++const precisionCases = [
++	[1.25, 2, "1.3"],
++	[9.99, 2, "10"],
++	[1e-7, 3, "1.00e-7"],
++	[1e-6, 3, "0.00000100"],
++	[-0, 3, "0.00"],
++	[5e-324, 3, "4.94e-324"],
++];
++for (const [number, precision, expected] of precisionCases) {
++	check("toPrecision " + expected, number.toPrecision(precision) === expected);
++}
++check(
++	"toPrecision exact high precision",
++	(1.2345).toPrecision(100) ===
++		"1.234499999999999930722083263390231877565383911132812500000000000000000000000000000000000000000000000",
++);
++check("toPrecision undefined uses shortest", (1.234567890123).toPrecision() === "1.234567890123");
++
++const receiverOrder = [];
++const fractionDigits = {
++	valueOf() {
++		receiverOrder.push("digits");
++		return 2;
++	},
++};
++check(
++	"format methods validate receiver before arguments",
++	throws(TypeError, () => Number.prototype.toFixed.call({}, fractionDigits)) &&
++		receiverOrder.length === 0,
++);
++let infinityExponentialCoercions = 0;
++const outOfRangeExponential = {
++	valueOf() {
++		infinityExponentialCoercions++;
++		return 101;
++	},
++};
++check(
++	"toExponential coerces before nonfinite shortcut",
++	Number.prototype.toExponential.call(Infinity, outOfRangeExponential) === "Infinity" &&
++		infinityExponentialCoercions === 1,
++);
++let infinityPrecisionCoercions = 0;
++const outOfRangePrecision = {
++	valueOf() {
++		infinityPrecisionCoercions++;
++		return 101;
++	},
++};
++check(
++	"toPrecision coerces before nonfinite shortcut",
++	Number.prototype.toPrecision.call(Infinity, outOfRangePrecision) === "Infinity" &&
++		infinityPrecisionCoercions === 1,
++);
++check("toFixed validates range for infinity", throws(RangeError, () => Infinity.toFixed(101)));
++check("toExponential validates finite range", throws(RangeError, () => (1).toExponential(101)));
++check("toPrecision validates finite range", throws(RangeError, () => (1).toPrecision(101)));
++check("toFixed preserves BigInt TypeError", throws(TypeError, () => (1).toFixed(1n)));
++check("toExponential preserves Symbol TypeError", throws(TypeError, () => (1).toExponential(Symbol())));
++
++console.log("RESULT " + checks.filter(Boolean).length + "/" + checks.length);
+diff --git a/tests/native/number-methods.test.ts b/tests/native/number-methods.test.ts
+new file mode 100644
+index 0000000..2cd2c7f
+--- /dev/null
++++ b/tests/native/number-methods.test.ts
+@@ -0,0 +1,20 @@
++import { describe, it } from "vitest";
++import {
++	assertResultPass,
++	buildNativeBinary,
++	runToStdout,
++} from "../../src/test-harness.ts";
++
++describe("Number methods", () => {
++	it.each([
++		["compiled", true],
++		["interpreted", false],
++	])("preserves exact Number semantics in %s mode", (_name, compiled) => {
++		const binary = buildNativeBinary({
++			fixture: "tests/local/number-methods.js",
++			name: `number-methods-${compiled ? "compiled" : "interpreted"}`,
++			compiled,
++		});
++		assertResultPass(runToStdout(binary));
++	});
++});
+-- 
+2.47.3
