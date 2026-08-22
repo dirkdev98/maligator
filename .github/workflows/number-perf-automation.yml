@@ -1,0 +1,105 @@
+name: Apply Number performance work
+
+on:
+  push:
+    branches: [number-perf-automation-20260822]
+    paths: [.github/workflows/number-perf-automation.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: number-perf-automation
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out automation scripts
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          persist-credentials: false
+
+      - name: Check out target branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: things
+          path: repo
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.14.1
+          package-manager-cache: false
+
+      - name: Install dependencies
+        working-directory: repo
+        run: npm ci
+
+      - name: Apply focused commits
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=367a98a84bd3751aa27c4d54461adf466268b6dc
+          git fetch origin things
+          test "$(git rev-parse origin/things)" = "$expected"
+          test "$(git rev-parse HEAD)" = "$expected"
+          git config user.name "OpenAI"
+          git config user.email "noreply@openai.com"
+
+          commit_stage() {
+            local script="$1"
+            local message="$2"
+            python "../automation/.github/number-perf/$script"
+            git diff --check
+            git add -A
+            git diff --cached --check
+            git commit --no-gpg-sign -m "$message"
+          }
+
+          commit_stage stage2.py "perf(number): optimize primitive and decimal methods"
+          commit_stage stage3.py "perf(number): streamline parsing"
+          commit_stage stage4.py "perf(number): accelerate integral radix strings"
+          commit_stage stage5.py "perf(number): cache the default locale formatter"
+
+          python ../automation/.github/number-perf/stage6.py
+          npm run format
+          changed="$(git diff --name-only | sort)"
+          expected_changed=$'tests/local/number-methods.js\ntests/native/number-methods.test.ts'
+          test "$changed" = "$expected_changed"
+          git diff --check
+          git add tests/local/number-methods.js tests/native/number-methods.test.ts
+          git diff --cached --check
+          git commit --no-gpg-sign -m "test(number): cover primitive fast paths"
+
+          python ../automation/.github/number-perf/stage7.py
+          npm run format
+          changed="$(git diff --name-only | sort)"
+          test "$changed" = "tests/local/number-methods.js"
+          git diff --check
+          git add tests/local/number-methods.js
+          git diff --cached --check
+          git commit --no-gpg-sign -m "test(number): cover exact formatting"
+
+          test -z "$(git status --porcelain)"
+
+      - name: Validate focused Number behavior
+        working-directory: repo
+        run: npm run test:native -- tests/native/number-methods.test.ts
+
+      - name: Run normal repository gate
+        working-directory: repo
+        run: npm run test:check
+
+      - name: Push fast-forward commits
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:things
