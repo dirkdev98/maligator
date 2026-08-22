@@ -1,0 +1,114 @@
+From e143aeef1029c110a33e5de4aa75cbed200d1df4 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:14:41 +0000
+Subject: [PATCH] test(number): cover integer radix formatting
+
+
+diff --git a/tests/local/number-methods.js b/tests/local/number-methods.js
+index 4bb1586..8effd53 100644
+--- a/tests/local/number-methods.js
++++ b/tests/local/number-methods.js
+@@ -126,6 +126,20 @@ for (const [number, expected] of shortestCases) {
+ }
+ check("shortest decimal suppresses negative zero", (-0).toString() === "0");
+ 
++const radixCases = [
++	[255, 16, "ff"],
++	[-255, 16, "-ff"],
++	[123456789, 8, "726746425"],
++	[Number.MAX_SAFE_INTEGER, 2, "11111111111111111111111111111111111111111111111111111"],
++	[Number.MAX_SAFE_INTEGER, 36, "2gosa7pa2gv"],
++	[-0, 2, "0"],
++	[10.5, 2, "1010.1"],
++	[2 ** 60, 2, "1000000000000000000000000000000000000000000000000000000000000"],
++];
++for (const [number, radix, expected] of radixCases) {
++	check("radix string " + radix + " " + expected, number.toString(radix) === expected);
++}
++
+ const fixedCases = [
+ 	[1.25, 1, "1.3"],
+ 	[2.25, 1, "2.3"],
+-- 
+2.47.3
+
+From f741a95ca6f3af7d880c7671c92eb269d33aed95 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:16:16 +0000
+Subject: [PATCH] perf(number): fast-path global numeric predicates
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index ea5e6dc..27acfb0 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -294,10 +294,14 @@ static MalValue mal_builtin_global_is_nan(MalVm *vm, MalValue this_value, const
+     (void) this_value;
+     (void) new_target;
+     (void) callee;
+-    // isNaN(number): num = ? ToNumber(number). ToNumber invokes @@toPrimitive /
+-    // valueOf / toString, whose abrupt completions must propagate (VM-aware).
++    // isNaN(number): num = ? ToNumber(number). Number primitives need no
++    // observable coercion and can be classified directly from their tags.
++    MalValue input = arg_count >= 1 ? args[0] : mal_value_new_undefined();
++    if (mal_ops_is_number(input)) {
++        return mal_value_new_boolean(mal_value_is_nan(input));
++    }
+     f64 number;
+-    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &number)) {
++    if (!mal_vm_to_number(vm, input, &number)) {
+         return mal_value_new_undefined();
+     }
+     return mal_value_new_boolean(isnan(number));
+@@ -308,8 +312,12 @@ static MalValue mal_builtin_global_is_finite(MalVm *vm, MalValue this_value, con
+     (void) new_target;
+     (void) callee;
+     // isFinite(number): num = ? ToNumber(number) — same abrupt-propagation rule.
++    MalValue input = arg_count >= 1 ? args[0] : mal_value_new_undefined();
++    if (mal_ops_is_number(input)) {
++        return mal_value_new_boolean(mal_builtin_number_value_is_finite(input));
++    }
+     f64 number;
+-    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &number)) {
++    if (!mal_vm_to_number(vm, input, &number)) {
+         return mal_value_new_undefined();
+     }
+     return mal_value_new_boolean(isfinite(number));
+-- 
+2.47.3
+
+From 46969153cba4fe1ccd2c19b93381d1344c2be0b7 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:16:17 +0000
+Subject: [PATCH] test(number): cover global numeric predicate paths
+
+
+diff --git a/tests/local/number-methods.js b/tests/local/number-methods.js
+index 8effd53..bfa6f67 100644
+--- a/tests/local/number-methods.js
++++ b/tests/local/number-methods.js
+@@ -50,6 +50,22 @@ check(
+ 		!Number.isSafeInteger(Number.MAX_SAFE_INTEGER + 1) &&
+ 		!Number.isSafeInteger(1.5),
+ );
++check("global isNaN classifies Number values", isNaN(NaN) && !isNaN(-0) && !isNaN(1.5));
++check(
++	"global isFinite classifies Number values",
++	isFinite(-0) && isFinite(1.5) && !isFinite(Infinity) && !isFinite(NaN),
++);
++let globalPredicateCoercions = 0;
++const globalPredicateInput = {
++	valueOf() {
++		globalPredicateCoercions++;
++		return 12;
++	},
++};
++check(
++	"global predicates retain observable coercion",
++	!isNaN(globalPredicateInput) && isFinite(globalPredicateInput) && globalPredicateCoercions === 2,
++);
+ 
+ check("parseInt decimal Number fast path", Number.parseInt(123456) === 123456);
+ check("parseInt negative Number fast path", Number.parseInt(-123456, 10) === -123456);
+-- 
+2.47.3
