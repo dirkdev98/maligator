@@ -1,0 +1,221 @@
+From c894726551c16b829874e825367d9c0ee93c986e Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:01:50 +0000
+Subject: [PATCH] perf(number): preserve primitive number values
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 75ce4e2..3be37d6 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -124,6 +124,11 @@ static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, c
+     } else if (mal_value_is_symbol(args[0])) {
+         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a number");
+         return mal_value_new_undefined();
++    } else if (mal_ops_is_number(args[0])) {
++        // Number primitives already carry the exact ECMAScript value, including
++        // -0, NaN, and the static infinity encodings. Preserve that value rather
++        // than converting through f64 and boxing it again.
++        number = args[0];
+     } else if (mal_value_is_object(args[0])) {
+         // ToNumber on an object first runs ToPrimitive(number) through the
+         // shared coercion path (valueOf/toString/@@toPrimitive), which may throw.
+@@ -132,8 +137,6 @@ static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, c
+             return mal_value_new_undefined();
+         }
+         number = mal_ops_number_value(primitive);
+-    } else if (mal_value_is_int32(args[0])) {
+-        number = args[0];
+     } else {
+         number = mal_ops_number_value(mal_ops_to_number(args[0]));
+     }
+@@ -157,16 +160,23 @@ static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, c
+ }
+ 
+ /**
+- * Spec thisNumberValue: unwrap a Number primitive or Number wrapper receiver to
+- * its f64, throwing a TypeError on a foreign receiver.
++ * Spec thisNumberValue: unwrap a Number primitive or Number wrapper receiver,
++ * throwing a TypeError on a foreign receiver.
+  */
++static bool mal_builtin_number_this_value(MalVm *vm, MalValue this_value, MalValue *out) {
++    if (!mal_value_this_number_value(this_value, out)) {
++        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Number.prototype method called on incompatible receiver");
++        return false;
++    }
++    return true;
++}
++
+ static bool mal_builtin_number_this(MalVm *vm, MalValue this_value, f64 *out) {
+     MalValue primitive;
+-    if (!mal_value_this_number_value(this_value, &primitive)) {
+-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Number.prototype method called on incompatible receiver");
++    if (!mal_builtin_number_this_value(vm, this_value, &primitive)) {
+         return false;
+     }
+-    *out = mal_ops_to_number(primitive);
++    *out = mal_ops_number_as_f64(primitive);
+     return true;
+ }
+ 
+@@ -693,11 +703,11 @@ static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_v
+     (void) arg_count;
+     (void) new_target;
+     (void) callee;
+-    f64 number;
+-    if (!mal_builtin_number_this(vm, this_value, &number)) {
++    MalValue number;
++    if (!mal_builtin_number_this_value(vm, this_value, &number)) {
+         return mal_value_new_undefined();
+     }
+-    return mal_ops_number_value(number);
++    return number;
+ }
+ 
+ void mal_builtin_number_install(MalVm *vm) {
+-- 
+2.47.3
+
+From 020d9f581fced510d371b9b5fe748d41c84e25ef Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:02:10 +0000
+Subject: [PATCH] perf(number): simplify numeric predicates
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 3be37d6..01bcf3a 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -183,21 +183,14 @@ static bool mal_builtin_number_this(MalVm *vm, MalValue this_value, f64 *out) {
+ static MalValue mal_builtin_number_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+     (void) vm;
+     (void) this_value;
+-    if (arg_count < 1) {
+-        return mal_value_new_boolean(false);
+-    }
+-
+-    return mal_value_new_boolean(
+-        mal_value_is_nan(args[0]) || (mal_value_is_f64(args[0]) && isnan(mal_value_to_f64(args[0])))
+-    );
++    return mal_value_new_boolean(arg_count >= 1 && mal_value_is_nan(args[0]));
+ }
+ 
+ static bool mal_builtin_number_value_is_finite(MalValue value) {
+-    if (mal_value_is_int32(value) || value == MAL_VALUE_NEGATIVE_ZERO) {
+-        return true;
+-    }
+-
+-    return mal_value_is_f64(value) && isfinite(mal_value_to_f64(value));
++    // Raw f64 values cannot encode NaN or infinity in MalValue: those use the
++    // dedicated static tags. Every value accepted by mal_value_is_f64 is finite.
++    return mal_value_is_int32(value) || mal_value_is_f64(value) ||
++        value == MAL_VALUE_NEGATIVE_ZERO;
+ }
+ 
+ static MalValue mal_builtin_number_is_finite(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+@@ -216,7 +209,7 @@ static bool mal_builtin_number_value_is_integer(MalValue value) {
+     }
+ 
+     f64 number = mal_value_to_f64(value);
+-    return isfinite(number) && trunc(number) == number;
++    return trunc(number) == number;
+ }
+ 
+ static MalValue mal_builtin_number_is_integer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+@@ -225,14 +218,23 @@ static MalValue mal_builtin_number_is_integer(MalVm *vm, MalValue this_value, co
+     return mal_value_new_boolean(arg_count >= 1 && mal_builtin_number_value_is_integer(args[0]));
+ }
+ 
++static bool mal_builtin_number_value_is_safe_integer(MalValue value) {
++    if (mal_value_is_int32(value) || value == MAL_VALUE_NEGATIVE_ZERO) {
++        return true;
++    }
++    if (!mal_value_is_f64(value)) {
++        return false;
++    }
++    f64 number = mal_value_to_f64(value);
++    return number >= MAL_NUMBER_MIN_SAFE_INTEGER &&
++        number <= MAL_NUMBER_MAX_SAFE_INTEGER && trunc(number) == number;
++}
++
+ static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+     (void) vm;
+     (void) this_value;
+-    if (arg_count < 1 || !mal_builtin_number_value_is_integer(args[0])) {
+-        return mal_value_new_boolean(false);
+-    }
+-
+-    return mal_value_new_boolean(fabs(mal_ops_to_number(args[0])) <= MAL_NUMBER_MAX_SAFE_INTEGER);
++    return mal_value_new_boolean(
++        arg_count >= 1 && mal_builtin_number_value_is_safe_integer(args[0]));
+ }
+ 
+ static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+-- 
+2.47.3
+
+From a2f51c77b966d57cfc6d5544d67ec538faafd199 Mon Sep 17 00:00:00 2001
+From: OpenAI <noreply@openai.com>
+Date: Sat, 22 Aug 2026 11:02:30 +0000
+Subject: [PATCH] perf(number): avoid transient parseFloat work
+
+
+diff --git a/runtime/src/builtin_number.c b/runtime/src/builtin_number.c
+index 01bcf3a..8c15556 100644
+--- a/runtime/src/builtin_number.c
++++ b/runtime/src/builtin_number.c
+@@ -75,8 +75,15 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
+         start++;
+     }
+ 
+-    // Collect the ASCII prefix and let strtod handle the float grammar.
+-    byte *buffer = malloc(length - start + 1);
++    // Collect the ASCII prefix and let strtod handle the float grammar. Most
++    // numeric protocol fields are small, so keep their staging buffer on the
++    // native stack and allocate only for unusually long inputs.
++    usize source_length = length - start;
++    byte stack_buffer[64];
++    byte *buffer = source_length + 1 <= sizeof(stack_buffer)
++        ? stack_buffer
++        : malloc(source_length + 1);
++    bool heap_buffer = buffer != stack_buffer;
+     usize buffer_length = 0;
+     for (usize i = start; i < length; i++) {
+         if (code_units[i] > 0x7F) {
+@@ -97,7 +104,7 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
+     // the StrDecimalLiteral grammar does not.
+     if (buffer_length >= digits_start + 8 && memcmp(buffer + digits_start, "Infinity", 8) == 0) {
+         bool negative = digits_start == 1 && buffer[0] == '-';
+-        free(buffer);
++        if (heap_buffer) free(buffer);
+         return negative ? -INFINITY : INFINITY;
+     }
+     if (buffer_length > digits_start && (buffer[digits_start] == 'i' || buffer[digits_start] == 'I' || buffer[digits_start] == 'n' || buffer[digits_start] == 'N')) {
+@@ -107,7 +114,7 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
+     byte *end = buffer;
+     f64 value = strtod(buffer, (char **) &end);
+     bool parsed = end != buffer;
+-    free(buffer);
++    if (heap_buffer) free(buffer);
+     return parsed ? value : NAN;
+ }
+ 
+@@ -254,8 +261,15 @@ static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalV
+ 
+ static MalValue mal_builtin_parse_float(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+     (void) this_value;
++    MalValue input = arg_count >= 1 ? args[0] : mal_value_new_undefined();
++    if (mal_ops_is_number(input)) {
++        // ToString(Number) followed by parsing yields the same Number because the
++        // decimal spelling round-trips. The one exception is -0: ToString(-0) is
++        // "0", so parseFloat must return positive zero.
++        return mal_ops_number_as_f64(input) == 0.0 ? mal_value_from_i32(0) : input;
++    }
+     MalString *string;
+-    if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
++    if (!mal_vm_to_string(vm, input, &string)) {
+         return mal_value_new_undefined();
+     }
+     return mal_ops_number_value(mal_builtin_parse_float_units(mal_string_code_units(string), mal_string_length(string)));
+-- 
+2.47.3
