@@ -15,6 +15,17 @@ interface PrimordialReference {
 	kind: "binding" | "object";
 }
 
+export interface PrimordialDiagnosticHostFacts {
+	nodeEnabled: boolean;
+}
+
+function isNodeErrorHook(target: PrimordialReference): boolean {
+	return (
+		target.display === "Error.prepareStackTrace" ||
+		target.display === "Error.stackTraceLimit"
+	);
+}
+
 function memberPropertyName(node: ESTree.MemberExpression): string | undefined {
 	if (!node.computed && node.property.type === "Identifier") return node.property.name;
 	if (
@@ -183,6 +194,7 @@ function diagnostic(
 export function collectPrimordialMutationDiagnostics(
 	program: SemanticProgram,
 	world: WorldFacts,
+	host: PrimordialDiagnosticHostFacts = { nodeEnabled: false },
 ): Array<CompilerDiagnostic> {
 	if (world.primordialPolicy !== "locked") return [];
 	const diagnostics: Array<CompilerDiagnostic> = [];
@@ -193,7 +205,7 @@ export function collectPrimordialMutationDiagnostics(
 					file,
 					node.type === "AssignmentExpression" ? node.left : node.argument,
 				);
-				if (target !== undefined) {
+				if (target !== undefined && !(host.nodeEnabled && isNodeErrorHook(target))) {
 					diagnostics.push(diagnostic(file, node, target, "assignment"));
 				}
 			} else if (node.type === "UnaryExpression" && node.operator === "delete") {

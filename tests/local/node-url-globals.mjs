@@ -1,5 +1,12 @@
 const checks = [];
 
+const encoded = new TextEncoder().encode("OK");
+checks.push(
+	encoded instanceof Uint8Array,
+	encoded.length === 2 && encoded[0] === 79 && encoded[1] === 75,
+	new TextDecoder().decode(encoded) === "OK",
+);
+
 const query = new URLSearchParams();
 query.append("label", "first");
 query.append("label", "second");

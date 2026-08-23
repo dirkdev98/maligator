@@ -544,7 +544,9 @@ export function compileBuildFrontend(
 	const world = facts.world;
 	const diagnostics =
 		world.primordialPolicy === "locked"
-			? collectPrimordialMutationDiagnostics(semanticForGraph(), world)
+			? collectPrimordialMutationDiagnostics(semanticForGraph(), world, {
+					nodeEnabled: options.config.surface.node,
+				})
 			: [];
 	let definition: VmDefinition;
 	let wires: Array<Uint8Array> | undefined;

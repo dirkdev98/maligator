@@ -8,6 +8,7 @@ import {
 	inspectMaligatorCache,
 	pruneMaligatorCache,
 } from "../src/cache-management.ts";
+import { CommandProgress } from "../src/command-progress.ts";
 
 function cacheRoot(): string {
 	return mkdtempSync(path.join(os.tmpdir(), "mal-cache-management-"));
@@ -101,7 +102,7 @@ describe("Maligator cache management", () => {
 		}
 	});
 
-	it("supports hosts with numeric interval handles", () => {
+	it("releases progress leases on hosts with numeric interval handles", () => {
 		const root = cacheRoot();
 		const setIntervalSpy = vi
 			.spyOn(globalThis, "setInterval")
@@ -110,13 +111,30 @@ describe("Maligator cache management", () => {
 			.spyOn(globalThis, "clearInterval")
 			.mockImplementation(() => {});
 		try {
-			const lease = createCacheLease("build", root);
-			expect(lease.path).toBeDefined();
-			lease.release();
+			const progress = new CommandProgress("test", {
+				cacheRoot: root,
+				quiet: true,
+			});
+			expect(inspectMaligatorCache(root).activeLeases).toBe(1);
+			progress.complete();
+			expect(inspectMaligatorCache(root).activeLeases).toBe(0);
 			expect(clearIntervalSpy).toHaveBeenCalledWith(1);
 		} finally {
 			setIntervalSpy.mockRestore();
 			clearIntervalSpy.mockRestore();
+		}
+	});
+
+	it("releases progress leases when a command completes or fails", () => {
+		for (const outcome of ["complete", "failed"] as const) {
+			const root = cacheRoot();
+			const progress = new CommandProgress("test", {
+				cacheRoot: root,
+				quiet: true,
+			});
+			expect(inspectMaligatorCache(root).activeLeases).toBe(1);
+			progress[outcome]();
+			expect(inspectMaligatorCache(root).activeLeases).toBe(0);
 		}
 	});
 

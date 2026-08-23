@@ -12,7 +12,7 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-url-globals-"));
 
-describe("Node URL globals without the broader web surface", () => {
+describe("Node shared globals without the broader web surface", () => {
 	let binaries: Array<string>;
 
 	beforeAll(() => {
@@ -29,7 +29,7 @@ describe("Node URL globals without the broader web surface", () => {
 		);
 	}, 600_000);
 
-	it("provides URL and URLSearchParams", () => {
+	it("provides URL, URLSearchParams, TextEncoder, and TextDecoder", () => {
 		for (const binary of binaries) assertResultPass(runToStdout(binary));
 	});
 

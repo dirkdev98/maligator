@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { createCacheLease, maybeMaintainMaligatorCache } from "./cache-management.ts";
+import type { CacheLease } from "./cache-management.ts";
 
 export function formatCommandDuration(durationMs: number): string {
 	if (durationMs < 1000) return `${Math.max(0, Math.round(durationMs))}ms`;
@@ -13,6 +14,7 @@ export interface CommandProgressOptions {
 	stream?: NodeJS.WriteStream;
 	quiet?: boolean;
 	cacheLease?: boolean;
+	cacheRoot?: string;
 }
 
 /** Stable, non-interactive progress shared by repository and product commands. */
@@ -22,6 +24,15 @@ export class CommandProgress {
 	readonly #quiet: boolean;
 	readonly #startedAt = performance.now();
 	#stageStartedAt = this.#startedAt;
+	#cacheLease?: CacheLease;
+
+	readonly #releaseCacheLease = (): void => {
+		const lease = this.#cacheLease;
+		if (lease === undefined) return;
+		this.#cacheLease = undefined;
+		lease.release();
+		process.removeListener("exit", this.#releaseCacheLease);
+	};
 
 	constructor(name: string, options: CommandProgressOptions = {}) {
 		this.name = name;
@@ -34,8 +45,8 @@ export class CommandProgress {
 				// Another live command or maintenance pass owns the cache. The lease
 				// below remains the concurrency authority; automatic pruning is optional.
 			}
-			const lease = createCacheLease(name);
-			process.once("exit", () => lease.release());
+			this.#cacheLease = createCacheLease(name, options.cacheRoot);
+			process.once("exit", this.#releaseCacheLease);
 		}
 	}
 
@@ -80,9 +91,11 @@ export class CommandProgress {
 
 	complete(label = "completed"): void {
 		this.#write(`${label} in ${formatCommandDuration(this.elapsedMs)}`);
+		this.#releaseCacheLease();
 	}
 
 	failed(label = "failed"): void {
 		this.#write(`${label} after ${formatCommandDuration(this.elapsedMs)}`);
+		this.#releaseCacheLease();
 	}
 }

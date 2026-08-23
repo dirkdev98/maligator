@@ -67,6 +67,7 @@ export function compileEntrypoint(
 			for (const diagnostic of collectPrimordialMutationDiagnostics(
 				result,
 				facts!.world,
+				{ nodeEnabled: options.buildConfig.surface.node },
 			)) {
 				options.onDiagnostic?.(diagnostic);
 			}

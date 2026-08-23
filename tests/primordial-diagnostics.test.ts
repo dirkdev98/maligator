@@ -4,11 +4,16 @@ import { collectPrimordialMutationDiagnostics } from "../src/compiler/frontend/p
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { worldFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 
-function diagnostics(source: string, policy: "locked" | "mutable" = "locked") {
+function diagnostics(
+	source: string,
+	policy: "locked" | "mutable" = "locked",
+	nodeEnabled = false,
+) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "diagnostic.js");
 	return collectPrimordialMutationDiagnostics(
 		semantic,
 		worldFactsFromConfig(resolveBuildConfig({ engine: { primordials: policy } })),
+		{ nodeEnabled },
 	);
 }
 
@@ -54,5 +59,19 @@ user.extra = 1;
 
 	it("is disabled completely in mutable builds", () => {
 		expect(diagnostics("Math.extra = 1", "mutable")).toEqual([]);
+	});
+
+	it("allows the locked Node Error hooks that the runtime setters preserve", () => {
+		const source = `
+Error.prepareStackTrace = prepare;
+Error.stackTraceLimit = 20;
+Error.captureStackTrace = replacement;
+delete Error.prepareStackTrace;
+`;
+		expect(diagnostics(source, "locked", true).map(({ message }) => message)).toEqual([
+			expect.stringContaining("Error.captureStackTrace"),
+			expect.stringContaining("Error.prepareStackTrace"),
+		]);
+		expect(diagnostics(source, "locked", false)).toHaveLength(4);
 	});
 });
