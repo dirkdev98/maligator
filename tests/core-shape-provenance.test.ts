@@ -694,7 +694,7 @@ describe("Core shaped-object provenance", () => {
 		expect(analysis.statistics.saturatedValues).toBeGreaterThan(0);
 	});
 
-	it("keeps constructor return candidates guarded and excludes spread/coroutine results", () => {
+	it("relays spread-call results while guarding construct and excluding coroutine results", () => {
 		const ordinary = shapedReturn(0, 1);
 		const asyncTarget = shapedReturn(1, 2, { isAsync: true });
 		const generatorTarget = shapedReturn(2, 3, { isGenerator: true });
@@ -709,6 +709,7 @@ describe("Core shaped-object provenance", () => {
 			[0, "construct"],
 			[0, "constructSpread"],
 			[0, "callSpread"],
+			[0, "callSpreadIterable"],
 			[1, "call"],
 			[2, "call"],
 		] as const) {
@@ -720,7 +721,7 @@ describe("Core shaped-object provenance", () => {
 					? [callee!]
 					: opcode === "constructSpread"
 						? [callee!, argumentsObject!]
-						: opcode === "callSpread"
+						: opcode === "callSpread" || opcode === "callSpreadIterable"
 							? [callee!, thisValue!, argumentsObject!]
 							: [callee!, thisValue!];
 			results.push(caller.appendInstruction(entry, opcode, inputs)[0]!);
@@ -741,7 +742,14 @@ describe("Core shaped-object provenance", () => {
 			expect(constructed.origins[0]!.keyStringIndices).toEqual([1]);
 			expect(constructed.opaque).toBe(true);
 		}
-		for (const result of results.slice(2)) {
+		for (const result of results.slice(2, 4)) {
+			const called = analysis.candidates(3, result);
+			expect(called.origins).toHaveLength(1);
+			expect(called.origins[0]!.functionIndex).toBe(0);
+			expect(called.origins[0]!.keyStringIndices).toEqual([1]);
+			expect(called.opaque).toBe(false);
+		}
+		for (const result of results.slice(4)) {
 			expect(analysis.candidates(3, result)).toEqual({
 				origins: [],
 				opaque: true,
@@ -907,6 +915,44 @@ describe("Core shaped-object provenance", () => {
 });
 
 describe("Core known own-slot selection", () => {
+	it("publishes guarded loop loads through both spread-call forms", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(count) {
+					const Factory = function (value) { return { x: value }; };
+					const iterable = Factory(...[2]);
+					const packed = Factory(3, ...[]);
+					let total = 0;
+					for (let index = 0; index < count; index++) total += iterable.x + packed.x;
+					return total;
+				}
+				run(4);`,
+				"shape-spread-call-return-relay.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		for (const opcode of ["callSpread", "callSpreadIterable"] as const) {
+			const call = optimized.functions.flatMap((fn) => instructions(fn, opcode)).at(0);
+			expect(call).toBeDefined();
+			const owner = optimized.functions.find((fn) =>
+				fn.blocks.some((block) => block.instructions.includes(call!)),
+			)!;
+			expect(
+				analyzeCoreShapeProvenance(optimized).candidates(
+					owner.functionIndex,
+					call!.outputs[0]!,
+				).origins,
+			).toHaveLength(1);
+		}
+		expect(
+			optimized.functions
+				.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
+				.filter((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes),
+		).toHaveLength(2);
+	});
+
 	it("publishes a guarded loop load through explicit constructor object completion", () => {
 		const initial = lowerSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(

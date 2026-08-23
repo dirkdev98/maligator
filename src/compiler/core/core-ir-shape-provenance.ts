@@ -256,10 +256,12 @@ function valueLimit(fn: CoreFunction): number {
  * Find the initial shaped-object origins that may reach each Core SSA value.
  *
  * The callee-target result is an input proof, not copied metadata. A finite
- * target wires actual arguments to that function's ABI parameters and its
- * ordinary returns back to the call result. An open target keeps those advisory
- * edges while opening the result; unknown callers are represented by the open
- * seeds on every formal and `loadThis` value.
+ * target wires explicit ordinary-call arguments to that function's ABI
+ * parameters and its ordinary returns back to the call result. Spread argument
+ * packs remain open, but their receiver and result flow are still useful. An
+ * open target keeps those advisory edges while opening the result; unknown
+ * callers are represented by the open seeds on every formal and `loadThis`
+ * value.
  */
 export function analyzeCoreShapeProvenance(
 	program: CoreProgram,
@@ -545,12 +547,15 @@ export function analyzeCoreShapeProvenance(
 					continue;
 				}
 				if (
-					instruction.opcode === "call" &&
+					(instruction.opcode === "call" ||
+						instruction.opcode === "callSpread" ||
+						instruction.opcode === "callSpreadIterable") &&
 					instruction.inputs.length >= 2 &&
 					instruction.outputs.length === 1
 				) {
 					const result = node(instruction.outputs[0]!);
 					const flattenedFunctionCall =
+						instruction.opcode === "call" &&
 						instruction.attributes.directFunctionCall === true;
 					const targetValue = flattenedFunctionCall
 						? instruction.inputs[1]!
@@ -578,10 +583,12 @@ export function analyzeCoreShapeProvenance(
 								addEdge(node(targetReceiver), destination);
 							}
 						}
-						for (const [index, parameter] of target.parameters.entries()) {
-							const argument = instruction.inputs[index + firstTargetArgument];
-							if (argument !== undefined) {
-								addEdge(node(argument), valueNode(targetIndex, parameter));
+						if (instruction.opcode === "call") {
+							for (const [index, parameter] of target.parameters.entries()) {
+								const argument = instruction.inputs[index + firstTargetArgument];
+								if (argument !== undefined) {
+									addEdge(node(argument), valueNode(targetIndex, parameter));
+								}
 							}
 						}
 						if (target.isAsync || target.isGenerator) {

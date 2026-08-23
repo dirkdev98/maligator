@@ -216,4 +216,43 @@ ok(
 	proxyConstructorReturn.total === 28 && proxyConstructorReturn.proxyGetCalls === 4,
 );
 
+const spreadCallReturnRelay = function (proxyCallee) {
+	const Factory = function (value) {
+		return { x: value };
+	};
+	let callee = Factory;
+	let proxyGetCalls = 0;
+	if (proxyCallee) {
+		callee = new Proxy(Factory, {
+			apply(_target, _receiver, argumentsList) {
+				return new Proxy(
+					{ x: argumentsList[0] + 1 },
+					{
+						get(target, key) {
+							proxyGetCalls++;
+							return target[key];
+						},
+					},
+				);
+			},
+		});
+	}
+	const argumentsList = [6];
+	const produced = callee(...argumentsList);
+	let total = 0;
+	for (let index = 0; index < 4; index++) total += produced.x;
+	return { total, proxyGetCalls };
+};
+
+const directSpreadCallReturn = spreadCallReturnRelay(false);
+ok(
+	"spread-call object return shape relay hit",
+	directSpreadCallReturn.total === 24 && directSpreadCallReturn.proxyGetCalls === 0,
+);
+const proxySpreadCallReturn = spreadCallReturnRelay(true);
+ok(
+	"spread-call object return shape relay fallback",
+	proxySpreadCallReturn.total === 28 && proxySpreadCallReturn.proxyGetCalls === 4,
+);
+
 console.log("captured-known-own-slot PASS");
