@@ -222,6 +222,10 @@ int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written) {
     return 0;
 }
 
+int mal_posix_fs_close_fd(int fd) {
+    return close(fd) == 0 ? 0 : errno;
+}
+
 static void mal_posix_fs_copy_stat(const struct stat *st, MalPosixStat *out) {
     out->type = mal_posix_ft_from_mode(st->st_mode);
     out->dev = (f64) st->st_dev;

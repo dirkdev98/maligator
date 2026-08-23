@@ -173,6 +173,19 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds closeSync through the node:fs installer", () => {
+		const def = compile(
+			`import { closeSync } from "node:fs";\nglobalThis.sink = closeSync;\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_fs",
+				exports: [expect.objectContaining({ name: "closeSync" })],
+			}),
+		]);
+	});
+
 	it("binds V8 flags and VM context helpers through separate installers", () => {
 		const def = compile(
 			`import { setFlagsFromString } from "node:v8";\nimport { runInNewContext } from "node:vm";\nglobalThis.sink = [setFlagsFromString, runInNewContext];\n`,

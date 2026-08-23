@@ -2,6 +2,7 @@ import {
 	Stats,
 	appendFileSync,
 	chmodSync,
+	closeSync,
 	copyFileSync,
 	existsSync,
 	lstatSync,
@@ -48,6 +49,19 @@ function rejectsNul(name: string, operation: () => unknown): void {
 	}
 	check(name, rejected);
 }
+
+let closeError: NodeJS.ErrnoException | undefined;
+try {
+	closeSync(0x7fffffff);
+} catch (error) {
+	closeError = error as NodeJS.ErrnoException;
+}
+check(
+	"closeSync exposes descriptor errors without a fake path",
+	closeError?.code === "EBADF" &&
+		closeError.syscall === "close" &&
+		!("path" in closeError),
+);
 
 const root = `/tmp/maligator-node-fs-${Date.now()}`;
 const nested = `${root}/a/b`;

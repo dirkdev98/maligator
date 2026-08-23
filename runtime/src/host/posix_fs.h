@@ -66,6 +66,9 @@ int mal_posix_fs_chmod(const char *path, u32 mode);
 /* Write all bytes to an open descriptor. Returns 0 or an errno. */
 int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written);
 
+/* Close an open descriptor. Returns 0 or an errno. */
+int mal_posix_fs_close_fd(int fd);
+
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */
 int mal_posix_fs_stat(const char *path, MalPosixStat *out);
 
