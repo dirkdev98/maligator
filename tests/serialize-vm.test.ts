@@ -201,6 +201,7 @@ const mainFn: VmFunction = {
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: true,
+	literalShapeCount: 1,
 	instructions,
 	handlers: [{ startIp: 10, endIp: 19, handlerIp: 20 }],
 	fileIndex: 0,
@@ -226,6 +227,7 @@ const genFn: VmFunction = {
 	isDerivedConstructor: true,
 	isClassConstructor: true,
 	hasPrototype: false,
+	literalShapeCount: 0,
 	instructions: [
 		{ opcode: "ASYNC_START" },
 		{ opcode: "AWAIT", awaitedSrc: 0, valueDst: 1, modeDst: 2 },
@@ -250,6 +252,7 @@ const definition: VmDefinition = {
 	],
 	bigintConstants: [42n, -((1n << 100n) + 7n)],
 	literalTemplateData: [8, 2, 5, 1, 4, 0, 0x80000000],
+	precompiledLiteralShapes: [],
 	globalCount: 6,
 	files: ["compiled://a.js", "compiled://b.ts"],
 	sourcePositions: [
@@ -400,9 +403,14 @@ function knownOwnSlotDefinition(): VmDefinition {
 	];
 	return {
 		...base,
+		precompiledLiteralShapes: [
+			{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1] },
+			{ functionIndex: 0, shapeCacheIndex: 1, keyStringIndices: [1] },
+		],
 		functions: [
 			{
 				...fn,
+				literalShapeCount: 2,
 				instructions,
 				positions: instructions.map(() => 0),
 				regions: undefined,
@@ -437,6 +445,8 @@ describe("serialize-vm", () => {
 		const valid = knownOwnSlotDefinition();
 		const wire = serializeVmDefinition(valid, { debugInfo: false });
 		const restored = deserializeVmDefinition(wire);
+		expect(restored.precompiledLiteralShapes).toEqual(valid.precompiledLiteralShapes);
+		expect(restored.functions[0]!.literalShapeCount).toBe(2);
 		expect(
 			restored.functions[0]!.instructions.find(
 				(instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
@@ -545,6 +555,52 @@ describe("serialize-vm", () => {
 		expect(() => deserializeVmDefinition(tampered)).toThrow(
 			/invalid known-own-slot access/,
 		);
+	});
+
+	it("validates portable precompiled shape descriptors independently of bytecode", () => {
+		const valid = knownOwnSlotDefinition();
+		expect(() =>
+			serializeVmDefinition({ ...valid, precompiledLiteralShapes: [] }),
+		).toThrow(/invalid known-own-slot access/);
+		expect(() =>
+			serializeVmDefinition({
+				...valid,
+				precompiledLiteralShapes: [
+					valid.precompiledLiteralShapes[0]!,
+					valid.precompiledLiteralShapes[0]!,
+				],
+			}),
+		).toThrow(/invalid precompiled literal shape/);
+
+		for (const units of [[0x30], [..."__proto__"].map((unit) => unit.charCodeAt(0))]) {
+			expect(() =>
+				serializeVmDefinition({
+					...valid,
+					stringConstants: [...valid.stringConstants, units],
+					precompiledLiteralShapes: [
+						{
+							functionIndex: 0,
+							shapeCacheIndex: 0,
+							keyStringIndices: [valid.stringConstants.length],
+						},
+					],
+				}),
+			).toThrow(/invalid precompiled literal shape/);
+		}
+
+		expect(() =>
+			serializeVmDefinition({
+				...valid,
+				stringConstants: [...valid.stringConstants, [...valid.stringConstants[0]!]],
+				precompiledLiteralShapes: [
+					{
+						functionIndex: 0,
+						shapeCacheIndex: 0,
+						keyStringIndices: [0, valid.stringConstants.length],
+					},
+				],
+			}),
+		).toThrow(/invalid precompiled literal shape/);
 	});
 
 	it("round-trips a definition with debug info", () => {
@@ -1130,6 +1186,7 @@ describe("serialize-vm", () => {
 			stringConstants: [],
 			bigintConstants: [],
 			literalTemplateData: [],
+			precompiledLiteralShapes: [],
 			globalCount: 0,
 			files: [],
 			sourcePositions: [],

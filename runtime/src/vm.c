@@ -71,7 +71,7 @@ void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
 }
 
 static void mal_vm_materialize_precompiled_literal_shapes(
-    MalVm *vm, const MalVmDefinition *definition, i32 function_base);
+    MalVm *vm, const MalVmDefinition *definition, i32 function_base, i32 string_base);
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
 #define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
@@ -659,7 +659,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     // A guarded own-slot load may execute before its source allocation site.
     // Build only those named literal shapes now, after their canonical atoms
     // exist, so both compiled and interpreted guards can hit on first use.
-    mal_vm_materialize_precompiled_literal_shapes(vm, definition, 0);
+    mal_vm_materialize_precompiled_literal_shapes(vm, definition, 0, 0);
     for (u32 i = 0; i < MAL_HOT_KEY_COUNT; i++) {
         vm->hot_intrinsic_keys[i] = nullptr;
     }
@@ -1393,7 +1393,7 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
 
     // Spliced functions may execute guarded loads before their own literal
     // origins. Their strings and function rows are now fully rebased and live.
-    mal_vm_materialize_precompiled_literal_shapes(vm, loaded, fn_base);
+    mal_vm_materialize_precompiled_literal_shapes(vm, loaded, fn_base, string_base);
 
     return fn_base;
 }
@@ -4352,13 +4352,12 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
 
 /**
  * Intern portable literal-shape descriptors into this VM's dense cache. Static
- * compiled output emits the compact table directly; the wire loader derives the
- * same table from validated bytecode before compiled functions may discard it.
+ * compiled output and the wire format carry the same portable table directly.
  * Keep this startup/splice-only path after the runtime's hot call machinery so
  * it does not perturb that code's layout.
  */
 static void mal_vm_materialize_precompiled_literal_shapes(
-    MalVm *vm, const MalVmDefinition *definition, i32 function_base
+    MalVm *vm, const MalVmDefinition *definition, i32 function_base, i32 string_base
 ) {
     for (i32 index = 0; index < definition->precompiled_literal_shape_count; index++) {
         const MalPrecompiledLiteralShape *descriptor =
@@ -4379,7 +4378,7 @@ static void mal_vm_materialize_precompiled_literal_shapes(
         MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
         bool valid = true;
         for (i32 key = 0; key < descriptor->key_count; key++) {
-            i32 string_index = descriptor->key_string_indices[key];
+            i32 string_index = descriptor->key_string_indices[key] + string_base;
             if (string_index < 0
                 || string_index >= vm->definition->string_constant_count
                 || vm->string_constant_atoms[string_index] == nullptr) {

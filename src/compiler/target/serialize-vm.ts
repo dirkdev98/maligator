@@ -36,7 +36,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 21;
+export const WIRE_VERSION = 22;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -869,6 +869,14 @@ export function serializeVmDefinition(
 		writeFunction(w, fn, debug);
 	}
 
+	// Portable rows that must be interned before guarded own-slot accesses run.
+	w.u32(def.precompiledLiteralShapes.length);
+	for (const descriptor of def.precompiledLiteralShapes) {
+		w.i32(descriptor.functionIndex);
+		w.i32(descriptor.shapeCacheIndex);
+		w.i32Array([...descriptor.keyStringIndices]);
+	}
+
 	// Debug-info definition tables.
 	if (debug) {
 		w.u32(def.files.length);
@@ -1305,6 +1313,7 @@ function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	w.i32(fn.registerCount);
 	w.i32(fn.capturedCount);
 	w.i32(debug ? fn.fileIndex : 0);
+	w.u32(fn.literalShapeCount);
 
 	w.u32(fn.instructions.length);
 	for (const instruction of fn.instructions) {
@@ -1386,6 +1395,9 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 				expectedLiteralShape++;
 				break;
 		}
+	}
+	if (expectedLiteralShape > fn.literalShapeCount) {
+		throw new RangeError("serialize-vm: literal shape count is too small");
 	}
 }
 
@@ -2873,6 +2885,15 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	for (let f = 0; f < functionCount; ++f) {
 		functions.push(readFunction(r));
 	}
+	const precompiledLiteralShapeCount = r.count(3);
+	const precompiledLiteralShapes: VmDefinition["precompiledLiteralShapes"] = [];
+	for (let shape = 0; shape < precompiledLiteralShapeCount; shape++) {
+		precompiledLiteralShapes.push({
+			functionIndex: r.i32(),
+			shapeCacheIndex: r.i32(),
+			keyStringIndices: r.i32Array(),
+		});
+	}
 
 	const files: Array<string> = [];
 	const sourcePositions: VmDefinition["sourcePositions"] = [];
@@ -3686,6 +3707,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		stringConstants,
 		bigintConstants,
 		literalTemplateData,
+		precompiledLiteralShapes,
 		globalCount,
 		...(semanticProtectors.length === 0 ? {} : { semanticProtectors }),
 		hostInstalls,
@@ -3720,11 +3742,12 @@ function readFunction(r: Reader): VmFunction {
 	const registerCount = r.i32();
 	const capturedCount = r.i32();
 	const fileIndex = r.i32();
+	const literalShapeCount = r.count(1);
 
 	const instructionCount = r.count(1);
 	const instructions: Array<VmInstruction> = [];
 	let propertyIcCount = 0;
-	let literalShapeCount = 0;
+	let physicalLiteralShapeCount = 0;
 	for (let i = 0; i < instructionCount; ++i) {
 		const instruction = readInstruction(r);
 		switch (instruction.opcode) {
@@ -3737,7 +3760,7 @@ function readFunction(r: Reader): VmFunction {
 				instruction.icIndex = propertyIcCount++;
 				break;
 			case "CREATE_OBJECT_SHAPED":
-				instruction.shapeCacheIndex = literalShapeCount++;
+				instruction.shapeCacheIndex = physicalLiteralShapeCount++;
 				break;
 		}
 		instructions.push(instruction);
@@ -3773,6 +3796,7 @@ function readFunction(r: Reader): VmFunction {
 		isDerivedConstructor,
 		isClassConstructor,
 		hasPrototype,
+		literalShapeCount,
 		instructions,
 		handlers,
 		fileIndex,

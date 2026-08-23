@@ -640,6 +640,8 @@ export interface VmDefinition {
 	stringConstants: Array<Array<number>>;
 	bigintConstants: Array<bigint>;
 	literalTemplateData: Array<number>;
+	/** Portable shape rows eagerly interned for guarded own-slot accesses. */
+	precompiledLiteralShapes: Array<VmPrecompiledLiteralShape>;
 	globalCount: number;
 	/** Runtime-backed facts retained for native emission. Hand-built
 	 * definitions may omit them and conservatively decline those transforms. */
@@ -688,6 +690,12 @@ export interface VmDefinition {
 		installer: string;
 		exports: Array<{ name: string; slot: number }>;
 	}>;
+}
+
+export interface VmPrecompiledLiteralShape {
+	readonly functionIndex: number;
+	readonly shapeCacheIndex: number;
+	readonly keyStringIndices: ReadonlyArray<number>;
 }
 
 /**
@@ -784,6 +792,9 @@ export interface VmFunction {
 	 * runtime by kind.)
 	 */
 	hasPrototype: boolean;
+
+	/** Number of VM-local entries in this function's literal-shape cache. */
+	literalShapeCount: number;
 
 	instructions: Array<VmInstruction>;
 	handlers: Array<VmExceptionHandler>;
@@ -1701,14 +1712,6 @@ export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>)
 	return count;
 }
 
-export function countLiteralShapeSites(
-	instructions: ReadonlyArray<VmInstruction>,
-): number {
-	return instructions.filter(
-		(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",
-	).length;
-}
-
 export interface VmDefinitionStats {
 	functionCount: number;
 	instructionCount: number;
@@ -1723,8 +1726,90 @@ function isNonnegativeSafeInteger(value: unknown): value is number {
 	);
 }
 
+function vmNamedShapeKeyIdentity(units: ReadonlyArray<number>): string | undefined {
+	if (
+		units.length === 9 &&
+		units.every((unit, offset) => unit === "__proto__".charCodeAt(offset))
+	) {
+		return undefined;
+	}
+	if (units.length > 0 && !(units.length > 1 && units[0] === 0x30)) {
+		let index = 0;
+		let digits = true;
+		for (const unit of units) {
+			if (unit < 0x30 || unit > 0x39) {
+				digits = false;
+				break;
+			}
+			index = index * 10 + (unit - 0x30);
+			if (index > 0xffff_ffff) {
+				digits = false;
+				break;
+			}
+		}
+		if (digits && index !== 0xffff_ffff) return undefined;
+	}
+	return units.join(",");
+}
+
 /** Reject malformed VM-level guarded slot references at every output boundary. */
 export function validateVmKnownOwnSlots(definition: VmDefinition): void {
+	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
+	for (const descriptor of definition.precompiledLiteralShapes) {
+		const { functionIndex, shapeCacheIndex, keyStringIndices } = descriptor;
+		const functionEntry = definition.functions[functionIndex];
+		const identity = `${functionIndex}\0${shapeCacheIndex}`;
+		if (
+			!isNonnegativeSafeInteger(functionIndex) ||
+			!isNonnegativeSafeInteger(shapeCacheIndex) ||
+			functionEntry === undefined ||
+			shapeCacheIndex >= functionEntry.literalShapeCount ||
+			!Array.isArray(keyStringIndices) ||
+			keyStringIndices.length < 1 ||
+			keyStringIndices.length > 64 ||
+			keyStringIndices.some(
+				(index) =>
+					!isNonnegativeSafeInteger(index) || index >= definition.stringConstants.length,
+			) ||
+			descriptors.has(identity)
+		) {
+			throw new RangeError("invalid precompiled literal shape");
+		}
+		const canonicalKeys = new Set<string>();
+		for (const index of descriptor.keyStringIndices) {
+			const units = definition.stringConstants[index]!;
+			const key = vmNamedShapeKeyIdentity(units);
+			if (key === undefined || canonicalKeys.has(key)) {
+				throw new RangeError("invalid precompiled literal shape");
+			}
+			canonicalKeys.add(key);
+		}
+		descriptors.set(identity, descriptor);
+	}
+	for (const fn of definition.functions) {
+		let physicalShapeCount = 0;
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode !== "CREATE_OBJECT_SHAPED") continue;
+			if (instruction.shapeCacheIndex !== physicalShapeCount) {
+				throw new RangeError(
+					`literal shape index ${instruction.shapeCacheIndex}, expected ${physicalShapeCount}`,
+				);
+			}
+			if (
+				instruction.count !== instruction.keyStringIndices.length ||
+				instruction.count !== instruction.valueRegisters.length
+			) {
+				throw new RangeError("invalid shaped object operands");
+			}
+			physicalShapeCount++;
+		}
+		if (
+			!isNonnegativeSafeInteger(fn.literalShapeCount) ||
+			physicalShapeCount > fn.literalShapeCount
+		) {
+			throw new RangeError("invalid literal shape cache layout");
+		}
+	}
 	for (const fn of definition.functions) {
 		for (const instruction of fn.instructions) {
 			if (
@@ -1760,21 +1845,12 @@ export function validateVmKnownOwnSlots(definition: VmDefinition): void {
 					throw new RangeError("invalid known-own-slot access");
 				}
 				const identity = `${shapeFunctionIndex}\0${shapeCacheIndex}`;
-				const sourceFunction = definition.functions[shapeFunctionIndex];
-				const sourceInstructions = sourceFunction?.instructions.filter(
-					(source) =>
-						source.opcode === "CREATE_OBJECT_SHAPED" &&
-						source.shapeCacheIndex === shapeCacheIndex,
-				);
-				const sourceInstruction = sourceInstructions?.[0];
+				const descriptor = descriptors.get(identity);
 				if (
 					identities.has(identity) ||
-					sourceInstructions?.length !== 1 ||
-					sourceInstruction?.opcode !== "CREATE_OBJECT_SHAPED" ||
-					sourceInstruction.count !== sourceInstruction.keyStringIndices.length ||
-					sourceInstruction.count !== sourceInstruction.valueRegisters.length ||
-					slot >= sourceInstruction.count ||
-					sourceInstruction.keyStringIndices[slot] !== instruction.stringIndex
+					descriptor === undefined ||
+					slot >= descriptor.keyStringIndices.length ||
+					descriptor.keyStringIndices[slot] !== instruction.stringIndex
 				) {
 					throw new RangeError("invalid known-own-slot access");
 				}
@@ -1889,12 +1965,14 @@ export function lowerCoreProgramToVmDefinition(
 		return index;
 	};
 	const literalShapeOrigins = buildLiteralShapeOrigins(program.functions);
+	const precompiledLiteralShapes = new Map<string, VmPrecompiledLiteralShape>();
 	const functions = program.functions.map((fn, index) =>
 		lowerFunctionToVmFunction(
 			fn,
 			fileIndexFor(fn.sourcePath),
 			core.stringConstants,
 			literalShapeOrigins,
+			precompiledLiteralShapes,
 			profile ? compilation.facts.instructionSites : undefined,
 			program.gcRootRegisters[index],
 		),
@@ -1907,6 +1985,7 @@ export function lowerCoreProgramToVmDefinition(
 		stringConstants: core.stringConstants.map((units) => [...units]),
 		bigintConstants: [...core.bigintConstants],
 		literalTemplateData: [...core.literalTemplateData],
+		precompiledLiteralShapes: [...precompiledLiteralShapes.values()],
 		globalCount: core.globalCount,
 		semanticProtectors: (
 			["primitive-methods", "watched-methods", "array-elements"] as const
@@ -2006,6 +2085,7 @@ function lowerFunctionToVmFunction(
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	literalShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmLiteralShapeOrigin>>,
+	precompiledLiteralShapes: Map<string, VmPrecompiledLiteralShape>,
 	instructionSites?: WeakMap<object, { id: string }>,
 	gcRootRegisters?: ReadonlyArray<number>,
 ): VmFunction {
@@ -2095,6 +2175,12 @@ function lowerFunctionToVmFunction(
 							`Invalid known-own-slot access origin ${shapeFunctionIndex}:${shapeInstruction}:${slot}`,
 						);
 					}
+					const identity = `${shapeFunctionIndex}\0${origin.shapeCacheIndex}`;
+					precompiledLiteralShapes.set(identity, {
+						functionIndex: shapeFunctionIndex,
+						shapeCacheIndex: origin.shapeCacheIndex,
+						keyStringIndices: [...origin.instruction.keyStringIndices],
+					});
 					return { shapeFunctionIndex, shapeCacheIndex: origin.shapeCacheIndex, slot };
 				});
 				vmInstruction =
@@ -3598,6 +3684,7 @@ function lowerFunctionToVmFunction(
 		isDerivedConstructor: fn.isDerivedConstructor,
 		isClassConstructor: fn.isClassConstructor,
 		hasPrototype: fn.hasPrototype,
+		literalShapeCount,
 		instructions,
 		handlers,
 		fileIndex,

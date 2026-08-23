@@ -18,7 +18,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 21u
+#define WIRE_VERSION 22u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in
@@ -1426,6 +1426,7 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     fn->register_count = rd_i32(r);
     fn->captured_count = rd_i32(r);
     fn->file_index = rd_i32(r);
+    fn->literal_shape_count = (i32) rd_count(r, 1);
     if (fn->parameter_count < 0 || fn->register_count < fn->parameter_count ||
         fn->argument_snapshot_count > fn->register_count - fn->parameter_count ||
         fn->captured_count < 0 || fn->mapped_argument_count > fn->parameter_count ||
@@ -1452,7 +1453,7 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
         rd_instruction(r, &instructions[i], &side_data);
     }
     fn->property_ic_count = 0;
-    fn->literal_shape_count = 0;
+    i32 physical_literal_shape_count = 0;
     for (u32 i = 0; r->ok && i < instruction_count; i++) {
         switch (instructions[i].opcode) {
             case MAL_OP_LOAD_PROPERTY:
@@ -1477,11 +1478,14 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
                 break;
             case MAL_OP_CREATE_OBJECT_SHAPED:
                 instructions[i].as.create_object_shaped.shape_cache_index =
-                    fn->literal_shape_count++;
+                    physical_literal_shape_count++;
                 break;
             default:
                 break;
         }
+    }
+    if (physical_literal_shape_count > fn->literal_shape_count) {
+        r->ok = false;
     }
     fn->instructions = instructions;
     fn->argument_retention_limit = -1;
@@ -1650,9 +1654,59 @@ static i32 mal_loaded_known_own_slot_offset(const MalInstruction *instruction) {
     return -1;
 }
 
+static const MalPrecompiledLiteralShape *mal_loaded_literal_shape(
+    const MalVmDefinition *definition, i32 function_index, i32 shape_cache_index
+) {
+    const MalPrecompiledLiteralShape *result = nullptr;
+    for (i32 index = 0; index < definition->precompiled_literal_shape_count; index++) {
+        const MalPrecompiledLiteralShape *candidate =
+            &definition->precompiled_literal_shapes[index];
+        if (candidate->function_index != function_index ||
+            candidate->shape_cache_index != shape_cache_index) {
+            continue;
+        }
+        if (result != nullptr) return nullptr;
+        result = candidate;
+    }
+    return result;
+}
+
+static bool mal_loaded_shape_key_is_named(const MalString *string) {
+    static const char proto[] = "__proto__";
+    if (string->length == sizeof(proto) - 1) {
+        bool equal = true;
+        for (usize index = 0; index < sizeof(proto) - 1; index++) {
+            if (string->code_units[index] != (u8) proto[index]) {
+                equal = false;
+                break;
+            }
+        }
+        if (equal) return false;
+    }
+    if (string->length == 0 ||
+        (string->length > 1 && string->code_units[0] == (c16) '0')) {
+        return true;
+    }
+    u64 value = 0;
+    for (usize index = 0; index < string->length; index++) {
+        c16 unit = string->code_units[index];
+        if (unit < (c16) '0' || unit > (c16) '9') return true;
+        value = value * 10 + (u64) (unit - (c16) '0');
+        if (value > UINT32_MAX) return true;
+    }
+    return value == UINT32_MAX;
+}
+
+static bool mal_loaded_strings_equal(const MalString *left, const MalString *right) {
+    if (left->length != right->length) return false;
+    for (usize index = 0; index < left->length; index++) {
+        if (left->code_units[index] != right->code_units[index]) return false;
+    }
+    return true;
+}
+
 static bool mal_loaded_known_own_slot_valid(
-    const MalFunction *functions,
-    u32 function_count,
+    const MalVmDefinition *definition,
     u32 string_count,
     const MalFunction *owner,
     const MalInstruction *instruction
@@ -1671,7 +1725,8 @@ static bool mal_loaded_known_own_slot_valid(
         i32 shape_function_index = data[2 + index * 3];
         i32 shape_cache_index = data[3 + index * 3];
         i32 slot = data[4 + index * 3];
-        if (shape_function_index < 0 || shape_function_index >= (i32) function_count ||
+        if (shape_function_index < 0 ||
+            shape_function_index >= definition->function_count ||
             shape_cache_index < 0 || slot < 0) {
             return false;
         }
@@ -1681,118 +1736,14 @@ static bool mal_loaded_known_own_slot_valid(
                 return false;
             }
         }
-        const MalFunction *source = &functions[shape_function_index];
-        if (shape_cache_index >= source->literal_shape_count) return false;
-        const MalInstruction *origin = nullptr;
-        i32 origin_count = 0;
-        for (i32 ip = 0; ip < source->instruction_count; ip++) {
-            const MalInstruction *candidate = &source->instructions[ip];
-            if (candidate->opcode == MAL_OP_CREATE_OBJECT_SHAPED &&
-                candidate->as.create_object_shaped.shape_cache_index == shape_cache_index) {
-                origin = candidate;
-                origin_count++;
-            }
-        }
-        if (origin_count != 1) return false;
-        i32 source_offset = origin->as.create_object_shaped.data_offset;
-        if (source_offset < 0 || source_offset >= source->instruction_data_count) return false;
-        i32 count = source->instruction_data[source_offset];
-        if (slot >= count || source_offset > source->instruction_data_count - 1 - count ||
-            source->instruction_data[source_offset + 1 + slot] != string_index) {
+        const MalPrecompiledLiteralShape *shape = mal_loaded_literal_shape(
+            definition, shape_function_index, shape_cache_index);
+        if (shape == nullptr || slot >= shape->key_count ||
+            shape->key_string_indices[slot] != string_index) {
             return false;
         }
     }
     return true;
-}
-
-static void mal_loaded_build_precompiled_literal_shapes(
-    MalLoadedDefinition *loaded, Rd *reader, MalVmDefinition *definition
-) {
-    i32 capacity = 0;
-    for (i32 function_index = 0;
-         reader->ok && function_index < definition->function_count;
-         function_index++) {
-        const MalFunction *function = &definition->functions[function_index];
-        for (i32 ip = 0; ip < function->instruction_count; ip++) {
-            if (function->instructions[ip].opcode ==
-                    MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT ||
-                function->instructions[ip].opcode ==
-                    MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
-                i32 offset = mal_loaded_known_own_slot_offset(
-                    &function->instructions[ip]);
-                i32 candidate_count = function->instruction_data[offset + 1];
-                if (candidate_count > INT32_MAX - capacity) {
-                    reader->ok = false;
-                    return;
-                }
-                capacity += candidate_count;
-            }
-        }
-    }
-    if (!reader->ok || capacity == 0) return;
-
-    MalPrecompiledLiteralShape *shapes = arena_array(
-        loaded, reader, (usize) capacity,
-        sizeof(MalPrecompiledLiteralShape), alignof(MalPrecompiledLiteralShape));
-    i32 count = 0;
-    for (i32 function_index = 0;
-         reader->ok && function_index < definition->function_count;
-         function_index++) {
-        const MalFunction *function = &definition->functions[function_index];
-        for (i32 ip = 0; reader->ok && ip < function->instruction_count; ip++) {
-            const MalInstruction *instruction = &function->instructions[ip];
-            if (instruction->opcode != MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT &&
-                instruction->opcode != MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
-                continue;
-            }
-            i32 offset = mal_loaded_known_own_slot_offset(instruction);
-            const i32 *decision = &function->instruction_data[offset];
-            i32 candidate_count = decision[1];
-            for (i32 candidate_index = 0;
-                 candidate_index < candidate_count;
-                 candidate_index++) {
-                i32 source_function_index = decision[2 + candidate_index * 3];
-                i32 shape_cache_index = decision[3 + candidate_index * 3];
-                bool duplicate = false;
-                for (i32 existing = 0; existing < count; existing++) {
-                    if (shapes[existing].function_index == source_function_index
-                        && shapes[existing].shape_cache_index == shape_cache_index) {
-                        duplicate = true;
-                        break;
-                    }
-                }
-                if (duplicate) continue;
-
-                const MalFunction *source = &definition->functions[source_function_index];
-                const MalInstruction *origin = nullptr;
-                for (i32 source_ip = 0;
-                     source_ip < source->instruction_count;
-                     source_ip++) {
-                    const MalInstruction *candidate = &source->instructions[source_ip];
-                    if (candidate->opcode == MAL_OP_CREATE_OBJECT_SHAPED
-                        && candidate->as.create_object_shaped.shape_cache_index
-                            == shape_cache_index) {
-                        origin = candidate;
-                        break;
-                    }
-                }
-                if (origin == nullptr) {
-                    reader->ok = false;
-                    return;
-                }
-                i32 source_offset = origin->as.create_object_shaped.data_offset;
-                i32 key_count = source->instruction_data[source_offset];
-                shapes[count++] = (MalPrecompiledLiteralShape) {
-                    .function_index = source_function_index,
-                    .shape_cache_index = shape_cache_index,
-                    .key_count = key_count,
-                    .key_string_indices = &source->instruction_data[source_offset + 1],
-                };
-            }
-        }
-    }
-    definition->precompiled_literal_shape_count = count;
-    definition->precompiled_literal_shapes = shapes;
 }
 
 MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
@@ -1908,6 +1859,51 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
     for (u32 f = 0; r.ok && f < function_count; f++) {
         rd_function(L, &r, &functions[f], debug);
     }
+
+    u32 precompiled_literal_shape_count = rd_count(&r, 3);
+    MalPrecompiledLiteralShape *precompiled_literal_shapes = arena_array(
+        L, &r, precompiled_literal_shape_count,
+        sizeof(MalPrecompiledLiteralShape), alignof(MalPrecompiledLiteralShape));
+    def->precompiled_literal_shape_count = (i32) precompiled_literal_shape_count;
+    def->precompiled_literal_shapes = precompiled_literal_shapes;
+    for (u32 shape = 0; r.ok && shape < precompiled_literal_shape_count; shape++) {
+        MalPrecompiledLiteralShape *descriptor = &precompiled_literal_shapes[shape];
+        descriptor->function_index = rd_i32(&r);
+        descriptor->shape_cache_index = rd_i32(&r);
+        descriptor->key_string_indices = rd_i32_array(L, &r, &descriptor->key_count);
+        if (descriptor->function_index < 0 ||
+            descriptor->function_index >= (i32) function_count ||
+            descriptor->shape_cache_index < 0 ||
+            descriptor->shape_cache_index >=
+                functions[descriptor->function_index].literal_shape_count ||
+            descriptor->key_count < 1 ||
+            descriptor->key_count > MAL_SHAPE_MAX_INLINE_SLOTS) {
+            r.ok = false;
+            continue;
+        }
+        for (i32 key = 0; r.ok && key < descriptor->key_count; key++) {
+            i32 string_index = descriptor->key_string_indices[key];
+            if (string_index < 0 || string_index >= (i32) string_count ||
+                !mal_loaded_shape_key_is_named(&strings[string_index])) {
+                r.ok = false;
+            }
+            for (i32 previous = 0; r.ok && previous < key; previous++) {
+                i32 previous_string_index = descriptor->key_string_indices[previous];
+                if (mal_loaded_strings_equal(
+                        &strings[previous_string_index], &strings[string_index])) {
+                    r.ok = false;
+                }
+            }
+        }
+        for (u32 previous = 0; r.ok && previous < shape; previous++) {
+            if (precompiled_literal_shapes[previous].function_index ==
+                    descriptor->function_index &&
+                precompiled_literal_shapes[previous].shape_cache_index ==
+                    descriptor->shape_cache_index) {
+                r.ok = false;
+            }
+        }
+    }
     for (u32 f = 0; r.ok && f < function_count; f++) {
         const MalFunction *fn = &functions[f];
         for (i32 ip = 0; r.ok && ip < fn->instruction_count; ip++) {
@@ -1915,12 +1911,11 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             if ((instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT ||
                  instruction->opcode == MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) &&
                 !mal_loaded_known_own_slot_valid(
-                    functions, function_count, string_count, fn, instruction)) {
+                    def, string_count, fn, instruction)) {
                 r.ok = false;
             }
         }
     }
-    mal_loaded_build_precompiled_literal_shapes(L, &r, def);
 
     // Debug-info: files + source positions.
     u32 file_count = rd_count(&r, 1);

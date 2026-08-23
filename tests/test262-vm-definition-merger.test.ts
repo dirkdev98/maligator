@@ -24,6 +24,9 @@ function vmFunction(instructions: Array<VmInstruction>): VmFunction {
 		isDerivedConstructor: false,
 		isClassConstructor: false,
 		hasPrototype: false,
+		literalShapeCount: instructions.filter(
+			(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",
+		).length,
 		instructions,
 		handlers: [{ startIp: 0, endIp: 1, handlerIp: 1 }],
 		fileIndex: 0,
@@ -42,6 +45,7 @@ function definition(overrides: Partial<VmDefinition> = {}): VmDefinition {
 		stringConstants: [[65]],
 		bigintConstants: [1n],
 		literalTemplateData: [8, 0],
+		precompiledLiteralShapes: [],
 		globalCount: 1,
 		files: ["input.js"],
 		sourcePositions: [{ line: 1, column: 0 }],
@@ -209,6 +213,9 @@ describe("Test262 VM definition merger", () => {
 			literalTemplateData: [8, 2, 5, 0, 6, 0, 9, 1, 10, 0, 5, 0],
 			sourcePositions: [{ line: 2, column: 1, inlinedFunctionIndex: 0, callerPosId: 0 }],
 			cjsModuleFunctionIndices: [0],
+			precompiledLiteralShapes: [
+				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0] },
+			],
 			hostInstalls: [
 				{ installer: "install_test", exports: [{ name: "value", slot: 0 }] },
 			],
@@ -230,6 +237,9 @@ describe("Test262 VM definition merger", () => {
 		expect(merged.hostInstalls[0]!.exports[0]!.slot).toBe(3);
 		expect(merged.literalTemplateData.slice(2)).toEqual([
 			8, 2, 5, 2, 6, 1, 9, 1, 10, 2, 5, 2,
+		]);
+		expect(merged.precompiledLiteralShapes).toEqual([
+			{ functionIndex: 2, shapeCacheIndex: 0, keyStringIndices: [2] },
 		]);
 
 		const rebased = merged.functions[2]!.instructions;

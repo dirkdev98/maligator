@@ -33,6 +33,7 @@ const fn: VmFunction = {
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: false,
+	literalShapeCount: 1,
 	instructions: [
 		{
 			opcode: "CREATE_OBJECT_SHAPED",
@@ -56,6 +57,7 @@ const definition: VmDefinition = {
 	stringConstants: [],
 	bigintConstants: [],
 	literalTemplateData: [],
+	precompiledLiteralShapes: [],
 	globalCount: 0,
 	files: [],
 	sourcePositions: [],
@@ -102,20 +104,21 @@ describe("wire loader side-data validation", () => {
 	}
 
 	it("rejects an explicit count that disagrees with its arrays", () => {
-		// Empty definition tables put the first instruction at byte 32 after the
-		// fixed header and source-entry field. Its explicit count follows the opcode
-		// tag and dst operand.
-		rejectsMutation("explicit-count", afterSourceEntry(32 + 1 + 1), 4); // ZigZag(2)
+		// Empty definition tables put the first instruction at byte 33 after the
+		// fixed header, source-entry field, and explicit literal-shape count. Its
+		// explicit operand count follows the opcode tag and dst operand.
+		rejectsMutation("explicit-count", afterSourceEntry(33 + 1 + 1), 4); // ZigZag(2)
 	});
 
 	it("rejects mismatched paired-array lengths", () => {
 		// Skip tag, dst, explicit count, then the first array's count and one value.
-		rejectsMutation("paired-count", afterSourceEntry(32 + 1 + 1 + 1 + 1 + 1), 2);
+		rejectsMutation("paired-count", afterSourceEntry(33 + 1 + 1 + 1 + 1 + 1), 2);
 	});
 
 	it("rejects known-own-slot side data that disagrees with the source shape", () => {
 		const knownSlotFunction: VmFunction = {
 			...fn,
+			literalShapeCount: 2,
 			registerCount: 2,
 			registerRepresentations: ["boxed", "boxed"],
 			instructions: [
@@ -165,6 +168,10 @@ describe("wire loader side-data validation", () => {
 			...definition,
 			functions: [knownSlotFunction],
 			stringConstants: [["x".charCodeAt(0)]],
+			precompiledLiteralShapes: [
+				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0] },
+				{ functionIndex: 0, shapeCacheIndex: 1, keyStringIndices: [0] },
+			],
 		};
 		const wire = serializeVmDefinition(knownSlotDefinition, { debugInfo: false });
 		const tag = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
@@ -196,6 +203,9 @@ describe("wire loader side-data validation", () => {
 	it("pre-instantiates known literal shapes for initial and spliced wire definitions", () => {
 		const shapedFunction: VmFunction = {
 			...fn,
+			// Row 2 has no CREATE_OBJECT_SHAPED instruction: it is a portable
+			// precompiled descriptor reserved for cross-function shape provenance.
+			literalShapeCount: 3,
 			registerCount: 3,
 			registerRepresentations: ["boxed", "boxed", "boxed"],
 			instructions: [
@@ -222,7 +232,7 @@ describe("wire loader side-data validation", () => {
 					object: 1,
 					stringIndex: 0,
 					icIndex: 0,
-					candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 }],
+					candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 2, slot: 0 }],
 				},
 				{ opcode: "RETURN", value: 0 },
 			],
@@ -231,6 +241,9 @@ describe("wire loader side-data validation", () => {
 			...definition,
 			functions: [shapedFunction],
 			stringConstants: [["x".charCodeAt(0)]],
+			precompiledLiteralShapes: [
+				{ functionIndex: 0, shapeCacheIndex: 2, keyStringIndices: [0] },
+			],
 		};
 		const baseDefinition: VmDefinition = {
 			...definition,

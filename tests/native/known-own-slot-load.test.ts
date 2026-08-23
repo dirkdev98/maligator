@@ -140,6 +140,7 @@ const fn: VmFunction = {
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: false,
+	literalShapeCount: 3,
 	instructions,
 	handlers: [],
 	fileIndex: 0,
@@ -154,6 +155,10 @@ const definition: VmDefinition = {
 	stringConstants: [["x".charCodeAt(0)], ["y".charCodeAt(0)]],
 	bigintConstants: [],
 	literalTemplateData: [],
+	precompiledLiteralShapes: [
+		{ functionIndex: 0, shapeCacheIndex: 1, keyStringIndices: [0] },
+		{ functionIndex: 0, shapeCacheIndex: 2, keyStringIndices: [1, 0] },
+	],
 	globalCount: 1,
 	files: [],
 	sourcePositions: [],

@@ -384,6 +384,7 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 		stringConstants: [],
 		bigintConstants: [],
 		literalTemplateData: [],
+		precompiledLiteralShapes: [],
 		globalCount: 0,
 		files: [],
 		sourcePositions: [],
@@ -433,6 +434,13 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 		merged.bigintConstants.push(...definition.bigintConstants);
 		merged.literalTemplateData.push(
 			...cloneLiteralTemplates(definition.literalTemplateData, base.string, base.bigint),
+		);
+		merged.precompiledLiteralShapes.push(
+			...definition.precompiledLiteralShapes.map((descriptor) => ({
+				functionIndex: descriptor.functionIndex + base.function,
+				shapeCacheIndex: descriptor.shapeCacheIndex,
+				keyStringIndices: descriptor.keyStringIndices.map((index) => index + base.string),
+			})),
 		);
 		merged.globalCount += definition.globalCount;
 		merged.files.push(...definition.files);

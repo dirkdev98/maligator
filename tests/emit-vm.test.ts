@@ -91,6 +91,7 @@ const fn: VmFunction = {
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: false,
+	literalShapeCount: 1,
 	instructions,
 	handlers: [],
 	fileIndex: 0,
@@ -105,6 +106,7 @@ const definition: VmDefinition = {
 	stringConstants: [[], ["a".charCodeAt(0)], ["b".charCodeAt(0)], ["c".charCodeAt(0)]],
 	bigintConstants: [],
 	literalTemplateData: [],
+	precompiledLiteralShapes: [],
 	globalCount: 7,
 	files: [],
 	sourcePositions: [],
@@ -295,6 +297,9 @@ describe("emit-vm instruction packing", () => {
 		];
 		const specialized: VmDefinition = {
 			...definition,
+			precompiledLiteralShapes: [
+				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [1, 2] },
+			],
 			functions: [
 				{
 					...fn,
@@ -337,6 +342,37 @@ describe("emit-vm instruction packing", () => {
 			expect(output).toContain("mal_vm_op_store_property_ic(vm,");
 		}
 
+		const syntheticInstructions: Array<VmInstruction> = [
+			{ opcode: "CREATE_UNDEFINED", dst: 1 },
+			{
+				opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+				dst: 5,
+				object: 1,
+				stringIndex: 2,
+				icIndex: 0,
+				candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 1 }],
+			},
+			{ opcode: "RETURN", value: 5 },
+		];
+		const synthetic: VmDefinition = {
+			...specialized,
+			functions: [
+				{
+					...specialized.functions[0]!,
+					literalShapeCount: 1,
+					instructions: syntheticInstructions,
+					positions: syntheticInstructions.map(() => 0),
+				},
+			],
+		};
+		for (const output of [
+			emitVmDefinition(synthetic, { compiled: true }),
+			emitVmDefinition(synthetic, { compiled: false }),
+		]) {
+			expect(output).toContain(".literal_shape_count = 1");
+			expect(output).toContain(".shape_cache_index = 0");
+		}
+
 		const malformed: VmDefinition = {
 			...specialized,
 			functions: [
@@ -373,9 +409,7 @@ describe("emit-vm instruction packing", () => {
 				},
 			],
 		};
-		expect(() => emitVmDefinition(duplicateShapeRow)).toThrow(
-			/invalid known-own-slot access/,
-		);
+		expect(() => emitVmDefinition(duplicateShapeRow)).toThrow(/literal shape index/);
 	});
 
 	it("emits terminal yields for interpreted and compiled generators", () => {

@@ -92,14 +92,29 @@ static void dump_loaded_scalars(const MalVmDefinition *definition) {
 }
 
 static bool precompiled_literal_shapes_ready(
-    const MalVm *vm, const MalVmDefinition *definition, i32 function_base
+    const MalVm *vm,
+    const MalVmDefinition *definition,
+    i32 function_base,
+    i32 string_base
 ) {
     for (i32 i = 0; i < definition->precompiled_literal_shape_count; i++) {
-        const MalPrecompiledLiteralShape *shape =
+        const MalPrecompiledLiteralShape *descriptor =
             &definition->precompiled_literal_shapes[i];
-        i32 function_index = shape->function_index + function_base;
+        i32 function_index = descriptor->function_index + function_base;
         MalShape **row = vm->literal_shape_cache[function_index];
-        if (row == nullptr || row[shape->shape_cache_index] == nullptr) return false;
+        if (row == nullptr || row[descriptor->shape_cache_index] == nullptr) return false;
+        const MalShape *shape = row[descriptor->shape_cache_index];
+        if (shape->inline_count != (u32) descriptor->key_count) return false;
+        for (i32 key = 0; key < descriptor->key_count; key++) {
+            i32 string_index = descriptor->key_string_indices[key] + string_base;
+            if (string_index < 0
+                || string_index >= vm->definition->string_constant_count
+                || shape->props[key].slot != (u32) key
+                || shape->props[key].key != mal_value_from_heap(
+                    (MalHeapHeader *) vm->string_constant_atoms[string_index])) {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -122,7 +137,7 @@ int main(int argc, char **argv) {
     mal_vm_init(&vm, mal_loaded_definition_get(base));
     if (getenv("MAL_EXPECT_PRECOMPILED_SHAPES") != nullptr
         && !precompiled_literal_shapes_ready(
-            &vm, mal_loaded_definition_get(base), 0)) {
+            &vm, mal_loaded_definition_get(base), 0, 0)) {
         fprintf(stderr, "precompiled literal shapes were not initialized\n");
         return 1;
     }
@@ -146,10 +161,11 @@ int main(int argc, char **argv) {
             return 2;
         }
         vm.completion = (MalCompletion){.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        i32 string_base = vm.definition->string_constant_count;
         i32 entry = mal_vm_splice_definition(&vm, mal_loaded_definition_get(spliced));
         if (getenv("MAL_EXPECT_PRECOMPILED_SHAPES") != nullptr
             && !precompiled_literal_shapes_ready(
-                &vm, mal_loaded_definition_get(spliced), entry)) {
+                &vm, mal_loaded_definition_get(spliced), entry, string_base)) {
             fprintf(stderr, "spliced precompiled literal shapes were not initialized\n");
             return 1;
         }
