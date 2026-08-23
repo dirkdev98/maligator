@@ -1127,6 +1127,84 @@ describe("Core known own-slot selection", () => {
 		).toHaveLength(2);
 	});
 
+	it("propagates base-class public field layouts and rejects unstable fields", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(count, leak) {
+					class Point { x = 2; y = 3; }
+					class Escaped { x = leak(this); }
+					class Private { #x = 1; read() { return this.#x; } }
+					class Derived extends Point { z = 4; }
+					const point = new Point();
+					new Escaped(); new Private(); new Derived();
+					let total = 0;
+					for (let index = 0; index < count; index++) total += point.x + point.y;
+					return total;
+				}
+				run(4, () => 0);`,
+				"shape-class-field-layout.mjs",
+			),
+		);
+		const point = initial.functions[functionIndexOfName(initial, "Point")]!;
+		const layout = coreConstructorShapeLayout(initial, point);
+		expect(layout?.keyStringIndices).toHaveLength(2);
+		expect(instructions(point, "defineProperty")).toHaveLength(2);
+		for (const name of ["Escaped", "Private", "Derived"]) {
+			expect(
+				coreConstructorShapeLayout(
+					initial,
+					initial.functions[functionIndexOfName(initial, name)]!,
+				),
+				name,
+			).toBeUndefined();
+		}
+
+		const firstField = instructions(point, "defineProperty")[0]!;
+		const invalidDescriptor = replaceInstruction(
+			initial,
+			point.functionIndex,
+			firstField.id,
+			(instruction) => ({
+				...instruction,
+				attributes: { ...instruction.attributes, configurable: false },
+			}),
+		);
+		expect(
+			coreConstructorShapeLayout(
+				invalidDescriptor,
+				invalidDescriptor.functions[point.functionIndex]!,
+			),
+		).toBeUndefined();
+
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		const guarded = optimized.functions
+			.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
+			.filter((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes);
+		expect(guarded).toHaveLength(2);
+		const optimizedPoint = optimized.functions[functionIndexOfName(optimized, "Point")]!;
+		const optimizedField = instructions(optimizedPoint, "defineProperty")[0]!;
+		const forgedDescriptor = replaceInstruction(
+			optimized,
+			optimizedPoint.functionIndex,
+			optimizedField.id,
+			(instruction) => ({
+				...instruction,
+				attributes: { ...instruction.attributes, configurable: false },
+			}),
+		);
+		expect(() => verifyCoreProgram(forgedDescriptor, coreOpcodeRegistry)).toThrow(
+			"invalid shaped-object origin",
+		);
+		const classOrigins = analyzeCoreShapeProvenance(optimized).origins.filter(
+			({ kind, functionIndex }) =>
+				kind === "constructor" &&
+				functionIndex === functionIndexOfName(optimized, "Point"),
+		);
+		expect(classOrigins).toHaveLength(1);
+	});
+
 	it("joins bounded constructor layouts and excludes unstable constructor bodies", () => {
 		const initial = lowerSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(

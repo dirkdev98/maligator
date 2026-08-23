@@ -261,8 +261,9 @@ interface CoreConstructorShapeLayout {
  * live shape pointer and retains the generic property operation as fallback.
  * This parser only avoids publishing layouts that are predictably cold: it
  * accepts a non-derived, non-coroutine constructor with one linear completion,
- * an implicit-undefined return, and static named stores whose receiver is the
- * canonical `this` value. Any other observable use of `this` declines the shape.
+ * an implicit-undefined return, and static named assignment or default data-field
+ * definitions whose receiver is the canonical `this` value. Any other observable
+ * use of `this` declines the shape.
  */
 export function coreConstructorShapeLayout(
 	program: CoreProgram,
@@ -282,17 +283,19 @@ export function coreConstructorShapeLayout(
 		return undefined;
 	}
 	let hasThisLoad = false;
-	let hasStaticStore = false;
+	let hasShapeStore = false;
 	for (const candidateBlock of fn.blocks) {
 		for (const instruction of candidateBlock.instructions) {
 			hasThisLoad ||= instruction.opcode === "loadThis";
-			hasStaticStore ||= instruction.opcode === "storePropertyStatic";
+			hasShapeStore ||=
+				instruction.opcode === "storePropertyStatic" ||
+				instruction.opcode === "defineProperty";
 		}
 	}
 	// Canonical-root solving is the expensive part of this parser. Most ordinary
 	// functions have a prototype but never initialize a receiver, so reject them
 	// before building any constructor-specific value-flow state.
-	if (!hasThisLoad || !hasStaticStore) return undefined;
+	if (!hasThisLoad || !hasShapeStore) return undefined;
 	const cfg = controlFlow ?? buildCoreControlFlow(fn, registry);
 	const orderedBlocks: Array<CoreBlock> = [];
 	const seen = new Set<CoreBlockId>();
@@ -337,12 +340,24 @@ export function coreConstructorShapeLayout(
 	for (const current of orderedBlocks) {
 		for (const instruction of current.instructions) {
 			const receiver = instruction.inputs[0];
-			if (
-				instruction.opcode === "storePropertyStatic" &&
-				receiver !== undefined &&
-				isThis(receiver)
-			) {
-				const stringIndex = instruction.attributes.stringIndex;
+			if (receiver !== undefined && isThis(receiver)) {
+				const stringIndex =
+					instruction.opcode === "storePropertyStatic"
+						? instruction.attributes.stringIndex
+						: instruction.opcode === "defineProperty" &&
+							  instruction.inputs.length === 3 &&
+							  instruction.attributes.enumerable === true &&
+							  instruction.attributes.writable !== false &&
+							  instruction.attributes.configurable !== false
+							? (() => {
+									const key = instruction.inputs[1];
+									if (key === undefined) return undefined;
+									const keyDefinition = definition(key);
+									return keyDefinition?.opcode === "createString"
+										? keyDefinition.attributes.stringIndex
+										: undefined;
+								})()
+							: undefined;
 				if (typeof stringIndex !== "number") return undefined;
 				const cell = cellForString(stringIndex);
 				const units = program.stringConstants[stringIndex];

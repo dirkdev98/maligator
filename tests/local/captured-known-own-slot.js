@@ -361,4 +361,51 @@ const polymorphicConstructorLayout = function (second) {
 ok("polymorphic constructor first layout", polymorphicConstructorLayout(false) === 24);
 ok("polymorphic constructor second layout", polymorphicConstructorLayout(true) === 24);
 
+const classFieldLayoutRelay = function (replaceWithAccessor) {
+	class FieldPoint {
+		x = 2;
+		y = 3;
+	}
+	let getterCalls = 0;
+	let setterCalls = 0;
+	Object.defineProperty(FieldPoint.prototype, "x", {
+		configurable: true,
+		get() {
+			getterCalls++;
+			return 99;
+		},
+		set() {
+			setterCalls++;
+		},
+	});
+	const point = new FieldPoint();
+	if (replaceWithAccessor) {
+		delete point.x;
+		Object.defineProperty(point, "x", {
+			configurable: true,
+			get() {
+				getterCalls++;
+				return 2;
+			},
+		});
+	}
+	let total = 0;
+	for (let index = 0; index < 4; index++) total += point.x + point.y;
+	return { total, getterCalls, setterCalls };
+};
+const directClassFieldLayout = classFieldLayoutRelay(false);
+ok(
+	"class field layout ignores inherited setter",
+	directClassFieldLayout.total === 20 &&
+		directClassFieldLayout.getterCalls === 0 &&
+		directClassFieldLayout.setterCalls === 0,
+);
+const accessorClassFieldLayout = classFieldLayoutRelay(true);
+ok(
+	"class field accessor replacement fallback",
+	accessorClassFieldLayout.total === 20 &&
+		accessorClassFieldLayout.getterCalls === 4 &&
+		accessorClassFieldLayout.setterCalls === 0,
+);
+
 console.log("captured-known-own-slot PASS");
