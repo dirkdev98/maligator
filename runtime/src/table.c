@@ -310,6 +310,62 @@ usize mal_table_size(const MalTable *table) {
     return table->size;
 }
 
+bool mal_table_reserve(MalTable *table, usize desired_size) {
+    if (desired_size <= table->size) {
+        return true;
+    }
+    if (desired_size > INT32_MAX - 1) {
+        return false;
+    }
+
+    usize appended = desired_size - table->size;
+    usize required_entries = (usize) table->entry_count + appended;
+    u32 target_entries = mal_table_initial_capacity(table);
+    while ((usize) target_entries < required_entries) {
+        if (target_entries > (u32) INT32_MAX / 2) {
+            return false;
+        }
+        target_entries *= 2;
+    }
+
+    u32 target_slots = mal_table_initial_capacity(table);
+    while ((desired_size + 1) * MAL_TABLE_MAX_LOAD_DENOMINATOR >
+           (usize) target_slots * MAL_TABLE_MAX_LOAD_NUMERATOR) {
+        if (target_slots > (u32) INT32_MAX / 2) {
+            return false;
+        }
+        target_slots *= 2;
+    }
+
+    MalHeap *heap = mal_gc_current_heap();
+    if (table->slot_capacity == 0) {
+        table->slots = mal_heap_alloc_raw_profiled(
+            heap, target_slots * sizeof(*table->slots),
+            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
+        for (u32 i = 0; i < target_slots; i++) {
+            table->slots[i] = MAL_TABLE_EMPTY;
+        }
+        table->entries = mal_heap_alloc_raw_profiled(
+            heap, target_entries * sizeof(*table->entries),
+            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
+        table->slot_capacity = target_slots;
+        table->entry_capacity = target_entries;
+        MAL_PERF_COUNT(tables[table->role].storage_allocations);
+        return true;
+    }
+
+    if (target_entries > table->entry_capacity) {
+        table->entries = gc_realloc_raw_profiled(
+            heap, table->entries, sizeof(*table->entries) * target_entries,
+            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
+        table->entry_capacity = target_entries;
+    }
+    if (target_slots > table->slot_capacity) {
+        mal_table_rehash(table, target_slots);
+    }
+    return true;
+}
+
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.tables[table->role] : nullptr;
     if (stats != nullptr) {

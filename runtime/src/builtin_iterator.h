@@ -48,6 +48,13 @@ MalValue mal_vm_new_builtin_iterator(MalVm *vm, MalIteratorKind kind, MalValue t
 bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out);
 
 /**
+ * Return a sound insertion-count hint for a fresh, exact built-in
+ * Array/Map/Set iterator. Custom or already-advanced iterators return false.
+ */
+bool mal_vm_builtin_iterator_size_hint(
+    const MalIteratorRecord *record, usize *size_out);
+
+/**
  * Spec GetIteratorFromMethod(value, method): call an already-observed iterator
  * method and capture the returned iterator's next method. This is useful when a
  * preceding dispatch step (such as Web IDL union conversion) must observe

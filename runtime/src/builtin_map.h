@@ -6,7 +6,11 @@
 typedef enum MalBuiltinCollectionDirectOp {
     MAL_BUILTIN_COLLECTION_MAP_GET,
     MAL_BUILTIN_COLLECTION_MAP_SET,
+    MAL_BUILTIN_COLLECTION_MAP_HAS,
+    MAL_BUILTIN_COLLECTION_MAP_DELETE,
     MAL_BUILTIN_COLLECTION_SET_ADD,
+    MAL_BUILTIN_COLLECTION_SET_HAS,
+    MAL_BUILTIN_COLLECTION_SET_DELETE,
 } MalBuiltinCollectionDirectOp;
 
 /**
@@ -32,7 +36,7 @@ MalValue mal_builtin_map_set_known(
 );
 
 /**
- * Guarded native-backend dispatch for direct Map.get/Map.set/Set.add sites.
+ * Guarded native-backend dispatch for direct Map/Set scalar-operation sites.
  * Exact intrinsic-callee and receiver-brand hits execute the collection body
  * without a native call frame; every miss retains ordinary cached dispatch.
  */

@@ -18,8 +18,9 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 23u
+#define WIRE_VERSION 24u
 #define WIRE_FLAG_HAS_DEBUG 1u
+#define WIRE_GUARDED_BUILTIN_TAG_COUNT 52u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in
  * src/compiler/target/serialize-vm.ts (index order). */
@@ -2279,7 +2280,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 					direct_function_index < -1 || direct_function_index >= (i32) function_count ||
 					direct_call_target_function_index < -1 ||
 					direct_call_target_function_index >= (i32) function_count ||
-					flags > 127 || (flags & 24) != 0 || collection_tag > 48 ||
+					flags > 127 || (flags & 24) != 0 ||
+					collection_tag > WIRE_GUARDED_BUILTIN_TAG_COUNT ||
 					guarded_builtin_count > 1 ||
 					((flags & 32) != 0 && (flags & 4) == 0) ||
 					(direct_call_target_function_index >= 0 && (flags & 1) == 0) ||

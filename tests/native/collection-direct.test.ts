@@ -51,7 +51,11 @@ describe("guarded direct Map and Set dispatch", () => {
 		expect(line).toBeDefined();
 		expect(field(line ?? "", "direct_get_hits")).toBeGreaterThan(6000);
 		expect(field(line ?? "", "direct_set_hits")).toBeGreaterThan(3000);
+		expect(field(line ?? "", "direct_map_has_hits")).toBeGreaterThan(4000);
+		expect(field(line ?? "", "direct_map_delete_hits")).toBeGreaterThan(4000);
 		expect(field(line ?? "", "direct_add_hits")).toBeGreaterThan(3000);
+		expect(field(line ?? "", "direct_set_has_hits")).toBeGreaterThan(4000);
+		expect(field(line ?? "", "direct_set_delete_hits")).toBeGreaterThan(4000);
 		expect(field(line ?? "", "direct_fallbacks")).toBeGreaterThanOrEqual(8);
 	});
 });

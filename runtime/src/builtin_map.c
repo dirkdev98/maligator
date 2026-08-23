@@ -32,6 +32,16 @@ static bool mal_builtin_map_can_be_held_weakly(MalValue value) {
     return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
 }
 
+/** Store through an already-canonicalized keyed-collection key. */
+static void mal_builtin_map_store_canonical(
+    MalMapObject *map, MalKey key, MalValue value
+) {
+    void *entry = mal_table_upsert_entry(map->entries, key, nullptr);
+    mal_table_entry_set_value(map->entries, entry, value);
+    mal_gc_card(&map->object.header, key.value);
+    mal_gc_card(&map->object.header, value);
+}
+
 /**
  * Shared Map/WeakMap constructor tail: populate the fresh map from an
  * optional iterable of [key, value] entries through this.set, closing the
@@ -78,14 +88,29 @@ static MalValue mal_builtin_map_construct(
         return mal_value_new_undefined();
     }
 
+    // The iterator and adder have already been observed in spec order. An exact,
+    // fresh built-in iterator gives a sound count hint without consulting the
+    // iterable again; custom/advanced iterators retain ordinary growth.
+    usize size_hint;
+    if (!weak && adder == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET] &&
+        mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
+        (void) mal_table_reserve(map->entries, size_hint);
+    }
+
     // Each step, the entry index Gets, and the adder all re-enter JS and can
     // collect; root the record, the map being built, the adder, and the current
     // entry across the loop, and lift GC suppression. (The extracted key/value are
     // the adder's args → rooted by the call seam during that call.)
-    MalValue roots[3] = {map_value, adder, mal_value_new_undefined()};
+    MalValue roots[5] = {
+        map_value,
+        adder,
+        mal_value_new_undefined(), // current entry
+        mal_value_new_undefined(), // entry key
+        mal_value_new_undefined(), // entry value
+    };
     MalRootSpan rec_span, span;
     mal_gc_root(&rec_span, &record.iterator, 2);
-    mal_gc_root(&span, roots, 3);
+    mal_gc_root(&span, roots, countof(roots));
     mal_gc_native_rooted_begin(vm);
     MalValue ret = mal_value_new_undefined();
 
@@ -97,7 +122,7 @@ static MalValue mal_builtin_map_construct(
         }
 
         if (done) {
-            ret = map_value;
+            ret = roots[0];
             goto done;
         }
         roots[2] = item;
@@ -108,14 +133,15 @@ static MalValue mal_builtin_map_construct(
             goto done;
         }
 
-        MalValue entry_args[2];
-        if (!mal_vm_get_property(vm, item, mal_key_index(0), &entry_args[0]) ||
-            !mal_vm_get_property(vm, item, mal_key_index(1), &entry_args[1])) {
+        if (!mal_vm_get_property(vm, roots[2], mal_key_index(0), &roots[3]) ||
+            !mal_vm_get_property(vm, roots[2], mal_key_index(1), &roots[4])) {
             mal_vm_iterator_close(vm, &record);
             goto done;
         }
 
-        MalCompletion completion = mal_vm_call_value(vm, adder, map_value, entry_args, 2);
+        MalValue entry_args[2] = {roots[3], roots[4]};
+        MalCompletion completion = mal_vm_call_value(
+            vm, roots[1], roots[0], entry_args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_vm_iterator_close(vm, &record);
             goto done;
@@ -136,6 +162,8 @@ static MalValue mal_builtin_map_constructor(MalVm *vm, MalValue this_value, cons
 
 static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
+    (void) new_target;
+    (void) callee;
 
     if (arg_count < 2 || !mal_value_is_callable(args[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Callback is not a function");
@@ -147,46 +175,76 @@ static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const M
         return mal_value_new_undefined();
     }
 
-    MalMapObject *result = mal_map_object_new(
-        &vm->heap,
-        MAL_HEAP_MAP_OBJECT,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]),
-        false
-    );
-    i32 index = 0;
+    MalValue roots[5] = {
+        mal_value_from_map_object(mal_map_object_new(
+            &vm->heap,
+            MAL_HEAP_MAP_OBJECT,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]),
+            false)),
+        args[1],
+        mal_value_new_undefined(), // current element
+        mal_value_new_undefined(), // callback result / canonical key
+        mal_value_new_undefined(), // current group
+    };
+    MalRootSpan record_span, roots_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&roots_span, roots, countof(roots));
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+    f64 index = 0.0;
     while (true) {
-        MalValue element;
+        if (index >= MAL_NUMBER_MAX_SAFE_INTEGER) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Map.groupBy exceeded the maximum safe index");
+            mal_vm_iterator_close(vm, &record);
+            goto done;
+        }
+
         bool done;
-        if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
-            return mal_value_new_undefined();
+        if (!mal_vm_iterator_step(vm, &record, &roots[2], &done)) {
+            goto done;
         }
 
         if (done) {
-            return mal_value_from_map_object(result);
+            ret = roots[0];
+            goto done;
         }
 
-        MalValue callback_args[] = {element, mal_value_from_i32(index)};
-        index++;
-        MalCompletion completion = mal_vm_call_value(vm, args[1], mal_value_new_undefined(), callback_args, 2);
+        MalValue callback_args[] = {roots[2], mal_ops_number_value(index)};
+        MalCompletion completion = mal_vm_call_value(
+            vm, roots[1], mal_value_new_undefined(), callback_args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            goto done;
+        }
+        MalKey key = mal_map_key_from_value(completion.value);
+        roots[3] = key.value;
+
+        MalMapObject *result = mal_value_to_map_object(roots[0]);
+        MalTableLookup lookup = mal_table_lookup(result->entries, key);
+        if (lookup.present) {
+            roots[4] = mal_table_entry_value(result->entries, lookup.entry);
+        } else {
+            roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+            mal_builtin_map_store_canonical(result, key, roots[4]);
         }
 
-        MalValue group = mal_map_object_get(result, completion.value);
-        if (!mal_map_object_has(result, completion.value)) {
-            group = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
-            mal_map_object_set(result, completion.value, group);
-        }
-
-        MalArrayObject *group_array = mal_value_to_array_object(group);
+        MalArrayObject *group_array = mal_value_to_array_object(roots[4]);
         mal_array_object_store(
             group_array,
             mal_key_index(mal_array_object_length(group_array)),
-            element
+            roots[2]
         );
+        index += 1.0;
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&roots_span);
+    mal_gc_unroot(&record_span);
+    return ret;
 }
 
 static MalValue mal_builtin_weak_map_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -314,14 +372,41 @@ MalCompletion mal_builtin_collection_direct(
         case MAL_BUILTIN_COLLECTION_MAP_SET:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_SET;
             break;
+        case MAL_BUILTIN_COLLECTION_MAP_HAS:
+            expected = MAL_INTRINSIC_MAP_PROTOTYPE_HAS;
+            break;
+        case MAL_BUILTIN_COLLECTION_MAP_DELETE:
+            expected = MAL_INTRINSIC_MAP_PROTOTYPE_DELETE;
+            break;
         case MAL_BUILTIN_COLLECTION_SET_ADD:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_ADD;
+            break;
+        case MAL_BUILTIN_COLLECTION_SET_HAS:
+            expected = MAL_INTRINSIC_SET_PROTOTYPE_HAS;
+            break;
+        case MAL_BUILTIN_COLLECTION_SET_DELETE:
+            expected = MAL_INTRINSIC_SET_PROTOTYPE_DELETE;
             break;
         default:
             abort();
     }
 
-    if (arg_count >= 0 && callee == vm->intrinsics[expected] &&
+    const bool has_operation =
+        operation == MAL_BUILTIN_COLLECTION_MAP_HAS ||
+        operation == MAL_BUILTIN_COLLECTION_SET_HAS;
+    const bool delete_operation =
+        operation == MAL_BUILTIN_COLLECTION_MAP_DELETE ||
+        operation == MAL_BUILTIN_COLLECTION_SET_DELETE;
+    const bool callee_matches =
+        callee == vm->intrinsics[expected] ||
+        (has_operation &&
+         (callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_HAS] ||
+          callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS])) ||
+        (delete_operation &&
+         (callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_DELETE] ||
+          callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_DELETE]));
+
+    if (arg_count >= 0 && callee_matches &&
         mal_value_is_native_function_object(callee)) {
         if (operation == MAL_BUILTIN_COLLECTION_MAP_GET &&
             mal_value_is_map_object(this_value)) {
@@ -348,6 +433,33 @@ MalCompletion mal_builtin_collection_direct(
                         arg_count >= 2 ? args[1] : mal_value_new_undefined()),
                 };
             }
+        } else if (has_operation &&
+                   callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_HAS] &&
+                   mal_value_is_map_object(this_value)) {
+            MalMapObject *map = mal_value_to_map_object(this_value);
+            if (!map->weak) {
+                MAL_PERF_COUNT(collection_direct_map_has_hits);
+                return (MalCompletion) {
+                    .kind = MAL_COMPLETION_NORMAL,
+                    .value = mal_value_new_boolean(mal_map_object_has(
+                        map, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
+                };
+            }
+        } else if (delete_operation &&
+                   callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_DELETE] &&
+                   mal_value_is_map_object(this_value)) {
+            MalMapObject *map = mal_value_to_map_object(this_value);
+            if (!map->weak) {
+                if (vm->map_get_set_cache.collection == this_value) {
+                    mal_vm_invalidate_map_get_set_cache(vm);
+                }
+                MAL_PERF_COUNT(collection_direct_map_delete_hits);
+                return (MalCompletion) {
+                    .kind = MAL_COMPLETION_NORMAL,
+                    .value = mal_value_new_boolean(mal_map_object_delete(
+                        map, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
+                };
+            }
         } else if (operation == MAL_BUILTIN_COLLECTION_SET_ADD &&
                    mal_value_is_set_object(this_value)) {
             MalMapObject *set = mal_value_to_map_object(this_value);
@@ -359,6 +471,30 @@ MalCompletion mal_builtin_collection_direct(
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
                     .value = this_value,
+                };
+            }
+        } else if (has_operation &&
+                   callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS] &&
+                   mal_value_is_set_object(this_value)) {
+            MalMapObject *set = mal_value_to_map_object(this_value);
+            if (!set->weak) {
+                MAL_PERF_COUNT(collection_direct_set_has_hits);
+                return (MalCompletion) {
+                    .kind = MAL_COMPLETION_NORMAL,
+                    .value = mal_value_new_boolean(mal_map_object_has(
+                        set, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
+                };
+            }
+        } else if (delete_operation &&
+                   callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_DELETE] &&
+                   mal_value_is_set_object(this_value)) {
+            MalMapObject *set = mal_value_to_map_object(this_value);
+            if (!set->weak) {
+                MAL_PERF_COUNT(collection_direct_set_delete_hits);
+                return (MalCompletion) {
+                    .kind = MAL_COMPLETION_NORMAL,
+                    .value = mal_value_new_boolean(mal_map_object_delete(
+                        set, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
                 };
             }
         }
@@ -424,11 +560,14 @@ static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_v
  * Returns the existing value for key, or stores and returns `value`.
  */
 static MalValue mal_builtin_map_get_or_insert(MalVm *vm, MalMapObject *map, MalValue key, MalValue value) {
-    if (mal_map_object_has(map, key)) {
-        return mal_map_object_get(map, key);
+    (void) vm;
+    MalKey canonical_key = mal_map_key_from_value(key);
+    MalTableLookup lookup = mal_table_lookup(map->entries, canonical_key);
+    if (lookup.present) {
+        return mal_table_entry_value(map->entries, lookup.entry);
     }
 
-    mal_map_object_set(map, key, value);
+    mal_builtin_map_store_canonical(map, canonical_key, value);
     return value;
 }
 
@@ -443,18 +582,25 @@ static MalValue mal_builtin_map_get_or_insert_computed(MalVm *vm, MalMapObject *
         return mal_value_new_undefined();
     }
 
-    if (mal_map_object_has(map, key)) {
-        return mal_map_object_get(map, key);
+    MalKey canonical_key = mal_map_key_from_value(key);
+    MalTableLookup lookup = mal_table_lookup(map->entries, canonical_key);
+    if (lookup.present) {
+        return mal_table_entry_value(map->entries, lookup.entry);
     }
 
-    MalValue canonical_key = mal_map_key_from_value(key).value;
-    MalCompletion completion = mal_vm_call_value(vm, callback, mal_value_new_undefined(), &canonical_key, 1);
+    MalValue callback_key = canonical_key.value;
+    // Receiver/key/callback are held by the outer call seam. Lift this native
+    // frame so an allocating callback can collect, then re-search for the upsert:
+    // the callback is allowed to mutate this same Map before its result wins.
+    mal_gc_native_rooted_begin(vm);
+    MalCompletion completion = mal_vm_call_value(
+        vm, callback, mal_value_new_undefined(), &callback_key, 1);
+    mal_gc_native_rooted_end(vm);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         return mal_value_new_undefined();
     }
 
-    // Overwrite any entry the callback inserted for this key, then append.
-    mal_map_object_set(map, key, completion.value);
+    mal_builtin_map_store_canonical(map, canonical_key, completion.value);
     return completion.value;
 }
 
@@ -654,6 +800,7 @@ static MalObject *mal_builtin_map_scaffold(
         0,
         constructor_callback
     );
+    mal_native_function_object_set_handles_new_target_prototype(constructor);
 
     vm->intrinsics[constructor_slot] = mal_value_from_native_function_object(constructor);
     vm->intrinsics[prototype_slot] = mal_value_from_object(prototype);
@@ -693,8 +840,10 @@ void mal_builtin_map_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "getOrInsertComputed", 2, mal_builtin_map_prototype_get_or_insert_computed);
     vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET] =
         mal_intrinsic_define_method_n(vm, prototype, "set", 2, mal_builtin_map_prototype_set);
-    mal_intrinsic_define_method_n(vm, prototype, "has", 1, mal_builtin_map_prototype_has);
-    mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_map_prototype_delete);
+    vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_HAS] =
+        mal_intrinsic_define_method_n(vm, prototype, "has", 1, mal_builtin_map_prototype_has);
+    vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_DELETE] =
+        mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_map_prototype_delete);
     mal_intrinsic_define_method_n(vm, prototype, "clear", 0, mal_builtin_map_prototype_clear);
     mal_intrinsic_define_method_n(vm, prototype, "forEach", 1, mal_builtin_map_prototype_for_each);
     mal_intrinsic_define_method_n(vm, prototype, "keys", 0, mal_builtin_map_prototype_keys);

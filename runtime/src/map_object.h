@@ -14,8 +14,8 @@ typedef struct MalMapObject {
     /**
      * General-mode ordered table. Entry keys are canonicalized through
      * mal_map_key_from_value; map values live in the inline entry payload.
-     * The table is never compacted, so storage-order indexes stay stable for
-     * outstanding iterators.
+     * Compaction is deferred while an iterator pins the table, so storage-order
+     * indexes stay stable for every outstanding iterator.
      */
     MalTable *entries;
 

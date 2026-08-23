@@ -72,6 +72,14 @@ typedef struct MalNativeFunctionObject {
      */
     bool is_constructor;
 
+    /**
+     * Whether the constructor callback itself performed
+     * OrdinaryCreateFromConstructor using new.target. Such callbacks must not
+     * have the generic native-construct seam repeat the observable prototype
+     * lookup after they return.
+     */
+    bool handles_new_target_prototype;
+
 #if MAL_PROFILE && MAL_PERF_STATS
     /** Exact-profile subsystem owning this native callback, or zero for core runtime. */
     u8 profile_category;
@@ -222,6 +230,12 @@ bool mal_native_function_object_is_constructor(const MalNativeFunctionObject *fu
  * Flag the native function as a constructor (implements [[Construct]]).
  */
 void mal_native_function_object_set_constructor(MalNativeFunctionObject *function);
+
+/** Mark/query a native constructor that selects its instance prototype itself. */
+bool mal_native_function_object_handles_new_target_prototype(
+    const MalNativeFunctionObject *function);
+void mal_native_function_object_set_handles_new_target_prototype(
+    MalNativeFunctionObject *function);
 
 /**
  * Read internal slot `index` (the spec's closure state). Returns undefined when

@@ -18,6 +18,18 @@ for (let i = 0; i < 3000; i++) {
 }
 ok("direct collection values", sum > 0 && map.size === 128 && set.size === 128);
 
+const scalarMap = new Map([["hit", 1]]);
+const scalarSet = new Set(["hit"]);
+const scalarMiss = {};
+let scalarScore = 0;
+for (let i = 0; i < 4000; i++) {
+	if (scalarMap.has("hit")) scalarScore++;
+	if (!scalarMap.delete(scalarMiss)) scalarScore++;
+	if (scalarSet.has("hit")) scalarScore++;
+	if (!scalarSet.delete(scalarMiss)) scalarScore++;
+}
+ok("direct scalar collection operations", scalarScore === 16000);
+
 function privateFreshMapGet(key) {
 	const values = new Map();
 	values.set("answer", 42);
@@ -94,10 +106,19 @@ const plain = {
 		this.value += value;
 		return "plain-add";
 	},
+	has(value) {
+		return value === this.value;
+	},
+	delete(value) {
+		this.deleted = value;
+		return "plain-delete";
+	},
 };
 ok("plain get fallback", plain.get(2) === 3);
 ok("plain set fallback", plain.set("stored", 4) === "plain-set" && plain.stored === 4);
 ok("plain add fallback", plain.add(5) === "plain-add" && plain.value === 6);
+ok("plain has fallback", plain.has(6));
+ok("plain delete fallback", plain.delete(7) === "plain-delete" && plain.deleted === 7);
 
 const ownMap = new Map([["key", 1]]);
 ownMap.get = function (key) {
@@ -107,15 +128,31 @@ ownMap.set = function (key, value) {
 	this.own = key + value;
 	return "own-set";
 };
+ownMap.has = function (key) {
+	return "own-has-" + key;
+};
+ownMap.delete = function (key) {
+	return "own-delete-" + key;
+};
 ok("own Map.get fallback", ownMap.get("key") === "own-key");
 ok("own Map.set fallback", ownMap.set("k", 2) === "own-set" && ownMap.own === "k2");
+ok("own Map.has fallback", ownMap.has("key") === "own-has-key");
+ok("own Map.delete fallback", ownMap.delete("key") === "own-delete-key");
 
 const ownSet = new Set();
 ownSet.add = function (value) {
 	this.own = value;
 	return "own-add";
 };
+ownSet.has = function (value) {
+	return "own-has-" + value;
+};
+ownSet.delete = function (value) {
+	return "own-delete-" + value;
+};
 ok("own Set.add fallback", ownSet.add(3) === "own-add" && ownSet.own === 3);
+ok("own Set.has fallback", ownSet.has(3) === "own-has-3");
+ok("own Set.delete fallback", ownSet.delete(3) === "own-delete-3");
 
 const intrinsicGet = Map.prototype.get;
 Map.prototype.get = function (key) {
@@ -137,6 +174,34 @@ ok(
 );
 Set.prototype.add = intrinsicAdd;
 
+const intrinsicMapHas = Map.prototype.has;
+Map.prototype.has = function (key) {
+	return key === "prototype-hit";
+};
+ok("Map has prototype override", new Map().has("prototype-hit"));
+Map.prototype.has = intrinsicMapHas;
+
+const intrinsicMapDelete = Map.prototype.delete;
+Map.prototype.delete = function (key) {
+	return key === "prototype-delete";
+};
+ok("Map delete prototype override", new Map().delete("prototype-delete"));
+Map.prototype.delete = intrinsicMapDelete;
+
+const intrinsicSetHas = Set.prototype.has;
+Set.prototype.has = function (key) {
+	return key === "prototype-hit";
+};
+ok("Set has prototype override", new Set().has("prototype-hit"));
+Set.prototype.has = intrinsicSetHas;
+
+const intrinsicSetDelete = Set.prototype.delete;
+Set.prototype.delete = function (key) {
+	return key === "prototype-delete";
+};
+ok("Set delete prototype override", new Set().delete("prototype-delete"));
+Set.prototype.delete = intrinsicSetDelete;
+
 const mutationMap = new Map([["key", 11]]);
 const mutationResult = mutationMap.get(
 	((Map.prototype.get = function () {
@@ -146,6 +211,29 @@ const mutationResult = mutationMap.get(
 );
 Map.prototype.get = intrinsicGet;
 ok("method loaded before argument mutation", mutationResult === 11);
+
+const hasMutationMap = new Map([["key", 1]]);
+const hasMutationResult = hasMutationMap.has(
+	((Map.prototype.has = function () {
+		return false;
+	}),
+	"key"),
+);
+Map.prototype.has = intrinsicMapHas;
+ok("Map has loaded before argument mutation", hasMutationResult === true);
+
+const deleteMutationSet = new Set(["key"]);
+const deleteMutationResult = deleteMutationSet.delete(
+	((Set.prototype.delete = function () {
+		return false;
+	}),
+	"key"),
+);
+Set.prototype.delete = intrinsicSetDelete;
+ok(
+	"Set delete loaded before argument mutation",
+	deleteMutationResult === true && !deleteMutationSet.has("key"),
+);
 
 const weakKey = {};
 const weak = new WeakMap([[weakKey, 5]]);

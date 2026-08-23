@@ -637,13 +637,47 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 								return false;
 						}
 					};
-					const ownerMatches = candidates?.filter(exactReceiverFor) ?? [];
+					const constructedCollectionOwnerFor = (
+						candidate: (typeof builtinOperations)[number],
+					): boolean => {
+						if (candidate.receiver !== "map" && candidate.receiver !== "set") {
+							return false;
+						}
+						if (receiver?.opcode !== "construct" || receiver.inputs.length < 1) {
+							return false;
+						}
+						const constructor = definitions.get(
+							canonical.get(receiver.inputs[0]!) ?? receiver.inputs[0]!,
+						);
+						return (
+							constructor?.opcode === "loadIntrinsic" &&
+							constructor.attributes.intrinsic ===
+								(candidate.receiver === "map" ? "Map" : "Set")
+						);
+					};
+					const ownerMatches =
+						candidates?.filter(
+							(candidate) =>
+								exactReceiverFor(candidate) || constructedCollectionOwnerFor(candidate),
+						) ?? [];
+					// Map/Set `has` and `delete` have identical declared semantics and
+					// share one guarded native dispatcher. When provenance cannot name
+					// the owner (for example a long-lived global/captured collection),
+					// the loaded callee identity plus runtime receiver brand safely
+					// disambiguates the pair. All other collisions stay conservative.
+					const compatibleCollectionCollision =
+						candidates?.length === 2 &&
+						(key === "has" || key === "delete") &&
+						candidates.some((candidate) => candidate.owner === "Map.prototype") &&
+						candidates.some((candidate) => candidate.owner === "Set.prototype");
 					const descriptor =
 						candidates?.length === 1
 							? candidates[0]
 							: ownerMatches.length === 1
 								? ownerMatches[0]
-								: undefined;
+								: compatibleCollectionCollision
+									? candidates?.[0]
+									: undefined;
 					if (descriptor === undefined) return instruction;
 					const site = builtinSourceSite(
 						program,

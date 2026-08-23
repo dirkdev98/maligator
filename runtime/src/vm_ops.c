@@ -2132,6 +2132,10 @@ void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instructio
             result = mal_builtin_object_has_own_known(
                 vm, &vm->value_stack[base], argument_count);
             break;
+        case MAL_DIRECT_BUILTIN_OBJECT_IS:
+            result = mal_builtin_object_is_known(
+                &vm->value_stack[base], argument_count);
+            break;
         case MAL_DIRECT_BUILTIN_STRING_CHAR_CODE_AT:
             result = mal_builtin_string_char_code_at_known(
                 vm, receiver, &vm->value_stack[base], argument_count);

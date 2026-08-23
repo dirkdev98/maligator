@@ -76,6 +76,11 @@ export const exactBuiltinCallDescriptors = {
 		forwardedArgumentLimit: 2,
 		cOperation: "MAL_DIRECT_BUILTIN_OBJECT_HAS_OWN",
 	},
+	"Object.is": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 2,
+		cOperation: "MAL_DIRECT_BUILTIN_OBJECT_IS",
+	},
 	"String.prototype.charCodeAt": {
 		receiverProof: "primitive-string",
 		forwardedArgumentLimit: 1,
@@ -355,6 +360,19 @@ const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
 
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	{
+		id: "Object.is",
+		owner: "Object",
+		key: "is",
+		receiver: "none",
+		arity: { minimum: 0, maximum: 2 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: [],
+		effects: [],
+		result: "boolean",
+		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	},
+	{
 		id: "Object.hasOwn",
 		owner: "Object",
 		key: "hasOwn",
@@ -515,34 +533,42 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		realm: "semantic-identity",
 		lowerings: ["generic", "guarded-primitive-string", "exact-builtin-call"],
 	},
-	...(["get", "set"] as const).map(
+	...(["get", "set", "has", "delete"] as const).map(
 		(key): BuiltinOperationDescriptor => ({
 			id: `Map.prototype.${key}`,
 			owner: "Map.prototype",
 			key,
 			receiver: "map",
-			arity: { minimum: key === "get" ? 1 : 2, maximum: key === "get" ? 1 : 2 },
+			arity: {
+				minimum: key === "set" ? 2 : 1,
+				maximum: key === "set" ? 2 : 1,
+			},
 			evaluationOrder: "receiver-then-arguments",
 			coercionOrder: [],
 			effects: ["throw", "safepoint"],
-			result: key === "get" ? "any" : "receiver",
+			result: key === "get" ? "any" : key === "set" ? "receiver" : "boolean",
 			realm: "semantic-identity",
-			lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
+			lowerings:
+				key === "get" || key === "set"
+					? ["generic", "guarded-native-collection", "exact-builtin-call"]
+					: ["generic", "guarded-native-collection"],
 		}),
 	),
-	{
-		id: "Set.prototype.add",
-		owner: "Set.prototype",
-		key: "add",
-		receiver: "set",
-		arity: { minimum: 1, maximum: 1 },
-		evaluationOrder: "receiver-then-arguments",
-		coercionOrder: [],
-		effects: ["throw", "safepoint"],
-		result: "receiver",
-		realm: "semantic-identity",
-		lowerings: ["generic", "guarded-native-collection"],
-	},
+	...(["add", "has", "delete"] as const).map(
+		(key): BuiltinOperationDescriptor => ({
+			id: `Set.prototype.${key}`,
+			owner: "Set.prototype",
+			key,
+			receiver: "set",
+			arity: { minimum: 1, maximum: 1 },
+			evaluationOrder: "receiver-then-arguments",
+			coercionOrder: [],
+			effects: ["throw", "safepoint"],
+			result: key === "add" ? "receiver" : "boolean",
+			realm: "semantic-identity",
+			lowerings: ["generic", "guarded-native-collection"],
+		}),
+	),
 	{
 		id: "String.prototype.slice",
 		owner: "String.prototype",

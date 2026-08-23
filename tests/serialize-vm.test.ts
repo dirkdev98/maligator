@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	buildArgumentSnapshotPlan,
@@ -12,6 +13,7 @@ import {
 	deserializeVmDefinition,
 	MAX_STRING_CODE_UNITS,
 	serializeVmDefinition,
+	WIRE_GUARDED_BUILTIN_TAG_COUNT,
 	WIRE_OPCODES,
 	WIRE_VERSION,
 } from "../src/compiler/target/serialize-vm.ts";
@@ -1201,6 +1203,17 @@ describe("serialize-vm", () => {
 		);
 		expect(() => deserializeVmDefinition(buffer)).toThrow(
 			`version ${WIRE_VERSION - 1}, expected ${WIRE_VERSION}`,
+		);
+	});
+
+	it("keeps the C loader wire constants synchronized", () => {
+		const loaderSource = readFileSync(
+			new URL("../runtime/src/vm_load.c", import.meta.url),
+			"utf-8",
+		);
+		expect(loaderSource).toContain(`#define WIRE_VERSION ${WIRE_VERSION}u`);
+		expect(loaderSource).toContain(
+			`#define WIRE_GUARDED_BUILTIN_TAG_COUNT ${WIRE_GUARDED_BUILTIN_TAG_COUNT}u`,
 		);
 	});
 

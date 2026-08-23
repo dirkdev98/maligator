@@ -16,6 +16,9 @@ MalValue mal_builtin_object_has_own_known(
     MalVm *vm, const MalValue *args, i32 arg_count
 );
 
+/** Pure SameValue comparison after the locked Object.is property seam. */
+MalValue mal_builtin_object_is_known(const MalValue *args, i32 arg_count);
+
 /** Exact Object.keys invocation after the locked namespace/property seam. */
 MalValue mal_builtin_object_keys_known(
     MalVm *vm, const MalValue *args, i32 arg_count

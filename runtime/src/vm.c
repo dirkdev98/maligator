@@ -4299,7 +4299,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
             resolution.callee == vm->intrinsics[MAL_INTRINSIC_GENERATOR_FUNCTION_CONSTRUCTOR] ||
             resolution.callee == vm->intrinsics[MAL_INTRINSIC_ASYNC_FUNCTION_CONSTRUCTOR] ||
             resolution.callee == vm->intrinsics[MAL_INTRINSIC_ASYNC_GENERATOR_FUNCTION_CONSTRUCTOR];
-        if (!dynamic_function_constructor && mal_value_is_object(value) &&
+        if (!dynamic_function_constructor &&
+            !mal_native_function_object_handles_new_target_prototype(native_function) &&
+            mal_value_is_object(value) &&
             effective_new_target != resolution.callee &&
             mal_value_is_object(effective_new_target)) {
             MalObject *value_object = mal_value_to_object(value);

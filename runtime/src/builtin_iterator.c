@@ -445,6 +445,56 @@ bool mal_vm_get_iterator_from_method(
     return true;
 }
 
+bool mal_vm_builtin_iterator_size_hint(
+    const MalIteratorRecord *record, usize *size_out
+) {
+    if (!mal_value_is_iterator_object(record->iterator) ||
+        !mal_value_is_native_function_object(record->next_method)) {
+        return false;
+    }
+
+    MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
+    if (iterator->done || iterator->index != 0 ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(record->next_method)) !=
+            mal_builtin_iterator_expected_next(iterator->kind)) {
+        return false;
+    }
+
+    switch (iterator->kind) {
+        case MAL_ITERATOR_ARRAY_KEYS:
+        case MAL_ITERATOR_ARRAY_VALUES:
+        case MAL_ITERATOR_ARRAY_ENTRIES:
+            if (!mal_value_is_array_object(iterator->target)) {
+                return false;
+            }
+            *size_out = mal_array_object_length(
+                mal_value_to_array_object(iterator->target));
+            return true;
+        case MAL_ITERATOR_MAP_KEYS:
+        case MAL_ITERATOR_MAP_VALUES:
+        case MAL_ITERATOR_MAP_ENTRIES:
+            if (!mal_value_is_map_object(iterator->target)) {
+                return false;
+            }
+            *size_out = mal_map_object_size(
+                mal_value_to_map_object(iterator->target));
+            return true;
+        case MAL_ITERATOR_SET_VALUES:
+        case MAL_ITERATOR_SET_ENTRIES:
+            if (!mal_value_is_set_object(iterator->target)) {
+                return false;
+            }
+            *size_out = mal_map_object_size(
+                mal_value_to_map_object(iterator->target));
+            return true;
+        case MAL_ITERATOR_STRING_VALUES:
+            return false;
+    }
+
+    return false;
+}
+
 bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
     *value_out = mal_value_new_undefined();
     *done_out = false;

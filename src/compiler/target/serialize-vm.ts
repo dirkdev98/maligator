@@ -36,7 +36,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 23;
+export const WIRE_VERSION = 24;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -48,6 +48,10 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"Map.prototype.get",
 	"Map.prototype.set",
 	"Set.prototype.add",
+	"Map.prototype.has",
+	"Map.prototype.delete",
+	"Set.prototype.has",
+	"Set.prototype.delete",
 	"String.prototype.split",
 	"String.prototype.trim",
 	"String.prototype.slice",
@@ -58,6 +62,9 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 			operation.startsWith("Array.prototype.") && operation !== "Array.prototype.push",
 	),
 ] as const;
+
+/** Keep synchronized with WIRE_GUARDED_BUILTIN_TAG_COUNT in vm_load.c. */
+export const WIRE_GUARDED_BUILTIN_TAG_COUNT = TAGGED_GUARDED_BUILTIN_OPERATIONS.length;
 
 function taggedGuardedBuiltinOperation(operation: string | undefined): number {
 	if (

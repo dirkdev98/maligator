@@ -70,6 +70,13 @@ MalTableMode mal_table_mode(const MalTable *table);
 usize mal_table_size(const MalTable *table);
 
 /**
+ * Ensure appending until `desired_size` live entries needs no entry-buffer or
+ * hash-slot growth. Existing handles and insertion-order indices stay valid.
+ * Returns false when the requested capacity cannot be represented.
+ */
+bool mal_table_reserve(MalTable *table, usize desired_size);
+
+/**
  * Look up a key using the equality rule implied by key.kind.
  */
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key);

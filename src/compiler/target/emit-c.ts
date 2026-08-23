@@ -3206,6 +3206,11 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (instruction.operation === "Object.is") {
+				return [
+					`r${instruction.dst} = mal_builtin_object_is_known(${argsExpr}, ${instruction.arguments.length});`,
+				];
+			}
 			if (instruction.operation === "Object.keys") {
 				return [
 					`r${instruction.dst} = mal_builtin_object_keys_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
@@ -3603,12 +3608,20 @@ function emitInstruction(
 			if (
 				guardedBuiltinOperation === "Map.prototype.get" ||
 				guardedBuiltinOperation === "Map.prototype.set" ||
-				guardedBuiltinOperation === "Set.prototype.add"
+				guardedBuiltinOperation === "Map.prototype.has" ||
+				guardedBuiltinOperation === "Map.prototype.delete" ||
+				guardedBuiltinOperation === "Set.prototype.add" ||
+				guardedBuiltinOperation === "Set.prototype.has" ||
+				guardedBuiltinOperation === "Set.prototype.delete"
 			) {
 				const operation = {
 					"Map.prototype.get": "MAL_BUILTIN_COLLECTION_MAP_GET",
 					"Map.prototype.set": "MAL_BUILTIN_COLLECTION_MAP_SET",
+					"Map.prototype.has": "MAL_BUILTIN_COLLECTION_MAP_HAS",
+					"Map.prototype.delete": "MAL_BUILTIN_COLLECTION_MAP_DELETE",
 					"Set.prototype.add": "MAL_BUILTIN_COLLECTION_SET_ADD",
+					"Set.prototype.has": "MAL_BUILTIN_COLLECTION_SET_HAS",
+					"Set.prototype.delete": "MAL_BUILTIN_COLLECTION_SET_DELETE",
 				}[guardedBuiltinOperation];
 				return [
 					`static MalCallCache __cc_${ip};`,
