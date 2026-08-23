@@ -220,12 +220,16 @@ function remarkForInstruction(
 				code: "property.static-load",
 				outcome: "applied",
 			};
-		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
 			const firstCandidate = instruction.candidates[0]!;
 			return {
 				phase: "lowering",
 				operation,
-				code: "property.known-own-slot",
+				code:
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+						? "property.known-own-slot"
+						: "property.known-own-slot-store",
 				outcome: "guarded",
 				details: {
 					candidateCount: instruction.candidates.length,

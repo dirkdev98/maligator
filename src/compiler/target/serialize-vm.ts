@@ -3,7 +3,7 @@ import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
 	decodeVmValueOperand,
-	validateVmKnownOwnSlotLoads,
+	validateVmKnownOwnSlots,
 	vmGuardIsWorldInvariant,
 	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
@@ -36,7 +36,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 20;
+export const WIRE_VERSION = 21;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -184,6 +184,7 @@ export const WIRE_OPCODES = [
 	"MATH_BINARY_NUMBER",
 	"CALL_BUILTIN",
 	"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+	"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -821,7 +822,7 @@ export function serializeVmDefinition(
 	def: VmDefinition,
 	options: { debugInfo?: boolean } = {},
 ): Uint8Array {
-	validateVmKnownOwnSlotLoads(def);
+	validateVmKnownOwnSlots(def);
 	const debug = options.debugInfo !== false;
 	const w = new Writer();
 
@@ -1368,6 +1369,7 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
+			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				if (instruction.icIndex !== expected) {
 					throw new RangeError(
 						`serialize-vm: property IC index ${instruction.icIndex}, expected ${expected}`,
@@ -2581,6 +2583,17 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 				w.i32(candidate.slot);
 			}
 			return;
+		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			w.i32(i.object);
+			w.i32(i.value);
+			w.i32(i.stringIndex);
+			w.u32(i.candidates.length);
+			for (const candidate of i.candidates) {
+				w.i32(candidate.shapeFunctionIndex);
+				w.i32(candidate.shapeCacheIndex);
+				w.i32(candidate.slot);
+			}
+			return;
 		case "STORE_PROPERTY":
 		case "DEFINE_PRIVATE":
 		case "STORE_PRIVATE":
@@ -3680,7 +3693,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		sourcePositions,
 		cjsModuleFunctionIndices,
 	};
-	validateVmKnownOwnSlotLoads(definition);
+	validateVmKnownOwnSlots(definition);
 	return definition;
 }
 
@@ -3720,6 +3733,7 @@ function readFunction(r: Reader): VmFunction {
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
+			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				instruction.icIndex = propertyIcCount++;
 				break;
 			case "CREATE_OBJECT_SHAPED":
@@ -4016,6 +4030,25 @@ function readInstruction(r: Reader): VmInstruction {
 				opcode,
 				dst,
 				object,
+				stringIndex,
+				candidates,
+				icIndex: -1,
+			};
+		}
+		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
+			const object = r.i32();
+			const value = r.i32();
+			const stringIndex = r.i32();
+			const candidateCount = r.count(3);
+			const candidates = Array.from({ length: candidateCount }, () => ({
+				shapeFunctionIndex: r.i32(),
+				shapeCacheIndex: r.i32(),
+				slot: r.i32(),
+			}));
+			return {
+				opcode,
+				object,
+				value,
 				stringIndex,
 				candidates,
 				icIndex: -1,

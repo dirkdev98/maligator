@@ -285,10 +285,14 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
-        "[perf-known-own-slot-stats] probes=%llu hits=%llu fallbacks=%llu\n",
+        "[perf-known-own-slot-stats] probes=%llu hits=%llu fallbacks=%llu "
+        "store_probes=%llu store_hits=%llu store_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.known_own_slot_load_probes,
         (unsigned long long) mal_perf_stats.known_own_slot_load_hits,
-        (unsigned long long) mal_perf_stats.known_own_slot_load_fallbacks
+        (unsigned long long) mal_perf_stats.known_own_slot_load_fallbacks,
+        (unsigned long long) mal_perf_stats.known_own_slot_store_probes,
+        (unsigned long long) mal_perf_stats.known_own_slot_store_hits,
+        (unsigned long long) mal_perf_stats.known_own_slot_store_fallbacks
     );
     fprintf(
         stderr,

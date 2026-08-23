@@ -193,6 +193,14 @@ describe("Test262 VM definition merger", () => {
 				icIndex: 3,
 				candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 }],
 			},
+			{
+				opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+				object: 1,
+				value: 2,
+				stringIndex: 0,
+				icIndex: 4,
+				candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 }],
+			},
 		];
 		const secondFunction = vmFunction(indexed);
 		const second = definition({
@@ -258,8 +266,13 @@ describe("Test262 VM definition merger", () => {
 		});
 		expect(rebased[17]).toMatchObject({ directFunctionIndex: 2 });
 		expect(rebased[18]).toMatchObject({ opcode: "BINARY", operator: "+" });
-		expect(rebased.at(-1)).toMatchObject({
+		expect(rebased.at(-2)).toMatchObject({
 			opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			stringIndex: 2,
+			candidates: [{ shapeFunctionIndex: 2, shapeCacheIndex: 0, slot: 0 }],
+		});
+		expect(rebased.at(-1)).toMatchObject({
+			opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			stringIndex: 2,
 			candidates: [{ shapeFunctionIndex: 2, shapeCacheIndex: 0, slot: 0 }],
 		});

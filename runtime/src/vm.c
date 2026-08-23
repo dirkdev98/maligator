@@ -1019,6 +1019,16 @@ static void mal_vm_rebase_instruction(
             }
             break;
         }
+        case MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT: {
+            i32 *data = instruction_data +
+                in->as.store_property_static_known_own_slot.data_offset;
+            data[0] += string_base;
+            i32 candidate_count = data[1];
+            for (i32 index = 0; index < candidate_count; index++) {
+                data[2 + index * 3] += fn_base;
+            }
+            break;
+        }
         case MAL_OP_STORE_PROPERTY_STATIC:
             in->as.store_property_static.string_index += string_base;
             break;
@@ -2229,6 +2239,23 @@ static void mal_vm_run_until_frame_count(
                 }
                 MAL_PERF_COUNT(interpreter_store_ic_sync_fallbacks);
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_property_static(frame, instruction));
+                break;
+            }
+            case MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT: {
+                const i32 *data = frame->function->instruction_data +
+                    instruction->as.store_property_static_known_own_slot.data_offset;
+                MalValue object = registers[
+                    instruction->as.store_property_static_known_own_slot.object];
+                MalValue value = registers[
+                    instruction->as.store_property_static_known_own_slot.value];
+                if (mal_vm_try_store_known_own_slots(
+                        vm, object, value, data[1], &data[2])) {
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
+                    mal_op_store_property_static_known_own_slot_fallback(
+                        frame, instruction));
                 break;
             }
             case MAL_OP_TO_PROPERTY_KEY:

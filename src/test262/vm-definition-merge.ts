@@ -145,6 +145,7 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "STORE_PROPERTY_STATIC":
 			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			return {
 				...instruction,
 				stringIndex: instruction.stringIndex + base.string,

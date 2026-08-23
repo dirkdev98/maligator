@@ -160,6 +160,9 @@ typedef struct MalPerfStats {
     u64 known_own_slot_load_probes;
     u64 known_own_slot_load_hits;
     u64 known_own_slot_load_fallbacks;
+    u64 known_own_slot_store_probes;
+    u64 known_own_slot_store_hits;
+    u64 known_own_slot_store_fallbacks;
     u64 copy_data_linear_exclusion_checks;
     u64 copy_data_shaped_hits;
     u64 copy_data_shaped_slots;

@@ -18,7 +18,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 20u
+#define WIRE_VERSION 21u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in
@@ -128,6 +128,7 @@ typedef enum WireOp {
     WIRE_MATH_BINARY_NUMBER,
     WIRE_CALL_BUILTIN,
     WIRE_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT,
+    WIRE_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -839,6 +840,13 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.load_property_static_known_own_slot.data_offset =
                 rd_side_known_own_slots(r, side_data);
             return;
+        case WIRE_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT:
+            o->opcode = MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT;
+            o->as.store_property_static_known_own_slot.object = rd_i32(r);
+            o->as.store_property_static_known_own_slot.value = rd_i32(r);
+            o->as.store_property_static_known_own_slot.data_offset =
+                rd_side_known_own_slots(r, side_data);
+            return;
         case WIRE_DELETE_PROPERTY:
             o->opcode = MAL_OP_DELETE_PROPERTY;
             o->as.delete_property.dst = rd_i32(r);
@@ -1463,6 +1471,10 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
             case MAL_OP_STORE_PROPERTY_STATIC:
                 instructions[i].as.store_property_static.ic_index = fn->property_ic_count++;
                 break;
+            case MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT:
+                instructions[i].as.store_property_static_known_own_slot.ic_index =
+                    fn->property_ic_count++;
+                break;
             case MAL_OP_CREATE_OBJECT_SHAPED:
                 instructions[i].as.create_object_shaped.shape_cache_index =
                     fn->literal_shape_count++;
@@ -1628,6 +1640,16 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     }
 }
 
+static i32 mal_loaded_known_own_slot_offset(const MalInstruction *instruction) {
+    if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
+        return instruction->as.load_property_static_known_own_slot.data_offset;
+    }
+    if (instruction->opcode == MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
+        return instruction->as.store_property_static_known_own_slot.data_offset;
+    }
+    return -1;
+}
+
 static bool mal_loaded_known_own_slot_valid(
     const MalFunction *functions,
     u32 function_count,
@@ -1635,7 +1657,7 @@ static bool mal_loaded_known_own_slot_valid(
     const MalFunction *owner,
     const MalInstruction *instruction
 ) {
-    i32 offset = instruction->as.load_property_static_known_own_slot.data_offset;
+    i32 offset = mal_loaded_known_own_slot_offset(instruction);
     if (offset < 0 || offset > owner->instruction_data_count - 2) return false;
     const i32 *data = &owner->instruction_data[offset];
     i32 string_index = data[0];
@@ -1692,10 +1714,12 @@ static void mal_loaded_build_precompiled_literal_shapes(
          function_index++) {
         const MalFunction *function = &definition->functions[function_index];
         for (i32 ip = 0; ip < function->instruction_count; ip++) {
-            if (function->instructions[ip].opcode
-                == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
-                i32 offset = function->instructions[ip]
-                    .as.load_property_static_known_own_slot.data_offset;
+            if (function->instructions[ip].opcode ==
+                    MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT ||
+                function->instructions[ip].opcode ==
+                    MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
+                i32 offset = mal_loaded_known_own_slot_offset(
+                    &function->instructions[ip]);
                 i32 candidate_count = function->instruction_data[offset + 1];
                 if (candidate_count > INT32_MAX - capacity) {
                     reader->ok = false;
@@ -1717,10 +1741,11 @@ static void mal_loaded_build_precompiled_literal_shapes(
         const MalFunction *function = &definition->functions[function_index];
         for (i32 ip = 0; reader->ok && ip < function->instruction_count; ip++) {
             const MalInstruction *instruction = &function->instructions[ip];
-            if (instruction->opcode != MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
+            if (instruction->opcode != MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT &&
+                instruction->opcode != MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
                 continue;
             }
-            i32 offset = instruction->as.load_property_static_known_own_slot.data_offset;
+            i32 offset = mal_loaded_known_own_slot_offset(instruction);
             const i32 *decision = &function->instruction_data[offset];
             i32 candidate_count = decision[1];
             for (i32 candidate_index = 0;
@@ -1887,7 +1912,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
         const MalFunction *fn = &functions[f];
         for (i32 ip = 0; r.ok && ip < fn->instruction_count; ip++) {
             const MalInstruction *instruction = &fn->instructions[ip];
-            if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT &&
+            if ((instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT ||
+                 instruction->opcode == MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) &&
                 !mal_loaded_known_own_slot_valid(
                     functions, function_count, string_count, fn, instruction)) {
                 r.ok = false;

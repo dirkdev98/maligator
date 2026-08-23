@@ -385,6 +385,17 @@ function knownOwnSlotDefinition(): VmDefinition {
 				{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
 			],
 		},
+		{
+			opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			object: 2,
+			value: 0,
+			stringIndex: 1,
+			icIndex: 1,
+			candidates: [
+				{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 1 },
+				{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
+			],
+		},
 		{ opcode: "RETURN", value: 3 },
 	];
 	return {
@@ -404,7 +415,7 @@ describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-13)).toEqual([
+		expect(WIRE_OPCODES.slice(-14)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -418,16 +429,28 @@ describe("serialize-vm", () => {
 			"MATH_BINARY_NUMBER",
 			"CALL_BUILTIN",
 			"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 		]);
 	});
 
-	it("round-trips and rejects tampered known-own-slot load metadata", () => {
+	it("round-trips and rejects tampered known-own-slot access metadata", () => {
 		const valid = knownOwnSlotDefinition();
 		const wire = serializeVmDefinition(valid, { debugInfo: false });
 		const restored = deserializeVmDefinition(wire);
 		expect(
 			restored.functions[0]!.instructions.find(
 				(instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			),
+		).toMatchObject({
+			stringIndex: 1,
+			candidates: [
+				{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 1 },
+				{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
+			],
+		});
+		expect(
+			restored.functions[0]!.instructions.find(
+				(instruction) => instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			),
 		).toMatchObject({
 			stringIndex: 1,
@@ -452,7 +475,9 @@ describe("serialize-vm", () => {
 				),
 			})),
 		};
-		expect(() => serializeVmDefinition(malformed)).toThrow(/invalid known-own-slot load/);
+		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid known-own-slot access/,
+		);
 		const duplicate = {
 			...valid,
 			functions: valid.functions.map((fn, functionIndex) => ({
@@ -468,7 +493,9 @@ describe("serialize-vm", () => {
 				),
 			})),
 		};
-		expect(() => serializeVmDefinition(duplicate)).toThrow(/invalid known-own-slot load/);
+		expect(() => serializeVmDefinition(duplicate)).toThrow(
+			/invalid known-own-slot access/,
+		);
 		const extraField = {
 			...valid,
 			functions: valid.functions.map((fn, functionIndex) => ({
@@ -485,7 +512,7 @@ describe("serialize-vm", () => {
 			})),
 		};
 		expect(() => serializeVmDefinition(extraField)).toThrow(
-			/invalid known-own-slot load/,
+			/invalid known-own-slot access/,
 		);
 		const negativeZero = {
 			...valid,
@@ -503,7 +530,7 @@ describe("serialize-vm", () => {
 			})),
 		};
 		expect(() => serializeVmDefinition(negativeZero)).toThrow(
-			/invalid known-own-slot load/,
+			/invalid known-own-slot access/,
 		);
 
 		const opcode = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
@@ -516,7 +543,7 @@ describe("serialize-vm", () => {
 		// Change the second candidate's slot ZigZag(0) to ZigZag(1), outside its shape.
 		tampered[instructionOffset + encodedInstruction.length - 1] = 2;
 		expect(() => deserializeVmDefinition(tampered)).toThrow(
-			/invalid known-own-slot load/,
+			/invalid known-own-slot access/,
 		);
 	});
 

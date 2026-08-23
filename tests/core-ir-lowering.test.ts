@@ -191,11 +191,46 @@ describe("Core IR lowering", () => {
 		};
 		try {
 			expect(() => lowerCoreProgramToVmDefinition(target)).toThrow(
-				/Invalid known-own-slot load origin/,
+				/Invalid known-own-slot access origin/,
 			);
 		} finally {
 			mutable.knownOwnSlot = original;
 		}
+	});
+
+	it("resolves guarded shaped stores to dense VM cache rows", () => {
+		const optimized = executeCoreOptimizations(
+			lower(`
+				function write(n, touch) {
+					const object = { x: 0 };
+					for (let index = 0; index < n; index++) {
+						touch(object);
+						object.x = index;
+					}
+					return object.x;
+				}
+				write(3, () => {});
+			`),
+			{ ablations: new Set(["inlining", "interprocedural"]) },
+		).program;
+		const target = lowerCoreProgramToTarget(optimized);
+		const vm = lowerCoreProgramToVmDefinition(target);
+		const store = vm.functions
+			.flatMap((fn) => fn.instructions)
+			.find(
+				(instruction) => instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			);
+		expect(store?.opcode).toBe("STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT");
+		if (store?.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") return;
+		const candidate = store.candidates[0]!;
+		const source = vm.functions[candidate.shapeFunctionIndex]!.instructions.find(
+			(instruction) =>
+				instruction.opcode === "CREATE_OBJECT_SHAPED" &&
+				instruction.shapeCacheIndex === candidate.shapeCacheIndex,
+		);
+		expect(source?.opcode).toBe("CREATE_OBJECT_SHAPED");
+		if (source?.opcode !== "CREATE_OBJECT_SHAPED") return;
+		expect(source.keyStringIndices[candidate.slot]).toBe(store.stringIndex);
 	});
 
 	it("rejects a malformed selected Core region instead of dropping it", () => {

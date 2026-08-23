@@ -2352,6 +2352,20 @@ function emitInstruction(
 				`}`,
 			];
 		}
+		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
+			const candidates = instruction.candidates.flatMap((candidate) => [
+				candidate.shapeFunctionIndex,
+				candidate.shapeCacheIndex,
+				candidate.slot,
+			]);
+			return [
+				`static const i32 __known_own_slot_store_candidates_${ip}[] = { ${candidates.join(", ")} };`,
+				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
+				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+				`  ${throwCheck}`,
+				`}`,
+			];
+		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
 			if (

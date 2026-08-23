@@ -1238,7 +1238,10 @@ function verifyKnownOwnSlotClaims(program: CoreProgram): void {
 						`instruction @${instruction.id} is claimed by both a Core region and a known own slot`,
 					);
 				}
-				if (instruction.opcode !== "loadPropertyStatic") {
+				if (
+					instruction.opcode !== "loadPropertyStatic" &&
+					instruction.opcode !== "storePropertyStatic"
+				) {
 					fail(
 						`instruction @${instruction.id} carries a known own slot on ${instruction.opcode}`,
 					);

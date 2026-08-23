@@ -83,9 +83,42 @@ const instructions: Array<VmInstruction> = [
 			{ shapeFunctionIndex: 0, shapeCacheIndex: 2, slot: 1 },
 		],
 	},
+	{ opcode: "CREATE_NUMBER", dst: 11, value: 50 },
+	{
+		opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+		object: 3,
+		value: 11,
+		stringIndex: 0,
+		icIndex: 5,
+		candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 }],
+	},
+	{
+		opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+		object: 5,
+		value: 11,
+		stringIndex: 0,
+		icIndex: 6,
+		candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 }],
+	},
+	{
+		opcode: "LOAD_PROPERTY_STATIC",
+		dst: 12,
+		object: 3,
+		stringIndex: 0,
+		icIndex: 7,
+	},
+	{
+		opcode: "LOAD_PROPERTY_STATIC",
+		dst: 13,
+		object: 5,
+		stringIndex: 0,
+		icIndex: 8,
+	},
 	{ opcode: "BINARY", dst: 10, left: 4, right: 6, operator: "+" },
 	{ opcode: "BINARY", dst: 10, left: 10, right: 8, operator: "+" },
 	{ opcode: "BINARY", dst: 10, left: 10, right: 9, operator: "+" },
+	{ opcode: "BINARY", dst: 10, left: 10, right: 12, operator: "+" },
+	{ opcode: "BINARY", dst: 10, left: 10, right: 13, operator: "+" },
 	{ opcode: "STORE_GLOBAL", src: 10, index: 0 },
 	{ opcode: "RETURN", value: 10 },
 ];
@@ -98,7 +131,7 @@ const fn: VmFunction = {
 	mappedArguments: false,
 	mappedArgumentSlots: [],
 	length: 0,
-	registerCount: 11,
+	registerCount: 14,
 	capturedCount: 0,
 	strict: true,
 	needsArguments: false,
@@ -111,7 +144,7 @@ const fn: VmFunction = {
 	handlers: [],
 	fileIndex: 0,
 	positions: [],
-	registerRepresentations: Array.from({ length: 11 }, () => "boxed"),
+	registerRepresentations: Array.from({ length: 14 }, () => "boxed"),
 };
 
 const definition: VmDefinition = {
@@ -144,7 +177,7 @@ function perfField(stderr: string, field: string): number {
 	return Number(line.match(new RegExp(`(?:^|\\s)${field}=([0-9]+)`))?.[1] ?? -1);
 }
 
-describe("guarded known-own-slot loads", () => {
+describe("guarded known-own-slot accesses", () => {
 	let compiled: string;
 	let interpreted: string;
 
@@ -180,6 +213,9 @@ describe("guarded known-own-slot loads", () => {
 			expect(perfField(stderr, "probes")).toBe(4);
 			expect(perfField(stderr, "hits")).toBe(3);
 			expect(perfField(stderr, "fallbacks")).toBe(1);
+			expect(perfField(stderr, "store_probes")).toBe(2);
+			expect(perfField(stderr, "store_hits")).toBe(1);
+			expect(perfField(stderr, "store_fallbacks")).toBe(1);
 		}
 	});
 });

@@ -444,6 +444,7 @@ export type CompilerInstruction =
 			// [object, value]
 			registers: [number, number];
 			stringIndex: number;
+			knownOwnSlot?: CompilerKnownOwnSlot;
 	  }
 	| {
 			type: "toPropertyKey";

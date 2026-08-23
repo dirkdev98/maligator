@@ -613,6 +613,8 @@ void mal_op_load_property_static_known_own_slot_fallback(
 
 void mal_op_store_property(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_store_property_static(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_store_property_static_known_own_slot_fallback(
+    MalCallable *callable, const MalInstruction *instruction);
 
 /**
  * Value-returning Get / completion-signalling Set with an already-evaluated key
@@ -1332,6 +1334,33 @@ static inline void mal_vm_object_slot_store(MalObject *object, u32 slot, MalValu
     mal_gc_write_barrier(object->slots[slot]);
     object->slots[slot] = value;
     mal_gc_card(&object->header, value);
+}
+
+/** Exact shaped-literal writable-slot overwrite with the ordinary store as fallback. */
+static inline bool mal_vm_try_store_known_own_slots(
+    MalVm *vm,
+    MalValue receiver,
+    MalValue value,
+    i32 candidate_count,
+    const i32 *candidates
+) {
+    MAL_PERF_COUNT(known_own_slot_store_probes);
+    if (mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+        MalObject *object = (MalObject *) mal_value_to_heap(receiver);
+        for (i32 index = 0; index < candidate_count; index++) {
+            i32 shape_function_index = candidates[index * 3];
+            i32 shape_cache_index = candidates[index * 3 + 1];
+            i32 slot = candidates[index * 3 + 2];
+            MalShape **row = vm->literal_shape_cache[shape_function_index];
+            MalShape *expected = row == nullptr ? nullptr : row[shape_cache_index];
+            if (expected == nullptr || object->shape != expected) continue;
+            mal_vm_object_slot_store(object, (u32) slot, value);
+            MAL_PERF_COUNT(known_own_slot_store_hits);
+            return true;
+        }
+    }
+    MAL_PERF_COUNT(known_own_slot_store_fallbacks);
+    return false;
 }
 
 static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, MalValue *out);

@@ -147,6 +147,17 @@ describe("wire loader side-data validation", () => {
 						{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
 					],
 				},
+				{
+					opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+					object: 1,
+					value: 0,
+					stringIndex: 0,
+					icIndex: 1,
+					candidates: [
+						{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 },
+						{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
+					],
+				},
 				{ opcode: "RETURN", value: 0 },
 			],
 		};
@@ -170,6 +181,16 @@ describe("wire loader side-data validation", () => {
 		// Rebase the second candidate's shape-cache row 1 to row 0.
 		duplicate[offset + encodedInstruction.length - 2] = 0;
 		rejectsWire("known-own-slot-duplicate", duplicate);
+
+		const storeWire = serializeVmDefinition(knownSlotDefinition, { debugInfo: false });
+		const storeTag = WIRE_OPCODES.indexOf("STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT");
+		const encodedStore = [storeTag, 2, 0, 0, 2, 0, 0, 0, 0, 2, 0];
+		const storeOffset = storeWire.findIndex((_, index) =>
+			encodedStore.every((byte, operand) => storeWire[index + operand] === byte),
+		);
+		expect(storeOffset).toBeGreaterThanOrEqual(0);
+		storeWire[storeOffset + encodedStore.length - 1] = 2;
+		rejectsWire("known-own-slot-store", storeWire);
 	});
 
 	it("pre-instantiates known literal shapes for initial and spliced wire definitions", () => {

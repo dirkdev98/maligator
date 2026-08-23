@@ -1170,6 +1170,44 @@ describe("Core known own-slot selection", () => {
 		expect(lowerCoreProgramToTarget(rerun).functions).toEqual(target.functions);
 	});
 
+	it("carries a loop store certificate unchanged to the target", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function write(n, touch) {
+					const object = { x: 0 };
+					for (let index = 0; index < n; index++) {
+						touch(object);
+						object.x = index;
+					}
+					return object.x;
+				}
+				write(3, () => {});`,
+				"known-own-slot-store-target.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining", "interprocedural"]),
+		}).program;
+		const coreStore = optimized.functions
+			.flatMap((fn) => instructions(fn, "storePropertyStatic"))
+			.find((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)!;
+		expect(coreStore).toBeDefined();
+		const target = lowerCoreProgramToTarget(optimized);
+		const targetStore = target.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions: blockInstructions }) => blockInstructions)
+			.find(
+				(instruction) =>
+					instruction.type === "storePropertyStatic" &&
+					instruction.knownOwnSlot !== undefined,
+			);
+		expect(targetStore?.type).toBe("storePropertyStatic");
+		if (targetStore?.type !== "storePropertyStatic") return;
+		expect(targetStore.knownOwnSlot).toEqual(
+			coreStore.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+		);
+	});
+
 	it("publishes a guarded loop load from a captured finite shape set", () => {
 		const initial = lowerSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(

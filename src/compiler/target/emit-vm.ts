@@ -8,7 +8,7 @@ import {
 	computeArgumentRetentionLimit,
 	countLiteralShapeSites,
 	countPropertyIcSites,
-	validateVmKnownOwnSlotLoads,
+	validateVmKnownOwnSlots,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
@@ -254,6 +254,7 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 	fn.instructions.forEach((instruction, index) => {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				offsets[index] = data.length;
 				data.push(instruction.stringIndex, instruction.candidates.length);
 				for (const candidate of instruction.candidates) {
@@ -460,7 +461,7 @@ function emitVmDefinitionSource(
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
 ): EmittedVmSource {
-	validateVmKnownOwnSlotLoads(definition);
+	validateVmKnownOwnSlots(definition);
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
@@ -871,7 +872,12 @@ function malVmDefinitionStruct(
 	>();
 	for (const fn of definition.functions) {
 		for (const instruction of fn.instructions) {
-			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") continue;
+			if (
+				instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+				instruction.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			) {
+				continue;
+			}
 			for (const candidate of instruction.candidates) {
 				const key = `${candidate.shapeFunctionIndex}:${candidate.shapeCacheIndex}`;
 				if (precompiledLiteralShapes.has(key)) continue;
@@ -1396,6 +1402,8 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC, .as.load_property_static = { .dst = ${instruction.dst}, .object = ${instruction.object}, .string_index = ${instruction.stringIndex}, .ic_index = ${instruction.icIndex} } }`;
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT, .as.load_property_static_known_own_slot = { .dst = ${instruction.dst}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()}, .ic_index = ${instruction.icIndex} } }`;
+		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			return `{ .opcode = MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT, .as.store_property_static_known_own_slot = { .object = ${instruction.object}, .value = ${instruction.value}, .data_offset = ${sideDataOffset()}, .ic_index = ${instruction.icIndex} } }`;
 		case "STORE_PROPERTY":
 			return `{ .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value}, .ic_index = ${instruction.icIndex} } }`;
 		case "STORE_PROPERTY_STATIC":

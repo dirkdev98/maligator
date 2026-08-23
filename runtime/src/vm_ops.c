@@ -4867,6 +4867,26 @@ void mal_op_store_property_static(MalCallable *callable, const MalInstruction *i
     );
 }
 
+void mal_op_store_property_static_known_own_slot_fallback(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.store_property_static_known_own_slot.data_offset);
+    MalValue key = mal_value_from_string(callable->vm->string_constant_atoms[data[0]]);
+    mal_vm_array_fast_store(
+        callable->vm,
+        callable->registers[
+            instruction->as.store_property_static_known_own_slot.object],
+        key,
+        callable->registers[
+            instruction->as.store_property_static_known_own_slot.value],
+        callable->function->strict,
+        mal_vm_property_ic_at(
+            callable,
+            instruction->as.store_property_static_known_own_slot.ic_index)
+    );
+}
+
 // Shared by the interpreter op and the native backend: `super.p = value` /
 // `super[k] = value`. `object` is the [[HomeObject]]'s prototype (the controlling
 // descriptor's source); the write applies to `receiver` (the derived `this`). A

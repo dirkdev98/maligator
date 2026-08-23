@@ -1268,6 +1268,15 @@ export type VmInstruction =
 			icIndex: number;
 	  }
 	| {
+			opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT";
+			object: number;
+			value: number;
+			stringIndex: number;
+			icIndex: number;
+			/** Ordered exact shaped-literal guards tried before the generic fallback. */
+			candidates: ReadonlyArray<VmKnownOwnSlotCandidate>;
+	  }
+	| {
 			opcode: "TO_PROPERTY_KEY";
 			dst: number;
 			object: number;
@@ -1684,6 +1693,7 @@ export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>)
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
+			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				count++;
 				break;
 		}
@@ -1714,10 +1724,15 @@ function isNonnegativeSafeInteger(value: unknown): value is number {
 }
 
 /** Reject malformed VM-level guarded slot references at every output boundary. */
-export function validateVmKnownOwnSlotLoads(definition: VmDefinition): void {
+export function validateVmKnownOwnSlots(definition: VmDefinition): void {
 	for (const fn of definition.functions) {
 		for (const instruction of fn.instructions) {
-			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") continue;
+			if (
+				instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+				instruction.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			) {
+				continue;
+			}
 			const rawCandidates: unknown = instruction.candidates;
 			if (
 				!isNonnegativeSafeInteger(instruction.stringIndex) ||
@@ -1726,13 +1741,13 @@ export function validateVmKnownOwnSlotLoads(definition: VmDefinition): void {
 				rawCandidates.length < 1 ||
 				rawCandidates.length > 4
 			) {
-				throw new RangeError("invalid known-own-slot load");
+				throw new RangeError("invalid known-own-slot access");
 			}
 			const candidates = rawCandidates as ReadonlyArray<unknown>;
 			const identities = new Set<string>();
 			for (const value of candidates) {
 				if (typeof value !== "object" || value === null || Array.isArray(value)) {
-					throw new RangeError("invalid known-own-slot load");
+					throw new RangeError("invalid known-own-slot access");
 				}
 				const candidate = value as Partial<VmKnownOwnSlotCandidate>;
 				const { shapeFunctionIndex, shapeCacheIndex, slot } = candidate;
@@ -1742,7 +1757,7 @@ export function validateVmKnownOwnSlotLoads(definition: VmDefinition): void {
 					!isNonnegativeSafeInteger(shapeCacheIndex) ||
 					!isNonnegativeSafeInteger(slot)
 				) {
-					throw new RangeError("invalid known-own-slot load");
+					throw new RangeError("invalid known-own-slot access");
 				}
 				const identity = `${shapeFunctionIndex}\0${shapeCacheIndex}`;
 				const sourceFunction = definition.functions[shapeFunctionIndex];
@@ -1761,7 +1776,7 @@ export function validateVmKnownOwnSlotLoads(definition: VmDefinition): void {
 					slot >= sourceInstruction.count ||
 					sourceInstruction.keyStringIndices[slot] !== instruction.stringIndex
 				) {
-					throw new RangeError("invalid known-own-slot load");
+					throw new RangeError("invalid known-own-slot access");
 				}
 				identities.add(identity);
 			}
@@ -2059,7 +2074,11 @@ function lowerFunctionToVmFunction(
 			const instructionIndex = instructions.length;
 			instructionIndexByTargetInstruction.set(instruction, instructionIndex);
 			let vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
-			if (instruction.type === "loadPropertyStatic" && instruction.knownOwnSlot) {
+			if (
+				(instruction.type === "loadPropertyStatic" ||
+					instruction.type === "storePropertyStatic") &&
+				instruction.knownOwnSlot
+			) {
 				const candidates = instruction.knownOwnSlot.candidates.map((candidate) => {
 					const { shapeFunctionIndex, shapeInstruction, slot } = candidate;
 					const origin = literalShapeOrigins[shapeFunctionIndex]?.get(shapeInstruction);
@@ -2073,19 +2092,29 @@ function lowerFunctionToVmFunction(
 						origin.instruction.keyStringIndices[slot] !== instruction.stringIndex
 					) {
 						throw new Error(
-							`Invalid known-own-slot load origin ${shapeFunctionIndex}:${shapeInstruction}:${slot}`,
+							`Invalid known-own-slot access origin ${shapeFunctionIndex}:${shapeInstruction}:${slot}`,
 						);
 					}
 					return { shapeFunctionIndex, shapeCacheIndex: origin.shapeCacheIndex, slot };
 				});
-				vmInstruction = {
-					opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
-					dst: instruction.registers[0],
-					object: instruction.registers[1],
-					stringIndex: instruction.stringIndex,
-					icIndex: -1,
-					candidates,
-				};
+				vmInstruction =
+					instruction.type === "loadPropertyStatic"
+						? {
+								opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+								dst: instruction.registers[0],
+								object: instruction.registers[1],
+								stringIndex: instruction.stringIndex,
+								icIndex: -1,
+								candidates,
+							}
+						: {
+								opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+								object: instruction.registers[0],
+								value: instruction.registers[1],
+								stringIndex: instruction.stringIndex,
+								icIndex: -1,
+								candidates,
+							};
 			}
 			switch (vmInstruction.opcode) {
 				case "LOAD_PROPERTY":
@@ -2093,6 +2122,7 @@ function lowerFunctionToVmFunction(
 				case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				case "STORE_PROPERTY":
 				case "STORE_PROPERTY_STATIC":
+				case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 					vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
 					break;
 				case "CREATE_OBJECT_SHAPED":

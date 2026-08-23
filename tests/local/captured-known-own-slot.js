@@ -105,4 +105,42 @@ aggregateExercise(
 );
 ok("aggregate Proxy count", aggregateProxyCalls === 4);
 
+const storeExercise = function (state) {
+	for (let index = 0; index < 4; index++) state.x = index + 1;
+	return state.x;
+};
+
+const stored = { x: 0 };
+ok("guarded store hit", storeExercise(stored) === 4 && stored.x === 4);
+
+let setterCalls = 0;
+let setterValue = 0;
+const accessorStore = { x: 0 };
+Object.defineProperty(accessorStore, "x", {
+	configurable: true,
+	get() {
+		return setterValue;
+	},
+	set(value) {
+		setterCalls++;
+		setterValue = value;
+	},
+});
+ok("guarded store accessor fallback", storeExercise(accessorStore) === 4);
+ok("guarded store accessor count", setterCalls === 4);
+
+let proxyStoreCalls = 0;
+const proxyStore = new Proxy(
+	{ x: 0 },
+	{
+		set(target, key, value) {
+			proxyStoreCalls++;
+			target[key] = value;
+			return true;
+		},
+	},
+);
+ok("guarded store Proxy fallback", storeExercise(proxyStore) === 4);
+ok("guarded store Proxy count", proxyStoreCalls === 4);
+
 console.log("captured-known-own-slot PASS");

@@ -791,9 +791,9 @@ export function retractCoreKnownOwnSlots(
 }
 
 /**
- * Attach guarded own-slot candidates to profitable residual static loads.
+ * Attach guarded own-slot candidates to profitable residual static accesses.
  *
- * This pass owns and retracts the attribute. The load remains in Core unchanged
+ * This pass owns and retracts the attribute. The access remains in Core unchanged
  * as the exact fallback; the candidate says only which initial layout a target
  * may cheaply test before executing that fallback.
  */
@@ -810,9 +810,11 @@ export function selectCoreKnownOwnSlots(
 			const instructions = block.instructions.map((instruction): CoreInstruction => {
 				let selected: CoreKnownOwnSlot | undefined;
 				if (
-					instruction.opcode === "loadPropertyStatic" &&
+					(instruction.opcode === "loadPropertyStatic" ||
+						instruction.opcode === "storePropertyStatic") &&
 					!claimed.has(instruction.id) &&
-					instruction.inputs.length === 1
+					instruction.inputs.length ===
+						(instruction.opcode === "loadPropertyStatic" ? 1 : 2)
 				) {
 					const stringIndex = instruction.attributes.stringIndex;
 					const receiver = instruction.inputs[0]!;
@@ -842,7 +844,7 @@ export function selectCoreKnownOwnSlots(
 							// declines until a later canonical-key selector generalizes this proof.
 							// A candidate crossing a function boundary is precision, not a
 							// frequency proof. Residual property ICs are already cheap when warm,
-							// so publish extra guarded output only where the load itself repeats.
+							// so publish extra guarded output only where the access itself repeats.
 							// Origins may still flow through any number of ordinary calls before
 							// reaching this loop-resident consumer.
 							if (provenance.isLoopBlock(fn.functionIndex, block.id)) {
