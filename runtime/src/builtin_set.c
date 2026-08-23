@@ -487,8 +487,8 @@ static MalValue mal_builtin_set_prototype_union(MalVm *vm, MalValue this_value, 
         SIZE_MAX - reserve_size >= mal_map_object_size(record.native_set)) {
         reserve_size += mal_map_object_size(record.native_set);
     }
-    MalMapObject *result = mal_builtin_set_new_result(vm, set, reserve_size);
     if (record.native_set != nullptr) {
+        MalMapObject *result = mal_builtin_set_new_result(vm, set, reserve_size);
         MalTableIter iter;
         mal_table_iter_init(&iter, record.native_set->entries, MAL_TABLE_ITER_STORAGE);
         MalKey key;
@@ -501,11 +501,18 @@ static MalValue mal_builtin_set_prototype_union(MalVm *vm, MalValue this_value, 
 
     MalSetExecution execution;
     mal_builtin_set_execution_begin(
-        vm, &record, mal_value_from_map_object(result), &execution);
+        vm, &record, this_value, &execution);
     MalValue ret = mal_value_new_undefined();
     if (!mal_builtin_set_record_keys_iterator(vm, &record, &execution.iterator)) {
         goto done;
     }
+
+    // GetIteratorFromMethod, including the observable `next` lookup, precedes
+    // copying the receiver's SetData. User code reached by that lookup can
+    // mutate the receiver, and the result must reflect the updated contents.
+    set = mal_value_to_map_object(this_value);
+    MalMapObject *result = mal_builtin_set_new_result(vm, set, reserve_size);
+    execution.values[0] = mal_value_from_map_object(result);
 
     while (true) {
         bool done;
@@ -751,8 +758,8 @@ static MalValue mal_builtin_set_prototype_symmetric_difference(MalVm *vm, MalVal
         SIZE_MAX - reserve_size >= mal_map_object_size(record.native_set)) {
         reserve_size += mal_map_object_size(record.native_set);
     }
-    MalMapObject *result = mal_builtin_set_new_result(vm, set, reserve_size);
     if (record.native_set != nullptr) {
+        MalMapObject *result = mal_builtin_set_new_result(vm, set, reserve_size);
         MalTableIter iter;
         mal_table_iter_init(
             &iter, record.native_set->entries, MAL_TABLE_ITER_STORAGE);
@@ -770,11 +777,16 @@ static MalValue mal_builtin_set_prototype_symmetric_difference(MalVm *vm, MalVal
 
     MalSetExecution execution;
     mal_builtin_set_execution_begin(
-        vm, &record, mal_value_from_map_object(result), &execution);
+        vm, &record, this_value, &execution);
     MalValue ret = mal_value_new_undefined();
     if (!mal_builtin_set_record_keys_iterator(vm, &record, &execution.iterator)) {
         goto done;
     }
+
+    // As in union, capture the iterator's `next` before copying the receiver.
+    set = mal_value_to_map_object(this_value);
+    MalMapObject *result = mal_builtin_set_new_result(vm, set, reserve_size);
+    execution.values[0] = mal_value_from_map_object(result);
 
     while (true) {
         bool done;

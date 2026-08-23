@@ -291,6 +291,34 @@ check(
 );
 if (mutablePrimordials) Object.is = originalObjectIs;
 
+if (mutablePrimordials) {
+	const symbolToStringTag = Object.getOwnPropertyDescriptor(
+		Symbol.prototype,
+		Symbol.toStringTag,
+	);
+	const bigintToStringTag = Object.getOwnPropertyDescriptor(
+		BigInt.prototype,
+		Symbol.toStringTag,
+	);
+	Object.defineProperty(Symbol.prototype, Symbol.toStringTag, {
+		value: 17,
+		configurable: true,
+	});
+	Object.defineProperty(BigInt.prototype, Symbol.toStringTag, {
+		value: {},
+		configurable: true,
+	});
+	check(
+		"Object ignores non-string Symbol and BigInt tags",
+		Object.prototype.toString.call(Symbol("s")) === "[object Object]" &&
+			Object.prototype.toString.call(Object(Symbol("s"))) === "[object Object]" &&
+			Object.prototype.toString.call(1n) === "[object Object]" &&
+			Object.prototype.toString.call(Object(1n)) === "[object Object]",
+	);
+	Object.defineProperty(Symbol.prototype, Symbol.toStringTag, symbolToStringTag);
+	Object.defineProperty(BigInt.prototype, Symbol.toStringTag, bigintToStringTag);
+}
+
 const constructedFromFreshEntry = new Map({
 	[Symbol.iterator]() {
 		let emitted = false;
@@ -404,6 +432,34 @@ check(
 	"Set record access order",
 	[...new Set([1]).union(orderedSetLike)].join(",") === "1,2" &&
 		setRecordLog.join(",") === "size,has,keys,keys-call",
+);
+
+function receiverMutationDuringNextLookup(method) {
+	const receiver = new Set([1, 2, 3]);
+	const other = {
+		size: 0,
+		has() {
+			return false;
+		},
+		keys() {
+			return {
+				get next() {
+					receiver.clear();
+					receiver.add(4);
+					collect();
+					return function () {
+						return { done: true };
+					};
+				},
+			};
+		},
+	};
+	return [...receiver[method](other)].join(",");
+}
+check(
+	"Set composition copies after iterator next lookup",
+	receiverMutationDuringNextLookup("union") === "4" &&
+		receiverMutationDuringNextLookup("symmetricDifference") === "4",
 );
 
 const intersectionReceiver = new Set([1, 2]);

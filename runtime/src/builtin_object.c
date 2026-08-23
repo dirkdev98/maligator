@@ -1566,10 +1566,11 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
                 tag = "[object Boolean]";
                 break;
             case MAL_PRIMITIVE_WRAPPER_SYMBOL:
-                tag = "[object Symbol]";
-                break;
             case MAL_PRIMITIVE_WRAPPER_BIGINT:
-                tag = "[object BigInt]";
+                // Symbol and BigInt get their usual tags from their prototypes'
+                // string-valued @@toStringTag. Their spec built-in tag is Object,
+                // so a missing or non-string override must fall back to Object.
+                tag = "[object Object]";
                 break;
             default:
                 tag = "[object Object]";
@@ -1581,10 +1582,6 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
         tag = "[object Boolean]";
     } else if (mal_value_is_int32(this_value) || mal_value_is_f64_or_nan(this_value)) {
         tag = "[object Number]";
-    } else if (mal_value_is_symbol(this_value)) {
-        tag = "[object Symbol]";
-    } else if (mal_value_is_bigint(this_value)) {
-        tag = "[object BigInt]";
     }
 
     // A string-valued @@toStringTag overrides the built-in tag.
