@@ -2357,16 +2357,23 @@ function emitInstruction(
 				candidate.shapeFunctionIndex,
 				candidate.shapeCacheIndex,
 			]);
+			const selected = `mal_vm_select_shape_case(vm, ${boxed(instruction.object)}, ${instruction.candidates.length}, __shape_case_candidates_${ip})`;
 			return [
 				`static const i32 __shape_case_candidates_${ip}[] = { ${candidates.join(", ")} };`,
-				`r${instruction.dst} = (f64) mal_vm_select_shape_case(vm, ${boxed(instruction.object)}, ${instruction.candidates.length}, __shape_case_candidates_${ip});`,
+				reps[instruction.dst] === "number"
+					? `r${instruction.dst} = (f64) ${selected};`
+					: `r${instruction.dst} = mal_value_from_i32(${selected});`,
 			];
 		}
 		case "LOAD_PROPERTY_STATIC_SHAPE_CASE": {
+			const selected =
+				reps[instruction.shapeCase] === "number"
+					? `(i32) r${instruction.shapeCase}`
+					: `(mal_value_is_int32(r${instruction.shapeCase}) ? mal_value_to_i32(r${instruction.shapeCase}) : -1)`;
 			return [
 				`MalValue __shape_case_value_${ip};`,
 				`static const i32 __shape_case_slots_${ip}[] = { ${instruction.slots.join(", ")} };`,
-				`if (mal_vm_try_load_shape_case(${boxed(instruction.object)}, (i32) r${instruction.shapeCase}, ${instruction.slots.length}, __shape_case_slots_${ip}, &__shape_case_value_${ip})) {`,
+				`if (mal_vm_try_load_shape_case(${boxed(instruction.object)}, ${selected}, ${instruction.slots.length}, __shape_case_slots_${ip}, &__shape_case_value_${ip})) {`,
 				`  r${instruction.dst} = __shape_case_value_${ip};`,
 				`} else {`,
 				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,

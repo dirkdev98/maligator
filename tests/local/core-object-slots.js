@@ -149,6 +149,17 @@ function* suspending(seed) {
 	return before + o.f0;
 }
 
+// Resumable functions store every register as a boxed MalValue. A failed
+// shared shape selection must remain the -1 sentinel after crossing that
+// representation boundary so the nested binding reads use their generic path.
+function* destructuredShapeMiss(
+	{ w: { x, y, z } = { x: 4, y: 5, z: 6 } } = {
+		w: { x: undefined, z: 7 },
+	},
+) {
+	yield [x, y, z];
+}
+
 // A fresh object per iteration: a read must never reuse a previous iteration's
 // slot value.
 function perIteration(limit) {
@@ -237,6 +248,10 @@ assert(storeThenThrow(0) === -1, "handler is not entered when nothing throws");
 const suspended = suspending(12);
 assert(suspended.next().value === 1, "generator yields before resuming");
 assert(suspended.next().value === 24, "slot survives suspension");
+const destructured = destructuredShapeMiss().next().value;
+assert(destructured[0] === undefined, "generator shape miss preserves x");
+assert(destructured[1] === undefined, "generator shape miss preserves absent y");
+assert(destructured[2] === 7, "generator shape miss preserves z");
 assert(perIteration(4) === 12, "each iteration reads its own object");
 assert(grownShape(13) === 27, "a grown shape reads both keys");
 assert(identityObserved(14, null) === 14, "identity comparison keeps the slot readable");
