@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "http_codec.h"
+#include "net.h"
 
 typedef struct MalVm MalVm;
 typedef struct MalHttpConn MalHttpConn;
@@ -143,6 +144,10 @@ bool mal_http_conn_request_read_credit(MalHttpConn *conn, usize bytes);
 void mal_http_conn_request_autoread(MalHttpConn *conn);
 void mal_http_conn_request_discard(MalHttpConn *conn);
 void mal_http_conn_request_release(MalHttpConn *conn);
+
+/* Numeric endpoints captured from the accepted socket. */
+bool mal_http_conn_local_endpoint(const MalHttpConn *conn, MalNetEndpoint *out);
+bool mal_http_conn_remote_endpoint(const MalHttpConn *conn, MalNetEndpoint *out);
 
 /* Configure the next response before mal_http_conn_respond. The completion
  * callback runs from the reactor path after the bytes flush or the connection

@@ -666,9 +666,9 @@ describe("node:http request bridge", () => {
 			field(line, "request_copy_operations"),
 		);
 		expect(field(line, "bulk_shaped_objects")).toBe(86);
-		expect(field(line, "bulk_shaped_slots")).toBe(516);
-		expect(field(line, "property_definitions_avoided")).toBe(516);
-		expect(field(line, "shape_transitions_avoided")).toBe(516);
+		expect(field(line, "bulk_shaped_slots")).toBe(1118);
+		expect(field(line, "property_definitions_avoided")).toBe(1118);
+		expect(field(line, "shape_transitions_avoided")).toBe(1118);
 		expect(field(line, "incoming_message_shape_append_batches")).toBe(85);
 		expect(field(line, "incoming_message_shape_append_slots")).toBe(1190);
 		expect(field(line, "incoming_message_shape_append_fallbacks")).toBe(1);

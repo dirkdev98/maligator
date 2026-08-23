@@ -909,18 +909,84 @@ static MalValue http_ascii_value(MalVm *vm, const char *bytes, usize length) {
         mal_string_new_ascii(&vm->heap, (const byte *) bytes, length));
 }
 
-static MalValue http_server_socket_facade(MalVm *vm) {
+static MalValue http_socket_address(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    if (!mal_value_is_native_function_object(callee)) {
+        return mal_value_new_undefined();
+    }
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {
+        mal_native_function_object_get_slot(function, 0),
+        mal_native_function_object_get_slot(function, 1),
+        mal_native_function_object_get_slot(function, 2),
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    http_define_own(vm, roots[3], "address", roots[0]);
+    http_define_own(vm, roots[3], "family", roots[1]);
+    http_define_own(vm, roots[3], "port", roots[2]);
+    MalValue result = roots[3];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue http_endpoint_family(MalVm *vm, MalNetAddressFamily family) {
+    const char *name = family == MAL_NET_ADDRESS_IPV4
+        ? "IPv4" : family == MAL_NET_ADDRESS_IPV6 ? "IPv6" : nullptr;
+    return name == nullptr
+        ? mal_value_new_undefined()
+        : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) name));
+}
+
+static MalValue http_server_socket_facade(MalVm *vm, MalHttpConn *conn) {
+    MalNetEndpoint local_endpoint;
+    MalNetEndpoint remote_endpoint;
+    bool have_local = mal_http_conn_local_endpoint(conn, &local_endpoint);
+    bool have_remote = mal_http_conn_remote_endpoint(conn, &remote_endpoint);
     MalObject *prototype = mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE]);
-    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[] = {
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
     roots[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    if (have_local) {
+        roots[2] = http_ascii_value(vm, local_endpoint.address,
+            strlen(local_endpoint.address));
+        roots[3] = http_endpoint_family(vm, local_endpoint.family);
+    }
+    if (have_remote) {
+        roots[4] = http_ascii_value(vm, remote_endpoint.address,
+            strlen(remote_endpoint.address));
+        roots[5] = http_endpoint_family(vm, remote_endpoint.family);
+    }
+    MalValue address_slots[] = {
+        roots[2], roots[3], have_local
+            ? mal_value_from_i32(local_endpoint.port) : mal_value_new_undefined(),
+    };
+    roots[6] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "address"),
+            http_socket_address, address_slots, countof(address_slots)));
     if (vm->node_http_socket_append_plan.source == nullptr) {
         static const char *names[] = {
             "_events", "_eventsCount", "_maxListeners",
             "encrypted", "readable", "writable",
+            "remoteAddress", "remotePort", "remoteFamily",
+            "localAddress", "localPort", "localFamily", "address",
         };
         MalShape *source = mal_shape_root(&vm->heap);
         MalShape *shape = source;
@@ -936,7 +1002,13 @@ static MalValue http_server_socket_facade(MalVm *vm) {
     MalValue values[] = {
         roots[1], mal_value_from_i32(0), mal_value_new_undefined(),
         mal_value_new_boolean(false), mal_value_new_boolean(true),
-        mal_value_new_boolean(true),
+        mal_value_new_boolean(true), roots[4],
+        have_remote ? mal_value_from_i32(remote_endpoint.port)
+                    : mal_value_new_undefined(),
+        roots[5], roots[2],
+        have_local ? mal_value_from_i32(local_endpoint.port)
+                   : mal_value_new_undefined(),
+        roots[3], roots[6],
     };
     if (mal_object_try_append_shaped_values(
             mal_value_to_object(roots[0]), &vm->node_http_socket_append_plan,
@@ -952,6 +1024,13 @@ static MalValue http_server_socket_facade(MalVm *vm) {
         http_define_own(vm, roots[0], "encrypted", values[3]);
         http_define_own(vm, roots[0], "readable", values[4]);
         http_define_own(vm, roots[0], "writable", values[5]);
+        http_define_own(vm, roots[0], "remoteAddress", values[6]);
+        http_define_own(vm, roots[0], "remotePort", values[7]);
+        http_define_own(vm, roots[0], "remoteFamily", values[8]);
+        http_define_own(vm, roots[0], "localAddress", values[9]);
+        http_define_own(vm, roots[0], "localPort", values[10]);
+        http_define_own(vm, roots[0], "localFamily", values[11]);
+        http_define_own(vm, roots[0], "address", values[12]);
     }
     mal_gc_unroot(&root);
     return roots[0];
@@ -3344,7 +3423,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         mal_gc_unroot(&root);
         goto fail;
     }
-    roots[4] = http_server_socket_facade(vm);
+    roots[4] = http_server_socket_facade(vm, state->conn);
     roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[6] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
 

@@ -124,6 +124,14 @@ typedef struct MalHttpConn {
     struct MalHttpConn *next;
 } MalHttpConn;
 
+bool mal_http_conn_local_endpoint(const MalHttpConn *conn, MalNetEndpoint *out) {
+    return conn != nullptr && mal_net_local_endpoint(conn->fd, out);
+}
+
+bool mal_http_conn_remote_endpoint(const MalHttpConn *conn, MalNetEndpoint *out) {
+    return conn != nullptr && mal_net_remote_endpoint(conn->fd, out);
+}
+
 static MalReactor *conn_reactor(MalHttpConn *c) {
     return &mal_host(c->vm)->reactor;
 }

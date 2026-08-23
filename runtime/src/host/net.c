@@ -147,19 +147,44 @@ int mal_net_connect_address(const struct sockaddr *address, socklen_t length) {
     return fd;
 }
 
-u16 mal_net_local_port(int fd) {
+static bool mal_net_endpoint(int fd, bool remote, MalNetEndpoint *out) {
+    if (out == nullptr) return false;
+    memset(out, 0, sizeof(*out));
     struct sockaddr_storage address;
     socklen_t length = sizeof(address);
-    if (getsockname(fd, (struct sockaddr *) &address, &length) < 0) {
-        return 0;
-    }
+    int status = remote
+        ? getpeername(fd, (struct sockaddr *) &address, &length)
+        : getsockname(fd, (struct sockaddr *) &address, &length);
+    if (status < 0) return false;
+    const void *numeric;
     if (address.ss_family == AF_INET) {
-        return ntohs(((struct sockaddr_in *) &address)->sin_port);
+        const struct sockaddr_in *ipv4 = (const struct sockaddr_in *) &address;
+        numeric = &ipv4->sin_addr;
+        out->port = ntohs(ipv4->sin_port);
+        out->family = MAL_NET_ADDRESS_IPV4;
+    } else if (address.ss_family == AF_INET6) {
+        const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *) &address;
+        numeric = &ipv6->sin6_addr;
+        out->port = ntohs(ipv6->sin6_port);
+        out->family = MAL_NET_ADDRESS_IPV6;
+    } else {
+        return false;
     }
-    if (address.ss_family == AF_INET6) {
-        return ntohs(((struct sockaddr_in6 *) &address)->sin6_port);
-    }
-    return 0;
+    return inet_ntop(address.ss_family, numeric, out->address, sizeof(out->address))
+        != nullptr;
+}
+
+bool mal_net_local_endpoint(int fd, MalNetEndpoint *out) {
+    return mal_net_endpoint(fd, false, out);
+}
+
+bool mal_net_remote_endpoint(int fd, MalNetEndpoint *out) {
+    return mal_net_endpoint(fd, true, out);
+}
+
+u16 mal_net_local_port(int fd) {
+    MalNetEndpoint endpoint;
+    return mal_net_local_endpoint(fd, &endpoint) ? endpoint.port : 0;
 }
 
 int mal_net_socket_error(int fd) {

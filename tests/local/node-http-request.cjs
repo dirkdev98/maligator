@@ -105,6 +105,8 @@ const server = http.createServer(function (request, response) {
 
 	if (request.url === "/socket-shape") {
 		const socket = request.socket;
+		const address = socket.address();
+		const secondAddress = socket.address();
 		const visibleDataProperty = (name, value) => {
 			const descriptor = Object.getOwnPropertyDescriptor(socket, name);
 			return (
@@ -119,12 +121,25 @@ const server = http.createServer(function (request, response) {
 		};
 		const checks = [
 			Object.getOwnPropertyNames(socket).join(",") ===
-				"_events,_eventsCount,_maxListeners,encrypted,readable,writable",
+				"_events,_eventsCount,_maxListeners,encrypted,readable,writable,remoteAddress,remotePort,remoteFamily,localAddress,localPort,localFamily,address",
 			Object.keys(socket).join(",") ===
-				"_events,_eventsCount,_maxListeners,encrypted,readable,writable",
+				"_events,_eventsCount,_maxListeners,encrypted,readable,writable,remoteAddress,remotePort,remoteFamily,localAddress,localPort,localFamily,address",
 			visibleDataProperty("encrypted", false),
 			visibleDataProperty("readable", true),
 			visibleDataProperty("writable", true),
+			visibleDataProperty("remoteAddress", "127.0.0.1"),
+			visibleDataProperty("remotePort", socket.remotePort),
+			Number.isInteger(socket.remotePort) && socket.remotePort > 0,
+			visibleDataProperty("remoteFamily", "IPv4"),
+			visibleDataProperty("localAddress", "127.0.0.1"),
+			visibleDataProperty("localPort", server.address().port),
+			visibleDataProperty("localFamily", "IPv4"),
+			visibleDataProperty("address", socket.address),
+			typeof socket.address === "function" && socket.address.length === 0,
+			address !== secondAddress,
+			address.address === socket.localAddress,
+			address.family === socket.localFamily,
+			address.port === socket.localPort,
 			Object.getPrototypeOf(socket) ===
 				Object.getPrototypeOf(Object.getPrototypeOf(server)),
 			socket.__httpSocketRealmMarker === "request-realm",

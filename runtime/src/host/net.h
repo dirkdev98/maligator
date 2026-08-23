@@ -5,6 +5,20 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 
+#define MAL_NET_ADDRESS_MAX 46
+
+typedef enum MalNetAddressFamily {
+    MAL_NET_ADDRESS_UNKNOWN = 0,
+    MAL_NET_ADDRESS_IPV4 = 1,
+    MAL_NET_ADDRESS_IPV6 = 2,
+} MalNetAddressFamily;
+
+typedef struct MalNetEndpoint {
+    char address[MAL_NET_ADDRESS_MAX];
+    u16 port;
+    MalNetAddressFamily family;
+} MalNetEndpoint;
+
 /*
  * Non-blocking TCP socket helpers (host layer). Thin wrappers over POSIX sockets
  * that the reactor drives: create sockets in non-blocking mode, and expose the
@@ -42,6 +56,10 @@ int mal_net_connect_address(const struct sockaddr *address, socklen_t length);
 
 /* The local port a socket is bound to (host byte order), or 0 on error. */
 u16 mal_net_local_port(int fd);
+
+/* Numeric local/peer endpoint metadata for an established socket. */
+bool mal_net_local_endpoint(int fd, MalNetEndpoint *out);
+bool mal_net_remote_endpoint(int fd, MalNetEndpoint *out);
 
 /* SO_ERROR of a socket (0 = ok), for completing a non-blocking connect. */
 int mal_net_socket_error(int fd);
