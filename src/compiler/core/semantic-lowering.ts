@@ -10188,23 +10188,36 @@ function compileLiteralTemplate(
 
 /**
  * If every member is a static, non-index data property (no spread, computed key,
- * accessor, method, __proto__, duplicate, or index-like name, and at most
- * MAL_SHAPE_MAX_INLINE_SLOTS of them), return the ordered key names and value
- * expressions so the literal can be built in one shape; otherwise null.
+ * accessor, dynamic HomeObject, __proto__, duplicate, or index-like name, and at
+ * most MAL_SHAPE_MAX_INLINE_SLOTS of them), return the ordered keys and properties
+ * so the literal can be built in one shape; otherwise null. A concise method with
+ * neither `super` nor direct eval is an ordinary enumerable data property and does
+ * not need the object identity while its function is created.
  */
 function staticObjectShape(
+	fn: CoreFrontendFunction,
 	objectExpression: ESTree.ObjectExpression,
-): { names: Array<string>; values: Array<ESTree.Expression> } | null {
+): { names: Array<string>; properties: Array<ESTree.Property> } | null {
 	const properties = objectExpression.properties;
 	if (properties.length < 1 || properties.length > 64) {
 		return null;
 	}
 	const names: Array<string> = [];
-	const values: Array<ESTree.Expression> = [];
+	const shapedProperties: Array<ESTree.Property> = [];
 	const seen = new Set<string>();
 	for (const property of properties) {
-		if (property.type !== "Property" || property.method || property.kind !== "init") {
+		if (property.type !== "Property" || property.kind !== "init") {
 			return null;
+		}
+		if (property.method) {
+			const value = property.value as ESTree.FunctionExpression;
+			if (
+				fn.semanticFile.hasDirectEval.has(value) ||
+				referencesSuper(value.body) ||
+				referencesSuper(value.params)
+			) {
+				return null;
+			}
 		}
 		const name = staticPropertyName(property);
 		if (name === undefined || name === "__proto__" || seen.has(name)) {
@@ -10216,9 +10229,9 @@ function staticObjectShape(
 		}
 		seen.add(name);
 		names.push(name);
-		values.push(property.value as ESTree.Expression);
+		shapedProperties.push(property);
 	}
-	return { names, values };
+	return { names, properties: shapedProperties };
 }
 
 /**
@@ -10284,12 +10297,27 @@ function compileObjectExpression(
 	const template = compileLiteralTemplate(program, fn, cursor, objectExpression);
 	if (template !== null) return template;
 
-	const staticShape = staticObjectShape(objectExpression);
+	const staticShape = staticObjectShape(fn, objectExpression);
 	if (staticShape !== null) {
 		// Evaluate the values left-to-right (keys are constants, so no key
 		// evaluation), then build the object directly in its final shape.
-		const valueRegisters = staticShape.values.map((value, i) =>
-			compileExpression(program, fn, cursor, value, staticShape.names[i]),
+		const valueRegisters = staticShape.properties.map((property, i) =>
+			property.method
+				? compileObjectMemberFunction(
+						program,
+						fn,
+						cursor,
+						property.value as ESTree.FunctionExpression,
+						undefined,
+						staticShape.names[i],
+					)
+				: compileExpression(
+						program,
+						fn,
+						cursor,
+						property.value as ESTree.Expression,
+						staticShape.names[i],
+					),
 		);
 		const destination = nextCoreVariable(fn);
 		cursor.block.emitter.emit({

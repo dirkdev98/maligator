@@ -255,4 +255,38 @@ ok(
 	proxySpreadCallReturn.total === 28 && proxySpreadCallReturn.proxyGetCalls === 4,
 );
 
+const objectMethodRelay = function (proxyReceiver) {
+	const object = {
+		x: 6,
+		read(count) {
+			let total = 0;
+			for (let index = 0; index < count; index++) total += this.x;
+			return total;
+		},
+	};
+	let receiver = object;
+	let proxyGetCalls = 0;
+	if (proxyReceiver) {
+		receiver = new Proxy(object, {
+			get(target, key, currentReceiver) {
+				proxyGetCalls++;
+				return Reflect.get(target, key, currentReceiver);
+			},
+		});
+	}
+	const total = receiver.read(4);
+	return { total, proxyGetCalls };
+};
+
+const directObjectMethod = objectMethodRelay(false);
+ok(
+	"object method literal shape hit",
+	directObjectMethod.total === 24 && directObjectMethod.proxyGetCalls === 0,
+);
+const proxyObjectMethod = objectMethodRelay(true);
+ok(
+	"object method literal receiver fallback",
+	proxyObjectMethod.total === 24 && proxyObjectMethod.proxyGetCalls === 5,
+);
+
 console.log("captured-known-own-slot PASS");

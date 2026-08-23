@@ -62,6 +62,18 @@ test("object literal methods are non-constructible without depending on sibling 
 	).core;
 	expect(withoutSuper.functions[1]?.metadata.hasPrototype).toBe(false);
 	expect(withSuper.functions[1]?.metadata.hasPrototype).toBe(false);
+	expect(
+		withoutSuper.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions }) => instructions)
+			.filter(({ opcode }) => opcode === "createObjectShaped"),
+	).toHaveLength(1);
+	expect(
+		withSuper.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions }) => instructions)
+			.filter(({ opcode }) => opcode === "createObjectShaped"),
+	).toHaveLength(0);
 });
 
 test("class heritage defines the constructor prototype without ordinary assignment", () => {

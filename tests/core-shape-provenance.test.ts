@@ -915,6 +915,47 @@ describe("Core shaped-object provenance", () => {
 });
 
 describe("Core known own-slot selection", () => {
+	it("precompiles plain object-method literals and consumes their receiver shape", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(count) {
+					const object = {
+						x: 6,
+						read(innerCount) {
+							let total = 0;
+							for (let index = 0; index < innerCount; index++) total += this.x;
+							return total;
+						},
+					};
+					return object.read(count);
+				}
+				run(4);`,
+				"shape-object-method-receiver.mjs",
+			),
+		);
+		const shaped = initial.functions
+			.flatMap((fn) => instructions(fn, "createObjectShaped"))
+			.at(0);
+		expect(shaped?.attributes.keyStringIndices).toEqual([
+			initial.stringConstants.findIndex(
+				(value) => String.fromCodePoint(...value) === "x",
+			),
+			initial.stringConstants.findIndex(
+				(value) => String.fromCodePoint(...value) === "read",
+			),
+		]);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		const read = optimized.functions[functionIndexOfName(optimized, "read")]!;
+		expect(
+			instructions(read, "loadPropertyStatic").some(
+				(instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes,
+			),
+		).toBe(true);
+		expect(read.metadata.hasPrototype).toBe(false);
+	});
+
 	it("publishes guarded loop loads through both spread-call forms", () => {
 		const initial = lowerSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(

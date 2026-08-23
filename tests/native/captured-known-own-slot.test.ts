@@ -13,7 +13,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-captured-known-own-slot-"
 const fixture = "tests/local/captured-known-own-slot.js";
 const expected = ["captured-known-own-slot PASS"];
 
-describe("captured, aggregate, call, construct, and spread guarded own-slot accesses", () => {
+describe("captured, aggregate, call, construct, spread, and method shape accesses", () => {
 	let compiled: string;
 	let interpreted: string;
 
@@ -32,7 +32,7 @@ describe("captured, aggregate, call, construct, and spread guarded own-slot acce
 		});
 	}, 600_000);
 
-	it("preserves load/store, call/construct/spread relay, Proxy, and shape misses", () => {
+	it("preserves relays, object methods, Proxy traps, and shape misses", () => {
 		assertExactLines(runToStdout(compiled), expected);
 		assertExactLines(runToStdout(interpreted), expected);
 	});

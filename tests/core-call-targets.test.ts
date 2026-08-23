@@ -1063,7 +1063,7 @@ describe("callee-target annotation", () => {
 		expect(calleeTargetsAttribute(site!)?.opaque).toBe(false);
 	});
 
-	it("leaves a mutable service binding open", () => {
+	it("keeps a guarded method candidate when its service binding stays open", () => {
 		const program = optimizedCore(
 			`let service = { run(value) { return value + 1; } };
 			function caller(value) { const callback = service.run; return callback(value); }
@@ -1073,7 +1073,11 @@ describe("callee-target annotation", () => {
 		const caller = program.functions[functionIndexOfName(program, "caller")]!;
 		const [site] = callSites(caller);
 		expect(site?.attributes.directFunctionIndex).toBeUndefined();
-		expect(calleeTargetsAttribute(site!)).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)).toEqual({
+			functions: [functionIndexOfName(program, "run")],
+			anyScript: false,
+			opaque: true,
+		});
 	});
 
 	it("keeps guarded candidates from an escaped service object", () => {
