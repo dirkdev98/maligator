@@ -40,6 +40,22 @@ static u64 g_coroutine_buffer_peak_retained_bytes = 0;
 static u64 g_loaded_instruction_count = 0;
 static u64 g_loaded_instruction_data_count = 0;
 
+static MalShape **mal_vm_ensure_literal_shape_cache(
+    MalVm *vm, i32 function_index
+) {
+    const MalFunction *function = &vm->definition->functions[function_index];
+    if (function->literal_shape_count > 0
+        && vm->literal_shape_cache[function_index] == nullptr) {
+        vm->literal_shape_cache[function_index] = calloc(
+            (usize) function->literal_shape_count, sizeof(MalShape *));
+        MAL_PERF_COUNT(function_literal_cache_allocations);
+        MAL_PERF_ADD(
+            function_literal_cache_bytes,
+            (u64) function->literal_shape_count * sizeof(MalShape *));
+    }
+    return vm->literal_shape_cache[function_index];
+}
+
 void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
     MalPropertyCachePool *pool = &vm->property_cache[function_index];
     const MalFunction *function = &vm->definition->functions[function_index];
@@ -51,16 +67,11 @@ void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
             function_property_cache_bytes,
             (u64) property_count * sizeof(MalInlineCache));
     }
-    if (function->literal_shape_count > 0
-        && vm->literal_shape_cache[function_index] == nullptr) {
-        vm->literal_shape_cache[function_index] = calloc(
-            (usize) function->literal_shape_count, sizeof(MalShape *));
-        MAL_PERF_COUNT(function_literal_cache_allocations);
-        MAL_PERF_ADD(
-            function_literal_cache_bytes,
-            (u64) function->literal_shape_count * sizeof(MalShape *));
-    }
+    mal_vm_ensure_literal_shape_cache(vm, function_index);
 }
+
+static void mal_vm_materialize_precompiled_literal_shapes(
+    MalVm *vm, const MalVmDefinition *definition, i32 function_base);
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
 #define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
@@ -645,6 +656,10 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
         vm->string_constant_atoms[i] = mal_property_atomize_string(
             vm, (MalString *) &vm->definition->string_constants[i]);
     }
+    // A guarded own-slot load may execute before its source allocation site.
+    // Build only those named literal shapes now, after their canonical atoms
+    // exist, so both compiled and interpreted guards can hit on first use.
+    mal_vm_materialize_precompiled_literal_shapes(vm, definition, 0);
     for (u32 i = 0; i < MAL_HOT_KEY_COUNT; i++) {
         vm->hot_intrinsic_keys[i] = nullptr;
     }
@@ -1362,6 +1377,10 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
         vm->literal_shape_cache[i] = nullptr;
         vm->function_cjs_module_bases[i] = cjs_module_base;
     }
+
+    // Spliced functions may execute guarded loads before their own literal
+    // origins. Their strings and function rows are now fully rebased and live.
+    mal_vm_materialize_precompiled_literal_shapes(vm, loaded, fn_base);
 
     return fn_base;
 }
@@ -4299,4 +4318,51 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
     }
 
     return nullptr;
+}
+
+/**
+ * Intern portable literal-shape descriptors into this VM's dense cache. Static
+ * compiled output emits the compact table directly; the wire loader derives the
+ * same table from validated bytecode before compiled functions may discard it.
+ * Keep this startup/splice-only path after the runtime's hot call machinery so
+ * it does not perturb that code's layout.
+ */
+static void mal_vm_materialize_precompiled_literal_shapes(
+    MalVm *vm, const MalVmDefinition *definition, i32 function_base
+) {
+    for (i32 index = 0; index < definition->precompiled_literal_shape_count; index++) {
+        const MalPrecompiledLiteralShape *descriptor =
+            &definition->precompiled_literal_shapes[index];
+        i32 function_index = descriptor->function_index + function_base;
+        if (function_index < 0
+            || function_index >= vm->definition->function_count
+            || descriptor->shape_cache_index < 0
+            || descriptor->key_count < 1
+            || descriptor->key_count > MAL_SHAPE_MAX_INLINE_SLOTS) {
+            continue;
+        }
+        const MalFunction *function = &vm->definition->functions[function_index];
+        if (descriptor->shape_cache_index >= function->literal_shape_count) continue;
+        MalShape **row = vm->literal_shape_cache[function_index];
+        if (row != nullptr && row[descriptor->shape_cache_index] != nullptr) continue;
+
+        MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
+        bool valid = true;
+        for (i32 key = 0; key < descriptor->key_count; key++) {
+            i32 string_index = descriptor->key_string_indices[key];
+            if (string_index < 0
+                || string_index >= vm->definition->string_constant_count
+                || vm->string_constant_atoms[string_index] == nullptr) {
+                valid = false;
+                break;
+            }
+            keys[key] = vm->string_constant_atoms[string_index];
+        }
+        if (!valid) continue;
+        row = mal_vm_ensure_literal_shape_cache(vm, function_index);
+        if (row != nullptr && row[descriptor->shape_cache_index] == nullptr) {
+            row[descriptor->shape_cache_index] = mal_shape_from_string_keys(
+                &vm->heap, keys, (u32) descriptor->key_count);
+        }
+    }
 }

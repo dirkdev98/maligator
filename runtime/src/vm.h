@@ -1009,6 +1009,18 @@ typedef struct MalAsset {
     const MalAssetFile *files;
 } MalAsset;
 
+/**
+ * VM-local shape requested by a guarded own-slot load. The descriptor contains
+ * only portable indices; mal_vm_init/splice interns the actual MalShape pointer
+ * into the referenced function's literal-shape cache.
+ */
+typedef struct MalPrecompiledLiteralShape {
+    i32 function_index;
+    i32 shape_cache_index;
+    i32 key_count;
+    const i32 *key_string_indices;
+} MalPrecompiledLiteralShape;
+
 typedef struct MalVmDefinition {
     i32 function_count;
     const MalFunction *functions;
@@ -1035,6 +1047,10 @@ typedef struct MalVmDefinition {
     /** Packed immutable static-data literal templates (MalLiteralTemplateTag). */
     i32 literal_template_data_count;
     const u32 *literal_template_data;
+
+    /** Deduplicated literal shapes needed before guarded own-slot execution. */
+    i32 precompiled_literal_shape_count;
+    const MalPrecompiledLiteralShape *precompiled_literal_shapes;
 
     i32 global_count;
 

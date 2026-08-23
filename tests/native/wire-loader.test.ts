@@ -158,6 +158,84 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("known-own-slot", wire);
 	});
 
+	it("pre-instantiates known literal shapes for initial and spliced wire definitions", () => {
+		const shapedFunction: VmFunction = {
+			...fn,
+			registerCount: 3,
+			registerRepresentations: ["boxed", "boxed", "boxed"],
+			instructions: [
+				{ opcode: "CREATE_UNDEFINED", dst: 0 },
+				{
+					opcode: "CREATE_OBJECT_SHAPED",
+					dst: 1,
+					count: 1,
+					keyStringIndices: [0],
+					valueRegisters: [0],
+					shapeCacheIndex: 0,
+				},
+				{
+					opcode: "CREATE_OBJECT_SHAPED",
+					dst: 2,
+					count: 1,
+					keyStringIndices: [0],
+					valueRegisters: [0],
+					shapeCacheIndex: 1,
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+					dst: 0,
+					object: 1,
+					stringIndex: 0,
+					icIndex: 0,
+					shapeFunctionIndex: 0,
+					shapeCacheIndex: 1,
+					slot: 0,
+				},
+				{ opcode: "RETURN", value: 0 },
+			],
+		};
+		const shapedDefinition: VmDefinition = {
+			...definition,
+			functions: [shapedFunction],
+			stringConstants: [["x".charCodeAt(0)]],
+		};
+		const baseDefinition: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					instructions: [
+						{ opcode: "CREATE_UNDEFINED", dst: 0 },
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+			],
+			stringConstants: [[..."padding"].map((unit) => unit.charCodeAt(0))],
+		};
+		const shapedPath = path.join(directory, "known-shape.malw");
+		const basePath = path.join(directory, "known-shape-base.malw");
+		writeFileSync(
+			shapedPath,
+			serializeVmDefinition(shapedDefinition, { debugInfo: false }),
+		);
+		writeFileSync(basePath, serializeVmDefinition(baseDefinition, { debugInfo: false }));
+		const environment = {
+			...process.env,
+			MAL_EXPECT_PRECOMPILED_SHAPES: "1",
+			MAL_GC_AT_EXIT: "1",
+		};
+		const initial = spawnSync(driver, [shapedPath], {
+			encoding: "utf8",
+			env: environment,
+		});
+		expect(initial.status, initial.stderr || initial.stdout).toBe(0);
+		const spliced = spawnSync(driver, ["--splice", basePath, shapedPath], {
+			encoding: "utf8",
+			env: environment,
+		});
+		expect(spliced.status, spliced.stderr || spliced.stdout).toBe(0);
+	});
+
 	it("rejects snapshot metadata that disagrees with the opcode prefix", () => {
 		// The first function starts at byte 15 after the source-entry field; its
 		// snapshot count is eight bytes later.

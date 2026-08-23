@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "vm_ops.h"
 #include "value_ops.h"
 
 #include <stdio.h>
@@ -8,6 +9,13 @@ extern const MalVmDefinition mal_vm_definition;
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_vm_definition);
+    if (vm.literal_shape_cache[0] == nullptr ||
+        vm.literal_shape_cache[0][1] == nullptr ||
+        vm.property_cache[0].sites != nullptr) {
+        fprintf(stderr, "known literal shape was not selectively pre-instantiated\n");
+        mal_vm_free(&vm);
+        return 1;
+    }
     MalCallable *entry = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, entry);
     MalValue result = vm.globals[0];

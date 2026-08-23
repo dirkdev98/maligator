@@ -91,6 +91,19 @@ static void dump_loaded_scalars(const MalVmDefinition *definition) {
     }
 }
 
+static bool precompiled_literal_shapes_ready(
+    const MalVm *vm, const MalVmDefinition *definition, i32 function_base
+) {
+    for (i32 i = 0; i < definition->precompiled_literal_shape_count; i++) {
+        const MalPrecompiledLiteralShape *shape =
+            &definition->precompiled_literal_shapes[i];
+        i32 function_index = shape->function_index + function_base;
+        MalShape **row = vm->literal_shape_cache[function_index];
+        if (row == nullptr || row[shape->shape_cache_index] == nullptr) return false;
+    }
+    return true;
+}
+
 int main(int argc, char **argv) {
     bool splice = argc >= 4 && strcmp(argv[1], "--splice") == 0;
     if (argc < 2 || (splice && argc < 4)) {
@@ -107,6 +120,12 @@ int main(int argc, char **argv) {
         dump_loaded_scalars(mal_loaded_definition_get(base));
     }
     mal_vm_init(&vm, mal_loaded_definition_get(base));
+    if (getenv("MAL_EXPECT_PRECOMPILED_SHAPES") != nullptr
+        && !precompiled_literal_shapes_ready(
+            &vm, mal_loaded_definition_get(base), 0)) {
+        fprintf(stderr, "precompiled literal shapes were not initialized\n");
+        return 1;
+    }
 
     // A from-wire definition's installers are unresolved (null), so this is a
     // no-op here; the call site stays uniform with the C-baked entry points. The
@@ -128,6 +147,12 @@ int main(int argc, char **argv) {
         }
         vm.completion = (MalCompletion){.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
         i32 entry = mal_vm_splice_definition(&vm, mal_loaded_definition_get(spliced));
+        if (getenv("MAL_EXPECT_PRECOMPILED_SHAPES") != nullptr
+            && !precompiled_literal_shapes_ready(
+                &vm, mal_loaded_definition_get(spliced), entry)) {
+            fprintf(stderr, "spliced precompiled literal shapes were not initialized\n");
+            return 1;
+        }
         MalCallable *spliced_callable = mal_vm_create_callable(&vm, entry);
         mal_vm_run(&vm, spliced_callable);
         code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;

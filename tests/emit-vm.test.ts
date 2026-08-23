@@ -315,6 +315,13 @@ describe("emit-vm instruction packing", () => {
 			expect(output).toContain(".load_property_static_known_own_slot");
 			expect(output).toContain("2, 0, 0, 1");
 		}
+		for (const output of [interpreted, compiled, split, splitInterpreted]) {
+			expect(output).toContain(
+				"MalPrecompiledLiteralShape mal_precompiled_literal_shapes",
+			);
+			expect(output).toContain(".function_index = 0, .shape_cache_index = 0");
+			expect(output).toContain(".precompiled_literal_shape_count = 1");
+		}
 		for (const output of [compiled, split]) {
 			expect(output).toContain("mal_vm_try_load_known_own_slot(vm,");
 			expect(output).toContain("mal_vm_op_load_property_ic(vm,");

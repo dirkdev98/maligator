@@ -17,8 +17,8 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
 	{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
 	{ opcode: "CREATE_NUMBER", dst: 2, value: 0 },
-	// This receiver establishes an interned {x} shape in row 0 while the
-	// independently referenced row 1 remains null, forcing the exact fallback.
+	// The guarded row 1 is referenced before its allocation executes. VM startup
+	// pre-instantiates it, and shape interning makes this row-0 {x} object match.
 	{
 		opcode: "CREATE_OBJECT_SHAPED",
 		dst: 3,
@@ -168,7 +168,7 @@ describe("guarded known-own-slot loads", () => {
 		});
 	}, 600_000);
 
-	it("preserves hit, uninitialized-row, different-shape, and mutation semantics", () => {
+	it("preserves pre-instantiated hit, different-shape, and mutation semantics", () => {
 		run(compiled);
 		run(interpreted);
 		run(compiled, STRESS_ENV);
@@ -180,8 +180,8 @@ describe("guarded known-own-slot loads", () => {
 			const stderr = run(binary, { MAL_PERF_STATS: "1" });
 			expect(stderr).toContain("[perf-known-own-slot-stats]");
 			expect(perfField(stderr, "probes")).toBe(4);
-			expect(perfField(stderr, "hits")).toBe(1);
-			expect(perfField(stderr, "fallbacks")).toBe(3);
+			expect(perfField(stderr, "hits")).toBe(2);
+			expect(perfField(stderr, "fallbacks")).toBe(2);
 		}
 	});
 });

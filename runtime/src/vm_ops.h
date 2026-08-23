@@ -882,8 +882,9 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
 
 /**
  * Exact shaped-literal own-slot read shared by compiled and interpreted output.
- * The source row is populated only after that literal has established its
- * interned shape. Every miss retains the ordinary static-property IC operation.
+ * Referenced source rows are normally pre-instantiated at VM initialization or
+ * splice time; lazy literal creation remains a defensive fallback. Every miss
+ * retains the ordinary static-property IC operation.
  */
 static inline bool mal_vm_try_load_known_own_slot(
     MalVm *vm,

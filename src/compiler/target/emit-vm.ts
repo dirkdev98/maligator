@@ -859,6 +859,55 @@ function malVmDefinitionStruct(
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
+	const precompiledLiteralShapes = new Map<
+		string,
+		{
+			functionIndex: number;
+			shapeCacheIndex: number;
+			keyStringIndices: ReadonlyArray<number>;
+		}
+	>();
+	for (const fn of definition.functions) {
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") continue;
+			const key = `${instruction.shapeFunctionIndex}:${instruction.shapeCacheIndex}`;
+			if (precompiledLiteralShapes.has(key)) continue;
+			const source = definition.functions[
+				instruction.shapeFunctionIndex
+			]!.instructions.find(
+				(candidate) =>
+					candidate.opcode === "CREATE_OBJECT_SHAPED" &&
+					candidate.shapeCacheIndex === instruction.shapeCacheIndex,
+			);
+			if (source?.opcode !== "CREATE_OBJECT_SHAPED") {
+				throw new RangeError("invalid known-own-slot literal shape");
+			}
+			precompiledLiteralShapes.set(key, {
+				functionIndex: instruction.shapeFunctionIndex,
+				shapeCacheIndex: instruction.shapeCacheIndex,
+				keyStringIndices: source.keyStringIndices,
+			});
+		}
+	}
+	const precompiledShapeRows = [...precompiledLiteralShapes.values()];
+	for (let index = 0; index < precompiledShapeRows.length; index++) {
+		const shape = precompiledShapeRows[index]!;
+		lines.push(
+			`static const i32 mal_precompiled_literal_shape_${index}_keys${suffix}[] = { ${shape.keyStringIndices.join(", ")} };`,
+		);
+	}
+	if (precompiledShapeRows.length > 0) {
+		lines.push(
+			`static const MalPrecompiledLiteralShape mal_precompiled_literal_shapes${suffix}[] = {`,
+		);
+		for (let index = 0; index < precompiledShapeRows.length; index++) {
+			const shape = precompiledShapeRows[index]!;
+			lines.push(
+				`    { .function_index = ${shape.functionIndex}, .shape_cache_index = ${shape.shapeCacheIndex}, .key_count = ${shape.keyStringIndices.length}, .key_string_indices = mal_precompiled_literal_shape_${index}_keys${suffix} },`,
+			);
+		}
+		lines.push("};", "");
+	}
 	const hasLiteralTemplates = definition.literalTemplateData.length > 0;
 	const literalTemplatesSymbol = hasLiteralTemplates
 		? (sharedLiteralTemplates ?? `mal_literal_templates${suffix}`)
@@ -1000,6 +1049,8 @@ function malVmDefinitionStruct(
 		`    .bigint_constants = ${definition.bigintConstants.length > 0 ? `mal_bigints${suffix}` : "nullptr"},`,
 		`    .literal_template_data_count = ${definition.literalTemplateData.length},`,
 		`    .literal_template_data = ${literalTemplatesSymbol},`,
+		`    .precompiled_literal_shape_count = ${precompiledShapeRows.length},`,
+		`    .precompiled_literal_shapes = ${precompiledShapeRows.length > 0 ? `mal_precompiled_literal_shapes${suffix}` : "nullptr"},`,
 		`    .global_count = ${definition.globalCount},`,
 		`    .entry_path = "${cEscapeString(definition.entrypointPath)}",`,
 		`    .cjs_module_count = ${definition.cjsModuleFunctionIndices.length},`,
