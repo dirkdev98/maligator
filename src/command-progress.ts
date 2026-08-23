@@ -26,7 +26,7 @@ export class CommandProgress {
 	#stageStartedAt = this.#startedAt;
 	#cacheLease?: CacheLease;
 
-	readonly #releaseCacheLease = (): void => {
+	readonly #releaseCacheLease = () => {
 		const lease = this.#cacheLease;
 		if (lease === undefined) return;
 		this.#cacheLease = undefined;
