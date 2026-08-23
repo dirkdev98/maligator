@@ -874,6 +874,42 @@ describe("Core shaped-object provenance", () => {
 });
 
 describe("Core known own-slot selection", () => {
+	it("publishes a guarded loop load through Function.prototype.call argument relay", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(count) {
+					const identity = (value) => value;
+					const object = { x: 2 };
+					const relayed = identity.call(null, object);
+					let total = 0;
+					for (let index = 0; index < count; index++) total += relayed.x;
+					return total;
+				}
+				run(4);`,
+				"shape-function-call-relay.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		const flattenedCall = optimized.functions
+			.flatMap((fn) => instructions(fn, "call"))
+			.find((instruction) => instruction.attributes.directFunctionCall === true);
+		expect(flattenedCall).toBeDefined();
+		const owner = optimized.functions.find((fn) =>
+			fn.blocks.some((block) => block.instructions.includes(flattenedCall!)),
+		)!;
+		const analysis = analyzeCoreShapeProvenance(optimized);
+		const guardedLoad = optimized.functions
+			.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
+			.find((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes);
+		expect(guardedLoad).toBeDefined();
+		const result = analysis.candidates(owner.functionIndex, flattenedCall!.outputs[0]!);
+		expect(result.opaque).toBe(true);
+		expect(result.origins).toHaveLength(1);
+		expect(result.origins[0]!.keyStringIndices).toHaveLength(1);
+	});
+
 	it("selects a local loop load and is identity-idempotent", () => {
 		const built = localLoopProgram();
 		const first = selectKnownOwnSlots(built.program);

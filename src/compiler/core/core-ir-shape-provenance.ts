@@ -550,21 +550,36 @@ export function analyzeCoreShapeProvenance(
 					instruction.outputs.length === 1
 				) {
 					const result = node(instruction.outputs[0]!);
-					const targets = calleeTargets.targets(fn.functionIndex, instruction.inputs[0]!);
+					const flattenedFunctionCall =
+						instruction.attributes.directFunctionCall === true;
+					const targetValue = flattenedFunctionCall
+						? instruction.inputs[1]!
+						: instruction.inputs[0]!;
+					const targetReceiver = flattenedFunctionCall
+						? instruction.inputs[2]
+						: instruction.inputs[1];
+					const firstTargetArgument = flattenedFunctionCall ? 3 : 2;
+					const targets = calleeTargets.targets(fn.functionIndex, targetValue);
 					let modelledResultTarget = false;
-					let excludedResultTarget = targets.anyScript || targets.opaque;
+					// directFunctionCall is guarded against the live realm method. If that
+					// method changed, the original call executes and may return any shape.
+					// Preserve that fallback as opaque while retaining the shifted target's
+					// in-image origins as useful guarded candidates.
+					let excludedResultTarget =
+						targets.anyScript || targets.opaque || flattenedFunctionCall;
 					for (const targetIndex of targets.functions) {
 						const target = functionsByIndex.get(targetIndex);
 						if (target === undefined || target.metadata.isClassConstructor) {
 							excludedResultTarget = true;
 							continue;
 						}
-						const receiver = instruction.inputs[1]!;
-						for (const destination of thisNodes.get(targetIndex) ?? []) {
-							addEdge(node(receiver), destination);
+						if (targetReceiver !== undefined) {
+							for (const destination of thisNodes.get(targetIndex) ?? []) {
+								addEdge(node(targetReceiver), destination);
+							}
 						}
 						for (const [index, parameter] of target.parameters.entries()) {
-							const argument = instruction.inputs[index + 2];
+							const argument = instruction.inputs[index + firstTargetArgument];
 							if (argument !== undefined) {
 								addEdge(node(argument), valueNode(targetIndex, parameter));
 							}

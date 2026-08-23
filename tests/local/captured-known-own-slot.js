@@ -143,4 +143,39 @@ const proxyStore = new Proxy(
 ok("guarded store Proxy fallback", storeExercise(proxyStore) === 4);
 ok("guarded store Proxy count", proxyStoreCalls === 4);
 
+const functionCallRelay = function (overrideCall) {
+	const identity = function (value) {
+		return value;
+	};
+	let proxyGetCalls = 0;
+	if (overrideCall) {
+		identity.call = function (_thisValue, value) {
+			return new Proxy(
+				{ x: value.x + 1 },
+				{
+					get(target, key) {
+						proxyGetCalls++;
+						return target[key];
+					},
+				},
+			);
+		};
+	}
+	const relayed = identity.call(null, { x: 6 });
+	let total = 0;
+	for (let index = 0; index < 4; index++) total += relayed.x;
+	return { total, proxyGetCalls };
+};
+
+const intrinsicCallRelay = functionCallRelay(false);
+ok(
+	"Function.call shape relay hit",
+	intrinsicCallRelay.total === 24 && intrinsicCallRelay.proxyGetCalls === 0,
+);
+const overriddenCallRelay = functionCallRelay(true);
+ok(
+	"Function.call shape relay fallback",
+	overriddenCallRelay.total === 28 && overriddenCallRelay.proxyGetCalls === 4,
+);
+
 console.log("captured-known-own-slot PASS");
