@@ -127,6 +127,23 @@ class Ordered extends Base {
 new Ordered();
 assert(keyCalls === 0, "computed key ran before this check");
 
+var directCaught;
+class DirectBeforeSuper extends Base {
+	constructor() {
+		try {
+			super.x;
+		} catch (error) {
+			directCaught = error;
+		}
+		super();
+	}
+}
+new DirectBeforeSuper();
+assert(
+	directCaught instanceof ReferenceError,
+	"direct super property read checks this inside try",
+);
+
 var replacement = {
 	get x() {
 		return this._x * 10;

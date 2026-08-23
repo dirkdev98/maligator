@@ -59,6 +59,24 @@ assert(
 );
 assert(counters.fieldRuns === 4, "instance fields initialize exactly once");
 
+let directSuperCaught;
+class DirectSuperBase {}
+class DirectSuperDerived extends DirectSuperBase {
+	constructor() {
+		try {
+			super.x;
+		} catch (error) {
+			directSuperCaught = error;
+		}
+		super();
+	}
+}
+new DirectSuperDerived();
+assert(
+	directSuperCaught instanceof ReferenceError,
+	"direct super property read checks this inside try",
+);
+
 let readCapturedThis;
 class CapturedThisBase {
 	constructor() {

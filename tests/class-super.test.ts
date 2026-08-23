@@ -3,6 +3,7 @@ import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.t
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { vmExceptionHandlerTargets } from "../src/compiler/target/lower-vm.ts";
 import {
 	deserializeVmDefinition,
 	serializeVmDefinition,
@@ -129,4 +130,27 @@ test("captured derived this keeps its TDZ check through target lowering", () => 
 	expect(capturedArrow!.instructions.map(({ opcode }) => opcode)).toContain(
 		"THROW_IF_TDZ",
 	);
+});
+
+test("a derived this read participates in its surrounding exception handler", () => {
+	const { semantic } = compile(`
+		class Base {}
+		class Derived extends Base {
+			constructor() {
+				try { super.x; } catch (error) { if (!(error instanceof ReferenceError)) throw error; }
+				super();
+			}
+		}
+		new Derived();
+	`);
+	const definition = compileSemanticProgramToVmDefinition(semantic);
+	const derived = definition.functions.find((fn) => fn.isDerivedConstructor);
+	expect(derived).toBeDefined();
+	const loadThis = derived!.instructions.findIndex(({ opcode }) => opcode === "LOAD_THIS");
+	expect(loadThis).toBeGreaterThanOrEqual(0);
+	expect(
+		vmExceptionHandlerTargets(derived!.instructions.length, derived!.handlers)[
+			loadThis
+		],
+	).toBeDefined();
 });

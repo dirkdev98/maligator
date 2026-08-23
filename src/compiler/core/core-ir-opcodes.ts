@@ -205,7 +205,6 @@ const NO_THROW = new Set<CoreOpcode>([
 	"loadArgument",
 	"loadArgumentCount",
 	"loadCallee",
-	"loadThis",
 	"mathBinaryNumber",
 	"mathUnaryNumber",
 ]);
@@ -279,7 +278,6 @@ const DISCARDABLE = new Set<CoreOpcode>([
 	"loadIntrinsic",
 	"loadLocal",
 	"loadNewTarget",
-	"loadThis",
 	"mathBinaryNumber",
 	"mathUnaryNumber",
 	"move",
