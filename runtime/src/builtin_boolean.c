@@ -1,5 +1,6 @@
 #include "builtin_boolean.h"
 
+#include "gc.h"
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
 #include "value_ops.h"
@@ -29,18 +30,28 @@ static MalValue mal_builtin_boolean_constructor(MalVm *vm, MalValue this_value, 
         return mal_value_new_boolean(value);
     }
 
+    MalValue roots[2] = {
+        mal_value_new_boolean(value),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
     MalObject *prototype;
     if (!mal_vm_get_prototype_from_constructor(
             vm, new_target, MAL_INTRINSIC_BOOLEAN_PROTOTYPE, &prototype)) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
+    roots[1] = mal_value_from_object(prototype);
 
-    return mal_value_from_primitive_wrapper(mal_primitive_wrapper_object_new(
+    MalValue result = mal_value_from_primitive_wrapper(mal_primitive_wrapper_object_new(
         &vm->heap,
-        prototype,
+        mal_value_to_object(roots[1]),
         MAL_PRIMITIVE_WRAPPER_BOOLEAN,
-        mal_value_new_boolean(value)
+        roots[0]
     ));
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 static MalValue mal_builtin_boolean_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -50,17 +61,24 @@ static MalValue mal_builtin_boolean_prototype_to_string(MalVm *vm, MalValue this
     if (!mal_builtin_boolean_this(vm, this_value, &value)) {
         return mal_value_new_undefined();
     }
-    return mal_value_from_string(mal_intrinsic_ascii(vm, value ? "true" : "false"));
+    return mal_value_from_string(mal_intrinsic_hot_ascii(
+        vm, value ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE
+    ));
 }
 
 static MalValue mal_builtin_boolean_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
-    bool value;
-    if (!mal_builtin_boolean_this(vm, this_value, &value)) {
+    MalValue primitive;
+    if (!mal_value_this_boolean_value(this_value, &primitive)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Boolean.prototype method called on incompatible receiver");
         return mal_value_new_undefined();
     }
-    return mal_value_new_boolean(value);
+    return primitive;
+}
+
+MalValue mal_builtin_boolean_value_of_known(MalValue this_value) {
+    return this_value;
 }
 
 void mal_builtin_boolean_install(MalVm *vm) {

@@ -14,6 +14,16 @@ check("typeof Intl === undefined", typeof Intl === "undefined");
 check("localeCompare b>a", "b".localeCompare("a") === 1);
 check("localeCompare a==a", "a".localeCompare("a") === 0);
 check("localeCompare a<b", "a".localeCompare("b") === -1);
+function freshCons(left, right) {
+	return left.repeat(64) + right.repeat(64);
+}
+check(
+	"localeCompare roots fresh cons inputs through both flattens",
+	String.prototype.localeCompare.call(
+		{ toString: () => freshCons("same-", "left") },
+		{ toString: () => freshCons("same-", "left") },
+	) === 0,
+);
 
 // Number.prototype.toLocaleString → base-10 Number::toString.
 check("number toLocaleString", (1234.5).toLocaleString() === "1234.5");

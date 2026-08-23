@@ -298,6 +298,7 @@ export function worldFactsFromConfig(config: ResolvedBuildConfig): WorldFacts {
  */
 export type EffectKind =
 	| "read-global"
+	| "read-host"
 	| "write-global"
 	| "read-prototype"
 	| "write-prototype"

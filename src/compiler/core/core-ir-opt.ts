@@ -490,9 +490,18 @@ function optimizationPassDelta(
 	return { ...pass, before, after, delta: metricDelta(before, after) };
 }
 
-const BUILTIN_OPERATION_BY_KEY = new Map(
-	builtinOperations.map((operation) => [operation.key, operation] as const),
-);
+const BUILTIN_OPERATIONS_BY_KEY = new Map<
+	string,
+	Array<(typeof builtinOperations)[number]>
+>();
+for (const operation of builtinOperations) {
+	const candidates = BUILTIN_OPERATIONS_BY_KEY.get(operation.key);
+	if (candidates === undefined) {
+		BUILTIN_OPERATIONS_BY_KEY.set(operation.key, [operation]);
+	} else {
+		candidates.push(operation);
+	}
+}
 const BUILTIN_OPERATION_BY_ID = new Map(
 	builtinOperations.map((operation) => [operation.id, operation] as const),
 );
@@ -532,10 +541,12 @@ function builtinSourceSite(
 
 /**
  * Attach guarded builtin identity and semantics to an ordinary property call.
- * Static method names are globally unique in the registry. Where the loaded
- * callee remains an SSA input, the fact keeps a `loaded-callee` fallback in
- * every world: a locked prototype slot proves nothing about an own shadowing
- * property on the receiver, so the runtime identity check must stay.
+ * A property key can name methods on multiple owners, so colliding candidates
+ * are admitted only when the receiver proves the corresponding intrinsic or
+ * primitive prototype. Where the loaded callee remains an SSA input, the fact
+ * keeps a `loaded-callee` fallback in every world: a locked prototype slot
+ * proves nothing about an own shadowing property on the receiver, so the
+ * runtime identity check must stay.
  */
 const annotateKnownBuiltinCalls: CoreFunctionPass = {
 	name: "annotate-known-builtin-calls",
@@ -598,8 +609,41 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 						return instruction;
 					}
 					const key = decodeString(program, stringIndex);
+					const receiverValue =
+						canonical.get(instruction.inputs[1]!) ?? instruction.inputs[1]!;
+					const receiver = definitions.get(receiverValue);
+					const receiverRepresentation = representations.get(receiverValue);
+					const candidates =
+						key === undefined ? undefined : BUILTIN_OPERATIONS_BY_KEY.get(key);
+					const exactReceiverFor = (
+						candidate: (typeof builtinOperations)[number],
+					): boolean => {
+						const exact = exactBuiltinCallDescriptor(candidate.id);
+						switch (exact?.receiverProof) {
+							case "intrinsic-object":
+								return (
+									receiver?.opcode === "loadIntrinsic" &&
+									receiver.attributes.intrinsic === candidate.owner
+								);
+							case "primitive-boolean":
+								return receiverRepresentation === "boolean";
+							case "primitive-number":
+								return (
+									receiverRepresentation === "f64" || receiverRepresentation === "i32"
+								);
+							case "primitive-string":
+								return receiver?.opcode === "createString";
+							default:
+								return false;
+						}
+					};
+					const ownerMatches = candidates?.filter(exactReceiverFor) ?? [];
 					const descriptor =
-						key === undefined ? undefined : BUILTIN_OPERATION_BY_KEY.get(key);
+						candidates?.length === 1
+							? candidates[0]
+							: ownerMatches.length === 1
+								? ownerMatches[0]
+								: undefined;
 					if (descriptor === undefined) return instruction;
 					const site = builtinSourceSite(
 						program,
@@ -626,16 +670,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 							? mathOpcode
 							: undefined;
 					const exact = exactBuiltinCallDescriptor(descriptor.id);
-					const receiver = definitions.get(
-						canonical.get(instruction.inputs[1]!) ?? instruction.inputs[1]!,
-					);
-					const exactReceiver =
-						exact?.receiverProof === "primitive-string"
-							? receiver?.opcode === "createString"
-							: exact?.receiverProof === "intrinsic-object"
-								? receiver?.opcode === "loadIntrinsic" &&
-									receiver.attributes.intrinsic === descriptor.owner
-								: false;
+					const exactReceiver = exactReceiverFor(descriptor);
 					const exactRewrite =
 						exact !== undefined &&
 						exactReceiver &&

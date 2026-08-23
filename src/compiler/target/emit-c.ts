@@ -3241,6 +3241,53 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (instruction.operation === "Number.isNaN") {
+				return [
+					`r${instruction.dst} = mal_builtin_number_is_nan_known(${argsExpr}, ${instruction.arguments.length});`,
+				];
+			}
+			if (instruction.operation === "Number.isFinite") {
+				return [
+					`r${instruction.dst} = mal_builtin_number_is_finite_known(${argsExpr}, ${instruction.arguments.length});`,
+				];
+			}
+			if (instruction.operation === "Number.isInteger") {
+				return [
+					`r${instruction.dst} = mal_builtin_number_is_integer_known(${argsExpr}, ${instruction.arguments.length});`,
+				];
+			}
+			if (instruction.operation === "Number.isSafeInteger") {
+				return [
+					`r${instruction.dst} = mal_builtin_number_is_safe_integer_known(${argsExpr}, ${instruction.arguments.length});`,
+				];
+			}
+			if (instruction.operation === "Number.prototype.valueOf") {
+				return [
+					`r${instruction.dst} = mal_builtin_number_value_of_known(${boxedOperand(instruction.thisValue)});`,
+				];
+			}
+			if (instruction.operation === "Boolean.prototype.valueOf") {
+				return [
+					`r${instruction.dst} = mal_builtin_boolean_value_of_known(${boxedOperand(instruction.thisValue)});`,
+				];
+			}
+			if (instruction.operation === "Date.now") {
+				return [`r${instruction.dst} = mal_builtin_date_now_known();`];
+			}
+			if (instruction.operation === "Date.parse") {
+				return [
+					`r${instruction.dst} = mal_builtin_date_parse_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
+			if (instruction.operation === "Date.UTC") {
+				return [
+					`r${instruction.dst} = mal_builtin_date_utc_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
 			if (instruction.operation !== "String.prototype.split") return null;
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site } = nativeStringSplitCursorAction;

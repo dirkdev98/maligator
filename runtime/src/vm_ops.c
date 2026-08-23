@@ -12,8 +12,11 @@
 #include "builtin_array.h"
 #include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
+#include "builtin_boolean.h"
+#include "builtin_date.h"
 #include "builtin_iterator.h"
 #include "builtin_map.h"
+#include "builtin_number.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
 #include "builtin_string.h"
@@ -2147,6 +2150,39 @@ void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instructio
             break;
         case MAL_DIRECT_BUILTIN_OBJECT_VALUES:
             result = mal_builtin_object_values_known(
+                vm, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_NUMBER_IS_NAN:
+            result = mal_builtin_number_is_nan_known(
+                &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_NUMBER_IS_FINITE:
+            result = mal_builtin_number_is_finite_known(
+                &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_NUMBER_IS_INTEGER:
+            result = mal_builtin_number_is_integer_known(
+                &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_NUMBER_IS_SAFE_INTEGER:
+            result = mal_builtin_number_is_safe_integer_known(
+                &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_NUMBER_VALUE_OF:
+            result = mal_builtin_number_value_of_known(receiver);
+            break;
+        case MAL_DIRECT_BUILTIN_BOOLEAN_VALUE_OF:
+            result = mal_builtin_boolean_value_of_known(receiver);
+            break;
+        case MAL_DIRECT_BUILTIN_DATE_NOW:
+            result = mal_builtin_date_now_known();
+            break;
+        case MAL_DIRECT_BUILTIN_DATE_PARSE:
+            result = mal_builtin_date_parse_known(
+                vm, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_DATE_UTC:
+            result = mal_builtin_date_utc_known(
                 vm, &vm->value_stack[base], argument_count);
             break;
     }

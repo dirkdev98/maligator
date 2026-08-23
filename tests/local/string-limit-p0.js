@@ -29,6 +29,281 @@ check(
 	"padEnd rejects impossible length",
 	throwsRangeError(() => "x".padEnd(1e9, "0")),
 );
+check(
+	"padding repeats and truncates UTF-16 patterns",
+	"x".padStart(8, "ab") === "abababax" &&
+		"x".padEnd(8, "ab") === "xabababa" &&
+		"x".padStart(4, "\ud83d\ude00") === "\ud83d\ude00\ud83dx",
+);
+const gcPad = String.prototype.padEnd.call(
+	{ toString: () => "r".repeat(128) },
+	{
+		valueOf() {
+			if (typeof $262 !== "undefined") $262.gc();
+			return 1024;
+		},
+	},
+	{
+		toString() {
+			if (typeof $262 !== "undefined") $262.gc();
+			return "pq".repeat(64);
+		},
+	},
+);
+check(
+	"padding roots coerced receiver and fill strings",
+	gcPad.length === 1024 &&
+		gcPad.slice(0, 128) === "r".repeat(128) &&
+		gcPad.slice(-4) === "pqpq",
+);
+
+function forceGc() {
+	if (typeof $262 !== "undefined") $262.gc();
+}
+
+function gcNumber(value) {
+	return {
+		valueOf() {
+			forceGc();
+			return value;
+		},
+	};
+}
+
+function indexedReceiver() {
+	return {
+		toString() {
+			return ["A", "\ud83d\ude00", "B", "x".repeat(96)].join("");
+		},
+	};
+}
+
+check(
+	"character access roots object-coerced receivers across position coercion",
+	String.prototype.codePointAt.call(indexedReceiver(), gcNumber(1)) === 0x1f600 &&
+		String.prototype.charAt.call(indexedReceiver(), gcNumber(1)) === "\ud83d" &&
+		String.prototype.charCodeAt.call(indexedReceiver(), gcNumber(1)) === 0xd83d &&
+		String.prototype.at.call(indexedReceiver(), gcNumber(3)) === "B",
+);
+
+function searchReceiver() {
+	return {
+		toString() {
+			return ["xx-", "needle", "needle", "-yy", "z".repeat(64)].join("");
+		},
+	};
+}
+
+function gcSearch() {
+	return {
+		toString() {
+			forceGc();
+			return ["nee", "dle"].join("");
+		},
+	};
+}
+
+check(
+	"search methods root receiver and search strings across later positions",
+	String.prototype.indexOf.call(searchReceiver(), gcSearch(), gcNumber(1)) === 3 &&
+		String.prototype.lastIndexOf.call(searchReceiver(), gcSearch(), gcNumber(15)) === 9 &&
+		String.prototype.includes.call(searchReceiver(), gcSearch(), gcNumber(4)) &&
+		String.prototype.startsWith.call(searchReceiver(), gcSearch(), gcNumber(3)) &&
+		String.prototype.endsWith.call(searchReceiver(), gcSearch(), gcNumber(15)),
+);
+const searchCoercionOrder = [];
+const orderedSearch = {
+	get [Symbol.match]() {
+		searchCoercionOrder.push("isRegExp");
+		forceGc();
+		return false;
+	},
+	toString() {
+		searchCoercionOrder.push("searchString");
+		return ["nee", "dle"].join("");
+	},
+};
+const orderedIncludes = String.prototype.includes.call(
+	{
+		toString() {
+			searchCoercionOrder.push("receiverString");
+			return ["xx-", "needle", "-yy", "z".repeat(64)].join("");
+		},
+	},
+	orderedSearch,
+);
+const receiverThrow = {};
+let rejectedSearchReads = 0;
+let receiverThrowObserved = false;
+try {
+	String.prototype.startsWith.call(
+		{
+			toString() {
+				throw receiverThrow;
+			},
+		},
+		{
+			get [Symbol.match]() {
+				rejectedSearchReads++;
+				return false;
+			},
+		},
+	);
+} catch (error) {
+	receiverThrowObserved = error === receiverThrow;
+}
+check(
+	"search guards coerce receiver before IsRegExp and stop on receiver throws",
+	orderedIncludes &&
+		searchCoercionOrder.join(",") === "receiverString,isRegExp,searchString" &&
+		receiverThrowObserved &&
+		rejectedSearchReads === 0,
+);
+
+function rangeReceiver() {
+	return {
+		toString() {
+			return ["0123456789", "q".repeat(96)].join("");
+		},
+	};
+}
+
+check(
+	"range methods root object-coerced receivers across both bounds",
+	String.prototype.slice.call(rangeReceiver(), gcNumber(2), gcNumber(5)) === "234" &&
+		String.prototype.substring.call(rangeReceiver(), gcNumber(5), gcNumber(2)) ===
+			"234" &&
+		String.prototype.substr.call(rangeReceiver(), gcNumber(2), gcNumber(3)) === "234",
+);
+
+check(
+	"repeat, normalize, and split root receivers across argument coercion",
+	String.prototype.repeat.call({ toString: () => ["ab", "cd"].join("") }, gcNumber(3)) ===
+		"abcdabcdabcd" &&
+		String.prototype.normalize.call(
+			{ toString: () => ["norm", "al"].join("") },
+			{
+				toString() {
+					forceGc();
+					return ["N", "FC"].join("");
+				},
+			},
+		) === "normal" &&
+		String.prototype.split
+			.call(
+				{ toString: () => ["a,b", ",c"].join("") },
+				{
+					toString() {
+						forceGc();
+						return [","].join("");
+					},
+				},
+				gcNumber(3),
+			)
+			.join("|") === "a|b|c",
+);
+
+check(
+	"localeCompare roots both coerced strings through collation setup",
+	String.prototype.localeCompare.call(
+		{ toString: () => ["equal-", "l".repeat(96)].join("") },
+		{
+			toString() {
+				forceGc();
+				return ["equal-", "l".repeat(96)].join("");
+			},
+		},
+	) === 0,
+);
+
+function flatWorkReceiver(prefix, suffix) {
+	return {
+		toString() {
+			return prefix.repeat(64) + suffix.repeat(64);
+		},
+	};
+}
+
+check(
+	"trim and well-formed scans root receivers through flattening and slicing",
+	String.prototype.trim.call(flatWorkReceiver(" ", "t")) === "t".repeat(64) &&
+		String.prototype.trimStart.call(flatWorkReceiver(" ", "s")) === "s".repeat(64) &&
+		String.prototype.trimEnd.call(flatWorkReceiver("e", " ")) === "e".repeat(64) &&
+		String.prototype.isWellFormed.call(flatWorkReceiver("i", "s")),
+);
+
+check(
+	"case conversion and iteration root object-coerced receivers",
+	String.prototype.toUpperCase.call(flatWorkReceiver("a", "b")) ===
+		"A".repeat(64) + "B".repeat(64) &&
+		String.prototype.toLowerCase.call(flatWorkReceiver("A", "B")) ===
+			"a".repeat(64) + "b".repeat(64) &&
+		String.prototype[Symbol.iterator]
+			.call({ toString: () => ["i".repeat(64), "t"].join("") })
+			.next().value === "i",
+);
+
+const flagsProbe = {
+	[Symbol.match]: true,
+	get flags() {
+		return {
+			toString() {
+				forceGc();
+				return "x".repeat(64) + "g";
+			},
+		};
+	},
+	[Symbol.matchAll](subject) {
+		return [subject][Symbol.iterator]();
+	},
+	[Symbol.replace]() {
+		return "custom-flags-replace";
+	},
+};
+check(
+	"regexp global checks root getter-produced flags through flattening",
+	[...String.prototype.matchAll.call("flags-subject", flagsProbe)][0] ===
+		"flags-subject" &&
+		String.prototype.replaceAll.call("flags-subject", flagsProbe, "unused") ===
+			"custom-flags-replace",
+);
+
+const fallbackMatch = String.prototype.match.call(
+	{ toString: () => ["aaa", "bbb", "ccc"].join("") },
+	{
+		toString() {
+			forceGc();
+			return ["b", "+"].join("");
+		},
+	},
+);
+const fallbackMatchAll = [
+	...String.prototype.matchAll.call(
+		{ toString: () => ["a", "b", "b"].join("") },
+		{
+			toString() {
+				forceGc();
+				return ["b"].join("");
+			},
+		},
+	),
+];
+check(
+	"fallback regexp protocols root receiver, pattern, and created regexp",
+	fallbackMatch[0] === "bbb" &&
+		String.prototype.search.call(
+			{ toString: () => ["aaa", "bbb", "ccc"].join("") },
+			{
+				toString() {
+					forceGc();
+					return ["b", "+"].join("");
+				},
+			},
+		) === 3 &&
+		fallbackMatchAll.length === 2 &&
+		fallbackMatchAll[0][0] === "b" &&
+		fallbackMatchAll[1][0] === "b",
+);
 
 // Build exact-limit values once so producers that add their own delimiters can
 // exercise the catchable boundary without attempting an impossible allocation.
@@ -178,6 +453,10 @@ check("typed-array hex remains correct", new Uint8Array([0, 255]).toHex() === "0
 
 check("repeat fills non-power-of-two results", "ab".repeat(7) === "ababababababab");
 check(
+	"repeat empty and zero remain empty",
+	"".repeat(1e6) === "" && "abc".repeat(0) === "",
+);
+check(
 	"repeat preserves UTF-16 code units",
 	"\ud83d\ude00x".repeat(3) === "\ud83d\ude00x\ud83d\ude00x\ud83d\ude00x",
 );
@@ -203,7 +482,250 @@ check(
 	"a".concat("\ud83d\ude00", "b") === "a\ud83d\ude00b",
 );
 check("empty String.prototype.concat remains correct", "".concat("") === "");
+let concatReceiverCoercions = 0;
+check(
+	"zero-argument concat still coerces its receiver",
+	String.prototype.concat.call({
+		toString() {
+			concatReceiverCoercions++;
+			return "receiver";
+		},
+	}) === "receiver" && concatReceiverCoercions === 1,
+);
+check(
+	"toWellFormed preserves valid units and replaces lone surrogates",
+	"plain\ud83d\ude00".toWellFormed() === "plain\ud83d\ude00" &&
+		"\ud800a\udc00".toWellFormed() === "\ufffda\ufffd",
+);
+const gcWellFormed = String.prototype.toWellFormed.call({
+	toString: () => "w".repeat(1024) + "\ud800",
+});
+check(
+	"toWellFormed roots a coerced receiver through managed allocation",
+	gcWellFormed.length === 1025 && gcWellFormed.slice(-2) === "w\ufffd",
+);
+check(
+	"String constructs flat symbol descriptions",
+	String(Symbol()) === "Symbol()" &&
+		String(Symbol("description")) === "Symbol(description)",
+);
+const staticStringOrder = [];
+function gcCode(name, value) {
+	return {
+		valueOf() {
+			staticStringOrder.push(name);
+			forceGc();
+			return value;
+		},
+	};
+}
+check(
+	"String code-unit and code-point builders preserve ordered coercion under GC",
+	String.fromCharCode(gcCode("char-a", 65), gcCode("char-b", 66)) === "AB" &&
+		String.fromCodePoint(
+			gcCode("point-a", 65),
+			gcCode("point-face", 0x1f600),
+			gcCode("point-b", 66),
+		) === "A\ud83d\ude00B" &&
+		staticStringOrder.join(",") === "char-a,char-b,point-a,point-face,point-b",
+);
+let throwingStringPrototypeReads = 0;
+let throwingStringConstruction = false;
+try {
+	Reflect.construct(
+		String,
+		[Symbol("cannot-wrap")],
+		new Proxy(function () {}, {
+			get(target, key, receiver) {
+				if (key === "prototype") throwingStringPrototypeReads++;
+				return Reflect.get(target, key, receiver);
+			},
+		}),
+	);
+} catch (error) {
+	throwingStringConstruction = error instanceof TypeError;
+}
+check(
+	"throwing String construction stops before custom prototype lookup",
+	throwingStringConstruction && throwingStringPrototypeReads === 0,
+);
+const boxedString = Reflect.construct(
+	String,
+	[{ toString: () => "boxed-" + "b".repeat(64) }],
+	new Proxy(function () {}, {
+		get(target, key, receiver) {
+			if (key === "prototype") {
+				forceGc();
+				return { marker: "fresh-string-prototype" };
+			}
+			return Reflect.get(target, key, receiver);
+		},
+	}),
+);
+check(
+	"String construction roots coerced data and custom prototype",
+	Object.getPrototypeOf(boxedString).marker === "fresh-string-prototype" &&
+		String.prototype.valueOf.call(boxedString) === "boxed-" + "b".repeat(64),
+);
+const htmlOrder = [];
+const htmlResult = String.prototype.link.call(
+	{
+		toString() {
+			htmlOrder.push("receiver");
+			return "body-" + "d".repeat(64);
+		},
+	},
+	{
+		toString() {
+			htmlOrder.push("attribute");
+			if (typeof $262 !== "undefined") $262.gc();
+			return 'q"' + "v".repeat(64);
+		},
+	},
+);
+check(
+	"Annex-B HTML emits once after ordered rooted coercions",
+	htmlResult ===
+		'<a href="q&quot;' + "v".repeat(64) + '">body-' + "d".repeat(64) + "</a>" &&
+		htmlOrder.join(",") === "receiver,attribute" &&
+		"x".bold() === "<b>x</b>",
+);
+const rawOrder = [];
+const rawSegments = {
+	get length() {
+		rawOrder.push("length");
+		return {
+			valueOf() {
+				rawOrder.push("lengthValue");
+				return 2;
+			},
+		};
+	},
+	get 0() {
+		rawOrder.push("zero");
+		return {
+			toString() {
+				rawOrder.push("zeroString");
+				return "a".repeat(64);
+			},
+		};
+	},
+	get 1() {
+		rawOrder.push("one");
+		if (typeof $262 !== "undefined") $262.gc();
+		return {
+			toString() {
+				rawOrder.push("oneString");
+				return "c".repeat(64);
+			},
+		};
+	},
+};
+const rawResult = String.raw(
+	{
+		get raw() {
+			rawOrder.push("raw");
+			return rawSegments;
+		},
+	},
+	{
+		toString() {
+			rawOrder.push("substitution");
+			if (typeof $262 !== "undefined") $262.gc();
+			return "b".repeat(64);
+		},
+	},
+);
+check(
+	"String.raw preserves coercion order and roots exact-builder parts",
+	rawResult === "a".repeat(64) + "b".repeat(64) + "c".repeat(64) &&
+		rawOrder.join(",") ===
+			"raw,length,lengthValue,zero,zeroString,substitution,one,oneString",
+);
+const hugeRawError = {};
+let hugeRawFirstRead = false;
+let hugeRawThrew = false;
+try {
+	String.raw({
+		raw: {
+			length: 2 ** 32,
+			get 0() {
+				hugeRawFirstRead = true;
+				throw hugeRawError;
+			},
+		},
+	});
+} catch (error) {
+	hugeRawThrew = error === hugeRawError;
+}
+check(
+	"String.raw does not truncate large LengthOfArrayLike values",
+	hugeRawFirstRead && hugeRawThrew,
+);
+let rawMissingTemplateThrows = false;
+try {
+	String.raw();
+} catch (error) {
+	rawMissingTemplateThrows = error instanceof TypeError;
+}
+check("String.raw requires a template", rawMissingTemplateThrows);
 check("string replacement remains correct", "aba".replaceAll("a", "$&$") === "a$ba$");
+let noMatchReplacementCoercions = 0;
+let noMatchCallbackCalls = 0;
+check(
+	"literal replacement preserves no-match coercion and callback behavior",
+	"abc".replace("missing", {
+		toString() {
+			noMatchReplacementCoercions++;
+			return "replacement";
+		},
+	}) === "abc" &&
+		"abc".replaceAll("missing", () => {
+			noMatchCallbackCalls++;
+			return "replacement";
+		}) === "abc" &&
+		noMatchReplacementCoercions === 1 &&
+		noMatchCallbackCalls === 0,
+);
+const gcNoMatchSubject = "subject-" + "s".repeat(64);
+const gcNoMatchReplace = String.prototype.replace.call(
+	{ toString: () => "subject-" + "s".repeat(64) },
+	{
+		toString() {
+			if (typeof $262 !== "undefined") $262.gc();
+			return "missing-" + "m".repeat(64);
+		},
+	},
+	{
+		toString() {
+			if (typeof $262 !== "undefined") $262.gc();
+			return "replacement-" + "r".repeat(64);
+		},
+	},
+);
+check(
+	"no-match replacement roots object-coerced receiver and search strings",
+	gcNoMatchReplace === gcNoMatchSubject,
+);
+const gcFunctionalReplacement = String.prototype.replaceAll.call(
+	{ toString: () => "x-x" },
+	{
+		toString() {
+			if (typeof $262 !== "undefined") $262.gc();
+			return "x";
+		},
+	},
+	() => ({
+		toString() {
+			if (typeof $262 !== "undefined") $262.gc();
+			return "y".repeat(32);
+		},
+	}),
+);
+check(
+	"functional replacement roots coerced callback results",
+	gcFunctionalReplacement === "y".repeat(32) + "-" + "y".repeat(32),
+);
 check("regexp replacement remains correct", "aba".replace(/(a)/g, "$1$") === "a$ba$");
 const builderGrowth = "0123456789abcdef".repeat(32);
 check(

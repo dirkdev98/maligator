@@ -2,7 +2,6 @@
 #include "value_ops.h"
 
 #include <math.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,6 +9,7 @@
 #include "ecma_whitespace.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
+#include "mal_number_format.h"
 #include "vm.h"
 
 f64 mal_ops_number_to_integer_or_infinity(f64 number) {
@@ -220,99 +220,6 @@ static MalValue mal_ops_string_to_number(MalValue value) {
         mal_string_code_units(string), mal_string_length(string));
 }
 
-// Render a finite, non-zero f64 per ECMAScript Number::toString (7.1.12.1) into
-// `out`, which must hold at least 32 bytes. Produces the shortest decimal digit
-// string that round-trips to the same double (found by trying increasing
-// precision against a correctly-rounded strtod), then places the decimal point
-// / exponent exactly as the spec's cases 5-10 require.
-static void mal_ops_f64_to_ecma_string(f64 value, byte *out) {
-    byte *p = out;
-    if (signbit(value)) {
-        *p++ = '-';
-        value = -value;
-    }
-
-    // Shortest significant digits: the smallest precision whose decimal rounds
-    // back to `value`. 17 significant digits always suffice for a double.
-    char formatted[40];
-    for (int prec = 1; prec <= 17; prec++) {
-        snprintf(formatted, sizeof(formatted), "%.*e", prec - 1, value);
-        if (strtod(formatted, nullptr) == value) {
-            break;
-        }
-    }
-
-    // formatted is "d.ddde±XX" (or "de±XX" at precision 1); split it into the
-    // significant digit run and the base-10 exponent of the leading digit.
-    char digits[20];
-    int k = 0;
-    char *cursor = formatted;
-    digits[k++] = *cursor++;
-    if (*cursor == '.') {
-        cursor++;
-        while (*cursor != 'e' && *cursor != 'E') {
-            digits[k++] = *cursor++;
-        }
-    }
-    int exponent = (int) strtol(cursor + 1, nullptr, 10);
-
-    // Trailing zeros are never significant for round-tripping (defensive).
-    while (k > 1 && digits[k - 1] == '0') {
-        k--;
-    }
-
-    // n is the position of the decimal point counted from before the first
-    // significant digit (value == digits × 10^(n-k)).
-    int n = exponent + 1;
-
-    if (k <= n && n <= 21) {
-        for (int i = 0; i < k; i++) {
-            *p++ = (byte) digits[i];
-        }
-        for (int i = 0; i < n - k; i++) {
-            *p++ = '0';
-        }
-    } else if (0 < n && n <= 21) {
-        for (int i = 0; i < n; i++) {
-            *p++ = (byte) digits[i];
-        }
-        *p++ = '.';
-        for (int i = n; i < k; i++) {
-            *p++ = (byte) digits[i];
-        }
-    } else if (-6 < n && n <= 0) {
-        *p++ = '0';
-        *p++ = '.';
-        for (int i = 0; i < -n; i++) {
-            *p++ = '0';
-        }
-        for (int i = 0; i < k; i++) {
-            *p++ = (byte) digits[i];
-        }
-    } else {
-        *p++ = (byte) digits[0];
-        if (k > 1) {
-            *p++ = '.';
-            for (int i = 1; i < k; i++) {
-                *p++ = (byte) digits[i];
-            }
-        }
-        *p++ = 'e';
-        int e = n - 1;
-        *p++ = e >= 0 ? '+' : '-';
-        if (e < 0) {
-            e = -e;
-        }
-        char exp_digits[8];
-        snprintf(exp_digits, sizeof(exp_digits), "%d", e);
-        for (int i = 0; exp_digits[i] != '\0'; i++) {
-            *p++ = (byte) exp_digits[i];
-        }
-    }
-
-    *p = '\0';
-}
-
 MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
     if (mal_value_is_string(value)) {
         return mal_value_to_string(value);
@@ -401,8 +308,11 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
             return mal_ops_string_from_ascii(heap, "0");
         }
         byte buffer[32];
-        mal_ops_f64_to_ecma_string(number, buffer);
-        return mal_ops_string_from_ascii(heap, buffer);
+        i32 length = mal_number_format_shortest(number, buffer, (i32) sizeof(buffer));
+        if (length <= 0 || length > (i32) sizeof(buffer)) {
+            abort();
+        }
+        return mal_string_new_ascii(heap, buffer, (usize) length);
     }
 
     return mal_ops_string_from_ascii(heap, "[object Object]");

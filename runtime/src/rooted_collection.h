@@ -35,17 +35,15 @@ void mal_rooted_value_list_append(MalRootedValueList *list, MalValue value);
 void mal_rooted_value_list_dispose(MalRootedValueList *list);
 
 /**
- * Rooted strings accumulated for one flatten operation. The separator and each
- * non-empty part stay rooted while caller-owned coercion or iteration re-enters
- * JS. `expected_count` fixes separator accounting before those side effects.
+ * Exactly sized rooted strings accumulated for one flatten operation. The
+ * separator and each non-empty part stay rooted while caller-owned coercion or
+ * iteration re-enters JS. `expected_count` fixes both storage and separator
+ * accounting before those side effects.
  */
 typedef struct MalRootedStringParts {
-    MalString *separator;
     MalValue separator_root;
-    MalString **parts;
     MalValue *roots;
     usize count;
-    usize capacity;
     usize expected_count;
     usize total_length;
     MalRootSpan separator_span;

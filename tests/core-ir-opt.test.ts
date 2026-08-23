@@ -2781,6 +2781,39 @@ describe("Core IR optimizer", () => {
 		).toBe(false);
 	});
 
+	it("keeps exact Date clock reads distinct and forwards only consumed arguments", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function dates(value, extra) {
+				const first = Date.now(extra());
+				const second = Date.now(extra());
+				const parsed = Date.parse(value, extra());
+				const utc = Date.UTC(2001, 1, 3, 4, 5, 6, 7, extra());
+				return first + second + parsed + utc;
+			}`,
+			"core-exact-date-builtins.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const calls = optimized!.functions[1]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		).filter(({ opcode }) => opcode === "callBuiltin");
+		expect(calls.map(({ attributes }) => attributes.operation)).toEqual([
+			"Date.now",
+			"Date.now",
+			"Date.parse",
+			"Date.UTC",
+		]);
+		// input 0 is the intrinsic receiver; discarded extra arguments were already
+		// evaluated in preceding IR and do not cross the direct builtin ABI.
+		expect(calls.map(({ inputs }) => inputs.length)).toEqual([1, 1, 2, 8]);
+	});
+
 	it("inlines an exact linear closure while retaining its source chain", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function outer(value) {

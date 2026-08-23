@@ -18,7 +18,16 @@ export interface BuiltinOperationDescriptor {
 	readonly id: string;
 	readonly owner: string;
 	readonly key: string;
-	readonly receiver: "none" | "any" | "array" | "string" | "regexp" | "map" | "set";
+	readonly receiver:
+		| "none"
+		| "any"
+		| "array"
+		| "boolean"
+		| "number"
+		| "string"
+		| "regexp"
+		| "map"
+		| "set";
 	readonly arity: { readonly minimum: number; readonly maximum?: number };
 	readonly evaluationOrder: "receiver-then-arguments" | "arguments-left-to-right";
 	readonly coercionOrder: ReadonlyArray<string>;
@@ -34,6 +43,8 @@ export type ExactBuiltinReceiverProof =
 	| "fresh-array"
 	| "fresh-map"
 	| "intrinsic-object"
+	| "primitive-boolean"
+	| "primitive-number"
 	| "primitive-string";
 
 export interface ExactBuiltinCallDescriptor {
@@ -89,6 +100,51 @@ export const exactBuiltinCallDescriptors = {
 		receiverProof: "intrinsic-object",
 		forwardedArgumentLimit: 1,
 		cOperation: "MAL_DIRECT_BUILTIN_OBJECT_VALUES",
+	},
+	"Number.isNaN": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_NUMBER_IS_NAN",
+	},
+	"Number.isFinite": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_NUMBER_IS_FINITE",
+	},
+	"Number.isInteger": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_NUMBER_IS_INTEGER",
+	},
+	"Number.isSafeInteger": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_NUMBER_IS_SAFE_INTEGER",
+	},
+	"Number.prototype.valueOf": {
+		receiverProof: "primitive-number",
+		forwardedArgumentLimit: 0,
+		cOperation: "MAL_DIRECT_BUILTIN_NUMBER_VALUE_OF",
+	},
+	"Boolean.prototype.valueOf": {
+		receiverProof: "primitive-boolean",
+		forwardedArgumentLimit: 0,
+		cOperation: "MAL_DIRECT_BUILTIN_BOOLEAN_VALUE_OF",
+	},
+	"Date.now": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 0,
+		cOperation: "MAL_DIRECT_BUILTIN_DATE_NOW",
+	},
+	"Date.parse": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_DATE_PARSE",
+	},
+	"Date.UTC": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 7,
+		cOperation: "MAL_DIRECT_BUILTIN_DATE_UTC",
 	},
 } as const satisfies Record<string, ExactBuiltinCallDescriptor>;
 
@@ -335,6 +391,96 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		effects: ["property-access", "call-user-code", "allocate", "throw", "safepoint"],
 		result: "array-of-values",
 		realm: "realm-object-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	},
+	...(["isNaN", "isFinite", "isInteger", "isSafeInteger"] as const).map(
+		(key): BuiltinOperationDescriptor => ({
+			id: `Number.${key}`,
+			owner: "Number",
+			key,
+			receiver: "none",
+			arity: { minimum: 0, maximum: 1 },
+			evaluationOrder: "arguments-left-to-right",
+			coercionOrder: [],
+			effects: [],
+			result: "boolean",
+			realm: "semantic-identity",
+			lowerings: ["generic", "exact-builtin-call"],
+		}),
+	),
+	{
+		id: "Number.prototype.valueOf",
+		owner: "Number.prototype",
+		key: "valueOf",
+		receiver: "number",
+		arity: { minimum: 0, maximum: 0 },
+		evaluationOrder: "receiver-then-arguments",
+		coercionOrder: [],
+		effects: [],
+		result: "number",
+		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	},
+	{
+		id: "Boolean.prototype.valueOf",
+		owner: "Boolean.prototype",
+		key: "valueOf",
+		receiver: "boolean",
+		arity: { minimum: 0, maximum: 0 },
+		evaluationOrder: "receiver-then-arguments",
+		coercionOrder: [],
+		effects: [],
+		result: "boolean",
+		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	},
+	{
+		id: "Date.now",
+		owner: "Date",
+		key: "now",
+		receiver: "none",
+		arity: { minimum: 0, maximum: 0 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: [],
+		// The clock is host state: each invocation is an observable read even when
+		// its numeric result is unused or happens to equal an adjacent read.
+		effects: ["read-host"],
+		result: "number",
+		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	},
+	{
+		id: "Date.parse",
+		owner: "Date",
+		key: "parse",
+		receiver: "none",
+		arity: { minimum: 0, maximum: 1 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: ["argument-string"],
+		effects: ["coerce", "call-user-code", "allocate", "throw", "safepoint"],
+		result: "number",
+		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	},
+	{
+		id: "Date.UTC",
+		owner: "Date",
+		key: "UTC",
+		receiver: "none",
+		arity: { minimum: 0, maximum: 7 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: [
+			"year-number",
+			"month-number",
+			"date-number",
+			"hours-number",
+			"minutes-number",
+			"seconds-number",
+			"milliseconds-number",
+		],
+		effects: ["coerce", "call-user-code", "throw", "safepoint"],
+		result: "number",
+		realm: "semantic-identity",
 		lowerings: ["generic", "exact-builtin-call"],
 	},
 	{

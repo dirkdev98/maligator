@@ -5,6 +5,7 @@
 
 #include "checked_size.h"
 #include "heap_string.h"
+#include "intrinsics.h"
 #include "vm.h"
 #include "vm_ops.h"
 
@@ -132,43 +133,6 @@ void mal_rooted_value_list_dispose(MalRootedValueList *list) {
     *list = (MalRootedValueList) {0};
 }
 
-static bool mal_rooted_string_parts_reserve(MalRootedStringParts *parts) {
-    if (parts->count < parts->capacity) {
-        return true;
-    }
-
-    usize capacity;
-    usize parts_bytes;
-    usize roots_bytes;
-    if (!mal_rooted_collection_capacity(
-            parts->capacity, parts->count + 1,
-            sizeof(MalString *), &capacity, &parts_bytes) ||
-        !mal_checked_size_multiply(
-            capacity, sizeof(MalValue), SIZE_MAX, &roots_bytes)) {
-        return false;
-    }
-
-    MalString **strings = malloc(parts_bytes);
-    MalValue *roots = malloc(roots_bytes);
-    if (strings == nullptr || roots == nullptr) {
-        free(roots);
-        free(strings);
-        return false;
-    }
-    if (parts->count != 0) {
-        memcpy(strings, parts->parts, parts->count * sizeof(MalString *));
-        memcpy(roots, parts->roots, parts->count * sizeof(MalValue));
-    }
-
-    free(parts->parts);
-    free(parts->roots);
-    parts->parts = strings;
-    parts->roots = roots;
-    parts->capacity = capacity;
-    parts->parts_span.slots = roots;
-    return true;
-}
-
 bool mal_rooted_string_parts_init(
     MalRootedStringParts *parts, MalString *separator, usize expected_count
 ) {
@@ -184,11 +148,21 @@ bool mal_rooted_string_parts_init(
         return false;
     }
 
-    parts->separator = separator;
+    usize roots_bytes;
+    if (!mal_checked_size_multiply(
+            expected_count, sizeof(MalValue), SIZE_MAX, &roots_bytes)) {
+        return false;
+    }
+    MalValue *roots = expected_count == 0 ? nullptr : malloc(roots_bytes);
+    if (expected_count != 0 && roots == nullptr) {
+        return false;
+    }
+
     parts->separator_root = mal_value_from_string(separator);
+    parts->roots = roots;
     parts->expected_count = expected_count;
     mal_gc_root(&parts->separator_span, &parts->separator_root, 1);
-    mal_gc_root(&parts->parts_span, nullptr, 0);
+    mal_gc_root(&parts->parts_span, roots, 0);
     return true;
 }
 
@@ -198,12 +172,10 @@ bool mal_rooted_string_parts_append(MalRootedStringParts *parts, MalString *part
             parts->total_length,
             part == nullptr ? 0 : mal_string_length(part),
             MAL_STRING_MAX_CODE_UNITS,
-            &parts->total_length) ||
-        !mal_rooted_string_parts_reserve(parts)) {
+            &parts->total_length)) {
         return false;
     }
 
-    parts->parts[parts->count] = part;
     parts->roots[parts->count] = part == nullptr
         ? mal_value_new_undefined()
         : mal_value_from_string(part);
@@ -219,27 +191,57 @@ bool mal_rooted_string_parts_flatten(
         return false;
     }
 
+    if (parts->count == 1 && !mal_value_is_undefined(parts->roots[0])) {
+        *out = mal_value_to_string(parts->roots[0]);
+        return true;
+    }
+    if (parts->total_length == 0) {
+        *out = mal_intrinsic_ascii(vm, "");
+        return true;
+    }
+
+    MalString *separator = mal_value_to_string(parts->separator_root);
+    usize separator_length = mal_string_length(separator);
+    if (separator_length == 0) {
+        // Joining empty parts around one full non-empty part is already flat.
+        for (usize i = 0; i < parts->count; i++) {
+            MalString *part = mal_value_is_undefined(parts->roots[i])
+                ? nullptr
+                : mal_value_to_string(parts->roots[i]);
+            if (part != nullptr && mal_string_length(part) == parts->total_length) {
+                *out = part;
+                return true;
+            }
+        }
+    }
+
     usize bytes;
     if (!mal_checked_size_multiply(
             sizeof(c16), parts->total_length, SIZE_MAX, &bytes)) {
         return false;
     }
-    c16 *code_units = parts->total_length == 0 ? nullptr : malloc(bytes);
-    if (parts->total_length != 0 && code_units == nullptr) {
+    c16 *code_units = mal_heap_try_alloc_raw_profiled(
+        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    if (code_units == nullptr) {
         return false;
     }
 
+    separator = mal_value_to_string(parts->separator_root);
+    const c16 *separator_units = separator_length == 0
+        ? nullptr
+        : mal_string_code_units(separator);
     usize offset = 0;
-    usize separator_length = mal_string_length(parts->separator);
     for (usize i = 0; i < parts->count; i++) {
         if (i != 0 && separator_length != 0) {
             memcpy(
                 code_units + offset,
-                mal_string_code_units(parts->separator),
+                separator_units,
                 separator_length * sizeof(c16));
             offset += separator_length;
         }
-        MalString *part = parts->parts[i];
+        MalString *part = mal_value_is_undefined(parts->roots[i])
+            ? nullptr
+            : mal_value_to_string(parts->roots[i]);
         usize part_length = part == nullptr ? 0 : mal_string_length(part);
         if (part_length != 0) {
             memcpy(
@@ -250,8 +252,7 @@ bool mal_rooted_string_parts_flatten(
         }
     }
 
-    *out = mal_string_new_copy(&vm->heap, code_units, parts->total_length);
-    free(code_units);
+    *out = mal_string_new_owned(&vm->heap, code_units, parts->total_length);
     return true;
 }
 
@@ -259,6 +260,5 @@ void mal_rooted_string_parts_dispose(MalRootedStringParts *parts) {
     mal_gc_unroot(&parts->parts_span);
     mal_gc_unroot(&parts->separator_span);
     free(parts->roots);
-    free(parts->parts);
     *parts = (MalRootedStringParts) {0};
 }

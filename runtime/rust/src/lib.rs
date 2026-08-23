@@ -14,6 +14,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod ffi;
+mod number_format;
 
 // temporal_rs's official C ABI. Keeping it in this crate preserves the one-
 // staticlib rule while exporting the generated `temporal_rs_*` symbols to C.
@@ -159,6 +160,50 @@ pub unsafe extern "C" fn mal_i18n_locale_field(tag_ptr: *const u8, tag_len: usiz
 // Intl.Collator — an opaque, leaked ICU4X Collator + a UTF-16 compare entry.
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "intl-collator")]
+fn compare_utf16_with_collator(
+    collator: &icu_collator::CollatorBorrowed<'static>,
+    a_ptr: *const u16,
+    a_len: usize,
+    b_ptr: *const u16,
+    b_len: usize,
+) -> i32 {
+    // ICU accepts the VM's UTF-16 view directly and compares each unpaired
+    // surrogate as U+FFFD, matching the previous lossy conversion without its
+    // two temporary Rust String allocations.
+    let a = unsafe { nullable_u16_slice(a_ptr, a_len) };
+    let b = unsafe { nullable_u16_slice(b_ptr, b_len) };
+    match collator.compare_utf16(a, b) {
+        core::cmp::Ordering::Less => -1,
+        core::cmp::Ordering::Equal => 0,
+        core::cmp::Ordering::Greater => 1,
+    }
+}
+
+#[cfg(feature = "intl-collator")]
+fn new_default_collator() -> Option<icu_collator::CollatorBorrowed<'static>> {
+    use icu_collator::options::{CollatorOptions, Strength};
+    use icu_collator::preferences::{CollationCaseFirst, CollationNumericOrdering};
+    use icu_collator::{Collator, CollatorPreferences};
+
+    let locale = "en-US".parse::<icu_locale::Locale>().ok()?;
+    let mut prefs = CollatorPreferences::from(&locale);
+    prefs.case_first = Some(CollationCaseFirst::False);
+    prefs.numeric_ordering = Some(CollationNumericOrdering::False);
+    let mut options = CollatorOptions::default();
+    options.strength = Some(Strength::Tertiary);
+    Collator::try_new(prefs, options).ok()
+}
+
+#[cfg(feature = "intl-collator")]
+thread_local! {
+    /// String#localeCompare with omitted locales/options uses this exact immutable
+    /// default plan. ICU4X's borrowed collator is not Sync, while each VM mutator
+    /// stays on one thread, so TLS avoids both synchronization and per-call setup.
+    static DEFAULT_COLLATOR: std::cell::OnceCell<Option<icu_collator::CollatorBorrowed<'static>>> =
+        const { std::cell::OnceCell::new() };
+}
+
 /// Build a Collator for `locale` with ECMA-402-mapped options. Returns an opaque
 /// (leaked) pointer, or null on failure. strength: 0 primary, 1 secondary, 2
 /// tertiary; case_first: 0 off, 1 upper, 2 lower.
@@ -221,17 +266,23 @@ pub unsafe extern "C" fn mal_i18n_collator_compare_utf16(
     b_len: usize,
 ) -> i32 {
     let collator = unsafe { &*(handle as *const icu_collator::CollatorBorrowed<'static>) };
-    // ICU collators operate on scalar values; malformed UTF-16 is therefore
-    // replaced rather than preserved as lone surrogate code units.
-    let a = unsafe { nullable_u16_slice(a_ptr, a_len) };
-    let b = unsafe { nullable_u16_slice(b_ptr, b_len) };
-    let sa = String::from_utf16_lossy(a);
-    let sb = String::from_utf16_lossy(b);
-    match collator.compare(&sa, &sb) {
-        core::cmp::Ordering::Less => -1,
-        core::cmp::Ordering::Equal => 0,
-        core::cmp::Ordering::Greater => 1,
-    }
+    compare_utf16_with_collator(collator, a_ptr, a_len, b_ptr, b_len)
+}
+
+/// Compare with the thread-local default en-US Collator. Returns 2 only if the
+/// baked default plan could not be constructed; ordinary results are -1 / 0 / 1.
+#[cfg(feature = "intl-collator")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_default_collator_compare_utf16(
+    a_ptr: *const u16,
+    a_len: usize,
+    b_ptr: *const u16,
+    b_len: usize,
+) -> i32 {
+    DEFAULT_COLLATOR.with(|slot| match slot.get_or_init(new_default_collator) {
+        Some(collator) => compare_utf16_with_collator(collator, a_ptr, a_len, b_ptr, b_len),
+        None => 2,
+    })
 }
 
 /// Free a collator handle from `mal_i18n_collator_new`. Null-tolerant (idempotent
@@ -325,6 +376,63 @@ fn sign_display_from_code(code: i32) -> icu_decimal::input::SignDisplay {
     }
 }
 
+#[cfg(feature = "intl-number-format")]
+std::thread_local! {
+    static DEFAULT_EN_US_NUMBER_FORMATTER: std::cell::OnceCell<icu_decimal::DecimalFormatter> =
+        const { std::cell::OnceCell::new() };
+}
+
+#[cfg(feature = "intl-number-format")]
+fn default_en_us_number_formatter() -> Option<icu_decimal::DecimalFormatter> {
+    use icu_decimal::options::{DecimalFormatterOptions, GroupingStrategy};
+    use icu_decimal::DecimalFormatter;
+
+    let locale = "en-US".parse::<icu_locale::Locale>().ok()?;
+    let mut options = DecimalFormatterOptions::default();
+    options.grouping_strategy = Some(GroupingStrategy::Auto);
+    DecimalFormatter::try_new((&locale).into(), options).ok()
+}
+
+/// The option-free Number.prototype.toLocaleString plan: en-US decimal style,
+/// grouping on, 1 integer digit, and 0..3 fraction digits. Keeping this narrow
+/// makes the cached formatter independent of observable locale/options parsing.
+#[cfg(feature = "intl-number-format")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_number_format_default_en_us(
+    number: f64,
+    out: *mut u8,
+    out_cap: i32,
+) -> i32 {
+    use icu_decimal::input::Decimal;
+    use icu_decimal::input::SignDisplay;
+
+    if !number.is_finite() {
+        return -1;
+    }
+    let rendered = format!("{}", number);
+    let mut decimal = match Decimal::try_from_str(&rendered) {
+        Ok(decimal) => decimal,
+        Err(_) => return -1,
+    };
+    round_half_expand(&mut decimal, -3);
+    decimal.pad_end(0);
+    decimal.apply_sign_display(SignDisplay::Auto);
+
+    DEFAULT_EN_US_NUMBER_FORMATTER.with(|cache| {
+        if cache.get().is_none() {
+            let Some(formatter) = default_en_us_number_formatter() else {
+                return -1;
+            };
+            let _ = cache.set(formatter);
+        }
+        let Some(formatter) = cache.get() else {
+            return -1;
+        };
+        let text = formatter.format_to_string(&decimal);
+        unsafe { write_utf8(&text, out, out_cap) }
+    })
+}
+
 /// Format `number` for `locale`. percent != 0 scales by 100 and appends '%'.
 /// Honors minimumIntegerDigits and grouping. When `max_significant` > 0 the
 /// significant-digit options drive rounding (halfExpand) and padding; otherwise
@@ -379,7 +487,7 @@ pub unsafe extern "C" fn mal_i18n_number_format(
     } else {
         // maximumFractionDigits: round at 10^-max_fraction; minimumFractionDigits:
         // pad the fraction to 10^-min_fraction.
-        decimal.round(-(max_fraction as i16));
+        round_half_expand(&mut decimal, -(max_fraction as i16));
         decimal.pad_end(-(min_fraction as i16));
     }
     // minimumIntegerDigits: pad the integer part out to 10^(min_integer-1).
@@ -408,6 +516,19 @@ pub unsafe extern "C" fn mal_i18n_number_format(
 // The C side passes pre-resolved civil components (local wall clock).
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "intl-date-time-format")]
+std::thread_local! {
+    static DEFAULT_EN_US_DATE_TIME_FORMATTER: std::cell::OnceCell<
+        Option<icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::YMDT>>,
+    > = const { std::cell::OnceCell::new() };
+    static DEFAULT_EN_US_DATE_FORMATTER: std::cell::OnceCell<
+        Option<icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::YMD>>,
+    > = const { std::cell::OnceCell::new() };
+    static DEFAULT_EN_US_TIME_FORMATTER: std::cell::OnceCell<
+        Option<icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::T>>,
+    > = const { std::cell::OnceCell::new() };
+}
+
 /// Format civil date/time components for `locale`. date_style / time_style:
 /// -1 none, 0 full, 1 long, 2 medium, 3 short. Writes UTF-8 into `out`; returns
 /// the full length, or -1 on failure.
@@ -431,9 +552,6 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     use icu_datetime::options::{Length, TimePrecision};
     use icu_datetime::DateTimeFormatter;
 
-    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
-        return -1;
-    };
     let Ok(date) = icu_calendar::Date::try_new_iso(year, month as u8, day as u8) else {
         return -1;
     };
@@ -449,6 +567,52 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     };
     let ymd = |style: i32| fieldsets::YMD::medium().with_length(to_length(style));
     let t = |style: i32| fieldsets::T::medium().with_length(to_length(style));
+
+    let default_text = if unsafe { nullable_slice(locale_ptr, locale_len) } == b"en-US" {
+        match (date_style, time_style) {
+            (2, 2) => DEFAULT_EN_US_DATE_TIME_FORMATTER.with(|cache| {
+                cache
+                    .get_or_init(|| {
+                        let locale = "en-US".parse::<icu_locale::Locale>().ok()?;
+                        DateTimeFormatter::try_new(
+                            (&locale).into(),
+                            ymd(2).with_time(TimePrecision::Second),
+                        )
+                        .ok()
+                    })
+                    .as_ref()
+                    .map(|formatter| formatter.format(&input).to_string())
+            }),
+            (2, -1) => DEFAULT_EN_US_DATE_FORMATTER.with(|cache| {
+                cache
+                    .get_or_init(|| {
+                        let locale = "en-US".parse::<icu_locale::Locale>().ok()?;
+                        DateTimeFormatter::try_new((&locale).into(), ymd(2)).ok()
+                    })
+                    .as_ref()
+                    .map(|formatter| formatter.format(&input).to_string())
+            }),
+            (-1, 2) => DEFAULT_EN_US_TIME_FORMATTER.with(|cache| {
+                cache
+                    .get_or_init(|| {
+                        let locale = "en-US".parse::<icu_locale::Locale>().ok()?;
+                        DateTimeFormatter::try_new((&locale).into(), t(2)).ok()
+                    })
+                    .as_ref()
+                    .map(|formatter| formatter.format(&input).to_string())
+            }),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some(text) = default_text {
+        return unsafe { write_utf8(&text, out, out_cap) };
+    }
+
+    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
+        return -1;
+    };
 
     let text = if date_style >= 0 && time_style >= 0 {
         // time length follows the date length in this fieldset model.
@@ -863,12 +1027,14 @@ fn system_time_zone() -> &'static jiff::tz::TimeZone {
 /// Project an ECMAScript Date instant into Jiff's supported span. Gregorian
 /// calendars repeat every 400 years, including the weekday of each date, so
 /// this preserves recurring TZif/POSIX rules outside Jiff's year range.
+const DATE_GREGORIAN_CYCLE_MS: i64 = 146_097 * 86_400_000;
+
 fn date_offset_timestamp(epoch_ms: i64) -> jiff::Timestamp {
     if let Ok(timestamp) = jiff::Timestamp::from_millisecond(epoch_ms) {
         return timestamp;
     }
 
-    const GREGORIAN_CYCLE_MS: i128 = 146_097 * 86_400_000;
+    const GREGORIAN_CYCLE_MS: i128 = DATE_GREGORIAN_CYCLE_MS as i128;
     let epoch_ms = epoch_ms as i128;
     let boundary_ms = if epoch_ms < 0 {
         jiff::Timestamp::MIN.as_millisecond() as i128
@@ -892,22 +1058,68 @@ fn offset_ms_at(tz: &jiff::tz::TimeZone, epoch_ms: i64) -> i64 {
     tz.to_offset(date_offset_timestamp(epoch_ms)).seconds() as i64 * 1000
 }
 
+thread_local! {
+    /// Date getter/render loops commonly project the same [[DateValue]] several
+    /// times. The system zone is process-immutable after `system_time_zone()` is
+    /// initialized, so an exact instant cache avoids repeating Jiff's transition
+    /// lookup without broadening the result across a DST boundary.
+    static DATE_OFFSET_CACHE: std::cell::Cell<(i64, i64)> =
+        const { std::cell::Cell::new((i64::MIN, 0)) };
+}
+
+fn cached_offset_ms_at(tz: &jiff::tz::TimeZone, epoch_ms: i64) -> i64 {
+    // i64::MIN is the empty-key sentinel. It is outside ECMAScript's Date range,
+    // but keep the flat FFI helper correct for that input by bypassing the cache.
+    if epoch_ms == i64::MIN {
+        return offset_ms_at(tz, epoch_ms);
+    }
+    DATE_OFFSET_CACHE.with(|cache| {
+        let (cached_epoch_ms, cached_offset_ms) = cache.get();
+        if cached_epoch_ms == epoch_ms {
+            return cached_offset_ms;
+        }
+        let offset_ms = offset_ms_at(tz, epoch_ms);
+        cache.set((epoch_ms, offset_ms));
+        offset_ms
+    })
+}
+
 /// LocalTZA(epoch_ms): the system zone's offset (ms east of UTC) at that UTC
 /// instant. The C side computes LocalTime(t) = t + this.
 #[no_mangle]
 pub extern "C" fn mal_i18n_local_offset_ms(epoch_ms: i64) -> i64 {
-    offset_ms_at(system_time_zone(), epoch_ms)
+    cached_offset_ms_at(system_time_zone(), epoch_ms)
+}
+
+fn compatible_offset_ms_from_local(
+    tz: &jiff::tz::TimeZone,
+    projected: jiff::Timestamp,
+) -> i64 {
+    use jiff::tz::AmbiguousOffset;
+
+    let local = jiff::tz::Offset::UTC.to_datetime(projected);
+    let offset = match tz.to_ambiguous_timestamp(local).offset() {
+        AmbiguousOffset::Unambiguous { offset } => offset,
+        AmbiguousOffset::Gap { before, .. } => before,
+        AmbiguousOffset::Fold { before, .. } => before,
+    };
+    offset.seconds() as i64 * 1000
+}
+
+fn utc_from_local_ms_at(tz: &jiff::tz::TimeZone, local_ms: i64) -> i64 {
+    let projected = date_offset_timestamp(local_ms);
+    let offset_ms = compatible_offset_ms_from_local(tz, projected);
+    // ECMAScript Date's local intermediates are at most one day beyond TimeClip
+    // and cannot overflow. Keep the flat FFI total for arbitrary i64 callers too.
+    local_ms.saturating_sub(offset_ms)
 }
 
 /// UTC(local_ms): map a local wall-clock (expressed as ms-since-epoch as if it
-/// were UTC) back to the UTC instant. A two-step offset refinement resolves the
-/// DST gap/overlap ambiguity the way a single subtraction cannot.
+/// were UTC) back to the UTC instant. Jiff's Compatible disambiguation selects
+/// the earlier instant in a fold and advances by the gap for a nonexistent time.
 #[no_mangle]
 pub extern "C" fn mal_i18n_utc_from_local_ms(local_ms: i64) -> i64 {
-    let tz = system_time_zone();
-    let first = offset_ms_at(tz, local_ms);
-    let second = offset_ms_at(tz, local_ms - first);
-    local_ms - second
+    utc_from_local_ms_at(system_time_zone(), local_ms)
 }
 
 /// Write the system zone's IANA name (e.g. "Europe/Amsterdam", "UTC") into `buf`
@@ -920,7 +1132,14 @@ pub unsafe extern "C" fn mal_i18n_local_tz_name(buf: *mut u8, cap: i32) -> i32 {
 
 #[cfg(test)]
 mod date_timezone_tests {
-    use super::offset_ms_at;
+    use super::{offset_ms_at, utc_from_local_ms_at};
+
+    fn utc_ms(dt: jiff::civil::DateTime) -> i64 {
+        jiff::tz::TimeZone::UTC
+            .to_timestamp(dt)
+            .unwrap()
+            .as_millisecond()
+    }
 
     #[test]
     fn named_zone_offsets_cover_ecmascript_date_extremes() {
@@ -928,5 +1147,20 @@ mod date_timezone_tests {
 
         assert_ne!(offset_ms_at(&tz, -8_640_000_000_000_000), 0);
         assert_ne!(offset_ms_at(&tz, 8_640_000_000_000_000), 0);
+    }
+
+    #[test]
+    fn local_to_utc_uses_compatible_dst_disambiguation() {
+        use jiff::civil::date;
+
+        let tz = jiff::tz::TimeZone::get("Europe/Amsterdam").unwrap();
+
+        let fold = utc_ms(date(2024, 10, 27).at(2, 30, 0, 0));
+        let fold_expected = utc_ms(date(2024, 10, 27).at(0, 30, 0, 0));
+        assert_eq!(utc_from_local_ms_at(&tz, fold), fold_expected);
+
+        let gap = utc_ms(date(2024, 3, 31).at(2, 30, 0, 0));
+        let gap_expected = utc_ms(date(2024, 3, 31).at(1, 30, 0, 0));
+        assert_eq!(utc_from_local_ms_at(&tz, gap), gap_expected);
     }
 }

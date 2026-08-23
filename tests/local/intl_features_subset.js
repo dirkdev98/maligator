@@ -145,6 +145,41 @@ check("NumberFormat undefined options bag", undefinedOptionsWork);
 
 check("Collator present", typeof Intl.Collator === "function");
 check("localeCompare (collator)", "b".localeCompare("a") === 1);
+const localeCompareOrder = [];
+const localeCompareResult = String.prototype.localeCompare.call(
+	{
+		toString() {
+			localeCompareOrder.push("receiver");
+			return ["same-", "s".repeat(96)].join("");
+		},
+	},
+	{
+		toString() {
+			localeCompareOrder.push("that");
+			if (typeof $262 !== "undefined") $262.gc();
+			return ["same-", "s".repeat(96)].join("");
+		},
+	},
+	{
+		get length() {
+			localeCompareOrder.push("locales");
+			if (typeof $262 !== "undefined") $262.gc();
+			return 0;
+		},
+	},
+	{
+		get usage() {
+			localeCompareOrder.push("options");
+			if (typeof $262 !== "undefined") $262.gc();
+			return "sort";
+		},
+	},
+);
+check(
+	"localeCompare coercion order and roots",
+	localeCompareResult === 0 &&
+		localeCompareOrder.join(",") === "receiver,that,locales,options",
+);
 check("DateTimeFormat present", typeof Intl.DateTimeFormat === "function");
 check("PluralRules select", new Intl.PluralRules("en").select(1) === "one");
 check("ListFormat present", typeof Intl.ListFormat === "function");

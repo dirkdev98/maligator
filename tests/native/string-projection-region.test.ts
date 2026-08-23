@@ -3,7 +3,7 @@ import { buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harne
 
 const fixture = "tests/local/string-projection-region.js";
 const expected =
-	"RESULT PASS 245,9,102,-12.5,16,Infinity,1,3,0,2,2,1,9,2,711,9,17,2,23 2 1";
+	"RESULT PASS 245,9,102,1010466,-12.5,16,Infinity,1,3,0,2,2,1,9,2,711,9,17,2,23 2 1";
 
 describe("projected String producer-consumer regions", () => {
 	it.each([true, false])("preserves generic fallbacks (compiled=%s)", (compiled) => {

@@ -13,6 +13,11 @@ function throws(errorType, fn) {
 	return false;
 }
 
+function forceGc() {
+	if (typeof $262 !== "undefined") $262.gc();
+	else if (typeof gc === "function") gc();
+}
+
 check("integer NaN", (12.4).toFixed(NaN) === "12");
 check("integer negative zero", "x".repeat(-0) === "");
 check("integer truncates toward zero", "x".repeat(2.9) === "xx");
@@ -28,6 +33,168 @@ check(
 		Number("1.25e2") === 125 &&
 		Number("0".repeat(70)) === 0 &&
 		Number.isNaN(Number("12x")),
+);
+check(
+	"Boolean call, construct, and receiver methods",
+	Boolean(0) === false &&
+		Boolean(1) === true &&
+		Boolean(new Boolean(false)) === true &&
+		new Boolean(false).valueOf() === false &&
+		new Boolean(true).toString() === "true" &&
+		Boolean.prototype.toString.call(false) === "false",
+);
+check(
+	"Number call and construct preserve primitive values",
+	Number() === 0 &&
+		Number(42) === 42 &&
+		Number(1n) === 1 &&
+		Number(Object(1n)) === 1 &&
+		Object.is(Number(-0), -0) &&
+		new Number(42).valueOf() === 42 &&
+		Object.is(new Number(-0).valueOf(), -0),
+);
+const numberBigIntCoercionOrder = [];
+const numberFromBigIntObject = Number({
+	valueOf() {
+		numberBigIntCoercionOrder.push("valueOf");
+		forceGc();
+		return 2n;
+	},
+	toString() {
+		numberBigIntCoercionOrder.push("toString");
+		return "99";
+	},
+});
+check(
+	"Number object coercion accepts BigInt after ordered forced-GC ToNumeric",
+	numberFromBigIntObject === 2 && numberBigIntCoercionOrder.join(",") === "valueOf",
+);
+function constructWithGcPrototype(constructor, argument, label) {
+	const newTarget = new Proxy(function () {}, {
+		get(target, key, receiver) {
+			if (key === "prototype") {
+				const prototype = { label };
+				forceGc();
+				return prototype;
+			}
+			return Reflect.get(target, key, receiver);
+		},
+	});
+	return Reflect.construct(constructor, [argument], newTarget);
+}
+const gcBooleanWrapper = constructWithGcPrototype(Boolean, true, "boolean");
+const gcNumberWrapper = constructWithGcPrototype(Number, 42, "number");
+check(
+	"Boolean and Number constructors root custom prototypes",
+	Object.getPrototypeOf(gcBooleanWrapper).label === "boolean" &&
+		Boolean.prototype.valueOf.call(gcBooleanWrapper) === true &&
+		Object.getPrototypeOf(gcNumberWrapper).label === "number" &&
+		Number.prototype.valueOf.call(gcNumberWrapper) === 42,
+);
+check(
+	"Number static predicates and parsers",
+	Number.isNaN(NaN) &&
+		!Number.isNaN("NaN") &&
+		Number.isFinite(42) &&
+		!Number.isFinite("42") &&
+		Number.isInteger(-0) &&
+		!Number.isInteger(1.5) &&
+		Number.isSafeInteger(Number.MAX_SAFE_INTEGER) &&
+		!Number.isSafeInteger(Number.MAX_SAFE_INTEGER + 1) &&
+		Number.parseInt("ff", 16) === 255 &&
+		Number.parseFloat("  -12.5tail") === -12.5 &&
+		Number.parseFloat({
+			toString() {
+				return String.fromCharCode(49, 50, 46, 53, 116, 97, 105, 108);
+			},
+		}) === 12.5,
+);
+check(
+	"Number.parseInt roots a fresh ToString result across radix coercion",
+	Number.parseInt(
+		{
+			toString() {
+				return String.fromCharCode(49, 50, 51, 52, 53);
+			},
+		},
+		{
+			valueOf() {
+				forceGc();
+				return 10;
+			},
+		},
+	) === 12345,
+);
+check(
+	"Number shortest decimal formatting",
+	String(Number.MIN_VALUE) === "5e-324" &&
+		String(Number.MAX_VALUE) === "1.7976931348623157e+308" &&
+		String(-(553675004028197 / 16)) === "-34604687751762.312" &&
+		String(553675004028199 / 16) === "34604687751762.438" &&
+		String(1e20) === "100000000000000000000" &&
+		String(1e21) === "1e+21" &&
+		String(1e-6) === "0.000001" &&
+		String(1e-7) === "1e-7",
+);
+check(
+	"Number fixed, exponential, and precision formatting",
+	(2.5).toFixed(0) === "3" &&
+		(1.25).toFixed(1) === "1.3" &&
+		(1.005).toFixed(2) === "1.00" &&
+		(1000000000000000100).toFixed(2) === "1000000000000000128.00" &&
+		(77).toExponential() === "7.7e+1" &&
+		(25).toExponential(0) === "3e+1" &&
+		(123).toPrecision(5) === "123.00" &&
+		Number.MIN_VALUE.toPrecision(5) === "4.9407e-324",
+);
+check(
+	"Number locale and safe-integer radix formatting",
+	(1234.5).toLocaleString() === "1,234.5" &&
+		(255).toString(16) === "ff" &&
+		Number.MAX_SAFE_INTEGER.toString(2) ===
+			"11111111111111111111111111111111111111111111111111111",
+);
+const defaultNumberFormatter = new Intl.NumberFormat();
+let defaultLocaleMatchesConstructor = true;
+for (const value of [-0, 0.0001, 1.2345, 999.9999, 1234567.89, Number.MAX_VALUE]) {
+	defaultLocaleMatchesConstructor &&=
+		value.toLocaleString() === defaultNumberFormatter.format(value);
+}
+check(
+	"Number default locale fast path matches Intl.NumberFormat",
+	defaultLocaleMatchesConstructor &&
+		(-0).toLocaleString() === "-0" &&
+		(1.2345).toLocaleString() === "1.235" &&
+		(999.9999).toLocaleString() === "1,000",
+);
+const customNumberLocaleOptions = {
+	maximumFractionDigits: 2,
+	useGrouping: false,
+};
+const customNumberFormatter = new Intl.NumberFormat("de-DE", customNumberLocaleOptions);
+check(
+	"Number custom locale and options retain the generic plan",
+	(1234.567).toLocaleString("de-DE", customNumberLocaleOptions) === "1234,57" &&
+		(1234.567).toLocaleString("de-DE", customNumberLocaleOptions) ===
+			customNumberFormatter.format(1234.567),
+);
+const minimumBinary = Number.MIN_VALUE.toString(2);
+check(
+	"Number arbitrary-radix formatting is shortest and covers binary boundaries",
+	(0.1).toString(3) === "0.0022002200220022002200220022002201" &&
+		Math.PI.toString(16) === "3.243f6a8885a3" &&
+		(9007199254740992).toString(16) === "20000000000000" &&
+		minimumBinary.length === 1076 &&
+		minimumBinary.startsWith("0.") &&
+		minimumBinary.endsWith("1"),
+);
+const radixSpecBits = new DataView(new ArrayBuffer(8));
+radixSpecBits.setUint32(0, 0xa20e9fd5, true);
+radixSpecBits.setUint32(4, 0x4f74e2cf, true);
+const radixSpecValue = radixSpecBits.getFloat64(0, true);
+check(
+	"Number radix formatting selects the shortest round-tripping candidate",
+	radixSpecValue.toString(3) === "201200221102210002021221110210012" + "0".repeat(124),
 );
 check("repeat negative fraction becomes zero", "x".repeat(-0.5) === "");
 check(
@@ -210,6 +377,28 @@ check(
 	String.fromCharCode(NaN).charCodeAt(0) === 0 &&
 		String.fromCharCode(Infinity).charCodeAt(0) === 0 &&
 		String.fromCharCode(0x10041).charCodeAt(0) === 65,
+);
+const codePointOrder = [];
+const coercedCodePoints = String.fromCodePoint(
+	{
+		valueOf() {
+			codePointOrder.push("first");
+			return 0x1f600;
+		},
+	},
+	{
+		[Symbol.toPrimitive](hint) {
+			codePointOrder.push(hint);
+			return 65;
+		},
+	},
+);
+check(
+	"fromCodePoint uses ordered ToNumber coercion",
+	coercedCodePoints === "\ud83d\ude00A" &&
+		codePointOrder.join(",") === "first,number" &&
+		throws(TypeError, () => String.fromCodePoint(1n)) &&
+		throws(TypeError, () => String.fromCodePoint(Symbol())),
 );
 
 const dataBuffer = new ArrayBuffer(8);

@@ -1,7 +1,6 @@
 #include "builtin_date.h"
 
 #include <math.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "ascii.h"
@@ -12,6 +11,7 @@
 #include "builtin_temporal.h"
 #endif
 #include "date_object.h"
+#include "gc.h"
 #include "heap_string.h"
 #include "mal_i18n.h"
 #include "intrinsics.h"
@@ -120,38 +120,147 @@ static f64 date_ms_from_time(f64 t) {
     return date_pmod(t, MS_PER_SECOND);
 }
 
-static f64 date_week_day(f64 t) {
-    if (!isfinite(t)) {
-        return NAN;
+typedef struct {
+    f64 day_number;
+    f64 time_within_day;
+    f64 year;
+    f64 month;
+    f64 date;
+    f64 week_day;
+    f64 hour;
+    f64 minute;
+    f64 second;
+    f64 millisecond;
+} DateComponents;
+
+typedef enum {
+    DATE_COMPONENT_CIVIL = 1 << 0,
+    DATE_COMPONENT_WEEK_DAY = 1 << 1,
+    DATE_COMPONENT_HOUR = 1 << 2,
+    DATE_COMPONENT_MINUTE = 1 << 3,
+    DATE_COMPONENT_SECOND = 1 << 4,
+    DATE_COMPONENT_MILLISECOND = 1 << 5,
+    DATE_COMPONENT_DAY_NUMBER = 1 << 6,
+    DATE_COMPONENT_TIME_WITHIN_DAY = 1 << 7,
+    DATE_COMPONENT_CLOCK = DATE_COMPONENT_HOUR | DATE_COMPONENT_MINUTE |
+        DATE_COMPONENT_SECOND | DATE_COMPONENT_MILLISECOND,
+} DateComponentMask;
+
+/** A clipped [[DateValue]] or its local-time projection as exact milliseconds. */
+static bool date_integral_milliseconds(f64 t, i64 *out) {
+    if (!isfinite(t) || fabs(t) > MAX_TIME + MS_PER_DAY) {
+        return false;
     }
-    return date_pmod(date_day(t) + 4.0, 7.0);
+    i64 milliseconds = (i64) t;
+    if ((f64) milliseconds != t) {
+        return false;
+    }
+    *out = milliseconds;
+    return true;
 }
 
-static f64 date_year_from_time(f64 t) {
-    if (!isfinite(t)) {
-        return NAN;
+/** Mathematical floor(ms / MS_PER_DAY), not C's truncation toward zero. */
+static i64 date_integral_day(i64 milliseconds) {
+    static const i64 milliseconds_per_day = 86400000;
+    i64 day = milliseconds / milliseconds_per_day;
+    if (milliseconds < 0 && milliseconds % milliseconds_per_day != 0) {
+        day--;
     }
-    f64 y, m, d;
-    date_civil_from_days(date_day(t), &y, &m, &d);
-    return y;
+    return day;
 }
 
-static f64 date_month_from_time(f64 t) {
-    if (!isfinite(t)) {
-        return NAN;
-    }
-    f64 y, m, d;
-    date_civil_from_days(date_day(t), &y, &m, &d);
-    return m;
+/** Positive millisecond offset inside a day for a signed epoch value. */
+static i64 date_integral_time_within_day(i64 milliseconds) {
+    static const i64 milliseconds_per_day = 86400000;
+    i64 result = milliseconds % milliseconds_per_day;
+    return result < 0 ? result + milliseconds_per_day : result;
 }
 
-static f64 date_date_from_time(f64 t) {
-    if (!isfinite(t)) {
-        return NAN;
+/** Integral Hinnant civil-from-days projection for the native Date range. */
+static void date_civil_from_integral_days(
+    i64 day, f64 *year_out, f64 *month_out, f64 *day_out
+) {
+    i64 z = day + 719468;
+    i64 era = (z >= 0 ? z : z - 146096) / 146097;
+    i64 doe = z - era * 146097;
+    i64 yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    i64 year = yoe + era * 400;
+    i64 doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    i64 mp = (5 * doy + 2) / 153;
+    i64 date = doy - (153 * mp + 2) / 5 + 1;
+    i64 month = mp < 10 ? mp + 3 : mp - 9;
+    *year_out = (f64) (year + (month <= 2));
+    *month_out = (f64) (month - 1);
+    *day_out = (f64) date;
+}
+
+/**
+ * Project a finite time value into the requested calendar/time components.
+ * Native Date slots and LocalTime projections are exact, bounded milliseconds;
+ * project those with integer div/mod so getters avoid libm fmod/floor calls.
+ * Combined consumers share both the civil conversion and one positive
+ * time-within-day remainder. Fractional or unbounded Intl inputs retain the
+ * f64 spec helpers.
+ */
+static void date_project_components(f64 t, u32 mask, DateComponents *out) {
+    i64 integral_milliseconds;
+    bool integral = date_integral_milliseconds(t, &integral_milliseconds);
+    i64 integral_day = 0;
+    if (mask & (DATE_COMPONENT_CIVIL | DATE_COMPONENT_WEEK_DAY | DATE_COMPONENT_DAY_NUMBER)) {
+        f64 day;
+        if (integral) {
+            integral_day = date_integral_day(integral_milliseconds);
+            day = (f64) integral_day;
+        } else {
+            day = date_day(t);
+        }
+        if (mask & DATE_COMPONENT_DAY_NUMBER) {
+            out->day_number = day;
+        }
+        if (mask & DATE_COMPONENT_CIVIL) {
+            if (integral) {
+                date_civil_from_integral_days(
+                    integral_day, &out->year, &out->month, &out->date);
+            } else {
+                date_civil_from_days(day, &out->year, &out->month, &out->date);
+            }
+        }
+        if (mask & DATE_COMPONENT_WEEK_DAY) {
+            if (integral) {
+                i64 week_day = (integral_day + 4) % 7;
+                out->week_day = (f64) (week_day < 0 ? week_day + 7 : week_day);
+            } else {
+                out->week_day = date_pmod(day + 4.0, 7.0);
+            }
+        }
     }
-    f64 y, m, d;
-    date_civil_from_days(date_day(t), &y, &m, &d);
-    return d;
+    u32 clock_mask = mask & DATE_COMPONENT_CLOCK;
+    if (integral && (clock_mask != 0 || (mask & DATE_COMPONENT_TIME_WITHIN_DAY))) {
+        i64 time_within_day = date_integral_time_within_day(integral_milliseconds);
+        if (mask & DATE_COMPONENT_HOUR) {
+            out->hour = (f64) (time_within_day / 3600000);
+        }
+        if (mask & DATE_COMPONENT_MINUTE) {
+            out->minute = (f64) ((time_within_day / 60000) % 60);
+        }
+        if (mask & DATE_COMPONENT_SECOND) {
+            out->second = (f64) ((time_within_day / 1000) % 60);
+        }
+        if (mask & DATE_COMPONENT_MILLISECOND) {
+            out->millisecond = (f64) (time_within_day % 1000);
+        }
+        if (mask & DATE_COMPONENT_TIME_WITHIN_DAY) {
+            out->time_within_day = (f64) time_within_day;
+        }
+    } else {
+        if (mask & DATE_COMPONENT_HOUR) out->hour = date_hour_from_time(t);
+        if (mask & DATE_COMPONENT_MINUTE) out->minute = date_min_from_time(t);
+        if (mask & DATE_COMPONENT_SECOND) out->second = date_sec_from_time(t);
+        if (mask & DATE_COMPONENT_MILLISECOND) out->millisecond = date_ms_from_time(t);
+        if (mask & DATE_COMPONENT_TIME_WITHIN_DAY) {
+            out->time_within_day = date_time_within_day(t);
+        }
+    }
 }
 
 /** MakeTime(§21.4.1.11). */
@@ -242,7 +351,7 @@ static f64 date_utc_from_local(f64 local) {
 static f64 date_now_ms(void) {
     struct timespec ts;
     timespec_get(&ts, TIME_UTC);
-    return floor((f64) ts.tv_sec * 1000.0 + (f64) ts.tv_nsec / 1.0e6);
+    return (f64) ts.tv_sec * 1000.0 + (f64) (ts.tv_nsec / 1000000L);
 }
 
 // ---------------------------------------------------------------------------
@@ -679,39 +788,101 @@ static f64 date_parse_units(const c16 *u, usize len) {
     return date_parse_legacy(u, len);
 }
 
+/** Flatten and parse a string while keeping a newly coerced/constructed cons
+ * string alive across the flatten allocation. */
+static f64 date_parse_string_value(MalString *string) {
+    MalValue string_root = mal_value_from_string(string);
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, &string_root, 1);
+    (void) mal_string_code_units(string);
+    string = mal_value_to_string(string_root);
+    f64 parsed = date_parse_units(
+        mal_string_code_units(string), mal_string_length(string));
+    mal_gc_unroot(&root_span);
+    return date_time_clip(parsed);
+}
+
 // ---------------------------------------------------------------------------
 // String rendering
 // ---------------------------------------------------------------------------
 
-/** "Www Mmm DD YYYY" for a finite local time t. Returns bytes written. */
-static usize date_render_date_string(byte *buf, f64 t) {
-    i32 wd = (i32) date_week_day(t);
-    i32 mo = (i32) date_month_from_time(t);
-    i32 d = (i32) date_date_from_time(t);
-    f64 y = date_year_from_time(t);
-    const char *sign = "";
-    if (y < 0.0) {
-        sign = "-";
-        y = -y;
+static byte *date_write_two_digits(byte *buf, i32 value) {
+    buf[0] = (byte) ('0' + value / 10);
+    buf[1] = (byte) ('0' + value % 10);
+    return buf + 2;
+}
+
+static byte *date_write_three_digits(byte *buf, i32 value) {
+    buf[0] = (byte) ('0' + value / 100);
+    buf[1] = (byte) ('0' + (value / 10) % 10);
+    buf[2] = (byte) ('0' + value % 10);
+    return buf + 3;
+}
+
+/** Write an unsigned decimal integer, zero-padded to at least min_digits. */
+static byte *date_write_unsigned(byte *buf, u64 value, usize min_digits) {
+    usize digits = 1;
+    for (u64 remaining = value; remaining >= 10; remaining /= 10) {
+        digits++;
     }
-    return (usize) snprintf((char *) buf, 48, "%s %s %02d %s%04.0f", WEEKDAY_NAMES[wd], MONTH_NAMES[mo], d, sign, y);
+    if (digits < min_digits) {
+        digits = min_digits;
+    }
+    byte *end = buf + digits;
+    byte *cursor = end;
+    do {
+        *--cursor = (byte) ('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+    while (cursor != buf) {
+        *--cursor = '0';
+    }
+    return end;
 }
 
-/** "HH:mm:ss GMT" for a finite local time t. */
-static usize date_render_time_string(byte *buf, f64 t) {
-    return (usize) snprintf(
-        (char *) buf, 24, "%02d:%02d:%02d GMT",
-        (i32) date_hour_from_time(t), (i32) date_min_from_time(t), (i32) date_sec_from_time(t)
-    );
+/** Write a signed Date year with at least four magnitude digits. */
+static byte *date_write_year(byte *buf, f64 year) {
+    i64 value = (i64) year;
+    if (value < 0) {
+        *buf++ = '-';
+        value = -value;
+    }
+    return date_write_unsigned(buf, (u64) value, 4);
 }
 
-/** "+HHMM (Time Zone Name)" for time value tv, written into at most `cap` bytes. */
-static usize date_render_tz_string(byte *buf, usize cap, f64 tv) {
-    f64 offset = date_local_time(tv) - tv;
-    char sign = offset < 0.0 ? '-' : '+';
-    f64 abs_offset = fabs(offset);
-    i32 oh = (i32) floor(abs_offset / MS_PER_HOUR);
-    i32 om = (i32) floor(abs_offset / MS_PER_MINUTE) % 60;
+/** "Www Mmm DD YYYY" from projected finite components. Returns bytes written. */
+static usize date_render_date_string(byte *buf, const DateComponents *components) {
+    i32 wd = (i32) components->week_day;
+    i32 mo = (i32) components->month;
+    byte *cursor = buf;
+    memcpy(cursor, WEEKDAY_NAMES[wd], 3);
+    cursor += 3;
+    *cursor++ = ' ';
+    memcpy(cursor, MONTH_NAMES[mo], 3);
+    cursor += 3;
+    *cursor++ = ' ';
+    cursor = date_write_two_digits(cursor, (i32) components->date);
+    *cursor++ = ' ';
+    cursor = date_write_year(cursor, components->year);
+    return (usize) (cursor - buf);
+}
+
+/** "HH:mm:ss GMT" from projected finite components. */
+static usize date_render_time_string(byte *buf, const DateComponents *components) {
+    byte *cursor = date_write_two_digits(buf, (i32) components->hour);
+    *cursor++ = ':';
+    cursor = date_write_two_digits(cursor, (i32) components->minute);
+    *cursor++ = ':';
+    cursor = date_write_two_digits(cursor, (i32) components->second);
+    memcpy(cursor, " GMT", 4);
+    return (usize) (cursor + 4 - buf);
+}
+
+/** "+HHMM (Time Zone Name)" for a derived local offset, in at most `cap` bytes. */
+static usize date_render_tz_string(byte *buf, usize cap, f64 offset) {
+    i64 abs_offset = (i64) fabs(offset);
+    i32 oh = (i32) (abs_offset / 3600000);
+    i32 om = (i32) ((abs_offset / 60000) % 60);
     u8 name[64];
     i32 name_len = mal_i18n_local_tz_name(name, (i32) sizeof(name));
     if (name_len < 0) {
@@ -719,7 +890,26 @@ static usize date_render_tz_string(byte *buf, usize cap, f64 tv) {
     } else if (name_len > (i32) sizeof(name)) {
         name_len = (i32) sizeof(name);
     }
-    return (usize) snprintf((char *) buf, cap, "%c%02d%02d (%.*s)", sign, oh, om, name_len, (char *) name);
+    // Every internal caller supplies MAL_DATE_RENDER_BUF minus at most 40 bytes;
+    // retain a cap guard so this helper stays safe if reused independently.
+    usize required = 8 + (usize) name_len;
+    if (cap < required) {
+        name_len = cap > 8 ? (i32) (cap - 8) : 0;
+        required = 8 + (usize) name_len;
+    }
+    if (cap < 8) {
+        return 0;
+    }
+    byte *cursor = buf;
+    *cursor++ = offset < 0.0 ? '-' : '+';
+    cursor = date_write_two_digits(cursor, oh);
+    cursor = date_write_two_digits(cursor, om);
+    memcpy(cursor, " (", 2);
+    cursor += 2;
+    memcpy(cursor, name, (usize) name_len);
+    cursor += name_len;
+    *cursor = ')';
+    return required;
 }
 
 /** ToDateString(tv): the full Date.prototype.toString form. */
@@ -729,22 +919,34 @@ static usize date_render_full(byte *buf, f64 tv) {
         return 12;
     }
     f64 t = date_local_time(tv);
-    usize n = date_render_date_string(buf, t);
+    DateComponents components;
+    date_project_components(
+        t,
+        DATE_COMPONENT_CIVIL | DATE_COMPONENT_WEEK_DAY |
+            DATE_COMPONENT_HOUR | DATE_COMPONENT_MINUTE | DATE_COMPONENT_SECOND,
+        &components
+    );
+    usize n = date_render_date_string(buf, &components);
     buf[n++] = ' ';
-    n += date_render_time_string(buf + n, t);
-    n += date_render_tz_string(buf + n, MAL_DATE_RENDER_BUF - n, tv);
+    n += date_render_time_string(buf + n, &components);
+    n += date_render_tz_string(buf + n, MAL_DATE_RENDER_BUF - n, t - tv);
     return n;
 }
 
 /** Year field for toISOString: 4 digits in [0,9999] else a signed 6-digit form. */
 static usize date_render_iso_year(byte *buf, f64 year) {
     if (year >= 0.0 && year <= 9999.0) {
-        return (usize) snprintf((char *) buf, 8, "%04.0f", year);
+        return (usize) (date_write_unsigned(buf, (u64) year, 4) - buf);
     }
+    byte *cursor = buf;
     if (year < 0.0) {
-        return (usize) snprintf((char *) buf, 12, "-%06.0f", -year);
+        *cursor++ = '-';
+        year = -year;
+    } else {
+        *cursor++ = '+';
     }
-    return (usize) snprintf((char *) buf, 12, "+%06.0f", year);
+    cursor = date_write_unsigned(cursor, (u64) year, 6);
+    return (usize) (cursor - buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -785,19 +987,20 @@ static MalValue date_constructor(MalVm *vm, MalValue this_value, const MalValue 
 
     f64 date_value;
     if (arg_count == 0) {
-        date_value = date_time_clip(date_now_ms());
+        // Current time is already an integral millisecond well inside TimeClip.
+        date_value = date_now_ms();
     } else if (arg_count == 1) {
         MalValue value = args[0];
         if (mal_value_is_date_object(value)) {
-            date_value = date_time_clip(mal_value_to_date_object(value)->date_value);
+            // [[DateValue]] is always already TimeClipped (or NaN).
+            date_value = mal_value_to_date_object(value)->date_value;
         } else {
             MalValue primitive;
             if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_DEFAULT, &primitive)) {
                 return mal_value_new_undefined();
             }
             if (mal_value_is_string(primitive)) {
-                MalString *s = mal_value_to_string(primitive);
-                date_value = date_time_clip(date_parse_units(mal_string_code_units(s), mal_string_length(s)));
+                date_value = date_parse_string_value(mal_value_to_string(primitive));
             } else {
                 f64 number;
                 if (!mal_vm_to_number(vm, primitive, &number)) {
@@ -823,44 +1026,39 @@ static MalValue date_constructor(MalVm *vm, MalValue this_value, const MalValue 
         date_value = date_time_clip(date_utc_from_local(final_date));
     }
 
+    MalValue prototype_root = mal_value_new_undefined();
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, &prototype_root, 1);
     MalObject *prototype;
     if (!mal_vm_get_prototype_from_constructor(
             vm, new_target, MAL_INTRINSIC_DATE_PROTOTYPE, &prototype)) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
-    return mal_value_from_date_object(mal_date_object_new(&vm->heap, prototype, date_value));
+    prototype_root = mal_value_from_object(prototype);
+    MalValue result = mal_value_from_date_object(mal_date_object_new(
+        &vm->heap, mal_value_to_object(prototype_root), date_value));
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 // ---------------------------------------------------------------------------
 // Statics
 // ---------------------------------------------------------------------------
 
-static MalValue date_now(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
-    (void) this_value;
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    (void) callee;
+MalValue mal_builtin_date_now_known(void) {
     return mal_ops_number_value(date_now_ms());
 }
 
-static MalValue date_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
+MalValue mal_builtin_date_parse_known(MalVm *vm, const MalValue *args, i32 arg_count) {
     MalString *string;
     if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
         return mal_value_new_undefined();
     }
-    f64 t = date_parse_units(mal_string_code_units(string), mal_string_length(string));
-    return mal_ops_number_value(date_time_clip(t));
+    return mal_ops_number_value(date_parse_string_value(string));
 }
 
-static MalValue date_utc(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
+MalValue mal_builtin_date_utc_known(MalVm *vm, const MalValue *args, i32 arg_count) {
     f64 comps[7] = {0, 0, 1, 0, 0, 0, 0};
     f64 year;
     if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &year)) {
@@ -878,6 +1076,30 @@ static MalValue date_utc(MalVm *vm, MalValue this_value, const MalValue *args, i
         date_make_time(comps[3], comps[4], comps[5], comps[6])
     );
     return mal_ops_number_value(date_time_clip(t));
+}
+
+static MalValue date_now(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    return mal_builtin_date_now_known();
+}
+
+static MalValue date_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    return mal_builtin_date_parse_known(vm, args, arg_count);
+}
+
+static MalValue date_utc(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    return mal_builtin_date_utc_known(vm, args, arg_count);
 }
 
 // ---------------------------------------------------------------------------
@@ -905,16 +1127,29 @@ static MalValue date_get_field(MalVm *vm, MalValue this_value, bool utc, DateFie
         return mal_value_new_nan();
     }
     f64 t = utc ? tv : date_local_time(tv);
+    u32 mask;
+    switch (field) {
+        case DATE_FIELD_FULL_YEAR:
+        case DATE_FIELD_MONTH:
+        case DATE_FIELD_DATE: mask = DATE_COMPONENT_CIVIL; break;
+        case DATE_FIELD_DAY: mask = DATE_COMPONENT_WEEK_DAY; break;
+        case DATE_FIELD_HOURS: mask = DATE_COMPONENT_HOUR; break;
+        case DATE_FIELD_MINUTES: mask = DATE_COMPONENT_MINUTE; break;
+        case DATE_FIELD_SECONDS: mask = DATE_COMPONENT_SECOND; break;
+        default: mask = DATE_COMPONENT_MILLISECOND; break;
+    }
+    DateComponents components;
+    date_project_components(t, mask, &components);
     f64 value;
     switch (field) {
-        case DATE_FIELD_FULL_YEAR: value = date_year_from_time(t); break;
-        case DATE_FIELD_MONTH: value = date_month_from_time(t); break;
-        case DATE_FIELD_DATE: value = date_date_from_time(t); break;
-        case DATE_FIELD_DAY: value = date_week_day(t); break;
-        case DATE_FIELD_HOURS: value = date_hour_from_time(t); break;
-        case DATE_FIELD_MINUTES: value = date_min_from_time(t); break;
-        case DATE_FIELD_SECONDS: value = date_sec_from_time(t); break;
-        default: value = date_ms_from_time(t); break;
+        case DATE_FIELD_FULL_YEAR: value = components.year; break;
+        case DATE_FIELD_MONTH: value = components.month; break;
+        case DATE_FIELD_DATE: value = components.date; break;
+        case DATE_FIELD_DAY: value = components.week_day; break;
+        case DATE_FIELD_HOURS: value = components.hour; break;
+        case DATE_FIELD_MINUTES: value = components.minute; break;
+        case DATE_FIELD_SECONDS: value = components.second; break;
+        default: value = components.millisecond; break;
     }
     return mal_ops_number_value(value);
 }
@@ -957,8 +1192,10 @@ static MalValue date_proto_get_year(MalVm *vm, MalValue this_value, const MalVal
     if (isnan(date->date_value)) {
         return mal_value_new_nan();
     }
-    return mal_ops_number_value(
-        date_year_from_time(date_local_time(date->date_value)) - 1900.0);
+    DateComponents components;
+    date_project_components(
+        date_local_time(date->date_value), DATE_COMPONENT_CIVIL, &components);
+    return mal_ops_number_value(components.year - 1900.0);
 }
 
 static MalValue date_proto_get_time(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
@@ -1050,11 +1287,19 @@ static MalValue date_set_time_fields(MalVm *vm, MalValue this_value, bool utc, c
         return mal_ops_number_value(NAN);
     }
     f64 t = utc ? tv : date_local_time(tv);
-    f64 h = present[0] ? vals[0] : date_hour_from_time(t);
-    f64 m = present[1] ? vals[1] : date_min_from_time(t);
-    f64 s = present[2] ? vals[2] : date_sec_from_time(t);
-    f64 milli = present[3] ? vals[3] : date_ms_from_time(t);
-    f64 new_date = date_make_date(date_day(t), date_make_time(h, m, s, milli));
+    u32 mask = DATE_COMPONENT_DAY_NUMBER;
+    if (!present[0]) mask |= DATE_COMPONENT_HOUR;
+    if (!present[1]) mask |= DATE_COMPONENT_MINUTE;
+    if (!present[2]) mask |= DATE_COMPONENT_SECOND;
+    if (!present[3]) mask |= DATE_COMPONENT_MILLISECOND;
+    DateComponents components;
+    date_project_components(t, mask, &components);
+    f64 h = present[0] ? vals[0] : components.hour;
+    f64 m = present[1] ? vals[1] : components.minute;
+    f64 s = present[2] ? vals[2] : components.second;
+    f64 milli = present[3] ? vals[3] : components.millisecond;
+    f64 new_date = date_make_date(
+        components.day_number, date_make_time(h, m, s, milli));
     return date_set_result(date, date_time_clip(utc ? new_date : date_utc_from_local(new_date)));
 }
 
@@ -1102,10 +1347,17 @@ static MalValue date_set_date_fields(MalVm *vm, MalValue this_value, bool utc, c
         }
         t = utc ? tv : date_local_time(tv);
     }
-    f64 year = present[0] ? vals[0] : date_year_from_time(t);
-    f64 month = present[1] ? vals[1] : date_month_from_time(t);
-    f64 day = present[2] ? vals[2] : date_date_from_time(t);
-    f64 new_date = date_make_date(date_make_day(year, month, day), date_time_within_day(t));
+    u32 mask = DATE_COMPONENT_TIME_WITHIN_DAY;
+    if (!present[0] || !present[1] || !present[2]) {
+        mask |= DATE_COMPONENT_CIVIL;
+    }
+    DateComponents components;
+    date_project_components(t, mask, &components);
+    f64 year = present[0] ? vals[0] : components.year;
+    f64 month = present[1] ? vals[1] : components.month;
+    f64 day = present[2] ? vals[2] : components.date;
+    f64 new_date = date_make_date(
+        date_make_day(year, month, day), components.time_within_day);
     return date_set_result(date, date_time_clip(utc ? new_date : date_utc_from_local(new_date)));
 }
 
@@ -1153,6 +1405,9 @@ static MalValue date_proto_to_string(MalVm *vm, MalValue this_value, const MalVa
     if (!date_this(vm, this_value, &date)) {
         return mal_value_new_undefined();
     }
+    if (isnan(date->date_value)) {
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "Invalid Date"));
+    }
     byte buf[MAL_DATE_RENDER_BUF];
     usize n = date_render_full(buf, date->date_value);
     return date_string_value(vm, buf, n);
@@ -1168,10 +1423,16 @@ static MalValue date_proto_to_date_string(MalVm *vm, MalValue this_value, const 
         return mal_value_new_undefined();
     }
     if (isnan(date->date_value)) {
-        return date_string_value(vm, (const byte *) "Invalid Date", 12);
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "Invalid Date"));
     }
+    DateComponents components;
+    date_project_components(
+        date_local_time(date->date_value),
+        DATE_COMPONENT_CIVIL | DATE_COMPONENT_WEEK_DAY,
+        &components
+    );
     byte buf[64];
-    usize n = date_render_date_string(buf, date_local_time(date->date_value));
+    usize n = date_render_date_string(buf, &components);
     return date_string_value(vm, buf, n);
 }
 
@@ -1186,11 +1447,18 @@ static MalValue date_proto_to_time_string(MalVm *vm, MalValue this_value, const 
     }
     f64 tv = date->date_value;
     if (isnan(tv)) {
-        return date_string_value(vm, (const byte *) "Invalid Date", 12);
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "Invalid Date"));
     }
+    f64 local = date_local_time(tv);
+    DateComponents components;
+    date_project_components(
+        local,
+        DATE_COMPONENT_HOUR | DATE_COMPONENT_MINUTE | DATE_COMPONENT_SECOND,
+        &components
+    );
     byte buf[MAL_DATE_RENDER_BUF];
-    usize n = date_render_time_string(buf, date_local_time(tv));
-    n += date_render_tz_string(buf + n, MAL_DATE_RENDER_BUF - n, tv);
+    usize n = date_render_time_string(buf, &components);
+    n += date_render_tz_string(buf + n, MAL_DATE_RENDER_BUF - n, local - tv);
     return date_string_value(vm, buf, n);
 }
 
@@ -1205,24 +1473,32 @@ static MalValue date_proto_to_utc_string(MalVm *vm, MalValue this_value, const M
     }
     f64 t = date->date_value;
     if (isnan(t)) {
-        return date_string_value(vm, (const byte *) "Invalid Date", 12);
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "Invalid Date"));
     }
-    i32 wd = (i32) date_week_day(t);
-    i32 mo = (i32) date_month_from_time(t);
-    i32 d = (i32) date_date_from_time(t);
-    f64 y = date_year_from_time(t);
-    const char *sign = "";
-    if (y < 0.0) {
-        sign = "-";
-        y = -y;
-    }
-    byte buf[64];
-    usize n = (usize) snprintf(
-        (char *) buf, sizeof(buf), "%s, %02d %s %s%04.0f %02d:%02d:%02d GMT",
-        WEEKDAY_NAMES[wd], d, MONTH_NAMES[mo], sign, y,
-        (i32) date_hour_from_time(t), (i32) date_min_from_time(t), (i32) date_sec_from_time(t)
+    DateComponents components;
+    date_project_components(
+        t,
+        DATE_COMPONENT_CIVIL | DATE_COMPONENT_WEEK_DAY |
+            DATE_COMPONENT_HOUR | DATE_COMPONENT_MINUTE | DATE_COMPONENT_SECOND,
+        &components
     );
-    return date_string_value(vm, buf, n);
+    i32 wd = (i32) components.week_day;
+    i32 mo = (i32) components.month;
+    byte buf[64];
+    byte *cursor = buf;
+    memcpy(cursor, WEEKDAY_NAMES[wd], 3);
+    cursor += 3;
+    memcpy(cursor, ", ", 2);
+    cursor += 2;
+    cursor = date_write_two_digits(cursor, (i32) components.date);
+    *cursor++ = ' ';
+    memcpy(cursor, MONTH_NAMES[mo], 3);
+    cursor += 3;
+    *cursor++ = ' ';
+    cursor = date_write_year(cursor, components.year);
+    *cursor++ = ' ';
+    cursor += date_render_time_string(cursor, &components);
+    return date_string_value(vm, buf, (usize) (cursor - buf));
 }
 
 static MalValue date_proto_to_iso_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
@@ -1239,16 +1515,24 @@ static MalValue date_proto_to_iso_string(MalVm *vm, MalValue this_value, const M
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid time value");
         return mal_value_new_undefined();
     }
-    byte ybuf[16];
-    date_render_iso_year(ybuf, date_year_from_time(t));
+    DateComponents components;
+    date_project_components(t, DATE_COMPONENT_CIVIL | DATE_COMPONENT_CLOCK, &components);
     byte buf[48];
-    usize n = (usize) snprintf(
-        (char *) buf, sizeof(buf), "%s-%02d-%02dT%02d:%02d:%02d.%03dZ",
-        (char *) ybuf, (i32) date_month_from_time(t) + 1, (i32) date_date_from_time(t),
-        (i32) date_hour_from_time(t), (i32) date_min_from_time(t), (i32) date_sec_from_time(t),
-        (i32) date_ms_from_time(t)
-    );
-    return date_string_value(vm, buf, n);
+    byte *cursor = buf + date_render_iso_year(buf, components.year);
+    *cursor++ = '-';
+    cursor = date_write_two_digits(cursor, (i32) components.month + 1);
+    *cursor++ = '-';
+    cursor = date_write_two_digits(cursor, (i32) components.date);
+    *cursor++ = 'T';
+    cursor = date_write_two_digits(cursor, (i32) components.hour);
+    *cursor++ = ':';
+    cursor = date_write_two_digits(cursor, (i32) components.minute);
+    *cursor++ = ':';
+    cursor = date_write_two_digits(cursor, (i32) components.second);
+    *cursor++ = '.';
+    cursor = date_write_three_digits(cursor, (i32) components.millisecond);
+    *cursor++ = 'Z';
+    return date_string_value(vm, buf, (usize) (cursor - buf));
 }
 
 #if MAL_TEMPORAL
@@ -1402,13 +1686,61 @@ bool mal_date_to_local_components(f64 time_value, i32 *year, i32 *month, i32 *da
         return false;
     }
     f64 local = date_local_time(time_value);
-    *year = (i32) date_year_from_time(local);
-    *month = (i32) date_month_from_time(local) + 1;
-    *day = (i32) date_date_from_time(local);
-    *hour = (i32) date_hour_from_time(local);
-    *minute = (i32) date_min_from_time(local);
-    *second = (i32) date_sec_from_time(local);
+    DateComponents components;
+    date_project_components(
+        local,
+        DATE_COMPONENT_CIVIL | DATE_COMPONENT_HOUR |
+            DATE_COMPONENT_MINUTE | DATE_COMPONENT_SECOND,
+        &components
+    );
+    *year = (i32) components.year;
+    *month = (i32) components.month + 1;
+    *day = (i32) components.date;
+    *hour = (i32) components.hour;
+    *minute = (i32) components.minute;
+    *second = (i32) components.second;
     return true;
+}
+
+MalValue mal_date_fallback_locale_string(MalVm *vm, f64 time_value, i32 which) {
+    if (!isfinite(time_value)) {
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "Invalid Date"));
+    }
+    u32 mask = which == 1
+        ? DATE_COMPONENT_CIVIL
+        : which == 2
+            ? DATE_COMPONENT_HOUR | DATE_COMPONENT_MINUTE | DATE_COMPONENT_SECOND
+            : DATE_COMPONENT_CIVIL | DATE_COMPONENT_HOUR |
+                DATE_COMPONENT_MINUTE | DATE_COMPONENT_SECOND;
+    DateComponents components;
+    date_project_components(date_local_time(time_value), mask, &components);
+
+    byte buf[40];
+    byte *cursor = buf;
+    if (which != 2) {
+        i64 year = (i64) components.year;
+        if (year < 0) {
+            *cursor++ = '-';
+            cursor = date_write_unsigned(cursor, (u64) -year, 3);
+        } else {
+            cursor = date_write_unsigned(cursor, (u64) year, 4);
+        }
+        *cursor++ = '-';
+        cursor = date_write_two_digits(cursor, (i32) components.month + 1);
+        *cursor++ = '-';
+        cursor = date_write_two_digits(cursor, (i32) components.date);
+    }
+    if (which == 0) {
+        *cursor++ = ' ';
+    }
+    if (which != 1) {
+        cursor = date_write_two_digits(cursor, (i32) components.hour);
+        *cursor++ = ':';
+        cursor = date_write_two_digits(cursor, (i32) components.minute);
+        *cursor++ = ':';
+        cursor = date_write_two_digits(cursor, (i32) components.second);
+    }
+    return date_string_value(vm, buf, (usize) (cursor - buf));
 }
 
 // ---------------------------------------------------------------------------

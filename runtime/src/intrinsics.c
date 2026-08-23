@@ -103,6 +103,8 @@ static const byte *const mal_hot_intrinsic_names[MAL_HOT_KEY_COUNT] = {
     [MAL_HOT_KEY_ERROR] = (const byte *) "error",
     [MAL_HOT_KEY_TO_JSON] = (const byte *) "toJSON",
     [MAL_HOT_KEY_SEARCH] = (const byte *) "search",
+    [MAL_HOT_KEY_TRUE] = (const byte *) "true",
+    [MAL_HOT_KEY_FALSE] = (const byte *) "false",
 };
 
 static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) {
@@ -199,6 +201,10 @@ static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) 
             return memcmp(name, "toJSON", 6) == 0 ? MAL_HOT_KEY_TO_JSON : MAL_HOT_KEY_COUNT;
         case MAL_HOT_KEY_SIGNATURE(6, 's', 'h'):
             return memcmp(name, "search", 6) == 0 ? MAL_HOT_KEY_SEARCH : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(4, 't', 'e'):
+            return memcmp(name, "true", 4) == 0 ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(5, 'f', 'e'):
+            return memcmp(name, "false", 5) == 0 ? MAL_HOT_KEY_FALSE : MAL_HOT_KEY_COUNT;
         default:
             return MAL_HOT_KEY_COUNT;
     }

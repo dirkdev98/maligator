@@ -3,6 +3,7 @@ import {
 	assertResultPass,
 	buildNativeBinary,
 	runToStdout,
+	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 describe("numeric abstract operations", () => {
@@ -16,5 +17,12 @@ describe("numeric abstract operations", () => {
 			compiled,
 		});
 		assertResultPass(runToStdout(binary));
+		if (compiled) {
+			assertResultPass(
+				runToStdout(binary, {
+					env: { ...STRESS_ENV, MAL_HOST_GC: "1" },
+				}),
+			);
+		}
 	});
 });

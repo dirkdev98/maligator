@@ -64,6 +64,8 @@ typedef enum MalHotIntrinsicKey {
     MAL_HOT_KEY_ERROR,
     MAL_HOT_KEY_TO_JSON,
     MAL_HOT_KEY_SEARCH,
+    MAL_HOT_KEY_TRUE,
+    MAL_HOT_KEY_FALSE,
     MAL_HOT_KEY_COUNT,
 } MalHotIntrinsicKey;
 

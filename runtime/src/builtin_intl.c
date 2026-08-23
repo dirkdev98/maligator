@@ -31,22 +31,38 @@
 // localeCompare → UTF-16 code-unit ordering. `this_string` is already a String
 // (the caller coerced it); ToString `that_value` (may throw on a Symbol).
 static MalValue intl_fallback_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value) {
-    MalString *a = mal_value_to_string(this_string);
+    MalValue roots[2] = {this_string, mal_value_new_undefined()};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
+
     MalString *b = nullptr;
     if (!mal_vm_to_string(vm, that_value, &b)) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
+    roots[1] = mal_value_from_string(b);
+    MalString *a = mal_value_to_string(roots[0]);
+    (void) mal_string_code_units(a);
+    b = mal_value_to_string(roots[1]);
+    (void) mal_string_code_units(b);
+    // Either flatten above can allocate. Reacquire both rooted cells before
+    // taking the stable contiguous views used by the comparison loop.
+    a = mal_value_to_string(roots[0]);
+    b = mal_value_to_string(roots[1]);
     usize la = mal_string_length(a);
     usize lb = mal_string_length(b);
     const c16 *ua = mal_string_code_units(a);
     const c16 *ub = mal_string_code_units(b);
     usize n = la < lb ? la : lb;
+    i32 comparison = la == lb ? 0 : (la < lb ? -1 : 1);
     for (usize i = 0; i < n; i++) {
         if (ua[i] != ub[i]) {
-            return mal_value_from_i32(ua[i] < ub[i] ? -1 : 1);
+            comparison = ua[i] < ub[i] ? -1 : 1;
+            break;
         }
     }
-    return mal_value_from_i32(la == lb ? 0 : (la < lb ? -1 : 1));
+    mal_gc_unroot(&root_span);
+    return mal_value_from_i32(comparison);
 }
 #endif
 
@@ -61,21 +77,7 @@ static MalValue intl_fallback_number_to_locale_string(MalVm *vm, f64 number) {
 // Date.toLocale{,Date,Time}String → fixed non-localized civil-time render (which:
 // 0 date+time, 1 date, 2 time). Non-finite time → "Invalid Date" (as toString does).
 static MalValue intl_fallback_date_to_locale_string(MalVm *vm, f64 time_value, i32 which) {
-    char buf[64];
-    i32 year, month, day, hour, minute, second;
-    if (!mal_date_to_local_components(time_value, &year, &month, &day, &hour, &minute, &second)) {
-        return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) "Invalid Date", 12));
-    }
-    int len;
-    if (which == 1) {
-        len = snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
-    } else if (which == 2) {
-        len = snprintf(buf, sizeof(buf), "%02d:%02d:%02d", hour, minute, second);
-    } else {
-        len = snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute,
-                       second);
-    }
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) buf, (usize) len));
+    return mal_date_fallback_locale_string(vm, time_value, which);
 }
 #endif
 
@@ -121,7 +123,12 @@ static MalValue intl_string_from_utf8(MalVm *vm, const byte *raw, usize len) {
     // A malformed octet can expand to a surrogate pair, so the buffer is sized
     // for the 2-units-per-byte worst case.
     const unsigned char *bytes = (const unsigned char *) raw;
-    c16 *units = malloc(sizeof(c16) * (2 * len + 1));
+    c16 stack_units[256];
+    usize capacity = 2 * len + 1;
+    bool heap_allocated = capacity > countof(stack_units);
+    c16 *units = heap_allocated
+        ? malloc(sizeof(c16) * capacity)
+        : stack_units;
     usize n = 0;
     usize i = 0;
     while (i < len) {
@@ -151,7 +158,9 @@ static MalValue intl_string_from_utf8(MalVm *vm, const byte *raw, usize len) {
         }
     }
     MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
-    free(units);
+    if (heap_allocated) {
+        free(units);
+    }
     return result;
 }
 
@@ -1084,21 +1093,40 @@ static MalValue intl_collator_constructor(MalVm *vm, MalValue this_value, const 
 static MalValue intl_collator_compare_callback(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue callee) {
     (void) this_value;
     (void) nt;
-    MalValue collator_value = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
-    MalIntlObject *collator = mal_value_to_intl_object(collator_value);
+    MalValue roots[3] = {
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
     MalString *x;
     MalString *y;
     if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &x)) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
+    roots[1] = mal_value_from_string(x);
     if (!mal_vm_to_string(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &y)) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
+    roots[2] = mal_value_from_string(y);
+    // Flatten both while rooted, then reacquire every moving-heap pointer before
+    // taking the contiguous views handed to Rust.
+    x = mal_value_to_string(roots[1]);
+    (void) mal_string_code_units(x);
+    y = mal_value_to_string(roots[2]);
+    (void) mal_string_code_units(y);
+    MalIntlObject *collator = mal_value_to_intl_object(roots[0]);
+    x = mal_value_to_string(roots[1]);
+    y = mal_value_to_string(roots[2]);
     i32 result = mal_i18n_collator_compare_utf16(
         collator->handle,
         (const uint16_t *) mal_string_code_units(x), mal_string_length(x),
         (const uint16_t *) mal_string_code_units(y), mal_string_length(y)
     );
+    mal_gc_unroot(&root_span);
     return mal_value_from_i32(result);
 }
 
@@ -1146,8 +1174,10 @@ static MalValue intl_collator_supported_locales_of(MalVm *vm, MalValue this_valu
 
 /**
  * String.prototype.localeCompare's collation, exposed for builtin_string.c: a
- * per-call Collator over (locales, options) comparing two already-resolved
- * strings. Returns a Number (-1/0/1), or undefined with a pending throw.
+ * Collator over (locales, options) comparing two already-resolved strings. The
+ * default plan uses Rust's thread-local flat primitive; explicit locales/options
+ * retain the full constructor path. Returns a Number (-1/0/1), or undefined with
+ * a pending throw.
  */
 #endif // MAL_INTL_HAS_COLLATOR — collator service statics
 
@@ -1155,25 +1185,58 @@ static MalValue intl_collator_supported_locales_of(MalVm *vm, MalValue this_valu
 // else the UTF-16 code-unit fallback. Always defined (builtin_string.c calls it).
 MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value, MalValue locales, MalValue options) {
 #if MAL_INTL_HAS_COLLATOR
-    MalString *self;
+    MalValue roots[3] = {
+        this_string,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
+    // builtin_string.c already performed the receiver's observable ToString.
+    MalString *self = mal_value_to_string(roots[0]);
     MalString *that;
-    if (!mal_vm_to_string(vm, this_string, &self)) {
-        return mal_value_new_undefined();
-    }
     if (!mal_vm_to_string(vm, that_value, &that)) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
-    MalValue ctor_args[2] = {locales, options};
-    MalValue collator = intl_collator_constructor(vm, mal_value_new_undefined(), ctor_args, 2, mal_value_new_undefined(), mal_value_new_undefined());
-    if (!mal_value_is_intl_object(collator)) {
-        return mal_value_new_undefined(); // a pending throw from the constructor
+    roots[1] = mal_value_from_string(that);
+
+    bool use_default = mal_value_is_undefined(locales) && mal_value_is_undefined(options);
+    void *compare_handle = nullptr;
+    if (!use_default) {
+        MalValue ctor_args[2] = {locales, options};
+        roots[2] = intl_collator_constructor(
+            vm, mal_value_new_undefined(), ctor_args, 2,
+            mal_value_new_undefined(), mal_value_new_undefined());
+        if (!mal_value_is_intl_object(roots[2])) {
+            mal_gc_unroot(&root_span);
+            return mal_value_new_undefined(); // a pending throw from the constructor
+        }
+        compare_handle = mal_value_to_intl_object(roots[2])->handle;
     }
-    MalIntlObject *handle = mal_value_to_intl_object(collator);
-    i32 result = mal_i18n_collator_compare_utf16(
-        handle->handle,
-        (const uint16_t *) mal_string_code_units(self), mal_string_length(self),
-        (const uint16_t *) mal_string_code_units(that), mal_string_length(that)
-    );
+
+    // Either input can be a cons string. Flatten both while rooted, then reacquire
+    // both pointers so no allocation can leave a stale moving-heap address.
+    self = mal_value_to_string(roots[0]);
+    (void) mal_string_code_units(self);
+    that = mal_value_to_string(roots[1]);
+    (void) mal_string_code_units(that);
+    self = mal_value_to_string(roots[0]);
+    that = mal_value_to_string(roots[1]);
+    i32 result = use_default
+        ? mal_i18n_default_collator_compare_utf16(
+            (const uint16_t *) mal_string_code_units(self), mal_string_length(self),
+            (const uint16_t *) mal_string_code_units(that), mal_string_length(that))
+        : mal_i18n_collator_compare_utf16(
+            compare_handle,
+            (const uint16_t *) mal_string_code_units(self), mal_string_length(self),
+            (const uint16_t *) mal_string_code_units(that), mal_string_length(that));
+    if (result < -1 || result > 1) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create collator for locale");
+        mal_gc_unroot(&root_span);
+        return mal_value_new_undefined();
+    }
+    mal_gc_unroot(&root_span);
     return mal_value_from_i32(result);
 #else
     (void) locales;
@@ -1426,6 +1489,61 @@ static MalValue intl_nonfinite_number(MalVm *vm, f64 number, i32 sign_display_co
     return mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
 }
 
+static MalValue intl_number_format_flat(
+    MalVm *vm,
+    const byte *locale,
+    usize locale_len,
+    f64 number,
+    bool percent,
+    i32 min_integer,
+    i32 min_fraction,
+    i32 max_fraction,
+    i32 min_significant,
+    i32 max_significant,
+    bool grouping,
+    i32 sign_display_code
+) {
+    byte out[256];
+    i32 n = mal_i18n_number_format(
+        locale, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
+        min_significant, max_significant, grouping ? 1 : 0, sign_display_code, out, (i32) sizeof(out)
+    );
+    if (n < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format number");
+        return mal_value_new_undefined();
+    }
+    if (n <= (i32) sizeof(out)) {
+        return intl_string_from_utf8(vm, out, (usize) n);
+    }
+    byte *big = malloc((usize) n);
+    mal_i18n_number_format(
+        locale, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
+        min_significant, max_significant, grouping ? 1 : 0, sign_display_code, big, n
+    );
+    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
+    free(big);
+    return result;
+}
+
+static MalValue intl_number_format_default_en_us(MalVm *vm, f64 number) {
+    byte out[512];
+    i32 n = mal_i18n_number_format_default_en_us(
+        number, out, (i32) sizeof(out)
+    );
+    if (n < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format number");
+        return mal_value_new_undefined();
+    }
+    if (n <= (i32) sizeof(out)) {
+        return intl_string_from_utf8(vm, out, (usize) n);
+    }
+    byte *big = malloc((usize) n);
+    mal_i18n_number_format_default_en_us(number, big, n);
+    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
+    free(big);
+    return result;
+}
+
 static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 number) {
     i32 sign_display_code = intl_sign_display_code(intl_data_string(vm, nf->data, "signDisplay"));
     if (!isfinite(number)) {
@@ -1446,26 +1564,10 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
     if (locale != nullptr) {
         intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
     }
-    byte out[256];
-    i32 n = mal_i18n_number_format(
-        locale_buf, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
-        min_significant, max_significant, grouping ? 1 : 0, sign_display_code, out, (i32) sizeof(out)
+    return intl_number_format_flat(
+        vm, locale_buf, locale_len, number, percent, min_integer, min_fraction,
+        max_fraction, min_significant, max_significant, grouping, sign_display_code
     );
-    if (n < 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format number");
-        return mal_value_new_undefined();
-    }
-    if (n <= (i32) sizeof(out)) {
-        return intl_string_from_utf8(vm, out, (usize) n);
-    }
-    byte *big = malloc((usize) n);
-    mal_i18n_number_format(
-        locale_buf, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
-        min_significant, max_significant, grouping ? 1 : 0, sign_display_code, big, n
-    );
-    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
-    free(big);
-    return result;
 }
 
 static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1600,6 +1702,12 @@ static MalValue intl_number_format_supported_locales_of(MalVm *vm, MalValue this
 // Number.prototype.toLocaleString: real NumberFormat when present, else base-10.
 MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
 #if MAL_INTL_HAS_NUMBER_FORMAT
+    if (mal_value_is_undefined(locales) && mal_value_is_undefined(options)) {
+        if (!isfinite(number)) {
+            return intl_nonfinite_number(vm, number, 0);
+        }
+        return intl_number_format_default_en_us(vm, number);
+    }
     MalValue ctor_args[2] = {locales, options};
     MalValue nf = intl_number_format_constructor(vm, mal_value_new_undefined(), ctor_args, 2, mal_value_new_undefined(), mal_value_new_undefined());
     if (!mal_value_is_intl_object(nf)) {
@@ -1905,6 +2013,16 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
 #if MAL_INTL_HAS_DATE_TIME_FORMAT
     if (!isfinite(time_value)) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, "Invalid Date"));
+    }
+    if (mal_value_is_undefined(locales) && mal_value_is_undefined(options)) {
+        // The implementation's default locale is the intrinsic en-US atom.
+        // With both inputs undefined CanonicalizeLocaleList and GetOption have
+        // no observable user-code seams, so skip their transient list/options
+        // work and use the per-method default DateTimeFormat plan directly.
+        i32 date_code = which == 2 ? -1 : 2;
+        i32 time_code = which == 1 ? -1 : 2;
+        return intl_datetime_format_epoch(
+            vm, mal_intrinsic_ascii(vm, "en-US"), time_value, date_code, time_code);
     }
     MalString *locale = intl_resolve_locale(vm, locales);
     if (locale == nullptr) {

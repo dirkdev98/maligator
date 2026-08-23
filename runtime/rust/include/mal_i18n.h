@@ -72,6 +72,8 @@ int32_t mal_i18n_locale_field(const uint8_t *tag, size_t tag_len, int32_t field,
  * strength: 0 primary, 1 secondary, 2 tertiary; case_first: 0 off, 1 upper, 2 lower. */
 void *mal_i18n_collator_new(const uint8_t *locale, size_t locale_len, int32_t strength, int32_t case_level, int32_t numeric, int32_t case_first);
 int32_t mal_i18n_collator_compare_utf16(void *handle, const uint16_t *a, size_t a_len, const uint16_t *b, size_t b_len);
+/* Default en-US plan: -1/0/1, or 2 if the baked plan could not be built. */
+int32_t mal_i18n_default_collator_compare_utf16(const uint16_t *a, size_t a_len, const uint16_t *b, size_t b_len);
 void mal_i18n_collator_free(void *handle); /* null-tolerant; ABI v2+ */
 
 /* ---- Intl.PluralRules ----
@@ -88,6 +90,7 @@ void mal_i18n_plural_rules_free(void *handle); /* null-tolerant; ABI v2+ */
  * applied to the rounded value so negative zero and values rounded to zero are
  * handled correctly). */
 int32_t mal_i18n_number_format(const uint8_t *locale, size_t locale_len, double number, int32_t percent, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t min_significant, int32_t max_significant, int32_t grouping, int32_t sign_display, uint8_t *out, int32_t out_cap);
+int32_t mal_i18n_number_format_default_en_us(double number, uint8_t *out, int32_t out_cap);
 
 /* ---- Intl.DateTimeFormat (dateStyle / timeStyle) ----
  * date_style / time_style: -1 none, 0 full, 1 long, 2 medium, 3 short. */

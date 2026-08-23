@@ -8,6 +8,16 @@ function sparseProjection(value) {
 	return (fields[4] === undefined ? 100 : 0) + fields.length;
 }
 
+function overflowProjection(value) {
+	const fields = value.split("::");
+	return (
+		fields[0].length * 1_000_000 +
+		fields[64].length * 10_000 +
+		fields[65].length * 100 +
+		fields.length
+	);
+}
+
 function parsed(value, start) {
 	return Number(value.slice(start));
 }
@@ -46,6 +56,7 @@ const results = [
 	projected("ab::x42::"),
 	projected("::x7"),
 	sparseProjection("a::b"),
+	overflowProjection("a::".repeat(65) + "tail"),
 	parsed("x  -12.5 ", 1),
 	parsed("x0x10", 1),
 	parsed("xInfinity", 1),
@@ -111,7 +122,8 @@ results.push(
 );
 
 const passed =
-	results.join(",") === "245,9,102,-12.5,16,Infinity,1,3,0,2,2,1,9,2,711,9,17,2,23" &&
+	results.join(",") ===
+		"245,9,102,1010466,-12.5,16,Infinity,1,3,0,2,2,1,9,2,711,9,17,2,23" &&
 	splitCalls === 2 &&
 	sliceCalls === 1;
 console.log(
