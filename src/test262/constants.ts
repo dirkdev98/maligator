@@ -10,9 +10,11 @@ export const TEST262_METADATA = {
 	 * Per-test binary run timeout. Loops are compilable now, so runaway tests
 	 * are a real possibility. Keep enough scheduler headroom for Unicode-scale
 	 * string construction and large dynamic-function stress tests while retaining
-	 * a bounded cost for a hung worker.
+	 * a bounded cost for a hung worker. The unique-source object-literal Function
+	 * stress takes about 11.3 seconds on the calibrated 11-core host, so keep real
+	 * scheduler headroom above that measured pass.
 	 */
-	runTimeoutMs: 10_000,
+	runTimeoutMs: 15_000,
 	// Full-suite batches can exceed one minute on the largest generated C units;
 	// timing those out is counterproductive because the single-test fallback then
 	// recompiles hundreds of files while competing with the remaining workers.
