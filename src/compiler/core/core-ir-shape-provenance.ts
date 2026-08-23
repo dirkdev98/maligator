@@ -2,11 +2,11 @@
  * Bounded allocation-site provenance for ordinary shaped objects.
  *
  * This is deliberately not a claim about an object's current runtime shape. A
- * `createObjectShaped` origin says only which initial ordinary-object layout may
- * have produced an SSA value; user code may subsequently delete properties,
- * install accessors, change descriptors, or otherwise move the object to another
- * shape. Consumers must therefore validate the live shape and retain the original
- * operation as an exact fallback.
+ * A `createObjectShaped` origin or bounded constructor receiver layout says only
+ * which ordinary-object layout may have produced an SSA value; user code may
+ * subsequently delete properties, install accessors, change descriptors, or
+ * otherwise move the object to another shape. Consumers must therefore validate
+ * the live shape and retain the original operation as an exact fallback.
  *
  * The lattice keeps at most four useful origins plus an independent `opaque` bit.
  * Opaque covers every producer outside this analysis and finite overflow. Keeping
@@ -21,7 +21,7 @@
 
 import { analyzeCoreCalleeTargets } from "./core-ir-call-targets.ts";
 import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { coreOwnCellResolver, coreProvenance } from "./core-ir-provenance.ts";
@@ -141,6 +141,7 @@ function isProtoLiteralKey(units: ReadonlyArray<number>): boolean {
 
 /** One compiler-created initial ordinary-object layout. */
 export interface CoreShapeOrigin {
+	readonly kind: "literal" | "constructor";
 	readonly functionIndex: number;
 	readonly instruction: CoreInstructionId;
 	/** Static string-constant keys in runtime slot order. */
@@ -246,6 +247,146 @@ export function coreShapedObjectKeys(
 	return Object.freeze(keys);
 }
 
+interface CoreConstructorShapeLayout {
+	readonly instruction: CoreInstructionId;
+	readonly keyStringIndices: ReadonlyArray<number>;
+}
+
+/**
+ * Recognize one deliberately narrow constructor receiver layout.
+ *
+ * The result remains advisory: ordinary [[Set]] can invoke inherited setters,
+ * prototype state can change, and an alternate/Proxy constructor can produce a
+ * different object. The eventual own-slot consumer therefore still compares the
+ * live shape pointer and retains the generic property operation as fallback.
+ * This parser only avoids publishing layouts that are predictably cold: it
+ * accepts a non-derived, non-coroutine constructor with one linear completion,
+ * an implicit-undefined return, and static named stores whose receiver is the
+ * canonical `this` value. Any other observable use of `this` declines the shape.
+ */
+export function coreConstructorShapeLayout(
+	program: CoreProgram,
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+	cellForString: ReturnType<typeof coreOwnCellResolver> = coreOwnCellResolver(
+		program.stringConstants,
+	),
+	controlFlow?: CoreControlFlow,
+): CoreConstructorShapeLayout | undefined {
+	if (
+		fn.isAsync ||
+		fn.isGenerator ||
+		fn.metadata.isDerivedConstructor ||
+		!fn.metadata.hasPrototype
+	) {
+		return undefined;
+	}
+	const cfg = controlFlow ?? buildCoreControlFlow(fn, registry);
+	const orderedBlocks: Array<CoreBlock> = [];
+	const seen = new Set<CoreBlockId>();
+	let block = fn.entry;
+	for (;;) {
+		if (seen.has(block) || !cfg.reachable.has(block)) return undefined;
+		seen.add(block);
+		const current = fn.blocks[block];
+		if (current === undefined || current.handler !== undefined) return undefined;
+		orderedBlocks.push(current);
+		if (current.terminator.kind === "return") break;
+		if (current.terminator.kind !== "jump") return undefined;
+		block = current.terminator.edge.block;
+	}
+	if (seen.size !== cfg.reachable.size) return undefined;
+
+	const definitions = new Map<CoreValueId, CoreInstruction>();
+	for (const current of orderedBlocks) {
+		for (const instruction of current.instructions) {
+			for (const output of instruction.outputs) definitions.set(output, instruction);
+		}
+	}
+	const roots = coreCanonicalValueRoots(fn, cfg);
+	const definition = (value: CoreValueId): CoreInstruction | undefined =>
+		definitions.get(roots.get(value) ?? value);
+	const thisRoots = new Set<CoreValueId>();
+	for (const current of orderedBlocks) {
+		for (const instruction of current.instructions) {
+			if (instruction.opcode !== "loadThis") continue;
+			for (const output of instruction.outputs) {
+				thisRoots.add(roots.get(output) ?? output);
+			}
+		}
+	}
+	if (thisRoots.size === 0) return undefined;
+	const isThis = (value: CoreValueId): boolean =>
+		thisRoots.has(roots.get(value) ?? value);
+
+	const keys: Array<number> = [];
+	const canonicalKeys = new Set<number>();
+	let anchor: CoreInstructionId | undefined;
+	for (const current of orderedBlocks) {
+		for (const instruction of current.instructions) {
+			const receiver = instruction.inputs[0];
+			if (
+				instruction.opcode === "storePropertyStatic" &&
+				receiver !== undefined &&
+				isThis(receiver)
+			) {
+				const stringIndex = instruction.attributes.stringIndex;
+				if (typeof stringIndex !== "number") return undefined;
+				const cell = cellForString(stringIndex);
+				const units = program.stringConstants[stringIndex];
+				if (
+					cell?.kind !== "object-slot" ||
+					units === undefined ||
+					isProtoLiteralKey(units)
+				) {
+					return undefined;
+				}
+				if (!canonicalKeys.has(cell.key)) {
+					if (keys.length === 64) return undefined;
+					canonicalKeys.add(cell.key);
+					keys.push(stringIndex);
+					anchor ??= instruction.id;
+				}
+				continue;
+			}
+			if (
+				instruction.opcode !== "move" &&
+				instruction.inputs.some((input) => isThis(input))
+			) {
+				return undefined;
+			}
+		}
+		if (current.terminator.kind === "return") {
+			const returned = definition(current.terminator.value);
+			if (returned?.opcode !== "createUndefined") return undefined;
+		}
+	}
+	return anchor === undefined
+		? undefined
+		: Object.freeze({
+				instruction: anchor,
+				keyStringIndices: Object.freeze(keys),
+			});
+}
+
+/** Re-prove either a literal or constructor-derived shape-origin anchor. */
+export function coreShapeOriginKeys(
+	program: CoreProgram,
+	fn: CoreFunction,
+	instruction: CoreInstruction,
+	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+	cellForString: ReturnType<typeof coreOwnCellResolver> = coreOwnCellResolver(
+		program.stringConstants,
+	),
+): ReadonlyArray<number> | undefined {
+	const literal = coreShapedObjectKeys(program, instruction, cellForString);
+	if (literal !== undefined) return literal;
+	const constructor = coreConstructorShapeLayout(program, fn, registry, cellForString);
+	return constructor?.instruction === instruction.id
+		? constructor.keyStringIndices
+		: undefined;
+}
+
 function valueLimit(fn: CoreFunction): number {
 	let limit = 0;
 	for (const { id } of fn.values) limit = Math.max(limit, id + 1);
@@ -333,6 +474,7 @@ export function analyzeCoreShapeProvenance(
 
 	const origins: Array<CoreShapeOrigin> = [];
 	const originByInstruction = new Map<string, number>();
+	const constructorOriginByFunction = new Map<number, number>();
 	const aggregateFunctions = new Set<number>();
 	const thisNodes = new Map<number, Array<number>>();
 	const controlFlowByFunction = new Map<number, CoreControlFlow>();
@@ -356,6 +498,7 @@ export function analyzeCoreShapeProvenance(
 					const origin = origins.length;
 					origins.push(
 						Object.freeze({
+							kind: "literal",
 							functionIndex: fn.functionIndex,
 							instruction: instruction.id,
 							keyStringIndices: keys,
@@ -371,6 +514,29 @@ export function analyzeCoreShapeProvenance(
 					thisNodes.set(fn.functionIndex, existing);
 				}
 			}
+		}
+		const constructorLayout = coreConstructorShapeLayout(
+			program,
+			fn,
+			registry,
+			cellForString,
+			cfg,
+		);
+		if (constructorLayout !== undefined) {
+			const origin = origins.length;
+			origins.push(
+				Object.freeze({
+					kind: "constructor",
+					functionIndex: fn.functionIndex,
+					instruction: constructorLayout.instruction,
+					keyStringIndices: constructorLayout.keyStringIndices,
+				}),
+			);
+			originByInstruction.set(
+				`${fn.functionIndex}\0${constructorLayout.instruction}`,
+				origin,
+			);
+			constructorOriginByFunction.set(fn.functionIndex, origin);
 		}
 	}
 
@@ -613,6 +779,12 @@ export function analyzeCoreShapeProvenance(
 						const target = functionsByIndex.get(targetIndex);
 						if (target === undefined || target.isAsync || target.isGenerator) continue;
 						addEdge(returnNodes.get(targetIndex)!, result);
+						if (instruction.opcode === "construct") {
+							const constructorOrigin = constructorOriginByFunction.get(targetIndex);
+							if (constructorOrigin !== undefined) {
+								originSeeds.push([result, constructorOrigin]);
+							}
+						}
 					}
 					// [[Construct]] returns a fresh receiver whenever the target completes
 					// with a primitive, and unknown/Proxy targets may return any object.

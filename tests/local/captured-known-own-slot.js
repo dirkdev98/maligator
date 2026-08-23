@@ -289,4 +289,76 @@ ok(
 	proxyObjectMethod.total === 24 && proxyObjectMethod.proxyGetCalls === 5,
 );
 
+const constructorLayoutRelay = function (mode) {
+	function Point(x, y) {
+		this.x = x;
+		this.y = y;
+	}
+	let getterCalls = 0;
+	let setterCalls = 0;
+	let storedX = 0;
+	if (mode === "inherited-setter") {
+		Object.defineProperty(Point.prototype, "x", {
+			configurable: true,
+			get() {
+				getterCalls++;
+				return storedX;
+			},
+			set(value) {
+				setterCalls++;
+				storedX = value;
+			},
+		});
+	}
+	const point = new Point(2, 3);
+	if (mode === "own-accessor") {
+		delete point.x;
+		Object.defineProperty(point, "x", {
+			configurable: true,
+			get() {
+				getterCalls++;
+				return 2;
+			},
+		});
+	}
+	let total = 0;
+	for (let index = 0; index < 4; index++) total += point.x + point.y;
+	return { total, getterCalls, setterCalls };
+};
+
+const directConstructorLayout = constructorLayoutRelay("direct");
+ok(
+	"constructor receiver layout hit",
+	directConstructorLayout.total === 20 && directConstructorLayout.getterCalls === 0,
+);
+const inheritedSetterLayout = constructorLayoutRelay("inherited-setter");
+ok(
+	"constructor inherited setter fallback",
+	inheritedSetterLayout.total === 20 &&
+		inheritedSetterLayout.getterCalls === 4 &&
+		inheritedSetterLayout.setterCalls === 1,
+);
+const ownAccessorLayout = constructorLayoutRelay("own-accessor");
+ok(
+	"constructor own accessor fallback",
+	ownAccessorLayout.total === 20 && ownAccessorLayout.getterCalls === 4,
+);
+
+const polymorphicConstructorLayout = function (second) {
+	function First(value) {
+		this.x = value;
+	}
+	function Second(value) {
+		this.tag = "second";
+		this.x = value;
+	}
+	const Constructor = second ? Second : First;
+	const object = new Constructor(6);
+	let total = 0;
+	for (let index = 0; index < 4; index++) total += object.x;
+	return total;
+};
+ok("polymorphic constructor first layout", polymorphicConstructorLayout(false) === 24);
+ok("polymorphic constructor second layout", polymorphicConstructorLayout(true) === 24);
+
 console.log("captured-known-own-slot PASS");

@@ -7,6 +7,7 @@ import {
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_SHAPE_ORIGIN_CAP,
 	analyzeCoreShapeProvenance,
+	coreConstructorShapeLayout,
 	coreKnownOwnSlotFromAttribute,
 	rebaseCoreShapeProvenance,
 	retractCoreKnownOwnSlots,
@@ -23,6 +24,7 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
+import { lowerCoreProgramToVmDefinition } from "../src/compiler/target/lower-vm.ts";
 
 const STRINGS: ReadonlyArray<ReadonlyArray<number>> = [
 	[],
@@ -1029,6 +1031,151 @@ describe("Core known own-slot selection", () => {
 				.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
 				.some((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes),
 		).toBe(true);
+	});
+
+	it("precompiles a synthetic receiver layout for an exact constructor", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(count) {
+					function Point(x, y) { this.x = x; this.y = y; }
+					const point = new Point(2, 3);
+					let total = 0;
+					for (let index = 0; index < count; index++) total += point.x + point.y;
+					return total;
+				}
+				run(4);`,
+				"shape-constructor-layout.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		const construct = optimized.functions
+			.flatMap((fn) => instructions(fn, "construct"))
+			.at(0)!;
+		const owner = optimized.functions.find((fn) =>
+			fn.blocks.some((block) => block.instructions.includes(construct)),
+		)!;
+		const result = analyzeCoreShapeProvenance(optimized).candidates(
+			owner.functionIndex,
+			construct.outputs[0]!,
+		);
+		expect(result.opaque).toBe(true);
+		expect(result.origins).toHaveLength(1);
+		expect(result.origins[0]).toMatchObject({ kind: "constructor" });
+		expect(result.origins[0]!.keyStringIndices).toHaveLength(2);
+		const origin = result.origins[0]!;
+		const guarded = optimized.functions
+			.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
+			.filter((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes);
+		expect(guarded).toHaveLength(2);
+		for (const instruction of guarded) {
+			expect(
+				coreKnownOwnSlotFromAttribute(
+					instruction.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+				)?.candidates,
+			).toEqual([
+				expect.objectContaining({
+					shapeFunctionIndex: origin.functionIndex,
+					shapeInstruction: origin.instruction,
+				}),
+			]);
+		}
+		const secondStore = instructions(
+			optimized.functions[origin.functionIndex]!,
+			"storePropertyStatic",
+		)[1]!;
+		const forgedAnchor = replaceInstruction(
+			optimized,
+			owner.functionIndex,
+			guarded[0]!.id,
+			(instruction) => ({
+				...instruction,
+				attributes: {
+					...instruction.attributes,
+					[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: {
+						candidates: [
+							{
+								shapeFunctionIndex: origin.functionIndex,
+								shapeInstruction: secondStore.id,
+								slot: 0,
+							},
+						],
+					},
+				},
+			}),
+		);
+		expect(() => verifyCoreProgram(forgedAnchor, coreOpcodeRegistry)).toThrow(
+			"invalid shaped-object origin",
+		);
+
+		const vm = lowerCoreProgramToVmDefinition(lowerCoreProgramToTarget(optimized));
+		const descriptor = vm.precompiledLiteralShapes.find(
+			(shape) => shape.functionIndex === origin.functionIndex,
+		);
+		expect(descriptor?.keyStringIndices).toEqual(origin.keyStringIndices);
+		expect(vm.functions[origin.functionIndex]!.literalShapeCount).toBe(1);
+		expect(
+			vm.functions[origin.functionIndex]!.instructions.some(
+				(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",
+			),
+		).toBe(false);
+		expect(
+			vm.functions
+				.flatMap((fn) => fn.instructions)
+				.filter((instruction) => instruction.opcode.includes("KNOWN_OWN_SLOT")),
+		).toHaveLength(2);
+	});
+
+	it("joins bounded constructor layouts and excludes unstable constructor bodies", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(count, second, touch) {
+					function First(value) { this.x = value; }
+					function Second(value) { this.tag = "second"; this.x = value; }
+					function Escaped(value) { this.x = value; touch(this); }
+					function Branched(value) { if (value) this.x = value; }
+					function Returning(value) { this.x = value; return { x: value + 1 }; }
+					const Constructor = second ? Second : First;
+					const object = new Constructor(2);
+					new Escaped(1); new Branched(1); new Returning(1);
+					let total = 0;
+					for (let index = 0; index < count; index++) total += object.x;
+					return total;
+				}
+				run(4, false, () => {});`,
+				"shape-constructor-layout-boundaries.mjs",
+			),
+		);
+		for (const name of ["Escaped", "Branched", "Returning"]) {
+			const fn = initial.functions[functionIndexOfName(initial, name)]!;
+			expect(coreConstructorShapeLayout(initial, fn), name).toBeUndefined();
+		}
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		const guarded = optimized.functions
+			.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
+			.find((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)!;
+		expect(guarded).toBeDefined();
+		const claim = coreKnownOwnSlotFromAttribute(
+			guarded.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+		);
+		expect(claim?.candidates).toHaveLength(2);
+		const owner = optimized.functions.find((fn) =>
+			fn.blocks.some((block) => block.instructions.includes(guarded)),
+		)!;
+		const construct = instructions(owner, "construct").find(
+			(instruction) => instruction.outputs[0] === guarded.inputs[0],
+		)!;
+		const candidates = analyzeCoreShapeProvenance(optimized).candidates(
+			owner.functionIndex,
+			construct.outputs[0]!,
+		);
+		expect(candidates.origins.filter(({ kind }) => kind === "constructor")).toHaveLength(
+			2,
+		);
+		expect(candidates.opaque).toBe(true);
 	});
 
 	it("publishes a guarded loop load through Function.prototype.call argument relay", () => {

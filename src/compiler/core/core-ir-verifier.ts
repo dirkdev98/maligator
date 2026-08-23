@@ -29,7 +29,7 @@ import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import {
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	coreKnownOwnSlotFromAttribute,
-	coreShapedObjectKeys,
+	coreShapeOriginKeys,
 } from "./core-ir-shape-provenance.ts";
 import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
@@ -1218,7 +1218,10 @@ export function verifyCoreProgram(
 	);
 }
 
-function verifyKnownOwnSlotClaims(program: CoreProgram): void {
+function verifyKnownOwnSlotClaims(
+	program: CoreProgram,
+	registry: CoreOpcodeRegistry,
+): void {
 	const cellForString = coreOwnCellResolver(program.stringConstants);
 	const instructionsByFunction = program.functions.map(
 		(fn) =>
@@ -1228,6 +1231,7 @@ function verifyKnownOwnSlotClaims(program: CoreProgram): void {
 				),
 			),
 	);
+	const keysByOrigin = new Map<string, ReadonlyArray<number>>();
 	for (const fn of program.functions) {
 		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
 		for (const block of fn.blocks) {
@@ -1254,19 +1258,30 @@ function verifyKnownOwnSlotClaims(program: CoreProgram): void {
 				}
 				const stringIndex = instruction.attributes.stringIndex;
 				for (const candidate of claim.candidates) {
+					const originIdentity = `${candidate.shapeFunctionIndex}\0${candidate.shapeInstruction}`;
 					const originFunction = program.functions[candidate.shapeFunctionIndex];
 					const origin = instructionsByFunction[candidate.shapeFunctionIndex]?.get(
 						candidate.shapeInstruction,
 					);
 					if (
 						originFunction?.functionIndex !== candidate.shapeFunctionIndex ||
-						origin?.opcode !== "createObjectShaped"
+						origin === undefined
 					) {
 						fail(
 							`instruction @${instruction.id} carries a known own slot with an invalid shaped-object origin`,
 						);
 					}
-					const keys = coreShapedObjectKeys(program, origin, cellForString);
+					let keys = keysByOrigin.get(originIdentity);
+					if (keys === undefined) {
+						keys = coreShapeOriginKeys(
+							program,
+							originFunction,
+							origin,
+							registry,
+							cellForString,
+						);
+						if (keys !== undefined) keysByOrigin.set(originIdentity, keys);
+					}
 					if (keys === undefined) {
 						fail(
 							`instruction @${instruction.id} carries a known own slot with an invalid shaped-object origin`,
@@ -1371,7 +1386,7 @@ function verifyCoreProgramGraph(
 			fail(`source position ${index} has invalid caller position`);
 		}
 	}
-	verifyKnownOwnSlotClaims(program);
+	verifyKnownOwnSlotClaims(program, registry);
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {
 			fail(`function index ${fn.functionIndex} is stored at program index ${index}`);

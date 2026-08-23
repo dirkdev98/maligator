@@ -2,6 +2,10 @@ import type {
 	CoreBuiltinIdentityDecision,
 	CorePropertyPlacement,
 } from "../core/core-ir-regions.ts";
+import {
+	coreKnownOwnSlotFromAttribute,
+	coreShapeOriginKeys,
+} from "../core/core-ir-shape-provenance.ts";
 import type { CoreProgram } from "../core/core-ir.ts";
 import {
 	builtinOperationDescriptor,
@@ -1860,46 +1864,149 @@ export function validateVmKnownOwnSlots(definition: VmDefinition): void {
 	}
 }
 
-interface VmLiteralShapeOrigin {
-	readonly instruction: Extract<CompilerInstruction, { type: "createObjectShaped" }>;
+interface VmKnownShapeOrigin {
+	readonly keyStringIndices: ReadonlyArray<number>;
 	readonly shapeCacheIndex: number;
 }
 
+interface VmKnownShapeLayout {
+	readonly origins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>;
+	readonly literalShapeCounts: ReadonlyArray<number>;
+	readonly precompiledLiteralShapes: ReadonlyArray<VmPrecompiledLiteralShape>;
+}
+
 /**
- * Resolve Core shaped-literal instruction ids to the dense cache rows assigned by
- * the VM backend. The Core id is only provenance: this consumer independently
- * proves that it names a surviving CREATE_OBJECT_SHAPED target instruction.
+ * Resolve Core shape-origin anchors to dense VM cache rows. Physical shaped
+ * allocations keep their bytecode row; constructor-derived layouts reserve a
+ * synthetic row after the physical prefix. Every row used by a guard receives a
+ * portable descriptor, so both static and wire/interpreted output intern the
+ * same live shape before the access executes.
  */
-function buildLiteralShapeOrigins(
+function buildKnownShapeLayout(
+	core: CoreProgram,
 	functions: ReadonlyArray<CoreTargetFunction>,
-): ReadonlyArray<ReadonlyMap<number, VmLiteralShapeOrigin>> {
-	return functions.map((fn) => {
+): VmKnownShapeLayout {
+	const origins: Array<Map<number, VmKnownShapeOrigin>> = [];
+	const layoutRows: Array<Map<string, number>> = [];
+	const literalShapeCounts: Array<number> = [];
+	for (const fn of functions) {
 		const cacheIndexByInstruction = new Map<CompilerInstruction, number>();
+		const rows = new Map<string, number>();
 		let shapeCacheIndex = 0;
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (instruction.type === "createObjectShaped") {
-					cacheIndexByInstruction.set(instruction, shapeCacheIndex++);
+					cacheIndexByInstruction.set(instruction, shapeCacheIndex);
+					rows.set(instruction.keyStringIndices.join(","), shapeCacheIndex++);
 				}
 			}
 		}
 
-		const origins = new Map<number, VmLiteralShapeOrigin>();
+		const functionOrigins = new Map<number, VmKnownShapeOrigin>();
 		for (const safepoint of fn.safepoints) {
 			if (safepoint.instruction.type !== "createObjectShaped") continue;
 			const cacheIndex = cacheIndexByInstruction.get(safepoint.instruction);
-			if (cacheIndex === undefined || origins.has(safepoint.coreInstruction)) {
+			if (cacheIndex === undefined || functionOrigins.has(safepoint.coreInstruction)) {
 				throw new Error(
 					`Invalid shaped-literal origin ${fn.functionIndex}:${safepoint.coreInstruction}`,
 				);
 			}
-			origins.set(safepoint.coreInstruction, {
-				instruction: safepoint.instruction,
+			functionOrigins.set(safepoint.coreInstruction, {
+				keyStringIndices: safepoint.instruction.keyStringIndices,
 				shapeCacheIndex: cacheIndex,
 			});
 		}
-		return origins;
-	});
+		origins[fn.functionIndex] = functionOrigins;
+		layoutRows[fn.functionIndex] = rows;
+		literalShapeCounts[fn.functionIndex] = shapeCacheIndex;
+	}
+
+	const coreInstructions = core.functions.map(
+		(fn) =>
+			new Map(
+				fn.blocks.flatMap((block) =>
+					block.instructions.map((instruction) => [instruction.id, instruction] as const),
+				),
+			),
+	);
+	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
+	const coreOriginKeys = new Map<string, ReadonlyArray<number>>();
+	for (const owner of core.functions) {
+		for (const block of owner.blocks) {
+			for (const instruction of block.instructions) {
+				const claim = coreKnownOwnSlotFromAttribute(instruction.attributes.knownOwnSlot);
+				if (claim === undefined) continue;
+				for (const candidate of claim.candidates) {
+					const functionIndex = candidate.shapeFunctionIndex;
+					const coreOriginIdentity = `${functionIndex}\0${candidate.shapeInstruction}`;
+					const originFunction = core.functions[functionIndex];
+					const originInstruction = coreInstructions[functionIndex]?.get(
+						candidate.shapeInstruction,
+					);
+					if (
+						originFunction?.functionIndex !== functionIndex ||
+						originInstruction === undefined
+					) {
+						throw new Error(
+							`Invalid known shape origin ${functionIndex}:${candidate.shapeInstruction}`,
+						);
+					}
+					let keys = coreOriginKeys.get(coreOriginIdentity);
+					if (keys === undefined) {
+						keys = coreShapeOriginKeys(core, originFunction, originInstruction);
+						if (keys !== undefined) coreOriginKeys.set(coreOriginIdentity, keys);
+					}
+					if (
+						keys === undefined ||
+						candidate.slot >= keys.length ||
+						keys[candidate.slot] !== instruction.attributes.stringIndex
+					) {
+						throw new Error(
+							`Invalid known shape origin ${functionIndex}:${candidate.shapeInstruction}`,
+						);
+					}
+
+					let origin = origins[functionIndex]?.get(candidate.shapeInstruction);
+					if (origin !== undefined) {
+						if (
+							origin.keyStringIndices.length !== keys.length ||
+							origin.keyStringIndices.some((key, index) => key !== keys[index])
+						) {
+							throw new Error(
+								`Shape origin layout changed ${functionIndex}:${candidate.shapeInstruction}`,
+							);
+						}
+					} else {
+						const rows = layoutRows[functionIndex];
+						const functionOrigins = origins[functionIndex];
+						if (rows === undefined || functionOrigins === undefined) {
+							throw new Error(`Unknown shape-origin function ${functionIndex}`);
+						}
+						const layout = keys.join(",");
+						let shapeCacheIndex = rows.get(layout);
+						if (shapeCacheIndex === undefined) {
+							shapeCacheIndex = literalShapeCounts[functionIndex]!;
+							literalShapeCounts[functionIndex] = shapeCacheIndex + 1;
+							rows.set(layout, shapeCacheIndex);
+						}
+						origin = { keyStringIndices: keys, shapeCacheIndex };
+						functionOrigins.set(candidate.shapeInstruction, origin);
+					}
+					const identity = `${functionIndex}\0${origin.shapeCacheIndex}`;
+					descriptors.set(identity, {
+						functionIndex,
+						shapeCacheIndex: origin.shapeCacheIndex,
+						keyStringIndices: [...origin.keyStringIndices],
+					});
+				}
+			}
+		}
+	}
+	return {
+		origins,
+		literalShapeCounts,
+		precompiledLiteralShapes: [...descriptors.values()],
+	};
 }
 
 /**
@@ -1964,15 +2071,14 @@ export function lowerCoreProgramToVmDefinition(
 		fileToIndex.set(path, index);
 		return index;
 	};
-	const literalShapeOrigins = buildLiteralShapeOrigins(program.functions);
-	const precompiledLiteralShapes = new Map<string, VmPrecompiledLiteralShape>();
+	const knownShapeLayout = buildKnownShapeLayout(core, program.functions);
 	const functions = program.functions.map((fn, index) =>
 		lowerFunctionToVmFunction(
 			fn,
 			fileIndexFor(fn.sourcePath),
 			core.stringConstants,
-			literalShapeOrigins,
-			precompiledLiteralShapes,
+			knownShapeLayout.origins,
+			knownShapeLayout.literalShapeCounts[index]!,
 			profile ? compilation.facts.instructionSites : undefined,
 			program.gcRootRegisters[index],
 		),
@@ -1985,7 +2091,7 @@ export function lowerCoreProgramToVmDefinition(
 		stringConstants: core.stringConstants.map((units) => [...units]),
 		bigintConstants: [...core.bigintConstants],
 		literalTemplateData: [...core.literalTemplateData],
-		precompiledLiteralShapes: [...precompiledLiteralShapes.values()],
+		precompiledLiteralShapes: [...knownShapeLayout.precompiledLiteralShapes],
 		globalCount: core.globalCount,
 		semanticProtectors: (
 			["primitive-methods", "watched-methods", "array-elements"] as const
@@ -2084,8 +2190,8 @@ function lowerFunctionToVmFunction(
 	fn: CoreTargetFunction,
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-	literalShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmLiteralShapeOrigin>>,
-	precompiledLiteralShapes: Map<string, VmPrecompiledLiteralShape>,
+	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
+	literalShapeCount: number,
 	instructionSites?: WeakMap<object, { id: string }>,
 	gcRootRegisters?: ReadonlyArray<number>,
 ): VmFunction {
@@ -2123,7 +2229,7 @@ function lowerFunctionToVmFunction(
 			}
 		}
 	}
-	let literalShapeCount = 0;
+	let physicalLiteralShapeCount = 0;
 	const handlers: Array<VmExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
@@ -2161,26 +2267,18 @@ function lowerFunctionToVmFunction(
 			) {
 				const candidates = instruction.knownOwnSlot.candidates.map((candidate) => {
 					const { shapeFunctionIndex, shapeInstruction, slot } = candidate;
-					const origin = literalShapeOrigins[shapeFunctionIndex]?.get(shapeInstruction);
+					const origin = knownShapeOrigins[shapeFunctionIndex]?.get(shapeInstruction);
 					if (
 						origin === undefined ||
 						!Number.isInteger(slot) ||
 						slot < 0 ||
-						slot >= origin.instruction.keyStringIndices.length ||
-						origin.instruction.registers.length !==
-							origin.instruction.keyStringIndices.length + 1 ||
-						origin.instruction.keyStringIndices[slot] !== instruction.stringIndex
+						slot >= origin.keyStringIndices.length ||
+						origin.keyStringIndices[slot] !== instruction.stringIndex
 					) {
 						throw new Error(
 							`Invalid known-own-slot access origin ${shapeFunctionIndex}:${shapeInstruction}:${slot}`,
 						);
 					}
-					const identity = `${shapeFunctionIndex}\0${origin.shapeCacheIndex}`;
-					precompiledLiteralShapes.set(identity, {
-						functionIndex: shapeFunctionIndex,
-						shapeCacheIndex: origin.shapeCacheIndex,
-						keyStringIndices: [...origin.instruction.keyStringIndices],
-					});
 					return { shapeFunctionIndex, shapeCacheIndex: origin.shapeCacheIndex, slot };
 				});
 				vmInstruction =
@@ -2212,7 +2310,7 @@ function lowerFunctionToVmFunction(
 					vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
 					break;
 				case "CREATE_OBJECT_SHAPED":
-					vmInstruction.shapeCacheIndex = literalShapeCount++;
+					vmInstruction.shapeCacheIndex = physicalLiteralShapeCount++;
 					break;
 			}
 			instructions.push(vmInstruction);
@@ -2222,6 +2320,9 @@ function lowerFunctionToVmFunction(
 	}
 	if (openExceptionRanges.length > 0) {
 		throw new Error("Unbalanced try marker at end of function");
+	}
+	if (physicalLiteralShapeCount > literalShapeCount) {
+		throw new Error(`Literal shape cache underflow in function ${fn.functionIndex}`);
 	}
 	const regions: Array<VmRegion> = [];
 	const claimedRegionInstructions = new Set<number>();
