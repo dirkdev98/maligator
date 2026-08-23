@@ -74,6 +74,7 @@ import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts
 import {
 	CORE_OWN_DATA_CELL_FACT,
 	coreOwnCellsEqual,
+	coreOwnCellResolver,
 	coreProvenance,
 } from "./core-ir-provenance.ts";
 import type { CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
@@ -8254,6 +8255,150 @@ function mayForwardMemoryAccesses(
 }
 
 /**
+ * Forward a fresh shaped allocation's own slots before its first escaping use.
+ *
+ * Whole-function containment deliberately becomes false once an object is
+ * published, even when all earlier accesses were still private. That is the
+ * correct contract for memory SSA, but it leaves a useful local prefix on the
+ * table: before the first instruction that receives the fresh reference, no
+ * user code or alias can have changed its default writable data slots. Track
+ * only one basic block, exact static present keys, moves, and existing-slot
+ * stores. Any other use ends the prefix before it executes. The object itself is
+ * retained when it later escapes; only semantically silent reads are forwarded.
+ */
+const forwardFreshAllocationPrefixLoads: CoreFunctionPass = {
+	name: "forward-fresh-allocation-prefix-loads",
+	changesControlFlow: true,
+	run(fn, analyses, program) {
+		const provenance = analyses.provenance(fn);
+		const layouts = new Map(
+			provenance.layouts
+				.filter((layout) => layout.kind === "named-slots")
+				.map((layout) => [layout.instruction, layout] as const),
+		);
+		if (layouts.size === 0) return fn;
+		const canonical = analyses.canonicalValues(fn);
+		const cellForString = coreOwnCellResolver(program.stringConstants);
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		const replacements = new Map<CoreValueId, CoreValueId>();
+		const removedInstructions = new Set<CoreInstructionId>();
+		const replacementInstructions = new Map<CoreInstructionId, CoreInstruction>();
+		interface PrefixState {
+			readonly values: Map<number, CoreValueId>;
+		}
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const resolved = (value: CoreValueId): CoreValueId =>
+			resolveValue(value, replacements);
+		for (const block of fn.blocks) {
+			const active = new Map<CoreValueId, PrefixState>();
+			for (const instruction of block.instructions) {
+				const receiver = instruction.inputs[0];
+				const receiverRoot = receiver === undefined ? undefined : root(receiver);
+				const state = receiverRoot === undefined ? undefined : active.get(receiverRoot);
+				const stringIndex =
+					instruction.opcode === "loadPropertyStatic" ||
+					instruction.opcode === "storePropertyStatic"
+						? instruction.attributes.stringIndex
+						: undefined;
+				const cell =
+					typeof stringIndex === "number" ? cellForString(stringIndex) : undefined;
+				const trackedCellKey = cell?.kind === "object-slot" ? cell.key : undefined;
+				const trackedSlot =
+					state !== undefined && trackedCellKey !== undefined
+						? state.values.get(trackedCellKey)
+						: undefined;
+				const trackedAccess =
+					trackedSlot !== undefined &&
+					((instruction.opcode === "loadPropertyStatic" &&
+						instruction.inputs.length === 1 &&
+						instruction.outputs.length === 1) ||
+						(instruction.opcode === "storePropertyStatic" &&
+							instruction.inputs.length === 2));
+
+				// A move only creates another SSA spelling of the same private object.
+				// A tracked own-slot access consumes the receiver without publishing it.
+				// Every other use ends this allocation's private prefix before the use.
+				for (const input of instruction.inputs) {
+					const inputRoot = root(input);
+					if (!active.has(inputRoot)) continue;
+					const retained =
+						(instruction.opcode === "move" && instruction.inputs.length === 1) ||
+						(inputRoot === receiverRoot && trackedAccess);
+					if (!retained) active.delete(inputRoot);
+				}
+
+				if (state !== undefined && active.has(receiverRoot!)) {
+					if (instruction.opcode === "storePropertyStatic") {
+						state.values.set(trackedCellKey!, resolved(instruction.inputs[1]!));
+					} else if (instruction.opcode === "loadPropertyStatic") {
+						const destination = instruction.outputs[0]!;
+						const source = resolved(trackedSlot!);
+						const sourceRepresentation = representations.get(source);
+						const destinationRepresentation = representations.get(destination);
+						if (sourceRepresentation === destinationRepresentation) {
+							replacements.set(destination, source);
+							removedInstructions.add(instruction.id);
+						} else if (
+							destinationRepresentation === "boxed" &&
+							(sourceRepresentation === "f64" ||
+								sourceRepresentation === "i32" ||
+								sourceRepresentation === "boolean")
+						) {
+							const { effectRefinement: _refinement, ...withoutRefinement } = instruction;
+							replacementInstructions.set(instruction.id, {
+								...withoutRefinement,
+								opcode: "move",
+								inputs: [source],
+								attributes: {},
+							});
+						}
+					}
+				}
+
+				const layout = layouts.get(instruction.id);
+				const output = instruction.outputs[0];
+				if (layout === undefined || output === undefined) continue;
+				const allocationRoot = root(output);
+				if (
+					active.has(allocationRoot) ||
+					provenance.allocationOf(output)?.instruction !== instruction.id
+				) {
+					continue;
+				}
+				const values = new Map<number, CoreValueId>();
+				let valid = true;
+				for (const [index, keyStringIndex] of layout.keys.entries()) {
+					const ownCell = cellForString(keyStringIndex);
+					const initial = layout.initialValues[index];
+					if (
+						ownCell?.kind !== "object-slot" ||
+						initial === undefined ||
+						values.has(ownCell.key)
+					) {
+						valid = false;
+						break;
+					}
+					values.set(ownCell.key, resolved(initial));
+				}
+				if (valid) active.set(allocationRoot, { values });
+			}
+		}
+		if (removedInstructions.size === 0 && replacementInstructions.size === 0) return fn;
+		const blocks = fn.blocks.map((block) => ({
+			...block,
+			instructions: block.instructions.map(
+				(instruction) => replacementInstructions.get(instruction.id) ?? instruction,
+			),
+		}));
+		return removeUnreachableCoreBlocks(
+			rewriteFunction(fn, blocks, replacements, removedInstructions),
+		);
+	},
+};
+
+/**
  * Reuse the value already in a compiler slot instead of loading it again: forward
  * a store to a later load, and remove a load the same load already performed.
  *
@@ -10395,6 +10540,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldStaticPropertyKeys,
 	refineOwnDataCellAccesses,
 	refineDirectCallEffects,
+	forwardFreshAllocationPrefixLoads,
 	forwardMemoryAccesses,
 	eliminateDeadStores,
 	eliminateDeadAllocations,

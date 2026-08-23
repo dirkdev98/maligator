@@ -408,4 +408,28 @@ ok(
 		accessorClassFieldLayout.setterCalls === 0,
 );
 
+let freshPrefixSink;
+const forwardFreshPrefixBeforeEscape = function () {
+	const point = { x: 2, y: 3 };
+	const total = point.x + point.y;
+	freshPrefixSink = { point };
+	return total;
+};
+ok(
+	"fresh prefix forwards before later escape",
+	forwardFreshPrefixBeforeEscape() === 5 && freshPrefixSink.point.x === 2,
+);
+
+const readFreshAfterEscape = function (mutate) {
+	const point = { x: 2, y: 3 };
+	mutate(point);
+	return point.x + point.y;
+};
+ok(
+	"fresh prefix stops before escaping call",
+	readFreshAfterEscape((point) => {
+		point.x = 7;
+	}) === 10,
+);
+
 console.log("captured-known-own-slot PASS");

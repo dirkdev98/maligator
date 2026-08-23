@@ -1237,7 +1237,7 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
-	it("keeps property accesses a prototype or a foreign reference could observe", () => {
+	it("keeps property accesses outside the private fresh-object prefix", () => {
 		const build = (
 			functionIndex: number,
 			variant: "outside-shape" | "returned" | "passed-to-call",
@@ -1298,13 +1298,51 @@ describe("Core IR optimizer", () => {
 			},
 			{ verification: "per-pass" },
 		);
-		for (const fn of outcome.program.functions) {
+		const expectedLoads = [2, 0, 2];
+		for (const [index, fn] of outcome.program.functions.entries()) {
 			expect(
 				fn.blocks
 					.flatMap(({ instructions }) => instructions)
 					.filter(({ opcode }) => opcode === "loadPropertyStatic"),
-			).toHaveLength(2);
+			).toHaveLength(expectedLoads[index]!);
 		}
+	});
+
+	it("forwards a fresh own-slot load before a later escape", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const parameter = builder.block(entry).parameters[0]!.value;
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [parameter], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [object!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+
+		const fn = executeCoreOptimizations(
+			{
+				...coreProgram([builder.finish(entry)]),
+				stringConstants: [[], [102]],
+				globalCount: 1,
+			},
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		const opcodes = fn.blocks
+			.flatMap(({ instructions }) => instructions)
+			.map(({ opcode }) => opcode);
+		expect(opcodes).not.toContain("loadPropertyStatic");
+		expect(opcodes).toContain("createObjectShaped");
+		expect(opcodes).toContain("storeGlobal");
+		expect(fn.blocks[0]!.terminator).toMatchObject({
+			kind: "return",
+			value: fn.parameters[0],
+		});
 	});
 
 	it("keeps a contained slot across a call and reloads it after a store", () => {
@@ -1350,7 +1388,7 @@ describe("Core IR optimizer", () => {
 		});
 	});
 
-	it("does not forward across an otherwise universal exact write", () => {
+	it("forwards an existing-slot write while a fresh object remains private", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
 			parameterCount: 2,
 		});
@@ -1385,8 +1423,8 @@ describe("Core IR optimizer", () => {
 		).program.functions[0]!;
 		expect(
 			fn.blocks.flatMap(({ instructions }) => instructions).map(({ opcode }) => opcode),
-		).toContain("loadPropertyStatic");
-		expect(fn.blocks[0]!.terminator).not.toMatchObject({ value: fn.parameters[0] });
+		).not.toContain("loadPropertyStatic");
+		expect(fn.blocks[0]!.terminator).toMatchObject({ value: fn.parameters[1] });
 	});
 
 	it("removes stores to a contained slot nothing reads", () => {
