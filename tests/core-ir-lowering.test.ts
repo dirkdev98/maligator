@@ -55,6 +55,17 @@ describe("Core IR lowering", () => {
 		expect(vm.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
 	});
 
+	it("does not lower unreachable structured handlers after abrupt completion", () => {
+		const converted = lower(`
+			function returned() { return; try {} catch (error) {} }
+			function thrown() { throw 1; try {} catch (error) {} }
+			function* generator() { throw 1; try {} catch (error) {} }
+		`);
+		for (const fn of converted.functions) {
+			expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+		}
+	});
+
 	it("keeps preloaded handler values live and rooted across protected blocks", () => {
 		const converted = lower(`
 			function preserve(object, callback) {

@@ -5559,6 +5559,20 @@ function compileStatementsToBlock(
 				break;
 			}
 		}
+
+		// Nothing after a direct abrupt completion in this statement list is
+		// reachable. Besides avoiding dead IR, stopping here keeps structured
+		// try markers balanced: a terminated emitter intentionally drops a later
+		// tryBegin, while lowering that unreachable try would otherwise create a
+		// fresh block containing its unmatched tryEnd.
+		if (
+			statement.type === "ReturnStatement" ||
+			statement.type === "ThrowStatement" ||
+			statement.type === "BreakStatement" ||
+			statement.type === "ContinueStatement"
+		) {
+			break;
+		}
 	}
 
 	// Join any dangling blocks left by the final statement into a single tail
