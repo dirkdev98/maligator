@@ -47,6 +47,7 @@ ok(
 );
 ok(First.has(first), "own evaluation brand");
 ok(!Second.has(first), "fresh private identity per class evaluation");
+ok(!First.has({}), "absent private brand stays false when unboxed");
 
 let effects = 0;
 class StampBase {

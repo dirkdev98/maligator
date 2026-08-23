@@ -4068,7 +4068,9 @@ function emitInstruction(
 		case "HAS_PRIVATE":
 			// Ergonomic brand check `#x in obj`; a non-object receiver throws.
 			return [
-				`r${instruction.dst} = mal_vm_op_has_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+				reps[instruction.dst] === "boolean"
+					? `r${instruction.dst} = mal_value_to_boolean(mal_vm_op_has_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}));`
+					: `r${instruction.dst} = mal_vm_op_has_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
 				throwCheck,
 			];
 		case "CALL_SPREAD": {
