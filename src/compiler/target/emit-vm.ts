@@ -193,8 +193,8 @@ function malFunctionRow(
 		`.literal_shape_count = ${fn.literalShapeCount}`,
 		`.instruction_count = ${omitBytecode ? 0 : fn.instructions.length}`,
 		`.instructions = ${omitBytecode ? "nullptr" : instructionsSymbol}`,
-		`.instruction_data_count = ${omitBytecode ? 0 : instructionDataCount}`,
-		`.instruction_data = ${omitBytecode ? "nullptr" : instructionDataSymbol}`,
+		`.instruction_data_count = ${instructionDataCount}`,
+		`.instruction_data = ${instructionDataSymbol}`,
 		`.handler_count = ${omitBytecode ? 0 : fn.handlers.length}`,
 		`.handlers = ${omitBytecode ? "nullptr" : handlersSymbol}`,
 		`.compiled = ${compiledSymbol}`,
@@ -318,6 +318,30 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 	});
 
 	return { data, offsets };
+}
+
+function compiledKnownOwnSlotSeedData(
+	fn: VmDefinition["functions"][number],
+): Array<number> {
+	const data: Array<number> = [0];
+	for (const instruction of fn.instructions) {
+		if (
+			instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+			instruction.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+		) {
+			continue;
+		}
+		data[0] = data[0]! + 1;
+		data.push(
+			instruction.icIndex,
+			instruction.stringIndex,
+			instruction.candidates.length,
+		);
+		for (const candidate of instruction.candidates) {
+			data.push(candidate.shapeFunctionIndex, candidate.shapeCacheIndex, candidate.slot);
+		}
+	}
+	return data[0] === 0 ? [] : data;
 }
 
 function handlerArrayBody(fn: VmDefinition["functions"][number]): string {
@@ -613,7 +637,9 @@ function emitVmDefinitionSource(
 	// (generators/async) keep their overlay.
 	const omitBytecode = compiled.map((c) => c !== null);
 	const instructionDataByFunction = definition.functions.map((fn, i) =>
-		omitBytecode[i] ? { data: [], offsets: [] } : instructionData(fn),
+		omitBytecode[i]
+			? { data: compiledKnownOwnSlotSeedData(fn), offsets: [] }
+			: instructionData(fn),
 	);
 
 	const positionInfo: Array<{ symbol: string; count: number }> = [];
@@ -635,13 +661,15 @@ function emitVmDefinitionSource(
 				lines.push(argumentSnapshotPlanBody(fn));
 				lines.push("};", "");
 			}
-			const sideData = instructionDataByFunction[i]!;
-			if (sideData.data.length > 0) {
-				lines.push(
-					`static const i32 mal_function_${i}_instruction_data${suffix}[] = { ${sideData.data.join(", ")} };`,
-					"",
-				);
-			}
+		}
+		const sideData = instructionDataByFunction[i]!;
+		if (sideData.data.length > 0) {
+			lines.push(
+				`static const i32 mal_function_${i}_instruction_data${suffix}[] = { ${sideData.data.join(", ")} };`,
+				"",
+			);
+		}
+		if (!omitBytecode[i]) {
 			lines.push(
 				`static const MalInstruction mal_function_${i}_instructions${suffix}[] = {`,
 			);
@@ -1162,9 +1190,14 @@ export function emitBatch(
 		for (let i = 0; i < definition.functions.length; ++i) {
 			const fn = definition.functions[i]!;
 			if (omitBytecode[i]) {
+				const seedData = compiledKnownOwnSlotSeedData(fn);
 				instructionSymbols.push("nullptr");
-				instructionDataSymbols.push("nullptr");
-				instructionDataCounts.push(0);
+				instructionDataSymbols.push(
+					seedData.length > 0
+						? intern("insn_data", "i32", `    ${seedData.join(", ")}`)
+						: "nullptr",
+				);
+				instructionDataCounts.push(seedData.length);
 				argumentSnapshotPlanSymbols.push("nullptr");
 				argumentSnapshotPlanCounts.push(0);
 				mappedArgumentSlotsSymbols.push("nullptr");

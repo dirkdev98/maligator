@@ -221,7 +221,7 @@ describe("guarded known-own-slot accesses", () => {
 			expect(perfField(stderr, "perf-known-own-slot-stats", "store_probes")).toBe(2);
 			expect(perfField(stderr, "perf-known-own-slot-stats", "store_hits")).toBe(1);
 			expect(perfField(stderr, "perf-known-own-slot-stats", "store_fallbacks")).toBe(1);
-			// Compiler candidates seed the site's ordinary IC. The first two loads
+			// Function-cache creation pre-seeds each ordinary IC. The first two loads
 			// are monomorphic, the two-layout site is polymorphic, and both stores use
 			// the normal slot-store probe before the exact generic fallback.
 			expect(perfField(stderr, "perf-ic-stats", "load_mono_hits")).toBe(2);

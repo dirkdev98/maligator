@@ -2344,7 +2344,7 @@ function emitInstruction(
 			return [
 				`MalValue __known_own_slot_${ip};`,
 				`static const i32 __known_own_slot_candidates_${ip}[] = { ${candidates.join(", ")} };`,
-				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
+				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
 				`  r${instruction.dst} = __known_own_slot_${ip};`,
 				`} else {`,
 				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
@@ -2382,7 +2382,7 @@ function emitInstruction(
 			]);
 			return [
 				`static const i32 __known_own_slot_store_candidates_${ip}[] = { ${candidates.join(", ")} };`,
-				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
+				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
 				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,

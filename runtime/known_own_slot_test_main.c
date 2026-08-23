@@ -17,6 +17,20 @@ int main(void) {
         mal_vm_free(&vm);
         return 1;
     }
+    mal_vm_ensure_function_caches(&vm, 0);
+    MalInlineCache *preseeded = vm.property_cache[0].sites;
+    if (preseeded == nullptr ||
+        preseeded[0].mode != MAL_IC_MODE_SHAPE ||
+        preseeded[0].shape != vm.literal_shape_cache[0][1] ||
+        preseeded[0].slot != 0 ||
+        preseeded[2].shape != vm.literal_shape_cache[0][1] ||
+        preseeded[2].poly_count != 1 ||
+        preseeded[2].poly_shape[0] != vm.literal_shape_cache[0][2] ||
+        mal_ic_poly_slot(&preseeded[2], 0) != 1) {
+        fprintf(stderr, "known own-slot IC was not preseeded at cache creation\n");
+        mal_vm_free(&vm);
+        return 1;
+    }
     MalCallable *entry = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, entry);
     MalValue result = vm.globals[0];

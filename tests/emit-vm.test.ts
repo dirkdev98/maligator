@@ -336,6 +336,14 @@ describe("emit-vm instruction packing", () => {
 			expect(output).toContain(".precompiled_literal_shape_count = 1");
 		}
 		for (const output of [compiled, split]) {
+			// Compiled functions omit bytecode, but their compact seed metadata must
+			// remain in the otherwise-unused instruction-data field so the packed
+			// MalFunction row does not grow.
+			expect(output).toContain(".instruction_count = 0");
+			expect(output).toContain(".instructions = nullptr");
+			expect(output).toContain(".instruction_data = mal_function_0_instruction_data");
+			expect(output).toContain(".instruction_data_count = 13");
+			expect(output).toContain("{ 2, 0, 2, 1, 0, 0, 1, 1, 2, 1, 0, 0, 1 }");
 			expect(output).toContain("mal_vm_try_load_known_own_slots(vm,");
 			expect(output).toMatch(
 				/mal_vm_try_load_known_own_slots\(vm,[^\n]+&__property_ic\[0\]/,

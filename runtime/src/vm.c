@@ -56,18 +56,97 @@ static MalShape **mal_vm_ensure_literal_shape_cache(
     return vm->literal_shape_cache[function_index];
 }
 
+static void mal_vm_seed_function_known_own_slot_ics(
+    MalVm *vm, const MalFunction *function, MalPropertyCachePool *pool
+) {
+    if (function->instructions != nullptr) {
+        // Interpreted functions retain their ordinary bytecode and side table,
+        // so discover the sparse certified sites once without another metadata
+        // allocation in every MalFunction row.
+        for (i32 ip = 0; ip < function->instruction_count; ip++) {
+            const MalInstruction *instruction = &function->instructions[ip];
+            i32 data_offset;
+            i32 ic_index;
+            if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
+                data_offset =
+                    instruction->as.load_property_static_known_own_slot.data_offset;
+                ic_index = instruction->as.load_property_static_known_own_slot.ic_index;
+            } else if (instruction->opcode == MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
+                data_offset =
+                    instruction->as.store_property_static_known_own_slot.data_offset;
+                ic_index = instruction->as.store_property_static_known_own_slot.ic_index;
+            } else {
+                continue;
+            }
+            if (data_offset < 0 || data_offset > function->instruction_data_count - 2 ||
+                ic_index < 0 || ic_index >= function->property_ic_count) {
+                continue;
+            }
+            const i32 *data = &function->instruction_data[data_offset];
+            i32 candidate_count = data[1];
+            if (data[0] < 0 || data[0] >= vm->definition->string_constant_count ||
+                candidate_count <= 0 ||
+                candidate_count > (function->instruction_data_count - data_offset - 2) / 3) {
+                continue;
+            }
+            MalValue key = mal_value_from_string(vm->string_constant_atoms[data[0]]);
+            mal_vm_seed_known_own_slot_ic(
+                vm, &pool->sites[ic_index], key, candidate_count, &data[2]);
+        }
+        return;
+    }
+
+    // Native emission drops compiled bytecode. Its otherwise-unused instruction
+    // data pointer carries a compact stream:
+    //   seedCount, (icIndex, stringIndex, candidateCount, candidate triples...)*
+    // This preserves one-time seeding without widening the hot MalFunction row.
+    if (function->compiled == nullptr) return;
+    const i32 *data = function->instruction_data;
+    i32 count = function->instruction_data_count;
+    if (data == nullptr || count < 1 || data[0] < 0) return;
+    i32 seed_count = data[0];
+    i32 offset = 1;
+    for (i32 seed = 0; seed < seed_count; seed++) {
+        if (offset > count - 3) return;
+        i32 ic_index = data[offset++];
+        i32 string_index = data[offset++];
+        i32 candidate_count = data[offset++];
+        if (string_index < 0 || string_index >= vm->definition->string_constant_count ||
+            candidate_count <= 0 || candidate_count > (count - offset) / 3 ||
+            ic_index < 0 || ic_index >= function->property_ic_count) {
+            return;
+        }
+        MalValue key = mal_value_from_string(vm->string_constant_atoms[string_index]);
+        mal_vm_seed_known_own_slot_ic(
+            vm, &pool->sites[ic_index], key, candidate_count, &data[offset]);
+        offset += candidate_count * 3;
+    }
+}
+
 void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
     MalPropertyCachePool *pool = &vm->property_cache[function_index];
     const MalFunction *function = &vm->definition->functions[function_index];
     i32 property_count = function->property_ic_count;
+    bool created_property_cache = false;
     if (property_count > 0 && pool->sites == nullptr) {
         pool->sites = calloc((usize) property_count, sizeof(MalInlineCache));
+        created_property_cache = true;
         MAL_PERF_COUNT(function_property_cache_allocations);
         MAL_PERF_ADD(
             function_property_cache_bytes,
             (u64) property_count * sizeof(MalInlineCache));
     }
     mal_vm_ensure_literal_shape_cache(vm, function_index);
+    if (!created_property_cache) return;
+
+    // Compiler-certified own-slot sites already name every portable literal
+    // shape that can hit. Seed their ordinary IC rows once, when the function's
+    // dense cache pool is created, instead of rebuilding the key and checking
+    // for an empty row on every dynamic access. Precompiled shape rows exist
+    // before any function can execute, both at VM initialization and after a
+    // definition splice. A later generic fallback may replace the row; the
+    // instruction's explicit bounded candidates remain its exact backup guard.
+    mal_vm_seed_function_known_own_slot_ics(vm, function, pool);
 }
 
 static void mal_vm_materialize_precompiled_literal_shapes(
@@ -2208,9 +2287,8 @@ static void mal_vm_run_until_frame_count(
                 MalValue result;
                 MalInlineCache *ic = mal_vm_property_ic_at(
                     frame, instruction->as.load_property_static_known_own_slot.ic_index);
-                MalValue key = mal_value_from_string(vm->string_constant_atoms[data[0]]);
                 if (mal_vm_try_load_known_own_slots(
-                        vm, object, key, ic, data[1], &data[2], &result)) {
+                        vm, object, ic, data[1], &data[2], &result)) {
                     registers[instruction->as.load_property_static_known_own_slot.dst] = result;
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
@@ -2301,9 +2379,8 @@ static void mal_vm_run_until_frame_count(
                     instruction->as.store_property_static_known_own_slot.value];
                 MalInlineCache *ic = mal_vm_property_ic_at(
                     frame, instruction->as.store_property_static_known_own_slot.ic_index);
-                MalValue key = mal_value_from_string(vm->string_constant_atoms[data[0]]);
                 if (mal_vm_try_store_known_own_slots(
-                        vm, object, value, key, ic, data[1], &data[2])) {
+                        vm, object, value, ic, data[1], &data[2])) {
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }

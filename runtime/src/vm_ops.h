@@ -1007,14 +1007,12 @@ static inline void mal_vm_seed_known_own_slot_ic(
 static inline bool mal_vm_try_load_known_own_slots(
     MalVm *vm,
     MalValue receiver,
-    MalValue key,
     MalInlineCache *ic,
     i32 candidate_count,
     const i32 *candidates,
     MalValue *out
 ) {
     MAL_PERF_COUNT(known_own_slot_load_probes);
-    mal_vm_seed_known_own_slot_ic(vm, ic, key, candidate_count, candidates);
     MalObject *object = mal_vm_as_object(receiver);
     if (object != nullptr && mal_vm_object_try_load_static(object, ic, out)) {
         MAL_PERF_COUNT(known_own_slot_load_hits);
@@ -1464,13 +1462,11 @@ static inline bool mal_vm_try_store_known_own_slots(
     MalVm *vm,
     MalValue receiver,
     MalValue value,
-    MalValue key,
     MalInlineCache *ic,
     i32 candidate_count,
     const i32 *candidates
 ) {
     MAL_PERF_COUNT(known_own_slot_store_probes);
-    mal_vm_seed_known_own_slot_ic(vm, ic, key, candidate_count, candidates);
     MalObject *object = mal_vm_as_object(receiver);
     if (object != nullptr && mal_vm_object_try_store_static(object, value, ic)) {
         MAL_PERF_COUNT(known_own_slot_store_hits);
