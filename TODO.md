@@ -102,9 +102,13 @@ performance neutral or better while specializing locked builds.
       arguments, clones, joins, and materialization; immediately consume them for
       unboxing, ABI specialization, box elimination, and reduced rooting.
 
-- [ ] Collect shape and value-class provenance across allocations, block arguments,
-      call results, and stores; immediately consume it for property specialization,
-      redundant-check elimination, alias refinement, and memory optimization.
+- [x] Collect bounded shape-origin provenance across allocations, block arguments,
+      call results, captures, globals, and constructor results; consume it through
+      exact runtime-guarded own-slot loads and shared shape cases in both backends.
+
+- [ ] Collect live value-class and alias facts across stores and calls; consume them
+      for guarded unboxing, redundant-check elimination, and memory optimization only
+      where representative output can amortize the required runtime admission.
 
 - [ ] Extend escape and containment facts across inlining, joins, exceptions, and
       suspension; immediately consume them for scalar replacement, stack allocation,
