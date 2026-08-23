@@ -239,6 +239,22 @@ function remarkForInstruction(
 				},
 			};
 		}
+		case "SELECT_SHAPE_CASE":
+			return {
+				phase: "lowering",
+				operation,
+				code: "property.shape-case",
+				outcome: "guarded",
+				details: { candidateCount: instruction.candidates.length },
+			};
+		case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
+			return {
+				phase: "lowering",
+				operation,
+				code: "property.shape-case-load",
+				outcome: "guarded",
+				details: { candidateCount: instruction.slots.length },
+			};
 		case "STORE_PROPERTY":
 			return {
 				phase: "lowering",

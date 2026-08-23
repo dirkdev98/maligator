@@ -1029,6 +1029,19 @@ static void mal_vm_rebase_instruction(
             }
             break;
         }
+        case MAL_OP_SELECT_SHAPE_CASE: {
+            i32 *data = instruction_data + in->as.select_shape_case.data_offset;
+            for (i32 index = 0; index < in->as.select_shape_case.candidate_count; index++) {
+                data[index * 2] += fn_base;
+            }
+            break;
+        }
+        case MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE: {
+            i32 *data = instruction_data +
+                in->as.load_property_static_shape_case.data_offset;
+            data[0] += string_base;
+            break;
+        }
         case MAL_OP_STORE_PROPERTY_STATIC:
             in->as.store_property_static.string_index += string_base;
             break;
@@ -2204,6 +2217,41 @@ static void mal_vm_run_until_frame_count(
                 }
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
                     mal_op_load_property_static_known_own_slot_fallback(frame, instruction));
+                break;
+            }
+            case MAL_OP_SELECT_SHAPE_CASE: {
+                const i32 *data = frame->function->instruction_data +
+                    instruction->as.select_shape_case.data_offset;
+                MalValue object = registers[instruction->as.select_shape_case.object];
+                i32 shape_case = mal_vm_select_shape_case(
+                    vm,
+                    object,
+                    instruction->as.select_shape_case.candidate_count,
+                    data);
+                registers[instruction->as.select_shape_case.dst] =
+                    mal_value_from_i32(shape_case);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
+            case MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE: {
+                const i32 *data = frame->function->instruction_data +
+                    instruction->as.load_property_static_shape_case.data_offset;
+                MalValue object = registers[
+                    instruction->as.load_property_static_shape_case.object];
+                MalValue encoded_case = registers[
+                    instruction->as.load_property_static_shape_case.shape_case];
+                i32 shape_case = mal_value_is_int32(encoded_case)
+                    ? mal_value_to_i32(encoded_case)
+                    : -1;
+                MalValue result;
+                if (mal_vm_try_load_shape_case(
+                        object, shape_case, data[2], &data[3], &result)) {
+                    registers[instruction->as.load_property_static_shape_case.dst] = result;
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
+                    mal_op_load_property_static_shape_case_fallback(frame, instruction));
                 break;
             }
             case MAL_OP_STORE_PROPERTY: {

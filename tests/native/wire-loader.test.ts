@@ -200,6 +200,98 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("known-own-slot-store", storeWire);
 	});
 
+	it("rejects malformed shared shape-case selectors and slot tables", () => {
+		const shapeCaseFunction: VmFunction = {
+			...fn,
+			literalShapeCount: 1,
+			registerCount: 7,
+			registerRepresentations: [
+				"boxed",
+				"boxed",
+				"boxed",
+				"number",
+				"boxed",
+				"boxed",
+				"boxed",
+			],
+			instructions: [
+				{ opcode: "CREATE_UNDEFINED", dst: 0 },
+				{
+					opcode: "CREATE_OBJECT_SHAPED",
+					dst: 2,
+					count: 3,
+					keyStringIndices: [0, 1, 2],
+					valueRegisters: [0, 0, 0],
+					shapeCacheIndex: 0,
+				},
+				{
+					opcode: "SELECT_SHAPE_CASE",
+					dst: 3,
+					object: 2,
+					candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0 }],
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+					dst: 4,
+					object: 2,
+					shapeCase: 3,
+					stringIndex: 0,
+					icIndex: 0,
+					slots: [0],
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+					dst: 5,
+					object: 2,
+					shapeCase: 3,
+					stringIndex: 1,
+					icIndex: 1,
+					slots: [1],
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+					dst: 6,
+					object: 2,
+					shapeCase: 3,
+					stringIndex: 2,
+					icIndex: 2,
+					slots: [2],
+				},
+				{ opcode: "RETURN", value: 6 },
+			],
+		};
+		const shapeCaseDefinition: VmDefinition = {
+			...definition,
+			functions: [shapeCaseFunction],
+			stringConstants: [[120], [121], [122]],
+			precompiledLiteralShapes: [
+				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1, 2] },
+			],
+		};
+		const wire = serializeVmDefinition(shapeCaseDefinition, { debugInfo: false });
+		const selectorTag = WIRE_OPCODES.indexOf("SELECT_SHAPE_CASE");
+		const encodedSelector = [selectorTag, 6, 4, 1, 0, 0];
+		const selectorOffset = wire.findIndex((_, index) =>
+			encodedSelector.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(selectorOffset).toBeGreaterThanOrEqual(0);
+		const invalidSelector = wire.slice();
+		// The only function owns one literal-shape row; row 1 is out of bounds.
+		invalidSelector[selectorOffset + encodedSelector.length - 1] = 2;
+		rejectsWire("shape-case-selector", invalidSelector);
+
+		const loadTag = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_SHAPE_CASE");
+		const encodedLoad = [loadTag, 10, 4, 6, 2, 1, 2];
+		const loadOffset = wire.findIndex((_, index) =>
+			encodedLoad.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(loadOffset).toBeGreaterThanOrEqual(0);
+		const invalidSlot = wire.slice();
+		// Key y must use slot 1; changing it to slot 0 would read x.
+		invalidSlot[loadOffset + encodedLoad.length - 1] = 0;
+		rejectsWire("shape-case-slot", invalidSlot);
+	});
+
 	it("pre-instantiates known literal shapes for initial and spliced wire definitions", () => {
 		const shapedFunction: VmFunction = {
 			...fn,

@@ -18,7 +18,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 22u
+#define WIRE_VERSION 23u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in
@@ -129,6 +129,8 @@ typedef enum WireOp {
     WIRE_CALL_BUILTIN,
     WIRE_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT,
     WIRE_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT,
+    WIRE_SELECT_SHAPE_CASE,
+    WIRE_LOAD_PROPERTY_STATIC_SHAPE_CASE,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -551,6 +553,42 @@ static i32 rd_side_known_own_slots(Rd *r, I32Builder *builder) {
     return offset;
 }
 
+static i32 rd_side_shape_case_candidates(
+    Rd *r, I32Builder *builder, i32 *candidate_count_out
+) {
+    i32 offset = (i32) builder->count;
+    u32 count = rd_count(r, 2);
+    if (!r->ok || count < 1 || count > 4 ||
+        !i32_builder_reserve(builder, r, (usize) count * 2)) {
+        r->ok = false;
+        return 0;
+    }
+    *candidate_count_out = (i32) count;
+    for (u32 index = 0; index < count; index++) {
+        builder->data[builder->count++] = rd_i32(r);
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    return offset;
+}
+
+static i32 rd_side_shape_case_load(Rd *r, I32Builder *builder) {
+    i32 offset = (i32) builder->count;
+    i32 string_index = rd_i32(r);
+    u32 slot_count = rd_count(r, 2);
+    if (!r->ok || slot_count < 1 || slot_count > 4 ||
+        !i32_builder_reserve(builder, r, 3 + (usize) slot_count)) {
+        r->ok = false;
+        return 0;
+    }
+    builder->data[builder->count++] = string_index;
+    builder->data[builder->count++] = -1;
+    builder->data[builder->count++] = (i32) slot_count;
+    for (u32 index = 0; index < slot_count; index++) {
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    return offset;
+}
+
 // ---- instruction decode (mirrors writeInstruction in serialize-vm.ts) ----
 
 static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
@@ -846,6 +884,21 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.store_property_static_known_own_slot.value = rd_i32(r);
             o->as.store_property_static_known_own_slot.data_offset =
                 rd_side_known_own_slots(r, side_data);
+            return;
+        case WIRE_SELECT_SHAPE_CASE:
+            o->opcode = MAL_OP_SELECT_SHAPE_CASE;
+            o->as.select_shape_case.dst = rd_i32(r);
+            o->as.select_shape_case.object = rd_i32(r);
+            o->as.select_shape_case.data_offset = rd_side_shape_case_candidates(
+                r, side_data, &o->as.select_shape_case.candidate_count);
+            return;
+        case WIRE_LOAD_PROPERTY_STATIC_SHAPE_CASE:
+            o->opcode = MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE;
+            o->as.load_property_static_shape_case.dst = rd_i32(r);
+            o->as.load_property_static_shape_case.object = rd_i32(r);
+            o->as.load_property_static_shape_case.shape_case = rd_i32(r);
+            o->as.load_property_static_shape_case.data_offset =
+                rd_side_shape_case_load(r, side_data);
             return;
         case WIRE_DELETE_PROPERTY:
             o->opcode = MAL_OP_DELETE_PROPERTY;
@@ -1247,6 +1300,10 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(
             MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT,
             load_property_static_known_own_slot);
+        MAL_WRITES_DST(MAL_OP_SELECT_SHAPE_CASE, select_shape_case);
+        MAL_WRITES_DST(
+            MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE,
+            load_property_static_shape_case);
         MAL_WRITES_DST(MAL_OP_DELETE_PROPERTY, delete_property);
         MAL_WRITES_DST(MAL_OP_TO_PROPERTY_KEY, to_property_key);
         MAL_WRITES_DST(MAL_OP_LOAD_PRIVATE, load_private);
@@ -1466,6 +1523,15 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
                 instructions[i].as.load_property_static_known_own_slot.ic_index =
                     fn->property_ic_count++;
                 break;
+            case MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE: {
+                i32 offset = instructions[i].as.load_property_static_shape_case.data_offset;
+                if (offset < 0 || offset > (i32) side_data.count - 3) {
+                    r->ok = false;
+                    break;
+                }
+                side_data.data[offset + 1] = fn->property_ic_count++;
+                break;
+            }
             case MAL_OP_STORE_PROPERTY:
                 instructions[i].as.store_property.ic_index = fn->property_ic_count++;
                 break;
@@ -1746,6 +1812,141 @@ static bool mal_loaded_known_own_slot_valid(
     return true;
 }
 
+static bool mal_loaded_shape_case_transparent(const MalInstruction *instruction) {
+    switch (instruction->opcode) {
+        case MAL_OP_MOVE:
+        case MAL_OP_CREATE_NUMBER:
+        case MAL_OP_CREATE_F64:
+        case MAL_OP_CREATE_BOOLEAN:
+        case MAL_OP_CREATE_UNDEFINED:
+        case MAL_OP_CREATE_EMPTY:
+        case MAL_OP_CREATE_NULL:
+        case MAL_OP_GUARD_FUNCTION_INDEX:
+        case MAL_OP_LOAD_CAPTURED:
+        case MAL_OP_STORE_CAPTURED:
+        case MAL_OP_LOAD_GLOBAL:
+        case MAL_OP_STORE_GLOBAL:
+        case MAL_OP_LOAD_INTRINSIC:
+        case MAL_OP_LOAD_NEW_TARGET:
+        case MAL_OP_LOAD_THIS:
+        case MAL_OP_SET_THIS:
+        case MAL_OP_IS_EMPTY:
+        case MAL_OP_TYPEOF_COMPARE:
+        case MAL_OP_MATH_UNARY_NUMBER:
+        case MAL_OP_MATH_BINARY_NUMBER:
+        case MAL_OP_WITH_EXIT:
+        case MAL_OP_SELECT_SHAPE_CASE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool mal_loaded_shape_case_load_valid(
+    const MalVmDefinition *definition,
+    u32 string_count,
+    const MalFunction *fn,
+    i32 ip,
+    const MalInstruction *selector,
+    const MalInstruction *load
+) {
+    if (selector == nullptr || selector->opcode != MAL_OP_SELECT_SHAPE_CASE ||
+        load->opcode != MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE ||
+        load->as.load_property_static_shape_case.dst < 0 ||
+        load->as.load_property_static_shape_case.dst >= fn->register_count ||
+        load->as.load_property_static_shape_case.object < 0 ||
+        load->as.load_property_static_shape_case.object >= fn->register_count ||
+        load->as.load_property_static_shape_case.shape_case < 0 ||
+        load->as.load_property_static_shape_case.shape_case >= fn->register_count ||
+        load->as.load_property_static_shape_case.object !=
+            selector->as.select_shape_case.object) {
+        return false;
+    }
+    i32 offset = load->as.load_property_static_shape_case.data_offset;
+    if (offset < 0 || offset > fn->instruction_data_count - 3) return false;
+    const i32 *load_data = &fn->instruction_data[offset];
+    i32 string_index = load_data[0];
+    i32 slot_count = load_data[2];
+    i32 candidate_count = selector->as.select_shape_case.candidate_count;
+    if (string_index < 0 || string_index >= (i32) string_count ||
+        slot_count != candidate_count || slot_count < 1 || slot_count > 4 ||
+        offset > fn->instruction_data_count - 3 - slot_count) {
+        return false;
+    }
+    i32 selector_offset = selector->as.select_shape_case.data_offset;
+    if (selector_offset < 0 || candidate_count < 1 || candidate_count > 4 ||
+        selector_offset > fn->instruction_data_count - candidate_count * 2) {
+        return false;
+    }
+    const i32 *candidates = &fn->instruction_data[selector_offset];
+    for (i32 index = 0; index < candidate_count; index++) {
+        i32 function_index = candidates[index * 2];
+        i32 shape_cache_index = candidates[index * 2 + 1];
+        i32 slot = load_data[3 + index];
+        const MalPrecompiledLiteralShape *shape = mal_loaded_literal_shape(
+            definition, function_index, shape_cache_index);
+        if (shape == nullptr || slot < 0 || slot >= shape->key_count ||
+            shape->key_string_indices[slot] != string_index) {
+            return false;
+        }
+    }
+    const MalInstruction *latest = mal_loaded_latest_definition(
+        fn, load->as.load_property_static_shape_case.shape_case, ip);
+    return latest == selector;
+}
+
+static bool mal_loaded_shape_case_selector_valid(
+    const MalVmDefinition *definition,
+    u32 string_count,
+    const MalFunction *fn,
+    i32 selector_ip
+) {
+    const MalInstruction *selector = &fn->instructions[selector_ip];
+    i32 dst = selector->as.select_shape_case.dst;
+    i32 object = selector->as.select_shape_case.object;
+    i32 count = selector->as.select_shape_case.candidate_count;
+    i32 offset = selector->as.select_shape_case.data_offset;
+    if (dst < 0 || dst >= fn->register_count || object < 0 ||
+        object >= fn->register_count || count < 1 || count > 4 || offset < 0 ||
+        offset > fn->instruction_data_count - count * 2) {
+        return false;
+    }
+    const i32 *candidates = &fn->instruction_data[offset];
+    for (i32 index = 0; index < count; index++) {
+        i32 function_index = candidates[index * 2];
+        i32 shape_cache_index = candidates[index * 2 + 1];
+        if (mal_loaded_literal_shape(definition, function_index, shape_cache_index) == nullptr) {
+            return false;
+        }
+        for (i32 previous = 0; previous < index; previous++) {
+            if (candidates[previous * 2] == function_index &&
+                candidates[previous * 2 + 1] == shape_cache_index) {
+                return false;
+            }
+        }
+    }
+    i32 uses = 0;
+    i32 last_ip = selector_ip;
+    bool crossed_barrier = false;
+    for (i32 ip = selector_ip + 1; ip < fn->instruction_count; ip++) {
+        const MalInstruction *instruction = &fn->instructions[ip];
+        if (mal_loaded_instruction_writes_register(instruction, dst)) break;
+        if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE &&
+            instruction->as.load_property_static_shape_case.shape_case == dst) {
+            if (crossed_barrier ||
+                !mal_loaded_shape_case_load_valid(
+                    definition, string_count, fn, ip, selector, instruction)) {
+                return false;
+            }
+            uses++;
+            last_ip = ip;
+            continue;
+        }
+        if (!mal_loaded_shape_case_transparent(instruction)) crossed_barrier = true;
+    }
+    return uses >= 3 && uses <= 16 && last_ip - selector_ip <= 64;
+}
+
 MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
     const u8 *buf,
     usize len,
@@ -1913,6 +2114,21 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 !mal_loaded_known_own_slot_valid(
                     def, string_count, fn, instruction)) {
                 r.ok = false;
+            }
+            if (instruction->opcode == MAL_OP_SELECT_SHAPE_CASE &&
+                !mal_loaded_shape_case_selector_valid(
+                    def, string_count, fn, ip)) {
+                r.ok = false;
+            }
+            if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE) {
+                const MalInstruction *selector = mal_loaded_latest_definition(
+                    fn,
+                    instruction->as.load_property_static_shape_case.shape_case,
+                    ip);
+                if (!mal_loaded_shape_case_load_valid(
+                        def, string_count, fn, ip, selector, instruction)) {
+                    r.ok = false;
+                }
             }
         }
     }

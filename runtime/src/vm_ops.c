@@ -4724,6 +4724,20 @@ void mal_op_to_property_key(MalCallable *callable, const MalInstruction *instruc
     );
 }
 
+void mal_op_load_property_static_shape_case_fallback(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.load_property_static_shape_case.data_offset);
+    MalValue key = mal_value_from_string(callable->vm->string_constant_atoms[data[0]]);
+    callable->registers[instruction->as.load_property_static_shape_case.dst] =
+        mal_vm_array_fast_load(
+            callable->vm,
+            callable->registers[instruction->as.load_property_static_shape_case.object],
+            key,
+            mal_vm_property_ic_at(callable, data[1]));
+}
+
 // Spec Set with an already-converted key — no further ToPropertyKey, so the
 // store inline cache converts the key once and reuses it on the slow path.
 static void mal_vm_op_store_property_keyed(

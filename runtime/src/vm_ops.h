@@ -610,6 +610,8 @@ void mal_op_load_property(MalCallable *callable, const MalInstruction *instructi
 void mal_op_load_property_static(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_load_property_static_known_own_slot_fallback(
     MalCallable *callable, const MalInstruction *instruction);
+void mal_op_load_property_static_shape_case_fallback(
+    MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_store_property(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_store_property_static(MalCallable *callable, const MalInstruction *instruction);
@@ -880,6 +882,46 @@ MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm);
  */
 static inline MalObject *mal_vm_as_object(MalValue v) {
     return mal_value_is_heap_type(v, MAL_HEAP_OBJECT) ? (MalObject *) mal_value_to_heap(v) : nullptr;
+}
+
+/** Return the exact precompiled literal-shape case for a plain object, or -1. */
+static inline i32 mal_vm_select_shape_case(
+    MalVm *vm, MalValue receiver, i32 candidate_count, const i32 *candidates
+) {
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr) return -1;
+    for (i32 index = 0; index < candidate_count; index++) {
+        i32 function_index = candidates[index * 2];
+        i32 shape_cache_index = candidates[index * 2 + 1];
+        if (function_index < 0 ||
+            function_index >= vm->definition->function_count ||
+            shape_cache_index < 0 ||
+            shape_cache_index >=
+                vm->definition->functions[function_index].literal_shape_count) {
+            continue;
+        }
+        MalShape **row = vm->literal_shape_cache[function_index];
+        MalShape *shape = row == nullptr ? nullptr : row[shape_cache_index];
+        if (shape != nullptr && object->shape == shape) return index;
+    }
+    return -1;
+}
+
+/** Read the slot licensed by a preceding, still-live exact shape case. */
+static inline bool mal_vm_try_load_shape_case(
+    MalValue receiver,
+    i32 shape_case,
+    i32 slot_count,
+    const i32 *slots,
+    MalValue *out
+) {
+    if (shape_case < 0 || shape_case >= slot_count) return false;
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr) return false;
+    i32 slot = slots[shape_case];
+    if (slot < 0 || (u32) slot >= object->shape->inline_count) return false;
+    *out = object->slots[slot];
+    return true;
 }
 
 static inline bool mal_vm_property_try_load_static(

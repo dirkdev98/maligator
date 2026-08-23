@@ -143,7 +143,16 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
 		case "LOAD_PROPERTY_STATIC":
 		case "STORE_PROPERTY_STATIC":
+		case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
+		case "SELECT_SHAPE_CASE":
+			return {
+				...instruction,
+				candidates: instruction.candidates.map((candidate) => ({
+					...candidate,
+					shapeFunctionIndex: candidate.shapeFunctionIndex + base.function,
+				})),
+			};
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			return {

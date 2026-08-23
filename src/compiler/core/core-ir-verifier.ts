@@ -11,6 +11,7 @@ import {
 	coreMemoryLocationFamily,
 	coreMemoryLocationIsExact,
 } from "./core-ir-memory.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	CORE_OWN_DATA_CELL_FACT,
 	coreOwnCellResolver,
@@ -28,7 +29,14 @@ import {
 import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import {
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
+	CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE,
+	CORE_SHAPE_CASE_MAX_LOADS,
+	CORE_SHAPE_CASE_MAX_SPAN,
+	CORE_SHAPE_CASE_MIN_LOADS,
+	CORE_SHAPE_CASE_SLOTS_ATTRIBUTE,
 	coreKnownOwnSlotFromAttribute,
+	coreShapeCaseCandidatesFromAttribute,
+	coreShapeCaseSlotsFromAttribute,
 	coreShapeOriginKeys,
 } from "./core-ir-shape-provenance.ts";
 import {
@@ -1292,6 +1300,192 @@ function verifyKnownOwnSlotClaims(
 							`instruction @${instruction.id} carries a known own slot for a different static key`,
 						);
 					}
+				}
+			}
+		}
+	}
+
+	for (const fn of program.functions) {
+		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
+		const blocksById = new Map(fn.blocks.map((block) => [block.id, block] as const));
+		const selectors = new Map<
+			CoreValueId,
+			{
+				readonly instruction: CoreInstruction;
+				readonly block: CoreBlockId;
+				readonly index: number;
+				readonly candidates: NonNullable<
+					ReturnType<typeof coreShapeCaseCandidatesFromAttribute>
+				>;
+			}
+		>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				const hasCandidates =
+					CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE in instruction.attributes;
+				const hasSlots = CORE_SHAPE_CASE_SLOTS_ATTRIBUTE in instruction.attributes;
+				if (instruction.opcode !== "selectShapeCase") {
+					if (hasCandidates) {
+						fail(
+							`instruction @${instruction.id} carries shape-case candidates on ${instruction.opcode}`,
+						);
+					}
+					if (instruction.opcode !== "loadPropertyStaticShapeCase" && hasSlots) {
+						fail(
+							`instruction @${instruction.id} carries shape-case slots on ${instruction.opcode}`,
+						);
+					}
+					if (
+						instruction.opcode === "loadPropertyStaticShapeCase" &&
+						(!hasSlots || claimed.has(instruction.id))
+					) {
+						fail(`instruction @${instruction.id} carries an invalid shape-case load`);
+					}
+					continue;
+				}
+				if (!hasCandidates || hasSlots || claimed.has(instruction.id)) {
+					fail(`instruction @${instruction.id} carries an invalid shape-case selector`);
+				}
+				const candidates = coreShapeCaseCandidatesFromAttribute(
+					instruction.attributes[CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE],
+				);
+				if (candidates === undefined || instruction.outputs.length !== 1) {
+					fail(`instruction @${instruction.id} carries an invalid shape-case selector`);
+				}
+				for (const candidate of candidates) {
+					const originIdentity = `${candidate.shapeFunctionIndex}\0${candidate.shapeInstruction}`;
+					const originFunction = program.functions[candidate.shapeFunctionIndex];
+					const origin = instructionsByFunction[candidate.shapeFunctionIndex]?.get(
+						candidate.shapeInstruction,
+					);
+					if (
+						originFunction?.functionIndex !== candidate.shapeFunctionIndex ||
+						origin === undefined
+					) {
+						fail(
+							`instruction @${instruction.id} carries a shape case with an invalid shaped-object origin`,
+						);
+					}
+					let keys = keysByOrigin.get(originIdentity);
+					if (keys === undefined) {
+						keys = coreShapeOriginKeys(
+							program,
+							originFunction,
+							origin,
+							registry,
+							cellForString,
+						);
+						if (keys !== undefined) keysByOrigin.set(originIdentity, keys);
+					}
+					if (keys === undefined) {
+						fail(
+							`instruction @${instruction.id} carries a shape case with an invalid shaped-object origin`,
+						);
+					}
+				}
+				selectors.set(instruction.outputs[0]!, {
+					instruction,
+					block: block.id,
+					index,
+					candidates,
+				});
+			}
+		}
+		const uses = new Map<CoreValueId, Array<{ block: number; index: number }>>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				if (
+					instruction.opcode === "loadPropertyStaticShapeCase" &&
+					selectors.get(instruction.inputs[1]!) === undefined
+				) {
+					fail(`instruction @${instruction.id} has no shape-case selector`);
+				}
+				for (const [position, input] of instruction.inputs.entries()) {
+					const selector = selectors.get(input);
+					if (selector === undefined) continue;
+					if (
+						instruction.opcode !== "loadPropertyStaticShapeCase" ||
+						position !== 1 ||
+						instruction.inputs[0] !== selector.instruction.inputs[0] ||
+						block.id !== selector.block ||
+						index <= selector.index
+					) {
+						fail(`shape-case value from @${selector.instruction.id} has an invalid use`);
+					}
+					const slots = coreShapeCaseSlotsFromAttribute(
+						instruction.attributes[CORE_SHAPE_CASE_SLOTS_ATTRIBUTE],
+					);
+					if (slots?.length !== selector.candidates.length) {
+						fail(`instruction @${instruction.id} carries invalid shape-case slots`);
+					}
+					const stringIndex = instruction.attributes.stringIndex;
+					for (const [candidateIndex, candidate] of selector.candidates.entries()) {
+						const keys = keysByOrigin.get(
+							`${candidate.shapeFunctionIndex}\0${candidate.shapeInstruction}`,
+						);
+						const slot = slots[candidateIndex]!;
+						if (keys === undefined || slot >= keys.length || keys[slot] !== stringIndex) {
+							fail(
+								`instruction @${instruction.id} carries a shape-case slot for a different static key`,
+							);
+						}
+					}
+					const existing = uses.get(input) ?? [];
+					existing.push({ block: block.id, index });
+					uses.set(input, existing);
+				}
+			}
+			const structuralValues: Array<CoreValueId> = [];
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				structuralValues.push(...edge.arguments);
+			}
+			if (block.terminator.kind === "branch" || block.terminator.kind === "guard") {
+				structuralValues.push(block.terminator.condition);
+			} else if (block.terminator.kind === "switch") {
+				structuralValues.push(block.terminator.discriminant);
+			} else if (
+				block.terminator.kind === "return" ||
+				block.terminator.kind === "throw"
+			) {
+				structuralValues.push(block.terminator.value);
+			}
+			structuralValues.push(...(block.handler?.arguments ?? []));
+			for (const value of structuralValues) {
+				if (selectors.has(value)) fail("shape-case value has a structural use");
+			}
+		}
+		for (const [value, selector] of selectors) {
+			const selectorUses = uses.get(value) ?? [];
+			if (
+				selectorUses.length < CORE_SHAPE_CASE_MIN_LOADS ||
+				selectorUses.length > CORE_SHAPE_CASE_MAX_LOADS
+			) {
+				fail(`shape-case selector @${selector.instruction.id} has invalid use count`);
+			}
+			const last = selectorUses.at(-1)!;
+			if (last.index - selector.index > CORE_SHAPE_CASE_MAX_SPAN) {
+				fail(`shape-case selector @${selector.instruction.id} has an oversized span`);
+			}
+			const block = blocksById.get(selector.block);
+			if (block === undefined) {
+				fail(`shape-case selector @${selector.instruction.id} has an invalid block`);
+			}
+			const useIndices = new Set(selectorUses.map(({ index }) => index));
+			for (let index = selector.index + 1; index <= last.index; index++) {
+				if (useIndices.has(index)) continue;
+				const instruction = block.instructions[index]!;
+				const effects = coreInstructionEffects(instruction, registry);
+				if (
+					(instruction.opcode !== "loadThis" || fn.metadata.isDerivedConstructor) &&
+					(effects.callsUserCode ||
+						effects.maySuspend ||
+						effects.mayGc ||
+						effects.mayThrow ||
+						effects.writes.includes("object-property"))
+				) {
+					fail(
+						`shape-case selector @${selector.instruction.id} crosses an invalid effect`,
+					);
 				}
 			}
 		}

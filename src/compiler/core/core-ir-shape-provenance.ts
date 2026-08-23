@@ -14,7 +14,7 @@
  * origin simply takes their fallback. The graph contains SSA moves, ordinary
  * block arguments, compiler-owned global/captured cells, and finite ordinary-call
  * argument/return edges. Cells remain open, but in-image stores still contribute
- * guarded candidates. It excludes aggregate heap cells and call forms whose
+ * guarded candidates. It excludes unmodelled aggregate heap cells and call forms whose
  * positional or result semantics are not exact in Core, so the solve is one
  * monotone worklist over O(values + cells + edges).
  */
@@ -23,9 +23,9 @@ import { analyzeCoreCalleeTargets } from "./core-ir-call-targets.ts";
 import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { coreOwnCellResolver, coreProvenance } from "./core-ir-provenance.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import { coreInstructionId, coreValueId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
 	CoreBlock,
@@ -43,6 +43,8 @@ export const CORE_SHAPE_ORIGIN_CAP = 4;
 
 /** Target-visible advisory slot candidate owned by the Core shape selector. */
 export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
+export const CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE = "shapeCaseCandidates";
+export const CORE_SHAPE_CASE_SLOTS_ATTRIBUTE = "shapeCaseSlots";
 
 export interface CoreKnownOwnSlotCandidate {
 	readonly shapeFunctionIndex: number;
@@ -52,6 +54,11 @@ export interface CoreKnownOwnSlotCandidate {
 
 export interface CoreKnownOwnSlot {
 	readonly candidates: ReadonlyArray<CoreKnownOwnSlotCandidate>;
+}
+
+export interface CoreShapeCaseCandidate {
+	readonly shapeFunctionIndex: number;
+	readonly shapeInstruction: CoreInstructionId;
 }
 
 function isNonnegativeSafeInteger(value: unknown): value is number {
@@ -106,6 +113,55 @@ export function coreKnownOwnSlotFromAttribute(
 	return Object.freeze({
 		candidates: Object.freeze(candidates),
 	});
+}
+
+/** Parse a shared shape selector's bounded candidate list. */
+export function coreShapeCaseCandidatesFromAttribute(
+	value: unknown,
+): ReadonlyArray<CoreShapeCaseCandidate> | undefined {
+	if (!Array.isArray(value) || value.length < 1 || value.length > CORE_SHAPE_ORIGIN_CAP) {
+		return undefined;
+	}
+	const candidates: Array<CoreShapeCaseCandidate> = [];
+	const identities = new Set<string>();
+	for (const entry of value as ReadonlyArray<unknown>) {
+		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+			return undefined;
+		}
+		const candidate = entry as Record<string, unknown>;
+		if (
+			Object.keys(candidate).length !== 2 ||
+			!isNonnegativeSafeInteger(candidate.shapeFunctionIndex) ||
+			!isNonnegativeSafeInteger(candidate.shapeInstruction)
+		) {
+			return undefined;
+		}
+		const identity = `${candidate.shapeFunctionIndex}\0${candidate.shapeInstruction}`;
+		if (identities.has(identity)) return undefined;
+		identities.add(identity);
+		candidates.push(
+			Object.freeze({
+				shapeFunctionIndex: candidate.shapeFunctionIndex,
+				shapeInstruction: coreInstructionId(candidate.shapeInstruction),
+			}),
+		);
+	}
+	return Object.freeze(candidates);
+}
+
+/** Parse one clustered load's slot table, indexed by the shared shape case. */
+export function coreShapeCaseSlotsFromAttribute(
+	value: unknown,
+): ReadonlyArray<number> | undefined {
+	if (!Array.isArray(value) || value.length < 1 || value.length > CORE_SHAPE_ORIGIN_CAP) {
+		return undefined;
+	}
+	const slots: Array<number> = [];
+	for (const slot of value as ReadonlyArray<unknown>) {
+		if (!isNonnegativeSafeInteger(slot) || slot >= 64) return undefined;
+		slots.push(slot);
+	}
+	return Object.freeze(slots);
 }
 
 function knownOwnSlotsEqual(
@@ -1005,31 +1061,294 @@ export interface CoreKnownOwnSlotSelection {
 	readonly changed: boolean;
 }
 
+export const CORE_SHAPE_CASE_MIN_LOADS = 3;
+export const CORE_SHAPE_CASE_MAX_LOADS = 16;
+export const CORE_SHAPE_CASE_MAX_SPAN = 64;
+
+interface CoreShapeCasePlan {
+	readonly positions: ReadonlyArray<number>;
+	readonly receiver: CoreValueId;
+	readonly candidates: ReadonlyArray<CoreShapeCaseCandidate>;
+	readonly slotsByPosition: ReadonlyMap<number, ReadonlyArray<number>>;
+}
+
+function knownOwnSlotCase(instruction: CoreInstruction):
+	| {
+			readonly receiver: CoreValueId;
+			readonly candidates: ReadonlyArray<CoreShapeCaseCandidate>;
+			readonly slots: ReadonlyArray<number>;
+	  }
+	| undefined {
+	if (
+		instruction.opcode !== "loadPropertyStatic" ||
+		instruction.inputs.length !== 1 ||
+		instruction.outputs.length !== 1
+	) {
+		return undefined;
+	}
+	const claim = coreKnownOwnSlotFromAttribute(
+		instruction.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+	);
+	if (claim === undefined) return undefined;
+	return {
+		receiver: instruction.inputs[0]!,
+		candidates: claim.candidates.map(({ shapeFunctionIndex, shapeInstruction }) => ({
+			shapeFunctionIndex,
+			shapeInstruction,
+		})),
+		slots: claim.candidates.map(({ slot }) => slot),
+	};
+}
+
+function sameShapeCases(
+	left: ReadonlyArray<CoreShapeCaseCandidate>,
+	right: ReadonlyArray<CoreShapeCaseCandidate>,
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every(
+			(candidate, index) =>
+				candidate.shapeFunctionIndex === right[index]?.shapeFunctionIndex &&
+				candidate.shapeInstruction === right[index]?.shapeInstruction,
+		)
+	);
+}
+
+function immutableThisValues(fn: CoreFunction): ReadonlySet<CoreValueId> {
+	if (
+		fn.metadata.isDerivedConstructor ||
+		fn.blocks.some((block) =>
+			block.instructions.some((instruction) => instruction.opcode === "setThis"),
+		)
+	) {
+		return new Set();
+	}
+	const loadThisInstructions = new Set(
+		fn.blocks.flatMap((block) =>
+			block.instructions.flatMap((instruction) =>
+				instruction.opcode === "loadThis" ? [instruction.id] : [],
+			),
+		),
+	);
+	return new Set(
+		fn.values.flatMap((value) =>
+			value.definition.kind === "instruction" &&
+			loadThisInstructions.has(value.definition.instruction)
+				? [value.id]
+				: [],
+		),
+	);
+}
+
+function sameShapeCaseReceiver(
+	immutableThis: ReadonlySet<CoreValueId>,
+	left: CoreValueId,
+	right: CoreValueId,
+): boolean {
+	return left === right || (immutableThis.has(left) && immutableThis.has(right));
+}
+
+function findShapeCasePlans(
+	fn: CoreFunction,
+	block: CoreBlock,
+	immutableThis: ReadonlySet<CoreValueId>,
+): ReadonlyArray<CoreShapeCasePlan> {
+	const plans: Array<CoreShapeCasePlan> = [];
+	for (let start = 0; start < block.instructions.length; start++) {
+		const first = knownOwnSlotCase(block.instructions[start]!);
+		if (first === undefined) continue;
+		const positions = [start];
+		const slotsByPosition = new Map<number, ReadonlyArray<number>>([
+			[start, first.slots],
+		]);
+		for (
+			let index = start + 1;
+			index < block.instructions.length &&
+			index - start < CORE_SHAPE_CASE_MAX_SPAN &&
+			positions.length < CORE_SHAPE_CASE_MAX_LOADS;
+			index++
+		) {
+			const instruction = block.instructions[index]!;
+			const candidate = knownOwnSlotCase(instruction);
+			if (
+				candidate !== undefined &&
+				sameShapeCaseReceiver(immutableThis, candidate.receiver, first.receiver) &&
+				sameShapeCases(candidate.candidates, first.candidates)
+			) {
+				positions.push(index);
+				slotsByPosition.set(index, candidate.slots);
+				continue;
+			}
+			const effects = coreInstructionEffects(instruction);
+			if (
+				(instruction.opcode !== "loadThis" || fn.metadata.isDerivedConstructor) &&
+				(effects.callsUserCode ||
+					effects.maySuspend ||
+					effects.mayGc ||
+					effects.mayThrow ||
+					effects.writes.includes("object-property"))
+			) {
+				break;
+			}
+		}
+		if (positions.length < CORE_SHAPE_CASE_MIN_LOADS) continue;
+		plans.push({
+			positions: Object.freeze(positions),
+			receiver: first.receiver,
+			candidates: Object.freeze(first.candidates),
+			slotsByPosition,
+		});
+		start = positions.at(-1)!;
+	}
+	return plans;
+}
+
+function consolidateKnownOwnSlotLoads(fn: CoreFunction): CoreFunction {
+	let nextInstruction =
+		Math.max(
+			-1,
+			...fn.blocks.flatMap((block) => [
+				...block.instructions.map((instruction) => instruction.id),
+				block.terminator.id,
+			]),
+		) + 1;
+	let nextValue = Math.max(-1, ...fn.values.map(({ id }) => id)) + 1;
+	const values = [...fn.values];
+	const immutableThis = immutableThisValues(fn);
+	let changed = false;
+	const blocks = fn.blocks.map((block): CoreBlock => {
+		const plans = findShapeCasePlans(fn, block, immutableThis);
+		if (plans.length === 0) return block;
+		changed = true;
+		const firstPlanByPosition = new Map(
+			plans.map((plan) => [plan.positions[0]!, plan] as const),
+		);
+		const planByPosition = new Map<number, CoreShapeCasePlan>();
+		for (const plan of plans) {
+			for (const position of plan.positions) planByPosition.set(position, plan);
+		}
+		const caseValueByPlan = new Map<CoreShapeCasePlan, CoreValueId>();
+		const instructions: Array<CoreInstruction> = [];
+		for (const [position, instruction] of block.instructions.entries()) {
+			const firstPlan = firstPlanByPosition.get(position);
+			if (firstPlan !== undefined) {
+				const shapeInstruction = coreInstructionId(nextInstruction++);
+				const shapeCase = coreValueId(nextValue++);
+				caseValueByPlan.set(firstPlan, shapeCase);
+				values.push({
+					id: shapeCase,
+					representation: "i32",
+					definition: {
+						kind: "instruction",
+						instruction: shapeInstruction,
+						index: 0,
+					},
+				});
+				instructions.push({
+					id: shapeInstruction,
+					opcode: "selectShapeCase",
+					inputs: [firstPlan.receiver],
+					outputs: [shapeCase],
+					attributes: {
+						[CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE]: firstPlan.candidates.map(
+							({ shapeFunctionIndex, shapeInstruction }) => ({
+								shapeFunctionIndex,
+								shapeInstruction,
+							}),
+						),
+					},
+				});
+			}
+			const plan = planByPosition.get(position);
+			if (plan === undefined) {
+				instructions.push(instruction);
+				continue;
+			}
+			const shapeCase = caseValueByPlan.get(plan);
+			const slots = plan.slotsByPosition.get(position);
+			if (shapeCase === undefined || slots === undefined) {
+				throw new Error("Malformed known-own-slot shape-case plan");
+			}
+			const attributes: Record<string, CoreAttributeValue> = {
+				...instruction.attributes,
+				[CORE_SHAPE_CASE_SLOTS_ATTRIBUTE]: [...slots],
+			};
+			delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+			instructions.push({
+				...instruction,
+				opcode: "loadPropertyStaticShapeCase",
+				inputs: [plan.receiver, shapeCase],
+				attributes,
+			});
+		}
+		return { ...block, instructions };
+	});
+	return changed ? { ...fn, blocks, values, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+}
+
 /** Retract target-facing hints before transforms or region selection mutate Core. */
 export function retractCoreKnownOwnSlots(
 	program: CoreProgram,
 ): CoreKnownOwnSlotSelection {
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
+		const removedShapeCases = new Set<CoreInstructionId>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.opcode === "selectShapeCase") {
+					removedShapeCases.add(instruction.id);
+				}
+			}
+		}
 		let functionChanged = false;
 		const blocks = fn.blocks.map((block): CoreBlock => {
 			let blockChanged = false;
-			const instructions = block.instructions.map((instruction): CoreInstruction => {
-				if (!(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)) {
-					return instruction;
-				}
-				const attributes: Record<string, CoreAttributeValue> = {
-					...instruction.attributes,
-				};
-				delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
-				changed = true;
-				functionChanged = true;
-				blockChanged = true;
-				return { ...instruction, attributes };
-			});
+			const instructions = block.instructions.flatMap(
+				(instruction): ReadonlyArray<CoreInstruction> => {
+					if (instruction.opcode === "selectShapeCase") {
+						changed = true;
+						functionChanged = true;
+						blockChanged = true;
+						return [];
+					}
+					const clustered = instruction.opcode === "loadPropertyStaticShapeCase";
+					if (!clustered && !(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)) {
+						return [instruction];
+					}
+					const attributes: Record<string, CoreAttributeValue> = {
+						...instruction.attributes,
+					};
+					delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+					delete attributes[CORE_SHAPE_CASE_SLOTS_ATTRIBUTE];
+					changed = true;
+					functionChanged = true;
+					blockChanged = true;
+					return [
+						clustered
+							? {
+									...instruction,
+									opcode: "loadPropertyStatic",
+									inputs: instruction.inputs.slice(0, 1),
+									attributes,
+								}
+							: { ...instruction, attributes },
+					];
+				},
+			);
 			return blockChanged ? { ...block, instructions } : block;
 		});
-		return functionChanged ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+		return functionChanged
+			? {
+					...fn,
+					blocks,
+					values: fn.values.filter(
+						(value) =>
+							value.definition.kind !== "instruction" ||
+							!removedShapeCases.has(value.definition.instruction),
+					),
+					mutationEpoch: fn.mutationEpoch + 1,
+				}
+			: fn;
 	});
 	return { program: changed ? { ...program, functions } : program, changed };
 }
@@ -1132,8 +1451,13 @@ export function selectCoreKnownOwnSlots(
 		});
 		return functionChanged ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
 	});
+	const clusteredFunctions = functions.map((fn) => {
+		const clustered = consolidateKnownOwnSlotLoads(fn);
+		if (clustered !== fn) changed = true;
+		return clustered;
+	});
 	return {
-		program: changed ? { ...program, functions } : program,
+		program: changed ? { ...program, functions: clusteredFunctions } : program,
 		changed,
 	};
 }

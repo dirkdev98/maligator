@@ -419,11 +419,88 @@ function knownOwnSlotDefinition(): VmDefinition {
 	};
 }
 
+function shapeCaseDefinition(): VmDefinition {
+	const base = knownOwnSlotDefinition();
+	const fn = base.functions[0]!;
+	const instructions: Array<VmInstruction> = [
+		{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
+		{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
+		{
+			opcode: "CREATE_OBJECT_SHAPED",
+			dst: 2,
+			count: 3,
+			keyStringIndices: [0, 1, 2],
+			valueRegisters: [0, 1, 0],
+			shapeCacheIndex: 0,
+		},
+		{
+			opcode: "SELECT_SHAPE_CASE",
+			dst: 3,
+			object: 2,
+			candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0 }],
+		},
+		{
+			opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+			dst: 4,
+			object: 2,
+			shapeCase: 3,
+			stringIndex: 0,
+			icIndex: 0,
+			slots: [0],
+		},
+		{
+			opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+			dst: 5,
+			object: 2,
+			shapeCase: 3,
+			stringIndex: 1,
+			icIndex: 1,
+			slots: [1],
+		},
+		{
+			opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+			dst: 6,
+			object: 2,
+			shapeCase: 3,
+			stringIndex: 2,
+			icIndex: 2,
+			slots: [2],
+		},
+		{ opcode: "RETURN", value: 6 },
+	];
+	return {
+		...base,
+		stringConstants: [[120], [121], [122]],
+		precompiledLiteralShapes: [
+			{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1, 2] },
+		],
+		functions: [
+			{
+				...fn,
+				registerCount: 7,
+				literalShapeCount: 1,
+				instructions,
+				positions: instructions.map(() => 0),
+				registerRepresentations: [
+					"boxed",
+					"boxed",
+					"boxed",
+					"number",
+					"boxed",
+					"boxed",
+					"boxed",
+				],
+				regions: undefined,
+			},
+		],
+	};
+}
+
 describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-14)).toEqual([
+		expect(WIRE_OPCODES.slice(-16)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -438,6 +515,8 @@ describe("serialize-vm", () => {
 			"CALL_BUILTIN",
 			"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+			"SELECT_SHAPE_CASE",
+			"LOAD_PROPERTY_STATIC_SHAPE_CASE",
 		]);
 	});
 
@@ -554,6 +633,59 @@ describe("serialize-vm", () => {
 		tampered[instructionOffset + encodedInstruction.length - 1] = 2;
 		expect(() => deserializeVmDefinition(tampered)).toThrow(
 			/invalid known-own-slot access/,
+		);
+	});
+
+	it("round-trips and validates shared shape-case loads", () => {
+		const valid = shapeCaseDefinition();
+		const restored = deserializeVmDefinition(
+			serializeVmDefinition(valid, { debugInfo: false }),
+		);
+		expect(restored.functions[0]!.instructions).toEqual(valid.functions[0]!.instructions);
+
+		const wrongSlot = {
+			...valid,
+			functions: valid.functions.map((fn) => ({
+				...fn,
+				instructions: fn.instructions.map((instruction) =>
+					instruction.opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE" &&
+					instruction.stringIndex === 1
+						? { ...instruction, slots: [0] }
+						: instruction,
+				),
+			})),
+		};
+		expect(() => serializeVmDefinition(wrongSlot)).toThrow(/invalid shape-case load/);
+
+		const orphan = {
+			...valid,
+			functions: valid.functions.map((fn) => ({
+				...fn,
+				instructions: fn.instructions.map((instruction) =>
+					instruction.opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE"
+						? { ...instruction, shapeCase: 0 }
+						: instruction,
+				),
+			})),
+		};
+		expect(() => serializeVmDefinition(orphan)).toThrow(/shape-case selector use count/);
+
+		const barrierInstruction: VmInstruction = { opcode: "CREATE_OBJECT", dst: 7 };
+		const barrier = {
+			...valid,
+			functions: valid.functions.map((fn) => ({
+				...fn,
+				registerCount: 8,
+				registerRepresentations: [...fn.registerRepresentations, "boxed" as const],
+				instructions: [
+					...fn.instructions.slice(0, 4),
+					barrierInstruction,
+					...fn.instructions.slice(4),
+				],
+			})),
+		};
+		expect(() => serializeVmDefinition(barrier)).toThrow(
+			/shape-case selector crosses an invalid instruction/,
 		);
 	});
 

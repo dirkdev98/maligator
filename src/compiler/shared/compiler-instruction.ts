@@ -30,6 +30,12 @@ export interface CompilerKnownOwnSlot {
 	readonly candidates: ReadonlyArray<CompilerKnownOwnSlotCandidate>;
 }
 
+/** One layout admitted by a shared exact-shape case selector. */
+export interface CompilerShapeCaseCandidate {
+	readonly shapeFunctionIndex: number;
+	readonly shapeInstruction: number;
+}
+
 export type CompilerInstruction =
 	| {
 			/**
@@ -248,6 +254,14 @@ export type CompilerInstruction =
 			functionIndex: number;
 	  }
 	| {
+			// Pure exact-shape selector shared by a bounded cluster of static loads.
+			// Returns the matching candidate index or -1 for the generic path.
+			type: "selectShapeCase";
+			// [destination (i32), object]
+			registers: [number, number];
+			shapeCaseCandidates: ReadonlyArray<CompilerShapeCaseCandidate>;
+	  }
+	| {
 			// Per-iteration loop environment (CreatePerIterationEnvironment). envPush
 			// enters a loop scope (fresh env, parent = current); envCopy replaces the
 			// current scope env with a sibling that copies the bindings forward; envPop
@@ -424,6 +438,15 @@ export type CompilerInstruction =
 			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
 			 * primitive-String consumer, so native code may try the String brand first. */
 			primitiveStringLength?: true;
+	  }
+	| {
+			// A preceding selectShapeCase licenses slots[case] on the exact live
+			// receiver shape. Case -1 executes the ordinary static-property IC.
+			type: "loadPropertyStaticShapeCase";
+			// [destination, object, shape case]
+			registers: [number, number, number];
+			stringIndex: number;
+			shapeCaseSlots: ReadonlyArray<number>;
 	  }
 	| {
 			type: "loadSuperProperty";

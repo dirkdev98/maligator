@@ -7,7 +7,7 @@ import {
 	compressPositions,
 	computeArgumentRetentionLimit,
 	countPropertyIcSites,
-	validateVmKnownOwnSlots,
+	validateVmShapeCases,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
@@ -252,6 +252,21 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 
 	fn.instructions.forEach((instruction, index) => {
 		switch (instruction.opcode) {
+			case "SELECT_SHAPE_CASE":
+				offsets[index] = data.length;
+				for (const candidate of instruction.candidates) {
+					data.push(candidate.shapeFunctionIndex, candidate.shapeCacheIndex);
+				}
+				break;
+			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
+				offsets[index] = data.length;
+				data.push(
+					instruction.stringIndex,
+					instruction.icIndex,
+					instruction.slots.length,
+					...instruction.slots,
+				);
+				break;
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				offsets[index] = data.length;
@@ -460,7 +475,7 @@ function emitVmDefinitionSource(
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
 ): EmittedVmSource {
-	validateVmKnownOwnSlots(definition);
+	validateVmShapeCases(definition);
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
@@ -1344,6 +1359,8 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_LOAD_CAPTURED, .as.load_captured = { .dst = ${instruction.dst}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "GUARD_FUNCTION_INDEX":
 			return `{ .opcode = MAL_OP_GUARD_FUNCTION_INDEX, .as.guard_function_index = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .function_index = ${instruction.functionIndex} } }`;
+		case "SELECT_SHAPE_CASE":
+			return `{ .opcode = MAL_OP_SELECT_SHAPE_CASE, .as.select_shape_case = { .dst = ${instruction.dst}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()}, .candidate_count = ${instruction.candidates.length} } }`;
 		case "LOAD_GLOBAL":
 			return `{ .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = ${instruction.dst}, .index = ${instruction.index} } }`;
 		case "LOAD_INTRINSIC":
@@ -1364,6 +1381,8 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC, .as.load_property_static = { .dst = ${instruction.dst}, .object = ${instruction.object}, .string_index = ${instruction.stringIndex}, .ic_index = ${instruction.icIndex} } }`;
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT, .as.load_property_static_known_own_slot = { .dst = ${instruction.dst}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()}, .ic_index = ${instruction.icIndex} } }`;
+		case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
+			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE, .as.load_property_static_shape_case = { .dst = ${instruction.dst}, .object = ${instruction.object}, .shape_case = ${instruction.shapeCase}, .data_offset = ${sideDataOffset()} } }`;
 		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			return `{ .opcode = MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT, .as.store_property_static_known_own_slot = { .object = ${instruction.object}, .value = ${instruction.value}, .data_offset = ${sideDataOffset()}, .ic_index = ${instruction.icIndex} } }`;
 		case "STORE_PROPERTY":

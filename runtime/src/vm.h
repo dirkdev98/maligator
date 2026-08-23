@@ -132,6 +132,8 @@ typedef enum MalOpcode {
     MAL_OP_CALL_BUILTIN,
     MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT,
     MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT,
+    MAL_OP_SELECT_SHAPE_CASE,
+    MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE,
 } MalOpcode;
 
 /** Exact builtin dispatch order generated from the canonical compiler registry. */
@@ -434,6 +436,16 @@ typedef struct MalInstruction {
             // Side data: [string_index, candidate_count, (function, shape, slot)...].
             i32 object, value, data_offset, ic_index;
         } store_property_static_known_own_slot;
+
+        struct {
+            // Side data: candidate_count pairs of (function, shape cache row).
+            i32 dst, object, data_offset, candidate_count;
+        } select_shape_case;
+
+        struct {
+            // Side data: [string_index, ic_index, slot_count, slots...].
+            i32 dst, object, shape_case, data_offset;
+        } load_property_static_shape_case;
 
         struct {
             i32 object, value, string_index, ic_index;

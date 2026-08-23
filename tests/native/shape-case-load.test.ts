@@ -1,0 +1,193 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+import type {
+	VmDefinition,
+	VmFunction,
+	VmInstruction,
+} from "../../src/compiler/target/lower-vm.ts";
+import { buildNativeDefinition, STRESS_ENV } from "../../src/test-harness.ts";
+
+const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shape-case-load-"));
+const mainFile = "runtime/shape_case_load_test_main.c";
+
+const instructions: Array<VmInstruction> = [
+	{ opcode: "CREATE_NUMBER", dst: 0, value: 1 },
+	{ opcode: "CREATE_NUMBER", dst: 1, value: 2 },
+	{ opcode: "CREATE_NUMBER", dst: 2, value: 3 },
+	{ opcode: "CREATE_NUMBER", dst: 3, value: 4 },
+	{ opcode: "CREATE_NUMBER", dst: 4, value: 5 },
+	{ opcode: "CREATE_NUMBER", dst: 5, value: 6 },
+	{
+		opcode: "CREATE_OBJECT_SHAPED",
+		dst: 6,
+		count: 3,
+		keyStringIndices: [0, 1, 2],
+		valueRegisters: [0, 1, 2],
+		shapeCacheIndex: 0,
+	},
+	{
+		opcode: "SELECT_SHAPE_CASE",
+		dst: 7,
+		object: 6,
+		candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0 }],
+	},
+	{
+		opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+		dst: 8,
+		object: 6,
+		shapeCase: 7,
+		stringIndex: 0,
+		icIndex: 0,
+		slots: [0],
+	},
+	{
+		opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+		dst: 9,
+		object: 6,
+		shapeCase: 7,
+		stringIndex: 1,
+		icIndex: 1,
+		slots: [1],
+	},
+	{
+		opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+		dst: 10,
+		object: 6,
+		shapeCase: 7,
+		stringIndex: 2,
+		icIndex: 2,
+		slots: [2],
+	},
+	{ opcode: "BINARY", dst: 11, left: 8, right: 9, operator: "+" },
+	{ opcode: "BINARY", dst: 11, left: 11, right: 10, operator: "+" },
+	{
+		opcode: "CREATE_OBJECT_SHAPED",
+		dst: 12,
+		count: 4,
+		keyStringIndices: [1, 0, 2, 3],
+		valueRegisters: [4, 3, 5, 0],
+		shapeCacheIndex: 1,
+	},
+	{
+		opcode: "SELECT_SHAPE_CASE",
+		dst: 13,
+		object: 12,
+		candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0 }],
+	},
+	{
+		opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+		dst: 14,
+		object: 12,
+		shapeCase: 13,
+		stringIndex: 0,
+		icIndex: 3,
+		slots: [0],
+	},
+	{
+		opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+		dst: 15,
+		object: 12,
+		shapeCase: 13,
+		stringIndex: 1,
+		icIndex: 4,
+		slots: [1],
+	},
+	{
+		opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+		dst: 16,
+		object: 12,
+		shapeCase: 13,
+		stringIndex: 2,
+		icIndex: 5,
+		slots: [2],
+	},
+	{ opcode: "BINARY", dst: 17, left: 14, right: 15, operator: "+" },
+	{ opcode: "BINARY", dst: 17, left: 17, right: 16, operator: "+" },
+	{ opcode: "BINARY", dst: 17, left: 11, right: 17, operator: "+" },
+	{ opcode: "STORE_GLOBAL", src: 17, index: 0 },
+	{ opcode: "RETURN", value: 17 },
+];
+
+const fn: VmFunction = {
+	nameStringIndex: -1,
+	isGenerator: false,
+	isAsync: false,
+	parameterCount: 0,
+	mappedArguments: false,
+	mappedArgumentSlots: [],
+	length: 0,
+	registerCount: 18,
+	capturedCount: 0,
+	strict: true,
+	needsArguments: false,
+	argumentSnapshotCount: 0,
+	argumentSnapshotPlan: [],
+	isDerivedConstructor: false,
+	isClassConstructor: false,
+	hasPrototype: false,
+	literalShapeCount: 2,
+	instructions,
+	handlers: [],
+	fileIndex: 0,
+	positions: [],
+	registerRepresentations: Array.from({ length: 18 }, (_, index) =>
+		index === 7 || index === 13 ? "number" : "boxed",
+	),
+};
+
+const definition: VmDefinition = {
+	entrypointPath: "/fixture/shape-case-load.mjs",
+	functionCount: 1,
+	functions: [fn],
+	stringConstants: [[120], [121], [122], [119]],
+	bigintConstants: [],
+	literalTemplateData: [],
+	precompiledLiteralShapes: [
+		{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1, 2] },
+	],
+	globalCount: 1,
+	files: [],
+	sourcePositions: [],
+	cjsModuleFunctionIndices: [],
+	hostInstalls: [],
+};
+
+function run(binary: string, environment: NodeJS.ProcessEnv = {}): void {
+	const result = spawnSync(binary, [], {
+		env: { ...process.env, ...environment },
+		encoding: "utf8",
+		timeout: 60_000,
+	});
+	if (result.error) throw result.error;
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+}
+
+describe("shared shape-case property loads", () => {
+	let compiled: string;
+	let interpreted: string;
+
+	beforeAll(() => {
+		compiled = buildNativeDefinition(definition, {
+			name: "shape-case-load-compiled",
+			compiled: true,
+			mainFile,
+			outDir,
+		});
+		interpreted = buildNativeDefinition(definition, {
+			name: "shape-case-load-interpreted",
+			compiled: false,
+			mainFile,
+			outDir,
+		});
+	}, 600_000);
+
+	it("shares one exact guard and preserves the generic miss path", () => {
+		run(compiled);
+		run(interpreted);
+		run(compiled, STRESS_ENV);
+		run(interpreted, STRESS_ENV);
+	});
+});

@@ -3,7 +3,7 @@ import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
 	decodeVmValueOperand,
-	validateVmKnownOwnSlots,
+	validateVmShapeCases,
 	vmGuardIsWorldInvariant,
 	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
@@ -36,7 +36,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 22;
+export const WIRE_VERSION = 23;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -185,6 +185,8 @@ export const WIRE_OPCODES = [
 	"CALL_BUILTIN",
 	"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 	"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+	"SELECT_SHAPE_CASE",
+	"LOAD_PROPERTY_STATIC_SHAPE_CASE",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -822,7 +824,7 @@ export function serializeVmDefinition(
 	def: VmDefinition,
 	options: { debugInfo?: boolean } = {},
 ): Uint8Array {
-	validateVmKnownOwnSlots(def);
+	validateVmShapeCases(def);
 	const debug = options.debugInfo !== false;
 	const w = new Writer();
 
@@ -1376,6 +1378,7 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
@@ -2467,7 +2470,7 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 		case "CREATE_MODULE_NAMESPACE":
 			w.i32(i.dst);
 			w.i32Array(i.nameIndices);
-			w.i32Array(i.slots);
+			w.i32Array([...i.slots]);
 			return;
 		case "CREATE_TEMPLATE_OBJECT":
 			w.i32(i.dst);
@@ -2552,6 +2555,15 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.callee);
 			w.i32(i.functionIndex);
 			return;
+		case "SELECT_SHAPE_CASE":
+			w.i32(i.dst);
+			w.i32(i.object);
+			w.u32(i.candidates.length);
+			for (const candidate of i.candidates) {
+				w.i32(candidate.shapeFunctionIndex);
+				w.i32(candidate.shapeCacheIndex);
+			}
+			return;
 		case "STORE_CAPTURED":
 			w.i32(i.src);
 			w.i32(i.ownerFunctionIndex);
@@ -2594,6 +2606,13 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 				w.i32(candidate.shapeCacheIndex);
 				w.i32(candidate.slot);
 			}
+			return;
+		case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
+			w.i32(i.dst);
+			w.i32(i.object);
+			w.i32(i.shapeCase);
+			w.i32(i.stringIndex);
+			w.i32Array([...i.slots]);
 			return;
 		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			w.i32(i.object);
@@ -3715,7 +3734,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		sourcePositions,
 		cjsModuleFunctionIndices,
 	};
-	validateVmKnownOwnSlots(definition);
+	validateVmShapeCases(definition);
 	return definition;
 }
 
@@ -3754,6 +3773,7 @@ function readFunction(r: Reader): VmFunction {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
@@ -4020,6 +4040,16 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, dst: r.i32(), ownerFunctionIndex: r.i32(), index: r.i32() };
 		case "GUARD_FUNCTION_INDEX":
 			return { opcode, dst: r.i32(), callee: r.i32(), functionIndex: r.i32() };
+		case "SELECT_SHAPE_CASE": {
+			const dst = r.i32();
+			const object = r.i32();
+			const candidateCount = r.count(2);
+			const candidates = Array.from({ length: candidateCount }, () => ({
+				shapeFunctionIndex: r.i32(),
+				shapeCacheIndex: r.i32(),
+			}));
+			return { opcode, dst, object, candidates };
+		}
 		case "STORE_CAPTURED":
 			return { opcode, src: r.i32(), ownerFunctionIndex: r.i32(), index: r.i32() };
 		case "ENV_PUSH":
@@ -4056,6 +4086,23 @@ function readInstruction(r: Reader): VmInstruction {
 				object,
 				stringIndex,
 				candidates,
+				icIndex: -1,
+			};
+		}
+		case "LOAD_PROPERTY_STATIC_SHAPE_CASE": {
+			const dst = r.i32();
+			const object = r.i32();
+			const shapeCase = r.i32();
+			const stringIndex = r.i32();
+			const slotCount = r.count(2);
+			const slots = Array.from({ length: slotCount }, () => r.i32());
+			return {
+				opcode,
+				dst,
+				object,
+				shapeCase,
+				stringIndex,
+				slots,
 				icIndex: -1,
 			};
 		}

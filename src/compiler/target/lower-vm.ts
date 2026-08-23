@@ -4,8 +4,10 @@ import type {
 } from "../core/core-ir-regions.ts";
 import {
 	coreKnownOwnSlotFromAttribute,
+	coreShapeCaseCandidatesFromAttribute,
 	coreShapeOriginKeys,
 } from "../core/core-ir-shape-provenance.ts";
+import { coreInstructionId } from "../core/core-ir.ts";
 import type { CoreProgram } from "../core/core-ir.ts";
 import {
 	builtinOperationDescriptor,
@@ -199,6 +201,11 @@ export interface VmKnownOwnSlotCandidate {
 	readonly shapeFunctionIndex: number;
 	readonly shapeCacheIndex: number;
 	readonly slot: number;
+}
+
+export interface VmShapeCaseCandidate {
+	readonly shapeFunctionIndex: number;
+	readonly shapeCacheIndex: number;
 }
 
 /** Exact builtin calls whose dynamic property/callback seam was erased in Core. */
@@ -1262,6 +1269,23 @@ export type VmInstruction =
 			candidates: ReadonlyArray<VmKnownOwnSlotCandidate>;
 	  }
 	| {
+			opcode: "SELECT_SHAPE_CASE";
+			dst: number;
+			object: number;
+			/** Exact portable shaped-literal rows, in the order used by load slot tables. */
+			candidates: ReadonlyArray<VmShapeCaseCandidate>;
+	  }
+	| {
+			opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE";
+			dst: number;
+			object: number;
+			shapeCase: number;
+			stringIndex: number;
+			icIndex: number;
+			/** Own data slot for each candidate in the defining selector. */
+			slots: ReadonlyArray<number>;
+	  }
+	| {
 			opcode: "LOAD_SUPER_PROPERTY";
 			dst: number;
 			object: number;
@@ -1604,8 +1628,10 @@ export function vmNativeInstructionMayCaptureStack(
 		case "LOAD_ARGUMENT_COUNT":
 		case "LOAD_ARGUMENT":
 		case "LOAD_NEW_TARGET":
+		case "LOAD_THIS":
 		case "LOAD_CALLEE":
 		case "GUARD_FUNCTION_INDEX":
+		case "SELECT_SHAPE_CASE":
 		case "LOAD_CAPTURED":
 		case "STORE_CAPTURED":
 		case "LOAD_GLOBAL":
@@ -1661,6 +1687,7 @@ const VM_REGISTER_USE_FIELDS = [
 	"yieldedSrc",
 	"iterable",
 	"argumentsArray",
+	"shapeCase",
 ] as const;
 
 const VM_REGISTER_USE_ARRAY_FIELDS = [
@@ -1706,6 +1733,7 @@ export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>)
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
@@ -1864,6 +1892,178 @@ export function validateVmKnownOwnSlots(definition: VmDefinition): void {
 	}
 }
 
+const VM_SHAPE_CASE_MIN_LOADS = 3;
+const VM_SHAPE_CASE_MAX_LOADS = 16;
+const VM_SHAPE_CASE_MAX_SPAN = 64;
+
+function vmShapeCaseTransparent(instruction: VmInstruction): boolean {
+	switch (instruction.opcode) {
+		case "MOVE":
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "CREATE_BOOLEAN":
+		case "CREATE_UNDEFINED":
+		case "CREATE_EMPTY":
+		case "CREATE_NULL":
+		case "GUARD_FUNCTION_INDEX":
+		case "LOAD_CAPTURED":
+		case "STORE_CAPTURED":
+		case "LOAD_GLOBAL":
+		case "STORE_GLOBAL":
+		case "LOAD_INTRINSIC":
+		case "LOAD_NEW_TARGET":
+		case "LOAD_THIS":
+		case "SET_THIS":
+		case "IS_EMPTY":
+		case "TYPEOF_COMPARE":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
+		case "WITH_EXIT":
+		case "SELECT_SHAPE_CASE":
+			return true;
+		default:
+			return false;
+	}
+}
+
+/** Reject forged or stale shared shape-case certificates in a VM definition. */
+export function validateVmShapeCases(definition: VmDefinition): void {
+	// Also validates the shared precompiled-shape table and physical cache layout.
+	validateVmKnownOwnSlots(definition);
+	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
+	for (const descriptor of definition.precompiledLiteralShapes) {
+		descriptors.set(
+			`${descriptor.functionIndex}\0${descriptor.shapeCacheIndex}`,
+			descriptor,
+		);
+	}
+	for (const fn of definition.functions) {
+		for (const [selectorIp, rawSelector] of fn.instructions.entries()) {
+			if (rawSelector.opcode !== "SELECT_SHAPE_CASE") continue;
+			const rawCandidates: unknown = rawSelector.candidates;
+			if (
+				!isNonnegativeSafeInteger(rawSelector.dst) ||
+				rawSelector.dst >= fn.registerCount ||
+				fn.registerRepresentations[rawSelector.dst] !== "number" ||
+				!isNonnegativeSafeInteger(rawSelector.object) ||
+				rawSelector.object >= fn.registerCount ||
+				fn.registerRepresentations[rawSelector.object] !== "boxed" ||
+				!Array.isArray(rawCandidates) ||
+				rawCandidates.length < 1 ||
+				rawCandidates.length > 4
+			) {
+				throw new RangeError("invalid shape-case selector");
+			}
+			const candidates = rawCandidates as ReadonlyArray<unknown>;
+			const candidateDescriptors: Array<VmPrecompiledLiteralShape> = [];
+			const identities = new Set<string>();
+			for (const rawCandidate of candidates) {
+				if (
+					typeof rawCandidate !== "object" ||
+					rawCandidate === null ||
+					Array.isArray(rawCandidate)
+				) {
+					throw new RangeError("invalid shape-case selector");
+				}
+				const candidate = rawCandidate as Partial<VmShapeCaseCandidate>;
+				if (
+					Object.keys(rawCandidate).length !== 2 ||
+					!isNonnegativeSafeInteger(candidate.shapeFunctionIndex) ||
+					!isNonnegativeSafeInteger(candidate.shapeCacheIndex)
+				) {
+					throw new RangeError("invalid shape-case selector");
+				}
+				const identity = `${candidate.shapeFunctionIndex}\0${candidate.shapeCacheIndex}`;
+				const descriptor = descriptors.get(identity);
+				if (descriptor === undefined || identities.has(identity)) {
+					throw new RangeError("invalid shape-case selector");
+				}
+				identities.add(identity);
+				candidateDescriptors.push(descriptor);
+			}
+
+			const uses: Array<{
+				readonly ip: number;
+				readonly instruction: Extract<
+					VmInstruction,
+					{ opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE" }
+				>;
+			}> = [];
+			for (let ip = selectorIp + 1; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (vmInstructionDefinesRegister(instruction, rawSelector.dst)) break;
+				if (!vmInstructionUsesRegister(instruction, rawSelector.dst)) continue;
+				if (
+					instruction.opcode !== "LOAD_PROPERTY_STATIC_SHAPE_CASE" ||
+					instruction.shapeCase !== rawSelector.dst ||
+					instruction.object !== rawSelector.object
+				) {
+					throw new RangeError("invalid shape-case selector use");
+				}
+				uses.push({ ip, instruction });
+			}
+			if (
+				uses.length < VM_SHAPE_CASE_MIN_LOADS ||
+				uses.length > VM_SHAPE_CASE_MAX_LOADS ||
+				uses.at(-1)!.ip - selectorIp > VM_SHAPE_CASE_MAX_SPAN
+			) {
+				throw new RangeError("invalid shape-case selector use count or span");
+			}
+			const useIps = new Set(uses.map(({ ip }) => ip));
+			for (let ip = selectorIp + 1; ip <= uses.at(-1)!.ip; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (useIps.has(ip)) continue;
+				if (!vmShapeCaseTransparent(instruction)) {
+					throw new RangeError("shape-case selector crosses an invalid instruction");
+				}
+			}
+			for (const { instruction } of uses) {
+				const rawSlots: unknown = instruction.slots;
+				if (
+					!isNonnegativeSafeInteger(instruction.dst) ||
+					instruction.dst >= fn.registerCount ||
+					fn.registerRepresentations[instruction.dst] !== "boxed" ||
+					!isNonnegativeSafeInteger(instruction.object) ||
+					instruction.object >= fn.registerCount ||
+					fn.registerRepresentations[instruction.object] !== "boxed" ||
+					!isNonnegativeSafeInteger(instruction.shapeCase) ||
+					instruction.shapeCase >= fn.registerCount ||
+					fn.registerRepresentations[instruction.shapeCase] !== "number" ||
+					!isNonnegativeSafeInteger(instruction.stringIndex) ||
+					instruction.stringIndex >= definition.stringConstants.length ||
+					!Array.isArray(rawSlots) ||
+					rawSlots.length !== candidateDescriptors.length
+				) {
+					throw new RangeError("invalid shape-case load");
+				}
+				for (const [candidateIndex, rawSlot] of rawSlots.entries()) {
+					const descriptor = candidateDescriptors[candidateIndex]!;
+					if (
+						!isNonnegativeSafeInteger(rawSlot) ||
+						rawSlot >= descriptor.keyStringIndices.length ||
+						descriptor.keyStringIndices[rawSlot] !== instruction.stringIndex
+					) {
+						throw new RangeError("invalid shape-case load");
+					}
+				}
+			}
+		}
+		for (const [ip, instruction] of fn.instructions.entries()) {
+			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_SHAPE_CASE") continue;
+			let producer: VmInstruction | undefined;
+			for (let before = ip - 1; before >= 0; before--) {
+				const candidate = fn.instructions[before]!;
+				if (!vmInstructionDefinesRegister(candidate, instruction.shapeCase)) continue;
+				producer = candidate;
+				break;
+			}
+			if (producer?.opcode !== "SELECT_SHAPE_CASE") {
+				throw new RangeError("shape-case load has no selector");
+			}
+		}
+	}
+}
+
 interface VmKnownShapeOrigin {
 	readonly keyStringIndices: ReadonlyArray<number>;
 	readonly shapeCacheIndex: number;
@@ -1931,73 +2131,89 @@ function buildKnownShapeLayout(
 	);
 	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
 	const coreOriginKeys = new Map<string, ReadonlyArray<number>>();
+	const ensureOrigin = (
+		functionIndex: number,
+		shapeInstruction: number,
+	): { readonly keys: ReadonlyArray<number>; readonly origin: VmKnownShapeOrigin } => {
+		const coreOriginIdentity = `${functionIndex}\0${shapeInstruction}`;
+		const originFunction = core.functions[functionIndex];
+		const originInstruction = coreInstructions[functionIndex]?.get(
+			coreInstructionId(shapeInstruction),
+		);
+		if (
+			originFunction?.functionIndex !== functionIndex ||
+			originInstruction === undefined
+		) {
+			throw new Error(`Invalid known shape origin ${functionIndex}:${shapeInstruction}`);
+		}
+		let keys = coreOriginKeys.get(coreOriginIdentity);
+		if (keys === undefined) {
+			keys = coreShapeOriginKeys(core, originFunction, originInstruction);
+			if (keys !== undefined) coreOriginKeys.set(coreOriginIdentity, keys);
+		}
+		if (keys === undefined) {
+			throw new Error(`Invalid known shape origin ${functionIndex}:${shapeInstruction}`);
+		}
+
+		let origin = origins[functionIndex]?.get(shapeInstruction);
+		if (origin !== undefined) {
+			if (
+				origin.keyStringIndices.length !== keys.length ||
+				origin.keyStringIndices.some((key, index) => key !== keys[index])
+			) {
+				throw new Error(
+					`Shape origin layout changed ${functionIndex}:${shapeInstruction}`,
+				);
+			}
+		} else {
+			const rows = layoutRows[functionIndex];
+			const functionOrigins = origins[functionIndex];
+			if (rows === undefined || functionOrigins === undefined) {
+				throw new Error(`Unknown shape-origin function ${functionIndex}`);
+			}
+			const layout = keys.join(",");
+			let shapeCacheIndex = rows.get(layout);
+			if (shapeCacheIndex === undefined) {
+				shapeCacheIndex = literalShapeCounts[functionIndex]!;
+				literalShapeCounts[functionIndex] = shapeCacheIndex + 1;
+				rows.set(layout, shapeCacheIndex);
+			}
+			origin = { keyStringIndices: keys, shapeCacheIndex };
+			functionOrigins.set(shapeInstruction, origin);
+		}
+		const identity = `${functionIndex}\0${origin.shapeCacheIndex}`;
+		descriptors.set(identity, {
+			functionIndex,
+			shapeCacheIndex: origin.shapeCacheIndex,
+			keyStringIndices: [...origin.keyStringIndices],
+		});
+		return { keys, origin };
+	};
 	for (const owner of core.functions) {
 		for (const block of owner.blocks) {
 			for (const instruction of block.instructions) {
 				const claim = coreKnownOwnSlotFromAttribute(instruction.attributes.knownOwnSlot);
-				if (claim === undefined) continue;
-				for (const candidate of claim.candidates) {
-					const functionIndex = candidate.shapeFunctionIndex;
-					const coreOriginIdentity = `${functionIndex}\0${candidate.shapeInstruction}`;
-					const originFunction = core.functions[functionIndex];
-					const originInstruction = coreInstructions[functionIndex]?.get(
-						candidate.shapeInstruction,
-					);
-					if (
-						originFunction?.functionIndex !== functionIndex ||
-						originInstruction === undefined
-					) {
-						throw new Error(
-							`Invalid known shape origin ${functionIndex}:${candidate.shapeInstruction}`,
-						);
-					}
-					let keys = coreOriginKeys.get(coreOriginIdentity);
-					if (keys === undefined) {
-						keys = coreShapeOriginKeys(core, originFunction, originInstruction);
-						if (keys !== undefined) coreOriginKeys.set(coreOriginIdentity, keys);
-					}
-					if (
-						keys === undefined ||
-						candidate.slot >= keys.length ||
-						keys[candidate.slot] !== instruction.attributes.stringIndex
-					) {
-						throw new Error(
-							`Invalid known shape origin ${functionIndex}:${candidate.shapeInstruction}`,
-						);
-					}
-
-					let origin = origins[functionIndex]?.get(candidate.shapeInstruction);
-					if (origin !== undefined) {
+				if (claim !== undefined) {
+					for (const candidate of claim.candidates) {
+						const functionIndex = candidate.shapeFunctionIndex;
+						const { keys } = ensureOrigin(functionIndex, candidate.shapeInstruction);
 						if (
-							origin.keyStringIndices.length !== keys.length ||
-							origin.keyStringIndices.some((key, index) => key !== keys[index])
+							candidate.slot >= keys.length ||
+							keys[candidate.slot] !== instruction.attributes.stringIndex
 						) {
 							throw new Error(
-								`Shape origin layout changed ${functionIndex}:${candidate.shapeInstruction}`,
+								`Invalid known shape origin ${functionIndex}:${candidate.shapeInstruction}`,
 							);
 						}
-					} else {
-						const rows = layoutRows[functionIndex];
-						const functionOrigins = origins[functionIndex];
-						if (rows === undefined || functionOrigins === undefined) {
-							throw new Error(`Unknown shape-origin function ${functionIndex}`);
-						}
-						const layout = keys.join(",");
-						let shapeCacheIndex = rows.get(layout);
-						if (shapeCacheIndex === undefined) {
-							shapeCacheIndex = literalShapeCounts[functionIndex]!;
-							literalShapeCounts[functionIndex] = shapeCacheIndex + 1;
-							rows.set(layout, shapeCacheIndex);
-						}
-						origin = { keyStringIndices: keys, shapeCacheIndex };
-						functionOrigins.set(candidate.shapeInstruction, origin);
 					}
-					const identity = `${functionIndex}\0${origin.shapeCacheIndex}`;
-					descriptors.set(identity, {
-						functionIndex,
-						shapeCacheIndex: origin.shapeCacheIndex,
-						keyStringIndices: [...origin.keyStringIndices],
-					});
+				}
+				const shapeCases = coreShapeCaseCandidatesFromAttribute(
+					instruction.attributes.shapeCaseCandidates,
+				);
+				if (shapeCases !== undefined) {
+					for (const candidate of shapeCases) {
+						ensureOrigin(candidate.shapeFunctionIndex, candidate.shapeInstruction);
+					}
 				}
 			}
 		}
@@ -2123,6 +2339,7 @@ export function lowerCoreProgramToVmDefinition(
 			? { optimizationTrace: [...compilation.optimizationTrace] }
 			: {}),
 	};
+	validateVmShapeCases(definition);
 	if (profile) buildProfileMetadata(core, definition);
 	return definition;
 }
@@ -2222,6 +2439,7 @@ function lowerFunctionToVmFunction(
 			if (
 				instruction.type === "loadProperty" ||
 				instruction.type === "loadPropertyStatic" ||
+				instruction.type === "loadPropertyStaticShapeCase" ||
 				instruction.type === "storeProperty" ||
 				instruction.type === "storePropertyStatic"
 			) {
@@ -2259,7 +2477,31 @@ function lowerFunctionToVmFunction(
 			}
 			const instructionIndex = instructions.length;
 			instructionIndexByTargetInstruction.set(instruction, instructionIndex);
-			let vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
+			let vmInstruction: VmInstruction;
+			if (instruction.type === "selectShapeCase") {
+				const candidates = instruction.shapeCaseCandidates.map((candidate) => {
+					const origin = knownShapeOrigins[candidate.shapeFunctionIndex]?.get(
+						candidate.shapeInstruction,
+					);
+					if (origin === undefined) {
+						throw new Error(
+							`Invalid shape-case origin ${candidate.shapeFunctionIndex}:${candidate.shapeInstruction}`,
+						);
+					}
+					return {
+						shapeFunctionIndex: candidate.shapeFunctionIndex,
+						shapeCacheIndex: origin.shapeCacheIndex,
+					};
+				});
+				vmInstruction = {
+					opcode: "SELECT_SHAPE_CASE",
+					dst: instruction.registers[0],
+					object: instruction.registers[1],
+					candidates,
+				};
+			} else {
+				vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
+			}
 			if (
 				(instruction.type === "loadPropertyStatic" ||
 					instruction.type === "storePropertyStatic") &&
@@ -2304,6 +2546,7 @@ function lowerFunctionToVmFunction(
 				case "LOAD_PROPERTY":
 				case "LOAD_PROPERTY_STATIC":
 				case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+				case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 				case "STORE_PROPERTY":
 				case "STORE_PROPERTY_STATIC":
 				case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
@@ -4213,6 +4456,18 @@ function lowerInstructionToVmInstruction(
 				icIndex: -1,
 				primitiveStringLength: instruction.primitiveStringLength,
 			};
+		case "loadPropertyStaticShapeCase":
+			return {
+				opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
+				shapeCase: instruction.registers[2],
+				stringIndex: instruction.stringIndex,
+				icIndex: -1,
+				slots: instruction.shapeCaseSlots,
+			};
+		case "selectShapeCase":
+			throw new Error("selectShapeCase must resolve its shape origins before lowering");
 		case "loadSuperProperty":
 			return {
 				opcode: "LOAD_SUPER_PROPERTY",

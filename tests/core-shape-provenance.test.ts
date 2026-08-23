@@ -5,6 +5,8 @@ import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import type { CoreOptimizationOptions } from "../src/compiler/core/core-ir-opt.ts";
 import {
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
+	CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE,
+	CORE_SHAPE_CASE_SLOTS_ATTRIBUTE,
 	CORE_SHAPE_ORIGIN_CAP,
 	analyzeCoreShapeProvenance,
 	coreConstructorShapeLayout,
@@ -177,6 +179,45 @@ function localLoopProgram(): {
 		load: instructions(fn, "loadPropertyStatic")[0]!,
 		loopBlock: loop,
 	};
+}
+
+function clusteredLoopProgram(): CoreProgram {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const loop = builder.createBlock();
+	const latch = builder.createBlock();
+	const exit = builder.createBlock();
+	const values = [1, 2, 3].map(
+		(value) =>
+			builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value },
+			})[0]!,
+	);
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", values, {
+		attributes: { keyStringIndices: [1, 2, 3] },
+	});
+	builder.setTerminator(entry, { kind: "jump", edge: { block: loop, arguments: [] } });
+	const loaded = [1, 2, 3].map(
+		(stringIndex) =>
+			builder.appendInstruction(loop, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex },
+			})[0]!,
+	);
+	const [condition] = builder.appendInstruction(loop, "createBoolean", [], {
+		attributes: { value: false },
+	});
+	builder.setTerminator(loop, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: latch, arguments: [] },
+		alternate: { block: exit, arguments: [] },
+	});
+	builder.setTerminator(latch, {
+		kind: "jump",
+		edge: { block: loop, arguments: [] },
+	});
+	builder.setTerminator(exit, { kind: "return", value: loaded[2]! });
+	return coreProgram([builder.finish(entry)]);
 }
 
 function crossCallProgram(
@@ -1543,6 +1584,132 @@ describe("Core known own-slot selection", () => {
 		expect(() => verifyCoreProgram(mismatchedArityProgram, coreOpcodeRegistry)).toThrow(
 			"invalid shaped-object origin",
 		);
+	});
+
+	it("shares one exact shape case across a bounded static-load cluster", () => {
+		const initial = clusteredLoopProgram();
+		const selected = selectKnownOwnSlots(initial).program;
+		verifyCoreProgram(selected, coreOpcodeRegistry);
+		const fn = selected.functions[0]!;
+		const [selector] = instructions(fn, "selectShapeCase");
+		const loads = instructions(fn, "loadPropertyStaticShapeCase");
+		expect(selector).toBeDefined();
+		expect(selector!.outputs).toHaveLength(1);
+		expect(selector!.attributes[CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE]).toEqual([
+			{ shapeFunctionIndex: 0, shapeInstruction: 3 },
+		]);
+		expect(loads).toHaveLength(3);
+		expect(loads.map(({ inputs }) => inputs[1])).toEqual([
+			selector!.outputs[0],
+			selector!.outputs[0],
+			selector!.outputs[0],
+		]);
+		expect(
+			loads.map(({ attributes }) => attributes[CORE_SHAPE_CASE_SLOTS_ATTRIBUTE]),
+		).toEqual([[0], [1], [2]]);
+		expect(instructions(fn, "loadPropertyStatic")).toHaveLength(0);
+
+		const retracted = retractCoreKnownOwnSlots(selected);
+		expect(retracted.changed).toBe(true);
+		expect(instructions(retracted.program.functions[0]!, "selectShapeCase")).toHaveLength(
+			0,
+		);
+		expect(
+			instructions(retracted.program.functions[0]!, "loadPropertyStatic"),
+		).toHaveLength(3);
+		verifyCoreProgram(retracted.program, coreOpcodeRegistry);
+
+		const rerun = selectKnownOwnSlots(selected);
+		expect(rerun.program).toEqual(selected);
+	});
+
+	it("rejects a clustered shape slot that names a different key", () => {
+		const selected = selectKnownOwnSlots(clusteredLoopProgram()).program;
+		const load = instructions(selected.functions[0]!, "loadPropertyStaticShapeCase")[1]!;
+		const malformed = replaceInstruction(selected, 0, load.id, (instruction) => ({
+			...instruction,
+			attributes: {
+				...instruction.attributes,
+				[CORE_SHAPE_CASE_SLOTS_ATTRIBUTE]: [0],
+			},
+		}));
+		expect(() => verifyCoreProgram(malformed, coreOpcodeRegistry)).toThrow(
+			"shape-case slot for a different static key",
+		);
+
+		const orphan = replaceInstruction(selected, 0, load.id, (instruction) => ({
+			...instruction,
+			inputs: [instruction.inputs[0]!, instruction.inputs[0]!],
+		}));
+		expect(() => verifyCoreProgram(orphan, coreOpcodeRegistry)).toThrow(
+			"has no shape-case selector",
+		);
+
+		const misplaced = replaceInstruction(selected, 0, load.id, (instruction) => ({
+			...instruction,
+			attributes: {
+				...instruction.attributes,
+				[CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE]: [
+					{ shapeFunctionIndex: 0, shapeInstruction: 3 },
+				],
+			},
+		}));
+		expect(() => verifyCoreProgram(misplaced, coreOpcodeRegistry)).toThrow(
+			"carries shape-case candidates on loadPropertyStaticShapeCase",
+		);
+	});
+
+	it("lowers an interprocedural loop cluster to one portable shape case", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(count) {
+					const object = {
+						x: 1, y: 2, z: 3,
+						sum3(innerCount) {
+							let total = 0;
+							for (let index = 0; index < innerCount; index++) {
+								const x = this.x;
+								const y = this.y;
+								const z = this.z;
+								total += x + y + z;
+							}
+							return total;
+						},
+					};
+					return object.sum3(count);
+				}
+				run(10);`,
+				"shape-case-target.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		const coreSelectors = optimized.functions.flatMap((fn) =>
+			instructions(fn, "selectShapeCase"),
+		);
+		const coreLoads = optimized.functions.flatMap((fn) =>
+			instructions(fn, "loadPropertyStaticShapeCase"),
+		);
+		expect(coreSelectors).toHaveLength(1);
+		expect(coreLoads).toHaveLength(3);
+
+		const target = lowerCoreProgramToTarget(optimized);
+		expect(
+			target.functions
+				.flatMap(({ blocks }) => blocks)
+				.flatMap(({ instructions: blockInstructions }) => blockInstructions)
+				.filter(({ type }) => type === "selectShapeCase"),
+		).toHaveLength(1);
+		const vm = lowerCoreProgramToVmDefinition(target);
+		const vmSelectors = vm.functions.flatMap(({ instructions }) =>
+			instructions.filter(({ opcode }) => opcode === "SELECT_SHAPE_CASE"),
+		);
+		const vmLoads = vm.functions.flatMap(({ instructions }) =>
+			instructions.filter(({ opcode }) => opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE"),
+		);
+		expect(vmSelectors).toHaveLength(1);
+		expect(vmLoads).toHaveLength(3);
 	});
 
 	it("carries the certificate unchanged to the target load", () => {
