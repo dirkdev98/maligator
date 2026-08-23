@@ -24,6 +24,8 @@
 
 MalNativeFunctionCallback mal_array_values_callback = nullptr;
 
+static bool mal_array_default_species(MalVm *vm, MalValue recv);
+
 static bool mal_builtin_array_throw_string_length(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     return false;
@@ -834,8 +836,29 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
     if (!mal_builtin_array_length_of_array_like(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
-    MalValue result;
-    if (!mal_builtin_array_species_create(vm, this_value, length, &result)) {
+    bool dense_default = false;
+    MalArrayObject *source_array = nullptr;
+    MalArrayObject *result_array = nullptr;
+    MalValue result = mal_value_new_undefined();
+    if (length <= (f64) UINT32_MAX && mal_array_elements_protector &&
+        mal_value_is_array_object(this_value)) {
+        source_array = mal_value_to_array_object(this_value);
+        MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+        dense_default = mal_array_object_is_dense(source_array) &&
+            mal_value_is_object(prototype) &&
+            source_array->object.prototype == mal_value_to_object(prototype) &&
+            mal_array_default_species(vm, this_value);
+        if (dense_default) {
+            result_array = mal_intrinsic_new_array(vm, 0);
+            dense_default = mal_array_object_try_fresh_dense_reserve_exact(
+                result_array, (u32) length);
+            if (dense_default) {
+                result = mal_value_from_array_object(result_array);
+            }
+        }
+    }
+    if (!dense_default &&
+        !mal_builtin_array_species_create(vm, this_value, length, &result)) {
         return mal_value_new_undefined();
     }
 
@@ -847,6 +870,41 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
     mal_gc_root(&span, roots, 3);
     mal_gc_native_rooted_begin(vm);
     MalValue ret = mal_value_new_undefined();
+
+    if (dense_default) {
+        bool dense_source = true;
+        MalObject *array_prototype = mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
+        for (u32 index = 0; index < (u32) length; index++) {
+            MalValue element;
+            if (dense_source &&
+                (!mal_array_elements_protector ||
+                 !mal_array_object_is_dense(source_array) ||
+                 source_array->object.prototype != array_prototype)) {
+                dense_source = false;
+            }
+            bool present = dense_source
+                ? mal_array_object_dense_get(source_array, index, &element)
+                : mal_builtin_array_try_get(vm, this_value, index, &element);
+            if (!present && vm->completion.kind == MAL_COMPLETION_THROW) {
+                goto done;
+            }
+
+            MalValue mapped = mal_value_new_array_hole();
+            if (present &&
+                !mal_builtin_array_invoke(
+                    vm, args[0], mal_builtin_array_this_arg(args, arg_count),
+                    element, index, this_value, &mapped)) {
+                goto done;
+            }
+            roots[1] = mapped;
+            if (!mal_array_object_fresh_dense_append(result_array, mapped)) {
+                abort();
+            }
+        }
+        ret = result;
+        goto done;
+    }
 
     for (f64 index = 0; index < length; index++) {
         MalValue element;

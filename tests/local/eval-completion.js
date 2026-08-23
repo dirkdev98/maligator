@@ -35,4 +35,27 @@ check("empty statement preserves", "11; ;", 11);
 check("empty block preserves", "12; {}", 12);
 check("declaration preserves", "13; var retained", 13);
 
+const firstDynamic = Function("return 21;");
+const secondDynamic = Function("return 21;");
+if (firstDynamic === secondDynamic || firstDynamic() !== secondDynamic()) {
+	throw new Error("FAIL cached Function source must create fresh closures");
+}
+passed++;
+
+function readDirect(value) {
+	return eval("value");
+}
+if (readDirect(31) !== 31 || readDirect(32) !== 32) {
+	throw new Error("FAIL cached direct eval must use the current scope");
+}
+passed++;
+
+if (
+	(0, eval)("let cachedLexical = 41; cachedLexical") !== 41 ||
+	(0, eval)("let cachedLexical = 41; cachedLexical") !== 41
+) {
+	throw new Error("FAIL cached indirect eval must create fresh lexical state");
+}
+passed++;
+
 console.log("eval-completion PASS " + passed + "/" + passed);

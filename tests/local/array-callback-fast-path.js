@@ -154,6 +154,40 @@ check(
 	})(),
 );
 
+check(
+	"map preserves holes and observes receiver mutation",
+	(() => {
+		const values = [1, , 3, 4];
+		let visits = 0;
+		const mapped = values.map((value, index, receiver) => {
+			visits++;
+			if (index === 0) delete receiver[3];
+			return value * 2;
+		});
+		return (
+			visits === 2 &&
+			mapped.length === 4 &&
+			mapped[0] === 2 &&
+			!(1 in mapped) &&
+			mapped[2] === 6 &&
+			!(3 in mapped)
+		);
+	})(),
+);
+
+check(
+	"map falls back after indexed prototype mutation",
+	(() => {
+		const values = [1, , , 4];
+		const mapped = values.map((value, index) => {
+			if (index === 0) Array.prototype[2] = 9;
+			return value + index;
+		});
+		delete Array.prototype[2];
+		return mapped.join(",") === "1,,11,7";
+	})(),
+);
+
 for (const [name, passed] of results) {
 	if (!passed) console.log("FAIL: " + name);
 }
