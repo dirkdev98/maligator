@@ -943,8 +943,8 @@ static inline bool mal_vm_try_load_shape_case(
     return true;
 }
 
-static inline bool mal_vm_property_try_load_static(
-    MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+static inline bool mal_vm_object_try_load_static(
+    const MalObject *object, const MalInlineCache *ic, MalValue *out
 );
 
 /** Warm one empty property IC from portable compiler-certified shape rows. */
@@ -1015,12 +1015,12 @@ static inline bool mal_vm_try_load_known_own_slots(
 ) {
     MAL_PERF_COUNT(known_own_slot_load_probes);
     mal_vm_seed_known_own_slot_ic(vm, ic, key, candidate_count, candidates);
-    if (mal_vm_property_try_load_static(vm, receiver, ic, out)) {
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object != nullptr && mal_vm_object_try_load_static(object, ic, out)) {
         MAL_PERF_COUNT(known_own_slot_load_hits);
         return true;
     }
-    if (mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
-        const MalObject *object = (MalObject *) mal_value_to_heap(receiver);
+    if (object != nullptr) {
         for (i32 index = 0; index < candidate_count; index++) {
             i32 shape_function_index = candidates[index * 3];
             i32 shape_cache_index = candidates[index * 3 + 1];
@@ -1471,12 +1471,12 @@ static inline bool mal_vm_try_store_known_own_slots(
 ) {
     MAL_PERF_COUNT(known_own_slot_store_probes);
     mal_vm_seed_known_own_slot_ic(vm, ic, key, candidate_count, candidates);
-    if (mal_vm_property_try_store_static(receiver, value, ic)) {
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object != nullptr && mal_vm_object_try_store_static(object, value, ic)) {
         MAL_PERF_COUNT(known_own_slot_store_hits);
         return true;
     }
-    if (mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
-        MalObject *object = (MalObject *) mal_value_to_heap(receiver);
+    if (object != nullptr) {
         for (i32 index = 0; index < candidate_count; index++) {
             i32 shape_function_index = candidates[index * 3];
             i32 shape_cache_index = candidates[index * 3 + 1];
