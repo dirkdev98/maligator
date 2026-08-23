@@ -21,6 +21,18 @@ int main(void) {
     mal_vm_run(&vm, entry);
     MalValue result = vm.globals[0];
     int code = 0;
+    MalInlineCache *property_cache = vm.property_cache[0].sites;
+    if (property_cache == nullptr ||
+        property_cache[0].mode != MAL_IC_MODE_SHAPE ||
+        property_cache[0].shape != vm.literal_shape_cache[0][1] ||
+        property_cache[0].slot != 0 ||
+        property_cache[2].shape != vm.literal_shape_cache[0][1] ||
+        property_cache[2].poly_count != 1 ||
+        property_cache[2].poly_shape[0] != vm.literal_shape_cache[0][2] ||
+        mal_ic_poly_slot(&property_cache[2], 0) != 1) {
+        fprintf(stderr, "known own-slot IC was not preseeded\n");
+        code = 1;
+    }
     if (vm.completion.kind != MAL_COMPLETION_NORMAL ||
         !mal_ops_is_number(result) ||
         mal_ops_number_as_f64(result) != 266.0) {

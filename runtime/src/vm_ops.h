@@ -882,6 +882,61 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
     return mal_value_is_heap_type(v, MAL_HEAP_OBJECT) ? (MalObject *) mal_value_to_heap(v) : nullptr;
 }
 
+static inline bool mal_vm_property_try_load_static(
+    MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+);
+
+/** Warm one empty property IC from portable compiler-certified shape rows. */
+static inline void mal_vm_seed_known_own_slot_ic(
+    MalVm *vm,
+    MalInlineCache *ic,
+    MalValue key,
+    i32 candidate_count,
+    const i32 *candidates
+) {
+    if (ic->key != 0) return;
+    for (i32 index = 0; index < candidate_count; index++) {
+        i32 shape_function_index = candidates[index * 3];
+        i32 shape_cache_index = candidates[index * 3 + 1];
+        i32 slot = candidates[index * 3 + 2];
+        if (shape_function_index < 0 ||
+            shape_function_index >= vm->definition->function_count ||
+            shape_cache_index < 0 ||
+            shape_cache_index >=
+                vm->definition->functions[shape_function_index].literal_shape_count ||
+            slot < 0 || slot >= UINT8_MAX) {
+            continue;
+        }
+        MalShape **row = vm->literal_shape_cache[shape_function_index];
+        MalShape *shape = row == nullptr ? nullptr : row[shape_cache_index];
+        if (shape == nullptr || (u32) slot >= shape->inline_count) continue;
+        if (ic->shape == nullptr) {
+            ic->shape = shape;
+            ic->key = key;
+            ic->slot = (u8) slot;
+            ic->prim_kind = 0;
+            ic->poly_count = 0;
+            ic->mode = MAL_IC_MODE_SHAPE;
+            ic->receiver_type = 0;
+            ic->megamorphic = false;
+#if MAL_REALMS
+            ic->realm = nullptr;
+#else
+            ic->obj = nullptr;
+#endif
+            continue;
+        }
+        bool duplicate = ic->shape == shape;
+        for (u8 candidate = 0; !duplicate && candidate < ic->poly_count; candidate++) {
+            duplicate = ic->poly_shape[candidate] == shape;
+        }
+        if (duplicate || ic->poly_count >= MAL_IC_POLY_EXTRA) continue;
+        ic->poly_shape[ic->poly_count] = shape;
+        mal_ic_set_poly_slot(ic, ic->poly_count, (u32) slot);
+        ic->poly_count++;
+    }
+}
+
 /**
  * Exact shaped-literal own-slot read shared by compiled and interpreted output.
  * Referenced source rows are normally pre-instantiated at VM initialization or
@@ -891,11 +946,18 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
 static inline bool mal_vm_try_load_known_own_slots(
     MalVm *vm,
     MalValue receiver,
+    MalValue key,
+    MalInlineCache *ic,
     i32 candidate_count,
     const i32 *candidates,
     MalValue *out
 ) {
     MAL_PERF_COUNT(known_own_slot_load_probes);
+    mal_vm_seed_known_own_slot_ic(vm, ic, key, candidate_count, candidates);
+    if (mal_vm_property_try_load_static(vm, receiver, ic, out)) {
+        MAL_PERF_COUNT(known_own_slot_load_hits);
+        return true;
+    }
     if (mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
         const MalObject *object = (MalObject *) mal_value_to_heap(receiver);
         for (i32 index = 0; index < candidate_count; index++) {
@@ -1341,10 +1403,17 @@ static inline bool mal_vm_try_store_known_own_slots(
     MalVm *vm,
     MalValue receiver,
     MalValue value,
+    MalValue key,
+    MalInlineCache *ic,
     i32 candidate_count,
     const i32 *candidates
 ) {
     MAL_PERF_COUNT(known_own_slot_store_probes);
+    mal_vm_seed_known_own_slot_ic(vm, ic, key, candidate_count, candidates);
+    if (mal_vm_property_try_store_static(receiver, value, ic)) {
+        MAL_PERF_COUNT(known_own_slot_store_hits);
+        return true;
+    }
     if (mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
         MalObject *object = (MalObject *) mal_value_to_heap(receiver);
         for (i32 index = 0; index < candidate_count; index++) {

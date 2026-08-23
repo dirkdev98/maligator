@@ -177,8 +177,8 @@ function run(binary: string, environment: NodeJS.ProcessEnv = {}): string {
 	return result.stderr;
 }
 
-function perfField(stderr: string, field: string): number {
-	const line = stderr.match(/^\[perf-known-own-slot-stats\].*$/m)?.[0] ?? "";
+function perfField(stderr: string, lineName: string, field: string): number {
+	const line = stderr.match(new RegExp(`^\\[${lineName}\\].*$`, "m"))?.[0] ?? "";
 	return Number(line.match(new RegExp(`(?:^|\\s)${field}=([0-9]+)`))?.[1] ?? -1);
 }
 
@@ -215,12 +215,18 @@ describe("guarded known-own-slot accesses", () => {
 		for (const binary of [compiled, interpreted]) {
 			const stderr = run(binary, { MAL_PERF_STATS: "1" });
 			expect(stderr).toContain("[perf-known-own-slot-stats]");
-			expect(perfField(stderr, "probes")).toBe(4);
-			expect(perfField(stderr, "hits")).toBe(3);
-			expect(perfField(stderr, "fallbacks")).toBe(1);
-			expect(perfField(stderr, "store_probes")).toBe(2);
-			expect(perfField(stderr, "store_hits")).toBe(1);
-			expect(perfField(stderr, "store_fallbacks")).toBe(1);
+			expect(perfField(stderr, "perf-known-own-slot-stats", "probes")).toBe(4);
+			expect(perfField(stderr, "perf-known-own-slot-stats", "hits")).toBe(3);
+			expect(perfField(stderr, "perf-known-own-slot-stats", "fallbacks")).toBe(1);
+			expect(perfField(stderr, "perf-known-own-slot-stats", "store_probes")).toBe(2);
+			expect(perfField(stderr, "perf-known-own-slot-stats", "store_hits")).toBe(1);
+			expect(perfField(stderr, "perf-known-own-slot-stats", "store_fallbacks")).toBe(1);
+			// Compiler candidates seed the site's ordinary IC. The first two loads
+			// are monomorphic, the two-layout site is polymorphic, and both stores use
+			// the normal slot-store probe before the exact generic fallback.
+			expect(perfField(stderr, "perf-ic-stats", "load_mono_hits")).toBe(2);
+			expect(perfField(stderr, "perf-ic-stats", "load_poly_hits")).toBe(1);
+			expect(perfField(stderr, "perf-ic-stats", "store_mono_hits")).toBe(1);
 		}
 	});
 });

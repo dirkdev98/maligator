@@ -2193,8 +2193,11 @@ static void mal_vm_run_until_frame_count(
                 MalValue object = registers[
                     instruction->as.load_property_static_known_own_slot.object];
                 MalValue result;
+                MalInlineCache *ic = mal_vm_property_ic_at(
+                    frame, instruction->as.load_property_static_known_own_slot.ic_index);
+                MalValue key = mal_value_from_string(vm->string_constant_atoms[data[0]]);
                 if (mal_vm_try_load_known_own_slots(
-                        vm, object, data[1], &data[2], &result)) {
+                        vm, object, key, ic, data[1], &data[2], &result)) {
                     registers[instruction->as.load_property_static_known_own_slot.dst] = result;
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
@@ -2248,8 +2251,11 @@ static void mal_vm_run_until_frame_count(
                     instruction->as.store_property_static_known_own_slot.object];
                 MalValue value = registers[
                     instruction->as.store_property_static_known_own_slot.value];
+                MalInlineCache *ic = mal_vm_property_ic_at(
+                    frame, instruction->as.store_property_static_known_own_slot.ic_index);
+                MalValue key = mal_value_from_string(vm->string_constant_atoms[data[0]]);
                 if (mal_vm_try_store_known_own_slots(
-                        vm, object, value, data[1], &data[2])) {
+                        vm, object, value, key, ic, data[1], &data[2])) {
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }

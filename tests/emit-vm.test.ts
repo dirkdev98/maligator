@@ -337,8 +337,14 @@ describe("emit-vm instruction packing", () => {
 		}
 		for (const output of [compiled, split]) {
 			expect(output).toContain("mal_vm_try_load_known_own_slots(vm,");
+			expect(output).toMatch(
+				/mal_vm_try_load_known_own_slots\(vm,[^\n]+&__property_ic\[0\]/,
+			);
 			expect(output).toContain("mal_vm_op_load_property_ic(vm,");
 			expect(output).toContain("mal_vm_try_store_known_own_slots(vm,");
+			expect(output).toMatch(
+				/mal_vm_try_store_known_own_slots\(vm,[^\n]+&__property_ic\[1\]/,
+			);
 			expect(output).toContain("mal_vm_op_store_property_ic(vm,");
 		}
 
