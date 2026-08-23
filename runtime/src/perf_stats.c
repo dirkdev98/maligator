@@ -296,6 +296,17 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-shape-case-stats] probes=%llu hits=%llu fallbacks=%llu "
+        "load_probes=%llu load_hits=%llu load_fallbacks=%llu\n",
+        (unsigned long long) mal_perf_stats.shape_case_probes,
+        (unsigned long long) mal_perf_stats.shape_case_hits,
+        (unsigned long long) mal_perf_stats.shape_case_fallbacks,
+        (unsigned long long) mal_perf_stats.shape_case_load_probes,
+        (unsigned long long) mal_perf_stats.shape_case_load_hits,
+        (unsigned long long) mal_perf_stats.shape_case_load_fallbacks
+    );
+    fprintf(
+        stderr,
         "[perf-map-stats] get_set_cache_checks=%llu get_set_cache_hits=%llu "
         "get_set_cache_misses=%llu direct_get_hits=%llu direct_set_hits=%llu "
         "direct_add_hits=%llu direct_fallbacks=%llu\n",

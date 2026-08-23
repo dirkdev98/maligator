@@ -155,7 +155,7 @@ const definition: VmDefinition = {
 	hostInstalls: [],
 };
 
-function run(binary: string, environment: NodeJS.ProcessEnv = {}): void {
+function run(binary: string, environment: NodeJS.ProcessEnv = {}): string {
 	const result = spawnSync(binary, [], {
 		env: { ...process.env, ...environment },
 		encoding: "utf8",
@@ -163,6 +163,12 @@ function run(binary: string, environment: NodeJS.ProcessEnv = {}): void {
 	});
 	if (result.error) throw result.error;
 	expect(result.status, result.stderr || result.stdout).toBe(0);
+	return result.stderr;
+}
+
+function perfField(stderr: string, field: string): number {
+	const line = stderr.match(/^\[perf-shape-case-stats\].*$/m)?.[0] ?? "";
+	return Number(line.match(new RegExp(`(?:^|\\s)${field}=([0-9]+)`))?.[1] ?? -1);
 }
 
 describe("shared shape-case property loads", () => {
@@ -170,17 +176,20 @@ describe("shared shape-case property loads", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
+		const environment = { ...process.env, MAL_PERF_STATS: "1" };
 		compiled = buildNativeDefinition(definition, {
 			name: "shape-case-load-compiled",
 			compiled: true,
 			mainFile,
 			outDir,
+			environment,
 		});
 		interpreted = buildNativeDefinition(definition, {
 			name: "shape-case-load-interpreted",
 			compiled: false,
 			mainFile,
 			outDir,
+			environment,
 		});
 	}, 600_000);
 
@@ -189,5 +198,17 @@ describe("shared shape-case property loads", () => {
 		run(interpreted);
 		run(compiled, STRESS_ENV);
 		run(interpreted, STRESS_ENV);
+	});
+
+	it("reports identical selector and load behavior in both backends", () => {
+		for (const binary of [compiled, interpreted]) {
+			const stderr = run(binary, { MAL_PERF_STATS: "1" });
+			expect(perfField(stderr, "probes")).toBe(2);
+			expect(perfField(stderr, "hits")).toBe(1);
+			expect(perfField(stderr, "fallbacks")).toBe(1);
+			expect(perfField(stderr, "load_probes")).toBe(6);
+			expect(perfField(stderr, "load_hits")).toBe(3);
+			expect(perfField(stderr, "load_fallbacks")).toBe(3);
+		}
 	});
 });

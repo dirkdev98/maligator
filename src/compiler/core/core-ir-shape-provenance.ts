@@ -2,7 +2,7 @@
  * Bounded allocation-site provenance for ordinary shaped objects.
  *
  * This is deliberately not a claim about an object's current runtime shape. A
- * A `createObjectShaped` origin or bounded constructor receiver layout says only
+ * `createObjectShaped` origin or bounded constructor receiver layout says only
  * which ordinary-object layout may have produced an SSA value; user code may
  * subsequently delete properties, install accessors, change descriptors, or
  * otherwise move the object to another shape. Consumers must therefore validate

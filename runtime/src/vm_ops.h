@@ -888,8 +888,12 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
 static inline i32 mal_vm_select_shape_case(
     MalVm *vm, MalValue receiver, i32 candidate_count, const i32 *candidates
 ) {
+    MAL_PERF_COUNT(shape_case_probes);
     MalObject *object = mal_vm_as_object(receiver);
-    if (object == nullptr) return -1;
+    if (object == nullptr) {
+        MAL_PERF_COUNT(shape_case_fallbacks);
+        return -1;
+    }
     for (i32 index = 0; index < candidate_count; index++) {
         i32 function_index = candidates[index * 2];
         i32 shape_cache_index = candidates[index * 2 + 1];
@@ -902,8 +906,12 @@ static inline i32 mal_vm_select_shape_case(
         }
         MalShape **row = vm->literal_shape_cache[function_index];
         MalShape *shape = row == nullptr ? nullptr : row[shape_cache_index];
-        if (shape != nullptr && object->shape == shape) return index;
+        if (shape != nullptr && object->shape == shape) {
+            MAL_PERF_COUNT(shape_case_hits);
+            return index;
+        }
     }
+    MAL_PERF_COUNT(shape_case_fallbacks);
     return -1;
 }
 
@@ -915,12 +923,23 @@ static inline bool mal_vm_try_load_shape_case(
     const i32 *slots,
     MalValue *out
 ) {
-    if (shape_case < 0 || shape_case >= slot_count) return false;
+    MAL_PERF_COUNT(shape_case_load_probes);
+    if (shape_case < 0 || shape_case >= slot_count) {
+        MAL_PERF_COUNT(shape_case_load_fallbacks);
+        return false;
+    }
     MalObject *object = mal_vm_as_object(receiver);
-    if (object == nullptr) return false;
+    if (object == nullptr) {
+        MAL_PERF_COUNT(shape_case_load_fallbacks);
+        return false;
+    }
     i32 slot = slots[shape_case];
-    if (slot < 0 || (u32) slot >= object->shape->inline_count) return false;
+    if (slot < 0 || (u32) slot >= object->shape->inline_count) {
+        MAL_PERF_COUNT(shape_case_load_fallbacks);
+        return false;
+    }
     *out = object->slots[slot];
+    MAL_PERF_COUNT(shape_case_load_hits);
     return true;
 }
 
