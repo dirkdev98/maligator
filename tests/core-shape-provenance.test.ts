@@ -646,7 +646,7 @@ describe("Core shaped-object provenance", () => {
 		}
 	});
 
-	it("keeps entry, exceptional, memory-cell, and template producers open", () => {
+	it("keeps entry, exceptional, compiler-cell, and template alternatives open", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
 			parameterCount: 1,
 		});
@@ -679,13 +679,58 @@ describe("Core shaped-object provenance", () => {
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		builder.setTerminator(handler, { kind: "return", value: handlerArgument });
 		const analysis = analyzeCoreShapeProvenance(coreProgram([builder.finish(entry)]));
-		for (const value of [parameter, handlerArgument, loaded!, template!]) {
+		for (const value of [parameter, handlerArgument, template!]) {
 			expect(analysis.candidates(0, value)).toEqual({
 				origins: [],
 				opaque: true,
 			});
 		}
+		expect(analysis.candidates(0, loaded!)).toEqual({
+			origins: [
+				expect.objectContaining({
+					functionIndex: 0,
+					keyStringIndices: [1],
+				}),
+			],
+			opaque: true,
+		});
 		expect(analysis.candidates(0, object!).opaque).toBe(false);
+	});
+
+	it("relays guarded origins through captured cells across functions", () => {
+		const writer = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const writerEntry = writer.createBlock();
+		const [initial] = writer.appendInstruction(writerEntry, "createUndefined", []);
+		const [object] = writer.appendInstruction(
+			writerEntry,
+			"createObjectShaped",
+			[initial!],
+			{ attributes: { keyStringIndices: [1] } },
+		);
+		writer.appendInstruction(writerEntry, "storeCaptured", [object!], {
+			attributes: { functionIndex: 0, index: 3 },
+		});
+		writer.setTerminator(writerEntry, { kind: "return", value: initial! });
+
+		const reader = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+		const readerEntry = reader.createBlock();
+		const [loaded] = reader.appendInstruction(readerEntry, "loadCaptured", [], {
+			attributes: { functionIndex: 0, index: 3 },
+		});
+		reader.setTerminator(readerEntry, { kind: "return", value: loaded! });
+
+		const analysis = analyzeCoreShapeProvenance(
+			coreProgram([writer.finish(writerEntry), reader.finish(readerEntry)]),
+		);
+		expect(analysis.candidates(1, loaded!)).toEqual({
+			origins: [
+				expect.objectContaining({
+					functionIndex: 0,
+					keyStringIndices: [1],
+				}),
+			],
+			opaque: true,
+		});
 	});
 
 	it("finds the vector literal at hot parameter loads in a real frontend graph", () => {
@@ -820,27 +865,23 @@ describe("Core known own-slot selection", () => {
 		).toBe(false);
 	});
 
-	it("retracts a stale candidate for multiple origins", () => {
+	it("selects one bounded candidate for multiple guarded origins", () => {
 		const built = multiOriginLoopProgram();
 		const origins = analyzeCoreShapeProvenance(built.program).origins;
 		expect(origins).toHaveLength(2);
-		const stale = replaceInstruction(built.program, 0, built.load.id, (instruction) => ({
-			...instruction,
-			attributes: {
-				...instruction.attributes,
-				[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: {
-					shapeFunctionIndex: 0,
-					shapeInstruction: origins[0]!.instruction,
-					slot: 0,
-				},
-			},
-		}));
-		const selected = selectKnownOwnSlots(stale);
+		const selected = selectKnownOwnSlots(built.program);
 		expect(selected.changed).toBe(true);
+		const load = instructions(selected.program.functions[0]!, "loadPropertyStatic")[0]!;
 		expect(
-			CORE_KNOWN_OWN_SLOT_ATTRIBUTE in
-				instructions(selected.program.functions[0]!, "loadPropertyStatic")[0]!.attributes,
-		).toBe(false);
+			coreKnownOwnSlotFromAttribute(load.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]),
+		).toMatchObject({
+			shapeFunctionIndex: 0,
+			shapeInstruction: origins[0]!.instruction,
+			slot: 0,
+		});
+		const rerun = selectKnownOwnSlots(selected.program);
+		expect(rerun.changed).toBe(false);
+		expect(rerun.program).toBe(selected.program);
 	});
 
 	it("retracts a candidate when a region claims the load", () => {
@@ -1019,5 +1060,46 @@ describe("Core known own-slot selection", () => {
 
 		const rerun = executeCoreOptimizations(optimized, optimizationOptions).program;
 		expect(lowerCoreProgramToTarget(rerun).functions).toEqual(target.functions);
+	});
+
+	it("publishes a guarded loop load from a captured finite shape set", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function exercise(second) {
+					let state;
+					if (second) state = { x: 1 };
+					else state = { x: 2 };
+					function sum() {
+						let total = 0;
+						for (let index = 0; index < 4; index++) total += state.x;
+						return total;
+					}
+					return sum();
+				}
+				exercise(false);`,
+				"captured-known-own-slot.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial).program;
+		const selected = optimized.functions
+			.flatMap((fn) =>
+				fn.blocks.flatMap((block) =>
+					block.instructions.map((instruction) => ({ fn, instruction })),
+				),
+			)
+			.find(
+				({ instruction }) =>
+					instruction.opcode === "loadPropertyStatic" &&
+					CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes,
+			);
+		expect(selected).toBeDefined();
+		const receiver = selected!.instruction.inputs[0]!;
+		const candidates = analyzeCoreShapeProvenance(optimized).candidates(
+			selected!.fn.functionIndex,
+			receiver,
+		);
+		expect(candidates.origins).toHaveLength(2);
+		expect(candidates.opaque).toBe(true);
+		expect(instructions(selected!.fn, "loadCaptured")).not.toHaveLength(0);
 	});
 });

@@ -12,9 +12,11 @@
  * Opaque covers every producer outside this analysis and finite overflow. Keeping
  * the bounded candidates is still useful for guarded consumers: an unlisted
  * origin simply takes their fallback. The graph contains SSA moves, ordinary
- * block arguments, and finite ordinary-call argument/return edges. It excludes
- * heap cells and call forms whose positional or result semantics are not exact in
- * Core, so the solve is one monotone worklist over O(values + edges).
+ * block arguments, compiler-owned global/captured cells, and finite ordinary-call
+ * argument/return edges. Cells remain open, but in-image stores still contribute
+ * guarded candidates. It excludes aggregate heap cells and call forms whose
+ * positional or result semantics are not exact in Core, so the solve is one
+ * monotone worklist over O(values + cells + edges).
  */
 
 import { analyzeCoreCalleeTargets } from "./core-ir-call-targets.ts";
@@ -246,6 +248,8 @@ export function analyzeCoreShapeProvenance(
 	const valueBase = new Map<number, number>();
 	const valueLimits = new Map<number, number>();
 	const returnNodes = new Map<number, number>();
+	const globalNodes = new Map<number, number>();
+	const capturedNodes = new Map<string, number>();
 	let nodeCount = 0;
 	for (const fn of activeFunctions) {
 		const limit = valueLimit(fn);
@@ -256,6 +260,23 @@ export function analyzeCoreShapeProvenance(
 	}
 	const valueNode = (functionIndex: number, value: CoreValueId): number =>
 		valueBase.get(functionIndex)! + value;
+	const globalNode = (slot: number): number => {
+		let node = globalNodes.get(slot);
+		if (node === undefined) {
+			node = nodeCount++;
+			globalNodes.set(slot, node);
+		}
+		return node;
+	};
+	const capturedNode = (owner: number, index: number): number => {
+		const key = `${owner}:${index}`;
+		let node = capturedNodes.get(key);
+		if (node === undefined) {
+			node = nodeCount++;
+			capturedNodes.set(key, node);
+		}
+		return node;
+	};
 
 	const origins: Array<CoreShapeOrigin> = [];
 	const originByInstruction = new Map<string, number>();
@@ -372,6 +393,42 @@ export function analyzeCoreShapeProvenance(
 					addEdge(node(instruction.inputs[0]!), node(instruction.outputs[0]!));
 					continue;
 				}
+				if (instruction.opcode === "loadGlobal" && output !== undefined) {
+					const slot = instruction.attributes.index;
+					if (typeof slot === "number") {
+						addEdge(globalNode(slot), node(output));
+						continue;
+					}
+				}
+				if (instruction.opcode === "storeGlobal") {
+					const slot = instruction.attributes.index;
+					const source = instruction.inputs[0];
+					if (typeof slot === "number" && source !== undefined) {
+						addEdge(node(source), globalNode(slot));
+						continue;
+					}
+				}
+				if (instruction.opcode === "loadCaptured" && output !== undefined) {
+					const owner = instruction.attributes.functionIndex;
+					const index = instruction.attributes.index;
+					if (typeof owner === "number" && typeof index === "number") {
+						addEdge(capturedNode(owner, index), node(output));
+						continue;
+					}
+				}
+				if (instruction.opcode === "storeCaptured") {
+					const owner = instruction.attributes.functionIndex;
+					const index = instruction.attributes.index;
+					const source = instruction.inputs[0];
+					if (
+						typeof owner === "number" &&
+						typeof index === "number" &&
+						source !== undefined
+					) {
+						addEdge(node(source), capturedNode(owner, index));
+						continue;
+					}
+				}
 				if (instruction.opcode === "loadThis") {
 					openOutputs(fn, instruction);
 					continue;
@@ -418,6 +475,11 @@ export function analyzeCoreShapeProvenance(
 			}
 		}
 	}
+	// The cell identity is compiler-owned, but the complete writer set is not a
+	// current-shape proof. Preserve the unknown alternative while retaining every
+	// in-image shaped allocation as a guarded candidate.
+	for (const node of globalNodes.values()) opaqueSeeds.push(node);
+	for (const node of capturedNodes.values()) opaqueSeeds.push(node);
 
 	const candidatesByNode = new Array<Array<number> | undefined>(nodeCount).fill(
 		undefined,
@@ -643,23 +705,27 @@ export function selectCoreKnownOwnSlots(
 					const stringIndex = instruction.attributes.stringIndex;
 					const receiver = instruction.inputs[0]!;
 					const candidates = provenance.candidates(fn.functionIndex, receiver);
-					if (typeof stringIndex === "number" && candidates.origins.length === 1) {
-						const origin = candidates.origins[0]!;
-						// Raw string-index identity is conservative: the array is also the
-						// runtime slot order, so an equivalent constant at another index simply
-						// declines until a later canonical-key selector generalizes this proof.
-						const slot = origin.keyStringIndices.indexOf(stringIndex);
-						// A candidate crossing a function boundary is precision, not a
-						// frequency proof. Residual property ICs are already cheap when warm,
-						// so publish extra guarded output only where the load itself repeats.
-						// Origins may still flow through any number of ordinary calls before
-						// reaching this loop-resident consumer.
-						if (slot >= 0 && provenance.isLoopBlock(fn.functionIndex, block.id)) {
-							selected = {
-								shapeFunctionIndex: origin.functionIndex,
-								shapeInstruction: origin.instruction,
-								slot,
-							};
+					if (typeof stringIndex === "number") {
+						const origin = candidates.origins.find(({ keyStringIndices }) =>
+							keyStringIndices.includes(stringIndex),
+						);
+						if (origin !== undefined) {
+							// Raw string-index identity is conservative: the array is also the
+							// runtime slot order, so an equivalent constant at another index simply
+							// declines until a later canonical-key selector generalizes this proof.
+							const slot = origin.keyStringIndices.indexOf(stringIndex);
+							// A candidate crossing a function boundary is precision, not a
+							// frequency proof. Residual property ICs are already cheap when warm,
+							// so publish extra guarded output only where the load itself repeats.
+							// Origins may still flow through any number of ordinary calls before
+							// reaching this loop-resident consumer.
+							if (provenance.isLoopBlock(fn.functionIndex, block.id)) {
+								selected = {
+									shapeFunctionIndex: origin.functionIndex,
+									shapeInstruction: origin.instruction,
+									slot,
+								};
+							}
 						}
 					}
 				}
