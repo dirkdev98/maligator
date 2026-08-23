@@ -694,7 +694,7 @@ describe("Core shaped-object provenance", () => {
 		expect(analysis.statistics.saturatedValues).toBeGreaterThan(0);
 	});
 
-	it("does not relay shapes through constructs, spread calls, or coroutine body returns", () => {
+	it("keeps constructor return candidates guarded and excludes spread/coroutine results", () => {
 		const ordinary = shapedReturn(0, 1);
 		const asyncTarget = shapedReturn(1, 2, { isAsync: true });
 		const generatorTarget = shapedReturn(2, 3, { isGenerator: true });
@@ -707,6 +707,7 @@ describe("Core shaped-object provenance", () => {
 		const results: Array<CoreValueId> = [];
 		for (const [target, opcode] of [
 			[0, "construct"],
+			[0, "constructSpread"],
 			[0, "callSpread"],
 			[1, "call"],
 			[2, "call"],
@@ -717,9 +718,11 @@ describe("Core shaped-object provenance", () => {
 			const inputs =
 				opcode === "construct"
 					? [callee!]
-					: opcode === "callSpread"
-						? [callee!, thisValue!, argumentsObject!]
-						: [callee!, thisValue!];
+					: opcode === "constructSpread"
+						? [callee!, argumentsObject!]
+						: opcode === "callSpread"
+							? [callee!, thisValue!, argumentsObject!]
+							: [callee!, thisValue!];
 			results.push(caller.appendInstruction(entry, opcode, inputs)[0]!);
 		}
 		caller.setTerminator(entry, { kind: "return", value: results.at(-1)! });
@@ -731,12 +734,42 @@ describe("Core shaped-object provenance", () => {
 				caller.finish(entry),
 			]),
 		);
-		for (const result of results) {
+		for (const result of results.slice(0, 2)) {
+			const constructed = analysis.candidates(3, result);
+			expect(constructed.origins).toHaveLength(1);
+			expect(constructed.origins[0]!.functionIndex).toBe(0);
+			expect(constructed.origins[0]!.keyStringIndices).toEqual([1]);
+			expect(constructed.opaque).toBe(true);
+		}
+		for (const result of results.slice(2)) {
 			expect(analysis.candidates(3, result)).toEqual({
 				origins: [],
 				opaque: true,
 			});
 		}
+	});
+
+	it("does not fan constructor argument origins through body formals", () => {
+		const program = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run() {
+					const Forward = function (value) { return value; };
+					return new Forward({ x: 1 });
+				}
+				run();`,
+				"shape-constructor-argument.mjs",
+			),
+		);
+		const owner = program.functions.find(
+			(fn) => instructions(fn, "construct").length > 0,
+		)!;
+		const construct = instructions(owner, "construct")[0]!;
+		expect(
+			analyzeCoreShapeProvenance(program).candidates(
+				owner.functionIndex,
+				construct.outputs[0]!,
+			),
+		).toEqual({ origins: [], opaque: true });
 	});
 
 	it("keeps entry, exceptional, compiler-cell, and template alternatives open", () => {
@@ -874,6 +907,43 @@ describe("Core shaped-object provenance", () => {
 });
 
 describe("Core known own-slot selection", () => {
+	it("publishes a guarded loop load through explicit constructor object completion", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(count) {
+					const Factory = function (value) { return { x: value }; };
+					const constructed = new Factory(2);
+					let total = 0;
+					for (let index = 0; index < count; index++) total += constructed.x;
+					return total;
+				}
+				run(4);`,
+				"shape-constructor-return-relay.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		const construct = optimized.functions
+			.flatMap((fn) => instructions(fn, "construct"))
+			.at(0);
+		expect(construct).toBeDefined();
+		const owner = optimized.functions.find((fn) =>
+			fn.blocks.some((block) => block.instructions.includes(construct!)),
+		)!;
+		const result = analyzeCoreShapeProvenance(optimized).candidates(
+			owner.functionIndex,
+			construct!.outputs[0]!,
+		);
+		expect(result.opaque).toBe(true);
+		expect(result.origins).toHaveLength(1);
+		expect(
+			optimized.functions
+				.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
+				.some((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes),
+		).toBe(true);
+	});
+
 	it("publishes a guarded loop load through Function.prototype.call argument relay", () => {
 		const initial = lowerSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(

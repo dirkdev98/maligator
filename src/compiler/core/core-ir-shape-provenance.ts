@@ -594,6 +594,29 @@ export function analyzeCoreShapeProvenance(
 					if (!modelledResultTarget || excludedResultTarget) opaqueSeeds.push(result);
 					continue;
 				}
+				if (
+					(instruction.opcode === "construct" ||
+						instruction.opcode === "constructSpread") &&
+					instruction.inputs.length >= 1 &&
+					instruction.outputs.length === 1
+				) {
+					const result = node(instruction.outputs[0]!);
+					const targets = calleeTargets.targets(fn.functionIndex, instruction.inputs[0]!);
+					for (const targetIndex of targets.functions) {
+						const target = functionsByIndex.get(targetIndex);
+						if (target === undefined || target.isAsync || target.isGenerator) continue;
+						addEdge(returnNodes.get(targetIndex)!, result);
+					}
+					// [[Construct]] returns a fresh receiver whenever the target completes
+					// with a primitive, and unknown/Proxy targets may return any object.
+					// Explicit in-image allocations returned by the constructor remain useful
+					// candidates, but can never close the result's current-shape alternatives.
+					// Constructor arguments deliberately remain open here: wiring every
+					// construction into body formals makes an advisory result producer fan out
+					// across unrelated constructor work.
+					opaqueSeeds.push(result);
+					continue;
+				}
 				openOutputs(fn, instruction);
 			}
 			if (block.terminator.kind === "return" && !fn.isAsync && !fn.isGenerator) {

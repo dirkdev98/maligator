@@ -178,4 +178,42 @@ ok(
 	overriddenCallRelay.total === 28 && overriddenCallRelay.proxyGetCalls === 4,
 );
 
+const constructorReturnRelay = function (proxyConstructor) {
+	const Forward = function (value) {
+		return { x: value.x };
+	};
+	let Constructor = Forward;
+	let proxyGetCalls = 0;
+	if (proxyConstructor) {
+		Constructor = new Proxy(Forward, {
+			construct(_target, argumentsList) {
+				return new Proxy(
+					{ x: argumentsList[0].x + 1 },
+					{
+						get(target, key) {
+							proxyGetCalls++;
+							return target[key];
+						},
+					},
+				);
+			},
+		});
+	}
+	const constructed = new Constructor({ x: 6 });
+	let total = 0;
+	for (let index = 0; index < 4; index++) total += constructed.x;
+	return { total, proxyGetCalls };
+};
+
+const directConstructorReturn = constructorReturnRelay(false);
+ok(
+	"constructor object return shape relay hit",
+	directConstructorReturn.total === 24 && directConstructorReturn.proxyGetCalls === 0,
+);
+const proxyConstructorReturn = constructorReturnRelay(true);
+ok(
+	"constructor object return shape relay fallback",
+	proxyConstructorReturn.total === 28 && proxyConstructorReturn.proxyGetCalls === 4,
+);
+
 console.log("captured-known-own-slot PASS");
