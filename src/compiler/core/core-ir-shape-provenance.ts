@@ -281,6 +281,18 @@ export function coreConstructorShapeLayout(
 	) {
 		return undefined;
 	}
+	let hasThisLoad = false;
+	let hasStaticStore = false;
+	for (const candidateBlock of fn.blocks) {
+		for (const instruction of candidateBlock.instructions) {
+			hasThisLoad ||= instruction.opcode === "loadThis";
+			hasStaticStore ||= instruction.opcode === "storePropertyStatic";
+		}
+	}
+	// Canonical-root solving is the expensive part of this parser. Most ordinary
+	// functions have a prototype but never initialize a receiver, so reject them
+	// before building any constructor-specific value-flow state.
+	if (!hasThisLoad || !hasStaticStore) return undefined;
 	const cfg = controlFlow ?? buildCoreControlFlow(fn, registry);
 	const orderedBlocks: Array<CoreBlock> = [];
 	const seen = new Set<CoreBlockId>();
