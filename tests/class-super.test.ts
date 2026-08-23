@@ -146,11 +146,11 @@ test("a derived this read participates in its surrounding exception handler", ()
 	const definition = compileSemanticProgramToVmDefinition(semantic);
 	const derived = definition.functions.find((fn) => fn.isDerivedConstructor);
 	expect(derived).toBeDefined();
-	const loadThis = derived!.instructions.findIndex(({ opcode }) => opcode === "LOAD_THIS");
+	const loadThis = derived!.instructions.findIndex(
+		({ opcode }) => opcode === "LOAD_THIS",
+	);
 	expect(loadThis).toBeGreaterThanOrEqual(0);
 	expect(
-		vmExceptionHandlerTargets(derived!.instructions.length, derived!.handlers)[
-			loadThis
-		],
+		vmExceptionHandlerTargets(derived!.instructions.length, derived!.handlers)[loadThis],
 	).toBeDefined();
 });
