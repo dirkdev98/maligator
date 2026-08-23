@@ -687,6 +687,35 @@ describe("serialize-vm", () => {
 		expect(() => serializeVmDefinition(barrier)).toThrow(
 			/shape-case selector crosses an invalid instruction/,
 		);
+
+		const receiverRedefinition = {
+			...valid,
+			functions: valid.functions.map((fn) => ({
+				...fn,
+				instructions: [
+					...fn.instructions.slice(0, 5),
+					{ opcode: "MOVE", dst: 2, src: 0 } as const,
+					...fn.instructions.slice(5),
+				],
+			})),
+		};
+		expect(() => serializeVmDefinition(receiverRedefinition)).toThrow(
+			/shape-case selector receiver is redefined/,
+		);
+
+		const encoded = serializeVmDefinition(valid, { debugInfo: false });
+		const loadTag = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_SHAPE_CASE");
+		const encodedFirstLoad = [loadTag, 8, 4, 6, 0, 1, 0];
+		const firstLoadOffset = encoded.findIndex((_, offset) =>
+			encodedFirstLoad.every((byte, index) => encoded[offset + index] === byte),
+		);
+		expect(firstLoadOffset).toBeGreaterThanOrEqual(0);
+		const receiverClobberWire = encoded.slice();
+		// Make the first of three loads overwrite r2, the selector's receiver.
+		receiverClobberWire[firstLoadOffset + 1] = 4;
+		expect(() => deserializeVmDefinition(receiverClobberWire)).toThrow(
+			/shape-case selector receiver is redefined/,
+		);
 	});
 
 	it("validates portable precompiled shape descriptors independently of bytecode", () => {

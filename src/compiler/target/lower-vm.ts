@@ -2010,8 +2010,19 @@ export function validateVmShapeCases(definition: VmDefinition): void {
 				throw new RangeError("invalid shape-case selector use count or span");
 			}
 			const useIps = new Set(uses.map(({ ip }) => ip));
-			for (let ip = selectorIp + 1; ip <= uses.at(-1)!.ip; ip++) {
+			const lastUseIp = uses.at(-1)!.ip;
+			for (let ip = selectorIp + 1; ip <= lastUseIp; ip++) {
 				const instruction = fn.instructions[ip]!;
+				// The selector licenses one exact live receiver value, not a physical
+				// register forever. A definition of that register before a later use
+				// would let a forged VM definition apply the old case to a new object.
+				// The final use may overwrite the receiver after reading it.
+				if (
+					ip < lastUseIp &&
+					vmInstructionDefinesRegister(instruction, rawSelector.object)
+				) {
+					throw new RangeError("shape-case selector receiver is redefined");
+				}
 				if (useIps.has(ip)) continue;
 				if (!vmShapeCaseTransparent(instruction)) {
 					throw new RangeError("shape-case selector crosses an invalid instruction");

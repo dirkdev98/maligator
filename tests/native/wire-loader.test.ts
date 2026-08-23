@@ -290,6 +290,17 @@ describe("wire loader side-data validation", () => {
 		// Key y must use slot 1; changing it to slot 0 would read x.
 		invalidSlot[loadOffset + encodedLoad.length - 1] = 0;
 		rejectsWire("shape-case-slot", invalidSlot);
+
+		const encodedFirstLoad = [loadTag, 8, 4, 6, 0, 1, 0];
+		const firstLoadOffset = wire.findIndex((_, index) =>
+			encodedFirstLoad.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(firstLoadOffset).toBeGreaterThanOrEqual(0);
+		const receiverClobber = wire.slice();
+		// The first load may not overwrite r2 while later loads still use the
+		// selector result for that receiver.
+		receiverClobber[firstLoadOffset + 1] = 4;
+		rejectsWire("shape-case-receiver", receiverClobber);
 	});
 
 	it("pre-instantiates known literal shapes for initial and spliced wire definitions", () => {

@@ -1928,21 +1928,27 @@ static bool mal_loaded_shape_case_selector_valid(
     i32 uses = 0;
     i32 last_ip = selector_ip;
     bool crossed_barrier = false;
+    bool receiver_redefined = false;
     for (i32 ip = selector_ip + 1; ip < fn->instruction_count; ip++) {
         const MalInstruction *instruction = &fn->instructions[ip];
         if (mal_loaded_instruction_writes_register(instruction, dst)) break;
         if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE &&
             instruction->as.load_property_static_shape_case.shape_case == dst) {
-            if (crossed_barrier ||
+            if (crossed_barrier || receiver_redefined ||
                 !mal_loaded_shape_case_load_valid(
                     definition, string_count, fn, ip, selector, instruction)) {
                 return false;
             }
             uses++;
             last_ip = ip;
+            receiver_redefined = mal_loaded_instruction_writes_register(
+                instruction, object);
             continue;
         }
         if (!mal_loaded_shape_case_transparent(instruction)) crossed_barrier = true;
+        if (mal_loaded_instruction_writes_register(instruction, object)) {
+            receiver_redefined = true;
+        }
     }
     return uses >= 3 && uses <= 16 && last_ip - selector_ip <= 64;
 }
