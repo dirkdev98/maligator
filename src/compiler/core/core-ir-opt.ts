@@ -5053,6 +5053,12 @@ const MAY_PRODUCE_EMPTY_OPCODES = new Set([
 	"loadCaptured",
 	"loadGlobal",
 	"loadLocal",
+	// Ordinary JavaScript properties cannot expose Empty, but compiler-owned
+	// hidden cells can. In particular, a derived constructor stores Empty in its
+	// shared lexical-this cell until super() binds the receiver.
+	"loadProperty",
+	"loadPropertyStatic",
+	"loadPropertyStaticShapeCase",
 ]);
 
 /**

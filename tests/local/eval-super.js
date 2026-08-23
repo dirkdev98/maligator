@@ -59,4 +59,25 @@ assert(
 );
 assert(counters.fieldRuns === 4, "instance fields initialize exactly once");
 
+let readCapturedThis;
+class CapturedThisBase {
+	constructor() {
+		let threw = false;
+		try {
+			readCapturedThis();
+		} catch (error) {
+			threw = error instanceof ReferenceError;
+		}
+		assert(threw, "captured this stays uninitialized while super runs");
+	}
+}
+class CapturedThisDerived extends CapturedThisBase {
+	constructor() {
+		readCapturedThis = () => this;
+		super();
+		assert(readCapturedThis() === this, "captured this refreshes after super");
+	}
+}
+new CapturedThisDerived();
+
 console.log("eval-super PASS 1/1");

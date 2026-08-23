@@ -106,3 +106,27 @@ test("class heritage defines the constructor prototype without ordinary assignme
 			),
 	).toHaveLength(1);
 });
+
+test("captured derived this keeps its TDZ check through target lowering", () => {
+	const { semantic } = compile(`
+		let readThis;
+		class Base { constructor() { readThis(); } }
+		class Derived extends Base {
+			constructor() {
+				readThis = () => this;
+				super();
+			}
+		}
+		new Derived();
+	`);
+	const definition = compileSemanticProgramToVmDefinition(semantic);
+	const capturedArrow = definition.functions.find(
+		(fn) =>
+			!fn.hasPrototype &&
+			fn.instructions.some(({ opcode }) => opcode === "LOAD_CAPTURED"),
+	);
+	expect(capturedArrow).toBeDefined();
+	expect(capturedArrow!.instructions.map(({ opcode }) => opcode)).toContain(
+		"THROW_IF_TDZ",
+	);
+});
