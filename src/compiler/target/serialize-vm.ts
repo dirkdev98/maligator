@@ -36,7 +36,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 19;
+export const WIRE_VERSION = 20;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -2574,9 +2574,12 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.dst);
 			w.i32(i.object);
 			w.i32(i.stringIndex);
-			w.i32(i.shapeFunctionIndex);
-			w.i32(i.shapeCacheIndex);
-			w.i32(i.slot);
+			w.u32(i.candidates.length);
+			for (const candidate of i.candidates) {
+				w.i32(candidate.shapeFunctionIndex);
+				w.i32(candidate.shapeCacheIndex);
+				w.i32(candidate.slot);
+			}
 			return;
 		case "STORE_PROPERTY":
 		case "DEFINE_PRIVATE":
@@ -3999,17 +4002,25 @@ function readInstruction(r: Reader): VmInstruction {
 				stringIndex: r.i32(),
 				icIndex: -1,
 			};
-		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
-			return {
-				opcode,
-				dst: r.i32(),
-				object: r.i32(),
-				stringIndex: r.i32(),
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
+			const dst = r.i32();
+			const object = r.i32();
+			const stringIndex = r.i32();
+			const candidateCount = r.count(3);
+			const candidates = Array.from({ length: candidateCount }, () => ({
 				shapeFunctionIndex: r.i32(),
 				shapeCacheIndex: r.i32(),
 				slot: r.i32(),
+			}));
+			return {
+				opcode,
+				dst,
+				object,
+				stringIndex,
+				candidates,
 				icIndex: -1,
 			};
+		}
 		case "DELETE_PROPERTY":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
 		case "TO_PROPERTY_KEY":

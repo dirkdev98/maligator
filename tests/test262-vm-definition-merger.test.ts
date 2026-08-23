@@ -191,9 +191,7 @@ describe("Test262 VM definition merger", () => {
 				object: 1,
 				stringIndex: 0,
 				icIndex: 3,
-				shapeFunctionIndex: 0,
-				shapeCacheIndex: 0,
-				slot: 0,
+				candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 }],
 			},
 		];
 		const secondFunction = vmFunction(indexed);
@@ -263,9 +261,7 @@ describe("Test262 VM definition merger", () => {
 		expect(rebased.at(-1)).toMatchObject({
 			opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			stringIndex: 2,
-			shapeFunctionIndex: 2,
-			shapeCacheIndex: 0,
-			slot: 0,
+			candidates: [{ shapeFunctionIndex: 2, shapeCacheIndex: 0, slot: 0 }],
 		});
 		expect(second.functions[0]!.instructions).toEqual(indexed);
 	});

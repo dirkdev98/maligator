@@ -1013,7 +1013,10 @@ static void mal_vm_rebase_instruction(
             i32 *data = instruction_data +
                 in->as.load_property_static_known_own_slot.data_offset;
             data[0] += string_base;
-            data[1] += fn_base;
+            i32 candidate_count = data[1];
+            for (i32 index = 0; index < candidate_count; index++) {
+                data[2 + index * 3] += fn_base;
+            }
             break;
         }
         case MAL_OP_STORE_PROPERTY_STATIC:
@@ -2180,8 +2183,8 @@ static void mal_vm_run_until_frame_count(
                 MalValue object = registers[
                     instruction->as.load_property_static_known_own_slot.object];
                 MalValue result;
-                if (mal_vm_try_load_known_own_slot(
-                        vm, object, data[1], data[2], data[3], &result)) {
+                if (mal_vm_try_load_known_own_slots(
+                        vm, object, data[1], &data[2], &result)) {
                     registers[instruction->as.load_property_static_known_own_slot.dst] = result;
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;

@@ -148,7 +148,10 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 			return {
 				...instruction,
 				stringIndex: instruction.stringIndex + base.string,
-				shapeFunctionIndex: instruction.shapeFunctionIndex + base.function,
+				candidates: instruction.candidates.map((candidate) => ({
+					...candidate,
+					shapeFunctionIndex: candidate.shapeFunctionIndex + base.function,
+				})),
 			};
 		case "CREATE_BIGINT":
 			return { ...instruction, bigintIndex: instruction.bigintIndex + base.bigint };

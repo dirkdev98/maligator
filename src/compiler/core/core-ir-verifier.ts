@@ -1249,29 +1249,31 @@ function verifyKnownOwnSlotClaims(program: CoreProgram): void {
 				if (claim === undefined) {
 					fail(`instruction @${instruction.id} carries an invalid known own slot`);
 				}
-				const originFunction = program.functions[claim.shapeFunctionIndex];
-				const origin = instructionsByFunction[claim.shapeFunctionIndex]?.get(
-					claim.shapeInstruction,
-				);
-				if (
-					originFunction?.functionIndex !== claim.shapeFunctionIndex ||
-					origin?.opcode !== "createObjectShaped"
-				) {
-					fail(
-						`instruction @${instruction.id} carries a known own slot with an invalid shaped-object origin`,
-					);
-				}
-				const keys = coreShapedObjectKeys(program, origin, cellForString);
 				const stringIndex = instruction.attributes.stringIndex;
-				if (keys === undefined) {
-					fail(
-						`instruction @${instruction.id} carries a known own slot with an invalid shaped-object origin`,
+				for (const candidate of claim.candidates) {
+					const originFunction = program.functions[candidate.shapeFunctionIndex];
+					const origin = instructionsByFunction[candidate.shapeFunctionIndex]?.get(
+						candidate.shapeInstruction,
 					);
-				}
-				if (claim.slot >= keys.length || keys[claim.slot] !== stringIndex) {
-					fail(
-						`instruction @${instruction.id} carries a known own slot for a different static key`,
-					);
+					if (
+						originFunction?.functionIndex !== candidate.shapeFunctionIndex ||
+						origin?.opcode !== "createObjectShaped"
+					) {
+						fail(
+							`instruction @${instruction.id} carries a known own slot with an invalid shaped-object origin`,
+						);
+					}
+					const keys = coreShapedObjectKeys(program, origin, cellForString);
+					if (keys === undefined) {
+						fail(
+							`instruction @${instruction.id} carries a known own slot with an invalid shaped-object origin`,
+						);
+					}
+					if (candidate.slot >= keys.length || keys[candidate.slot] !== stringIndex) {
+						fail(
+							`instruction @${instruction.id} carries a known own slot for a different static key`,
+						);
+					}
 				}
 			}
 		}

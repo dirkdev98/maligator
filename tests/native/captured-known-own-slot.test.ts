@@ -13,7 +13,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-captured-known-own-slot-"
 const fixture = "tests/local/captured-known-own-slot.js";
 const expected = ["captured-known-own-slot PASS"];
 
-describe("captured guarded own-slot loads", () => {
+describe("captured polymorphic guarded own-slot loads", () => {
 	let compiled: string;
 	let interpreted: string;
 

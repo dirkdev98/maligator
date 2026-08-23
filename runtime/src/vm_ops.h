@@ -886,20 +886,23 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
  * splice time; lazy literal creation remains a defensive fallback. Every miss
  * retains the ordinary static-property IC operation.
  */
-static inline bool mal_vm_try_load_known_own_slot(
+static inline bool mal_vm_try_load_known_own_slots(
     MalVm *vm,
     MalValue receiver,
-    i32 shape_function_index,
-    i32 shape_cache_index,
-    i32 slot,
+    i32 candidate_count,
+    const i32 *candidates,
     MalValue *out
 ) {
     MAL_PERF_COUNT(known_own_slot_load_probes);
-    MalShape **row = vm->literal_shape_cache[shape_function_index];
-    MalShape *expected = row == nullptr ? nullptr : row[shape_cache_index];
-    if (expected != nullptr && mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
-        MalObject *object = (MalObject *) mal_value_to_heap(receiver);
-        if (object->shape == expected) {
+    if (mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+        const MalObject *object = (MalObject *) mal_value_to_heap(receiver);
+        for (i32 index = 0; index < candidate_count; index++) {
+            i32 shape_function_index = candidates[index * 3];
+            i32 shape_cache_index = candidates[index * 3 + 1];
+            i32 slot = candidates[index * 3 + 2];
+            MalShape **row = vm->literal_shape_cache[shape_function_index];
+            MalShape *expected = row == nullptr ? nullptr : row[shape_cache_index];
+            if (expected == nullptr || object->shape != expected) continue;
             *out = object->slots[slot];
             MAL_PERF_COUNT(known_own_slot_load_hits);
             return true;

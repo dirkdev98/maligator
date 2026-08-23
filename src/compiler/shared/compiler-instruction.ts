@@ -18,11 +18,16 @@ export type CompilerTypeofResult =
 	| "bigint"
 	| "function";
 
-/** Guarded initial shaped-object slot candidate retained by target lowering. */
-export interface CompilerKnownOwnSlot {
+/** One guarded initial shaped-object slot candidate retained by target lowering. */
+export interface CompilerKnownOwnSlotCandidate {
 	readonly shapeFunctionIndex: number;
 	readonly shapeInstruction: number;
 	readonly slot: number;
+}
+
+/** Bounded polymorphic own-slot certificate; every candidate retains fallback. */
+export interface CompilerKnownOwnSlot {
+	readonly candidates: ReadonlyArray<CompilerKnownOwnSlotCandidate>;
 }
 
 export type CompilerInstruction =

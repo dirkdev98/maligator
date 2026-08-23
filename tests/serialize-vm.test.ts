@@ -367,14 +367,23 @@ function knownOwnSlotDefinition(): VmDefinition {
 			shapeCacheIndex: 0,
 		},
 		{
+			opcode: "CREATE_OBJECT_SHAPED",
+			dst: 2,
+			count: 1,
+			keyStringIndices: [1],
+			valueRegisters: [1],
+			shapeCacheIndex: 1,
+		},
+		{
 			opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			dst: 3,
 			object: 2,
 			stringIndex: 1,
 			icIndex: 0,
-			shapeFunctionIndex: 0,
-			shapeCacheIndex: 0,
-			slot: 1,
+			candidates: [
+				{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 1 },
+				{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
+			],
 		},
 		{ opcode: "RETURN", value: 3 },
 	];
@@ -422,9 +431,10 @@ describe("serialize-vm", () => {
 			),
 		).toMatchObject({
 			stringIndex: 1,
-			shapeFunctionIndex: 0,
-			shapeCacheIndex: 0,
-			slot: 1,
+			candidates: [
+				{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 1 },
+				{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
+			],
 		});
 
 		const malformed = {
@@ -434,22 +444,77 @@ describe("serialize-vm", () => {
 				instructions: fn.instructions.map((instruction) =>
 					functionIndex === 0 &&
 					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-						? { ...instruction, slot: 0 }
+						? {
+								...instruction,
+								candidates: [{ ...instruction.candidates[0]!, slot: 0 }],
+							}
 						: instruction,
 				),
 			})),
 		};
 		expect(() => serializeVmDefinition(malformed)).toThrow(/invalid known-own-slot load/);
+		const duplicate = {
+			...valid,
+			functions: valid.functions.map((fn, functionIndex) => ({
+				...fn,
+				instructions: fn.instructions.map((instruction) =>
+					functionIndex === 0 &&
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+						? {
+								...instruction,
+								candidates: [instruction.candidates[0]!, instruction.candidates[0]!],
+							}
+						: instruction,
+				),
+			})),
+		};
+		expect(() => serializeVmDefinition(duplicate)).toThrow(/invalid known-own-slot load/);
+		const extraField = {
+			...valid,
+			functions: valid.functions.map((fn, functionIndex) => ({
+				...fn,
+				instructions: fn.instructions.map((instruction) =>
+					functionIndex === 0 &&
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+						? {
+								...instruction,
+								candidates: [{ ...instruction.candidates[0]!, unexpected: true }],
+							}
+						: instruction,
+				),
+			})),
+		};
+		expect(() => serializeVmDefinition(extraField)).toThrow(
+			/invalid known-own-slot load/,
+		);
+		const negativeZero = {
+			...valid,
+			functions: valid.functions.map((fn, functionIndex) => ({
+				...fn,
+				instructions: fn.instructions.map((instruction) =>
+					functionIndex === 0 &&
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+						? {
+								...instruction,
+								candidates: [{ ...instruction.candidates[0]!, slot: -0 }],
+							}
+						: instruction,
+				),
+			})),
+		};
+		expect(() => serializeVmDefinition(negativeZero)).toThrow(
+			/invalid known-own-slot load/,
+		);
 
 		const opcode = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
-		const encodedInstruction = [opcode, 6, 4, 2, 0, 0, 2];
+		const encodedInstruction = [opcode, 6, 4, 2, 2, 0, 0, 2, 0, 2, 0];
 		const instructionOffset = wire.findIndex((_, offset) =>
 			encodedInstruction.every((byte, index) => wire[offset + index] === byte),
 		);
 		expect(instructionOffset).toBeGreaterThanOrEqual(0);
 		const tampered = wire.slice();
-		// Change slot ZigZag(1) to ZigZag(0); the source key at slot 0 differs.
-		tampered[instructionOffset + encodedInstruction.length - 1] = 0;
+		// Change the second candidate's slot ZigZag(0) to ZigZag(1), outside its shape.
+		tampered[instructionOffset + encodedInstruction.length - 1] = 2;
 		expect(() => deserializeVmDefinition(tampered)).toThrow(
 			/invalid known-own-slot load/,
 		);

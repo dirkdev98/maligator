@@ -220,18 +220,21 @@ function remarkForInstruction(
 				code: "property.static-load",
 				outcome: "applied",
 			};
-		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
+			const firstCandidate = instruction.candidates[0]!;
 			return {
 				phase: "lowering",
 				operation,
 				code: "property.known-own-slot",
 				outcome: "guarded",
 				details: {
-					shapeFunctionIndex: instruction.shapeFunctionIndex,
-					shapeCacheIndex: instruction.shapeCacheIndex,
-					slot: instruction.slot,
+					candidateCount: instruction.candidates.length,
+					shapeFunctionIndex: firstCandidate.shapeFunctionIndex,
+					shapeCacheIndex: firstCandidate.shapeCacheIndex,
+					slot: firstCandidate.slot,
 				},
 			};
+		}
 		case "STORE_PROPERTY":
 			return {
 				phase: "lowering",

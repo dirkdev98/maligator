@@ -151,14 +151,15 @@ describe("Core IR lowering", () => {
 			);
 		expect(load?.opcode).toBe("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
 		if (load?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") return;
-		const source = vm.functions[load.shapeFunctionIndex]!.instructions.find(
+		const candidate = load.candidates[0]!;
+		const source = vm.functions[candidate.shapeFunctionIndex]!.instructions.find(
 			(instruction) =>
 				instruction.opcode === "CREATE_OBJECT_SHAPED" &&
-				instruction.shapeCacheIndex === load.shapeCacheIndex,
+				instruction.shapeCacheIndex === candidate.shapeCacheIndex,
 		);
 		expect(source?.opcode).toBe("CREATE_OBJECT_SHAPED");
 		if (source?.opcode !== "CREATE_OBJECT_SHAPED") return;
-		expect(source.keyStringIndices[load.slot]).toBe(load.stringIndex);
+		expect(source.keyStringIndices[candidate.slot]).toBe(load.stringIndex);
 
 		const targetLoad = target.functions
 			.flatMap((fn) => fn.blocks)
@@ -173,14 +174,20 @@ describe("Core IR lowering", () => {
 		const original = targetLoad.knownOwnSlot;
 		const mutable = targetLoad as {
 			knownOwnSlot: {
-				shapeFunctionIndex: number;
-				shapeInstruction: number;
-				slot: number;
+				candidates: ReadonlyArray<{
+					shapeFunctionIndex: number;
+					shapeInstruction: number;
+					slot: number;
+				}>;
 			};
 		};
 		mutable.knownOwnSlot = {
-			...original,
-			shapeInstruction: Number.MAX_SAFE_INTEGER,
+			candidates: [
+				{
+					...original.candidates[0]!,
+					shapeInstruction: Number.MAX_SAFE_INTEGER,
+				},
+			],
 		};
 		try {
 			expect(() => lowerCoreProgramToVmDefinition(target)).toThrow(

@@ -4,7 +4,7 @@ const ok = function (name, condition) {
 
 const exercise = function (secondOrigin) {
 	let state;
-	if (secondOrigin) state = { x: 2 };
+	if (secondOrigin) state = { tag: "second", x: 2 };
 	else state = { x: 1 };
 
 	const sum = function (count) {

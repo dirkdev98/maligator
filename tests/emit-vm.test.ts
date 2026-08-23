@@ -281,9 +281,7 @@ describe("emit-vm instruction packing", () => {
 				object: 1,
 				stringIndex: 2,
 				icIndex: 0,
-				shapeFunctionIndex: 0,
-				shapeCacheIndex: 0,
-				slot: 1,
+				candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 1 }],
 			},
 			{ opcode: "RETURN", value: 5 },
 		];
@@ -313,7 +311,7 @@ describe("emit-vm instruction packing", () => {
 		for (const output of [interpreted, splitInterpreted]) {
 			expect(output).toContain("MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
 			expect(output).toContain(".load_property_static_known_own_slot");
-			expect(output).toContain("2, 0, 0, 1");
+			expect(output).toContain("2, 1, 0, 0, 1");
 		}
 		for (const output of [interpreted, compiled, split, splitInterpreted]) {
 			expect(output).toContain(
@@ -323,7 +321,7 @@ describe("emit-vm instruction packing", () => {
 			expect(output).toContain(".precompiled_literal_shape_count = 1");
 		}
 		for (const output of [compiled, split]) {
-			expect(output).toContain("mal_vm_try_load_known_own_slot(vm,");
+			expect(output).toContain("mal_vm_try_load_known_own_slots(vm,");
 			expect(output).toContain("mal_vm_op_load_property_ic(vm,");
 		}
 
@@ -334,7 +332,10 @@ describe("emit-vm instruction packing", () => {
 					...specialized.functions[0]!,
 					instructions: specializedInstructions.map((instruction) =>
 						instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-							? { ...instruction, slot: 0 }
+							? {
+									...instruction,
+									candidates: [{ ...instruction.candidates[0]!, slot: 0 }],
+								}
 							: instruction,
 					),
 				},

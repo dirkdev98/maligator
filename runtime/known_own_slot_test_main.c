@@ -11,6 +11,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_vm_definition);
     if (vm.literal_shape_cache[0] == nullptr ||
         vm.literal_shape_cache[0][1] == nullptr ||
+        vm.literal_shape_cache[0][2] == nullptr ||
         vm.property_cache[0].sites != nullptr) {
         fprintf(stderr, "known literal shape was not selectively pre-instantiated\n");
         mal_vm_free(&vm);

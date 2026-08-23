@@ -33,9 +33,7 @@ const instructions: Array<VmInstruction> = [
 		object: 3,
 		stringIndex: 0,
 		icIndex: 0,
-		shapeFunctionIndex: 0,
-		shapeCacheIndex: 1,
-		slot: 0,
+		candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 }],
 	},
 	{
 		opcode: "CREATE_OBJECT_SHAPED",
@@ -51,9 +49,7 @@ const instructions: Array<VmInstruction> = [
 		object: 5,
 		stringIndex: 0,
 		icIndex: 1,
-		shapeFunctionIndex: 0,
-		shapeCacheIndex: 1,
-		slot: 0,
+		candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 }],
 	},
 	{
 		opcode: "CREATE_OBJECT_SHAPED",
@@ -69,9 +65,10 @@ const instructions: Array<VmInstruction> = [
 		object: 7,
 		stringIndex: 0,
 		icIndex: 2,
-		shapeFunctionIndex: 0,
-		shapeCacheIndex: 1,
-		slot: 0,
+		candidates: [
+			{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
+			{ shapeFunctionIndex: 0, shapeCacheIndex: 2, slot: 1 },
+		],
 	},
 	// Adding y transitions the source object away from the certified {x} shape.
 	{ opcode: "STORE_PROPERTY_STATIC", object: 5, value: 2, stringIndex: 1, icIndex: 3 },
@@ -81,9 +78,10 @@ const instructions: Array<VmInstruction> = [
 		object: 5,
 		stringIndex: 0,
 		icIndex: 4,
-		shapeFunctionIndex: 0,
-		shapeCacheIndex: 1,
-		slot: 0,
+		candidates: [
+			{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
+			{ shapeFunctionIndex: 0, shapeCacheIndex: 2, slot: 1 },
+		],
 	},
 	{ opcode: "BINARY", dst: 10, left: 4, right: 6, operator: "+" },
 	{ opcode: "BINARY", dst: 10, left: 10, right: 8, operator: "+" },
@@ -168,7 +166,7 @@ describe("guarded known-own-slot loads", () => {
 		});
 	}, 600_000);
 
-	it("preserves pre-instantiated hit, different-shape, and mutation semantics", () => {
+	it("preserves polymorphic hits and mutation fallback semantics", () => {
 		run(compiled);
 		run(interpreted);
 		run(compiled, STRESS_ENV);
@@ -180,8 +178,8 @@ describe("guarded known-own-slot loads", () => {
 			const stderr = run(binary, { MAL_PERF_STATS: "1" });
 			expect(stderr).toContain("[perf-known-own-slot-stats]");
 			expect(perfField(stderr, "probes")).toBe(4);
-			expect(perfField(stderr, "hits")).toBe(2);
-			expect(perfField(stderr, "fallbacks")).toBe(2);
+			expect(perfField(stderr, "hits")).toBe(3);
+			expect(perfField(stderr, "fallbacks")).toBe(1);
 		}
 	});
 });

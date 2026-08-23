@@ -129,14 +129,23 @@ describe("wire loader side-data validation", () => {
 					shapeCacheIndex: 0,
 				},
 				{
+					opcode: "CREATE_OBJECT_SHAPED",
+					dst: 1,
+					count: 1,
+					keyStringIndices: [0],
+					valueRegisters: [0],
+					shapeCacheIndex: 1,
+				},
+				{
 					opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 					dst: 0,
 					object: 1,
 					stringIndex: 0,
 					icIndex: 0,
-					shapeFunctionIndex: 0,
-					shapeCacheIndex: 0,
-					slot: 0,
+					candidates: [
+						{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 },
+						{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
+					],
 				},
 				{ opcode: "RETURN", value: 0 },
 			],
@@ -148,7 +157,7 @@ describe("wire loader side-data validation", () => {
 		};
 		const wire = serializeVmDefinition(knownSlotDefinition, { debugInfo: false });
 		const tag = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
-		const encodedInstruction = [tag, 0, 2, 0, 0, 0, 0];
+		const encodedInstruction = [tag, 0, 2, 0, 2, 0, 0, 0, 0, 2, 0];
 		const offset = wire.findIndex((_, index) =>
 			encodedInstruction.every((byte, operand) => wire[index + operand] === byte),
 		);
@@ -156,6 +165,11 @@ describe("wire loader side-data validation", () => {
 		// Change slot ZigZag(0) to ZigZag(1), outside the one-slot source shape.
 		wire[offset + encodedInstruction.length - 1] = 2;
 		rejectsWire("known-own-slot", wire);
+
+		const duplicate = serializeVmDefinition(knownSlotDefinition, { debugInfo: false });
+		// Rebase the second candidate's shape-cache row 1 to row 0.
+		duplicate[offset + encodedInstruction.length - 2] = 0;
+		rejectsWire("known-own-slot-duplicate", duplicate);
 	});
 
 	it("pre-instantiates known literal shapes for initial and spliced wire definitions", () => {
@@ -187,9 +201,7 @@ describe("wire loader side-data validation", () => {
 					object: 1,
 					stringIndex: 0,
 					icIndex: 0,
-					shapeFunctionIndex: 0,
-					shapeCacheIndex: 1,
-					slot: 0,
+					candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 }],
 				},
 				{ opcode: "RETURN", value: 0 },
 			],

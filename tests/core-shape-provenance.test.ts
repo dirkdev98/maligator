@@ -258,9 +258,14 @@ function multiOriginLoopProgram(): {
 	const [first] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
 		attributes: { keyStringIndices: [1] },
 	});
-	const [second] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
-		attributes: { keyStringIndices: [1] },
-	});
+	const [second] = builder.appendInstruction(
+		entry,
+		"createObjectShaped",
+		[initial!, initial!],
+		{
+			attributes: { keyStringIndices: [2, 1] },
+		},
+	);
 	const [choose] = builder.appendInstruction(entry, "createBoolean", [], {
 		attributes: { value: true },
 	});
@@ -792,10 +797,12 @@ describe("Core known own-slot selection", () => {
 		const claim = coreKnownOwnSlotFromAttribute(
 			selectedLoad.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
 		);
-		expect(claim).toMatchObject({ shapeFunctionIndex: 0, slot: 0 });
+		expect(claim?.candidates).toEqual([
+			expect.objectContaining({ shapeFunctionIndex: 0, slot: 0 }),
+		]);
 		expect(
 			instructions(first.program.functions[0]!, "createObjectShaped").some(
-				({ id }) => id === claim?.shapeInstruction,
+				({ id }) => id === claim?.candidates[0]?.shapeInstruction,
 			),
 		).toBe(true);
 
@@ -822,7 +829,7 @@ describe("Core known own-slot selection", () => {
 		const load = instructions(selected.program.functions[1]!, "loadPropertyStatic")[0]!;
 		expect(
 			coreKnownOwnSlotFromAttribute(load.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]),
-		).toMatchObject({ shapeFunctionIndex: 0, slot: 0 });
+		).toMatchObject({ candidates: [{ shapeFunctionIndex: 0, slot: 0 }] });
 	});
 
 	it("retracts published hints once and preserves every unrelated identity", () => {
@@ -865,7 +872,7 @@ describe("Core known own-slot selection", () => {
 		).toBe(false);
 	});
 
-	it("selects one bounded candidate for multiple guarded origins", () => {
+	it("selects each distinct bounded layout for multiple guarded origins", () => {
 		const built = multiOriginLoopProgram();
 		const origins = analyzeCoreShapeProvenance(built.program).origins;
 		expect(origins).toHaveLength(2);
@@ -873,12 +880,20 @@ describe("Core known own-slot selection", () => {
 		expect(selected.changed).toBe(true);
 		const load = instructions(selected.program.functions[0]!, "loadPropertyStatic")[0]!;
 		expect(
-			coreKnownOwnSlotFromAttribute(load.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]),
-		).toMatchObject({
-			shapeFunctionIndex: 0,
-			shapeInstruction: origins[0]!.instruction,
-			slot: 0,
-		});
+			coreKnownOwnSlotFromAttribute(load.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE])
+				?.candidates,
+		).toEqual([
+			{
+				shapeFunctionIndex: 0,
+				shapeInstruction: origins[0]!.instruction,
+				slot: 0,
+			},
+			{
+				shapeFunctionIndex: 0,
+				shapeInstruction: origins[1]!.instruction,
+				slot: 1,
+			},
+		]);
 		const rerun = selectKnownOwnSlots(selected.program);
 		expect(rerun.changed).toBe(false);
 		expect(rerun.program).toBe(selected.program);
@@ -925,10 +940,17 @@ describe("Core known own-slot selection", () => {
 		const valid = coreKnownOwnSlotFromAttribute(
 			load.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
 		)!;
+		const validCandidate = valid.candidates[0]!;
+		const validValue = {
+			candidates: valid.candidates.map((candidate) => ({ ...candidate })),
+		};
 		for (const value of [
 			undefined,
-			{ ...valid, slot: -0 },
-			{ ...valid, extra: 1 },
+			{ candidates: [] },
+			{ candidates: [{ ...validCandidate }, { ...validCandidate }] },
+			{ candidates: Array.from({ length: 5 }, () => ({ ...validCandidate })) },
+			{ candidates: [{ ...validCandidate, slot: -0 }] },
+			{ ...validValue, extra: 1 },
 		] as const) {
 			const malformed = replaceInstruction(selected, 1, load.id, (instruction) => ({
 				...instruction,
@@ -943,9 +965,11 @@ describe("Core known own-slot selection", () => {
 		}
 
 		for (const value of [
-			{ ...valid, shapeFunctionIndex: 99 },
-			{ ...valid, shapeInstruction: coreInstructionId(99_999) },
-			{ ...valid, slot: 1 },
+			{ candidates: [{ ...validCandidate, shapeFunctionIndex: 99 }] },
+			{
+				candidates: [{ ...validCandidate, shapeInstruction: coreInstructionId(99_999) }],
+			},
+			{ candidates: [{ ...validCandidate, slot: 1 }] },
 		] as const) {
 			const malformed = replaceInstruction(selected, 1, load.id, (instruction) => ({
 				...instruction,
@@ -966,11 +990,7 @@ describe("Core known own-slot selection", () => {
 			...instruction,
 			attributes: {
 				...instruction.attributes,
-				[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: {
-					shapeFunctionIndex: valid.shapeFunctionIndex,
-					shapeInstruction: valid.shapeInstruction,
-					slot: valid.slot,
-				},
+				[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: validValue,
 			},
 		}));
 		expect(() => verifyCoreProgram(misplaced, coreOpcodeRegistry)).toThrow(

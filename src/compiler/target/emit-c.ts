@@ -1784,7 +1784,7 @@ function profileDecisionsForInstruction(
 			);
 		}
 	} else if (operation === "property") {
-		if (source.includes("mal_vm_try_load_known_own_slot(")) {
+		if (source.includes("mal_vm_try_load_known_own_slots(")) {
 			decisions.push(
 				decision("property.known-own-slot", "guarded", "exact-shape-fallback"),
 			);
@@ -2335,16 +2335,23 @@ function emitInstruction(
 				`{ MalEnv *__old_env = env; env = mal_env_new(vm, __old_env->parent, ${instruction.scopeId}, ${instruction.slotCount}); for (i32 __i = 0; __i < ${instruction.slotCount}; __i++) env->slots[__i] = __old_env->slots[__i]; }${frameUpdate}`,
 			];
 		}
-		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
+			const candidates = instruction.candidates.flatMap((candidate) => [
+				candidate.shapeFunctionIndex,
+				candidate.shapeCacheIndex,
+				candidate.slot,
+			]);
 			return [
 				`MalValue __known_own_slot_${ip};`,
-				`if (mal_vm_try_load_known_own_slot(vm, ${boxed(instruction.object)}, ${instruction.shapeFunctionIndex}, ${instruction.shapeCacheIndex}, ${instruction.slot}, &__known_own_slot_${ip})) {`,
+				`static const i32 __known_own_slot_candidates_${ip}[] = { ${candidates.join(", ")} };`,
+				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
 				`  r${instruction.dst} = __known_own_slot_${ip};`,
 				`} else {`,
 				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
 			];
+		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
 			if (

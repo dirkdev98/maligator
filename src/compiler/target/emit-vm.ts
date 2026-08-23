@@ -255,12 +255,14 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				offsets[index] = data.length;
-				data.push(
-					instruction.stringIndex,
-					instruction.shapeFunctionIndex,
-					instruction.shapeCacheIndex,
-					instruction.slot,
-				);
+				data.push(instruction.stringIndex, instruction.candidates.length);
+				for (const candidate of instruction.candidates) {
+					data.push(
+						candidate.shapeFunctionIndex,
+						candidate.shapeCacheIndex,
+						candidate.slot,
+					);
+				}
 				break;
 			case "CREATE_OBJECT_SHAPED":
 				if (instruction.count !== instruction.keyStringIndices.length) {
@@ -870,23 +872,25 @@ function malVmDefinitionStruct(
 	for (const fn of definition.functions) {
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") continue;
-			const key = `${instruction.shapeFunctionIndex}:${instruction.shapeCacheIndex}`;
-			if (precompiledLiteralShapes.has(key)) continue;
-			const source = definition.functions[
-				instruction.shapeFunctionIndex
-			]!.instructions.find(
-				(candidate) =>
-					candidate.opcode === "CREATE_OBJECT_SHAPED" &&
-					candidate.shapeCacheIndex === instruction.shapeCacheIndex,
-			);
-			if (source?.opcode !== "CREATE_OBJECT_SHAPED") {
-				throw new RangeError("invalid known-own-slot literal shape");
+			for (const candidate of instruction.candidates) {
+				const key = `${candidate.shapeFunctionIndex}:${candidate.shapeCacheIndex}`;
+				if (precompiledLiteralShapes.has(key)) continue;
+				const source = definition.functions[
+					candidate.shapeFunctionIndex
+				]!.instructions.find(
+					(origin) =>
+						origin.opcode === "CREATE_OBJECT_SHAPED" &&
+						origin.shapeCacheIndex === candidate.shapeCacheIndex,
+				);
+				if (source?.opcode !== "CREATE_OBJECT_SHAPED") {
+					throw new RangeError("invalid known-own-slot literal shape");
+				}
+				precompiledLiteralShapes.set(key, {
+					functionIndex: candidate.shapeFunctionIndex,
+					shapeCacheIndex: candidate.shapeCacheIndex,
+					keyStringIndices: source.keyStringIndices,
+				});
 			}
-			precompiledLiteralShapes.set(key, {
-				functionIndex: instruction.shapeFunctionIndex,
-				shapeCacheIndex: instruction.shapeCacheIndex,
-				keyStringIndices: source.keyStringIndices,
-			});
 		}
 	}
 	const precompiledShapeRows = [...precompiledLiteralShapes.values()];

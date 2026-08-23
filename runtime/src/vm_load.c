@@ -18,7 +18,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 19u
+#define WIRE_VERSION 20u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in
@@ -531,6 +531,25 @@ static i32 rd_side_fixed(Rd *r, I32Builder *builder, usize count) {
     return offset;
 }
 
+static i32 rd_side_known_own_slots(Rd *r, I32Builder *builder) {
+    i32 offset = (i32) builder->count;
+    i32 string_index = rd_i32(r);
+    u32 candidate_count = rd_count(r, 3);
+    if (!r->ok || candidate_count < 1 || candidate_count > 4 ||
+        !i32_builder_reserve(builder, r, 2 + (usize) candidate_count * 3)) {
+        r->ok = false;
+        return 0;
+    }
+    builder->data[builder->count++] = string_index;
+    builder->data[builder->count++] = (i32) candidate_count;
+    for (u32 index = 0; index < candidate_count; index++) {
+        builder->data[builder->count++] = rd_i32(r);
+        builder->data[builder->count++] = rd_i32(r);
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    return offset;
+}
+
 // ---- instruction decode (mirrors writeInstruction in serialize-vm.ts) ----
 
 static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
@@ -818,7 +837,7 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.load_property_static_known_own_slot.dst = rd_i32(r);
             o->as.load_property_static_known_own_slot.object = rd_i32(r);
             o->as.load_property_static_known_own_slot.data_offset =
-                rd_side_fixed(r, side_data, 4);
+                rd_side_known_own_slots(r, side_data);
             return;
         case WIRE_DELETE_PROPERTY:
             o->opcode = MAL_OP_DELETE_PROPERTY;
@@ -1617,32 +1636,51 @@ static bool mal_loaded_known_own_slot_valid(
     const MalInstruction *instruction
 ) {
     i32 offset = instruction->as.load_property_static_known_own_slot.data_offset;
-    if (offset < 0 || offset > owner->instruction_data_count - 4) return false;
+    if (offset < 0 || offset > owner->instruction_data_count - 2) return false;
     const i32 *data = &owner->instruction_data[offset];
     i32 string_index = data[0];
-    i32 shape_function_index = data[1];
-    i32 shape_cache_index = data[2];
-    i32 slot = data[3];
+    i32 candidate_count = data[1];
     if (string_index < 0 || string_index >= (i32) string_count ||
-        shape_function_index < 0 || shape_function_index >= (i32) function_count ||
-        shape_cache_index < 0 || slot < 0) {
+        candidate_count < 1 || candidate_count > 4 ||
+        offset > owner->instruction_data_count - 2 - candidate_count * 3) {
         return false;
     }
-    const MalFunction *source = &functions[shape_function_index];
-    if (shape_cache_index >= source->literal_shape_count) return false;
-    for (i32 ip = 0; ip < source->instruction_count; ip++) {
-        const MalInstruction *candidate = &source->instructions[ip];
-        if (candidate->opcode != MAL_OP_CREATE_OBJECT_SHAPED ||
-            candidate->as.create_object_shaped.shape_cache_index != shape_cache_index) {
-            continue;
+    for (i32 index = 0; index < candidate_count; index++) {
+        i32 shape_function_index = data[2 + index * 3];
+        i32 shape_cache_index = data[3 + index * 3];
+        i32 slot = data[4 + index * 3];
+        if (shape_function_index < 0 || shape_function_index >= (i32) function_count ||
+            shape_cache_index < 0 || slot < 0) {
+            return false;
         }
-        i32 source_offset = candidate->as.create_object_shaped.data_offset;
+        for (i32 previous = 0; previous < index; previous++) {
+            if (data[2 + previous * 3] == shape_function_index &&
+                data[3 + previous * 3] == shape_cache_index) {
+                return false;
+            }
+        }
+        const MalFunction *source = &functions[shape_function_index];
+        if (shape_cache_index >= source->literal_shape_count) return false;
+        const MalInstruction *origin = nullptr;
+        i32 origin_count = 0;
+        for (i32 ip = 0; ip < source->instruction_count; ip++) {
+            const MalInstruction *candidate = &source->instructions[ip];
+            if (candidate->opcode == MAL_OP_CREATE_OBJECT_SHAPED &&
+                candidate->as.create_object_shaped.shape_cache_index == shape_cache_index) {
+                origin = candidate;
+                origin_count++;
+            }
+        }
+        if (origin_count != 1) return false;
+        i32 source_offset = origin->as.create_object_shaped.data_offset;
         if (source_offset < 0 || source_offset >= source->instruction_data_count) return false;
         i32 count = source->instruction_data[source_offset];
-        return slot < count && source_offset <= source->instruction_data_count - 1 - count &&
-            source->instruction_data[source_offset + 1 + slot] == string_index;
+        if (slot >= count || source_offset > source->instruction_data_count - 1 - count ||
+            source->instruction_data[source_offset + 1 + slot] != string_index) {
+            return false;
+        }
     }
-    return false;
+    return true;
 }
 
 static void mal_loaded_build_precompiled_literal_shapes(
@@ -1656,11 +1694,14 @@ static void mal_loaded_build_precompiled_literal_shapes(
         for (i32 ip = 0; ip < function->instruction_count; ip++) {
             if (function->instructions[ip].opcode
                 == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT) {
-                if (capacity == INT32_MAX) {
+                i32 offset = function->instructions[ip]
+                    .as.load_property_static_known_own_slot.data_offset;
+                i32 candidate_count = function->instruction_data[offset + 1];
+                if (candidate_count > INT32_MAX - capacity) {
                     reader->ok = false;
                     return;
                 }
-                capacity++;
+                capacity += candidate_count;
             }
         }
     }
@@ -1681,41 +1722,48 @@ static void mal_loaded_build_precompiled_literal_shapes(
             }
             i32 offset = instruction->as.load_property_static_known_own_slot.data_offset;
             const i32 *decision = &function->instruction_data[offset];
-            i32 source_function_index = decision[1];
-            i32 shape_cache_index = decision[2];
-            bool duplicate = false;
-            for (i32 existing = 0; existing < count; existing++) {
-                if (shapes[existing].function_index == source_function_index
-                    && shapes[existing].shape_cache_index == shape_cache_index) {
-                    duplicate = true;
-                    break;
+            i32 candidate_count = decision[1];
+            for (i32 candidate_index = 0;
+                 candidate_index < candidate_count;
+                 candidate_index++) {
+                i32 source_function_index = decision[2 + candidate_index * 3];
+                i32 shape_cache_index = decision[3 + candidate_index * 3];
+                bool duplicate = false;
+                for (i32 existing = 0; existing < count; existing++) {
+                    if (shapes[existing].function_index == source_function_index
+                        && shapes[existing].shape_cache_index == shape_cache_index) {
+                        duplicate = true;
+                        break;
+                    }
                 }
-            }
-            if (duplicate) continue;
+                if (duplicate) continue;
 
-            const MalFunction *source = &definition->functions[source_function_index];
-            const MalInstruction *origin = nullptr;
-            for (i32 source_ip = 0; source_ip < source->instruction_count; source_ip++) {
-                const MalInstruction *candidate = &source->instructions[source_ip];
-                if (candidate->opcode == MAL_OP_CREATE_OBJECT_SHAPED
-                    && candidate->as.create_object_shaped.shape_cache_index
-                        == shape_cache_index) {
-                    origin = candidate;
-                    break;
+                const MalFunction *source = &definition->functions[source_function_index];
+                const MalInstruction *origin = nullptr;
+                for (i32 source_ip = 0;
+                     source_ip < source->instruction_count;
+                     source_ip++) {
+                    const MalInstruction *candidate = &source->instructions[source_ip];
+                    if (candidate->opcode == MAL_OP_CREATE_OBJECT_SHAPED
+                        && candidate->as.create_object_shaped.shape_cache_index
+                            == shape_cache_index) {
+                        origin = candidate;
+                        break;
+                    }
                 }
+                if (origin == nullptr) {
+                    reader->ok = false;
+                    return;
+                }
+                i32 source_offset = origin->as.create_object_shaped.data_offset;
+                i32 key_count = source->instruction_data[source_offset];
+                shapes[count++] = (MalPrecompiledLiteralShape) {
+                    .function_index = source_function_index,
+                    .shape_cache_index = shape_cache_index,
+                    .key_count = key_count,
+                    .key_string_indices = &source->instruction_data[source_offset + 1],
+                };
             }
-            if (origin == nullptr) {
-                reader->ok = false;
-                return;
-            }
-            i32 source_offset = origin->as.create_object_shaped.data_offset;
-            i32 key_count = source->instruction_data[source_offset];
-            shapes[count++] = (MalPrecompiledLiteralShape) {
-                .function_index = source_function_index,
-                .shape_cache_index = shape_cache_index,
-                .key_count = key_count,
-                .key_string_indices = &source->instruction_data[source_offset + 1],
-            };
         }
     }
     definition->precompiled_literal_shape_count = count;

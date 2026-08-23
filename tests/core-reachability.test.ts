@@ -423,9 +423,7 @@ describe("Core whole-program function reachability", () => {
 			attributes: {
 				stringIndex: 0,
 				[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: {
-					shapeFunctionIndex: 0,
-					shapeInstruction,
-					slot: 0,
+					candidates: [{ shapeFunctionIndex: 0, shapeInstruction, slot: 0 }],
 				},
 			},
 		});

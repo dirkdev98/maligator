@@ -44,10 +44,14 @@ export const CORE_SHAPE_ORIGIN_CAP = 4;
 /** Target-visible advisory slot candidate owned by the Core shape selector. */
 export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
 
-export interface CoreKnownOwnSlot {
+export interface CoreKnownOwnSlotCandidate {
 	readonly shapeFunctionIndex: number;
 	readonly shapeInstruction: CoreInstructionId;
 	readonly slot: number;
+}
+
+export interface CoreKnownOwnSlot {
+	readonly candidates: ReadonlyArray<CoreKnownOwnSlotCandidate>;
 }
 
 function isNonnegativeSafeInteger(value: unknown): value is number {
@@ -67,18 +71,40 @@ export function coreKnownOwnSlotFromAttribute(
 		return undefined;
 	}
 	const record = value as Record<string, unknown>;
-	if (
-		Object.keys(record).length !== 3 ||
-		!isNonnegativeSafeInteger(record.shapeFunctionIndex) ||
-		!isNonnegativeSafeInteger(record.shapeInstruction) ||
-		!isNonnegativeSafeInteger(record.slot)
-	) {
+	if (Object.keys(record).length !== 1 || !Array.isArray(record.candidates)) {
 		return undefined;
 	}
+	if (record.candidates.length < 1 || record.candidates.length > CORE_SHAPE_ORIGIN_CAP) {
+		return undefined;
+	}
+	const candidates: Array<CoreKnownOwnSlotCandidate> = [];
+	const identities = new Set<string>();
+	for (const value of record.candidates as ReadonlyArray<unknown>) {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			return undefined;
+		}
+		const candidate = value as Record<string, unknown>;
+		if (
+			Object.keys(candidate).length !== 3 ||
+			!isNonnegativeSafeInteger(candidate.shapeFunctionIndex) ||
+			!isNonnegativeSafeInteger(candidate.shapeInstruction) ||
+			!isNonnegativeSafeInteger(candidate.slot)
+		) {
+			return undefined;
+		}
+		const identity = `${candidate.shapeFunctionIndex}\0${candidate.shapeInstruction}`;
+		if (identities.has(identity)) return undefined;
+		identities.add(identity);
+		candidates.push(
+			Object.freeze({
+				shapeFunctionIndex: candidate.shapeFunctionIndex,
+				shapeInstruction: coreInstructionId(candidate.shapeInstruction),
+				slot: candidate.slot,
+			}),
+		);
+	}
 	return Object.freeze({
-		shapeFunctionIndex: record.shapeFunctionIndex,
-		shapeInstruction: coreInstructionId(record.shapeInstruction),
-		slot: record.slot,
+		candidates: Object.freeze(candidates),
 	});
 }
 
@@ -87,9 +113,18 @@ function knownOwnSlotsEqual(
 	right: CoreKnownOwnSlot | undefined,
 ): boolean {
 	return (
-		left?.shapeFunctionIndex === right?.shapeFunctionIndex &&
-		left?.shapeInstruction === right?.shapeInstruction &&
-		left?.slot === right?.slot
+		left !== undefined &&
+		right !== undefined &&
+		left.candidates.length === right.candidates.length &&
+		left.candidates.every((candidate, index) => {
+			const other = right.candidates[index];
+			return (
+				other !== undefined &&
+				candidate.shapeFunctionIndex === other.shapeFunctionIndex &&
+				candidate.shapeInstruction === other.shapeInstruction &&
+				candidate.slot === other.slot
+			);
+		})
 	);
 }
 
@@ -706,14 +741,28 @@ export function selectCoreKnownOwnSlots(
 					const receiver = instruction.inputs[0]!;
 					const candidates = provenance.candidates(fn.functionIndex, receiver);
 					if (typeof stringIndex === "number") {
-						const origin = candidates.origins.find(({ keyStringIndices }) =>
-							keyStringIndices.includes(stringIndex),
-						);
-						if (origin !== undefined) {
+						const selectedCandidates: Array<CoreKnownOwnSlotCandidate> = [];
+						const seenLayouts = new Set<string>();
+						for (const origin of candidates.origins) {
+							const slot = origin.keyStringIndices.indexOf(stringIndex);
+							if (slot < 0) continue;
+							// Literal shapes are interned from their ordered canonical keys. One
+							// representative therefore covers identical layouts from any number of
+							// allocation sites, while genuinely different layouts retain their own
+							// exact pointer+slot guard.
+							const layout = origin.keyStringIndices.join(",");
+							if (seenLayouts.has(layout)) continue;
+							seenLayouts.add(layout);
+							selectedCandidates.push({
+								shapeFunctionIndex: origin.functionIndex,
+								shapeInstruction: origin.instruction,
+								slot,
+							});
+						}
+						if (selectedCandidates.length > 0) {
 							// Raw string-index identity is conservative: the array is also the
 							// runtime slot order, so an equivalent constant at another index simply
 							// declines until a later canonical-key selector generalizes this proof.
-							const slot = origin.keyStringIndices.indexOf(stringIndex);
 							// A candidate crossing a function boundary is precision, not a
 							// frequency proof. Residual property ICs are already cheap when warm,
 							// so publish extra guarded output only where the load itself repeats.
@@ -721,9 +770,7 @@ export function selectCoreKnownOwnSlots(
 							// reaching this loop-resident consumer.
 							if (provenance.isLoopBlock(fn.functionIndex, block.id)) {
 								selected = {
-									shapeFunctionIndex: origin.functionIndex,
-									shapeInstruction: origin.instruction,
-									slot,
+									candidates: Object.freeze(selectedCandidates),
 								};
 							}
 						}
@@ -746,9 +793,11 @@ export function selectCoreKnownOwnSlots(
 				delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
 				if (selected !== undefined) {
 					attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] = {
-						shapeFunctionIndex: selected.shapeFunctionIndex,
-						shapeInstruction: selected.shapeInstruction,
-						slot: selected.slot,
+						candidates: selected.candidates.map((candidate) => ({
+							shapeFunctionIndex: candidate.shapeFunctionIndex,
+							shapeInstruction: candidate.shapeInstruction,
+							slot: candidate.slot,
+						})),
 					};
 				}
 				changed = true;
