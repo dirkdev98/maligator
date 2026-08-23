@@ -308,6 +308,66 @@ function multiOriginLoopProgram(): {
 	};
 }
 
+function aggregateFieldLoopProgram(escaped = false): {
+	readonly program: CoreProgram;
+	readonly receiver: CoreValueId;
+	readonly load: CoreInstruction;
+} {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const loop = builder.createBlock();
+	const latch = builder.createBlock();
+	const exit = builder.createBlock();
+	const [initial] = builder.appendInstruction(entry, "createUndefined", []);
+	const [first] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	const [second] = builder.appendInstruction(
+		entry,
+		"createObjectShaped",
+		[initial!, initial!],
+		{
+			attributes: { keyStringIndices: [2, 1] },
+		},
+	);
+	const [holder] = builder.appendInstruction(entry, "createObjectShaped", [first!], {
+		attributes: { keyStringIndices: [4] },
+	});
+	builder.appendInstruction(entry, "storePropertyStatic", [holder!, second!], {
+		attributes: { stringIndex: 4 },
+	});
+	builder.setTerminator(entry, {
+		kind: "jump",
+		edge: { block: loop, arguments: [] },
+	});
+	const [receiver] = builder.appendInstruction(loop, "loadPropertyStatic", [holder!], {
+		attributes: { stringIndex: 4 },
+	});
+	const [loaded] = builder.appendInstruction(loop, "loadPropertyStatic", [receiver!], {
+		attributes: { stringIndex: 1 },
+	});
+	const [repeat] = builder.appendInstruction(loop, "createBoolean", [], {
+		attributes: { value: false },
+	});
+	builder.setTerminator(loop, {
+		kind: "branch",
+		condition: repeat!,
+		consequent: { block: latch, arguments: [] },
+		alternate: { block: exit, arguments: [] },
+	});
+	builder.setTerminator(latch, {
+		kind: "jump",
+		edge: { block: loop, arguments: [] },
+	});
+	builder.setTerminator(exit, { kind: "return", value: escaped ? holder! : loaded! });
+	const fn = builder.finish(entry);
+	return {
+		program: coreProgram([fn]),
+		receiver: receiver!,
+		load: instructions(fn, "loadPropertyStatic")[1]!,
+	};
+}
+
 describe("Core shaped-object provenance", () => {
 	it("admits canonical named slots and preserves their original runtime order", () => {
 		const { program, object } = shapedKeysProgram([2, 1], [[], [120], [121]]);
@@ -322,6 +382,34 @@ describe("Core shaped-object provenance", () => {
 			],
 			opaque: false,
 		});
+	});
+
+	it("joins shaped values stored in a compiler-created aggregate field", () => {
+		const built = aggregateFieldLoopProgram();
+		const analysis = analyzeCoreShapeProvenance(built.program);
+		expect(
+			analysis
+				.candidates(0, built.receiver)
+				.origins.map(({ keyStringIndices }) => keyStringIndices),
+		).toEqual([[1], [2, 1]]);
+		expect(analysis.candidates(0, built.receiver).opaque).toBe(false);
+		expect(analysis.statistics.aggregateCellNodes).toBeGreaterThan(0);
+		const selected = selectCoreKnownOwnSlots(built.program, analysis).program;
+		expect(
+			coreKnownOwnSlotFromAttribute(
+				instructions(selected.functions[0]!, "loadPropertyStatic")[1]!.attributes[
+					CORE_KNOWN_OWN_SLOT_ATTRIBUTE
+				],
+			)?.candidates,
+		).toHaveLength(2);
+
+		const escaped = aggregateFieldLoopProgram(true);
+		const escapedCandidates = analyzeCoreShapeProvenance(escaped.program).candidates(
+			0,
+			escaped.receiver,
+		);
+		expect(escapedCandidates.origins).toHaveLength(2);
+		expect(escapedCandidates.opaque).toBe(true);
 	});
 
 	it("rejects duplicate-content, array-index, and __proto__ shaped keys", () => {
@@ -1121,5 +1209,51 @@ describe("Core known own-slot selection", () => {
 		expect(candidates.origins).toHaveLength(2);
 		expect(candidates.opaque).toBe(true);
 		expect(instructions(selected!.fn, "loadCaptured")).not.toHaveLength(0);
+	});
+
+	it("propagates stored shapes through an escaped aggregate field", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function exercise(second) {
+					const holder = { value: { x: 1 } };
+					if (second) holder.value = { tag: "second", x: 2 };
+					globalThis.publishHolder(holder);
+					let total = 0;
+					for (let index = 0; index < 4; index++) total += holder.value.x;
+					return total;
+				}
+				exercise(false);`,
+				"aggregate-known-own-slot.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining", "interprocedural"]),
+		}).program;
+		const selected = optimized.functions
+			.flatMap((fn) =>
+				fn.blocks.flatMap((block) =>
+					block.instructions.map((instruction) => ({ fn, instruction })),
+				),
+			)
+			.find(
+				({ instruction }) =>
+					instruction.opcode === "loadPropertyStatic" &&
+					CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes,
+			);
+		expect(selected).toBeDefined();
+		const analysis = analyzeCoreShapeProvenance(optimized);
+		const candidates = analysis.candidates(
+			selected!.fn.functionIndex,
+			selected!.instruction.inputs[0]!,
+		);
+		expect(
+			candidates.origins.map(({ keyStringIndices }) => keyStringIndices.length),
+		).toEqual([1]);
+		expect(analysis.statistics.aggregateCellNodes).toBeGreaterThan(0);
+		expect(
+			coreKnownOwnSlotFromAttribute(
+				selected!.instruction.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+			)?.candidates,
+		).toHaveLength(1);
 	});
 });

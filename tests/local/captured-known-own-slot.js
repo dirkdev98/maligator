@@ -46,4 +46,63 @@ const exercise = function (secondOrigin) {
 
 exercise(false);
 exercise(true);
+
+const aggregateExercise = function (name, mutate, expected) {
+	const holder = { value: { x: 1 } };
+	mutate(holder);
+	let total = 0;
+	for (let index = 0; index < 4; index++) total += holder.value.x;
+	ok(name, total === expected);
+};
+
+aggregateExercise("aggregate initial slot", () => {}, 4);
+aggregateExercise(
+	"aggregate same-shape replacement",
+	(holder) => {
+		holder.value = { x: 2 };
+	},
+	8,
+);
+aggregateExercise(
+	"aggregate different-shape fallback",
+	(holder) => {
+		holder.value = { tag: "different", x: 3 };
+	},
+	12,
+);
+
+let aggregateGetterCalls = 0;
+aggregateExercise(
+	"aggregate accessor fallback",
+	(holder) => {
+		const value = { y: 0, x: 4 };
+		Object.defineProperty(holder, "value", {
+			get() {
+				aggregateGetterCalls++;
+				return value;
+			},
+		});
+	},
+	16,
+);
+ok("aggregate accessor count", aggregateGetterCalls === 4);
+
+let aggregateProxyCalls = 0;
+aggregateExercise(
+	"aggregate Proxy fallback",
+	(holder) => {
+		holder.value = new Proxy(
+			{ x: 5 },
+			{
+				get(target, key) {
+					aggregateProxyCalls++;
+					return target[key];
+				},
+			},
+		);
+	},
+	20,
+);
+ok("aggregate Proxy count", aggregateProxyCalls === 4);
+
 console.log("captured-known-own-slot PASS");

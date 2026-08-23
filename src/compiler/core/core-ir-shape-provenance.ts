@@ -24,7 +24,7 @@ import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import { coreOwnCellResolver } from "./core-ir-provenance.ts";
+import { coreOwnCellResolver, coreProvenance } from "./core-ir-provenance.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
@@ -174,6 +174,8 @@ export interface CoreShapeProvenanceStatistics {
 	readonly nodes: number;
 	readonly edges: number;
 	readonly origins: number;
+	/** Compiler-created object fields carrying candidate values. */
+	readonly aggregateCellNodes: number;
 	/** Strict node-state rises during the bounded solve. */
 	readonly propagations: number;
 	/** Values that observed more origins than the finite candidate bound. */
@@ -285,6 +287,7 @@ export function analyzeCoreShapeProvenance(
 	const returnNodes = new Map<number, number>();
 	const globalNodes = new Map<number, number>();
 	const capturedNodes = new Map<string, number>();
+	const aggregateNodes = new Map<string, number>();
 	let nodeCount = 0;
 	for (const fn of activeFunctions) {
 		const limit = valueLimit(fn);
@@ -312,9 +315,23 @@ export function analyzeCoreShapeProvenance(
 		}
 		return node;
 	};
+	const aggregateNode = (
+		functionIndex: number,
+		allocation: CoreInstructionId,
+		key: number,
+	): number => {
+		const identity = `${functionIndex}:${allocation}:${key}`;
+		let node = aggregateNodes.get(identity);
+		if (node === undefined) {
+			node = nodeCount++;
+			aggregateNodes.set(identity, node);
+		}
+		return node;
+	};
 
 	const origins: Array<CoreShapeOrigin> = [];
 	const originByInstruction = new Map<string, number>();
+	const aggregateFunctions = new Set<number>();
 	const thisNodes = new Map<number, Array<number>>();
 	const controlFlowByFunction = new Map<number, CoreControlFlow>();
 	const loopBlocksByFunction = new Map<number, ReadonlySet<CoreBlockId>>();
@@ -333,6 +350,7 @@ export function analyzeCoreShapeProvenance(
 			for (const instruction of block.instructions) {
 				const keys = coreShapedObjectKeys(program, instruction, cellForString);
 				if (keys !== undefined) {
+					aggregateFunctions.add(fn.functionIndex);
 					const origin = origins.length;
 					origins.push(
 						Object.freeze({
@@ -374,6 +392,39 @@ export function analyzeCoreShapeProvenance(
 		const base = valueBase.get(fn.functionIndex)!;
 		const node = (value: CoreValueId): number => base + value;
 		const cfg = controlFlowByFunction.get(fn.functionIndex)!;
+		const provenance = aggregateFunctions.has(fn.functionIndex)
+			? coreProvenance(fn, cfg, program.stringConstants)
+			: undefined;
+		const aggregateCells = new Map<CoreInstructionId, Map<number, number>>();
+		for (const layout of provenance?.layouts ?? []) {
+			if (layout.kind !== "named-slots") continue;
+			const cells = new Map<number, number>();
+			aggregateCells.set(layout.instruction, cells);
+			for (const [index, keyStringIndex] of layout.keys.entries()) {
+				const key = cellForString(keyStringIndex);
+				const initial = layout.initialValues[index];
+				if (key?.kind !== "object-slot" || initial === undefined) continue;
+				const cell = aggregateNode(fn.functionIndex, layout.instruction, key.key);
+				cells.set(key.key, cell);
+				addEdge(node(initial), cell);
+				// Once the carrier escapes, unknown code can delete the field, replace
+				// its descriptor, or write any value. Keep every in-image candidate but
+				// never present the aggregate cell as closed.
+				if (provenance?.escape(layout.instruction) === "escaped") {
+					opaqueSeeds.push(cell);
+				}
+			}
+		}
+		const aggregateCellFor = (
+			value: CoreValueId,
+			keyStringIndex: number,
+		): number | undefined => {
+			const layout = provenance?.allocationOf(value);
+			const key = cellForString(keyStringIndex);
+			return layout?.kind === "named-slots" && key?.kind === "object-slot"
+				? aggregateCells.get(layout.instruction)?.get(key.key)
+				: undefined;
+		};
 		// A function can always be entered by code this candidate graph does not name.
 		// Known calls add useful origins below, but never turn a formal into a closed
 		// current-shape proof.
@@ -427,6 +478,31 @@ export function analyzeCoreShapeProvenance(
 				) {
 					addEdge(node(instruction.inputs[0]!), node(instruction.outputs[0]!));
 					continue;
+				}
+				if (instruction.opcode === "loadPropertyStatic" && output !== undefined) {
+					const object = instruction.inputs[0];
+					const stringIndex = instruction.attributes.stringIndex;
+					const cell =
+						object !== undefined && typeof stringIndex === "number"
+							? aggregateCellFor(object, stringIndex)
+							: undefined;
+					if (cell !== undefined) {
+						addEdge(cell, node(output));
+						continue;
+					}
+				}
+				if (instruction.opcode === "storePropertyStatic") {
+					const object = instruction.inputs[0];
+					const source = instruction.inputs[1];
+					const stringIndex = instruction.attributes.stringIndex;
+					const cell =
+						object !== undefined && typeof stringIndex === "number"
+							? aggregateCellFor(object, stringIndex)
+							: undefined;
+					if (cell !== undefined && source !== undefined) {
+						addEdge(node(source), cell);
+						continue;
+					}
 				}
 				if (instruction.opcode === "loadGlobal" && output !== undefined) {
 					const slot = instruction.attributes.index;
@@ -606,6 +682,7 @@ export function analyzeCoreShapeProvenance(
 			nodes: nodeCount,
 			edges,
 			origins: origins.length,
+			aggregateCellNodes: aggregateNodes.size,
 			propagations,
 			saturatedValues,
 		}),
