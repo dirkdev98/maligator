@@ -220,6 +220,48 @@ function clusteredLoopProgram(): CoreProgram {
 	return coreProgram([builder.finish(entry)]);
 }
 
+function nonLoopClusterProgram(
+	options: {
+		readonly barrier?: boolean;
+		readonly differentCandidate?: boolean;
+		readonly movedReceiver?: boolean;
+	} = {},
+): CoreProgram {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const values = [1, 2].map(
+		(value) =>
+			builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value },
+			})[0]!,
+	);
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", values, {
+		attributes: { keyStringIndices: [1, 2] },
+	});
+	const [_first] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+		attributes: { stringIndex: 1 },
+	});
+	if (options.barrier === true) {
+		builder.appendInstruction(entry, "createObject", []);
+	}
+	let secondReceiver = object!;
+	if (options.movedReceiver === true) {
+		secondReceiver = builder.appendInstruction(entry, "move", [object!])[0]!;
+	} else if (options.differentCandidate === true) {
+		secondReceiver = builder.appendInstruction(entry, "createObjectShaped", values, {
+			attributes: { keyStringIndices: [1, 2] },
+		})[0]!;
+	}
+	const [second] = builder.appendInstruction(
+		entry,
+		"loadPropertyStatic",
+		[secondReceiver],
+		{ attributes: { stringIndex: 2 } },
+	);
+	builder.setTerminator(entry, { kind: "return", value: second! });
+	return coreProgram([builder.finish(entry)]);
+}
+
 function crossCallProgram(
 	producerIndex = 0,
 	callerIndex = 1,
@@ -1405,6 +1447,9 @@ describe("Core known own-slot selection", () => {
 		const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
 			attributes: { keyStringIndices: [1] },
 		});
+		builder.appendInstruction(entry, "storePropertyStatic", [object!, initial!], {
+			attributes: { stringIndex: 1 },
+		});
 		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
 			attributes: { stringIndex: 1 },
 		});
@@ -1417,6 +1462,51 @@ describe("Core known own-slot selection", () => {
 			CORE_KNOWN_OWN_SLOT_ATTRIBUTE in
 				instructions(program.functions[0]!, "loadPropertyStatic")[0]!.attributes,
 		).toBe(false);
+		expect(
+			CORE_KNOWN_OWN_SLOT_ATTRIBUTE in
+				instructions(program.functions[0]!, "storePropertyStatic")[0]!.attributes,
+		).toBe(false);
+	});
+
+	it("shares one shape selection across two safe non-loop loads", () => {
+		const initial = nonLoopClusterProgram();
+		const selected = selectKnownOwnSlots(initial);
+		expect(selected.changed).toBe(true);
+		const fn = selected.program.functions[0]!;
+		expect(instructions(fn, "selectShapeCase")).toHaveLength(1);
+		expect(instructions(fn, "loadPropertyStaticShapeCase")).toHaveLength(2);
+		expect(instructions(fn, "loadPropertyStatic")).toHaveLength(0);
+		expect(
+			fn.blocks.flatMap(({ instructions: blockInstructions }) =>
+				blockInstructions.filter(
+					(instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes,
+				),
+			),
+		).toHaveLength(0);
+		verifyCoreProgram(selected.program, coreOpcodeRegistry);
+
+		const rerun = selectKnownOwnSlots(selected.program);
+		expect(rerun.changed).toBe(false);
+		expect(rerun.program).toBe(selected.program);
+	});
+
+	it("keeps unsafe or mismatched non-loop load pairs generic", () => {
+		for (const initial of [
+			nonLoopClusterProgram({ barrier: true }),
+			nonLoopClusterProgram({ movedReceiver: true }),
+			nonLoopClusterProgram({ differentCandidate: true }),
+		]) {
+			const selected = selectKnownOwnSlots(initial);
+			expect(selected.changed).toBe(false);
+			expect(selected.program).toBe(initial);
+			expect(instructions(initial.functions[0]!, "selectShapeCase")).toHaveLength(0);
+			expect(instructions(initial.functions[0]!, "loadPropertyStatic")).toHaveLength(2);
+			expect(
+				instructions(initial.functions[0]!, "loadPropertyStatic").some(
+					(instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes,
+				),
+			).toBe(false);
+		}
 	});
 
 	it("selects each distinct bounded layout for multiple guarded origins", () => {
@@ -1695,12 +1785,15 @@ describe("Core known own-slot selection", () => {
 		expect(coreLoads).toHaveLength(3);
 
 		const target = lowerCoreProgramToTarget(optimized);
+		const targetInstructions = target.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions: blockInstructions }) => blockInstructions);
 		expect(
-			target.functions
-				.flatMap(({ blocks }) => blocks)
-				.flatMap(({ instructions: blockInstructions }) => blockInstructions)
-				.filter(({ type }) => type === "selectShapeCase"),
+			targetInstructions.filter(({ type }) => type === "selectShapeCase"),
 		).toHaveLength(1);
+		expect(
+			targetInstructions.filter(({ type }) => type === "loadPropertyStaticShapeCase"),
+		).toHaveLength(3);
 		const vm = lowerCoreProgramToVmDefinition(target);
 		const vmSelectors = vm.functions.flatMap(({ instructions }) =>
 			instructions.filter(({ opcode }) => opcode === "SELECT_SHAPE_CASE"),
@@ -1710,6 +1803,66 @@ describe("Core known own-slot selection", () => {
 		);
 		expect(vmSelectors).toHaveLength(1);
 		expect(vmLoads).toHaveLength(3);
+	});
+
+	it("lowers two acyclic loads to one portable shape case", () => {
+		const initial = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(touch) {
+					const object = {
+						x: 1,
+						y: 2,
+						sum2() {
+							touch(this);
+							const x = this.x;
+							const y = this.y;
+							return x + y;
+						},
+					};
+					return object.sum2();
+				}
+				run(() => {});`,
+				"shape-case-non-loop-target.mjs",
+			),
+		);
+		const optimized = executeCoreOptimizations(initial, {
+			ablations: new Set(["inlining"]),
+		}).program;
+		const coreSelectors = optimized.functions.flatMap((fn) =>
+			instructions(fn, "selectShapeCase"),
+		);
+		const coreLoads = optimized.functions.flatMap((fn) =>
+			instructions(fn, "loadPropertyStaticShapeCase"),
+		);
+		expect(coreSelectors).toHaveLength(1);
+		expect(coreLoads).toHaveLength(2);
+		expect(
+			optimized.functions
+				.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
+				.some((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes),
+		).toBe(false);
+
+		const target = lowerCoreProgramToTarget(optimized);
+		const targetInstructions = target.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions: blockInstructions }) => blockInstructions);
+		expect(
+			targetInstructions.filter(({ type }) => type === "selectShapeCase"),
+		).toHaveLength(1);
+		expect(
+			targetInstructions.filter(({ type }) => type === "loadPropertyStaticShapeCase"),
+		).toHaveLength(2);
+		const vm = lowerCoreProgramToVmDefinition(target);
+		expect(
+			vm.functions.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "SELECT_SHAPE_CASE"),
+			),
+		).toHaveLength(1);
+		expect(
+			vm.functions.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE"),
+			),
+		).toHaveLength(2);
 	});
 
 	it("carries the certificate unchanged to the target load", () => {

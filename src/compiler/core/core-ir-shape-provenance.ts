@@ -1061,9 +1061,10 @@ export interface CoreKnownOwnSlotSelection {
 	readonly changed: boolean;
 }
 
-export const CORE_SHAPE_CASE_MIN_LOADS = 3;
+export const CORE_SHAPE_CASE_MIN_LOADS = 2;
 export const CORE_SHAPE_CASE_MAX_LOADS = 16;
 export const CORE_SHAPE_CASE_MAX_SPAN = 64;
+const CORE_LOOP_SHAPE_CASE_MIN_LOADS = 3;
 
 interface CoreShapeCasePlan {
 	readonly positions: ReadonlyArray<number>;
@@ -1072,7 +1073,10 @@ interface CoreShapeCasePlan {
 	readonly slotsByPosition: ReadonlyMap<number, ReadonlyArray<number>>;
 }
 
-function knownOwnSlotCase(instruction: CoreInstruction):
+function knownOwnSlotCase(
+	instruction: CoreInstruction,
+	provisional: ReadonlyMap<CoreInstructionId, CoreKnownOwnSlot> | undefined,
+):
 	| {
 			readonly receiver: CoreValueId;
 			readonly candidates: ReadonlyArray<CoreShapeCaseCandidate>;
@@ -1086,9 +1090,9 @@ function knownOwnSlotCase(instruction: CoreInstruction):
 	) {
 		return undefined;
 	}
-	const claim = coreKnownOwnSlotFromAttribute(
-		instruction.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
-	);
+	const claim =
+		provisional?.get(instruction.id) ??
+		coreKnownOwnSlotFromAttribute(instruction.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]);
 	if (claim === undefined) return undefined;
 	return {
 		receiver: instruction.inputs[0]!,
@@ -1152,11 +1156,17 @@ function findShapeCasePlans(
 	fn: CoreFunction,
 	block: CoreBlock,
 	immutableThis: ReadonlySet<CoreValueId>,
+	provisional: ReadonlyMap<CoreInstructionId, CoreKnownOwnSlot> | undefined,
 ): ReadonlyArray<CoreShapeCasePlan> {
 	const plans: Array<CoreShapeCasePlan> = [];
 	for (let start = 0; start < block.instructions.length; start++) {
-		const first = knownOwnSlotCase(block.instructions[start]!);
+		const firstInstruction = block.instructions[start]!;
+		const first = knownOwnSlotCase(firstInstruction, provisional);
 		if (first === undefined) continue;
+		const minimumLoads =
+			provisional?.has(firstInstruction.id) === true
+				? CORE_SHAPE_CASE_MIN_LOADS
+				: CORE_LOOP_SHAPE_CASE_MIN_LOADS;
 		const positions = [start];
 		const slotsByPosition = new Map<number, ReadonlyArray<number>>([
 			[start, first.slots],
@@ -1169,7 +1179,7 @@ function findShapeCasePlans(
 			index++
 		) {
 			const instruction = block.instructions[index]!;
-			const candidate = knownOwnSlotCase(instruction);
+			const candidate = knownOwnSlotCase(instruction, provisional);
 			if (
 				candidate !== undefined &&
 				sameShapeCaseReceiver(immutableThis, candidate.receiver, first.receiver) &&
@@ -1191,7 +1201,7 @@ function findShapeCasePlans(
 				break;
 			}
 		}
-		if (positions.length < CORE_SHAPE_CASE_MIN_LOADS) continue;
+		if (positions.length < minimumLoads) continue;
 		plans.push({
 			positions: Object.freeze(positions),
 			receiver: first.receiver,
@@ -1203,7 +1213,10 @@ function findShapeCasePlans(
 	return plans;
 }
 
-function consolidateKnownOwnSlotLoads(fn: CoreFunction): CoreFunction {
+function consolidateKnownOwnSlotLoads(
+	fn: CoreFunction,
+	provisional: ReadonlyMap<CoreInstructionId, CoreKnownOwnSlot> | undefined,
+): CoreFunction {
 	let nextInstruction =
 		Math.max(
 			-1,
@@ -1217,7 +1230,7 @@ function consolidateKnownOwnSlotLoads(fn: CoreFunction): CoreFunction {
 	const immutableThis = immutableThisValues(fn);
 	let changed = false;
 	const blocks = fn.blocks.map((block): CoreBlock => {
-		const plans = findShapeCasePlans(fn, block, immutableThis);
+		const plans = findShapeCasePlans(fn, block, immutableThis, provisional);
 		if (plans.length === 0) return block;
 		changed = true;
 		const firstPlanByPosition = new Map(
@@ -1365,8 +1378,13 @@ export function selectCoreKnownOwnSlots(
 	provenance: CoreShapeProvenanceAnalysis,
 ): CoreKnownOwnSlotSelection {
 	let changed = false;
+	const provisionalByFunction = new Map<
+		number,
+		ReadonlyMap<CoreInstructionId, CoreKnownOwnSlot>
+	>();
 	const functions = program.functions.map((fn): CoreFunction => {
 		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
+		let provisional: Map<CoreInstructionId, CoreKnownOwnSlot> | undefined;
 		let functionChanged = false;
 		const blocks = fn.blocks.map((block): CoreBlock => {
 			let blockChanged = false;
@@ -1402,18 +1420,24 @@ export function selectCoreKnownOwnSlots(
 							});
 						}
 						if (selectedCandidates.length > 0) {
+							const candidate: CoreKnownOwnSlot = {
+								candidates: Object.freeze(selectedCandidates),
+							};
 							// Raw string-index identity is conservative: the array is also the
 							// runtime slot order, so an equivalent constant at another index simply
 							// declines until a later canonical-key selector generalizes this proof.
 							// A candidate crossing a function boundary is precision, not a
 							// frequency proof. Residual property ICs are already cheap when warm,
-							// so publish extra guarded output only where the access itself repeats.
+							// so publish an independent guard only where a loop repeats the access.
 							// Origins may still flow through any number of ordinary calls before
-							// reaching this loop-resident consumer.
+							// reaching either admission form.
 							if (provenance.isLoopBlock(fn.functionIndex, block.id)) {
-								selected = {
-									candidates: Object.freeze(selectedCandidates),
-								};
+								selected = candidate;
+							} else if (instruction.opcode === "loadPropertyStatic") {
+								// Acyclic sites are not profitable as independent guarded loads.
+								// Keep their proof ephemeral so only a safe repeated-load cluster
+								// can consume it; every residual site stays a generic property IC.
+								(provisional ??= new Map()).set(instruction.id, candidate);
 							}
 						}
 					}
@@ -1449,10 +1473,16 @@ export function selectCoreKnownOwnSlots(
 			});
 			return blockChanged ? { ...block, instructions } : block;
 		});
+		if (provisional !== undefined) {
+			provisionalByFunction.set(fn.functionIndex, provisional);
+		}
 		return functionChanged ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
 	});
 	const clusteredFunctions = functions.map((fn) => {
-		const clustered = consolidateKnownOwnSlotLoads(fn);
+		const clustered = consolidateKnownOwnSlotLoads(
+			fn,
+			provisionalByFunction.get(fn.functionIndex),
+		);
 		if (clustered !== fn) changed = true;
 		return clustered;
 	});

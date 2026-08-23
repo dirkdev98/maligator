@@ -20,6 +20,43 @@ const object = {
 	},
 };
 
+const pair = {
+	left: 10,
+	right: 11,
+	sum2() {
+		const left = this.left;
+		const right = this.right;
+		return left + right;
+	},
+};
+
+ok("acyclic pair hit", pair.sum2() === 21);
+
+let pairAccessorGets = 0;
+Object.defineProperty(pair, "left", {
+	configurable: true,
+	get() {
+		pairAccessorGets++;
+		return 20;
+	},
+});
+ok("acyclic pair accessor fallback", pair.sum2() === 31);
+ok("acyclic pair accessor count", pairAccessorGets === 1);
+
+const pairMethod = pair.sum2;
+const pairProxyGets = [];
+const pairProxy = new Proxy(
+	{ left: 7, right: 8 },
+	{
+		get(target, key, receiver) {
+			pairProxyGets.push(key);
+			return Reflect.get(target, key, receiver);
+		},
+	},
+);
+ok("acyclic pair proxy fallback", pairMethod.call(pairProxy) === 15);
+ok("acyclic pair proxy get order", pairProxyGets.join(",") === "left,right");
+
 ok("exact shape hit", object.sum3(4) === 24);
 
 let accessorGets = 0;
@@ -61,5 +98,5 @@ try {
 }
 ok("throw fallback", message === "shape-case getter throw");
 
-if (checks !== 6) throw new Error("shape-case check count: " + checks);
+if (checks !== 11) throw new Error("shape-case check count: " + checks);
 console.log("shape-case-flow PASS");

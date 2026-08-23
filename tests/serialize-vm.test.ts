@@ -428,9 +428,9 @@ function shapeCaseDefinition(): VmDefinition {
 		{
 			opcode: "CREATE_OBJECT_SHAPED",
 			dst: 2,
-			count: 3,
-			keyStringIndices: [0, 1, 2],
-			valueRegisters: [0, 1, 0],
+			count: 2,
+			keyStringIndices: [0, 1],
+			valueRegisters: [0, 1],
 			shapeCacheIndex: 0,
 		},
 		{
@@ -457,39 +457,22 @@ function shapeCaseDefinition(): VmDefinition {
 			icIndex: 1,
 			slots: [1],
 		},
-		{
-			opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
-			dst: 6,
-			object: 2,
-			shapeCase: 3,
-			stringIndex: 2,
-			icIndex: 2,
-			slots: [2],
-		},
-		{ opcode: "RETURN", value: 6 },
+		{ opcode: "RETURN", value: 5 },
 	];
 	return {
 		...base,
-		stringConstants: [[120], [121], [122]],
+		stringConstants: [[120], [121]],
 		precompiledLiteralShapes: [
-			{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1, 2] },
+			{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1] },
 		],
 		functions: [
 			{
 				...fn,
-				registerCount: 7,
+				registerCount: 6,
 				literalShapeCount: 1,
 				instructions,
 				positions: instructions.map(() => 0),
-				registerRepresentations: [
-					"boxed",
-					"boxed",
-					"boxed",
-					"number",
-					"boxed",
-					"boxed",
-					"boxed",
-				],
+				registerRepresentations: ["boxed", "boxed", "boxed", "number", "boxed", "boxed"],
 				regions: undefined,
 			},
 		],
@@ -643,6 +626,23 @@ describe("serialize-vm", () => {
 		);
 		expect(restored.functions[0]!.instructions).toEqual(valid.functions[0]!.instructions);
 
+		const oneLoad = {
+			...valid,
+			functions: valid.functions.map((fn) => ({
+				...fn,
+				instructions: fn.instructions
+					.filter(
+						(instruction) =>
+							instruction.opcode !== "LOAD_PROPERTY_STATIC_SHAPE_CASE" ||
+							instruction.stringIndex !== 1,
+					)
+					.map((instruction) =>
+						instruction.opcode === "RETURN" ? { ...instruction, value: 4 } : instruction,
+					),
+			})),
+		};
+		expect(() => serializeVmDefinition(oneLoad)).toThrow(/shape-case selector use count/);
+
 		const wrongSlot = {
 			...valid,
 			functions: valid.functions.map((fn) => ({
@@ -711,7 +711,7 @@ describe("serialize-vm", () => {
 		);
 		expect(firstLoadOffset).toBeGreaterThanOrEqual(0);
 		const receiverClobberWire = encoded.slice();
-		// Make the first of three loads overwrite r2, the selector's receiver.
+		// Make the first of two loads overwrite r2, the selector's receiver.
 		receiverClobberWire[firstLoadOffset + 1] = 4;
 		expect(() => deserializeVmDefinition(receiverClobberWire)).toThrow(
 			/shape-case selector receiver is redefined/,

@@ -103,6 +103,13 @@ describe("wire loader side-data validation", () => {
 		expect(result.stderr).toContain("truncated or corrupt buffer");
 	}
 
+	function acceptsWire(name: string, wire: Uint8Array): void {
+		const wirePath = path.join(directory, `${name}.malw`);
+		writeFileSync(wirePath, wire);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr).toBe(0);
+	}
+
 	it("rejects an explicit count that disagrees with its arrays", () => {
 		// Empty definition tables put the first instruction at byte 33 after the
 		// fixed header, source-entry field, and explicit literal-shape count. Its
@@ -204,24 +211,16 @@ describe("wire loader side-data validation", () => {
 		const shapeCaseFunction: VmFunction = {
 			...fn,
 			literalShapeCount: 1,
-			registerCount: 7,
-			registerRepresentations: [
-				"boxed",
-				"boxed",
-				"boxed",
-				"number",
-				"boxed",
-				"boxed",
-				"boxed",
-			],
+			registerCount: 6,
+			registerRepresentations: ["boxed", "boxed", "boxed", "number", "boxed", "boxed"],
 			instructions: [
 				{ opcode: "CREATE_UNDEFINED", dst: 0 },
 				{
 					opcode: "CREATE_OBJECT_SHAPED",
 					dst: 2,
-					count: 3,
-					keyStringIndices: [0, 1, 2],
-					valueRegisters: [0, 0, 0],
+					count: 2,
+					keyStringIndices: [0, 1],
+					valueRegisters: [0, 0],
 					shapeCacheIndex: 0,
 				},
 				{
@@ -248,27 +247,21 @@ describe("wire loader side-data validation", () => {
 					icIndex: 1,
 					slots: [1],
 				},
-				{
-					opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
-					dst: 6,
-					object: 2,
-					shapeCase: 3,
-					stringIndex: 2,
-					icIndex: 2,
-					slots: [2],
-				},
-				{ opcode: "RETURN", value: 6 },
+				{ opcode: "RETURN", value: 5 },
 			],
 		};
 		const shapeCaseDefinition: VmDefinition = {
 			...definition,
 			functions: [shapeCaseFunction],
-			stringConstants: [[120], [121], [122]],
+			stringConstants: [[120], [121]],
 			precompiledLiteralShapes: [
-				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1, 2] },
+				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1] },
 			],
 		};
 		const wire = serializeVmDefinition(shapeCaseDefinition, { debugInfo: false });
+		// Two loads are the minimum profitable shared case and must be accepted by
+		// the native loader, not merely by the TypeScript serializer.
+		acceptsWire("shape-case-two-loads", wire);
 		const selectorTag = WIRE_OPCODES.indexOf("SELECT_SHAPE_CASE");
 		const encodedSelector = [selectorTag, 6, 4, 1, 0, 0];
 		const selectorOffset = wire.findIndex((_, index) =>

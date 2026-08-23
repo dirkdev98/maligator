@@ -1892,7 +1892,7 @@ export function validateVmKnownOwnSlots(definition: VmDefinition): void {
 	}
 }
 
-const VM_SHAPE_CASE_MIN_LOADS = 3;
+const VM_SHAPE_CASE_MIN_LOADS = 2;
 const VM_SHAPE_CASE_MAX_LOADS = 16;
 const VM_SHAPE_CASE_MAX_SPAN = 64;
 

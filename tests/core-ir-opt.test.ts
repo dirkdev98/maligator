@@ -1298,13 +1298,19 @@ describe("Core IR optimizer", () => {
 			},
 			{ verification: "per-pass" },
 		);
-		const expectedLoads = [2, 0, 2];
+		const expectedLoads = [
+			{ ordinary: 2, guarded: 0 },
+			{ ordinary: 0, guarded: 0 },
+			{ ordinary: 0, guarded: 2 },
+		];
 		for (const [index, fn] of outcome.program.functions.entries()) {
+			const fnInstructions = fn.blocks.flatMap(({ instructions }) => instructions);
 			expect(
-				fn.blocks
-					.flatMap(({ instructions }) => instructions)
-					.filter(({ opcode }) => opcode === "loadPropertyStatic"),
-			).toHaveLength(expectedLoads[index]!);
+				fnInstructions.filter(({ opcode }) => opcode === "loadPropertyStatic"),
+			).toHaveLength(expectedLoads[index]!.ordinary);
+			expect(
+				fnInstructions.filter(({ opcode }) => opcode === "loadPropertyStaticShapeCase"),
+			).toHaveLength(expectedLoads[index]!.guarded);
 		}
 	});
 

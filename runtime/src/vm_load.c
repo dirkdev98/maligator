@@ -1950,7 +1950,7 @@ static bool mal_loaded_shape_case_selector_valid(
             receiver_redefined = true;
         }
     }
-    return uses >= 3 && uses <= 16 && last_ip - selector_ip <= 64;
+    return uses >= 2 && uses <= 16 && last_ip - selector_ip <= 64;
 }
 
 MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
