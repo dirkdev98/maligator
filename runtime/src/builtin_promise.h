@@ -114,6 +114,14 @@ void mal_promise_perform_async_from_sync(
     MalValue realm_anchor
 );
 
+/** Register the value-discarding continuation used by async disposal. */
+void mal_promise_perform_async_dispose(
+    MalVm *vm,
+    MalValue promise,
+    MalValue result_promise,
+    MalValue realm_anchor
+);
+
 /**
  * PerformPromiseThen on a Promise value: register on_fulfilled / on_rejected
  * (callables, or undefined for the default pass-through/rethrow) against an

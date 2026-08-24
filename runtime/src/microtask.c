@@ -511,6 +511,13 @@ static void mal_vm_run_reaction_job(MalVm *vm, MalJob *job) {
     } else if (job->is_reject) {
         // Default reject handler rethrows the reason.
         result = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = job->as.reaction.argument};
+    } else if (mal_value_is_empty(job->as.reaction.handler)) {
+        // The internal async-dispose fulfillment continuation discards the
+        // awaited return value without allocating a native callback object.
+        result = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
     } else {
         // Default fulfill handler passes the value through.
         result = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = job->as.reaction.argument};

@@ -400,23 +400,6 @@ static MalValue mal_async_iterator_constructor(MalVm *vm, MalValue this_value, c
     return mal_value_from_object(mal_object_new(&vm->heap, prototype));
 }
 
-static MalValue mal_async_iterator_dispose_unwrap(
-    MalVm *vm,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalValue new_target,
-    MalValue callee
-) {
-    (void) vm;
-    (void) this_value;
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    (void) callee;
-    return mal_value_new_undefined();
-}
-
 static MalValue mal_async_iterator_dispose_reject(
     MalVm *vm,
     MalValue promise,
@@ -506,19 +489,9 @@ static MalValue mal_async_iterator_prototype_async_dispose(
         return promise;
     }
 
-    MalNativeFunctionObject *unwrap = mal_native_function_object_new_arity(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, ""),
-        1,
-        mal_async_iterator_dispose_unwrap
-    );
-    roots[5] = mal_value_from_native_function_object(unwrap);
-    mal_promise_perform_then(
+    mal_promise_perform_async_dispose(
         vm,
         roots[6],
-        roots[5],
-        mal_value_new_undefined(),
         roots[1],
         roots[2]
     );
