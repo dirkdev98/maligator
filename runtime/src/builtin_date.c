@@ -1017,6 +1017,8 @@ static MalValue date_constructor(MalVm *vm, MalValue this_value, const MalValue 
         if (mal_value_is_date_object(value)) {
             // [[DateValue]] is always already TimeClipped (or NaN).
             date_value = mal_value_to_date_object(value)->date_value;
+        } else if (mal_ops_is_number(value)) {
+            date_value = date_time_clip(mal_ops_number_as_f64(value));
         } else {
             MalValue primitive;
             if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_DEFAULT, &primitive)) {
