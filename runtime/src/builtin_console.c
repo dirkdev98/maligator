@@ -134,6 +134,9 @@ static MalValue mal_builtin_console_trace(MalVm *vm, MalValue this_value, const 
     }
 
     MalStackTrace *trace = mal_vm_capture_stack(vm);
+    if (trace == nullptr) {
+        return mal_value_new_undefined();
+    }
     MalString *frames = mal_vm_format_stack_frames(vm, trace);
     mal_builtin_console_print_string(stderr, frames);
     mal_vm_free_stack_trace(trace);

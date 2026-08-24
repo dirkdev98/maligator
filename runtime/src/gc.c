@@ -1027,7 +1027,6 @@ static void mal_gc_scan_roots(MalVm *vm) {
     }
 #endif
 #if MAL_REALMS
-    mal_gc_mark_value(vm->error_data_marker);
     mal_gc_mark_value(vm->error_stack_marker);
     // Every realm's globals and intrinsics are roots. The VM aliases point into the
     // current realm, which this loop already covers.

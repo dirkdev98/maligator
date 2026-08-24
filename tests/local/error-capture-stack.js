@@ -29,6 +29,39 @@ check(
 		limitDescriptor.configurable === true,
 );
 
+const builtinErrors = [
+	new Error("error"),
+	new TypeError("type"),
+	new RangeError("range"),
+	new ReferenceError("reference"),
+	new SyntaxError("syntax"),
+	new URIError("uri"),
+	new EvalError("eval"),
+	new AggregateError([], "aggregate"),
+];
+check(
+	"ErrorData recognizes every built-in error kind",
+	builtinErrors.every((error) => Error.isError(error)),
+);
+check(
+	"ErrorData is an internal slot rather than inherited state",
+	!Error.isError(Object.create(Error.prototype)) &&
+		!Error.isError({ name: "Error", message: "lookalike" }) &&
+		!Error.isError(undefined),
+);
+check(
+	"ErrorData still drives Object.prototype.toString",
+	Object.prototype.toString.call(new Error()) === "[object Error]",
+);
+const longName = "N".repeat(100);
+const longMessage = "M".repeat(100);
+check(
+	"Error toString preserves inline and spill concatenation",
+	new TypeError("native machinery").toString() === "TypeError: native machinery" &&
+		Error.prototype.toString.call({ name: longName, message: longMessage }) ===
+			longName + ": " + longMessage,
+);
+
 let preparedTarget;
 let preparedSites;
 Error.prepareStackTrace = function prepare(target, sites) {

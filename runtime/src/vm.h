@@ -1191,11 +1191,12 @@ typedef struct MalStackFrameRecord {
  */
 typedef struct MalStackTrace {
     i32 frame_count;
-    MalStackFrameRecord *frames;
     struct MalStackTrace *async_parent;
     /** Logical frames to omit and retain when an explicit V8-style capture is read. */
     i32 frame_skip;
     i32 frame_limit;
+    /** Coallocated frame records, ordered top first. */
+    MalStackFrameRecord frames[];
 } MalStackTrace;
 
 // Opaque loaded definition (vm_load.h); the VM retains the ones it splices at
@@ -1429,9 +1430,8 @@ typedef struct MalVm {
      * state). Allocated by mal_gc_init, freed by mal_gc_state_free. See gc.c. */
     MalGcState *gc;
 #if MAL_REALMS
-    /** Isolate-wide private symbols backing Error internal slots. Shared by every
+    /** Isolate-wide private symbol backing captured Error stacks. Shared by every
      * realm and rooted directly because a realm may temporarily hold no errors. */
-    MalValue error_data_marker;
     MalValue error_stack_marker;
     /** Current-realm globals; aliases current_realm->globals and is not owned here. */
     MalValue *globals;

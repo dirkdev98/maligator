@@ -1,5 +1,6 @@
 #include "vm.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -13,6 +14,7 @@
 #include "builtin_math.h"
 #include "bound_function_object.h"
 #include "builtin_object.h"
+#include "checked_size.h"
 #include "fiber.h"
 #include "function_object.h"
 #include "gc.h"
@@ -494,7 +496,6 @@ void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 #if MAL_REALMS
-    vm->error_data_marker = mal_value_new_undefined();
     vm->error_stack_marker = mal_value_new_undefined();
 #endif
     vm->allocation_error = mal_value_new_undefined();
@@ -3306,62 +3307,71 @@ static i32 mal_vm_position_for(const MalFunction *function, i32 instruction_poin
     return found;
 }
 
-MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
-    // Collect every live frame — interpreted (vm->frames, source of truth: a
-    // suspended generator/async frame is naturally absent) and native (skipping
-    // bailed duplicates) — then order by enter_seq descending (top first).
-    i32 max = vm->frame_count + vm->native_frame_count;
-    MalStackFrameRecord *records = malloc(sizeof(MalStackFrameRecord) * (usize) (max > 0 ? max : 1));
-    u64 *seqs = malloc(sizeof(u64) * (usize) (max > 0 ? max : 1));
-    i32 count = 0;
-
-    for (i32 i = 0; i < vm->frame_count; i++) {
-        MalVmFrame *frame = &vm->frames[i];
-        // The instruction pointer was advanced past the executing/call
-        // instruction, so ip - 1 is the responsible site (as in unwinding).
-        i32 ip = frame->instruction_pointer - 1;
-        i32 function_index = frame->function_index;
-        records[count] = (MalStackFrameRecord) {
-            .function_index = function_index,
-            .pos_id = mal_vm_position_for(frame->function, ip),
-        };
-        seqs[count] = frame->enter_seq;
-        count++;
+static MalStackTrace *mal_vm_stack_trace_new(MalVm *vm, usize frame_capacity) {
+    usize frame_bytes;
+    usize bytes;
+    if (!mal_checked_size_multiply(
+            sizeof(MalStackFrameRecord), frame_capacity, SIZE_MAX, &frame_bytes) ||
+        !mal_checked_size_add(sizeof(MalStackTrace), frame_bytes, SIZE_MAX, &bytes)) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
     }
-    for (i32 i = 0; i < vm->native_frame_count; i++) {
-        MalNativeFrame *native = &vm->native_frames[i];
-        if (native->hidden) {
-            continue;
-        }
-        records[count] = (MalStackFrameRecord) {
-            .function_index = native->function_index,
-            .pos_id = native->pos_id,
-        };
-        seqs[count] = native->enter_seq;
-        count++;
+    MalStackTrace *trace = malloc(bytes);
+    if (trace == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
     }
-
-    // Insertion sort by seq descending (small, slow-path only).
-    for (i32 i = 1; i < count; i++) {
-        MalStackFrameRecord record = records[i];
-        u64 seq = seqs[i];
-        i32 j = i - 1;
-        while (j >= 0 && seqs[j] < seq) {
-            records[j + 1] = records[j];
-            seqs[j + 1] = seqs[j];
-            j--;
-        }
-        records[j + 1] = record;
-        seqs[j + 1] = seq;
-    }
-    free(seqs);
-
-    MalStackTrace *trace = malloc(sizeof(MalStackTrace));
-    trace->frame_count = count;
-    trace->frames = records;
+    trace->frame_count = 0;
     trace->async_parent = nullptr;
     trace->frame_skip = 0;
     trace->frame_limit = -1;
+    return trace;
+}
+
+MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
+    // Each live-frame array is already ordered by enter_seq. Merge them from
+    // their newest ends, skipping bailed native duplicates, directly into one
+    // coallocated trace instead of allocating sequence scratch and sorting it.
+    usize frame_capacity;
+    if (!mal_checked_size_add(
+            (usize) vm->frame_count,
+            (usize) vm->native_frame_count,
+            INT_MAX,
+            &frame_capacity)) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    MalStackTrace *trace = mal_vm_stack_trace_new(vm, frame_capacity);
+    if (trace == nullptr) {
+        return nullptr;
+    }
+
+    i32 interpreted = vm->frame_count - 1;
+    i32 native = vm->native_frame_count - 1;
+    while (interpreted >= 0 || native >= 0) {
+        while (native >= 0 && vm->native_frames[native].hidden) native--;
+        bool take_interpreted = interpreted >= 0;
+        if (take_interpreted && native >= 0) {
+            take_interpreted = vm->frames[interpreted].enter_seq >=
+                               vm->native_frames[native].enter_seq;
+        }
+        if (take_interpreted) {
+            MalVmFrame *frame = &vm->frames[interpreted--];
+            // The instruction pointer was advanced past the executing/call
+            // instruction, so ip - 1 is the responsible site (as in unwinding).
+            i32 ip = frame->instruction_pointer - 1;
+            trace->frames[trace->frame_count++] = (MalStackFrameRecord) {
+                .function_index = frame->function_index,
+                .pos_id = mal_vm_position_for(frame->function, ip),
+            };
+        } else if (native >= 0) {
+            MalNativeFrame *frame = &vm->native_frames[native--];
+            trace->frames[trace->frame_count++] = (MalStackFrameRecord) {
+                .function_index = frame->function_index,
+                .pos_id = frame->pos_id,
+            };
+        }
+    }
 
     // Async stack stitching (v2): if execution is inside a resumed async
     // function, follow the awaited_by chain to splice the awaiting ancestors'
@@ -3382,9 +3392,12 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
     while (async_state != nullptr && async_state->awaited_by != nullptr && guard++ < 100000) {
         MalGeneratorObject *parent = async_state->awaited_by;
         const MalFunction *function = parent->frame.function;
-        MalStackTrace *segment = malloc(sizeof(MalStackTrace));
+        MalStackTrace *segment = mal_vm_stack_trace_new(vm, 1);
+        if (segment == nullptr) {
+            mal_vm_free_stack_trace(trace);
+            return nullptr;
+        }
         segment->frame_count = 1;
-        segment->frames = malloc(sizeof(MalStackFrameRecord));
         // The awaiter is suspended at its `await`; ip - 1 is that await's site.
         segment->frames[0] = (MalStackFrameRecord) {
             .function_index = parent->frame.function_index,
@@ -3404,7 +3417,6 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
 void mal_vm_free_stack_trace(MalStackTrace *trace) {
     while (trace != nullptr) {
         MalStackTrace *parent = trace->async_parent;
-        free(trace->frames);
         free(trace);
         trace = parent;
     }
@@ -3417,14 +3429,48 @@ i32 mal_vm_store_stack_trace(MalVm *vm, MalStackTrace *trace) {
         vm->captured_trace_free_head = vm->captured_trace_free_next[id];
     } else {
         if (vm->captured_trace_count == vm->captured_trace_capacity) {
-            vm->captured_trace_capacity = vm->captured_trace_capacity == 0
-                ? 16 : vm->captured_trace_capacity * 2;
-            vm->captured_traces = realloc(
-                vm->captured_traces,
-                sizeof(MalStackTrace *) * (usize) vm->captured_trace_capacity);
-            vm->captured_trace_free_next = realloc(
-                vm->captured_trace_free_next,
-                sizeof(i32) * (usize) vm->captured_trace_capacity);
+            usize required;
+            usize new_capacity;
+            usize trace_bytes;
+            usize free_bytes;
+            if (!mal_checked_size_add(
+                    (usize) vm->captured_trace_count, 1, INT_MAX, &required) ||
+                !mal_checked_size_growth(
+                    (usize) vm->captured_trace_capacity,
+                    required,
+                    16,
+                    INT_MAX,
+                    &new_capacity) ||
+                !mal_checked_size_multiply(
+                    sizeof(MalStackTrace *), new_capacity, SIZE_MAX, &trace_bytes) ||
+                !mal_checked_size_multiply(
+                    sizeof(i32), new_capacity, SIZE_MAX, &free_bytes)) {
+                mal_vm_throw_allocation_error(vm);
+                return -1;
+            }
+            MalStackTrace **grown_traces = malloc(trace_bytes);
+            i32 *grown_free_next = malloc(free_bytes);
+            if (grown_traces == nullptr || grown_free_next == nullptr) {
+                free(grown_traces);
+                free(grown_free_next);
+                mal_vm_throw_allocation_error(vm);
+                return -1;
+            }
+            if (vm->captured_trace_count > 0) {
+                memcpy(
+                    grown_traces,
+                    vm->captured_traces,
+                    sizeof(MalStackTrace *) * (usize) vm->captured_trace_count);
+                memcpy(
+                    grown_free_next,
+                    vm->captured_trace_free_next,
+                    sizeof(i32) * (usize) vm->captured_trace_count);
+            }
+            free(vm->captured_traces);
+            free(vm->captured_trace_free_next);
+            vm->captured_traces = grown_traces;
+            vm->captured_trace_free_next = grown_free_next;
+            vm->captured_trace_capacity = (i32) new_capacity;
         }
         id = vm->captured_trace_count++;
     }

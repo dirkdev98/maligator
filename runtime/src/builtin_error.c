@@ -16,24 +16,17 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-/** Unforgeable markers backing the [[ErrorData]] and captured-stack slots. */
+/** Unforgeable marker backing the captured-stack slot. */
 #if MAL_REALMS
-#define MAL_ERROR_DATA_MARKER(vm) ((vm)->error_data_marker)
 #define MAL_ERROR_STACK_MARKER(vm) ((vm)->error_stack_marker)
 #else
-static MalValue mal_error_data_marker = MAL_VALUE_UNDEFINED;
 static MalValue mal_error_stack_marker = MAL_VALUE_UNDEFINED;
-#define MAL_ERROR_DATA_MARKER(vm) ((void) (vm), mal_error_data_marker)
 #define MAL_ERROR_STACK_MARKER(vm) ((void) (vm), mal_error_stack_marker)
 #endif
 
 static bool mal_builtin_error_throw_string_length(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     return false;
-}
-
-static MalKey mal_error_data_key(MalVm *vm) {
-    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = MAL_ERROR_DATA_MARKER(vm)};
 }
 
 static MalKey mal_error_stack_key(MalVm *vm) {
@@ -53,21 +46,17 @@ void mal_builtin_error_finalize_object(MalVm *vm, MalObject *object) {
     object->has_captured_stack = false;
 }
 
-static void mal_error_mark_error_data(MalVm *vm, MalObject *error) {
-    MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_new_boolean(true), MAL_PROPERTY_NONE);
-    mal_object_define_own(error, mal_error_data_key(vm), &desc);
+static void mal_error_mark_error_data(MalObject *error) {
+    error->has_error_data = true;
 }
 
-static bool mal_error_has_error_data(MalVm *vm, MalObject *object) {
-    if (mal_value_is_undefined(MAL_ERROR_DATA_MARKER(vm))) {
-        return false;
-    }
-    MalPropertyLookup lookup = mal_object_get_own(object, mal_error_data_key(vm));
-    return lookup.present;
+static bool mal_error_has_error_data(MalObject *object) {
+    return object->has_error_data;
 }
 
 bool mal_builtin_value_has_error_data(MalVm *vm, MalValue value) {
-    return mal_value_is_object(value) && mal_error_has_error_data(vm, mal_value_to_object(value));
+    (void) vm;
+    return mal_value_is_object(value) && mal_error_has_error_data(mal_value_to_object(value));
 }
 
 /**
@@ -77,15 +66,23 @@ bool mal_builtin_value_has_error_data(MalVm *vm, MalValue value) {
  * and keeps the throw-heavy test262 batch at zero capture cost — and before the
  * marker is minted (errors created during early intrinsics init).
  */
-static void mal_error_capture_stack(MalVm *vm, MalObject *error) {
+static bool mal_error_capture_stack(MalVm *vm, MalObject *error) {
     if (mal_value_is_undefined(MAL_ERROR_STACK_MARKER(vm)) || vm->definition->file_count == 0) {
-        return;
+        return true;
     }
     MalStackTrace *trace = mal_vm_capture_stack(vm);
+    if (trace == nullptr) {
+        return false;
+    }
     i32 id = mal_vm_store_stack_trace(vm, trace);
+    if (id < 0) {
+        mal_vm_free_stack_trace(trace);
+        return false;
+    }
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(id), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(error, mal_error_stack_key(vm), &desc);
     error->has_captured_stack = true;
+    return true;
 }
 
 /**
@@ -124,8 +121,10 @@ static bool mal_error_install_cause(MalVm *vm, MalObject *error, MalValue option
  */
 static MalValue mal_builtin_error_make(MalVm *vm, MalIntrinsic prototype_slot, const MalValue *args, i32 arg_count) {
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[prototype_slot]));
-    mal_error_mark_error_data(vm, error);
-    mal_error_capture_stack(vm, error);
+    mal_error_mark_error_data(error);
+    if (!mal_error_capture_stack(vm, error)) {
+        return mal_value_new_undefined();
+    }
 
     if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
         MalString *message_string;
@@ -203,8 +202,10 @@ static MalValue mal_builtin_eval_error_constructor(MalVm *vm, MalValue this_valu
  */
 static MalValue mal_builtin_aggregate_error_make(MalVm *vm, MalValue errors_value, MalValue message_value, MalValue options_value) {
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE]));
-    mal_error_mark_error_data(vm, error);
-    mal_error_capture_stack(vm, error);
+    mal_error_mark_error_data(error);
+    if (!mal_error_capture_stack(vm, error)) {
+        return mal_value_new_undefined();
+    }
 
     if (!mal_value_is_undefined(message_value)) {
         MalString *message_string;
@@ -275,8 +276,10 @@ static MalValue mal_builtin_suppressed_error_constructor(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_SUPPRESSED_ERROR_PROTOTYPE])
     );
-    mal_error_mark_error_data(vm, error);
-    mal_error_capture_stack(vm, error);
+    mal_error_mark_error_data(error);
+    if (!mal_error_capture_stack(vm, error)) {
+        return mal_value_new_undefined();
+    }
 
     MalValue message = arg_count >= 3 ? args[2] : mal_value_new_undefined();
     if (!mal_value_is_undefined(message)) {
@@ -327,7 +330,7 @@ static MalValue mal_builtin_error_is_error(MalVm *vm, MalValue this_value, const
     if (!mal_value_is_object(arg)) {
         return mal_value_new_boolean(false);
     }
-    return mal_value_new_boolean(mal_error_has_error_data(vm, mal_value_to_object(arg)));
+    return mal_value_new_boolean(mal_error_has_error_data(mal_value_to_object(arg)));
 }
 
 /**
@@ -394,10 +397,15 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
         mal_builtin_error_throw_string_length(vm);
         return mal_value_new_undefined();
     }
-    c16 *code_units = malloc(bytes);
-    if (code_units == nullptr) {
-        mal_builtin_error_throw_string_length(vm);
-        return mal_value_new_undefined();
+    c16 inline_code_units[128];
+    c16 *code_units = inline_code_units;
+    bool heap_code_units = total_length > countof(inline_code_units);
+    if (heap_code_units) {
+        code_units = malloc(bytes);
+        if (code_units == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
     }
 
     memcpy(code_units, mal_string_code_units(name), (usize) sizeof(c16) * name_length);
@@ -406,7 +414,7 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
     memcpy(code_units + name_length + 2, mal_string_code_units(message), (usize) sizeof(c16) * message_length);
 
     MalString *result = mal_string_new_copy(&vm->heap, code_units, total_length);
-    free(code_units);
+    if (heap_code_units) free(code_units);
     return mal_value_from_string(result);
 }
 
@@ -688,6 +696,9 @@ static MalValue mal_builtin_error_capture_stack_trace(MalVm *vm, MalValue this_v
     }
 
     MalStackTrace *trace = mal_vm_capture_stack(vm);
+    if (trace == nullptr) {
+        return mal_value_new_undefined();
+    }
     if (!mal_ops_is_number(limit_value)) {
         trace->frame_limit = -2;
     } else {
@@ -719,6 +730,10 @@ static MalValue mal_builtin_error_capture_stack_trace(MalVm *vm, MalValue this_v
     };
     MalPropertyLookup previous_trace = mal_object_get_own(target_object, trace_key);
     i32 trace_id = mal_vm_store_stack_trace(vm, trace);
+    if (trace_id < 0) {
+        mal_vm_free_stack_trace(trace);
+        return mal_value_new_undefined();
+    }
     MalPropertyDesc trace_desc = mal_intrinsic_data_desc(
         mal_value_from_i32(trace_id), MAL_PROPERTY_CONFIGURABLE);
     if (mal_object_define_own(target_object, trace_key, &trace_desc) == MAL_DEFINE_OWN_REJECTED) {
@@ -762,7 +777,7 @@ static MalValue mal_builtin_error_stack_getter(MalVm *vm, MalValue this_value, c
         return mal_value_new_undefined();
     }
     MalObject *error = mal_value_to_object(this_value);
-    if (!mal_error_has_error_data(vm, error)) {
+    if (!mal_error_has_error_data(error)) {
         return mal_value_new_undefined();
     }
 
@@ -936,8 +951,10 @@ void mal_vm_throw_error_value(MalVm *vm, MalIntrinsic prototype_slot, MalValue m
     // Build the error object directly so internal throws never re-enter the
     // observable ToString/cause machinery (the message is already a string).
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[prototype_slot]));
-    mal_error_mark_error_data(vm, error);
-    mal_error_capture_stack(vm, error);
+    mal_error_mark_error_data(error);
+    if (!mal_error_capture_stack(vm, error)) {
+        return;
+    }
     if (!mal_value_is_undefined(message)) {
         mal_intrinsic_define_data(vm, error, "message", message, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     }
@@ -957,7 +974,7 @@ void mal_vm_throw_allocation_error(MalVm *vm) {
 MalValue mal_vm_create_allocation_error(MalVm *vm) {
     MalObject *error = mal_object_new(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]));
-    mal_error_mark_error_data(vm, error);
+    mal_error_mark_error_data(error);
     mal_intrinsic_define_data(
         vm, error, "message", mal_value_from_string(mal_intrinsic_ascii(vm, "Out of memory")),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -997,17 +1014,13 @@ static MalObject *mal_builtin_error_install_kind(
 }
 
 void mal_builtin_error_install(MalVm *vm) {
-    // Mint the [[ErrorData]] and captured-stack markers before any error object
-    // is created. A realms build reuses the VM-owned pair for every realm.
+    // Mint the captured-stack marker before any error object is created. A
+    // realms build reuses the VM-owned marker for every realm.
 #if MAL_REALMS
-    if (mal_value_is_undefined(vm->error_data_marker)) {
-        vm->error_data_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
-    }
     if (mal_value_is_undefined(vm->error_stack_marker)) {
         vm->error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
     }
 #else
-    mal_error_data_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
     mal_error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
 #endif
 

@@ -60,6 +60,8 @@ typedef struct MalObject {
     bool slots_owned : 1;
     /** A private Error.captureStackTrace id must be released at finalization. */
     bool has_captured_stack : 1;
+    /** ECMAScript [[ErrorData]] internal slot; never exposed as a property. */
+    bool has_error_data : 1;
     /** This object belongs to the protected ECMAScript primordial graph. */
     bool primordial_locked : 1;
     /** DFS marker used only while a Realm's primordial graph is finalized. */
