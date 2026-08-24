@@ -13,6 +13,8 @@
 #define MAL_COROUTINE_POOL_CLASS_COUNT 14
 #define MAL_TINY_STRING_CACHE_CAPACITY 256
 #define MAL_SMALL_UINT_STRING_CACHE_CAPACITY 1024
+#define MAL_SMALL_BIGINT_CACHE_MIN (-128)
+#define MAL_SMALL_BIGINT_CACHE_CAPACITY 384
 
 static_assert((MAL_TINY_STRING_CACHE_CAPACITY
                & (MAL_TINY_STRING_CACHE_CAPACITY - 1)) == 0,
@@ -1711,6 +1713,9 @@ typedef struct MalVm {
     struct MalString **small_uint_string_cache;
     /** One past the largest populated uint slot; bounds every GC root scan. */
     u16 small_uint_string_cache_scan_limit;
+
+    /** Lazily allocated immutable BigInt cells for values -128 through 255. */
+    struct MalBigInt **small_bigint_cache;
 
     /** Tail-only semantic versions: do not perturb established hot VM offsets. */
     MalSemanticEpochs semantic_epochs;
