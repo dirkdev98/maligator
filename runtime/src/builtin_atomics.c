@@ -297,11 +297,17 @@ static MalValue mal_atomics_store(MalVm *vm, MalValue this_value, const MalValue
         if (!mal_bigint_to_bigint(vm, value, &big)) {
             return mal_value_new_undefined();
         }
-        MalValue coerced = mal_value_from_bigint(mal_bigint_new(&vm->heap, big));
+        MalValue coerced = mal_value_is_bigint(value)
+            ? value
+            : mal_value_from_bigint(mal_bigint_new(&vm->heap, big));
         if (!atomics_revalidate(vm, array, index)) {
             return mal_value_new_undefined();
         }
-        mal_typed_array_object_set(vm, array, index, coerced);
+        MalTypedArraySpan span;
+        if (!mal_typed_array_object_span(array, &span)) {
+            return mal_value_new_undefined();
+        }
+        mal_typed_array_span_store_bits(&span, index, (u64) (u128) big);
         return coerced;
     }
 
