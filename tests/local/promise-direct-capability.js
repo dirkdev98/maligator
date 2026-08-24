@@ -44,6 +44,10 @@ ok(
 		exactResolved.constructor === Promise &&
 		Object.getPrototypeOf(exactResolved) === Promise.prototype,
 );
+ok(
+	"canonical Promise.resolve identity",
+	Promise.resolve(exactResolved) === exactResolved,
+);
 fulfilled("exact Promise.resolve settlement", exactResolved, (value) => value === 19);
 
 let sameConstructorGets = 0;

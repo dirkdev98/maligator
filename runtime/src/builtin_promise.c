@@ -643,6 +643,11 @@ static MalValue mal_promise_resolve_static(MalVm *vm, MalValue this_value, const
 
     MalValue x = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     if (mal_value_is_promise_object(x)) {
+        if (this_value == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] &&
+            mal_promise_is_canonical_intrinsic(vm, x, this_value)) {
+            MAL_PERF_COUNT(promise_resolve_identity_hits);
+            return x;
+        }
         MalValue x_constructor;
         if (!mal_vm_get_property(vm, x, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR), &x_constructor)) {
             return mal_value_new_undefined();
@@ -1057,10 +1062,22 @@ done:
 
 /** Build a {status, value|reason} record for allSettled. */
 static MalValue mal_promise_settled_record(MalVm *vm, const byte *status, const byte *field, MalValue value) {
-    MalObject *object = mal_intrinsic_new_object(vm);
-    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    mal_intrinsic_define_data(vm, object, "status", mal_value_from_string(mal_intrinsic_ascii(vm, status)), flags);
-    mal_intrinsic_define_data(vm, object, field, value, flags);
+    MalString *shape_keys[2] = {
+        mal_intrinsic_ascii(vm, "status"),
+        mal_intrinsic_ascii(vm, field),
+    };
+    MalValue shape_values[2] = {
+        mal_value_from_string(mal_intrinsic_ascii(vm, status)),
+        value,
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, shape_values, 2);
+    MalShape *shape = mal_shape_from_string_keys(&vm->heap, shape_keys, 2);
+    MalObject *prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalObject *object = mal_object_new_shaped(
+        &vm->heap, prototype, shape, shape_values, 2);
+    mal_gc_unroot(&span);
     return mal_value_from_object(object);
 }
 
@@ -1423,11 +1440,20 @@ static MalValue mal_promise_with_resolvers(MalVm *vm, MalValue this_value, const
         return mal_value_new_undefined();
     }
 
-    MalObject *result = mal_intrinsic_new_object(vm);
-    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    mal_intrinsic_define_data(vm, result, "promise", cap_promise, flags);
-    mal_intrinsic_define_data(vm, result, "resolve", cap_resolve, flags);
-    mal_intrinsic_define_data(vm, result, "reject", cap_reject, flags);
+    MalString *shape_keys[3] = {
+        mal_intrinsic_ascii(vm, "promise"),
+        mal_intrinsic_ascii(vm, "resolve"),
+        mal_intrinsic_ascii(vm, "reject"),
+    };
+    MalValue shape_values[3] = {cap_promise, cap_resolve, cap_reject};
+    MalRootSpan span;
+    mal_gc_root(&span, shape_values, 3);
+    MalShape *shape = mal_shape_from_string_keys(&vm->heap, shape_keys, 3);
+    MalObject *prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalObject *result = mal_object_new_shaped(
+        &vm->heap, prototype, shape, shape_values, 3);
+    mal_gc_unroot(&span);
     return mal_value_from_object(result);
 }
 

@@ -135,6 +135,9 @@ describe("direct Promise.prototype.then capabilities", () => {
 		const adoptionFallbacks = Number(
 			stderr.match(/native_adoption_guard_fallbacks=(\d+)/)?.[1] ?? 0,
 		);
+		const resolveIdentityHits = Number(
+			stderr.match(/resolve_identity_hits=(\d+)/)?.[1] ?? 0,
+		);
 		const speciesHits = Number(stderr.match(/intrinsic_species_hits=(\d+)/)?.[1] ?? 0);
 		const discardedRegistrations = Number(
 			stderr.match(/discarded_dependent_registrations=(\d+)/)?.[1] ?? 0,
@@ -144,6 +147,7 @@ describe("direct Promise.prototype.then capabilities", () => {
 		expect(jobs).toBe(continuations);
 		expect(adoptionHits).toBeGreaterThan(0);
 		expect(adoptionFallbacks).toBeGreaterThan(0);
+		expect(resolveIdentityHits).toBeGreaterThan(0);
 		expect(speciesHits).toBeGreaterThan(0);
 		expect(discardedRegistrations).toBeGreaterThan(0);
 		expect(guardedFallbacks).toBeGreaterThan(0);
