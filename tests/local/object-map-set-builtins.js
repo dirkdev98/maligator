@@ -189,6 +189,42 @@ check(
 		new Set().isDisjointFrom(new Set()),
 );
 
+const emptySet = new Set();
+check(
+	"Set native empty algebra identities",
+	[...emptySet.union(selfSet)].join(",") === "1,2,3" &&
+		[...selfSet.union(emptySet)].join(",") === "1,2,3" &&
+		emptySet.intersection(selfSet).size === 0 &&
+		selfSet.intersection(emptySet).size === 0 &&
+		emptySet.difference(selfSet).size === 0 &&
+		[...selfSet.difference(emptySet)].join(",") === "1,2,3" &&
+		[...emptySet.symmetricDifference(selfSet)].join(",") === "1,2,3" &&
+		[...selfSet.symmetricDifference(emptySet)].join(",") === "1,2,3" &&
+		emptySet.isSubsetOf(selfSet) &&
+		selfSet.isSupersetOf(emptySet) &&
+		emptySet.isDisjointFrom(selfSet),
+);
+
+let emptyReceiverHasCalls = 0;
+const emptyReceiverOther = {
+	size: 5,
+	has() {
+		emptyReceiverHasCalls++;
+		return true;
+	},
+	keys() {
+		throw new Error("empty receiver must not acquire an iterator");
+	},
+};
+check(
+	"Set empty receiver skips unobservable set-like calls",
+	emptySet.intersection(emptyReceiverOther).size === 0 &&
+		emptySet.difference(emptyReceiverOther).size === 0 &&
+		emptySet.isSubsetOf(emptyReceiverOther) &&
+		emptySet.isDisjointFrom(emptyReceiverOther) &&
+		emptyReceiverHasCalls === 0,
+);
+
 let intrinsicMapPrototypeGets = 0;
 const intrinsicMapTarget = new Proxy(function () {}, {
 	get(target, key, receiver) {
