@@ -214,15 +214,10 @@ void mal_promise_free_reactions(MalVm *vm, MalPromiseReaction *list) {
     }
 }
 
-static void mal_promise_recycle_reaction(MalVm *vm, MalPromiseReaction *reaction) {
-    mal_gc_write_barrier(reaction->on_fulfilled);
-    mal_gc_write_barrier(reaction->on_rejected);
-    mal_gc_write_barrier(reaction->cap_resolve);
-    mal_gc_write_barrier(reaction->cap_reject);
-#if MAL_NODE
-    mal_gc_write_barrier(
-        mal_async_internal_value((MalHeapHeader *) reaction->async_context));
-#endif
+/** Recycle a reaction whose outgoing edges were shaded before list detachment. */
+static void mal_promise_recycle_barriered_reaction(
+    MalVm *vm, MalPromiseReaction *reaction
+) {
     reaction->on_fulfilled = mal_value_new_undefined();
     reaction->on_rejected = mal_value_new_undefined();
     reaction->cap_resolve = mal_value_new_undefined();
@@ -259,6 +254,10 @@ static void mal_promise_barrier_reactions(MalPromiseReaction *reaction) {
         mal_gc_write_barrier(reaction->on_rejected);
         mal_gc_write_barrier(reaction->cap_resolve);
         mal_gc_write_barrier(reaction->cap_reject);
+#if MAL_NODE
+        mal_gc_write_barrier(
+            mal_async_internal_value((MalHeapHeader *) reaction->async_context));
+#endif
     }
 }
 
@@ -301,7 +300,7 @@ static void mal_promise_trigger_reactions(MalVm *vm, MalPromiseReaction *list, b
                 vm, handler, is_reject, list->cap_resolve, list->cap_reject, argument);
 #endif
         }
-        mal_promise_recycle_reaction(vm, list);
+        mal_promise_recycle_barriered_reaction(vm, list);
         list = next;
     }
 }
