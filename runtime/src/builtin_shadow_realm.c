@@ -68,7 +68,8 @@ static bool mal_shadow_realm_copy_name_and_length(
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 3);
 
-    MalKey length_key = mal_intrinsic_string_key(vm, "length");
+    MalKey length_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH);
+    MalKey name_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME);
     bool has_own_length;
     if (!mal_shadow_realm_get_own_property(vm, target, length_key, &has_own_length)) {
         mal_shadow_realm_throw_boundary_type_error(
@@ -97,7 +98,7 @@ static bool mal_shadow_realm_copy_name_and_length(
         mal_ops_number_value(length), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own((MalObject *) wrapper, length_key, &length_desc);
 
-    if (!mal_vm_get_property(vm, target, mal_intrinsic_string_key(vm, "name"), &roots[2])) {
+    if (!mal_vm_get_property(vm, target, name_key, &roots[2])) {
         mal_shadow_realm_throw_boundary_type_error(
             vm, caller_realm, "ShadowRealm wrapped function name lookup failed");
         mal_gc_unroot(&root_span);
@@ -109,7 +110,7 @@ static bool mal_shadow_realm_copy_name_and_length(
         : mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name, MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(
-        (MalObject *) wrapper, mal_intrinsic_string_key(vm, "name"), &name_desc);
+        (MalObject *) wrapper, name_key, &name_desc);
     wrapper->name = mal_value_to_string(name);
     mal_gc_card(&wrapper->object.header, name);
 
