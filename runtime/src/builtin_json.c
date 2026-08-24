@@ -797,6 +797,7 @@ typedef struct MalJsonParseState {
 
 typedef struct MalJsonParser {
     MalVm *vm;
+    MalString *source;
     const c16 *code_units;
     usize length;
     usize position;
@@ -914,8 +915,8 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
         c16 code_unit = parser->code_units[position];
         if (code_unit == '"') {
             parser->position = position + 1;
-            return mal_value_from_string(mal_string_new_copy(
-                &parser->vm->heap, &parser->code_units[start], position - start));
+            return mal_value_from_string(mal_string_new_slice(
+                &parser->vm->heap, parser->source, start, position - start));
         }
         if (code_unit == '\\' || code_unit < 0x20) break;
     }
@@ -1679,6 +1680,7 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
     }
     MalJsonParser parser = {
         .vm = vm,
+        .source = text,
         .code_units = mal_string_code_units(text),
         .length = mal_string_length(text),
         .position = 0,
@@ -1781,6 +1783,7 @@ static MalValue mal_builtin_json_raw_json(MalVm *vm, MalValue this_value, const 
     mal_gc_root(&text_span, &text_value, 1);
     MalJsonParser parser = {
         .vm = vm,
+        .source = text,
         .code_units = units,
         .length = length,
         .position = 0,
