@@ -81,6 +81,10 @@ static MalValue mal_reflect_apply(MalVm *vm, MalValue this_value, const MalValue
             inline_list, countof(inline_list), &list, &count)) {
         return mal_value_new_undefined();
     }
+    if (count == 0) {
+        return mal_reflect_forward(vm, mal_vm_call_value(
+            vm, target, mal_reflect_arg(args, arg_count, 1), nullptr, 0));
+    }
 
     MalRootSpan list_root;
     mal_gc_root(&list_root, list, count);
@@ -114,6 +118,10 @@ static MalValue mal_reflect_construct(MalVm *vm, MalValue this_value, const MalV
             vm, mal_reflect_arg(args, arg_count, 1),
             inline_list, countof(inline_list), &list, &count)) {
         return mal_value_new_undefined();
+    }
+    if (count == 0) {
+        return mal_reflect_forward(vm, mal_vm_construct_value_with_target(
+            vm, target, nullptr, 0, new_target_arg));
     }
 
     MalRootSpan list_root;

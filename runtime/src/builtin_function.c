@@ -92,6 +92,10 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
             &call_args, &call_arg_count)) {
         return mal_value_new_undefined();
     }
+    if (call_arg_count == 0) {
+        return mal_builtin_function_forward_completion(
+            vm, mal_vm_call_value(vm, this_value, this_arg, nullptr, 0));
+    }
 
     // Keep the materialized list alive across proxy/native dispatch checkpoints.
     MalRootSpan args_span;
