@@ -615,6 +615,37 @@ static MalValue mal_promise_prototype_then(MalVm *vm, MalValue this_value, const
     return cap_promise;
 }
 
+/** Call an observed current-realm intrinsic `then` without generic native dispatch. */
+static MalCompletion mal_promise_call_captured_then(
+    MalVm *vm,
+    MalValue then,
+    MalValue receiver,
+    const MalValue *args,
+    i32 arg_count
+) {
+    bool direct = mal_value_is_native_function_object(then) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(then)) ==
+            mal_promise_prototype_then;
+#if MAL_REALMS
+    direct = direct && mal_vm_callee_realm(vm, then) == vm->current_realm;
+#endif
+    if (!direct) {
+        return mal_vm_call_value(vm, then, receiver, args, arg_count);
+    }
+
+    MalValue value = mal_promise_prototype_then(
+        vm,
+        receiver,
+        args,
+        arg_count,
+        mal_value_new_undefined(),
+        then);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? vm->completion
+        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+}
+
 static MalValue mal_promise_prototype_catch(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -626,7 +657,8 @@ static MalValue mal_promise_prototype_catch(MalVm *vm, MalValue this_value, cons
         return mal_value_new_undefined();
     }
     MalValue then_args[2] = {mal_value_new_undefined(), arg_count >= 1 ? args[0] : mal_value_new_undefined()};
-    MalCompletion completion = mal_vm_call_value(vm, then, this_value, then_args, 2);
+    MalCompletion completion = mal_promise_call_captured_then(
+        vm, then, this_value, then_args, 2);
     return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
 }
 
@@ -855,7 +887,8 @@ static bool mal_promise_invoke_then(
         return false;
     }
     MalValue then_args[2] = {roots[1], roots[2]};
-    MalCompletion completion = mal_vm_call_value(vm, roots[3], roots[0], then_args, 2);
+    MalCompletion completion = mal_promise_call_captured_then(
+        vm, roots[3], roots[0], then_args, 2);
     mal_gc_unroot(&span);
     if (completion.kind == MAL_COMPLETION_THROW) {
         return false;
@@ -1410,7 +1443,8 @@ static MalValue mal_promise_finally_react(MalVm *vm, MalValue callee, MalValue p
     if (!mal_vm_get_property(vm, inner, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then_fn)) {
         return mal_value_new_undefined();
     }
-    MalCompletion completion = mal_vm_call_value(vm, then_fn, inner, &thunk, 1);
+    MalCompletion completion = mal_promise_call_captured_then(
+        vm, then_fn, inner, &thunk, 1);
     return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
 }
 
@@ -1457,7 +1491,8 @@ static MalValue mal_promise_prototype_finally(MalVm *vm, MalValue this_value, co
         return mal_value_new_undefined();
     }
     MalValue then_args[2] = {then_finally, catch_finally};
-    MalCompletion completion = mal_vm_call_value(vm, then_fn, this_value, then_args, 2);
+    MalCompletion completion = mal_promise_call_captured_then(
+        vm, then_fn, this_value, then_args, 2);
     return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
 }
 
