@@ -1,5 +1,6 @@
 #include "builtin_object.h"
 
+#include "array_object.h"
 #include "builtin_error.h"
 #include "arguments_object.h"
 #include "builtin_iterator.h"
@@ -1908,10 +1909,17 @@ static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, 
             goto done;
         }
 
-        if (!mal_vm_get_property(vm, roots[1], mal_key_index(0), &roots[2]) ||
-            !mal_vm_get_property(vm, roots[1], mal_key_index(1), &roots[3])) {
-            mal_vm_iterator_close(vm, &record);
-            goto done;
+        bool dense_pair = mal_value_is_array_object(roots[1]) &&
+            mal_array_object_dense_pair(
+                mal_value_to_array_object(roots[1]), &roots[2], &roots[3]);
+        if (!dense_pair) {
+            if (!mal_vm_get_property(
+                    vm, roots[1], mal_key_index(0), &roots[2]) ||
+                !mal_vm_get_property(
+                    vm, roots[1], mal_key_index(1), &roots[3])) {
+                mal_vm_iterator_close(vm, &record);
+                goto done;
+            }
         }
 
         MalKey key;

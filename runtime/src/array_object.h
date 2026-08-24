@@ -51,6 +51,10 @@ bool mal_array_object_is_dense(const MalArrayObject *array);
  */
 bool mal_array_object_dense_get(const MalArrayObject *array, u32 index, MalValue *out);
 
+/** Read the two own data elements of a dense entry pair atomically. */
+bool mal_array_object_dense_pair(
+    const MalArrayObject *array, MalValue *first_out, MalValue *second_out);
+
 /** Whether `index` is a present (non-hole) own element in the dense region. */
 bool mal_array_object_dense_has(const MalArrayObject *array, u32 index);
 

@@ -357,6 +357,25 @@ check(
 		Object.hasOwn(fromEntriesProto, "__proto__") &&
 		fromEntriesProto.__proto__ === protoPayload,
 );
+const fromEntriesGetLog = [];
+const observableEntry = {};
+Object.defineProperty(observableEntry, "0", {
+	get() {
+		fromEntriesGetLog.push(0);
+		return "observed";
+	},
+});
+Object.defineProperty(observableEntry, "1", {
+	get() {
+		fromEntriesGetLog.push(1);
+		return 17;
+	},
+});
+const fromObservableEntry = Object.fromEntries([observableEntry]);
+check(
+	"Object.fromEntries preserves observable entry Gets",
+	fromObservableEntry.observed === 17 && fromEntriesGetLog.join(",") === "0,1",
+);
 
 const rootedEntriesSource = {};
 Object.defineProperty(rootedEntriesSource, "0", {

@@ -40,6 +40,13 @@ bool mal_array_object_dense_get(const MalArrayObject *array, u32 index, MalValue
     return true;
 }
 
+bool mal_array_object_dense_pair(
+    const MalArrayObject *array, MalValue *first_out, MalValue *second_out
+) {
+    return mal_array_object_dense_get(array, 0, first_out) &&
+        mal_array_object_dense_get(array, 1, second_out);
+}
+
 bool mal_array_object_dense_has(const MalArrayObject *array, u32 index) {
     MalValue ignored;
     return mal_array_object_dense_get(array, index, &ignored);

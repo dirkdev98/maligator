@@ -1,5 +1,6 @@
 #include "builtin_map.h"
 
+#include "array_object.h"
 #include "builtin_iterator.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -135,10 +136,17 @@ static MalValue mal_builtin_map_construct(
             goto done;
         }
 
-        if (!mal_vm_get_property(vm, roots[2], mal_key_index(0), &roots[3]) ||
-            !mal_vm_get_property(vm, roots[2], mal_key_index(1), &roots[4])) {
-            mal_vm_iterator_close(vm, &record);
-            goto done;
+        bool dense_pair = mal_value_is_array_object(roots[2]) &&
+            mal_array_object_dense_pair(
+                mal_value_to_array_object(roots[2]), &roots[3], &roots[4]);
+        if (!dense_pair) {
+            if (!mal_vm_get_property(
+                    vm, roots[2], mal_key_index(0), &roots[3]) ||
+                !mal_vm_get_property(
+                    vm, roots[2], mal_key_index(1), &roots[4])) {
+                mal_vm_iterator_close(vm, &record);
+                goto done;
+            }
         }
 
         // The exact built-in Map.prototype.set has no observable call seam.
