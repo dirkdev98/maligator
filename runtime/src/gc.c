@@ -921,7 +921,8 @@ static void mal_gc_mark_job(MalJob *job) {
 #endif
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
         job->kind == MAL_JOB_ASYNC_AWAIT ||
-        job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN) {
+        job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN ||
+        job->kind == MAL_JOB_ASYNC_FROM_SYNC) {
         mal_gc_mark_value(job->as.reaction.handler);
         mal_gc_mark_value(job->as.reaction.cap_resolve);
         mal_gc_mark_value(job->as.reaction.cap_reject);
