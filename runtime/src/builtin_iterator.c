@@ -18,8 +18,6 @@ MalNativeFunctionCallback mal_array_iterator_next_callback = nullptr;
 
 MalValue mal_vm_create_iter_result(MalVm *vm, MalValue value, bool done) {
     MalValue values[2] = {value, mal_value_new_boolean(done)};
-    MalRootSpan span;
-    mal_gc_root(&span, values, 2);
     if (vm->iterator_result_shape == nullptr) {
         MalString *keys[2] = {
             mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_VALUE),
@@ -27,10 +25,10 @@ MalValue mal_vm_create_iter_result(MalVm *vm, MalValue value, bool done) {
         };
         vm->iterator_result_shape = mal_shape_from_string_keys(&vm->heap, keys, 2);
     }
-    MalValue result =
-        mal_vm_create_object_shaped(vm, vm->iterator_result_shape, values, 2);
-    mal_gc_unroot(&span);
-    return result;
+    // Shape lookup and shaped allocation contain no safepoint, so this local
+    // value pair cannot be collected between assembly and the inline-slot copy.
+    return mal_vm_create_object_shaped(
+        vm, vm->iterator_result_shape, values, 2);
 }
 
 static MalIntrinsic mal_vm_iterator_prototype_slot(MalIteratorKind kind) {

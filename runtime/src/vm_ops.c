@@ -758,7 +758,7 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue 
     // directly in that shape and bulk-fill its inline slots in key order, instead
     // of transitioning the shape property-by-property. No safepoint runs between
     // the allocation and the fill, so the half-initialized object is never visible
-    // to the collector. `values` are already rooted in the caller's frame.
+    // to the collector and caller-local `values` remain live through the copy.
     assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
     assert(shape->inline_count == count);
     MAL_PERF_COUNT(object_shaped_creations);
