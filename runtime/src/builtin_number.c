@@ -3,7 +3,6 @@
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "builtin_intl.h"
 #include "ecma_whitespace.h"
@@ -76,48 +75,80 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
         start++;
     }
 
-    // Collect the ASCII prefix and let strtod handle the float grammar. Most
-    // source tokens fit on the stack; retain a heap fallback for long inputs.
-    usize token_length = length - start;
+    usize cursor = start;
+    if (cursor < length &&
+        (code_units[cursor] == '+' || code_units[cursor] == '-')) {
+        cursor++;
+    }
+
+    static const byte infinity[] = "Infinity";
+    if (length - cursor >= sizeof(infinity) - 1) {
+        bool matches = true;
+        for (usize i = 0; i < sizeof(infinity) - 1; i++) {
+            if (code_units[cursor + i] != infinity[i]) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            return cursor > start && code_units[start] == '-'
+                ? -INFINITY
+                : INFINITY;
+        }
+    }
+
+    bool any_digit = false;
+    while (cursor < length &&
+           code_units[cursor] >= '0' && code_units[cursor] <= '9') {
+        any_digit = true;
+        cursor++;
+    }
+    if (cursor < length && code_units[cursor] == '.') {
+        cursor++;
+        while (cursor < length &&
+               code_units[cursor] >= '0' && code_units[cursor] <= '9') {
+            any_digit = true;
+            cursor++;
+        }
+    }
+    if (!any_digit) {
+        return NAN;
+    }
+
+    if (cursor < length &&
+        (code_units[cursor] == 'e' || code_units[cursor] == 'E')) {
+        usize exponent_start = cursor++;
+        if (cursor < length &&
+            (code_units[cursor] == '+' || code_units[cursor] == '-')) {
+            cursor++;
+        }
+        usize exponent_digits = cursor;
+        while (cursor < length &&
+               code_units[cursor] >= '0' && code_units[cursor] <= '9') {
+            cursor++;
+        }
+        if (cursor == exponent_digits) {
+            cursor = exponent_start;
+        }
+    }
+
+    // Copy only the grammar-recognized prefix. Trailing ASCII text used to
+    // force a proportional allocation even though strtod immediately ignored
+    // it; ordinary source tokens stay on this local buffer.
+    usize token_length = cursor - start;
     byte stack_buffer[64];
     bool heap_allocated = token_length >= sizeof(stack_buffer);
     byte *buffer = heap_allocated ? malloc(token_length + 1) : stack_buffer;
-    usize buffer_length = 0;
-    for (usize i = start; i < length; i++) {
-        if (code_units[i] > 0x7F) {
-            break;
-        }
-        buffer[buffer_length++] = (byte) code_units[i];
+    for (usize i = 0; i < token_length; i++) {
+        buffer[i] = (byte) code_units[start + i];
     }
-    buffer[buffer_length] = '\0';
+    buffer[token_length] = '\0';
 
-    // JS parseFloat has no hex or "inf" forms; strtod would accept both.
-    usize digits_start = buffer_length > 0 && (buffer[0] == '+' || buffer[0] == '-') ? 1 : 0;
-    if (buffer_length >= digits_start + 2 && buffer[digits_start] == '0' &&
-        (buffer[digits_start + 1] == 'x' || buffer[digits_start + 1] == 'X')) {
-        buffer[digits_start + 1] = '\0';
-    }
-    // parseFloat accepts a leading "Infinity" (exact spelling, after an optional
-    // sign); strtod would otherwise also accept "inf"/"infinity"/"nan", which
-    // the StrDecimalLiteral grammar does not.
-    if (buffer_length >= digits_start + 8 && memcmp(buffer + digits_start, "Infinity", 8) == 0) {
-        bool negative = digits_start == 1 && buffer[0] == '-';
-        if (heap_allocated) {
-            free(buffer);
-        }
-        return negative ? -INFINITY : INFINITY;
-    }
-    if (buffer_length > digits_start && (buffer[digits_start] == 'i' || buffer[digits_start] == 'I' || buffer[digits_start] == 'n' || buffer[digits_start] == 'N')) {
-        buffer[digits_start] = '\0';
-    }
-
-    byte *end = buffer;
-    f64 value = strtod(buffer, (char **) &end);
-    bool parsed = end != buffer;
+    f64 value = strtod(buffer, nullptr);
     if (heap_allocated) {
         free(buffer);
     }
-    return parsed ? value : NAN;
+    return value;
 }
 
 /**

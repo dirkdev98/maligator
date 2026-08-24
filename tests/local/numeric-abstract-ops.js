@@ -103,6 +103,11 @@ check(
 		!Number.isSafeInteger(Number.MAX_SAFE_INTEGER + 1) &&
 		Number.parseInt("ff", 16) === 255 &&
 		Number.parseFloat("  -12.5tail") === -12.5 &&
+		Number.parseFloat("1.e2tail") === 100 &&
+		Number.parseFloat(".5e+") === 0.5 &&
+		Number.parseFloat("0x10") === 0 &&
+		Number.parseFloat("+Infinity-tail") === Infinity &&
+		Object.is(Number.parseFloat("-0tail"), -0) &&
 		Number.parseFloat({
 			toString() {
 				return String.fromCharCode(49, 50, 46, 53, 116, 97, 105, 108);
