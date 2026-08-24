@@ -192,11 +192,17 @@ static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, Atom
         if (!atomics_revalidate(vm, array, index)) {
             return mal_value_new_undefined();
         }
-        MalValue old_value = mal_typed_array_object_get(vm, array, index);
-        i128 old = mal_bigint_value(mal_value_to_bigint(old_value));
+        MalTypedArraySpan span;
+        if (!mal_typed_array_object_span(array, &span)) {
+            return mal_value_new_undefined();
+        }
+        u64 old_bits = mal_typed_array_span_load_bits(&span, index);
+        i128 old = array->kind == MAL_TA_BIGINT64
+            ? (i128) mal_scalar_i64_from_bits(old_bits)
+            : (i128) (u128) old_bits;
         i128 result = atomics_apply_i128(op, old, operand);
-        mal_typed_array_object_set(vm, array, index, mal_value_from_bigint(mal_bigint_new(&vm->heap, result)));
-        return old_value;
+        mal_typed_array_span_store_bits(&span, index, (u64) (u128) result);
+        return mal_value_from_bigint(mal_bigint_new(&vm->heap, old));
     }
 
     f64 number;
