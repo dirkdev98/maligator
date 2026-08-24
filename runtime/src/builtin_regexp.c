@@ -33,6 +33,14 @@
 // The CreateDataPropertyOrThrow descriptor used for exec result-array members.
 #define REGEXP_WEC (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
+static inline void regexp_dense_append(
+    MalArrayObject *array, u32 index, MalValue value
+) {
+    if (!mal_array_object_fresh_dense_append(array, value)) {
+        mal_array_object_store(array, mal_key_index(index), value);
+    }
+}
+
 static bool regexp_threw(MalVm *vm) {
     return vm->completion.kind == MAL_COMPLETION_THROW;
 }
@@ -430,7 +438,8 @@ static MalValue regexp_build_groups(MalVm *vm, MalRegExpObject *re, MalString *s
 // Build the `.indices` array for the `d` flag: a [start,end] pair (or undefined)
 // per group, plus an `.indices.groups` object for named groups.
 static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *s, const int32_t *caps, int32_t ngroups) {
-    MalArrayObject *indices = mal_intrinsic_new_dense_array(vm, (u32) ngroups);
+    MalArrayObject *indices = mal_intrinsic_new_array(vm, 0);
+    (void) mal_array_object_fresh_dense_reserve_exact(indices, (u32) ngroups);
     for (int32_t i = 0; i < ngroups; i++) {
         int32_t cs = caps[2 * i];
         int32_t ce = caps[2 * i + 1];
@@ -438,12 +447,13 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
         if (cs < 0) {
             entry = mal_value_new_undefined();
         } else {
-            MalArrayObject *pair = mal_intrinsic_new_array(vm, 2);
-            mal_array_object_store(pair, mal_key_index(0), mal_value_from_f64((f64) cs));
-            mal_array_object_store(pair, mal_key_index(1), mal_value_from_f64((f64) ce));
+            MalArrayObject *pair = mal_intrinsic_new_array(vm, 0);
+            (void) mal_array_object_fresh_dense_reserve_exact(pair, 2);
+            regexp_dense_append(pair, 0, mal_value_from_f64((f64) cs));
+            regexp_dense_append(pair, 1, mal_value_from_f64((f64) ce));
             entry = mal_value_from_object((MalObject *) pair);
         }
-        mal_array_object_store(indices, mal_key_index(i), entry);
+        regexp_dense_append(indices, (u32) i, entry);
     }
 
     // indices.groups
@@ -478,9 +488,10 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
             if (range[0] < 0) {
                 entry = mal_value_new_undefined();
             } else {
-                MalArrayObject *pair = mal_intrinsic_new_array(vm, 2);
-                mal_array_object_store(pair, mal_key_index(0), mal_value_from_f64((f64) range[0]));
-                mal_array_object_store(pair, mal_key_index(1), mal_value_from_f64((f64) range[1]));
+                MalArrayObject *pair = mal_intrinsic_new_array(vm, 0);
+                (void) mal_array_object_fresh_dense_reserve_exact(pair, 2);
+                regexp_dense_append(pair, 0, mal_value_from_f64((f64) range[0]));
+                regexp_dense_append(pair, 1, mal_value_from_f64((f64) range[1]));
                 entry = mal_value_from_object((MalObject *) pair);
             }
             MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
@@ -695,14 +706,15 @@ static MalValue regexp_builtin_exec(
         // repeating RegExpBuiltinExec and its lastIndex effects.
     }
 
-    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) ngroups);
+    MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+    (void) mal_array_object_fresh_dense_reserve_exact(array, (u32) ngroups);
     MalObject *array_object = (MalObject *) array;
 
     for (int32_t i = 0; i < ngroups; i++) {
         int32_t cs = caps[2 * i];
         int32_t ce = caps[2 * i + 1];
         MalValue element = cs < 0 ? mal_value_new_undefined() : regexp_substring(vm, s, cs, ce);
-        mal_array_object_store(array, mal_key_index(i), element);
+        regexp_dense_append(array, (u32) i, element);
     }
 
     MalValue groups = regexp_build_groups(vm, re, s);
