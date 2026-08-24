@@ -71,6 +71,7 @@ static MalArrayObject *mal_builtin_array_dense_builder(
     }
     MalArrayObject *array = mal_value_to_array_object(value);
     if (array->dense_deopted || !array->object.extensible ||
+        !array->length_writable || array->length != start ||
         array->dense_count != start || array->object.fast_elements_proto ||
         array->object.is_prototype || array->object.watched_method_proto) {
         return nullptr;
@@ -2726,12 +2727,56 @@ done:
  * Returns false (leaving the throw completion on the vm) if a property op aborts.
  * Shared by `mal_builtin_array_flat_map` and the guarded-inlining append intrinsic.
  */
+static bool mal_array_flat_map_append_dense(
+    MalVm *vm, MalValue result, u32 *count, MalValue mapped
+) {
+    MalArrayObject *mapped_array =
+        mal_builtin_array_clean_dense(vm, mapped);
+    MalArrayObject *result_array =
+        mal_builtin_array_dense_builder(result, *count);
+    if (mapped_array == nullptr || result_array == nullptr) {
+        return false;
+    }
+
+    // Snapshot the mapped extent before reserving. A custom species can expose
+    // the result to the callback and return that same Array as `mapped`.
+    u32 mapped_dense_count = mapped_array->dense_count;
+    if (mapped_dense_count > UINT32_MAX - *count) return false;
+    u32 needed = *count + mapped_dense_count;
+    bool reserved = needed > UINT32_MAX / 2
+        ? mal_array_object_dense_reserve_exact(result_array, needed)
+        : mal_array_object_dense_reserve(result_array, needed);
+    if (!reserved) {
+        return false;
+    }
+
+    u32 appended = 0;
+    for (u32 inner = 0; inner < mapped_dense_count; inner++) {
+        MalValue inner_element;
+        if (!mal_array_object_dense_get(
+                mapped_array, inner, &inner_element)) {
+            continue;
+        }
+        if (!mal_array_object_fresh_dense_append(
+                result_array, inner_element)) {
+            abort();
+        }
+        appended++;
+    }
+    *count += appended;
+    return true;
+}
+
 static bool mal_array_flat_map_append(MalVm *vm, MalValue result, u32 *count, MalValue mapped) {
     bool should_flatten;
     if (!mal_vm_is_array(vm, mapped, &should_flatten)) {
         return false;
     }
     if (should_flatten) {
+        if (mal_array_flat_map_append_dense(
+                vm, result, count, mapped)) {
+            return true;
+        }
         u32 mapped_length;
         if (!mal_builtin_array_this_length(vm, mapped, &mapped_length)) {
             return false;

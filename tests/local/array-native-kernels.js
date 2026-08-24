@@ -121,6 +121,48 @@ async function main() {
 		[flatProxyChild].flat().join() === "11,12" && flatProxyHas >= 3 && flatProxyGet >= 3,
 	);
 	check("flatMap", source.flatMap((value) => [value, -value]).length === 10);
+	const flatMappedHoles = [1, 2].flatMap((value) =>
+		value === 1 ? [value, , value + 10] : [, value],
+	);
+	check(
+		"flatMap dense mapped arrays compact holes",
+		flatMappedHoles.length === 3 &&
+			flatMappedHoles.join() === "1,11,2" &&
+			Object.keys(flatMappedHoles).length === 3,
+	);
+	let exposedFlatMapResult;
+	const aliasFlatMapSource = [1, 2];
+	aliasFlatMapSource.constructor = {
+		[Symbol.species]: function () {
+			exposedFlatMapResult = [];
+			return exposedFlatMapResult;
+		},
+	};
+	const aliasedFlatMap = aliasFlatMapSource.flatMap((value, index) =>
+		index === 0 ? [value] : exposedFlatMapResult,
+	);
+	check(
+		"flatMap snapshots an aliased mapped result extent",
+		aliasedFlatMap === exposedFlatMapResult && aliasedFlatMap.join() === "1,1",
+	);
+	let flatMapProxyHas = 0;
+	let flatMapProxyGet = 0;
+	const flatMapProxyChild = new Proxy([3, , 4], {
+		has(target, key) {
+			flatMapProxyHas++;
+			return Reflect.has(target, key);
+		},
+		get(target, key, receiver) {
+			flatMapProxyGet++;
+			return Reflect.get(target, key, receiver);
+		},
+	});
+	check(
+		"flatMap falls back for proxy mapped arrays",
+		[0].flatMap(() => flatMapProxyChild).join() === "3,4" &&
+			flatMapProxyHas >= 3 &&
+			flatMapProxyGet >= 3,
+	);
 
 	check("indexOf", source.indexOf(3) === 2);
 	check("lastIndexOf", [1, 2, 1].lastIndexOf(1) === 2);
