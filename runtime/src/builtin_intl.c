@@ -223,15 +223,14 @@ static MalString *intl_locale_field_string(MalVm *vm, const MalString *tag, i32 
 /** Define an enumerable index element on a result array and bump its length. */
 static void intl_array_push(MalVm *vm, MalArrayObject *array, u32 index, MalValue value) {
     (void) vm;
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
-        .value = value,
-        .getter = mal_value_new_undefined(),
-        .setter = mal_value_new_undefined(),
-    };
-    MalKey key = mal_key_index(index);
-    mal_object_define_own((MalObject *) array, key, &desc);
-    mal_array_object_set_length(array, index + 1);
+    if (mal_array_object_dense_store(array, index, value) ==
+        MAL_ARRAY_DENSE_APPLIED) {
+        if (index >= mal_array_object_length(array)) {
+            array->length = index + 1;
+        }
+        return;
+    }
+    (void) mal_array_object_store(array, mal_key_index(index), value);
 }
 
 /** Set a configurable, non-writable @@toStringTag on an object. */
@@ -479,6 +478,7 @@ static MalValue intl_supported_values_of(MalVm *vm, MalValue this_value, const M
     qsort(sorted, count, sizeof(char *), intl_compare_cstr);
 
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    (void) mal_array_object_fresh_dense_reserve_exact(result, (u32) count);
     for (usize i = 0; i < count; i++) {
         intl_array_push(vm, result, (u32) i, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) sorted[i])));
     }
@@ -3038,6 +3038,10 @@ static MalValue intl_segments_iterator(MalVm *vm, MalValue this_value, const Mal
     // Snapshot the boundaries + word-like flags as JS arrays on the iterator.
     MalArrayObject *bounds_array = mal_intrinsic_new_array(vm, 0);
     MalArrayObject *wl_array = mal_intrinsic_new_array(vm, 0);
+    (void) mal_array_object_fresh_dense_reserve_exact(
+        bounds_array, (u32) count);
+    (void) mal_array_object_fresh_dense_reserve_exact(
+        wl_array, count > 0 ? (u32) count - 1 : 0);
     for (i32 i = 0; i < count; i++) {
         intl_array_push(vm, bounds_array, (u32) i, mal_value_from_i32(bounds[i]));
     }
