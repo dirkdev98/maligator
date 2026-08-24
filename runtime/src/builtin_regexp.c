@@ -1046,22 +1046,44 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "RegExp.prototype.toString called on non-object");
         return mal_value_new_undefined();
     }
-    MalValue source_value;
     MalString *source;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, (const byte *) "source"), &source_value)) {
-        return mal_value_new_undefined();
-    }
-    if (!mal_vm_to_string(vm, source_value, &source)) {
-        return mal_value_new_undefined();
-    }
-    MalValue flags_value;
     MalString *flags;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_FLAGS), &flags_value)) {
-        return mal_value_new_undefined();
+    MalValue string_roots[2] = {
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, this_value, &canonical)) {
+        string_roots[0] = regexp_escape_pattern(vm, canonical->source);
+        if (regexp_threw(vm)) {
+            return mal_value_new_undefined();
+        }
+        mal_gc_root(&root_span, string_roots, 2);
+        flags = regexp_canonical_flags_string(vm, canonical);
+        string_roots[1] = mal_value_from_string(flags);
+    } else {
+        MalValue source_value;
+        if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, (const byte *) "source"), &source_value)) {
+            return mal_value_new_undefined();
+        }
+        if (!mal_vm_to_string(vm, source_value, &source)) {
+            return mal_value_new_undefined();
+        }
+        string_roots[0] = mal_value_from_string(source);
+        mal_gc_root(&root_span, string_roots, 2);
+        MalValue flags_value;
+        if (!mal_vm_get_property(vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_FLAGS), &flags_value)) {
+            mal_gc_unroot(&root_span);
+            return mal_value_new_undefined();
+        }
+        if (!mal_vm_to_string(vm, flags_value, &flags)) {
+            mal_gc_unroot(&root_span);
+            return mal_value_new_undefined();
+        }
+        string_roots[1] = mal_value_from_string(flags);
     }
-    if (!mal_vm_to_string(vm, flags_value, &flags)) {
-        return mal_value_new_undefined();
-    }
+    source = mal_value_to_string(string_roots[0]);
+    flags = mal_value_to_string(string_roots[1]);
     usize source_len = mal_string_length(source);
     usize flags_len = mal_string_length(flags);
     usize total;
@@ -1070,10 +1092,13 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
         !mal_checked_size_add(total, 2, MAL_STRING_MAX_CODE_UNITS, &total) ||
         !mal_checked_size_multiply(sizeof(c16), total, SIZE_MAX, &bytes)) {
         regexp_throw_string_length(vm);
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
     c16 *buf = mal_heap_alloc_raw_profiled(
         &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    source = mal_value_to_string(string_roots[0]);
+    flags = mal_value_to_string(string_roots[1]);
     usize out = 0;
     buf[out++] = '/';
     for (usize i = 0; i < source_len; i++) {
@@ -1083,7 +1108,10 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
     for (usize i = 0; i < flags_len; i++) {
         buf[out++] = mal_string_code_units(flags)[i];
     }
-    return mal_value_from_string(mal_string_new_owned(&vm->heap, buf, out));
+    MalValue result = mal_value_from_string(
+        mal_string_new_owned(&vm->heap, buf, out));
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 // ---------------------------------------------------------------------------
