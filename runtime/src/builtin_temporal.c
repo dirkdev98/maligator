@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "ascii.h"
@@ -39,7 +40,62 @@ static MalValue plain_year_month_wrap_intrinsic(MalVm *vm, PlainYearMonth *handl
 static MalValue zoned_date_time_wrap_intrinsic(MalVm *vm, ZonedDateTime *handle);
 static bool temporal_to_string_rounding_options(
     MalVm *vm, MalValue value, ToStringRoundingOptions *options);
-static MalValue temporal_write_to_string(MalVm *vm, DiplomatWrite *write);
+
+typedef struct MalTemporalWrite {
+    DiplomatWrite diplomat;
+    byte *allocation;
+} MalTemporalWrite;
+
+static void temporal_write_flush(DiplomatWrite *write) {
+    (void) write;
+}
+
+static bool temporal_write_grow(DiplomatWrite *diplomat, usize minimum) {
+    MalTemporalWrite *write = diplomat->context;
+    usize capacity = diplomat->cap <= SIZE_MAX / 2 ? diplomat->cap * 2 : SIZE_MAX;
+    if (capacity < minimum) capacity = minimum;
+    byte *allocation;
+    if (write->allocation == nullptr) {
+        allocation = malloc(capacity);
+        if (allocation != nullptr && diplomat->len > 0) {
+            memcpy(allocation, diplomat->buf, diplomat->len);
+        }
+    } else {
+        allocation = realloc(write->allocation, capacity);
+    }
+    if (allocation == nullptr) return false;
+    write->allocation = allocation;
+    diplomat->buf = (char *) allocation;
+    diplomat->cap = capacity;
+    return true;
+}
+
+static MalTemporalWrite temporal_write_new(byte *buffer, usize capacity) {
+    MalTemporalWrite write = {
+        .diplomat = {
+            .context = nullptr,
+            .buf = (char *) buffer,
+            .len = 0,
+            .cap = capacity,
+            .grow_failed = false,
+            .flush = temporal_write_flush,
+            .grow = temporal_write_grow,
+        },
+        .allocation = nullptr,
+    };
+    return write;
+}
+
+static void temporal_write_destroy(MalTemporalWrite *write) {
+    free(write->allocation);
+}
+
+#define TEMPORAL_WRITE(name, capacity) \
+    byte name##_buffer[(capacity)]; \
+    MalTemporalWrite name = temporal_write_new(name##_buffer, sizeof(name##_buffer)); \
+    name.diplomat.context = &name
+
+static MalValue temporal_write_to_string(MalVm *vm, MalTemporalWrite *write);
 
 static MalValue temporal_throw(MalVm *vm, TemporalError error) {
     MalIntrinsic kind = error.kind == ErrorKind_Type
@@ -367,28 +423,19 @@ static MalValue duration_subtract(
 static MalValue duration_to_string_default(MalVm *vm, MalValue this_value) {
     MalTemporalObject *object;
     if (!duration_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(64);
-    if (write == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                           "Unable to format Temporal.Duration");
-        return mal_value_new_undefined();
-    }
+    TEMPORAL_WRITE(write, 64);
     ToStringRoundingOptions options = {
         .precision = {.is_minute = false, .precision = {.is_ok = false}},
         .smallest_unit = {.is_ok = false},
         .rounding_mode = {.is_ok = false},
     };
     temporal_rs_Duration_to_string_result result =
-        temporal_rs_Duration_to_string(object->handle, options, write);
+        temporal_rs_Duration_to_string(object->handle, options, &write.diplomat);
     if (!result.is_ok) {
-        diplomat_buffer_write_destroy(write);
+        temporal_write_destroy(&write);
         return temporal_throw(vm, result.err);
     }
-    MalString *string = mal_string_from_utf8(
-        &vm->heap, (const byte *) diplomat_buffer_write_get_bytes(write),
-        diplomat_buffer_write_len(write));
-    diplomat_buffer_write_destroy(write);
-    return mal_value_from_string(string);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue duration_to_string(
@@ -403,14 +450,14 @@ static MalValue duration_to_string(
             vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &options)) {
         return mal_value_new_undefined();
     }
-    DiplomatWrite *write = diplomat_buffer_write_create(64);
+    TEMPORAL_WRITE(write, 64);
     temporal_rs_Duration_to_string_result result =
-        temporal_rs_Duration_to_string(object->handle, options, write);
+        temporal_rs_Duration_to_string(object->handle, options, &write.diplomat);
     if (!result.is_ok) {
-        diplomat_buffer_write_destroy(write);
+        temporal_write_destroy(&write);
         return temporal_throw(vm, result.err);
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue duration_to_string_no_options(
@@ -586,11 +633,15 @@ static bool temporal_get_rounding_mode(
     return temporal_rounding_mode_from_string(vm, string, out);
 }
 
-static MalValue temporal_write_to_string(MalVm *vm, DiplomatWrite *write) {
+static MalValue temporal_write_to_string(MalVm *vm, MalTemporalWrite *write) {
+    if (write->diplomat.grow_failed) {
+        temporal_write_destroy(write);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     MalString *string = mal_string_from_utf8(
-        &vm->heap, (const byte *) diplomat_buffer_write_get_bytes(write),
-        diplomat_buffer_write_len(write));
-    diplomat_buffer_write_destroy(write);
+        &vm->heap, (const byte *) write->diplomat.buf, write->diplomat.len);
+    temporal_write_destroy(write);
     return mal_value_from_string(string);
 }
 
@@ -1398,19 +1449,19 @@ static MalValue plain_time_until(
 static MalValue plain_time_to_string_default(MalVm *vm, MalValue this_value) {
     MalTemporalObject *object;
     if (!plain_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(32);
-    if (write == nullptr) return temporal_throw_type(vm, "Unable to format Temporal.PlainTime");
+    TEMPORAL_WRITE(write, 32);
     ToStringRoundingOptions options = {
         .precision = {.is_minute = false, .precision = {.is_ok = false}},
         .smallest_unit = {.is_ok = false}, .rounding_mode = {.is_ok = false},
     };
     temporal_rs_PlainTime_to_ixdtf_string_result result =
-        temporal_rs_PlainTime_to_ixdtf_string(object->handle, options, write);
+        temporal_rs_PlainTime_to_ixdtf_string(
+            object->handle, options, &write.diplomat);
     if (!result.is_ok) {
-        diplomat_buffer_write_destroy(write);
+        temporal_write_destroy(&write);
         return temporal_throw(vm, result.err);
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static bool temporal_to_string_rounding_options(
@@ -1506,15 +1557,15 @@ static MalValue plain_time_to_string(
             vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &options)) {
         return mal_value_new_undefined();
     }
-    DiplomatWrite *write = diplomat_buffer_write_create(32);
-    if (write == nullptr) return temporal_throw_type(vm, "Unable to format Temporal.PlainTime");
+    TEMPORAL_WRITE(write, 32);
     temporal_rs_PlainTime_to_ixdtf_string_result result =
-        temporal_rs_PlainTime_to_ixdtf_string(object->handle, options, write);
+        temporal_rs_PlainTime_to_ixdtf_string(
+            object->handle, options, &write.diplomat);
     if (!result.is_ok) {
-        diplomat_buffer_write_destroy(write);
+        temporal_write_destroy(&write);
         return temporal_throw(vm, result.err);
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_time_to_string_no_options(
@@ -1810,9 +1861,9 @@ static MalValue plain_date_month_code(
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(8);
-    temporal_rs_PlainDate_month_code(object->handle, write);
-    return temporal_write_to_string(vm, write);
+    TEMPORAL_WRITE(write, 8);
+    temporal_rs_PlainDate_month_code(object->handle, &write.diplomat);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_date_in_leap_year(
@@ -1832,13 +1883,13 @@ static MalValue plain_date_era(
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(16);
-    temporal_rs_PlainDate_era(object->handle, write);
-    if (diplomat_buffer_write_len(write) == 0) {
-        diplomat_buffer_write_destroy(write);
+    TEMPORAL_WRITE(write, 16);
+    temporal_rs_PlainDate_era(object->handle, &write.diplomat);
+    if (!write.diplomat.grow_failed && write.diplomat.len == 0) {
+        temporal_write_destroy(&write);
         return mal_value_new_undefined();
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_date_era_year(
@@ -2118,9 +2169,10 @@ static MalValue plain_date_to_string_impl(
     if (read_options && !temporal_display_calendar(vm, options, &display)) {
         return mal_value_new_undefined();
     }
-    DiplomatWrite *write = diplomat_buffer_write_create(32);
-    temporal_rs_PlainDate_to_ixdtf_string(object->handle, display, write);
-    return temporal_write_to_string(vm, write);
+    TEMPORAL_WRITE(write, 32);
+    temporal_rs_PlainDate_to_ixdtf_string(
+        object->handle, display, &write.diplomat);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_date_to_string(
@@ -2372,9 +2424,9 @@ static MalValue plain_date_time_month_code(
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(8);
-    temporal_rs_PlainDateTime_month_code(object->handle, write);
-    return temporal_write_to_string(vm, write);
+    TEMPORAL_WRITE(write, 8);
+    temporal_rs_PlainDateTime_month_code(object->handle, &write.diplomat);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_date_time_in_leap_year(
@@ -2419,13 +2471,13 @@ static MalValue plain_date_time_era(
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(16);
-    temporal_rs_PlainDateTime_era(object->handle, write);
-    if (diplomat_buffer_write_len(write) == 0) {
-        diplomat_buffer_write_destroy(write);
+    TEMPORAL_WRITE(write, 16);
+    temporal_rs_PlainDateTime_era(object->handle, &write.diplomat);
+    if (!write.diplomat.grow_failed && write.diplomat.len == 0) {
+        temporal_write_destroy(&write);
         return mal_value_new_undefined();
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_date_time_era_year(
@@ -2658,10 +2710,10 @@ static MalValue plain_date_time_to_string_impl(
          !temporal_display_calendar(vm, options_value, &display))) {
         return mal_value_new_undefined();
     }
-    DiplomatWrite *write = diplomat_buffer_write_create(48);
+    TEMPORAL_WRITE(write, 48);
     temporal_rs_PlainDateTime_to_ixdtf_string(
-        object->handle, options, display, write);
-    return temporal_write_to_string(vm, write);
+        object->handle, options, display, &write.diplomat);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_date_time_to_string(
@@ -2878,9 +2930,9 @@ static MalValue plain_year_month_month_code(
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(8);
-    temporal_rs_PlainYearMonth_month_code(object->handle, write);
-    return temporal_write_to_string(vm, write);
+    TEMPORAL_WRITE(write, 8);
+    temporal_rs_PlainYearMonth_month_code(object->handle, &write.diplomat);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_year_month_in_leap_year(
@@ -3035,13 +3087,13 @@ static MalValue plain_year_month_era(
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(16);
-    temporal_rs_PlainYearMonth_era(object->handle, write);
-    if (diplomat_buffer_write_len(write) == 0) {
-        diplomat_buffer_write_destroy(write);
+    TEMPORAL_WRITE(write, 16);
+    temporal_rs_PlainYearMonth_era(object->handle, &write.diplomat);
+    if (!write.diplomat.grow_failed && write.diplomat.len == 0) {
+        temporal_write_destroy(&write);
         return mal_value_new_undefined();
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_year_month_era_year(
@@ -3111,9 +3163,10 @@ static MalValue plain_year_month_to_string_impl(
     if (read_options && !temporal_display_calendar(vm, options, &display)) {
         return mal_value_new_undefined();
     }
-    DiplomatWrite *write = diplomat_buffer_write_create(32);
-    temporal_rs_PlainYearMonth_to_ixdtf_string(object->handle, display, write);
-    return temporal_write_to_string(vm, write);
+    TEMPORAL_WRITE(write, 32);
+    temporal_rs_PlainYearMonth_to_ixdtf_string(
+        object->handle, display, &write.diplomat);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_year_month_to_string(
@@ -3305,9 +3358,9 @@ static MalValue plain_month_day_month_code(
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(8);
-    temporal_rs_PlainMonthDay_month_code(object->handle, write);
-    return temporal_write_to_string(vm, write);
+    TEMPORAL_WRITE(write, 8);
+    temporal_rs_PlainMonthDay_month_code(object->handle, &write.diplomat);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_month_day_equals(
@@ -3387,9 +3440,10 @@ static MalValue plain_month_day_to_string_impl(
     if (read_options && !temporal_display_calendar(vm, options, &display)) {
         return mal_value_new_undefined();
     }
-    DiplomatWrite *write = diplomat_buffer_write_create(32);
-    temporal_rs_PlainMonthDay_to_ixdtf_string(object->handle, display, write);
-    return temporal_write_to_string(vm, write);
+    TEMPORAL_WRITE(write, 32);
+    temporal_rs_PlainMonthDay_to_ixdtf_string(
+        object->handle, display, &write.diplomat);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue plain_month_day_to_string(
@@ -3814,16 +3868,15 @@ static MalValue instant_to_string_impl(
             }
         }
     }
-    DiplomatWrite *write = diplomat_buffer_write_create(48);
-    if (write == nullptr) return temporal_throw_type(vm, "Unable to format Temporal.Instant");
+    TEMPORAL_WRITE(write, 48);
     temporal_rs_Instant_to_ixdtf_string_with_compiled_data_result result =
         temporal_rs_Instant_to_ixdtf_string_with_compiled_data(
-            object->handle, zone, options, write);
+            object->handle, zone, options, &write.diplomat);
     if (!result.is_ok) {
-        diplomat_buffer_write_destroy(write);
+        temporal_write_destroy(&write);
         return temporal_throw(vm, result.err);
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue instant_to_string(
@@ -4239,21 +4292,21 @@ static MalValue zoned_date_time_string_getter(
 ) {
     MalTemporalObject *object;
     if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(32);
+    TEMPORAL_WRITE(write, 32);
     if (timezone) {
         temporal_rs_TimeZone_identifier(
-            temporal_rs_ZonedDateTime_timezone(object->handle), write);
+            temporal_rs_ZonedDateTime_timezone(object->handle), &write.diplomat);
     } else if (month_code) {
-        temporal_rs_ZonedDateTime_month_code(object->handle, write);
+        temporal_rs_ZonedDateTime_month_code(object->handle, &write.diplomat);
     } else {
         temporal_rs_ZonedDateTime_offset_result result =
-            temporal_rs_ZonedDateTime_offset(object->handle, write);
+            temporal_rs_ZonedDateTime_offset(object->handle, &write.diplomat);
         if (!result.is_ok) {
-            diplomat_buffer_write_destroy(write);
+            temporal_write_destroy(&write);
             return temporal_throw(vm, result.err);
         }
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 #define ZONED_STRING_GETTER(c_name, timezone, month_code) \
@@ -4323,13 +4376,13 @@ static MalValue zoned_date_time_era(
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    DiplomatWrite *write = diplomat_buffer_write_create(16);
-    temporal_rs_ZonedDateTime_era(object->handle, write);
-    if (diplomat_buffer_write_len(write) == 0) {
-        diplomat_buffer_write_destroy(write);
+    TEMPORAL_WRITE(write, 16);
+    temporal_rs_ZonedDateTime_era(object->handle, &write.diplomat);
+    if (!write.diplomat.grow_failed && write.diplomat.len == 0) {
+        temporal_write_destroy(&write);
         return mal_value_new_undefined();
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue zoned_date_time_era_year(
@@ -4842,15 +4895,15 @@ static MalValue zoned_date_time_to_string_impl(
             }
         }
     }
-    DiplomatWrite *write = diplomat_buffer_write_create(80);
+    TEMPORAL_WRITE(write, 80);
     temporal_rs_ZonedDateTime_to_ixdtf_string_result result =
         temporal_rs_ZonedDateTime_to_ixdtf_string(
-            object->handle, offset, timezone, calendar, rounding, write);
+            object->handle, offset, timezone, calendar, rounding, &write.diplomat);
     if (!result.is_ok) {
-        diplomat_buffer_write_destroy(write);
+        temporal_write_destroy(&write);
         return temporal_throw(vm, result.err);
     }
-    return temporal_write_to_string(vm, write);
+    return temporal_write_to_string(vm, &write);
 }
 
 static MalValue zoned_date_time_to_string(

@@ -25,6 +25,23 @@ check(parsed.toString() === "P1DT2H3M4.005006007S");
 check(parsed.toJSON() === parsed.toString());
 check(parsed.toLocaleString() === parsed.toString());
 check(parsed.negated().abs().toString() === parsed.toString());
+const largeDuration = new Temporal.Duration(
+	1000000000,
+	1000000000,
+	1000000000,
+	1000000000,
+	1000000000,
+	1000000000,
+	1000000000,
+	1000000000,
+	1000000000,
+	1000000000,
+);
+const largeDurationString = largeDuration.toString();
+check(
+	largeDurationString.length > 64 &&
+		Temporal.Duration.from(largeDurationString).toString() === largeDurationString,
+);
 check(Temporal.Duration.from({ hours: 1 }).add({ minutes: 30 }).toString() === "PT1H30M");
 check(
 	Temporal.Duration.from({ hours: 1 }).subtract({ minutes: 30 }).toString() === "PT30M",
