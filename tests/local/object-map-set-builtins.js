@@ -75,6 +75,40 @@ check(
 		setPrototypeGets === 1,
 );
 
+const capturedSetAdderPrototype = Object.create(Set.prototype);
+function CapturedSetAdderTarget() {}
+CapturedSetAdderTarget.prototype = capturedSetAdderPrototype;
+let replacementSetAdderCalls = 0;
+const capturedSetAdderIterable = {
+	get [Symbol.iterator]() {
+		Object.defineProperty(capturedSetAdderPrototype, "add", {
+			value() {
+				replacementSetAdderCalls++;
+			},
+		});
+		let emitted = false;
+		return function () {
+			return {
+				next() {
+					if (emitted) return { done: true };
+					emitted = true;
+					return { done: false, value: "captured-set-value" };
+				},
+			};
+		};
+	},
+};
+const capturedSetAdder = Reflect.construct(
+	Set,
+	[capturedSetAdderIterable],
+	CapturedSetAdderTarget,
+);
+check(
+	"Set constructor retains the adder captured before iterator effects",
+	replacementSetAdderCalls === 0 &&
+		Set.prototype.has.call(capturedSetAdder, "captured-set-value"),
+);
+
 let intrinsicMapPrototypeGets = 0;
 const intrinsicMapTarget = new Proxy(function () {}, {
 	get(target, key, receiver) {

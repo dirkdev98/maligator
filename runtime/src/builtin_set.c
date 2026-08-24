@@ -73,6 +73,8 @@ static MalValue mal_builtin_set_construct(
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set adder is not callable");
         return mal_value_new_undefined();
     }
+    bool direct_set_adder = !weak &&
+        adder == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD];
 
     MalIteratorRecord record;
     if (!mal_vm_get_iterator(vm, args[0], &record)) {
@@ -80,7 +82,7 @@ static MalValue mal_builtin_set_construct(
     }
 
     usize size_hint;
-    if (!weak && adder == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD] &&
+    if (direct_set_adder &&
         mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
         (void) mal_table_reserve(set->entries, size_hint);
     }
@@ -108,6 +110,14 @@ static MalValue mal_builtin_set_construct(
         if (done) {
             ret = roots[0];
             goto done;
+        }
+
+        // The exact built-in Set.prototype.add has no observable call seam.
+        // Its identity was captured before iterator acquisition, so direct
+        // insertion remains valid even if later iterator effects replace add.
+        if (direct_set_adder) {
+            mal_map_object_set(set, roots[2], roots[2]);
+            continue;
         }
 
         MalCompletion completion = mal_vm_call_value(
