@@ -29,6 +29,14 @@ static bool mal_builtin_error_throw_string_length(MalVm *vm) {
     return false;
 }
 
+static inline void mal_error_dense_append(
+    MalArrayObject *array, u32 index, MalValue value
+) {
+    if (!mal_array_object_fresh_dense_append(array, value)) {
+        mal_array_object_store(array, mal_key_index(index), value);
+    }
+}
+
 static MalKey mal_error_stack_key(MalVm *vm) {
     return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = MAL_ERROR_STACK_MARKER(vm)};
 }
@@ -225,17 +233,22 @@ static MalValue mal_builtin_aggregate_error_make(MalVm *vm, MalValue errors_valu
     if (!mal_vm_get_iterator(vm, errors_value, &record)) {
         return mal_value_new_undefined(); // not iterable: propagate the pending throw
     }
-    i32 index = 0;
+    usize size_hint;
+    if (mal_vm_builtin_iterator_size_hint(&record, &size_hint) &&
+        size_hint <= UINT32_MAX) {
+        (void) mal_array_object_fresh_dense_reserve_exact(list, (u32) size_hint);
+    }
+    u32 index = 0;
     while (true) {
         MalValue item;
         bool done;
-        if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
+        if (!mal_vm_iterator_step_fast(vm, &record, &item, &done)) {
             return mal_value_new_undefined();
         }
         if (done) {
             break;
         }
-        mal_array_object_store(list, mal_key_index(index++), item);
+        mal_error_dense_append(list, index++, item);
     }
 
     // AggregateError "errors": { writable: true, enumerable: false, configurable: true }.
@@ -573,9 +586,8 @@ static MalArrayObject *mal_error_callsite_array(MalVm *vm, const MalStackTrace *
                     if (trace->frame_limit >= 0 && emitted >= trace->frame_limit) {
                         return array;
                     }
-                    mal_array_object_store(
-                        array,
-                        mal_key_index(emitted++),
+                    mal_error_dense_append(
+                        array, (u32) emitted++,
                         mal_value_from_object(mal_error_new_callsite(vm, function_index, pos_id))
                     );
                 }
