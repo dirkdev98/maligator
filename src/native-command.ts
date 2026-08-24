@@ -65,10 +65,11 @@ export function runIndependentCommands(
 		}
 		return;
 	}
-	execFileSync("/bin/sh", ["-c", parallelShellScript(commands, jobs)], {
+	execFileSync("/bin/sh", [], {
 		cwd: options.cwd,
 		env: options.env,
-		stdio: options.verbose ? "inherit" : "pipe",
+		input: parallelShellScript(commands, jobs),
+		stdio: options.verbose ? ["pipe", "inherit", "inherit"] : "pipe",
 	});
 }
 
@@ -109,10 +110,11 @@ export function runNativeCommands(
 	for (const command of commands) {
 		context.onCommand?.({ tool: command.tool, args: command.args, cwd: options.cwd });
 	}
-	const stdout = execFileSync("/bin/sh", ["-c", parallelShellScript(commands, jobs)], {
+	const stdout = execFileSync("/bin/sh", [], {
 		cwd: options.cwd,
 		env: options.env ?? context.environment,
-		stdio: options.verbose ? ["ignore", "pipe", "inherit"] : "pipe",
+		input: parallelShellScript(commands, jobs),
+		stdio: options.verbose ? ["pipe", "pipe", "inherit"] : "pipe",
 	});
 	if (options.verbose && stdout.length > 0) process.stderr.write(stdout);
 }

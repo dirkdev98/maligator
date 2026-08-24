@@ -418,6 +418,11 @@ function smokeRelease(): void {
 			}).trim(),
 		],
 	];
+	// Linux compiler drivers resolve these through PATH. Keep the release smoke
+	// isolated while still providing the assembler and linker needed by cc/c++.
+	if (process.platform === "linux") {
+		requiredTools.push(["as", "as"], ["ld", "ld"]);
+	}
 	for (const [name, executable] of requiredTools) {
 		const source = executable.includes(path.sep)
 			? executable
