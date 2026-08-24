@@ -519,7 +519,9 @@ check(
 		BigInt.prototype.valueOf.call(Object(identityBigInt)) === identityBigInt &&
 		identityBigInt.toString(16) === "75bcd15" &&
 		(-170141183460469231731687303715884105728n).toString(16) ===
-			"-80000000000000000000000000000000",
+			"-80000000000000000000000000000000" &&
+		(-170141183460469231731687303715884105728n).toString() ===
+			"-170141183460469231731687303715884105728",
 );
 check(
 	"bigint ToIndex infinity",

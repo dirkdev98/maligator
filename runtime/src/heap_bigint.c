@@ -43,9 +43,61 @@ i128 mal_bigint_value(const MalBigInt *bigint) {
     return bigint->value;
 }
 
+static byte *mal_bigint_write_u64_decimal(
+    byte *out, u64 value, usize min_digits
+) {
+    byte reverse[20];
+    usize digits = 0;
+    do {
+        reverse[digits++] = (byte) ('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+    while (digits < min_digits) {
+        reverse[digits++] = '0';
+    }
+    while (digits > 0) {
+        *out++ = reverse[--digits];
+    }
+    return out;
+}
+
+static MalString *mal_bigint_to_decimal_string(MalHeap *heap, i128 value) {
+    if (value == 0) {
+        return mal_string_new_ascii(heap, "0", 1);
+    }
+
+    static const u128 chunk_base = (u128) 10000000000000000000ULL;
+    bool negative = value < 0;
+    u128 magnitude = negative ? (~(u128) value + 1) : (u128) value;
+    u64 chunks[3];
+    usize chunk_count = 0;
+    do {
+        chunks[chunk_count++] = (u64) (magnitude % chunk_base);
+        magnitude /= chunk_base;
+    } while (magnitude != 0);
+
+    byte buffer[40];
+    byte *cursor = buffer;
+    if (negative) {
+        *cursor++ = '-';
+    }
+    cursor = mal_bigint_write_u64_decimal(
+        cursor, chunks[--chunk_count], 1);
+    while (chunk_count > 0) {
+        cursor = mal_bigint_write_u64_decimal(
+            cursor, chunks[--chunk_count], 19);
+    }
+    return mal_string_new_ascii(
+        heap, buffer, (usize) (cursor - buffer));
+}
+
 MalString *mal_bigint_to_string(MalHeap *heap, i128 value, i32 radix) {
     if (radix < 2 || radix > 36) {
         radix = 10;
+    }
+
+    if (radix == 10) {
+        return mal_bigint_to_decimal_string(heap, value);
     }
 
     if (value == 0) {
