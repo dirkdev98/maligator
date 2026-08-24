@@ -12,6 +12,7 @@
 #include "heap_symbol.h"
 #include "object_ops.h"
 #include "property_store.h"
+#include "u16_buffer.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -558,15 +559,42 @@ static MalValue mal_error_callsite_method(MalVm *vm, MalValue this_value, const 
         return result;
     }
 
-    result = mal_vm_add(vm, result, mal_value_from_string(mal_intrinsic_ascii(vm, " (")));
-    result = mal_vm_add(vm, result, file);
-    if (!mal_value_is_null(line)) {
-        result = mal_vm_add(vm, result, mal_value_from_string(mal_intrinsic_ascii(vm, ":")));
-        result = mal_vm_add(vm, result, line);
-        result = mal_vm_add(vm, result, mal_value_from_string(mal_intrinsic_ascii(vm, ":")));
-        result = mal_vm_add(vm, result, column);
+    MalU16Buffer buffer = {0};
+    MalU16BufferStatus status = mal_u16_buffer_append_string(
+        &buffer, mal_value_to_string(result));
+    if (status == MAL_U16_BUFFER_OK) {
+        status = mal_u16_buffer_append_ascii(&buffer, " (");
     }
-    return mal_vm_add(vm, result, mal_value_from_string(mal_intrinsic_ascii(vm, ")")));
+    if (status == MAL_U16_BUFFER_OK) {
+        status = mal_u16_buffer_append_string(&buffer, mal_value_to_string(file));
+    }
+    if (!mal_value_is_null(line)) {
+        if (status == MAL_U16_BUFFER_OK) {
+            status = mal_u16_buffer_push(&buffer, ':');
+        }
+        if (status == MAL_U16_BUFFER_OK) {
+            status = mal_u16_buffer_append_i32(&buffer, mal_value_to_i32(line));
+        }
+        if (status == MAL_U16_BUFFER_OK) {
+            status = mal_u16_buffer_push(&buffer, ':');
+        }
+        if (status == MAL_U16_BUFFER_OK) {
+            status = mal_u16_buffer_append_i32(&buffer, mal_value_to_i32(column));
+        }
+    }
+    if (status == MAL_U16_BUFFER_OK) {
+        status = mal_u16_buffer_push(&buffer, ')');
+    }
+    if (status != MAL_U16_BUFFER_OK) {
+        mal_u16_buffer_dispose(&buffer);
+        if (status == MAL_U16_BUFFER_LENGTH_OVERFLOW) {
+            mal_builtin_error_throw_string_length(vm);
+        } else {
+            mal_vm_throw_allocation_error(vm);
+        }
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &buffer));
 }
 
 static void mal_error_callsite_define_method(

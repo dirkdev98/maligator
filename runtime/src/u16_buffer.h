@@ -32,6 +32,10 @@ MalU16BufferStatus mal_u16_buffer_append_string(
 MalU16BufferStatus mal_u16_buffer_append_ascii(
     MalU16Buffer *buffer, const byte *ascii);
 
+/** Append the base-10 spelling of a signed 32-bit integer. */
+MalU16BufferStatus mal_u16_buffer_append_i32(
+    MalU16Buffer *buffer, i32 value);
+
 /** Copy the current contents into a heap string without consuming the buffer. */
 MalString *mal_u16_buffer_copy(MalHeap *heap, const MalU16Buffer *buffer);
 

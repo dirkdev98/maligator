@@ -3532,9 +3532,7 @@ static void mal_stack_buf_push_string(MalStackBuf *buf, const MalString *string)
 }
 
 static void mal_stack_buf_push_i32(MalStackBuf *buf, i32 value) {
-    char digits[16];
-    snprintf(digits, sizeof(digits), "%d", value);
-    mal_stack_buf_push_ascii(buf, digits);
+    mal_stack_buf_require(mal_u16_buffer_append_i32(buf, value));
 }
 
 MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {

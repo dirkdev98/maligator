@@ -96,6 +96,32 @@ MalU16BufferStatus mal_u16_buffer_append_ascii(
     return status;
 }
 
+MalU16BufferStatus mal_u16_buffer_append_i32(
+    MalU16Buffer *buffer, i32 value
+) {
+    c16 reversed[11];
+    usize count = 0;
+    bool negative = value < 0;
+    u32 magnitude = negative ? (u32) -(i64) value : (u32) value;
+    do {
+        reversed[count++] = (c16) ('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude != 0);
+
+    MalU16BufferStatus status = mal_u16_buffer_reserve(
+        buffer, count + (negative ? 1 : 0));
+    if (status != MAL_U16_BUFFER_OK) {
+        return status;
+    }
+    if (negative) {
+        buffer->data[buffer->length++] = '-';
+    }
+    while (count > 0) {
+        buffer->data[buffer->length++] = reversed[--count];
+    }
+    return MAL_U16_BUFFER_OK;
+}
+
 MalString *mal_u16_buffer_copy(MalHeap *heap, const MalU16Buffer *buffer) {
     if (buffer->status != MAL_U16_BUFFER_OK) {
         return nullptr;
