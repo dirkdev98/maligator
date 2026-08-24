@@ -1,7 +1,7 @@
 #include "builtin_json.h"
 
 #include <math.h>
-#include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -66,10 +66,23 @@ static bool mal_json_builder_push_string(MalJsonBuilder *builder, const MalStrin
         mal_json_throw_string_length(builder->vm);
 }
 
+static void mal_json_builder_push_unicode_escape_unchecked(
+    MalJsonBuilder *builder, c16 code_unit
+) {
+    static const byte hex_digits[] = "0123456789abcdef";
+    builder->buffer.data[builder->buffer.length++] = '\\';
+    builder->buffer.data[builder->buffer.length++] = 'u';
+    builder->buffer.data[builder->buffer.length++] = hex_digits[code_unit >> 12];
+    builder->buffer.data[builder->buffer.length++] = hex_digits[(code_unit >> 8) & 0xf];
+    builder->buffer.data[builder->buffer.length++] = hex_digits[(code_unit >> 4) & 0xf];
+    builder->buffer.data[builder->buffer.length++] = hex_digits[code_unit & 0xf];
+}
+
 static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalString *string) {
     const c16 *code_units = mal_string_code_units(string);
     usize string_length = mal_string_length(string);
     usize quoted_length = 2;
+    bool needs_escaping = false;
     for (usize i = 0; i < string_length; i++) {
         c16 code_unit = code_units[i];
         usize width = 1;
@@ -77,8 +90,10 @@ static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalStrin
             code_unit == '\b' || code_unit == '\f' || code_unit == '\n' ||
             code_unit == '\r' || code_unit == '\t') {
             width = 2;
+            needs_escaping = true;
         } else if (code_unit < 0x20) {
             width = 6;
+            needs_escaping = true;
         } else if (mal_utf16_is_surrogate(code_unit)) {
             usize scalar_width;
             bool valid = mal_utf16_read_scalar(
@@ -88,6 +103,7 @@ static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalStrin
                 i += scalar_width - 1;
             } else {
                 width = 6;
+                needs_escaping = true;
             }
         }
         if (!mal_checked_size_add(
@@ -100,6 +116,14 @@ static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalStrin
     }
 
     builder->buffer.data[builder->buffer.length++] = '"';
+    if (!needs_escaping) {
+        memcpy(
+            &builder->buffer.data[builder->buffer.length], code_units,
+            sizeof(c16) * string_length);
+        builder->buffer.length += string_length;
+        builder->buffer.data[builder->buffer.length++] = '"';
+        return true;
+    }
     for (usize i = 0; i < string_length; i++) {
         c16 code_unit = code_units[i];
         switch (code_unit) {
@@ -133,11 +157,8 @@ static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalStrin
                 break;
             default:
                 if (code_unit < 0x20) {
-                    byte buffer[8];
-                    snprintf(buffer, sizeof(buffer), "\\u%04x", code_unit);
-                    for (usize j = 0; j < 6; j++) {
-                        builder->buffer.data[builder->buffer.length++] = buffer[j];
-                    }
+                    mal_json_builder_push_unicode_escape_unchecked(
+                        builder, code_unit);
                 } else if (mal_utf16_is_surrogate(code_unit)) {
                     // QuoteJSONString escapes lone surrogates; a valid pair (high
                     // followed by low) passes through unescaped as the two units.
@@ -148,11 +169,8 @@ static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalStrin
                         builder->buffer.data[builder->buffer.length++] = code_unit;
                         builder->buffer.data[builder->buffer.length++] = code_units[++i];
                     } else {
-                        byte buffer[8];
-                        snprintf(buffer, sizeof(buffer), "\\u%04x", code_unit);
-                        for (usize j = 0; j < 6; j++) {
-                            builder->buffer.data[builder->buffer.length++] = buffer[j];
-                        }
+                        mal_json_builder_push_unicode_escape_unchecked(
+                            builder, code_unit);
                     }
                 } else {
                     builder->buffer.data[builder->buffer.length++] = code_unit;
@@ -236,6 +254,7 @@ static bool mal_json_is_number(MalValue value) {
 }
 
 static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBuilder *builder, MalKey get_key, MalValue key_string, MalValue holder, usize depth);
+static MalJsonResult mal_json_serialize_value(MalJsonState *state, MalJsonBuilder *builder, MalKey get_key, MalValue key_string, MalValue holder, MalValue value, usize depth);
 
 /** Push "\n" followed by `depth` copies of the gap, when the gap is non-empty. */
 static bool mal_json_push_indent(MalJsonState *state, MalJsonBuilder *builder, usize depth) {
@@ -301,8 +320,9 @@ static MalJsonResult mal_json_serialize_array(MalJsonState *state, MalJsonBuilde
         }
 
         MalKey get_key = mal_key_index(index);
-        MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index)));
-        MalJsonResult result = mal_json_serialize_property(state, builder, get_key, key_string, value, depth + 1);
+        MalJsonResult result = mal_json_serialize_property(
+            state, builder, get_key, mal_value_new_undefined(), value,
+            depth + 1);
         if (result == MAL_JSON_THROW) {
             return MAL_JSON_THROW;
         }
@@ -401,8 +421,6 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
             }
             mal_rooted_key_snapshot_append(&keys, own_keys.keys[i]);
         }
-        mal_rooted_key_snapshot_dispose(&own_keys);
-
         for (usize i = 0; ok && i < keys.count; i++) {
             MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys.keys[i].value));
             member->buffer.length = 0;
@@ -427,7 +445,9 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
             }
             any = true;
         }
+        // Root spans are stack-linked: unwind the snapshots in reverse order.
         mal_rooted_key_snapshot_dispose(&keys);
+        mal_rooted_key_snapshot_dispose(&own_keys);
     }
 
     if (!ok) {
@@ -463,6 +483,26 @@ static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBui
         return MAL_JSON_THROW;
     }
 
+    return mal_json_serialize_value(
+        state, builder, get_key, key_string, holder, value, depth);
+}
+
+static MalValue mal_json_materialize_key_string(
+    MalVm *vm, MalKey get_key, MalValue key_string
+) {
+    if (!mal_value_is_undefined(key_string)) {
+        return key_string;
+    }
+    return mal_value_from_string(mal_ops_to_string(
+        &vm->heap, mal_value_from_u32(mal_key_index_value(get_key))));
+}
+
+static MalJsonResult mal_json_serialize_value(
+    MalJsonState *state, MalJsonBuilder *builder, MalKey get_key,
+    MalValue key_string, MalValue holder, MalValue value, usize depth
+) {
+    MalVm *vm = state->vm;
+
     // toJSON: called on Objects and BigInts with the (string) key as its argument.
     if (mal_value_is_object(value) || mal_value_is_bigint(value)) {
         MalValue to_json;
@@ -470,6 +510,8 @@ static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBui
             return MAL_JSON_THROW;
         }
         if (mal_value_is_callable(to_json)) {
+            key_string = mal_json_materialize_key_string(
+                vm, get_key, key_string);
             MalCompletion completion = mal_vm_call_value(vm, to_json, value, &key_string, 1);
             if (completion.kind == MAL_COMPLETION_THROW) {
                 return MAL_JSON_THROW;
@@ -479,6 +521,7 @@ static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBui
     }
 
     if (mal_value_is_callable(state->replacer_fn)) {
+        key_string = mal_json_materialize_key_string(vm, get_key, key_string);
         MalValue replacer_args[2] = {key_string, value};
         MalCompletion completion = mal_vm_call_value(vm, state->replacer_fn, holder, replacer_args, 2);
         if (completion.kind == MAL_COMPLETION_THROW) {
@@ -688,15 +731,27 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
         state.gap_length = length;
     }
 
-    // Wrap the top-level value in {"": value} and serialize that property, so the
-    // replacer/toJSON see the empty-string key and the root holder.
-    MalObject *wrapper = mal_intrinsic_new_object(vm);
     MalValue empty_key = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
-    mal_intrinsic_define_data(vm, wrapper, "", value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-
     MalJsonBuilder builder = {.vm = vm};
     MalKey root_key = {.kind = MAL_KEY_STRING, .value = empty_key};
-    MalJsonResult result = mal_json_serialize_property(&state, &builder, root_key, empty_key, mal_value_from_object(wrapper), 0);
+    MalValue holder = mal_value_new_undefined();
+    MalJsonResult result;
+    if (mal_value_is_callable(state.replacer_fn)) {
+        // A replacer observes the synthetic root holder as its `this` value.
+        MalObject *wrapper = mal_intrinsic_new_object(vm);
+        mal_intrinsic_define_data(
+            vm, wrapper, "", value,
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                MAL_PROPERTY_CONFIGURABLE);
+        holder = mal_value_from_object(wrapper);
+        result = mal_json_serialize_property(
+            &state, &builder, root_key, empty_key, holder, 0);
+    } else {
+        // Without a replacer, the wrapper's only observable work is reading
+        // back the value just stored in it. Serialize the argument directly.
+        result = mal_json_serialize_value(
+            &state, &builder, root_key, empty_key, holder, value, 0);
+    }
 
     free(state.property_list);
     free(state.stack);
@@ -959,45 +1014,90 @@ length_error:
 
 static MalValue mal_json_parse_number(MalJsonParser *parser) {
     usize start = parser->position;
-
-    mal_json_consume(parser, '-');
-    while (parser->position < parser->length &&
-           parser->code_units[parser->position] >= '0' && parser->code_units[parser->position] <= '9') {
-        parser->position++;
+    bool negative = mal_json_consume(parser, '-');
+    usize integer_start = parser->position;
+    if (mal_json_consume(parser, '0')) {
+        // A leading zero is the whole integer part. A following digit remains
+        // as trailing input and makes the containing JSON text invalid.
+    } else if (parser->position < parser->length &&
+               parser->code_units[parser->position] >= '1' &&
+               parser->code_units[parser->position] <= '9') {
+        do {
+            parser->position++;
+        } while (parser->position < parser->length &&
+                 parser->code_units[parser->position] >= '0' &&
+                 parser->code_units[parser->position] <= '9');
+    } else {
+        mal_json_parse_error(parser);
+        return mal_value_new_undefined();
     }
+    usize integer_end = parser->position;
+    bool integer_literal = true;
     if (mal_json_consume(parser, '.')) {
+        integer_literal = false;
+        usize fraction_start = parser->position;
         while (parser->position < parser->length &&
                parser->code_units[parser->position] >= '0' && parser->code_units[parser->position] <= '9') {
             parser->position++;
+        }
+        if (parser->position == fraction_start) {
+            mal_json_parse_error(parser);
+            return mal_value_new_undefined();
         }
     }
     if (mal_json_consume(parser, 'e') || mal_json_consume(parser, 'E')) {
+        integer_literal = false;
         if (!mal_json_consume(parser, '+')) {
             mal_json_consume(parser, '-');
         }
+        usize exponent_start = parser->position;
         while (parser->position < parser->length &&
                parser->code_units[parser->position] >= '0' && parser->code_units[parser->position] <= '9') {
             parser->position++;
         }
+        if (parser->position == exponent_start) {
+            mal_json_parse_error(parser);
+            return mal_value_new_undefined();
+        }
     }
 
-    if (parser->position == start) {
-        mal_json_parse_error(parser);
-        return mal_value_new_undefined();
+    if (integer_literal && integer_end - integer_start <= 10) {
+        u64 magnitude = 0;
+        for (usize i = integer_start; i < integer_end; i++) {
+            magnitude = magnitude * 10 +
+                (u64) (parser->code_units[i] - '0');
+        }
+        u64 limit = negative ? 2147483648ULL : 2147483647ULL;
+        if (magnitude <= limit) {
+            if (negative && magnitude == 0) {
+                return MAL_VALUE_NEGATIVE_ZERO;
+            }
+            if (negative && magnitude == 2147483648ULL) {
+                return mal_value_from_i32(INT32_MIN);
+            }
+            i32 number = (i32) magnitude;
+            return mal_value_from_i32(negative ? -number : number);
+        }
     }
 
-    byte buffer[64];
     usize length = parser->position - start;
-    if (length >= sizeof(buffer)) {
-        mal_json_parse_error(parser);
-        return mal_value_new_undefined();
+    byte stack_buffer[64];
+    byte *buffer = stack_buffer;
+    if (length >= sizeof(stack_buffer)) {
+        buffer = malloc(length + 1);
+        if (buffer == nullptr) {
+            abort();
+        }
     }
     for (usize i = 0; i < length; i++) {
         buffer[i] = (byte) parser->code_units[start + i];
     }
     buffer[length] = '\0';
-
-    return mal_ops_number_value(strtod(buffer, nullptr));
+    f64 number = strtod(buffer, nullptr);
+    if (buffer != stack_buffer) {
+        free(buffer);
+    }
+    return mal_ops_number_value(number);
 }
 
 static MalValue mal_json_parse_array(
@@ -1499,8 +1599,6 @@ static bool mal_json_internalize(
                     mal_rooted_key_snapshot_append(&keys, own_keys.keys[i]);
                 }
             }
-            mal_rooted_key_snapshot_dispose(&own_keys);
-
             for (usize i = 0; keys_ok && i < keys.count; i++) {
                 MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys.keys[i].value));
                 MalValue new_element;
@@ -1522,7 +1620,9 @@ static bool mal_json_internalize(
                     break;
                 }
             }
+            // Root spans are stack-linked: unwind the snapshots in reverse order.
             mal_rooted_key_snapshot_dispose(&keys);
+            mal_rooted_key_snapshot_dispose(&own_keys);
             if (!keys_ok) {
                 goto done;
             }

@@ -214,5 +214,24 @@ check(
 	JSON.stringify("\ud800A\udc00") === '"\\ud800A\\udc00"',
 	"lone surrogates remain escaped",
 );
+check(
+	JSON.stringify([
+		{
+			toJSON(key) {
+				return key;
+			},
+		},
+		2,
+	]) === '["0",2]',
+	"array toJSON receives its materialized index key",
+);
+check(
+	JSON.stringify({
+		toJSON(key) {
+			return key === "" ? "root" : "bad";
+		},
+	}) === '"root"',
+	"direct root serialization preserves the empty toJSON key",
+);
 
 console.log(failed ? "json-stringify-scratch FAIL" : "json-stringify-scratch PASS");

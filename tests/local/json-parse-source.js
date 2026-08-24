@@ -152,6 +152,24 @@ const raw = JSON.rawJSON('{"items":[1,true]}');
 forceGc();
 check("raw JSON validation retains its source", raw.rawJSON === '{"items":[1,true]}');
 
+const longNumberSource = "1" + "0".repeat(400);
+check(
+	"long numeric tokens parse without an implementation length limit",
+	JSON.parse(longNumberSource) === Infinity &&
+		JSON.rawJSON(longNumberSource).rawJSON === longNumberSource,
+);
+check("negative zero is preserved", Object.is(JSON.parse("-0"), -0));
+
+let malformedNumbers = 0;
+for (const source of ["-", "01", "1.", "1e", "1e+", "[-01]"]) {
+	try {
+		JSON.parse(source);
+	} catch (error) {
+		if (error instanceof SyntaxError) malformedNumbers++;
+	}
+}
+check("number grammar rejects incomplete and leading-zero forms", malformedNumbers === 6);
+
 if (results.every((entry) => entry[1])) {
 	console.log("json-parse-source PASS");
 } else {
