@@ -619,6 +619,34 @@ check(
 		setRecordLog.join(",") === "size,has,keys,keys-call",
 );
 
+const inheritedSetRecordLog = [];
+class ObservableSetArgument extends Set {}
+Object.defineProperties(ObservableSetArgument.prototype, {
+	size: {
+		get() {
+			inheritedSetRecordLog.push("size");
+			return 1;
+		},
+	},
+	has: {
+		get() {
+			inheritedSetRecordLog.push("has");
+			return Set.prototype.has;
+		},
+	},
+	keys: {
+		get() {
+			inheritedSetRecordLog.push("keys");
+			return Set.prototype.values;
+		},
+	},
+});
+check(
+	"Set subclass record access remains observable",
+	[...new Set([1]).union(new ObservableSetArgument([2]))].join(",") === "1,2" &&
+		inheritedSetRecordLog.join(",") === "size,has,keys",
+);
+
 function receiverMutationDuringNextLookup(method) {
 	const receiver = new Set([1, 2, 3]);
 	const other = {

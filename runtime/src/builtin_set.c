@@ -317,6 +317,32 @@ static bool mal_builtin_set_get_set_record(MalVm *vm, MalValue obj, MalSetRecord
         return false;
     }
 
+    /*
+     * An exact same-Realm Set inherits all three observable record properties
+     * from the protected intrinsic prototype. Avoid resolving those properties
+     * and coercing the already-integral native size on the overwhelmingly common
+     * Set-vs-Set composition path. Own overrides and subclass prototypes remain
+     * observable below; mutations of %Set.prototype% invalidate the monotonic
+     * method protector before this path can be taken again.
+     */
+    if (mal_primitive_method_protector && mal_value_is_set_object(obj)) {
+        MalMapObject *candidate = mal_value_to_map_object(obj);
+        MalObject *object = &candidate->object;
+        if (!candidate->weak &&
+            object->prototype ==
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE]) &&
+            object->shape->inline_count == 0 && object->overflow == nullptr) {
+            *record_out = (MalSetRecord) {
+                .set_object = obj,
+                .has = vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS],
+                .keys = vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_VALUES],
+                .size = (f64) mal_map_object_size(candidate),
+                .native_set = candidate,
+            };
+            return true;
+        }
+    }
+
     MalValue raw_size;
     if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "size"), &raw_size)) {
         return false;
