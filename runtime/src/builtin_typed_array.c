@@ -280,6 +280,25 @@ static bool mal_ta_span_matches(
         (same_value_zero && isnan(element) && isnan(sought));
 }
 
+static bool mal_ta_byte_search_target(
+    const MalTypedArraySpan *span, MalValue target, u8 *out
+) {
+    if (span->element_size != 1 || !mal_ops_is_number(target)) {
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(target);
+    if (!isfinite(number) || trunc(number) != number) {
+        return false;
+    }
+    if (span->kind == MAL_TA_INT8) {
+        if (number < -128 || number > 127) return false;
+    } else if (number < 0 || number > 255) {
+        return false;
+    }
+    *out = (u8) mal_ops_number_to_uint_width(number, 8);
+    return true;
+}
+
 static u64 mal_ta_number_bits(MalTypedArrayKind kind, f64 number) {
     switch (kind) {
         case MAL_TA_INT8:
@@ -1103,6 +1122,19 @@ static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *
     if (!mal_typed_array_object_span(array, &span)) {
         return mal_value_from_i32(-1);
     }
+    if (span.element_size == 1) {
+        u8 needle;
+        u32 search_end = current < length ? current : length;
+        if (!mal_ta_byte_search_target(&span, target, &needle) ||
+            from >= search_end) {
+            return mal_value_from_i32(-1);
+        }
+        const byte *found = memchr(
+            span.data + from, needle, search_end - from);
+        return found == nullptr
+            ? mal_value_from_i32(-1)
+            : mal_value_from_i32((i32) (found - span.data));
+    }
     for (u32 i = from; i < length && i < current; i++) {
         if (mal_ta_span_matches(&span, i, target, false)) {
             return mal_value_from_i32((i32) i);
@@ -1154,6 +1186,18 @@ static MalValue mal_ta_last_index_of(MalVm *vm, MalValue this_value, const MalVa
     if (!mal_typed_array_object_span(array, &span)) {
         return mal_value_from_i32(-1);
     }
+    if (span.element_size == 1) {
+        u8 needle;
+        if (!mal_ta_byte_search_target(&span, target, &needle)) {
+            return mal_value_from_i32(-1);
+        }
+        for (i64 i = from; i >= 0; i--) {
+            if (span.data[i] == needle) {
+                return mal_value_from_i32((i32) i);
+            }
+        }
+        return mal_value_from_i32(-1);
+    }
     for (i64 i = from; i >= 0; i--) {
         if (mal_ta_span_matches(&span, (u32) i, target, false)) {
             return mal_value_from_i32((i32) i);
@@ -1180,6 +1224,20 @@ static MalValue mal_ta_includes(MalVm *vm, MalValue this_value, const MalValue *
     MalTypedArraySpan span;
     if (mal_typed_array_object_span(array, &span)) {
         u32 present_end = span.length < length ? span.length : length;
+        if (span.element_size == 1) {
+            u8 needle;
+            if (!mal_ta_byte_search_target(&span, target, &needle)) {
+                return mal_value_new_boolean(
+                    mal_value_is_undefined(target) &&
+                    (from > span.length ? from : span.length) < length);
+            }
+            if (from >= present_end) {
+                return mal_value_new_boolean(false);
+            }
+            return mal_value_new_boolean(
+                memchr(span.data + from, needle, present_end - from) !=
+                nullptr);
+        }
         for (u32 i = from; i < present_end; i++) {
             if (mal_ta_span_matches(&span, i, target, true)) {
                 return mal_value_new_boolean(true);
