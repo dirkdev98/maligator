@@ -424,13 +424,19 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
     // transferToFixedLength always yields a fixed-length buffer.
     bool resizable = preserve_resizability && buffer->resizable;
     u32 max_byte_length = resizable ? buffer->max_byte_length : new_length;
+    if (resizable && new_length > max_byte_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Transfer length exceeds maxByteLength");
+        return mal_value_new_undefined();
+    }
 
     MalObject *prototype = mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
-    if (new_length == buffer->byte_length &&
-        (preserve_resizability || !buffer->resizable)) {
+    if (new_length <= buffer->allocation_capacity &&
+        max_byte_length <= buffer->allocation_capacity) {
         MalArrayBufferObject *result = mal_array_buffer_object_move_store(
-            &vm->heap, prototype, buffer, preserve_resizability, false);
+            &vm->heap, prototype, buffer, new_length, max_byte_length,
+            resizable, false);
         return mal_value_from_array_buffer_object(result);
     }
 
@@ -502,9 +508,10 @@ static MalValue mal_builtin_array_buffer_transfer_to_immutable(MalVm *vm, MalVal
 
     MalObject *prototype = mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
-    if (new_length == buffer->byte_length && !buffer->resizable) {
+    if (new_length <= buffer->allocation_capacity) {
         MalArrayBufferObject *result = mal_array_buffer_object_move_store(
-            &vm->heap, prototype, buffer, false, true);
+            &vm->heap, prototype, buffer, new_length, new_length,
+            false, true);
         return mal_value_from_array_buffer_object(result);
     }
 

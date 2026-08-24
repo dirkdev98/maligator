@@ -14,8 +14,10 @@ typedef struct MalArrayBufferObject {
     byte *data;
     u32 byte_length;
     // For resizable/growable buffers; equals byte_length for fixed buffers.
-    // Also the allocated capacity of `data`, which is what a scrub must cover.
     u32 max_byte_length;
+    // Physical allocation size. Usually max_byte_length, but a transfer may
+    // retain a larger source allocation after making the result fixed/smaller.
+    u32 allocation_capacity;
     bool resizable;
     bool detached;
     // SharedArrayBuffer (growable, never detached).
@@ -58,15 +60,14 @@ MalArrayBufferObject *mal_array_buffer_object_new_uninitialized(
     bool resizable, bool shared);
 
 /**
- * Move a fixed store, or preserve a resizable store, into a fresh ArrayBuffer
- * header without allocating/copying its bytes. The source becomes detached.
- * Callers must only drop resizability when the source was already fixed, so the
- * logical maximum continues to describe the actual allocation capacity.
+ * Move an existing store into a fresh ArrayBuffer header without copying its
+ * bytes. The result may expose a different length/max within the physical
+ * allocation; newly exposed bytes are zeroed and the source becomes detached.
  */
 MalArrayBufferObject *mal_array_buffer_object_move_store(
     MalHeap *heap, MalObject *prototype,
-    MalArrayBufferObject *source, bool preserve_resizability,
-    bool immutable);
+    MalArrayBufferObject *source, u32 byte_length, u32 max_byte_length,
+    bool resizable, bool immutable);
 
 /**
  * Allocate a zero-filled, fixed-length backing store for secret-bearing bytes

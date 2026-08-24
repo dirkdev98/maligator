@@ -146,11 +146,10 @@ static bool a_shrunken_store_is_scrubbed_to_its_capacity(MalVm *vm) {
 }
 
 /*
- * ArrayBuffer.prototype.transfer() moves the contents into a fresh store and
- * detaches the source, so the flag has to move with them — otherwise
- * transferring a derived key leaves an unscrubbed copy behind. The builtin is
- * the thing under test, so it is called for real; JavaScript cannot observe the
- * flag itself, which is why the assertion is made from here.
+ * ArrayBuffer.prototype.transfer() can move the allocation into a smaller
+ * logical buffer, so the flag and physical scrub capacity have to move with it.
+ * The builtin is called for real, then the result is detached to observe the
+ * exact block that survived the transfer.
  */
 static bool a_transferred_store_stays_sensitive(MalVm *vm) {
     secret_observation_reset();
@@ -168,17 +167,29 @@ static bool a_transferred_store_stays_sensitive(MalVm *vm) {
     bool ok = mal_vm_get_property(vm, roots[0], key, &roots[1])
         && mal_value_is_callable(roots[1]);
     if (ok) {
-        MalCompletion completion = mal_vm_call_value(vm, roots[1], roots[0], nullptr, 0);
+        MalValue new_length = mal_value_from_i32(SECRET_LENGTH / 2);
+        MalCompletion completion = mal_vm_call_value(
+            vm, roots[1], roots[0], &new_length, 1);
         ok = completion.kind == MAL_COMPLETION_NORMAL
             && mal_value_is_array_buffer_object(completion.value);
         roots[2] = completion.value;
     }
-    ok = ok && mal_value_to_array_buffer_object(roots[2])->sensitive;
+    MalArrayBufferObject *result = ok
+        ? mal_value_to_array_buffer_object(roots[2])
+        : nullptr;
+    ok = ok && result->sensitive
+        && result->byte_length == SECRET_LENGTH / 2
+        && result->allocation_capacity == SECRET_LENGTH
+        && mal_array_buffer_object_is_detached(source);
+    if (ok) {
+        g_observed.target = result;
+        mal_array_buffer_object_detach(result);
+    }
     mal_gc_unroot(&root);
     vm->completion.kind = MAL_COMPLETION_NORMAL;
-    // transfer() detaches the source, which is what scrubbed it.
     return ok && g_observed.releases == 1 && !g_observed.residue
-        && mal_array_buffer_object_is_detached(source);
+        && g_observed.capacity == SECRET_LENGTH
+        && g_observed.sensitive;
 }
 
 int main(void) {

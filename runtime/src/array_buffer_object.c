@@ -43,6 +43,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     }
     buffer->byte_length = byte_length;
     buffer->max_byte_length = resizable ? max_byte_length : byte_length;
+    buffer->allocation_capacity = capacity;
     buffer->resizable = resizable;
     buffer->detached = false;
     buffer->shared = shared;
@@ -75,21 +76,31 @@ MalArrayBufferObject *mal_array_buffer_object_new_uninitialized(
 
 MalArrayBufferObject *mal_array_buffer_object_move_store(
     MalHeap *heap, MalObject *prototype,
-    MalArrayBufferObject *source, bool preserve_resizability,
-    bool immutable
+    MalArrayBufferObject *source, u32 byte_length, u32 max_byte_length,
+    bool resizable, bool immutable
 ) {
+    if (byte_length > source->allocation_capacity ||
+        max_byte_length > source->allocation_capacity ||
+        (resizable && byte_length > max_byte_length)) {
+        abort();
+    }
+    if (byte_length > source->byte_length) {
+        memset(source->data + source->byte_length, 0,
+            byte_length - source->byte_length);
+    }
     MalArrayBufferObject *result = mal_array_buffer_object_new_impl(
         heap, prototype, 0, 0, false, false, false);
     result->data = source->data;
-    result->byte_length = source->byte_length;
-    result->max_byte_length = preserve_resizability
-        ? source->max_byte_length : source->byte_length;
-    result->resizable = preserve_resizability && source->resizable;
+    result->byte_length = byte_length;
+    result->max_byte_length = max_byte_length;
+    result->allocation_capacity = source->allocation_capacity;
+    result->resizable = resizable;
     result->immutable = immutable;
     result->sensitive = source->sensitive;
 
     source->data = nullptr;
     source->byte_length = 0;
+    source->allocation_capacity = 0;
     source->detached = true;
     source->sensitive = false;
     return result;
@@ -115,6 +126,7 @@ MalArrayBufferObject *mal_array_buffer_object_adopt(
     buffer->data = data;
     buffer->byte_length = byte_length;
     buffer->max_byte_length = byte_length;
+    buffer->allocation_capacity = byte_length;
     buffer->sensitive = sensitive;
     return buffer;
 }
@@ -134,13 +146,14 @@ void mal_array_buffer_object_release_store(MalArrayBufferObject *buffer) {
     if (buffer->sensitive) {
         // The whole allocation, not byte_length: a shrunken resizable store
         // still holds the bytes past its current length.
-        mal_secure_scrub(buffer->data, buffer->max_byte_length);
+        mal_secure_scrub(buffer->data, buffer->allocation_capacity);
     }
     if (g_release_observer != nullptr) {
-        g_release_observer(buffer, buffer->data, buffer->max_byte_length);
+        g_release_observer(buffer, buffer->data, buffer->allocation_capacity);
     }
     free(buffer->data);
     buffer->data = nullptr;
+    buffer->allocation_capacity = 0;
 }
 
 void mal_array_buffer_object_detach(MalArrayBufferObject *buffer) {
