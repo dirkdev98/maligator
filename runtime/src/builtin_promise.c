@@ -866,6 +866,7 @@ static bool mal_promise_invoke_then(
 /** Shared combinator prologue: capability + promiseResolve + GetIterator, with IfAbruptRejectPromise. */
 typedef struct {
     bool ok;
+    bool direct_resolve;
     MalValue result_promise;
     MalValue cap_resolve;
     MalValue cap_reject;
@@ -900,6 +901,16 @@ static MalPromiseCombinator mal_promise_combinator_begin(MalVm *vm, MalValue con
         mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
         goto done;
     }
+    ctx.direct_resolve =
+        constructor == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] &&
+        mal_value_is_native_function_object(ctx.promise_resolve) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(ctx.promise_resolve)) ==
+            mal_promise_resolve_static;
+#if MAL_REALMS
+    ctx.direct_resolve = ctx.direct_resolve &&
+        mal_vm_callee_realm(vm, ctx.promise_resolve) == vm->current_realm;
+#endif
     MalValue iterable = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     if (!mal_vm_get_iterator(vm, iterable, &ctx.iterator)) {
         mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
@@ -914,6 +925,16 @@ done:
 
 /** promiseResolve.call(C, value) → the wrapped element promise. */
 static bool mal_promise_resolve_element(MalVm *vm, const MalPromiseCombinator *ctx, MalValue constructor, MalValue value, MalValue *out) {
+    if (ctx->direct_resolve) {
+        *out = mal_promise_resolve_static(
+            vm,
+            constructor,
+            &value,
+            1,
+            mal_value_new_undefined(),
+            ctx->promise_resolve);
+        return vm->completion.kind != MAL_COMPLETION_THROW;
+    }
     MalCompletion completion = mal_vm_call_value(vm, ctx->promise_resolve, constructor, &value, 1);
     if (completion.kind == MAL_COMPLETION_THROW) {
         return false;
@@ -1660,6 +1681,16 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.resolve is not callable");
         return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
     }
+    bool direct_resolve =
+        this_value == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] &&
+        mal_value_is_native_function_object(promise_resolve) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(promise_resolve)) ==
+            mal_promise_resolve_static;
+#if MAL_REALMS
+    direct_resolve = direct_resolve &&
+        mal_vm_callee_realm(vm, promise_resolve) == vm->current_realm;
+#endif
 
     MalValue promises = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     if (!mal_value_is_object(promises)) {
@@ -1704,8 +1735,21 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
         mal_promise_array_create_data(keys, index, key_value);
         mal_promise_array_create_data(values, index, mal_value_new_undefined());
 
-        MalCompletion resolved = mal_vm_call_value(vm, promise_resolve, this_value, &next_value, 1);
-        if (resolved.kind == MAL_COMPLETION_THROW) {
+        MalValue resolved_value;
+        if (direct_resolve) {
+            resolved_value = mal_promise_resolve_static(
+                vm,
+                this_value,
+                &next_value,
+                1,
+                mal_value_new_undefined(),
+                promise_resolve);
+        } else {
+            MalCompletion resolved = mal_vm_call_value(
+                vm, promise_resolve, this_value, &next_value, 1);
+            resolved_value = resolved.value;
+        }
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
             mal_rooted_key_snapshot_dispose(&own_keys);
             return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
         }
@@ -1718,10 +1762,10 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
         if (settled) {
             MalValue on_fulfilled = mal_promise_new_closure(vm, mal_promise_keyed_settled_fulfill, element_slots, 6, 1);
             MalValue on_rejected = mal_promise_new_closure(vm, mal_promise_keyed_settled_reject, element_slots, 6, 1);
-            ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, on_rejected, discard_safe);
+            ok = mal_promise_invoke_then(vm, resolved_value, on_fulfilled, on_rejected, discard_safe);
         } else {
             MalValue on_fulfilled = mal_promise_new_closure(vm, mal_promise_keyed_all_element, element_slots, 6, 1);
-            ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, cap_reject, discard_safe);
+            ok = mal_promise_invoke_then(vm, resolved_value, on_fulfilled, cap_reject, discard_safe);
         }
         if (!ok) {
             mal_rooted_key_snapshot_dispose(&own_keys);
