@@ -370,6 +370,60 @@ static bool mal_builtin_error_get_string(
     return true;
 }
 
+static bool mal_builtin_error_exact_string_parts(
+    MalVm *vm, MalValue value, MalValue *name_out, MalValue *message_out
+) {
+    if (!mal_primitive_method_protector || !mal_value_is_object(value)) {
+        return false;
+    }
+    MalObject *error = mal_value_to_object(value);
+    if (!mal_error_has_error_data(error)) {
+        return false;
+    }
+
+    const byte *name = nullptr;
+    MalObject *prototype = mal_object_get_prototype(error);
+    if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE])) {
+        name = "Error";
+    } else if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE])) {
+        name = "EvalError";
+    } else if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE])) {
+        name = "RangeError";
+    } else if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE])) {
+        name = "ReferenceError";
+    } else if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE])) {
+        name = "SyntaxError";
+    } else if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE])) {
+        name = "TypeError";
+    } else if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_URI_ERROR_PROTOTYPE])) {
+        name = "URIError";
+    } else if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE])) {
+        name = "AggregateError";
+    } else if (prototype == mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_SUPPRESSED_ERROR_PROTOTYPE])) {
+        name = "SuppressedError";
+    } else {
+        return false;
+    }
+
+    if (mal_object_get_own(error, mal_intrinsic_string_key(vm, "name")).present) {
+        return false;
+    }
+    MalPropertyLookup message = mal_object_get_own(
+        error, mal_intrinsic_string_key(vm, "message"));
+    if (message.present &&
+        ((message.desc.flags & MAL_PROPERTY_ACCESSOR) != 0 ||
+         (!mal_value_is_string(message.desc.value) &&
+          !mal_value_is_undefined(message.desc.value)))) {
+        return false;
+    }
+
+    *name_out = mal_value_from_string(mal_intrinsic_ascii(vm, name));
+    *message_out = message.present
+        ? message.desc.value
+        : mal_value_new_undefined();
+    return true;
+}
+
 static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
@@ -390,19 +444,22 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, countof(roots));
 
-    // 3-4. name: Get(O, "name"); if undefined use "Error", else ToString(name).
-    if (!mal_builtin_error_get_string(vm, roots[0], "name", &roots[1])) {
-        mal_gc_unroot(&root_span);
-        return mal_value_new_undefined();
-    }
-    if (mal_value_is_undefined(roots[1])) {
-        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, "Error"));
-    }
+    if (!mal_builtin_error_exact_string_parts(
+            vm, roots[0], &roots[1], &roots[2])) {
+        // 3-4. name: Get(O, "name"); if undefined use "Error", else ToString(name).
+        if (!mal_builtin_error_get_string(vm, roots[0], "name", &roots[1])) {
+            mal_gc_unroot(&root_span);
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_undefined(roots[1])) {
+            roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, "Error"));
+        }
 
-    // 5-6. message: Get(O, "message"); if undefined use "", else ToString(msg).
-    if (!mal_builtin_error_get_string(vm, roots[0], "message", &roots[2])) {
-        mal_gc_unroot(&root_span);
-        return mal_value_new_undefined();
+        // 5-6. message: Get(O, "message"); if undefined use "", else ToString(msg).
+        if (!mal_builtin_error_get_string(vm, roots[0], "message", &roots[2])) {
+            mal_gc_unroot(&root_span);
+            return mal_value_new_undefined();
+        }
     }
 
     MalString *name = mal_value_to_string(roots[1]);
