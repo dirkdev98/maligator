@@ -109,6 +109,65 @@ check(
 		Set.prototype.has.call(capturedSetAdder, "captured-set-value"),
 );
 
+const weakSetValue = { marker: "weak-set-value" };
+const capturedWeakSetAdderPrototype = Object.create(WeakSet.prototype);
+function CapturedWeakSetAdderTarget() {}
+CapturedWeakSetAdderTarget.prototype = capturedWeakSetAdderPrototype;
+let replacementWeakSetAdderCalls = 0;
+const capturedWeakSetAdderIterable = {
+	get [Symbol.iterator]() {
+		Object.defineProperty(capturedWeakSetAdderPrototype, "add", {
+			value() {
+				replacementWeakSetAdderCalls++;
+			},
+		});
+		let emitted = false;
+		return function () {
+			return {
+				next() {
+					if (emitted) return { done: true };
+					emitted = true;
+					return { done: false, value: weakSetValue };
+				},
+			};
+		};
+	},
+};
+const capturedWeakSetAdder = Reflect.construct(
+	WeakSet,
+	[capturedWeakSetAdderIterable],
+	CapturedWeakSetAdderTarget,
+);
+check(
+	"WeakSet constructor retains the adder captured before iterator effects",
+	replacementWeakSetAdderCalls === 0 &&
+		WeakSet.prototype.has.call(capturedWeakSetAdder, weakSetValue),
+);
+
+let weakSetIteratorClosed = false;
+let weakSetPrimitiveThrew = false;
+try {
+	new WeakSet({
+		[Symbol.iterator]() {
+			return {
+				next() {
+					return { done: false, value: 1 };
+				},
+				return() {
+					weakSetIteratorClosed = true;
+					return {};
+				},
+			};
+		},
+	});
+} catch (error) {
+	weakSetPrimitiveThrew = error instanceof TypeError;
+}
+check(
+	"WeakSet direct constructor rejects primitives and closes the iterator",
+	weakSetPrimitiveThrew && weakSetIteratorClosed,
+);
+
 let intrinsicMapPrototypeGets = 0;
 const intrinsicMapTarget = new Proxy(function () {}, {
 	get(target, key, receiver) {

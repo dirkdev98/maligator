@@ -33,6 +33,10 @@ static bool mal_builtin_set_can_be_held_weakly(MalValue value) {
     return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
 }
 
+static MalValue mal_builtin_weak_set_prototype_add(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee);
+
 /**
  * Shared Set/WeakSet constructor tail: populate the fresh set from an
  * optional iterable through this.add, closing the iterator on abrupt
@@ -75,6 +79,12 @@ static MalValue mal_builtin_set_construct(
     }
     bool direct_set_adder = !weak &&
         adder == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD];
+    bool direct_weak_adder = weak &&
+        mal_value_is_native_function_object(adder) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(adder)) ==
+            mal_builtin_weak_set_prototype_add;
+    bool direct_adder = direct_set_adder || direct_weak_adder;
 
     MalIteratorRecord record;
     if (!mal_vm_get_iterator(vm, args[0], &record)) {
@@ -82,7 +92,7 @@ static MalValue mal_builtin_set_construct(
     }
 
     usize size_hint;
-    if (direct_set_adder &&
+    if (direct_adder &&
         mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
         (void) mal_table_reserve(set->entries, size_hint);
     }
@@ -115,7 +125,15 @@ static MalValue mal_builtin_set_construct(
         // The exact built-in Set.prototype.add has no observable call seam.
         // Its identity was captured before iterator acquisition, so direct
         // insertion remains valid even if later iterator effects replace add.
-        if (direct_set_adder) {
+        if (direct_adder) {
+            if (direct_weak_adder &&
+                !mal_builtin_set_can_be_held_weakly(roots[2])) {
+                mal_vm_throw_error(
+                    vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Invalid value used in weak set");
+                mal_vm_iterator_close(vm, &record);
+                goto done;
+            }
             mal_map_object_set(set, roots[2], roots[2]);
             continue;
         }
