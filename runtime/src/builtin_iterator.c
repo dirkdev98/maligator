@@ -479,7 +479,7 @@ bool mal_vm_builtin_iterator_size_hint(
     }
 
     MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
-    if (iterator->done || iterator->index != 0 ||
+    if (iterator->done ||
         mal_native_function_object_callback(
             mal_value_to_native_function_object(record->next_method)) !=
             mal_builtin_iterator_expected_next(iterator->kind)) {
@@ -490,16 +490,32 @@ bool mal_vm_builtin_iterator_size_hint(
         case MAL_ITERATOR_ARRAY_KEYS:
         case MAL_ITERATOR_ARRAY_VALUES:
         case MAL_ITERATOR_ARRAY_ENTRIES:
-            if (!mal_value_is_array_object(iterator->target)) {
-                return false;
+            if (mal_value_is_array_object(iterator->target)) {
+                usize length = mal_array_object_length(
+                    mal_value_to_array_object(iterator->target));
+                *size_out = iterator->index < length
+                    ? length - (usize) iterator->index
+                    : 0;
+                return true;
             }
-            *size_out = mal_array_object_length(
-                mal_value_to_array_object(iterator->target));
-            return true;
+            if (mal_value_is_typed_array_object(iterator->target)) {
+                MalTypedArrayObject *array =
+                    mal_value_to_typed_array_object(iterator->target);
+                if (mal_typed_array_object_is_out_of_bounds(array)) {
+                    return false;
+                }
+                usize length = mal_typed_array_object_length(array);
+                *size_out = iterator->index < length
+                    ? length - (usize) iterator->index
+                    : 0;
+                return true;
+            }
+            return false;
         case MAL_ITERATOR_MAP_KEYS:
         case MAL_ITERATOR_MAP_VALUES:
         case MAL_ITERATOR_MAP_ENTRIES:
-            if (!mal_value_is_map_object(iterator->target)) {
+            if (iterator->index != 0 ||
+                !mal_value_is_map_object(iterator->target)) {
                 return false;
             }
             *size_out = mal_map_object_size(
@@ -507,14 +523,21 @@ bool mal_vm_builtin_iterator_size_hint(
             return true;
         case MAL_ITERATOR_SET_VALUES:
         case MAL_ITERATOR_SET_ENTRIES:
-            if (!mal_value_is_set_object(iterator->target)) {
+            if (iterator->index != 0 ||
+                !mal_value_is_set_object(iterator->target)) {
                 return false;
             }
             *size_out = mal_map_object_size(
                 mal_value_to_map_object(iterator->target));
             return true;
-        case MAL_ITERATOR_STRING_VALUES:
-            return false;
+        case MAL_ITERATOR_STRING_VALUES: {
+            usize length = mal_string_length(
+                mal_value_to_string(iterator->target));
+            *size_out = iterator->index < length
+                ? length - (usize) iterator->index
+                : 0;
+            return true;
+        }
     }
 
     return false;
