@@ -49,8 +49,8 @@ describe("Map get-to-set table handle reuse", () => {
 	it("reports exact cache checks, hits, and misses", () => {
 		const stderr = run(instrumented, { MAL_PERF_STATS: "1" });
 		expect(stderr).toContain("[perf-map-stats]");
-		expect(perfField(stderr, "get_set_cache_checks")).toBe(135);
-		expect(perfField(stderr, "get_set_cache_hits")).toBe(7);
-		expect(perfField(stderr, "get_set_cache_misses")).toBe(128);
+		expect(perfField(stderr, "get_set_cache_checks")).toBe(146);
+		expect(perfField(stderr, "get_set_cache_hits")).toBe(15);
+		expect(perfField(stderr, "get_set_cache_misses")).toBe(131);
 	});
 });

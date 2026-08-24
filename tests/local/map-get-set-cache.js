@@ -13,6 +13,7 @@ function check(name, condition) {
 
 const direct = new Map([["key", { value: 1 }]]);
 check("direct get", direct.get("key").value === 1);
+check("direct cached has", direct.has("key") && !direct.has("missing"));
 direct.set("key", { value: 2 });
 check("direct cached update", direct.size === 1 && direct.get("key").value === 2);
 
