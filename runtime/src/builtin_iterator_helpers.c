@@ -1061,11 +1061,49 @@ static bool mal_ih_is_iterator_instance(MalVm *vm, MalValue value) {
     return false;
 }
 
+static bool mal_ih_is_default_builtin_iterator(MalVm *vm, MalValue value) {
+    if (!mal_primitive_method_protector ||
+        (!mal_value_is_iterator_object(value) &&
+         !mal_value_is_iterator_helper_object(value))) {
+        return false;
+    }
+    MalObject *object = mal_value_to_object(value);
+    MalObject *prototype = object->prototype;
+    bool default_prototype =
+        prototype == mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE]) ||
+        prototype == mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE]) ||
+        prototype == mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE]) ||
+        prototype == mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE]) ||
+        prototype == mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE]);
+    if (!default_prototype) {
+        return false;
+    }
+    return !mal_object_get_own(
+                object,
+                mal_intrinsic_symbol_key(
+                    vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present &&
+        !mal_object_get_own(
+                object,
+                mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT)).present;
+}
+
 static MalValue mal_iterator_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
     MalValue source = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+
+    // The exact built-in iterator already inherits the identity @@iterator and
+    // its native next method. Watched prototypes plus absent own overrides make
+    // the otherwise observable Get/Call/Get sequence side-effect free.
+    if (mal_ih_is_default_builtin_iterator(vm, source)) {
+        return source;
+    }
 
     MalIteratorRecord record;
     if (mal_value_is_string(source)) {
