@@ -40,6 +40,19 @@ typedef struct MalTypedArrayObject {
     bool is_buffer;
 } MalTypedArrayObject;
 
+/**
+ * A validated, current TypedArray extent for native kernels. The span is only
+ * valid while no observable JavaScript operation can detach or resize its
+ * backing buffer. Keep it inside leaf C operations; never retain it across a
+ * callback, property access, coercion, or species construction.
+ */
+typedef struct MalTypedArraySpan {
+    byte *data;
+    u32 length;
+    MalTypedArrayKind kind;
+    u32 element_size;
+} MalTypedArraySpan;
+
 MalTypedArrayObject *mal_typed_array_object_new(
     MalHeap *heap,
     MalObject *prototype,
@@ -75,6 +88,22 @@ bool mal_typed_array_object_is_out_of_bounds(const MalTypedArrayObject *array);
 
 /** The view's current byte length (length * element size). */
 u32 mal_typed_array_object_byte_length(const MalTypedArrayObject *array);
+
+/** Acquire the receiver's current in-bounds extent for a leaf native kernel. */
+bool mal_typed_array_object_span(
+    const MalTypedArrayObject *array, MalTypedArraySpan *out);
+
+/** Load/store an element's raw storage bits from a validated span. */
+u64 mal_typed_array_span_load_bits(const MalTypedArraySpan *span, u32 index);
+void mal_typed_array_span_store_bits(
+    const MalTypedArraySpan *span, u32 index, u64 bits);
+
+/**
+ * Perform the observable ToNumber/ToBigInt conversion for one element and
+ * lower the result to the destination kind's raw storage bits.
+ */
+bool mal_typed_array_coerce_element_bits(
+    MalVm *vm, MalTypedArrayKind kind, MalValue value, u64 *out);
 
 /**
  * Read element `index`. Out-of-bounds (or detached) reads return undefined.

@@ -32,8 +32,9 @@ typedef struct MalArrayBufferObject {
 } MalArrayBufferObject;
 
 /**
- * Allocate a new ArrayBuffer with a zero-filled backing store. When resizable,
- * the store is allocated at max_byte_length up front so resize never moves it.
+ * Allocate a new ArrayBuffer whose initial byte range is zero-filled. When
+ * resizable, capacity is reserved up to max_byte_length so resize never moves
+ * it; reserved bytes are zeroed immediately before they become visible.
  */
 MalArrayBufferObject *mal_array_buffer_object_new(
     MalHeap *heap,
@@ -43,6 +44,14 @@ MalArrayBufferObject *mal_array_buffer_object_new(
     bool resizable,
     bool shared
 );
+
+/**
+ * Allocate a fixed backing store without initializing its bytes. This is only
+ * for leaf native constructors that overwrite the complete store before the
+ * object can become observable. Prefer mal_array_buffer_object_new otherwise.
+ */
+MalArrayBufferObject *mal_array_buffer_object_new_uninitialized(
+    MalHeap *heap, MalObject *prototype, u32 byte_length);
 
 /**
  * Allocate a zero-filled, fixed-length backing store for secret-bearing bytes

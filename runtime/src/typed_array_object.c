@@ -43,7 +43,7 @@ u32 mal_typed_array_element_size(MalTypedArrayKind kind) {
 }
 
 bool mal_typed_array_is_bigint(MalTypedArrayKind kind) {
-    return kind == MAL_TA_BIGINT64 || kind == MAL_TA_BIGUINT64;
+    return kind >= MAL_TA_BIGINT64;
 }
 
 const byte *mal_typed_array_name(MalTypedArrayKind kind) {
@@ -71,45 +71,97 @@ MalTypedArrayObject *mal_typed_array_object_new(
     return array;
 }
 
-u32 mal_typed_array_object_length(const MalTypedArrayObject *array) {
+static bool mal_typed_array_object_extent(
+    const MalTypedArrayObject *array, u32 *length) {
     MalArrayBufferObject *buffer = array->buffer;
     if (buffer == nullptr || buffer->detached) {
-        return 0;
+        *length = 0;
+        return false;
     }
 
     u32 size = mal_typed_array_sizes[array->kind];
     if (array->length_tracking) {
         if (array->byte_offset > buffer->byte_length) {
-            return 0;
+            *length = 0;
+            return false;
         }
-        return (buffer->byte_length - array->byte_offset) / size;
+        *length = (buffer->byte_length - array->byte_offset) / size;
+        return true;
     }
 
     // A fixed-length view goes out of bounds if a resizable buffer shrank below
     // the view's extent.
     u64 end = (u64) array->byte_offset + (u64) array->length * size;
     if (end > buffer->byte_length) {
-        return 0;
+        *length = 0;
+        return false;
     }
-    return array->length;
+    *length = array->length;
+    return true;
+}
+
+u32 mal_typed_array_object_length(const MalTypedArrayObject *array) {
+    u32 length;
+    mal_typed_array_object_extent(array, &length);
+    return length;
 }
 
 bool mal_typed_array_object_is_out_of_bounds(const MalTypedArrayObject *array) {
-    MalArrayBufferObject *buffer = array->buffer;
-    if (buffer == nullptr || buffer->detached) {
-        return true;
-    }
-    if (array->length_tracking) {
-        // A length-tracking view is out of bounds only once its offset passes the
-        // (possibly shrunk) buffer end; otherwise it tracks the remaining bytes.
-        return array->byte_offset > buffer->byte_length;
-    }
-    u64 end = (u64) array->byte_offset + (u64) array->length * mal_typed_array_sizes[array->kind];
-    return end > buffer->byte_length;
+    u32 length;
+    return !mal_typed_array_object_extent(array, &length);
 }
 
 u32 mal_typed_array_object_byte_length(const MalTypedArrayObject *array) {
     return mal_typed_array_object_length(array) * mal_typed_array_sizes[array->kind];
+}
+
+bool mal_typed_array_object_span(
+    const MalTypedArrayObject *array, MalTypedArraySpan *out) {
+    u32 length;
+    if (!mal_typed_array_object_extent(array, &length)) {
+        return false;
+    }
+    u32 element_size = mal_typed_array_sizes[array->kind];
+    *out = (MalTypedArraySpan) {
+        .data = length == 0 ? nullptr : array->buffer->data + array->byte_offset,
+        .length = length,
+        .kind = array->kind,
+        .element_size = element_size,
+    };
+    return true;
+}
+
+u64 mal_typed_array_span_load_bits(const MalTypedArraySpan *span, u32 index) {
+    const byte *at = span->data + (usize) index * span->element_size;
+    switch (span->element_size) {
+        case 1:
+            return mal_scalar_load_native_u8(at);
+        case 2:
+            return mal_scalar_load_native_u16(at);
+        case 4:
+            return mal_scalar_load_native_u32(at);
+        default:
+            return mal_scalar_load_native_u64(at);
+    }
+}
+
+void mal_typed_array_span_store_bits(
+    const MalTypedArraySpan *span, u32 index, u64 bits) {
+    byte *at = span->data + (usize) index * span->element_size;
+    switch (span->element_size) {
+        case 1:
+            mal_scalar_store_native_u8(at, (u8) bits);
+            break;
+        case 2:
+            mal_scalar_store_native_u16(at, (u16) bits);
+            break;
+        case 4:
+            mal_scalar_store_native_u32(at, (u32) bits);
+            break;
+        default:
+            mal_scalar_store_native_u64(at, bits);
+            break;
+    }
 }
 
 // ToUint8Clamp: clamp to [0, 255] with round-half-to-even.
@@ -129,65 +181,52 @@ static u8 mal_typed_array_to_uint8_clamp(f64 number) {
 }
 
 MalValue mal_typed_array_object_get(MalVm *vm, MalTypedArrayObject *array, u32 index) {
-    if (index >= mal_typed_array_object_length(array)) {
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span) || index >= span.length) {
         return mal_value_new_undefined();
     }
 
-    byte *at = array->buffer->data + array->byte_offset + (usize) index * mal_typed_array_sizes[array->kind];
+    u64 bits = mal_typed_array_span_load_bits(&span, index);
 
     switch (array->kind) {
         case MAL_TA_INT8:
-            return mal_value_from_i32(mal_scalar_i8_from_bits(
-                mal_scalar_load_native_u8(at)));
+            return mal_value_from_i32(mal_scalar_i8_from_bits((u8) bits));
         case MAL_TA_UINT8:
         case MAL_TA_UINT8_CLAMPED:
-            return mal_value_from_i32(mal_scalar_load_native_u8(at));
+            return mal_value_from_i32((u8) bits);
         case MAL_TA_INT16:
-            return mal_value_from_i32(mal_scalar_i16_from_bits(
-                mal_scalar_load_native_u16(at)));
+            return mal_value_from_i32(mal_scalar_i16_from_bits((u16) bits));
         case MAL_TA_UINT16:
-            return mal_value_from_i32(mal_scalar_load_native_u16(at));
+            return mal_value_from_i32((u16) bits);
         case MAL_TA_INT32:
-            return mal_value_from_i32(mal_scalar_i32_from_bits(
-                mal_scalar_load_native_u32(at)));
+            return mal_value_from_i32(mal_scalar_i32_from_bits((u32) bits));
         case MAL_TA_UINT32: {
-            u32 value = mal_scalar_load_native_u32(at);
+            u32 value = (u32) bits;
             return value <= INT32_MAX ? mal_value_from_i32((i32) value) : mal_ops_number_value((f64) value);
         }
         case MAL_TA_FLOAT32:
             return mal_value_from_f64_convert_nan((f64) mal_scalar_f32_from_bits(
-                mal_scalar_load_native_u32(at)));
+                (u32) bits));
         case MAL_TA_FLOAT64:
-            return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(
-                mal_scalar_load_native_u64(at)));
+            return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(bits));
         case MAL_TA_BIGINT64:
             return mal_value_from_bigint(mal_bigint_new(
-                &vm->heap,
-                (i128) mal_scalar_i64_from_bits(
-                    mal_scalar_load_native_u64(at))));
+                &vm->heap, (i128) mal_scalar_i64_from_bits(bits)));
         case MAL_TA_BIGUINT64:
             return mal_value_from_bigint(mal_bigint_new(
-                &vm->heap,
-                (i128) (u128) mal_scalar_load_native_u64(at)));
+                &vm->heap, (i128) (u128) bits));
         default:
             return mal_value_new_undefined();
     }
 }
 
-void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index, MalValue value) {
-    u32 size = mal_typed_array_sizes[array->kind];
-
-    if (array->buffer->immutable) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
-        return;
-    }
-
-    // Coercion runs (and may throw) before the bounds check, as specced.
+bool mal_typed_array_coerce_element_bits(
+    MalVm *vm, MalTypedArrayKind kind, MalValue value, u64 *out) {
     u64 bits = 0;
-    if (mal_typed_array_is_bigint(array->kind)) {
+    if (mal_typed_array_is_bigint(kind)) {
         i128 big;
         if (!mal_bigint_to_bigint(vm, value, &big)) {
-            return;
+            return false;
         }
         bits = (u64) (u128) big;
     } else {
@@ -195,10 +234,12 @@ void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index
         // or @@toPrimitive) and throws on BigInt/Symbol, exactly once, before
         // the bounds check — per IntegerIndexedElementSet.
         f64 number;
-        if (!mal_vm_to_number(vm, value, &number)) {
-            return;
+        if (mal_ops_is_number(value)) {
+            number = mal_ops_number_as_f64(value);
+        } else if (!mal_vm_to_number(vm, value, &number)) {
+            return false;
         }
-        switch (array->kind) {
+        switch (kind) {
             case MAL_TA_INT8:
             case MAL_TA_UINT8:
                 bits = mal_ops_number_to_uint_width(number, 8);
@@ -223,27 +264,29 @@ void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index
                 bits = mal_scalar_f64_to_bits(number);
                 break;
             default:
-                return;
+                return false;
         }
     }
 
-    if (index >= mal_typed_array_object_length(array)) {
+    *out = bits;
+    return true;
+}
+
+void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index, MalValue value) {
+    if (array->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
         return;
     }
 
-    byte *at = array->buffer->data + array->byte_offset + (usize) index * size;
-    switch (size) {
-        case 1:
-            mal_scalar_store_native_u8(at, (u8) bits);
-            break;
-        case 2:
-            mal_scalar_store_native_u16(at, (u16) bits);
-            break;
-        case 4:
-            mal_scalar_store_native_u32(at, (u32) bits);
-            break;
-        case 8:
-            mal_scalar_store_native_u64(at, bits);
-            break;
+    // Coercion runs (and may throw) before the bounds check, as specced.
+    u64 bits;
+    if (!mal_typed_array_coerce_element_bits(vm, array->kind, value, &bits)) {
+        return;
     }
+
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span) || index >= span.length) {
+        return;
+    }
+    mal_typed_array_span_store_bits(&span, index, bits);
 }

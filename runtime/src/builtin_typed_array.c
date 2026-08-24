@@ -11,6 +11,7 @@
 #include "heap_bigint.h"
 #include "hex.h"
 #include "object_ops.h"
+#include "scalar_bits.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -20,14 +21,31 @@ static MalObject *mal_ta_kind_prototype(MalVm *vm, MalTypedArrayKind kind) {
     return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind]);
 }
 
-// Allocate a fresh same-kind view backed by a new exact-size buffer.
-static MalValue mal_ta_create(MalVm *vm, MalTypedArrayKind kind, u32 length) {
+static MalValue mal_ta_create_impl(
+    MalVm *vm, MalTypedArrayKind kind, u32 length, bool initialize) {
     u32 element_size = mal_typed_array_element_size(kind);
-    MalArrayBufferObject *buffer = mal_array_buffer_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        length * element_size, length * element_size, false, false);
+    u32 byte_length = length * element_size;
+    MalObject *buffer_prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
+    MalArrayBufferObject *buffer = initialize
+        ? mal_array_buffer_object_new(&vm->heap, buffer_prototype,
+            byte_length, byte_length, false, false)
+        : mal_array_buffer_object_new_uninitialized(
+            &vm->heap, buffer_prototype, byte_length);
     MalTypedArrayObject *array = mal_typed_array_object_new(&vm->heap, mal_ta_kind_prototype(vm, kind), buffer, kind, 0, length, false);
     return mal_value_from_typed_array_object(array);
+}
+
+// Allocate a fresh same-kind view backed by a new exact-size zeroed buffer.
+static MalValue mal_ta_create(MalVm *vm, MalTypedArrayKind kind, u32 length) {
+    return mal_ta_create_impl(vm, kind, length, true);
+}
+
+// Leaf native kernels use this only when every byte is overwritten before the
+// result can become observable.
+static MalValue mal_ta_create_uninitialized(
+    MalVm *vm, MalTypedArrayKind kind, u32 length) {
+    return mal_ta_create_impl(vm, kind, length, false);
 }
 
 // SpeciesConstructor(exemplar, defaultCtor): exemplar.constructor, then its
@@ -148,7 +166,9 @@ static MalTypedArrayObject *mal_ta_this_writable(MalVm *vm, MalValue this_value)
 // leaves vm->completion set and returns false.
 static bool mal_ta_to_index(MalVm *vm, MalValue value, u32 *out) {
     f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) {
+    if (mal_ops_is_number(value)) {
+        number = mal_ops_number_as_f64(value);
+    } else if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
     number = mal_ops_number_to_integer_or_infinity(number);
@@ -165,7 +185,9 @@ static bool mal_ta_to_index(MalVm *vm, MalValue value, u32 *out) {
 // vm->completion set; otherwise writes the truncated integer (NaN → 0).
 static bool mal_ta_to_integer(MalVm *vm, MalValue value, f64 *out) {
     f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) {
+    if (mal_ops_is_number(value)) {
+        number = mal_ops_number_as_f64(value);
+    } else if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
     *out = mal_ops_number_to_integer_or_infinity(number);
@@ -181,22 +203,137 @@ static bool mal_ta_relative(MalVm *vm, MalValue value, u32 length, u32 fallback,
         return true;
     }
     f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) {
+    if (mal_ops_is_number(value)) {
+        number = mal_ops_number_as_f64(value);
+    } else if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
     *out = (u32) mal_ops_number_clamp_relative(number, (f64) length);
     return true;
 }
 
-// Copy `count` elements from src[src_start..] into dst[dst_start..], converting
-// through boxed values so cross-kind copies coerce. Returns false on a throw.
-static bool mal_ta_copy_elements(MalVm *vm, MalTypedArrayObject *dst, u32 dst_start, MalTypedArrayObject *src, u32 src_start, u32 count) {
-    for (u32 i = 0; i < count; i++) {
-        MalValue element = mal_typed_array_object_get(vm, src, src_start + i);
-        mal_typed_array_object_set(vm, dst, dst_start + i, element);
-        if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+static f64 mal_ta_span_number_at(
+    const MalTypedArraySpan *span, u32 index) {
+    u64 bits = mal_typed_array_span_load_bits(span, index);
+    switch (span->kind) {
+        case MAL_TA_INT8:
+            return mal_scalar_i8_from_bits((u8) bits);
+        case MAL_TA_UINT8:
+        case MAL_TA_UINT8_CLAMPED:
+            return (u8) bits;
+        case MAL_TA_INT16:
+            return mal_scalar_i16_from_bits((u16) bits);
+        case MAL_TA_UINT16:
+            return (u16) bits;
+        case MAL_TA_INT32:
+            return mal_scalar_i32_from_bits((u32) bits);
+        case MAL_TA_UINT32:
+            return (u32) bits;
+        case MAL_TA_FLOAT32:
+            return (f64) mal_scalar_f32_from_bits((u32) bits);
+        case MAL_TA_FLOAT64:
+            return mal_scalar_f64_from_bits(bits);
+        default:
+            return 0;
+    }
+}
+
+static bool mal_ta_span_matches(
+    const MalTypedArraySpan *span, u32 index, MalValue target,
+    bool same_value_zero) {
+    if (mal_typed_array_is_bigint(span->kind)) {
+        if (!mal_value_is_bigint(target)) {
             return false;
         }
+        u64 bits = mal_typed_array_span_load_bits(span, index);
+        i128 element = span->kind == MAL_TA_BIGINT64
+            ? (i128) mal_scalar_i64_from_bits(bits)
+            : (i128) (u128) bits;
+        return element == mal_bigint_value(mal_value_to_bigint(target));
+    }
+    if (!mal_ops_is_number(target)) {
+        return false;
+    }
+    f64 element = mal_ta_span_number_at(span, index);
+    f64 sought = mal_ops_number_as_f64(target);
+    return element == sought ||
+        (same_value_zero && isnan(element) && isnan(sought));
+}
+
+static u64 mal_ta_number_bits(MalTypedArrayKind kind, f64 number) {
+    switch (kind) {
+        case MAL_TA_INT8:
+        case MAL_TA_UINT8:
+            return mal_ops_number_to_uint_width(number, 8);
+        case MAL_TA_UINT8_CLAMPED:
+            if (isnan(number) || number <= 0) {
+                return 0;
+            }
+            if (number >= 255) {
+                return 255;
+            }
+            {
+                f64 rounded = floor(number);
+                f64 fraction = number - rounded;
+                if (fraction > 0.5 ||
+                    (fraction == 0.5 && ((u64) rounded & 1) != 0)) {
+                    rounded += 1;
+                }
+                return (u8) rounded;
+            }
+        case MAL_TA_INT16:
+        case MAL_TA_UINT16:
+            return mal_ops_number_to_uint_width(number, 16);
+        case MAL_TA_INT32:
+        case MAL_TA_UINT32:
+            return mal_ops_number_to_uint32(number);
+        case MAL_TA_FLOAT32:
+            return mal_scalar_f32_to_bits((f32) number);
+        case MAL_TA_FLOAT64:
+            return mal_scalar_f64_to_bits(number);
+        default:
+            return 0;
+    }
+}
+
+// Copy `count` elements from src[src_start..] into dst[dst_start..]. Same-kind
+// and BigInt-kind copies preserve raw bits; numeric cross-kind copies convert
+// without materializing MalValues. Copying is deliberately forward and
+// element-by-element when species returns a view over the source buffer: slice
+// specifies observable sequential reads/writes rather than snapshot semantics.
+static bool mal_ta_copy_elements(MalVm *vm, MalTypedArrayObject *dst, u32 dst_start, MalTypedArrayObject *src, u32 src_start, u32 count) {
+    if (count == 0) {
+        return true;
+    }
+
+    MalTypedArraySpan dst_span, src_span;
+    if (!mal_typed_array_object_span(dst, &dst_span) ||
+        !mal_typed_array_object_span(src, &src_span)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "TypedArray is out of bounds");
+        return false;
+    }
+
+    byte *dst_at = dst_span.data + (usize) dst_start * dst_span.element_size;
+    const byte *src_at = src_span.data + (usize) src_start * src_span.element_size;
+    if (dst->kind == src->kind && dst->buffer != src->buffer) {
+        memcpy(dst_at, src_at, (usize) count * src_span.element_size);
+        return true;
+    }
+
+    bool dst_bigint = mal_typed_array_is_bigint(dst->kind);
+    bool src_bigint = mal_typed_array_is_bigint(src->kind);
+    if (dst_bigint != src_bigint) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot mix BigInt and non-BigInt typed arrays");
+        return false;
+    }
+
+    for (u32 i = 0; i < count; i++) {
+        u64 bits = src_bigint
+            ? mal_typed_array_span_load_bits(&src_span, src_start + i)
+            : mal_ta_number_bits(dst->kind,
+                mal_ta_span_number_at(&src_span, src_start + i));
+        mal_typed_array_span_store_bits(&dst_span, dst_start + i, bits);
     }
     return true;
 }
@@ -216,48 +353,35 @@ static bool mal_ta_set_from_same_buffer(
         return true;
     }
 
-    u32 src_element_size = mal_typed_array_element_size(src->kind);
-    usize snapshot_size = (usize) count * src_element_size;
+    MalTypedArraySpan dst_span, src_span;
+    if (!mal_typed_array_object_span(dst, &dst_span) ||
+        !mal_typed_array_object_span(src, &src_span)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "TypedArray is out of bounds");
+        return false;
+    }
+    byte *dst_at = dst_span.data + (usize) dst_start * dst_span.element_size;
+    usize snapshot_size = (usize) count * src_span.element_size;
     if (dst->kind == src->kind) {
-        memmove(
-            dst->buffer->data + dst->byte_offset + (usize) dst_start * src_element_size,
-            src->buffer->data + src->byte_offset,
-            snapshot_size);
+        memmove(dst_at, src_span.data, snapshot_size);
         return true;
     }
 
     byte *snapshot = malloc(snapshot_size);
-    memcpy(snapshot, src->buffer->data + src->byte_offset, snapshot_size);
-
-    MalArrayBufferObject snapshot_buffer = {
-        .data = snapshot,
-        .byte_length = (u32) snapshot_size,
-        .max_byte_length = (u32) snapshot_size,
-    };
-    MalTypedArrayObject snapshot_array = {
-        .buffer = &snapshot_buffer,
-        .kind = src->kind,
-        .length = count,
-    };
-    MalValue element_root[1] = {mal_value_new_undefined()};
-    MalRootSpan element_span;
-    mal_gc_root(&element_span, element_root, 1);
-    mal_gc_native_rooted_begin(vm);
-
-    bool ok = true;
+    memcpy(snapshot, src_span.data, snapshot_size);
+    MalTypedArraySpan read_span = src_span;
+    read_span.data = snapshot;
+    read_span.length = count;
+    bool bigint = mal_typed_array_is_bigint(src->kind);
     for (u32 i = 0; i < count; i++) {
-        element_root[0] = mal_typed_array_object_get(vm, &snapshot_array, i);
-        mal_typed_array_object_set(vm, dst, dst_start + i, element_root[0]);
-        if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
-            ok = false;
-            break;
-        }
+        u64 bits = bigint
+            ? mal_typed_array_span_load_bits(&read_span, i)
+            : mal_ta_number_bits(dst->kind,
+                mal_ta_span_number_at(&read_span, i));
+        mal_typed_array_span_store_bits(&dst_span, dst_start + i, bits);
     }
-
-    mal_gc_native_rooted_end(vm);
-    mal_gc_unroot(&element_span);
     free(snapshot);
-    return ok;
+    return true;
 }
 
 static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -344,7 +468,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
                 &prototype)) {
             return mal_value_new_undefined();
         }
-        MalValue result = mal_ta_create(vm, kind, length);
+        MalValue result = mal_ta_create_uninitialized(vm, kind, length);
         MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
         mal_object_set_prototype(&array->object, prototype);
         if (!mal_ta_copy_elements(vm, array, 0, source, 0, length)) {
@@ -607,24 +731,11 @@ static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args
         return mal_value_new_undefined();
     }
     u32 length = mal_typed_array_object_length(array);
-    MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-
-    // The fill value is coerced (ToNumber / ToBigInt, may throw) exactly once,
-    // before the start/end indices, matching the spec ordering. The coerced
-    // primitive (not the original) is what gets written, so the per-element
-    // mal_typed_array_object_set never re-runs user coercion.
-    if (mal_typed_array_is_bigint(array->kind)) {
-        i128 big;
-        if (!mal_bigint_to_bigint(vm, value, &big)) {
-            return mal_value_new_undefined();
-        }
-        value = mal_value_from_bigint(mal_bigint_new(&vm->heap, big));
-    } else {
-        f64 number;
-        if (!mal_vm_to_number(vm, value, &number)) {
-            return mal_value_new_undefined();
-        }
-        value = mal_ops_number_value(number);
+    // Coerce and lower the fill value exactly once, before start/end coercion.
+    u64 bits;
+    if (!mal_typed_array_coerce_element_bits(vm, array->kind,
+            arg_count >= 1 ? args[0] : mal_value_new_undefined(), &bits)) {
+        return mal_value_new_undefined();
     }
 
     u32 start;
@@ -640,17 +751,22 @@ static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args
     }
     // The view length is re-read after coercion (a resizable buffer may have
     // shrunk); clamp start/end so we never write past the current extent.
-    u32 current = mal_typed_array_object_length(array);
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span)) {
+        return mal_value_new_undefined();
+    }
+    u32 current = span.length;
     if (start > current) {
         start = current;
     }
     if (end > current) {
         end = current;
     }
-    for (u32 i = start; i < end; i++) {
-        mal_typed_array_object_set(vm, array, i, value);
-        if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
-            return mal_value_new_undefined();
+    if (start < end && span.element_size == 1) {
+        memset(span.data + start, (u8) bits, end - start);
+    } else {
+        for (u32 i = start; i < end; i++) {
+            mal_typed_array_span_store_bits(&span, i, bits);
         }
     }
     return this_value;
@@ -963,8 +1079,12 @@ static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *
     // indexOf consults HasProperty: an index past the current (possibly shrunk
     // or detached) extent is "not present" and never matches. Clamp the bound.
     u32 current = mal_typed_array_object_length(array);
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span)) {
+        return mal_value_from_i32(-1);
+    }
     for (u32 i = from; i < length && i < current; i++) {
-        if (mal_value_is_truthy(mal_ops_strict_equal(mal_typed_array_object_get(vm, array, i), target))) {
+        if (mal_ta_span_matches(&span, i, target, false)) {
             return mal_value_from_i32((i32) i);
         }
     }
@@ -1010,8 +1130,12 @@ static MalValue mal_ta_last_index_of(MalVm *vm, MalValue this_value, const MalVa
     if (from > (i64) current - 1) {
         from = (i64) current - 1;
     }
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span)) {
+        return mal_value_from_i32(-1);
+    }
     for (i64 i = from; i >= 0; i--) {
-        if (mal_value_is_truthy(mal_ops_strict_equal(mal_typed_array_object_get(vm, array, (u32) i), target))) {
+        if (mal_ta_span_matches(&span, (u32) i, target, false)) {
             return mal_value_from_i32((i32) i);
         }
     }
@@ -1033,6 +1157,24 @@ static MalValue mal_ta_includes(MalVm *vm, MalValue this_value, const MalValue *
     if (!mal_ta_relative(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), length, 0, &from)) {
         return mal_value_new_undefined();
     }
+    MalTypedArraySpan span;
+    if (mal_typed_array_object_span(array, &span)) {
+        u32 present_end = span.length < length ? span.length : length;
+        for (u32 i = from; i < present_end; i++) {
+            if (mal_ta_span_matches(&span, i, target, true)) {
+                return mal_value_new_boolean(true);
+            }
+        }
+        if (mal_value_is_undefined(target) &&
+            (from > span.length ? from : span.length) < length) {
+            return mal_value_new_boolean(true);
+        }
+        return mal_value_new_boolean(false);
+    }
+
+    // A coercing fromIndex can detach the buffer. includes still performs Get
+    // for every captured index, whose IntegerIndexedElementGet result is then
+    // undefined; retain that observable edge instead of treating it as a span.
     bool target_nan = mal_value_is_nan(target);
     for (u32 i = from; i < length; i++) {
         MalValue element = mal_typed_array_object_get(vm, array, i);
@@ -1052,12 +1194,16 @@ static MalValue mal_ta_reverse(MalVm *vm, MalValue this_value, const MalValue *a
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
-    u32 length = mal_typed_array_object_length(array);
-    for (u32 i = 0; i < length / 2; i++) {
-        MalValue a = mal_typed_array_object_get(vm, array, i);
-        MalValue b = mal_typed_array_object_get(vm, array, length - 1 - i);
-        mal_typed_array_object_set(vm, array, i, b);
-        mal_typed_array_object_set(vm, array, length - 1 - i, a);
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span)) {
+        return mal_value_new_undefined();
+    }
+    for (u32 i = 0; i < span.length / 2; i++) {
+        u32 other = span.length - 1 - i;
+        u64 a = mal_typed_array_span_load_bits(&span, i);
+        u64 b = mal_typed_array_span_load_bits(&span, other);
+        mal_typed_array_span_store_bits(&span, i, b);
+        mal_typed_array_span_store_bits(&span, other, a);
     }
     return this_value;
 }
@@ -1303,15 +1449,60 @@ static MalValue mal_ta_reduce_right(MalVm *vm, MalValue this_value, const MalVal
     return mal_ta_reduce_impl(vm, this_value, args, arg_count, true);
 }
 
-// Default TypedArray sort order: numeric ascending (NaN last, -0 before +0).
-static i32 mal_ta_default_compare(MalValue a, MalValue b) {
-    if (mal_value_is_bigint(a) && mal_value_is_bigint(b)) {
-        i128 x = mal_bigint_value(mal_value_to_bigint(a));
-        i128 y = mal_bigint_value(mal_value_to_bigint(b));
-        return x < y ? -1 : x > y ? 1 : 0;
+// Default TypedArray sort order over raw element bits: numeric ascending (NaN
+// last, -0 before +0). Equal values compare equal so the merge remains stable,
+// including distinct NaN payloads.
+static i32 mal_ta_compare_raw(
+    MalTypedArrayKind kind, u64 a, u64 b) {
+    switch (kind) {
+        case MAL_TA_INT8: {
+            i8 x = mal_scalar_i8_from_bits((u8) a);
+            i8 y = mal_scalar_i8_from_bits((u8) b);
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+        case MAL_TA_UINT8:
+        case MAL_TA_UINT8_CLAMPED: {
+            u8 x = (u8) a;
+            u8 y = (u8) b;
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+        case MAL_TA_INT16: {
+            i16 x = mal_scalar_i16_from_bits((u16) a);
+            i16 y = mal_scalar_i16_from_bits((u16) b);
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+        case MAL_TA_UINT16: {
+            u16 x = (u16) a;
+            u16 y = (u16) b;
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+        case MAL_TA_INT32: {
+            i32 x = mal_scalar_i32_from_bits((u32) a);
+            i32 y = mal_scalar_i32_from_bits((u32) b);
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+        case MAL_TA_UINT32: {
+            u32 x = (u32) a;
+            u32 y = (u32) b;
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+        case MAL_TA_BIGINT64: {
+            i64 x = mal_scalar_i64_from_bits(a);
+            i64 y = mal_scalar_i64_from_bits(b);
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+        case MAL_TA_BIGUINT64:
+            return a < b ? -1 : a > b ? 1 : 0;
+        default:
+            break;
     }
-    f64 x = mal_ops_to_number(a);
-    f64 y = mal_ops_to_number(b);
+
+    f64 x = kind == MAL_TA_FLOAT32
+        ? (f64) mal_scalar_f32_from_bits((u32) a)
+        : mal_scalar_f64_from_bits(a);
+    f64 y = kind == MAL_TA_FLOAT32
+        ? (f64) mal_scalar_f32_from_bits((u32) b)
+        : mal_scalar_f64_from_bits(b);
     if (isnan(x)) {
         return isnan(y) ? 0 : 1;
     }
@@ -1335,6 +1526,76 @@ static i32 mal_ta_default_compare(MalValue a, MalValue b) {
     return 0;
 }
 
+static void mal_ta_sort_default(MalTypedArrayObject *array) {
+    MalTypedArraySpan target;
+    if (!mal_typed_array_object_span(array, &target) || target.length < 2) {
+        return;
+    }
+
+    usize byte_length = (usize) target.length * target.element_size;
+    byte *source_data = malloc(byte_length);
+    byte *scratch_data = malloc(byte_length);
+    memcpy(source_data, target.data, byte_length);
+
+    MalTypedArraySpan source = target;
+    MalTypedArraySpan scratch = target;
+    u32 width = 1;
+    while (width < target.length) {
+        source.data = source_data;
+        scratch.data = scratch_data;
+        u32 base = 0;
+        while (base < target.length) {
+            u32 remaining = target.length - base;
+            u32 middle = width < remaining ? base + width : target.length;
+            remaining = target.length - middle;
+            u32 end = width < remaining ? middle + width : target.length;
+            u32 left = base;
+            u32 right = middle;
+            for (u32 out = base; out < end; out++) {
+                bool take_left = right >= end ||
+                    (left < middle && mal_ta_compare_raw(target.kind,
+                        mal_typed_array_span_load_bits(&source, left),
+                        mal_typed_array_span_load_bits(&source, right)) <= 0);
+                u32 selected = take_left ? left++ : right++;
+                mal_typed_array_span_store_bits(&scratch, out,
+                    mal_typed_array_span_load_bits(&source, selected));
+            }
+            base = end;
+        }
+        byte *swap = source_data;
+        source_data = scratch_data;
+        scratch_data = swap;
+        width = width > target.length / 2 ? target.length : width * 2;
+    }
+
+    memcpy(target.data, source_data, byte_length);
+    free(source_data);
+    free(scratch_data);
+}
+
+static bool mal_ta_compare_callback(
+    MalVm *vm, MalValue compare, MalValue left, MalValue right, i32 *order) {
+    MalValue call_args[2] = {left, right};
+    MalRootSpan call_span;
+    mal_gc_root(&call_span, call_args, 2);
+    MalCompletion completion = mal_vm_call_value(
+        vm, compare, mal_value_new_undefined(), call_args, 2);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        mal_gc_unroot(&call_span);
+        vm->completion = completion;
+        return false;
+    }
+    call_args[0] = completion.value;
+    f64 result;
+    if (!mal_vm_to_number(vm, completion.value, &result)) {
+        mal_gc_unroot(&call_span);
+        return false;
+    }
+    mal_gc_unroot(&call_span);
+    *order = isnan(result) ? 0 : (result < 0 ? -1 : result > 0 ? 1 : 0);
+    return true;
+}
+
 static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this_writable(vm, this_value);
@@ -1350,66 +1611,73 @@ static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args
     if (length < 2) {
         return this_value;
     }
-
-    MalValue *values = malloc(sizeof(MalValue) * length);
-    for (u32 i = 0; i < length; i++) {
-        values[i] = mal_typed_array_object_get(vm, array, i);
+    if (mal_value_is_undefined(compare)) {
+        mal_ta_sort_default(array);
+        return this_value;
     }
 
-    // A user comparator can collect; root the snapshot (BigInt arrays hold heap
-    // elements) and lift GC suppression. `current` is extracted from the snapshot
-    // during an insertion but is rooted by the call span across each comparator
-    // call; between calls only non-allocating shifts run.
-    MalRootSpan values_span;
+    MalValue *values = malloc(sizeof(MalValue) * length);
+    MalValue *scratch = malloc(sizeof(MalValue) * length);
+    for (u32 i = 0; i < length; i++) {
+        values[i] = mal_typed_array_object_get(vm, array, i);
+        scratch[i] = mal_value_new_undefined();
+    }
+
+    // A user comparator can collect; root both merge buffers (BigInt arrays hold
+    // heap elements) and lift GC suppression. Bottom-up stable merge sort bounds
+    // comparator calls to O(n log n), while keeping all array writes until after
+    // the comparator phase.
+    MalRootSpan values_span, scratch_span;
     mal_gc_root(&values_span, values, (i32) length);
+    mal_gc_root(&scratch_span, scratch, (i32) length);
     mal_gc_native_rooted_begin(vm);
     MalValue ret = this_value;
 
-    // Insertion sort keeps it stable and lets the comparator call into the VM.
-    for (u32 i = 1; i < length; i++) {
-        MalValue current = values[i];
-        i64 j = (i64) i - 1;
-        while (j >= 0) {
-            i32 order;
-            if (mal_value_is_callable(compare)) {
-                MalValue call_args[2] = {values[j], current};
-                MalRootSpan call_span;
-                mal_gc_root(&call_span, call_args, 2);
-                MalCompletion completion = mal_vm_call_value(vm, compare, mal_value_new_undefined(), call_args, 2);
-                if (completion.kind != MAL_COMPLETION_NORMAL) {
-                    mal_gc_unroot(&call_span);
-                    vm->completion = completion;
-                    ret = mal_value_new_undefined();
-                    goto done;
+    MalValue *source = values;
+    MalValue *destination = scratch;
+    u32 width = 1;
+    while (width < length) {
+        u32 base = 0;
+        while (base < length) {
+            u32 remaining = length - base;
+            u32 middle = width < remaining ? base + width : length;
+            remaining = length - middle;
+            u32 end = width < remaining ? middle + width : length;
+            u32 left = base;
+            u32 right = middle;
+            for (u32 out = base; out < end; out++) {
+                bool take_left = right >= end;
+                if (!take_left && left < middle) {
+                    i32 order;
+                    if (!mal_ta_compare_callback(
+                            vm, compare, source[left], source[right], &order)) {
+                        ret = mal_value_new_undefined();
+                        goto done;
+                    }
+                    take_left = order <= 0;
+                } else if (left < middle) {
+                    take_left = true;
                 }
-                call_args[0] = completion.value;
-                f64 result;
-                if (!mal_vm_to_number(vm, completion.value, &result)) {
-                    mal_gc_unroot(&call_span);
-                    ret = mal_value_new_undefined();
-                    goto done;
-                }
-                mal_gc_unroot(&call_span);
-                order = isnan(result) ? 0 : (result < 0 ? -1 : result > 0 ? 1 : 0);
-            } else {
-                order = mal_ta_default_compare(values[j], current);
+                destination[out] = take_left
+                    ? source[left++] : source[right++];
             }
-            if (order <= 0) {
-                break;
-            }
-            values[j + 1] = values[j];
-            j--;
+            base = end;
         }
-        values[j + 1] = current;
+        MalValue *swap = source;
+        source = destination;
+        destination = swap;
+        width = width > length / 2 ? length : width * 2;
     }
 
     for (u32 i = 0; i < length; i++) {
-        mal_typed_array_object_set(vm, array, i, values[i]);
+        mal_typed_array_object_set(vm, array, i, source[i]);
     }
 
 done:
     mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&scratch_span);
     mal_gc_unroot(&values_span);
+    free(scratch);
     free(values);
     return ret;
 }
@@ -1427,10 +1695,16 @@ static MalValue mal_ta_to_reversed(MalVm *vm, MalValue this_value, const MalValu
         return mal_value_new_undefined();
     }
     u32 length = mal_typed_array_object_length(array);
-    MalValue result = mal_ta_create(vm, array->kind, length);
+    MalValue result = mal_ta_create_uninitialized(vm, array->kind, length);
     MalTypedArrayObject *out = mal_value_to_typed_array_object(result);
+    MalTypedArraySpan source_span, result_span;
+    if (!mal_typed_array_object_span(array, &source_span) ||
+        !mal_typed_array_object_span(out, &result_span)) {
+        return mal_value_new_undefined();
+    }
     for (u32 i = 0; i < length; i++) {
-        mal_typed_array_object_set(vm, out, i, mal_typed_array_object_get(vm, array, length - 1 - i));
+        mal_typed_array_span_store_bits(&result_span, i,
+            mal_typed_array_span_load_bits(&source_span, length - 1 - i));
     }
     return result;
 }
@@ -1450,7 +1724,7 @@ static MalValue mal_ta_to_sorted(MalVm *vm, MalValue this_value, const MalValue 
         return mal_value_new_undefined();
     }
     u32 length = mal_typed_array_object_length(array);
-    MalValue result = mal_ta_create(vm, array->kind, length);
+    MalValue result = mal_ta_create_uninitialized(vm, array->kind, length);
     if (!mal_ta_copy_elements(vm, mal_value_to_typed_array_object(result), 0, array, 0, length)) {
         return mal_value_new_undefined();
     }
@@ -1482,19 +1756,11 @@ static MalValue mal_ta_with(MalVm *vm, MalValue this_value, const MalValue *args
     }
     f64 actual = relative >= 0 ? relative : (f64) length + relative;
 
-    MalValue value = arg_count >= 2 ? args[1] : mal_value_new_undefined();
-    if (mal_typed_array_is_bigint(array->kind)) {
-        i128 big;
-        if (!mal_bigint_to_bigint(vm, value, &big)) {
-            return mal_value_new_undefined();
-        }
-        value = mal_value_from_bigint(mal_bigint_new(&vm->heap, big));
-    } else {
-        f64 number;
-        if (!mal_vm_to_number(vm, value, &number)) {
-            return mal_value_new_undefined();
-        }
-        value = mal_ops_number_value(number);
+    u64 replacement_bits;
+    if (!mal_typed_array_coerce_element_bits(vm, array->kind,
+            arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+            &replacement_bits)) {
+        return mal_value_new_undefined();
     }
 
     // IsValidIntegerIndex observes the live post-coercion extent. The result
@@ -1507,11 +1773,24 @@ static MalValue mal_ta_with(MalVm *vm, MalValue this_value, const MalValue *args
     }
     u32 actual_index = (u32) actual;
 
-    MalValue result = mal_ta_create(vm, array->kind, length);
+    MalValue result = mal_ta_create_uninitialized(vm, array->kind, length);
     MalTypedArrayObject *out = mal_value_to_typed_array_object(result);
+    MalTypedArraySpan source_span, result_span;
+    if (!mal_typed_array_object_span(array, &source_span) ||
+        !mal_typed_array_object_span(out, &result_span)) {
+        return mal_value_new_undefined();
+    }
     for (u32 i = 0; i < length; i++) {
-        mal_typed_array_object_set(vm, out, i,
-            i == actual_index ? value : mal_typed_array_object_get(vm, array, i));
+        u64 bits;
+        if (i == actual_index) {
+            bits = replacement_bits;
+        } else if (i < source_span.length) {
+            bits = mal_typed_array_span_load_bits(&source_span, i);
+        } else if (!mal_typed_array_coerce_element_bits(
+                vm, array->kind, mal_value_new_undefined(), &bits)) {
+            return mal_value_new_undefined();
+        }
+        mal_typed_array_span_store_bits(&result_span, i, bits);
     }
     return result;
 }

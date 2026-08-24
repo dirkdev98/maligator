@@ -26,6 +26,8 @@ typedef struct MalDataViewObject {
 
 static u32 mal_data_view_current_length(const MalDataViewObject *view);
 static bool mal_data_view_is_out_of_bounds(const MalDataViewObject *view);
+static bool mal_data_view_extent(
+    const MalDataViewObject *view, u32 *byte_length);
 
 MalArrayBufferObject *mal_data_view_object_buffer(const MalDataViewObject *view) {
     return view->buffer;
@@ -82,11 +84,12 @@ MalBufferSourceSpanStatus mal_buffer_source_span(
         if (buffer == nullptr || buffer->detached) {
             return MAL_BUFFER_SOURCE_SPAN_DETACHED;
         }
-        if (mal_data_view_is_out_of_bounds(view)) {
+        u32 current_length;
+        if (!mal_data_view_extent(view, &current_length)) {
             return MAL_BUFFER_SOURCE_SPAN_OUT_OF_BOUNDS;
         }
         byte_offset = view->byte_offset;
-        byte_length = mal_data_view_current_length(view);
+        byte_length = current_length;
     } else {
         return MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE;
     }
@@ -129,18 +132,33 @@ static u32 mal_data_view_type_size(MalDataViewType type) {
     }
 }
 
-static u32 mal_data_view_current_length(const MalDataViewObject *view) {
+static bool mal_data_view_extent(
+    const MalDataViewObject *view, u32 *byte_length) {
     if (view->buffer->detached) {
-        return 0;
+        *byte_length = 0;
+        return false;
     }
     if (view->length_tracking) {
-        return view->byte_offset > view->buffer->byte_length ? 0 : view->buffer->byte_length - view->byte_offset;
+        if (view->byte_offset > view->buffer->byte_length) {
+            *byte_length = 0;
+            return false;
+        }
+        *byte_length = view->buffer->byte_length - view->byte_offset;
+        return true;
     }
     // A fixed view goes out of bounds if a resizable buffer shrank under it.
     if ((u64) view->byte_offset + view->byte_length > view->buffer->byte_length) {
-        return 0;
+        *byte_length = 0;
+        return false;
     }
-    return view->byte_length;
+    *byte_length = view->byte_length;
+    return true;
+}
+
+static u32 mal_data_view_current_length(const MalDataViewObject *view) {
+    u32 byte_length;
+    mal_data_view_extent(view, &byte_length);
+    return byte_length;
 }
 
 // Spec IsViewOutOfBounds: a detached buffer, a length-tracking view whose offset
@@ -148,13 +166,8 @@ static u32 mal_data_view_current_length(const MalDataViewObject *view) {
 // fits the buffer. Used to raise TypeError (distinct from the in-bounds RangeError)
 // when a resizable buffer shrinks under the view.
 static bool mal_data_view_is_out_of_bounds(const MalDataViewObject *view) {
-    if (view->buffer->detached) {
-        return true;
-    }
-    if (view->length_tracking) {
-        return view->byte_offset > view->buffer->byte_length;
-    }
-    return (u64) view->byte_offset + view->byte_length > view->buffer->byte_length;
+    u32 byte_length;
+    return !mal_data_view_extent(view, &byte_length);
 }
 
 static MalDataViewObject *mal_data_view_this(MalVm *vm, MalValue this_value) {
@@ -171,7 +184,9 @@ static MalDataViewObject *mal_data_view_this(MalVm *vm, MalValue this_value) {
 // callers that pass it (matching the spec's optional-argument handling).
 static bool mal_data_view_to_index(MalVm *vm, MalValue value, u64 *out) {
     f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) {
+    if (mal_ops_is_number(value)) {
+        number = mal_ops_number_as_f64(value);
+    } else if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
     number = mal_ops_number_to_integer_or_infinity(number);
@@ -311,11 +326,12 @@ static MalValue mal_data_view_get(MalVm *vm, MalValue this_value, const MalValue
     bool little_endian = arg_count >= 2 && mal_value_is_truthy(args[1]);
     u32 size = mal_data_view_type_size(type);
 
-    if (mal_data_view_is_out_of_bounds(view)) {
+    u32 current_length;
+    if (!mal_data_view_extent(view, &current_length)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "DataView is out of bounds of its ArrayBuffer");
         return mal_value_new_undefined();
     }
-    if (index + size > mal_data_view_current_length(view)) {
+    if (index + size > current_length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Offset is outside the bounds of the DataView");
         return mal_value_new_undefined();
     }
@@ -391,7 +407,9 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
         bits = (u64) (u128) big;
     } else {
         f64 number;
-        if (!mal_vm_to_number(vm, value, &number)) {
+        if (mal_ops_is_number(value)) {
+            number = mal_ops_number_as_f64(value);
+        } else if (!mal_vm_to_number(vm, value, &number)) {
             return mal_value_new_undefined();
         }
         switch (type) {
@@ -424,11 +442,12 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
         }
     }
 
-    if (mal_data_view_is_out_of_bounds(view)) {
+    u32 current_length;
+    if (!mal_data_view_extent(view, &current_length)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "DataView is out of bounds of its ArrayBuffer");
         return mal_value_new_undefined();
     }
-    if (index + size > mal_data_view_current_length(view)) {
+    if (index + size > current_length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Offset is outside the bounds of the DataView");
         return mal_value_new_undefined();
     }
@@ -501,11 +520,12 @@ static MalValue mal_dv_get_byte_length(MalVm *vm, MalValue this_value, const Mal
     if (view == nullptr) {
         return mal_value_new_undefined();
     }
-    if (mal_data_view_is_out_of_bounds(view)) {
+    u32 byte_length;
+    if (!mal_data_view_extent(view, &byte_length)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read byteLength of an out-of-bounds view");
         return mal_value_new_undefined();
     }
-    return mal_value_from_i32((i32) mal_data_view_current_length(view));
+    return mal_value_from_i32((i32) byte_length);
 }
 
 static MalValue mal_dv_get_byte_offset(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

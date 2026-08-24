@@ -1,0 +1,140 @@
+const results = [];
+
+function check(name, condition) {
+	results.push([name, condition]);
+}
+
+const variants = [
+	[Int8Array, false],
+	[Uint8Array, false],
+	[Uint8ClampedArray, false],
+	[Int16Array, false],
+	[Uint16Array, false],
+	[Int32Array, false],
+	[Uint32Array, false],
+	[Float32Array, false],
+	[Float64Array, false],
+	[BigInt64Array, true],
+	[BigUint64Array, true],
+];
+
+for (const [Ctor, bigint] of variants) {
+	const one = bigint ? 1n : 1;
+	const two = bigint ? 2n : 2;
+	const three = bigint ? 3n : 3;
+	const four = bigint ? 4n : 4;
+	const seven = bigint ? 7n : 7;
+	const nine = bigint ? 9n : 9;
+	const source = new Ctor([one, two, three, four]);
+	const copied = new Ctor(source);
+	copied.fill(nine, 1, 3);
+	copied.reverse();
+	const reversed = copied.toReversed();
+	const sliced = copied.slice(1, 3);
+	const replaced = copied.with(2, seven);
+	const setCopy = new Ctor(4);
+	setCopy.set(source);
+	const sorted = new Ctor([four, one, three, two]);
+	sorted.sort();
+	const sub = source.subarray(1, 3);
+	sub[0] = nine;
+	check(
+		Ctor.name + " raw kernels",
+		copied.join() === [four, nine, nine, one].join() &&
+			reversed.join() === [one, nine, nine, four].join() &&
+			sliced.join() === [nine, nine].join() &&
+			replaced.join() === [four, nine, seven, one].join() &&
+			setCopy.join() === [one, two, three, four].join() &&
+			sorted.join() === [one, two, three, four].join() &&
+			copied.indexOf(nine) === 1 &&
+			copied.lastIndexOf(nine) === 2 &&
+			copied.includes(nine) &&
+			source[1] === nine,
+	);
+}
+
+const clamped = new Uint8ClampedArray(4);
+clamped.fill(2.5, 0, 1);
+clamped.fill(3.5, 1, 2);
+clamped.fill(-1, 2, 3);
+clamped.fill(300, 3);
+check("Uint8Clamp ties and limits", clamped.join() === "2,4,0,255");
+
+const floatBits = new ArrayBuffer(24);
+const floatWords = new Uint32Array(floatBits);
+floatWords.set([0x7fc00001, 0x40400000, 0x7fc00002, 0x80000000, 0, 0xc0000000]);
+const floats = new Float32Array(floatBits);
+floats.sort();
+check(
+	"Float32 sort keeps -0 before +0 and stable NaN payloads",
+	floatWords.join() ===
+		[0xc0000000, 0x80000000, 0, 0x40400000, 0x7fc00001, 0x7fc00002].join(),
+);
+
+const crossNumeric = new Int16Array(new Float64Array([1.9, -2.1, 65537]));
+const crossBigInt = new BigUint64Array(new BigInt64Array([-1n, 2n]));
+check("cross-kind native conversion", crossNumeric.join() === "1,-2,1");
+check(
+	"cross-kind BigInt conversion",
+	crossBigInt[0] === 0xffffffffffffffffn && crossBigInt[1] === 2n,
+);
+
+const resizable = new ArrayBuffer(4, { maxByteLength: 64 });
+new Uint8Array(resizable).fill(0xaa);
+resizable.resize(2);
+resizable.resize(32);
+const grown = new Uint8Array(resizable);
+let zeroed = true;
+for (let i = 2; i < grown.length; i++) zeroed = zeroed && grown[i] === 0;
+check("resizable growth exposes only zeroed bytes", zeroed);
+
+const slicedBuffer = new Uint8Array([1, 2, 3, 4]).buffer.slice(1, 3);
+check("ArrayBuffer slice copies bytes", new Uint8Array(slicedBuffer).join() === "2,3");
+
+const shared = new SharedArrayBuffer(4, { maxByteLength: 16 });
+new Uint8Array(shared).set([5, 6, 7, 8]);
+shared.grow(8);
+const sharedSlice = shared.slice(1, 4);
+check(
+	"SharedArrayBuffer grow and slice",
+	shared.byteLength === 8 && new Uint8Array(sharedSlice).join() === "6,7,8",
+);
+
+const data = new ArrayBuffer(64);
+const view = new DataView(data);
+view.setInt8(0, -7);
+view.setUint8(1, 250);
+view.setInt16(2, -1234, true);
+view.setUint16(4, 60000, false);
+view.setInt32(6, -1234567, true);
+view.setUint32(10, 4000000000, false);
+view.setFloat16(14, 1.5, true);
+view.setFloat32(16, -3.25, false);
+view.setFloat64(24, 3.5, true);
+view.setBigInt64(32, -9n, false);
+view.setBigUint64(40, 0xfffffffffffffff0n, true);
+check(
+	"DataView scalar load/store variants",
+	view.getInt8(0) === -7 &&
+		view.getUint8(1) === 250 &&
+		view.getInt16(2, true) === -1234 &&
+		view.getUint16(4, false) === 60000 &&
+		view.getInt32(6, true) === -1234567 &&
+		view.getUint32(10, false) === 4000000000 &&
+		view.getFloat16(14, true) === 1.5 &&
+		view.getFloat32(16, false) === -3.25 &&
+		view.getFloat64(24, true) === 3.5 &&
+		view.getBigInt64(32, false) === -9n &&
+		view.getBigUint64(40, true) === 0xfffffffffffffff0n,
+);
+check(
+	"ArrayBuffer.isView covers both view families",
+	ArrayBuffer.isView(view) && ArrayBuffer.isView(floats),
+);
+
+for (const [name, passed] of results) {
+	if (!passed) console.log("FAIL: " + name);
+}
+console.log(
+	"RESULT " + results.filter(([, passed]) => passed).length + "/" + results.length,
+);

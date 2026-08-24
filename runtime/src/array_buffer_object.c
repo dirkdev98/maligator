@@ -9,20 +9,34 @@
 
 static MalArrayBufferReleaseObserver g_release_observer;
 
-MalArrayBufferObject *mal_array_buffer_object_new(
+static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     MalHeap *heap,
     MalObject *prototype,
     u32 byte_length,
     u32 max_byte_length,
     bool resizable,
-    bool shared
+    bool shared,
+    bool initialize
 ) {
     MalArrayBufferObject *buffer = mal_heap_alloc(heap, sizeof(MalArrayBufferObject), MAL_HEAP_ARRAY_BUFFER_OBJECT);
     mal_object_init(heap, &buffer->object, MAL_HEAP_ARRAY_BUFFER_OBJECT, prototype);
 
     // Resizable buffers reserve the maximum so the backing store never moves.
     u32 capacity = resizable ? max_byte_length : byte_length;
-    buffer->data = capacity > 0 ? calloc(capacity, 1) : nullptr;
+    buffer->data = nullptr;
+    if (capacity > 0) {
+        // Only currently exposed bytes require zero semantics. Reserving a much
+        // larger resizable capacity must not eagerly dirty every future page;
+        // resize zeroes each newly exposed range before publishing its length.
+        if (!initialize || (resizable && byte_length < capacity)) {
+            buffer->data = malloc(capacity);
+            if (initialize && buffer->data != nullptr && byte_length > 0) {
+                memset(buffer->data, 0, byte_length);
+            }
+        } else {
+            buffer->data = calloc(capacity, 1);
+        }
+    }
     if (buffer->data != nullptr) {
         mal_profile_native_allocation(
             heap, capacity, MAL_PROFILE_ALLOCATION_FAMILY_BUFFER);
@@ -36,6 +50,24 @@ MalArrayBufferObject *mal_array_buffer_object_new(
     buffer->sensitive = false;
 
     return buffer;
+}
+
+MalArrayBufferObject *mal_array_buffer_object_new(
+    MalHeap *heap,
+    MalObject *prototype,
+    u32 byte_length,
+    u32 max_byte_length,
+    bool resizable,
+    bool shared
+) {
+    return mal_array_buffer_object_new_impl(
+        heap, prototype, byte_length, max_byte_length, resizable, shared, true);
+}
+
+MalArrayBufferObject *mal_array_buffer_object_new_uninitialized(
+    MalHeap *heap, MalObject *prototype, u32 byte_length) {
+    return mal_array_buffer_object_new_impl(
+        heap, prototype, byte_length, byte_length, false, false, false);
 }
 
 MalArrayBufferObject *mal_array_buffer_object_new_sensitive(

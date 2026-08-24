@@ -19,7 +19,9 @@ static bool mal_array_buffer_to_index(MalVm *vm, MalValue value, f64 *out) {
         return true;
     }
     f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) {
+    if (mal_ops_is_number(value)) {
+        number = mal_ops_number_as_f64(value);
+    } else if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
     number = mal_ops_number_to_integer_or_infinity(number);
@@ -200,7 +202,9 @@ static bool mal_array_buffer_clamp(MalVm *vm, MalValue value, u32 length, u32 fa
         return true;
     }
     f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) {
+    if (mal_ops_is_number(value)) {
+        number = mal_ops_number_as_f64(value);
+    } else if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
     *out = (u32) mal_ops_number_clamp_relative(number, (f64) length);
