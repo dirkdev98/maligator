@@ -126,6 +126,13 @@ async function main() {
 			!(2 in shrunkSlice),
 	);
 	check("join", [1, null, undefined, 4].join(":") === "1:::4");
+	check(
+		"join dense strings, nullish values, and holes",
+		["alpha", "beta", null, "gamma", undefined, "delta"].join(":") ===
+			"alpha:beta::gamma::delta" &&
+			["a", , "b"].join() === "a,,b" &&
+			["", "only", ""].join("") === "only",
+	);
 	const reversed = [1, , 3, 4];
 	reversed.reverse();
 	check(

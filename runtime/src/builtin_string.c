@@ -2980,6 +2980,117 @@ static bool mal_builtin_string_append_substitution(
     return true;
 }
 
+static bool mal_builtin_string_replacement_is_literal(const MalString *replacement) {
+    const c16 *units = mal_string_code_units(replacement);
+    usize length = mal_string_length(replacement);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] == '$') return false;
+    }
+    return true;
+}
+
+/** Exact native replacement for the common non-callable, no-$ template case.
+ * All observable receiver/search/replacement coercions have already completed. */
+static MalValue mal_builtin_string_replace_literal(
+    MalVm *vm,
+    MalString *string,
+    MalString *search,
+    MalString *replacement,
+    usize first_match,
+    bool all
+) {
+    usize length = mal_string_length(string);
+    usize search_length = mal_string_length(search);
+    usize replacement_length = mal_string_length(replacement);
+    if (mal_string_equals(search, replacement)) {
+        return mal_value_from_string(string);
+    }
+
+    usize match_count = 1;
+    if (all) {
+        if (search_length == 0) {
+            match_count = length + 1;
+        } else {
+            usize position = first_match + search_length;
+            while (position <= length - search_length) {
+                i64 match = mal_builtin_string_find(string, search, position);
+                if (match < 0) break;
+                match_count++;
+                position = (usize) match + search_length;
+            }
+        }
+    }
+
+    usize removed;
+    usize added;
+    usize result_length;
+    usize bytes;
+    if (!mal_checked_size_multiply(
+            match_count, search_length, length, &removed) ||
+        !mal_checked_size_multiply(
+            match_count, replacement_length, MAL_STRING_MAX_CODE_UNITS,
+            &added) ||
+        !mal_checked_size_add(
+            length - removed, added, MAL_STRING_MAX_CODE_UNITS,
+            &result_length) ||
+        !mal_checked_size_multiply(
+            sizeof(c16), result_length, SIZE_MAX, &bytes)) {
+        mal_builtin_string_throw_length(vm);
+        return mal_value_new_undefined();
+    }
+    if (result_length == 0) {
+        return mal_builtin_string_empty(vm);
+    }
+    c16 *output = mal_heap_try_alloc_raw_profiled(
+        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    if (output == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+
+    const c16 *source = mal_string_code_units(string);
+    const c16 *replacement_units = mal_string_code_units(replacement);
+    usize source_position = 0;
+    usize offset = 0;
+    usize match_position = first_match;
+    for (usize match_index = 0; match_index < match_count; match_index++) {
+        usize gap = match_position - source_position;
+        if (gap != 0) {
+            memcpy(output + offset, source + source_position, sizeof(c16) * gap);
+            offset += gap;
+        }
+        if (replacement_length != 0) {
+            memcpy(
+                output + offset, replacement_units,
+                sizeof(c16) * replacement_length);
+            offset += replacement_length;
+        }
+        source_position = match_position + search_length;
+        if (search_length == 0 && match_position < length) {
+            output[offset++] = source[match_position];
+            source_position++;
+        }
+        if (match_index + 1 < match_count) {
+            if (search_length == 0) {
+                match_position++;
+            } else {
+                i64 next = mal_builtin_string_find(
+                    string, search, source_position);
+                if (next < 0) abort();
+                match_position = (usize) next;
+            }
+        }
+    }
+    if (source_position < length) {
+        usize tail = length - source_position;
+        memcpy(output + offset, source + source_position, sizeof(c16) * tail);
+        offset += tail;
+    }
+    assert(offset == result_length);
+    return mal_value_from_string(
+        mal_string_new_owned(&vm->heap, output, result_length));
+}
+
 static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool all) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -3029,6 +3140,13 @@ static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, 
             result = roots[0];
             goto done;
         }
+    }
+
+    if (!functional && mal_builtin_string_replacement_is_literal(replacement)) {
+        result = mal_builtin_string_replace_literal(
+            vm, string, search, replacement,
+            first_match < 0 ? 0 : (usize) first_match, all);
+        goto done;
     }
 
     usize seg_start = 0;

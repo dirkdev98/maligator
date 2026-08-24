@@ -705,6 +705,13 @@ try {
 }
 check("String.raw requires a template", rawMissingTemplateThrows);
 check("string replacement remains correct", "aba".replaceAll("a", "$&$") === "a$ba$");
+check(
+	"literal string replacement preserves replace and replaceAll boundaries",
+	"alpha/beta/alpha".replaceAll("alpha", "item") === "item/beta/item" &&
+		"abc".replace("", "-") === "-abc" &&
+		"abc".replaceAll("", "-") === "-a-b-c-" &&
+		"same".replaceAll("a", "a") === "same",
+);
 let noMatchReplacementCoercions = 0;
 let noMatchCallbackCalls = 0;
 check(

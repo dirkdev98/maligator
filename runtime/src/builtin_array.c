@@ -1,5 +1,6 @@
 #include "builtin_array.h"
 
+#include <assert.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2098,6 +2099,99 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
     return result;
 }
 
+/** Join an exact clean dense Array when every present non-nullish element is
+ * already a string primitive. Returns 1 with *out set, 0 for the observable
+ * generic fallback, and -1 with a pending length/allocation throw. */
+static i32 mal_builtin_array_join_dense_strings(
+    MalVm *vm,
+    MalArrayObject *array,
+    MalString *separator,
+    MalValue *out
+) {
+    usize length = array->length;
+    usize separator_length = mal_string_length(separator);
+    usize result_length;
+    if (!mal_checked_size_multiply(
+            separator_length, length == 0 ? 0 : length - 1,
+            MAL_STRING_MAX_CODE_UNITS, &result_length)) {
+        mal_builtin_array_throw_string_length(vm);
+        return -1;
+    }
+    MalString *sole_part = nullptr;
+    usize nonempty_parts = 0;
+    for (u32 index = 0; index < array->length; index++) {
+        MalValue element;
+        if (!mal_array_object_dense_get(array, index, &element) ||
+            mal_value_is_nil(element)) {
+            continue;
+        }
+        if (!mal_value_is_string(element)) return 0;
+        MalString *part = mal_value_to_string(element);
+        usize part_length = mal_string_length(part);
+        if (!mal_checked_size_add(
+                result_length, part_length, MAL_STRING_MAX_CODE_UNITS,
+                &result_length)) {
+            mal_builtin_array_throw_string_length(vm);
+            return -1;
+        }
+        if (part_length != 0) {
+            sole_part = part;
+            nonempty_parts++;
+        }
+    }
+    if (result_length == 0) {
+        *out = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+        return 1;
+    }
+    if (separator_length == 0 && nonempty_parts == 1 &&
+        mal_string_length(sole_part) == result_length) {
+        *out = mal_value_from_string(sole_part);
+        return 1;
+    }
+
+    usize bytes;
+    if (!mal_checked_size_multiply(
+            sizeof(c16), result_length, SIZE_MAX, &bytes)) {
+        mal_builtin_array_throw_string_length(vm);
+        return -1;
+    }
+    c16 *units = mal_heap_try_alloc_raw_profiled(
+        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    if (units == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return -1;
+    }
+    const c16 *separator_units = separator_length == 0
+        ? nullptr
+        : mal_string_code_units(separator);
+    usize offset = 0;
+    for (u32 index = 0; index < array->length; index++) {
+        if (index != 0 && separator_length != 0) {
+            memcpy(
+                units + offset, separator_units,
+                sizeof(c16) * separator_length);
+            offset += separator_length;
+        }
+        MalValue element;
+        if (!mal_array_object_dense_get(array, index, &element) ||
+            mal_value_is_nil(element)) {
+            continue;
+        }
+        MalString *part = mal_value_to_string(element);
+        usize part_length = mal_string_length(part);
+        if (part_length != 0) {
+            memcpy(
+                units + offset, mal_string_code_units(part),
+                sizeof(c16) * part_length);
+            offset += part_length;
+        }
+    }
+    assert(offset == result_length);
+    *out = mal_value_from_string(
+        mal_string_new_owned(&vm->heap, units, result_length));
+    return 1;
+}
+
 static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O).
     if (!mal_builtin_array_to_object(vm, &this_value)) {
@@ -2120,6 +2214,18 @@ static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const Mal
 
     if (length == 0) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    }
+
+    MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
+    if (dense != nullptr && dense->length == length) {
+        MalValue dense_result;
+        i32 dense_status = mal_builtin_array_join_dense_strings(
+            vm, dense, separator, &dense_result);
+        if (dense_status != 0) {
+            return dense_status > 0
+                ? dense_result
+                : mal_value_new_undefined();
+        }
     }
 
     MalRootedStringParts parts;

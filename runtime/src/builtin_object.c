@@ -870,6 +870,64 @@ static bool mal_builtin_object_collect_plain_keys(
     return true;
 }
 
+static bool mal_builtin_object_plain_data_count(
+    MalObject *object,
+    usize *count_out
+) {
+    usize count = 0;
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (key.kind == MAL_KEY_SYMBOL ||
+            !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+            continue;
+        }
+        if (desc.flags & MAL_PROPERTY_ACCESSOR) return false;
+        if (count == UINT32_MAX) return false;
+        count++;
+    }
+    *count_out = count;
+    return true;
+}
+
+/** Object.values / entries can likewise bypass the observable generic path
+ * when every enumerable string-key property is a plain data descriptor. */
+static bool mal_builtin_object_collect_plain_data(
+    MalVm *vm,
+    MalValue target,
+    MalBuiltinObjectCollect collect,
+    MalArrayObject *result,
+    usize count
+) {
+    (void) mal_array_object_fresh_dense_reserve_exact(result, (u32) count);
+    MalPropertyIter iter;
+    mal_property_iter_init(
+        &iter, mal_value_to_object(target),
+        MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+    u32 index = 0;
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (key.kind == MAL_KEY_SYMBOL ||
+            !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+            continue;
+        }
+        MalValue value = desc.value;
+        if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
+            MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
+            mal_array_object_store(
+                entry, mal_key_index(0),
+                mal_builtin_object_key_to_string(vm, key));
+            mal_array_object_store(entry, mal_key_index(1), value);
+            value = mal_value_from_array_object(entry);
+        }
+        mal_array_object_store(result, mal_key_index(index++), value);
+    }
+    return true;
+}
+
 // Fills `result` with the collected keys/values/entries; returns false with a
 // pending throw on an abrupt step. `result` is rooted by the caller wrapper
 // (mal_builtin_object_collect) across the getter/trap re-entry below.
@@ -958,6 +1016,17 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
                 vm, target, iter_kind, result)
             ? result_box
             : mal_value_new_undefined();
+    }
+    if (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) &&
+        collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+        usize count;
+        if (mal_builtin_object_plain_data_count(
+                mal_value_to_object(target), &count)) {
+            return mal_builtin_object_collect_plain_data(
+                    vm, target, collect, result, count)
+                ? result_box
+                : mal_value_new_undefined();
+        }
     }
     MalRootSpan result_span;
     mal_gc_root(&result_span, &result_box, 1);

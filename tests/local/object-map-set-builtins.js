@@ -189,6 +189,21 @@ check(
 		plainKeyGetterCalls === 0,
 );
 
+const plainDataSymbol = Symbol("plain-data");
+const plainDataSource = { beta: 2, 7: 7, alpha: 1, 2: 2 };
+Object.defineProperty(plainDataSource, "hidden", {
+	value: 9,
+	enumerable: false,
+});
+plainDataSource[plainDataSymbol] = 11;
+check(
+	"Object plain data collection preserves order and filtering",
+	Object.values(plainDataSource).join(",") === "2,7,2,1" &&
+		Object.entries(plainDataSource)
+			.map((entry) => entry.join(":"))
+			.join(",") === "2:2,7:7,beta:2,alpha:1",
+);
+
 let predicateDescriptorCalls = 0;
 const predicateProxy = new Proxy(
 	{ visible: 1 },
