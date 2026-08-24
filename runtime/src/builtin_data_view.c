@@ -408,6 +408,10 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
             return mal_value_new_undefined();
         }
         bits = (u64) (u128) big;
+    } else if (mal_value_is_int32(value) && type <= DV_UINT32) {
+        // All integer DataView setters retain the low width bits; the sized
+        // store below performs the 8/16-bit narrowing without f64/fmod work.
+        bits = (u32) mal_value_to_i32(value);
     } else {
         f64 number;
         if (mal_ops_is_number(value)) {

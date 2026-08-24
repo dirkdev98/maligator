@@ -229,6 +229,15 @@ bool mal_typed_array_coerce_element_bits(
             return false;
         }
         bits = (u64) (u128) big;
+    } else if (mal_value_is_int32(value) && kind <= MAL_TA_UINT32) {
+        i32 integer = mal_value_to_i32(value);
+        if (kind == MAL_TA_UINT8_CLAMPED) {
+            bits = integer <= 0 ? 0 : integer >= 255 ? 255 : (u8) integer;
+        } else {
+            // Integer element stores retain only the low element-width bits.
+            // The eventual scalar store performs the 8/16-bit narrowing.
+            bits = (u32) integer;
+        }
     } else {
         // ToNumber runs full ToPrimitive(number) for objects (valueOf/toString
         // or @@toPrimitive) and throws on BigInt/Symbol, exactly once, before
