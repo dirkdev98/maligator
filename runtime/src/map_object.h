@@ -47,10 +47,16 @@ MalKey mal_map_key_from_value(MalValue value);
  */
 void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value);
 
+/** Insert or update using a key already produced by mal_map_key_from_value. */
+void mal_map_object_set_canonical(MalMapObject *map, MalKey key, MalValue value);
+
 /**
  * Check for an entry under SameValueZero.
  */
 bool mal_map_object_has(const MalMapObject *map, MalValue key);
+
+/** Check for an entry using an already-canonicalized key. */
+bool mal_map_object_has_canonical(const MalMapObject *map, MalKey key);
 
 /**
  * Read the value stored for key, or undefined when absent.
@@ -61,6 +67,9 @@ MalValue mal_map_object_get(const MalMapObject *map, MalValue key);
  * Delete the entry for key if present.
  */
 bool mal_map_object_delete(MalMapObject *map, MalValue key);
+
+/** Delete an entry using an already-canonicalized key. */
+bool mal_map_object_delete_canonical(MalMapObject *map, MalKey key);
 
 /**
  * Number of live entries.

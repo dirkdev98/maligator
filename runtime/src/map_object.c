@@ -64,19 +64,27 @@ MalKey mal_map_key_from_value(MalValue value) {
     return (MalKey) {.kind = MAL_KEY_STATIC, .value = value};
 }
 
-void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value) {
-    void *entry = mal_table_upsert_entry(map->entries, mal_map_key_from_value(key), nullptr);
+void mal_map_object_set_canonical(MalMapObject *map, MalKey key, MalValue value) {
+    void *entry = mal_table_upsert_entry(map->entries, key, nullptr);
     mal_table_entry_set_value(map->entries, entry, value);
     // Old map gaining a young key/value: remember it so the minor collector traces
     // its entries table. For a WeakMap this also re-registers it for the weak pass
     // (its young keys are weak), so a dead young key's entry is still cleaned and the
     // key reclaimed without dangling — tracing reaches both through `map`.
-    mal_gc_card(&map->object.header, key);
+    mal_gc_card(&map->object.header, key.value);
     mal_gc_card(&map->object.header, value);
 }
 
+void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value) {
+    mal_map_object_set_canonical(map, mal_map_key_from_value(key), value);
+}
+
+bool mal_map_object_has_canonical(const MalMapObject *map, MalKey key) {
+    return mal_table_lookup(map->entries, key).present;
+}
+
 bool mal_map_object_has(const MalMapObject *map, MalValue key) {
-    return mal_table_lookup(map->entries, mal_map_key_from_value(key)).present;
+    return mal_map_object_has_canonical(map, mal_map_key_from_value(key));
 }
 
 MalValue mal_map_object_get(const MalMapObject *map, MalValue key) {
@@ -89,8 +97,12 @@ MalValue mal_map_object_get(const MalMapObject *map, MalValue key) {
     return mal_table_entry_value(map->entries, lookup.entry);
 }
 
+bool mal_map_object_delete_canonical(MalMapObject *map, MalKey key) {
+    return mal_table_delete(map->entries, key);
+}
+
 bool mal_map_object_delete(MalMapObject *map, MalValue key) {
-    return mal_table_delete(map->entries, mal_map_key_from_value(key));
+    return mal_map_object_delete_canonical(map, mal_map_key_from_value(key));
 }
 
 usize mal_map_object_size(const MalMapObject *map) {

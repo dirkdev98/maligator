@@ -37,16 +37,6 @@ static MalValue mal_builtin_weak_map_prototype_set(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee);
 
-/** Store through an already-canonicalized keyed-collection key. */
-static void mal_builtin_map_store_canonical(
-    MalMapObject *map, MalKey key, MalValue value
-) {
-    void *entry = mal_table_upsert_entry(map->entries, key, nullptr);
-    mal_table_entry_set_value(map->entries, entry, value);
-    mal_gc_card(&map->object.header, key.value);
-    mal_gc_card(&map->object.header, value);
-}
-
 static void *mal_builtin_map_cached_entry(
     MalVm *vm, MalValue collection, MalMapObject *map, MalKey key
 ) {
@@ -204,7 +194,7 @@ static MalValue mal_builtin_map_construct(
                 mal_vm_iterator_close(vm, &record);
                 goto done;
             }
-            mal_builtin_map_store_canonical(
+            mal_map_object_set_canonical(
                 map, mal_map_key_from_value(roots[3]), roots[4]);
             continue;
         }
@@ -298,7 +288,7 @@ static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const M
             roots[4] = mal_table_entry_value(result->entries, lookup.entry);
         } else {
             roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
-            mal_builtin_map_store_canonical(result, key, roots[4]);
+            mal_map_object_set_canonical(result, key, roots[4]);
         }
 
         MalArrayObject *group_array = mal_value_to_array_object(roots[4]);
@@ -680,7 +670,7 @@ static MalValue mal_builtin_map_get_or_insert_computed(MalVm *vm, MalMapObject *
         return mal_value_new_undefined();
     }
 
-    mal_builtin_map_store_canonical(map, canonical_key, completion.value);
+    mal_map_object_set_canonical(map, canonical_key, completion.value);
     return completion.value;
 }
 

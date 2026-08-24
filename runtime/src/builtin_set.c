@@ -518,7 +518,7 @@ static MalMapObject *mal_builtin_set_new_result(
         MalKey key;
         void *entry;
         while (mal_table_iter_next(&iter, &key, &entry)) {
-            mal_map_object_set(result, key.value, key.value);
+            mal_map_object_set_canonical(result, key, key.value);
         }
     }
 
@@ -548,7 +548,7 @@ static MalValue mal_builtin_set_prototype_union(MalVm *vm, MalValue this_value, 
         MalKey key;
         void *entry;
         while (mal_table_iter_next(&iter, &key, &entry)) {
-            mal_map_object_set(result, key.value, key.value);
+            mal_map_object_set_canonical(result, key, key.value);
         }
         return mal_value_from_map_object(result);
     }
@@ -610,8 +610,8 @@ static MalValue mal_builtin_set_prototype_intersection(MalVm *vm, MalValue this_
             MalKey key;
             void *entry;
             while (mal_table_iter_next(&iter, &key, &entry)) {
-                if (mal_map_object_has(record.native_set, key.value)) {
-                    mal_map_object_set(result, key.value, key.value);
+                if (mal_map_object_has_canonical(record.native_set, key)) {
+                    mal_map_object_set_canonical(result, key, key.value);
                 }
             }
             return mal_value_from_map_object(result);
@@ -656,8 +656,8 @@ receiver_done:
             MalKey key;
             void *entry;
             while (mal_table_iter_next(&iter, &key, &entry)) {
-                if (mal_map_object_has(set, key.value)) {
-                    mal_map_object_set(result, key.value, key.value);
+                if (mal_map_object_has_canonical(set, key)) {
+                    mal_map_object_set_canonical(result, key, key.value);
                 }
             }
             return mal_value_from_map_object(result);
@@ -720,8 +720,8 @@ static MalValue mal_builtin_set_prototype_difference(MalVm *vm, MalValue this_va
             MalKey key;
             void *entry;
             while (mal_table_iter_next(&iter, &key, &entry)) {
-                if (mal_map_object_has(record.native_set, key.value)) {
-                    mal_map_object_delete(result, key.value);
+                if (mal_map_object_has_canonical(record.native_set, key)) {
+                    mal_map_object_delete_canonical(result, key);
                 }
             }
             mal_table_unpin(result->entries);
@@ -762,7 +762,7 @@ result_done:
             MalKey key;
             void *entry;
             while (mal_table_iter_next(&iter, &key, &entry)) {
-                mal_map_object_delete(result, key.value);
+                mal_map_object_delete_canonical(result, key);
             }
             return mal_value_from_map_object(result);
         }
@@ -820,10 +820,10 @@ static MalValue mal_builtin_set_prototype_symmetric_difference(MalVm *vm, MalVal
         MalKey key;
         void *entry;
         while (mal_table_iter_next(&iter, &key, &entry)) {
-            if (mal_map_object_has(set, key.value)) {
-                mal_map_object_delete(result, key.value);
+            if (mal_map_object_has_canonical(set, key)) {
+                mal_map_object_delete_canonical(result, key);
             } else {
-                mal_map_object_set(result, key.value, key.value);
+                mal_map_object_set_canonical(result, key, key.value);
             }
         }
         return mal_value_from_map_object(result);
@@ -889,7 +889,7 @@ static MalValue mal_builtin_set_prototype_is_subset_of(MalVm *vm, MalValue this_
         MalKey key;
         void *entry;
         while (mal_table_iter_next(&iter, &key, &entry)) {
-            if (!mal_map_object_has(record.native_set, key.value)) {
+            if (!mal_map_object_has_canonical(record.native_set, key)) {
                 return mal_value_new_boolean(false);
             }
         }
@@ -947,7 +947,7 @@ static MalValue mal_builtin_set_prototype_is_superset_of(MalVm *vm, MalValue thi
         MalKey key;
         void *entry;
         while (mal_table_iter_next(&iter, &key, &entry)) {
-            if (!mal_map_object_has(set, key.value)) {
+            if (!mal_map_object_has_canonical(set, key)) {
                 return mal_value_new_boolean(false);
             }
         }
@@ -1002,7 +1002,7 @@ static MalValue mal_builtin_set_prototype_is_disjoint_from(MalVm *vm, MalValue t
             MalKey key;
             void *entry;
             while (mal_table_iter_next(&iter, &key, &entry)) {
-                if (mal_map_object_has(record.native_set, key.value)) {
+                if (mal_map_object_has_canonical(record.native_set, key)) {
                     return mal_value_new_boolean(false);
                 }
             }
@@ -1044,7 +1044,7 @@ receiver_done:
             MalKey key;
             void *entry;
             while (mal_table_iter_next(&iter, &key, &entry)) {
-                if (mal_map_object_has(set, key.value)) {
+                if (mal_map_object_has_canonical(set, key)) {
                     return mal_value_new_boolean(false);
                 }
             }
