@@ -327,10 +327,29 @@ MalValue mal_regexp_create(MalVm *vm, MalString *pattern, MalString *flags) {
 // lastIndex helpers
 // ---------------------------------------------------------------------------
 
+static MalObject *regexp_exact_last_index_object(
+    MalVm *vm, MalValue value
+) {
+    if (!mal_value_is_regexp_object(value)) return nullptr;
+    MalObject *object = (MalObject *) mal_value_to_regexp_object(value);
+    if (object->shape != regexp_instance_shape(vm) || object->slots == nullptr) {
+        return nullptr;
+    }
+    return object;
+}
+
 static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
     MalValue v;
-    if (!mal_vm_get_property(vm, r, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), &v)) {
-        return false;
+    MalObject *exact = regexp_exact_last_index_object(vm, r);
+    if (exact != nullptr) {
+        v = exact->slots[exact->shape->props[0].slot];
+    } else {
+        if (!mal_vm_get_property(
+                vm, r,
+                mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX),
+                &v)) {
+            return false;
+        }
     }
     f64 num;
     if (!mal_vm_to_number(vm, v, &num)) {
@@ -342,6 +361,12 @@ static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
 }
 
 static bool regexp_set_last_index(MalVm *vm, MalValue r, i64 value) {
+    MalObject *exact = regexp_exact_last_index_object(vm, r);
+    if (exact != nullptr) {
+        exact->slots[exact->shape->props[0].slot] =
+            mal_value_from_f64((f64) value);
+        return true;
+    }
     bool ok = mal_vm_set_property(
         vm, r, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), mal_value_from_f64((f64) value), r
     );

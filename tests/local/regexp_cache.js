@@ -330,6 +330,30 @@ check(
 	"matchAll preserves non-extensible RegExp behavior",
 	[..."aba".matchAll(nonExtensibleRegExp)].length === 2,
 );
+const nonExtensibleExec = /a/g;
+Object.preventExtensions(nonExtensibleExec);
+check(
+	"exact lastIndex writes remain valid on non-extensible RegExps",
+	nonExtensibleExec.test("a") && nonExtensibleExec.lastIndex === 1,
+);
+
+const mutatingLastIndex = /a/g;
+let mutatingLastIndexCoercions = 0;
+const mutatingLastIndexValue = {
+	valueOf() {
+		mutatingLastIndexCoercions++;
+		Object.defineProperty(mutatingLastIndex, "lastIndex", { writable: false });
+		return 0;
+	},
+};
+mutatingLastIndex.lastIndex = mutatingLastIndexValue;
+const mutatingLastIndexError = caught(() => mutatingLastIndex.test("a"));
+check(
+	"lastIndex direct reads revalidate layout before the matching write",
+	mutatingLastIndexCoercions === 1 &&
+		mutatingLastIndexError instanceof TypeError &&
+		mutatingLastIndex.lastIndex === mutatingLastIndexValue,
+);
 
 if (typeof ShadowRealm === "function") {
 	const realmMatchAll = new ShadowRealm().evaluate(`() => {
