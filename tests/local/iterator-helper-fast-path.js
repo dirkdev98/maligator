@@ -154,4 +154,16 @@ assert(
 	"String iterator helper code points",
 );
 
+const nativeStringIterator = String.prototype[Symbol.iterator];
+let stringIteratorCalls = 0;
+String.prototype[Symbol.iterator] = function () {
+	stringIteratorCalls++;
+	return nativeStringIterator.call(this);
+};
+assert(
+	Iterator.from("xy").toArray().join("") === "xy",
+	"Iterator.from observes an overridden String iterator",
+);
+assert(stringIteratorCalls === 1, "overridden String iterator call count");
+
 console.log("iterator-helper-fast-path PASS");

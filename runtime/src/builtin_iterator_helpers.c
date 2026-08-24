@@ -1098,6 +1098,14 @@ static MalValue mal_iterator_from(MalVm *vm, MalValue this_value, const MalValue
     (void) callee;
     MalValue source = arg_count >= 1 ? args[0] : mal_value_new_undefined();
 
+    // A primitive string has no own overrides. While the String and String
+    // iterator prototypes remain watched, the observable lookup/call sequence
+    // can only produce the standard String iterator.
+    if (mal_primitive_method_protector && mal_value_is_string(source)) {
+        return mal_vm_new_builtin_iterator(
+            vm, MAL_ITERATOR_STRING_VALUES, source);
+    }
+
     // The exact built-in iterator already inherits the identity @@iterator and
     // its native next method. Watched prototypes plus absent own overrides make
     // the otherwise observable Get/Call/Get sequence side-effect free.
