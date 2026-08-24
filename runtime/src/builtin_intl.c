@@ -290,25 +290,11 @@ static MalString *intl_canonicalize(MalVm *vm, const MalString *tag) {
 static bool intl_array_contains(MalVm *vm, MalArrayObject *array, u32 count, const MalString *needle) {
     (void) vm;
     for (u32 i = 0; i < count; i++) {
-        MalKey key = mal_key_index(i);
         MalValue existing;
-        if (mal_vm_get_property(vm, mal_value_from_array_object(array), key, &existing)) {
-            if (mal_value_is_string(existing) && mal_string_length(mal_value_to_string(existing)) == mal_string_length(needle)) {
-                MalString *e = mal_value_to_string(existing);
-                const c16 *a = mal_string_code_units(e);
-                const c16 *b = mal_string_code_units(needle);
-                usize n = mal_string_length(needle);
-                bool eq = true;
-                for (usize j = 0; j < n; j++) {
-                    if (a[j] != b[j]) {
-                        eq = false;
-                        break;
-                    }
-                }
-                if (eq) {
-                    return true;
-                }
-            }
+        if (mal_array_object_dense_get(array, i, &existing) &&
+            mal_value_is_string(existing) &&
+            mal_string_equals(mal_value_to_string(existing), needle)) {
+            return true;
         }
     }
     return false;
@@ -863,13 +849,23 @@ static MalValue intl_supported_locales_of_impl(MalVm *vm, const MalValue *args, 
 
 /** ResolveLocale (simplified): the first canonical requested locale, else "en-US". */
 static MalString *intl_resolve_locale(MalVm *vm, MalValue locales) {
+    if (mal_value_is_undefined(locales)) {
+        return mal_intrinsic_ascii(vm, "en-US");
+    }
+    if (mal_value_is_string(locales)) {
+        return intl_canonicalize(vm, mal_value_to_string(locales));
+    }
+    if (mal_value_is_intl_object(locales) &&
+        mal_value_to_intl_object(locales)->kind == MAL_INTL_LOCALE) {
+        return mal_value_to_string(mal_value_to_intl_object(locales)->data);
+    }
+
     MalArrayObject *list = intl_canonicalize_locale_list(vm, locales);
     if (list == nullptr) {
         return nullptr;
     }
-    MalKey first_key = mal_key_index(0);
     MalValue first;
-    if (mal_vm_get_property(vm, mal_value_from_array_object(list), first_key, &first) && mal_value_is_string(first)) {
+    if (mal_array_object_dense_get(list, 0, &first) && mal_value_is_string(first)) {
         return mal_value_to_string(first);
     }
     return mal_intrinsic_ascii(vm, "en-US");
