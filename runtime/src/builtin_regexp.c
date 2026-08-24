@@ -246,6 +246,12 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
         }
         prev_backslash = (c == '\\') && !prev_backslash;
     }
+    // The overwhelmingly common source contains no literal delimiter or line
+    // terminator that EscapeRegExpPattern must rewrite. Primitive strings are
+    // immutable, so the retained [[OriginalSource]] is already the exact result.
+    if (capacity == n) {
+        return mal_value_from_string(src);
+    }
     if (!mal_checked_size_multiply(sizeof(c16), capacity, SIZE_MAX, &bytes)) {
         regexp_throw_string_length(vm);
         return mal_value_new_undefined();

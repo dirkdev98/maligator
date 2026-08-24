@@ -99,6 +99,11 @@ check(
 	"canonical flags preserve specification order",
 	new RegExp("a", "ymig").flags === "gimy",
 );
+check(
+	"RegExp source reuses plain content and still escapes special content",
+	new RegExp(["plain", "source", "123"].join("-")).source === "plain-source-123" &&
+		new RegExp("a/b\nc\u2028d").source === "a\\/b\\nc\\u2028d",
+);
 
 const canonicalMatchAll = /a/g;
 canonicalMatchAll.lastIndex = 1;
