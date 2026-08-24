@@ -178,6 +178,60 @@ check(
 		(1234.567).toLocaleString("de-DE", customNumberLocaleOptions) ===
 			customNumberFormatter.format(1234.567),
 );
+
+function coercibleMathValue(order, name, value) {
+	return {
+		valueOf() {
+			order.push(name);
+			return value;
+		},
+	};
+}
+const minOrder = [];
+const minResult = Math.min(
+	coercibleMathValue(minOrder, "first", NaN),
+	coercibleMathValue(minOrder, "second", 4),
+	coercibleMathValue(minOrder, "third", -0),
+);
+const maxOrder = [];
+const maxResult = Math.max(
+	coercibleMathValue(maxOrder, "first", NaN),
+	coercibleMathValue(maxOrder, "second", -4),
+	coercibleMathValue(maxOrder, "third", 0),
+);
+check(
+	"Math min and max coerce every argument before returning NaN",
+	Number.isNaN(minResult) &&
+		minOrder.join(",") === "first,second,third" &&
+		Number.isNaN(maxResult) &&
+		maxOrder.join(",") === "first,second,third",
+);
+check(
+	"Math min and max preserve empty and signed-zero results",
+	Math.min() === Infinity &&
+		Math.max() === -Infinity &&
+		Object.is(Math.min(0, -0, 0), -0) &&
+		Object.is(Math.max(-0, 0, -0), 0),
+);
+const hypotOrder = [];
+const hypotResult = Math.hypot(
+	coercibleMathValue(hypotOrder, "first", NaN),
+	coercibleMathValue(hypotOrder, "second", Infinity),
+	coercibleMathValue(hypotOrder, "third", 3),
+);
+const wideHypot = [3, 4];
+while (wideHypot.length < 24) wideHypot.push(0);
+check(
+	"Math hypot preserves coercion order, Infinity priority, and heap spill",
+	hypotResult === Infinity &&
+		hypotOrder.join(",") === "first,second,third" &&
+		Math.hypot(...wideHypot) === 5,
+);
+check(
+	"Math sumPrecise keeps exact small accumulations",
+	Math.sumPrecise([1, 1e100, 1, -1e100, 3.5, -0]) === 5.5 &&
+		Object.is(Math.sumPrecise([]), -0),
+);
 const minimumBinary = Number.MIN_VALUE.toString(2);
 check(
 	"Number arbitrary-radix formatting is shortest and covers binary boundaries",

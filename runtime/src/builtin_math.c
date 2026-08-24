@@ -5,10 +5,12 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "builtin_iterator.h"
+#include "checked_size.h"
 #include "float16.h"
 #include "object_ops.h"
 #include "value.h"
@@ -328,13 +330,20 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
     (void) new_target;
     (void) callee;
 
-    f64 *coerced = nullptr;
-    if (arg_count > 0) {
-        coerced = malloc(sizeof(f64) * (usize) arg_count);
+    f64 inline_coerced[16];
+    f64 *coerced = inline_coerced;
+    bool heap_coerced = arg_count > (i32) countof(inline_coerced);
+    if (heap_coerced) {
+        usize bytes;
+        if (!mal_checked_size_multiply(sizeof(f64), (usize) arg_count, SIZE_MAX, &bytes) ||
+            (coerced = malloc(bytes)) == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_nan();
+        }
     }
     for (i32 i = 0; i < arg_count; i++) {
         if (!mal_vm_to_number(vm, args[i], &coerced[i])) {
-            free(coerced);
+            if (heap_coerced) free(coerced);
             return mal_value_new_nan();
         }
     }
@@ -350,11 +359,11 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
     }
 
     if (any_infinity) {
-        free(coerced);
+        if (heap_coerced) free(coerced);
         return mal_ops_number_value(INFINITY);
     }
     if (any_nan) {
-        free(coerced);
+        if (heap_coerced) free(coerced);
         return mal_value_new_nan();
     }
 
@@ -367,7 +376,7 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
         }
     }
     if (max_abs == 0.0) {
-        free(coerced);
+        if (heap_coerced) free(coerced);
         return mal_ops_number_value(0.0);
     }
     f64 sum = 0.0;
@@ -375,30 +384,23 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
         f64 scaled = coerced[i] / max_abs;
         sum += scaled * scaled;
     }
-    free(coerced);
+    if (heap_coerced) free(coerced);
     return mal_ops_number_value(max_abs * sqrt(sum));
 }
 
-// Math.min / Math.max coerce *all* arguments first (ToNumber side effects must
-// all run), then compare. NaN poisons the result; +0 is treated as greater
-// than -0 so min/max pick the spec-correct signed zero.
+// Math.min / Math.max must coerce *all* arguments in order. Folding each
+// successfully coerced Number into native state is not observable, so no
+// temporary argument array is needed. NaN poisons the eventual result; +0 is
+// treated as greater than -0 so min/max pick the spec-correct signed zero.
 static MalValue mal_builtin_math_min_max(MalVm *vm, const MalValue *args, i32 arg_count, bool is_max) {
-    f64 *coerced = nullptr;
-    if (arg_count > 0) {
-        coerced = malloc(sizeof(f64) * (usize) arg_count);
-    }
-    for (i32 i = 0; i < arg_count; i++) {
-        if (!mal_vm_to_number(vm, args[i], &coerced[i])) {
-            free(coerced);
-            return mal_value_new_nan();
-        }
-    }
-
     f64 result = is_max ? -INFINITY : INFINITY;
     bool result_is_neg_zero = false;
     bool saw_nan = false;
     for (i32 i = 0; i < arg_count; i++) {
-        f64 value = coerced[i];
+        f64 value;
+        if (!mal_vm_to_number(vm, args[i], &value)) {
+            return mal_value_new_nan();
+        }
         if (isnan(value)) {
             saw_nan = true;
             continue;
@@ -424,7 +426,6 @@ static MalValue mal_builtin_math_min_max(MalVm *vm, const MalValue *args, i32 ar
             }
         }
     }
-    free(coerced);
 
     if (saw_nan) {
         return mal_value_new_nan();
@@ -536,13 +537,33 @@ typedef struct {
     usize count;
     usize capacity;
     f64 overflow; // accumulated multiples of 2^1024 (carries beyond MAX_VALUE)
+    f64 inline_partials[16];
 } MalSumPartials;
 
-static bool mal_sum_partials_push(MalSumPartials *p, f64 value) {
+static bool mal_sum_partials_push(MalVm *vm, MalSumPartials *p, f64 value) {
     if (p->count == p->capacity) {
-        usize new_capacity = p->capacity == 0 ? 16 : p->capacity * 2;
-        f64 *grown = realloc(p->partials, sizeof(f64) * new_capacity);
+        usize required;
+        usize new_capacity;
+        usize bytes;
+        if (!mal_checked_size_add(p->count, 1, SIZE_MAX, &required) ||
+            !mal_checked_size_growth(
+                p->capacity, required, countof(p->inline_partials),
+                SIZE_MAX / sizeof(f64), &new_capacity) ||
+            !mal_checked_size_multiply(sizeof(f64), new_capacity, SIZE_MAX, &bytes)) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        f64 *grown;
+        if (p->partials == p->inline_partials) {
+            grown = malloc(bytes);
+            if (grown != nullptr) {
+                memcpy(grown, p->inline_partials, sizeof(f64) * p->count);
+            }
+        } else {
+            grown = realloc(p->partials, bytes);
+        }
         if (grown == nullptr) {
+            mal_vm_throw_allocation_error(vm);
             return false;
         }
         p->partials = grown;
@@ -552,7 +573,7 @@ static bool mal_sum_partials_push(MalSumPartials *p, f64 value) {
     return true;
 }
 
-static bool mal_sum_partials_add(MalSumPartials *p, f64 x) {
+static bool mal_sum_partials_add(MalVm *vm, MalSumPartials *p, f64 x) {
     usize i = 0;
     for (usize j = 0; j < p->count; j++) {
         f64 y = p->partials[j];
@@ -596,10 +617,10 @@ static bool mal_sum_partials_add(MalSumPartials *p, f64 x) {
         x = hi;
     }
     p->count = i;
-    return mal_sum_partials_push(p, x);
+    return mal_sum_partials_push(vm, p, x);
 }
 
-static f64 mal_sum_partials_total(MalSumPartials *p) {
+static f64 mal_sum_partials_total(MalVm *vm, MalSumPartials *p) {
     // Reconcile carried 2^1024 overflow units. true_sum = (partials) +
     // overflow*2^1024. Two regimes:
     //  - In range: the partials carry a large opposite-signed value that pulls
@@ -634,8 +655,10 @@ static f64 mal_sum_partials_total(MalSumPartials *p) {
 
         f64 half = sign * ldexp(1.0, 1023); // 2^1023
         p->overflow = 0.0;
-        mal_sum_partials_add(p, half);
-        mal_sum_partials_add(p, half);
+        if (!mal_sum_partials_add(vm, p, half) ||
+            !mal_sum_partials_add(vm, p, half)) {
+            return NAN;
+        }
 
         if (p->overflow != 0.0) {
             // Boundary regime: |true| is within an ulp of 2^1024. The true
@@ -715,6 +738,8 @@ static MalValue mal_builtin_math_sum_precise(MalVm *vm, MalValue this_value, con
     // State: track non-finite contributions; finite values feed the exact
     // accumulator. -0 only matters when the entire (non-empty) sum is zero.
     MalSumPartials partials = {0};
+    partials.partials = partials.inline_partials;
+    partials.capacity = countof(partials.inline_partials);
     bool seen_pos_inf = false;
     bool seen_neg_inf = false;
     bool seen_nan = false;
@@ -762,7 +787,7 @@ static MalValue mal_builtin_math_sum_precise(MalVm *vm, MalValue this_value, con
             any_nonneg_zero = true; // a nonzero, or a +0
         }
         if (n != 0.0) {
-            if (!mal_sum_partials_add(&partials, n)) {
+            if (!mal_sum_partials_add(vm, &partials, n)) {
                 error = true;
                 break;
             }
@@ -782,7 +807,11 @@ static MalValue mal_builtin_math_sum_precise(MalVm *vm, MalValue this_value, con
     } else if (!any_value) {
         result = mal_value_from_f64(-0.0); // empty list
     } else {
-        f64 total = mal_sum_partials_total(&partials);
+        f64 total = mal_sum_partials_total(vm, &partials);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            result = mal_value_new_nan();
+            goto done;
+        }
         if (total == 0.0) {
             // All contributions were zero: -0 unless a +0 (or recovered
             // nonzero) appeared.
@@ -792,7 +821,10 @@ static MalValue mal_builtin_math_sum_precise(MalVm *vm, MalValue this_value, con
         }
     }
 
-    free(partials.partials);
+done:
+    if (partials.partials != partials.inline_partials) {
+        free(partials.partials);
+    }
     return result;
 }
 
