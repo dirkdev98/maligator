@@ -3271,11 +3271,21 @@ bool mal_vm_to_primitive(MalVm *vm, MalValue value, MalToPrimitiveHint hint, Mal
 }
 
 bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out) {
+    // Numbers dominate coercion-heavy native call sites (Math, typed views,
+    // string indices, and Date fields). Avoid the cross-TU ToPrimitive call
+    // and its object test when the value is already known to be a Number.
+    if (mal_ops_is_number(value)) {
+        *out = mal_ops_number_as_f64(value);
+        return true;
+    }
+
     // Objects first go through ToPrimitive(number): @@toPrimitive, else the
     // OrdinaryToPrimitive order valueOf → toString.
-    MalValue primitive;
-    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_NUMBER, &primitive)) {
-        return false;
+    MalValue primitive = value;
+    if (mal_value_is_object(value)) {
+        if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_NUMBER, &primitive)) {
+            return false;
+        }
     }
 
     // ToNumber proper: BigInt and Symbol are not convertible.
