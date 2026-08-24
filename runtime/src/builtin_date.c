@@ -819,16 +819,26 @@ static f64 date_parse_string_value(MalString *string) {
 // String rendering
 // ---------------------------------------------------------------------------
 
+static const byte DATE_DIGIT_PAIRS[] =
+    "00010203040506070809"
+    "10111213141516171819"
+    "20212223242526272829"
+    "30313233343536373839"
+    "40414243444546474849"
+    "50515253545556575859"
+    "60616263646566676869"
+    "70717273747576777879"
+    "80818283848586878889"
+    "90919293949596979899";
+
 static byte *date_write_two_digits(byte *buf, i32 value) {
-    buf[0] = (byte) ('0' + value / 10);
-    buf[1] = (byte) ('0' + value % 10);
+    memcpy(buf, DATE_DIGIT_PAIRS + (usize) value * 2, 2);
     return buf + 2;
 }
 
 static byte *date_write_three_digits(byte *buf, i32 value) {
     buf[0] = (byte) ('0' + value / 100);
-    buf[1] = (byte) ('0' + (value / 10) % 10);
-    buf[2] = (byte) ('0' + value % 10);
+    memcpy(buf + 1, DATE_DIGIT_PAIRS + (usize) (value % 100) * 2, 2);
     return buf + 3;
 }
 
