@@ -65,9 +65,34 @@ MalArrayBufferObject *mal_array_buffer_object_new(
 }
 
 MalArrayBufferObject *mal_array_buffer_object_new_uninitialized(
-    MalHeap *heap, MalObject *prototype, u32 byte_length) {
+    MalHeap *heap, MalObject *prototype,
+    u32 byte_length, u32 max_byte_length,
+    bool resizable, bool shared) {
     return mal_array_buffer_object_new_impl(
-        heap, prototype, byte_length, byte_length, false, false, false);
+        heap, prototype, byte_length, max_byte_length,
+        resizable, shared, false);
+}
+
+MalArrayBufferObject *mal_array_buffer_object_move_store(
+    MalHeap *heap, MalObject *prototype,
+    MalArrayBufferObject *source, bool preserve_resizability,
+    bool immutable
+) {
+    MalArrayBufferObject *result = mal_array_buffer_object_new_impl(
+        heap, prototype, 0, 0, false, false, false);
+    result->data = source->data;
+    result->byte_length = source->byte_length;
+    result->max_byte_length = preserve_resizability
+        ? source->max_byte_length : source->byte_length;
+    result->resizable = preserve_resizability && source->resizable;
+    result->immutable = immutable;
+    result->sensitive = source->sensitive;
+
+    source->data = nullptr;
+    source->byte_length = 0;
+    source->detached = true;
+    source->sensitive = false;
+    return result;
 }
 
 MalArrayBufferObject *mal_array_buffer_object_new_sensitive(

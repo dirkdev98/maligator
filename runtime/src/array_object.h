@@ -101,6 +101,34 @@ bool mal_array_object_dense_append_many(
 );
 
 /**
+ * Append values into the unpublished tail of a native-built dense Array. Unlike
+ * dense_append_many, the Array may already have its final length (the usual
+ * ArraySpeciesCreate/copy-by-change shape); `start` must equal dense_count. The
+ * helper reserves before publishing, applies card barriers, and grows length
+ * only when the builder started from length zero.
+ */
+bool mal_array_object_dense_build_values(
+    MalArrayObject *array, u32 start, const MalValue *values, u32 count
+);
+
+/** Append `count` copies of one value into an unpublished dense tail. */
+bool mal_array_object_dense_build_fill(
+    MalArrayObject *array, u32 start, u32 count, MalValue value
+);
+
+/**
+ * Append a source Array range into the unpublished tail of a native-built dense
+ * result. Source holes are either preserved or materialized as undefined, and
+ * the range can be read in reverse order. The source and destination must be
+ * distinct and no observable operation may run while the raw range is copied.
+ */
+bool mal_array_object_dense_build_range(
+    MalArrayObject *array, u32 start,
+    const MalArrayObject *source, u32 source_start, u32 count,
+    bool reverse, bool holes_as_undefined
+);
+
+/**
  * Leaf bulk kernels over a fully materialized dense region. Callers must prove
  * that ordinary indexed property operations cannot invoke user code and that
  * any required extensibility checks have already passed. These helpers apply

@@ -202,6 +202,90 @@ bool mal_array_object_dense_append_many(
     return true;
 }
 
+static bool mal_array_object_dense_build_prepare(
+    MalArrayObject *array, u32 start, u32 count
+) {
+    if (array->dense_deopted || !array->object.extensible ||
+        array->dense_count != start ||
+        count > UINT32_MAX - start) {
+        return false;
+    }
+    u32 end = start + count;
+    if (end > array->length && !array->length_writable) {
+        return false;
+    }
+    if (array->length != start && array->length < end) {
+        return false;
+    }
+    return mal_array_object_dense_reserve(array, end);
+}
+
+bool mal_array_object_dense_build_values(
+    MalArrayObject *array, u32 start, const MalValue *values, u32 count
+) {
+    if (!mal_array_object_dense_build_prepare(array, start, count)) {
+        return false;
+    }
+    for (u32 index = 0; index < count; index++) {
+        MalValue value = values[index];
+        array->elements[start + index] = value;
+        mal_gc_card(&array->object.header, value);
+    }
+    array->dense_count = start + count;
+    if (array->length < array->dense_count) {
+        array->length = array->dense_count;
+    }
+    return true;
+}
+
+bool mal_array_object_dense_build_fill(
+    MalArrayObject *array, u32 start, u32 count, MalValue value
+) {
+    if (!mal_array_object_dense_build_prepare(array, start, count)) {
+        return false;
+    }
+    for (u32 index = 0; index < count; index++) {
+        array->elements[start + index] = value;
+        mal_gc_card(&array->object.header, value);
+    }
+    array->dense_count = start + count;
+    if (array->length < array->dense_count) {
+        array->length = array->dense_count;
+    }
+    return true;
+}
+
+bool mal_array_object_dense_build_range(
+    MalArrayObject *array, u32 start,
+    const MalArrayObject *source, u32 source_start, u32 count,
+    bool reverse, bool holes_as_undefined
+) {
+    if (array == source || source_start > source->length ||
+        count > source->length - source_start ||
+        !mal_array_object_dense_build_prepare(array, start, count)) {
+        return false;
+    }
+
+    for (u32 index = 0; index < count; index++) {
+        u32 source_index = reverse
+            ? source_start + count - 1 - index
+            : source_start + index;
+        MalValue value = source_index < source->dense_count
+            ? source->elements[source_index]
+            : mal_value_new_array_hole();
+        if (holes_as_undefined && mal_value_is_array_hole(value)) {
+            value = mal_value_new_undefined();
+        }
+        array->elements[start + index] = value;
+        mal_gc_card(&array->object.header, value);
+    }
+    array->dense_count = start + count;
+    if (array->length < array->dense_count) {
+        array->length = array->dense_count;
+    }
+    return true;
+}
+
 static void mal_array_object_dense_barrier_range(
     MalArrayObject *array, u32 start, u32 end
 ) {

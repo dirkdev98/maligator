@@ -274,13 +274,26 @@ static MalValue mal_builtin_array_buffer_slice(MalVm *vm, MalValue this_value, c
     if (!mal_array_buffer_species_constructor(vm, this_value, MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR, &ctor)) {
         return mal_value_new_undefined();
     }
-    MalValue len_arg = mal_value_from_i32((i32) new_length);
-    MalCompletion completion = mal_vm_construct_value(vm, ctor, &len_arg, 1);
-    if (completion.kind == MAL_COMPLETION_THROW) {
-        vm->completion = completion;
-        return mal_value_new_undefined();
+    MalValue result_value;
+    bool direct_result =
+        ctor == vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR];
+    if (direct_result) {
+        result_value = mal_value_from_array_buffer_object(
+            mal_array_buffer_object_new_uninitialized(
+                &vm->heap,
+                mal_value_to_object(
+                    vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+                new_length, new_length, false, false));
+    } else {
+        MalValue len_arg = mal_value_from_i32((i32) new_length);
+        MalCompletion completion =
+            mal_vm_construct_value(vm, ctor, &len_arg, 1);
+        if (completion.kind == MAL_COMPLETION_THROW) {
+            vm->completion = completion;
+            return mal_value_new_undefined();
+        }
+        result_value = completion.value;
     }
-    MalValue result_value = completion.value;
 
     // The constructed value must itself be a (non-shared, non-detached) ArrayBuffer
     // at least newLen bytes long, and distinct from the source.
@@ -317,6 +330,9 @@ static MalValue mal_builtin_array_buffer_slice(MalVm *vm, MalValue this_value, c
         u32 copy = new_length < available ? new_length : available;
         if (copy > 0) {
             memcpy(result->data, buffer->data + start, copy);
+        }
+        if (direct_result && copy < new_length) {
+            memset(result->data + copy, 0, new_length - copy);
         }
     }
     return result_value;
@@ -380,20 +396,26 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
     bool resizable = preserve_resizability && buffer->resizable;
     u32 max_byte_length = resizable ? buffer->max_byte_length : new_length;
 
-    MalArrayBufferObject *result = mal_array_buffer_object_new(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        new_length,
-        max_byte_length,
-        resizable,
-        false
-    );
+    MalObject *prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
+    if (new_length == buffer->byte_length &&
+        (preserve_resizability || !buffer->resizable)) {
+        MalArrayBufferObject *result = mal_array_buffer_object_move_store(
+            &vm->heap, prototype, buffer, preserve_resizability, false);
+        return mal_value_from_array_buffer_object(result);
+    }
+
+    MalArrayBufferObject *result = mal_array_buffer_object_new_uninitialized(
+        &vm->heap, prototype, new_length, max_byte_length, resizable, false);
     // The contents move, so the scrub-before-release contract moves with them:
     // transferring a derived key must not leave an unscrubbed copy behind.
     result->sensitive = buffer->sensitive;
     u32 copy = new_length < buffer->byte_length ? new_length : buffer->byte_length;
     if (copy > 0) {
         memcpy(result->data, buffer->data, copy);
+    }
+    if (new_length > copy) {
+        memset(result->data + copy, 0, new_length - copy);
     }
     mal_array_buffer_object_detach(buffer);
     return mal_value_from_array_buffer_object(result);
@@ -449,19 +471,25 @@ static MalValue mal_builtin_array_buffer_transfer_to_immutable(MalVm *vm, MalVal
         return mal_value_new_undefined();
     }
 
-    MalArrayBufferObject *result = mal_array_buffer_object_new(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        new_length,
-        new_length,
-        false,
-        false
-    );
+    MalObject *prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
+    if (new_length == buffer->byte_length && !buffer->resizable) {
+        MalArrayBufferObject *result = mal_array_buffer_object_move_store(
+            &vm->heap, prototype, buffer, false, true);
+        return mal_value_from_array_buffer_object(result);
+    }
+
+    MalArrayBufferObject *result = mal_array_buffer_object_new_uninitialized(
+        &vm->heap, prototype,
+        new_length, new_length, false, false);
     result->immutable = true;
     result->sensitive = buffer->sensitive;
     u32 copy = new_length < buffer->byte_length ? new_length : buffer->byte_length;
     if (copy > 0) {
         memcpy(result->data, buffer->data, copy);
+    }
+    if (new_length > copy) {
+        memset(result->data + copy, 0, new_length - copy);
     }
     mal_array_buffer_object_detach(buffer);
     return mal_value_from_array_buffer_object(result);
@@ -503,13 +531,10 @@ static MalValue mal_builtin_array_buffer_slice_to_immutable(MalVm *vm, MalValue 
     }
     u32 new_length = final > first ? final - first : 0;
 
-    MalArrayBufferObject *result = mal_array_buffer_object_new(
+    MalArrayBufferObject *result = mal_array_buffer_object_new_uninitialized(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        new_length,
-        new_length,
-        false,
-        false
+        new_length, new_length, false, false
     );
     result->immutable = true;
     result->sensitive = buffer->sensitive;
@@ -619,13 +644,26 @@ static MalValue mal_shared_array_buffer_slice(MalVm *vm, MalValue this_value, co
     if (!mal_array_buffer_species_constructor(vm, this_value, MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR, &ctor)) {
         return mal_value_new_undefined();
     }
-    MalValue len_arg = mal_value_from_i32((i32) new_length);
-    MalCompletion completion = mal_vm_construct_value(vm, ctor, &len_arg, 1);
-    if (completion.kind == MAL_COMPLETION_THROW) {
-        vm->completion = completion;
-        return mal_value_new_undefined();
+    MalValue result_value;
+    bool direct_result =
+        ctor == vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR];
+    if (direct_result) {
+        result_value = mal_value_from_array_buffer_object(
+            mal_array_buffer_object_new_uninitialized(
+                &vm->heap,
+                mal_value_to_object(
+                    vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE]),
+                new_length, new_length, false, true));
+    } else {
+        MalValue len_arg = mal_value_from_i32((i32) new_length);
+        MalCompletion completion =
+            mal_vm_construct_value(vm, ctor, &len_arg, 1);
+        if (completion.kind == MAL_COMPLETION_THROW) {
+            vm->completion = completion;
+            return mal_value_new_undefined();
+        }
+        result_value = completion.value;
     }
-    MalValue result_value = completion.value;
     if (!mal_value_is_array_buffer_object(result_value) || !mal_value_to_array_buffer_object(result_value)->shared) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                            "Species constructor did not return a SharedArrayBuffer");
@@ -645,6 +683,9 @@ static MalValue mal_shared_array_buffer_slice(MalVm *vm, MalValue this_value, co
         u32 copy = new_length < available ? new_length : available;
         if (copy > 0) {
             memcpy(result->data, buffer->data + start, copy);
+        }
+        if (direct_result && copy < new_length) {
+            memset(result->data + copy, 0, new_length - copy);
         }
     }
     return result_value;

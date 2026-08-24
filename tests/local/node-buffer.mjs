@@ -125,8 +125,13 @@ check(
 );
 
 const allocated = Buffer.alloc(5, "ab");
+const repeatedFill = Buffer.alloc(257, "abc");
 const unsafe = Buffer.allocUnsafe(4);
 check("alloc fill", allocated.toString() === "ababa");
+check(
+	"alloc repeats native string fill",
+	repeatedFill[0] === 97 && repeatedFill[128] === 99 && repeatedFill[256] === 98,
+);
 check(
 	"allocUnsafe is safely zero-filled",
 	unsafe.length === 4 &&
@@ -140,6 +145,22 @@ const concatenated = Buffer.concat([Buffer.from("ab"), new Uint8Array([99, 100])
 const padded = Buffer.concat([Buffer.from("x")], 3);
 check("concat copies Buffer and Uint8Array", concatenated.toString() === "abcd");
 check("concat totalLength truncates or zero-pads", padded.toString("hex") === "780000");
+
+const typedCopies = [
+	Buffer.from(new Int8Array([-1]))[0],
+	Buffer.from(new Uint8Array([254]))[0],
+	Buffer.from(new Uint8ClampedArray([253]))[0],
+	Buffer.from(new Int16Array([257]))[0],
+	Buffer.from(new Uint16Array([258]))[0],
+	Buffer.from(new Int32Array([-2]))[0],
+	Buffer.from(new Uint32Array([260]))[0],
+	Buffer.from(new Float32Array([261.75]))[0],
+	Buffer.from(new Float64Array([-3.5]))[0],
+];
+check(
+	"Buffer.from converts every numeric TypedArray variant",
+	typedCopies.join() === "255,254,253,1,2,254,4,5,253",
+);
 check(
 	"static and prototype compare",
 	Buffer.compare(Buffer.from("a"), Buffer.from("b")) === -1 &&
@@ -220,11 +241,16 @@ check(
 	"API-specific encoding fallbacks",
 	Buffer.from("é", null).toString("hex") === "c3a9" &&
 		Buffer.byteLength("é", "unknown") === 2 &&
+		Buffer.byteLength("61zz", "hex") === 1 &&
+		Buffer.byteLength("aGVs bG8=!!", "base64") === 5 &&
 		Buffer.from("abc").toString("utf8", -1) === "abc",
 );
 check("constructor number form", Buffer(2).length === 2 && new Buffer(2).length === 2);
 
 throws("Buffer.from rejects numbers", TypeError, () => Buffer.from(3));
+throws("Buffer.from rejects BigInt typed arrays", TypeError, () =>
+	Buffer.from(new BigInt64Array([1n])),
+);
 throws("unknown encoding rejects", TypeError, () => Buffer.from("x", "wat"));
 throws("negative allocation rejects", RangeError, () => Buffer.alloc(-1));
 throws("missing allocation size rejects", TypeError, () => Buffer.alloc());

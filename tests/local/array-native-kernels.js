@@ -36,6 +36,11 @@ async function main() {
 		"Array.from observes iterator Get",
 		Array.from(iterable).join() === "7,8,9" && iteratorGets === 1,
 	);
+	const fromHoles = Array.from([, 1]);
+	check(
+		"Array.from materializes iterator holes",
+		0 in fromHoles && fromHoles[0] === undefined && fromHoles[1] === 1,
+	);
 	const badIterator = [1];
 	badIterator[Symbol.iterator] = 1;
 	check(
@@ -97,6 +102,29 @@ async function main() {
 		slicedHole.length === 2 && !(0 in slicedHole) && slicedHole[1] === 1,
 	);
 	check("concat", [1, 2].concat([3, 4], 5).join() === "1,2,3,4,5");
+	const concatenatedHole = [0].concat([, 2]);
+	check(
+		"concat preserves holes",
+		concatenatedHole.length === 3 &&
+			concatenatedHole[0] === 0 &&
+			!(1 in concatenatedHole) &&
+			concatenatedHole[2] === 2,
+	);
+	const shrinkingSlice = [1, 2, 3];
+	shrinkingSlice.constructor = {
+		get [Symbol.species]() {
+			shrinkingSlice.length = 1;
+			return Array;
+		},
+	};
+	const shrunkSlice = shrinkingSlice.slice(0, 3);
+	check(
+		"slice revalidates after species side effects",
+		shrunkSlice.length === 3 &&
+			shrunkSlice[0] === 1 &&
+			!(1 in shrunkSlice) &&
+			!(2 in shrunkSlice),
+	);
 	check("join", [1, null, undefined, 4].join(":") === "1:::4");
 	const reversed = [1, , 3, 4];
 	reversed.reverse();
@@ -160,6 +188,11 @@ async function main() {
 	copiedWithin.copyWithin(1, 3);
 	check("copyWithin", copiedWithin.join() === "1,4,5,4,5");
 	check("with", source.with(2, 9).join() === "1,2,9,4,5");
+	const withHole = [, 1].with(1, 2);
+	check(
+		"with materializes holes",
+		0 in withHole && withHole[0] === undefined && withHole[1] === 2,
+	);
 	const copyHole = [, 1].toReversed();
 	check(
 		"toReversed densifies holes",
@@ -170,6 +203,11 @@ async function main() {
 	);
 	check("toSorted", [3, 1, 2].toSorted((a, b) => a - b).join() === "1,2,3");
 	check("toSpliced", source.toSpliced(1, 2, 8, 9).join() === "1,8,9,4,5");
+	const splicedHole = [, 1].toSpliced(1, 0, 2);
+	check(
+		"toSpliced materializes copied holes",
+		0 in splicedHole && splicedHole[0] === undefined && splicedHole.join() === ",2,1",
+	);
 	check("toString", [1, 2, 3].toString() === "1,2,3");
 	check("toLocaleString", [1, 2, 3].toLocaleString() === "1,2,3");
 

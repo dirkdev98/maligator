@@ -56,6 +56,27 @@ static MalArrayObject *mal_builtin_array_clean_dense(
     return array;
 }
 
+/**
+ * Exact ordinary Array result whose unpublished dense tail can be populated
+ * without re-entering property machinery. This mirrors the guarded direct
+ * CreateDataProperty path below, while additionally requiring the builder's
+ * next index to match the vector frontier.
+ */
+static MalArrayObject *mal_builtin_array_dense_builder(
+    MalValue value, u32 start
+) {
+    if (!mal_value_is_array_object(value)) {
+        return nullptr;
+    }
+    MalArrayObject *array = mal_value_to_array_object(value);
+    if (array->dense_deopted || !array->object.extensible ||
+        array->dense_count != start || array->object.fast_elements_proto ||
+        array->object.is_prototype || array->object.watched_method_proto) {
+        return nullptr;
+    }
+    return array;
+}
+
 static bool mal_builtin_array_try_get_wide(MalVm *vm, MalValue this_value, f64 index, MalValue *out) {
     if (mal_value_is_string(this_value)) {
         MalString *string = mal_value_to_string(this_value);
@@ -559,8 +580,11 @@ static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, co
     }
 
     MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) arg_count);
-    for (i32 i = 0; i < arg_count; i++) {
-        mal_builtin_array_store_index(array, (u32) i, args[i]);
+    if (!mal_array_object_dense_build_values(
+            array, 0, args, (u32) arg_count)) {
+        for (i32 i = 0; i < arg_count; i++) {
+            mal_builtin_array_store_index(array, (u32) i, args[i]);
+        }
     }
 
     return mal_value_from_array_object(array);
@@ -588,8 +612,11 @@ static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalVa
     // must observe Construct(C, « len »), CreateDataPropertyOrThrow, and Set(length).
     if (plain_mode) {
         MalArrayObject *array = mal_intrinsic_new_dense_array(vm, length);
-        for (i32 i = 0; i < arg_count; i++) {
-            mal_builtin_array_store_index(array, (u32) i, args[i]);
+        if (!mal_array_object_dense_build_values(
+                array, 0, args, length)) {
+            for (i32 i = 0; i < arg_count; i++) {
+                mal_builtin_array_store_index(array, (u32) i, args[i]);
+            }
         }
         return mal_value_from_array_object(array);
     }
@@ -800,6 +827,21 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
             return mal_value_new_undefined();
         }
         a = c.value;
+    }
+
+    // The exact Array values iterator materializes holes as undefined. Once its
+    // identity and the source's index-clean state have been revalidated, copy
+    // the private result in one native builder pass instead of performing a
+    // Has/Get/CreateDataProperty round trip per element.
+    if (direct_array_copy && plain_mode) {
+        MalArrayObject *source_array = mal_builtin_array_clean_dense(vm, source);
+        MalArrayObject *result_array = mal_builtin_array_dense_builder(a, 0);
+        if (source_array != nullptr && result_array != nullptr &&
+            source_array->length == length &&
+            mal_array_object_dense_build_range(
+                result_array, 0, source_array, 0, length, false, true)) {
+            return a;
+        }
     }
 
     // The array-like index Get may invoke a getter and the mapfn re-enters JS;
@@ -1934,6 +1976,23 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
         return mal_value_new_undefined();
     }
 
+    if (result_length <= (f64) UINT32_MAX && start <= (f64) UINT32_MAX) {
+        MalArrayObject *source_array =
+            mal_builtin_array_clean_dense(vm, this_value);
+        MalArrayObject *result_array =
+            mal_builtin_array_dense_builder(result, 0);
+        u32 source_start = (u32) start;
+        u32 copy_count = (u32) result_length;
+        if (source_array != nullptr && result_array != nullptr &&
+            (f64) source_start == start &&
+            (f64) copy_count == result_length &&
+            mal_array_object_dense_build_range(
+                result_array, 0, source_array, source_start, copy_count,
+                false, false)) {
+            return result;
+        }
+    }
+
     for (f64 index = 0; index < result_length; index++) {
         MalValue element;
         if (mal_builtin_array_try_get_wide(vm, this_value, start + index, &element)) {
@@ -1990,6 +2049,24 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
             if (result_length + source_length > MAL_NUMBER_MAX_SAFE_INTEGER) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid array length");
                 return mal_value_new_undefined();
+            }
+
+            if (result_length <= (f64) UINT32_MAX &&
+                source_length <= (f64) UINT32_MAX &&
+                result_length + source_length <= (f64) UINT32_MAX) {
+                MalArrayObject *source_array =
+                    mal_builtin_array_clean_dense(vm, source);
+                MalArrayObject *result_array = mal_builtin_array_dense_builder(
+                    result, (u32) result_length);
+                if (source_array != nullptr && result_array != nullptr &&
+                    source_array->length == (u32) source_length &&
+                    mal_array_object_dense_build_range(
+                        result_array, (u32) result_length,
+                        source_array, 0, (u32) source_length,
+                        false, false)) {
+                    result_length += source_length;
+                    continue;
+                }
             }
             for (f64 index = 0; index < source_length; index++) {
                 MalValue element;
@@ -2770,6 +2847,15 @@ static MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, cons
     // The copy is dense: undefined values and holes both sort to the end as
     // undefined elements.
     MalArrayObject *result = mal_intrinsic_new_dense_array(vm, length);
+    if (mal_array_object_dense_build_values(
+            result, 0, sorted.values, sorted.defined_count) &&
+        mal_array_object_dense_build_fill(
+            result, sorted.defined_count,
+            length - sorted.defined_count,
+            mal_value_new_undefined())) {
+        ret = mal_value_from_array_object(result);
+        goto sorted_done;
+    }
     for (u32 index = 0; index < length; index++) {
         MalValue element = index < sorted.defined_count ? sorted.values[index] : mal_value_new_undefined();
         if (!mal_builtin_array_create_data_property_wide(vm, mal_value_from_array_object(result), (f64) index, element)) {
@@ -2962,6 +3048,32 @@ static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, con
     mal_gc_root(&result_span, &result_value, 1);
     u32 out = 0;
 
+    MalArrayObject *source_array =
+        mal_builtin_array_clean_dense(vm, this_value);
+    MalArrayObject *result_array =
+        mal_builtin_array_dense_builder(result_value, 0);
+    if (source_array != nullptr && result_array != nullptr &&
+        source_array->length == (u32) length &&
+        (f64) (u32) start == start &&
+        (f64) (u32) skip_count == skip_count) {
+        u32 prefix_count = (u32) start;
+        u32 suffix_start = prefix_count + (u32) skip_count;
+        u32 suffix_count = (u32) length - suffix_start;
+        if (mal_array_object_dense_build_range(
+                result_array, 0, source_array, 0, prefix_count,
+                false, true) &&
+            mal_array_object_dense_build_values(
+                result_array, prefix_count,
+                insert_count == 0 ? nullptr : args + 2, insert_count) &&
+            mal_array_object_dense_build_range(
+                result_array, prefix_count + insert_count,
+                source_array, suffix_start, suffix_count,
+                false, true)) {
+            ret = result_value;
+            goto result_done;
+        }
+    }
+
     for (f64 index = 0; index < start; index++) {
         MalValue element = mal_builtin_array_get_wide(vm, this_value, index);
         if (vm->completion.kind == MAL_COMPLETION_THROW
@@ -3080,6 +3192,23 @@ static MalValue mal_builtin_array_with(MalVm *vm, MalValue this_value, const Mal
     }
 
     MalArrayObject *result = mal_intrinsic_new_dense_array(vm, (u32) length);
+    MalArrayObject *source_array =
+        mal_builtin_array_clean_dense(vm, this_value);
+    if (source_array != nullptr && source_array->length == (u32) length) {
+        u32 index = (u32) relative;
+        MalValue replacement =
+            arg_count >= 2 ? args[1] : mal_value_new_undefined();
+        if (mal_array_object_dense_build_range(
+                result, 0, source_array, 0, index, false, true) &&
+            mal_array_object_dense_build_values(
+                result, index, &replacement, 1) &&
+            mal_array_object_dense_build_range(
+                result, index + 1, source_array, index + 1,
+                (u32) length - index - 1, false, true)) {
+            ret = mal_value_from_array_object(result);
+            goto done;
+        }
+    }
     for (u32 index = 0; (f64) index < length; index++) {
         MalValue element = (f64) index == relative
             ? (arg_count >= 2 ? args[1] : mal_value_new_undefined())
@@ -3118,6 +3247,14 @@ static MalValue mal_builtin_array_to_reversed(MalVm *vm, MalValue this_value, co
     u32 length = (u32) wide_length;
 
     MalArrayObject *result = mal_intrinsic_new_dense_array(vm, length);
+    MalArrayObject *source_array =
+        mal_builtin_array_clean_dense(vm, this_value);
+    if (source_array != nullptr && source_array->length == length &&
+        mal_array_object_dense_build_range(
+            result, 0, source_array, 0, length, true, true)) {
+        ret = mal_value_from_array_object(result);
+        goto done;
+    }
     for (u32 index = 0; index < length; index++) {
         MalValue element = mal_builtin_array_get_wide(vm, this_value, (f64) length - 1 - (f64) index);
         if (vm->completion.kind == MAL_COMPLETION_THROW

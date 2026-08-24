@@ -46,12 +46,27 @@ MalArrayBufferObject *mal_array_buffer_object_new(
 );
 
 /**
- * Allocate a fixed backing store without initializing its bytes. This is only
- * for leaf native constructors that overwrite the complete store before the
- * object can become observable. Prefer mal_array_buffer_object_new otherwise.
+ * Allocate a backing store without initializing its currently visible bytes.
+ * This is only for leaf native constructors that overwrite the complete visible
+ * range before the object can become observable. Hidden resizable capacity is
+ * still zeroed by resize immediately before exposure. Prefer the initialized
+ * constructor otherwise.
  */
 MalArrayBufferObject *mal_array_buffer_object_new_uninitialized(
-    MalHeap *heap, MalObject *prototype, u32 byte_length);
+    MalHeap *heap, MalObject *prototype,
+    u32 byte_length, u32 max_byte_length,
+    bool resizable, bool shared);
+
+/**
+ * Move a fixed store, or preserve a resizable store, into a fresh ArrayBuffer
+ * header without allocating/copying its bytes. The source becomes detached.
+ * Callers must only drop resizability when the source was already fixed, so the
+ * logical maximum continues to describe the actual allocation capacity.
+ */
+MalArrayBufferObject *mal_array_buffer_object_move_store(
+    MalHeap *heap, MalObject *prototype,
+    MalArrayBufferObject *source, bool preserve_resizability,
+    bool immutable);
 
 /**
  * Allocate a zero-filled, fixed-length backing store for secret-bearing bytes

@@ -91,6 +91,62 @@ check("resizable growth exposes only zeroed bytes", zeroed);
 const slicedBuffer = new Uint8Array([1, 2, 3, 4]).buffer.slice(1, 3);
 check("ArrayBuffer slice copies bytes", new Uint8Array(slicedBuffer).join() === "2,3");
 
+const movable = new Uint8Array([9, 8, 7, 6]).buffer;
+const moved = movable.transfer();
+check(
+	"ArrayBuffer transfer moves fixed storage",
+	movable.detached &&
+		moved.byteLength === 4 &&
+		new Uint8Array(moved).join() === "9,8,7,6",
+);
+
+const movableResizable = new ArrayBuffer(4, { maxByteLength: 16 });
+new Uint8Array(movableResizable).set([1, 3, 5, 7]);
+const movedResizable = movableResizable.transfer();
+check(
+	"ArrayBuffer transfer preserves resizability",
+	movableResizable.detached &&
+		movedResizable.resizable &&
+		movedResizable.maxByteLength === 16 &&
+		new Uint8Array(movedResizable).join() === "1,3,5,7",
+);
+
+const fixedSource = new ArrayBuffer(4, { maxByteLength: 16 });
+new Uint8Array(fixedSource).set([2, 4, 6, 8]);
+const transferredFixed = fixedSource.transferToFixedLength();
+check(
+	"transferToFixedLength drops resizability",
+	fixedSource.detached &&
+		!transferredFixed.resizable &&
+		transferredFixed.maxByteLength === 4 &&
+		new Uint8Array(transferredFixed).join() === "2,4,6,8",
+);
+
+const grownTransferSource = new Uint8Array([4, 2]).buffer;
+const grownTransfer = grownTransferSource.transfer(5);
+check(
+	"ArrayBuffer transfer zeroes an extended tail",
+	new Uint8Array(grownTransfer).join() === "4,2,0,0,0",
+);
+
+const immutableSource = new Uint8Array([6, 7, 8]).buffer;
+const immutable = immutableSource.transferToImmutable();
+let immutableWriteThrew = false;
+try {
+	new Uint8Array(immutable)[0] = 1;
+} catch (error) {
+	immutableWriteThrew = error instanceof TypeError;
+}
+const immutableSlice = new Uint8Array([3, 4, 5, 6]).buffer.sliceToImmutable(1, 3);
+check(
+	"immutable ArrayBuffer transfer and slice",
+	immutableSource.detached &&
+		immutable.immutable &&
+		immutableWriteThrew &&
+		immutableSlice.immutable &&
+		new Uint8Array(immutableSlice).join() === "4,5",
+);
+
 const shared = new SharedArrayBuffer(4, { maxByteLength: 16 });
 new Uint8Array(shared).set([5, 6, 7, 8]);
 shared.grow(8);

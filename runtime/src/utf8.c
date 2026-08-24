@@ -5,6 +5,22 @@
 #include "heap_string.h"
 #include "utf16.h"
 
+usize mal_utf8_encoded_length(const c16 *units, usize len) {
+    usize output_length = 0;
+    for (usize index = 0; index < len; index++) {
+        u32 scalar;
+        usize width;
+        if (!mal_utf16_read_scalar(units, len, index, &scalar, &width)) {
+            scalar = 0xFFFD;
+        }
+        index += width - 1;
+        output_length += scalar < 0x80 ? 1
+            : scalar < 0x800 ? 2
+            : scalar < 0x10000 ? 3 : 4;
+    }
+    return output_length;
+}
+
 byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len) {
     *out_len = 0;
     if (len > (SIZE_MAX - 1) / 3) return nullptr;
@@ -110,6 +126,11 @@ c16 *mal_utf8_decode_report(const byte *bytes, usize len, usize *out_count, bool
 
 byte *mal_string_to_utf8(const MalString *string, usize *out_len) {
     return mal_utf8_encode(mal_string_code_units(string), mal_string_length(string), out_len);
+}
+
+usize mal_string_utf8_length(const MalString *string) {
+    return mal_utf8_encoded_length(
+        mal_string_code_units(string), mal_string_length(string));
 }
 
 MalString *mal_string_from_utf8(MalHeap *heap, const byte *bytes, usize len) {
