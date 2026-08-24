@@ -203,13 +203,17 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
         mal_gc_unroot(&bound_root);
         return mal_value_new_undefined();
     }
-    MalValue prefix = mal_value_from_string(mal_intrinsic_ascii(vm, "bound "));
-    MalValue name_value = mal_value_is_string(bound_roots[1])
-        ? mal_vm_add(vm, prefix, bound_roots[1])
-        : prefix;
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        mal_gc_unroot(&bound_root);
-        return mal_value_new_undefined();
+    MalString *prefix = mal_intrinsic_ascii(vm, "bound ");
+    MalValue name_value = mal_value_from_string(prefix);
+    if (mal_value_is_string(bound_roots[1])) {
+        MalString *combined;
+        if (!mal_string_new_cons_checked(
+                &vm->heap, prefix, mal_value_to_string(bound_roots[1]), &combined)) {
+            mal_builtin_function_throw_string_length(vm);
+            mal_gc_unroot(&bound_root);
+            return mal_value_new_undefined();
+        }
+        name_value = mal_value_from_string(combined);
     }
     mal_bound_function_object_init_metadata(
         bound, length_key, mal_ops_number_value(length_num), name_key, name_value);
