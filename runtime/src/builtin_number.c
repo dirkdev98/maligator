@@ -510,6 +510,37 @@ static i32 mal_builtin_number_format_safe_integer_fixed(
     return (i32) length;
 }
 
+static i32 mal_builtin_number_format_zero_exponential(
+    i32 fraction_digits, byte *out
+) {
+    usize length = 0;
+    out[length++] = '0';
+    if (fraction_digits > 0) {
+        out[length++] = '.';
+        for (i32 i = 0; i < fraction_digits; i++) {
+            out[length++] = '0';
+        }
+    }
+    out[length++] = 'e';
+    out[length++] = '+';
+    out[length++] = '0';
+    return (i32) length;
+}
+
+static i32 mal_builtin_number_format_zero_precision(
+    i32 precision, byte *out
+) {
+    usize length = 0;
+    out[length++] = '0';
+    if (precision > 1) {
+        out[length++] = '.';
+        for (i32 i = 1; i < precision; i++) {
+            out[length++] = '0';
+        }
+    }
+    return (i32) length;
+}
+
 static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -583,6 +614,14 @@ static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue 
         return mal_value_new_undefined();
     }
 
+    if (number == 0.0) {
+        byte out[105];
+        i32 length = mal_builtin_number_format_zero_exponential(
+            digits_undefined ? 0 : (i32) digits, out);
+        return mal_builtin_number_format_result(
+            vm, out, length, sizeof(out));
+    }
+
     if (digits_undefined) {
         byte buffer[32];
         i32 length = mal_number_format_shortest_exponential(
@@ -624,6 +663,14 @@ static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue th
     if (precision < 1 || precision > 100) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toPrecision() argument must be between 1 and 100");
         return mal_value_new_undefined();
+    }
+
+    if (number == 0.0) {
+        byte out[102];
+        i32 length = mal_builtin_number_format_zero_precision(
+            (i32) precision, out);
+        return mal_builtin_number_format_result(
+            vm, out, length, sizeof(out));
     }
 
     byte out[256];

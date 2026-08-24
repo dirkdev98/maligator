@@ -152,7 +152,11 @@ check(
 		(1000000000000000100).toFixed(2) === "1000000000000000128.00" &&
 		(77).toExponential() === "7.7e+1" &&
 		(25).toExponential(0) === "3e+1" &&
+		(0).toExponential() === "0e+0" &&
+		(-0).toExponential(3) === "0.000e+0" &&
 		(123).toPrecision(5) === "123.00" &&
+		(0).toPrecision(1) === "0" &&
+		(-0).toPrecision(5) === "0.0000" &&
 		Number.MIN_VALUE.toPrecision(5) === "4.9407e-324",
 );
 check(
