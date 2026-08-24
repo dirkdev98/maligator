@@ -245,6 +245,45 @@ check(
 	encodeURIComponent("ÿ") === "%C3%BF" && decodeURIComponent("%66%6F%6f") === "foo",
 );
 check(
+	"URI unchanged and reserved fast paths preserve semantics",
+	encodeURI("https://example.com/a?b=c#d") === "https://example.com/a?b=c#d" &&
+		encodeURIComponent("alpha-_.!~*'()") === "alpha-_.!~*'()" &&
+		decodeURIComponent("plain-text_123") === "plain-text_123" &&
+		decodeURI("%2f%3F%23%41") === "%2f%3F%23A",
+);
+check(
+	"URI scalar encoding and decoding",
+	encodeURIComponent("Málaga/東京 😀") ===
+		"M%C3%A1laga%2F%E6%9D%B1%E4%BA%AC%20%F0%9F%98%80" &&
+		decodeURIComponent("M%C3%A1laga%2F%E6%9D%B1%E4%BA%AC%20%F0%9F%98%80") ===
+			"Málaga/東京 😀",
+);
+for (const [name, malformed] of [
+	["truncated", "%"],
+	["bad continuation", "%E2%28%A1"],
+	["overlong", "%C0%AF"],
+	["surrogate", "%ED%A0%80"],
+	["out of range", "%F4%90%80%80"],
+]) {
+	throws("decodeURIComponent rejects " + name, URIError, () => decodeURIComponent(malformed));
+}
+let uriCoercions = 0;
+check(
+	"URI coercion occurs once before the native kernel",
+	encodeURIComponent({
+		toString() {
+			uriCoercions++;
+			return "a b";
+		},
+	}) === "a%20b" && uriCoercions === 1,
+);
+check(
+	"legacy URI globals use exact escape forms",
+	escape("safe/@+ 東") === "safe/@+%20%u6771" &&
+		unescape("safe/@+%20%u6771") === "safe/@+ 東" &&
+		unescape("%u12xz%QZ") === "%u12xz%QZ",
+);
+check(
 	"query decoders share only percent hex semantics",
 	querystring.parse("x=%66%6F%6f&bad=%GG").x === "foo" &&
 		querystring.parse("x=%66%6F%6f&bad=%GG").bad === "%GG" &&

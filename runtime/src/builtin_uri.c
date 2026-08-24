@@ -1,48 +1,19 @@
 #include "builtin_uri.h"
 
 #include <stdlib.h>
+#include <string.h>
 
+#include "checked_size.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "hex.h"
-#include "u16_buffer.h"
 #include "utf16.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
 
-// A growable UTF-16 code-unit buffer used to build encode/decode results.
-typedef struct MalUriBuffer {
-    MalVm *vm;
-    union {
-        MalU16Buffer output;
-        struct {
-            c16 *data;
-            usize length;
-            usize capacity;
-            MalU16BufferStatus status;
-        };
-    };
-} MalUriBuffer;
-
-static bool mal_uri_buffer_push(MalUriBuffer *buffer, c16 unit) {
-    if (mal_u16_buffer_push(&buffer->output, unit) != MAL_U16_BUFFER_OK) {
-        mal_vm_throw_error(
-            buffer->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
-        return false;
-    }
-    return true;
-}
-
 static const byte mal_uri_hex_digits[] = "0123456789ABCDEF";
-
-// Append the percent-escape of a single UTF-8 octet: "%XX" with uppercase hex.
-static bool mal_uri_buffer_push_octet(MalUriBuffer *buffer, u8 octet) {
-    return mal_uri_buffer_push(buffer, '%') &&
-        mal_uri_buffer_push(buffer, (c16) mal_uri_hex_digits[(octet >> 4) & 0x0F]) &&
-        mal_uri_buffer_push(buffer, (c16) mal_uri_hex_digits[octet & 0x0F]);
-}
 
 // The unreserved characters (ECMA-262 uriUnescaped) common to every set.
 static bool mal_uri_is_unreserved(c16 c) {
@@ -61,26 +32,6 @@ static bool mal_uri_is_reserved_or_hash(c16 c) {
         c == '#';
 }
 
-// The unescapedSet for encodeURI.
-static bool mal_uri_encode_uri_unescaped(c16 c) {
-    return mal_uri_is_unreserved(c) || mal_uri_is_reserved_or_hash(c);
-}
-
-// The unescapedSet for encodeURIComponent (unreserved only).
-static bool mal_uri_encode_component_unescaped(c16 c) {
-    return mal_uri_is_unreserved(c);
-}
-
-// The reservedSet for decodeURI: uriReserved + "#". Escapes of these are kept
-// verbatim. decodeURIComponent uses an empty reserved set.
-static bool mal_uri_decode_uri_reserved(c16 c) {
-    return mal_uri_is_reserved_or_hash(c);
-}
-
-static MalValue mal_uri_buffer_to_string(MalVm *vm, MalUriBuffer *buffer) {
-    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &buffer->output));
-}
-
 // Convert two hex code units (already known to be present) into a byte. Returns
 // false when either unit is not a hexadecimal digit.
 static bool mal_uri_hex_pair(c16 high, c16 low, u8 *out) {
@@ -91,17 +42,54 @@ static bool mal_uri_hex_pair(c16 high, c16 low, u8 *out) {
     return true;
 }
 
-// ECMA-262 Encode(string, unescapedSet) operating on UTF-16 code units.
-static MalValue mal_uri_encode(MalVm *vm, MalString *string, bool (*unescaped)(c16)) {
+static bool mal_uri_result_length_add(MalVm *vm, usize *length, usize extra) {
+    usize result;
+    if (!mal_checked_size_add(*length, extra, MAL_STRING_MAX_CODE_UNITS, &result)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return false;
+    }
+    *length = result;
+    return true;
+}
+
+static c16 *mal_uri_result_alloc(MalVm *vm, usize length) {
+    usize bytes;
+    if (!mal_checked_size_multiply(sizeof(c16), length, SIZE_MAX, &bytes)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return nullptr;
+    }
+    c16 *result = mal_heap_try_alloc_raw(&vm->heap, bytes);
+    if (result == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+    }
+    return result;
+}
+
+static inline bool mal_uri_encode_unescaped(c16 c, bool component) {
+    return mal_uri_is_unreserved(c) || (!component && mal_uri_is_reserved_or_hash(c));
+}
+
+static inline void mal_uri_write_octet(c16 *output, usize *offset, u8 octet) {
+    output[(*offset)++] = '%';
+    output[(*offset)++] = (c16) mal_uri_hex_digits[(octet >> 4) & 0x0F];
+    output[(*offset)++] = (c16) mal_uri_hex_digits[octet & 0x0F];
+}
+
+// ECMA-262 Encode(string, unescapedSet), with a validation/size pass followed
+// by one exact heap allocation. The overwhelmingly common unchanged path
+// returns the already-coerced string without allocating.
+static MalValue mal_uri_encode(MalVm *vm, MalString *string, bool component) {
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
-    MalUriBuffer buffer = { .vm = vm };
+    usize result_length = 0;
+    bool changed = false;
 
     for (usize k = 0; k < length; k++) {
         c16 c = units[k];
-        if (unescaped(c)) {
-            if (!mal_uri_buffer_push(&buffer, c)) {
-                free(buffer.data);
+        if (mal_uri_encode_unescaped(c, component)) {
+            if (!mal_uri_result_length_add(vm, &result_length, 1)) {
                 return mal_value_new_undefined();
             }
             continue;
@@ -110,179 +98,185 @@ static MalValue mal_uri_encode(MalVm *vm, MalString *string, bool (*unescaped)(c
         u32 code_point;
         usize width;
         if (!mal_utf16_read_scalar(units, length, k, &code_point, &width)) {
-            free(buffer.data);
             mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
             return mal_value_new_undefined();
         }
         k += width - 1;
-
-        // UTF-8 encode the code point and percent-escape each octet.
-        if (code_point <= 0x7F) {
-            if (!mal_uri_buffer_push_octet(&buffer, (u8) code_point)) {
-                free(buffer.data);
-                return mal_value_new_undefined();
-            }
-        } else if (code_point <= 0x7FF) {
-            if (!mal_uri_buffer_push_octet(&buffer, (u8) (0xC0 | (code_point >> 6))) ||
-                !mal_uri_buffer_push_octet(&buffer, (u8) (0x80 | (code_point & 0x3F)))) {
-                free(buffer.data);
-                return mal_value_new_undefined();
-            }
-        } else if (code_point <= 0xFFFF) {
-            if (!mal_uri_buffer_push_octet(&buffer, (u8) (0xE0 | (code_point >> 12))) ||
-                !mal_uri_buffer_push_octet(&buffer, (u8) (0x80 | ((code_point >> 6) & 0x3F))) ||
-                !mal_uri_buffer_push_octet(&buffer, (u8) (0x80 | (code_point & 0x3F)))) {
-                free(buffer.data);
-                return mal_value_new_undefined();
-            }
-        } else {
-            if (!mal_uri_buffer_push_octet(&buffer, (u8) (0xF0 | (code_point >> 18))) ||
-                !mal_uri_buffer_push_octet(&buffer, (u8) (0x80 | ((code_point >> 12) & 0x3F))) ||
-                !mal_uri_buffer_push_octet(&buffer, (u8) (0x80 | ((code_point >> 6) & 0x3F))) ||
-                !mal_uri_buffer_push_octet(&buffer, (u8) (0x80 | (code_point & 0x3F)))) {
-                free(buffer.data);
-                return mal_value_new_undefined();
-            }
+        usize utf8_length = code_point <= 0x7F
+            ? 1
+            : code_point <= 0x7FF ? 2 : code_point <= 0xFFFF ? 3 : 4;
+        if (!mal_uri_result_length_add(vm, &result_length, utf8_length * 3)) {
+            return mal_value_new_undefined();
         }
+        changed = true;
     }
 
-    return mal_uri_buffer_to_string(vm, &buffer);
-}
-
-// ECMA-262 Decode(string, reservedSet) operating on UTF-16 code units.
-static MalValue mal_uri_decode(MalVm *vm, MalString *string, bool (*reserved)(c16)) {
-    const c16 *units = mal_string_code_units(string);
-    usize length = mal_string_length(string);
-    MalUriBuffer buffer = { .vm = vm };
-
+    if (!changed) {
+        return mal_value_from_string(string);
+    }
+    c16 *output = mal_uri_result_alloc(vm, result_length);
+    if (output == nullptr) {
+        return mal_value_new_undefined();
+    }
+    usize offset = 0;
     for (usize k = 0; k < length; k++) {
         c16 c = units[k];
-        if (c != '%') {
-            if (!mal_uri_buffer_push(&buffer, c)) {
-                free(buffer.data);
-                return mal_value_new_undefined();
-            }
+        if (mal_uri_encode_unescaped(c, component)) {
+            output[offset++] = c;
             continue;
         }
-
-        usize start = k;
-        // Need "%XX": two hex digits must follow.
-        u8 octet;
-        if (k + 2 >= length) {
-            free(buffer.data);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-            return mal_value_new_undefined();
-        }
-        if (!mal_uri_hex_pair(units[k + 1], units[k + 2], &octet)) {
-            free(buffer.data);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-            return mal_value_new_undefined();
-        }
-        k += 2;
-
-        if (octet < 0x80) {
-            c16 decoded = (c16) octet;
-            if (reserved(decoded)) {
-                // Keep the original escape verbatim (decodeURI reserved set).
-                for (usize i = start; i <= k; i++) {
-                    if (!mal_uri_buffer_push(&buffer, units[i])) {
-                        free(buffer.data);
-                        return mal_value_new_undefined();
-                    }
-                }
-            } else {
-                if (!mal_uri_buffer_push(&buffer, decoded)) {
-                    free(buffer.data);
-                    return mal_value_new_undefined();
-                }
-            }
-            continue;
-        }
-
-        // Multi-byte UTF-8 sequence: count the leading one bits to find n.
-        i32 n;
-        if ((octet & 0xE0) == 0xC0) {
-            n = 2;
-        } else if ((octet & 0xF0) == 0xE0) {
-            n = 3;
-        } else if ((octet & 0xF8) == 0xF0) {
-            n = 4;
-        } else {
-            free(buffer.data);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-            return mal_value_new_undefined();
-        }
-
         u32 code_point;
-        switch (n) {
-            case 2:
-                code_point = (u32) (octet & 0x1F);
-                break;
-            case 3:
-                code_point = (u32) (octet & 0x0F);
-                break;
-            default:
-                code_point = (u32) (octet & 0x07);
-                break;
-        }
-
-        // Read the n-1 continuation octets, each as a "%XX" escape.
-        for (i32 j = 1; j < n; j++) {
-            if (k + 1 >= length || units[k + 1] != '%') {
-                free(buffer.data);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-                return mal_value_new_undefined();
-            }
-            if (k + 3 > length) {
-                free(buffer.data);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-                return mal_value_new_undefined();
-            }
-            u8 continuation;
-            if (!mal_uri_hex_pair(units[k + 2], units[k + 3], &continuation)) {
-                free(buffer.data);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-                return mal_value_new_undefined();
-            }
-            if ((continuation & 0xC0) != 0x80) {
-                free(buffer.data);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-                return mal_value_new_undefined();
-            }
-            code_point = (code_point << 6) | (u32) (continuation & 0x3F);
-            k += 3;
-        }
-
-        // Reject overlong encodings, surrogates and out-of-range code points.
-        bool overlong =
-            (n == 2 && code_point < 0x80) ||
-            (n == 3 && code_point < 0x800) ||
-            (n == 4 && code_point < 0x10000);
-        if (overlong ||
-            (code_point >= 0xD800 && code_point <= 0xDFFF) ||
-            code_point > 0x10FFFF) {
-            free(buffer.data);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-            return mal_value_new_undefined();
-        }
-
-        if (code_point <= 0xFFFF) {
-            if (!mal_uri_buffer_push(&buffer, (c16) code_point)) {
-                free(buffer.data);
-                return mal_value_new_undefined();
-            }
+        usize width;
+        if (!mal_utf16_read_scalar(units, length, k, &code_point, &width)) abort();
+        k += width - 1;
+        if (code_point <= 0x7F) {
+            mal_uri_write_octet(output, &offset, (u8) code_point);
+        } else if (code_point <= 0x7FF) {
+            mal_uri_write_octet(output, &offset, (u8) (0xC0 | (code_point >> 6)));
+            mal_uri_write_octet(output, &offset, (u8) (0x80 | (code_point & 0x3F)));
+        } else if (code_point <= 0xFFFF) {
+            mal_uri_write_octet(output, &offset, (u8) (0xE0 | (code_point >> 12)));
+            mal_uri_write_octet(output, &offset, (u8) (0x80 | ((code_point >> 6) & 0x3F)));
+            mal_uri_write_octet(output, &offset, (u8) (0x80 | (code_point & 0x3F)));
         } else {
-            c16 pair[2];
-            mal_utf16_emit_pair(code_point, pair);
-            if (!mal_uri_buffer_push(&buffer, pair[0]) ||
-                !mal_uri_buffer_push(&buffer, pair[1])) {
-                free(buffer.data);
-                return mal_value_new_undefined();
-            }
+            mal_uri_write_octet(output, &offset, (u8) (0xF0 | (code_point >> 18)));
+            mal_uri_write_octet(output, &offset, (u8) (0x80 | ((code_point >> 12) & 0x3F)));
+            mal_uri_write_octet(output, &offset, (u8) (0x80 | ((code_point >> 6) & 0x3F)));
+            mal_uri_write_octet(output, &offset, (u8) (0x80 | (code_point & 0x3F)));
         }
     }
+    return mal_value_from_string(mal_string_new_owned(&vm->heap, output, result_length));
+}
 
-    return mal_uri_buffer_to_string(vm, &buffer);
+typedef struct MalUriDecodedEscape {
+    usize end;
+    u32 code_point;
+    bool preserved;
+} MalUriDecodedEscape;
+
+/** Parse one percent-encoded UTF-8 scalar. This is intentionally allocation-
+ * free so the sizing pass rejects malformed input before allocating output. */
+static bool mal_uri_decode_escape(
+    const c16 *units,
+    usize length,
+    usize start,
+    bool preserve_reserved,
+    MalUriDecodedEscape *out
+) {
+    if (start + 2 >= length) return false;
+    u8 first;
+    if (!mal_uri_hex_pair(units[start + 1], units[start + 2], &first)) return false;
+    if (first < 0x80) {
+        *out = (MalUriDecodedEscape) {
+            .end = start + 2,
+            .code_point = first,
+            .preserved = preserve_reserved && mal_uri_is_reserved_or_hash((c16) first),
+        };
+        return true;
+    }
+
+    i32 count;
+    u32 code_point;
+    if ((first & 0xE0) == 0xC0) {
+        count = 2;
+        code_point = (u32) (first & 0x1F);
+    } else if ((first & 0xF0) == 0xE0) {
+        count = 3;
+        code_point = (u32) (first & 0x0F);
+    } else if ((first & 0xF8) == 0xF0) {
+        count = 4;
+        code_point = (u32) (first & 0x07);
+    } else {
+        return false;
+    }
+
+    usize position = start + 3;
+    for (i32 index = 1; index < count; index++) {
+        if (position + 2 >= length || units[position] != '%') return false;
+        u8 continuation;
+        if (!mal_uri_hex_pair(units[position + 1], units[position + 2], &continuation) ||
+            (continuation & 0xC0) != 0x80) {
+            return false;
+        }
+        code_point = (code_point << 6) | (u32) (continuation & 0x3F);
+        position += 3;
+    }
+
+    bool overlong =
+        (count == 2 && code_point < 0x80) ||
+        (count == 3 && code_point < 0x800) ||
+        (count == 4 && code_point < 0x10000);
+    if (overlong ||
+        (code_point >= 0xD800 && code_point <= 0xDFFF) ||
+        code_point > 0x10FFFF) {
+        return false;
+    }
+    *out = (MalUriDecodedEscape) {
+        .end = position - 1,
+        .code_point = code_point,
+        .preserved = false,
+    };
+    return true;
+}
+
+// ECMA-262 Decode(string, reservedSet), using an exact two-pass result. Inputs
+// without percent escapes return the existing string immediately.
+static MalValue mal_uri_decode(MalVm *vm, MalString *string, bool preserve_reserved) {
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    usize result_length = 0;
+    bool changed = false;
+
+    for (usize k = 0; k < length; k++) {
+        if (units[k] != '%') {
+            if (!mal_uri_result_length_add(vm, &result_length, 1)) {
+                return mal_value_new_undefined();
+            }
+            continue;
+        }
+        MalUriDecodedEscape decoded;
+        if (!mal_uri_decode_escape(units, length, k, preserve_reserved, &decoded)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
+            return mal_value_new_undefined();
+        }
+        usize appended = decoded.preserved
+            ? decoded.end - k + 1
+            : decoded.code_point <= 0xFFFF ? 1 : 2;
+        if (!mal_uri_result_length_add(vm, &result_length, appended)) {
+            return mal_value_new_undefined();
+        }
+        changed |= !decoded.preserved;
+        k = decoded.end;
+    }
+
+    if (!changed) {
+        return mal_value_from_string(string);
+    }
+    c16 *output = mal_uri_result_alloc(vm, result_length);
+    if (output == nullptr) {
+        return mal_value_new_undefined();
+    }
+    usize offset = 0;
+    for (usize k = 0; k < length; k++) {
+        if (units[k] != '%') {
+            output[offset++] = units[k];
+            continue;
+        }
+        MalUriDecodedEscape decoded;
+        if (!mal_uri_decode_escape(units, length, k, preserve_reserved, &decoded)) abort();
+        if (decoded.preserved) {
+            usize count = decoded.end - k + 1;
+            memcpy(output + offset, units + k, sizeof(c16) * count);
+            offset += count;
+        } else if (decoded.code_point <= 0xFFFF) {
+            output[offset++] = (c16) decoded.code_point;
+        } else {
+            mal_utf16_emit_pair(decoded.code_point, output + offset);
+            offset += 2;
+        }
+        k = decoded.end;
+    }
+    return mal_value_from_string(mal_string_new_owned(&vm->heap, output, result_length));
 }
 
 // Full ToString(arg), including object ToPrimitive and abrupt completion.
@@ -299,12 +293,7 @@ static MalValue mal_builtin_decode_uri(MalVm *vm, MalValue this_value, const Mal
     if (!mal_uri_to_string(vm, args, arg_count, &string)) {
         return mal_value_new_undefined();
     }
-    return mal_uri_decode(vm, string, mal_uri_decode_uri_reserved);
-}
-
-static bool mal_uri_no_reserved(c16 c) {
-    (void) c;
-    return false;
+    return mal_uri_decode(vm, string, true);
 }
 
 static MalValue mal_builtin_decode_uri_component(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -315,7 +304,7 @@ static MalValue mal_builtin_decode_uri_component(MalVm *vm, MalValue this_value,
     if (!mal_uri_to_string(vm, args, arg_count, &string)) {
         return mal_value_new_undefined();
     }
-    return mal_uri_decode(vm, string, mal_uri_no_reserved);
+    return mal_uri_decode(vm, string, false);
 }
 
 static MalValue mal_builtin_encode_uri(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -326,7 +315,7 @@ static MalValue mal_builtin_encode_uri(MalVm *vm, MalValue this_value, const Mal
     if (!mal_uri_to_string(vm, args, arg_count, &string)) {
         return mal_value_new_undefined();
     }
-    return mal_uri_encode(vm, string, mal_uri_encode_uri_unescaped);
+    return mal_uri_encode(vm, string, false);
 }
 
 static MalValue mal_builtin_encode_uri_component(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -337,7 +326,7 @@ static MalValue mal_builtin_encode_uri_component(MalVm *vm, MalValue this_value,
     if (!mal_uri_to_string(vm, args, arg_count, &string)) {
         return mal_value_new_undefined();
     }
-    return mal_uri_encode(vm, string, mal_uri_encode_component_unescaped);
+    return mal_uri_encode(vm, string, true);
 }
 
 static bool mal_uri_escape_unescaped(c16 c) {
@@ -360,27 +349,40 @@ static MalValue mal_builtin_escape(MalVm *vm, MalValue this_value, const MalValu
 
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
-    MalUriBuffer buffer = {.vm = vm};
+    usize result_length = 0;
+    bool changed = false;
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        usize width = mal_uri_escape_unescaped(unit) ? 1 : unit < 256 ? 3 : 6;
+        if (!mal_uri_result_length_add(vm, &result_length, width)) {
+            return mal_value_new_undefined();
+        }
+        changed |= width != 1;
+    }
+    if (!changed) {
+        return mal_value_from_string(string);
+    }
+    c16 *output = mal_uri_result_alloc(vm, result_length);
+    if (output == nullptr) {
+        return mal_value_new_undefined();
+    }
+    usize offset = 0;
     for (usize i = 0; i < length; i++) {
         c16 unit = units[i];
         if (mal_uri_escape_unescaped(unit)) {
-            if (!mal_uri_buffer_push(&buffer, unit)) goto failed;
+            output[offset++] = unit;
         } else if (unit < 256) {
-            if (!mal_uri_buffer_push_octet(&buffer, (u8) unit)) goto failed;
-        } else if (!mal_uri_buffer_push(&buffer, '%') ||
-                   !mal_uri_buffer_push(&buffer, 'u') ||
-                   !mal_uri_buffer_push(&buffer, mal_uri_hex_digits[(unit >> 12) & 0x0F]) ||
-                   !mal_uri_buffer_push(&buffer, mal_uri_hex_digits[(unit >> 8) & 0x0F]) ||
-                   !mal_uri_buffer_push(&buffer, mal_uri_hex_digits[(unit >> 4) & 0x0F]) ||
-                   !mal_uri_buffer_push(&buffer, mal_uri_hex_digits[unit & 0x0F])) {
-            goto failed;
+            mal_uri_write_octet(output, &offset, (u8) unit);
+        } else {
+            output[offset++] = '%';
+            output[offset++] = 'u';
+            output[offset++] = mal_uri_hex_digits[(unit >> 12) & 0x0F];
+            output[offset++] = mal_uri_hex_digits[(unit >> 8) & 0x0F];
+            output[offset++] = mal_uri_hex_digits[(unit >> 4) & 0x0F];
+            output[offset++] = mal_uri_hex_digits[unit & 0x0F];
         }
     }
-    return mal_uri_buffer_to_string(vm, &buffer);
-
-failed:
-    free(buffer.data);
-    return mal_value_new_undefined();
+    return mal_value_from_string(mal_string_new_owned(&vm->heap, output, result_length));
 }
 
 static bool mal_uri_hex_quad(const c16 *units, c16 *out) {
@@ -405,27 +407,48 @@ static MalValue mal_builtin_unescape(MalVm *vm, MalValue this_value, const MalVa
 
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
-    MalUriBuffer buffer = {.vm = vm};
+    usize result_length = 0;
+    bool changed = false;
     for (usize i = 0; i < length; i++) {
         c16 decoded;
-        u8 byte;
+        u8 octet;
         if (units[i] == '%' && i + 5 < length && units[i + 1] == 'u' &&
             mal_uri_hex_quad(units + i + 2, &decoded)) {
-            if (!mal_uri_buffer_push(&buffer, decoded)) goto failed;
             i += 5;
+            changed = true;
         } else if (units[i] == '%' && i + 2 < length &&
-                   mal_uri_hex_pair(units[i + 1], units[i + 2], &byte)) {
-            if (!mal_uri_buffer_push(&buffer, byte)) goto failed;
+                   mal_uri_hex_pair(units[i + 1], units[i + 2], &octet)) {
             i += 2;
-        } else if (!mal_uri_buffer_push(&buffer, units[i])) {
-            goto failed;
+            changed = true;
+        }
+        if (!mal_uri_result_length_add(vm, &result_length, 1)) {
+            return mal_value_new_undefined();
         }
     }
-    return mal_uri_buffer_to_string(vm, &buffer);
-
-failed:
-    free(buffer.data);
-    return mal_value_new_undefined();
+    if (!changed) {
+        return mal_value_from_string(string);
+    }
+    c16 *output = mal_uri_result_alloc(vm, result_length);
+    if (output == nullptr) {
+        return mal_value_new_undefined();
+    }
+    usize offset = 0;
+    for (usize i = 0; i < length; i++) {
+        c16 decoded;
+        u8 octet;
+        if (units[i] == '%' && i + 5 < length && units[i + 1] == 'u' &&
+            mal_uri_hex_quad(units + i + 2, &decoded)) {
+            output[offset++] = decoded;
+            i += 5;
+        } else if (units[i] == '%' && i + 2 < length &&
+                   mal_uri_hex_pair(units[i + 1], units[i + 2], &octet)) {
+            output[offset++] = octet;
+            i += 2;
+        } else {
+            output[offset++] = units[i];
+        }
+    }
+    return mal_value_from_string(mal_string_new_owned(&vm->heap, output, result_length));
 }
 
 static MalValue mal_uri_make_function(MalVm *vm, const byte *name, MalNativeFunctionCallback callback) {
