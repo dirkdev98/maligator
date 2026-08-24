@@ -1144,14 +1144,6 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             }
             break;
         }
-        case MAL_HEAP_BOUND_FUNCTION_OBJECT: {
-            MalBoundFunctionObject *bound = (MalBoundFunctionObject *) cell;
-            if (bound->bound_args != nullptr) {
-                gc_free_raw(&g_gc_vm->heap, bound->bound_args);
-                bound->bound_args = nullptr;
-            }
-            break;
-        }
         case MAL_HEAP_REGEXP_OBJECT: {
 #if MAL_REGEXP
             // No regexp objects are ever allocated under engine.regexp:false, so this

@@ -3739,7 +3739,10 @@ MalCompletion mal_vm_call_value(
         return proxy_completion;
     }
 
-    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, args, arg_count, true);
+    MalValue inline_args[MAL_BOUND_INLINE_ARGS];
+    MalBoundResolution resolution = mal_bound_function_object_resolve(
+        callee, this_value, args, arg_count, true,
+        inline_args, countof(inline_args));
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
 #if MAL_REALMS
@@ -4235,7 +4238,10 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
     }
 
     // [[Construct]] ignores the bound this.
-    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), args, arg_count, false);
+    MalValue inline_args[MAL_BOUND_INLINE_ARGS];
+    MalBoundResolution resolution = mal_bound_function_object_resolve(
+        callee, mal_value_new_undefined(), args, arg_count, false,
+        inline_args, countof(inline_args));
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
     // BoundFunctionCreate [[Construct]]: a new.target that is the bound function

@@ -84,50 +84,25 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
         return mal_builtin_function_forward_completion(vm, mal_vm_call_value(vm, this_value, this_arg, nullptr, 0));
     }
 
-    // CreateListFromArrayLike(argArray): any object with length + indices, not
-    // only real arrays (so `fn.apply(t, arguments)` / a {length, 0, 1} work).
-    if (!mal_value_is_object(arguments_value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.apply expects an array-like arguments object");
+    MalValue inline_args[8];
+    MalValue *call_args;
+    i32 call_arg_count;
+    if (!mal_vm_create_list_from_array_like(
+            vm, arguments_value, inline_args, countof(inline_args),
+            &call_args, &call_arg_count)) {
         return mal_value_new_undefined();
     }
 
-    MalValue length_value;
-    if (!mal_vm_get_property(vm, arguments_value, mal_intrinsic_string_key(vm, "length"), &length_value)) {
-        return mal_value_new_undefined();
-    }
-    f64 length_number;
-    if (!mal_vm_to_number(vm, length_value, &length_number)) {
-        return mal_value_new_undefined();
-    }
-    // ToLength clamp (capped at u32 for our calling convention).
-    f64 safe_length = mal_ops_number_to_length(length_number);
-    u32 length = safe_length >= (f64) UINT32_MAX ? UINT32_MAX : (u32) safe_length;
-
-    MalValue *call_args = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
-    // Each index Get can invoke a getter that collects; root the already-fetched
-    // arguments (scanning only filled entries) and lift GC suppression. The final
-    // call's args reach the callee's own roots, but keep the span up for it too.
+    // Keep the materialized list alive across proxy/native dispatch checkpoints.
     MalRootSpan args_span;
-    mal_gc_root(&args_span, call_args, 0);
+    mal_gc_root(&args_span, call_args, call_arg_count);
     mal_gc_native_rooted_begin(vm);
-    MalValue ret = mal_value_new_undefined();
-    for (u32 index = 0; index < length; index++) {
-        args_span.count = (i32) index;
-        if (!mal_vm_get_property(vm, arguments_value, mal_key_index(index), &call_args[index])) {
-            goto done;
-        }
-    }
-    args_span.count = (i32) length;
-
-    {
-        MalCompletion completion = mal_vm_call_value(vm, this_value, this_arg, call_args, (i32) length);
-        ret = mal_builtin_function_forward_completion(vm, completion);
-    }
-
-done:
+    MalCompletion completion = mal_vm_call_value(
+        vm, this_value, this_arg, call_args, call_arg_count);
+    MalValue ret = mal_builtin_function_forward_completion(vm, completion);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&args_span);
-    free(call_args);
+    if (call_args != inline_args) free(call_args);
     return ret;
 }
 
@@ -140,9 +115,18 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     i32 bound_count = arg_count > 1 ? arg_count - 1 : 0;
     // BoundFunctionCreate (10.4.1.3): the bound function's [[Prototype]] is the
     // target's [[GetPrototypeOf]](), not unconditionally %Function.prototype%.
-    MalObject *bound_prototype = mal_object_get_prototype(mal_value_to_object(this_value));
-    if (bound_prototype == nullptr) {
-        bound_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *bound_prototype;
+    if (mal_value_is_proxy_object(this_value)) {
+        MalValue prototype_value;
+        if (!mal_proxy_get_prototype_of(
+                vm, mal_value_to_proxy_object(this_value), &prototype_value)) {
+            return mal_value_new_undefined();
+        }
+        bound_prototype = mal_value_is_object(prototype_value)
+            ? mal_value_to_object(prototype_value)
+            : nullptr;
+    } else {
+        bound_prototype = mal_object_get_prototype(mal_value_to_object(this_value));
     }
     MalBoundFunctionObject *bound = mal_bound_function_object_new(
         &vm->heap,
@@ -164,6 +148,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     // real { writable: false, enumerable: false, configurable: true } own property.
     MalKey length_key = mal_intrinsic_string_key(vm, "length");
     bool has_own_length;
+    MalPropertyLookup own_length = {0};
     if (mal_value_is_proxy_object(this_value)) {
         bool present;
         MalPropertyDesc desc;
@@ -173,13 +158,17 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
         }
         has_own_length = present;
     } else {
-        has_own_length = mal_object_get_own(mal_value_to_object(this_value), length_key).present;
+        own_length = mal_object_get_own(mal_value_to_object(this_value), length_key);
+        has_own_length = own_length.present;
     }
 
     f64 length_num = 0;
     if (has_own_length) {
         MalValue target_length;
-        if (!mal_vm_get_property(vm, this_value, length_key, &target_length)) {
+        bool read = mal_value_is_proxy_object(this_value)
+            ? mal_vm_get_property(vm, this_value, length_key, &target_length)
+            : mal_vm_desc_read(vm, own_length.desc, this_value, &target_length);
+        if (!read) {
             mal_gc_unroot(&bound_root);
             return mal_value_new_undefined();
         }
@@ -197,7 +186,20 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     }
     // SetFunctionName: "bound " ++ (target.name if a string, else "").
     MalKey name_key = mal_intrinsic_string_key(vm, "name");
-    if (!mal_vm_get_property(vm, this_value, name_key, &bound_roots[1])) {
+    bool read_name = false;
+    if (!mal_value_is_proxy_object(this_value)) {
+        MalPropertyLookup own_name =
+            mal_object_get_own(mal_value_to_object(this_value), name_key);
+        if (own_name.present) {
+            read_name = mal_vm_desc_read(
+                vm, own_name.desc, this_value, &bound_roots[1]);
+        }
+    }
+    if (!read_name && vm->completion.kind != MAL_COMPLETION_THROW) {
+        read_name = mal_vm_get_property(
+            vm, this_value, name_key, &bound_roots[1]);
+    }
+    if (!read_name) {
         mal_gc_unroot(&bound_root);
         return mal_value_new_undefined();
     }
@@ -247,11 +249,7 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
         return mal_value_new_undefined();
     }
 
-    c16 *code_units = malloc(bytes);
-    if (code_units == nullptr) {
-        mal_builtin_function_throw_string_length(vm);
-        return mal_value_new_undefined();
-    }
+    c16 *code_units = mal_heap_alloc_raw(&vm->heap, bytes);
     usize offset = 0;
     for (usize i = 0; i < lengthof(prefix); i++) {
         code_units[offset++] = (c16) prefix[i];
@@ -264,8 +262,7 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
         code_units[offset++] = (c16) suffix[i];
     }
 
-    MalString *result = mal_string_new_copy(&vm->heap, code_units, total_length);
-    free(code_units);
+    MalString *result = mal_string_new_owned(&vm->heap, code_units, total_length);
     return mal_value_from_string(result);
 }
 

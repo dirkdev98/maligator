@@ -98,6 +98,15 @@ bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
 bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalValue *out);
 
 /**
+ * CreateListFromArrayLike for Function/Reflect call seams. Small lists reuse the
+ * caller-provided storage; larger lists are malloc-owned and must be freed by
+ * the caller when the returned pointer differs from `inline_items`.
+ */
+bool mal_vm_create_list_from_array_like(
+    MalVm *vm, MalValue list, MalValue *inline_items, i32 inline_capacity,
+    MalValue **items_out, i32 *count_out);
+
+/**
  * Spec [[OwnPropertyKeys]] over an object, including Proxy traps and the engine's
  * Array, TypedArray, String-wrapper, and module-namespace exotic own keys. The
  * returned dense array contains String/Symbol key values in property order.

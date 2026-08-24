@@ -275,10 +275,121 @@ bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalVal
     return true;
 }
 
+bool mal_vm_create_list_from_array_like(
+    MalVm *vm, MalValue list, MalValue *inline_items, i32 inline_capacity,
+    MalValue **items_out, i32 *count_out
+) {
+    *items_out = inline_items;
+    *count_out = 0;
+    if (!mal_value_is_object(list)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Arguments list must be an object");
+        return false;
+    }
+
+    MalValue length_value;
+    if (!mal_vm_get_property(
+            vm, list, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
+            &length_value)) {
+        return false;
+    }
+    f64 length_number;
+    if (!mal_vm_to_number(vm, length_value, &length_number)) {
+        return false;
+    }
+
+    f64 safe_length = mal_ops_number_to_length(length_number);
+    if (safe_length > (f64) INT32_MAX) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Arguments list exceeds the maximum call size");
+        return false;
+    }
+    i32 count = (i32) safe_length;
+    if (count == 0) {
+        return true;
+    }
+
+    MalValue *items = count <= inline_capacity
+        ? inline_items
+        : malloc(sizeof(MalValue) * (usize) count);
+    if (items == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+
+    // A fully packed ordinary Array contains only own default-data elements.
+    // Once its non-overridable length has been read, copying those elements has
+    // no user-code checkpoint to skip. Holes and every exotic array-like retain
+    // the indexed Get loop below so inherited accessors and mutation order stay
+    // observable.
+    if (mal_value_is_array_object(list)) {
+        const MalArrayObject *array = mal_value_to_array_object(list);
+        bool packed = array->elements != nullptr &&
+            array->dense_count >= (u32) count;
+        for (i32 index = 0; packed && index < count; index++) {
+            if (mal_value_is_array_hole(array->elements[index])) {
+                packed = false;
+            }
+        }
+        if (packed) {
+            memcpy(items, array->elements, sizeof(MalValue) * (usize) count);
+            *items_out = items;
+            *count_out = count;
+            return true;
+        }
+    }
+
+    MalRootSpan items_span;
+    mal_gc_root(&items_span, items, 0);
+    mal_gc_native_rooted_begin(vm);
+    bool ok = true;
+    for (i32 index = 0; index < count; index++) {
+        items_span.count = index;
+        if (!mal_vm_get_property(vm, list, mal_key_index((u32) index), &items[index])) {
+            ok = false;
+            break;
+        }
+    }
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&items_span);
+    if (!ok) {
+        if (items != inline_items) free(items);
+        return false;
+    }
+
+    *items_out = items;
+    *count_out = count;
+    return true;
+}
+
 static MalValue mal_vm_own_key_value(MalVm *vm, MalKey key) {
     return key.kind == MAL_KEY_INDEX
         ? mal_value_from_string(mal_ops_to_string(&vm->heap, key.value))
         : key.value;
+}
+
+static void mal_vm_own_keys_append(MalArrayObject *keys, MalValue value) {
+    u32 index = mal_array_object_length(keys);
+    if (!mal_array_object_fresh_dense_append(keys, value)) {
+        mal_array_object_store(keys, mal_key_index(index), value);
+    }
+}
+
+static void mal_vm_own_keys_reserve(
+    MalArrayObject *keys, const MalObject *object, usize exotic_count
+) {
+    usize count = exotic_count + object->shape->inline_count;
+    if (object->overflow != nullptr) {
+        count += mal_table_size(object->overflow);
+    }
+    if (object->header.type == MAL_HEAP_ARRAY_OBJECT) {
+        count += ((const MalArrayObject *) object)->dense_count;
+    }
+    if (count <= UINT32_MAX) {
+        mal_array_object_fresh_dense_reserve_exact(keys, (u32) count);
+    }
 }
 
 static bool mal_vm_script_function_has_prototype(MalVm *vm, MalValue value) {
@@ -313,42 +424,55 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
 
     MalArrayObject *keys = mal_intrinsic_new_array(vm, 0);
     *keys_out = mal_value_from_array_object(keys);
-    u32 count = 0;
 
     if (mal_value_is_module_namespace_object(object_value)) {
         MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(object_value);
+        mal_array_object_fresh_dense_reserve_exact(
+            keys, (u32) ns->export_count + 1);
         for (i32 i = 0; i < ns->export_count; i++) {
-            mal_array_object_store(keys,
-                mal_key_index(count++),
-                mal_value_from_string(ns->exports[i].name));
+            mal_vm_own_keys_append(
+                keys, mal_value_from_string(ns->exports[i].name));
         }
-        mal_array_object_store(keys,
-            mal_key_index(count),
+        mal_vm_own_keys_append(
+            keys,
             mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG).value);
         return true;
     }
 
     MalObject *object = mal_value_to_object(object_value);
     bool typed_array = mal_value_is_typed_array_object(object_value);
+    u32 typed_array_length = typed_array
+        ? mal_typed_array_object_length(
+            mal_value_to_typed_array_object(object_value))
+        : 0;
+    MalPropertyDesc string_exotic;
+    bool string_wrapper = mal_primitive_wrapper_string_exotic_own(
+        &vm->heap, object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
+        &string_exotic);
+    u32 string_length = string_wrapper
+        ? (u32) mal_value_to_i32(string_exotic.value)
+        : 0;
+    usize exotic_count = (usize) typed_array_length + string_length;
+    if (string_wrapper || mal_value_is_array_object(object_value)) {
+        exotic_count++;
+    }
+    mal_vm_own_keys_reserve(keys, object, exotic_count);
+
     if (typed_array) {
-        u32 length = mal_typed_array_object_length(mal_value_to_typed_array_object(object_value));
-        for (u32 index = 0; index < length; index++) {
-            mal_array_object_store(keys,
-                mal_key_index(count++),
-                mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index))));
+        for (u32 index = 0; index < typed_array_length; index++) {
+            mal_vm_own_keys_append(
+                keys,
+                mal_value_from_string(mal_ops_to_string(
+                    &vm->heap, mal_value_from_i32((i32) index))));
         }
     }
 
-    MalPropertyDesc string_exotic;
-    bool string_wrapper = mal_primitive_wrapper_string_exotic_own(
-        &vm->heap, object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &string_exotic);
-    u32 string_length = 0;
     if (string_wrapper) {
-        string_length = (u32) mal_value_to_i32(string_exotic.value);
         for (u32 index = 0; index < string_length; index++) {
-            mal_array_object_store(keys,
-                mal_key_index(count++),
-                mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index))));
+            mal_vm_own_keys_append(
+                keys,
+                mal_value_from_string(mal_ops_to_string(
+                    &vm->heap, mal_value_from_i32((i32) index))));
         }
     }
 
@@ -372,29 +496,27 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
             }
         }
         if (string_length_pending && key.kind != MAL_KEY_INDEX) {
-            mal_array_object_store(keys,
-                mal_key_index(count++),
+            mal_vm_own_keys_append(
+                keys,
                 mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
             string_length_pending = false;
         }
         if (length_pending && key.kind != MAL_KEY_INDEX) {
-            mal_array_object_store(keys,
-                mal_key_index(count++),
+            mal_vm_own_keys_append(
+                keys,
                 mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
             length_pending = false;
         }
-        mal_array_object_store(keys,
-            mal_key_index(count++),
-            mal_vm_own_key_value(vm, key));
+        mal_vm_own_keys_append(keys, mal_vm_own_key_value(vm, key));
     }
     if (length_pending) {
-        mal_array_object_store(keys,
-            mal_key_index(count),
+        mal_vm_own_keys_append(
+            keys,
             mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
     }
     if (string_length_pending) {
-        mal_array_object_store(keys,
-            mal_key_index(count),
+        mal_vm_own_keys_append(
+            keys,
             mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
     }
     return true;
@@ -1554,7 +1676,7 @@ void mal_op_load_callee(MalCallable *callable, const MalInstruction *instruction
  * Leaves a pending RangeError (and the stack reset to base) on overflow.
  */
 static void mal_vm_remarshal_bound_args(MalVm *vm, i32 base, const MalBoundResolution *resolution) {
-    if (resolution->owned_args == nullptr) {
+    if (!resolution->args_merged) {
         return;
     }
 
@@ -1680,7 +1802,10 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         return;
     }
 
-    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, &vm->value_stack[base], argument_count, true);
+    MalValue inline_args[MAL_BOUND_INLINE_ARGS];
+    MalBoundResolution resolution = mal_bound_function_object_resolve(
+        callee, this_value, &vm->value_stack[base], argument_count, true,
+        inline_args, countof(inline_args));
 
     if (mal_value_is_function_object(resolution.callee)) {
         mal_vm_remarshal_bound_args(vm, base, &resolution);
@@ -1784,7 +1909,10 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
     }
 
     // The bound this is ignored when constructing.
-    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), &vm->value_stack[base], argument_count, false);
+    MalValue inline_args[MAL_BOUND_INLINE_ARGS];
+    MalBoundResolution resolution = mal_bound_function_object_resolve(
+        callee, mal_value_new_undefined(), &vm->value_stack[base], argument_count,
+        false, inline_args, countof(inline_args));
 
     if (mal_value_is_function_object(resolution.callee)) {
         i32 callee_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));

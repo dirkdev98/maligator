@@ -3,6 +3,7 @@ tests/native/drivers.test.ts
 tests/native/eval-gc-runtime-compilation-p0.test.ts
 tests/native/express-smoke.test.ts
 tests/native/function-call-direct.test.ts
+tests/native/function-reflect-builtins.test.ts
 tests/native/array-push-direct.test.ts
 tests/native/collection-direct.test.ts
 tests/native/gc.test.ts
