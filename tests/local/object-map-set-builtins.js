@@ -394,6 +394,19 @@ check(
 		rootedEntries[0][1].marker === 404 &&
 		rootedEntries[1].join(":") === "after:2",
 );
+let lateValueReads = 0;
+const lateAccessorValues = { first: 1, second: 2 };
+Object.defineProperty(lateAccessorValues, "third", {
+	enumerable: true,
+	get() {
+		lateValueReads++;
+		return 3;
+	},
+});
+check(
+	"Object.values restarts cleanly for a late accessor",
+	Object.values(lateAccessorValues).join(",") === "1,2,3" && lateValueReads === 1,
+);
 
 const freshAssignSource = {};
 Object.defineProperty(freshAssignSource, "fresh", {

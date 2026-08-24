@@ -831,6 +831,20 @@ static MalValue mal_builtin_object_key_to_string(MalVm *vm, MalKey key) {
     return key.value;
 }
 
+static bool mal_builtin_object_plain_capacity(
+    MalObject *object, u32 *capacity_out
+) {
+    usize capacity = object->shape->inline_count;
+    if (object->overflow != nullptr &&
+        !mal_checked_size_add(
+            capacity, mal_table_size(object->overflow), UINT32_MAX,
+            &capacity)) {
+        return false;
+    }
+    *capacity_out = (u32) capacity;
+    return true;
+}
+
 /** Object.keys / getOwnPropertyNames over an exact ordinary object cannot
  * invoke user code. Iterate its shape/table storage directly while the native
  * frame still suppresses collection, avoiding the generic rooted key snapshot
@@ -842,15 +856,9 @@ static bool mal_builtin_object_collect_plain_keys(
     MalArrayObject *result
 ) {
     MalObject *object = mal_value_to_object(target);
-    usize capacity = object->shape->inline_count;
-    if (object->overflow != nullptr) {
-        if (!mal_checked_size_add(
-                capacity, mal_table_size(object->overflow), UINT32_MAX,
-                &capacity)) {
-            return false;
-        }
-    }
-    (void) mal_array_object_fresh_dense_reserve_exact(result, (u32) capacity);
+    u32 capacity;
+    if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;
+    (void) mal_array_object_fresh_dense_reserve_exact(result, capacity);
 
     bool enumerable_only =
         iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
@@ -904,41 +912,23 @@ static MalValue mal_builtin_object_collect_plain_symbols(
     return mal_value_from_array_object(result);
 }
 
-static bool mal_builtin_object_plain_data_count(
-    MalObject *object,
-    usize *count_out
-) {
-    usize count = 0;
-    MalPropertyIter iter;
-    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
-    MalKey key;
-    MalPropertyDesc desc;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (key.kind == MAL_KEY_SYMBOL ||
-            !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
-            continue;
-        }
-        if (desc.flags & MAL_PROPERTY_ACCESSOR) return false;
-        if (count == UINT32_MAX) return false;
-        count++;
-    }
-    *count_out = count;
-    return true;
-}
-
 /** Object.values / entries can likewise bypass the observable generic path
- * when every enumerable string-key property is a plain data descriptor. */
+ * when every enumerable string-key property is a plain data descriptor. Build
+ * during that eligibility scan; a late accessor discards this private result
+ * and lets the caller restart on the observable generic path. */
 static bool mal_builtin_object_collect_plain_data(
     MalVm *vm,
     MalValue target,
     MalBuiltinObjectCollect collect,
-    MalArrayObject *result,
-    usize count
+    MalArrayObject *result
 ) {
-    (void) mal_array_object_fresh_dense_reserve_exact(result, (u32) count);
+    MalObject *object = mal_value_to_object(target);
+    u32 capacity;
+    if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;
+    (void) mal_array_object_fresh_dense_reserve_exact(result, capacity);
     MalPropertyIter iter;
     mal_property_iter_init(
-        &iter, mal_value_to_object(target),
+        &iter, object,
         MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
     u32 index = 0;
     MalKey key;
@@ -948,6 +938,7 @@ static bool mal_builtin_object_collect_plain_data(
             !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
             continue;
         }
+        if (desc.flags & MAL_PROPERTY_ACCESSOR) return false;
         MalValue value = desc.value;
         if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
             MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
@@ -1053,14 +1044,12 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
     }
     if (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) &&
         collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
-        usize count;
-        if (mal_builtin_object_plain_data_count(
-                mal_value_to_object(target), &count)) {
-            return mal_builtin_object_collect_plain_data(
-                    vm, target, collect, result, count)
-                ? result_box
-                : mal_value_new_undefined();
+        if (mal_builtin_object_collect_plain_data(
+                vm, target, collect, result)) {
+            return result_box;
         }
+        result = mal_intrinsic_new_array(vm, 0);
+        result_box = mal_value_from_array_object(result);
     }
     MalRootSpan result_span;
     mal_gc_root(&result_span, &result_box, 1);
