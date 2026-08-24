@@ -2,7 +2,7 @@
   "schema": 2,
   "javascript": {
     "workload": "javascript-v1",
-    "runs": 7,
+    "runs": 5,
     "phaseChecksums": {
       "core": 299544852,
       "objects": 338353713,
@@ -12,26 +12,26 @@
       "allocation": 77034407
     },
     "node": {
-      "wallMs": 457.798958,
+      "wallMs": 343.622875,
       "phaseMs": {
-        "core": 102,
-        "objects": 51,
-        "collections": 76,
-        "text": 73,
-        "async": 58,
-        "allocation": 56
+        "core": 52,
+        "objects": 40,
+        "collections": 68,
+        "text": 67,
+        "async": 44,
+        "allocation": 42
       }
     },
     "modes": {
       "closed-compiled": {
-        "wallMs": 2270.306666,
+        "wallMs": 1942.242625,
         "phaseMs": {
-          "core": 214,
-          "objects": 839,
-          "collections": 404,
-          "text": 292,
-          "async": 147,
-          "allocation": 362
+          "core": 205,
+          "objects": 738,
+          "collections": 314,
+          "text": 244,
+          "async": 120,
+          "allocation": 320
         },
         "world": "closed",
         "backend": "compiled",
@@ -40,24 +40,24 @@
           "eval": false,
           "realms": false
         },
-        "ratio": 4.959178316871573,
-        "balancedRatio": 4.786379971379823,
-        "binaryBytes": 2601288,
-        "collections": 241,
-        "allocatedMb": 1079.2534484863281,
-        "peakLiveKb": 14198.28125,
-        "maxPauseMs": 6.323,
-        "rssMb": 63.796875
+        "ratio": 5.652250668701844,
+        "balancedRatio": 5.422322164562575,
+        "binaryBytes": 2633768,
+        "collections": 232,
+        "allocatedMb": 1071.9608917236328,
+        "peakLiveKb": 12873.546875,
+        "maxPauseMs": 4.404,
+        "rssMb": 60.625
       },
       "open-compiled": {
-        "wallMs": 2962.968209,
+        "wallMs": 2539.827292,
         "phaseMs": {
-          "core": 211,
-          "objects": 890,
-          "collections": 424,
-          "text": 300,
-          "async": 153,
-          "allocation": 987
+          "core": 195,
+          "objects": 752,
+          "collections": 330,
+          "text": 244,
+          "async": 126,
+          "allocation": 890
         },
         "world": "open",
         "backend": "compiled",
@@ -66,24 +66,24 @@
           "eval": true,
           "realms": true
         },
-        "ratio": 6.472203916637136,
-        "balancedRatio": 5.8104204006722195,
-        "binaryBytes": 4750872,
-        "collections": 497,
-        "allocatedMb": 2104.9723358154297,
-        "peakLiveKb": 14616.609375,
-        "maxPauseMs": 6.587,
-        "rssMb": 64.53125
+        "ratio": 7.391321931055957,
+        "balancedRatio": 6.5027135807610374,
+        "binaryBytes": 4832952,
+        "collections": 487,
+        "allocatedMb": 2097.715286254883,
+        "peakLiveKb": 13213.90625,
+        "maxPauseMs": 4.724,
+        "rssMb": 61.21875
       },
       "closed-interpreted": {
-        "wallMs": 5479.562959,
+        "wallMs": 4616.218,
         "phaseMs": {
-          "core": 822,
-          "objects": 1746,
-          "collections": 766,
-          "text": 397,
-          "async": 194,
-          "allocation": 1546
+          "core": 751,
+          "objects": 1515,
+          "collections": 517,
+          "text": 329,
+          "async": 156,
+          "allocation": 1362
         },
         "world": "closed",
         "backend": "interpreted",
@@ -92,24 +92,24 @@
           "eval": false,
           "realms": false
         },
-        "ratio": 11.969365292876004,
-        "balancedRatio": 10.572327844419089,
-        "binaryBytes": 2483024,
-        "collections": 271,
-        "allocatedMb": 1151.0312957763672,
-        "peakLiveKb": 14630.359375,
-        "maxPauseMs": 6.761,
-        "rssMb": 64.4375
+        "ratio": 13.43396594304148,
+        "balancedRatio": 11.528742786981377,
+        "binaryBytes": 2515552,
+        "collections": 242,
+        "allocatedMb": 1134.9823913574219,
+        "peakLiveKb": 14765.8125,
+        "maxPauseMs": 4.734,
+        "rssMb": 64.671875
       },
       "open-interpreted": {
-        "wallMs": 7051.0735,
+        "wallMs": 6013.048208,
         "phaseMs": {
-          "core": 821,
-          "objects": 1791,
-          "collections": 838,
-          "text": 410,
-          "async": 206,
-          "allocation": 2980
+          "core": 737,
+          "objects": 1553,
+          "collections": 570,
+          "text": 336,
+          "async": 163,
+          "allocation": 2678
         },
         "world": "open",
         "backend": "interpreted",
@@ -118,14 +118,14 @@
           "eval": true,
           "realms": true
         },
-        "ratio": 15.402117844051537,
-        "balancedRatio": 12.206876394846338,
-        "binaryBytes": 4648008,
-        "collections": 526,
-        "allocatedMb": 2176.7501831054688,
-        "peakLiveKb": 15260.84375,
-        "maxPauseMs": 6.82,
-        "rssMb": 65.703125
+        "ratio": 17.498975317053617,
+        "balancedRatio": 13.271409179976192,
+        "binaryBytes": 4730120,
+        "collections": 496,
+        "allocatedMb": 2160.736785888672,
+        "peakLiveKb": 15364.390625,
+        "maxPauseMs": 5.146,
+        "rssMb": 65.9375
       }
     }
   },
