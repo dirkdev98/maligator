@@ -2597,6 +2597,16 @@ static bool mal_builtin_array_sort_order(MalVm *vm, MalValue comparator, MalValu
         return true;
     }
 
+    // The default comparator's ToString steps are identity and non-observable
+    // when both values are already string primitives. Compare their native
+    // representations directly instead of publishing three temporary roots and
+    // entering the generic VM coercion path for every merge comparison.
+    if (mal_value_is_string(left) && mal_value_is_string(right)) {
+        *order_out = (f64) mal_string_compare(
+            mal_value_to_string(left), mal_value_to_string(right));
+        return true;
+    }
+
     MalValue roots[] = {left, right, mal_value_new_undefined()};
     MalRootSpan roots_span;
     mal_gc_root(&roots_span, roots, 3);

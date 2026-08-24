@@ -166,6 +166,29 @@ check(
 	Object.getOwnPropertySymbols(descriptorProxy)[0] === descriptorSymbol,
 );
 
+let plainKeyGetterCalls = 0;
+const plainKeySymbol = Symbol("plain-key");
+const plainKeySource = { beta: 1, 7: 2, alpha: 3, 2: 4 };
+Object.defineProperty(plainKeySource, "observed", {
+	enumerable: true,
+	get() {
+		plainKeyGetterCalls++;
+		return 5;
+	},
+});
+Object.defineProperty(plainKeySource, "hidden", {
+	value: 6,
+	enumerable: false,
+});
+plainKeySource[plainKeySymbol] = 7;
+check(
+	"Object plain key collection preserves order and descriptors",
+	Object.keys(plainKeySource).join(",") === "2,7,beta,alpha,observed" &&
+		Object.getOwnPropertyNames(plainKeySource).join(",") ===
+			"2,7,beta,alpha,observed,hidden" &&
+		plainKeyGetterCalls === 0,
+);
+
 let predicateDescriptorCalls = 0;
 const predicateProxy = new Proxy(
 	{ visible: 1 },

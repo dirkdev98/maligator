@@ -3,6 +3,7 @@
 #include "builtin_error.h"
 #include "arguments_object.h"
 #include "builtin_iterator.h"
+#include "checked_size.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "module_namespace_object.h"
@@ -829,6 +830,46 @@ static MalValue mal_builtin_object_key_to_string(MalVm *vm, MalKey key) {
     return key.value;
 }
 
+/** Object.keys / getOwnPropertyNames over an exact ordinary object cannot
+ * invoke user code. Iterate its shape/table storage directly while the native
+ * frame still suppresses collection, avoiding the generic rooted key snapshot
+ * and a second descriptor lookup for every property. */
+static bool mal_builtin_object_collect_plain_keys(
+    MalVm *vm,
+    MalValue target,
+    MalPropertyIterKind iter_kind,
+    MalArrayObject *result
+) {
+    MalObject *object = mal_value_to_object(target);
+    usize capacity = object->shape->inline_count;
+    if (object->overflow != nullptr) {
+        if (!mal_checked_size_add(
+                capacity, mal_table_size(object->overflow), UINT32_MAX,
+                &capacity)) {
+            return false;
+        }
+    }
+    (void) mal_array_object_fresh_dense_reserve_exact(result, (u32) capacity);
+
+    bool enumerable_only =
+        iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
+    u32 count = 0;
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (key.kind == MAL_KEY_SYMBOL ||
+            (enumerable_only && !(desc.flags & MAL_PROPERTY_ENUMERABLE))) {
+            continue;
+        }
+        mal_array_object_store(
+            result, mal_key_index(count++),
+            mal_builtin_object_key_to_string(vm, key));
+    }
+    return true;
+}
+
 // Fills `result` with the collected keys/values/entries; returns false with a
 // pending throw on an abrupt step. `result` is rooted by the caller wrapper
 // (mal_builtin_object_collect) across the getter/trap re-entry below.
@@ -911,6 +952,13 @@ static bool mal_builtin_object_collect_impl(MalVm *vm, MalValue target, MalPrope
 static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect) {
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     MalValue result_box = mal_value_from_array_object(result);
+    if (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) &&
+        collect == MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+        return mal_builtin_object_collect_plain_keys(
+                vm, target, iter_kind, result)
+            ? result_box
+            : mal_value_new_undefined();
+    }
     MalRootSpan result_span;
     mal_gc_root(&result_span, &result_box, 1);
     mal_gc_native_rooted_begin(vm);

@@ -510,6 +510,12 @@ check(
 	"String.prototype.concat remains correct",
 	"a".concat("\ud83d\ude00", "b") === "a\ud83d\ude00b",
 );
+check(
+	"primitive concat handles inline, empty, and flat owned parts",
+	"ab".concat("", "c", "d") === "abcd" &&
+		"route".concat("/", "users", "/", "active", "?page=1") ===
+			"route/users/active?page=1",
+);
 check("empty String.prototype.concat remains correct", "".concat("") === "");
 let concatReceiverCoercions = 0;
 check(

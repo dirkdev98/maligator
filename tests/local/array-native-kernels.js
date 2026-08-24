@@ -148,6 +148,19 @@ async function main() {
 			defaultSorted[4] === undefined &&
 			!(5 in defaultSorted),
 	);
+	const primitiveStringSorted = [
+		"pear",
+		"apple",
+		"orange",
+		"banana",
+		"plum",
+		"grape",
+	];
+	primitiveStringSorted.sort();
+	check(
+		"sort compares primitive strings directly",
+		primitiveStringSorted.join(",") === "apple,banana,grape,orange,pear,plum",
+	);
 	let compareCoercions = 0;
 	const comparatorSorted = [3, 1, 2];
 	comparatorSorted.sort((left, right) => ({

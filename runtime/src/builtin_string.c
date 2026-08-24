@@ -1647,6 +1647,68 @@ static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_val
             : mal_value_from_string(string);
     }
 
+    // Primitive strings require no observable coercion. Build their exact flat
+    // result directly, avoiding the malloc-backed root-part vector used by the
+    // generic path for object arguments whose ToString hooks may re-enter.
+    if (mal_builtin_string_is_flat_value(this_value)) {
+        usize total_length = mal_string_length(mal_value_to_string(this_value));
+        bool primitive = true;
+        for (i32 i = 0; i < arg_count; i++) {
+            if (!mal_builtin_string_is_flat_value(args[i]) ||
+                !mal_checked_size_add(
+                    total_length, mal_string_length(mal_value_to_string(args[i])),
+                    MAL_STRING_MAX_CODE_UNITS, &total_length)) {
+                primitive = false;
+                break;
+            }
+        }
+        if (primitive) {
+            if (total_length == mal_string_length(mal_value_to_string(this_value))) {
+                return this_value;
+            }
+            if (total_length <= MAL_STRING_INLINE_CODE_UNITS) {
+                c16 units[MAL_STRING_INLINE_CODE_UNITS];
+                usize offset = 0;
+                MalString *part = mal_value_to_string(this_value);
+                usize part_length = mal_string_length(part);
+                memcpy(units, mal_string_code_units(part), sizeof(c16) * part_length);
+                offset += part_length;
+                for (i32 i = 0; i < arg_count; i++) {
+                    part = mal_value_to_string(args[i]);
+                    part_length = mal_string_length(part);
+                    memcpy(units + offset, mal_string_code_units(part), sizeof(c16) * part_length);
+                    offset += part_length;
+                }
+                return mal_builtin_string_from_units(vm, units, total_length);
+            }
+            usize bytes;
+            if (!mal_checked_size_multiply(
+                    sizeof(c16), total_length, SIZE_MAX, &bytes)) {
+                mal_builtin_string_throw_length(vm);
+                return mal_value_new_undefined();
+            }
+            c16 *units = mal_heap_try_alloc_raw_profiled(
+                &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+            if (units == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                return mal_value_new_undefined();
+            }
+            usize offset = 0;
+            MalString *part = mal_value_to_string(this_value);
+            usize part_length = mal_string_length(part);
+            memcpy(units, mal_string_code_units(part), sizeof(c16) * part_length);
+            offset += part_length;
+            for (i32 i = 0; i < arg_count; i++) {
+                part = mal_value_to_string(args[i]);
+                part_length = mal_string_length(part);
+                memcpy(units + offset, mal_string_code_units(part), sizeof(c16) * part_length);
+                offset += part_length;
+            }
+            return mal_value_from_string(
+                mal_string_new_owned(&vm->heap, units, total_length));
+        }
+    }
+
     usize part_count;
     if (!mal_checked_size_add((usize) arg_count, 1, INT32_MAX, &part_count)) {
         mal_builtin_string_throw_length(vm);
