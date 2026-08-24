@@ -365,13 +365,18 @@ static MalValue mal_atomics_compare_exchange(MalVm *vm, MalValue this_value, con
         return mal_value_new_undefined();
     }
     u32 element_size = mal_typed_array_element_size(array->kind);
-    MalValue old_value = mal_typed_array_object_get(vm, array, index);
-    u64 old_bits = mal_ops_number_to_uint_width(mal_ops_to_number(old_value), element_size * 8);
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span)) {
+        return mal_value_new_undefined();
+    }
+    u64 old_bits = mal_typed_array_span_load_bits(&span, index);
     u64 expected_bits = mal_ops_number_to_uint_width(expected_num, element_size * 8);
     if (old_bits == expected_bits) {
-        mal_typed_array_object_set(vm, array, index, mal_ops_number_value(replacement_num));
+        u64 replacement_bits = mal_ops_number_to_uint_width(
+            replacement_num, element_size * 8);
+        mal_typed_array_span_store_bits(&span, index, replacement_bits);
     }
-    return old_value;
+    return atomics_numeric_value_from_bits(array->kind, old_bits);
 }
 
 static MalValue mal_atomics_is_lock_free(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
