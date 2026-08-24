@@ -477,6 +477,39 @@ static MalValue mal_builtin_number_format_result(
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, buffer, (usize) length));
 }
 
+static i32 mal_builtin_number_format_safe_integer_fixed(
+    f64 number, i32 fraction_digits, byte *out, usize capacity
+) {
+    byte reverse_digits[24];
+    usize digit_count = 0;
+    u64 magnitude = (u64) fabs(number);
+    do {
+        reverse_digits[digit_count++] = (byte) ('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude != 0);
+
+    usize required = digit_count + (number < 0.0 ? 1 : 0) +
+        (fraction_digits > 0 ? (usize) fraction_digits + 1 : 0);
+    if (required > capacity) {
+        abort();
+    }
+
+    usize length = 0;
+    if (number < 0.0) {
+        out[length++] = '-';
+    }
+    while (digit_count > 0) {
+        out[length++] = reverse_digits[--digit_count];
+    }
+    if (fraction_digits > 0) {
+        out[length++] = '.';
+        for (i32 i = 0; i < fraction_digits; i++) {
+            out[length++] = '0';
+        }
+    }
+    return (i32) length;
+}
+
 static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -509,7 +542,15 @@ static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_v
     }
 
     byte buffer[160];
-    i32 length = mal_number_format_fixed(number, (i32) digits, buffer, (i32) sizeof(buffer));
+    i32 length;
+    if (trunc(number) == number &&
+        fabs(number) <= MAL_NUMBER_MAX_SAFE_INTEGER) {
+        length = mal_builtin_number_format_safe_integer_fixed(
+            number, (i32) digits, buffer, sizeof(buffer));
+    } else {
+        length = mal_number_format_fixed(
+            number, (i32) digits, buffer, (i32) sizeof(buffer));
+    }
     return mal_builtin_number_format_result(vm, buffer, length, sizeof(buffer));
 }
 
