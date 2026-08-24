@@ -2092,15 +2092,28 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
         // A defined @@isConcatSpreadable overrides the IsArray fallback.
         bool spreadable = false;
         if (mal_value_is_object(source)) {
-            MalValue spreadable_value;
-            if (!mal_vm_get_property(vm, source, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE), &spreadable_value)) {
-                return mal_value_new_undefined();
-            }
-
-            if (!mal_value_is_undefined(spreadable_value)) {
-                spreadable = mal_value_is_truthy(spreadable_value);
-            } else if (!mal_vm_is_array(vm, source, &spreadable)) {
-                return mal_value_new_undefined();
+            MalKey spreadable_key = mal_intrinsic_symbol_key(
+                vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE);
+            bool default_array_spread = mal_primitive_method_protector &&
+                mal_builtin_array_clean_dense(vm, source) != nullptr &&
+                !mal_object_get_own(
+                    mal_value_to_object(source), spreadable_key).present;
+            if (default_array_spread) {
+                // The watched intrinsic prototype chain contains no
+                // @@isConcatSpreadable property, so this exact Array follows
+                // the IsArray fallback without a generic property lookup.
+                spreadable = true;
+            } else {
+                MalValue spreadable_value;
+                if (!mal_vm_get_property(
+                        vm, source, spreadable_key, &spreadable_value)) {
+                    return mal_value_new_undefined();
+                }
+                if (!mal_value_is_undefined(spreadable_value)) {
+                    spreadable = mal_value_is_truthy(spreadable_value);
+                } else if (!mal_vm_is_array(vm, source, &spreadable)) {
+                    return mal_value_new_undefined();
+                }
             }
         }
 
