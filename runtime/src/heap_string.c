@@ -706,6 +706,81 @@ u64 mal_string_hash_slow(const MalString *string) {
     return mutable->hash;
 }
 
+#define MAL_STRING_STRUCTURAL_COMPARE_CAPACITY ((usize) 64)
+
+typedef struct MalStringComparePair {
+    const MalString *left;
+    const MalString *right;
+} MalStringComparePair;
+
+/**
+ * Compare equally sized, identically partitioned ropes without flattening them.
+ * Repeat builds shared DAGs, so matching duplicated children only need one visit.
+ * Return false when the partitions or depth do not fit this bounded fast path.
+ */
+static bool mal_string_compare_structural(
+    const MalString *left, const MalString *right, i32 *result_out
+) {
+    if (left->length != right->length ||
+        left->storage != MAL_STRING_STORAGE_CONS ||
+        right->storage != MAL_STRING_STORAGE_CONS) {
+        return false;
+    }
+    MalStringComparePair stack[MAL_STRING_STRUCTURAL_COMPARE_CAPACITY];
+    usize count = 1;
+    stack[0] = (MalStringComparePair) {.left = left, .right = right};
+
+    while (count > 0) {
+        MalStringComparePair pair = stack[--count];
+        if (pair.left == pair.right) continue;
+        if (pair.left->length != pair.right->length) return false;
+
+        bool left_cons = pair.left->storage == MAL_STRING_STORAGE_CONS;
+        bool right_cons = pair.right->storage == MAL_STRING_STORAGE_CONS;
+        if (left_cons || right_cons) {
+            if (!left_cons || !right_cons ||
+                pair.left->left->length != pair.right->left->length) {
+                return false;
+            }
+            if (pair.left->left == pair.left->right &&
+                pair.right->left == pair.right->right) {
+                if (count == MAL_STRING_STRUCTURAL_COMPARE_CAPACITY) return false;
+                stack[count++] = (MalStringComparePair) {
+                    .left = pair.left->left,
+                    .right = pair.right->left,
+                };
+                continue;
+            }
+            if (count > MAL_STRING_STRUCTURAL_COMPARE_CAPACITY - 2) return false;
+            stack[count++] = (MalStringComparePair) {
+                .left = pair.left->right,
+                .right = pair.right->right,
+            };
+            stack[count++] = (MalStringComparePair) {
+                .left = pair.left->left,
+                .right = pair.right->left,
+            };
+            continue;
+        }
+
+        const c16 *left_units = mal_string_code_units(pair.left);
+        const c16 *right_units = mal_string_code_units(pair.right);
+        for (usize i = 0; i < pair.left->length; i++) {
+            if (left_units[i] < right_units[i]) {
+                *result_out = -1;
+                return true;
+            }
+            if (left_units[i] > right_units[i]) {
+                *result_out = 1;
+                return true;
+            }
+        }
+    }
+
+    *result_out = 0;
+    return true;
+}
+
 bool mal_string_equals(const MalString *left, const MalString *right) {
     MAL_PERF_COUNT(string_equals_calls);
     if (left == right) {
@@ -716,6 +791,10 @@ bool mal_string_equals(const MalString *left, const MalString *right) {
     if (left->length != right->length) {
         MAL_PERF_COUNT(string_length_misses);
         return false;
+    }
+    i32 structural_result;
+    if (mal_string_compare_structural(left, right, &structural_result)) {
+        return structural_result == 0;
     }
     // Hashing is only a useful prefilter when both hashes already exist. Computing
     // either one here adds a full code-unit pass before memcmp, and dependent
@@ -736,6 +815,10 @@ bool mal_string_equals(const MalString *left, const MalString *right) {
 
 i32 mal_string_compare(const MalString *left, const MalString *right) {
     usize min_length = left->length < right->length ? left->length : right->length;
+    i32 structural_result;
+    if (mal_string_compare_structural(left, right, &structural_result)) {
+        return structural_result;
+    }
     const c16 *left_code_units = mal_string_code_units(left);
     const c16 *right_code_units = mal_string_code_units(right);
 

@@ -157,6 +157,18 @@ check(
 		consSearchSubject.trim() === consSearchSubject &&
 		consSearchSubject.isWellFormed(),
 );
+const repeatedRope = "ab".repeat(32768) + "c";
+const equalRepeatedRope = "ab".repeat(32768) + "c";
+const greaterRepeatedRope = "ab".repeat(32768) + "d";
+const differentlyPartitionedRope = "abab".repeat(16384) + "c";
+check(
+	"equality and comparison preserve shared and differently partitioned ropes",
+	repeatedRope === equalRepeatedRope &&
+		repeatedRope === differentlyPartitionedRope &&
+		repeatedRope < greaterRepeatedRope &&
+		greaterRepeatedRope > equalRepeatedRope &&
+		!(repeatedRope < equalRepeatedRope),
+);
 const searchCoercionOrder = [];
 const orderedSearch = {
 	get [Symbol.match]() {
