@@ -752,6 +752,14 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         if (!mal_vm_get_iterator(vm, source, &record)) {
             return mal_value_new_undefined();
         }
+        if (plain_mode) {
+            usize size_hint;
+            if (mal_vm_builtin_iterator_size_hint(&record, &size_hint) &&
+                size_hint <= UINT32_MAX) {
+                (void) mal_array_object_fresh_dense_reserve_exact(
+                    mal_value_to_array_object(a), (u32) size_hint);
+            }
+        }
 
         // Each step (iterator.next) and the mapfn re-enter JS and can collect;
         // root the record, the result A, and the in-flight element, and lift GC
@@ -766,7 +774,7 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         while (true) {
             MalValue element;
             bool done;
-            if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
+            if (!mal_vm_iterator_step_fast(vm, &record, &element, &done)) {
                 goto iter_done;
             }
 
@@ -789,10 +797,13 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
 
             bool ok;
             if (plain_mode) {
-                // The direct writer grows a fresh plain array's length to cover
-                // each newly appended index.
-                mal_builtin_array_store_index(
-                    mal_value_to_array_object(roots[0]), index, element);
+                MalArrayObject *result_array =
+                    mal_value_to_array_object(roots[0]);
+                if (!mal_array_object_fresh_dense_append(
+                        result_array, element)) {
+                    mal_builtin_array_store_index(
+                        result_array, index, element);
+                }
                 ok = true;
             } else {
                 ok = mal_builtin_array_create_data_property(vm, roots[0], index, element);
