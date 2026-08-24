@@ -401,25 +401,43 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
         // get traps.
         MalRootedKeySnapshot own_keys;
         mal_rooted_key_snapshot_init(&own_keys);
-        ok = mal_rooted_key_snapshot_own_keys(vm, value, &own_keys);
-
         MalRootedKeySnapshot keys;
         mal_rooted_key_snapshot_init(&keys);
-        for (usize i = 0; ok && i < own_keys.count; i++) {
-            if (own_keys.keys[i].kind == MAL_KEY_SYMBOL) {
-                continue;
-            }
-            bool present;
+
+        MalObject *object = mal_value_to_object(value);
+        if (object->header.type == MAL_HEAP_OBJECT) {
+            // A plain ordinary object exposes exactly its shape/table properties.
+            // Snapshot their already-available descriptors directly; exotics and
+            // proxies retain the full [[OwnPropertyKeys]]/[[GetOwnProperty]] path.
+            MalPropertyIter iter;
+            mal_property_iter_init(
+                &iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+            MalKey key;
             MalPropertyDesc desc;
-            if (!mal_vm_get_own_property(
-                    vm, value, own_keys.keys[i], &present, &desc)) {
-                ok = false;
-                break;
+            while (mal_property_iter_next(&iter, &key, &desc)) {
+                if (key.kind != MAL_KEY_SYMBOL &&
+                    (desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+                    mal_rooted_key_snapshot_append(&keys, key);
+                }
             }
-            if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
-                continue;
+        } else {
+            ok = mal_rooted_key_snapshot_own_keys(vm, value, &own_keys);
+            for (usize i = 0; ok && i < own_keys.count; i++) {
+                if (own_keys.keys[i].kind == MAL_KEY_SYMBOL) {
+                    continue;
+                }
+                bool present;
+                MalPropertyDesc desc;
+                if (!mal_vm_get_own_property(
+                        vm, value, own_keys.keys[i], &present, &desc)) {
+                    ok = false;
+                    break;
+                }
+                if (present && (desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+                    mal_rooted_key_snapshot_append(
+                        &keys, own_keys.keys[i]);
+                }
             }
-            mal_rooted_key_snapshot_append(&keys, own_keys.keys[i]);
         }
         for (usize i = 0; ok && i < keys.count; i++) {
             MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys.keys[i].value));
