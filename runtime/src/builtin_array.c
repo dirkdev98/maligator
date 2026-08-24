@@ -961,6 +961,21 @@ static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u
  * false with a pending throw on any abrupt step.
  */
 static bool mal_builtin_array_species_create(MalVm *vm, MalValue original, f64 length, MalValue *out) {
+    // For an exact current-realm Array whose constructor and @@species remain
+    // structurally default, both Get operations and the builtin species getter
+    // are effect-free and necessarily select ArrayCreate. Share that guard
+    // across every species-producing Array method.
+    if (mal_builtin_array_clean_dense(vm, original) != nullptr &&
+        mal_array_default_species(vm, original)) {
+        if (length > 4294967295.0) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+            return false;
+        }
+        *out = mal_value_from_array_object(
+            mal_intrinsic_new_array(vm, (u32) length));
+        return true;
+    }
+
     MalValue constructor = mal_value_new_undefined();
     bool is_array;
     if (!mal_vm_is_array(vm, original, &is_array)) {
