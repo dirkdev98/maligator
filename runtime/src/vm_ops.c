@@ -327,12 +327,8 @@ bool mal_vm_create_list_from_array_like(
     if (mal_value_is_array_object(list)) {
         const MalArrayObject *array = mal_value_to_array_object(list);
         bool packed = array->elements != nullptr &&
-            array->dense_count >= (u32) count;
-        for (i32 index = 0; packed && index < count; index++) {
-            if (mal_value_is_array_hole(array->elements[index])) {
-                packed = false;
-            }
-        }
+            array->dense_count >= (u32) count &&
+            !array->dense_maybe_holey;
         if (packed) {
             memcpy(items, array->elements, sizeof(MalValue) * (usize) count);
             *items_out = items;
@@ -2097,12 +2093,8 @@ static bool mal_vm_try_marshal_dense_array(
         vm->value_stack_capacity - vm->value_stack_size;
     bool dense = array->elements != nullptr
         && array->dense_count >= length
+        && !array->dense_maybe_holey
         && length <= (u32) available;
-    for (u32 i = 0; dense && i < length; i++) {
-        if (mal_value_is_array_hole(array->elements[i])) {
-            dense = false;
-        }
-    }
     if (!dense) return false;
 
     i32 base = vm->value_stack_size;

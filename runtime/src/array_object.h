@@ -38,6 +38,12 @@ typedef struct MalArrayObject {
      * the first contiguous index store creates the vector).
      */
     bool dense_deopted : 1;
+
+    /**
+     * Conservative hole summary for the dense region. False proves every slot in
+     * [0, dense_count) is present; true may remain set after later hole filling.
+     */
+    bool dense_maybe_holey : 1;
 } MalArrayObject;
 
 static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");

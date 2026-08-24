@@ -297,6 +297,7 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
     array->capacity = 0;
     array->dense_count = 0;
     array->dense_deopted = true;
+    array->dense_maybe_holey = false;
     if (buffer == nullptr) {
         return; // lazy-empty array: nothing to migrate
     }

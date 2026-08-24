@@ -22,6 +22,7 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
     array->capacity = 0;
     array->dense_count = 0;
     array->dense_deopted = false;
+    array->dense_maybe_holey = false;
 }
 
 bool mal_array_object_is_dense(const MalArrayObject *array) {
@@ -284,6 +285,8 @@ bool mal_array_object_dense_build_range(
             value = mal_value_new_undefined();
         }
         array->elements[start + index] = value;
+        array->dense_maybe_holey =
+            array->dense_maybe_holey || mal_value_is_array_hole(value);
         mal_gc_card(&array->object.header, value);
     }
     array->dense_count = start + count;
@@ -437,6 +440,9 @@ MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index
         return MAL_ARRAY_DENSE_NEEDS_TABLE;
     }
     // Fill the gap [dense_count, index) with holes, then place the value.
+    if (index > array->dense_count) {
+        array->dense_maybe_holey = true;
+    }
     for (u32 i = array->dense_count; i < index; i++) {
         array->elements[i] = mal_value_new_array_hole();
     }
@@ -452,6 +458,7 @@ void mal_array_object_dense_delete(MalArrayObject *array, u32 index) {
     }
     mal_gc_write_barrier(array->elements[index]);
     array->elements[index] = mal_value_new_array_hole();
+    array->dense_maybe_holey = true;
 }
 
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
