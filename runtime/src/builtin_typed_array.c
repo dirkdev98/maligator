@@ -21,6 +21,18 @@ static MalObject *mal_ta_kind_prototype(MalVm *vm, MalTypedArrayKind kind) {
     return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind]);
 }
 
+static bool mal_ta_default_species(
+    MalVm *vm, MalTypedArrayObject *array
+) {
+    if (!mal_primitive_method_protector ||
+        array->object.prototype != mal_ta_kind_prototype(vm, array->kind)) {
+        return false;
+    }
+    return !mal_object_get_own(
+        &array->object,
+        mal_intrinsic_string_key(vm, "constructor")).present;
+}
+
 static MalValue mal_ta_create_impl(
     MalVm *vm, MalTypedArrayKind kind, u32 length, bool initialize) {
     u32 element_size = mal_typed_array_element_size(kind);
@@ -113,6 +125,13 @@ static bool mal_ta_species_construct(MalVm *vm, MalValue species, const MalValue
 
 // TypedArraySpeciesCreate(exemplar, «length»).
 static bool mal_ta_species_create(MalVm *vm, MalTypedArrayObject *exemplar, u32 length, bool writable, MalValue *out) {
+    if (mal_ta_default_species(vm, exemplar)) {
+        // The watched concrete prototype/constructor chain still resolves the
+        // builtin constructor and inherited @@species getter. Its construction
+        // is exactly an unobservable same-kind allocation.
+        *out = mal_ta_create(vm, exemplar->kind, length);
+        return true;
+    }
     MalValue species;
     if (!mal_ta_species_constructor(vm, exemplar, &species)) {
         return false;
