@@ -2121,6 +2121,21 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
     MAL_PERF_ADD(string_case_input_code_units, length);
 
     usize changed_at = 0;
+    while (length - changed_at >= 4) {
+        bool unchanged = true;
+        for (usize lane = 0; lane < 4; lane++) {
+            c16 source_unit = source[changed_at + lane];
+            c16 mapped_unit = to_upper
+                ? mal_ascii_to_upper(source_unit)
+                : mal_ascii_to_lower(source_unit);
+            if (mapped_unit != source_unit) {
+                unchanged = false;
+                break;
+            }
+        }
+        if (!unchanged) break;
+        changed_at += 4;
+    }
     while (changed_at < length) {
         c16 source_unit = source[changed_at];
         c16 mapped_unit =
@@ -2140,7 +2155,16 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
         if (changed_at > 0) {
             memcpy(code_units, source, sizeof(c16) * changed_at);
         }
-        for (usize i = changed_at; i < length; i++) {
+        usize i = changed_at;
+        while (length - i >= 4) {
+            for (usize lane = 0; lane < 4; lane++) {
+                code_units[i + lane] = to_upper
+                    ? mal_ascii_to_upper(source[i + lane])
+                    : mal_ascii_to_lower(source[i + lane]);
+            }
+            i += 4;
+        }
+        for (; i < length; i++) {
             code_units[i] =
                 to_upper ? mal_ascii_to_upper(source[i]) : mal_ascii_to_lower(source[i]);
         }
@@ -2158,7 +2182,16 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
     if (changed_at > 0) {
         memcpy(code_units, source, sizeof(c16) * changed_at);
     }
-    for (usize i = changed_at; i < length; i++) {
+    usize i = changed_at;
+    while (length - i >= 4) {
+        for (usize lane = 0; lane < 4; lane++) {
+            code_units[i + lane] = to_upper
+                ? mal_ascii_to_upper(source[i + lane])
+                : mal_ascii_to_lower(source[i + lane]);
+        }
+        i += 4;
+    }
+    for (; i < length; i++) {
         code_units[i] =
             to_upper ? mal_ascii_to_upper(source[i]) : mal_ascii_to_lower(source[i]);
     }
@@ -2218,7 +2251,14 @@ static bool mal_builtin_string_ascii_case_chain_length_span_impl(
         return false;
     }
     const c16 *units = mal_string_code_units(string);
-    for (i32 index = start; index < end; index++) {
+    i32 index = start;
+    while (end - index >= 4) {
+        u64 word;
+        memcpy(&word, units + index, sizeof(word));
+        if ((word & 0xff80ff80ff80ff80ULL) != 0) return false;
+        index += 4;
+    }
+    for (; index < end; index++) {
         if (units[index] > 0x7f) {
             return false;
         }
@@ -2258,6 +2298,28 @@ bool mal_builtin_string_ascii_case_chain_length_span_locked(
         true);
 }
 
+static usize mal_builtin_string_find_invalid_utf16(
+    const c16 *units, usize length
+) {
+    usize index = 0;
+    while (index < length) {
+        while (length - index >= 4 &&
+               !mal_utf16_is_surrogate(units[index]) &&
+               !mal_utf16_is_surrogate(units[index + 1]) &&
+               !mal_utf16_is_surrogate(units[index + 2]) &&
+               !mal_utf16_is_surrogate(units[index + 3])) {
+            index += 4;
+        }
+        if (index == length) break;
+        usize width;
+        if (!mal_utf16_read_scalar(units, length, index, nullptr, &width)) {
+            return index;
+        }
+        index += width;
+    }
+    return length;
+}
+
 // A code unit is a surrogate paired with its neighbour, a lone surrogate, or an
 // ordinary unit. isWellFormed is false when any lone surrogate is present.
 static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2272,14 +2334,8 @@ static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue 
     usize length = mal_string_length(string);
     const c16 *units;
     string = mal_builtin_string_flatten_for_scan(string, &units);
-    for (usize i = 0; i < length;) {
-        usize width;
-        if (!mal_utf16_read_scalar(units, length, i, nullptr, &width)) {
-            return mal_value_new_boolean(false);
-        }
-        i += width;
-    }
-    return mal_value_new_boolean(true);
+    return mal_value_new_boolean(
+        mal_builtin_string_find_invalid_utf16(units, length) == length);
 }
 
 // Replace each lone surrogate with U+FFFD (the replacement character), leaving
@@ -2296,15 +2352,7 @@ static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue 
     usize length = mal_string_length(string);
     const c16 *source;
     string = mal_builtin_string_flatten_for_scan(string, &source);
-    usize first_invalid = length;
-    for (usize i = 0; i < length;) {
-        usize width;
-        if (!mal_utf16_read_scalar(source, length, i, nullptr, &width)) {
-            first_invalid = i;
-            break;
-        }
-        i += width;
-    }
+    usize first_invalid = mal_builtin_string_find_invalid_utf16(source, length);
     if (first_invalid == length) {
         return mal_value_from_string(string);
     }

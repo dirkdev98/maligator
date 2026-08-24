@@ -70,6 +70,14 @@ check(
 		malformed.toWellFormed() === "\ufffdA\ufffd" + pair &&
 		JSON.stringify(malformed) === '"\\ud800A\\udc00' + pair + '"',
 );
+const boundaryPair = "abc\ud83d\ude00x";
+const boundaryLone = "abc\ud800x";
+check(
+	"well-formed scans preserve block-boundary surrogate pairs",
+	boundaryPair.isWellFormed() &&
+		!boundaryLone.isWellFormed() &&
+		boundaryLone.toWellFormed() === "abc\ufffdx",
+);
 
 let uriLeadThrew = false;
 let uriTrailThrew = false;
