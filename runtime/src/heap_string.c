@@ -259,9 +259,9 @@ static MalString *mal_string_copy_range(
     usize offset,
     usize length
 ) {
-    usize capacity = 64;
-    MalStringRangePart *stack = malloc(sizeof(MalStringRangePart) * capacity);
-    if (stack == nullptr) abort();
+    MalStringRangePart inline_stack[64];
+    usize capacity = sizeof(inline_stack) / sizeof(inline_stack[0]);
+    MalStringRangePart *stack = inline_stack;
 
     c16 *code_units = mal_heap_alloc_raw_profiled(
         heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
@@ -294,8 +294,16 @@ static MalString *mal_string_copy_range(
                 )) {
                 abort();
             }
-            MalStringRangePart *grown =
-                realloc(stack, sizeof(MalStringRangePart) * grown_capacity);
+            MalStringRangePart *grown;
+            if (stack == inline_stack) {
+                grown = malloc(sizeof(MalStringRangePart) * grown_capacity);
+                if (grown != nullptr) {
+                    memcpy(grown, stack, sizeof(MalStringRangePart) * count);
+                }
+            } else {
+                grown = realloc(
+                    stack, sizeof(MalStringRangePart) * grown_capacity);
+            }
             if (grown == nullptr) abort();
             stack = grown;
             capacity = grown_capacity;
@@ -311,7 +319,7 @@ static MalString *mal_string_copy_range(
         };
     }
 
-    free(stack);
+    if (stack != inline_stack) free(stack);
     return mal_string_new_owned(heap, code_units, length);
 }
 
@@ -590,11 +598,9 @@ typedef struct MalStringFlattenTask {
 const c16 *mal_string_flatten(MalString *mutable) {
     MAL_PERF_COUNT(string_flatten_calls);
     MAL_PERF_ADD(string_flatten_code_units, mutable->length);
-    usize capacity = 64;
-    MalStringFlattenTask *stack = malloc(sizeof(MalStringFlattenTask) * capacity);
-    if (stack == nullptr) {
-        abort();
-    }
+    MalStringFlattenTask inline_stack[64];
+    usize capacity = sizeof(inline_stack) / sizeof(inline_stack[0]);
+    MalStringFlattenTask *stack = inline_stack;
 
     c16 *code_units = mal_heap_alloc_raw_profiled(
         mal_gc_current_heap(), sizeof(c16) * mutable->length,
@@ -648,8 +654,16 @@ const c16 *mal_string_flatten(MalString *mutable) {
             if (!mal_checked_size_growth(capacity, required, 64, MAL_STRING_MAX_CODE_UNITS, &grown_capacity)) {
                 abort();
             }
-            MalStringFlattenTask *grown =
-                realloc(stack, sizeof(MalStringFlattenTask) * grown_capacity);
+            MalStringFlattenTask *grown;
+            if (stack == inline_stack) {
+                grown = malloc(sizeof(MalStringFlattenTask) * grown_capacity);
+                if (grown != nullptr) {
+                    memcpy(grown, stack, sizeof(MalStringFlattenTask) * count);
+                }
+            } else {
+                grown = realloc(
+                    stack, sizeof(MalStringFlattenTask) * grown_capacity);
+            }
             if (grown == nullptr) {
                 abort();
             }
@@ -669,7 +683,7 @@ const c16 *mal_string_flatten(MalString *mutable) {
         }
     }
 
-    free(stack);
+    if (stack != inline_stack) free(stack);
     if (offset != mutable->length) {
         abort();
     }
