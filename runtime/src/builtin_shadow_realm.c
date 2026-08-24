@@ -36,20 +36,23 @@ static bool mal_shadow_realm_get_own_property(
     MalVm *vm,
     MalValue object,
     MalKey key,
-    bool *present_out
+    bool *present_out,
+    MalPropertyDesc *desc_out
 ) {
     if (mal_value_is_proxy_object(object)) {
-        MalPropertyDesc desc;
         return mal_proxy_get_own_property_descriptor(
             vm,
             mal_value_to_proxy_object(object),
             key,
             present_out,
-            &desc
+            desc_out
         );
     }
 
-    *present_out = mal_object_get_own(mal_value_to_object(object), key).present;
+    MalPropertyLookup lookup = mal_object_get_own(
+        mal_value_to_object(object), key);
+    *present_out = lookup.present;
+    if (lookup.present) *desc_out = lookup.desc;
     return true;
 }
 
@@ -70,8 +73,11 @@ static bool mal_shadow_realm_copy_name_and_length(
 
     MalKey length_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH);
     MalKey name_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME);
+    bool target_is_proxy = mal_value_is_proxy_object(target);
     bool has_own_length;
-    if (!mal_shadow_realm_get_own_property(vm, target, length_key, &has_own_length)) {
+    MalPropertyDesc own_length = {0};
+    if (!mal_shadow_realm_get_own_property(
+            vm, target, length_key, &has_own_length, &own_length)) {
         mal_shadow_realm_throw_boundary_type_error(
             vm, caller_realm, "ShadowRealm wrapped function length lookup failed");
         mal_gc_unroot(&root_span);
@@ -80,7 +86,9 @@ static bool mal_shadow_realm_copy_name_and_length(
 
     f64 length = 0.0;
     if (has_own_length) {
-        if (!mal_vm_get_property(vm, target, length_key, &roots[1])) {
+        if (!target_is_proxy && !(own_length.flags & MAL_PROPERTY_ACCESSOR)) {
+            roots[1] = own_length.value;
+        } else if (!mal_vm_get_property(vm, target, length_key, &roots[1])) {
             mal_shadow_realm_throw_boundary_type_error(
                 vm, caller_realm, "ShadowRealm wrapped function length lookup failed");
             mal_gc_unroot(&root_span);
@@ -98,7 +106,16 @@ static bool mal_shadow_realm_copy_name_and_length(
         mal_ops_number_value(length), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own((MalObject *) wrapper, length_key, &length_desc);
 
-    if (!mal_vm_get_property(vm, target, name_key, &roots[2])) {
+    bool direct_name = false;
+    if (!target_is_proxy) {
+        MalPropertyLookup own_name = mal_object_get_own(
+            mal_value_to_object(target), name_key);
+        if (own_name.present && !(own_name.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+            roots[2] = own_name.desc.value;
+            direct_name = true;
+        }
+    }
+    if (!direct_name && !mal_vm_get_property(vm, target, name_key, &roots[2])) {
         mal_shadow_realm_throw_boundary_type_error(
             vm, caller_realm, "ShadowRealm wrapped function name lookup failed");
         mal_gc_unroot(&root_span);
