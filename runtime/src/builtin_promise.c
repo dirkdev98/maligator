@@ -758,34 +758,54 @@ static void mal_promise_array_create_data(MalValue array_value, i32 index, MalVa
 // [[Set]] (which would consult an inherited indexed accessor on
 // Array.prototype, e.g. does-not-invoke-array-setters).
 
+/** Build a private one-element dense Array used only as an internal spec cell. */
+static MalValue mal_promise_cell_new(MalVm *vm, MalValue initial) {
+    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, 1);
+    if (!mal_array_object_dense_build_values(array, 0, &initial, 1)) {
+        MalValue array_value = mal_value_from_array_object(array);
+        mal_promise_array_create_data(array_value, 0, initial);
+        return array_value;
+    }
+    return mal_value_from_array_object(array);
+}
+
+static MalValue mal_promise_cell_get(MalVm *vm, MalValue cell) {
+    MalValue out;
+    MalArrayObject *array = mal_value_to_array_object(cell);
+    if (!mal_array_object_dense_get(array, 0, &out)) {
+        mal_builtin_array_try_get(vm, cell, 0, &out);
+    }
+    return out;
+}
+
+static void mal_promise_cell_set(MalValue cell, MalValue value) {
+    MalArrayObject *array = mal_value_to_array_object(cell);
+    if (mal_array_object_dense_store(array, 0, value) != MAL_ARRAY_DENSE_APPLIED) {
+        mal_promise_array_create_data(cell, 0, value);
+    }
+}
+
 /** A shared mutable integer cell (1-element array), for the remaining counter. */
 static MalValue mal_promise_counter_new(MalVm *vm, i32 initial) {
-    MalValue array = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
-    mal_promise_array_create_data(array, 0, mal_value_from_i32(initial));
-    return array;
+    return mal_promise_cell_new(vm, mal_value_from_i32(initial));
 }
 static i32 mal_promise_counter_get(MalVm *vm, MalValue counter) {
-    MalValue out;
-    mal_builtin_array_try_get(vm, counter, 0, &out);
-    return mal_value_to_i32(out);
+    return mal_value_to_i32(mal_promise_cell_get(vm, counter));
 }
 static void mal_promise_counter_set(MalValue counter, i32 value) {
-    mal_promise_array_create_data(counter, 0, mal_value_from_i32(value));
+    mal_promise_cell_set(counter, mal_value_from_i32(value));
 }
 
 /** A shared boolean cell; test_set returns the prior value and sets it true. */
 static MalValue mal_promise_flag_new(MalVm *vm) {
-    MalValue array = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
-    mal_promise_array_create_data(array, 0, mal_value_new_boolean(false));
-    return array;
+    return mal_promise_cell_new(vm, mal_value_new_boolean(false));
 }
 static bool mal_promise_flag_test_set(MalVm *vm, MalValue flag) {
-    MalValue out;
-    mal_builtin_array_try_get(vm, flag, 0, &out);
+    MalValue out = mal_promise_cell_get(vm, flag);
     if (mal_value_is_truthy(out)) {
         return true;
     }
-    mal_promise_array_create_data(flag, 0, mal_value_new_boolean(true));
+    mal_promise_cell_set(flag, mal_value_new_boolean(true));
     return false;
 }
 
