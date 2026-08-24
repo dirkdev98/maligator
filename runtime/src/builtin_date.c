@@ -993,6 +993,14 @@ static MalValue date_string_value(MalVm *vm, const byte *buf, usize length) {
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, buf, length));
 }
 
+static bool date_to_number(MalVm *vm, MalValue value, f64 *out) {
+    if (mal_ops_is_number(value)) {
+        *out = mal_ops_number_as_f64(value);
+        return true;
+    }
+    return mal_vm_to_number(vm, value, out);
+}
+
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
@@ -1028,7 +1036,7 @@ static MalValue date_constructor(MalVm *vm, MalValue this_value, const MalValue 
                 date_value = date_parse_string_value(mal_value_to_string(primitive));
             } else {
                 f64 number;
-                if (!mal_vm_to_number(vm, primitive, &number)) {
+                if (!date_to_number(vm, primitive, &number)) {
                     return mal_value_new_undefined();
                 }
                 date_value = date_time_clip(number);
@@ -1039,7 +1047,7 @@ static MalValue date_constructor(MalVm *vm, MalValue this_value, const MalValue 
         f64 comps[7] = {0, 0, 1, 0, 0, 0, 0};
         i32 need = arg_count < 7 ? arg_count : 7;
         for (i32 i = 0; i < need; i++) {
-            if (!mal_vm_to_number(vm, args[i], &comps[i])) {
+            if (!date_to_number(vm, args[i], &comps[i])) {
                 return mal_value_new_undefined();
             }
         }
@@ -1086,12 +1094,12 @@ MalValue mal_builtin_date_parse_known(MalVm *vm, const MalValue *args, i32 arg_c
 MalValue mal_builtin_date_utc_known(MalVm *vm, const MalValue *args, i32 arg_count) {
     f64 comps[7] = {0, 0, 1, 0, 0, 0, 0};
     f64 year;
-    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &year)) {
+    if (!date_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &year)) {
         return mal_value_new_undefined();
     }
     i32 need = arg_count < 7 ? arg_count : 7;
     for (i32 i = 1; i < need; i++) {
-        if (!mal_vm_to_number(vm, args[i], &comps[i])) {
+        if (!date_to_number(vm, args[i], &comps[i])) {
             return mal_value_new_undefined();
         }
     }
@@ -1268,7 +1276,7 @@ static MalValue date_proto_set_time(MalVm *vm, MalValue this_value, const MalVal
         return mal_value_new_undefined();
     }
     f64 time;
-    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &time)) {
+    if (!date_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &time)) {
         return mal_value_new_undefined();
     }
     return date_set_result(date, date_time_clip(time));
@@ -1292,14 +1300,14 @@ static MalValue date_set_time_fields(MalVm *vm, MalValue this_value, bool utc, c
     f64 vals[4] = {0, 0, 0, 0};
     bool present[4] = {false, false, false, false};
 
-    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &vals[first])) {
+    if (!date_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &vals[first])) {
         return mal_value_new_undefined();
     }
     present[first] = true;
     i32 fields = 4 - first;
     for (i32 i = 1; i < fields; i++) {
         if (i < arg_count) {
-            if (!mal_vm_to_number(vm, args[i], &vals[first + i])) {
+            if (!date_to_number(vm, args[i], &vals[first + i])) {
                 return mal_value_new_undefined();
             }
             present[first + i] = true;
@@ -1343,14 +1351,14 @@ static MalValue date_set_date_fields(MalVm *vm, MalValue this_value, bool utc, c
     f64 vals[3] = {0, 0, 0};
     bool present[3] = {false, false, false};
 
-    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &vals[first])) {
+    if (!date_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &vals[first])) {
         return mal_value_new_undefined();
     }
     present[first] = true;
     i32 fields = 3 - first;
     for (i32 i = 1; i < fields; i++) {
         if (i < arg_count) {
-            if (!mal_vm_to_number(vm, args[i], &vals[first + i])) {
+            if (!date_to_number(vm, args[i], &vals[first + i])) {
                 return mal_value_new_undefined();
             }
             present[first + i] = true;
