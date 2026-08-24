@@ -3067,6 +3067,10 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
                 mal_value_new_undefined(), nullptr
             );
             mal_vm_leave_compiled(vm);
+            // Runtime eval can splice functions into the live definition and move
+            // its function table. The index is stable; a pointer cached across the
+            // compiled call is not.
+            entry = &vm->definition->functions[entry_index];
             // A compiled async entry (a top-level-await module) returns its result
             // promise; record it so a rejected module evaluation fails the run,
             // mirroring mal_async_function_start's caller-less branch.

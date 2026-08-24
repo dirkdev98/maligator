@@ -51,4 +51,11 @@ $262.evalScript("$262.gc(); globalThis.evalGcScriptValue = { value: 42 };");
 $262.gc();
 ok("evalScript retained result", globalThis.evalGcScriptValue.value === 42);
 
+let tableGrowthSource = "";
+for (let i = 0; i < 128; i++) {
+	tableGrowthSource += "function evalTableGrowth" + i + "() { return " + i + "; }";
+}
+tableGrowthSource += "evalTableGrowth127();";
+ok("compiled entry survives eval function-table growth", eval(tableGrowthSource) === 127);
+
 console.log("eval-gc-runtime-compilation-p0 PASS " + passed + "/" + passed);
