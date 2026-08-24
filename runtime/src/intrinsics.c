@@ -105,6 +105,20 @@ static const byte *const mal_hot_intrinsic_names[MAL_HOT_KEY_COUNT] = {
     [MAL_HOT_KEY_SEARCH] = (const byte *) "search",
     [MAL_HOT_KEY_TRUE] = (const byte *) "true",
     [MAL_HOT_KEY_FALSE] = (const byte *) "false",
+    [MAL_HOT_KEY_PROXY_GET] = (const byte *) "get",
+    [MAL_HOT_KEY_PROXY_SET] = (const byte *) "set",
+    [MAL_HOT_KEY_PROXY_HAS] = (const byte *) "has",
+    [MAL_HOT_KEY_PROXY_DELETE_PROPERTY] = (const byte *) "deleteProperty",
+    [MAL_HOT_KEY_PROXY_GET_OWN_PROPERTY_DESCRIPTOR] =
+        (const byte *) "getOwnPropertyDescriptor",
+    [MAL_HOT_KEY_PROXY_DEFINE_PROPERTY] = (const byte *) "defineProperty",
+    [MAL_HOT_KEY_PROXY_OWN_KEYS] = (const byte *) "ownKeys",
+    [MAL_HOT_KEY_PROXY_GET_PROTOTYPE_OF] = (const byte *) "getPrototypeOf",
+    [MAL_HOT_KEY_PROXY_SET_PROTOTYPE_OF] = (const byte *) "setPrototypeOf",
+    [MAL_HOT_KEY_PROXY_IS_EXTENSIBLE] = (const byte *) "isExtensible",
+    [MAL_HOT_KEY_PROXY_PREVENT_EXTENSIONS] = (const byte *) "preventExtensions",
+    [MAL_HOT_KEY_PROXY_APPLY] = (const byte *) "apply",
+    [MAL_HOT_KEY_PROXY_CONSTRUCT] = (const byte *) "construct",
 };
 
 static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) {
@@ -205,6 +219,51 @@ static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) 
             return memcmp(name, "true", 4) == 0 ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_COUNT;
         case MAL_HOT_KEY_SIGNATURE(5, 'f', 'e'):
             return memcmp(name, "false", 5) == 0 ? MAL_HOT_KEY_FALSE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(3, 'g', 't'):
+            return memcmp(name, "get", 3) == 0 ? MAL_HOT_KEY_PROXY_GET : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(3, 's', 't'):
+            return memcmp(name, "set", 3) == 0 ? MAL_HOT_KEY_PROXY_SET : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(3, 'h', 's'):
+            return memcmp(name, "has", 3) == 0 ? MAL_HOT_KEY_PROXY_HAS : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(14, 'd', 'y'):
+            if (memcmp(name, "deleteProperty", 14) == 0) {
+                return MAL_HOT_KEY_PROXY_DELETE_PROPERTY;
+            }
+            return memcmp(name, "defineProperty", 14) == 0
+                ? MAL_HOT_KEY_PROXY_DEFINE_PROPERTY
+                : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(24, 'g', 'r'):
+            return memcmp(name, "getOwnPropertyDescriptor", 24) == 0
+                ? MAL_HOT_KEY_PROXY_GET_OWN_PROPERTY_DESCRIPTOR
+                : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(7, 'o', 's'):
+            return memcmp(name, "ownKeys", 7) == 0
+                ? MAL_HOT_KEY_PROXY_OWN_KEYS
+                : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(14, 'g', 'f'):
+            return memcmp(name, "getPrototypeOf", 14) == 0
+                ? MAL_HOT_KEY_PROXY_GET_PROTOTYPE_OF
+                : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(14, 's', 'f'):
+            return memcmp(name, "setPrototypeOf", 14) == 0
+                ? MAL_HOT_KEY_PROXY_SET_PROTOTYPE_OF
+                : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(12, 'i', 'e'):
+            return memcmp(name, "isExtensible", 12) == 0
+                ? MAL_HOT_KEY_PROXY_IS_EXTENSIBLE
+                : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(17, 'p', 's'):
+            return memcmp(name, "preventExtensions", 17) == 0
+                ? MAL_HOT_KEY_PROXY_PREVENT_EXTENSIONS
+                : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(5, 'a', 'y'):
+            return memcmp(name, "apply", 5) == 0
+                ? MAL_HOT_KEY_PROXY_APPLY
+                : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(9, 'c', 't'):
+            return memcmp(name, "construct", 9) == 0
+                ? MAL_HOT_KEY_PROXY_CONSTRUCT
+                : MAL_HOT_KEY_COUNT;
         default:
             return MAL_HOT_KEY_COUNT;
     }

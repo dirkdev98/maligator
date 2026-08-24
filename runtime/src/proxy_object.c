@@ -172,9 +172,9 @@ static void mal_proxy_dispatch_leave(MalVm *vm) {
 // (out stays undefined). A non-callable, non-nullish trap is a TypeError.
 // Returns false on a throw (pending completion set).
 static bool mal_proxy_get_trap_from_handler(
-    MalVm *vm, MalValue handler, const byte *name, MalValue *out) {
+    MalVm *vm, MalValue handler, MalHotIntrinsicKey trap_key, MalValue *out) {
     *out = mal_value_new_undefined();
-    MalKey key = mal_intrinsic_string_key(vm, name);
+    MalKey key = mal_intrinsic_hot_string_key(vm, trap_key);
     MalValue trap;
     if (!mal_vm_get_property(vm, handler, key, &trap)) {
         return false;
@@ -190,8 +190,10 @@ static bool mal_proxy_get_trap_from_handler(
     return true;
 }
 
-static bool mal_proxy_get_trap(MalVm *vm, MalProxyObject *proxy, const byte *name, MalValue *out) {
-    return mal_proxy_get_trap_from_handler(vm, proxy->handler, name, out);
+static bool mal_proxy_get_trap(
+    MalVm *vm, MalProxyObject *proxy, MalHotIntrinsicKey trap_key, MalValue *out
+) {
+    return mal_proxy_get_trap_from_handler(vm, proxy->handler, trap_key, out);
 }
 
 // Forward declaration: target-own probing recurses through a proxy target's
@@ -217,7 +219,7 @@ static bool mal_proxy_target_get_own(MalVm *vm, MalValue target, MalKey key, boo
 static bool mal_proxy_get_snapshot(
     MalVm *vm, MalValue target, MalValue handler, MalKey key, MalValue receiver, MalValue *out) {
     MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, "get", &trap)) {
+    if (!mal_proxy_get_trap_from_handler(vm, handler, MAL_HOT_KEY_PROXY_GET, &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
@@ -300,7 +302,7 @@ static bool mal_proxy_set_snapshot(
     MalVm *vm, MalValue target, MalValue handler, MalKey key, MalValue value,
     MalValue receiver) {
     MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, "set", &trap)) {
+    if (!mal_proxy_get_trap_from_handler(vm, handler, MAL_HOT_KEY_PROXY_SET, &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
@@ -373,7 +375,7 @@ bool mal_proxy_set(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue value,
 static bool mal_proxy_has_snapshot(
     MalVm *vm, MalValue target, MalValue handler, MalKey key) {
     MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, "has", &trap)) {
+    if (!mal_proxy_get_trap_from_handler(vm, handler, MAL_HOT_KEY_PROXY_HAS, &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
@@ -444,7 +446,8 @@ bool mal_proxy_has(MalVm *vm, MalProxyObject *proxy, MalKey key) {
 static bool mal_proxy_delete_snapshot(
     MalVm *vm, MalValue target, MalValue handler, MalKey key) {
     MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, "deleteProperty", &trap)) {
+    if (!mal_proxy_get_trap_from_handler(
+            vm, handler, MAL_HOT_KEY_PROXY_DELETE_PROPERTY, &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
@@ -541,7 +544,8 @@ bool mal_proxy_get_own_property_descriptor(MalVm *vm, MalProxyObject *proxy, Mal
 
     bool ok = false;
     if (!mal_proxy_get_trap_from_handler(
-            vm, roots[1], "getOwnPropertyDescriptor", &roots[2])) {
+            vm, roots[1], MAL_HOT_KEY_PROXY_GET_OWN_PROPERTY_DESCRIPTOR,
+            &roots[2])) {
         goto done;
     }
     if (mal_value_is_undefined(roots[2])) {
@@ -644,7 +648,8 @@ static bool mal_proxy_define_own_property_snapshot(
     MalVm *vm, MalValue target, MalValue handler, MalKey key,
     const MalPropertyDescriptorParse *parsed, MalValue descriptor_value) {
     MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, "defineProperty", &trap)) {
+    if (!mal_proxy_get_trap_from_handler(
+            vm, handler, MAL_HOT_KEY_PROXY_DEFINE_PROPERTY, &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
@@ -808,7 +813,8 @@ bool mal_proxy_own_property_keys(MalVm *vm, MalProxyObject *proxy, MalValue *out
     mal_gc_root(&roots_span, roots, 6);
 
     bool ok = false;
-    if (!mal_proxy_get_trap_from_handler(vm, roots[1], "ownKeys", &roots[2])) {
+    if (!mal_proxy_get_trap_from_handler(
+            vm, roots[1], MAL_HOT_KEY_PROXY_OWN_KEYS, &roots[2])) {
         goto done;
     }
     if (mal_value_is_undefined(roots[2])) {
@@ -968,7 +974,7 @@ bool mal_proxy_get_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue *out)
         return false;
     }
     MalValue trap;
-    if (!mal_proxy_get_trap(vm, proxy, "getPrototypeOf", &trap)) {
+    if (!mal_proxy_get_trap(vm, proxy, MAL_HOT_KEY_PROXY_GET_PROTOTYPE_OF, &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
@@ -1013,7 +1019,8 @@ static bool mal_proxy_set_prototype_of_snapshot(
     MalVm *vm, MalValue target, MalValue handler, MalValue proto,
     bool *success_out) {
     MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, "setPrototypeOf", &trap)) {
+    if (!mal_proxy_get_trap_from_handler(
+            vm, handler, MAL_HOT_KEY_PROXY_SET_PROTOTYPE_OF, &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
@@ -1102,7 +1109,8 @@ bool mal_proxy_set_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue proto
 static bool mal_proxy_is_extensible_snapshot(
     MalVm *vm, MalValue target, MalValue handler, bool *out) {
     MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, "isExtensible", &trap)) {
+    if (!mal_proxy_get_trap_from_handler(
+            vm, handler, MAL_HOT_KEY_PROXY_IS_EXTENSIBLE, &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
@@ -1173,7 +1181,7 @@ bool mal_proxy_prevent_extensions(MalVm *vm, MalProxyObject *proxy, bool *out) {
     mal_gc_root(&roots_span, roots, 3);
     bool ok = false;
     if (!mal_proxy_get_trap_from_handler(
-            vm, roots[1], "preventExtensions", &roots[2])) {
+            vm, roots[1], MAL_HOT_KEY_PROXY_PREVENT_EXTENSIONS, &roots[2])) {
         goto done;
     }
     if (mal_value_is_undefined(roots[2])) {
@@ -1238,7 +1246,7 @@ MalCompletion mal_proxy_apply(MalVm *vm, MalProxyObject *proxy, MalValue this_va
         return vm->completion;
     }
     MalValue trap;
-    if (!mal_proxy_get_trap(vm, proxy, "apply", &trap)) {
+    if (!mal_proxy_get_trap(vm, proxy, MAL_HOT_KEY_PROXY_APPLY, &trap)) {
         return vm->completion;
     }
     if (mal_value_is_undefined(trap)) {
@@ -1254,7 +1262,7 @@ MalCompletion mal_proxy_construct(MalVm *vm, MalProxyObject *proxy, const MalVal
         return vm->completion;
     }
     MalValue trap;
-    if (!mal_proxy_get_trap(vm, proxy, "construct", &trap)) {
+    if (!mal_proxy_get_trap(vm, proxy, MAL_HOT_KEY_PROXY_CONSTRUCT, &trap)) {
         return vm->completion;
     }
     if (mal_value_is_undefined(trap)) {
