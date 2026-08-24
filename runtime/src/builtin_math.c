@@ -772,7 +772,7 @@ static MalValue mal_builtin_math_sum_precise(MalVm *vm, MalValue this_value, con
     while (true) {
         MalValue value;
         bool done = false;
-        if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
+        if (!mal_vm_iterator_step_fast(vm, &record, &value, &done)) {
             error = true;
             break;
         }
