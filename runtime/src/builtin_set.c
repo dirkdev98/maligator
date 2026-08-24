@@ -536,6 +536,11 @@ static MalValue mal_builtin_set_prototype_union(MalVm *vm, MalValue this_value, 
         return mal_value_new_undefined();
     }
 
+    if (record.native_set == set) {
+        return mal_value_from_map_object(mal_builtin_set_new_result(
+            vm, set, mal_map_object_size(set)));
+    }
+
     usize reserve_size = mal_map_object_size(set);
     if (record.native_set != nullptr &&
         SIZE_MAX - reserve_size >= mal_map_object_size(record.native_set)) {
@@ -598,6 +603,11 @@ static MalValue mal_builtin_set_prototype_intersection(MalVm *vm, MalValue this_
     MalSetRecord record;
     if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
         return mal_value_new_undefined();
+    }
+
+    if (record.native_set == set) {
+        return mal_value_from_map_object(mal_builtin_set_new_result(
+            vm, set, mal_map_object_size(set)));
     }
 
     MalMapObject *result = mal_builtin_set_new_result(
@@ -706,6 +716,11 @@ static MalValue mal_builtin_set_prototype_difference(MalVm *vm, MalValue this_va
         return mal_value_new_undefined();
     }
 
+    if (record.native_set == set) {
+        return mal_value_from_map_object(
+            mal_builtin_set_new_result(vm, nullptr, 0));
+    }
+
     MalMapObject *result = mal_builtin_set_new_result(
         vm, set, mal_map_object_size(set));
 
@@ -807,6 +822,11 @@ static MalValue mal_builtin_set_prototype_symmetric_difference(MalVm *vm, MalVal
         return mal_value_new_undefined();
     }
 
+    if (record.native_set == set) {
+        return mal_value_from_map_object(
+            mal_builtin_set_new_result(vm, nullptr, 0));
+    }
+
     usize reserve_size = mal_map_object_size(set);
     if (record.native_set != nullptr &&
         SIZE_MAX - reserve_size >= mal_map_object_size(record.native_set)) {
@@ -879,6 +899,10 @@ static MalValue mal_builtin_set_prototype_is_subset_of(MalVm *vm, MalValue this_
         return mal_value_new_undefined();
     }
 
+    if (record.native_set == set) {
+        return mal_value_new_boolean(true);
+    }
+
     if ((f64) mal_map_object_size(set) > record.size) {
         return mal_value_new_boolean(false);
     }
@@ -934,6 +958,10 @@ static MalValue mal_builtin_set_prototype_is_superset_of(MalVm *vm, MalValue thi
     MalSetRecord record;
     if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
         return mal_value_new_undefined();
+    }
+
+    if (record.native_set == set) {
+        return mal_value_new_boolean(true);
     }
 
     if ((f64) mal_map_object_size(set) < record.size) {
@@ -993,6 +1021,10 @@ static MalValue mal_builtin_set_prototype_is_disjoint_from(MalVm *vm, MalValue t
     MalSetRecord record;
     if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
         return mal_value_new_undefined();
+    }
+
+    if (record.native_set == set) {
+        return mal_value_new_boolean(mal_map_object_size(set) == 0);
     }
 
     if ((f64) mal_map_object_size(set) <= record.size) {

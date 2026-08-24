@@ -168,6 +168,27 @@ check(
 	weakSetPrimitiveThrew && weakSetIteratorClosed,
 );
 
+const selfSet = new Set([1, 2, 3]);
+const selfUnion = selfSet.union(selfSet);
+const selfIntersection = selfSet.intersection(selfSet);
+selfUnion.add(4);
+selfIntersection.delete(1);
+check(
+	"Set native self algebra returns independent results",
+	[...selfUnion].join(",") === "1,2,3,4" &&
+		[...selfIntersection].join(",") === "2,3" &&
+		[...selfSet].join(",") === "1,2,3" &&
+		selfSet.difference(selfSet).size === 0 &&
+		selfSet.symmetricDifference(selfSet).size === 0,
+);
+check(
+	"Set native self predicates short circuit correctly",
+	selfSet.isSubsetOf(selfSet) &&
+		selfSet.isSupersetOf(selfSet) &&
+		!selfSet.isDisjointFrom(selfSet) &&
+		new Set().isDisjointFrom(new Set()),
+);
+
 let intrinsicMapPrototypeGets = 0;
 const intrinsicMapTarget = new Proxy(function () {}, {
 	get(target, key, receiver) {
