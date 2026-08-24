@@ -420,20 +420,15 @@ static MalValue mal_async_iterator_dispose_unwrap(
 static MalValue mal_async_iterator_dispose_reject(
     MalVm *vm,
     MalValue promise,
-    MalValue reject
+    MalValue promise_constructor
 ) {
     MalValue reason = vm->completion.value;
     vm->completion = (MalCompletion) {
         .kind = MAL_COMPLETION_NORMAL,
         .value = mal_value_new_undefined(),
     };
-    (void) mal_vm_call_value(
-        vm,
-        reject,
-        mal_value_new_undefined(),
-        &reason,
-        1
-    );
+    mal_promise_settle_direct(
+        vm, promise, promise_constructor, true, reason);
     vm->completion = (MalCompletion) {
         .kind = MAL_COMPLETION_NORMAL,
         .value = mal_value_new_undefined(),
@@ -467,15 +462,7 @@ static MalValue mal_async_iterator_prototype_async_dispose(
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
 
-    if (!mal_promise_new_capability(
-            vm,
-            vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
-            &roots[0],
-            &roots[1],
-            &roots[2])) {
-        mal_gc_unroot(&span);
-        return mal_value_new_undefined();
-    }
+    mal_promise_new_direct_capability(vm, &roots[0], &roots[1], &roots[2]);
 
     if (!mal_vm_get_property(
             vm,
@@ -498,14 +485,8 @@ static MalValue mal_async_iterator_prototype_async_dispose(
     }
 
     if (mal_value_is_nil(roots[4])) {
-        MalValue undefined = mal_value_new_undefined();
-        (void) mal_vm_call_value(
-            vm,
-            roots[1],
-            mal_value_new_undefined(),
-            &undefined,
-            1
-        );
+        mal_promise_settle_direct(
+            vm, roots[0], roots[2], false, mal_value_new_undefined());
         MalValue promise = roots[0];
         mal_gc_unroot(&span);
         return promise;
