@@ -92,13 +92,13 @@ static bool mal_agen_dequeue(
     i32 *out_mode,
     MalValue *out_value
 ) {
-    MalAsyncGeneratorRequest *req = agen->agen_queue_head;
+    MalAsyncGeneratorRequest *req = agen->async_data->queue_head;
     if (req == nullptr) {
         return false;
     }
-    agen->agen_queue_head = req->next;
-    if (agen->agen_queue_head == nullptr) {
-        agen->agen_queue_tail = nullptr;
+    agen->async_data->queue_head = req->next;
+    if (agen->async_data->queue_head == nullptr) {
+        agen->async_data->queue_tail = nullptr;
     }
     *out_promise = req->promise;
     *out_promise_constructor = req->promise_constructor;
@@ -147,7 +147,7 @@ static void mal_agen_resolve_result(
 /** Await the front return completion without removing it from the FIFO queue. */
 static void mal_agen_await_return(MalVm *vm, MalGeneratorObject *agen) {
     MalValue promise;
-    if (!mal_promise_resolve_value(vm, agen->agen_queue_head->value, &promise)) {
+    if (!mal_promise_resolve_value(vm, agen->async_data->queue_head->value, &promise)) {
         MalValue error = vm->completion.value;
         vm->completion = mal_agen_normal();
         agen->agen_running = false;
@@ -203,15 +203,16 @@ void mal_async_generator_resume_next(MalVm *vm, MalGeneratorObject *agen) {
         return;
     }
 
-    while (agen->agen_queue_head != nullptr) {
+    while (agen->async_data->queue_head != nullptr) {
         // return()/throw() on a not-yet-started generator completes it.
-        if (agen->state == MAL_GENERATOR_SUSPENDED_START && agen->agen_queue_head->mode != MAL_GENERATOR_RESUME_NEXT) {
+        if (agen->state == MAL_GENERATOR_SUSPENDED_START &&
+            agen->async_data->queue_head->mode != MAL_GENERATOR_RESUME_NEXT) {
             mal_generator_release_frame(vm, agen);
             agen->state = MAL_GENERATOR_COMPLETED;
         }
 
         if (agen->state == MAL_GENERATOR_COMPLETED) {
-            if (agen->agen_queue_head->mode == MAL_GENERATOR_RESUME_RETURN) {
+            if (agen->async_data->queue_head->mode == MAL_GENERATOR_RESUME_RETURN) {
                 mal_agen_await_return(vm, agen);
                 return;
             }
@@ -241,7 +242,11 @@ void mal_async_generator_resume_next(MalVm *vm, MalGeneratorObject *agen) {
         // return/throw settles this request) or settles synchronously through
         // the yield/return/throw hooks below (which recurse into resume_next).
         agen->agen_running = true;
-        mal_vm_resume_generator(vm, agen, agen->agen_queue_head->value, agen->agen_queue_head->mode);
+        mal_vm_resume_generator(
+            vm,
+            agen,
+            agen->async_data->queue_head->value,
+            agen->async_data->queue_head->mode);
         return;
     }
 }
@@ -326,12 +331,12 @@ static MalValue mal_agen_enqueue_and_drive(MalVm *vm, MalValue this_value, const
     request->mode = mode;
     request->value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
 
-    if (agen->agen_queue_tail == nullptr) {
-        agen->agen_queue_head = request;
+    if (agen->async_data->queue_tail == nullptr) {
+        agen->async_data->queue_head = request;
     } else {
-        agen->agen_queue_tail->next = request;
+        agen->async_data->queue_tail->next = request;
     }
-    agen->agen_queue_tail = request;
+    agen->async_data->queue_tail = request;
     // An old async generator gaining a queued request with young Promise,
     // constructor, or value refs: remember it so the minor traces the queue.
     mal_gc_remember_if_old(&agen->object.header);

@@ -869,19 +869,19 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 mal_gc_trace_frame(&gen->frame);
             }
             mal_gc_mark_value(gen->yielded_value);
-            mal_gc_mark_value(gen->async_promise);
-            if (gen->awaited_by != nullptr) {
-                mal_gc_shade(&gen->awaited_by->object.header);
-            }
-            // Pending async-generator requests (malloc'd nodes, traced via the
-            // owner): each holds its direct result Promise, request-realm Promise
-            // constructor anchor, and resume value until the driver dequeues it.
-            // This common cell trace covers major, remembered-owner minor, and
-            // concurrent marking.
-            for (MalAsyncGeneratorRequest *req = gen->agen_queue_head; req != nullptr; req = req->next) {
-                mal_gc_mark_value(req->promise);
-                mal_gc_mark_value(req->promise_constructor);
-                mal_gc_mark_value(req->value);
+            if (gen->async_data != nullptr) {
+                mal_gc_mark_value(gen->async_data->promise);
+                if (gen->async_data->awaited_by != nullptr) {
+                    mal_gc_shade(&gen->async_data->awaited_by->object.header);
+                }
+                // Pending async-generator requests (malloc'd nodes, traced via
+                // the owner) remain reachable through the coallocated tail.
+                for (MalAsyncGeneratorRequest *req = gen->async_data->queue_head;
+                     req != nullptr; req = req->next) {
+                    mal_gc_mark_value(req->promise);
+                    mal_gc_mark_value(req->promise_constructor);
+                    mal_gc_mark_value(req->value);
+                }
             }
             break;
         }
@@ -1270,9 +1270,12 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 gen->state == MAL_GENERATOR_SUSPENDED_YIELD) {
                 mal_generator_release_frame(g_gc_vm, gen);
             }
-            mal_async_generator_free_requests(g_gc_vm, gen->agen_queue_head);
-            gen->agen_queue_head = nullptr;
-            gen->agen_queue_tail = nullptr;
+            if (gen->async_data != nullptr) {
+                mal_async_generator_free_requests(
+                    g_gc_vm, gen->async_data->queue_head);
+                gen->async_data->queue_head = nullptr;
+                gen->async_data->queue_tail = nullptr;
+            }
             break;
         }
         case MAL_HEAP_ITERATOR_OBJECT:

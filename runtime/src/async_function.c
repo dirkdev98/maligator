@@ -17,9 +17,11 @@ void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
     mal_gc_root(&promise_root, &promise_value, 1);
 
     // The hidden async state reuses the generator suspendable-frame object.
-    MalGeneratorObject *state = mal_generator_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    state->is_async = true;
-    state->async_promise = promise_value;
+    MalGeneratorObject *state = mal_generator_object_new_async(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        false);
+    state->async_data->promise = promise_value;
     state->state = MAL_GENERATOR_EXECUTING;
     frame->generator = state;
 
@@ -65,10 +67,11 @@ void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awa
         if (owner != nullptr) {
             // SATB: awaited_by is a traced edge (gc.c shades it); a second awaiter of
             // the same result promise overwrites it, so shade the previous awaiter.
-            if (owner->awaited_by != nullptr) {
-                mal_gc_write_barrier(mal_value_from_object((MalObject *) owner->awaited_by));
+            if (owner->async_data->awaited_by != nullptr) {
+                mal_gc_write_barrier(mal_value_from_object(
+                    (MalObject *) owner->async_data->awaited_by));
             }
-            owner->awaited_by = state;
+            owner->async_data->awaited_by = state;
             // An old awaitee gaining a young awaiter: remember it (trace shades
             // awaited_by) so the minor keeps the awaiter's async chain alive.
             mal_gc_remember_if_old(&owner->object.header);
@@ -81,7 +84,7 @@ void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awa
 void mal_async_function_settle_return(MalVm *vm, MalGeneratorObject *state, MalValue value) {
     mal_promise_settle_direct(
         vm,
-        state->async_promise,
+        state->async_data->promise,
         vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
         false,
         value);
@@ -91,7 +94,7 @@ void mal_async_function_settle_return(MalVm *vm, MalGeneratorObject *state, MalV
 void mal_async_function_settle_throw(MalVm *vm, MalGeneratorObject *state, MalValue reason) {
     mal_promise_settle_direct(
         vm,
-        state->async_promise,
+        state->async_data->promise,
         vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
         true,
         reason);

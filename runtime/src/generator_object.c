@@ -5,8 +5,12 @@
 #include "gc.h"
 #include "heap.h"
 
-MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype) {
-    MalGeneratorObject *generator = mal_heap_alloc(heap, sizeof(MalGeneratorObject), MAL_HEAP_GENERATOR_OBJECT);
+static MalGeneratorObject *mal_generator_object_alloc(
+    MalHeap *heap, MalObject *prototype, bool with_async_data) {
+    usize alloc_size = sizeof(MalGeneratorObject) +
+        (with_async_data ? sizeof(MalGeneratorAsyncData) : 0);
+    MalGeneratorObject *generator = mal_heap_alloc(
+        heap, alloc_size, MAL_HEAP_GENERATOR_OBJECT);
     mal_object_init(heap, &generator->object, MAL_HEAP_GENERATOR_OBJECT, prototype);
 
     // The suspendable frame is only populated on the first suspend (a
@@ -33,14 +37,33 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
     generator->resume_mode_register = -1;
     generator->yielded_value = mal_value_new_undefined();
     generator->is_async = false;
-    generator->async_promise = mal_value_new_undefined();
-    generator->awaited_by = nullptr;
+    generator->async_data = nullptr;
     generator->is_async_generator = false;
     generator->agen_running = false;
     generator->terminal_yield_pending = false;
-    generator->agen_queue_head = nullptr;
-    generator->agen_queue_tail = nullptr;
 
+    if (with_async_data) {
+        generator->async_data = (MalGeneratorAsyncData *) (generator + 1);
+        *generator->async_data = (MalGeneratorAsyncData) {
+            .promise = mal_value_new_undefined(),
+            .awaited_by = nullptr,
+            .queue_head = nullptr,
+            .queue_tail = nullptr,
+        };
+    }
+
+    return generator;
+}
+
+MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype) {
+    return mal_generator_object_alloc(heap, prototype, false);
+}
+
+MalGeneratorObject *mal_generator_object_new_async(
+    MalHeap *heap, MalObject *prototype, bool is_async_generator) {
+    MalGeneratorObject *generator = mal_generator_object_alloc(heap, prototype, true);
+    generator->is_async = true;
+    generator->is_async_generator = is_async_generator;
     return generator;
 }
 

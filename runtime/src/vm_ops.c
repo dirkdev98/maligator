@@ -6456,11 +6456,9 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalObject *generator_prototype = mal_vm_generator_instance_prototype(
         vm, callee, is_async_generator);
 
-    MalGeneratorObject *generator = mal_generator_object_new(&vm->heap, generator_prototype);
-    if (is_async_generator) {
-        generator->is_async = true;
-        generator->is_async_generator = true;
-    }
+    MalGeneratorObject *generator = is_async_generator
+        ? mal_generator_object_new_async(&vm->heap, generator_prototype, true)
+        : mal_generator_object_new(&vm->heap, generator_prototype);
 
     // Adopt the register buffer and any argument slice needed after suspension.
     generator->frame.vm = vm;
@@ -6606,9 +6604,11 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     mal_gc_root(&promise_root, &promise_value, 1);
 
     // The hidden async state reuses the generator suspendable-frame object.
-    MalGeneratorObject *state = mal_generator_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    state->is_async = true;
-    state->async_promise = promise_value;
+    MalGeneratorObject *state = mal_generator_object_new_async(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        false);
+    state->async_data->promise = promise_value;
     state->state = MAL_GENERATOR_EXECUTING;
     // Link the result promise back to this async state for async stack stitching.
     promise = mal_value_to_promise_object(promise_value);

@@ -2500,13 +2500,10 @@ static void mal_vm_run_until_frame_count(
                     mal_vm_generator_instance_prototype(
                         vm, frame->callee, start_is_async_generator);
 
-                MalGeneratorObject *generator = mal_generator_object_new(&vm->heap, generator_prototype);
-                if (start_is_async_generator) {
-                    // Async generators await in their body and settle request
-                    // promises; mark both so the await and yield ops route right.
-                    generator->is_async = true;
-                    generator->is_async_generator = true;
-                }
+                MalGeneratorObject *generator = start_is_async_generator
+                    ? mal_generator_object_new_async(
+                        &vm->heap, generator_prototype, true)
+                    : mal_generator_object_new(&vm->heap, generator_prototype);
 
                 i32 return_register = frame->return_register;
                 i32 caller_frame_index = frame->caller_frame_index;
@@ -3407,8 +3404,9 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
     }
     MalStackTrace **link = &trace->async_parent;
     i32 guard = 0;
-    while (async_state != nullptr && async_state->awaited_by != nullptr && guard++ < 100000) {
-        MalGeneratorObject *parent = async_state->awaited_by;
+    while (async_state != nullptr &&
+           async_state->async_data->awaited_by != nullptr && guard++ < 100000) {
+        MalGeneratorObject *parent = async_state->async_data->awaited_by;
         const MalFunction *function = parent->frame.function;
         MalStackTrace *segment = mal_vm_stack_trace_new(vm, 1);
         if (segment == nullptr) {
