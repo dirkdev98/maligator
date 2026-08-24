@@ -217,64 +217,53 @@ static bool mal_proxy_target_get_own(MalVm *vm, MalValue target, MalKey key, boo
 // ---- get ------------------------------------------------------------------
 
 static bool mal_proxy_get_snapshot(
-    MalVm *vm, MalValue target, MalValue handler, MalKey key, MalValue receiver, MalValue *out) {
-    MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, MAL_HOT_KEY_PROXY_GET, &trap)) {
+    MalVm *vm, MalValue *roots, MalKey key, MalValue *out
+) {
+    if (!mal_proxy_get_trap_from_handler(
+            vm, roots[1], MAL_HOT_KEY_PROXY_GET, &roots[4])) {
         return false;
     }
-    if (mal_value_is_undefined(trap)) {
-        return mal_vm_get_property_with_receiver(vm, target, key, receiver, out);
+    if (mal_value_is_undefined(roots[4])) {
+        return mal_vm_get_property_with_receiver(
+            vm, roots[0], key, roots[3], out);
     }
 
-    MalValue call_roots[4] = {trap, target, key.value, receiver};
-    MalRootSpan call_span;
-    mal_gc_root(&call_span, call_roots, 4);
-    call_roots[2] = mal_proxy_key_to_value(vm, key);
+    roots[5] = mal_proxy_key_to_value(vm, key);
+    MalValue args[3] = {roots[0], roots[5], roots[3]};
     MalCompletion completion = mal_vm_call_value(
-        vm, call_roots[0], handler, &call_roots[1], 3);
+        vm, roots[4], roots[1], args, 3);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
-        mal_gc_unroot(&call_span);
         return false;
     }
-    MalValue trap_result = completion.value;
-    MalRootSpan trap_result_span;
-    mal_gc_root(&trap_result_span, &trap_result, 1);
+    roots[4] = completion.value;
 
     // Invariant: a non-configurable, non-writable data property must report its
     // exact value; a non-configurable accessor with no getter must report
     // undefined.
     bool present;
     MalPropertyDesc desc;
-    if (!mal_proxy_target_get_own(vm, target, key, &present, &desc)) {
-        mal_gc_unroot(&trap_result_span);
-        mal_gc_unroot(&call_span);
+    if (!mal_proxy_target_get_own(vm, roots[0], key, &present, &desc)) {
         return false;
     }
     if (present) {
         if (!(desc.flags & MAL_PROPERTY_CONFIGURABLE)) {
             if (!(desc.flags & MAL_PROPERTY_ACCESSOR) && !(desc.flags & MAL_PROPERTY_WRITABLE)) {
-                if (!mal_proxy_same_value(trap_result, desc.value)) {
+                if (!mal_proxy_same_value(roots[4], desc.value)) {
                     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "proxy get trap violated invariant on non-configurable non-writable property");
-                    mal_gc_unroot(&trap_result_span);
-                    mal_gc_unroot(&call_span);
                     return false;
                 }
             }
             if ((desc.flags & MAL_PROPERTY_ACCESSOR) && mal_value_is_undefined(desc.getter)) {
-                if (!mal_value_is_undefined(trap_result)) {
+                if (!mal_value_is_undefined(roots[4])) {
                     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "proxy get trap violated invariant on non-configurable accessor property");
-                    mal_gc_unroot(&trap_result_span);
-                    mal_gc_unroot(&call_span);
                     return false;
                 }
             }
         }
     }
 
-    *out = trap_result;
-    mal_gc_unroot(&trap_result_span);
-    mal_gc_unroot(&call_span);
+    *out = roots[4];
     return true;
 }
 
@@ -286,11 +275,14 @@ bool mal_proxy_get(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue receiv
     if (!mal_proxy_dispatch_enter(vm)) {
         return false;
     }
-    MalValue roots[4] = {proxy->target, proxy->handler, key.value, receiver};
+    MalValue roots[6] = {
+        proxy->target, proxy->handler, key.value, receiver,
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 4);
+    mal_gc_root(&roots_span, roots, 6);
     key.value = roots[2];
-    bool ok = mal_proxy_get_snapshot(vm, roots[0], roots[1], key, roots[3], out);
+    bool ok = mal_proxy_get_snapshot(vm, roots, key, out);
     mal_gc_unroot(&roots_span);
     mal_proxy_dispatch_leave(vm);
     return ok;
@@ -299,45 +291,40 @@ bool mal_proxy_get(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue receiv
 // ---- set ------------------------------------------------------------------
 
 static bool mal_proxy_set_snapshot(
-    MalVm *vm, MalValue target, MalValue handler, MalKey key, MalValue value,
-    MalValue receiver) {
-    MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, MAL_HOT_KEY_PROXY_SET, &trap)) {
+    MalVm *vm, MalValue *roots, MalKey key
+) {
+    if (!mal_proxy_get_trap_from_handler(
+            vm, roots[1], MAL_HOT_KEY_PROXY_SET, &roots[5])) {
         return false;
     }
-    if (mal_value_is_undefined(trap)) {
-        return mal_vm_set_property(vm, target, key, value, receiver);
+    if (mal_value_is_undefined(roots[5])) {
+        return mal_vm_set_property(vm, roots[0], key, roots[2], roots[3]);
     }
 
-    MalValue call_roots[5] = {trap, target, key.value, value, receiver};
-    MalRootSpan call_span;
-    mal_gc_root(&call_span, call_roots, 5);
-    call_roots[2] = mal_proxy_key_to_value(vm, key);
+    roots[6] = mal_proxy_key_to_value(vm, key);
+    MalValue args[4] = {roots[0], roots[6], roots[2], roots[3]};
     MalCompletion completion = mal_vm_call_value(
-        vm, call_roots[0], handler, &call_roots[1], 4);
+        vm, roots[5], roots[1], args, 4);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
-        mal_gc_unroot(&call_span);
         return false;
     }
     if (!mal_value_is_truthy(completion.value)) {
-        mal_gc_unroot(&call_span);
         return false;
     }
-    mal_gc_unroot(&call_span);
 
     // Invariant: cannot report success when the target has a non-configurable,
     // non-writable data property with a different value, or a non-configurable
     // accessor with no setter.
     bool present;
     MalPropertyDesc desc;
-    if (!mal_proxy_target_get_own(vm, target, key, &present, &desc)) {
+    if (!mal_proxy_target_get_own(vm, roots[0], key, &present, &desc)) {
         return false;
     }
     if (present) {
         if (!(desc.flags & MAL_PROPERTY_CONFIGURABLE)) {
             if (!(desc.flags & MAL_PROPERTY_ACCESSOR) && !(desc.flags & MAL_PROPERTY_WRITABLE)) {
-                if (!mal_proxy_same_value(value, desc.value)) {
+                if (!mal_proxy_same_value(roots[2], desc.value)) {
                     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "proxy set trap violated invariant on non-configurable non-writable property");
                     return false;
                 }
@@ -359,12 +346,14 @@ bool mal_proxy_set(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue value,
     if (!mal_proxy_dispatch_enter(vm)) {
         return false;
     }
-    MalValue roots[5] = {proxy->target, proxy->handler, value, receiver, key.value};
+    MalValue roots[7] = {
+        proxy->target, proxy->handler, value, receiver, key.value,
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 5);
+    mal_gc_root(&roots_span, roots, 7);
     key.value = roots[4];
-    bool ok = mal_proxy_set_snapshot(
-        vm, roots[0], roots[1], key, roots[2], roots[3]);
+    bool ok = mal_proxy_set_snapshot(vm, roots, key);
     mal_gc_unroot(&roots_span);
     mal_proxy_dispatch_leave(vm);
     return ok;
@@ -373,28 +362,25 @@ bool mal_proxy_set(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue value,
 // ---- has ------------------------------------------------------------------
 
 static bool mal_proxy_has_snapshot(
-    MalVm *vm, MalValue target, MalValue handler, MalKey key) {
-    MalValue trap;
-    if (!mal_proxy_get_trap_from_handler(vm, handler, MAL_HOT_KEY_PROXY_HAS, &trap)) {
+    MalVm *vm, MalValue *roots, MalKey key
+) {
+    if (!mal_proxy_get_trap_from_handler(
+            vm, roots[1], MAL_HOT_KEY_PROXY_HAS, &roots[3])) {
         return false;
     }
-    if (mal_value_is_undefined(trap)) {
-        return mal_vm_has_property(vm, target, key);
+    if (mal_value_is_undefined(roots[3])) {
+        return mal_vm_has_property(vm, roots[0], key);
     }
 
-    MalValue call_roots[3] = {trap, target, key.value};
-    MalRootSpan call_span;
-    mal_gc_root(&call_span, call_roots, 3);
-    call_roots[2] = mal_proxy_key_to_value(vm, key);
+    roots[4] = mal_proxy_key_to_value(vm, key);
+    MalValue args[2] = {roots[0], roots[4]};
     MalCompletion completion = mal_vm_call_value(
-        vm, call_roots[0], handler, &call_roots[1], 2);
+        vm, roots[3], roots[1], args, 2);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
-        mal_gc_unroot(&call_span);
         return false;
     }
     bool result = mal_value_is_truthy(completion.value);
-    mal_gc_unroot(&call_span);
 
     // Invariant: a property cannot be reported absent if it is a
     // non-configurable own property of the target, or if the target is
@@ -402,7 +388,7 @@ static bool mal_proxy_has_snapshot(
     if (!result) {
         bool present;
         MalPropertyDesc desc;
-        if (!mal_proxy_target_get_own(vm, target, key, &present, &desc)) {
+        if (!mal_proxy_target_get_own(vm, roots[0], key, &present, &desc)) {
             return false;
         }
         if (present) {
@@ -411,7 +397,7 @@ static bool mal_proxy_has_snapshot(
                 return false;
             }
             bool extensible;
-            if (!mal_vm_is_extensible_object(vm, target, &extensible)) {
+            if (!mal_vm_is_extensible_object(vm, roots[0], &extensible)) {
                 return false;
             }
             if (!extensible) {
@@ -431,11 +417,14 @@ bool mal_proxy_has(MalVm *vm, MalProxyObject *proxy, MalKey key) {
     if (!mal_proxy_dispatch_enter(vm)) {
         return false;
     }
-    MalValue roots[3] = {proxy->target, proxy->handler, key.value};
+    MalValue roots[5] = {
+        proxy->target, proxy->handler, key.value,
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 3);
+    mal_gc_root(&roots_span, roots, 5);
     key.value = roots[2];
-    bool result = mal_proxy_has_snapshot(vm, roots[0], roots[1], key);
+    bool result = mal_proxy_has_snapshot(vm, roots, key);
     mal_gc_unroot(&roots_span);
     mal_proxy_dispatch_leave(vm);
     return result;
@@ -444,38 +433,33 @@ bool mal_proxy_has(MalVm *vm, MalProxyObject *proxy, MalKey key) {
 // ---- deleteProperty -------------------------------------------------------
 
 static bool mal_proxy_delete_snapshot(
-    MalVm *vm, MalValue target, MalValue handler, MalKey key) {
-    MalValue trap;
+    MalVm *vm, MalValue *roots, MalKey key
+) {
     if (!mal_proxy_get_trap_from_handler(
-            vm, handler, MAL_HOT_KEY_PROXY_DELETE_PROPERTY, &trap)) {
+            vm, roots[1], MAL_HOT_KEY_PROXY_DELETE_PROPERTY, &roots[3])) {
         return false;
     }
-    if (mal_value_is_undefined(trap)) {
-        return mal_vm_delete_property(vm, target, key);
+    if (mal_value_is_undefined(roots[3])) {
+        return mal_vm_delete_property(vm, roots[0], key);
     }
 
-    MalValue call_roots[3] = {trap, target, key.value};
-    MalRootSpan call_span;
-    mal_gc_root(&call_span, call_roots, 3);
-    call_roots[2] = mal_proxy_key_to_value(vm, key);
+    roots[4] = mal_proxy_key_to_value(vm, key);
+    MalValue args[2] = {roots[0], roots[4]};
     MalCompletion completion = mal_vm_call_value(
-        vm, call_roots[0], handler, &call_roots[1], 2);
+        vm, roots[3], roots[1], args, 2);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
-        mal_gc_unroot(&call_span);
         return false;
     }
     if (!mal_value_is_truthy(completion.value)) {
-        mal_gc_unroot(&call_span);
         return false;
     }
-    mal_gc_unroot(&call_span);
 
     // Invariant: a non-configurable own property of the target cannot be
     // reported as deleted; nor any own property of a non-extensible target.
     bool present;
     MalPropertyDesc desc;
-    if (!mal_proxy_target_get_own(vm, target, key, &present, &desc)) {
+    if (!mal_proxy_target_get_own(vm, roots[0], key, &present, &desc)) {
         return false;
     }
     if (present) {
@@ -484,7 +468,7 @@ static bool mal_proxy_delete_snapshot(
             return false;
         }
         bool extensible;
-        if (!mal_vm_is_extensible_object(vm, target, &extensible)) {
+        if (!mal_vm_is_extensible_object(vm, roots[0], &extensible)) {
             return false;
         }
         if (!extensible) {
@@ -503,11 +487,14 @@ bool mal_proxy_delete(MalVm *vm, MalProxyObject *proxy, MalKey key) {
     if (!mal_proxy_dispatch_enter(vm)) {
         return false;
     }
-    MalValue roots[3] = {proxy->target, proxy->handler, key.value};
+    MalValue roots[5] = {
+        proxy->target, proxy->handler, key.value,
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 3);
+    mal_gc_root(&roots_span, roots, 5);
     key.value = roots[2];
-    bool ok = mal_proxy_delete_snapshot(vm, roots[0], roots[1], key);
+    bool ok = mal_proxy_delete_snapshot(vm, roots, key);
     mal_gc_unroot(&roots_span);
     mal_proxy_dispatch_leave(vm);
     return ok;
