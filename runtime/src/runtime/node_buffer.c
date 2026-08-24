@@ -872,26 +872,36 @@ static MalValue mal_buffer_alloc_impl(
                                "Buffer encoding allocation failed");
             return mal_value_new_undefined();
         }
-        MalValue result = fill_length == 0
-            ? mal_buffer_new(vm, prototype, length)
-            : mal_buffer_new_uninitialized(vm, prototype, length);
-        if (mal_value_is_undefined(result)) {
+        if (fill_length == 0) {
             free(fill);
-            return result;
+            return mal_buffer_new(vm, prototype, length);
         }
-        if (fill_length > 0) {
-            byte *data = mal_value_to_typed_array_object(result)->buffer->data;
-            usize written = fill_length < length ? fill_length : length;
-            memcpy(data, fill, written);
+
+        if (fill_length < length) {
+            byte *grown = realloc(fill, length);
+            if (grown == nullptr) {
+                free(fill);
+                mal_vm_throw_allocation_error(vm);
+                return mal_value_new_undefined();
+            }
+            fill = grown;
+            usize written = fill_length;
             while (written < length) {
                 usize copy = written < length - written
                     ? written : length - written;
-                memcpy(data + written, data, copy);
+                memcpy(fill + written, fill, copy);
                 written += copy;
             }
+        } else if (fill_length > length) {
+            // Shrinking is opportunistic: a failed realloc leaves the original
+            // allocation valid, and ArrayBuffer ownership only needs the exposed
+            // byte length in order to free a non-sensitive block correctly.
+            byte *shrunk = realloc(fill, length);
+            if (shrunk != nullptr) {
+                fill = shrunk;
+            }
         }
-        free(fill);
-        return result;
+        return mal_buffer_adopt_bytes(vm, prototype, fill, length, false);
     }
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                        "The fill argument must be a number or string");
