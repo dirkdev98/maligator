@@ -145,6 +145,13 @@ const concatenated = Buffer.concat([Buffer.from("ab"), new Uint8Array([99, 100])
 const padded = Buffer.concat([Buffer.from("x")], 3);
 check("concat copies Buffer and Uint8Array", concatenated.toString() === "abcd");
 check("concat totalLength truncates or zero-pads", padded.toString("hex") === "780000");
+const sparseChunks = [];
+sparseChunks.length = 1;
+Object.setPrototypeOf(sparseChunks, { 0: Buffer.from("p") });
+check(
+	"concat preserves sparse inherited element lookup",
+	Buffer.concat(sparseChunks).toString() === "p",
+);
 
 const typedCopies = [
 	Buffer.from(new Int8Array([-1]))[0],

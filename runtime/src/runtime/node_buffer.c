@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "ascii.h"
+#include "array_object.h"
 #include "array_buffer_object.h"
 #include "base64.h"
 #include "builtin_bigint.h"
@@ -1076,12 +1077,37 @@ static MalValue mal_buffer_concat(
                            "Buffer.concat requires an array of Buffers");
         return mal_value_new_undefined();
     }
-    MalValue length_value;
-    if (!mal_vm_get_property(vm, list, mal_intrinsic_string_key(vm, "length"), &length_value)) {
-        return mal_value_new_undefined();
-    }
     u32 list_length;
-    if (!mal_buffer_to_size(vm, length_value, &list_length)) return mal_value_new_undefined();
+    MalArrayObject *dense_list = nullptr;
+    if (mal_value_is_array_object(list)) {
+        MalArrayObject *array = mal_value_to_array_object(list);
+        list_length = mal_array_object_length(array);
+        if (list_length > INT32_MAX) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "The Buffer size is invalid");
+            return mal_value_new_undefined();
+        }
+        if (array->dense_count >= list_length) {
+            bool complete = true;
+            for (u32 i = 0; i < list_length; i++) {
+                if (!mal_array_object_dense_has(array, i)) {
+                    complete = false;
+                    break;
+                }
+            }
+            if (complete) dense_list = array;
+        }
+    } else {
+        MalValue length_value;
+        if (!mal_vm_get_property(
+                vm, list, mal_intrinsic_string_key(vm, "length"),
+                &length_value)) {
+            return mal_value_new_undefined();
+        }
+        if (!mal_buffer_to_size(vm, length_value, &list_length)) {
+            return mal_value_new_undefined();
+        }
+    }
     u64 total = 0;
     if (argc >= 2 && !mal_value_is_undefined(args[1])) {
         u32 requested;
@@ -1103,8 +1129,14 @@ static MalValue mal_buffer_concat(
     } else {
         for (u32 i = 0; i < list_length; i++) {
             MalValue item;
-            MalKey key = mal_key_index(i);
-            if (!mal_vm_get_property(vm, list, key, &item)) return mal_value_new_undefined();
+            if (dense_list != nullptr) {
+                (void) mal_array_object_dense_get(dense_list, i, &item);
+            } else {
+                MalKey key = mal_key_index(i);
+                if (!mal_vm_get_property(vm, list, key, &item)) {
+                    return mal_value_new_undefined();
+                }
+            }
             MalTypedArrayObject *view = mal_buffer_byte_view(vm, item);
             if (view == nullptr) return mal_value_new_undefined();
             total += mal_typed_array_object_length(view);
@@ -1124,8 +1156,12 @@ static MalValue mal_buffer_concat(
     u32 written = 0;
     for (u32 i = 0; i < list_length && written < total; i++) {
         MalValue item;
-        MalKey key = mal_key_index(i);
-        if (!mal_vm_get_property(vm, list, key, &item)) goto concat_error;
+        if (dense_list != nullptr) {
+            (void) mal_array_object_dense_get(dense_list, i, &item);
+        } else {
+            MalKey key = mal_key_index(i);
+            if (!mal_vm_get_property(vm, list, key, &item)) goto concat_error;
+        }
         MalTypedArrayObject *view = mal_buffer_byte_view(vm, item);
         if (view == nullptr) goto concat_error;
         u32 available = mal_typed_array_object_length(view);
