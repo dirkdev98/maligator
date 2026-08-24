@@ -199,9 +199,11 @@ static MalValue mal_shadow_realm_wrapped_call(
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 3);
 
-    MalValue *wrapped_args = arg_count > 0
+    MalValue inline_args[8];
+    bool heap_args = (usize) arg_count > countof(inline_args);
+    MalValue *wrapped_args = heap_args
         ? malloc(sizeof(MalValue) * (usize) arg_count)
-        : nullptr;
+        : inline_args;
     MalRootSpan args_span;
     mal_gc_root(&args_span, wrapped_args, 0);
     mal_gc_native_rooted_begin(vm);
@@ -250,7 +252,7 @@ done:
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&args_span);
     mal_gc_unroot(&root_span);
-    free(wrapped_args);
+    if (heap_args) free(wrapped_args);
     return result;
 }
 
