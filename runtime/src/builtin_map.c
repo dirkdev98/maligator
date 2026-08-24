@@ -573,12 +573,16 @@ static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_v
 static MalValue mal_builtin_map_get_or_insert(MalVm *vm, MalMapObject *map, MalValue key, MalValue value) {
     (void) vm;
     MalKey canonical_key = mal_map_key_from_value(key);
-    MalTableLookup lookup = mal_table_lookup(map->entries, canonical_key);
-    if (lookup.present) {
-        return mal_table_entry_value(map->entries, lookup.entry);
+    bool inserted;
+    void *entry = mal_table_upsert_entry(
+        map->entries, canonical_key, &inserted);
+    if (!inserted) {
+        return mal_table_entry_value(map->entries, entry);
     }
 
-    mal_builtin_map_store_canonical(map, canonical_key, value);
+    mal_table_entry_set_value(map->entries, entry, value);
+    mal_gc_card(&map->object.header, canonical_key.value);
+    mal_gc_card(&map->object.header, value);
     return value;
 }
 

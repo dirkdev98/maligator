@@ -548,6 +548,15 @@ check(
 		upsert.getOrInsert("missing", 2) === 2 &&
 		upsert.get("missing") === 2,
 );
+const canonicalUpsert = new Map();
+const canonicalUpsertValue = { marker: 707 };
+check(
+	"Map getOrInsert single upsert preserves canonical keys and existing values",
+	canonicalUpsert.getOrInsert(-0, canonicalUpsertValue) === canonicalUpsertValue &&
+		canonicalUpsert.getOrInsert(0, { marker: 808 }) === canonicalUpsertValue &&
+		canonicalUpsert.size === 1 &&
+		1 / canonicalUpsert.keys().next().value === Infinity,
+);
 const computedValue = upsert.getOrInsertComputed(-0, (key) => {
 	computedCalls++;
 	check("Map computed callback canonical key", 1 / key === Infinity);
