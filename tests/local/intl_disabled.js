@@ -14,6 +14,16 @@ check("typeof Intl === undefined", typeof Intl === "undefined");
 check("localeCompare b>a", "b".localeCompare("a") === 1);
 check("localeCompare a==a", "a".localeCompare("a") === 0);
 check("localeCompare a<b", "a".localeCompare("b") === -1);
+const comparisonPrefix = "abcd".repeat(16);
+check(
+	"localeCompare preserves code-unit order after word-sized prefixes",
+	(comparisonPrefix + "a").localeCompare(comparisonPrefix + "b") === -1 &&
+		(comparisonPrefix + "d").localeCompare(comparisonPrefix + "c") === 1,
+);
+check(
+	"relational comparison preserves UTF-16 ordering",
+	comparisonPrefix + "\ud800" < comparisonPrefix + "\ud801",
+);
 function freshCons(left, right) {
 	return left.repeat(64) + right.repeat(64);
 }

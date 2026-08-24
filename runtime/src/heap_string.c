@@ -727,6 +727,36 @@ typedef struct MalStringComparePair {
     const MalString *right;
 } MalStringComparePair;
 
+static i32 mal_string_compare_code_units(
+    const c16 *left, const c16 *right, usize length
+) {
+    usize index = 0;
+    while (length - index >= 4) {
+        u64 left_word;
+        u64 right_word;
+        memcpy(&left_word, left + index, sizeof(left_word));
+        memcpy(&right_word, right + index, sizeof(right_word));
+        if (left_word != right_word) {
+            for (usize lane = 0; lane < 4; lane++) {
+                c16 left_unit = left[index + lane];
+                c16 right_unit = right[index + lane];
+                if (left_unit < right_unit) return -1;
+                if (left_unit > right_unit) return 1;
+            }
+            abort();
+        }
+        index += 4;
+    }
+    while (index < length) {
+        c16 left_unit = left[index];
+        c16 right_unit = right[index];
+        if (left_unit < right_unit) return -1;
+        if (left_unit > right_unit) return 1;
+        index++;
+    }
+    return 0;
+}
+
 /**
  * Compare equally sized, identically partitioned ropes without flattening them.
  * Repeat builds shared DAGs, so matching duplicated children only need one visit.
@@ -777,17 +807,12 @@ static bool mal_string_compare_structural(
             continue;
         }
 
-        const c16 *left_units = mal_string_code_units(pair.left);
-        const c16 *right_units = mal_string_code_units(pair.right);
-        for (usize i = 0; i < pair.left->length; i++) {
-            if (left_units[i] < right_units[i]) {
-                *result_out = -1;
-                return true;
-            }
-            if (left_units[i] > right_units[i]) {
-                *result_out = 1;
-                return true;
-            }
+        i32 result = mal_string_compare_code_units(
+            mal_string_code_units(pair.left),
+            mal_string_code_units(pair.right), pair.left->length);
+        if (result != 0) {
+            *result_out = result;
+            return true;
         }
     }
 
@@ -836,18 +861,9 @@ i32 mal_string_compare(const MalString *left, const MalString *right) {
     const c16 *left_code_units = mal_string_code_units(left);
     const c16 *right_code_units = mal_string_code_units(right);
 
-    for (usize i = 0; i < min_length; i++) {
-        c16 left_code_unit = left_code_units[i];
-        c16 right_code_unit = right_code_units[i];
-
-        if (left_code_unit < right_code_unit) {
-            return -1;
-        }
-
-        if (left_code_unit > right_code_unit) {
-            return 1;
-        }
-    }
+    i32 result = mal_string_compare_code_units(
+        left_code_units, right_code_units, min_length);
+    if (result != 0) return result;
 
     if (left->length < right->length) {
         return -1;
