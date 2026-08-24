@@ -61,6 +61,24 @@ check(
 		Error.prototype.toString.call({ name: longName, message: longMessage }) ===
 			longName + ": " + longMessage,
 );
+const errorStringOrder = [];
+const rootedErrorName = "Rooted".repeat(64);
+const rootedErrorString = Error.prototype.toString.call({
+	get name() {
+		errorStringOrder.push("name");
+		return rootedErrorName;
+	},
+	get message() {
+		errorStringOrder.push("message");
+		if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+		return "message";
+	},
+});
+check(
+	"Error toString roots observable string parts",
+	rootedErrorString === rootedErrorName + ": message" &&
+		errorStringOrder.join(",") === "name,message",
+);
 
 let preparedTarget;
 let preparedSites;

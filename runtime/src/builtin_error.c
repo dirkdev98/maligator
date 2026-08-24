@@ -338,16 +338,23 @@ static MalValue mal_builtin_error_is_error(MalVm *vm, MalValue this_value, const
  * result (which can throw on a Symbol). Returns false on a pending throw, and
  * sets *out to NULL when the property is undefined/absent.
  */
-static bool mal_builtin_error_get_string(MalVm *vm, MalObject *error, const byte *name, MalString **out) {
+static bool mal_builtin_error_get_string(
+    MalVm *vm, MalValue error, const byte *name, MalValue *out
+) {
     MalValue value;
-    if (!mal_vm_get_property(vm, mal_value_from_object(error), mal_intrinsic_string_key(vm, name), &value)) {
+    if (!mal_vm_get_property(vm, error, mal_intrinsic_string_key(vm, name), &value)) {
         return false;
     }
     if (mal_value_is_undefined(value)) {
-        *out = nullptr;
+        *out = mal_value_new_undefined();
         return true;
     }
-    return mal_vm_to_string(vm, value, out);
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) {
+        return false;
+    }
+    *out = mal_value_from_string(string);
+    return true;
 }
 
 static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -362,28 +369,42 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
         return mal_value_new_undefined();
     }
 
-    MalObject *error = mal_value_to_object(this_value);
+    MalValue roots[3] = {
+        this_value,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
 
     // 3-4. name: Get(O, "name"); if undefined use "Error", else ToString(name).
-    MalString *name;
-    if (!mal_builtin_error_get_string(vm, error, "name", &name)) {
+    if (!mal_builtin_error_get_string(vm, roots[0], "name", &roots[1])) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
-    if (name == nullptr) {
-        name = mal_intrinsic_ascii(vm, "Error");
+    if (mal_value_is_undefined(roots[1])) {
+        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, "Error"));
     }
 
     // 5-6. message: Get(O, "message"); if undefined use "", else ToString(msg).
-    MalString *message;
-    if (!mal_builtin_error_get_string(vm, error, "message", &message)) {
+    if (!mal_builtin_error_get_string(vm, roots[0], "message", &roots[2])) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
 
+    MalString *name = mal_value_to_string(roots[1]);
+    MalString *message = mal_value_is_undefined(roots[2])
+        ? nullptr
+        : mal_value_to_string(roots[2]);
     if (message == nullptr || mal_string_length(message) == 0) {
-        return mal_value_from_string(name);
+        MalValue result = roots[1];
+        mal_gc_unroot(&root_span);
+        return result;
     }
     if (mal_string_length(name) == 0) {
-        return mal_value_from_string(message);
+        MalValue result = roots[2];
+        mal_gc_unroot(&root_span);
+        return result;
     }
 
     usize name_length = mal_string_length(name);
@@ -395,27 +416,29 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
             total_length, message_length, MAL_STRING_MAX_CODE_UNITS, &total_length) ||
         !mal_checked_size_multiply(sizeof(c16), total_length, SIZE_MAX, &bytes)) {
         mal_builtin_error_throw_string_length(vm);
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
-    c16 inline_code_units[128];
-    c16 *code_units = inline_code_units;
-    bool heap_code_units = total_length > countof(inline_code_units);
-    if (heap_code_units) {
-        code_units = malloc(bytes);
-        if (code_units == nullptr) {
-            mal_vm_throw_allocation_error(vm);
-            return mal_value_new_undefined();
-        }
-    }
+    c16 inline_code_units[MAL_STRING_INLINE_CODE_UNITS];
+    bool inline_result = total_length <= MAL_STRING_INLINE_CODE_UNITS;
+    c16 *code_units = inline_result
+        ? inline_code_units
+        : mal_heap_alloc_raw_profiled(
+            &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
 
+    name = mal_value_to_string(roots[1]);
+    message = mal_value_to_string(roots[2]);
     memcpy(code_units, mal_string_code_units(name), (usize) sizeof(c16) * name_length);
     code_units[name_length] = ':';
     code_units[name_length + 1] = ' ';
     memcpy(code_units + name_length + 2, mal_string_code_units(message), (usize) sizeof(c16) * message_length);
 
-    MalString *result = mal_string_new_copy(&vm->heap, code_units, total_length);
-    if (heap_code_units) free(code_units);
-    return mal_value_from_string(result);
+    MalString *result = inline_result
+        ? mal_string_new_copy(&vm->heap, code_units, total_length)
+        : mal_string_new_owned(&vm->heap, code_units, total_length);
+    MalValue result_value = mal_value_from_string(result);
+    mal_gc_unroot(&root_span);
+    return result_value;
 }
 
 enum {
