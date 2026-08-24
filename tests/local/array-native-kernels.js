@@ -84,6 +84,42 @@ async function main() {
 		source.every((value) => value < 6),
 	);
 	check("flat", [1, [2, [3]]].flat(2).join() === "1,2,3");
+	const flatWithHoles = [1, [2, , 3], , [4, 5]].flat();
+	check(
+		"flat dense depth one compacts outer and nested holes",
+		flatWithHoles.length === 5 &&
+			flatWithHoles.join() === "1,2,3,4,5" &&
+			Object.keys(flatWithHoles).length === 5,
+	);
+	const speciesNested = [6, 7, 8];
+	const speciesFlatSource = [speciesNested, 9];
+	speciesFlatSource.constructor = {
+		get [Symbol.species]() {
+			speciesNested[0] = 10;
+			delete speciesNested[1];
+			return Array;
+		},
+	};
+	check(
+		"flat revalidates dense children after species effects",
+		speciesFlatSource.flat().join() === "10,8,9",
+	);
+	let flatProxyHas = 0;
+	let flatProxyGet = 0;
+	const flatProxyChild = new Proxy([11, , 12], {
+		has(target, key) {
+			flatProxyHas++;
+			return Reflect.has(target, key);
+		},
+		get(target, key, receiver) {
+			flatProxyGet++;
+			return Reflect.get(target, key, receiver);
+		},
+	});
+	check(
+		"flat falls back for proxy array children",
+		[flatProxyChild].flat().join() === "11,12" && flatProxyHas >= 3 && flatProxyGet >= 3,
+	);
 	check("flatMap", source.flatMap((value) => [value, -value]).length === 10);
 
 	check("indexOf", source.indexOf(3) === 2);

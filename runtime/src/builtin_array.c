@@ -2579,6 +2579,70 @@ static void mal_builtin_array_flatten_into(MalVm *vm, MalValue result, u32 *coun
     }
 }
 
+/**
+ * Flatten exact clean dense Arrays at depth one into a fresh dense result. The
+ * eligibility pass observes no user code and completes before reserving or
+ * publishing output, so any exotic or differently represented child can fall
+ * back to the generic FlattenIntoArray loop without duplicated effects.
+ */
+static bool mal_builtin_array_flat_dense_depth_one(
+    MalVm *vm,
+    MalArrayObject *source,
+    u32 source_length,
+    MalArrayObject *result
+) {
+    if (source->length != source_length) return false;
+    u32 result_length = 0;
+    for (u32 index = 0; index < source->dense_count; index++) {
+        MalValue element;
+        if (!mal_array_object_dense_get(source, index, &element)) continue;
+        bool should_flatten;
+        if (!mal_vm_is_array(vm, element, &should_flatten)) return false;
+        if (!should_flatten) {
+            if (result_length == UINT32_MAX) return false;
+            result_length++;
+            continue;
+        }
+        MalArrayObject *nested = mal_builtin_array_clean_dense(vm, element);
+        if (nested == nullptr) return false;
+        for (u32 nested_index = 0;
+             nested_index < nested->dense_count;
+             nested_index++) {
+            if (!mal_array_object_dense_has(nested, nested_index)) continue;
+            if (result_length == UINT32_MAX) return false;
+            result_length++;
+        }
+    }
+
+    if (!mal_array_object_try_fresh_dense_reserve_exact(
+            result, result_length)) {
+        return false;
+    }
+    for (u32 index = 0; index < source->dense_count; index++) {
+        MalValue element;
+        if (!mal_array_object_dense_get(source, index, &element)) continue;
+        if (!mal_value_is_array_object(element)) {
+            if (!mal_array_object_fresh_dense_append(result, element)) abort();
+            continue;
+        }
+        MalArrayObject *nested = mal_value_to_array_object(element);
+        for (u32 nested_index = 0;
+             nested_index < nested->dense_count;
+             nested_index++) {
+            MalValue nested_element;
+            if (!mal_array_object_dense_get(
+                    nested, nested_index, &nested_element)) {
+                continue;
+            }
+            if (!mal_array_object_fresh_dense_append(
+                    result, nested_element)) {
+                abort();
+            }
+        }
+    }
+    return true;
+}
+
 static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
@@ -2602,6 +2666,25 @@ static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const Mal
     }
     MalRootSpan result_span;
     mal_gc_root(&result_span, &result, 1);
+    if (depth == 1) {
+        MalArrayObject *source_array =
+            mal_builtin_array_clean_dense(vm, this_value);
+        MalArrayObject *result_array =
+            mal_builtin_array_dense_builder(result, 0);
+        if (source_array != nullptr && result_array != nullptr) {
+            bool flattened = mal_builtin_array_flat_dense_depth_one(
+                vm, source_array, length, result_array);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                mal_gc_unroot(&result_span);
+                goto done;
+            }
+            if (flattened) {
+                ret = result;
+                mal_gc_unroot(&result_span);
+                goto done;
+            }
+        }
+    }
     u32 count = 0;
     for (u32 index = 0; index < length; index++) {
         MalValue element;
