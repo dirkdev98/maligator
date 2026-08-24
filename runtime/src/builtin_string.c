@@ -590,6 +590,20 @@ static MalValue mal_builtin_string_from_char_code(MalVm *vm, MalValue this_value
             vm, (c16) mal_ops_number_to_uint_width(code, 16)));
     }
 
+    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
+        c16 inline_code_units[MAL_STRING_INLINE_CODE_UNITS];
+        for (i32 i = 0; i < arg_count; i++) {
+            f64 code = mal_builtin_string_arg_to_number(vm, args[i]);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
+            inline_code_units[i] =
+                (c16) mal_ops_number_to_uint_width(code, 16);
+        }
+        return mal_builtin_string_from_units(
+            vm, inline_code_units, length);
+    }
+
     c16 *code_units = mal_heap_alloc_raw_profiled(
         &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     for (i32 i = 0; i < arg_count; i++) {
@@ -658,34 +672,47 @@ static MalValue mal_builtin_string_from_code_point(MalVm *vm, MalValue this_valu
         mal_builtin_string_throw_length(vm);
         return mal_value_new_undefined();
     }
-    c16 *code_units = mal_heap_alloc_raw_profiled(
-        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    c16 inline_code_units[MAL_STRING_INLINE_CODE_UNITS];
+    bool inline_buffer = input_count <= MAL_STRING_INLINE_CODE_UNITS;
+    c16 *code_units = inline_buffer
+        ? inline_code_units
+        : mal_heap_alloc_raw_profiled(
+            &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     usize length = 0;
     for (i32 i = 0; i < arg_count; i++) {
         u32 code_point;
         if (!mal_builtin_string_to_code_point(vm, args[i], &code_point)) {
-            gc_free_raw(&vm->heap, code_units);
+            if (!inline_buffer) gc_free_raw(&vm->heap, code_units);
             return mal_value_new_undefined();
         }
 
-        if (code_point <= 0xFFFF) {
-            if (length >= MAL_STRING_MAX_CODE_UNITS) {
-                gc_free_raw(&vm->heap, code_units);
-                mal_builtin_string_throw_length(vm);
-                return mal_value_new_undefined();
-            }
+        usize width = code_point <= 0xFFFF ? 1 : 2;
+        if (length > MAL_STRING_MAX_CODE_UNITS - width) {
+            if (!inline_buffer) gc_free_raw(&vm->heap, code_units);
+            mal_builtin_string_throw_length(vm);
+            return mal_value_new_undefined();
+        }
+        if (inline_buffer &&
+            length + width > MAL_STRING_INLINE_CODE_UNITS) {
+            c16 *grown = mal_heap_alloc_raw_profiled(
+                &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+            memcpy(grown, inline_code_units, sizeof(c16) * length);
+            code_units = grown;
+            inline_buffer = false;
+        }
+
+        if (width == 1) {
             code_units[length++] = (c16) code_point;
         } else {
-            if (length > MAL_STRING_MAX_CODE_UNITS - 2) {
-                gc_free_raw(&vm->heap, code_units);
-                mal_builtin_string_throw_length(vm);
-                return mal_value_new_undefined();
-            }
             mal_utf16_emit_pair(code_point, code_units + length);
             length += 2;
         }
     }
 
+    if (inline_buffer) {
+        return mal_builtin_string_from_units(
+            vm, inline_code_units, length);
+    }
     return mal_value_from_string(
         mal_string_new_owned(&vm->heap, code_units, length));
 }

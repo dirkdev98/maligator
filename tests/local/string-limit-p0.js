@@ -590,8 +590,9 @@ check(
 			gcCode("point-a", 65),
 			gcCode("point-face", 0x1f600),
 			gcCode("point-b", 66),
-		) === "A\ud83d\ude00B" &&
-		staticStringOrder.join(",") === "char-a,char-b,point-a,point-face,point-b",
+			gcCode("point-c", 67),
+		) === "A\ud83d\ude00BC" &&
+		staticStringOrder.join(",") === "char-a,char-b,point-a,point-face,point-b,point-c",
 );
 let throwingStringPrototypeReads = 0;
 let throwingStringConstruction = false;
