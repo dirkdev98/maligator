@@ -1,5 +1,6 @@
 #include "builtin_intl.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 #include "intl_object.h"
 #include "intrinsics.h"
 #include "mal_i18n.h"
+#include "shape.h"
 #include "value_ops.h"
 #include "utf16.h"
 #include "vm.h"
@@ -878,13 +880,12 @@ static void intl_resolved_set(MalVm *vm, MalObject *object, const char *name, Ma
 }
 
 /** Read an engine-owned Intl metadata object's exact own data slot. */
-static bool intl_data_get(
-    MalVm *vm, MalValue data, const char *name, MalValue *out) {
+static bool intl_data_get_key(MalValue data, MalKey key, MalValue *out) {
     if (!mal_value_is_object(data)) {
         return false;
     }
     MalPropertyLookup lookup = mal_object_get_own(
-        mal_value_to_object(data), mal_intrinsic_string_key(vm, name));
+        mal_value_to_object(data), key);
     if (!lookup.present || (lookup.desc.flags & MAL_PROPERTY_ACCESSOR)) {
         return false;
     }
@@ -892,18 +893,34 @@ static bool intl_data_get(
     return true;
 }
 
+static bool intl_data_get(
+    MalVm *vm, MalValue data, const char *name, MalValue *out) {
+    return intl_data_get_key(
+        data, mal_intrinsic_string_key(vm, name), out);
+}
+
 /** A fresh object copying the named keys out of an instance's stored template. */
 static MalValue intl_resolved_copy(MalVm *vm, MalValue template_value, const char *const *keys, usize key_count) {
-    MalObject *out = mal_intrinsic_new_object(vm);
+    assert(key_count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    MalString *shape_keys[MAL_SHAPE_MAX_INLINE_SLOTS];
+    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
+    u32 count = 0;
     for (usize i = 0; i < key_count; i++) {
+        MalKey key = mal_intrinsic_string_key(vm, keys[i]);
         MalValue value = mal_value_new_undefined();
-        (void) intl_data_get(vm, template_value, keys[i], &value);
+        (void) intl_data_get_key(template_value, key, &value);
         // Omit keys the instance never set (e.g. an unspecified dateStyle).
         if (!mal_value_is_undefined(value)) {
-            intl_resolved_set(vm, out, keys[i], value);
+            shape_keys[count] = mal_value_to_string(key.value);
+            values[count++] = value;
         }
     }
-    return mal_value_from_object(out);
+    if (count == 0) {
+        return mal_value_from_object(mal_intrinsic_new_object(vm));
+    }
+    MalShape *shape = mal_shape_from_string_keys(
+        &vm->heap, shape_keys, count);
+    return mal_vm_create_object_shaped(vm, shape, values, count);
 }
 
 #if MAL_INTL_HAS_NUMBER_FORMAT
