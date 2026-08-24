@@ -366,62 +366,48 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
         return mal_ops_number_value(hypot(left, right));
     }
 
-    f64 inline_coerced[16];
-    f64 *coerced = inline_coerced;
-    bool heap_coerced = arg_count > (i32) countof(inline_coerced);
-    if (heap_coerced) {
-        usize bytes;
-        if (!mal_checked_size_multiply(sizeof(f64), (usize) arg_count, SIZE_MAX, &bytes) ||
-            (coerced = malloc(bytes)) == nullptr) {
-            mal_vm_throw_allocation_error(vm);
-            return mal_value_new_nan();
-        }
-    }
-    for (i32 i = 0; i < arg_count; i++) {
-        if (!mal_builtin_math_value_to_number(vm, args[i], &coerced[i])) {
-            if (heap_coerced) free(coerced);
-            return mal_value_new_nan();
-        }
-    }
-
     bool any_infinity = false;
     bool any_nan = false;
+    f64 scale = 0.0;
+    f64 scaled_sum = 0.0;
     for (i32 i = 0; i < arg_count; i++) {
-        if (isinf(coerced[i])) {
+        f64 value;
+        if (!mal_builtin_math_value_to_number(vm, args[i], &value)) {
+            return mal_value_new_nan();
+        }
+        if (isinf(value)) {
             any_infinity = true;
-        } else if (isnan(coerced[i])) {
+            continue;
+        }
+        if (isnan(value)) {
             any_nan = true;
+            continue;
+        }
+
+        // Accumulate scaled squares as values are coerced. Folding already
+        // converted Numbers is not observable, while changing the scale when
+        // a larger magnitude arrives avoids both overflow and a second pass.
+        f64 magnitude = fabs(value);
+        if (magnitude > scale) {
+            f64 ratio = scale / magnitude;
+            scaled_sum = scaled_sum * ratio * ratio + 1.0;
+            scale = magnitude;
+        } else if (magnitude != 0.0) {
+            f64 ratio = magnitude / scale;
+            scaled_sum += ratio * ratio;
         }
     }
 
     if (any_infinity) {
-        if (heap_coerced) free(coerced);
         return mal_ops_number_value(INFINITY);
     }
     if (any_nan) {
-        if (heap_coerced) free(coerced);
         return mal_value_new_nan();
     }
-
-    // Sum of squares with scaling to avoid spurious overflow/underflow.
-    f64 max_abs = 0.0;
-    for (i32 i = 0; i < arg_count; i++) {
-        f64 a = fabs(coerced[i]);
-        if (a > max_abs) {
-            max_abs = a;
-        }
-    }
-    if (max_abs == 0.0) {
-        if (heap_coerced) free(coerced);
+    if (scale == 0.0) {
         return mal_ops_number_value(0.0);
     }
-    f64 sum = 0.0;
-    for (i32 i = 0; i < arg_count; i++) {
-        f64 scaled = coerced[i] / max_abs;
-        sum += scaled * scaled;
-    }
-    if (heap_coerced) free(coerced);
-    return mal_ops_number_value(max_abs * sqrt(sum));
+    return mal_ops_number_value(scale * sqrt(scaled_sum));
 }
 
 // Math.min / Math.max must coerce *all* arguments in order. Folding each
