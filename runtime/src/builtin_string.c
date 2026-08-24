@@ -105,6 +105,42 @@ static f64 mal_builtin_string_arg_to_number(MalVm *vm, MalValue value) {
     return number;
 }
 
+/**
+ * Non-observable Number extraction for primitive fast paths. Undefined is
+ * represented as NaN because every String index operation below subsequently
+ * applies ToIntegerOrInfinity/ToLength (or lastIndexOf's explicit NaN rule).
+ */
+static bool mal_builtin_string_primitive_number(MalValue value, f64 *number_out) {
+    if (mal_ops_is_number(value)) {
+        *number_out = mal_ops_number_as_f64(value);
+        return true;
+    }
+    if (mal_value_is_undefined(value)) {
+        *number_out = NAN;
+        return true;
+    }
+    return false;
+}
+
+static bool mal_builtin_string_primitive_number_arg(
+    const MalValue *args,
+    i32 arg_count,
+    i32 index,
+    f64 missing,
+    f64 *number_out
+) {
+    if (arg_count <= index) {
+        *number_out = missing;
+        return true;
+    }
+    return mal_builtin_string_primitive_number(args[index], number_out);
+}
+
+static bool mal_builtin_string_is_flat_value(MalValue value) {
+    return mal_value_is_string(value) &&
+        mal_string_storage(mal_value_to_string(value)) != MAL_STRING_STORAGE_CONS;
+}
+
 static bool mal_builtin_string_throw_length(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     return false;
@@ -161,6 +197,22 @@ static MalString *mal_builtin_string_root_get(
 
 static void mal_builtin_string_root_dispose(MalBuiltinRootedString *root) {
     mal_gc_unroot(&root->span);
+}
+
+/** Flatten a cons string while it is rooted, then return stable contiguous data. */
+static MalString *mal_builtin_string_flatten_for_scan(
+    MalString *string, const c16 **code_units_out
+) {
+    if (mal_string_storage(string) != MAL_STRING_STORAGE_CONS) {
+        *code_units_out = mal_string_code_units(string);
+        return string;
+    }
+    MalBuiltinRootedString string_root;
+    mal_builtin_string_root_init(&string_root, string);
+    *code_units_out = mal_string_code_units(string);
+    string = mal_builtin_string_root_get(&string_root);
+    mal_builtin_string_root_dispose(&string_root);
+    return string;
 }
 
 static MalValue mal_builtin_string_slice(MalVm *vm, MalString *string, usize offset, usize length) {
@@ -791,6 +843,23 @@ done:
 }
 
 static MalValue mal_builtin_string_prototype_code_point_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    f64 primitive_position;
+    if (mal_builtin_string_is_flat_value(this_value) &&
+        mal_builtin_string_primitive_number_arg(
+            args, arg_count, 0, 0.0, &primitive_position)) {
+        primitive_position = mal_ops_number_to_integer_or_infinity(primitive_position);
+        MalString *primitive_string = mal_value_to_string(this_value);
+        usize primitive_length = mal_string_length(primitive_string);
+        if (primitive_position < 0 || primitive_position >= (f64) primitive_length) {
+            return mal_value_new_undefined();
+        }
+        u32 code_point;
+        mal_utf16_read_scalar(
+            mal_string_code_units(primitive_string), primitive_length,
+            (usize) primitive_position, &code_point, nullptr);
+        return mal_value_from_i32((i32) code_point);
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -810,7 +879,8 @@ static MalValue mal_builtin_string_prototype_code_point_at(MalVm *vm, MalValue t
         return mal_value_new_undefined();
     }
 
-    const c16 *code_units = mal_string_code_units(string);
+    const c16 *code_units;
+    string = mal_builtin_string_flatten_for_scan(string, &code_units);
     usize index = (usize) position;
     u32 code_point;
     mal_utf16_read_scalar(
@@ -821,6 +891,20 @@ static MalValue mal_builtin_string_prototype_code_point_at(MalVm *vm, MalValue t
 }
 
 static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    f64 primitive_position;
+    if (mal_builtin_string_is_flat_value(this_value) &&
+        mal_builtin_string_primitive_number_arg(
+            args, arg_count, 0, 0.0, &primitive_position)) {
+        primitive_position = mal_ops_number_to_integer_or_infinity(primitive_position);
+        MalString *primitive_string = mal_value_to_string(this_value);
+        if (primitive_position < 0 ||
+            primitive_position >= (f64) mal_string_length(primitive_string)) {
+            return mal_builtin_string_empty(vm);
+        }
+        c16 unit = mal_string_code_units(primitive_string)[(usize) primitive_position];
+        return mal_value_from_string(mal_intrinsic_code_unit(vm, unit));
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -847,6 +931,13 @@ static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_va
 }
 
 static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    f64 primitive_position;
+    if (mal_builtin_string_is_flat_value(this_value) &&
+        mal_builtin_string_primitive_number_arg(
+            args, arg_count, 0, 0.0, &primitive_position)) {
+        return mal_builtin_string_char_code_at_number(this_value, primitive_position);
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -944,6 +1035,23 @@ MalValue mal_builtin_string_char_code_at_known(
 }
 
 static MalValue mal_builtin_string_prototype_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    f64 primitive_relative;
+    if (mal_builtin_string_is_flat_value(this_value) &&
+        mal_builtin_string_primitive_number_arg(
+            args, arg_count, 0, 0.0, &primitive_relative)) {
+        primitive_relative = mal_ops_number_to_integer_or_infinity(primitive_relative);
+        MalString *primitive_string = mal_value_to_string(this_value);
+        usize primitive_length = mal_string_length(primitive_string);
+        if (primitive_relative < 0) {
+            primitive_relative += (f64) primitive_length;
+        }
+        if (primitive_relative < 0 || primitive_relative >= (f64) primitive_length) {
+            return mal_value_new_undefined();
+        }
+        c16 unit = mal_string_code_units(primitive_string)[(usize) primitive_relative];
+        return mal_value_from_string(mal_intrinsic_code_unit(vm, unit));
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -971,6 +1079,21 @@ static MalValue mal_builtin_string_prototype_at(MalVm *vm, MalValue this_value, 
 }
 
 static MalValue mal_builtin_string_prototype_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    f64 primitive_position;
+    if (mal_builtin_string_is_flat_value(this_value) && arg_count >= 1 &&
+        mal_builtin_string_is_flat_value(args[0]) &&
+        mal_builtin_string_primitive_number_arg(
+            args, arg_count, 1, 0.0, &primitive_position)) {
+        MalString *primitive_string = mal_value_to_string(this_value);
+        usize primitive_length = mal_string_length(primitive_string);
+        primitive_position = mal_ops_number_to_length(primitive_position);
+        usize from = primitive_position > (f64) primitive_length
+            ? primitive_length
+            : (usize) primitive_position;
+        return mal_value_from_i32((i32) mal_builtin_string_find(
+            primitive_string, mal_value_to_string(args[0]), from));
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -1009,6 +1132,37 @@ static MalValue mal_builtin_string_prototype_index_of(MalVm *vm, MalValue this_v
 }
 
 static MalValue mal_builtin_string_prototype_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    f64 primitive_position;
+    if (mal_builtin_string_is_flat_value(this_value) && arg_count >= 1 &&
+        mal_builtin_string_is_flat_value(args[0]) &&
+        mal_builtin_string_primitive_number_arg(
+            args, arg_count, 1, NAN, &primitive_position)) {
+        MalString *primitive_string = mal_value_to_string(this_value);
+        MalString *primitive_search = mal_value_to_string(args[0]);
+        usize primitive_length = mal_string_length(primitive_string);
+        usize primitive_search_length = mal_string_length(primitive_search);
+        if (primitive_search_length > primitive_length) {
+            return mal_value_from_i32(-1);
+        }
+        usize max_start = primitive_length - primitive_search_length;
+        usize start;
+        if (isnan(primitive_position)) {
+            start = max_start;
+        } else {
+            primitive_position = mal_ops_number_to_integer_or_infinity(
+                primitive_position);
+            if (primitive_position <= 0) {
+                start = 0;
+            } else if (primitive_position >= (f64) max_start) {
+                start = max_start;
+            } else {
+                start = (usize) primitive_position;
+            }
+        }
+        return mal_value_from_i32((i32) mal_builtin_string_reverse_find(
+            primitive_string, primitive_search, start));
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -1085,6 +1239,21 @@ static bool mal_builtin_string_reject_regexp(
 }
 
 static MalValue mal_builtin_string_prototype_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    f64 primitive_position;
+    if (mal_builtin_string_is_flat_value(this_value) && arg_count >= 1 &&
+        mal_builtin_string_is_flat_value(args[0]) &&
+        mal_builtin_string_primitive_number_arg(
+            args, arg_count, 1, 0.0, &primitive_position)) {
+        MalString *primitive_string = mal_value_to_string(this_value);
+        usize primitive_length = mal_string_length(primitive_string);
+        primitive_position = mal_ops_number_to_length(primitive_position);
+        usize start = primitive_position > (f64) primitive_length
+            ? primitive_length
+            : (usize) primitive_position;
+        return mal_value_new_boolean(mal_builtin_string_find(
+            primitive_string, mal_value_to_string(args[0]), start) >= 0);
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -1127,6 +1296,21 @@ static MalValue mal_builtin_string_prototype_includes(MalVm *vm, MalValue this_v
 }
 
 static MalValue mal_builtin_string_prototype_starts_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    f64 primitive_position;
+    if (mal_builtin_string_is_flat_value(this_value) && arg_count >= 1 &&
+        mal_builtin_string_is_flat_value(args[0]) &&
+        mal_builtin_string_primitive_number_arg(
+            args, arg_count, 1, 0.0, &primitive_position)) {
+        MalString *primitive_string = mal_value_to_string(this_value);
+        usize primitive_length = mal_string_length(primitive_string);
+        primitive_position = mal_ops_number_to_length(primitive_position);
+        usize position = primitive_position > (f64) primitive_length
+            ? primitive_length
+            : (usize) primitive_position;
+        return mal_value_new_boolean(mal_builtin_string_matches_at(
+            primitive_string, mal_value_to_string(args[0]), position));
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -1168,6 +1352,29 @@ static MalValue mal_builtin_string_prototype_starts_with(MalVm *vm, MalValue thi
 }
 
 static MalValue mal_builtin_string_prototype_ends_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    if (mal_builtin_string_is_flat_value(this_value) && arg_count >= 1 &&
+        mal_builtin_string_is_flat_value(args[0])) {
+        MalString *primitive_string = mal_value_to_string(this_value);
+        usize primitive_length = mal_string_length(primitive_string);
+        f64 primitive_position = (f64) primitive_length;
+        bool primitive_position_ok = arg_count < 2 ||
+            mal_value_is_undefined(args[1]) ||
+            mal_builtin_string_primitive_number(args[1], &primitive_position);
+        if (primitive_position_ok) {
+            primitive_position = mal_ops_number_to_length(primitive_position);
+            usize end = primitive_position > (f64) primitive_length
+                ? primitive_length
+                : (usize) primitive_position;
+            MalString *primitive_search = mal_value_to_string(args[0]);
+            usize primitive_search_length = mal_string_length(primitive_search);
+            return mal_value_new_boolean(
+                primitive_search_length <= end &&
+                mal_builtin_string_matches_at(
+                    primitive_string, primitive_search,
+                    end - primitive_search_length));
+        }
+    }
+
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -1761,9 +1968,8 @@ static MalValue mal_builtin_string_trim_impl(MalVm *vm, MalValue this_value, boo
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
-    MalBuiltinRootedString string_root;
-    mal_builtin_string_root_init(&string_root, string);
-    const c16 *code_units = mal_string_code_units(string);
+    const c16 *code_units;
+    string = mal_builtin_string_flatten_for_scan(string, &code_units);
     usize start = 0;
     usize end = mal_string_length(string);
 
@@ -1774,8 +1980,23 @@ static MalValue mal_builtin_string_trim_impl(MalVm *vm, MalValue this_value, boo
         end--;
     }
 
-    string = mal_builtin_string_root_get(&string_root);
-    MalValue result = mal_builtin_string_slice(vm, string, start, end - start);
+    usize result_length = end - start;
+    if (start == 0 && result_length == mal_string_length(string)) {
+        return mal_value_from_string(string);
+    }
+    if (result_length == 0) {
+        return mal_builtin_string_empty(vm);
+    }
+    if (result_length == 1) {
+        return mal_value_from_string(
+            mal_intrinsic_code_unit(vm, code_units[start]));
+    }
+
+    // Only a dependent result can allocate while still needing its parent.
+    MalBuiltinRootedString string_root;
+    mal_builtin_string_root_init(&string_root, string);
+    MalValue result = mal_builtin_string_slice(
+        vm, mal_builtin_string_root_get(&string_root), start, result_length);
     mal_builtin_string_root_dispose(&string_root);
     return result;
 }
@@ -1804,11 +2025,9 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
-    MalValue string_root = mal_value_from_string(string);
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, &string_root, 1);
     usize length = mal_string_length(string);
-    const c16 *source = mal_string_code_units(string);
+    const c16 *source;
+    string = mal_builtin_string_flatten_for_scan(string, &source);
     MAL_PERF_COUNT(string_case_calls);
     MAL_PERF_ADD(string_case_input_code_units, length);
 
@@ -1822,8 +2041,7 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
     }
     if (changed_at == length) {
         MAL_PERF_COUNT(string_case_reuses);
-        mal_gc_unroot(&root_span);
-        return string_root;
+        return mal_value_from_string(string);
     }
 
     MAL_PERF_COUNT(string_case_changed_allocations);
@@ -1838,10 +2056,12 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
                 to_upper ? mal_ascii_to_upper(source[i]) : mal_ascii_to_lower(source[i]);
         }
         MalValue result = mal_builtin_string_from_units(vm, code_units, length);
-        mal_gc_unroot(&root_span);
         return result;
     }
 
+    MalValue string_root = mal_value_from_string(string);
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, &string_root, 1);
     c16 *code_units = mal_heap_alloc_raw_profiled(
         &vm->heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     string = mal_value_to_string(string_root);
@@ -1960,19 +2180,16 @@ static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue 
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
-    MalBuiltinRootedString string_root;
-    mal_builtin_string_root_init(&string_root, string);
     usize length = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
+    const c16 *units;
+    string = mal_builtin_string_flatten_for_scan(string, &units);
     for (usize i = 0; i < length;) {
         usize width;
         if (!mal_utf16_read_scalar(units, length, i, nullptr, &width)) {
-            mal_builtin_string_root_dispose(&string_root);
             return mal_value_new_boolean(false);
         }
         i += width;
     }
-    mal_builtin_string_root_dispose(&string_root);
     return mal_value_new_boolean(true);
 }
 
@@ -1987,11 +2204,9 @@ static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue 
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
-    MalValue string_root = mal_value_from_string(string);
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, &string_root, 1);
     usize length = mal_string_length(string);
-    const c16 *source = mal_string_code_units(string);
+    const c16 *source;
+    string = mal_builtin_string_flatten_for_scan(string, &source);
     usize first_invalid = length;
     for (usize i = 0; i < length;) {
         usize width;
@@ -2002,16 +2217,17 @@ static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue 
         i += width;
     }
     if (first_invalid == length) {
-        mal_gc_unroot(&root_span);
-        return string_root;
+        return mal_value_from_string(string);
     }
 
     usize bytes;
     if (!mal_checked_size_multiply(sizeof(c16), length, SIZE_MAX, &bytes)) {
         mal_builtin_string_throw_length(vm);
-        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
+    MalValue string_root = mal_value_from_string(string);
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, &string_root, 1);
     c16 *code_units = mal_heap_alloc_raw_profiled(
         &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     string = mal_value_to_string(string_root);

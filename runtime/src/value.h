@@ -332,25 +332,31 @@ static inline bool mal_value_is_object(MalValue value) {
     return (value & MAL_VALUE_CLASS_MASK) >= MAL_VALUE_OBJECT;
 }
 
-/**
- * Check if the value is a function object.
- */
-bool mal_value_is_function_object(MalValue value);
+/** Check if the value is a script function object. */
+static inline bool mal_value_is_function_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_FUNCTION_OBJECT);
+}
 
 /**
  * Check if the value is a native function object.
  */
-bool mal_value_is_native_function_object(MalValue value);
+static inline bool mal_value_is_native_function_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_NATIVE_FUNCTION_OBJECT);
+}
 
 /**
  * Check if the value is a bound function object.
  */
-bool mal_value_is_bound_function_object(MalValue value);
+static inline bool mal_value_is_bound_function_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_BOUND_FUNCTION_OBJECT);
+}
 
 /**
  * Check if the value is an array object.
  */
-bool mal_value_is_array_object(MalValue value);
+static inline bool mal_value_is_array_object(MalValue value) {
+    return (value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_ARRAY;
+}
 
 /** Module namespace exotic object accessors. */
 bool mal_value_is_module_namespace_object(MalValue value);
@@ -512,66 +518,94 @@ static inline MalString *mal_value_to_string(MalValue value) {
 /**
  * Unbox a symbol.
  */
-MalSymbol *mal_value_to_symbol(MalValue value);
+static inline MalSymbol *mal_value_to_symbol(MalValue value) {
+    return (MalSymbol *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox a BigInt.
  */
-MalBigInt *mal_value_to_bigint(MalValue value);
+static inline MalBigInt *mal_value_to_bigint(MalValue value) {
+    return (MalBigInt *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox an object.
  */
-MalObject *mal_value_to_object(MalValue value);
+static inline MalObject *mal_value_to_object(MalValue value) {
+    return (MalObject *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox a function object.
  */
-MalFunctionObject *mal_value_to_function_object(MalValue value);
+static inline MalFunctionObject *mal_value_to_function_object(MalValue value) {
+    return (MalFunctionObject *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox a native function object.
  */
-MalNativeFunctionObject *mal_value_to_native_function_object(MalValue value);
+static inline MalNativeFunctionObject *mal_value_to_native_function_object(MalValue value) {
+    return (MalNativeFunctionObject *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox a bound function object.
  */
-MalBoundFunctionObject *mal_value_to_bound_function_object(MalValue value);
+static inline MalBoundFunctionObject *mal_value_to_bound_function_object(MalValue value) {
+    return (MalBoundFunctionObject *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox an array object.
  */
-MalArrayObject *mal_value_to_array_object(MalValue value);
+static inline MalArrayObject *mal_value_to_array_object(MalValue value) {
+    return (MalArrayObject *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox a map/set object (shared layout for all four collection types).
  */
-MalMapObject *mal_value_to_map_object(MalValue value);
+static inline MalMapObject *mal_value_to_map_object(MalValue value) {
+    return (MalMapObject *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox a built-in iterator object.
  */
-MalIteratorObject *mal_value_to_iterator_object(MalValue value);
+static inline MalIteratorObject *mal_value_to_iterator_object(MalValue value) {
+    return (MalIteratorObject *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox an ArrayBuffer / TypedArray / DataView.
  */
-MalArrayBufferObject *mal_value_to_array_buffer_object(MalValue value);
-MalTypedArrayObject *mal_value_to_typed_array_object(MalValue value);
-MalDataViewObject *mal_value_to_data_view_object(MalValue value);
+static inline MalArrayBufferObject *mal_value_to_array_buffer_object(MalValue value) {
+    return (MalArrayBufferObject *) mal_value_to_heap(value);
+}
+static inline MalTypedArrayObject *mal_value_to_typed_array_object(MalValue value) {
+    return (MalTypedArrayObject *) mal_value_to_heap(value);
+}
+static inline MalDataViewObject *mal_value_to_data_view_object(MalValue value) {
+    return (MalDataViewObject *) mal_value_to_heap(value);
+}
 MalWeakRefObject *mal_value_to_weak_ref_object(MalValue value);
 MalFinalizationRegistryObject *mal_value_to_finalization_registry_object(MalValue value);
 
 /**
  * Unbox a Promise instance.
  */
-MalPromiseObject *mal_value_to_promise_object(MalValue value);
+static inline MalPromiseObject *mal_value_to_promise_object(MalValue value) {
+    return (MalPromiseObject *) mal_value_to_heap(value);
+}
 
 /**
  * Unbox an Iterator Helper instance.
  */
-MalIteratorHelperObject *mal_value_to_iterator_helper_object(MalValue value);
+static inline MalIteratorHelperObject *mal_value_to_iterator_helper_object(MalValue value) {
+    return (MalIteratorHelperObject *) mal_value_to_heap(value);
+}
 
 /**
  * Box a string. Inline (a single tagged-pointer or) so a constant string key in
@@ -588,7 +622,9 @@ static inline MalValue mal_value_from_string(MalString *string) {
 /**
  * Box a symbol.
  */
-MalValue mal_value_from_symbol(MalSymbol *symbol);
+static inline MalValue mal_value_from_symbol(MalSymbol *symbol) {
+    return MAL_VALUE_SYMBOL | ((uptr) symbol & MAKS_PTR);
+}
 
 /**
  * Box a BigInt. Inline for the same reason as mal_value_from_string (the backend
@@ -610,51 +646,73 @@ static inline MalValue mal_value_from_object(MalObject *object) {
 /**
  * Box a function object.
  */
-MalValue mal_value_from_function_object(MalFunctionObject *function);
+static inline MalValue mal_value_from_function_object(MalFunctionObject *function) {
+    return MAL_VALUE_CALLABLE | ((uptr) function & MAKS_PTR);
+}
 
 /**
  * Box a native function object.
  */
-MalValue mal_value_from_native_function_object(MalNativeFunctionObject *function);
+static inline MalValue mal_value_from_native_function_object(MalNativeFunctionObject *function) {
+    return MAL_VALUE_CALLABLE | ((uptr) function & MAKS_PTR);
+}
 
 /**
  * Box a bound function object.
  */
-MalValue mal_value_from_bound_function_object(MalBoundFunctionObject *bound);
+static inline MalValue mal_value_from_bound_function_object(MalBoundFunctionObject *bound) {
+    return MAL_VALUE_CALLABLE | ((uptr) bound & MAKS_PTR);
+}
 
 /**
  * Box an array object.
  */
-MalValue mal_value_from_array_object(MalArrayObject *array);
+static inline MalValue mal_value_from_array_object(MalArrayObject *array) {
+    return MAL_VALUE_ARRAY | ((uptr) array & MAKS_PTR);
+}
 
 /**
  * Box a map/set object.
  */
-MalValue mal_value_from_map_object(MalMapObject *map);
+static inline MalValue mal_value_from_map_object(MalMapObject *map) {
+    return MAL_VALUE_OBJECT | ((uptr) map & MAKS_PTR);
+}
 
 /**
  * Box a built-in iterator object.
  */
-MalValue mal_value_from_iterator_object(MalIteratorObject *iterator);
+static inline MalValue mal_value_from_iterator_object(MalIteratorObject *iterator) {
+    return MAL_VALUE_OBJECT | ((uptr) iterator & MAKS_PTR);
+}
 
 /**
  * Box an ArrayBuffer / TypedArray / DataView.
  */
-MalValue mal_value_from_array_buffer_object(MalArrayBufferObject *buffer);
-MalValue mal_value_from_typed_array_object(MalTypedArrayObject *array);
-MalValue mal_value_from_data_view_object(MalDataViewObject *view);
+static inline MalValue mal_value_from_array_buffer_object(MalArrayBufferObject *buffer) {
+    return MAL_VALUE_OBJECT | ((uptr) buffer & MAKS_PTR);
+}
+static inline MalValue mal_value_from_typed_array_object(MalTypedArrayObject *array) {
+    return MAL_VALUE_OBJECT | ((uptr) array & MAKS_PTR);
+}
+static inline MalValue mal_value_from_data_view_object(MalDataViewObject *view) {
+    return MAL_VALUE_OBJECT | ((uptr) view & MAKS_PTR);
+}
 MalValue mal_value_from_weak_ref_object(MalWeakRefObject *ref);
 MalValue mal_value_from_finalization_registry_object(MalFinalizationRegistryObject *reg);
 
 /**
  * Box a Promise instance.
  */
-MalValue mal_value_from_promise_object(MalPromiseObject *promise);
+static inline MalValue mal_value_from_promise_object(MalPromiseObject *promise) {
+    return MAL_VALUE_OBJECT | ((uptr) promise & MAKS_PTR);
+}
 
 /**
  * Box an Iterator Helper instance.
  */
-MalValue mal_value_from_iterator_helper_object(MalIteratorHelperObject *helper);
+static inline MalValue mal_value_from_iterator_helper_object(MalIteratorHelperObject *helper) {
+    return MAL_VALUE_OBJECT | ((uptr) helper & MAKS_PTR);
+}
 
 /**
  * Check if the value is truthy.

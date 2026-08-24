@@ -86,6 +86,17 @@ check(
 		String.prototype.at.call(indexedReceiver(), gcNumber(3)) === "B",
 );
 
+const primitiveIndexed = "A\ud83d\ude00B";
+check(
+	"primitive character access preserves numeric index edge cases",
+	primitiveIndexed.charAt(undefined) === "A" &&
+		primitiveIndexed.charCodeAt(-0) === 0x41 &&
+		primitiveIndexed.codePointAt(1) === 0x1f600 &&
+		primitiveIndexed.at(-1) === "B" &&
+		primitiveIndexed.at(Infinity) === undefined &&
+		Number.isNaN(primitiveIndexed.charCodeAt(Infinity)),
+);
+
 function searchReceiver() {
 	return {
 		toString() {
@@ -110,6 +121,24 @@ check(
 		String.prototype.includes.call(searchReceiver(), gcSearch(), gcNumber(4)) &&
 		String.prototype.startsWith.call(searchReceiver(), gcSearch(), gcNumber(3)) &&
 		String.prototype.endsWith.call(searchReceiver(), gcSearch(), gcNumber(15)),
+);
+check(
+	"primitive search methods preserve position edge cases",
+	"alpha-beta-beta".indexOf("beta", -Infinity) === 6 &&
+		"alpha-beta-beta".lastIndexOf("beta", undefined) === 11 &&
+		"alpha-beta-beta".includes("beta", NaN) &&
+		"alpha-beta-beta".startsWith("alpha", undefined) &&
+		"alpha-beta-beta".endsWith("beta", undefined) &&
+		!"alpha-beta-beta".endsWith("alpha", NaN),
+);
+
+const consSearchSubject = "x".repeat(64) + "needle" + "y".repeat(64);
+check(
+	"search and scan methods preserve lazy concatenation behavior",
+	consSearchSubject.indexOf("needle") === 64 &&
+		consSearchSubject.includes("needle") &&
+		consSearchSubject.trim() === consSearchSubject &&
+		consSearchSubject.isWellFormed(),
 );
 const searchCoercionOrder = [];
 const orderedSearch = {

@@ -6,22 +6,6 @@
 #include "value.h"
 
 
-bool mal_value_is_function_object(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_FUNCTION_OBJECT);
-}
-
-bool mal_value_is_native_function_object(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_NATIVE_FUNCTION_OBJECT);
-}
-
-bool mal_value_is_bound_function_object(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_BOUND_FUNCTION_OBJECT);
-}
-
-bool mal_value_is_array_object(MalValue value) {
-    return (value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_ARRAY;
-}
-
 bool mal_value_is_module_namespace_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_MODULE_NAMESPACE_OBJECT);
 }
@@ -317,112 +301,8 @@ bool mal_value_is_callable(MalValue value) {
     return false;
 }
 
-MalSymbol *mal_value_to_symbol(MalValue value) {
-    return (MalSymbol *) mal_value_to_heap(value);
-}
-
-MalBigInt *mal_value_to_bigint(MalValue value) {
-    return (MalBigInt *) mal_value_to_heap(value);
-}
-
-MalObject *mal_value_to_object(MalValue value) {
-    return (MalObject *) mal_value_to_heap(value);
-}
-
-MalFunctionObject *mal_value_to_function_object(MalValue value) {
-    return (MalFunctionObject *) mal_value_to_heap(value);
-}
-
-MalNativeFunctionObject *mal_value_to_native_function_object(MalValue value) {
-    return (MalNativeFunctionObject *) mal_value_to_heap(value);
-}
-
-MalBoundFunctionObject *mal_value_to_bound_function_object(MalValue value) {
-    return (MalBoundFunctionObject *) mal_value_to_heap(value);
-}
-
-MalArrayObject *mal_value_to_array_object(MalValue value) {
-    return (MalArrayObject *) mal_value_to_heap(value);
-}
-
-MalMapObject *mal_value_to_map_object(MalValue value) {
-    return (MalMapObject *) mal_value_to_heap(value);
-}
-
-MalIteratorObject *mal_value_to_iterator_object(MalValue value) {
-    return (MalIteratorObject *) mal_value_to_heap(value);
-}
-
-MalArrayBufferObject *mal_value_to_array_buffer_object(MalValue value) {
-    return (MalArrayBufferObject *) mal_value_to_heap(value);
-}
-
-MalTypedArrayObject *mal_value_to_typed_array_object(MalValue value) {
-    return (MalTypedArrayObject *) mal_value_to_heap(value);
-}
-
-MalDataViewObject *mal_value_to_data_view_object(MalValue value) {
-    return (MalDataViewObject *) mal_value_to_heap(value);
-}
-
-MalPromiseObject *mal_value_to_promise_object(MalValue value) {
-    return (MalPromiseObject *) mal_value_to_heap(value);
-}
-
-MalIteratorHelperObject *mal_value_to_iterator_helper_object(MalValue value) {
-    return (MalIteratorHelperObject *) mal_value_to_heap(value);
-}
-
-// mal_value_from_string / _from_bigint / _from_object are now static inline in
-// value.h (constant-foldable in the emitted native-C backend).
-
-MalValue mal_value_from_symbol(MalSymbol *symbol) {
-    return mal_value_from_heap((MalHeapHeader *) symbol);
-}
-
-MalValue mal_value_from_function_object(MalFunctionObject *function) {
-    return mal_value_from_heap((MalHeapHeader *) function);
-}
-
-MalValue mal_value_from_native_function_object(MalNativeFunctionObject *function) {
-    return mal_value_from_heap((MalHeapHeader *) function);
-}
-
-MalValue mal_value_from_bound_function_object(MalBoundFunctionObject *bound) {
-    return mal_value_from_heap((MalHeapHeader *) bound);
-}
-
-MalValue mal_value_from_array_object(MalArrayObject *array) {
-    return mal_value_from_heap((MalHeapHeader *) array);
-}
-
-MalValue mal_value_from_map_object(MalMapObject *map) {
-    return mal_value_from_heap((MalHeapHeader *) map);
-}
-
-MalValue mal_value_from_iterator_object(MalIteratorObject *iterator) {
-    return mal_value_from_heap((MalHeapHeader *) iterator);
-}
-
-MalValue mal_value_from_array_buffer_object(MalArrayBufferObject *buffer) {
-    return mal_value_from_heap((MalHeapHeader *) buffer);
-}
-
-MalValue mal_value_from_typed_array_object(MalTypedArrayObject *array) {
-    return mal_value_from_heap((MalHeapHeader *) array);
-}
-
-MalValue mal_value_from_data_view_object(MalDataViewObject *view) {
-    return mal_value_from_heap((MalHeapHeader *) view);
-}
-
-MalValue mal_value_from_promise_object(MalPromiseObject *promise) {
-    return mal_value_from_heap((MalHeapHeader *) promise);
-}
-
-MalValue mal_value_from_iterator_helper_object(MalIteratorHelperObject *helper) {
-    return mal_value_from_heap((MalHeapHeader *) helper);
-}
+// Common exact-type box/unbox helpers are static inline in value.h so emitted
+// C and runtime translation units avoid cross-TU calls and redundant type reads.
 
 bool mal_value_is_truthy(MalValue value) {
     if (mal_value_is_nil(value)) {
