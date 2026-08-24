@@ -103,6 +103,17 @@ void mal_promise_perform_async_generator_return(
     MalGeneratorObject *generator
 );
 
+/** Register the typed continuation used by AsyncFromSyncIterator. */
+void mal_promise_perform_async_from_sync(
+    MalVm *vm,
+    MalValue promise,
+    MalValue sync_iterator,
+    bool done,
+    bool close_on_rejection,
+    MalValue result_promise,
+    MalValue realm_anchor
+);
+
 /**
  * PerformPromiseThen on a Promise value: register on_fulfilled / on_rejected
  * (callables, or undefined for the default pass-through/rethrow) against an

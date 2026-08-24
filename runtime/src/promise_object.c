@@ -19,6 +19,32 @@ static inline MalValue mal_promise_async_generator_return_reaction_tag(void) {
     return mal_value_from_i32(INT32_MIN + 1);
 }
 
+static inline MalValue mal_promise_async_from_sync_reaction_tag(
+    bool done,
+    bool close_on_rejection
+) {
+    i32 flags = (done ? 1 : 0) | (close_on_rejection ? 2 : 0);
+    return mal_value_from_i32(INT32_MIN + 2 + flags);
+}
+
+static bool mal_promise_is_async_from_sync_reaction_tag(
+    MalValue value,
+    bool *done,
+    bool *close_on_rejection
+) {
+    if (!mal_value_is_int32(value)) {
+        return false;
+    }
+    i32 tag = mal_value_to_i32(value);
+    if (tag < INT32_MIN + 2 || tag > INT32_MIN + 5) {
+        return false;
+    }
+    i32 flags = tag - (INT32_MIN + 2);
+    *done = (flags & 1) != 0;
+    *close_on_rejection = (flags & 2) != 0;
+    return true;
+}
+
 struct MalPromiseReactionBlock {
     MalPromiseReactionBlock *next;
     MalPromiseReaction *free_list;
@@ -190,6 +216,24 @@ void mal_promise_append_async_generator_return_reaction(
         generator);
 }
 
+void mal_promise_append_async_from_sync_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue sync_iterator,
+    MalValue result_promise,
+    MalValue realm_anchor,
+    bool done,
+    bool close_on_rejection
+) {
+    mal_promise_append_reaction_internal(
+        vm,
+        promise,
+        result_promise,
+        realm_anchor,
+        mal_promise_async_from_sync_reaction_tag(done, close_on_rejection),
+        sync_iterator);
+}
+
 /** Free a pending reaction list without scheduling it. */
 void mal_promise_free_reactions(MalVm *vm, MalPromiseReaction *list) {
     while (list != nullptr) {
@@ -290,15 +334,43 @@ static void mal_promise_trigger_reactions(MalVm *vm, MalPromiseReaction *list, b
                 argument);
 #endif
         } else {
-            MalValue handler = is_reject ? list->on_rejected : list->on_fulfilled;
+            bool done;
+            bool close_on_rejection;
+            if (mal_promise_is_async_from_sync_reaction_tag(
+                    list->cap_resolve, &done, &close_on_rejection)) {
 #if MAL_NODE
-            mal_vm_enqueue_reaction_job_in_context(
-                vm, handler, is_reject, list->cap_resolve, list->cap_reject,
-                argument, list->async_context);
+                mal_vm_enqueue_async_from_sync_job_in_context(
+                    vm,
+                    list->cap_reject,
+                    list->on_fulfilled,
+                    list->on_rejected,
+                    done,
+                    close_on_rejection,
+                    is_reject,
+                    argument,
+                    list->async_context);
 #else
-            mal_vm_enqueue_reaction_job(
-                vm, handler, is_reject, list->cap_resolve, list->cap_reject, argument);
+                mal_vm_enqueue_async_from_sync_job(
+                    vm,
+                    list->cap_reject,
+                    list->on_fulfilled,
+                    list->on_rejected,
+                    done,
+                    close_on_rejection,
+                    is_reject,
+                    argument);
 #endif
+            } else {
+                MalValue handler = is_reject ? list->on_rejected : list->on_fulfilled;
+#if MAL_NODE
+                mal_vm_enqueue_reaction_job_in_context(
+                    vm, handler, is_reject, list->cap_resolve, list->cap_reject,
+                    argument, list->async_context);
+#else
+                mal_vm_enqueue_reaction_job(
+                    vm, handler, is_reject, list->cap_resolve, list->cap_reject, argument);
+#endif
+            }
         }
         mal_promise_recycle_barriered_reaction(vm, list);
         list = next;

@@ -105,6 +105,17 @@ void mal_promise_append_async_generator_return_reaction(
     MalValue realm_anchor
 );
 
+/** Append a typed AsyncFromSyncIterator continuation. */
+void mal_promise_append_async_from_sync_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue sync_iterator,
+    MalValue result_promise,
+    MalValue realm_anchor,
+    bool done,
+    bool close_on_rejection
+);
+
 /**
  * FulfillPromise: settle to fulfilled with `value` and enqueue reaction jobs
  * for the fulfill list. A no-op when already settled.

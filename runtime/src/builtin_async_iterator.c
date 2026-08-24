@@ -16,13 +16,6 @@ enum {
     MAL_AFS_NEXT_SLOT_SYNC_ITERATOR = 0,
     MAL_AFS_NEXT_SLOT_SYNC_NEXT = 1,
 };
-enum {
-    MAL_AFS_UNWRAP_SLOT_DONE = 0,
-};
-enum {
-    MAL_AFS_CLOSE_SLOT_SYNC_ITERATOR = 0,
-};
-
 static MalCompletion mal_afs_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
@@ -49,15 +42,6 @@ static MalValue mal_afs_finish(MalAfsCapability *capability, MalValue result) {
     return result;
 }
 
-/** onFulfilled for the awaited value: repackage as { value, done }. */
-static MalValue mal_async_from_sync_unwrap(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
-    bool done = mal_value_is_truthy(mal_native_function_object_get_slot(self, MAL_AFS_UNWRAP_SLOT_DONE));
-    return mal_vm_create_iter_result(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), done);
-}
-
 /** Reject a fresh capability with the pending throw and return its promise. */
 static MalValue mal_afs_reject_pending(MalVm *vm, MalValue cap_promise, MalValue cap_reject) {
     MalValue error = vm->completion.value;
@@ -67,41 +51,21 @@ static MalValue mal_afs_reject_pending(MalVm *vm, MalValue cap_promise, MalValue
     return cap_promise;
 }
 
-/** A rejected yielded value closes the underlying sync iterator, preserving it. */
-static MalValue mal_async_from_sync_close_rejected(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
-    MalIteratorRecord record = {
-        .iterator = mal_native_function_object_get_slot(self, MAL_AFS_CLOSE_SLOT_SYNC_ITERATOR),
-        .next_method = mal_value_new_undefined(),
-    };
-    vm->completion = (MalCompletion) {
-        .kind = MAL_COMPLETION_THROW,
-        .value = arg_count >= 1 ? args[0] : mal_value_new_undefined(),
-    };
-    mal_vm_iterator_close(vm, &record);
-    return mal_value_new_undefined();
-}
-
 static MalValue mal_async_from_sync_continuation(
     MalVm *vm,
     MalValue result,
     MalValue sync_iterator,
     bool close_on_rejection,
     MalValue cap_promise,
-    MalValue cap_resolve,
     MalValue cap_reject
 ) {
-    MalValue roots[5] = {
+    MalValue roots[3] = {
         result,
         sync_iterator,
         mal_value_new_undefined(),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
     };
     MalRootSpan span;
-    mal_gc_root(&span, roots, 5);
+    mal_gc_root(&span, roots, 3);
 
     if (!mal_value_is_object(roots[0])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator result is not an object");
@@ -130,28 +94,14 @@ static MalValue mal_async_from_sync_continuation(
         return rejected;
     }
 
-    MalValue unwrap_slots[1] = {mal_value_new_boolean(done)};
-    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        nullptr,
-        mal_async_from_sync_unwrap,
-        unwrap_slots,
-        1
-    ));
-
-    if (!done && close_on_rejection) {
-        MalValue close_slots[1] = {roots[1]};
-        roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
-            &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            nullptr,
-            mal_async_from_sync_close_rejected,
-            close_slots,
-            1
-        ));
-    }
-    mal_promise_perform_then(vm, roots[2], roots[3], roots[4], cap_resolve, cap_reject);
+    mal_promise_perform_async_from_sync(
+        vm,
+        roots[2],
+        roots[1],
+        done,
+        close_on_rejection,
+        cap_promise,
+        cap_reject);
     mal_gc_unroot(&span);
     return cap_promise;
 }
@@ -189,7 +139,6 @@ static MalValue mal_async_from_sync_next(MalVm *vm, MalValue this_value, const M
         sync_iterator,
         true,
         capability.promise,
-        capability.resolve,
         capability.reject);
     return mal_afs_finish(&capability, result);
 }
@@ -217,7 +166,6 @@ static MalValue mal_async_from_sync_return(MalVm *vm, MalValue this_value, const
             iterator,
             false,
             capability.promise,
-            capability.resolve,
             capability.reject);
         return mal_afs_finish(&capability, continued);
     }
@@ -241,7 +189,6 @@ static MalValue mal_async_from_sync_return(MalVm *vm, MalValue this_value, const
         iterator,
         false,
         capability.promise,
-        capability.resolve,
         capability.reject);
     return mal_afs_finish(&capability, continued);
 }
@@ -292,7 +239,6 @@ static MalValue mal_async_from_sync_throw(MalVm *vm, MalValue this_value, const 
         iterator,
         true,
         capability.promise,
-        capability.resolve,
         capability.reject);
     return mal_afs_finish(&capability, continued);
 }
