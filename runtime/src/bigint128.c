@@ -245,13 +245,40 @@ i128 mal_bigint128_parse(const c16 *code_units, usize length, bool *ok) {
     }
 
     u128 accumulator = 0;
-    for (; start < end; start++) {
-        i32 digit = mal_bigint128_digit_value(code_units[start]);
-        if (digit < 0 || (u32) digit >= radix) {
-            *ok = false;
-            return 0;
+    if (radix != 10) {
+        u32 shift = radix == 16 ? 4 : radix == 8 ? 3 : 1;
+        for (; start < end; start++) {
+            i32 digit = mal_bigint128_digit_value(code_units[start]);
+            if (digit < 0 || (u32) digit >= radix) {
+                *ok = false;
+                return 0;
+            }
+            accumulator = (accumulator << shift) | (u128) digit;
         }
-        accumulator = accumulator * (u128) radix + (u128) digit;
+    } else {
+        static const u128 decimal_chunk_base = (u128) 10000000000000000000ULL;
+        usize group_length = (end - start) % 19;
+        if (group_length == 0) {
+            group_length = 19;
+        }
+        while (start < end) {
+            u64 chunk = 0;
+            u64 multiplier = 1;
+            usize group_end = start + group_length;
+            for (; start < group_end; start++) {
+                c16 unit = code_units[start];
+                if (unit < '0' || unit > '9') {
+                    *ok = false;
+                    return 0;
+                }
+                chunk = chunk * 10 + (u64) (unit - '0');
+                multiplier *= 10;
+            }
+            accumulator = accumulator * (group_length == 19
+                ? decimal_chunk_base
+                : (u128) multiplier) + (u128) chunk;
+            group_length = 19;
+        }
     }
     if (negative) {
         accumulator = (u128) 0 - accumulator;
