@@ -460,6 +460,37 @@ check(
 		constructedFromFreshEntry.get(freshEntryKey) === "entry-value",
 );
 
+const capturedMapAdderPrototype = Object.create(Map.prototype);
+function CapturedMapAdderTarget() {}
+CapturedMapAdderTarget.prototype = capturedMapAdderPrototype;
+let replacementMapAdderCalls = 0;
+const capturedMapAdderEntry = {};
+Object.defineProperty(capturedMapAdderEntry, "0", {
+	get() {
+		Object.defineProperty(capturedMapAdderPrototype, "set", {
+			value() {
+				replacementMapAdderCalls++;
+			},
+		});
+		return "captured-key";
+	},
+});
+Object.defineProperty(capturedMapAdderEntry, "1", {
+	get() {
+		return "captured-value";
+	},
+});
+const capturedMapAdder = Reflect.construct(
+	Map,
+	[[capturedMapAdderEntry]],
+	CapturedMapAdderTarget,
+);
+check(
+	"Map constructor retains the adder captured before entry Gets",
+	replacementMapAdderCalls === 0 &&
+		Map.prototype.get.call(capturedMapAdder, "captured-key") === "captured-value",
+);
+
 const mapGroupIndices = [];
 const mapGroups = Map.groupBy([1, 2, 3, 4], (value, index) => {
 	mapGroupIndices.push(index);

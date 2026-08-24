@@ -82,6 +82,8 @@ static MalValue mal_builtin_map_construct(
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Map adder is not callable");
         return mal_value_new_undefined();
     }
+    bool direct_map_adder = !weak &&
+        adder == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET];
 
     MalIteratorRecord record;
     if (!mal_vm_get_iterator(vm, args[0], &record)) {
@@ -92,7 +94,7 @@ static MalValue mal_builtin_map_construct(
     // fresh built-in iterator gives a sound count hint without consulting the
     // iterable again; custom/advanced iterators retain ordinary growth.
     usize size_hint;
-    if (!weak && adder == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET] &&
+    if (direct_map_adder &&
         mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
         (void) mal_table_reserve(map->entries, size_hint);
     }
@@ -137,6 +139,15 @@ static MalValue mal_builtin_map_construct(
             !mal_vm_get_property(vm, roots[2], mal_key_index(1), &roots[4])) {
             mal_vm_iterator_close(vm, &record);
             goto done;
+        }
+
+        // The exact built-in Map.prototype.set has no observable call seam.
+        // The constructor already performed Get(map, "set") before acquiring
+        // the iterator, so reuse that captured identity after the entry Gets.
+        if (direct_map_adder) {
+            mal_builtin_map_store_canonical(
+                map, mal_map_key_from_value(roots[3]), roots[4]);
+            continue;
         }
 
         MalValue entry_args[2] = {roots[3], roots[4]};
