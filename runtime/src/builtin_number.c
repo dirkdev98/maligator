@@ -398,10 +398,23 @@ static MalString *mal_builtin_number_safe_integer_radix_string(MalHeap *heap, f6
     byte *cursor = end;
     bool negative = number < 0.0;
     u64 magnitude = (u64) fabs(number);
-    do {
-        *--cursor = digits[magnitude % (u64) radix];
-        magnitude /= (u64) radix;
-    } while (magnitude != 0);
+    i32 shift = radix == 2 ? 1 :
+        radix == 4 ? 2 :
+        radix == 8 ? 3 :
+        radix == 16 ? 4 :
+        radix == 32 ? 5 : 0;
+    if (shift != 0) {
+        u64 mask = (u64) radix - 1;
+        do {
+            *--cursor = digits[magnitude & mask];
+            magnitude >>= shift;
+        } while (magnitude != 0);
+    } else {
+        do {
+            *--cursor = digits[magnitude % (u64) radix];
+            magnitude /= (u64) radix;
+        } while (magnitude != 0);
+    }
     if (negative) {
         *--cursor = '-';
     }

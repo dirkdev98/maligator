@@ -164,7 +164,10 @@ check(
 	(1234.5).toLocaleString() === "1,234.5" &&
 		(255).toString(16) === "ff" &&
 		Number.MAX_SAFE_INTEGER.toString(2) ===
-			"11111111111111111111111111111111111111111111111111111",
+			"11111111111111111111111111111111111111111111111111111" &&
+		Number.MAX_SAFE_INTEGER.toString(16) === "1fffffffffffff" &&
+		Number.MAX_SAFE_INTEGER.toString(32) === "7vvvvvvvvvv" &&
+		(-255).toString(16) === "-ff",
 );
 const defaultNumberFormatter = new Intl.NumberFormat();
 let defaultLocaleMatchesConstructor = true;
