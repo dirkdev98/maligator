@@ -1431,7 +1431,6 @@ static void intl_install_plural_rules(MalVm *vm, MalObject *intl_object) {
 // Intl.NumberFormat supports decimal and percent; currency, unit, and compact remain.
 // ---------------------------------------------------------------------------
 
-#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT
 static i32 intl_data_int(MalVm *vm, MalValue data, const char *key, i32 fallback) {
     MalValue value;
     if (intl_data_get(vm, data, key, &value) && mal_ops_is_number(value)) {
@@ -1447,7 +1446,6 @@ static MalString *intl_data_string(MalVm *vm, MalValue data, const char *key) {
     }
     return nullptr;
 }
-#endif
 
 #if MAL_INTL_HAS_NUMBER_FORMAT
 /** signDisplay values in FFI-code order (mirrors mal_i18n.h / SignDisplay in lib.rs). */
@@ -2640,10 +2638,13 @@ static void intl_install_display_names(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "DisplayNames", vm->intrinsics[MAL_INTRINSIC_INTL_DISPLAY_NAMES_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+#endif // MAL_INTL_HAS_DISPLAY_NAMES
+
 // ---------------------------------------------------------------------------
 // Intl.RelativeTimeFormat — icu::experimental::relativetime.
 // ---------------------------------------------------------------------------
 
+#if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 /** SingularRelativeTimeUnit: map a unit string (singular or plural) to 0..7, or -1. */
 static i32 intl_relative_unit_code(const MalString *unit) {
     static const char *const SINGULAR[8] = {"second", "minute", "hour", "day", "week", "month", "quarter", "year"};
@@ -2656,9 +2657,6 @@ static i32 intl_relative_unit_code(const MalString *unit) {
     return -1;
 }
 
-#endif // MAL_INTL_HAS_DISPLAY_NAMES
-
-#if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 static MalValue intl_relative_time_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -2884,12 +2882,15 @@ static void intl_install_relative_time_format(MalVm *vm, MalObject *intl_object)
     mal_intrinsic_define_data(vm, intl_object, "RelativeTimeFormat", vm->intrinsics[MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+#endif // MAL_INTL_HAS_RELATIVE_TIME_FORMAT
+
 // ---------------------------------------------------------------------------
 // Intl.Segmenter — icu::segmenter (grapheme / word / sentence). The segment()
 // result is a Segments object (kind MAL_INTL_SEGMENTS) that is iterable and has
 // containing(); iteration yields Segment Iterators (kind MAL_INTL_SEGMENT_ITERATOR).
 // ---------------------------------------------------------------------------
 
+#if MAL_INTL_HAS_SEGMENTER
 static i32 intl_segment_granularity_code(const MalString *g) {
     if (g != nullptr && intl_string_eq_ascii(g, "word")) {
         return 1;
@@ -2932,9 +2933,6 @@ static MalValue intl_make_segment_data(MalVm *vm, MalString *input, i32 start, i
     return mal_value_from_object(data);
 }
 
-#endif // MAL_INTL_HAS_RELATIVE_TIME_FORMAT
-
-#if MAL_INTL_HAS_SEGMENTER
 static MalValue intl_segmenter_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;

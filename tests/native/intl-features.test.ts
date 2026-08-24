@@ -56,4 +56,15 @@ describe("engine.intl.features (service subset)", () => {
 		// Segmenter's LSTM data alone is ~12 MB; allow generous slack.
 		expect(fullSize - subsetSize).toBeGreaterThan(4_000_000);
 	});
+
+	it("builds Segmenter without unrelated Intl services", () => {
+		const segmenterBin = buildNativeBinary({
+			fixture: "tests/local/intl_segmenter_only.js",
+			name: "intl-segmenter-only",
+			mainFile: HOST_MAIN,
+			outDir,
+			intlFeatures: ["segmenter"],
+		});
+		assertResultPass(runToStdout(segmenterBin));
+	});
 });
