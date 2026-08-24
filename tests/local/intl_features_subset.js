@@ -86,6 +86,25 @@ const supportedDigitsFormat = new Intl.NumberFormat("en", {
 	useGrouping: false,
 }).format(7);
 check("NumberFormat supported fraction format", supportedDigitsFormat === "7.00");
+const cachedNumberFormat = new Intl.NumberFormat("de-DE", {
+	minimumFractionDigits: 2,
+	maximumFractionDigits: 2,
+	useGrouping: true,
+});
+const cachedNumberFormatFunction = cachedNumberFormat.format;
+check(
+	"NumberFormat persistent native plan",
+	cachedNumberFormatFunction === cachedNumberFormat.format &&
+		cachedNumberFormatFunction(1234.5) === "1.234,50" &&
+		cachedNumberFormatFunction(7) === "7,00",
+);
+const mutableNumberOptions = cachedNumberFormat.resolvedOptions();
+mutableNumberOptions.minimumFractionDigits = 0;
+check(
+	"NumberFormat resolvedOptions copy does not alter plan",
+	cachedNumberFormatFunction(7) === "7,00" &&
+		cachedNumberFormat.resolvedOptions().minimumFractionDigits === 2,
+);
 check(
 	"NumberFormat unsupported style rejected",
 	throws(RangeError, () => new Intl.NumberFormat(undefined, { style: "invalid" })),
@@ -181,6 +200,35 @@ check(
 		localeCompareOrder.join(",") === "receiver,that,locales,options",
 );
 check("DateTimeFormat present", typeof Intl.DateTimeFormat === "function");
+const cachedDateFormat = new Intl.DateTimeFormat("de-DE", {
+	dateStyle: "long",
+	timeStyle: "short",
+});
+const cachedDateFormatFunction = cachedDateFormat.format;
+const cachedDateValue = cachedDateFormatFunction(1_700_000_000_000);
+check(
+	"DateTimeFormat persistent native plan",
+	cachedDateFormatFunction === cachedDateFormat.format &&
+		cachedDateValue.length > 8 &&
+		cachedDateFormatFunction(1_700_000_000_000) === cachedDateValue,
+);
+const mutableDateOptions = cachedDateFormat.resolvedOptions();
+mutableDateOptions.dateStyle = "short";
+check(
+	"DateTimeFormat resolvedOptions copy does not alter plan",
+	cachedDateFormatFunction(1_700_000_000_000) === cachedDateValue &&
+		cachedDateFormat.resolvedOptions().dateStyle === "long",
+);
+let formatterLifecycleChecksum = 0;
+for (let index = 0; index < 24; index++) {
+	formatterLifecycleChecksum += new Intl.NumberFormat(index & 1 ? "de-DE" : "en-US", {
+		maximumFractionDigits: 2,
+	}).format(index + 0.25).length;
+	formatterLifecycleChecksum += new Intl.DateTimeFormat(index & 1 ? "de-DE" : "en-US", {
+		dateStyle: index & 1 ? "long" : "short",
+	}).format(1_700_000_000_000 + index).length;
+}
+check("Intl formatter handle lifecycle", formatterLifecycleChecksum > 100);
 check("PluralRules select", new Intl.PluralRules("en").select(1) === "one");
 check("ListFormat present", typeof Intl.ListFormat === "function");
 

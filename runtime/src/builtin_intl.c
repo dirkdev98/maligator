@@ -123,12 +123,23 @@ static MalValue intl_string_from_utf8(MalVm *vm, const byte *raw, usize len) {
     // A malformed octet can expand to a surrogate pair, so the buffer is sized
     // for the 2-units-per-byte worst case.
     const unsigned char *bytes = (const unsigned char *) raw;
+    usize ascii_len = 0;
+    while (ascii_len < len && bytes[ascii_len] < 0x80) {
+        ascii_len++;
+    }
+    if (ascii_len == len) {
+        return mal_value_from_string(mal_string_new_ascii(&vm->heap, raw, len));
+    }
     c16 stack_units[256];
     usize capacity = 2 * len + 1;
     bool heap_allocated = capacity > countof(stack_units);
     c16 *units = heap_allocated
         ? malloc(sizeof(c16) * capacity)
         : stack_units;
+    if (units == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     usize n = 0;
     usize i = 0;
     while (i < len) {
@@ -1409,14 +1420,6 @@ static MalString *intl_data_string(MalVm *vm, MalValue data, const char *key) {
 #endif
 
 #if MAL_INTL_HAS_NUMBER_FORMAT
-static bool intl_data_bool(MalVm *vm, MalValue data, const char *key, bool fallback) {
-    MalValue value;
-    if (mal_vm_get_property(vm, data, mal_intrinsic_string_key(vm, key), &value) && !mal_value_is_undefined(value)) {
-        return mal_value_is_truthy(value);
-    }
-    return fallback;
-}
-
 /** signDisplay values in FFI-code order (mirrors mal_i18n.h / SignDisplay in lib.rs). */
 static const char *const INTL_SIGN_DISPLAYS[] = {"auto", "never", "always", "exceptZero", "negative"};
 
@@ -1489,25 +1492,9 @@ static MalValue intl_nonfinite_number(MalVm *vm, f64 number, i32 sign_display_co
     return mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
 }
 
-static MalValue intl_number_format_flat(
-    MalVm *vm,
-    const byte *locale,
-    usize locale_len,
-    f64 number,
-    bool percent,
-    i32 min_integer,
-    i32 min_fraction,
-    i32 max_fraction,
-    i32 min_significant,
-    i32 max_significant,
-    bool grouping,
-    i32 sign_display_code
-) {
+static MalValue intl_number_format_handle(MalVm *vm, void *handle, f64 number) {
     byte out[256];
-    i32 n = mal_i18n_number_format(
-        locale, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
-        min_significant, max_significant, grouping ? 1 : 0, sign_display_code, out, (i32) sizeof(out)
-    );
+    i32 n = mal_i18n_number_formatter_format(handle, number, out, (i32) sizeof(out));
     if (n < 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format number");
         return mal_value_new_undefined();
@@ -1516,10 +1503,15 @@ static MalValue intl_number_format_flat(
         return intl_string_from_utf8(vm, out, (usize) n);
     }
     byte *big = malloc((usize) n);
-    mal_i18n_number_format(
-        locale, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
-        min_significant, max_significant, grouping ? 1 : 0, sign_display_code, big, n
-    );
+    if (big == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (mal_i18n_number_formatter_format(handle, number, big, n) != n) {
+        free(big);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format number");
+        return mal_value_new_undefined();
+    }
     MalValue result = intl_string_from_utf8(vm, big, (usize) n);
     free(big);
     return result;
@@ -1538,36 +1530,26 @@ static MalValue intl_number_format_default_en_us(MalVm *vm, f64 number) {
         return intl_string_from_utf8(vm, out, (usize) n);
     }
     byte *big = malloc((usize) n);
-    mal_i18n_number_format_default_en_us(number, big, n);
+    if (big == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (mal_i18n_number_format_default_en_us(number, big, n) != n) {
+        free(big);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format number");
+        return mal_value_new_undefined();
+    }
     MalValue result = intl_string_from_utf8(vm, big, (usize) n);
     free(big);
     return result;
 }
 
 static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 number) {
-    i32 sign_display_code = intl_sign_display_code(intl_data_string(vm, nf->data, "signDisplay"));
     if (!isfinite(number)) {
+        i32 sign_display_code = intl_sign_display_code(intl_data_string(vm, nf->data, "signDisplay"));
         return intl_nonfinite_number(vm, number, sign_display_code);
     }
-    MalString *locale = intl_data_string(vm, nf->data, "locale");
-    MalString *style = intl_data_string(vm, nf->data, "style");
-    bool percent = style != nullptr && intl_string_eq_ascii(style, "percent");
-    i32 min_integer = intl_data_int(vm, nf->data, "minimumIntegerDigits", 1);
-    i32 min_fraction = intl_data_int(vm, nf->data, "minimumFractionDigits", 0);
-    i32 max_fraction = intl_data_int(vm, nf->data, "maximumFractionDigits", percent ? 0 : 3);
-    i32 min_significant = intl_data_int(vm, nf->data, "minimumSignificantDigits", 0);
-    i32 max_significant = intl_data_int(vm, nf->data, "maximumSignificantDigits", 0);
-    bool grouping = intl_data_bool(vm, nf->data, "useGrouping", true);
-
-    byte locale_buf[160];
-    usize locale_len = 0;
-    if (locale != nullptr) {
-        intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
-    }
-    return intl_number_format_flat(
-        vm, locale_buf, locale_len, number, percent, min_integer, min_fraction,
-        max_fraction, min_significant, max_significant, grouping, sign_display_code
-    );
+    return intl_number_format_handle(vm, nf->handle, number);
 }
 
 static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1637,7 +1619,22 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     if (prototype == nullptr) {
         return mal_value_new_undefined();
     }
-    MalIntlObject *nf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_NUMBER_FORMAT, nullptr, mal_value_from_object(resolved));
+    byte locale_buf[160];
+    usize locale_len;
+    if (!intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not build number formatter");
+        return mal_value_new_undefined();
+    }
+    void *handle = mal_i18n_number_formatter_new(
+        locale_buf, locale_len, percent ? 1 : 0, min_integer, min_fraction,
+        max_fraction, min_significant, max_significant, grouping ? 1 : 0,
+        intl_sign_display_code(sign_display)
+    );
+    if (handle == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not build number formatter");
+        return mal_value_new_undefined();
+    }
+    MalIntlObject *nf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_NUMBER_FORMAT, handle, mal_value_from_object(resolved));
     return mal_value_from_intl_object(nf);
 }
 
@@ -1792,7 +1789,47 @@ static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epo
         return intl_string_from_utf8(vm, out, (usize) n);
     }
     byte *big = malloc((usize) n);
-    mal_i18n_datetime_format(locale_buf, locale_len, year, month, day, hour, minute, second, date_code, time_code, big, n);
+    if (big == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (mal_i18n_datetime_format(locale_buf, locale_len, year, month, day, hour, minute, second, date_code, time_code, big, n) != n) {
+        free(big);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
+        return mal_value_new_undefined();
+    }
+    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
+    free(big);
+    return result;
+}
+
+static MalValue intl_datetime_format_epoch_handle(MalVm *vm, void *handle, f64 epoch) {
+    i32 year, month, day, hour, minute, second;
+    if (!mal_date_to_local_components(epoch, &year, &month, &day, &hour, &minute, &second)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid time value");
+        return mal_value_new_undefined();
+    }
+    byte out[256];
+    i32 n = mal_i18n_datetime_formatter_format(
+        handle, year, month, day, hour, minute, second, out, (i32) sizeof(out));
+    if (n < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
+        return mal_value_new_undefined();
+    }
+    if (n <= (i32) sizeof(out)) {
+        return intl_string_from_utf8(vm, out, (usize) n);
+    }
+    byte *big = malloc((usize) n);
+    if (big == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (mal_i18n_datetime_formatter_format(
+            handle, year, month, day, hour, minute, second, big, n) != n) {
+        free(big);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format date");
+        return mal_value_new_undefined();
+    }
     MalValue result = intl_string_from_utf8(vm, big, (usize) n);
     free(big);
     return result;
@@ -1850,7 +1887,19 @@ static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value
     if (prototype == nullptr) {
         return mal_value_new_undefined();
     }
-    MalIntlObject *dtf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_DATE_TIME_FORMAT, nullptr, mal_value_from_object(resolved));
+    byte locale_buf[160];
+    usize locale_len;
+    if (!intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not build date formatter");
+        return mal_value_new_undefined();
+    }
+    void *handle = mal_i18n_datetime_formatter_new(
+        locale_buf, locale_len, date_code, time_code);
+    if (handle == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not build date formatter");
+        return mal_value_new_undefined();
+    }
+    MalIntlObject *dtf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_DATE_TIME_FORMAT, handle, mal_value_from_object(resolved));
     return mal_value_from_intl_object(dtf);
 }
 
@@ -1864,10 +1913,7 @@ static MalValue intl_date_time_format_callback(MalVm *vm, MalValue this_value, c
     } else if (!mal_vm_to_number(vm, args[0], &epoch)) {
         return mal_value_new_undefined();
     }
-    MalString *locale = intl_data_string(vm, dtf->data, "locale");
-    i32 date_code = intl_data_int(vm, dtf->data, "dateStyleCode", 2);
-    i32 time_code = intl_data_int(vm, dtf->data, "timeStyleCode", -1);
-    return intl_datetime_format_epoch(vm, locale, epoch, date_code, time_code);
+    return intl_datetime_format_epoch_handle(vm, dtf->handle, epoch);
 }
 
 static MalValue intl_date_time_format_get_format(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
@@ -1931,17 +1977,14 @@ static MalValue intl_date_time_format_range_string(MalVm *vm, MalIntlObject *dtf
     if (!intl_date_range_arg(vm, start_arg, &start) || !intl_date_range_arg(vm, end_arg, &end)) {
         return mal_value_new_undefined();
     }
-    MalString *locale = intl_data_string(vm, dtf->data, "locale");
-    i32 date_code = intl_data_int(vm, dtf->data, "dateStyleCode", 2);
-    i32 time_code = intl_data_int(vm, dtf->data, "timeStyleCode", -1);
-    MalValue start_str = intl_datetime_format_epoch(vm, locale, start, date_code, time_code);
+    MalValue start_str = intl_datetime_format_epoch_handle(vm, dtf->handle, start);
     if (!mal_value_is_string(start_str)) {
         return mal_value_new_undefined();
     }
     if (start == end) {
         return start_str;
     }
-    MalValue end_str = intl_datetime_format_epoch(vm, locale, end, date_code, time_code);
+    MalValue end_str = intl_datetime_format_epoch_handle(vm, dtf->handle, end);
     if (!mal_value_is_string(end_str)) {
         return mal_value_new_undefined();
     }

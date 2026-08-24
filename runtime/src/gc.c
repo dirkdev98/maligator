@@ -1206,6 +1206,16 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                     mal_i18n_plural_rules_free(intl->handle);
                 }
 #endif
+#if MAL_INTL_HAS_NUMBER_FORMAT
+                if (intl->kind == MAL_INTL_NUMBER_FORMAT) {
+                    mal_i18n_number_formatter_free(intl->handle);
+                }
+#endif
+#if MAL_INTL_HAS_DATE_TIME_FORMAT
+                if (intl->kind == MAL_INTL_DATE_TIME_FORMAT) {
+                    mal_i18n_datetime_formatter_free(intl->handle);
+                }
+#endif
                 intl->handle = nullptr;
             }
             break;

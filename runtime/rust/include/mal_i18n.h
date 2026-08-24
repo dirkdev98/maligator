@@ -18,7 +18,7 @@ extern "C" {
  * v2: added mal_i18n_collator_free / mal_i18n_plural_rules_free (GC finalization).
  * v3: mal_i18n_number_format gained min/max significant-digit parameters.
  * v4: mal_i18n_number_format gained a sign_display parameter. */
-#define MAL_I18N_ABI_VERSION 4u
+#define MAL_I18N_ABI_VERSION 5u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -89,12 +89,17 @@ void mal_i18n_plural_rules_free(void *handle); /* null-tolerant; ABI v2+ */
  * 1 never, 2 always, 3 exceptZero, 4 negative (ECMA-402 signDisplay values,
  * applied to the rounded value so negative zero and values rounded to zero are
  * handled correctly). */
-int32_t mal_i18n_number_format(const uint8_t *locale, size_t locale_len, double number, int32_t percent, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t min_significant, int32_t max_significant, int32_t grouping, int32_t sign_display, uint8_t *out, int32_t out_cap);
+void *mal_i18n_number_formatter_new(const uint8_t *locale, size_t locale_len, int32_t percent, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t min_significant, int32_t max_significant, int32_t grouping, int32_t sign_display);
+int32_t mal_i18n_number_formatter_format(void *handle, double number, uint8_t *out, int32_t out_cap);
+void mal_i18n_number_formatter_free(void *handle);
 int32_t mal_i18n_number_format_default_en_us(double number, uint8_t *out, int32_t out_cap);
 
 /* ---- Intl.DateTimeFormat (dateStyle / timeStyle) ----
  * date_style / time_style: -1 none, 0 full, 1 long, 2 medium, 3 short. */
 int32_t mal_i18n_datetime_format(const uint8_t *locale, size_t locale_len, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, int32_t date_style, int32_t time_style, uint8_t *out, int32_t out_cap);
+void *mal_i18n_datetime_formatter_new(const uint8_t *locale, size_t locale_len, int32_t date_style, int32_t time_style);
+int32_t mal_i18n_datetime_formatter_format(void *handle, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, uint8_t *out, int32_t out_cap);
+void mal_i18n_datetime_formatter_free(void *handle);
 
 /* ---- Intl.ListFormat ----
  * A borrowed UTF-16 string (mirrors Rust MalU16Str). */

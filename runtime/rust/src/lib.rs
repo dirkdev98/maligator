@@ -51,7 +51,8 @@ pub mod argon2;
 /// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).
 /// v3: `mal_i18n_number_format` gained min/max significant-digit parameters.
 /// v4: `mal_i18n_number_format` gained a sign_display parameter.
-pub const MAL_I18N_ABI_VERSION: u32 = 4;
+/// v5: NumberFormat / DateTimeFormat gained persistent formatter handles.
+pub const MAL_I18N_ABI_VERSION: u32 = 5;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -433,19 +434,26 @@ pub unsafe extern "C" fn mal_i18n_number_format_default_en_us(
     })
 }
 
-/// Format `number` for `locale`. percent != 0 scales by 100 and appends '%'.
-/// Honors minimumIntegerDigits and grouping. When `max_significant` > 0 the
-/// significant-digit options drive rounding (halfExpand) and padding; otherwise
-/// min+max fraction digits do. sign_display is applied to the rounded value (see
-/// sign_display_from_code) so negative zero and values rounded to zero are
-/// handled per ECMA-402. Writes UTF-8 into `out`; returns the full length, or -1
-/// on failure.
+#[cfg(feature = "intl-number-format")]
+struct MalNumberFormatter {
+    formatter: icu_decimal::DecimalFormatter,
+    percent: bool,
+    min_integer: i32,
+    min_fraction: i32,
+    max_fraction: i32,
+    min_significant: i32,
+    max_significant: i32,
+    sign_display: i32,
+}
+
+/// Build the immutable ICU formatter and resolved numeric plan once per
+/// Intl.NumberFormat instance. JavaScript option access remains entirely on the
+/// C side and is complete before this pure native constructor is called.
 #[cfg(feature = "intl-number-format")]
 #[no_mangle]
-pub unsafe extern "C" fn mal_i18n_number_format(
+pub unsafe extern "C" fn mal_i18n_number_formatter_new(
     locale_ptr: *const u8,
     locale_len: usize,
-    number: f64,
     percent: i32,
     min_integer: i32,
     min_fraction: i32,
@@ -454,17 +462,52 @@ pub unsafe extern "C" fn mal_i18n_number_format(
     max_significant: i32,
     grouping: i32,
     sign_display: i32,
-    out: *mut u8,
-    out_cap: i32,
-) -> i32 {
-    use icu_decimal::input::Decimal;
+) -> *mut core::ffi::c_void {
     use icu_decimal::options::{DecimalFormatterOptions, GroupingStrategy};
     use icu_decimal::DecimalFormatter;
 
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
+        return core::ptr::null_mut();
+    };
+    let mut options = DecimalFormatterOptions::default();
+    options.grouping_strategy = Some(if grouping != 0 { GroupingStrategy::Auto } else { GroupingStrategy::Never });
+    let Ok(formatter) = DecimalFormatter::try_new((&locale).into(), options) else {
+        return core::ptr::null_mut();
+    };
+    Box::into_raw(Box::new(MalNumberFormatter {
+        formatter,
+        percent: percent != 0,
+        min_integer,
+        min_fraction,
+        max_fraction,
+        min_significant,
+        max_significant,
+        sign_display,
+    })) as *mut core::ffi::c_void
+}
+
+/// Format with a persistent Intl.NumberFormat plan. The handle owns both the
+/// ICU locale/grouping formatter and the already-resolved digit options, so this
+/// hot path performs no locale parsing, formatter construction, or JS property
+/// lookup. Non-finite values remain C-side because their ECMA-402 sign handling
+/// does not enter ICU's fixed-decimal pipeline.
+#[cfg(feature = "intl-number-format")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_number_formatter_format(
+    handle: *mut core::ffi::c_void,
+    number: f64,
+    out: *mut u8,
+    out_cap: i32,
+) -> i32 {
+    use icu_decimal::input::Decimal;
+
+    let Some(plan) = (unsafe { (handle as *const MalNumberFormatter).as_ref() }) else {
         return -1;
     };
-    let value = if percent != 0 { number * 100.0 } else { number };
+    if !number.is_finite() {
+        return -1;
+    }
+    let value = if plan.percent { number * 100.0 } else { number };
 
     // Rust's Display for f64 is the shortest round-trip decimal (never
     // scientific), which Decimal parses; rounding follows.
@@ -473,42 +516,46 @@ pub unsafe extern "C" fn mal_i18n_number_format(
         Ok(d) => d,
         Err(_) => return -1,
     };
-    if max_significant > 0 {
+    if plan.max_significant > 0 {
         // Significant-digit rounding: keep max_significant digits starting at the
         // most significant one, then pad the tail out to min_significant.
         if !decimal.is_zero() {
             let msd = decimal.nonzero_magnitude_start();
-            round_half_expand(&mut decimal, msd - (max_significant as i16) + 1);
+            round_half_expand(&mut decimal, msd - (plan.max_significant as i16) + 1);
         }
         // Drop rounding's trailing zeros, then pad back up to min_significant.
         decimal.trim_end();
         let msd = decimal.nonzero_magnitude_start();
-        decimal.pad_end(msd - (min_significant as i16) + 1);
+        decimal.pad_end(msd - (plan.min_significant as i16) + 1);
     } else {
         // maximumFractionDigits: round at 10^-max_fraction; minimumFractionDigits:
         // pad the fraction to 10^-min_fraction.
-        round_half_expand(&mut decimal, -(max_fraction as i16));
-        decimal.pad_end(-(min_fraction as i16));
+        round_half_expand(&mut decimal, -(plan.max_fraction as i16));
+        decimal.pad_end(-(plan.min_fraction as i16));
     }
     // minimumIntegerDigits: pad the integer part out to 10^(min_integer-1).
-    if min_integer > 1 {
-        decimal.pad_start((min_integer - 1) as i16);
+    if plan.min_integer > 1 {
+        decimal.pad_start((plan.min_integer - 1) as i16);
     }
     // Applied after rounding so a value that rounds to zero (or -0) is judged
     // by its final displayed magnitude, per ECMA-402 FormatNumericToString.
-    decimal.apply_sign_display(sign_display_from_code(sign_display));
+    decimal.apply_sign_display(sign_display_from_code(plan.sign_display));
 
-    let mut options = DecimalFormatterOptions::default();
-    options.grouping_strategy = Some(if grouping != 0 { GroupingStrategy::Auto } else { GroupingStrategy::Never });
-    let formatter = match DecimalFormatter::try_new((&locale).into(), options) {
-        Ok(f) => f,
-        Err(_) => return -1,
-    };
-    let mut text = formatter.format_to_string(&decimal);
-    if percent != 0 {
+    let mut text = plan.formatter.format_to_string(&decimal);
+    if plan.percent {
         text.push('%');
     }
     unsafe { write_utf8(&text, out, out_cap) }
+}
+
+/// Free a number-formatter handle. Null-tolerant for GC finalization.
+#[cfg(feature = "intl-number-format")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_number_formatter_free(handle: *mut core::ffi::c_void) {
+    if handle.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(handle as *mut MalNumberFormatter) });
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +574,104 @@ std::thread_local! {
     static DEFAULT_EN_US_TIME_FORMATTER: std::cell::OnceCell<
         Option<icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::T>>,
     > = const { std::cell::OnceCell::new() };
+}
+
+#[cfg(feature = "intl-date-time-format")]
+enum MalDateTimeFormatter {
+    DateTime(icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::YMDT>),
+    Date(icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::YMD>),
+    Time(icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::T>),
+}
+
+/// Build the immutable ICU formatter once per Intl.DateTimeFormat instance.
+#[cfg(feature = "intl-date-time-format")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_datetime_formatter_new(
+    locale_ptr: *const u8,
+    locale_len: usize,
+    date_style: i32,
+    time_style: i32,
+) -> *mut core::ffi::c_void {
+    use icu_datetime::fieldsets;
+    use icu_datetime::options::{Length, TimePrecision};
+    use icu_datetime::DateTimeFormatter;
+
+    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
+        return core::ptr::null_mut();
+    };
+    let to_length = |style: i32| match style {
+        0 | 1 => Length::Long,
+        3 => Length::Short,
+        _ => Length::Medium,
+    };
+    let ymd = |style: i32| fieldsets::YMD::medium().with_length(to_length(style));
+    let t = |style: i32| fieldsets::T::medium().with_length(to_length(style));
+
+    let formatter = if date_style >= 0 && time_style >= 0 {
+        let fields = ymd(date_style).with_time(TimePrecision::Second);
+        match DateTimeFormatter::try_new((&locale).into(), fields) {
+            Ok(formatter) => MalDateTimeFormatter::DateTime(formatter),
+            Err(_) => return core::ptr::null_mut(),
+        }
+    } else if date_style >= 0 {
+        match DateTimeFormatter::try_new((&locale).into(), ymd(date_style)) {
+            Ok(formatter) => MalDateTimeFormatter::Date(formatter),
+            Err(_) => return core::ptr::null_mut(),
+        }
+    } else if time_style >= 0 {
+        match DateTimeFormatter::try_new((&locale).into(), t(time_style)) {
+            Ok(formatter) => MalDateTimeFormatter::Time(formatter),
+            Err(_) => return core::ptr::null_mut(),
+        }
+    } else {
+        match DateTimeFormatter::try_new((&locale).into(), ymd(2)) {
+            Ok(formatter) => MalDateTimeFormatter::Date(formatter),
+            Err(_) => return core::ptr::null_mut(),
+        }
+    };
+    Box::into_raw(Box::new(formatter)) as *mut core::ffi::c_void
+}
+
+/// Format civil components with a persistent Intl.DateTimeFormat plan.
+#[cfg(feature = "intl-date-time-format")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_datetime_formatter_format(
+    handle: *mut core::ffi::c_void,
+    year: i32,
+    month: i32,
+    day: i32,
+    hour: i32,
+    minute: i32,
+    second: i32,
+    out: *mut u8,
+    out_cap: i32,
+) -> i32 {
+    let Some(formatter) = (unsafe { (handle as *const MalDateTimeFormatter).as_ref() }) else {
+        return -1;
+    };
+    let Ok(date) = icu_calendar::Date::try_new_iso(year, month as u8, day as u8) else {
+        return -1;
+    };
+    let Ok(time) = icu_time::Time::try_new(hour as u8, minute as u8, second as u8, 0) else {
+        return -1;
+    };
+    let input = icu_time::DateTime { date, time };
+    let text = match formatter {
+        MalDateTimeFormatter::DateTime(formatter) => formatter.format(&input).to_string(),
+        MalDateTimeFormatter::Date(formatter) => formatter.format(&input).to_string(),
+        MalDateTimeFormatter::Time(formatter) => formatter.format(&input).to_string(),
+    };
+    unsafe { write_utf8(&text, out, out_cap) }
+}
+
+/// Free a date-time formatter handle. Null-tolerant for GC finalization.
+#[cfg(feature = "intl-date-time-format")]
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_datetime_formatter_free(handle: *mut core::ffi::c_void) {
+    if handle.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(handle as *mut MalDateTimeFormatter) });
 }
 
 /// Format civil date/time components for `locale`. date_style / time_style:

@@ -28,9 +28,9 @@ typedef enum MalIntlKind {
 
 /**
  * A generic Intl service instance: an ordinary object plus the bits every
- * service needs. `handle` is a Rust-owned ICU4X formatter (leaked — no GC yet,
- * consistent with the bump allocator), null for services with no native state
- * (e.g. Locale). `data` is a per-kind MalValue: the canonical tag string for
+ * service needs. `handle` is an optional Rust-owned ICU4X formatter released by
+ * the heap finalizer, and is null for services with no native state (e.g.
+ * Locale). `data` is a per-kind MalValue: the canonical tag string for
  * Locale, or the resolved-options object for the formatters (so resolvedOptions
  * can copy from it). `bound` caches the bound `format` accessor function.
  */
