@@ -698,10 +698,26 @@ MalValue mal_builtin_object_parsed_descriptor_object(
 // Keeping reflection on this shared path avoids duplicating exotic-object logic
 // and lets predicate callers inspect the compact descriptor without allocating a
 // temporary JavaScript descriptor object.
+static bool mal_builtin_object_get_own(
+    MalVm *vm, MalValue target, MalKey key,
+    bool *present_out, MalPropertyDesc *desc_out
+) {
+    if (mal_value_heap_type(target) == MAL_HEAP_OBJECT) {
+        MalPropertyLookup lookup =
+            mal_object_get_own(mal_value_to_object(target), key);
+        *present_out = lookup.present;
+        if (lookup.present) *desc_out = lookup.desc;
+        return true;
+    }
+    return mal_vm_get_own_property(
+        vm, target, key, present_out, desc_out);
+}
+
 static MalValue mal_builtin_object_own_descriptor(MalVm *vm, MalValue target, MalKey key) {
     bool present;
     MalPropertyDesc desc;
-    if (!mal_vm_get_own_property(vm, target, key, &present, &desc) || !present) {
+    if (!mal_builtin_object_get_own(
+            vm, target, key, &present, &desc) || !present) {
         return mal_value_new_undefined();
     }
     return mal_builtin_object_descriptor_object(vm, desc);
@@ -879,29 +895,23 @@ static bool mal_builtin_object_collect_plain_keys(
     return true;
 }
 
-/** Exact ordinary objects expose symbol keys without an ownKeys trap. Count and
- * copy them directly so Object.getOwnPropertySymbols avoids a rooted snapshot
- * containing every string and index key as well. */
+/** Exact ordinary objects expose symbol keys without an ownKeys trap. Copy them
+ * in one pass so Object.getOwnPropertySymbols avoids a rooted snapshot containing
+ * every string and index key as well. */
 static MalValue mal_builtin_object_collect_plain_symbols(
     MalVm *vm,
     MalObject *object
 ) {
-    u32 count = 0;
+    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    u32 capacity;
+    if (!mal_builtin_object_plain_capacity(object, &capacity)) {
+        return mal_value_new_undefined();
+    }
+    (void) mal_array_object_fresh_dense_reserve_exact(result, capacity);
     MalPropertyIter iter;
     mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
     MalKey key;
     MalPropertyDesc desc;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (key.kind == MAL_KEY_SYMBOL &&
-            !mal_symbol_is_private(mal_value_to_symbol(key.value))) {
-            if (count == UINT32_MAX) abort();
-            count++;
-        }
-    }
-
-    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
-    (void) mal_array_object_fresh_dense_reserve_exact(result, count);
-    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
     u32 index = 0;
     while (mal_property_iter_next(&iter, &key, &desc)) {
         if (key.kind == MAL_KEY_SYMBOL &&
@@ -1589,7 +1599,8 @@ MalValue mal_builtin_object_is_known(const MalValue *args, i32 arg_count) {
 static MalValue mal_builtin_object_has_own_resolved(MalVm *vm, MalValue object, MalKey key) {
     bool present;
     MalPropertyDesc desc;
-    if (!mal_vm_get_own_property(vm, object, key, &present, &desc)) {
+    if (!mal_builtin_object_get_own(
+            vm, object, key, &present, &desc)) {
         return mal_value_new_undefined();
     }
     return mal_value_new_boolean(present);
@@ -1698,7 +1709,8 @@ static MalValue mal_builtin_object_prototype_property_is_enumerable(MalVm *vm, M
 
     bool present;
     MalPropertyDesc desc;
-    if (!mal_vm_get_own_property(vm, target, key, &present, &desc)) {
+    if (!mal_builtin_object_get_own(
+            vm, target, key, &present, &desc)) {
         return mal_value_new_undefined();
     }
     return mal_value_new_boolean(present && (desc.flags & MAL_PROPERTY_ENUMERABLE));
