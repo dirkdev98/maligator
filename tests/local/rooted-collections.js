@@ -288,6 +288,30 @@ check(
 	"Object.assign snapshots all keys and rechecks descriptors in key order",
 );
 
+const assignMutationOrder = [];
+const assignMutationSource = { first: 1, second: 2, third: 3 };
+const assignMutationTarget = {};
+Object.defineProperty(assignMutationTarget, "first", {
+	set(value) {
+		assignMutationOrder.push("set:" + value);
+		delete assignMutationSource.second;
+		Object.defineProperty(assignMutationSource, "third", {
+			enumerable: true,
+			get() {
+				assignMutationOrder.push("get:third");
+				return 33;
+			},
+		});
+	},
+});
+Object.assign(assignMutationTarget, assignMutationSource);
+check(
+	!("second" in assignMutationTarget) &&
+		assignMutationTarget.third === 33 &&
+		assignMutationOrder.join(",") === "set:1,get:third",
+	"Object.assign rechecks ordinary descriptors after target setter effects",
+);
+
 const assignProxyLog = [];
 const assignProxy = new Proxy(
 	{ a: 1, b: 2 },

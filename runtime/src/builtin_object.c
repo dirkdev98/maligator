@@ -1126,14 +1126,11 @@ static MalValue mal_builtin_object_get_own_property_names(MalVm *vm, MalValue th
     );
 }
 
-// Copy one own enumerable key from source to target: Get (invoking a getter /
-// Proxy trap) then Set(to, key, value, true) (invoking a target setter and
-// throwing on a failed write), per the Object.assign copy step.
-static bool mal_builtin_object_assign_copy(MalVm *vm, MalValue target, MalKey key, MalValue source) {
-    MalValue value;
-    if (!mal_vm_get_property(vm, source, key, &value)) {
-        return false;
-    }
+// Store one snapshotted Object.assign value, rooting it while target property
+// resolution invokes a setter or Proxy trap.
+static bool mal_builtin_object_assign_store(
+    MalVm *vm, MalValue target, MalKey key, MalValue value
+) {
     MalRootSpan value_span;
     mal_gc_root(&value_span, &value, 1);
     bool stored = mal_vm_set_property(vm, target, key, value, target);
@@ -1147,6 +1144,19 @@ static bool mal_builtin_object_assign_copy(MalVm *vm, MalValue target, MalKey ke
     return true;
 }
 
+// Copy one own enumerable key from source to target: Get (invoking a getter /
+// Proxy trap) then Set(to, key, value, true) (invoking a target setter and
+// throwing on a failed write), per the Object.assign copy step.
+static bool mal_builtin_object_assign_copy(
+    MalVm *vm, MalValue target, MalKey key, MalValue source
+) {
+    MalValue value;
+    if (!mal_vm_get_property(vm, source, key, &value)) {
+        return false;
+    }
+    return mal_builtin_object_assign_store(vm, target, key, value);
+}
+
 // CopyDataProperties from one (already ToObject'd) source: enumerate own keys
 // via the source's [[OwnPropertyKeys]] / [[GetOwnProperty]] so Proxy traps fire,
 // a TypedArray's / String wrapper's exotic indices are seen, and both string and
@@ -1157,18 +1167,36 @@ static bool mal_builtin_object_assign_from(MalVm *vm, MalValue target, MalValue 
     MalRootedKeySnapshot keys;
     mal_rooted_key_snapshot_init(&keys);
     bool ok = mal_rooted_key_snapshot_own_keys(vm, source, &keys);
+    bool ordinary_source = mal_value_heap_type(source) == MAL_HEAP_OBJECT;
     for (usize i = 0; ok && i < keys.count; i++) {
         bool present;
         MalPropertyDesc desc;
-        if (!mal_vm_get_own_property(
-                vm, source, keys.keys[i], &present, &desc)) {
-            ok = false;
-            break;
+        if (ordinary_source) {
+            MalPropertyLookup lookup =
+                mal_object_get_own(mal_value_to_object(source), keys.keys[i]);
+            present = lookup.present;
+            if (present) desc = lookup.desc;
+        } else {
+            if (!mal_vm_get_own_property(
+                    vm, source, keys.keys[i], &present, &desc)) {
+                ok = false;
+                break;
+            }
         }
         if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
             continue;
         }
-        if (!mal_builtin_object_assign_copy(vm, target, keys.keys[i], source)) {
+        // An ordinary data property has no observable operation between the
+        // descriptor query and Get, so its current descriptor value is exactly
+        // what Get would return. Accessors retain the generic Get path so their
+        // user code and receiver semantics stay intact.
+        bool copied = ordinary_source &&
+                !(desc.flags & MAL_PROPERTY_ACCESSOR)
+            ? mal_builtin_object_assign_store(
+                vm, target, keys.keys[i], desc.value)
+            : mal_builtin_object_assign_copy(
+                vm, target, keys.keys[i], source);
+        if (!copied) {
             ok = false;
             break;
         }
