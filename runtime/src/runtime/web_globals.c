@@ -177,33 +177,7 @@ static MalValue mal_web_text_encoder_encode_into(
     usize len = mal_string_length(str);
     usize read = 0;
     usize written = 0;
-    for (usize i = 0; i < len;) {
-        u32 cp;
-        usize adv;
-        if (!mal_utf16_read_scalar(u, len, i, &cp, &adv)) cp = 0xFFFD;
-        usize n = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
-        if (written + n > cap) {
-            break;
-        }
-        if (cp < 0x80) {
-            dst[written] = (byte) cp;
-        } else if (cp < 0x800) {
-            dst[written] = (byte) (0xC0 | (cp >> 6));
-            dst[written + 1] = (byte) (0x80 | (cp & 0x3F));
-        } else if (cp < 0x10000) {
-            dst[written] = (byte) (0xE0 | (cp >> 12));
-            dst[written + 1] = (byte) (0x80 | ((cp >> 6) & 0x3F));
-            dst[written + 2] = (byte) (0x80 | (cp & 0x3F));
-        } else {
-            dst[written] = (byte) (0xF0 | (cp >> 18));
-            dst[written + 1] = (byte) (0x80 | ((cp >> 12) & 0x3F));
-            dst[written + 2] = (byte) (0x80 | ((cp >> 6) & 0x3F));
-            dst[written + 3] = (byte) (0x80 | (cp & 0x3F));
-        }
-        written += n;
-        read += adv;
-        i += adv;
-    }
+    mal_utf8_encode_into(u, len, dst, cap, &read, &written);
 
     MalObject *result = mal_intrinsic_new_object(vm);
     mal_object_set(result, mal_intrinsic_string_key(vm, (const byte *) "read"),

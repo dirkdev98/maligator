@@ -14,6 +14,11 @@ byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len);
 /** Exact output byte count for the same replacement-mode UTF-8 encoding. */
 usize mal_utf8_encoded_length(const c16 *units, usize len);
 
+/** Encode complete scalars into a bounded destination without splitting one. */
+void mal_utf8_encode_into(
+    const c16 *units, usize len, byte *output, usize capacity,
+    usize *read_out, usize *written_out);
+
 /** UTF-8 bytes -> UTF-16 code units. Sets *out_count; returns a malloc'd buffer. */
 c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count);
 

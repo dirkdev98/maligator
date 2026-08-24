@@ -101,13 +101,11 @@ static bool mal_buffer_encoding(
 /* Node's Buffer decoder is deliberately forgiving: both alphabets are accepted,
  * whitespace and unrelated characters are ignored, and an incomplete final
  * quartet contributes all complete bytes. */
-static byte *mal_buffer_decode_base64(const MalString *string, usize *length_out) {
+static usize mal_buffer_decode_base64_into(
+    const MalString *string, byte *bytes, usize capacity
+) {
+    if (capacity == 0) return 0;
     usize length = mal_string_length(string);
-    byte *bytes = malloc(length / 4 * 3 + 3);
-    if (bytes == nullptr) {
-        *length_out = 0;
-        return nullptr;
-    }
     const c16 *units = mal_string_code_units(string);
     u32 accumulator = 0;
     i32 sextets = 0;
@@ -120,21 +118,86 @@ static byte *mal_buffer_decode_base64(const MalString *string, usize *length_out
         accumulator = (accumulator << 6) | (u32) digit;
         sextets++;
         if (sextets == 4) {
-            bytes[written++] = (byte) (accumulator >> 16);
-            bytes[written++] = (byte) (accumulator >> 8);
-            bytes[written++] = (byte) accumulator;
+            byte block[3] = {
+                (byte) (accumulator >> 16),
+                (byte) (accumulator >> 8),
+                (byte) accumulator,
+            };
+            usize copy = capacity - written < 3 ? capacity - written : 3;
+            memcpy(bytes + written, block, copy);
+            written += copy;
+            if (written == capacity) return written;
             accumulator = 0;
             sextets = 0;
         }
     }
     if (sextets == 2) {
-        bytes[written++] = (byte) ((accumulator >> 4) & 0xff);
+        if (written < capacity) {
+            bytes[written++] = (byte) ((accumulator >> 4) & 0xff);
+        }
     } else if (sextets == 3) {
-        bytes[written++] = (byte) ((accumulator >> 10) & 0xff);
-        bytes[written++] = (byte) ((accumulator >> 2) & 0xff);
+        if (written < capacity) {
+            bytes[written++] = (byte) ((accumulator >> 10) & 0xff);
+        }
+        if (written < capacity) {
+            bytes[written++] = (byte) ((accumulator >> 2) & 0xff);
+        }
     }
-    *length_out = written;
+    return written;
+}
+
+static byte *mal_buffer_decode_base64(const MalString *string, usize *length_out) {
+    usize capacity = mal_string_length(string) / 4 * 3 + 3;
+    byte *bytes = malloc(capacity);
+    if (bytes == nullptr) {
+        *length_out = 0;
+        return nullptr;
+    }
+    *length_out = mal_buffer_decode_base64_into(string, bytes, capacity);
     return bytes;
+}
+
+static usize mal_buffer_write_string(
+    const MalString *string, MalBufferEncoding encoding,
+    byte *output, usize capacity
+) {
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    if (encoding == MAL_BUFFER_UTF8) {
+        usize written;
+        mal_utf8_encode_into(
+            units, length, output, capacity, nullptr, &written);
+        return written;
+    }
+    if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
+        return mal_buffer_decode_base64_into(string, output, capacity);
+    }
+    if (encoding == MAL_BUFFER_HEX) {
+        usize written = 0;
+        while (written < capacity && written * 2 + 1 < length) {
+            i32 high = mal_hex_decode_digit(units[written * 2]);
+            i32 low = mal_hex_decode_digit(units[written * 2 + 1]);
+            if (high < 0 || low < 0) break;
+            output[written++] = (byte) ((high << 4) | low);
+        }
+        return written;
+    }
+    if (encoding == MAL_BUFFER_UTF16LE) {
+        usize read = 0;
+        usize written = 0;
+        while (read < length && capacity - written >= 2) {
+            c16 unit = units[read++];
+            output[written++] = (byte) unit;
+            output[written++] = (byte) (unit >> 8);
+        }
+        return written;
+    }
+
+    usize written = length < capacity ? length : capacity;
+    for (usize i = 0; i < written; i++) {
+        output[i] = (byte) (units[i] & 0xff);
+    }
+    return written;
 }
 
 static byte *mal_buffer_encode_string(
@@ -1239,28 +1302,10 @@ static MalValue mal_buffer_write(
             vm, encoding_value, MAL_BUFFER_UTF8, false, false, &encoding)) {
         return mal_value_new_undefined();
     }
-    usize encoded_length;
-    byte *encoded = mal_buffer_encode_string(mal_value_to_string(args[0]), encoding, &encoded_length);
-    if (encoded == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                           "Buffer encoding allocation failed");
-        return mal_value_new_undefined();
-    }
-    usize written = encoded_length < max_length ? encoded_length : max_length;
-    if (encoding == MAL_BUFFER_UTF8 && written < encoded_length) {
-        // Never leave a partial UTF-8 sequence at the end of the destination.
-        usize start = written;
-        while (start > 0 && (encoded[start] & 0xc0) == 0x80) start--;
-        if (start < written) {
-            u8 lead = (u8) encoded[start];
-            usize needed = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
-            if (start + needed > written) written = start;
-        }
-    }
-    if (written > 0) {
-        memcpy(array->buffer->data + array->byte_offset + offset, encoded, written);
-    }
-    free(encoded);
+    byte *data = mal_buffer_view_data(array);
+    byte *output = data == nullptr ? nullptr : data + offset;
+    usize written = mal_buffer_write_string(
+        mal_value_to_string(args[0]), encoding, output, max_length);
     return mal_value_from_i32((i32) written);
 }
 

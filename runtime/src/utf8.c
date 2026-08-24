@@ -26,30 +26,45 @@ byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len) {
     if (len > (SIZE_MAX - 1) / 3) return nullptr;
     byte *out = malloc(len * 3 + 1); // <= 3 bytes/BMP unit; a surrogate pair is 2 units -> 4 bytes
     if (out == nullptr) return nullptr;
-    usize o = 0;
-    for (usize i = 0; i < len; i++) {
+    mal_utf8_encode_into(units, len, out, len * 3 + 1, nullptr, out_len);
+    return out;
+}
+
+void mal_utf8_encode_into(
+    const c16 *units, usize len, byte *output, usize capacity,
+    usize *read_out, usize *written_out
+) {
+    usize read = 0;
+    usize written = 0;
+    while (read < len) {
         u32 c;
         usize width;
-        if (!mal_utf16_read_scalar(units, len, i, &c, &width)) c = 0xFFFD;
-        i += width - 1;
-        if (c < 0x80) {
-            out[o++] = (byte) c;
-        } else if (c < 0x800) {
-            out[o++] = (byte) (0xC0 | (c >> 6));
-            out[o++] = (byte) (0x80 | (c & 0x3F));
-        } else if (c < 0x10000) {
-            out[o++] = (byte) (0xE0 | (c >> 12));
-            out[o++] = (byte) (0x80 | ((c >> 6) & 0x3F));
-            out[o++] = (byte) (0x80 | (c & 0x3F));
-        } else {
-            out[o++] = (byte) (0xF0 | (c >> 18));
-            out[o++] = (byte) (0x80 | ((c >> 12) & 0x3F));
-            out[o++] = (byte) (0x80 | ((c >> 6) & 0x3F));
-            out[o++] = (byte) (0x80 | (c & 0x3F));
+        if (!mal_utf16_read_scalar(units, len, read, &c, &width)) c = 0xFFFD;
+        usize encoded_width = c < 0x80 ? 1
+            : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+        if (encoded_width > capacity - written) {
+            break;
         }
+        if (c < 0x80) {
+            output[written] = (byte) c;
+        } else if (c < 0x800) {
+            output[written] = (byte) (0xC0 | (c >> 6));
+            output[written + 1] = (byte) (0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            output[written] = (byte) (0xE0 | (c >> 12));
+            output[written + 1] = (byte) (0x80 | ((c >> 6) & 0x3F));
+            output[written + 2] = (byte) (0x80 | (c & 0x3F));
+        } else {
+            output[written] = (byte) (0xF0 | (c >> 18));
+            output[written + 1] = (byte) (0x80 | ((c >> 12) & 0x3F));
+            output[written + 2] = (byte) (0x80 | ((c >> 6) & 0x3F));
+            output[written + 3] = (byte) (0x80 | (c & 0x3F));
+        }
+        read += width;
+        written += encoded_width;
     }
-    *out_len = o;
-    return out;
+    if (read_out != nullptr) *read_out = read;
+    if (written_out != nullptr) *written_out = written;
 }
 
 c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count) {

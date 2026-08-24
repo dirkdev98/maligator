@@ -175,6 +175,25 @@ check(
 	written === 3 && writable.slice(1, 4).toString() === "hé",
 );
 check("write avoids partial utf8", Buffer.alloc(1).write("é") === 0);
+const boundedBase64 = Buffer.alloc(2, 0xff);
+check(
+	"write decodes base64 into the bounded destination",
+	boundedBase64.write("YWJj", 0, 2, "base64") === 2 &&
+		boundedBase64.toString("hex") === "6162",
+);
+const boundedHex = Buffer.alloc(2, 0xff);
+check(
+	"write stops hex decoding at the first invalid pair",
+	boundedHex.write("41zz", 0, 2, "hex") === 1 &&
+		boundedHex.toString("hex") === "41ff",
+);
+check("write handles an empty destination", Buffer.alloc(0).write("x") === 0);
+const partialUtf16 = Buffer.alloc(3, 0xff);
+check(
+	"write avoids partial utf16 code units",
+	partialUtf16.write("AB", 0, 3, "utf16le") === 2 &&
+		partialUtf16.toString("hex") === "4100ff",
+);
 const integers = Buffer.alloc(8);
 check(
 	"iconv-lite integer primitives",
