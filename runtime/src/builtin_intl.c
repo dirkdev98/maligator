@@ -877,14 +877,27 @@ static void intl_resolved_set(MalVm *vm, MalObject *object, const char *name, Ma
     mal_intrinsic_define_data(vm, object, name, value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+/** Read an engine-owned Intl metadata object's exact own data slot. */
+static bool intl_data_get(
+    MalVm *vm, MalValue data, const char *name, MalValue *out) {
+    if (!mal_value_is_object(data)) {
+        return false;
+    }
+    MalPropertyLookup lookup = mal_object_get_own(
+        mal_value_to_object(data), mal_intrinsic_string_key(vm, name));
+    if (!lookup.present || (lookup.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        return false;
+    }
+    *out = lookup.desc.value;
+    return true;
+}
+
 /** A fresh object copying the named keys out of an instance's stored template. */
 static MalValue intl_resolved_copy(MalVm *vm, MalValue template_value, const char *const *keys, usize key_count) {
     MalObject *out = mal_intrinsic_new_object(vm);
     for (usize i = 0; i < key_count; i++) {
         MalValue value = mal_value_new_undefined();
-        if (mal_value_is_object(template_value)) {
-            mal_vm_get_property(vm, template_value, mal_intrinsic_string_key(vm, keys[i]), &value);
-        }
+        (void) intl_data_get(vm, template_value, keys[i], &value);
         // Omit keys the instance never set (e.g. an unspecified dateStyle).
         if (!mal_value_is_undefined(value)) {
             intl_resolved_set(vm, out, keys[i], value);
@@ -1404,7 +1417,7 @@ static void intl_install_plural_rules(MalVm *vm, MalObject *intl_object) {
 #if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT
 static i32 intl_data_int(MalVm *vm, MalValue data, const char *key, i32 fallback) {
     MalValue value;
-    if (mal_vm_get_property(vm, data, mal_intrinsic_string_key(vm, key), &value) && mal_ops_is_number(value)) {
+    if (intl_data_get(vm, data, key, &value) && mal_ops_is_number(value)) {
         return (i32) mal_ops_number_as_f64(value);
     }
     return fallback;
@@ -1412,7 +1425,7 @@ static i32 intl_data_int(MalVm *vm, MalValue data, const char *key, i32 fallback
 
 static MalString *intl_data_string(MalVm *vm, MalValue data, const char *key) {
     MalValue value;
-    if (mal_vm_get_property(vm, data, mal_intrinsic_string_key(vm, key), &value) && mal_value_is_string(value)) {
+    if (intl_data_get(vm, data, key, &value) && mal_value_is_string(value)) {
         return mal_value_to_string(value);
     }
     return nullptr;
