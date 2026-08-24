@@ -55,8 +55,15 @@ static MalValue mal_builtin_fin_reg_constructor(
     }
 
     MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(
-            vm, new_target, MAL_INTRINSIC_FINALIZATION_REGISTRY_PROTOTYPE, &prototype)) {
+    if (new_target ==
+            vm->intrinsics[MAL_INTRINSIC_FINALIZATION_REGISTRY_CONSTRUCTOR]) {
+        prototype = mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_FINALIZATION_REGISTRY_PROTOTYPE]);
+    } else if (!mal_vm_get_prototype_from_constructor(
+                   vm,
+                   new_target,
+                   MAL_INTRINSIC_FINALIZATION_REGISTRY_PROTOTYPE,
+                   &prototype)) {
         return mal_value_new_undefined();
     }
     return mal_value_from_finalization_registry_object(

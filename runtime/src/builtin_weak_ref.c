@@ -42,8 +42,11 @@ static MalValue mal_builtin_weak_ref_constructor(
     }
 
     MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(
-            vm, new_target, MAL_INTRINSIC_WEAK_REF_PROTOTYPE, &prototype)) {
+    if (new_target == vm->intrinsics[MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR]) {
+        prototype = mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_WEAK_REF_PROTOTYPE]);
+    } else if (!mal_vm_get_prototype_from_constructor(
+                   vm, new_target, MAL_INTRINSIC_WEAK_REF_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
     // AddToKeptObjects: a freshly constructed WeakRef must not see its target die
