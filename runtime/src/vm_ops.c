@@ -3303,10 +3303,20 @@ bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out) {
 }
 
 bool mal_vm_to_string(MalVm *vm, MalValue value, MalString **out) {
+    // String arguments dominate constructors, property helpers, URI methods,
+    // and symbol-registry traffic. Preserve the existing string object and
+    // avoid generic ToPrimitive dispatch for every primitive input.
+    if (mal_value_is_string(value)) {
+        *out = mal_value_to_string(value);
+        return true;
+    }
+
     // ToString(object) is ToPrimitive(string) then ToString of the primitive.
-    MalValue primitive;
-    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &primitive)) {
-        return false;
+    MalValue primitive = value;
+    if (mal_value_is_object(value)) {
+        if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &primitive)) {
+            return false;
+        }
     }
 
     // A Symbol has no string coercion (only String(sym) / sym.toString()).
