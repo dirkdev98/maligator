@@ -1062,22 +1062,18 @@ static MalValue mal_json_parse_number(MalJsonParser *parser) {
         }
     }
 
-    if (integer_literal && integer_end - integer_start <= 10) {
+    if (integer_literal && integer_end - integer_start <= 16) {
         u64 magnitude = 0;
         for (usize i = integer_start; i < integer_end; i++) {
             magnitude = magnitude * 10 +
                 (u64) (parser->code_units[i] - '0');
         }
-        u64 limit = negative ? 2147483648ULL : 2147483647ULL;
-        if (magnitude <= limit) {
+        if (magnitude <= (u64) MAL_NUMBER_MAX_SAFE_INTEGER) {
             if (negative && magnitude == 0) {
                 return MAL_VALUE_NEGATIVE_ZERO;
             }
-            if (negative && magnitude == 2147483648ULL) {
-                return mal_value_from_i32(INT32_MIN);
-            }
-            i32 number = (i32) magnitude;
-            return mal_value_from_i32(negative ? -number : number);
+            f64 number = (f64) magnitude;
+            return mal_ops_number_value(negative ? -number : number);
         }
     }
 
