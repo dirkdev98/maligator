@@ -74,6 +74,18 @@ static f64 date_days_from_civil(f64 y, i32 m, f64 d) {
     return era * 146097.0 + doe - 719468.0;
 }
 
+/** Integral civil-to-days projection for parsed ISO fields. */
+static i64 date_days_from_integral_civil(i64 year, i32 month, i32 date) {
+    year -= month <= 2;
+    i64 era = (year >= 0 ? year : year - 399) / 400;
+    i64 year_of_era = year - era * 400;
+    i64 month_prime = month > 2 ? month - 3 : month + 9;
+    i64 day_of_year = (153 * month_prime + 2) / 5 + date - 1;
+    i64 day_of_era = year_of_era * 365 + year_of_era / 4 -
+        year_of_era / 100 + day_of_year;
+    return era * 146097 + day_of_era - 719468;
+}
+
 /** Decompose a day number (days since the epoch, finite) into year, 0-based month, and day. */
 static void date_civil_from_days(f64 z, f64 *year_out, f64 *month_out, f64 *day_out) {
     z += 719468.0;
@@ -402,13 +414,13 @@ static bool date_read_digits(DateCursor *c, i32 count, i32 *out) {
 static f64 date_parse_iso(const c16 *u, usize len) {
     DateCursor c = {u, len, 0};
 
-    f64 year;
+    i32 year;
     i32 month = 1, date = 1, hour = 0, minute = 0, second = 0, ms = 0;
     bool has_time = false;
     bool has_tz = false;
     bool has_full_date = false;
     bool postgres_style = false;
-    f64 tz_offset_ms = 0.0;
+    i64 tz_offset_ms = 0;
 
     // Year: a leading sign introduces the 6-digit expanded form (±YYYYYY).
     bool expanded = false;
@@ -426,7 +438,7 @@ static f64 date_parse_iso(const c16 *u, usize len) {
         if (!date_read_digits(&c, 6, &y6)) {
             return NAN;
         }
-        year = (f64) (year_sign * y6);
+        year = year_sign * y6;
         // "-000000" denotes year 0 BCE, which the format forbids.
         if (year_sign < 0 && y6 == 0) {
             return NAN;
@@ -436,7 +448,7 @@ static f64 date_parse_iso(const c16 *u, usize len) {
         if (!date_read_digits(&c, 4, &y4)) {
             return NAN;
         }
-        year = (f64) y4;
+        year = y4;
     }
 
     // Optional -MM and -DD.
@@ -506,7 +518,8 @@ static f64 date_parse_iso(const c16 *u, usize len) {
                 return NAN;
             }
             has_tz = true;
-            tz_offset_ms = (f64) sign * ((f64) oh * MS_PER_HOUR + (f64) om * MS_PER_MINUTE);
+            tz_offset_ms = (i64) sign *
+                ((i64) oh * 3600000 + (i64) om * 60000);
         }
     }
 
@@ -522,13 +535,13 @@ static f64 date_parse_iso(const c16 *u, usize len) {
         return NAN;
     }
 
-    f64 t = date_make_date(
-        date_make_day(year, (f64) (month - 1), (f64) date),
-        date_make_time((f64) hour, (f64) minute, (f64) second, (f64) ms)
-    );
+    i64 day_number = date_days_from_integral_civil(year, month, date);
+    i64 time_within_day = (i64) hour * 3600000 +
+        (i64) minute * 60000 + (i64) second * 1000 + ms;
+    f64 t = (f64) (day_number * 86400000 + time_within_day);
 
     if (has_tz) {
-        t = t - tz_offset_ms;
+        t -= (f64) tz_offset_ms;
     } else if (has_time) {
         // A date-time without a designator is local time; a date-only form is UTC.
         t = date_utc_from_local(t);
