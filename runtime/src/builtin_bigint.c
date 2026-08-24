@@ -79,6 +79,13 @@ static MalValue mal_builtin_bigint_constructor(MalVm *vm, MalValue this_value, c
         return mal_value_from_bigint(mal_bigint_new(&vm->heap, converted));
     }
 
+    // BigInt primitives are immutable and the abstract conversion returns the
+    // input value unchanged. Retain the existing primitive instead of copying
+    // its 128-bit payload into a fresh managed BigInt cell.
+    if (mal_value_is_bigint(primitive)) {
+        return primitive;
+    }
+
     // 4. Otherwise, return ? ToBigInt(prim).
     i128 result;
     if (!mal_bigint_primitive_to_bigint(vm, primitive, &result)) {
@@ -148,14 +155,18 @@ static MalValue mal_builtin_bigint_prototype_value_of(MalVm *vm, MalValue this_v
     (void) new_target;
     (void) callee;
 
-    i128 value;
-    if (!mal_builtin_bigint_this(vm, this_value, &value)) {
-        return mal_value_new_undefined();
+    if (mal_value_is_bigint(this_value)) {
+        return this_value;
+    }
+    if (mal_value_is_primitive_wrapper(this_value)) {
+        MalPrimitiveWrapperObject *wrapper = mal_value_to_primitive_wrapper(this_value);
+        if (wrapper->kind == MAL_PRIMITIVE_WRAPPER_BIGINT) {
+            return wrapper->primitive_data;
+        }
     }
 
-    // Return the [[BigIntData]] as a BigInt primitive — re-box rather than return
-    // this_value, which is the wrapper object when called on Object(1n).
-    return mal_value_from_bigint(mal_bigint_new(&vm->heap, value));
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a BigInt");
+    return mal_value_new_undefined();
 }
 
 /**

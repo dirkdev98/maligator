@@ -496,6 +496,13 @@ check(
 );
 
 check("bigint ToIndex NaN", BigInt.asUintN(NaN, 7n) === 0n);
+const identityBigInt = 123456789n;
+check(
+	"BigInt identity conversions preserve primitive values",
+	BigInt(identityBigInt) === identityBigInt &&
+		BigInt.prototype.valueOf.call(identityBigInt) === identityBigInt &&
+		BigInt.prototype.valueOf.call(Object(identityBigInt)) === identityBigInt,
+);
 check(
 	"bigint ToIndex infinity",
 	throws(RangeError, () => BigInt.asUintN(Infinity, 7n)),
