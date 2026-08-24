@@ -1244,7 +1244,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             MalFinRegCell *fc = reg->cells;
             while (fc != nullptr) {
                 MalFinRegCell *next = fc->next;
-                free(fc);
+                mal_finalization_registry_cell_recycle(g_gc_vm, fc);
                 fc = next;
             }
             reg->cells = nullptr;
@@ -1425,7 +1425,7 @@ static void mal_gc_weak_pass(void) {
                 mal_vm_enqueue_reaction_job(g_gc_vm, reg->cleanup_callback, false,
                     mal_value_new_undefined(), mal_value_new_undefined(), fc->held_value);
                 *link = fc->next;
-                free(fc);
+                mal_finalization_registry_cell_recycle(g_gc_vm, fc);
             } else {
                 // [[UnregisterToken]] is weak independently of the target. A
                 // live target can therefore outlast an otherwise unreachable

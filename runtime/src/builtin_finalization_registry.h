@@ -31,6 +31,11 @@ typedef struct MalFinalizationRegistryObject {
     MalFinRegCell *cells;
 } MalFinalizationRegistryObject;
 
+/** Allocate/recycle the VM-owned native registration cells. */
+MalFinRegCell *mal_finalization_registry_cell_new(MalVm *vm);
+void mal_finalization_registry_cell_recycle(MalVm *vm, MalFinRegCell *cell);
+void mal_finalization_registry_free_cell_pool(MalVm *vm);
+
 /**
  * Install the FinalizationRegistry constructor and prototype.
  */

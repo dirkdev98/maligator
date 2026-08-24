@@ -9,6 +9,51 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+#define MAL_FIN_REG_CELL_POOL_LIMIT 4096
+
+MalFinRegCell *mal_finalization_registry_cell_new(MalVm *vm) {
+    MalFinRegCell *cell = vm->finalization_registry_cell_pool;
+    if (cell == nullptr) {
+        return malloc(sizeof(MalFinRegCell));
+    }
+    vm->finalization_registry_cell_pool = cell->next;
+    vm->finalization_registry_cell_pool_count--;
+    cell->next = nullptr;
+    return cell;
+}
+
+void mal_finalization_registry_cell_recycle(
+    MalVm *vm,
+    MalFinRegCell *cell
+) {
+    // Only held_value is a strong edge. target and unregister_token must remain
+    // weak even while a concurrent mark observes their removal.
+    mal_gc_write_barrier(cell->held_value);
+    cell->target = mal_value_new_undefined();
+    cell->held_value = mal_value_new_undefined();
+    cell->unregister_token = mal_value_new_undefined();
+    cell->has_token = false;
+    if (vm->finalization_registry_cell_pool_count >=
+        MAL_FIN_REG_CELL_POOL_LIMIT) {
+        free(cell);
+        return;
+    }
+    cell->next = vm->finalization_registry_cell_pool;
+    vm->finalization_registry_cell_pool = cell;
+    vm->finalization_registry_cell_pool_count++;
+}
+
+void mal_finalization_registry_free_cell_pool(MalVm *vm) {
+    MalFinRegCell *cell = vm->finalization_registry_cell_pool;
+    while (cell != nullptr) {
+        MalFinRegCell *next = cell->next;
+        free(cell);
+        cell = next;
+    }
+    vm->finalization_registry_cell_pool = nullptr;
+    vm->finalization_registry_cell_pool_count = 0;
+}
+
 static MalFinalizationRegistryObject *mal_finalization_registry_object_new(
     MalHeap *heap, MalObject *prototype, MalValue cleanup_callback
 ) {
@@ -102,7 +147,7 @@ static MalValue mal_builtin_fin_reg_register(
         return mal_value_new_undefined();
     }
 
-    MalFinRegCell *cell = malloc(sizeof(MalFinRegCell));
+    MalFinRegCell *cell = mal_finalization_registry_cell_new(vm);
     cell->target = target;
     cell->held_value = held;
     cell->unregister_token = token;
@@ -142,8 +187,7 @@ static MalValue mal_builtin_fin_reg_unregister(
             // SATB: unregister drops this cell (traced via the registry). Shade only
             // the STRONG held_value; target and unregister_token are weak edges the
             // collector's weak pass owns, so shading them would wrongly strengthen.
-            mal_gc_write_barrier(cell->held_value);
-            free(cell);
+            mal_finalization_registry_cell_recycle(vm, cell);
             removed = true;
         } else {
             link = &cell->next;

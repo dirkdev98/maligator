@@ -1515,6 +1515,10 @@ typedef struct MalVm {
     struct MalAsyncGeneratorRequest *async_generator_request_pool;
     u32 async_generator_request_pool_count;
 
+    /** Cleared FinalizationRegistry registration cells retained for reuse. */
+    struct MalFinRegCell *finalization_registry_cell_pool;
+    u32 finalization_registry_cell_pool_count;
+
     /**
      * [[KeptObjects]]: WeakRef targets observed (constructed or deref'd) since the
      * last microtask checkpoint, held strongly so a target cannot be reclaimed

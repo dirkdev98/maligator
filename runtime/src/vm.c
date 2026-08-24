@@ -11,6 +11,7 @@
 
 #include "async_function.h"
 #include "builtin_async_generator.h"
+#include "builtin_finalization_registry.h"
 #include "builtin_math.h"
 #include "bound_function_object.h"
 #include "builtin_object.h"
@@ -710,6 +711,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->coroutine_buffer_pool_count = 0;
     vm->async_generator_request_pool = nullptr;
     vm->async_generator_request_pool_count = 0;
+    vm->finalization_registry_cell_pool = nullptr;
+    vm->finalization_registry_cell_pool_count = 0;
     vm->unhandled_rejections = nullptr;
     vm->unhandled_count = 0;
     vm->unhandled_capacity = 0;
@@ -1012,6 +1015,7 @@ void mal_vm_free(MalVm *vm) {
     mal_promise_free_reaction_pool(vm);
     mal_vm_free_coroutine_buffer_pool(vm);
     mal_async_generator_free_request_pool(vm);
+    mal_finalization_registry_free_cell_pool(vm);
     free(vm->tiny_string_cache);
     vm->tiny_string_cache = nullptr;
     free(vm->small_uint_string_cache);
