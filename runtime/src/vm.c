@@ -856,6 +856,9 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
 }
 
 void mal_vm_add_kept_object(MalVm *vm, MalValue value) {
+    if (vm->kept_count > 0 && vm->kept_objects[vm->kept_count - 1] == value) {
+        return;
+    }
     if (vm->kept_count == vm->kept_capacity) {
         vm->kept_capacity = vm->kept_capacity == 0 ? 8 : vm->kept_capacity * 2;
         vm->kept_objects = realloc(vm->kept_objects, sizeof(MalValue) * (usize) vm->kept_capacity);
