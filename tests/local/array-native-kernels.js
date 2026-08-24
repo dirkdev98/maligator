@@ -171,14 +171,7 @@ async function main() {
 		mixedPrimitiveSorted.map((value) => String(value)).join(",") ===
 			"1,10,2,false,null,true",
 	);
-	const primitiveStringSorted = [
-		"pear",
-		"apple",
-		"orange",
-		"banana",
-		"plum",
-		"grape",
-	];
+	const primitiveStringSorted = ["pear", "apple", "orange", "banana", "plum", "grape"];
 	primitiveStringSorted.sort();
 	check(
 		"sort compares primitive strings directly",

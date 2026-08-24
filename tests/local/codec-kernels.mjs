@@ -265,7 +265,9 @@ for (const [name, malformed] of [
 	["surrogate", "%ED%A0%80"],
 	["out of range", "%F4%90%80%80"],
 ]) {
-	throws("decodeURIComponent rejects " + name, URIError, () => decodeURIComponent(malformed));
+	throws("decodeURIComponent rejects " + name, URIError, () =>
+		decodeURIComponent(malformed),
+	);
 }
 let uriCoercions = 0;
 check(
