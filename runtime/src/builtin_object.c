@@ -2038,11 +2038,12 @@ static MalValue mal_builtin_object_group_by(MalVm *vm, MalValue this_value, cons
             }
         }
 
-        mal_array_object_store(
-            group,
-            mal_key_index(mal_array_object_length(group)),
-            roots[2]
-        );
+        if (!mal_array_object_fresh_dense_append(group, roots[2])) {
+            mal_array_object_store(
+                group,
+                mal_key_index(mal_array_object_length(group)),
+                roots[2]);
+        }
         index += 1.0;
     }
 

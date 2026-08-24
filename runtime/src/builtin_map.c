@@ -251,11 +251,12 @@ static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const M
         }
 
         MalArrayObject *group_array = mal_value_to_array_object(roots[4]);
-        mal_array_object_store(
-            group_array,
-            mal_key_index(mal_array_object_length(group_array)),
-            roots[2]
-        );
+        if (!mal_array_object_fresh_dense_append(group_array, roots[2])) {
+            mal_array_object_store(
+                group_array,
+                mal_key_index(mal_array_object_length(group_array)),
+                roots[2]);
+        }
         index += 1.0;
     }
 
