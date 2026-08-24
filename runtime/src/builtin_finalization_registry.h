@@ -8,14 +8,14 @@ typedef struct MalVm MalVm;
 /**
  * One registration in a FinalizationRegistry. `target` and `unregister_token`
  * are held WEAKLY (not traced); `held_value` is held STRONGLY (traced) and is
- * passed to the cleanup callback when the target is reclaimed. A plain malloc'd
- * linked-list node, freed on unregister, on cleanup, or when the registry dies.
+ * passed to the cleanup callback when the target is reclaimed. An undefined
+ * unregister_token denotes the no-token case, keeping the pooled node to four
+ * machine words.
  */
 typedef struct MalFinRegCell {
     MalValue target;
     MalValue held_value;
     MalValue unregister_token;
-    bool has_token;
     struct MalFinRegCell *next;
 } MalFinRegCell;
 

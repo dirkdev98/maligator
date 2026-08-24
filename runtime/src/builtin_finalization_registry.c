@@ -32,7 +32,6 @@ void mal_finalization_registry_cell_recycle(
     cell->target = mal_value_new_undefined();
     cell->held_value = mal_value_new_undefined();
     cell->unregister_token = mal_value_new_undefined();
-    cell->has_token = false;
     if (vm->finalization_registry_cell_pool_count >=
         MAL_FIN_REG_CELL_POOL_LIMIT) {
         free(cell);
@@ -140,8 +139,7 @@ static MalValue mal_builtin_fin_reg_register(
             "FinalizationRegistry.register: target and held value must not be the same");
         return mal_value_new_undefined();
     }
-    bool has_token = !mal_value_is_undefined(token);
-    if (has_token && !mal_can_be_held_weakly(token)) {
+    if (!mal_value_is_undefined(token) && !mal_can_be_held_weakly(token)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "FinalizationRegistry.register: unregister token must be an object or unregistered symbol");
         return mal_value_new_undefined();
@@ -151,7 +149,6 @@ static MalValue mal_builtin_fin_reg_register(
     cell->target = target;
     cell->held_value = held;
     cell->unregister_token = token;
-    cell->has_token = has_token;
     cell->next = reg->cells;
     reg->cells = cell;
     // An old registry gaining a cell with a young held value (strong) / target /
@@ -182,7 +179,7 @@ static MalValue mal_builtin_fin_reg_unregister(
     MalFinRegCell **link = &reg->cells;
     while (*link != nullptr) {
         MalFinRegCell *cell = *link;
-        if (cell->has_token && cell->unregister_token == token) {
+        if (cell->unregister_token == token) {
             *link = cell->next;
             // SATB: unregister drops this cell (traced via the registry). Shade only
             // the STRONG held_value; target and unregister_token are weak edges the

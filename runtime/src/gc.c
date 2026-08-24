@@ -1431,9 +1431,9 @@ static void mal_gc_weak_pass(void) {
                 // live target can therefore outlast an otherwise unreachable
                 // token; clear that dead edge before sweep so the registry never
                 // retains a dangling MalValue.
-                if (fc->has_token && !mal_gc_is_marked(fc->unregister_token)) {
+                if (mal_value_is_heap(fc->unregister_token) &&
+                    !mal_gc_is_marked(fc->unregister_token)) {
                     fc->unregister_token = mal_value_new_undefined();
-                    fc->has_token = false;
                 }
                 link = &fc->next;
             }
