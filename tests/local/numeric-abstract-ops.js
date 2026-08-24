@@ -227,6 +227,19 @@ check(
 		hypotOrder.join(",") === "first,second,third" &&
 		Math.hypot(...wideHypot) === 5,
 );
+const smallHypotOrder = [];
+check(
+	"Math hypot common arities preserve coercion and edge results",
+	Math.hypot(
+		coercibleMathValue(smallHypotOrder, "first", 3),
+		coercibleMathValue(smallHypotOrder, "second", 4),
+	) === 5 &&
+		smallHypotOrder.join(",") === "first,second" &&
+		Object.is(Math.hypot(), 0) &&
+		Object.is(Math.hypot(-0), 0) &&
+		Math.hypot(NaN, Infinity) === Infinity &&
+		Number.isNaN(Math.hypot(NaN, 1)),
+);
 check(
 	"Math sumPrecise keeps exact small accumulations",
 	Math.sumPrecise([1, 1e100, 1, -1e100, 3.5, -0]) === 5.5 &&

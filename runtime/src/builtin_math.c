@@ -330,6 +330,34 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
     (void) new_target;
     (void) callee;
 
+    if (arg_count == 0) {
+        return mal_value_from_i32(0);
+    }
+    if (arg_count == 1) {
+        f64 value;
+        if (!mal_vm_to_number(vm, args[0], &value)) {
+            return mal_value_new_nan();
+        }
+        return mal_ops_number_value(fabs(value));
+    }
+    if (arg_count == 2) {
+        f64 left;
+        if (!mal_vm_to_number(vm, args[0], &left)) {
+            return mal_value_new_nan();
+        }
+        f64 right;
+        if (!mal_vm_to_number(vm, args[1], &right)) {
+            return mal_value_new_nan();
+        }
+        if (isinf(left) || isinf(right)) {
+            return mal_ops_number_value(INFINITY);
+        }
+        if (isnan(left) || isnan(right)) {
+            return mal_value_new_nan();
+        }
+        return mal_ops_number_value(hypot(left, right));
+    }
+
     f64 inline_coerced[16];
     f64 *coerced = inline_coerced;
     bool heap_coerced = arg_count > (i32) countof(inline_coerced);
