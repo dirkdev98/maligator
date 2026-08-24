@@ -28,13 +28,14 @@ static MalValue mal_generator_resume_result(MalVm *vm, MalGeneratorObject *gener
         return mal_value_new_undefined();
     }
 
-    if (generator->terminal_yield_pending) {
+    if (generator->terminal_yield_pending ||
+        generator->state == MAL_GENERATOR_SUSPENDED_YIELD) {
+        MalValue yielded = generator->yielded_value;
+        MalValue result = mal_vm_create_iter_result(vm, yielded, false);
         generator->terminal_yield_pending = false;
-        return mal_vm_create_iter_result(vm, generator->yielded_value, false);
-    }
-
-    if (generator->state == MAL_GENERATOR_SUSPENDED_YIELD) {
-        return mal_vm_create_iter_result(vm, generator->yielded_value, false);
+        mal_gc_write_barrier(yielded);
+        generator->yielded_value = mal_value_new_undefined();
+        return result;
     }
 
     // Completed via return: the return value is the final result value.

@@ -258,6 +258,8 @@ void mal_async_generator_yield(MalVm *vm, MalGeneratorObject *agen) {
         mal_agen_resolve_result(
             vm, promise, promise_constructor, agen->yielded_value, false);
     }
+    mal_gc_write_barrier(agen->yielded_value);
+    agen->yielded_value = mal_value_new_undefined();
 
     mal_async_generator_resume_next(vm, agen);
 }
