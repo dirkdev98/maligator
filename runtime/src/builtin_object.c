@@ -1378,6 +1378,13 @@ static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value,
 bool mal_builtin_object_set_integrity(
     MalVm *vm, MalValue target, bool clear_writable
 ) {
+    if (mal_value_heap_type(target) == MAL_HEAP_OBJECT &&
+        !mal_object_is_locked_primordial(mal_value_to_object(target))) {
+        mal_object_set_integrity_level(
+            mal_value_to_object(target), clear_writable);
+        return true;
+    }
+
     bool prevented;
     if (mal_value_is_proxy_object(target)) {
         if (!mal_proxy_prevent_extensions(

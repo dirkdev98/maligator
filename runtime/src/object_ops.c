@@ -4,6 +4,7 @@
 
 #include "array_object.h"
 #include "gc.h"
+#include "heap_symbol.h"
 #include "perf_stats.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -185,6 +186,42 @@ bool mal_object_is_extensible(const MalObject *object) {
 
 void mal_object_set_extensible(MalObject *object, bool extensible) {
     object->extensible = extensible;
+}
+
+void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
+    object->extensible = false;
+    bool has_shape_properties = object->shape->inline_count != 0;
+    bool has_overflow_properties =
+        object->overflow != nullptr && mal_table_size(object->overflow) != 0;
+    if (!has_shape_properties && !has_overflow_properties) return;
+
+    if (object->watched_method_proto) {
+        mal_invalidate_primitive_method_protector();
+    }
+    if (has_shape_properties) {
+        // Attribute changes require dictionary descriptors. Migrate once rather
+        // than once per property through mal_object_define_own.
+        mal_object_dictionarize(object);
+    } else if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+    }
+
+    MalTableIter iter;
+    mal_table_iter_init(&iter, object->overflow, MAL_TABLE_ITER_STORAGE);
+    MalKey key;
+    void *entry;
+    while (mal_table_iter_next(&iter, &key, &entry)) {
+        if (key.kind == MAL_KEY_SYMBOL &&
+            mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+            continue;
+        }
+        MalPropertyDesc desc = mal_property_entry_desc(object->overflow, entry);
+        desc.flags &= ~MAL_PROPERTY_CONFIGURABLE;
+        if (clear_writable && !(desc.flags & MAL_PROPERTY_ACCESSOR)) {
+            desc.flags &= ~MAL_PROPERTY_WRITABLE;
+        }
+        mal_property_write_entry(object->overflow, entry, &desc);
+    }
 }
 
 MalObject *mal_object_get_prototype(const MalObject *object) {

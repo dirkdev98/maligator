@@ -235,6 +235,48 @@ check(
 		!Object.isFrozen(sealedPlain),
 );
 
+const integritySymbol = Symbol("integrity");
+let integrityAccessorValue = 3;
+const detailedFrozen = { data: 1, [integritySymbol]: 2 };
+Object.defineProperty(detailedFrozen, "accessor", {
+	get() {
+		return integrityAccessorValue;
+	},
+	set(value) {
+		integrityAccessorValue = value;
+	},
+	enumerable: true,
+	configurable: true,
+});
+Object.freeze(detailedFrozen);
+const frozenDataDescriptor = Object.getOwnPropertyDescriptor(detailedFrozen, "data");
+const frozenAccessorDescriptor = Object.getOwnPropertyDescriptor(
+	detailedFrozen,
+	"accessor",
+);
+const frozenSymbolDescriptor = Object.getOwnPropertyDescriptor(
+	detailedFrozen,
+	integritySymbol,
+);
+detailedFrozen.accessor = 9;
+const detailedSealed = Object.seal({ writable: 4 });
+detailedSealed.writable = 5;
+const sealedDescriptor = Object.getOwnPropertyDescriptor(detailedSealed, "writable");
+check(
+	"Object plain integrity updates data accessor and symbol descriptors",
+	!frozenDataDescriptor.writable &&
+		!frozenDataDescriptor.configurable &&
+		frozenAccessorDescriptor.get instanceof Function &&
+		frozenAccessorDescriptor.set instanceof Function &&
+		!frozenAccessorDescriptor.configurable &&
+		!frozenSymbolDescriptor.writable &&
+		!frozenSymbolDescriptor.configurable &&
+		integrityAccessorValue === 9 &&
+		sealedDescriptor.writable &&
+		!sealedDescriptor.configurable &&
+		detailedSealed.writable === 5,
+);
+
 let predicateDescriptorCalls = 0;
 const predicateProxy = new Proxy(
 	{ visible: 1 },
