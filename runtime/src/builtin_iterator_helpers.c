@@ -426,7 +426,8 @@ static bool mal_ih_step_zip(
         return mal_ih_finish(self, value_out, done_out);
     }
 
-    MalValue results = mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) count));
+    MalValue results = mal_value_from_array_object(
+        mal_intrinsic_new_dense_array(vm, (u32) count));
     i32 open = 0;
 
     for (i32 i = 0; i < count; i++) {
@@ -1175,6 +1176,10 @@ static MalValue mal_iterator_concat(MalVm *vm, MalValue this_value, const MalVal
 
     MalArrayObject *iterables = mal_intrinsic_new_array(vm, 0);
     MalArrayObject *methods = mal_intrinsic_new_array(vm, 0);
+    if (arg_count > 0) {
+        mal_array_object_fresh_dense_reserve_exact(iterables, (u32) arg_count);
+        mal_array_object_fresh_dense_reserve_exact(methods, (u32) arg_count);
+    }
 
     // Validate every argument in order: each must be an Object exposing a
     // callable @@iterator (GetMethod). The methods are captured but not yet
@@ -1285,7 +1290,8 @@ static bool mal_ih_zip_read_options(MalVm *vm, MalValue options_arg, MalIterator
 static MalValue mal_ih_zip_assemble(MalVm *vm, MalValue sources, MalValue methods, i32 count, MalIteratorZipMode mode, MalValue padding_option, MalValue padding_values, MalValue keys) {
     MalValue padding = mal_value_new_undefined();
     if (mode == MAL_ITERATOR_ZIP_LONGEST) {
-        MalArrayObject *padding_array = mal_intrinsic_new_array(vm, (u32) count);
+        MalArrayObject *padding_array =
+            mal_intrinsic_new_dense_array(vm, (u32) count);
         padding = mal_value_from_array_object(padding_array);
         if (!mal_value_is_undefined(padding_values)) {
             // zipKeyed: padding already resolved per key.
@@ -1365,6 +1371,14 @@ static MalValue mal_iterator_zip(MalVm *vm, MalValue this_value, const MalValue 
 
     MalValue sources = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
     MalValue methods = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    usize input_hint;
+    if (mal_vm_builtin_iterator_size_hint(&input_iter, &input_hint) &&
+        input_hint <= UINT32_MAX) {
+        mal_array_object_fresh_dense_reserve_exact(
+            mal_value_to_array_object(sources), (u32) input_hint);
+        mal_array_object_fresh_dense_reserve_exact(
+            mal_value_to_array_object(methods), (u32) input_hint);
+    }
     i32 count = 0;
     while (true) {
         MalValue value;
@@ -1423,7 +1437,6 @@ static MalValue mal_iterator_zip_keyed(MalVm *vm, MalValue this_value, const Mal
     MalValue padding_values = mode == MAL_ITERATOR_ZIP_LONGEST
         ? mal_value_from_array_object(mal_intrinsic_new_array(vm, 0))
         : mal_value_new_undefined();
-
     i32 stored = 0;
     for (i32 i = 0; i < key_count; i++) {
         MalKey key = collected[i];
