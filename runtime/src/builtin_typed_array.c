@@ -11,6 +11,7 @@
 #include "heap_bigint.h"
 #include "hex.h"
 #include "object_ops.h"
+#include "rooted_collection.h"
 #include "scalar_bits.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
@@ -1031,25 +1032,49 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
         separator = mal_intrinsic_ascii(vm, ",");
     }
 
-    MalValue result = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    MalRootedStringParts parts;
+    if (!mal_rooted_string_parts_init(&parts, separator, length)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    MalRootSpan this_span;
+    mal_gc_root(&this_span, &this_value, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
     for (u32 i = 0; i < length; i++) {
-        if (i > 0) {
-            result = mal_vm_add(vm, result, mal_value_from_string(separator));
-            if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                return mal_value_new_undefined();
-            }
-        }
         MalValue element = mal_typed_array_object_get(vm, array, i);
         if (mal_value_is_nil(element)) {
+            if (!mal_rooted_string_parts_append(&parts, nullptr)) {
+                mal_vm_throw_error(
+                    vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Invalid string length");
+                goto done;
+            }
             continue;
         }
-        result = mal_vm_add(
-            vm, result, mal_value_from_string(mal_ops_to_string(&vm->heap, element)));
-        if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            return mal_value_new_undefined();
+        MalString *part = mal_ops_to_string(&vm->heap, element);
+        if (!mal_rooted_string_parts_append(&parts, part)) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Invalid string length");
+            goto done;
         }
     }
-    return result;
+    MalString *result;
+    if (!mal_rooted_string_parts_flatten(vm, &parts, &result)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid string length");
+        goto done;
+    }
+    ret = mal_value_from_string(result);
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&this_span);
+    mal_rooted_string_parts_dispose(&parts);
+    return ret;
 }
 
 // %TypedArray%.prototype.toLocaleString: each element formats through
@@ -1067,37 +1092,61 @@ static MalValue mal_ta_to_locale_string(MalVm *vm, MalValue this_value, const Ma
     MalKey to_locale_key = mal_intrinsic_string_key(vm, "toLocaleString");
     MalString *separator = mal_intrinsic_ascii(vm, ",");
 
-    MalValue result = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    MalRootedStringParts parts;
+    if (!mal_rooted_string_parts_init(&parts, separator, length)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    MalRootSpan this_span;
+    mal_gc_root(&this_span, &this_value, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
     for (u32 i = 0; i < length; i++) {
-        if (i > 0) {
-            result = mal_vm_add(vm, result, mal_value_from_string(separator));
-            if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                return mal_value_new_undefined();
-            }
-        }
         MalValue element = mal_typed_array_object_get(vm, array, i);
         if (mal_value_is_nil(element)) {
+            if (!mal_rooted_string_parts_append(&parts, nullptr)) {
+                mal_vm_throw_error(
+                    vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Invalid string length");
+                goto done;
+            }
             continue;
         }
         MalValue method;
         if (!mal_vm_get_property(vm, element, to_locale_key, &method)) {
-            return mal_value_new_undefined();
+            goto done;
         }
         MalCompletion completion = mal_vm_call_value(vm, method, element, nullptr, 0);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
-            return mal_value_new_undefined();
+            goto done;
         }
         MalString *part;
         if (!mal_vm_to_string(vm, completion.value, &part)) {
-            return mal_value_new_undefined();
+            goto done;
         }
-        result = mal_vm_add(vm, result, mal_value_from_string(part));
-        if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            return mal_value_new_undefined();
+        if (!mal_rooted_string_parts_append(&parts, part)) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Invalid string length");
+            goto done;
         }
     }
-    return result;
+    MalString *result;
+    if (!mal_rooted_string_parts_flatten(vm, &parts, &result)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid string length");
+        goto done;
+    }
+    ret = mal_value_from_string(result);
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&this_span);
+    mal_rooted_string_parts_dispose(&parts);
+    return ret;
 }
 
 static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
