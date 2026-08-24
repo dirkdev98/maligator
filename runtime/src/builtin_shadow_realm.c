@@ -235,8 +235,11 @@ static MalValue mal_shadow_realm_wrapped_call(
     }
 
     for (i32 index = 0; index < arg_count; index++) {
-        if (!mal_shadow_realm_wrap_value(
-                vm, target_realm, args[index], &wrapped_args[index])) {
+        MalValue argument = args[index];
+        if (!mal_value_is_object(argument)) {
+            wrapped_args[index] = argument;
+        } else if (!mal_shadow_realm_wrap_value(
+                       vm, target_realm, argument, &wrapped_args[index])) {
             mal_shadow_realm_throw_boundary_type_error(
                 vm, caller_realm, "ShadowRealm wrapped argument transfer failed");
             goto done;
@@ -244,7 +247,10 @@ static MalValue mal_shadow_realm_wrapped_call(
         args_span.count = index + 1;
     }
 
-    if (!mal_shadow_realm_wrap_value(vm, target_realm, this_value, &roots[1])) {
+    if (!mal_value_is_object(this_value)) {
+        roots[1] = this_value;
+    } else if (!mal_shadow_realm_wrap_value(
+                   vm, target_realm, this_value, &roots[1])) {
         mal_shadow_realm_throw_boundary_type_error(
             vm, caller_realm, "ShadowRealm wrapped this transfer failed");
         goto done;
@@ -261,7 +267,10 @@ static MalValue mal_shadow_realm_wrapped_call(
         }
     }
 
-    if (!mal_shadow_realm_wrap_value(vm, caller_realm, roots[2], &result)) {
+    if (!mal_value_is_object(roots[2])) {
+        result = roots[2];
+    } else if (!mal_shadow_realm_wrap_value(
+                   vm, caller_realm, roots[2], &result)) {
         goto done;
     }
 
@@ -379,7 +388,11 @@ static MalValue mal_builtin_shadow_realm_evaluate(
         goto done;
     }
 
-    mal_shadow_realm_wrap_value(vm, caller_realm, roots[1], &result);
+    if (!mal_value_is_object(roots[1])) {
+        result = roots[1];
+    } else {
+        mal_shadow_realm_wrap_value(vm, caller_realm, roots[1], &result);
+    }
 
 done:
     mal_vm_realm_switch_to(vm, caller_realm);
