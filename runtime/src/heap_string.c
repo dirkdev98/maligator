@@ -414,6 +414,12 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
     }
     if (length <= MAL_STRING_INLINE_CODE_UNITS) {
         MAL_PERF_COUNT(string_slice_copy_results);
+        if (parent->storage == MAL_STRING_STORAGE_CONS) {
+            // A tiny slice should not flatten and retain/copy an arbitrarily
+            // large rope. Traverse only the overlapping leaves; the tiny-string
+            // cache adopts the resulting code units.
+            return mal_string_copy_range(heap, parent, offset, length);
+        }
         return mal_string_new_copy(
             heap, mal_string_code_units(parent) + offset, length
         );

@@ -89,6 +89,15 @@ async function main() {
 	check("indexOf", source.indexOf(3) === 2);
 	check("lastIndexOf", [1, 2, 1].lastIndexOf(1) === 2);
 	check("includes", [, 2].includes(undefined) && source.includes(4));
+	const denseSearch = [NaN, 1, , 2, 1, NaN];
+	check(
+		"dense searches preserve holes, offsets, and equality modes",
+		denseSearch.indexOf(NaN) === -1 &&
+			denseSearch.indexOf(1, 2) === 4 &&
+			denseSearch.lastIndexOf(1, -2) === 4 &&
+			denseSearch.includes(NaN) &&
+			denseSearch.includes(undefined),
+	);
 
 	const pushed = [1, 2, 3];
 	check("push", pushed.push(4, 5) === 5 && pushed.join() === "1,2,3,4,5");

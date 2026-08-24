@@ -1445,6 +1445,30 @@ static bool mal_builtin_object_test_integrity(
         return true;
     }
 
+    if (mal_value_heap_type(target) == MAL_HEAP_OBJECT) {
+        *result = true;
+        MalPropertyIter iter;
+        mal_property_iter_init(
+            &iter, mal_value_to_object(target),
+            MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+        MalKey key;
+        MalPropertyDesc desc;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            if (key.kind == MAL_KEY_SYMBOL &&
+                mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+                continue;
+            }
+            if ((desc.flags & MAL_PROPERTY_CONFIGURABLE) ||
+                (check_writable &&
+                 !(desc.flags & MAL_PROPERTY_ACCESSOR) &&
+                 (desc.flags & MAL_PROPERTY_WRITABLE))) {
+                *result = false;
+                break;
+            }
+        }
+        return true;
+    }
+
     MalRootedKeySnapshot keys;
     mal_rooted_key_snapshot_init(&keys);
     bool ok = mal_rooted_key_snapshot_own_keys(vm, target, &keys);

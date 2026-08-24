@@ -225,6 +225,16 @@ check(
 			.join(",") === "2:2,7:7,beta:2,alpha:1",
 );
 
+const frozenPlain = Object.freeze({ alpha: 1, beta: 2 });
+const sealedPlain = Object.seal({ alpha: 1 });
+check(
+	"Object plain integrity predicates inspect descriptors directly",
+	Object.isFrozen(frozenPlain) &&
+		Object.isSealed(frozenPlain) &&
+		Object.isSealed(sealedPlain) &&
+		!Object.isFrozen(sealedPlain),
+);
+
 let predicateDescriptorCalls = 0;
 const predicateProxy = new Proxy(
 	{ visible: 1 },

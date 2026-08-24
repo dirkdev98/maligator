@@ -151,7 +151,8 @@ check(
 const consSearchSubject = "x".repeat(64) + "needle" + "y".repeat(64);
 check(
 	"search and scan methods preserve lazy concatenation behavior",
-	consSearchSubject.indexOf("needle") === 64 &&
+	consSearchSubject.slice(62, 66) === "xxne" &&
+		consSearchSubject.indexOf("needle") === 64 &&
 		consSearchSubject.includes("needle") &&
 		consSearchSubject.trim() === consSearchSubject &&
 		consSearchSubject.isWellFormed(),
