@@ -209,7 +209,8 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     }
     MalString *prefix = mal_intrinsic_ascii(vm, "bound ");
     MalValue name_value = mal_value_from_string(prefix);
-    if (mal_value_is_string(bound_roots[1])) {
+    if (mal_value_is_string(bound_roots[1]) &&
+        mal_value_to_string(bound_roots[1])->length != 0) {
         MalString *combined;
         if (!mal_string_new_cons_checked(
                 &vm->heap, prefix, mal_value_to_string(bound_roots[1]), &combined)) {
