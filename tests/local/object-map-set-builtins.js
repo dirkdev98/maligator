@@ -526,6 +526,59 @@ check(
 		constructedFromFreshEntry.get(freshEntryKey) === "entry-value",
 );
 
+const weakConstructorKey = {};
+const constructedWeakMap = new WeakMap([[weakConstructorKey, 23]]);
+check(
+	"WeakMap constructor populates dense entry arrays",
+	constructedWeakMap.get(weakConstructorKey) === 23,
+);
+let weakIteratorClosed = 0;
+const invalidWeakEntries = {
+	[Symbol.iterator]() {
+		let emitted = false;
+		return {
+			next() {
+				if (emitted) return { done: true };
+				emitted = true;
+				return { done: false, value: [1, "invalid"] };
+			},
+			return() {
+				weakIteratorClosed++;
+				return { done: true };
+			},
+		};
+	},
+};
+let invalidWeakKeyThrew = false;
+try {
+	new WeakMap(invalidWeakEntries);
+} catch (error) {
+	invalidWeakKeyThrew = error instanceof TypeError;
+}
+check(
+	"WeakMap constructor closes after invalid direct keys",
+	invalidWeakKeyThrew && weakIteratorClosed === 1,
+);
+const customWeakKey = {};
+let customWeakAdderCalls = 0;
+function CustomWeakTarget() {}
+CustomWeakTarget.prototype = Object.create(WeakMap.prototype);
+Object.defineProperty(CustomWeakTarget.prototype, "set", {
+	value(key, value) {
+		customWeakAdderCalls += key === customWeakKey && value === 31 ? 1 : 100;
+	},
+});
+const customWeakMap = Reflect.construct(
+	WeakMap,
+	[[[customWeakKey, 31]]],
+	CustomWeakTarget,
+);
+check(
+	"WeakMap constructor calls a captured custom adder",
+	customWeakAdderCalls === 1 &&
+		!WeakMap.prototype.has.call(customWeakMap, customWeakKey),
+);
+
 const capturedMapAdderPrototype = Object.create(Map.prototype);
 function CapturedMapAdderTarget() {}
 CapturedMapAdderTarget.prototype = capturedMapAdderPrototype;

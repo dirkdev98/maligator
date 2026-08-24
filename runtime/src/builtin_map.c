@@ -33,6 +33,10 @@ static bool mal_builtin_map_can_be_held_weakly(MalValue value) {
     return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
 }
 
+static MalValue mal_builtin_weak_map_prototype_set(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee);
+
 /** Store through an already-canonicalized keyed-collection key. */
 static void mal_builtin_map_store_canonical(
     MalMapObject *map, MalKey key, MalValue value
@@ -118,6 +122,12 @@ static MalValue mal_builtin_map_construct(
     }
     bool direct_map_adder = !weak &&
         adder == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET];
+    bool direct_weak_adder = weak &&
+        mal_value_is_native_function_object(adder) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(adder)) ==
+            mal_builtin_weak_map_prototype_set;
+    bool direct_adder = direct_map_adder || direct_weak_adder;
 
     MalIteratorRecord record;
     if (!mal_vm_get_iterator(vm, args[0], &record)) {
@@ -128,7 +138,7 @@ static MalValue mal_builtin_map_construct(
     // fresh built-in iterator gives a sound count hint without consulting the
     // iterable again; custom/advanced iterators retain ordinary growth.
     usize size_hint;
-    if (direct_map_adder &&
+    if (direct_adder &&
         mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
         (void) mal_table_reserve(map->entries, size_hint);
     }
@@ -185,7 +195,15 @@ static MalValue mal_builtin_map_construct(
         // The exact built-in Map.prototype.set has no observable call seam.
         // The constructor already performed Get(map, "set") before acquiring
         // the iterator, so reuse that captured identity after the entry Gets.
-        if (direct_map_adder) {
+        if (direct_adder) {
+            if (direct_weak_adder &&
+                !mal_builtin_map_can_be_held_weakly(roots[3])) {
+                mal_vm_throw_error(
+                    vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Invalid value used as weak map key");
+                mal_vm_iterator_close(vm, &record);
+                goto done;
+            }
             mal_builtin_map_store_canonical(
                 map, mal_map_key_from_value(roots[3]), roots[4]);
             continue;
