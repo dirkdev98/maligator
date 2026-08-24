@@ -11,6 +11,9 @@ typedef enum MalBase64Alphabet {
 extern const byte mal_base64_alphabet_standard[];
 extern const byte mal_base64_alphabet_url[];
 
+struct MalHeap;
+struct MalString;
+
 bool mal_base64_encoded_length(
     usize input_length, bool padding, usize limit, usize *out);
 
@@ -25,3 +28,8 @@ usize mal_base64_encode_block(
 usize mal_base64_encode(
     const byte *input, usize input_length, MalBase64Alphabet alphabet,
     bool padding, byte *output);
+
+/** Encode directly into one managed UTF-16 String allocation. */
+struct MalString *mal_base64_encode_string(
+    struct MalHeap *heap, const byte *input, usize input_length,
+    MalBase64Alphabet alphabet, bool padding);

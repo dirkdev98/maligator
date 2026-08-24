@@ -1,6 +1,8 @@
 #include "base64.h"
 
 #include "checked_size.h"
+#include "heap_string.h"
+#include "profile.h"
 
 const byte mal_base64_alphabet_standard[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -69,4 +71,40 @@ usize mal_base64_encode(
         read += block_length;
     }
     return written;
+}
+
+MalString *mal_base64_encode_string(
+    MalHeap *heap, const byte *input, usize input_length,
+    MalBase64Alphabet alphabet, bool padding
+) {
+    usize output_length;
+    if (!mal_base64_encoded_length(
+            input_length, padding, MAL_STRING_MAX_CODE_UNITS,
+            &output_length)) {
+        return nullptr;
+    }
+    if (output_length <= MAL_STRING_INLINE_CODE_UNITS) {
+        byte output[MAL_STRING_INLINE_CODE_UNITS];
+        usize written = mal_base64_encode(
+            input, input_length, alphabet, padding, output);
+        return mal_string_new_ascii(heap, output, written);
+    }
+
+    c16 *output = mal_heap_alloc_raw_profiled(
+        heap, sizeof(c16) * output_length,
+        MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    usize read = 0;
+    usize written = 0;
+    while (read < input_length) {
+        usize remaining = input_length - read;
+        usize block_length = remaining < 3 ? remaining : 3;
+        byte block[4];
+        usize block_output = mal_base64_encode_block(
+            input + read, block_length, alphabet, padding, block);
+        for (usize i = 0; i < block_output; i++) {
+            output[written++] = block[i];
+        }
+        read += block_length;
+    }
+    return mal_string_new_owned(heap, output, written);
 }

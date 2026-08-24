@@ -268,63 +268,39 @@ static MalValue mal_buffer_string_from_bytes(
         return mal_value_from_string(string);
     }
     if (encoding == MAL_BUFFER_HEX) {
-        byte *ascii = malloc(output_length + 1);
-        if (ascii == nullptr) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                               "Buffer string allocation failed");
-            return mal_value_new_undefined();
-        }
-        mal_hex_encode_lower(bytes, length, ascii);
-        MalValue value = mal_value_from_string(mal_string_new_ascii(&vm->heap, ascii, length * 2));
-        free(ascii);
-        return value;
+        return mal_value_from_string(
+            mal_hex_encode_string(&vm->heap, bytes, length));
     }
     if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
         bool padding = encoding == MAL_BUFFER_BASE64;
-        byte *ascii = malloc(output_length + 1);
-        if (ascii == nullptr) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                               "Buffer string allocation failed");
-            return mal_value_new_undefined();
-        }
-        usize written = mal_base64_encode(
-            bytes, length,
+        return mal_value_from_string(mal_base64_encode_string(
+            &vm->heap, bytes, length,
             encoding == MAL_BUFFER_BASE64URL
                 ? MAL_BASE64_ALPHABET_URL
                 : MAL_BASE64_ALPHABET_STANDARD,
-            padding, ascii);
-        MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, ascii, written));
-        free(ascii);
-        return result;
+            padding));
     }
+    c16 inline_units[MAL_STRING_INLINE_CODE_UNITS];
+    c16 *units = output_length <= MAL_STRING_INLINE_CODE_UNITS
+        ? inline_units
+        : mal_heap_alloc_raw_profiled(
+            &vm->heap, sizeof(c16) * output_length,
+            MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     if (encoding == MAL_BUFFER_UTF16LE) {
-        c16 *units = malloc(sizeof(c16) * (output_length == 0 ? 1 : output_length));
-        if (units == nullptr) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                               "Buffer string allocation failed");
-            return mal_value_new_undefined();
-        }
         for (usize i = 0; i < output_length; i++) {
             units[i] = (c16) ((u8) bytes[i * 2] | ((u16) (u8) bytes[i * 2 + 1] << 8));
         }
-        MalValue value = mal_value_from_string(
-            mal_string_new_copy(&vm->heap, units, output_length));
-        free(units);
-        return value;
+    } else {
+        for (usize i = 0; i < length; i++) {
+            units[i] = encoding == MAL_BUFFER_ASCII
+                ? (u8) bytes[i] & 0x7f
+                : (u8) bytes[i];
+        }
     }
-
-    c16 *units = malloc(sizeof(c16) * (length == 0 ? 1 : length));
-    if (units == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                           "Buffer string allocation failed");
-        return mal_value_new_undefined();
-    }
-    for (usize i = 0; i < length; i++) {
-        units[i] = encoding == MAL_BUFFER_ASCII ? (u8) bytes[i] & 0x7f : (u8) bytes[i];
-    }
-    MalValue value = mal_value_from_string(mal_string_new_copy(&vm->heap, units, length));
-    free(units);
-    return value;
+    MalString *result = units == inline_units
+        ? mal_string_new_copy(&vm->heap, units, output_length)
+        : mal_string_new_owned(&vm->heap, units, output_length);
+    return mal_value_from_string(result);
 }
 
 static bool mal_buffer_to_number(MalVm *vm, MalValue value, f64 *out) {

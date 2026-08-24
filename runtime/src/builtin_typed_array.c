@@ -2321,19 +2321,11 @@ static MalValue mal_b64_encode(MalVm *vm, const byte *bytes, usize length, bool 
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return mal_value_new_undefined();
     }
-    byte *out = malloc(out_length == 0 ? 1 : out_length);
-    if (out == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
-        return mal_value_new_undefined();
-    }
-    usize written = mal_base64_encode(
-        bytes, length,
+    MalString *result = mal_base64_encode_string(
+        &vm->heap, bytes, length,
         url ? MAL_BASE64_ALPHABET_URL : MAL_BASE64_ALPHABET_STANDARD,
-        !omit_padding, out);
-    MalValue result = mal_value_from_string(
-        mal_string_new_ascii(&vm->heap, out, written));
-    free(out);
-    return result;
+        !omit_padding);
+    return mal_value_from_string(result);
 }
 
 /** Encode `bytes` as lowercase hex into a fresh String. */
@@ -2343,15 +2335,8 @@ static MalValue mal_hex_encode(MalVm *vm, const byte *bytes, usize length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return mal_value_new_undefined();
     }
-    byte *out = malloc(out_length == 0 ? 1 : out_length);
-    if (out == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
-        return mal_value_new_undefined();
-    }
-    mal_hex_encode_lower(bytes, length, out);
-    MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, out, out_length));
-    free(out);
-    return result;
+    return mal_value_from_string(
+        mal_hex_encode_string(&vm->heap, bytes, length));
 }
 
 // Require a String argument (these methods never coerce).
