@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "checked_size.h"
+#include "gc.h"
+#include "profile.h"
 
 #define MAL_U16_BUFFER_INITIAL_CAPACITY ((usize) 16)
 
@@ -32,11 +34,21 @@ MalU16BufferStatus mal_u16_buffer_reserve(MalU16Buffer *buffer, usize extra) {
         return buffer->status;
     }
 
-    c16 *grown = realloc(buffer->data, bytes);
+    MalHeap *heap = buffer->heap;
+    if (heap == nullptr) {
+        heap = mal_gc_current_heap();
+        buffer->heap = heap;
+    }
+    c16 *grown = mal_heap_try_alloc_raw_profiled(
+        heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     if (grown == nullptr) {
         buffer->status = MAL_U16_BUFFER_ALLOCATION_FAILURE;
         return buffer->status;
     }
+    if (buffer->length != 0) {
+        memcpy(grown, buffer->data, sizeof(c16) * buffer->length);
+    }
+    gc_free_raw(heap, buffer->data);
     buffer->data = grown;
     buffer->capacity = capacity;
     return MAL_U16_BUFFER_OK;
@@ -92,12 +104,21 @@ MalString *mal_u16_buffer_copy(MalHeap *heap, const MalU16Buffer *buffer) {
 }
 
 MalString *mal_u16_buffer_finish(MalHeap *heap, MalU16Buffer *buffer) {
-    MalString *string = mal_u16_buffer_copy(heap, buffer);
-    mal_u16_buffer_dispose(buffer);
-    return string;
+    if (buffer->status != MAL_U16_BUFFER_OK) {
+        mal_u16_buffer_dispose(buffer);
+        return nullptr;
+    }
+    if (buffer->heap != nullptr && buffer->heap != heap) abort();
+    c16 *data = buffer->data;
+    usize length = buffer->length;
+    *buffer = (MalU16Buffer) {0};
+    return mal_string_new_owned(heap, data, length);
 }
 
 void mal_u16_buffer_dispose(MalU16Buffer *buffer) {
-    free(buffer->data);
+    if (buffer->data != nullptr) {
+        if (buffer->heap == nullptr) abort();
+        gc_free_raw(buffer->heap, buffer->data);
+    }
     *buffer = (MalU16Buffer) {0};
 }

@@ -8,8 +8,9 @@ typedef enum MalU16BufferStatus : u8 {
     MAL_U16_BUFFER_ALLOCATION_FAILURE,
 } MalU16BufferStatus;
 
-/** Growable UTF-16 scratch storage backed only by plain malloc/realloc. */
+/** Growable UTF-16 storage in GC-accounted RAW space. */
 typedef struct MalU16Buffer {
+    MalHeap *heap;
     c16 *data;
     usize length;
     usize capacity;
@@ -34,7 +35,7 @@ MalU16BufferStatus mal_u16_buffer_append_ascii(
 /** Copy the current contents into a heap string without consuming the buffer. */
 MalString *mal_u16_buffer_copy(MalHeap *heap, const MalU16Buffer *buffer);
 
-/** Copy the current contents into a heap string and dispose the scratch storage. */
+/** Adopt the current contents into a heap string and reset the buffer. */
 MalString *mal_u16_buffer_finish(MalHeap *heap, MalU16Buffer *buffer);
 
 void mal_u16_buffer_dispose(MalU16Buffer *buffer);
