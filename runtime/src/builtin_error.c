@@ -622,6 +622,15 @@ static void mal_error_callsite_define_method(
     );
 }
 
+static MalString *mal_error_file_string(MalVm *vm, i32 file_index) {
+    MalString *cached = vm->file_string_atoms[file_index];
+    if (cached == nullptr) {
+        cached = mal_intrinsic_ascii(vm, vm->definition->files[file_index]);
+        vm->file_string_atoms[file_index] = cached;
+    }
+    return cached;
+}
+
 static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_id) {
     const MalFunction *function = &vm->definition->functions[function_index];
     bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
@@ -630,11 +639,8 @@ static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_
     const MalString *name = &vm->definition->string_constants[function->name_string_index];
     MalValue slots[MAL_CALLSITE_SLOT_COUNT] = {
         have_file
-            ? mal_value_from_string(mal_string_new_ascii(
-                &vm->heap,
-                vm->definition->files[function->file_index],
-                strlen(vm->definition->files[function->file_index])
-            ))
+            ? mal_value_from_string(
+                mal_error_file_string(vm, function->file_index))
             : mal_value_new_null(),
         have_pos ? mal_value_from_i32(pos->line) : mal_value_new_null(),
         have_pos ? mal_value_from_i32(pos->column + 1) : mal_value_new_null(),

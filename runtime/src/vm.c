@@ -588,6 +588,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
         memcpy(files, definition->files, sizeof(char *) * (usize) file_count);
     }
     vm->live_definition.files = files;
+    vm->file_string_atoms = calloc(
+        (usize) vm->file_capacity, sizeof(MalString *));
 
     i32 source_position_count = definition->source_position_count;
     vm->source_position_capacity =
@@ -961,6 +963,7 @@ void mal_vm_free(MalVm *vm) {
     free((MalBigInt *) vm->live_definition.bigint_constants);
     free((u32 *) vm->live_definition.literal_template_data);
     free((i32 *) vm->live_definition.cjs_module_function_indices);
+    free(vm->file_string_atoms);
     free((char **) vm->live_definition.files);
     free((MalSourcePos *) vm->live_definition.source_positions);
 
@@ -1375,9 +1378,16 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     // like bytecode operands.
     i32 new_file_count = file_base + loaded->file_count;
     if (new_file_count > vm->file_capacity) {
+        i32 old_capacity = vm->file_capacity;
         vm->file_capacity = new_file_count;
         live->files = realloc(
             (char **) live->files, sizeof(char *) * (usize) new_file_count);
+        vm->file_string_atoms = realloc(
+            vm->file_string_atoms,
+            sizeof(MalString *) * (usize) new_file_count);
+        memset(
+            vm->file_string_atoms + old_capacity, 0,
+            sizeof(MalString *) * (usize) (new_file_count - old_capacity));
     }
     const char **files = (const char **) live->files;
     for (i32 i = 0; i < loaded->file_count; i++) {

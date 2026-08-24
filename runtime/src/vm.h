@@ -1339,6 +1339,9 @@ typedef struct MalVm {
     i32 source_position_capacity;
     i32 global_capacity;
 
+    /** Lazily atomized debug filenames, indexed with live_definition.files. */
+    MalString **file_string_atoms;
+
     /**
      * Definition-local CommonJS ids are rebased at the require seam. Runtime
      * splices remain interpreted, so the active frame identifies which module
