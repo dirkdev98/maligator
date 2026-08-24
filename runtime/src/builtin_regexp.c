@@ -264,11 +264,8 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
         regexp_throw_string_length(vm);
         return mal_value_new_undefined();
     }
-    c16 *buf = malloc(bytes);
-    if (buf == nullptr) {
-        regexp_throw_string_length(vm);
-        return mal_value_new_undefined();
-    }
+    c16 *buf = mal_heap_alloc_raw_profiled(
+        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     usize out = 0;
     prev_backslash = false;
     for (usize i = 0; i < n; i++) {
@@ -295,9 +292,7 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
         }
         prev_backslash = (c == '\\') && !prev_backslash;
     }
-    MalString *result = mal_string_new_copy(&vm->heap, buf, out);
-    free(buf);
-    return mal_value_from_string(result);
+    return mal_value_from_string(mal_string_new_owned(&vm->heap, buf, out));
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,11 +1072,8 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
         regexp_throw_string_length(vm);
         return mal_value_new_undefined();
     }
-    c16 *buf = malloc(bytes);
-    if (buf == nullptr) {
-        regexp_throw_string_length(vm);
-        return mal_value_new_undefined();
-    }
+    c16 *buf = mal_heap_alloc_raw_profiled(
+        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     usize out = 0;
     buf[out++] = '/';
     for (usize i = 0; i < source_len; i++) {
@@ -1091,9 +1083,7 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
     for (usize i = 0; i < flags_len; i++) {
         buf[out++] = mal_string_code_units(flags)[i];
     }
-    MalString *result = mal_string_new_copy(&vm->heap, buf, out);
-    free(buf);
-    return mal_value_from_string(result);
+    return mal_value_from_string(mal_string_new_owned(&vm->heap, buf, out));
 }
 
 // ---------------------------------------------------------------------------
