@@ -1131,11 +1131,9 @@ static MalValue mal_json_parse_array(
 
         MalKey element_key = mal_key_index(index++);
         array = mal_value_to_array_object(array_value);
-        mal_array_object_store(
-            array,
-            element_key,
-            element
-        );
+        if (!mal_array_object_fresh_dense_append(array, element)) {
+            mal_array_object_store(array, element_key, element);
+        }
         mal_json_parse_node_append(parser, node, element_key, element_node);
         mal_gc_unroot(&element_span);
 
