@@ -94,13 +94,13 @@ static void mal_native_function_metadata_keys(
 ) {
     *length_key = (MalKey) {
         .kind = MAL_KEY_STRING,
-        .value = mal_value_from_string(mal_string_new_ascii(heap, "length", 6)),
+        .value = mal_value_from_string(heap->native_function_length_key),
     };
     *name_key = (MalKey) {0};
     if (has_name) {
         *name_key = (MalKey) {
             .kind = MAL_KEY_STRING,
-            .value = mal_value_from_string(mal_string_new_ascii(heap, "name", 4)),
+            .value = mal_value_from_string(heap->native_function_name_key),
         };
     }
 }

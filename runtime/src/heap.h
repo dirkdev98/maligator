@@ -25,6 +25,7 @@ typedef struct MalGcChunk MalGcChunk;
 typedef struct MalGcBlock MalGcBlock;
 typedef struct MalGcLarge MalGcLarge;
 typedef struct MalShape MalShape;
+typedef struct MalString MalString;
 
 #if MAL_REALMS
 /* Realm metadata is defined in vm.h; the heap caches only a back-pointer to the
@@ -89,6 +90,9 @@ typedef struct MalHeap {
     usize live_bytes;
     /** Heap-lifetime root of this isolate's hidden-class transition tree. */
     MalShape *shape_root;
+    /** Canonical metadata keys reused by every native function allocation. */
+    MalString *native_function_length_key;
+    MalString *native_function_name_key;
     /** Process-unique heap lifetime identity. Static native call caches use this
      * with epoch so exact object identities never cross VM lifetimes. */
     u64 identity;

@@ -714,6 +714,10 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->entry_async_promise = mal_value_new_undefined();
 
     mal_heap_init(&vm->heap, 0);
+    vm->heap.native_function_length_key =
+        mal_string_new_ascii(&vm->heap, "length", 6);
+    vm->heap.native_function_name_key =
+        mal_string_new_ascii(&vm->heap, "name", 4);
 #if MAL_REALMS
     // global_capacity is already established above, so the initial realm can own
     // both its absolute globals array and intrinsics before intrinsic initialization.
