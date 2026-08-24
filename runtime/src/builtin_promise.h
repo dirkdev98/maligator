@@ -31,6 +31,18 @@ bool mal_promise_new_capability(
 );
 
 /**
+ * Allocate the compact capability used only by native Promise machinery.
+ * `resolve` is the target Promise and `reject` is its intrinsic constructor;
+ * reaction jobs recognize that pair and settle the Promise directly.
+ */
+void mal_promise_new_direct_capability(
+    MalVm *vm,
+    MalValue *out_promise,
+    MalValue *out_resolve,
+    MalValue *out_reject
+);
+
+/**
  * Create a resolving-function pair (CreateResolvingFunctions) for an existing
  * promise value: the two functions share one [[AlreadyResolved]] guard.
  */

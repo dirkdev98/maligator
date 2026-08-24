@@ -35,14 +35,11 @@ typedef struct {
 } MalAfsCapability;
 
 static bool mal_afs_capability(MalVm *vm, MalAfsCapability *capability) {
-    if (!mal_promise_new_capability(
-            vm,
-            vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
-            &capability->promise,
-            &capability->resolve,
-            &capability->reject)) {
-        return false;
-    }
+    mal_promise_new_direct_capability(
+        vm,
+        &capability->promise,
+        &capability->resolve,
+        &capability->reject);
     mal_gc_root(&capability->roots, &capability->promise, 3);
     return true;
 }
@@ -65,7 +62,7 @@ static MalValue mal_async_from_sync_unwrap(MalVm *vm, MalValue this_value, const
 static MalValue mal_afs_reject_pending(MalVm *vm, MalValue cap_promise, MalValue cap_reject) {
     MalValue error = vm->completion.value;
     vm->completion = mal_afs_normal();
-    mal_vm_call_value(vm, cap_reject, mal_value_new_undefined(), &error, 1);
+    mal_promise_settle_direct(vm, cap_promise, cap_reject, true, error);
     vm->completion = mal_afs_normal();
     return cap_promise;
 }

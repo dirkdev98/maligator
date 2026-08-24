@@ -394,6 +394,21 @@ bool mal_promise_new_capability(MalVm *vm, MalValue constructor, MalValue *out_p
     return true;
 }
 
+void mal_promise_new_direct_capability(
+    MalVm *vm,
+    MalValue *out_promise,
+    MalValue *out_resolve,
+    MalValue *out_reject
+) {
+    MalPromiseObject *promise = mal_promise_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+    *out_promise = mal_value_from_promise_object(promise);
+    *out_resolve = *out_promise;
+    *out_reject = vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
+    g_direct_capabilities++;
+}
+
 // --- Constructor -------------------------------------------------------------
 
 static MalValue mal_promise_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -595,13 +610,8 @@ static MalValue mal_promise_prototype_then(MalVm *vm, MalValue this_value, const
         // cap_reject is its exact intrinsic constructor (the realm anchor/tag).
         // Generic capabilities always have two callable fields; capability-less
         // internal reactions have two undefined fields.
-        MalPromiseObject *promise = mal_promise_object_new(
-            &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
-        cap_promise = mal_value_from_promise_object(promise);
-        cap_resolve = cap_promise;
-        cap_reject = constructor;
-        g_direct_capabilities++;
+        mal_promise_new_direct_capability(
+            vm, &cap_promise, &cap_resolve, &cap_reject);
     } else {
         if (!mal_promise_new_capability(
                 vm, constructor, &cap_promise, &cap_resolve, &cap_reject)) {
