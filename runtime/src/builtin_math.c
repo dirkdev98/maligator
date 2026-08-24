@@ -24,12 +24,20 @@
  * returning any placeholder value, the dispatcher reads vm->completion.
  * Missing arguments coerce to NaN (ToNumber(undefined)).
  */
+static inline bool mal_builtin_math_value_to_number(MalVm *vm, MalValue value, f64 *out) {
+    if (mal_ops_is_number(value)) {
+        *out = mal_ops_number_as_f64(value);
+        return true;
+    }
+    return mal_vm_to_number(vm, value, out);
+}
+
 static bool mal_builtin_math_to_number(MalVm *vm, const MalValue *args, i32 arg_count, i32 index, f64 *out) {
     if (index >= arg_count) {
         *out = NAN;
         return true;
     }
-    return mal_vm_to_number(vm, args[index], out);
+    return mal_builtin_math_value_to_number(vm, args[index], out);
 }
 
 #define MAL_BUILTIN_MATH_UNARY(name, expression) \
@@ -335,18 +343,18 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
     }
     if (arg_count == 1) {
         f64 value;
-        if (!mal_vm_to_number(vm, args[0], &value)) {
+        if (!mal_builtin_math_value_to_number(vm, args[0], &value)) {
             return mal_value_new_nan();
         }
         return mal_ops_number_value(fabs(value));
     }
     if (arg_count == 2) {
         f64 left;
-        if (!mal_vm_to_number(vm, args[0], &left)) {
+        if (!mal_builtin_math_value_to_number(vm, args[0], &left)) {
             return mal_value_new_nan();
         }
         f64 right;
-        if (!mal_vm_to_number(vm, args[1], &right)) {
+        if (!mal_builtin_math_value_to_number(vm, args[1], &right)) {
             return mal_value_new_nan();
         }
         if (isinf(left) || isinf(right)) {
@@ -370,7 +378,7 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
         }
     }
     for (i32 i = 0; i < arg_count; i++) {
-        if (!mal_vm_to_number(vm, args[i], &coerced[i])) {
+        if (!mal_builtin_math_value_to_number(vm, args[i], &coerced[i])) {
             if (heap_coerced) free(coerced);
             return mal_value_new_nan();
         }
@@ -426,7 +434,7 @@ static MalValue mal_builtin_math_min_max(MalVm *vm, const MalValue *args, i32 ar
     bool saw_nan = false;
     for (i32 i = 0; i < arg_count; i++) {
         f64 value;
-        if (!mal_vm_to_number(vm, args[i], &value)) {
+        if (!mal_builtin_math_value_to_number(vm, args[i], &value)) {
             return mal_value_new_nan();
         }
         if (isnan(value)) {
