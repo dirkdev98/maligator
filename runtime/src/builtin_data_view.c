@@ -241,9 +241,12 @@ static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value
     // user getter that detaches or resizes the buffer. The spec re-validates the
     // detached state and the offset/length bounds against the post-access buffer
     // length before installing the view.
-    MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(
-            vm, new_target, MAL_INTRINSIC_DATA_VIEW_PROTOTYPE, &prototype)) {
+    MalObject *prototype = nullptr;
+    if (mal_primitive_method_protector &&
+        mal_ops_same_value(new_target, vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_CONSTRUCTOR])) {
+        prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_PROTOTYPE]);
+    } else if (!mal_vm_get_prototype_from_constructor(
+                   vm, new_target, MAL_INTRINSIC_DATA_VIEW_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
 

@@ -22,6 +22,21 @@ static MalObject *mal_ta_kind_prototype(MalVm *vm, MalTypedArrayKind kind) {
     return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind]);
 }
 
+static bool mal_ta_prototype_from_constructor(
+    MalVm *vm, MalTypedArrayKind kind, MalValue new_target, MalObject **prototype
+) {
+    MalIntrinsic constructor =
+        (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + kind);
+    MalIntrinsic fallback =
+        (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind);
+    if (mal_primitive_method_protector &&
+        mal_ops_same_value(new_target, vm->intrinsics[constructor])) {
+        *prototype = mal_value_to_object(vm->intrinsics[fallback]);
+        return true;
+    }
+    return mal_vm_get_prototype_from_constructor(vm, new_target, fallback, prototype);
+}
+
 static bool mal_ta_default_species(
     MalVm *vm, MalTypedArrayObject *array
 ) {
@@ -480,10 +495,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         }
 
         MalObject *prototype;
-        if (!mal_vm_get_prototype_from_constructor(
-                vm, new_target,
-                (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
-                &prototype)) {
+        if (!mal_ta_prototype_from_constructor(vm, kind, new_target, &prototype)) {
             return mal_value_new_undefined();
         }
         MalTypedArrayObject *array = mal_typed_array_object_new(&vm->heap, prototype, buffer, kind, byte_offset, length, length_tracking);
@@ -502,10 +514,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         }
         u32 length = mal_typed_array_object_length(source);
         MalObject *prototype;
-        if (!mal_vm_get_prototype_from_constructor(
-                vm, new_target,
-                (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
-                &prototype)) {
+        if (!mal_ta_prototype_from_constructor(vm, kind, new_target, &prototype)) {
             return mal_value_new_undefined();
         }
         MalValue result = mal_ta_create_uninitialized(vm, kind, length);
@@ -567,10 +576,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
             }
 
             MalObject *prototype;
-            if (!mal_vm_get_prototype_from_constructor(
-                    vm, new_target,
-                    (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
-                    &prototype)) {
+            if (!mal_ta_prototype_from_constructor(vm, kind, new_target, &prototype)) {
                 result = mal_value_new_undefined();
                 goto iter_done;
             }
@@ -612,10 +618,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         u32 length = (u32) length_number;
 
         MalObject *prototype;
-        if (!mal_vm_get_prototype_from_constructor(
-                vm, new_target,
-                (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
-                &prototype)) {
+        if (!mal_ta_prototype_from_constructor(vm, kind, new_target, &prototype)) {
             return mal_value_new_undefined();
         }
         MalValue result = mal_ta_create(vm, kind, length);
@@ -642,10 +645,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         }
     }
     MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(
-            vm, new_target,
-            (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
-            &prototype)) {
+    if (!mal_ta_prototype_from_constructor(vm, kind, new_target, &prototype)) {
         return mal_value_new_undefined();
     }
     MalValue result = mal_ta_create(vm, kind, length);

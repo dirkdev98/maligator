@@ -101,8 +101,12 @@ static MalValue mal_builtin_array_buffer_construct(MalVm *vm, const MalValue *ar
     // AllocateArrayBuffer step 1: OrdinaryCreateFromConstructor reads
     // new_target.prototype (which may be a throwing getter) before allocating.
     MalIntrinsic fallback = shared ? MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE : MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE;
-    MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(vm, new_target, fallback, &prototype)) {
+    MalIntrinsic constructor = shared ? MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR : MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR;
+    MalObject *prototype = nullptr;
+    if (mal_primitive_method_protector &&
+        mal_ops_same_value(new_target, vm->intrinsics[constructor])) {
+        prototype = mal_value_to_object(vm->intrinsics[fallback]);
+    } else if (!mal_vm_get_prototype_from_constructor(vm, new_target, fallback, &prototype)) {
         return mal_value_new_undefined();
     }
 
