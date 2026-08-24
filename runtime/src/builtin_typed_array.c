@@ -912,6 +912,26 @@ static MalValue mal_ta_subarray(MalVm *vm, MalValue this_value, const MalValue *
     bool length_tracking_to_end = array->length_tracking && (arg_count < 2 || mal_value_is_undefined(args[1]));
     u32 new_length = end > start ? end - start : 0;
 
+    u64 result_byte_offset =
+        (u64) array->byte_offset + (u64) start * element_size;
+    bool result_fits = result_byte_offset <= array->buffer->byte_length &&
+        (length_tracking_to_end ||
+            result_byte_offset + (u64) new_length * element_size <=
+                array->buffer->byte_length);
+    if (mal_ta_default_species(vm, array) &&
+        !mal_typed_array_object_is_out_of_bounds(array) && result_fits) {
+        // The default constructor would only validate these already-derived
+        // in-bounds arguments and allocate a same-kind view over the same
+        // buffer. Build that private view directly.
+        MalTypedArrayObject *result = mal_typed_array_object_new(
+            &vm->heap, mal_ta_kind_prototype(vm, array->kind),
+            array->buffer, array->kind,
+            (u32) result_byte_offset,
+            length_tracking_to_end ? 0 : new_length,
+            length_tracking_to_end);
+        return mal_value_from_typed_array_object(result);
+    }
+
     // subarray builds a new view over the SAME buffer via TypedArraySpeciesCreate
     // with «buffer, beginByteOffset[, newLength]».
     MalValue species;
