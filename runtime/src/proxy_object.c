@@ -1227,10 +1227,9 @@ static MalCompletion mal_proxy_throw_completion(MalVm *vm, const byte *message) 
 
 // Pack arguments into a fresh Array (the argList passed to apply/construct traps).
 static MalValue mal_proxy_args_array(MalVm *vm, const MalValue *args, i32 arg_count) {
-    MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
-    for (i32 i = 0; i < arg_count; i++) {
-        mal_array_object_store(array, mal_key_index(i), args[i]);
-    }
+    u32 count = (u32) arg_count;
+    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, count);
+    (void) mal_array_object_dense_build_values(array, 0, args, count);
     return mal_value_from_array_object(array);
 }
 
