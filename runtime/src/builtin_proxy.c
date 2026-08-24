@@ -76,10 +76,24 @@ static MalValue mal_builtin_proxy_revocable(MalVm *vm, MalValue this_value, cons
         1
     );
 
-    MalObject *result = mal_intrinsic_new_object(vm);
-    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    mal_intrinsic_define_data(vm, result, "proxy", proxy_value, flags);
-    mal_intrinsic_define_data(vm, result, "revoke", mal_value_from_native_function_object(revoke), flags);
+    MalValue values[2] = {
+        proxy_value,
+        mal_value_from_native_function_object(revoke),
+    };
+    MalRootSpan values_span;
+    mal_gc_root(&values_span, values, 2);
+    MalString *keys[2] = {
+        mal_intrinsic_ascii(vm, "proxy"),
+        mal_intrinsic_ascii(vm, "revoke"),
+    };
+    MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, 2);
+    MalObject *result = mal_object_new_shaped(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        shape,
+        values,
+        2);
+    mal_gc_unroot(&values_span);
     return mal_value_from_object(result);
 }
 
