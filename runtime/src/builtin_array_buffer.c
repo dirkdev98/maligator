@@ -216,7 +216,32 @@ static bool mal_array_buffer_clamp(MalVm *vm, MalValue value, u32 length, u32 fa
 // constructor[@@species]: undefined/null means default, a non-constructor is a
 // TypeError. Returns false with a pending throw on any abrupt step; *out holds
 // the resolved constructor value on success.
+static bool mal_array_buffer_default_species(
+    MalVm *vm, MalValue object, MalIntrinsic default_ctor
+) {
+    if (!mal_primitive_method_protector ||
+        !mal_value_is_array_buffer_object(object)) {
+        return false;
+    }
+    MalIntrinsic prototype =
+        default_ctor == MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR
+            ? MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE
+            : MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE;
+    MalObject *receiver = mal_value_to_object(object);
+    return receiver->prototype ==
+            mal_value_to_object(vm->intrinsics[prototype]) &&
+        !mal_object_get_own(
+            receiver,
+            mal_intrinsic_string_key(vm, "constructor")).present;
+}
+
 static bool mal_array_buffer_species_constructor(MalVm *vm, MalValue object, MalIntrinsic default_ctor, MalValue *out) {
+    if (mal_array_buffer_default_species(vm, object, default_ctor)) {
+        // The watched prototype/constructor chain still selects the builtin
+        // species, and the builtin getter itself has no side effects.
+        *out = vm->intrinsics[default_ctor];
+        return true;
+    }
     MalValue constructor;
     if (!mal_vm_get_property(vm, object, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
         return false;
