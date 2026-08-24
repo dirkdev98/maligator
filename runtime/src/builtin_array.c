@@ -3706,6 +3706,15 @@ static MalValue mal_builtin_array_to_string(MalVm *vm, MalValue this_value, cons
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
+    if (mal_primitive_method_protector &&
+        mal_array_method_is_default_builtin(
+            vm, this_value, (const byte *) "join",
+            mal_builtin_array_join)) {
+        return mal_builtin_array_join(
+            vm, this_value, nullptr, 0,
+            mal_value_new_undefined(),
+            mal_value_new_undefined());
+    }
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
