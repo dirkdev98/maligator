@@ -370,14 +370,17 @@ static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
 }
 
 static bool regexp_set_last_index(MalVm *vm, MalValue r, i64 value) {
+    // RegExp string lengths are capped well below INT32_MAX, so every native
+    // match end and reset fits the immediate integer representation.
+    assert(value >= 0 && value <= (i64) MAL_STRING_MAX_CODE_UNITS);
+    MalValue index_value = mal_value_from_i32((i32) value);
     MalObject *exact = regexp_exact_last_index_object(vm, r);
     if (exact != nullptr) {
-        exact->slots[exact->shape->props[0].slot] =
-            mal_value_from_f64((f64) value);
+        exact->slots[exact->shape->props[0].slot] = index_value;
         return true;
     }
     bool ok = mal_vm_set_property(
-        vm, r, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), mal_value_from_f64((f64) value), r
+        vm, r, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), index_value, r
     );
     if (regexp_threw(vm)) {
         return false;
