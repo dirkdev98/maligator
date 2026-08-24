@@ -9,6 +9,7 @@
 #include "heap_bigint.h"
 #include "intrinsics.h"
 #include "object.h"
+#include "scalar_bits.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "value_ops.h"
@@ -144,6 +145,30 @@ static i128 atomics_apply_i128(AtomicsOp op, i128 old, i128 operand) {
     return operand;
 }
 
+static MalValue atomics_numeric_value_from_bits(
+    MalTypedArrayKind kind,
+    u64 bits
+) {
+    switch (kind) {
+        case MAL_TA_INT8:
+            return mal_value_from_i32(mal_scalar_i8_from_bits((u8) bits));
+        case MAL_TA_UINT8:
+            return mal_value_from_i32((u8) bits);
+        case MAL_TA_INT16:
+            return mal_value_from_i32(mal_scalar_i16_from_bits((u16) bits));
+        case MAL_TA_UINT16:
+            return mal_value_from_i32((u16) bits);
+        case MAL_TA_INT32:
+            return mal_value_from_i32(mal_scalar_i32_from_bits((u32) bits));
+        case MAL_TA_UINT32: {
+            u32 value = (u32) bits;
+            return mal_value_from_u32(value);
+        }
+        default:
+            return mal_value_new_undefined();
+    }
+}
+
 // Shared read-modify-write: AtomicReadModifyWrite(typedArray, index, value, op).
 // Reads the old element (the return value), computes the new value, stores it
 // (the store re-truncates to the element width), and returns the old value.
@@ -183,11 +208,14 @@ static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, Atom
     }
     u32 element_size = mal_typed_array_element_size(array->kind);
     i64 operand = (i64) mal_ops_number_to_uint_width(number, element_size * 8);
-    MalValue old_value = mal_typed_array_object_get(vm, array, index);
-    i64 old = (i64) mal_ops_to_number(old_value);
-    i64 result = atomics_apply_i64(op, old, operand);
-    mal_typed_array_object_set(vm, array, index, mal_ops_number_value((f64) result));
-    return old_value;
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span)) {
+        return mal_value_new_undefined();
+    }
+    u64 old_bits = mal_typed_array_span_load_bits(&span, index);
+    i64 result = atomics_apply_i64(op, (i64) old_bits, operand);
+    mal_typed_array_span_store_bits(&span, index, (u64) result);
+    return atomics_numeric_value_from_bits(array->kind, old_bits);
 }
 
 static MalValue mal_atomics_add(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
