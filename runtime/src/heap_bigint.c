@@ -34,10 +34,28 @@ MalString *mal_bigint_to_string(MalHeap *heap, i128 value, i32 radix) {
     // 128 binary digits is the worst case, plus sign.
     byte buffer[140];
     usize length = 0;
-    while (magnitude > 0) {
-        i32 digit = (i32) (magnitude % (u128) radix);
-        buffer[length++] = digit < 10 ? (byte) ('0' + digit) : (byte) ('a' + digit - 10);
-        magnitude /= (u128) radix;
+    i32 shift = radix == 2 ? 1 :
+        radix == 4 ? 2 :
+        radix == 8 ? 3 :
+        radix == 16 ? 4 :
+        radix == 32 ? 5 : 0;
+    if (shift != 0) {
+        u128 mask = (u128) radix - 1;
+        while (magnitude > 0) {
+            i32 digit = (i32) (magnitude & mask);
+            buffer[length++] = digit < 10
+                ? (byte) ('0' + digit)
+                : (byte) ('a' + digit - 10);
+            magnitude >>= shift;
+        }
+    } else {
+        while (magnitude > 0) {
+            i32 digit = (i32) (magnitude % (u128) radix);
+            buffer[length++] = digit < 10
+                ? (byte) ('0' + digit)
+                : (byte) ('a' + digit - 10);
+            magnitude /= (u128) radix;
+        }
     }
     if (negative) {
         buffer[length++] = '-';
