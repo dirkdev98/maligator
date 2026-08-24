@@ -97,6 +97,22 @@ check(
 		Number.isNaN(primitiveIndexed.charCodeAt(Infinity)),
 );
 
+let tinyStringResultsStayCorrect = true;
+for (let i = 0; i < 128; i++) {
+	if (
+		"abcdef".slice(1, 4) !== "bcd" ||
+		String.fromCharCode(97, 98, 99) !== "abc" ||
+		"ax".replace("a", "b") !== "bx"
+	) {
+		tinyStringResultsStayCorrect = false;
+	}
+	if ((i & 15) === 0) forceGc();
+}
+check(
+	"tiny string representations survive reuse and collection",
+	tinyStringResultsStayCorrect,
+);
+
 function searchReceiver() {
 	return {
 		toString() {

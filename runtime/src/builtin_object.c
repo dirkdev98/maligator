@@ -870,6 +870,39 @@ static bool mal_builtin_object_collect_plain_keys(
     return true;
 }
 
+/** Exact ordinary objects expose symbol keys without an ownKeys trap. Count and
+ * copy them directly so Object.getOwnPropertySymbols avoids a rooted snapshot
+ * containing every string and index key as well. */
+static MalValue mal_builtin_object_collect_plain_symbols(
+    MalVm *vm,
+    MalObject *object
+) {
+    u32 count = 0;
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (key.kind == MAL_KEY_SYMBOL &&
+            !mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+            if (count == UINT32_MAX) abort();
+            count++;
+        }
+    }
+
+    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    (void) mal_array_object_fresh_dense_reserve_exact(result, count);
+    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+    u32 index = 0;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (key.kind == MAL_KEY_SYMBOL &&
+            !mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+            mal_array_object_store(result, mal_key_index(index++), key.value);
+        }
+    }
+    return mal_value_from_array_object(result);
+}
+
 static bool mal_builtin_object_plain_data_count(
     MalObject *object,
     usize *count_out
@@ -1736,13 +1769,18 @@ static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue 
         return mal_value_new_undefined();
     }
 
+    if (!mal_value_is_object(target)) {
+        return mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    }
+    if (mal_value_heap_type(target) == MAL_HEAP_OBJECT) {
+        return mal_builtin_object_collect_plain_symbols(
+            vm, mal_value_to_object(target));
+    }
+
     MalValue roots[2] = {
         target,
         mal_value_from_array_object(mal_intrinsic_new_array(vm, 0)),
     };
-    if (!mal_value_is_object(target)) {
-        return roots[1];
-    }
 
     MalRootSpan roots_span;
     mal_gc_root(&roots_span, roots, countof(roots));

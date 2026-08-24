@@ -166,6 +166,27 @@ check(
 	Object.getOwnPropertySymbols(descriptorProxy)[0] === descriptorSymbol,
 );
 
+const plainSymbolFirst = Symbol("plain-first");
+const plainSymbolSecond = Symbol("plain-second");
+let plainSymbolGetterCalls = 0;
+const plainSymbolSource = { stringKey: 1, 4: 2 };
+plainSymbolSource[plainSymbolFirst] = 3;
+Object.defineProperty(plainSymbolSource, plainSymbolSecond, {
+	enumerable: false,
+	get() {
+		plainSymbolGetterCalls++;
+		return 4;
+	},
+});
+const plainSymbols = Object.getOwnPropertySymbols(plainSymbolSource);
+check(
+	"Object plain symbol collection preserves order without reading values",
+	plainSymbols.length === 2 &&
+		plainSymbols[0] === plainSymbolFirst &&
+		plainSymbols[1] === plainSymbolSecond &&
+		plainSymbolGetterCalls === 0,
+);
+
 let plainKeyGetterCalls = 0;
 const plainKeySymbol = Symbol("plain-key");
 const plainKeySource = { beta: 1, 7: 2, alpha: 3, 2: 4 };

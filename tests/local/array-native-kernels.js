@@ -155,6 +155,13 @@ async function main() {
 			defaultSorted[4] === undefined &&
 			!(5 in defaultSorted),
 	);
+	const mixedPrimitiveSorted = [true, null, false, 10, 2, 1n];
+	mixedPrimitiveSorted.sort();
+	check(
+		"sort reuses non-observable primitive string keys",
+		mixedPrimitiveSorted.map((value) => String(value)).join(",") ===
+			"1,10,2,false,null,true",
+	);
 	const primitiveStringSorted = [
 		"pear",
 		"apple",

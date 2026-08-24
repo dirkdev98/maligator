@@ -215,6 +215,16 @@ void mal_string_init_external(MalString *string, const c16 *code_units, usize le
 
 MalString *mal_string_new_copy(MalHeap *heap, const c16 *code_units, usize length) {
     mal_string_require_valid_length(length);
+    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
+        MalTinyStringCacheResult result =
+            mal_string_tiny_cache_get_or_create(heap, code_units, length);
+        if (!result.hit) {
+            mal_perf_string_allocation(length);
+            MAL_PERF_COUNT(string_copy_allocations);
+            MAL_PERF_ADD(string_copy_code_units, length);
+        }
+        return result.string;
+    }
     mal_perf_string_allocation(length);
     MAL_PERF_COUNT(string_copy_allocations);
     MAL_PERF_ADD(string_copy_code_units, length);
@@ -499,18 +509,24 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
 
 MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize length) {
     mal_string_require_valid_length(length);
-    mal_perf_string_allocation(length);
-    MAL_PERF_COUNT(string_owned_allocations);
-    MAL_PERF_ADD(string_owned_code_units, length);
     // Takes ownership of `code_units` (a mal_heap_alloc_raw buffer) — no copy. The
     // cell allocation may run a GC, but an unowned RAW buffer is never swept (the
     // sweep only walks CELL blocks), so `code_units` survives until we adopt it.
-    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     if (length <= MAL_STRING_INLINE_CODE_UNITS) {
-        mal_string_init_inline(string, code_units, length);
+        MalTinyStringCacheResult result =
+            mal_string_tiny_cache_get_or_create(heap, code_units, length);
         gc_free_raw(heap, (void *) code_units);
-        return string;
+        if (!result.hit) {
+            mal_perf_string_allocation(length);
+            MAL_PERF_COUNT(string_owned_allocations);
+            MAL_PERF_ADD(string_owned_code_units, length);
+        }
+        return result.string;
     }
+    mal_perf_string_allocation(length);
+    MAL_PERF_COUNT(string_owned_allocations);
+    MAL_PERF_ADD(string_owned_code_units, length);
+    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_OWNED;
     string->hash_valid = false;
@@ -524,18 +540,23 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
 
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) {
     mal_string_require_valid_length(length);
-    mal_perf_string_allocation(length);
-    MAL_PERF_COUNT(string_ascii_allocations);
-    MAL_PERF_ADD(string_ascii_code_units, length);
     if (length <= MAL_STRING_INLINE_CODE_UNITS) {
         c16 code_units[MAL_STRING_INLINE_CODE_UNITS];
         for (usize i = 0; i < length; i++) {
             code_units[i] = (u8) bytes[i];
         }
-        MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-        mal_string_init_inline(string, code_units, length);
-        return string;
+        MalTinyStringCacheResult result =
+            mal_string_tiny_cache_get_or_create(heap, code_units, length);
+        if (!result.hit) {
+            mal_perf_string_allocation(length);
+            MAL_PERF_COUNT(string_ascii_allocations);
+            MAL_PERF_ADD(string_ascii_code_units, length);
+        }
+        return result.string;
     }
+    mal_perf_string_allocation(length);
+    MAL_PERF_COUNT(string_ascii_allocations);
+    MAL_PERF_ADD(string_ascii_code_units, length);
     c16 *code_units = mal_heap_alloc_raw_profiled(
         heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
 

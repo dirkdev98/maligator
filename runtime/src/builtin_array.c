@@ -2736,56 +2736,112 @@ static bool mal_builtin_array_sort_order(MalVm *vm, MalValue comparator, MalValu
  * Stable bottom-up merge sort over a value buffer. Returns false when the
  * comparator threw; the buffer contents are unspecified in that case.
  */
-static bool mal_builtin_array_sort_values(MalVm *vm, MalValue *values, u32 count, MalValue comparator) {
+static bool mal_builtin_array_sort_values(
+    MalVm *vm,
+    MalValue *values,
+    u32 count,
+    MalValue comparator,
+    MalValue *default_keys
+) {
     if (count < 2) {
         return true;
     }
 
     MalValue *scratch = malloc(sizeof(MalValue) * count);
+    if (scratch == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    MalValue *key_scratch = default_keys == nullptr
+        ? nullptr
+        : malloc(sizeof(MalValue) * count);
+    if (default_keys != nullptr && key_scratch == nullptr) {
+        free(scratch);
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
     for (u32 index = 0; index < count; index++) {
         scratch[index] = mal_value_new_undefined();
+        if (key_scratch != nullptr) {
+            key_scratch[index] = mal_value_new_undefined();
+        }
     }
-    MalRootSpan values_span, scratch_span;
+    MalRootSpan values_span, scratch_span, keys_span, key_scratch_span;
     mal_gc_root(&values_span, values, (i32) count);
     mal_gc_root(&scratch_span, scratch, (i32) count);
+    if (default_keys != nullptr) {
+        mal_gc_root(&keys_span, default_keys, (i32) count);
+        mal_gc_root(&key_scratch_span, key_scratch, (i32) count);
+    }
     MalValue *from = values;
     MalValue *to = scratch;
+    MalValue *key_from = default_keys;
+    MalValue *key_to = key_scratch;
     bool ok = true;
 
-    for (u32 width = 1; ok && width < count; width *= 2) {
-        for (u32 low = 0; ok && low < count; low += width * 2) {
-            u32 middle = low + width < count ? low + width : count;
-            u32 high = low + width * 2 < count ? low + width * 2 : count;
+    for (u32 width = 1; ok && width < count;) {
+        for (u32 low = 0; ok && low < count;) {
+            u32 middle = width < count - low ? low + width : count;
+            u32 high = width < count - middle ? middle + width : count;
             u32 left = low;
             u32 right = middle;
             u32 out = low;
 
             while (ok && left < middle && right < high) {
                 f64 order;
-                ok = mal_builtin_array_sort_order(vm, comparator, from[left], from[right], &order);
+                if (key_from != nullptr) {
+                    order = (f64) mal_string_compare(
+                        mal_value_to_string(key_from[left]),
+                        mal_value_to_string(key_from[right]));
+                } else {
+                    ok = mal_builtin_array_sort_order(
+                        vm, comparator, from[left], from[right], &order);
+                }
                 if (ok) {
-                    to[out++] = order <= 0 ? from[left++] : from[right++];
+                    u32 source = order <= 0 ? left++ : right++;
+                    to[out] = from[source];
+                    if (key_to != nullptr) {
+                        key_to[out] = key_from[source];
+                    }
+                    out++;
                 }
             }
             while (left < middle) {
-                to[out++] = from[left++];
+                to[out] = from[left];
+                if (key_to != nullptr) key_to[out] = key_from[left];
+                out++;
+                left++;
             }
             while (right < high) {
-                to[out++] = from[right++];
+                to[out] = from[right];
+                if (key_to != nullptr) key_to[out] = key_from[right];
+                out++;
+                right++;
             }
+            low = high;
         }
 
         MalValue *swap = from;
         from = to;
         to = swap;
+        swap = key_from;
+        key_from = key_to;
+        key_to = swap;
+        if (width > count / 2) break;
+        width *= 2;
     }
 
     if (ok && from != values) {
         memcpy(values, from, sizeof(MalValue) * count);
     }
 
+    if (default_keys != nullptr) {
+        mal_gc_unroot(&key_scratch_span);
+        mal_gc_unroot(&keys_span);
+    }
     mal_gc_unroot(&scratch_span);
     mal_gc_unroot(&values_span);
+    free(key_scratch);
     free(scratch);
     return ok;
 }
@@ -2818,6 +2874,10 @@ typedef struct MalBuiltinArraySorted {
  */
 static MalBuiltinArraySorted mal_builtin_array_sorted_elements(MalVm *vm, MalValue this_value, u32 length, MalValue comparator) {
     MalBuiltinArraySorted sorted = {.values = malloc(sizeof(MalValue) * (length > 0 ? length : 1))};
+    if (sorted.values == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return sorted;
+    }
     for (u32 index = 0; index < length; index++) {
         sorted.values[index] = mal_value_new_undefined();
     }
@@ -2844,10 +2904,51 @@ static MalBuiltinArraySorted mal_builtin_array_sorted_elements(MalVm *vm, MalVal
         }
     }
 
-    if (!mal_builtin_array_sort_values(vm, sorted.values, sorted.defined_count, comparator)) {
+    // Primitive ToString is deterministic and cannot invoke user code. For a
+    // default sort containing only non-Symbol primitives, compute those keys
+    // once instead of allocating/coercing again for every merge comparison.
+    MalValue *default_keys = nullptr;
+    MalRootSpan default_keys_span;
+    bool primitive_default = mal_value_is_undefined(comparator) &&
+        sorted.defined_count >= 2;
+    for (u32 index = 0; primitive_default && index < sorted.defined_count; index++) {
+        if (mal_value_is_object(sorted.values[index]) ||
+            mal_value_is_symbol(sorted.values[index])) {
+            primitive_default = false;
+        }
+    }
+    if (primitive_default) {
+        default_keys = malloc(sizeof(MalValue) * sorted.defined_count);
+        if (default_keys == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            mal_gc_native_rooted_end(vm);
+            mal_gc_unroot(&values_span);
+            free(sorted.values);
+            sorted.values = nullptr;
+            return sorted;
+        }
+        for (u32 index = 0; index < sorted.defined_count; index++) {
+            default_keys[index] = mal_value_new_undefined();
+        }
+        mal_gc_root(
+            &default_keys_span, default_keys, (i32) sorted.defined_count);
+        for (u32 index = 0; index < sorted.defined_count; index++) {
+            default_keys[index] = mal_value_from_string(
+                mal_ops_to_string(&vm->heap, sorted.values[index]));
+        }
+    }
+
+    bool sort_ok = mal_builtin_array_sort_values(
+        vm, sorted.values, sorted.defined_count, comparator, default_keys);
+    if (default_keys != nullptr) {
+        mal_gc_unroot(&default_keys_span);
+        free(default_keys);
+    }
+    if (!sort_ok) {
         mal_gc_native_rooted_end(vm);
         mal_gc_unroot(&values_span);
         free(sorted.values);
+        sorted.values = nullptr;
         return sorted;
     }
 
