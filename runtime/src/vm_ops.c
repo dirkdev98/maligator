@@ -6412,6 +6412,36 @@ static MalValue *mal_compiled_coroutine_arguments(
     return owned;
 }
 
+MalObject *mal_vm_generator_instance_prototype(
+    MalVm *vm, MalValue callee, bool is_async_generator
+) {
+    MalObject *fallback = mal_value_to_object(vm->intrinsics[
+        is_async_generator
+            ? MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE
+            : MAL_INTRINSIC_GENERATOR_PROTOTYPE
+    ]);
+    if (!mal_value_is_object(callee)) return fallback;
+
+    MalKey prototype_key = mal_intrinsic_hot_string_key(
+        vm, MAL_HOT_KEY_PROTOTYPE);
+    if (!mal_value_is_proxy_object(callee)) {
+        MalPropertyLookup own = mal_object_get_own(
+            mal_value_to_object(callee), prototype_key);
+        if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+            return mal_value_is_object(own.desc.value)
+                ? mal_value_to_object(own.desc.value)
+                : fallback;
+        }
+    }
+
+    MalValue prototype_value;
+    if (mal_vm_get_property(vm, callee, prototype_key, &prototype_value) &&
+        mal_value_is_object(prototype_value)) {
+        return mal_value_to_object(prototype_value);
+    }
+    return fallback;
+}
+
 MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
     MalValue *registers, const MalValue *arguments, i32 argument_count,
@@ -6423,15 +6453,8 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     // inherits %GeneratorPrototype% / %AsyncGeneratorPrototype%), else the
     // intrinsic prototype. `registers` is already published as a GC root by the
     // caller, so a getter on .prototype cannot sweep the pending activation.
-    MalObject *generator_prototype = mal_value_to_object(vm->intrinsics[
-        is_async_generator ? MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE : MAL_INTRINSIC_GENERATOR_PROTOTYPE
-    ]);
-    MalValue prototype_value;
-    if (mal_value_is_object(callee) &&
-        mal_vm_get_property(vm, callee, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &prototype_value) &&
-        mal_value_is_object(prototype_value)) {
-        generator_prototype = mal_value_to_object(prototype_value);
-    }
+    MalObject *generator_prototype = mal_vm_generator_instance_prototype(
+        vm, callee, is_async_generator);
 
     MalGeneratorObject *generator = mal_generator_object_new(&vm->heap, generator_prototype);
     if (is_async_generator) {

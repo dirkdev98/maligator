@@ -2091,6 +2091,10 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalValue *registers, const MalValue *arguments, i32 argument_count,
     bool retain_arguments, i32 resume_ip, bool is_async_generator);
 
+/** Resolve the instance prototype used when a generator activation starts. */
+MalObject *mal_vm_generator_instance_prototype(
+    MalVm *vm, MalValue callee, bool is_async_generator);
+
 // YIELD (compiled): record the yielded value, resume registers, and resume IP on
 // the coroutine, save the current env, mark SUSPENDED_YIELD, and (for an async
 // generator) settle the front request. The compiled body then returns.

@@ -2496,15 +2496,9 @@ static void mal_vm_run_until_frame_count(
                 // function's own .prototype (which inherits %GeneratorPrototype%
                 // or %AsyncGeneratorPrototype%).
                 bool start_is_async_generator = frame->function->kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR;
-                MalObject *generator_prototype = mal_value_to_object(vm->intrinsics[
-                    start_is_async_generator ? MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE : MAL_INTRINSIC_GENERATOR_PROTOTYPE
-                ]);
-                MalValue prototype_value;
-                if (mal_value_is_object(frame->callee) &&
-                    mal_vm_get_property(vm, frame->callee, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &prototype_value) &&
-                    mal_value_is_object(prototype_value)) {
-                    generator_prototype = mal_value_to_object(prototype_value);
-                }
+                MalObject *generator_prototype =
+                    mal_vm_generator_instance_prototype(
+                        vm, frame->callee, start_is_async_generator);
 
                 MalGeneratorObject *generator = mal_generator_object_new(&vm->heap, generator_prototype);
                 if (start_is_async_generator) {
