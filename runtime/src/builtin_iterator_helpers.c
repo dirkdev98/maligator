@@ -22,7 +22,9 @@ static bool mal_ih_get_direct(MalVm *vm, MalValue this_value, MalIteratorRecord 
         return false;
     }
     MalValue next;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "next"), &next)) {
+    if (!mal_vm_get_property(
+            vm, this_value,
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &next)) {
         return false;
     }
     record_out->iterator = this_value;
@@ -68,7 +70,9 @@ static bool mal_ih_get_flattenable(MalVm *vm, MalValue obj, MalIteratorRecord *r
     }
 
     MalValue next;
-    if (!mal_vm_get_property(vm, iterator, mal_intrinsic_string_key(vm, "next"), &next)) {
+    if (!mal_vm_get_property(
+            vm, iterator,
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &next)) {
         return false;
     }
     record_out->iterator = iterator;
@@ -100,104 +104,131 @@ static MalIteratorRecord mal_ih_underlying(const MalIteratorHelperObject *self) 
     return (MalIteratorRecord) {.iterator = self->iterator, .next_method = self->next_method};
 }
 
-static MalValue mal_ih_finish(MalIteratorHelperObject *self, MalVm *vm) {
+static bool mal_ih_finish(
+    MalIteratorHelperObject *self, MalValue *value_out, bool *done_out
+) {
     self->done = true;
-    return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+    *value_out = mal_value_new_undefined();
+    *done_out = true;
+    return true;
+}
+
+static bool mal_ih_yield(MalValue value, MalValue *value_out, bool *done_out) {
+    *value_out = value;
+    *done_out = false;
+    return true;
 }
 
 // --- Per-kind lazy steps (read the helper's struct state) -------------------
 
-static MalValue mal_ih_step_map(MalVm *vm, MalIteratorHelperObject *self) {
+static bool mal_ih_step_map(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
     MalIteratorRecord record = mal_ih_underlying(self);
     MalValue value;
     bool done;
     if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
-        return mal_value_new_undefined();
+        return false;
     }
     if (done) {
-        return mal_ih_finish(self, vm);
+        return mal_ih_finish(self, value_out, done_out);
     }
     MalValue callback_args[2] = {value, mal_value_from_i32(self->index++)};
     MalCompletion mapped = mal_vm_call_value(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
     if (mapped.kind == MAL_COMPLETION_THROW) {
         self->done = true;
         mal_vm_iterator_close(vm, &record);
-        return mal_value_new_undefined();
+        return false;
     }
-    return mal_vm_create_iter_result(vm, mapped.value, false);
+    return mal_ih_yield(mapped.value, value_out, done_out);
 }
 
-static MalValue mal_ih_step_filter(MalVm *vm, MalIteratorHelperObject *self) {
+static bool mal_ih_step_filter(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
     MalIteratorRecord record = mal_ih_underlying(self);
     while (true) {
         MalValue value;
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
-            return mal_value_new_undefined();
+            return false;
         }
         if (done) {
-            return mal_ih_finish(self, vm);
+            return mal_ih_finish(self, value_out, done_out);
         }
         MalValue callback_args[2] = {value, mal_value_from_i32(self->index++)};
         MalCompletion kept = mal_vm_call_value(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
         if (kept.kind == MAL_COMPLETION_THROW) {
             self->done = true;
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            return false;
         }
         if (mal_value_is_truthy(kept.value)) {
-            return mal_vm_create_iter_result(vm, value, false);
+            return mal_ih_yield(value, value_out, done_out);
         }
     }
 }
 
-static MalValue mal_ih_step_take(MalVm *vm, MalIteratorHelperObject *self) {
+static bool mal_ih_step_take(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
     MalIteratorRecord record = mal_ih_underlying(self);
     if (self->counter <= 0.0) {
         // Normal-completion close: a throwing return() must surface here.
         self->done = true;
         if (!mal_vm_iterator_close_normal(vm, &record)) {
-            return mal_value_new_undefined();
+            return false;
         }
-        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
     }
     self->counter -= 1.0;
     MalValue value;
     bool done;
     if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
-        return mal_value_new_undefined();
+        return false;
     }
     if (done) {
-        return mal_ih_finish(self, vm);
+        return mal_ih_finish(self, value_out, done_out);
     }
-    return mal_vm_create_iter_result(vm, value, false);
+    return mal_ih_yield(value, value_out, done_out);
 }
 
-static MalValue mal_ih_step_drop(MalVm *vm, MalIteratorHelperObject *self) {
+static bool mal_ih_step_drop(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
     MalIteratorRecord record = mal_ih_underlying(self);
     while (self->counter > 0.0) {
         MalValue skipped;
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &skipped, &done)) {
-            return mal_value_new_undefined();
+            return false;
         }
         if (done) {
-            return mal_ih_finish(self, vm);
+            return mal_ih_finish(self, value_out, done_out);
         }
         self->counter -= 1.0;
     }
     MalValue value;
     bool done;
     if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
-        return mal_value_new_undefined();
+        return false;
     }
     if (done) {
-        return mal_ih_finish(self, vm);
+        return mal_ih_finish(self, value_out, done_out);
     }
-    return mal_vm_create_iter_result(vm, value, false);
+    return mal_ih_yield(value, value_out, done_out);
 }
 
-static MalValue mal_ih_step_flatmap(MalVm *vm, MalIteratorHelperObject *self) {
+static bool mal_ih_step_flatmap(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
     MalIteratorRecord outer = mal_ih_underlying(self);
     while (true) {
         if (!mal_value_is_undefined(self->inner_iterator)) {
@@ -209,10 +240,10 @@ static MalValue mal_ih_step_flatmap(MalVm *vm, MalIteratorHelperObject *self) {
                 // step closes the OUTER iterator, keeping the original throw.
                 self->done = true;
                 mal_vm_iterator_close(vm, &outer);
-                return mal_value_new_undefined();
+                return false;
             }
             if (!done) {
-                return mal_vm_create_iter_result(vm, value, false);
+                return mal_ih_yield(value, value_out, done_out);
             }
             // SATB: the exhausted inner iterator (traced via this helper) is being
             // dropped; shade the old refs before clearing. The re-arm sites store
@@ -226,23 +257,23 @@ static MalValue mal_ih_step_flatmap(MalVm *vm, MalIteratorHelperObject *self) {
         MalValue value;
         bool done;
         if (!mal_vm_iterator_step(vm, &outer, &value, &done)) {
-            return mal_value_new_undefined();
+            return false;
         }
         if (done) {
-            return mal_ih_finish(self, vm);
+            return mal_ih_finish(self, value_out, done_out);
         }
         MalValue callback_args[2] = {value, mal_value_from_i32(self->index++)};
         MalCompletion mapped = mal_vm_call_value(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
         if (mapped.kind == MAL_COMPLETION_THROW) {
             self->done = true;
             mal_vm_iterator_close(vm, &outer);
-            return mal_value_new_undefined();
+            return false;
         }
         MalIteratorRecord inner;
         if (!mal_ih_get_flattenable(vm, mapped.value, &inner)) {
             self->done = true;
             mal_vm_iterator_close(vm, &outer);
-            return mal_value_new_undefined();
+            return false;
         }
         self->inner_iterator = inner.iterator;
         self->inner_next = inner.next_method;
@@ -255,7 +286,12 @@ static MalValue mal_ih_step_wrap(MalVm *vm, MalIteratorHelperObject *self) {
     return result.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result.value;
 }
 
-static MalValue mal_ih_step_concat(MalVm *vm, MalIteratorHelperObject *self) {
+static MalValue mal_ih_zip_get(MalVm *vm, MalValue array, i32 index);
+
+static bool mal_ih_step_concat(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
     // sources/source_methods are intrinsic arrays this helper owns.
     i32 length = (i32) mal_array_object_length(mal_value_to_array_object(self->sources));
 
@@ -265,10 +301,10 @@ static MalValue mal_ih_step_concat(MalVm *vm, MalIteratorHelperObject *self) {
             MalValue value;
             bool done;
             if (!mal_vm_iterator_step(vm, &inner, &value, &done)) {
-                return mal_value_new_undefined();
+                return false;
             }
             if (!done) {
-                return mal_vm_create_iter_result(vm, value, false);
+                return mal_ih_yield(value, value_out, done_out);
             }
             // SATB: the exhausted inner iterator (traced via this helper) is being
             // dropped; shade the old refs before clearing. The re-arm sites store
@@ -280,32 +316,33 @@ static MalValue mal_ih_step_concat(MalVm *vm, MalIteratorHelperObject *self) {
         }
 
         if (self->index >= length) {
-            return mal_ih_finish(self, vm);
+            return mal_ih_finish(self, value_out, done_out);
         }
 
         // Open the next source: call its captured @@iterator method.
         MalValue iterable;
         MalValue method;
-        if (!mal_vm_get_property(vm, self->sources, mal_key_index(self->index), &iterable) ||
-            !mal_vm_get_property(vm, self->source_methods, mal_key_index(self->index), &method)) {
-            return mal_value_new_undefined();
-        }
+        iterable = mal_ih_zip_get(vm, self->sources, self->index);
+        method = mal_ih_zip_get(vm, self->source_methods, self->index);
         self->index++;
 
         MalCompletion opened = mal_vm_call_value(vm, method, iterable, nullptr, 0);
         if (opened.kind != MAL_COMPLETION_NORMAL) {
             self->done = true;
-            return mal_value_new_undefined();
+            return false;
         }
         if (!mal_value_is_object(opened.value)) {
             self->done = true;
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator is not an object");
-            return mal_value_new_undefined();
+            return false;
         }
         MalValue inner_next;
-        if (!mal_vm_get_property(vm, opened.value, mal_intrinsic_string_key(vm, "next"), &inner_next)) {
+        if (!mal_vm_get_property(
+                vm, opened.value,
+                mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT),
+                &inner_next)) {
             self->done = true;
-            return mal_value_new_undefined();
+            return false;
         }
         self->inner_iterator = opened.value;
         self->inner_next = inner_next;
@@ -320,6 +357,10 @@ static i32 mal_ih_zip_count(MalIteratorHelperObject *self) {
 
 static MalValue mal_ih_zip_get(MalVm *vm, MalValue array, i32 index) {
     MalValue out;
+    if (mal_array_object_dense_get(
+            mal_value_to_array_object(array), (u32) index, &out)) {
+        return out;
+    }
     mal_vm_get_property(vm, array, mal_key_index(index), &out);
     return out;
 }
@@ -376,10 +417,13 @@ static MalValue mal_ih_zip_finish_results(MalVm *vm, MalIteratorHelperObject *se
     return mal_value_from_object(object);
 }
 
-static MalValue mal_ih_step_zip(MalVm *vm, MalIteratorHelperObject *self) {
+static bool mal_ih_step_zip(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
     i32 count = mal_ih_zip_count(self);
     if (count == 0) {
-        return mal_ih_finish(self, vm);
+        return mal_ih_finish(self, value_out, done_out);
     }
 
     MalValue results = mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) count));
@@ -401,7 +445,7 @@ static MalValue mal_ih_step_zip(MalVm *vm, MalIteratorHelperObject *self) {
                 // Abrupt step: close the rest, propagate the pending throw.
                 self->done = true;
                 mal_ih_zip_close_all(vm, self, i);
-                return mal_value_new_undefined();
+                return false;
             }
 
             if (!done) {
@@ -412,9 +456,9 @@ static MalValue mal_ih_step_zip(MalVm *vm, MalIteratorHelperObject *self) {
                 mal_ih_zip_set(vm, self->sources, i, mal_value_new_null());
                 mal_ih_zip_close_all(vm, self, -1);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                    return mal_value_new_undefined();
+                    return false;
                 }
-                return mal_ih_finish(self, vm);
+                return mal_ih_finish(self, value_out, done_out);
             } else if (self->zip_mode == MAL_ITERATOR_ZIP_LONGEST) {
                 mal_ih_zip_set(vm, self->sources, i, mal_value_new_null());
                 open--;
@@ -433,21 +477,21 @@ static MalValue mal_ih_step_zip(MalVm *vm, MalIteratorHelperObject *self) {
                         bool k_done;
                         if (!mal_vm_iterator_step(vm, &k_record, &k_value, &k_done)) {
                             mal_ih_zip_close_all(vm, self, -1);
-                            return mal_value_new_undefined();
+                            return false;
                         }
                         if (!k_done) {
                             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip strict mode: iterators have different lengths");
                             mal_ih_zip_close_all(vm, self, -1);
-                            return mal_value_new_undefined();
+                            return false;
                         }
                         mal_ih_zip_set(vm, self->sources, k, mal_value_new_null());
                     }
-                    return mal_ih_finish(self, vm);
+                    return mal_ih_finish(self, value_out, done_out);
                 }
                 // A later input ended while earlier ones produced values.
                 mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip strict mode: iterators have different lengths");
                 mal_ih_zip_close_all(vm, self, -1);
-                return mal_value_new_undefined();
+                return false;
             }
         }
 
@@ -456,13 +500,41 @@ static MalValue mal_ih_step_zip(MalVm *vm, MalIteratorHelperObject *self) {
 
     // longest: a round with no real value means every input is exhausted.
     if (self->zip_mode == MAL_ITERATOR_ZIP_LONGEST && open == 0) {
-        return mal_ih_finish(self, vm);
+        return mal_ih_finish(self, value_out, done_out);
     }
 
-    return mal_vm_create_iter_result(vm, mal_ih_zip_finish_results(vm, self, results, count), false);
+    return mal_ih_yield(
+        mal_ih_zip_finish_results(vm, self, results, count), value_out, done_out);
 }
 
 // --- Shared %IteratorHelperPrototype% next / return -------------------------
+
+static bool mal_ih_advance(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
+    switch (self->kind) {
+        case MAL_ITERATOR_HELPER_MAP:
+            return mal_ih_step_map(vm, self, value_out, done_out);
+        case MAL_ITERATOR_HELPER_FILTER:
+            return mal_ih_step_filter(vm, self, value_out, done_out);
+        case MAL_ITERATOR_HELPER_TAKE:
+            return mal_ih_step_take(vm, self, value_out, done_out);
+        case MAL_ITERATOR_HELPER_DROP:
+            return mal_ih_step_drop(vm, self, value_out, done_out);
+        case MAL_ITERATOR_HELPER_FLATMAP:
+            return mal_ih_step_flatmap(vm, self, value_out, done_out);
+        case MAL_ITERATOR_HELPER_WRAP: {
+            MalIteratorRecord record = mal_ih_underlying(self);
+            return mal_vm_iterator_step(vm, &record, value_out, done_out);
+        }
+        case MAL_ITERATOR_HELPER_CONCAT:
+            return mal_ih_step_concat(vm, self, value_out, done_out);
+        case MAL_ITERATOR_HELPER_ZIP:
+            return mal_ih_step_zip(vm, self, value_out, done_out);
+    }
+    return mal_ih_finish(self, value_out, done_out);
+}
 
 static MalValue mal_ih_proto_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
@@ -485,37 +557,56 @@ static MalValue mal_ih_proto_next(MalVm *vm, MalValue this_value, const MalValue
     }
     self->running = true;
     MalValue result;
-    switch (self->kind) {
-        case MAL_ITERATOR_HELPER_MAP:
-            result = mal_ih_step_map(vm, self);
-            break;
-        case MAL_ITERATOR_HELPER_FILTER:
-            result = mal_ih_step_filter(vm, self);
-            break;
-        case MAL_ITERATOR_HELPER_TAKE:
-            result = mal_ih_step_take(vm, self);
-            break;
-        case MAL_ITERATOR_HELPER_DROP:
-            result = mal_ih_step_drop(vm, self);
-            break;
-        case MAL_ITERATOR_HELPER_FLATMAP:
-            result = mal_ih_step_flatmap(vm, self);
-            break;
-        case MAL_ITERATOR_HELPER_WRAP:
-            result = mal_ih_step_wrap(vm, self);
-            break;
-        case MAL_ITERATOR_HELPER_CONCAT:
-            result = mal_ih_step_concat(vm, self);
-            break;
-        case MAL_ITERATOR_HELPER_ZIP:
-            result = mal_ih_step_zip(vm, self);
-            break;
-        default:
-            result = mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
-            break;
+    if (self->kind == MAL_ITERATOR_HELPER_WRAP) {
+        // %WrapForValidIteratorPrototype%.next forwards the exact result object.
+        result = mal_ih_step_wrap(vm, self);
+    } else {
+        MalValue value;
+        bool done;
+        result = mal_ih_advance(vm, self, &value, &done)
+            ? mal_vm_create_iter_result(vm, value, done)
+            : mal_value_new_undefined();
     }
     self->running = false;
     return result;
+}
+
+int mal_builtin_iterator_helper_try_step(
+    MalVm *vm, const MalIteratorRecord *record,
+    MalValue *value_out, bool *done_out
+) {
+    if (!mal_value_is_iterator_helper_object(record->iterator) ||
+        !mal_value_is_native_function_object(record->next_method) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(record->next_method)) !=
+            mal_ih_proto_next) {
+        return 0;
+    }
+
+    MalIteratorHelperObject *self =
+        mal_value_to_iterator_helper_object(record->iterator);
+    if (self->running) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Iterator Helper is already running");
+        return -1;
+    }
+    if (self->done) {
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return 1;
+    }
+
+    // This is the allocation-free equivalent of calling the exact native
+    // helper next method and immediately unwrapping its {value, done} result.
+    // Recreate that native frame's GC suppression while helper state and callback
+    // scratch live in C locals.
+    self->running = true;
+    vm->gc_native_frames++;
+    bool ok = mal_ih_advance(vm, self, value_out, done_out);
+    vm->gc_native_frames--;
+    self->running = false;
+    return ok ? 1 : -1;
 }
 
 static MalValue mal_ih_proto_return(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -719,6 +810,11 @@ static MalValue mal_ih_method_to_array(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
     MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+    usize size_hint;
+    if (mal_vm_builtin_iterator_size_hint(&record, &size_hint) &&
+        size_hint <= UINT32_MAX) {
+        mal_array_object_fresh_dense_reserve_exact(array, (u32) size_hint);
+    }
     // Each step re-enters JS (iterator.next) and can collect; root the record's
     // iterator/next_method (two contiguous MalValues) + the result array + the
     // in-flight value, and lift GC suppression for the loop.
@@ -740,7 +836,10 @@ static MalValue mal_ih_method_to_array(MalVm *vm, MalValue this_value, const Mal
             break;
         }
         roots[1] = value;
-        mal_array_object_store(array, mal_key_index(index++), value);
+        if (!mal_array_object_fresh_dense_append(array, value)) {
+            mal_array_object_store(array, mal_key_index(index), value);
+        }
+        index++;
     }
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
@@ -985,7 +1084,9 @@ static MalValue mal_iterator_from(MalVm *vm, MalValue this_value, const MalValue
             return mal_value_new_undefined();
         }
         MalValue next;
-        if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "next"), &next)) {
+        if (!mal_vm_get_property(
+                vm, completion.value,
+                mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &next)) {
             return mal_value_new_undefined();
         }
         record.iterator = completion.value;

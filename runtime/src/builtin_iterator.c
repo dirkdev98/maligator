@@ -2,6 +2,7 @@
 
 #include "array_object.h"
 #include "builtin_array.h"
+#include "builtin_iterator_helpers.h"
 #include "builtin_regexp.h"
 #include "function_object.h"
 #include "gc.h"
@@ -65,8 +66,8 @@ MalValue mal_vm_new_builtin_iterator(MalVm *vm, MalIteratorKind kind, MalValue t
 
 static MalValue mal_builtin_iterator_pair(MalVm *vm, MalValue first, MalValue second) {
     MalArrayObject *pair = mal_intrinsic_new_array(vm, 2);
-    mal_object_set((MalObject *) pair, mal_key_index(0), first);
-    mal_object_set((MalObject *) pair, mal_key_index(1), second);
+    mal_array_object_store(pair, mal_key_index(0), first);
+    mal_array_object_store(pair, mal_key_index(1), second);
 
     return mal_value_from_array_object(pair);
 }
@@ -129,11 +130,10 @@ static bool mal_builtin_iterator_array_advance(
 ) {
     // Fast path: a real array (not an array-like the iterator was .call'd on) reads
     // its live length from the header and a present element straight from the dense
-    // vector — no Get calls. A KEYS or VALUES step needs no allocation; ENTRIES (a
-    // pair), a hole, or an out-of-dense index falls through to the Get-based path.
-    if (mal_value_is_heap_type(iterator->target, MAL_HEAP_ARRAY_OBJECT) &&
-        iterator->kind != MAL_ITERATOR_ARRAY_ENTRIES) {
-        MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(iterator->target);
+    // vector — no Get calls. A hole or out-of-dense index falls through to the
+    // Get-based path so inherited indexed properties remain observable.
+    if (mal_value_is_array_object(iterator->target)) {
+        MalArrayObject *array = mal_value_to_array_object(iterator->target);
         u64 index = iterator->index;
         if (index >= array->length) {
             iterator->done = true;
@@ -143,14 +143,17 @@ static bool mal_builtin_iterator_array_advance(
         }
         if (iterator->kind == MAL_ITERATOR_ARRAY_KEYS) {
             iterator->index++;
-            *value_out = mal_value_from_i32((i32) index);
+            *value_out = mal_ops_number_value((f64) index);
             *done_out = false;
             return true;
         }
         MalValue element;
         if (mal_array_object_dense_get(array, (u32) index, &element)) {
             iterator->index++;
-            *value_out = element; // MAL_ITERATOR_ARRAY_VALUES
+            *value_out = iterator->kind == MAL_ITERATOR_ARRAY_ENTRIES
+                ? mal_builtin_iterator_pair(
+                    vm, mal_ops_number_value((f64) index), element)
+                : element;
             *done_out = false;
             return true;
         }
@@ -158,12 +161,33 @@ static bool mal_builtin_iterator_array_advance(
         // Get-based path reads it (prototype-aware → undefined for a clean hole).
     }
 
-    if (mal_value_is_typed_array_object(iterator->target) &&
-        mal_typed_array_object_is_out_of_bounds(
-            mal_value_to_typed_array_object(iterator->target))) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "TypedArray iterator target is out of bounds");
-        return false;
+    if (mal_value_is_typed_array_object(iterator->target)) {
+        MalTypedArrayObject *array =
+            mal_value_to_typed_array_object(iterator->target);
+        if (mal_typed_array_object_is_out_of_bounds(array)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "TypedArray iterator target is out of bounds");
+            return false;
+        }
+        u64 index = iterator->index;
+        if (index >= mal_typed_array_object_length(array)) {
+            iterator->done = true;
+            *value_out = mal_value_new_undefined();
+            *done_out = true;
+            return true;
+        }
+        iterator->index++;
+        *done_out = false;
+        if (iterator->kind == MAL_ITERATOR_ARRAY_KEYS) {
+            *value_out = mal_ops_number_value((f64) index);
+            return true;
+        }
+        MalValue element = mal_typed_array_object_get(vm, array, (u32) index);
+        *value_out = iterator->kind == MAL_ITERATOR_ARRAY_ENTRIES
+            ? mal_builtin_iterator_pair(
+                vm, mal_ops_number_value((f64) index), element)
+            : element;
+        return true;
     }
 
     // Length reads live each step, so growth during iteration is visited.
@@ -189,7 +213,7 @@ static bool mal_builtin_iterator_array_advance(
     *done_out = false;
 
     if (iterator->kind == MAL_ITERATOR_ARRAY_KEYS) {
-        *value_out = mal_value_from_i32((i32) index);
+        *value_out = mal_ops_number_value((f64) index);
         return true;
     }
 
@@ -204,7 +228,8 @@ static bool mal_builtin_iterator_array_advance(
     }
 
     if (iterator->kind == MAL_ITERATOR_ARRAY_ENTRIES) {
-        *value_out = mal_builtin_iterator_pair(vm, mal_value_from_i32((i32) index), element);
+        *value_out = mal_builtin_iterator_pair(
+            vm, mal_ops_number_value((f64) index), element);
         return true;
     }
 
@@ -519,6 +544,12 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
             vm->gc_native_frames--;
             return ok;
         }
+    }
+
+    int helper_step = mal_builtin_iterator_helper_try_step(
+        vm, record, value_out, done_out);
+    if (helper_step != 0) {
+        return helper_step > 0;
     }
 
     int regexp_step = mal_regexp_try_exact_iterator_step(
