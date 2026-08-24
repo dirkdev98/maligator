@@ -100,6 +100,28 @@ bool mal_array_object_dense_append_many(
     MalArrayObject *array, const MalValue *values, u32 count
 );
 
+/**
+ * Leaf bulk kernels over a fully materialized dense region. Callers must prove
+ * that ordinary indexed property operations cannot invoke user code and that
+ * any required extensibility checks have already passed. These helpers apply
+ * the SATB/card barriers required by raw vector movement.
+ */
+void mal_array_object_dense_shift(MalArrayObject *array);
+bool mal_array_object_dense_unshift_many(
+    MalArrayObject *array, const MalValue *values, u32 count
+);
+void mal_array_object_dense_reverse(MalArrayObject *array);
+void mal_array_object_dense_fill(
+    MalArrayObject *array, u32 start, u32 end, MalValue value
+);
+void mal_array_object_dense_copy_within(
+    MalArrayObject *array, u32 target, u32 start, u32 count
+);
+bool mal_array_object_dense_splice(
+    MalArrayObject *array, u32 start, u32 delete_count,
+    const MalValue *values, u32 insert_count
+);
+
 /** Result of attempting a dense default-data store. */
 typedef enum MalArrayDenseStore {
     MAL_ARRAY_DENSE_APPLIED,     // stored in the vector (length already updated)

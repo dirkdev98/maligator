@@ -1,6 +1,7 @@
 #include "array_object.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "gc.h"
 #include "heap_string.h"
@@ -198,6 +199,132 @@ bool mal_array_object_dense_append_many(
     }
     array->dense_count = end;
     array->length = end;
+    return true;
+}
+
+static void mal_array_object_dense_barrier_range(
+    MalArrayObject *array, u32 start, u32 end
+) {
+    for (u32 index = start; index < end; index++) {
+        mal_gc_write_barrier(array->elements[index]);
+    }
+}
+
+static void mal_array_object_dense_card_range(
+    MalArrayObject *array, u32 start, u32 end
+) {
+    for (u32 index = start; index < end; index++) {
+        mal_gc_card(&array->object.header, array->elements[index]);
+    }
+}
+
+void mal_array_object_dense_shift(MalArrayObject *array) {
+    u32 count = array->dense_count;
+    if (count > 0) {
+        mal_array_object_dense_barrier_range(array, 0, count);
+        if (count > 1) {
+            memmove(array->elements, array->elements + 1,
+                sizeof(MalValue) * (usize) (count - 1));
+        }
+        array->dense_count = count - 1;
+        mal_array_object_dense_card_range(array, 0, count - 1);
+    }
+    array->length--;
+}
+
+bool mal_array_object_dense_unshift_many(
+    MalArrayObject *array, const MalValue *values, u32 count
+) {
+    if (count == 0) {
+        return true;
+    }
+    if (count > UINT32_MAX - array->length ||
+        count > UINT32_MAX - array->dense_count) {
+        return false;
+    }
+    u32 old_count = array->dense_count;
+    u32 new_count = old_count + count;
+    if (!mal_array_object_dense_reserve(array, new_count)) {
+        return false;
+    }
+
+    mal_array_object_dense_barrier_range(array, 0, old_count);
+    if (old_count > 0) {
+        memmove(array->elements + count, array->elements,
+            sizeof(MalValue) * (usize) old_count);
+    }
+    memcpy(array->elements, values, sizeof(MalValue) * (usize) count);
+    array->dense_count = new_count;
+    array->length += count;
+    mal_array_object_dense_card_range(array, 0, new_count);
+    return true;
+}
+
+void mal_array_object_dense_reverse(MalArrayObject *array) {
+    u32 count = array->dense_count;
+    mal_array_object_dense_barrier_range(array, 0, count);
+    for (u32 left = 0; left < count / 2; left++) {
+        u32 right = count - 1 - left;
+        MalValue swap = array->elements[left];
+        array->elements[left] = array->elements[right];
+        array->elements[right] = swap;
+    }
+    mal_array_object_dense_card_range(array, 0, count);
+}
+
+void mal_array_object_dense_fill(
+    MalArrayObject *array, u32 start, u32 end, MalValue value
+) {
+    mal_array_object_dense_barrier_range(array, start, end);
+    for (u32 index = start; index < end; index++) {
+        array->elements[index] = value;
+        mal_gc_card(&array->object.header, value);
+    }
+}
+
+void mal_array_object_dense_copy_within(
+    MalArrayObject *array, u32 target, u32 start, u32 count
+) {
+    if (count == 0 || target == start) {
+        return;
+    }
+    mal_array_object_dense_barrier_range(array, target, target + count);
+    memmove(array->elements + target, array->elements + start,
+        sizeof(MalValue) * (usize) count);
+    mal_array_object_dense_card_range(array, target, target + count);
+}
+
+bool mal_array_object_dense_splice(
+    MalArrayObject *array, u32 start, u32 delete_count,
+    const MalValue *values, u32 insert_count
+) {
+    u32 old_length = array->length;
+    if (delete_count > old_length - start ||
+        insert_count > UINT32_MAX - (old_length - delete_count)) {
+        return false;
+    }
+    u32 new_length = old_length - delete_count + insert_count;
+    if (!mal_array_object_dense_reserve(array, new_length)) {
+        return false;
+    }
+
+    // Every old slot can be overwritten, moved, or dropped. Shade the old
+    // references before the raw movement, then card the complete published range.
+    mal_array_object_dense_barrier_range(array, 0, old_length);
+    u32 tail_start = start + delete_count;
+    u32 tail_count = old_length - tail_start;
+    if (tail_count > 0 && insert_count != delete_count) {
+        memmove(array->elements + start + insert_count,
+            array->elements + tail_start,
+            sizeof(MalValue) * (usize) tail_count);
+    }
+    if (insert_count > 0) {
+        memcpy(array->elements + start, values,
+            sizeof(MalValue) * (usize) insert_count);
+    }
+    array->dense_count = new_length;
+    array->length = new_length;
+    mal_array_object_dense_card_range(array, 0, new_length);
     return true;
 }
 
