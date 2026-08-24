@@ -573,6 +573,14 @@ check(
 	String(Symbol()) === "Symbol()" &&
 		String(Symbol("description")) === "Symbol(description)",
 );
+const describedSymbol = Symbol("description-\ud83d\ude00");
+check(
+	"Symbol toString constructs descriptive strings",
+	Symbol().toString() === "Symbol()" &&
+		describedSymbol.toString() === "Symbol(description-\ud83d\ude00)" &&
+		Symbol.prototype.toString.call(Object(describedSymbol)) ===
+			"Symbol(description-\ud83d\ude00)",
+);
 const staticStringOrder = [];
 function gcCode(name, value) {
 	return {

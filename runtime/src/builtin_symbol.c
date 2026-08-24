@@ -1,5 +1,9 @@
 #include "builtin_symbol.h"
 
+#include <string.h>
+
+#include "checked_size.h"
+#include "gc.h"
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
 #include "heap_symbol.h"
@@ -48,21 +52,51 @@ static MalValue mal_builtin_symbol_prototype_to_string(MalVm *vm, MalValue this_
     (void) args;
     (void) arg_count;
 
-    MalSymbol *symbol = mal_builtin_symbol_this(vm, this_value);
+    MalValue symbol_root = this_value;
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, &symbol_root, 1);
+
+    MalSymbol *symbol = mal_builtin_symbol_this(vm, symbol_root);
     if (symbol == nullptr) {
+        mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
 
     MalString *description = mal_symbol_description(symbol);
-    MalValue text = mal_value_from_string(mal_intrinsic_ascii(vm, "Symbol("));
-    if (description != nullptr) {
-        text = mal_vm_add(vm, text, mal_value_from_string(description));
-        if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            return mal_value_new_undefined();
-        }
+    if (description == nullptr) {
+        MalValue result = mal_value_from_string(mal_intrinsic_ascii(vm, "Symbol()"));
+        mal_gc_unroot(&root_span);
+        return result;
     }
 
-    return mal_vm_add(vm, text, mal_value_from_string(mal_intrinsic_ascii(vm, ")")));
+    usize description_length = mal_string_length(description);
+    usize length;
+    if (!mal_checked_size_add(
+            description_length, 8, MAL_STRING_MAX_CODE_UNITS, &length)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        mal_gc_unroot(&root_span);
+        return mal_value_new_undefined();
+    }
+
+    c16 *code_units = mal_heap_alloc_raw_profiled(
+        &vm->heap, sizeof(c16) * length,
+        MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    static const byte prefix[] = "Symbol(";
+    for (usize i = 0; i < sizeof(prefix) - 1; i++) {
+        code_units[i] = prefix[i];
+    }
+    symbol = mal_builtin_symbol_this(vm, symbol_root);
+    description = mal_symbol_description(symbol);
+    memcpy(
+        code_units + sizeof(prefix) - 1,
+        mal_string_code_units(description),
+        sizeof(c16) * description_length);
+    code_units[length - 1] = ')';
+
+    MalValue result = mal_value_from_string(
+        mal_string_new_owned(&vm->heap, code_units, length));
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
