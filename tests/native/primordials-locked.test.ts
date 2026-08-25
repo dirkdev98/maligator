@@ -52,7 +52,10 @@ describe("engine.primordials: locked", () => {
 	});
 
 	it("holds under GC stress", () => {
-		assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60_000 }));
-		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 60_000 }));
-	}, 120_000);
+		// Full Intl + Temporal intrinsic installation verifies the heap after every
+		// allocation under STRESS_ENV; both backends take about 100 seconds on the
+		// reference development machine before running the shared 75 checks.
+		assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 180_000 }));
+		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 180_000 }));
+	}, 370_000);
 });
