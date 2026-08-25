@@ -162,10 +162,10 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.nativePlan.functions.flatMap((fn) =>
+		const coldRegions = cold.definition.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-split-projection"),
 		);
-		const warmRegions = warm.definition.nativePlan.functions.flatMap((fn) =>
+		const warmRegions = warm.definition.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-split-projection"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
@@ -196,10 +196,10 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.nativePlan.functions.flatMap((fn) =>
+		const coldRegions = cold.definition.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 		);
-		const warmRegions = warm.definition.nativePlan.functions.flatMap((fn) =>
+		const warmRegions = warm.definition.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
@@ -226,10 +226,10 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.nativePlan.functions.flatMap((fn) =>
+		const coldRegions = cold.definition.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-slice-number"),
 		);
-		const warmRegions = warm.definition.nativePlan.functions.flatMap((fn) =>
+		const warmRegions = warm.definition.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-slice-number"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
@@ -260,10 +260,10 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.nativePlan.functions.flatMap((fn) =>
+		const coldRegions = cold.definition.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-iterator-projection"),
 		);
-		const warmRegions = warm.definition.nativePlan.functions.flatMap((fn) =>
+		const warmRegions = warm.definition.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-iterator-projection"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");

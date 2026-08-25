@@ -12,7 +12,12 @@ import {
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
-import type { ProgramImage, BytecodeFunction, BytecodeInstruction } from "./lower-vm.ts";
+import type {
+	ProgramImage,
+	BytecodeFunction,
+	BytecodeInstruction,
+	RuntimeImage,
+} from "./lower-vm.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 
 type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
@@ -148,7 +153,7 @@ function malStringRow(symbol: string, length: number): string {
 	return `    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = ${length}, .code_units = ${symbol} },`;
 }
 
-function malFunctionKind(fn: ProgramImage["functions"][number]): string {
+function malFunctionKind(fn: RuntimeImage["functions"][number]): string {
 	return fn.isAsync && fn.isGenerator
 		? "MAL_FUNCTION_KIND_ASYNC_GENERATOR"
 		: fn.isAsync
@@ -160,7 +165,7 @@ function malFunctionKind(fn: ProgramImage["functions"][number]): string {
 
 /** One MalFunction table row, given the (possibly shared) symbols it points at. */
 function malFunctionRow(
-	fn: ProgramImage["functions"][number],
+	fn: RuntimeImage["functions"][number],
 	instructionsSymbol: string,
 	instructionDataSymbol: string,
 	instructionDataCount: number,
@@ -227,7 +232,7 @@ function positionArrayBody(fn: BytecodeFunction): string {
 }
 
 function instructionArrayBody(
-	fn: ProgramImage["functions"][number],
+	fn: RuntimeImage["functions"][number],
 	dataOffsets: Array<number | undefined>,
 ): string {
 	return fn.instructions
@@ -235,7 +240,7 @@ function instructionArrayBody(
 		.join("\n");
 }
 
-function instructionData(fn: ProgramImage["functions"][number]): {
+function instructionData(fn: RuntimeImage["functions"][number]): {
 	data: Array<number>;
 	offsets: Array<number | undefined>;
 } {
@@ -324,7 +329,7 @@ function instructionData(fn: ProgramImage["functions"][number]): {
 }
 
 function compiledKnownOwnSlotSeedData(
-	fn: ProgramImage["functions"][number],
+	fn: RuntimeImage["functions"][number],
 ): Array<number> {
 	const data: Array<number> = [0];
 	for (const instruction of fn.instructions) {
@@ -347,7 +352,7 @@ function compiledKnownOwnSlotSeedData(
 	return data[0] === 0 ? [] : data;
 }
 
-function handlerArrayBody(fn: ProgramImage["functions"][number]): string {
+function handlerArrayBody(fn: RuntimeImage["functions"][number]): string {
 	return fn.handlers
 		.map(
 			(handler) =>
@@ -497,11 +502,12 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 }
 
 function emitProgramImageSource(
-	definition: ProgramImage,
+	image: ProgramImage,
 	options: EmitOptions,
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
 ): EmittedVmSource {
+	const definition = image.runtime;
 	validateVmShapeCases(definition);
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
@@ -549,13 +555,13 @@ function emitProgramImageSource(
 		if (!useCompiled) return null;
 		const emitted = emitCompiledFunction(
 			fn,
-			definition.nativePlan.functions[i]!,
+			image.native.functions[i]!,
 			i,
 			suffix,
 			debug,
 			splitCompiledFunctions ? "external" : "static",
 			new Set(),
-			definition.semanticProtectors ?? [],
+			image.native.semanticProtectors,
 		);
 		if (emitted === null) return null;
 		if (
@@ -577,7 +583,7 @@ function emitProgramImageSource(
 			if (fn !== null) compiledTargets.add(index);
 		});
 		const directCompiledTargets = new Set<number>();
-		for (const native of definition.nativePlan.functions) {
+		for (const native of image.native.functions) {
 			for (const instruction of native.instructions) {
 				if (instruction?.kind !== "call") continue;
 				const target = instruction.directFunctionIndex;
@@ -594,13 +600,13 @@ function emitProgramImageSource(
 			if (!compiledTargets.has(i)) return null;
 			return emitCompiledFunction(
 				fn,
-				definition.nativePlan.functions[i]!,
+				image.native.functions[i]!,
 				i,
 				suffix,
 				debug,
 				"static",
 				directCompiledTargets,
-				definition.semanticProtectors ?? [],
+				image.native.semanticProtectors,
 			);
 		});
 		if (directCompiledTargets.size > 0) {
@@ -613,7 +619,7 @@ function emitProgramImageSource(
 			lines.push("");
 		}
 	}
-	finalizeCompilerRemarks(definition, compiled);
+	finalizeCompilerRemarks(image, compiled);
 	if (splitCompiledFunctions) {
 		if (compiled.some((fn) => fn !== null)) {
 			lines.push(
@@ -752,6 +758,7 @@ function emitProgramImageSource(
 		debug,
 		undefined,
 		options,
+		image.diagnostics.profileSites?.length,
 	)) {
 		lines.push(line);
 	}
@@ -901,11 +908,12 @@ export function emitProgramTranslationUnits(
 }
 
 function malProgramImageStruct(
-	definition: ProgramImage,
+	definition: RuntimeImage,
 	suffix: string,
 	debug: boolean,
 	sharedLiteralTemplates?: string,
 	options: Pick<EmitOptions, "assets" | "maligatorSurface"> = {},
+	profileSiteCount?: number,
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
@@ -1079,9 +1087,9 @@ function malProgramImageStruct(
 		`    .files = ${hasFiles ? `mal_files${suffix}` : "nullptr"},`,
 		`    .source_position_count = ${hasPositions ? definition.sourcePositions.length : 0},`,
 		`    .source_positions = ${hasPositions ? `mal_source_positions${suffix}` : "nullptr"},`,
-		...(definition.profileSites === undefined
+		...(profileSiteCount === undefined
 			? []
-			: [`    .profile_site_count = ${definition.profileSites.length},`]),
+			: [`    .profile_site_count = ${profileSiteCount},`]),
 		`    .asset_count = ${assets.length},`,
 		`    .assets = ${assets.length > 0 ? `mal_assets${suffix}` : "nullptr"},`,
 		`    .host_install_count = ${hostInstalls.length},`,
@@ -1129,7 +1137,8 @@ export function emitBatch(
 	};
 
 	for (let d = 0; d < definitions.length; ++d) {
-		const definition = definitions[d]!;
+		const image = definitions[d]!;
+		const definition = image.runtime;
 		const suffix = `_${d}`;
 		const literalTemplatesSymbol =
 			definition.literalTemplateData.length > 0
@@ -1166,13 +1175,13 @@ export function emitBatch(
 			useCompiled
 				? emitCompiledFunction(
 						fn,
-						definition.nativePlan.functions[i]!,
+						image.native.functions[i]!,
 						i,
 						suffix,
 						false,
 						"static",
 						new Set(),
-						definition.semanticProtectors ?? [],
+						image.native.semanticProtectors,
 					)
 				: null,
 		);

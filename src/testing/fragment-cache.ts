@@ -401,7 +401,7 @@ function compileArtifact(
 	});
 	phases.compileMs += Date.now() - compileStartedAt;
 	const serializeStartedAt = Date.now();
-	const wire = serializeRuntimeImage(definition);
+	const wire = serializeRuntimeImage(definition.runtime);
 	phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = digest(wire);
 	cacheFrontendWire(wire, artifactRoot);

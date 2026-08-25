@@ -3,6 +3,8 @@ import type {
 	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
+	NativePlan,
+	RuntimeImage,
 } from "../src/compiler/target/lower-vm.ts";
 import { mergeProgramImages } from "../src/test262/vm-definition-merge.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
@@ -35,30 +37,35 @@ function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction 
 	};
 }
 
-function definition(overrides: Partial<ProgramImage> = {}): ProgramImage {
+function definition(
+	overrides: Partial<RuntimeImage> = {},
+	nativeOverrides: Partial<NativePlan> = {},
+): ProgramImage {
 	const functions = overrides.functions ?? [vmFunction([{ opcode: "RETURN", value: 0 }])];
-	return {
-		...testProgramImage({
-			entrypointPath: "input.js",
-			functionCount: functions.length,
-			functions,
-			stringConstants: [[65]],
-			bigintConstants: [1n],
-			literalTemplateData: [8, 0],
-			precompiledLiteralShapes: [],
-			globalCount: 1,
-			files: ["input.js"],
-			sourcePositions: [{ line: 1, column: 0 }],
-			cjsModuleFunctionIndices: [],
-			hostInstalls: [],
-		}),
+	const image = testProgramImage({
+		entrypointPath: "input.js",
+		functionCount: functions.length,
+		functions,
+		stringConstants: [[65]],
+		bigintConstants: [1n],
+		literalTemplateData: [8, 0],
+		precompiledLiteralShapes: [],
+		globalCount: 1,
+		files: ["input.js"],
+		sourcePositions: [{ line: 1, column: 0 }],
+		cjsModuleFunctionIndices: [],
+		hostInstalls: [],
 		...overrides,
+	});
+	return {
+		...image,
+		native: { ...image.native, ...nativeOverrides },
 	};
 }
 
 describe("Test262 VM definition merger", () => {
 	it("retains one shared semantic world and rejects mixed facts", () => {
-		const semanticProtectors: NonNullable<ProgramImage["semanticProtectors"]> = [
+		const semanticProtectors: NativePlan["semanticProtectors"] = [
 			{
 				family: "array-elements",
 				guard: {
@@ -68,29 +75,32 @@ describe("Test262 VM definition merger", () => {
 			},
 		];
 		const merged = mergeProgramImages([
-			definition({ semanticProtectors }),
-			definition({ semanticProtectors }),
+			definition({}, { semanticProtectors }),
+			definition({}, { semanticProtectors }),
 		]).definition;
-		expect(merged.semanticProtectors).toEqual(semanticProtectors);
-		expect(merged.semanticProtectors).not.toBe(semanticProtectors);
+		expect(merged.native.semanticProtectors).toEqual(semanticProtectors);
+		expect(merged.native.semanticProtectors).not.toBe(semanticProtectors);
 
 		expect(() =>
-			mergeProgramImages([definition({ semanticProtectors }), definition()]),
+			mergeProgramImages([definition({}, { semanticProtectors }), definition()]),
 		).toThrow("semantic protector facts do not match");
 		expect(() =>
 			mergeProgramImages([
-				definition({ semanticProtectors }),
-				definition({
-					semanticProtectors: [
-						{
-							family: "array-elements",
-							guard: {
-								dependencies: [{ kind: "world", fact: "primordials.locked" }],
-								obligations: ["fallback"],
+				definition({}, { semanticProtectors }),
+				definition(
+					{},
+					{
+						semanticProtectors: [
+							{
+								family: "array-elements",
+								guard: {
+									dependencies: [{ kind: "world", fact: "primordials.locked" }],
+									obligations: ["fallback"],
+								},
 							},
-						},
-					],
-				}),
+						],
+					},
+				),
 			]),
 		).toThrow("semantic protector facts do not match");
 	});
@@ -231,26 +241,26 @@ describe("Test262 VM definition merger", () => {
 
 		const { definition: merged, functionBases } = mergeProgramImages([first, second]);
 		expect(functionBases).toEqual([0, 2]);
-		expect(merged.functionCount).toBe(3);
-		expect(merged.functions[2]!.nameStringIndex).toBe(2);
-		expect(merged.functions[2]!.fileIndex).toBe(1);
-		expect(merged.functions[2]!.positions[0]).toBe(1);
-		expect(merged.sourcePositions[1]).toEqual({
+		expect(merged.runtime.functionCount).toBe(3);
+		expect(merged.runtime.functions[2]!.nameStringIndex).toBe(2);
+		expect(merged.runtime.functions[2]!.fileIndex).toBe(1);
+		expect(merged.runtime.functions[2]!.positions[0]).toBe(1);
+		expect(merged.runtime.sourcePositions[1]).toEqual({
 			line: 2,
 			column: 1,
 			inlinedFunctionIndex: 2,
 			callerPosId: 1,
 		});
-		expect(merged.cjsModuleFunctionIndices).toEqual([2]);
-		expect(merged.hostInstalls[0]!.exports[0]!.slot).toBe(3);
-		expect(merged.literalTemplateData.slice(2)).toEqual([
+		expect(merged.runtime.cjsModuleFunctionIndices).toEqual([2]);
+		expect(merged.runtime.hostInstalls[0]!.exports[0]!.slot).toBe(3);
+		expect(merged.runtime.literalTemplateData.slice(2)).toEqual([
 			8, 2, 5, 2, 6, 1, 9, 1, 10, 2, 5, 2,
 		]);
-		expect(merged.precompiledLiteralShapes).toEqual([
+		expect(merged.runtime.precompiledLiteralShapes).toEqual([
 			{ functionIndex: 2, shapeCacheIndex: 0, keyStringIndices: [2] },
 		]);
 
-		const rebased = merged.functions[2]!.instructions;
+		const rebased = merged.runtime.functions[2]!.instructions;
 		expect(rebased[0]).toMatchObject({ functionIndex: 2 });
 		expect(rebased[1]).toMatchObject({ functionIndex: 2 });
 		expect(rebased[2]).toMatchObject({ ownerFunctionIndex: 2 });
@@ -277,7 +287,7 @@ describe("Test262 VM definition merger", () => {
 			capturedIndices: [0, 2],
 		});
 		expect(rebased[15]).toMatchObject({ object: 0, keyRegisters: [1, 2] });
-		const rebasedNative = merged.nativePlan.functions[2]!.instructions;
+		const rebasedNative = merged.native.functions[2]!.instructions;
 		expect(rebasedNative[16]).toMatchObject({
 			directFunctionIndex: 2,
 			directFunctionCall: true,
@@ -295,7 +305,7 @@ describe("Test262 VM definition merger", () => {
 			stringIndex: 2,
 			candidates: [{ shapeFunctionIndex: 2, shapeCacheIndex: 0, slot: 0 }],
 		});
-		expect(second.functions[0]!.instructions).toEqual(indexed);
+		expect(second.runtime.functions[0]!.instructions).toEqual(indexed);
 	});
 
 	it("rejects malformed definition counts and literal-template streams", () => {

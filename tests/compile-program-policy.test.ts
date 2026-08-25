@@ -34,7 +34,7 @@ describe("compileEntrypoint build policy", () => {
 			},
 		});
 
-		expect(definition.functions.length).toBeGreaterThan(0);
+		expect(definition.runtime.functions.length).toBeGreaterThan(0);
 		expect(phases).toEqual([
 			"graph",
 			"semantic",

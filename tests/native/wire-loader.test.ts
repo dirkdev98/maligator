@@ -553,14 +553,14 @@ describe("wire loader side-data validation", () => {
 			stripTypes: stripCompactTypes,
 		});
 		expect(
-			cursorDefinition.nativePlan.functions.flatMap((fn) =>
+			cursorDefinition.native.functions.flatMap((fn) =>
 				fn.specializations.filter((region) => region.kind === "string-split-cursor"),
 			),
 		).toHaveLength(1);
 		const wirePath = path.join(directory, "string-split-cursor-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeRuntimeImage(cursorDefinition, { debugInfo: false }),
+			serializeRuntimeImage(cursorDefinition.runtime, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -580,11 +580,11 @@ describe("wire loader side-data validation", () => {
 			stripTypes: stripCompactTypes,
 			buildConfig: resolveBuildConfig({}),
 		});
-		const projectionSites = projectionDefinition.nativePlan.functions.flatMap((native) =>
+		const projectionSites = projectionDefinition.native.functions.flatMap((native) =>
 			native.specializations
 				.filter((region) => region.kind === "string-split-projection")
 				.map((region) => ({
-					fn: projectionDefinition.functions[native.functionIndex]!,
+					fn: projectionDefinition.runtime.functions[native.functionIndex]!,
 					region,
 				})),
 		);
@@ -597,7 +597,7 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, "string-split-projection-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeRuntimeImage(projectionDefinition, { debugInfo: false }),
+			serializeRuntimeImage(projectionDefinition.runtime, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -619,14 +619,14 @@ describe("wire loader side-data validation", () => {
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
-			projectionDefinition.nativePlan.functions.flatMap((fn) =>
+			projectionDefinition.native.functions.flatMap((fn) =>
 				fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 			),
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "regexp-exec-projection-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeRuntimeImage(projectionDefinition, { debugInfo: false }),
+			serializeRuntimeImage(projectionDefinition.runtime, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -648,7 +648,7 @@ describe("wire loader side-data validation", () => {
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
-			projectionDefinition.nativePlan.functions.flatMap((fn) =>
+			projectionDefinition.native.functions.flatMap((fn) =>
 				fn.specializations.filter(
 					(region) => region.kind === "regexp-iterator-projection",
 				),
@@ -657,7 +657,7 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, "regexp-iterator-projection-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeRuntimeImage(projectionDefinition, { debugInfo: false }),
+			serializeRuntimeImage(projectionDefinition.runtime, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -681,14 +681,14 @@ describe("wire loader side-data validation", () => {
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
-			regionDefinition.nativePlan.functions.flatMap((fn) =>
+			regionDefinition.native.functions.flatMap((fn) =>
 				fn.specializations.filter((region) => region.kind === "string-slice-number"),
 			),
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "string-slice-number-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeRuntimeImage(regionDefinition, { debugInfo: false }),
+			serializeRuntimeImage(regionDefinition.runtime, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -710,12 +710,15 @@ describe("wire loader side-data validation", () => {
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
-			stackDefinition.nativePlan.functions.flatMap((fn) =>
+			stackDefinition.native.functions.flatMap((fn) =>
 				fn.specializations.filter((region) => region.kind === "stack-object-plan"),
 			),
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "stack-object-plan-region.malw");
-		writeFileSync(wirePath, serializeRuntimeImage(stackDefinition, { debugInfo: false }));
+		writeFileSync(
+			wirePath,
+			serializeRuntimeImage(stackDefinition.runtime, { debugInfo: false }),
+		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});

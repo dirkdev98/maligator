@@ -315,7 +315,8 @@ export function compileIsolatedTestImage(
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	return {
 		wire: serializeRuntimeImage(
-			compileSemanticProgramToProgramImage(semantic, { optimization: "development" }),
+			compileSemanticProgramToProgramImage(semantic, { optimization: "development" })
+				.runtime,
 		),
 		entries,
 		dependencies,
@@ -447,7 +448,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 		});
 		phases.compileMs = Date.now() - compileStartedAt;
 		const serializeStartedAt = Date.now();
-		wire = serializeRuntimeImage(definition);
+		wire = serializeRuntimeImage(definition.runtime);
 		phases.serializeMs = Date.now() - serializeStartedAt;
 		const cachedPath = cacheFrontendWire(wire, artifactRoot);
 		publish(

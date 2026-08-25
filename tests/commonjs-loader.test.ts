@@ -49,7 +49,7 @@ describe("CommonJS loader lowering", () => {
 		).toHaveLength(1);
 
 		const definition = compileSemanticProgramToProgramImage(program);
-		expect(definition.hostInstalls).toEqual([
+		expect(definition.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_path",
 				exports: [expect.objectContaining({ name: "default" })],
@@ -67,10 +67,12 @@ describe("CommonJS loader lowering", () => {
 		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
 		const definition = compileSemanticProgramToProgramImage(program);
 
-		expect(definition.cjsModuleFunctionIndices).toHaveLength(4);
-		expect(new Set(definition.cjsModuleFunctionIndices).size).toBe(4);
-		for (const functionIndex of definition.cjsModuleFunctionIndices) {
-			expect(definition.functions[functionIndex]!.instructions.length).toBeGreaterThan(2);
+		expect(definition.runtime.cjsModuleFunctionIndices).toHaveLength(4);
+		expect(new Set(definition.runtime.cjsModuleFunctionIndices).size).toBe(4);
+		for (const functionIndex of definition.runtime.cjsModuleFunctionIndices) {
+			expect(
+				definition.runtime.functions[functionIndex]!.instructions.length,
+			).toBeGreaterThan(2);
 		}
 		expect(program.graph!.cycles).toHaveLength(1);
 		expect(new Set(program.graph!.cycles[0]!.map((file) => path.basename(file)))).toEqual(
@@ -85,7 +87,7 @@ describe("CommonJS loader lowering", () => {
 		});
 		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
 		const definition = compileSemanticProgramToProgramImage(program);
-		const constants = strings(definition.stringConstants);
+		const constants = strings(definition.runtime.stringConstants);
 
 		expect(constants).toContain(path.join(root, "main.cjs"));
 		expect(constants).toContain(path.join(root, "child.cjs"));
@@ -101,11 +103,11 @@ describe("CommonJS loader lowering", () => {
 		const definition = compileSemanticProgramToProgramImage(program);
 
 		expect(
-			definition.functions
+			definition.runtime.functions
 				.flatMap((fn) => fn.instructions)
 				.filter((instruction) => instruction.opcode === "CREATE_MODULE_NAMESPACE"),
 		).toHaveLength(1);
-		expect(definition.cjsModuleFunctionIndices).toHaveLength(1);
+		expect(definition.runtime.cjsModuleFunctionIndices).toHaveLength(1);
 	});
 
 	it("rejects top-level await in a synchronously required ES module graph", () => {

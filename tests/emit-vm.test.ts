@@ -116,19 +116,20 @@ const definition: ProgramImage = testProgramImage({
 });
 
 function specializations(definition: ProgramImage) {
-	return definition.nativePlan.functions.flatMap((fn) => fn.specializations);
+	return definition.native.functions.flatMap((fn) => fn.specializations);
 }
 
 function withSpecializations(
 	definition: ProgramImage,
 	functionIndex: number,
-	next: ProgramImage["nativePlan"]["functions"][number]["specializations"],
+	next: ProgramImage["native"]["functions"][number]["specializations"],
 ): ProgramImage {
-	const owner = definition.nativePlan.functions[functionIndex]!;
+	const owner = definition.native.functions[functionIndex]!;
 	return {
 		...definition,
-		nativePlan: {
-			functions: definition.nativePlan.functions.with(functionIndex, {
+		native: {
+			...definition.native,
+			functions: definition.native.functions.with(functionIndex, {
 				...owner,
 				specializations: next,
 			}),
@@ -208,22 +209,25 @@ describe("emit-vm instruction packing", () => {
 	it("emits complete data-property descriptor attributes", () => {
 		const descriptorDefinition = {
 			...definition,
-			functions: [
-				{
-					...fn,
-					instructions: [
-						{
-							opcode: "DEFINE_PROPERTY" as const,
-							object: 1,
-							key: 2,
-							value: 3,
-							enumerable: true,
-							writable: false,
-							configurable: false,
-						},
-					],
-				},
-			],
+			runtime: {
+				...definition.runtime,
+				functions: [
+					{
+						...fn,
+						instructions: [
+							{
+								opcode: "DEFINE_PROPERTY" as const,
+								object: 1,
+								key: 2,
+								value: 3,
+								enumerable: true,
+								writable: false,
+								configurable: false,
+							},
+						],
+					},
+				],
+			},
 		};
 		expect(emitProgramImage(descriptorDefinition, { compiled: false })).toContain(
 			".as.define_property = { .object = 1, .key = 2, .value = 3, .enumerable = true, .writable = false, .configurable = false }",
@@ -235,21 +239,24 @@ describe("emit-vm instruction packing", () => {
 			const emitted = emitProgramImage(
 				{
 					...definition,
-					functions: [
-						{
-							...fn,
-							instructions: [
-								{
-									opcode: "CALL_BUILTIN",
-									dst: 0,
-									thisValue: 1,
-									argumentCount: 1,
-									arguments: [2],
-									operation,
-								},
-							],
-						},
-					],
+					runtime: {
+						...definition.runtime,
+						functions: [
+							{
+								...fn,
+								instructions: [
+									{
+										opcode: "CALL_BUILTIN",
+										dst: 0,
+										thisValue: 1,
+										argumentCount: 1,
+										arguments: [2],
+										operation,
+									},
+								],
+							},
+						],
+					},
 				},
 				{ compiled: false },
 			);
@@ -319,16 +326,19 @@ describe("emit-vm instruction packing", () => {
 		];
 		const specialized: ProgramImage = {
 			...definition,
-			precompiledLiteralShapes: [
-				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [1, 2] },
-			],
-			functions: [
-				{
-					...fn,
-					instructions: specializedInstructions,
-					positions: specializedInstructions.map(() => 0),
-				},
-			],
+			runtime: {
+				...definition.runtime,
+				precompiledLiteralShapes: [
+					{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [1, 2] },
+				],
+				functions: [
+					{
+						...fn,
+						instructions: specializedInstructions,
+						positions: specializedInstructions.map(() => 0),
+					},
+				],
+			},
 		};
 		const interpreted = emitProgramImage(specialized, { compiled: false });
 		const compiled = emitProgramImage(specialized, { compiled: true });
@@ -392,14 +402,17 @@ describe("emit-vm instruction packing", () => {
 		];
 		const synthetic: ProgramImage = {
 			...specialized,
-			functions: [
-				{
-					...specialized.functions[0]!,
-					literalShapeCount: 1,
-					instructions: syntheticInstructions,
-					positions: syntheticInstructions.map(() => 0),
-				},
-			],
+			runtime: {
+				...specialized.runtime,
+				functions: [
+					{
+						...specialized.runtime.functions[0]!,
+						literalShapeCount: 1,
+						instructions: syntheticInstructions,
+						positions: syntheticInstructions.map(() => 0),
+					},
+				],
+			},
 		};
 		for (const output of [
 			emitProgramImage(synthetic, { compiled: true }),
@@ -411,19 +424,22 @@ describe("emit-vm instruction packing", () => {
 
 		const malformed: ProgramImage = {
 			...specialized,
-			functions: [
-				{
-					...specialized.functions[0]!,
-					instructions: specializedInstructions.map((instruction) =>
-						instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-							? {
-									...instruction,
-									candidates: [{ ...instruction.candidates[0]!, slot: 0 }],
-								}
-							: instruction,
-					),
-				},
-			],
+			runtime: {
+				...specialized.runtime,
+				functions: [
+					{
+						...specialized.runtime.functions[0]!,
+						instructions: specializedInstructions.map((instruction) =>
+							instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+								? {
+										...instruction,
+										candidates: [{ ...instruction.candidates[0]!, slot: 0 }],
+									}
+								: instruction,
+						),
+					},
+				],
+			},
 		};
 		expect(() => emitProgramImage(malformed)).toThrow(/invalid known-own-slot access/);
 		expect(() => emitProgramTranslationUnits(malformed)).toThrow(
@@ -437,13 +453,16 @@ describe("emit-vm instruction packing", () => {
 		] as Array<BytecodeInstruction>;
 		const duplicateShapeRow: ProgramImage = {
 			...specialized,
-			functions: [
-				{
-					...specialized.functions[0]!,
-					instructions: duplicateShapeRowInstructions,
-					positions: duplicateShapeRowInstructions.map(() => 0),
-				},
-			],
+			runtime: {
+				...specialized.runtime,
+				functions: [
+					{
+						...specialized.runtime.functions[0]!,
+						instructions: duplicateShapeRowInstructions,
+						positions: duplicateShapeRowInstructions.map(() => 0),
+					},
+				],
+			},
 		};
 		expect(() => emitProgramImage(duplicateShapeRow)).toThrow(/literal shape index/);
 	});
@@ -451,17 +470,20 @@ describe("emit-vm instruction packing", () => {
 	it("emits terminal yields for interpreted and compiled generators", () => {
 		const terminal = {
 			...definition,
-			functions: [
-				{
-					...fn,
-					isGenerator: true,
-					instructions: [
-						{ opcode: "GENERATOR_START" },
-						{ opcode: "TERMINAL_YIELD", yieldedSrc: 6 },
-					] as Array<BytecodeInstruction>,
-				},
-			],
-			nativePlan: createConservativeNativePlan([
+			runtime: {
+				...definition.runtime,
+				functions: [
+					{
+						...fn,
+						isGenerator: true,
+						instructions: [
+							{ opcode: "GENERATOR_START" },
+							{ opcode: "TERMINAL_YIELD", yieldedSrc: 6 },
+						] as Array<BytecodeInstruction>,
+					},
+				],
+			},
+			native: createConservativeNativePlan([
 				{
 					...fn,
 					isGenerator: true,
@@ -499,9 +521,8 @@ describe("emit-vm instruction packing", () => {
 		}));
 		const splitDefinition = {
 			...definition,
-			functionCount: functions.length,
-			functions,
-			nativePlan: createConservativeNativePlan(functions),
+			runtime: { ...definition.runtime, functionCount: functions.length, functions },
+			native: createConservativeNativePlan(functions),
 		};
 		const budget = 20_000;
 		const units = emitProgramTranslationUnits(splitDefinition, {}, budget);
@@ -545,10 +566,13 @@ describe("emit-vm instruction packing", () => {
 		const units = emitProgramTranslationUnits(
 			{
 				...definition,
-				functionCount: functions.length,
-				functions,
-				stringConstants,
-				nativePlan: createConservativeNativePlan(functions),
+				runtime: {
+					...definition.runtime,
+					functionCount: functions.length,
+					functions,
+					stringConstants,
+				},
+				native: createConservativeNativePlan(functions),
 			},
 			{},
 			budget,
@@ -582,8 +606,8 @@ describe("emit-vm instruction packing", () => {
 		const units = emitProgramTranslationUnits(
 			{
 				...definition,
-				functions: [asyncFunction],
-				nativePlan: createConservativeNativePlan([asyncFunction]),
+				runtime: { ...definition.runtime, functionCount: 1, functions: [asyncFunction] },
+				native: createConservativeNativePlan([asyncFunction]),
 			},
 			{},
 			Number.MAX_SAFE_INTEGER,
@@ -602,13 +626,16 @@ describe("emit-vm instruction packing", () => {
 		}));
 		const splitDefinition = {
 			...definition,
-			functionCount: functions.length,
-			functions,
-			nativePlan: createConservativeNativePlan(functions),
-			sourcePositions: instructions.map((_, index) => ({
-				line: index + 1,
-				column: index,
-			})),
+			runtime: {
+				...definition.runtime,
+				functionCount: functions.length,
+				functions,
+				sourcePositions: instructions.map((_, index) => ({
+					line: index + 1,
+					column: index,
+				})),
+			},
+			native: createConservativeNativePlan(functions),
 		};
 		const budget = 30_000;
 		const units = emitProgramTranslationUnits(
@@ -650,11 +677,14 @@ describe("emit-vm instruction packing", () => {
 		const units = emitProgramTranslationUnits(
 			{
 				...definition,
-				functionCount: functions.length,
-				functions,
-				sourcePositions,
-				stringConstants,
-				nativePlan: createConservativeNativePlan(functions),
+				runtime: {
+					...definition.runtime,
+					functionCount: functions.length,
+					functions,
+					sourcePositions,
+					stringConstants,
+				},
+				native: createConservativeNativePlan(functions),
 			},
 			{},
 			budget,
@@ -698,8 +728,8 @@ describe("emit-vm instruction packing", () => {
 		const units = emitProgramTranslationUnits(
 			{
 				...definition,
-				functions,
-				nativePlan: createConservativeNativePlan(functions),
+				runtime: { ...definition.runtime, functionCount: functions.length, functions },
+				native: createConservativeNativePlan(functions),
 			},
 			{},
 			20_000,
@@ -725,7 +755,10 @@ describe("emit-vm instruction packing", () => {
 	it("uses a null side table when a function has no variable operands", () => {
 		const simple = {
 			...definition,
-			functions: [{ ...fn, instructions: [{ opcode: "RETURN", value: 0 } as const] }],
+			runtime: {
+				...definition.runtime,
+				functions: [{ ...fn, instructions: [{ opcode: "RETURN", value: 0 } as const] }],
+			},
 		};
 		expect(emitProgramImage(simple, { compiled: false })).toContain(
 			".instruction_data_count = 0, .instruction_data = nullptr",
@@ -841,11 +874,11 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.summarize = summarize;
 		`);
-		const functionIndex = definition.nativePlan.functions.findIndex(
+		const functionIndex = definition.native.functions.findIndex(
 			(fn) => fn.specializations.length > 0,
 		);
 		expect(functionIndex).toBeGreaterThanOrEqual(0);
-		const native = definition.nativePlan.functions[functionIndex]!;
+		const native = definition.native.functions[functionIndex]!;
 		const region = native.specializations[0]!;
 		const malformed = withSpecializations(definition, functionIndex, [
 			{
@@ -1393,10 +1426,10 @@ describe("native update-expression representation", () => {
 			"mal_builtin_string_split_projection(vm,",
 		);
 
-		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+		const functionIndex = lowered.native.functions.findIndex((fn) =>
 			fn.specializations.some((region) => region.kind === "string-split-projection"),
 		);
-		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const owner = lowered.native.functions[functionIndex]!;
 		const regionIndex = owner.specializations.findIndex(
 			(region) => region.kind === "string-split-projection",
 		);
@@ -1480,10 +1513,10 @@ describe("native update-expression representation", () => {
 			"mal_regexp_exec_capture_projection(vm,",
 		);
 
-		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+		const functionIndex = lowered.native.functions.findIndex((fn) =>
 			fn.specializations.some((region) => region.kind === "regexp-exec-projection"),
 		);
-		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const owner = lowered.native.functions[functionIndex]!;
 		const regionIndex = owner.specializations.findIndex(
 			(region) => region.kind === "regexp-exec-projection",
 		);
@@ -1524,7 +1557,7 @@ describe("native update-expression representation", () => {
 			parseScript(source, { strict: false }),
 		);
 		const projectedIdentities = (lowered: ProgramImage) => {
-			const region = lowered.nativePlan.functions
+			const region = lowered.native.functions
 				.flatMap((fn) => fn.specializations)
 				.find((candidate) => candidate.kind === "regexp-exec-projection");
 			if (region?.kind !== "regexp-exec-projection") {
@@ -1567,8 +1600,9 @@ describe("native update-expression representation", () => {
 		const charConsumer = firstLoad.consumer;
 		const malformed: ProgramImage = {
 			...locked,
-			nativePlan: {
-				functions: locked.nativePlan.functions.map((fn) => ({
+			native: {
+				...locked.native,
+				functions: locked.native.functions.map((fn) => ({
 					...fn,
 					specializations: fn.specializations.map((region) =>
 						region === lockedProjection.region
@@ -1591,21 +1625,24 @@ describe("native update-expression representation", () => {
 			/invalid RegExp\.exec projection region/,
 		);
 
-		const ownerIndex = locked.nativePlan.functions.findIndex((fn) =>
+		const ownerIndex = locked.native.functions.findIndex((fn) =>
 			fn.specializations.includes(lockedProjection.region),
 		);
-		const owner = locked.functions[ownerIndex]!;
+		const owner = locked.runtime.functions[ownerIndex]!;
 		const charCall = owner.instructions[charConsumer.callIp];
 		if (charCall?.opcode !== "CALL") throw new Error("missing projected char call");
 		const invalidZero: ProgramImage = {
 			...locked,
-			functions: locked.functions.with(ownerIndex, {
-				...owner,
-				instructions: owner.instructions.with(charConsumer.callIp, {
-					...charCall,
-					arguments: [-4],
+			runtime: {
+				...locked.runtime,
+				functions: locked.runtime.functions.with(ownerIndex, {
+					...owner,
+					instructions: owner.instructions.with(charConsumer.callIp, {
+						...charCall,
+						arguments: [-4],
+					}),
 				}),
-			}),
+			},
 		};
 		expect(() => serializeCompilerArtifact(invalidZero)).toThrow(
 			/invalid RegExp\.exec projection region/,
@@ -1628,13 +1665,16 @@ describe("native update-expression representation", () => {
 		}
 		const invalidCaseChain: ProgramImage = {
 			...locked,
-			functions: locked.functions.with(ownerIndex, {
-				...owner,
-				instructions: owner.instructions.with(asciiConsumer.lowerPropertyIp, {
-					...lowerProperty,
-					stringIndex: upperProperty.stringIndex,
+			runtime: {
+				...locked.runtime,
+				functions: locked.runtime.functions.with(ownerIndex, {
+					...owner,
+					instructions: owner.instructions.with(asciiConsumer.lowerPropertyIp, {
+						...lowerProperty,
+						stringIndex: upperProperty.stringIndex,
+					}),
 				}),
-			}),
+			},
 		};
 		expect(() => serializeCompilerArtifact(invalidCaseChain)).toThrow(
 			/invalid RegExp\.exec projection region/,
@@ -1695,10 +1735,10 @@ describe("native update-expression representation", () => {
 			"mal_builtin_string_slice_to_number_direct(vm,",
 		);
 
-		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+		const functionIndex = lowered.native.functions.findIndex((fn) =>
 			fn.specializations.some((region) => region.kind === "string-slice-number"),
 		);
-		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const owner = lowered.native.functions[functionIndex]!;
 		const regionIndex = owner.specializations.findIndex(
 			(region) => region.kind === "string-slice-number",
 		);
@@ -1775,10 +1815,10 @@ describe("native update-expression representation", () => {
 			"mal_regexp_try_exact_iterator_capture_projection(vm,",
 		);
 
-		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+		const functionIndex = lowered.native.functions.findIndex((fn) =>
 			fn.specializations.some((region) => region.kind === "regexp-iterator-projection"),
 		);
-		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const owner = lowered.native.functions[functionIndex]!;
 		const regionIndex = owner.specializations.findIndex(
 			(region) => region.kind === "regexp-iterator-projection",
 		);
@@ -1863,11 +1903,11 @@ describe("native update-expression representation", () => {
 		expect(
 			specializations(cached).filter((region) => region.kind === "string-split-cursor"),
 		).toEqual(cursors);
-		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+		const functionIndex = lowered.native.functions.findIndex((fn) =>
 			fn.specializations.some((region) => region.kind === "string-split-cursor"),
 		);
-		const owner = lowered.nativePlan.functions[functionIndex]!;
-		const bytecode = lowered.functions[functionIndex]!;
+		const owner = lowered.native.functions[functionIndex]!;
+		const bytecode = lowered.runtime.functions[functionIndex]!;
 		const cursor = owner.specializations.find(
 			(region) => region.kind === "string-split-cursor",
 		)!;

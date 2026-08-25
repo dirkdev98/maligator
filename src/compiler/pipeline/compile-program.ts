@@ -89,5 +89,5 @@ export function compileEntrypointToBuffer(
 	const runPhase =
 		options.runPhase ??
 		(<T>(_phase: CompileEntrypointToBufferPhase, run: () => T): T => run());
-	return runPhase("serialize", () => serializeRuntimeImage(definition));
+	return runPhase("serialize", () => serializeRuntimeImage(definition.runtime));
 }

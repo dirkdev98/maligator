@@ -210,12 +210,8 @@ describe("guarded-region admission validity", () => {
 		for (const primordials of ["locked", "mutable"] as const) {
 			const { definition } = compile(primordials);
 			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
-			const original = definition.nativePlan.functions.flatMap(
-				(fn) => fn.specializations,
-			);
-			const roundTripped = restored.nativePlan.functions.flatMap(
-				(fn) => fn.specializations,
-			);
+			const original = definition.native.functions.flatMap((fn) => fn.specializations);
+			const roundTripped = restored.native.functions.flatMap((fn) => fn.specializations);
 
 			expect(original.length).toBeGreaterThan(0);
 			expect(roundTripped.map((region) => region.license.admission)).toEqual(
@@ -226,11 +222,11 @@ describe("guarded-region admission validity", () => {
 
 	it("rejects a wire admission anchor outside the region's claims", () => {
 		const { definition } = compile("locked");
-		const functionIndex = definition.nativePlan.functions.findIndex((fn) =>
+		const functionIndex = definition.native.functions.findIndex((fn) =>
 			fn.specializations.some(({ kind }) => kind === "string-split-cursor"),
 		);
-		const owner = definition.nativePlan.functions[functionIndex]!;
-		const bytecode = definition.functions[functionIndex]!;
+		const owner = definition.native.functions[functionIndex]!;
+		const bytecode = definition.runtime.functions[functionIndex]!;
 		const regionIndex = owner.specializations.findIndex(
 			({ kind }) => kind === "string-split-cursor",
 		);
@@ -241,8 +237,9 @@ describe("guarded-region admission validity", () => {
 		);
 		const tampered: ProgramImage = {
 			...definition,
-			nativePlan: {
-				functions: definition.nativePlan.functions.with(functionIndex, {
+			native: {
+				...definition.native,
+				functions: definition.native.functions.with(functionIndex, {
 					...owner,
 					specializations: owner.specializations.with(regionIndex, {
 						...region,

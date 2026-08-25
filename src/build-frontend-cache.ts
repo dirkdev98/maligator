@@ -351,7 +351,7 @@ function loadCached(
 		const loadRuntimeWires = () =>
 			(runtimeWires ??= [
 				...loadArtifacts().slice(0, -1),
-				serializeRuntimeImage(loadDefinition()),
+				serializeRuntimeImage(loadDefinition().runtime),
 			]);
 		return {
 			get definition() {
@@ -609,7 +609,7 @@ export function compileBuildFrontend(
 			definition = compileDefinition(semantic, facts, options, phases);
 			const serializeStartedAt = Date.now();
 			artifactWires = [serializeCompilerArtifact(definition)];
-			wires = [serializeRuntimeImage(definition)];
+			wires = [serializeRuntimeImage(definition.runtime)];
 			phases.serializeMs += Date.now() - serializeStartedAt;
 		}
 	} else {
@@ -621,7 +621,7 @@ export function compileBuildFrontend(
 		definition = compileDefinition(semantic, facts, options, phases);
 		const serializeStartedAt = Date.now();
 		artifactWires = [serializeCompilerArtifact(definition)];
-		wires = [serializeRuntimeImage(definition)];
+		wires = [serializeRuntimeImage(definition.runtime)];
 		phases.serializeMs = Date.now() - serializeStartedAt;
 	}
 	const dependencies = graphDependencies(graph, session);

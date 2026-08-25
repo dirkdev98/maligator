@@ -648,7 +648,7 @@ export function vmCallProvesBuiltin(
 /**
  * Keep inline with the C struct
  */
-export interface ProgramImage {
+export interface RuntimeImage {
 	/** Absolute source entry used for Node-compatible process.argv[1]. */
 	entrypointPath: string;
 	functionCount: number;
@@ -659,10 +659,6 @@ export interface ProgramImage {
 	/** Portable shape rows eagerly interned for guarded own-slot accesses. */
 	precompiledLiteralShapes: Array<VmPrecompiledLiteralShape>;
 	globalCount: number;
-	/** Runtime-backed facts retained for native emission. Hand-built
-	 * definitions may omit them and conservatively decline those transforms. */
-	semanticProtectors?: ReadonlyArray<VmSemanticProtectorFact>;
-
 	/**
 	 * Debug-info file table: file id -> source path (relative to the compiler's
 	 * working directory). A function's `fileIndex` points here; the runtime
@@ -682,12 +678,6 @@ export interface ProgramImage {
 		callerPosId?: number;
 	}>;
 
-	/** Build-local source sites and structured optimization decisions. Profile
-	 * builds emit these; ordinary generated code ignores them. */
-	profileSites?: Array<ProfileSite>;
-	profileRemarks?: Array<CompilerRemark>;
-	optimizationTrace?: Array<OptimizationPassDelta>;
-
 	/**
 	 * CommonJS module table: index (module id) -> wrapper function index. Empty
 	 * for programs with no CommonJS modules.
@@ -706,18 +696,22 @@ export interface ProgramImage {
 		installer: string;
 		exports: Array<{ name: string; slot: number }>;
 	}>;
-
-	/** Native-only lowering plan. It is never part of the runtime bytecode wire. */
-	nativePlan: NativePlan;
 }
 
-/** The complete runtime payload. It contains no optimizer trace or native plan. */
-export type RuntimeImage = Omit<
-	ProgramImage,
-	"nativePlan" | "profileSites" | "profileRemarks" | "optimizationTrace"
->;
+/** Compiler-owned information that must never reach the runtime image. */
+export interface ProgramImage {
+	readonly runtime: RuntimeImage;
+	readonly native: NativePlan;
+	readonly diagnostics: {
+		profileSites?: Array<ProfileSite>;
+		profileRemarks?: Array<CompilerRemark>;
+		optimizationTrace?: Array<OptimizationPassDelta>;
+	};
+}
 
 export interface NativePlan {
+	/** Runtime-backed proof contracts consumed only while rendering native code. */
+	readonly semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>;
 	readonly functions: ReadonlyArray<NativeFunctionPlan>;
 }
 
@@ -766,6 +760,7 @@ export function createConservativeNativePlan(
 	functions: ReadonlyArray<BytecodeFunction>,
 ): NativePlan {
 	return {
+		semanticProtectors: [],
 		functions: functions.map((fn, functionIndex) => ({
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
@@ -2314,11 +2309,11 @@ export function compressPositions(
  */
 export function programImageStats(definition: ProgramImage): ProgramImageStats {
 	let instructionCount = 0;
-	for (const fn of definition.functions) {
+	for (const fn of definition.runtime.functions) {
 		instructionCount += fn.instructions.length;
 	}
 
-	return { functionCount: definition.functions.length, instructionCount };
+	return { functionCount: definition.runtime.functions.length, instructionCount };
 }
 
 /**
@@ -2359,7 +2354,26 @@ export function lowerExecutionToProgramImage(
 	);
 	const functions = functionPlans.map(({ bytecode }) => bytecode);
 
-	const definition: ProgramImage = {
+	const semanticProtectors = (
+		["primitive-methods", "watched-methods", "array-elements"] as const
+	).map((family) => {
+		const plan = compilerGuardPlan(
+			[context.facts.protectors.get(family)],
+			[
+				{
+					kind: "fallback" as const,
+					id: `semantic-protector:${family}`,
+					cause: "runtime-contract",
+				},
+			],
+		);
+		const guard = plan === undefined ? undefined : lowerGuardPlan(plan);
+		if (guard === undefined || !guard.obligations.includes("fallback")) {
+			throw new Error(`Runtime semantic fact ${family} lost its fallback contract`);
+		}
+		return { family, guard };
+	});
+	const runtime: RuntimeImage = {
 		entrypointPath: context.data.entrypointPath,
 		functionCount: program.functions.length,
 		functions,
@@ -2368,38 +2382,24 @@ export function lowerExecutionToProgramImage(
 		literalTemplateData: [...core.literalTemplateData],
 		precompiledLiteralShapes: [...knownShapeLayout.precompiledLiteralShapes],
 		globalCount: core.globalCount,
-		semanticProtectors: (
-			["primitive-methods", "watched-methods", "array-elements"] as const
-		).map((family) => {
-			const plan = compilerGuardPlan(
-				[context.facts.protectors.get(family)],
-				// The runtime's protector fact always keeps the generic operation as its
-				// twin, in both worlds: a locked build proves the family cannot be
-				// invalidated, never that a post-wire analysis may drop the ordinary path.
-				[
-					{
-						kind: "fallback",
-						id: `semantic-protector:${family}`,
-						cause: "runtime-contract",
-					},
-				],
-			);
-			const guard = plan === undefined ? undefined : lowerGuardPlan(plan);
-			if (guard === undefined || !guard.obligations.includes("fallback")) {
-				throw new Error(`Runtime semantic fact ${family} lost its fallback contract`);
-			}
-			return { family, guard };
-		}),
 		cjsModuleFunctionIndices: [...context.data.cjsModuleFunctionIndices],
 		hostInstalls: buildHostInstalls(context, functions),
-		nativePlan: { functions: functionPlans.map(({ native }) => native) },
 		files,
 		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),
-		...(profile && context.optimizationTrace !== undefined
-			? { optimizationTrace: [...context.optimizationTrace] }
-			: {}),
 	};
-	validateVmShapeCases(definition);
+	const definition: ProgramImage = {
+		runtime,
+		native: {
+			semanticProtectors,
+			functions: functionPlans.map(({ native }) => native),
+		},
+		diagnostics: {
+			...(profile && context.optimizationTrace !== undefined
+				? { optimizationTrace: [...context.optimizationTrace] }
+				: {}),
+		},
+	};
+	validateVmShapeCases(runtime);
 	if (profile) buildProfileMetadata(core, context, definition);
 	return definition;
 }
@@ -2413,7 +2413,7 @@ export function lowerExecutionToProgramImage(
 function buildHostInstalls(
 	context: CoreCompilationContext,
 	functions: Array<BytecodeFunction>,
-): ProgramImage["hostInstalls"] {
+): RuntimeImage["hostInstalls"] {
 	const readGlobalSlots = new Set<number>();
 	for (const fn of functions) {
 		for (const instruction of fn.instructions) {
@@ -2429,7 +2429,7 @@ function buildHostInstalls(
 		}
 	}
 
-	const manifest: ProgramImage["hostInstalls"] = [];
+	const manifest: RuntimeImage["hostInstalls"] = [];
 	const installFor = (installer: string) => {
 		let install = manifest.find((entry) => entry.installer === installer);
 		if (!install) {

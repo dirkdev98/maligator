@@ -101,19 +101,17 @@ function emptyForwardingBlocks(program: CoreProgram): ReadonlyArray<string> {
 }
 
 function vmRegions(definition: ProgramImage): ReadonlyArray<VmRegion> {
-	return definition.nativePlan.functions.flatMap(
-		({ specializations }) => specializations,
-	);
+	return definition.native.functions.flatMap(({ specializations }) => specializations);
 }
 
 /** Region kind, placement, and opcode selection, with every register identity dropped. */
 function semanticRegionShape(
 	definition: ProgramImage,
 ): ReadonlyArray<Record<string, unknown>> {
-	return definition.nativePlan.functions
+	return definition.native.functions
 		.flatMap((native) =>
 			native.specializations.map((region) => {
-				const fn = definition.functions[native.functionIndex]!;
+				const fn = definition.runtime.functions[native.functionIndex]!;
 				return {
 					kind: region.kind,
 					representation: region.representation,
@@ -160,10 +158,10 @@ describe("Core region property placement", () => {
 		const projections = regexpProjections(definition);
 		expect(projections).toHaveLength(2);
 		for (const projection of projections) {
-			const functionIndex = definition.nativePlan.functions.findIndex((candidate) =>
+			const functionIndex = definition.native.functions.findIndex((candidate) =>
 				candidate.specializations.includes(projection),
 			);
-			const fn = definition.functions[functionIndex]!;
+			const fn = definition.runtime.functions[functionIndex]!;
 			// Both sites emit the load immediately before its call, so adjacency cannot
 			// be what separates them.
 			expect(projection.propertyIp + 1).toBe(projection.callIp);
@@ -220,9 +218,9 @@ describe("Core region property placement", () => {
 					reuseRegisters: false,
 				}),
 			);
-			expect(distinct.functions.map(({ registerCount }) => registerCount)).not.toEqual(
-				reused.functions.map(({ registerCount }) => registerCount),
-			);
+			expect(
+				distinct.runtime.functions.map(({ registerCount }) => registerCount),
+			).not.toEqual(reused.runtime.functions.map(({ registerCount }) => registerCount));
 			expect(semanticRegionShape(distinct)).toEqual(semanticRegionShape(reused));
 			expect(vmRegions(distinct)).toHaveLength(vmRegions(reused).length);
 		}
@@ -344,7 +342,7 @@ describe("Core region property placement", () => {
 
 		const { functionIndex, regionIndex } = findVmSliceRegion(definition);
 		const region =
-			definition.nativePlan.functions[functionIndex]!.specializations[regionIndex]!;
+			definition.native.functions[functionIndex]!.specializations[regionIndex]!;
 		if (region.kind !== "string-slice-number") throw new Error("missing fusion region");
 		const asInPlace = serializeCompilerArtifact(
 			withVmRegion(definition, functionIndex, regionIndex, {
@@ -411,15 +409,15 @@ function findVmSliceRegion(definition: ProgramImage): {
 	functionIndex: number;
 	regionIndex: number;
 } {
-	const functionIndex = definition.nativePlan.functions.findIndex((fn) =>
+	const functionIndex = definition.native.functions.findIndex((fn) =>
 		fn.specializations.some((region) => region.kind === "string-slice-number"),
 	);
 	if (functionIndex < 0) throw new Error("no string-slice-number region");
 	return {
 		functionIndex,
-		regionIndex: definition.nativePlan.functions[
-			functionIndex
-		]!.specializations.findIndex((region) => region.kind === "string-slice-number"),
+		regionIndex: definition.native.functions[functionIndex]!.specializations.findIndex(
+			(region) => region.kind === "string-slice-number",
+		),
 	};
 }
 
@@ -429,11 +427,12 @@ function withVmRegion(
 	regionIndex: number,
 	region: VmRegion,
 ): ProgramImage {
-	const owner = definition.nativePlan.functions[functionIndex]!;
+	const owner = definition.native.functions[functionIndex]!;
 	return {
 		...definition,
-		nativePlan: {
-			functions: definition.nativePlan.functions.with(functionIndex, {
+		native: {
+			...definition.native,
+			functions: definition.native.functions.with(functionIndex, {
 				...owner,
 				specializations: owner.specializations.with(regionIndex, region),
 			}),

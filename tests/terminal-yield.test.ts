@@ -11,7 +11,7 @@ function generatorYields(source: string): Array<BytecodeInstruction["opcode"]> {
 		parseScript(source, { strict: true }),
 	);
 	const definition = compileSemanticProgramToProgramImage(semantic);
-	const generator = definition.functions.find((fn) => fn.isGenerator)!;
+	const generator = definition.runtime.functions.find((fn) => fn.isGenerator)!;
 	return generator.instructions
 		.map((instruction) => instruction.opcode)
 		.filter((opcode) => opcode === "YIELD" || opcode === "TERMINAL_YIELD");
@@ -24,7 +24,7 @@ function generatorOpcodes(source: string): Array<BytecodeInstruction["opcode"]> 
 		parseScript(source, { strict: true }),
 	);
 	const definition = compileSemanticProgramToProgramImage(semantic);
-	return definition.functions
+	return definition.runtime.functions
 		.find((fn) => fn.isGenerator)!
 		.instructions.map((instruction) => instruction.opcode);
 }

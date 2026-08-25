@@ -31,7 +31,7 @@ describe("tagged VM call operands", () => {
 			}
 			globalThis.keep = invoke;
 		`);
-		const call = definition.functions
+		const call = definition.runtime.functions
 			.flatMap((fn) => fn.instructions)
 			.find((instruction) => instruction.opcode === "CALL");
 		expect(call?.opcode).toBe("CALL");
@@ -53,7 +53,7 @@ describe("tagged VM call operands", () => {
 			function make(C) { return new C(undefined, "x", 7, -0); }
 			globalThis.keep = make;
 		`);
-		const instructions = definition.functions.flatMap((fn) => fn.instructions);
+		const instructions = definition.runtime.functions.flatMap((fn) => fn.instructions);
 		const construct = instructions.find(
 			(instruction) => instruction.opcode === "CONSTRUCT",
 		);

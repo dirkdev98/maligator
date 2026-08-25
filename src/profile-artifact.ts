@@ -242,11 +242,12 @@ const REMARK_EXPLANATIONS: Record<string, string> = {
 };
 
 function functionName(definition: ProgramImage, index: number): string {
-	const fn = definition.functions[index];
+	const fn = definition.runtime.functions[index];
 	if (fn === undefined) return "<unknown>";
 	return (
-		String.fromCodePoint(...(definition.stringConstants[fn.nameStringIndex] ?? [])) ||
-		"<anonymous>"
+		String.fromCodePoint(
+			...(definition.runtime.stringConstants[fn.nameStringIndex] ?? []),
+		) || "<anonymous>"
 	);
 }
 
@@ -260,14 +261,14 @@ export function prepareProfile(
 		schema: 3,
 		mode,
 		buildId: hash("sha256", readFileSync(binaryPath), "hex"),
-		entrypoint: definition.entrypointPath,
-		functions: definition.functions.map((fn, index) => ({
+		entrypoint: definition.runtime.entrypointPath,
+		functions: definition.runtime.functions.map((fn, index) => ({
 			name: functionName(definition, index),
-			file: definition.files[fn.fileIndex] ?? "<unknown>",
+			file: definition.runtime.files[fn.fileIndex] ?? "<unknown>",
 		})),
-		sites: definition.profileSites ?? [],
-		remarks: definition.profileRemarks ?? [],
-		optimizationTrace: definition.optimizationTrace ?? [],
+		sites: definition.diagnostics.profileSites ?? [],
+		remarks: definition.diagnostics.profileRemarks ?? [],
+		optimizationTrace: definition.diagnostics.optimizationTrace ?? [],
 	};
 	prepared.captureIdentity = profileCaptureIdentity(prepared);
 	atomicJson(`${binaryPath}.profile.json`, prepared, true);

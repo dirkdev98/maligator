@@ -1,4 +1,5 @@
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
+import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
@@ -41,8 +42,8 @@ import type {
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 25;
-export const COMPILER_ARTIFACT_VERSION = 25;
+export const WIRE_VERSION = 26;
+export const COMPILER_ARTIFACT_VERSION = 26;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -87,120 +88,8 @@ function taggedGuardedBuiltinOperation(operation: string | undefined): number {
 	return index + 1;
 }
 
-/**
- * Canonical opcode order = the wire tag (a u8 index into this array). The C
- * loader's `MalWireOp` enum mirrors this order exactly; keep them in lockstep.
- */
-export const WIRE_OPCODES = [
-	"MOVE",
-	"RETURN",
-	"JUMP_IF",
-	"JUMP",
-	"CREATE_NUMBER",
-	"CREATE_F64",
-	"CREATE_BOOLEAN",
-	"CREATE_STRING",
-	"CREATE_BIGINT",
-	"CREATE_OBJECT",
-	"CREATE_OBJECT_SHAPED",
-	"CREATE_ARRAY",
-	"CREATE_MODULE_NAMESPACE",
-	"CREATE_TEMPLATE_OBJECT",
-	"CREATE_UNDEFINED",
-	"CREATE_EMPTY",
-	"CREATE_NULL",
-	"CREATE_FUNCTION",
-	"CREATE_ARGUMENTS_OBJECT",
-	"LOAD_THIS",
-	"LOAD_NEW_TARGET",
-	"CALL",
-	"CONSTRUCT",
-	"THROW",
-	"CATCH",
-	"TRY_BEGIN",
-	"TRY_END",
-	"GENERATOR_START",
-	"ASYNC_START",
-	"YIELD",
-	"AWAIT",
-	"LOAD_INTRINSIC",
-	"LOAD_CAPTURED",
-	"LOAD_GLOBAL",
-	"STORE_CAPTURED",
-	"ENV_PUSH",
-	"ENV_COPY",
-	"ENV_POP",
-	"STORE_GLOBAL",
-	"LOAD_PROPERTY",
-	"STORE_PROPERTY",
-	"TO_PROPERTY_KEY",
-	"STORE_SUPER_PROPERTY",
-	"LOAD_PROTOTYPE",
-	"GET_ITERATOR",
-	"GET_ASYNC_ITERATOR",
-	"ITERATOR_NEXT",
-	"ITERATOR_STEP",
-	"ITERATOR_CLOSE",
-	"FOR_IN_KEYS",
-	"CALL_SPREAD",
-	"CONSTRUCT_SPREAD",
-	"CONSTRUCT_SUPER",
-	"MERGE_DATA_PROPERTIES",
-	"DELETE_PROPERTY",
-	"DEFINE_ACCESSOR",
-	"DEFINE_PROPERTY",
-	"CREATE_PRIVATE_NAME",
-	"DEFINE_PRIVATE",
-	"LOAD_PRIVATE",
-	"STORE_PRIVATE",
-	"HAS_PRIVATE",
-	"SET_PROTOTYPE",
-	"LOAD_UNDECLARED",
-	"LOAD_GLOBAL_PROPERTY",
-	"STORE_GLOBAL_PROPERTY",
-	"THROW_IF_TDZ",
-	"WITH_ENTER",
-	"WITH_EXIT",
-	"WITH_GET",
-	"WITH_SET",
-	"IS_EMPTY",
-	"REQUIRE_COERCIBLE",
-	"CREATE_REST_ARGUMENTS",
-	"ARRAY_REST",
-	"COPY_DATA_PROPERTIES",
-	"BINARY",
-	"UNARY",
-	// Appended last to preserve existing wire tags; mirrored by the trailing
-	// WIRE_WITH_RESOLVE_BASE / WIRE_SET_FUNCTION_NAME in the C wire_opcodes enum
-	// (vm_load.c). APPEND-ONLY.
-	"WITH_RESOLVE_BASE",
-	"SET_FUNCTION_NAME",
-	"CHECK_SUPER_CLASS",
-	"LOAD_CALLEE",
-	"GUARD_FUNCTION_INDEX",
-	"LOAD_SUPER_PROPERTY",
-	"INSTANTIATE_LITERAL_TEMPLATE",
-	"LOAD_ARGUMENT_COUNT",
-	"LOAD_ARGUMENT",
-	"LOAD_PROPERTY_STATIC",
-	"STORE_PROPERTY_STATIC",
-	"INIT_GLOBAL_VARS",
-	"CREATE_PRIVATE_NAMES",
-	"INIT_PRIVATE_FIELDS",
-	"TYPEOF_COMPARE",
-	"TERMINAL_YIELD",
-	"CONSTRUCT_SUPER_EXPLICIT",
-	"SET_THIS",
-	"LOAD_STATIC_ARGUMENT",
-	"CALL_SPREAD_ITERABLE",
-	"MATH_UNARY_NUMBER",
-	"MATH_BINARY_NUMBER",
-	"CALL_BUILTIN",
-	"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
-	"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
-	"SELECT_SHAPE_CASE",
-	"LOAD_PROPERTY_STATIC_SHAPE_CASE",
-] as const;
+/** Canonical wire tags generated into the C runtime from the same registry. */
+export const WIRE_OPCODES = BYTECODE_OPERATIONS;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
 
@@ -841,10 +730,10 @@ export function serializeRuntimeImage(
 }
 
 export function serializeCompilerArtifact(
-	def: ProgramImage,
+	image: ProgramImage,
 	options: { debugInfo?: boolean } = {},
 ): Uint8Array {
-	return serializeImage(def, def, COMPILER_ARTIFACT_MAGIC, options);
+	return serializeImage(image.runtime, image, COMPILER_ARTIFACT_MAGIC, options);
 }
 
 function serializeImage(
@@ -944,7 +833,9 @@ function serializeImage(
 		}
 	}
 
-	const semanticProtectors = [...(def.semanticProtectors ?? [])];
+	if (compiler === undefined) return w.finish();
+
+	const semanticProtectors = [...compiler.native.semanticProtectors];
 	if (
 		semanticProtectors.length > 3 ||
 		new Set(semanticProtectors.map((fact) => fact.family)).size !==
@@ -960,13 +851,11 @@ function serializeImage(
 		w.u8(obligationMask);
 	}
 
-	if (compiler === undefined) return w.finish();
-
 	// The compiler artifact appends native-only plans to the runtime payload. Its
 	// distinct magic prevents this richer artifact from ever reaching the VM loader.
-	w.u32(compiler.functions.length);
+	w.u32(compiler.native.functions.length);
 	for (const [functionIndex, fn] of def.functions.entries()) {
-		const native = compiler.nativePlan.functions[functionIndex];
+		const native = compiler.native.functions[functionIndex];
 		if (native?.functionIndex !== functionIndex) {
 			throw new RangeError("serialize-vm: native function plan mismatch");
 		}
@@ -2963,7 +2852,7 @@ function deserializeImage(
 		functions.push(readFunction(r));
 	}
 	const precompiledLiteralShapeCount = r.count(3);
-	const precompiledLiteralShapes: ProgramImage["precompiledLiteralShapes"] = [];
+	const precompiledLiteralShapes: RuntimeImage["precompiledLiteralShapes"] = [];
 	for (let shape = 0; shape < precompiledLiteralShapeCount; shape++) {
 		precompiledLiteralShapes.push({
 			functionIndex: r.i32(),
@@ -2973,7 +2862,7 @@ function deserializeImage(
 	}
 
 	const files: Array<string> = [];
-	const sourcePositions: ProgramImage["sourcePositions"] = [];
+	const sourcePositions: RuntimeImage["sourcePositions"] = [];
 	const fileCount = r.count(1);
 	for (let f = 0; f < fileCount; ++f) {
 		const len = r.count(1);
@@ -2989,7 +2878,7 @@ function deserializeImage(
 		const column = r.i32();
 		const inlinedFunctionIndex = r.i32();
 		const callerPosId = r.i32();
-		const pos: ProgramImage["sourcePositions"][number] = { line, column };
+		const pos: RuntimeImage["sourcePositions"][number] = { line, column };
 		if (inlinedFunctionIndex !== -1) {
 			pos.inlinedFunctionIndex = inlinedFunctionIndex;
 		}
@@ -3001,7 +2890,7 @@ function deserializeImage(
 	void debug;
 
 	const hostInstallCount = r.u32();
-	const hostInstalls: ProgramImage["hostInstalls"] = [];
+	const hostInstalls: RuntimeImage["hostInstalls"] = [];
 	for (let index = 0; index < hostInstallCount; index++) {
 		const installerLength = r.count(1);
 		const installerBytes = new Array<number>(installerLength);
@@ -3019,7 +2908,7 @@ function deserializeImage(
 		hostInstalls.push({ installer: utf8Decode(installerBytes), exports: hostExports });
 	}
 
-	const semanticProtectorCount = r.count(3);
+	const semanticProtectorCount = compilerArtifact ? r.count(3) : 0;
 	if (semanticProtectorCount > 3) {
 		throw new RangeError("serialize-vm: too many semantic protector facts");
 	}
@@ -3068,7 +2957,6 @@ function deserializeImage(
 		literalTemplateData,
 		precompiledLiteralShapes,
 		globalCount,
-		...(semanticProtectors.length === 0 ? {} : { semanticProtectors }),
 		hostInstalls,
 		files,
 		sourcePositions,
@@ -3844,10 +3732,11 @@ function deserializeImage(
 	}
 
 	const definition: ProgramImage = {
-		...runtimeImage,
-		nativePlan: { functions: nativeFunctions },
+		runtime: runtimeImage,
+		native: { semanticProtectors, functions: nativeFunctions },
+		diagnostics: {},
 	};
-	validateVmShapeCases(definition);
+	validateVmShapeCases(runtimeImage);
 	return definition;
 }
 

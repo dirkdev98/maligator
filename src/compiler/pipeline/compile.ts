@@ -90,5 +90,5 @@ export function compileSourceToBuffer(
 			directEvalContext,
 		},
 	});
-	return serializeRuntimeImage(definition, { debugInfo: options.debugInfo });
+	return serializeRuntimeImage(definition.runtime, { debugInfo: options.debugInfo });
 }

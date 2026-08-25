@@ -320,7 +320,7 @@ function compileIsland(
 		},
 	});
 	const serializeStartedAt = Date.now();
-	const wire = serializeRuntimeImage(definition);
+	const wire = serializeRuntimeImage(definition.runtime);
 	options.phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = frontendDigest(wire);
 	cacheFrontendWire(wire, artifactRoot);

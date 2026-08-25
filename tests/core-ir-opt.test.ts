@@ -3312,13 +3312,13 @@ describe("Core IR optimizer", () => {
 		expect(optimized!.functions[1]!.regions).toContainEqual(
 			expect.objectContaining({ kind: "stack-object-plan" }),
 		);
-		expect(definition.nativePlan.functions[1]!.specializations).toContainEqual(
+		expect(definition.native.functions[1]!.specializations).toContainEqual(
 			expect.objectContaining({
 				kind: "stack-object-plan",
 				sites: [expect.objectContaining({ materializations: [expect.any(Object)] })],
 			}),
 		);
-		expect(definition.profileRemarks).toContainEqual(
+		expect(definition.diagnostics.profileRemarks).toContainEqual(
 			expect.objectContaining({
 				code: "optimization.applied.partial-escape-materialization",
 			}),
@@ -3376,7 +3376,7 @@ describe("Core IR optimizer", () => {
 		expect(JSON.stringify(coreRegion?.data)).toMatch(
 			/"inheritedAccess":\{"\$coreInstruction":\d+\}/,
 		);
-		const vmRegion = definition.nativePlan.functions[1]!.specializations.find(
+		const vmRegion = definition.native.functions[1]!.specializations.find(
 			({ kind }) => kind === "stack-object-plan",
 		);
 		expect(vmRegion?.license.materialization).toBe("on-demand");
@@ -3413,7 +3413,7 @@ describe("Core IR optimizer", () => {
 		});
 
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
-		const vmRegion = restored.nativePlan.functions[1]!.specializations.find(
+		const vmRegion = restored.native.functions[1]!.specializations.find(
 			({ kind }) => kind === "stack-object-plan",
 		);
 		expect(vmRegion?.kind).toBe("stack-object-plan");
@@ -3440,12 +3440,12 @@ describe("Core IR optimizer", () => {
 			"core-many-regions.js",
 		);
 		const definition = compileSemanticProgramToProgramImage(semantic);
-		const regions = definition.nativePlan.functions[1]!.specializations;
+		const regions = definition.native.functions[1]!.specializations;
 
 		expect(regions.length).toBeGreaterThan(40);
 		expect(regions.filter(({ kind }) => kind === "stack-object-plan")).toHaveLength(41);
 		expect(
-			deserializeCompilerArtifact(serializeCompilerArtifact(definition)).nativePlan
+			deserializeCompilerArtifact(serializeCompilerArtifact(definition)).native
 				.functions[1]!.specializations,
 		).toEqual(regions);
 	});

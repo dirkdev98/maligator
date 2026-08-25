@@ -46,7 +46,7 @@ function compile(source: string, options: { node?: boolean } = {}): ProgramImage
 /** Every LOAD_GLOBAL slot index read anywhere in the program. */
 function loadGlobalSlots(def: ProgramImage): Set<number> {
 	const slots = new Set<number>();
-	for (const fn of def.functions) {
+	for (const fn of def.runtime.functions) {
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode === "LOAD_GLOBAL") {
 				slots.add(instruction.index);
@@ -63,8 +63,8 @@ describe("host-install manifest", () => {
 			{ node: true },
 		);
 
-		expect(def.hostInstalls).toHaveLength(1);
-		const install = def.hostInstalls[0]!;
+		expect(def.runtime.hostInstalls).toHaveLength(1);
+		const install = def.runtime.hostInstalls[0]!;
 		expect(install.installer).toBe("mal_host_install_node_path");
 		expect(install.exports.map((e) => e.name)).toEqual(["join"]);
 
@@ -75,7 +75,7 @@ describe("host-install manifest", () => {
 		// No host-specific opcode was introduced: every emitted opcode is a known
 		// wire opcode.
 		const known = new Set<string>(WIRE_OPCODES);
-		for (const fn of def.functions) {
+		for (const fn of def.runtime.functions) {
 			for (const instruction of fn.instructions) {
 				expect(known.has(instruction.opcode)).toBe(true);
 			}
@@ -87,34 +87,34 @@ describe("host-install manifest", () => {
 			`import { join, resolve } from "node:path";\nglobalThis.sink = join("a");\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toHaveLength(1);
-		expect(def.hostInstalls[0]!.exports.map((e) => e.name)).toEqual(["join"]);
+		expect(def.runtime.hostInstalls).toHaveLength(1);
+		expect(def.runtime.hostInstalls[0]!.exports.map((e) => e.name)).toEqual(["join"]);
 	});
 
 	it("drops a host export whose final LOAD_GLOBAL is optimized away", () => {
 		const def = compile(`import { join } from "node:path";\njoin;\n`, { node: true });
-		expect(def.hostInstalls).toEqual([]);
+		expect(def.runtime.hostInstalls).toEqual([]);
 		expect(loadGlobalSlots(def)).toEqual(new Set());
 	});
 
 	it("drops a side-effect-only host import", () => {
 		const def = compile(`import "node:path";\nglobalThis.sink = 1;\n`, { node: true });
-		expect(def.hostInstalls).toEqual([]);
+		expect(def.runtime.hostInstalls).toEqual([]);
 	});
 
 	it("retains host exports read by a surviving namespace", () => {
 		const def = compile(`import * as path from "node:path";\nglobalThis.sink = path;\n`, {
 			node: true,
 		});
-		const namespace = def.functions
+		const namespace = def.runtime.functions
 			.flatMap((fn) => fn.instructions)
 			.find((instruction) => instruction.opcode === "CREATE_MODULE_NAMESPACE");
 		expect(namespace).toBeDefined();
 		if (namespace?.opcode !== "CREATE_MODULE_NAMESPACE") {
 			throw new Error("Expected a module namespace instruction");
 		}
-		expect(def.hostInstalls).toHaveLength(1);
-		expect(def.hostInstalls[0]!.exports.map((entry) => entry.name)).toEqual([
+		expect(def.runtime.hostInstalls).toHaveLength(1);
+		expect(def.runtime.hostInstalls[0]!.exports.map((entry) => entry.name)).toEqual([
 			"basename",
 			"delimiter",
 			"dirname",
@@ -128,9 +128,9 @@ describe("host-install manifest", () => {
 			"sep",
 			"default",
 		]);
-		expect(new Set(def.hostInstalls[0]!.exports.map((entry) => entry.slot))).toEqual(
-			new Set(namespace.slots),
-		);
+		expect(
+			new Set(def.runtime.hostInstalls[0]!.exports.map((entry) => entry.slot)),
+		).toEqual(new Set(namespace.slots));
 	});
 
 	it("binds newly curated path and crypto exports", () => {
@@ -138,7 +138,7 @@ describe("host-install manifest", () => {
 			`import { normalize } from "node:path";\nimport { randomUUID } from "node:crypto";\nglobalThis.sink = [normalize, randomUUID];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_path",
 				exports: [expect.objectContaining({ name: "normalize" })],
@@ -154,7 +154,7 @@ describe("host-install manifest", () => {
 		const def = compile(`import p from "node:path";\nglobalThis.sink = p;\n`, {
 			node: true,
 		});
-		expect(def.hostInstalls[0]!.exports.map((e) => e.name)).toEqual(["default"]);
+		expect(def.runtime.hostInstalls[0]!.exports.map((e) => e.name)).toEqual(["default"]);
 	});
 
 	it("binds promise-based filesystem exports through their submodule installer", () => {
@@ -162,7 +162,7 @@ describe("host-install manifest", () => {
 			`import fsPromises, { readdir } from "node:fs/promises";\nglobalThis.sink = [fsPromises, readdir];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_fs_promises",
 				exports: [
@@ -178,7 +178,7 @@ describe("host-install manifest", () => {
 			`import { closeSync } from "node:fs";\nglobalThis.sink = closeSync;\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_fs",
 				exports: [expect.objectContaining({ name: "closeSync" })],
@@ -191,7 +191,7 @@ describe("host-install manifest", () => {
 			`import { setFlagsFromString } from "node:v8";\nimport { runInNewContext } from "node:vm";\nglobalThis.sink = [setFlagsFromString, runInNewContext];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({ installer: "mal_host_install_node_v8" }),
 			expect.objectContaining({ installer: "mal_host_install_node_vm" }),
 		]);
@@ -202,7 +202,7 @@ describe("host-install manifest", () => {
 			`import { tracingChannel } from "node:diagnostics_channel";\nglobalThis.sink = tracingChannel;\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_diagnostics_channel",
 			}),
@@ -214,7 +214,7 @@ describe("host-install manifest", () => {
 			`import { isMainThread } from "node:worker_threads";\nglobalThis.sink = isMainThread;\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_worker_threads",
 			}),
@@ -226,7 +226,7 @@ describe("host-install manifest", () => {
 			`import { createRequire } from "node:module";\nglobalThis.sink = createRequire;\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_module",
 			}),
@@ -238,7 +238,7 @@ describe("host-install manifest", () => {
 			`import { exec, spawn } from "node:child_process";\nglobalThis.sink = [exec, spawn];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_child_process",
 				exports: [
@@ -254,7 +254,7 @@ describe("host-install manifest", () => {
 			`import Events, { EventEmitter } from "node:events";\nglobalThis.sink = [Events, EventEmitter];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_events",
 				exports: [
@@ -270,7 +270,7 @@ describe("host-install manifest", () => {
 			`import assert, { strictEqual } from "node:assert";\nglobalThis.sink = [assert, strictEqual];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_assert",
 				exports: [
@@ -286,18 +286,18 @@ describe("host-install manifest", () => {
 			`import { doesNotMatch, fail, ifError, notDeepStrictEqual, notStrictEqual } from "node:assert";\nimport strict, { deepStrictEqual, notDeepEqual, notEqual, ok, strictEqual } from "node:assert/strict";\nglobalThis.sink = [doesNotMatch, fail, ifError, notDeepStrictEqual, notStrictEqual, strict, deepStrictEqual, notDeepEqual, notEqual, ok, strictEqual];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls.map((install) => install.installer)).toEqual([
+		expect(def.runtime.hostInstalls.map((install) => install.installer)).toEqual([
 			"mal_host_install_node_assert",
 			"mal_host_install_node_assert_strict",
 		]);
-		expect(def.hostInstalls[0]!.exports.map((entry) => entry.name)).toEqual([
+		expect(def.runtime.hostInstalls[0]!.exports.map((entry) => entry.name)).toEqual([
 			"doesNotMatch",
 			"fail",
 			"ifError",
 			"notDeepStrictEqual",
 			"notStrictEqual",
 		]);
-		expect(def.hostInstalls[1]!.exports.map((entry) => entry.name)).toEqual([
+		expect(def.runtime.hostInstalls[1]!.exports.map((entry) => entry.name)).toEqual([
 			"deepStrictEqual",
 			"notDeepEqual",
 			"notEqual",
@@ -312,7 +312,7 @@ describe("host-install manifest", () => {
 			`import tty, { isatty } from "node:tty";\nglobalThis.sink = [tty, isatty];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_tty",
 				exports: [
@@ -327,7 +327,7 @@ describe("host-install manifest", () => {
 		const def = compile(`import { isatty } from "node:tty";\nisatty;\n`, {
 			node: true,
 		});
-		expect(def.hostInstalls).toEqual([]);
+		expect(def.runtime.hostInstalls).toEqual([]);
 	});
 
 	it("binds node:util default and named exports through one installer", () => {
@@ -335,7 +335,7 @@ describe("host-install manifest", () => {
 			`import util, { format } from "node:util";\nglobalThis.sink = [util, format];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_util",
 				exports: [
@@ -350,7 +350,7 @@ describe("host-install manifest", () => {
 		const def = compile(`import { EventEmitter } from "node:events";\nEventEmitter;\n`, {
 			node: true,
 		});
-		expect(def.hostInstalls).toEqual([]);
+		expect(def.runtime.hostInstalls).toEqual([]);
 	});
 
 	it("coalesces free Buffer and node:buffer exports into one installer", () => {
@@ -358,7 +358,7 @@ describe("host-install manifest", () => {
 			`import buffer, { Buffer as ImportedBuffer } from "node:buffer";\nglobalThis.sink = [buffer, ImportedBuffer, Buffer];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_buffer",
 				exports: [
@@ -371,14 +371,14 @@ describe("host-install manifest", () => {
 
 	it("installs free Buffer without a module import", () => {
 		const def = compile(`globalThis.sink = Buffer.from("x");\n`, { node: true });
-		expect(def.hostInstalls).toEqual([
+		expect(def.runtime.hostInstalls).toEqual([
 			{ installer: "mal_host_install_node_buffer", exports: [] },
 		]);
 	});
 
 	it("retains the process installer for the free global alias", () => {
 		const def = compile(`globalThis.sink = global;\n`, { node: true });
-		expect(def.hostInstalls).toContainEqual({
+		expect(def.runtime.hostInstalls).toContainEqual({
 			installer: "mal_host_install_process",
 			exports: [],
 		});
@@ -389,41 +389,41 @@ describe("host-install manifest", () => {
 			`import { Buffer as ImportedBuffer } from "node:buffer";\nfunction unused() { return [ImportedBuffer, Buffer]; }\nglobalThis.sink = 1;\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls).toEqual([]);
+		expect(def.runtime.hostInstalls).toEqual([]);
 	});
 
 	it("detects and installs the free global `process`", () => {
 		const def = compile(`globalThis.sink = process.argv;\n`, { node: true });
-		const install = def.hostInstalls.find(
+		const install = def.runtime.hostInstalls.find(
 			(i) => i.installer === "mal_host_install_process",
 		);
 		expect(install?.exports).toEqual([]);
-		expect(def.functions.flatMap((fn) => fn.instructions)).toContainEqual(
+		expect(def.runtime.functions.flatMap((fn) => fn.instructions)).toContainEqual(
 			expect.objectContaining({ opcode: "LOAD_GLOBAL_PROPERTY" }),
 		);
 	});
 
 	it("stores assignment to process through the global object", () => {
 		const def = compile(`process = globalThis.replacement;\n`, { node: true });
-		expect(def.hostInstalls).toContainEqual({
+		expect(def.runtime.hostInstalls).toContainEqual({
 			installer: "mal_host_install_process",
 			exports: [],
 		});
-		expect(def.functions.flatMap((fn) => fn.instructions)).toContainEqual(
+		expect(def.runtime.functions.flatMap((fn) => fn.instructions)).toContainEqual(
 			expect.objectContaining({ opcode: "STORE_GLOBAL_PROPERTY" }),
 		);
 	});
 
 	it("installs `process` when it is only read by typeof", () => {
 		const def = compile(`globalThis.sink = typeof process;\n`, { node: true });
-		expect(def.hostInstalls.map((i) => i.installer)).toContain(
+		expect(def.runtime.hostInstalls.map((i) => i.installer)).toContain(
 			"mal_host_install_process",
 		);
 	});
 
 	it("installs Node text encoding globals without the web surface", () => {
 		const def = compile(`globalThis.sink = new TextDecoder();\n`, { node: true });
-		expect(def.hostInstalls).toContainEqual({
+		expect(def.runtime.hostInstalls).toContainEqual({
 			installer: "mal_host_install_process",
 			exports: [],
 		});
@@ -431,14 +431,14 @@ describe("host-install manifest", () => {
 
 	it("leaves an ordinary program's manifest empty", () => {
 		const def = compile(`globalThis.sink = process;\n`, { node: false });
-		expect(def.hostInstalls).toEqual([]);
+		expect(def.runtime.hostInstalls).toEqual([]);
 	});
 
 	it("drops process used only by an unreachable function", () => {
 		const def = compile(`function unused() { return process; }\nglobalThis.sink = 1;\n`, {
 			node: true,
 		});
-		expect(def.hostInstalls).toEqual([]);
+		expect(def.runtime.hostInstalls).toEqual([]);
 	});
 
 	it("emits a direct installer reference for a reached host module", () => {
@@ -468,8 +468,8 @@ describe("host-install manifest", () => {
 			`import { join } from "node:path";\nglobalThis.sink = [join("a"), process.pid];\n`,
 			{ node: true },
 		);
-		expect(def.hostInstalls.length).toBeGreaterThan(0);
+		expect(def.runtime.hostInstalls.length).toBeGreaterThan(0);
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(def));
-		expect(restored.hostInstalls).toEqual(def.hostInstalls);
+		expect(restored.runtime.hostInstalls).toEqual(def.runtime.hostInstalls);
 	});
 });

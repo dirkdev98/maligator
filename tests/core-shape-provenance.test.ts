@@ -1202,18 +1202,18 @@ describe("Core known own-slot selection", () => {
 		const vm = lowerExecutionToProgramImage(
 			lowerCoreCompilationToExecution(coreCompilationForTest(optimized)),
 		);
-		const descriptor = vm.precompiledLiteralShapes.find(
+		const descriptor = vm.runtime.precompiledLiteralShapes.find(
 			(shape) => shape.functionIndex === origin.functionIndex,
 		);
 		expect(descriptor?.keyStringIndices).toEqual(origin.keyStringIndices);
-		expect(vm.functions[origin.functionIndex]!.literalShapeCount).toBe(1);
+		expect(vm.runtime.functions[origin.functionIndex]!.literalShapeCount).toBe(1);
 		expect(
-			vm.functions[origin.functionIndex]!.instructions.some(
+			vm.runtime.functions[origin.functionIndex]!.instructions.some(
 				(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",
 			),
 		).toBe(false);
 		expect(
-			vm.functions
+			vm.runtime.functions
 				.flatMap((fn) => fn.instructions)
 				.filter((instruction) => instruction.opcode.includes("KNOWN_OWN_SLOT")),
 		).toHaveLength(2);
@@ -1804,10 +1804,10 @@ describe("Core known own-slot selection", () => {
 			targetInstructions.filter(({ type }) => type === "loadPropertyStaticShapeCase"),
 		).toHaveLength(3);
 		const vm = lowerExecutionToProgramImage(target);
-		const vmSelectors = vm.functions.flatMap(({ instructions }) =>
+		const vmSelectors = vm.runtime.functions.flatMap(({ instructions }) =>
 			instructions.filter(({ opcode }) => opcode === "SELECT_SHAPE_CASE"),
 		);
-		const vmLoads = vm.functions.flatMap(({ instructions }) =>
+		const vmLoads = vm.runtime.functions.flatMap(({ instructions }) =>
 			instructions.filter(({ opcode }) => opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE"),
 		);
 		expect(vmSelectors).toHaveLength(1);
@@ -1863,12 +1863,12 @@ describe("Core known own-slot selection", () => {
 		).toHaveLength(2);
 		const vm = lowerExecutionToProgramImage(target);
 		expect(
-			vm.functions.flatMap(({ instructions }) =>
+			vm.runtime.functions.flatMap(({ instructions }) =>
 				instructions.filter(({ opcode }) => opcode === "SELECT_SHAPE_CASE"),
 			),
 		).toHaveLength(1);
 		expect(
-			vm.functions.flatMap(({ instructions }) =>
+			vm.runtime.functions.flatMap(({ instructions }) =>
 				instructions.filter(({ opcode }) => opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE"),
 			),
 		).toHaveLength(2);

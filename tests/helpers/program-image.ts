@@ -3,13 +3,16 @@ import type {
 	BytecodeFunction,
 	NativeFunctionPlan,
 	ProgramImage,
+	RuntimeImage,
 } from "../../src/compiler/target/lower-vm.ts";
 
-type RuntimeProgramImage = Omit<ProgramImage, "nativePlan">;
-
 /** Build an explicit conservative native contract for a hand-authored fixture. */
-export function testProgramImage(image: RuntimeProgramImage): ProgramImage {
-	return { ...image, nativePlan: createConservativeNativePlan(image.functions) };
+export function testProgramImage(runtime: RuntimeImage): ProgramImage {
+	return {
+		runtime,
+		native: createConservativeNativePlan(runtime.functions),
+		diagnostics: {},
+	};
 }
 
 /** Replace one native plan while preserving its bytecode function. */
@@ -18,10 +21,10 @@ export function withNativeFunctionPlan(
 	functionIndex: number,
 	update: (plan: NativeFunctionPlan, fn: BytecodeFunction) => NativeFunctionPlan,
 ): ProgramImage {
-	const functions = [...image.nativePlan.functions];
+	const functions = [...image.native.functions];
 	functions[functionIndex] = update(
 		functions[functionIndex]!,
-		image.functions[functionIndex]!,
+		image.runtime.functions[functionIndex]!,
 	);
-	return { ...image, nativePlan: { functions } };
+	return { ...image, native: { ...image.native, functions } };
 }

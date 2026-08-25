@@ -18,7 +18,7 @@ describe("static-key property operations", () => {
 		const definition = compile(
 			`function f(o, value) { o.answer = value; return o.answer + o["other"]; } globalThis.keep = f;`,
 		);
-		const instructions = definition.functions.flatMap((fn) => fn.instructions);
+		const instructions = definition.runtime.functions.flatMap((fn) => fn.instructions);
 		expect(
 			instructions.filter(
 				(instruction) => instruction.opcode === "STORE_PROPERTY_STATIC",
@@ -36,7 +36,7 @@ describe("static-key property operations", () => {
 		const definition = compile(
 			`function f(o, key, value) { o[key] = value; return o[key]; } globalThis.keep = f;`,
 		);
-		const instructions = definition.functions.flatMap((fn) => fn.instructions);
+		const instructions = definition.runtime.functions.flatMap((fn) => fn.instructions);
 		expect(
 			instructions.some((instruction) => instruction.opcode === "STORE_PROPERTY"),
 		).toBe(true);

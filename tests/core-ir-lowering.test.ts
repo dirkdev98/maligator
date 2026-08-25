@@ -53,7 +53,7 @@ describe("Core IR lowering", () => {
 
 		const lowered = lowerCoreCompilationToExecution(coreCompilationForTest(converted));
 		const vm = lowerExecutionToProgramImage(lowered);
-		expect(vm.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
+		expect(vm.runtime.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
 	});
 
 	it("does not lower unreachable structured handlers after abrupt completion", () => {
@@ -132,9 +132,9 @@ describe("Core IR lowering", () => {
 		`);
 		const lowered = lowerCoreCompilationToExecution(coreCompilationForTest(converted));
 		const vm = lowerExecutionToProgramImage(lowered);
-		expect(vm.functions.length).toBeGreaterThan(0);
+		expect(vm.runtime.functions.length).toBeGreaterThan(0);
 		expect(
-			vm.functions.flatMap(({ instructions }) => instructions).length,
+			vm.runtime.functions.flatMap(({ instructions }) => instructions).length,
 		).toBeGreaterThan(10);
 	});
 
@@ -156,7 +156,7 @@ describe("Core IR lowering", () => {
 		).program;
 		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
 		const vm = lowerExecutionToProgramImage(target);
-		const load = vm.functions
+		const load = vm.runtime.functions
 			.flatMap((fn) => fn.instructions)
 			.find(
 				(instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
@@ -164,7 +164,7 @@ describe("Core IR lowering", () => {
 		expect(load?.opcode).toBe("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
 		if (load?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") return;
 		const candidate = load.candidates[0]!;
-		const source = vm.functions[candidate.shapeFunctionIndex]!.instructions.find(
+		const source = vm.runtime.functions[candidate.shapeFunctionIndex]!.instructions.find(
 			(instruction) =>
 				instruction.opcode === "CREATE_OBJECT_SHAPED" &&
 				instruction.shapeCacheIndex === candidate.shapeCacheIndex,
@@ -227,7 +227,7 @@ describe("Core IR lowering", () => {
 		).program;
 		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
 		const vm = lowerExecutionToProgramImage(target);
-		const store = vm.functions
+		const store = vm.runtime.functions
 			.flatMap((fn) => fn.instructions)
 			.find(
 				(instruction) => instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
@@ -235,7 +235,7 @@ describe("Core IR lowering", () => {
 		expect(store?.opcode).toBe("STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT");
 		if (store?.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") return;
 		const candidate = store.candidates[0]!;
-		const source = vm.functions[candidate.shapeFunctionIndex]!.instructions.find(
+		const source = vm.runtime.functions[candidate.shapeFunctionIndex]!.instructions.find(
 			(instruction) =>
 				instruction.opcode === "CREATE_OBJECT_SHAPED" &&
 				instruction.shapeCacheIndex === candidate.shapeCacheIndex,

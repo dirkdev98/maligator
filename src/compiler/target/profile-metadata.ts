@@ -430,14 +430,17 @@ export function finalizeCompilerRemarks(
 	definition: ProgramImage,
 	compiled: ReadonlyArray<FinalCompiledFunction | null>,
 ): void {
-	if (definition.profileSites === undefined) return;
-	const remarks: Array<CompilerRemark> = [...(definition.profileRemarks ?? [])];
-	for (const [functionIndex, fn] of definition.functions.entries()) {
+	const sites = definition.diagnostics.profileSites;
+	if (sites === undefined) return;
+	const remarks: Array<CompilerRemark> = [
+		...(definition.diagnostics.profileRemarks ?? []),
+	];
+	for (const [functionIndex, fn] of definition.runtime.functions.entries()) {
 		const emitted = compiled[functionIndex];
 		if (emitted === null || emitted === undefined) {
 			for (const siteId of fn.profileSiteIds ?? []) {
 				if (siteId < 0) continue;
-				const site = definition.profileSites[siteId];
+				const site = sites[siteId];
 				if (site === undefined || !remarkableOperation(site.operation)) continue;
 				remarks.push({
 					siteId,
@@ -464,7 +467,7 @@ export function finalizeCompilerRemarks(
 			});
 		}
 	}
-	definition.profileRemarks = remarks;
+	definition.diagnostics.profileRemarks = remarks;
 }
 
 /** Derive dense runtime IDs plus conservative cross-build keys from the final
@@ -475,6 +478,7 @@ export function buildProfileMetadata(
 	context: CoreCompilationContext,
 	definition: ProgramImage,
 ): void {
+	const runtime = definition.runtime;
 	const sourcePaths = context.data.sourceFiles.map((file) => normalizedPath(file.path));
 	const root = commonDirectory(sourcePaths);
 	const fileByPath = new Map(
@@ -493,21 +497,21 @@ export function buildProfileMetadata(
 	const relativeFile = (file: string): string =>
 		root !== "" && file.startsWith(`${root}/`) ? file.slice(root.length + 1) : file;
 	const functionName = (functionIndex: number): string => {
-		const candidate = definition.functions[functionIndex];
+		const candidate = runtime.functions[functionIndex];
 		const units =
 			candidate === undefined
 				? undefined
-				: definition.stringConstants[candidate.nameStringIndex];
+				: runtime.stringConstants[candidate.nameStringIndex];
 		return units === undefined
 			? "<anonymous>"
 			: String.fromCodePoint(...units) || "<anonymous>";
 	};
 	const functionFile = (functionIndex: number): string => {
-		const candidate = definition.functions[functionIndex];
+		const candidate = runtime.functions[functionIndex];
 		return normalizedPath(
 			candidate === undefined
 				? "<unknown>"
-				: (definition.files[candidate.fileIndex] ?? "<unknown>"),
+				: (runtime.files[candidate.fileIndex] ?? "<unknown>"),
 		);
 	};
 	const ensureDecisionSite = (
@@ -518,7 +522,7 @@ export function buildProfileMetadata(
 		const decisionKey = `${functionIndex}:${positionId}:${operation}`;
 		const existing = decisionSiteByKey.get(decisionKey);
 		if (existing !== undefined) return existing;
-		const position = definition.sourcePositions[positionId];
+		const position = runtime.sourcePositions[positionId];
 		if (position === undefined) return undefined;
 		const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
 		const leafFile = functionFile(leafFunctionIndex);
@@ -530,7 +534,7 @@ export function buildProfileMetadata(
 		let chainPositionId = positionId;
 		let guard = 0;
 		while (chainPositionId >= 0 && guard++ < 1024) {
-			const chainPosition = definition.sourcePositions[chainPositionId];
+			const chainPosition = runtime.sourcePositions[chainPositionId];
 			if (chainPosition === undefined) break;
 			inlineChain.push({
 				functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
@@ -540,7 +544,7 @@ export function buildProfileMetadata(
 		}
 		const chainKey = inlineChain
 			.map((entry) => {
-				const chainPosition = definition.sourcePositions[entry.positionId]!;
+				const chainPosition = runtime.sourcePositions[entry.positionId]!;
 				const chainFile = functionFile(entry.functionIndex);
 				const chainSource = fileByPath.get(chainFile)?.contents ?? "";
 				const chainAnchor = (chainSource.split("\n")[chainPosition.line - 1] ?? "")
@@ -575,15 +579,15 @@ export function buildProfileMetadata(
 		return siteId;
 	};
 
-	for (const [functionIndex, fn] of definition.functions.entries()) {
-		const physicalFile = normalizedPath(definition.files[fn.fileIndex] ?? "<unknown>");
+	for (const [functionIndex, fn] of runtime.functions.entries()) {
+		const physicalFile = normalizedPath(runtime.files[fn.fileIndex] ?? "<unknown>");
 		const siteIds = new Array<number>(fn.instructions.length).fill(-1);
 		const occurrenceByOrigin = new Map<string, number>();
 
 		for (const [instructionIndex, instruction] of fn.instructions.entries()) {
 			const positionId = fn.positions[instructionIndex] ?? -1;
 			if (positionId < 0) continue;
-			const position = definition.sourcePositions[positionId];
+			const position = runtime.sourcePositions[positionId];
 			if (position === undefined) continue;
 			const operation = profileOperationForInstruction(instruction);
 			const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
@@ -600,7 +604,7 @@ export function buildProfileMetadata(
 			let chainPositionId = positionId;
 			let guard = 0;
 			while (chainPositionId >= 0 && guard++ < 1024) {
-				const chainPosition = definition.sourcePositions[chainPositionId];
+				const chainPosition = runtime.sourcePositions[chainPositionId];
 				if (chainPosition === undefined) break;
 				inlineChain.push({
 					functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
@@ -610,7 +614,7 @@ export function buildProfileMetadata(
 			}
 			const chainKey = inlineChain
 				.map((entry) => {
-					const chainPosition = definition.sourcePositions[entry.positionId]!;
+					const chainPosition = runtime.sourcePositions[entry.positionId]!;
 					const chainFile = functionFile(entry.functionIndex);
 					const chainSource = fileByPath.get(chainFile)?.contents ?? "";
 					const chainAnchor = (chainSource.split("\n")[chainPosition.line - 1] ?? "")
@@ -646,9 +650,7 @@ export function buildProfileMetadata(
 				decisionSiteByKey.set(decisionKey, siteId);
 			}
 			const compilerSiteId =
-				definition.nativePlan.functions[functionIndex]?.compilerSiteIds?.[
-					instructionIndex
-				];
+				definition.native.functions[functionIndex]?.compilerSiteIds?.[instructionIndex];
 			const compilerSite =
 				compilerSiteId === undefined
 					? undefined
@@ -679,6 +681,6 @@ export function buildProfileMetadata(
 		});
 	}
 
-	definition.profileSites = sites;
-	definition.profileRemarks = remarks;
+	definition.diagnostics.profileSites = sites;
+	definition.diagnostics.profileRemarks = remarks;
 }

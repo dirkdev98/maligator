@@ -416,7 +416,7 @@ function compileArtifact(
 			(definition ??= deserializeCompilerArtifact(loadArtifact()));
 		return {
 			get wire() {
-				return serializeRuntimeImage(loadDefinition());
+				return serializeRuntimeImage(loadDefinition().runtime);
 			},
 			get definition() {
 				return loadDefinition();
@@ -448,7 +448,7 @@ function compileArtifact(
 	});
 	const serializeStartedAt = Date.now();
 	const artifactWire = serializeCompilerArtifact(definition);
-	const wire = serializeRuntimeImage(definition);
+	const wire = serializeRuntimeImage(definition.runtime);
 	options.phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = digest(artifactWire);
 	cacheFrontendWire(artifactWire, artifactRoot);

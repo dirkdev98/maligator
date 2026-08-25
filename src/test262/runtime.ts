@@ -573,14 +573,14 @@ type DefinitionStats = NonNullable<CompileOutcome["stats"]>;
 function definitionStats(definition: ProgramImage): DefinitionStats {
 	const opcodes: Record<string, number> = {};
 	let instructionCount = 0;
-	for (const fn of definition.functions) {
+	for (const fn of definition.runtime.functions) {
 		instructionCount += fn.instructions.length;
 		for (const instruction of fn.instructions) {
 			opcodes[instruction.opcode] = (opcodes[instruction.opcode] ?? 0) + 1;
 		}
 	}
 	return {
-		functionCount: definition.functions.length,
+		functionCount: definition.runtime.functions.length,
 		instructionCount,
 		opcodes,
 	};

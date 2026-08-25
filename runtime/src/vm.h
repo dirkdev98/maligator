@@ -21,121 +21,10 @@ static_assert((MAL_TINY_STRING_CACHE_CAPACITY
               "tiny string cache capacity must be a power of two");
 
 typedef enum MalOpcode {
-    MAL_OP_MOVE,
-    MAL_OP_RETURN,
-    MAL_OP_THROW,
-    MAL_OP_CATCH,
-    MAL_OP_TRY_BEGIN,
-    MAL_OP_TRY_END,
-    MAL_OP_JUMP_IF,
-    MAL_OP_JUMP,
-    MAL_OP_CREATE_NUMBER,
-    MAL_OP_CREATE_F64,
-    MAL_OP_CREATE_BOOLEAN,
-    MAL_OP_CREATE_STRING,
-    MAL_OP_CREATE_BIGINT,
-    MAL_OP_CREATE_OBJECT,
-    MAL_OP_CREATE_OBJECT_SHAPED,
-    MAL_OP_CREATE_ARRAY,
-    MAL_OP_CREATE_MODULE_NAMESPACE,
-    MAL_OP_CREATE_UNDEFINED,
-    MAL_OP_CREATE_EMPTY,
-    MAL_OP_CREATE_NULL,
-    MAL_OP_CREATE_FUNCTION,
-    MAL_OP_CREATE_ARGUMENTS_OBJECT,
-    MAL_OP_LOAD_ARGUMENT_COUNT,
-    MAL_OP_LOAD_ARGUMENT,
-    MAL_OP_LOAD_THIS,
-    MAL_OP_LOAD_NEW_TARGET,
-    MAL_OP_LOAD_CALLEE,
-    MAL_OP_LOAD_CAPTURED,
-    MAL_OP_LOAD_GLOBAL,
-    MAL_OP_LOAD_INTRINSIC,
-    MAL_OP_STORE_CAPTURED,
-    MAL_OP_STORE_GLOBAL,
-    MAL_OP_LOAD_PROPERTY,
-    MAL_OP_STORE_PROPERTY,
-    MAL_OP_TO_PROPERTY_KEY,
-    MAL_OP_STORE_SUPER_PROPERTY,
-    MAL_OP_LOAD_SUPER_PROPERTY,
-    MAL_OP_LOAD_PROTOTYPE,
-    MAL_OP_GET_ITERATOR,
-    MAL_OP_GET_ASYNC_ITERATOR,
-    MAL_OP_ITERATOR_NEXT,
-    MAL_OP_ITERATOR_STEP,
-    MAL_OP_ITERATOR_CLOSE,
-    MAL_OP_FOR_IN_KEYS,
-    MAL_OP_GENERATOR_START,
-    MAL_OP_YIELD,
-    MAL_OP_ASYNC_START,
-    MAL_OP_AWAIT,
-    MAL_OP_DELETE_PROPERTY,
-    MAL_OP_DEFINE_ACCESSOR,
-    MAL_OP_DEFINE_PROPERTY,
-    MAL_OP_SET_FUNCTION_NAME,
-    MAL_OP_CREATE_PRIVATE_NAME,
-    MAL_OP_DEFINE_PRIVATE,
-    MAL_OP_LOAD_PRIVATE,
-    MAL_OP_STORE_PRIVATE,
-    MAL_OP_HAS_PRIVATE,
-    MAL_OP_SET_PROTOTYPE,
-    MAL_OP_LOAD_UNDECLARED,
-    MAL_OP_LOAD_GLOBAL_PROPERTY,
-    MAL_OP_STORE_GLOBAL_PROPERTY,
-    MAL_OP_CREATE_TEMPLATE_OBJECT,
-    MAL_OP_WITH_ENTER,
-    MAL_OP_WITH_EXIT,
-    MAL_OP_WITH_GET,
-    MAL_OP_WITH_RESOLVE_BASE,
-    MAL_OP_WITH_SET,
-    MAL_OP_IS_EMPTY,
-    MAL_OP_THROW_IF_TDZ,
-    MAL_OP_REQUIRE_COERCIBLE,
-    MAL_OP_CHECK_SUPER_CLASS,
-    MAL_OP_CREATE_REST_ARGUMENTS,
-    MAL_OP_ARRAY_REST,
-    MAL_OP_COPY_DATA_PROPERTIES,
-    MAL_OP_MERGE_DATA_PROPERTIES,
-    MAL_OP_CALL,
-    MAL_OP_CALL_SPREAD,
-    MAL_OP_CONSTRUCT,
-    MAL_OP_CONSTRUCT_SPREAD,
-    MAL_OP_CONSTRUCT_SUPER,
-    MAL_OP_BINARY,
-    MAL_OP_UNARY,
-    // Per-iteration loop environments (CreatePerIterationEnvironment). A loop whose
-    // lexical head bindings are captured by closures gets a fresh env per iteration
-    // so each closure sees its own binding. ENV_PUSH enters the scope (new env,
-    // parent = current); ENV_COPY replaces the current env with a sibling (parent =
-    // current->parent) copying the bindings forward for the next iteration; ENV_POP
-    // restores the enclosing env on loop exit. All mutate the activation's current
-    // capture env (callable->env / the compiled `env` local).
-    MAL_OP_ENV_PUSH,
-    MAL_OP_ENV_COPY,
-    MAL_OP_ENV_POP,
-    // Speculative-call-inlining guard: dst = (callee is a function object with the cached
-    // function index). Opcode additions are append-only to keep prior numeric values stable
-    // for the serialized wire format. Must stay in lockstep with serialize-vm's opcode list.
-    MAL_OP_GUARD_FUNCTION_INDEX,
-    MAL_OP_INSTANTIATE_LITERAL_TEMPLATE,
-    MAL_OP_LOAD_PROPERTY_STATIC,
-    MAL_OP_STORE_PROPERTY_STATIC,
-    MAL_OP_INIT_GLOBAL_VARS,
-    MAL_OP_CREATE_PRIVATE_NAMES,
-    MAL_OP_INIT_PRIVATE_FIELDS,
-    MAL_OP_TYPEOF_COMPARE,
-    MAL_OP_TERMINAL_YIELD,
-    MAL_OP_CONSTRUCT_SUPER_EXPLICIT,
-    MAL_OP_SET_THIS,
-    MAL_OP_LOAD_STATIC_ARGUMENT,
-    MAL_OP_CALL_SPREAD_ITERABLE,
-    MAL_OP_MATH_UNARY_NUMBER,
-    MAL_OP_MATH_BINARY_NUMBER,
-    MAL_OP_CALL_BUILTIN,
-    MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT,
-    MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT,
-    MAL_OP_SELECT_SHAPE_CASE,
-    MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE,
+#define BYTECODE_OPERATION(name) MAL_OP_##name,
+#include "generated/bytecode_operations.inc"
+#undef BYTECODE_OPERATION
+    MAL_OP_COUNT,
 } MalOpcode;
 
 /** Exact builtin dispatch order generated from the canonical compiler registry. */
@@ -2000,6 +1889,11 @@ static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 136 : 128),
 
 typedef MalVmFrame MalCallable;
 
+/**
+ * Initialize one isolate through ordered engine, program-adoption, execution,
+ * and language-state phases. Host attachment and host installs happen only
+ * after this contract completes.
+ */
 void mal_vm_init(MalVm *vm, const MalProgramImage *definition);
 
 /** Register one idempotent runtime-module teardown with the owning isolate. */

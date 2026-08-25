@@ -183,7 +183,7 @@ export function buildNativeDefinition(
 ): string {
 	const harnessOptions: BuildOptions = {
 		...options,
-		fixture: definition.entrypointPath,
+		fixture: definition.runtime.entrypointPath,
 	};
 	const config = resolveHarnessBuildConfig(harnessOptions);
 	return linkDefinition(

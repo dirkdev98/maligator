@@ -42,13 +42,13 @@ test("super reads retain their receiver through Core, lowering, and wire encodin
 	}
 
 	const vm = compileSemanticProgramToProgramImage(semantic);
-	const lowered = vm.functions.flatMap((fn) => fn.instructions);
+	const lowered = vm.runtime.functions.flatMap((fn) => fn.instructions);
 	expect(
 		lowered.filter((instruction) => instruction.opcode === "LOAD_SUPER_PROPERTY"),
 	).toHaveLength(superLoads.length);
 	const roundTripped = deserializeCompilerArtifact(serializeCompilerArtifact(vm));
 	expect(
-		roundTripped.functions
+		roundTripped.runtime.functions
 			.flatMap((fn) => fn.instructions)
 			.filter((instruction) => instruction.opcode === "LOAD_SUPER_PROPERTY"),
 	).toEqual(
@@ -99,7 +99,7 @@ test("class heritage defines the constructor prototype without ordinary assignme
 		serializeCompilerArtifact(compileSemanticProgramToProgramImage(semantic)),
 	);
 	expect(
-		roundTripped.functions
+		roundTripped.runtime.functions
 			.flatMap((fn) => fn.instructions)
 			.filter(
 				(instruction) =>
@@ -121,7 +121,7 @@ test("captured derived this keeps its TDZ check through target lowering", () => 
 		new Derived();
 	`);
 	const definition = compileSemanticProgramToProgramImage(semantic);
-	const capturedArrow = definition.functions.find(
+	const capturedArrow = definition.runtime.functions.find(
 		(fn) =>
 			!fn.hasPrototype &&
 			fn.instructions.some(({ opcode }) => opcode === "LOAD_CAPTURED"),
@@ -144,7 +144,7 @@ test("a derived this read participates in its surrounding exception handler", ()
 		new Derived();
 	`);
 	const definition = compileSemanticProgramToProgramImage(semantic);
-	const derived = definition.functions.find((fn) => fn.isDerivedConstructor);
+	const derived = definition.runtime.functions.find((fn) => fn.isDerivedConstructor);
 	expect(derived).toBeDefined();
 	const loadThis = derived!.instructions.findIndex(
 		({ opcode }) => opcode === "LOAD_THIS",

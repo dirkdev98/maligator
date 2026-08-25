@@ -17,7 +17,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			afterCoreOptimization: () => events.push("after optimization"),
 		});
 
-		expect(definition.functions.length).toBeGreaterThan(0);
+		expect(definition.runtime.functions.length).toBeGreaterThan(0);
 		expect(events).toEqual([
 			"start:construct core ir",
 			"end:construct core ir",
@@ -37,7 +37,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			semanticLowering: { evalCompletion: true, evalDirect: true },
 		});
 
-		expect(definition.functions.length).toBeGreaterThan(0);
+		expect(definition.runtime.functions.length).toBeGreaterThan(0);
 	});
 
 	it("supports the correctness-focused development optimization profile", () => {
@@ -50,8 +50,8 @@ describe("compileSemanticProgramToProgramImage", () => {
 			optimization: "development",
 		});
 
-		expect(definition.functions.length).toBeGreaterThan(0);
-		expect(definition.functionCount).toBe(definition.functions.length);
+		expect(definition.runtime.functions.length).toBeGreaterThan(0);
+		expect(definition.runtime.functionCount).toBe(definition.runtime.functions.length);
 	});
 
 	it("routes optimized production IR through Core", () => {

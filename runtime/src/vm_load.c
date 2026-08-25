@@ -12,126 +12,19 @@
  * Inverse of src/compiler/target/emit-vm.ts plus
  * src/compiler/target/serialize-vm.ts: decode the flat wire buffer into the
  * runtime structs. The per-opcode operand layout, the opcode tag
- * ordering (WireOp below), and the operator/intrinsic tables mirror
- * serialize-vm.ts exactly. Existing tags/layouts are immutable and new opcodes
- * append where possible; WIRE_VERSION guards incompatible changes.
+ * ordering (WireOp below), and the operator/intrinsic tables mirror the compiler
+ * contracts. WIRE_VERSION guards incompatible layout changes.
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 25u
+#define WIRE_VERSION 26u
 #define WIRE_FLAG_HAS_DEBUG 1u
 #define WIRE_GUARDED_BUILTIN_TAG_COUNT 52u
 
-/* Wire opcode tags. MUST match WIRE_OPCODES in
- * src/compiler/target/serialize-vm.ts (index order). */
 typedef enum WireOp {
-    WIRE_MOVE,
-    WIRE_RETURN,
-    WIRE_JUMP_IF,
-    WIRE_JUMP,
-    WIRE_CREATE_NUMBER,
-    WIRE_CREATE_F64,
-    WIRE_CREATE_BOOLEAN,
-    WIRE_CREATE_STRING,
-    WIRE_CREATE_BIGINT,
-    WIRE_CREATE_OBJECT,
-    WIRE_CREATE_OBJECT_SHAPED,
-    WIRE_CREATE_ARRAY,
-    WIRE_CREATE_MODULE_NAMESPACE,
-    WIRE_CREATE_TEMPLATE_OBJECT,
-    WIRE_CREATE_UNDEFINED,
-    WIRE_CREATE_EMPTY,
-    WIRE_CREATE_NULL,
-    WIRE_CREATE_FUNCTION,
-    WIRE_CREATE_ARGUMENTS_OBJECT,
-    WIRE_LOAD_THIS,
-    WIRE_LOAD_NEW_TARGET,
-    WIRE_CALL,
-    WIRE_CONSTRUCT,
-    WIRE_THROW,
-    WIRE_CATCH,
-    WIRE_TRY_BEGIN,
-    WIRE_TRY_END,
-    WIRE_GENERATOR_START,
-    WIRE_ASYNC_START,
-    WIRE_YIELD,
-    WIRE_AWAIT,
-    WIRE_LOAD_INTRINSIC,
-    WIRE_LOAD_CAPTURED,
-    WIRE_LOAD_GLOBAL,
-    WIRE_STORE_CAPTURED,
-    WIRE_ENV_PUSH,
-    WIRE_ENV_COPY,
-    WIRE_ENV_POP,
-    WIRE_STORE_GLOBAL,
-    WIRE_LOAD_PROPERTY,
-    WIRE_STORE_PROPERTY,
-    WIRE_TO_PROPERTY_KEY,
-    WIRE_STORE_SUPER_PROPERTY,
-    WIRE_LOAD_PROTOTYPE,
-    WIRE_GET_ITERATOR,
-    WIRE_GET_ASYNC_ITERATOR,
-    WIRE_ITERATOR_NEXT,
-    WIRE_ITERATOR_STEP,
-    WIRE_ITERATOR_CLOSE,
-    WIRE_FOR_IN_KEYS,
-    WIRE_CALL_SPREAD,
-    WIRE_CONSTRUCT_SPREAD,
-    WIRE_CONSTRUCT_SUPER,
-    WIRE_MERGE_DATA_PROPERTIES,
-    WIRE_DELETE_PROPERTY,
-    WIRE_DEFINE_ACCESSOR,
-    WIRE_DEFINE_PROPERTY,
-    WIRE_CREATE_PRIVATE_NAME,
-    WIRE_DEFINE_PRIVATE,
-    WIRE_LOAD_PRIVATE,
-    WIRE_STORE_PRIVATE,
-    WIRE_HAS_PRIVATE,
-    WIRE_SET_PROTOTYPE,
-    WIRE_LOAD_UNDECLARED,
-    WIRE_LOAD_GLOBAL_PROPERTY,
-    WIRE_STORE_GLOBAL_PROPERTY,
-    WIRE_THROW_IF_TDZ,
-    WIRE_WITH_ENTER,
-    WIRE_WITH_EXIT,
-    WIRE_WITH_GET,
-    WIRE_WITH_SET,
-    WIRE_IS_EMPTY,
-    WIRE_REQUIRE_COERCIBLE,
-    WIRE_CREATE_REST_ARGUMENTS,
-    WIRE_ARRAY_REST,
-    WIRE_COPY_DATA_PROPERTIES,
-    WIRE_BINARY,
-    WIRE_UNARY,
-    /* Appended last; mirrors the trailing opcodes in WIRE_OPCODES
-     * (serialize-vm.ts). APPEND-ONLY. */
-    WIRE_WITH_RESOLVE_BASE,
-    WIRE_SET_FUNCTION_NAME,
-    WIRE_CHECK_SUPER_CLASS,
-    WIRE_LOAD_CALLEE,
-    WIRE_GUARD_FUNCTION_INDEX,
-    WIRE_LOAD_SUPER_PROPERTY,
-    WIRE_INSTANTIATE_LITERAL_TEMPLATE,
-    WIRE_LOAD_ARGUMENT_COUNT,
-    WIRE_LOAD_ARGUMENT,
-    WIRE_LOAD_PROPERTY_STATIC,
-    WIRE_STORE_PROPERTY_STATIC,
-    WIRE_INIT_GLOBAL_VARS,
-    WIRE_CREATE_PRIVATE_NAMES,
-    WIRE_INIT_PRIVATE_FIELDS,
-    WIRE_TYPEOF_COMPARE,
-    WIRE_TERMINAL_YIELD,
-    WIRE_CONSTRUCT_SUPER_EXPLICIT,
-    WIRE_SET_THIS,
-    WIRE_LOAD_STATIC_ARGUMENT,
-    WIRE_CALL_SPREAD_ITERABLE,
-    WIRE_MATH_UNARY_NUMBER,
-    WIRE_MATH_BINARY_NUMBER,
-    WIRE_CALL_BUILTIN,
-    WIRE_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT,
-    WIRE_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT,
-    WIRE_SELECT_SHAPE_CASE,
-    WIRE_LOAD_PROPERTY_STATIC_SHAPE_CASE,
+#define BYTECODE_OPERATION(name) WIRE_##name,
+#include "generated/bytecode_operations.inc"
+#undef BYTECODE_OPERATION
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -2207,27 +2100,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             slots[slot].slot = rd_i32(&r);
         }
     }
-
-    /* Program-level compiler facts consumed only by native emission. */
-    u32 semantic_protector_count = rd_count(&r, 3);
-    u8 semantic_protector_tags = 0;
-    if (semantic_protector_count > 3) {
-        r.ok = false;
-    }
-    for (u32 i = 0; r.ok && i < semantic_protector_count; i++) {
-        u8 tag = rd_u8(&r);
-        u8 dependency_mask = rd_u8(&r);
-        u8 obligation_mask = rd_u8(&r);
-        if (tag < 1 || tag > 3 ||
-            (dependency_mask != 1 && dependency_mask != (u8) (1u << tag)) ||
-            obligation_mask != 1 ||
-            (semantic_protector_tags & (u8) (1u << tag)) != 0) {
-            r.ok = false;
-            continue;
-        }
-        semantic_protector_tags |= (u8) (1u << tag);
-    }
-
 
     if (!r.ok || r.pos != r.len) {
 		if (err[0] == 'o' && err[1] == 'k' && err[2] == '\0') {

@@ -507,7 +507,7 @@ describe("Core whole-program function reachability", () => {
 		);
 
 		expect(optimized!.functions).toHaveLength(2);
-		expect(definition.functionCount).toBe(2);
-		expect(definition.functions).toHaveLength(2);
+		expect(definition.runtime.functionCount).toBe(2);
+		expect(definition.runtime.functions).toHaveLength(2);
 	});
 });

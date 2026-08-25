@@ -495,7 +495,8 @@ void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
     };
 }
 
-void mal_vm_init(MalVm *vm, const MalProgramImage *definition) {
+/** Phase 1: establish allocation-safe engine state before adopting a program. */
+static void mal_vm_init_engine_state(MalVm *vm) {
 #if MAL_REALMS
     vm->error_stack_marker = mal_value_new_undefined();
 #endif
@@ -509,9 +510,12 @@ void mal_vm_init(MalVm *vm, const MalProgramImage *definition) {
         .array_elements = 1,
         .watched_methods = 1,
     };
-    mal_gc_init(vm);
+	mal_gc_init(vm);
+}
 
-    if (definition->initialize_generated_data != nullptr) {
+/** Phase 2: adopt immutable input tables into VM-owned, spliceable storage. */
+static void mal_vm_adopt_program_image(MalVm *vm, const MalProgramImage *definition) {
+	if (definition->initialize_generated_data != nullptr) {
         definition->initialize_generated_data();
     }
 
@@ -602,10 +606,13 @@ void mal_vm_init(MalVm *vm, const MalProgramImage *definition) {
                sizeof(MalSourcePos) * (usize) source_position_count);
     }
     vm->live_definition.source_positions = source_positions;
-    vm->function_cjs_module_bases =
-        calloc((usize) vm->function_capacity, sizeof(i32));
+	vm->function_cjs_module_bases =
+		calloc((usize) vm->function_capacity, sizeof(i32));
+}
 
-    vm->property_cache =
+/** Phase 3: allocate execution stacks, caches, queues, and host-neutral state. */
+static void mal_vm_init_execution_state(MalVm *vm, const MalProgramImage *definition) {
+	vm->property_cache =
         calloc((usize) vm->function_capacity, sizeof(MalPropertyCachePool));
     vm->literal_shape_cache =
         calloc((usize) vm->function_capacity, sizeof(MalShape **));
@@ -716,9 +723,12 @@ void mal_vm_init(MalVm *vm, const MalProgramImage *definition) {
     vm->unhandled_rejections = nullptr;
     vm->unhandled_count = 0;
     vm->unhandled_capacity = 0;
-    vm->entry_async_promise = mal_value_new_undefined();
+	vm->entry_async_promise = mal_value_new_undefined();
+}
 
-    mal_heap_init(&vm->heap, 0);
+/** Phase 4: create language heap roots, intrinsics, module state, and the main fiber. */
+static void mal_vm_init_language_state(MalVm *vm, const MalProgramImage *definition) {
+	mal_heap_init(&vm->heap, 0);
     vm->heap.native_function_length_key =
         mal_string_new_ascii(&vm->heap, "length", 6);
     vm->heap.native_function_name_key =
@@ -785,6 +795,13 @@ void mal_vm_init(MalVm *vm, const MalProgramImage *definition) {
 	MalFiber *main_fiber = malloc(sizeof(MalFiber));
 	mal_fiber_init_main(main_fiber, vm);
 	mal_profile_init(vm);
+}
+
+void mal_vm_init(MalVm *vm, const MalProgramImage *definition) {
+	mal_vm_init_engine_state(vm);
+	mal_vm_adopt_program_image(vm, definition);
+	mal_vm_init_execution_state(vm, definition);
+	mal_vm_init_language_state(vm, definition);
 }
 
 MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
