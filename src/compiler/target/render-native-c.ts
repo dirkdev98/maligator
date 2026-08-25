@@ -2802,7 +2802,7 @@ function emitInstruction(
 				}
 				return ordinary;
 			}
-			const probe = `(${receiverName} && mal_vm_object_try_load_static(${receiverName}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
+			const probe = `mal_vm_property_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
 			const ordinary = [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`MalValue __v_${ip};`,

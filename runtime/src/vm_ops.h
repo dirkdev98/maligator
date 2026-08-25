@@ -1304,6 +1304,12 @@ static inline bool mal_vm_inherited_try_load_static(MalValue receiver,
     return mal_vm_inherited_try_load(receiver, ic->key, ic, out);
 }
 
+/** Probe the VM-wide inherited/negative handler cache after local site misses. */
+bool mal_vm_inherited_stub_try_load_static(
+    const MalVm *vm, MalValue receiver, const MalObject *object,
+    const MalInlineCache *site, MalValue *out
+);
+
 /** Guarded own-value hit for watched built-ins whose properties live in overflow tables. */
 static inline bool mal_vm_watched_try_load(MalValue receiver, MalValue key,
                                            const MalInlineCache *ic, MalValue *out) {
@@ -1386,8 +1392,9 @@ static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalVal
 }
 
 /** Static-name property probe: the site identity supplies the key guard. */
-static inline bool mal_vm_property_try_load_static(MalVm *vm, MalValue receiver,
-                                                   const MalInlineCache *ic, MalValue *out) {
+static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static(
+    MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE ||
         ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
@@ -1397,7 +1404,8 @@ static inline bool mal_vm_property_try_load_static(MalVm *vm, MalValue receiver,
     MalObject *object = mal_vm_as_object(receiver);
     return (object != nullptr && mal_vm_object_try_load_static(object, ic, out)) ||
         mal_vm_watched_try_load_static(receiver, ic, out) ||
-        mal_vm_special_try_load_static(vm, receiver, ic, out);
+        mal_vm_special_try_load_static(vm, receiver, ic, out) ||
+        mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, out);
 }
 
 /**

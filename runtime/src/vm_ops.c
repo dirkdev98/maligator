@@ -1723,6 +1723,27 @@ MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm) {
 }
 
 /**
+ * Shared cold handler for a compiled static-name site's second-level inherited
+ * or missing-chain row. The emitted always-inline prefix has already rejected
+ * its local own/inherited/special handlers. Keeping full chain and table-handle
+ * validation here avoids cloning it into every generated property access.
+ */
+bool mal_vm_inherited_stub_try_load_static(
+    const MalVm *vm, MalValue receiver, const MalObject *object,
+    const MalInlineCache *site, MalValue *out
+) {
+    if (object == nullptr || vm->inherited_property_stub == nullptr ||
+        site->mode != MAL_IC_MODE_SHAPE || site->shape == nullptr ||
+        site->slot == MAL_IC_VALUE_SLOT) {
+        return false;
+    }
+    const MalInlineCache *stub =
+        &vm->inherited_property_stub[mal_inherited_stub_hash(
+            object->shape, object->prototype, site->key)];
+    return mal_vm_inherited_try_load(receiver, site->key, stub, out);
+}
+
+/**
  * Enter a cached plain interpreted function through the same realm/frame seam as
  * the generic dispatcher. No collectable pointer is retained by the cache: the
  * closure environment is read from the exact live callee after the epoch guard.
@@ -4343,7 +4364,7 @@ static bool mal_ic_try_record_inherited_slot(
 }
 
 static bool mal_ic_try_record_missing(
-    MalValue receiver, MalValue key_value, MalInlineCache *ic
+    MalValue receiver, MalValue key_value, MalInlineCache *ic, bool count_fill
 ) {
     if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
         return false;
@@ -4403,7 +4424,7 @@ static bool mal_ic_try_record_missing(
     }
     ic->megamorphic = false;
     ic->mode = MAL_IC_MODE_MISSING;
-    MAL_PERF_COUNT(ic_load_missing_fills);
+    if (count_fill) MAL_PERF_COUNT(ic_load_missing_fills);
     return true;
 }
 
@@ -4432,7 +4453,20 @@ static void mal_ic_try_record_inherited(
     MalPropertyResolution resolution = mal_object_resolve_property(object, key);
     if (!resolution.found) {
         if (result == mal_value_new_undefined() &&
-            mal_ic_try_record_missing(receiver, key_value, ic)) {
+            mal_ic_try_record_missing(receiver, key_value, ic, true)) {
+            MalObject *object = mal_value_to_object(receiver);
+            MalInlineCache *stub =
+                &mal_vm_inherited_property_stub_cache(vm)[mal_inherited_stub_hash(
+                    object->shape, object->prototype, key_value)];
+            if (stub != ic) {
+                // A direct-mapped collision replaces the old independently
+                // registered chain. Clearing first bypasses the per-site policy
+                // that deliberately retains one exact deep-chain row.
+                mal_ic_detach_prototype_cache(stub);
+                *stub = (MalInlineCache) {0};
+                (void) mal_ic_try_record_missing(
+                    receiver, key_value, stub, false);
+            }
             return;
         }
         MAL_PERF_COUNT(ic_inherited_reject_resolution);

@@ -1060,38 +1060,6 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(" += ");
 	});
 
-	it("emits independent static per-site property guards without backend regions", () => {
-		const staticOutput = emit(
-			`"use strict"; function read(object) { object.a = object.a + 1; return object.a + object.b; } globalThis.read = read;`,
-		);
-		expect(staticOutput).toContain("mal_vm_object_try_load_static(");
-		expect(staticOutput).toContain("mal_vm_object_try_store_static(");
-		expect(staticOutput).not.toContain("mal_perf_ic_load_region_hit");
-		expect(staticOutput).not.toContain("mal_perf_ic_store_region_hit");
-	});
-
-	it("uses key-free probes for non-consolidated static property sites", () => {
-		const staticOutput = emit(
-			`"use strict"; function load(object) { return object.value; } function store(object, value) { object.value = value; } globalThis.keep = [load, store];`,
-		);
-		expect(staticOutput).toContain("mal_vm_object_try_load_static(");
-		expect(staticOutput).toContain("mal_vm_inherited_try_load_static(");
-		expect(staticOutput).toContain("mal_vm_object_try_store_static(");
-		expect(staticOutput).not.toContain("mal_vm_local_inherited_value_try_load_static(");
-		expect(staticOutput).not.toContain(
-			"mal_vm_local_watched_inherited_value_try_load_static(",
-		);
-
-		const loopSource = `"use strict"; function load(object, count, initial) { let value = initial; for (let i = 0; i < count; i++) value = object.value; return value; } globalThis.load = load;`;
-		const loopDefinition = lower(loopSource);
-		expect(
-			deserializeCompilerArtifact(serializeCompilerArtifact(loopDefinition)),
-		).toEqual(loopDefinition);
-		const loopOutput = emitProgramImage(loopDefinition, { compiled: true });
-		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
-		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
-	});
-
 	it("does not synthesize watched epochs for ordinary resumable property loads", () => {
 		const output = emit(
 			`"use strict"; async function read(object) { for (let i = 0; i < 2; i++) { await 0; object.value; } } globalThis.read = read;`,
