@@ -2,24 +2,28 @@ import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import type { Reader } from "./program-image-codec.ts";
 import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
 import {
-	decodeVmValueOperand,
 	nativeFrameRootRegisters,
-	validateVmShapeCases,
 	vmGuardIsWorldInvariant,
-	vmInstructionWriteRegisters,
 	VM_GUARDED_BUILTIN_OPERATIONS,
 } from "./program-image.ts";
 import type {
-	BytecodeFunction,
-	BytecodeInstruction,
 	NativeFunctionPlan,
 	NativeInstructionPlan,
 	ProgramImage,
-	RuntimeImage,
 	VmGuardedBuiltinCall,
 	VmRegion,
 	VmSemanticProtectorFact,
 } from "./program-image.ts";
+import {
+	decodeVmValueOperand,
+	validateVmShapeCases,
+	vmInstructionWriteRegisters,
+} from "./runtime-image.ts";
+import type {
+	BytecodeFunction,
+	BytecodeInstruction,
+	RuntimeImage,
+} from "./runtime-image.ts";
 
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian

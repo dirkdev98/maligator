@@ -3,11 +3,11 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { ProgramImage } from "../../src/compiler/target/program-image.ts";
 import type {
-	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
-} from "../../src/compiler/target/program-image.ts";
+} from "../../src/compiler/target/runtime-image.ts";
 import { buildNativeProgramImage, STRESS_ENV } from "../../src/test-harness.ts";
 import { testProgramImage } from "../helpers/program-image.ts";
 

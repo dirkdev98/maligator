@@ -8,18 +8,18 @@ import {
 	MAX_STRING_CODE_UNITS,
 	WIRE_OPCODES,
 } from "../src/compiler/target/program-image-codec.ts";
-import {
-	buildArgumentSnapshotPlan,
-	VM_GUARDED_BUILTIN_OPERATIONS,
-} from "../src/compiler/target/program-image.ts";
+import { VM_GUARDED_BUILTIN_OPERATIONS } from "../src/compiler/target/program-image.ts";
 import type {
 	ProgramImage,
-	BytecodeFunction,
-	BytecodeInstruction,
 	NativeInstructionPlan,
 	VmRegion,
 } from "../src/compiler/target/program-image.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
+import { buildArgumentSnapshotPlan } from "../src/compiler/target/runtime-image.ts";
+import type {
+	BytecodeFunction,
+	BytecodeInstruction,
+} from "../src/compiler/target/runtime-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
 // A definition exercising the tricky encodings: variable-length operand arrays
@@ -40,8 +40,20 @@ const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "LOAD_INTRINSIC", dst: 6, intrinsic: "__arrayFlatMapAppend" },
 	{ opcode: "MOVE", dst: 7, src: 0 },
 	{ opcode: "LOAD_SUPER_PROPERTY", dst: 7, object: 10, key: 3, receiver: 10 },
-	{ opcode: "LOAD_PROPERTY_STATIC", dst: 7, object: 10, stringIndex: 1, icIndex: 0 },
-	{ opcode: "STORE_PROPERTY_STATIC", object: 10, value: 7, stringIndex: 1, icIndex: 1 },
+	{
+		opcode: "LOAD_PROPERTY_STATIC",
+		dst: 7,
+		object: 10,
+		stringIndex: 1,
+		icIndex: 0,
+	},
+	{
+		opcode: "STORE_PROPERTY_STATIC",
+		object: 10,
+		value: 7,
+		stringIndex: 1,
+		icIndex: 1,
+	},
 	{ opcode: "BINARY", dst: 8, left: 0, right: 1, operator: ">>>" },
 	{ opcode: "UNARY", dst: 9, src: 8, operator: "typeof" },
 	{ opcode: "MATH_UNARY_NUMBER", dst: 9, src: 1, operation: "Math.floor" },
@@ -116,7 +128,13 @@ const instructions: Array<BytecodeInstruction> = [
 		arguments: [0],
 		operation: "Object.values",
 	},
-	{ opcode: "TYPEOF_COMPARE", dst: 9, src: 8, expected: "number", negated: true },
+	{
+		opcode: "TYPEOF_COMPARE",
+		dst: 9,
+		src: 8,
+		expected: "number",
+		negated: true,
+	},
 	{ opcode: "TRY_BEGIN", handlerIp: 0 },
 	{
 		opcode: "CREATE_OBJECT_SHAPED",
@@ -141,8 +159,19 @@ const instructions: Array<BytecodeInstruction> = [
 		cookedIndices: [0, -1, 1],
 		rawIndices: [0, 1, 1],
 	},
-	{ opcode: "CREATE_MODULE_NAMESPACE", dst: 13, nameIndices: [0, 1], slots: [4, 5] },
-	{ opcode: "COPY_DATA_PROPERTIES", dst: 14, src: 10, excludedCount: 1, excluded: [3] },
+	{
+		opcode: "CREATE_MODULE_NAMESPACE",
+		dst: 13,
+		nameIndices: [0, 1],
+		slots: [4, 5],
+	},
+	{
+		opcode: "COPY_DATA_PROPERTIES",
+		dst: 14,
+		src: 10,
+		excludedCount: 1,
+		excluded: [3],
+	},
 	{
 		opcode: "DEFINE_ACCESSOR",
 		object: 10,
@@ -170,7 +199,11 @@ const instructions: Array<BytecodeInstruction> = [
 		nameStringIndices: [0, 1],
 		declarationConfigurable: true,
 	},
-	{ opcode: "CREATE_PRIVATE_NAMES", ownerFunctionIndex: 0, capturedIndices: [0, 2] },
+	{
+		opcode: "CREATE_PRIVATE_NAMES",
+		ownerFunctionIndex: 0,
+		capturedIndices: [0, 2],
+	},
 	{ opcode: "INIT_PRIVATE_FIELDS", object: 10, keyRegisters: [3, 7] },
 	{
 		opcode: "CALL_SPREAD_ITERABLE",
@@ -324,7 +357,13 @@ function stackObjectDefinition(): ProgramImage {
 				valueRegisters: [0, 1],
 				shapeCacheIndex: 0,
 			},
-			{ opcode: "LOAD_PROPERTY_STATIC", dst: 3, object: 2, stringIndex: 1, icIndex: 0 },
+			{
+				opcode: "LOAD_PROPERTY_STATIC",
+				dst: 3,
+				object: 2,
+				stringIndex: 1,
+				icIndex: 0,
+			},
 			{
 				opcode: "STORE_PROPERTY_STATIC",
 				object: 2,
@@ -711,7 +750,10 @@ describe("program-image-codec", () => {
 			/shape-case selector use count/,
 		);
 
-		const barrierInstruction: BytecodeInstruction = { opcode: "CREATE_OBJECT", dst: 7 };
+		const barrierInstruction: BytecodeInstruction = {
+			opcode: "CREATE_OBJECT",
+			dst: 7,
+		};
 		const barrierFunctions = valid.runtime.functions.map((fn) => ({
 			...fn,
 			registerCount: 8,
@@ -991,7 +1033,9 @@ describe("program-image-codec", () => {
 				positions: [
 					...mainFn.positions,
 					...Array.from(
-						{ length: metadataInstructions.length - mainFn.instructions.length },
+						{
+							length: metadataInstructions.length - mainFn.instructions.length,
+						},
 						() => 2,
 					),
 				],
@@ -1211,7 +1255,10 @@ describe("program-image-codec", () => {
 			serializeCompilerArtifact(
 				withRuntime(snapshotDefinition, {
 					functions: [
-						{ ...snapshotDefinition.runtime.functions[0]!, argumentSnapshotCount: 1 },
+						{
+							...snapshotDefinition.runtime.functions[0]!,
+							argumentSnapshotCount: 1,
+						},
 					],
 				}),
 			),

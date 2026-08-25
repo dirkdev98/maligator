@@ -4,7 +4,7 @@ import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/c
 import {
 	decodeVmValueOperand,
 	encodeVmValueOperand,
-} from "../src/compiler/target/program-image.ts";
+} from "../src/compiler/target/runtime-image.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "immediate-operands.js");

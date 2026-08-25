@@ -1,7 +1,8 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import type { CoreProgram } from "../core/core-ir.ts";
 import type { CompilerSiteFacts, FactDependency } from "../shared/compiler-facts.ts";
-import type { ProgramImage, BytecodeInstruction } from "./program-image.ts";
+import type { ProgramImage } from "./program-image.ts";
+import type { BytecodeInstruction } from "./runtime-image.ts";
 
 export interface ProfileSite {
 	id: number;

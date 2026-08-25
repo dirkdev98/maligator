@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { ProgramImage, NativePlan } from "../src/compiler/target/program-image.ts";
 import type {
-	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
-	NativePlan,
 	RuntimeImage,
-} from "../src/compiler/target/program-image.ts";
+} from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
@@ -140,14 +139,23 @@ describe("Test262 VM image merger", () => {
 				cookedIndices: [0, -1],
 				rawIndices: [0, 0],
 			},
-			{ opcode: "CREATE_MODULE_NAMESPACE", dst: 0, nameIndices: [0], slots: [0] },
+			{
+				opcode: "CREATE_MODULE_NAMESPACE",
+				dst: 0,
+				nameIndices: [0],
+				slots: [0],
+			},
 			{ opcode: "WITH_SET", found: 0, value: 1, nameStringIndex: 0 },
 			{
 				opcode: "INIT_GLOBAL_VARS",
 				nameStringIndices: [0],
 				declarationConfigurable: true,
 			},
-			{ opcode: "CREATE_PRIVATE_NAMES", ownerFunctionIndex: 0, capturedIndices: [0, 2] },
+			{
+				opcode: "CREATE_PRIVATE_NAMES",
+				ownerFunctionIndex: 0,
+				capturedIndices: [0, 2],
+			},
 			{ opcode: "INIT_PRIVATE_FIELDS", object: 0, keyRegisters: [1, 2] },
 			{
 				opcode: "CALL",
@@ -270,7 +278,10 @@ describe("Test262 VM image merger", () => {
 		expect(rebased[6]).toMatchObject({ stringIndex: 2 });
 		expect(rebased[7]).toMatchObject({ bigintIndex: 1 });
 		expect(rebased[8]).toMatchObject({ templateOffset: 2 });
-		expect(rebased[9]).toMatchObject({ keyStringIndices: [2], valueRegisters: [1] });
+		expect(rebased[9]).toMatchObject({
+			keyStringIndices: [2],
+			valueRegisters: [1],
+		});
 		expect(rebased[10]).toMatchObject({
 			cacheSlot: 3,
 			cookedIndices: [2, -1],

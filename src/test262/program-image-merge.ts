@@ -1,10 +1,10 @@
-import { rebaseVmValueOperand } from "../compiler/target/program-image.ts";
 import type {
 	ProgramImage,
-	BytecodeInstruction,
 	NativeInstructionPlan,
 	VmRegion,
 } from "../compiler/target/program-image.ts";
+import { rebaseVmValueOperand } from "../compiler/target/runtime-image.ts";
+import type { BytecodeInstruction } from "../compiler/target/runtime-image.ts";
 
 export interface MergedProgramImage {
 	image: ProgramImage;

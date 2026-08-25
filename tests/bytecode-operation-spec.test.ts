@@ -4,7 +4,7 @@ import {
 	BYTECODE_OPERATIONS,
 	generateBytecodeOperationInclude,
 } from "../src/compiler/target/bytecode-operation-spec.ts";
-import type { BytecodeInstruction } from "../src/compiler/target/program-image.ts";
+import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
 type MissingOperation = Exclude<
 	BytecodeInstruction["opcode"],

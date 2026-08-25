@@ -2,6 +2,9 @@ import path from "node:path";
 import type { IncludedAsset } from "../../assets.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
+import type { ProgramImage } from "./program-image.ts";
+import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
+import type { CompiledFunction } from "./render-native-c.ts";
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
@@ -10,15 +13,12 @@ import {
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
-} from "./program-image.ts";
+} from "./runtime-image.ts";
 import type {
-	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
 	RuntimeImage,
-} from "./program-image.ts";
-import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
-import type { CompiledFunction } from "./render-native-c.ts";
+} from "./runtime-image.ts";
 
 type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
 
@@ -1025,7 +1025,11 @@ export function emitProgramTranslationUnits(
 		if (fn === null) continue;
 		append({ kind: "compiled function", symbol: fn.symbol, source: fn.source });
 		for (const entry of fn.directEntries) {
-			append({ kind: "compiled function", symbol: entry.symbol, source: entry.source });
+			append({
+				kind: "compiled function",
+				symbol: entry.symbol,
+				source: entry.source,
+			});
 		}
 	}
 	flush();

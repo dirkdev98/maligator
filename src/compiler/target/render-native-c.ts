@@ -7,21 +7,16 @@ import {
 } from "./emit-program-image.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
-	computeArgumentRetentionLimit,
-	decodeVmValueOperand,
 	nativeFrameRootRegisters,
 	vmCallProvesBuiltin,
-	vmExceptionHandlerTargets as exceptionHandlerTargets,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
 } from "./program-image.ts";
 import type {
-	BytecodeFunction,
 	NativeFunctionPlan,
 	NativeDirectEntryPlan,
 	NativeInstructionPlan,
 	VmGuardPlan,
-	BytecodeInstruction,
 	VmRegion,
 	VmRegionLicense,
 	VmRegisterRepresentation,
@@ -29,6 +24,12 @@ import type {
 	VmSemanticProtectorFact,
 	VmStackObjectPlanRegion,
 } from "./program-image.ts";
+import {
+	computeArgumentRetentionLimit,
+	decodeVmValueOperand,
+	vmExceptionHandlerTargets as exceptionHandlerTargets,
+} from "./runtime-image.ts";
+import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
 /**
  * The native-C backend: lower an eligible function straight to a C function

@@ -16,7 +16,7 @@ import {
 import type {
 	RuntimeImage,
 	BytecodeFunction,
-} from "../../src/compiler/target/program-image.ts";
+} from "../../src/compiler/target/runtime-image.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 
 const fn: BytecodeFunction = {

@@ -21,12 +21,12 @@ import {
 	vmRegionLicense,
 	vmSemanticProtectorGuard,
 } from "../src/compiler/target/program-image.ts";
+import type { ProgramImage } from "../src/compiler/target/program-image.ts";
+import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type {
-	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
-} from "../src/compiler/target/program-image.ts";
-import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
+} from "../src/compiler/target/runtime-image.ts";
 import { testProgramImage } from "./helpers/program-image.ts";
 
 const instructions: Array<BytecodeInstruction> = [
@@ -41,7 +41,12 @@ const instructions: Array<BytecodeInstruction> = [
 		valueRegisters: [3, 4],
 		shapeCacheIndex: 0,
 	},
-	{ opcode: "CREATE_MODULE_NAMESPACE", dst: 2, nameIndices: [1, 2], slots: [5, 6] },
+	{
+		opcode: "CREATE_MODULE_NAMESPACE",
+		dst: 2,
+		nameIndices: [1, 2],
+		slots: [5, 6],
+	},
 	{
 		opcode: "CREATE_TEMPLATE_OBJECT",
 		dst: 3,
@@ -70,9 +75,19 @@ const instructions: Array<BytecodeInstruction> = [
 		nameStringIndices: [0, 2, 3],
 		declarationConfigurable: true,
 	},
-	{ opcode: "CREATE_PRIVATE_NAMES", ownerFunctionIndex: 0, capturedIndices: [1, 4] },
+	{
+		opcode: "CREATE_PRIVATE_NAMES",
+		ownerFunctionIndex: 0,
+		capturedIndices: [1, 4],
+	},
 	{ opcode: "INIT_PRIVATE_FIELDS", object: 6, keyRegisters: [8, 9] },
-	{ opcode: "TYPEOF_COMPARE", dst: 7, src: 6, expected: "number", negated: true },
+	{
+		opcode: "TYPEOF_COMPARE",
+		dst: 7,
+		src: 6,
+		expected: "number",
+		negated: true,
+	},
 	{ opcode: "RETURN", value: 6 },
 ];
 
@@ -521,7 +536,11 @@ describe("emit-program-image instruction packing", () => {
 		}));
 		const splitDefinition = {
 			...definition,
-			runtime: { ...definition.runtime, functionCount: functions.length, functions },
+			runtime: {
+				...definition.runtime,
+				functionCount: functions.length,
+				functions,
+			},
 			native: createConservativeNativePlan(functions),
 		};
 		const budget = 20_000;
@@ -606,7 +625,11 @@ describe("emit-program-image instruction packing", () => {
 		const units = emitProgramTranslationUnits(
 			{
 				...definition,
-				runtime: { ...definition.runtime, functionCount: 1, functions: [asyncFunction] },
+				runtime: {
+					...definition.runtime,
+					functionCount: 1,
+					functions: [asyncFunction],
+				},
 				native: createConservativeNativePlan([asyncFunction]),
 			},
 			{},
@@ -728,7 +751,11 @@ describe("emit-program-image instruction packing", () => {
 		const units = emitProgramTranslationUnits(
 			{
 				...definition,
-				runtime: { ...definition.runtime, functionCount: functions.length, functions },
+				runtime: {
+					...definition.runtime,
+					functionCount: functions.length,
+					functions,
+				},
 				native: createConservativeNativePlan(functions),
 			},
 			{},

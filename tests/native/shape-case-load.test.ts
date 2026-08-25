@@ -3,11 +3,11 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { ProgramImage } from "../../src/compiler/target/program-image.ts";
 import type {
-	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
-} from "../../src/compiler/target/program-image.ts";
+} from "../../src/compiler/target/runtime-image.ts";
 import { buildNativeProgramImage, STRESS_ENV } from "../../src/test-harness.ts";
 import { testProgramImage, withNativeFunctionPlan } from "../helpers/program-image.ts";
 
@@ -154,12 +154,23 @@ const definition: ProgramImage = withNativeFunctionPlan(
 		hostInstalls: [],
 	}),
 	0,
-	(plan) => ({
-		...plan,
-		registerRepresentations: Array.from({ length: 18 }, (_, index) =>
+	(plan) => {
+		const registerRepresentations = Array.from({ length: 18 }, (_, index) =>
 			index === 7 || index === 13 ? "number" : "boxed",
-		),
-	}),
+		);
+		return {
+			...plan,
+			registerRepresentations,
+			gc: {
+				safepoints: plan.gc.safepoints.map((safepoint) => ({
+					...safepoint,
+					rootRegisters: safepoint.rootRegisters.filter(
+						(register) => registerRepresentations[register] === "boxed",
+					),
+				})),
+			},
+		};
+	},
 );
 
 function run(binary: string, environment: NodeJS.ProcessEnv = {}): string {
