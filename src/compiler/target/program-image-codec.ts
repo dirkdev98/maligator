@@ -6,12 +6,12 @@ import {
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
-} from "./program-image.ts";
+} from "./runtime-image.ts";
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 	RuntimeImage,
-} from "./program-image.ts";
+} from "./runtime-image.ts";
 
 /**
  * Sequential portable runtime-image wire format consumed by

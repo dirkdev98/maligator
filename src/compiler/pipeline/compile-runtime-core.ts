@@ -1,7 +1,7 @@
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import { lowerCoreCompilationToRuntimeExecution } from "../target/lower-execution.ts";
-import { lowerExecutionToRuntimeImage } from "../target/program-image.ts";
-import type { RuntimeImage } from "../target/program-image.ts";
+import { lowerExecutionToRuntimeImage } from "../target/runtime-image.ts";
+import type { RuntimeImage } from "../target/runtime-image.ts";
 import type { CompileCoreOptions, CompileCorePhase } from "./compile-core-common.ts";
 import { optimizeSemanticProgramToCore } from "./compile-core-common.ts";
 

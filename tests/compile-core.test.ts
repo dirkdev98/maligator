@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToRuntimeImage } from "../src/compiler/pipeline/compile-runtime-core.ts";
 
 describe("compileSemanticProgramToProgramImage", () => {
 	it("runs phases in order and inspects optimized IR before allocation", () => {
@@ -75,5 +76,22 @@ describe("compileSemanticProgramToProgramImage", () => {
 				optimization: "full",
 			}),
 		).not.toThrow();
+	});
+
+	it("gives runtime-wire and native products the same portable VM image", () => {
+		const source = `
+			function add(left, right) { return left + right; }
+			let sum = 0;
+			for (let index = 0; index < 100; index++) sum = add(sum, index);
+			const record = { sum, label: "total" };
+			globalThis.answer = record.sum + String(sum).length;
+		`;
+		const semantic = () =>
+			analyzeSourceAndRunSemanticAnalysis(source, "runtime-terminal-parity.js");
+
+		const portable = compileSemanticProgramToRuntimeImage(semantic());
+		const native = compileSemanticProgramToProgramImage(semantic());
+
+		expect(portable).toEqual(native.runtime);
 	});
 });
