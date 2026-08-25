@@ -8,6 +8,10 @@ import type {
 	ExecutionParallelCopy,
 	ExecutionProgram,
 } from "./execution-ir.ts";
+import {
+	executionLoopBackedgeInstructions,
+	executionSafepointRootRegisters,
+} from "./execution-liveness.ts";
 
 export interface ExecutionVerificationContext {
 	readonly functionIndex?: number;
@@ -170,11 +174,6 @@ function verifyProgramCardinality(program: ExecutionProgram): void {
 			`target program holds ${program.functions.length} functions for a ${core.functions.length}-function Core program`,
 		);
 	}
-	if (program.gcRootRegisters.length !== program.functions.length) {
-		fail(
-			`GC root table holds ${program.gcRootRegisters.length} entries for ${program.functions.length} target functions`,
-		);
-	}
 	for (const [index, fn] of program.functions.entries()) {
 		const context: ExecutionVerificationContext = { functionIndex: index };
 		const coreFunction = core.functions[index]!;
@@ -224,14 +223,6 @@ function verifyProgramCardinality(program: ExecutionProgram): void {
 				`target function names unknown string constant ${fn.nameStringIndex}`,
 				context,
 			);
-		}
-		const resumable = fn.isGenerator || fn.isAsync;
-		const roots = program.gcRootRegisters[index];
-		if (resumable && roots !== undefined) {
-			fail("resumable target function must not carry a GC root table", context);
-		}
-		if (!resumable && roots === undefined) {
-			fail("non-resumable target function must carry a GC root table", context);
 		}
 	}
 }
@@ -720,122 +711,7 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 	}
 }
 
-function blockSuccessors(model: FunctionModel): ReadonlyArray<ReadonlyArray<number>> {
-	const { fn } = model;
-	return fn.blocks.map(({ instructions }, block) => {
-		const successors = new Set<number>();
-		for (const instruction of instructions) {
-			// An exception can leave a protected block at any protected instruction, so
-			// its handler's live-in set reaches every point in the block.
-			if (
-				instruction.type === "jump" ||
-				instruction.type === "jumpIf" ||
-				instruction.type === "tryBegin"
-			) {
-				successors.add(instruction.blocks[0]);
-			}
-		}
-		if (fallsThrough(instructions) && block + 1 < fn.blocks.length) {
-			successors.add(block + 1);
-		}
-		return [...successors];
-	});
-}
-
-interface BoxedOperands {
-	readonly reads: ReadonlyArray<number>;
-	readonly writes: ReadonlyArray<number>;
-}
-
-function sameRegisters(left: ReadonlySet<number>, right: ReadonlySet<number>): boolean {
-	if (left.size !== right.size) return false;
-	for (const register of left) {
-		if (!right.has(register)) return false;
-	}
-	return true;
-}
-
-/**
- * Every boxed register whose value can still be read after a recorded safepoint must
- * be a declared GC root: the collector only scans the declared root frame, and an
- * unboxed class can never hold a heap pointer. Backward liveness over the emitted
- * blocks is a lower bound on the obligation, so a register reported here is provably
- * missing rather than conservatively suspected.
- */
-function verifySafepointRoots(
-	model: FunctionModel,
-	roots: ReadonlySet<number>,
-	safepoints: ReadonlySet<CompilerInstruction>,
-): void {
-	const { fn, functionIndex } = model;
-	if (safepoints.size === 0) return;
-	const successors = blockSuccessors(model);
-	const operands: Array<Array<BoxedOperands>> = fn.blocks.map(({ instructions }) =>
-		instructions.map((instruction) => {
-			const shape = model.shapes.get(instruction)!;
-			return {
-				reads: reads(instruction, shape).filter((register) => isBoxed(fn, register)),
-				writes: writes(instruction, shape).filter((register) => isBoxed(fn, register)),
-			};
-		}),
-	);
-	const transfer = (block: number, out: ReadonlySet<number>): Set<number> => {
-		const live = new Set(out);
-		const blockOperands = operands[block]!;
-		for (let index = blockOperands.length - 1; index >= 0; index--) {
-			for (const register of blockOperands[index]!.writes) live.delete(register);
-			for (const register of blockOperands[index]!.reads) live.add(register);
-		}
-		return live;
-	};
-	const liveIn: Array<Set<number>> = fn.blocks.map(() => new Set<number>());
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (let block = fn.blocks.length - 1; block >= 0; block--) {
-			const out = new Set<number>();
-			for (const successor of successors[block]!) {
-				for (const register of liveIn[successor]!) out.add(register);
-			}
-			const live = transfer(block, out);
-			if (!sameRegisters(live, liveIn[block]!)) {
-				liveIn[block] = live;
-				changed = true;
-			}
-		}
-	}
-	for (const [block, { instructions }] of fn.blocks.entries()) {
-		const live = new Set<number>();
-		for (const successor of successors[block]!) {
-			for (const register of liveIn[successor]!) live.add(register);
-		}
-		for (let index = instructions.length - 1; index >= 0; index--) {
-			const instruction = instructions[index]!;
-			const { reads: instructionReads, writes: instructionWrites } =
-				operands[block]![index]!;
-			if (safepoints.has(instruction)) {
-				for (const register of [...live, ...instructionReads]) {
-					if (roots.has(register)) continue;
-					fail("boxed register live at a safepoint is not a GC root", {
-						functionIndex,
-						block,
-						instruction: index,
-						opcode: instruction.type,
-						register,
-					});
-				}
-			}
-			for (const register of instructionWrites) live.delete(register);
-			for (const register of instructionReads) live.add(register);
-		}
-	}
-}
-
-function verifyGcRoots(
-	model: FunctionModel,
-	roots: ReadonlyArray<number> | undefined,
-	core: CoreFunction,
-): void {
+function verifyGcRoots(model: FunctionModel, core: CoreFunction): void {
 	const { fn, functionIndex } = model;
 	const expected = new Map(
 		core.blocks.flatMap(({ instructions }) =>
@@ -859,13 +735,64 @@ function verifyGcRoots(
 		core.values.map(({ id, definition }) => [id, definition] as const),
 	);
 	const safepoints = new Set<CompilerInstruction>();
+	const expectedBackedges = executionLoopBackedgeInstructions(fn);
+	const recordedBackedges = new Set<CompilerInstruction>();
 	const recordedOrigins = new Set<number>();
 	const covered = new Set<number>();
-	for (const {
-		coreInstruction,
-		realizedCoreInstructions,
-		instruction,
-	} of fn.safepoints) {
+	for (const safepoint of fn.gc.safepoints) {
+		const { instruction, rootRegisters } = safepoint;
+		const site = model.sites.get(instruction);
+		if (site === undefined) {
+			fail("recorded safepoint does not belong to this function", { functionIndex });
+		}
+		if (safepoints.has(instruction)) {
+			fail("instruction has two target safepoint records", {
+				functionIndex,
+				block: site.block,
+				instruction: site.index,
+				opcode: instruction.type,
+			});
+		}
+		safepoints.add(instruction);
+		const unique = new Set<number>();
+		for (const register of rootRegisters) {
+			const context: ExecutionVerificationContext = {
+				functionIndex,
+				block: site.block,
+				instruction: site.index,
+				opcode: instruction.type,
+				register,
+			};
+			if (
+				!Number.isSafeInteger(register) ||
+				register < 0 ||
+				register >= fn.registerCount
+			) {
+				fail(
+					`GC root register is out of bounds for a ${fn.registerCount}-register function`,
+					context,
+				);
+			}
+			if (!isBoxed(fn, register)) fail("GC root register must be boxed", context);
+			if (unique.has(register)) fail("GC root register is listed twice", context);
+			unique.add(register);
+		}
+		if (safepoint.kind === "loop-backedge") {
+			if (!expectedBackedges.has(instruction)) {
+				fail("loop-backedge safepoint does not name a native polling edge", {
+					functionIndex,
+					block: site.block,
+					instruction: site.index,
+					opcode: instruction.type,
+				});
+			}
+			recordedBackedges.add(instruction);
+			continue;
+		}
+		if (safepoint.kind !== "operation") {
+			fail("target safepoint has an unknown kind", { functionIndex });
+		}
+		const { coreInstruction, realizedCoreInstructions } = safepoint;
 		if (recordedOrigins.has(coreInstruction)) {
 			fail(`Core instruction @${coreInstruction} has two target safepoint records`, {
 				functionIndex,
@@ -877,9 +804,6 @@ function verifyGcRoots(
 			fail(`target safepoint names unknown Core instruction @${coreInstruction}`, {
 				functionIndex,
 			});
-		}
-		if (!model.sites.has(instruction)) {
-			fail("recorded safepoint does not belong to this function", { functionIndex });
 		}
 		if (instruction.type !== origin.opcode) {
 			fail(
@@ -913,27 +837,39 @@ function verifyGcRoots(
 			}
 			covered.add(realized);
 		}
-		safepoints.add(instruction);
 	}
 	const missing = [...expected.keys()].find((instruction) => !covered.has(instruction));
 	if (missing !== undefined) {
 		fail(`Core safepoint @${missing} has no target safepoint record`, { functionIndex });
 	}
-	if (roots === undefined) return;
-	const unique = new Set<number>();
-	for (const register of roots) {
-		const context: ExecutionVerificationContext = { functionIndex, register };
-		if (!Number.isSafeInteger(register) || register < 0 || register >= fn.registerCount) {
-			fail(
-				`GC root register is out of bounds for a ${fn.registerCount}-register function`,
-				context,
-			);
-		}
-		if (!isBoxed(fn, register)) fail("GC root register must be boxed", context);
-		if (unique.has(register)) fail("GC root register is listed twice", context);
-		unique.add(register);
+	const missingBackedge = [...expectedBackedges].find(
+		(instruction) => !recordedBackedges.has(instruction),
+	);
+	if (missingBackedge !== undefined) {
+		const site = model.sites.get(missingBackedge)!;
+		fail("native polling edge has no loop-backedge safepoint record", {
+			functionIndex,
+			block: site.block,
+			instruction: site.index,
+			opcode: missingBackedge.type,
+		});
 	}
-	verifySafepointRoots(model, unique, safepoints);
+	const exactRoots = executionSafepointRootRegisters(fn, safepoints);
+	for (const safepoint of fn.gc.safepoints) {
+		const expectedRoots = exactRoots.get(safepoint.instruction) ?? [];
+		const mismatch = Math.max(expectedRoots.length, safepoint.rootRegisters.length);
+		for (let index = 0; index < mismatch; index++) {
+			if (expectedRoots[index] === safepoint.rootRegisters[index]) continue;
+			const site = model.sites.get(safepoint.instruction)!;
+			fail("GC safepoint roots do not match exact execution liveness", {
+				functionIndex,
+				block: site.block,
+				instruction: site.index,
+				opcode: safepoint.instruction.type,
+				register: expectedRoots[index] ?? safepoint.rootRegisters[index],
+			});
+		}
+	}
 }
 
 function regionRegisters(region: CoreAllocatedRegion): ReadonlyArray<number> {
@@ -1028,7 +964,7 @@ export function verifyExecutionProgram(program: ExecutionProgram): void {
 		verifyParallelCopies(model);
 		verifyExceptionEntries(model);
 		verifyTemporaryRegisters(model);
-		verifyGcRoots(model, program.gcRootRegisters[index], program.core.functions[index]!);
+		verifyGcRoots(model, program.core.functions[index]!);
 		verifyRegions(model);
 	}
 }

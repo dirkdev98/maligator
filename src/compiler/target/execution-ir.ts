@@ -15,7 +15,6 @@ export interface ExecutionProgram {
 	readonly core: CoreProgram;
 	readonly context: CoreCompilationContext;
 	readonly functions: ReadonlyArray<ExecutionFunction>;
-	readonly gcRootRegisters: ReadonlyArray<ReadonlyArray<number> | undefined>;
 }
 
 export type ExecutionMove = Extract<CompilerInstruction, { type: "move" }>;
@@ -31,13 +30,23 @@ export interface ExecutionParallelCopy {
 	readonly temporaries: ReadonlyArray<number>;
 }
 
-export interface ExecutionSafepoint {
-	/** Core instruction that emitted `instruction`. */
-	readonly coreInstruction: CoreInstructionId;
-	/** Core collection points realized while this operation executes. */
-	readonly realizedCoreInstructions: ReadonlyArray<CoreInstructionId>;
-	readonly instruction: CompilerInstruction;
-}
+export type ExecutionSafepoint =
+	| {
+			readonly kind: "operation";
+			/** Core instruction that emitted `instruction`. */
+			readonly coreInstruction: CoreInstructionId;
+			/** Core collection points realized while this operation executes. */
+			readonly realizedCoreInstructions: ReadonlyArray<CoreInstructionId>;
+			readonly instruction: CompilerInstruction;
+			/** Exact boxed physical registers required by this collection point. */
+			readonly rootRegisters: ReadonlyArray<number>;
+	  }
+	| {
+			readonly kind: "loop-backedge";
+			readonly instruction: CompilerInstruction;
+			/** Exact boxed physical registers required by the taken-edge poll. */
+			readonly rootRegisters: ReadonlyArray<number>;
+	  };
 
 export interface ExecutionFunction {
 	readonly sourcePath: string;
@@ -63,7 +72,10 @@ export interface ExecutionFunction {
 	readonly isClassConstructor: boolean;
 	readonly isDerivedConstructor: boolean;
 	readonly hasPrototype: boolean;
-	readonly safepoints: ReadonlyArray<ExecutionSafepoint>;
+	readonly gc: {
+		/** Every operation collection point and native loop-backedge poll. */
+		readonly safepoints: ReadonlyArray<ExecutionSafepoint>;
+	};
 	readonly parallelCopies: ReadonlyArray<ExecutionParallelCopy>;
 	readonly temporaryRegisters: ReadonlyArray<number>;
 }

@@ -515,10 +515,7 @@ function shapeCaseDefinition(): ProgramImage {
 			native: createConservativeNativePlan(functions),
 		},
 		0,
-		(plan) => ({
-			...plan,
-			registerRepresentations: ["boxed", "boxed", "boxed", "number", "boxed", "boxed"],
-		}),
+		(plan) => plan,
 	);
 }
 
@@ -1014,7 +1011,6 @@ describe("program-image-codec", () => {
 			0,
 			(plan) => ({
 				...plan,
-				gc: { ...plan.gc, rootRegisters: [0, 3, 7] },
 				instructions: nativeInstructions,
 			}),
 		);

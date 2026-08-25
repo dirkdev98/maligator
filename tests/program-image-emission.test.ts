@@ -324,6 +324,11 @@ describe("emit-program-image instruction packing", () => {
 			},
 			{ opcode: "RETURN", value: 5 },
 		];
+		const specializedFunction: BytecodeFunction = {
+			...fn,
+			instructions: specializedInstructions,
+			positions: specializedInstructions.map(() => 0),
+		};
 		const specialized: ProgramImage = {
 			...definition,
 			runtime: {
@@ -331,14 +336,9 @@ describe("emit-program-image instruction packing", () => {
 				precompiledLiteralShapes: [
 					{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [1, 2] },
 				],
-				functions: [
-					{
-						...fn,
-						instructions: specializedInstructions,
-						positions: specializedInstructions.map(() => 0),
-					},
-				],
+				functions: [specializedFunction],
 			},
+			native: createConservativeNativePlan([specializedFunction]),
 		};
 		const interpreted = emitProgramImage(specialized, { compiled: false });
 		const compiled = emitProgramImage(specialized, { compiled: true });
@@ -400,19 +400,19 @@ describe("emit-program-image instruction packing", () => {
 			},
 			{ opcode: "RETURN", value: 5 },
 		];
+		const syntheticFunction: BytecodeFunction = {
+			...specialized.runtime.functions[0]!,
+			literalShapeCount: 1,
+			instructions: syntheticInstructions,
+			positions: syntheticInstructions.map(() => 0),
+		};
 		const synthetic: ProgramImage = {
 			...specialized,
 			runtime: {
 				...specialized.runtime,
-				functions: [
-					{
-						...specialized.runtime.functions[0]!,
-						literalShapeCount: 1,
-						instructions: syntheticInstructions,
-						positions: syntheticInstructions.map(() => 0),
-					},
-				],
+				functions: [syntheticFunction],
 			},
+			native: createConservativeNativePlan([syntheticFunction]),
 		};
 		for (const output of [
 			emitProgramImage(synthetic, { compiled: true }),
@@ -451,18 +451,18 @@ describe("emit-program-image instruction packing", () => {
 			{ ...specializedInstructions[0]!, dst: 2 },
 			...specializedInstructions.slice(1),
 		] as Array<BytecodeInstruction>;
+		const duplicateShapeRowFunction: BytecodeFunction = {
+			...specialized.runtime.functions[0]!,
+			instructions: duplicateShapeRowInstructions,
+			positions: duplicateShapeRowInstructions.map(() => 0),
+		};
 		const duplicateShapeRow: ProgramImage = {
 			...specialized,
 			runtime: {
 				...specialized.runtime,
-				functions: [
-					{
-						...specialized.runtime.functions[0]!,
-						instructions: duplicateShapeRowInstructions,
-						positions: duplicateShapeRowInstructions.map(() => 0),
-					},
-				],
+				functions: [duplicateShapeRowFunction],
 			},
+			native: createConservativeNativePlan([duplicateShapeRowFunction]),
 		};
 		expect(() => emitProgramImage(duplicateShapeRow)).toThrow(/literal shape index/);
 	});

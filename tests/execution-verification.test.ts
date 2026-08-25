@@ -291,16 +291,16 @@ describe("Core target construction", () => {
 
 	it("records safepoints and boxed GC roots for allocating source", () => {
 		const program = optimizedTarget(HANDLER_SOURCE, "verified-safepoints.js");
-		for (const [index, fn] of program.functions.entries()) {
-			const roots = program.gcRootRegisters[index];
-			expect(roots === undefined).toBe(fn.isGenerator || fn.isAsync);
-			for (const register of roots ?? []) {
-				expect(fn.registerRepresentations[register]).toBe("boxed");
+		for (const fn of program.functions) {
+			for (const safepoint of fn.gc.safepoints) {
+				for (const register of safepoint.rootRegisters) {
+					expect(fn.registerRepresentations[register]).toBe("boxed");
+				}
 			}
 		}
-		expect(
-			program.functions.flatMap(({ safepoints }) => safepoints).length,
-		).toBeGreaterThan(0);
+		expect(program.functions.flatMap(({ gc }) => gc.safepoints).length).toBeGreaterThan(
+			0,
+		);
 	});
 
 	it("constrains two-address operations to one register", () => {
@@ -831,21 +831,38 @@ describe("Core target verification", () => {
 
 	it("rejects GC roots that are out of bounds, unboxed, duplicated, or missing at a safepoint", () => {
 		const program = optimizedTarget(HANDLER_SOURCE, "gc-roots.js");
-		const functionIndex = program.functions.findIndex(
-			(fn, index) =>
-				(program.gcRootRegisters[index] ?? []).length > 0 &&
-				fn.safepoints.some(
-					({ instruction }) => instruction.type === "loadPropertyStatic",
-				),
+		const functionIndex = program.functions.findIndex((fn) =>
+			fn.gc.safepoints.some(
+				({ instruction, rootRegisters }) =>
+					instruction.type === "loadPropertyStatic" && rootRegisters.length > 0,
+			),
 		);
 		const fn = program.functions[functionIndex]!;
-		const roots = program.gcRootRegisters[functionIndex]!;
-		const withRoots = (replacement: ReadonlyArray<number>): ExecutionProgram => ({
-			...program,
-			gcRootRegisters: program.gcRootRegisters.with(functionIndex, replacement),
-		});
+		const safepointIndex = fn.gc.safepoints.findIndex(
+			({ instruction }) => instruction.type === "loadPropertyStatic",
+		);
+		const safepoint = fn.gc.safepoints[safepointIndex]!;
+		const roots = safepoint.rootRegisters;
+		const withRoots = (
+			target: ExecutionProgram,
+			targetFunctionIndex: number,
+			targetSafepointIndex: number,
+			replacement: ReadonlyArray<number>,
+		): ExecutionProgram => {
+			const targetFunction = target.functions[targetFunctionIndex]!;
+			return withFunction(target, targetFunctionIndex, {
+				gc: {
+					safepoints: targetFunction.gc.safepoints.with(targetSafepointIndex, {
+						...targetFunction.gc.safepoints[targetSafepointIndex]!,
+						rootRegisters: replacement,
+					}),
+				},
+			});
+		};
 
-		const outOfBounds = verificationError(withRoots([...roots, fn.registerCount]));
+		const outOfBounds = verificationError(
+			withRoots(program, functionIndex, safepointIndex, [...roots, fn.registerCount]),
+		);
 		expect(outOfBounds.detail).toBe(
 			`GC root register is out of bounds for a ${fn.registerCount}-register function`,
 		);
@@ -856,60 +873,73 @@ describe("Core target verification", () => {
 
 		const numeric = optimizedTarget(LOOP_SOURCE, "gc-roots-unboxed.js");
 		const numericIndex = numeric.functions.findIndex(
-			(candidate, index) =>
-				(numeric.gcRootRegisters[index] ?? []).length > 0 &&
+			(candidate) =>
+				candidate.gc.safepoints.length > 0 &&
 				candidate.registerRepresentations.includes("number"),
 		);
-		const unboxed =
-			numeric.functions[numericIndex]!.registerRepresentations.indexOf("number");
-		const unboxedRoot = verificationError({
-			...numeric,
-			gcRootRegisters: numeric.gcRootRegisters.with(numericIndex, [
-				...numeric.gcRootRegisters[numericIndex]!,
+		const numericFunction = numeric.functions[numericIndex]!;
+		const unboxed = numericFunction.registerRepresentations.indexOf("number");
+		const unboxedRoot = verificationError(
+			withRoots(numeric, numericIndex, 0, [
+				...numericFunction.gc.safepoints[0]!.rootRegisters,
 				unboxed,
 			]),
-		});
+		);
 		expect(unboxedRoot.detail).toBe("GC root register must be boxed");
 		expect(unboxedRoot.context).toMatchObject({
 			functionIndex: numericIndex,
 			register: unboxed,
 		});
 
-		const duplicated = verificationError(withRoots([...roots, roots[0]!]));
+		const duplicated = verificationError(
+			withRoots(program, functionIndex, safepointIndex, [...roots, roots[0]!]),
+		);
 		expect(duplicated.detail).toBe("GC root register is listed twice");
 		expect(duplicated.context).toMatchObject({ functionIndex, register: roots[0] });
 
-		const load = fn.safepoints.find(
-			({ instruction }) => instruction.type === "loadPropertyStatic",
-		)!.instruction;
+		const load = safepoint.instruction;
 		const object = registerOf(load, 1);
 		const missing = verificationError(
-			withRoots(roots.filter((register) => register !== object)),
+			withRoots(
+				program,
+				functionIndex,
+				safepointIndex,
+				roots.filter((register) => register !== object),
+			),
 		);
-		expect(missing.detail).toBe("boxed register live at a safepoint is not a GC root");
+		expect(missing.detail).toBe(
+			"GC safepoint roots do not match exact execution liveness",
+		);
 		expect(missing.context).toMatchObject({ functionIndex, register: object });
 		// The first safepoint that still needs the register reports it; every
 		// safepoint carries its own block, position, and operation.
 		expect(missing.context.block).toBeGreaterThanOrEqual(0);
 		expect(missing.context.instruction).toBeGreaterThanOrEqual(0);
 		expect(
-			fn.safepoints.some(
+			fn.gc.safepoints.some(
 				({ instruction }) => instruction.type === missing.context.opcode,
 			),
 		).toBe(true);
 
-		const omittedSafepoint = fn.safepoints[0]!;
+		const operationSafepoints = fn.gc.safepoints.filter(
+			(safepoint) => safepoint.kind === "operation",
+		);
+		const omittedSafepoint = operationSafepoints[0]!;
 		const stillCovered = new Set(
-			fn.safepoints
+			operationSafepoints
 				.slice(1)
-				.flatMap(({ realizedCoreInstructions }) => realizedCoreInstructions),
+				.flatMap((candidate) => candidate.realizedCoreInstructions),
 		);
 		const omittedCoreInstruction = omittedSafepoint.realizedCoreInstructions.find(
 			(instruction) => !stillCovered.has(instruction),
 		)!;
 		const incomplete = verificationError(
 			withFunction(program, functionIndex, {
-				safepoints: fn.safepoints.slice(1),
+				gc: {
+					safepoints: fn.gc.safepoints.filter(
+						(candidate) => candidate !== omittedSafepoint,
+					),
+				},
 			}),
 		);
 		expect(incomplete.detail).toBe(

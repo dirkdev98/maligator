@@ -33,6 +33,10 @@ import type {
 	ExecutionProgram,
 	ExecutionSafepoint,
 } from "./execution-ir.ts";
+import {
+	executionLoopBackedgeInstructions,
+	executionSafepointRootRegisters,
+} from "./execution-liveness.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
 export type {
 	ExecutionFunction,
@@ -303,9 +307,8 @@ export function coreRegisterClasses(
 ): {
 	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
 	readonly registers: Map<CoreValueId, number>;
-	readonly gcRootRegisters: ReadonlyArray<number>;
 	readonly registerRepresentations: Map<number, CoreRepresentation>;
-	/** Core instructions whose effects made them collection points for the root set. */
+	/** Core instructions whose refined effects make them collection points. */
 	readonly safepoints: ReadonlySet<CoreInstructionId>;
 } {
 	const representations = new Map(
@@ -676,56 +679,19 @@ export function coreRegisterClasses(
 		nextUniqueColor = Math.max(nextUniqueColor, color + 1);
 		active.push(interval);
 	}
-	const gcRootValues = new Set<CoreValueId>();
-	const safepoints = new Set<CoreInstructionId>();
-	const loopBackedges = new Set(controlFlow.loops.flatMap(({ latches }) => [...latches]));
-	for (const block of core.blocks) {
-		const live = new Set(liveOut[block.id]);
-		// Successor liveness is expressed in the successor's SSA parameters, while
-		// values consumed by this block's outgoing edges and exceptional edge are
-		// local operands. Seed the reverse walk with those operands so a preceding
-		// safepoint roots values whose only later use is an edge copy or handler copy.
-		for (const value of blockTerminatorValues[block.id]!) live.add(value);
-		for (const value of block.handler?.arguments ?? []) live.add(value);
-		for (const parameter of handlerParameters(block)) live.add(parameter);
-		if (loopBackedges.has(block.id)) {
-			for (const value of live) gcRootValues.add(value);
-			for (const value of blockTerminatorValues[block.id]!) gcRootValues.add(value);
-		}
-		for (let index = block.instructions.length - 1; index >= 0; index--) {
-			const instruction = block.instructions[index]!;
-			const effects =
-				instruction.effectRefinement?.effects ??
-				coreOpcodeRegistry.require(instruction.opcode).effects;
-			if (effects.mayGc) {
-				safepoints.add(instruction.id);
-				for (const value of live) gcRootValues.add(value);
-				for (const value of instruction.inputs) gcRootValues.add(value);
-			}
-			for (const output of instruction.outputs) live.delete(output);
-			for (const input of instruction.inputs) live.add(input);
-		}
-		if (block.parameters[0]?.role === "exception") {
-			for (const value of live) gcRootValues.add(value);
-			gcRootValues.add(block.parameters[0].value);
-		}
-	}
-	// Only boxed registers can hold a heap pointer, so unboxed classes are never
-	// part of the root frame the collector scans.
-	const gcRootRegisters = [
-		...new Set(
-			[...gcRootValues]
-				.map((value) => registers.get(roots.get(value)!)!)
-				.filter(
-					(register) =>
-						physicalRegisterClass(colorRepresentations.get(register)!) === "boxed",
-				),
+	const safepoints = new Set<CoreInstructionId>(
+		core.blocks.flatMap(({ instructions }) =>
+			instructions.flatMap((instruction) => {
+				const effects =
+					instruction.effectRefinement?.effects ??
+					coreOpcodeRegistry.require(instruction.opcode).effects;
+				return effects.mayGc ? [instruction.id] : [];
+			}),
 		),
-	].sort((left, right) => left - right);
+	);
 	return {
 		roots,
 		registers,
-		gcRootRegisters,
 		registerRepresentations: colorRepresentations,
 		safepoints,
 	};
@@ -892,7 +858,6 @@ function coreBlockLayout(core: CoreFunction): Array<CoreBlockId> {
 
 interface LoweredCoreFunction {
 	readonly fn: ExecutionFunction;
-	readonly gcRootRegisters: ReadonlyArray<number>;
 }
 
 function lowerFunctionToTarget(
@@ -913,11 +878,9 @@ function lowerFunctionToTarget(
 	const {
 		roots,
 		registers: allocatedRegisters,
-		gcRootRegisters: allocatedGcRootRegisters,
 		registerRepresentations,
 		safepoints: coreSafepoints,
 	} = coreRegisterClasses(core, reuseRegisters);
-	const gcRootRegisters = new Set(allocatedGcRootRegisters);
 	const parallelCopies: Array<ExecutionParallelCopy> = [];
 	const temporaryRegisters: Array<number> = [];
 	const nextRegister = {
@@ -965,7 +928,9 @@ function lowerFunctionToTarget(
 			: lowered + 1;
 	};
 
-	const safepoints: Array<ExecutionSafepoint> = [];
+	const operationSafepoints: Array<
+		Omit<Extract<ExecutionSafepoint, { kind: "operation" }>, "rootRegisters">
+	> = [];
 	const coreValueDefinitions = new Map(
 		core.values.map(({ id, definition }) => [id, definition] as const),
 	);
@@ -1033,9 +998,6 @@ function lowerFunctionToTarget(
 					const constrained = nextRegister.value++;
 					registerRepresentations.set(constrained, "boxed");
 					temporaryRegisters.push(constrained);
-					// The constrained register holds the incoming operand across the operation
-					// and its result afterwards, both across a collection point.
-					gcRootRegisters.add(constrained);
 					instructions.push({
 						type: "move",
 						registers: [constrained, operand],
@@ -1071,7 +1033,8 @@ function lowerFunctionToTarget(
 				}
 			}
 			if (realizedCoreInstructions.size > 0) {
-				safepoints.push({
+				operationSafepoints.push({
+					kind: "operation",
 					coreInstruction: instruction.id,
 					realizedCoreInstructions: [...realizedCoreInstructions],
 					instruction: lowered,
@@ -1197,37 +1160,75 @@ function lowerFunctionToTarget(
 			return physicalRegisterClass(representation);
 		},
 	);
+	const fnWithoutGc: Omit<ExecutionFunction, "gc"> = {
+		sourcePath: core.metadata.sourcePath,
+		functionIndex: core.functionIndex,
+		nameStringIndex: core.metadata.nameStringIndex,
+		blocks,
+		specializations: lowerCoreRegions(
+			core.regions,
+			loweredInstructions,
+			loweredBlockForCore,
+			new Map(core.values.map(({ id }) => [id, registerForValue(id)])),
+		),
+		isGenerator: core.isGenerator,
+		isAsync: core.isAsync,
+		parameterCount: core.parameters.length,
+		mappedArgumentSlots: [...core.metadata.mappedArgumentSlots],
+		mappedArguments: core.metadata.mappedArguments,
+		length: core.metadata.length,
+		registerCount: nextRegister.value,
+		allocatedRegisterCount,
+		registerRepresentations: physicalRepresentations,
+		capturedCount: core.metadata.capturedCount,
+		strict: core.metadata.strict,
+		isClassConstructor: core.metadata.isClassConstructor,
+		isDerivedConstructor: core.metadata.isDerivedConstructor,
+		hasPrototype: core.metadata.hasPrototype,
+		parallelCopies,
+		temporaryRegisters,
+	};
+	const analysisFunction: ExecutionFunction = {
+		...fnWithoutGc,
+		gc: { safepoints: [] },
+	};
+	const backedges = executionLoopBackedgeInstructions(analysisFunction);
+	type PendingSafepoint =
+		| Omit<Extract<ExecutionSafepoint, { kind: "operation" }>, "rootRegisters">
+		| Omit<Extract<ExecutionSafepoint, { kind: "loop-backedge" }>, "rootRegisters">;
+	const pendingSafepoints: Array<PendingSafepoint> = [
+		...operationSafepoints,
+		...[...backedges].map((instruction) => ({
+			kind: "loop-backedge" as const,
+			instruction,
+		})),
+	];
+	const rootsAtSafepoint = executionSafepointRootRegisters(
+		analysisFunction,
+		new Set(pendingSafepoints.map(({ instruction }) => instruction)),
+	);
+	const instructionOrder = new Map<CompilerInstruction, number>();
+	let nextInstructionOrder = 0;
+	for (const { instructions } of blocks) {
+		for (const instruction of instructions) {
+			instructionOrder.set(instruction, nextInstructionOrder++);
+		}
+	}
+	const safepoints: Array<ExecutionSafepoint> = pendingSafepoints
+		.map((safepoint) => ({
+			...safepoint,
+			rootRegisters: rootsAtSafepoint.get(safepoint.instruction) ?? [],
+		}))
+		.sort(
+			(left, right) =>
+				instructionOrder.get(left.instruction)! -
+				instructionOrder.get(right.instruction)!,
+		);
 	return {
 		fn: {
-			sourcePath: core.metadata.sourcePath,
-			functionIndex: core.functionIndex,
-			nameStringIndex: core.metadata.nameStringIndex,
-			blocks,
-			specializations: lowerCoreRegions(
-				core.regions,
-				loweredInstructions,
-				loweredBlockForCore,
-				new Map(core.values.map(({ id }) => [id, registerForValue(id)])),
-			),
-			isGenerator: core.isGenerator,
-			isAsync: core.isAsync,
-			parameterCount: core.parameters.length,
-			mappedArgumentSlots: [...core.metadata.mappedArgumentSlots],
-			mappedArguments: core.metadata.mappedArguments,
-			length: core.metadata.length,
-			registerCount: nextRegister.value,
-			allocatedRegisterCount,
-			registerRepresentations: physicalRepresentations,
-			capturedCount: core.metadata.capturedCount,
-			strict: core.metadata.strict,
-			isClassConstructor: core.metadata.isClassConstructor,
-			isDerivedConstructor: core.metadata.isDerivedConstructor,
-			hasPrototype: core.metadata.hasPrototype,
-			safepoints,
-			parallelCopies,
-			temporaryRegisters,
+			...fnWithoutGc,
+			gc: { safepoints },
 		},
-		gcRootRegisters: [...gcRootRegisters].sort((left, right) => left - right),
 	};
 }
 
@@ -1254,11 +1255,6 @@ export function lowerCoreCompilationToExecution(
 		core,
 		context,
 		functions: lowered.map(({ fn }) => fn),
-		gcRootRegisters: lowered.map(({ gcRootRegisters }, index) =>
-			core.functions[index]!.isGenerator || core.functions[index]!.isAsync
-				? undefined
-				: gcRootRegisters,
-		),
 	};
 	// Owned boundary: no program-image consumer may observe an unverified target program.
 	verifyExecutionProgram(program);

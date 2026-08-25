@@ -9,6 +9,7 @@ import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
+	nativeFrameRootRegisters,
 	vmCallProvesBuiltin,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
@@ -394,19 +395,13 @@ export function emitCompiledFunction(
 	// The registers ARE the slots (via `#define r<i> (__gc_slots[<slot>])`), so no
 	// spilling is needed; every exit must unlink the frame (gcUnlink).
 	//
-	// Only registers LIVE AT A SAFEPOINT need rooting (C1 liveness minimization):
-	// `gcRootRegisters` (computed on Core SSA before VM lowering) is the set of
-	// registers live at or used by a point where GC can run — every property access,
-	// binary op, iterator step, call, and back-edge, since each can re-enter JS or
-	// allocate. A boxed register absent from this set is dead at every collection
-	// point, so it stays a plain C local the compiler can keep in a register rather
-	// than an address-taken root slot. Rooting a safepoint's *operands* (not just
-	// values live across it) preserves the invariant the runtime relies on: the
-	// caller keeps an in-flight call's receiver/args reachable for the callee. When
-	// the set is absent (generator/async, which this backend does not compile, or a
-	// future op without Core effect metadata), fall back to rooting every boxed
-	// register.
-	const rootRegisters = new Set(native.gc.rootRegisters);
+	// Execution lowering owns precise per-safepoint physical-register liveness,
+	// including operation operands/results, exceptional exits, target temporaries,
+	// and native loop-backedge polls. This static-shadow-frame backend consumes that
+	// contract by allocating the union of its exact maps. It never re-runs liveness
+	// or infers GC policy from bytecode; a later dynamic-map frame can consume the
+	// individual maps without changing the ExecutionProgram or NativePlan boundary.
+	const rootRegisters = new Set(nativeFrameRootRegisters(fn, native));
 	const valueRegs: Array<number> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
 		const isBoxed = reps[i] !== "number" && reps[i] !== "boolean";

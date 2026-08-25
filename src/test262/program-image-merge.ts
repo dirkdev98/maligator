@@ -533,16 +533,11 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				mode: native.mode,
 				registerRepresentations: [...native.registerRepresentations],
 				gc: {
-					rootRegisters: [...native.gc.rootRegisters],
 					safepoints: native.gc.safepoints.map((safepoint) => ({
+						kind: safepoint.kind,
 						instructionIp: safepoint.instructionIp,
 						rootRegisters: [...safepoint.rootRegisters],
 					})),
-				},
-				abi: {
-					parameters: [...native.abi.parameters],
-					result: native.abi.result,
-					argumentsRootedByCaller: true as const,
 				},
 				instructions: native.instructions.map((plan) =>
 					cloneNativeInstructionPlan(plan, base),

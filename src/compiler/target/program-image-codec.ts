@@ -4,6 +4,7 @@ import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
 	decodeVmValueOperand,
+	nativeFrameRootRegisters,
 	validateVmShapeCases,
 	vmGuardIsWorldInvariant,
 	vmInstructionWriteRegisters,
@@ -42,8 +43,8 @@ import type {
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 26;
-export const COMPILER_ARTIFACT_VERSION = 26;
+export const WIRE_VERSION = 27;
+export const COMPILER_ARTIFACT_VERSION = 27;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -877,14 +878,6 @@ function serializeImage(
 		if (native?.functionIndex !== functionIndex) {
 			throw new RangeError("program-image-codec: native function plan mismatch");
 		}
-		w.u8(1);
-		w.i32Array([...native.gc.rootRegisters]);
-		w.u32(native.gc.safepoints.length);
-		for (const safepoint of native.gc.safepoints) {
-			w.i32(safepoint.instructionIp);
-			w.i32Array([...safepoint.rootRegisters]);
-		}
-
 		const representationTag = (representation: string): number =>
 			representation === "boxed"
 				? 0
@@ -903,6 +896,16 @@ function serializeImage(
 		) {
 			throw new RangeError("program-image-codec: invalid register representations");
 		}
+		nativeFrameRootRegisters(fn, native);
+		w.u32(native.gc.safepoints.length);
+		for (const safepoint of native.gc.safepoints) {
+			w.u8(
+				safepoint.kind === "operation" ? 0 : safepoint.kind === "loop-backedge" ? 1 : 2,
+			);
+			w.i32(safepoint.instructionIp);
+			w.i32Array([...safepoint.rootRegisters]);
+		}
+
 		w.u32(native.registerRepresentations.length);
 		for (const representation of native.registerRepresentations) {
 			w.u8(representationTag(representation));
@@ -3015,27 +3018,26 @@ function deserializeImage(
 	}
 	const nativeFunctions: Array<NativeFunctionPlan> = [];
 	for (const [functionIndex, fn] of functions.entries()) {
-		const hasGcRootRegisters = r.u8();
-		if (hasGcRootRegisters > 1) {
-			throw new Error("program-image-codec: invalid GC-root metadata");
-		}
-		const gcRootRegisters = r.i32Array();
-		if (hasGcRootRegisters === 0 && gcRootRegisters.length !== 0) {
-			throw new Error("program-image-codec: invalid GC-root metadata");
-		}
 		const safepointCount = r.count(2);
 		const safepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
 		for (let safepointIndex = 0; safepointIndex < safepointCount; safepointIndex++) {
+			const kindTag = r.u8();
 			const instructionIp = r.i32();
 			const rootRegisters = r.i32Array();
 			if (
+				kindTag > 2 ||
 				instructionIp < 0 ||
 				instructionIp >= fn.instructions.length ||
 				rootRegisters.some((register) => register < 0 || register >= fn.registerCount)
 			) {
 				throw new RangeError("program-image-codec: invalid native safepoint metadata");
 			}
-			safepoints.push({ instructionIp, rootRegisters });
+			safepoints.push({
+				kind:
+					kindTag === 0 ? "operation" : kindTag === 1 ? "loop-backedge" : "conservative",
+				instructionIp,
+				rootRegisters,
+			});
 		}
 
 		const representationCount = r.count(1);
@@ -3768,27 +3770,16 @@ function deserializeImage(
 				regions.push(region);
 			}
 		}
-		nativeFunctions.push({
+		const nativeFunction: NativeFunctionPlan = {
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 			registerRepresentations,
-			gc: {
-				rootRegisters:
-					hasGcRootRegisters === 1
-						? gcRootRegisters
-						: registerRepresentations.flatMap((representation, register) =>
-								representation === "boxed" ? [register] : [],
-							),
-				safepoints,
-			},
-			abi: {
-				parameters: Array.from({ length: fn.parameterCount }, () => "boxed" as const),
-				result: "boxed",
-				argumentsRootedByCaller: true,
-			},
+			gc: { safepoints },
 			instructions: nativeInstructions,
 			specializations: regions,
-		});
+		};
+		nativeFrameRootRegisters(fn, nativeFunction);
+		nativeFunctions.push(nativeFunction);
 	}
 	if (r.remaining() !== 0) {
 		throw new Error("program-image-codec: trailing data");

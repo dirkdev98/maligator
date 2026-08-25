@@ -720,16 +720,11 @@ export interface NativeFunctionPlan {
 	readonly mode: "direct" | "resumable";
 	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	readonly gc: {
-		readonly rootRegisters: ReadonlyArray<number>;
 		readonly safepoints: ReadonlyArray<{
+			readonly kind: "operation" | "loop-backedge" | "conservative";
 			readonly instructionIp: number;
 			readonly rootRegisters: ReadonlyArray<number>;
 		}>;
-	};
-	readonly abi: {
-		readonly parameters: ReadonlyArray<"boxed">;
-		readonly result: "boxed";
-		readonly argumentsRootedByCaller: true;
 	};
 	/** One native-only decision per bytecode IP; absent entries mean generic lowering. */
 	readonly instructions: ReadonlyArray<NativeInstructionPlan | undefined>;
@@ -769,21 +764,86 @@ export function createConservativeNativePlan(
 				() => "boxed" as const,
 			),
 			gc: {
-				rootRegisters: Array.from(
-					{ length: fn.registerCount },
-					(_, register) => register,
-				),
-				safepoints: [],
-			},
-			abi: {
-				parameters: Array.from({ length: fn.parameterCount }, () => "boxed" as const),
-				result: "boxed",
-				argumentsRootedByCaller: true,
+				safepoints: fn.instructions.map((_, instructionIp) => ({
+					kind: "conservative" as const,
+					instructionIp,
+					rootRegisters: Array.from(
+						{ length: fn.registerCount },
+						(_, register) => register,
+					),
+				})),
 			},
 			instructions: Array.from({ length: fn.instructions.length }),
 			specializations: [],
 		})),
 	};
+}
+
+/**
+ * Validate the native GC contract and materialize the static shadow-frame union.
+ * This is the only permitted union operation: producers retain exact maps, while
+ * the current C frame representation explicitly chooses one slot set per function.
+ */
+export function nativeFrameRootRegisters(
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
+): ReadonlyArray<number> {
+	const seenIps = new Set<number>();
+	const frameRoots = new Set<number>();
+	let previousIp = -1;
+	for (const safepoint of native.gc.safepoints) {
+		if (
+			safepoint.kind !== "operation" &&
+			safepoint.kind !== "loop-backedge" &&
+			safepoint.kind !== "conservative"
+		) {
+			throw new RangeError("native GC safepoint has an invalid kind");
+		}
+		if (
+			!Number.isSafeInteger(safepoint.instructionIp) ||
+			safepoint.instructionIp < 0 ||
+			safepoint.instructionIp >= fn.instructions.length ||
+			safepoint.instructionIp <= previousIp ||
+			seenIps.has(safepoint.instructionIp)
+		) {
+			throw new RangeError("native GC safepoints must name unique ordered instructions");
+		}
+		previousIp = safepoint.instructionIp;
+		seenIps.add(safepoint.instructionIp);
+		const instruction = fn.instructions[safepoint.instructionIp]!;
+		const isBackedge =
+			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+			instruction.targetIp <= safepoint.instructionIp;
+		if (safepoint.kind === "loop-backedge" && !isBackedge) {
+			throw new RangeError("native loop-backedge safepoint does not name a polling edge");
+		}
+		let previousRegister = -1;
+		for (const register of safepoint.rootRegisters) {
+			if (
+				!Number.isSafeInteger(register) ||
+				register < 0 ||
+				register >= fn.registerCount ||
+				register <= previousRegister ||
+				native.registerRepresentations[register] !== "boxed"
+			) {
+				throw new RangeError(
+					"native GC roots must be unique ordered boxed function registers",
+				);
+			}
+			previousRegister = register;
+			frameRoots.add(register);
+		}
+	}
+	for (const [instructionIp, instruction] of fn.instructions.entries()) {
+		if (
+			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+			instruction.targetIp <= instructionIp &&
+			!seenIps.has(instructionIp)
+		) {
+			throw new RangeError("native polling edge has no GC safepoint");
+		}
+	}
+	return [...frameRoots].sort((left, right) => left - right);
 }
 
 export interface VmPrecompiledLiteralShape {
@@ -2159,7 +2219,8 @@ function buildKnownShapeLayout(
 		}
 
 		const functionOrigins = new Map<number, VmKnownShapeOrigin>();
-		for (const safepoint of fn.safepoints) {
+		for (const safepoint of fn.gc.safepoints) {
+			if (safepoint.kind !== "operation") continue;
 			if (safepoint.instruction.type !== "createObjectShaped") continue;
 			const cacheIndex = cacheIndexByInstruction.get(safepoint.instruction);
 			if (cacheIndex === undefined || functionOrigins.has(safepoint.coreInstruction)) {
@@ -2349,7 +2410,6 @@ export function lowerExecutionToProgramImage(
 			knownShapeLayout.origins,
 			knownShapeLayout.literalShapeCounts[index]!,
 			profile ? context.facts.instructionSites : undefined,
-			program.gcRootRegisters[index],
 		),
 	);
 	const functions = functionPlans.map(({ bytecode }) => bytecode);
@@ -2550,7 +2610,6 @@ function lowerExecutionFunctionPlans(
 	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
 	literalShapeCount: number,
 	instructionSites?: WeakMap<object, { id: string }>,
-	gcRootRegisters?: ReadonlyArray<number>,
 ): LoweredFunctionPlans {
 	// Source-position and exception-range markers carry no executable opcode, so
 	// block start IPs count only instructions that survive flattening.
@@ -4193,17 +4252,11 @@ function lowerExecutionFunctionPlans(
 		fileIndex,
 		positions,
 	};
-	const rootRegisters = [
-		...(gcRootRegisters ??
-			fn.registerRepresentations.flatMap((representation, register) =>
-				representation === "boxed" ? [register] : [],
-			)),
-	];
-	const safepoints = fn.safepoints.flatMap(({ instruction }) => {
+	const safepoints = fn.gc.safepoints.flatMap(({ kind, instruction, rootRegisters }) => {
 		const instructionIp = instructionIndexByTargetInstruction.get(instruction);
 		return instructionIp === undefined
 			? []
-			: [{ instructionIp, rootRegisters: [...rootRegisters] }];
+			: [{ kind, instructionIp, rootRegisters: [...rootRegisters] }];
 	});
 	return {
 		bytecode,
@@ -4211,12 +4264,7 @@ function lowerExecutionFunctionPlans(
 			functionIndex: fn.functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 			registerRepresentations: [...fn.registerRepresentations],
-			gc: { rootRegisters, safepoints },
-			abi: {
-				parameters: Array.from({ length: fn.parameterCount }, () => "boxed" as const),
-				result: "boxed",
-				argumentsRootedByCaller: true,
-			},
+			gc: { safepoints },
 			instructions: nativeInstructions,
 			specializations: regions,
 			...(compilerSiteIds.some((site) => site !== undefined) ? { compilerSiteIds } : {}),

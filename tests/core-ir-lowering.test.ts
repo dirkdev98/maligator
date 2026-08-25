@@ -90,9 +90,15 @@ describe("Core IR lowering", () => {
 			allocation.registers.get(allocation.roots.get(value)!)!;
 		const handlerRegister = register(handlerValue);
 		const clobbers = protectedBlock.instructions.flatMap(({ outputs }) => outputs);
+		const execution = lowerCoreCompilationToExecution(coreCompilationForTest(converted));
+		const executionFunction = execution.functions[fn.functionIndex]!;
 
 		expect(clobbers.map(register)).not.toContain(handlerRegister);
-		expect(allocation.gcRootRegisters).toContain(handlerRegister);
+		expect(
+			executionFunction.gc.safepoints.some(({ rootRegisters }) =>
+				rootRegisters.includes(handlerRegister),
+			),
+		).toBe(true);
 	});
 
 	it("roots values consumed by outgoing edges after a GC safepoint", () => {
@@ -120,8 +126,14 @@ describe("Core IR lowering", () => {
 		const edgeValue = protectedBlock.terminator.consequent.arguments[0]!;
 		const allocation = coreRegisterClasses(fn, true);
 		const edgeRegister = allocation.registers.get(allocation.roots.get(edgeValue)!)!;
+		const execution = lowerCoreCompilationToExecution(coreCompilationForTest(converted));
+		const executionFunction = execution.functions[fn.functionIndex]!;
 
-		expect(allocation.gcRootRegisters).toContain(edgeRegister);
+		expect(
+			executionFunction.gc.safepoints.some(({ rootRegisters }) =>
+				rootRegisters.includes(edgeRegister),
+			),
+		).toBe(true);
 	});
 
 	it("round-trips loops, calls, and multiple-result operations to VM form", () => {
