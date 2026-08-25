@@ -1,3 +1,4 @@
+import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import type {
 	CoreBuiltinIdentityDecision,
 	CorePropertyPlacement,
@@ -2286,10 +2287,7 @@ export function lowerCoreProgramToVmDefinition(
 	// so construction-time verification cannot license a later lower-vm call.
 	verifyCoreTargetProgram(program);
 	const core = program.core;
-	const compilation = core.compilation;
-	if (compilation === undefined) {
-		throw new Error("Core program is missing product compilation metadata");
-	}
+	const context = program.context;
 	// Build the debug-info file table: distinct source paths in first-seen order.
 	const files: Array<string> = [];
 	const fileToIndex = new Map<string, number>();
@@ -2310,13 +2308,13 @@ export function lowerCoreProgramToVmDefinition(
 			core.stringConstants,
 			knownShapeLayout.origins,
 			knownShapeLayout.literalShapeCounts[index]!,
-			profile ? compilation.facts.instructionSites : undefined,
+			profile ? context.facts.instructionSites : undefined,
 			program.gcRootRegisters[index],
 		),
 	);
 
 	const definition: VmDefinition = {
-		entrypointPath: compilation.semantic.entrypointPath,
+		entrypointPath: context.data.entrypointPath,
 		functionCount: program.functions.length,
 		functions,
 		stringConstants: core.stringConstants.map((units) => [...units]),
@@ -2328,7 +2326,7 @@ export function lowerCoreProgramToVmDefinition(
 			["primitive-methods", "watched-methods", "array-elements"] as const
 		).map((family) => {
 			const plan = compilerGuardPlan(
-				[compilation.facts.protectors.get(family)],
+				[context.facts.protectors.get(family)],
 				// The runtime's protector fact always keeps the generic operation as its
 				// twin, in both worlds: a locked build proves the family cannot be
 				// invalidated, never that a post-wire analysis may drop the ordinary path.
@@ -2346,16 +2344,16 @@ export function lowerCoreProgramToVmDefinition(
 			}
 			return { family, guard };
 		}),
-		cjsModuleFunctionIndices: [...compilation.cjsModuleFunctionIndices],
-		hostInstalls: buildHostInstalls(core, functions),
+		cjsModuleFunctionIndices: [...context.data.cjsModuleFunctionIndices],
+		hostInstalls: buildHostInstalls(context, functions),
 		files,
 		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),
-		...(profile && compilation.optimizationTrace !== undefined
-			? { optimizationTrace: [...compilation.optimizationTrace] }
+		...(profile && context.optimizationTrace !== undefined
+			? { optimizationTrace: [...context.optimizationTrace] }
 			: {}),
 	};
 	validateVmShapeCases(definition);
-	if (profile) buildProfileMetadata(core, definition);
+	if (profile) buildProfileMetadata(core, context, definition);
 	return definition;
 }
 
@@ -2366,13 +2364,9 @@ export function lowerCoreProgramToVmDefinition(
  * retention. Process remains statically retained from global-property analysis.
  */
 function buildHostInstalls(
-	program: CoreProgram,
+	context: CoreCompilationContext,
 	functions: Array<VmFunction>,
 ): VmDefinition["hostInstalls"] {
-	const compilation = program.compilation;
-	if (compilation === undefined) {
-		throw new Error("Core program is missing product compilation metadata");
-	}
 	const readGlobalSlots = new Set<number>();
 	for (const fn of functions) {
 		for (const instruction of fn.instructions) {
@@ -2397,7 +2391,7 @@ function buildHostInstalls(
 		}
 		return install;
 	};
-	for (const hostModule of compilation.hostInstallCandidates) {
+	for (const hostModule of context.data.hostInstallCandidates) {
 		const usedExports: Array<{ name: string; slot: number }> = [];
 		for (const { name, slot } of hostModule.exports) {
 			if (readGlobalSlots.has(slot)) {
@@ -2409,7 +2403,7 @@ function buildHostInstalls(
 		}
 	}
 
-	for (const installer of compilation.retainedHostInstallers) installFor(installer);
+	for (const installer of context.data.retainedHostInstallers) installFor(installer);
 
 	return manifest;
 }

@@ -8,6 +8,7 @@ import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts"
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
+import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 /** Source that reaches region selection, so certificates take part in every contract. */
 const REGION_SOURCE = `
@@ -36,7 +37,8 @@ function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 
 function optimizedRegionProgram(): CoreProgram {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(REGION_SOURCE, "core-regions.js");
-	return executeCoreOptimizations(lowerSemanticProgramToCore(semantic)).program;
+	const lowered = lowerSemanticProgramToCore(semantic);
+	return executeCoreOptimizations(lowered.program, { context: lowered.context }).program;
 }
 
 /** Program with a return of a value that was never defined. */
@@ -149,9 +151,10 @@ describe("Core verification boundaries", () => {
 
 	it("verifies the whole program before target lowering", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(REGION_SOURCE, "pre-target.js");
-		const optimized = executeCoreOptimizations(
-			lowerSemanticProgramToCore(semantic),
-		).program;
+		const lowered = lowerSemanticProgramToCore(semantic);
+		const optimized = executeCoreOptimizations(lowered.program, {
+			context: lowered.context,
+		}).program;
 		const broken: CoreProgram = {
 			...optimized,
 			functions: optimized.functions.with(0, {
@@ -164,7 +167,7 @@ describe("Core verification boundaries", () => {
 		};
 
 		expect(() => compileSemanticProgramToVmDefinition(semantic)).not.toThrow();
-		expect(() => lowerCoreProgramToTarget(broken)).toThrow(
+		expect(() => lowerCoreProgramToTarget(coreCompilationForTest(broken))).toThrow(
 			/Core IR verification failed \[stage=pre-target\]: function 0 has unknown name string/,
 		);
 	});

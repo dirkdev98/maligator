@@ -477,7 +477,7 @@ describe("Core to target boundary", () => {
 	it("emits every Core block instead of absorbing forwarding arms", () => {
 		// Unoptimized Core keeps the empty branch arms that target lowering used to
 		// absorb on its own; lowering must now emit each of them.
-		const core = lowerSemanticProgramToCore(
+		const compilation = lowerSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(
 				`globalThis.pick = function pick(flag) {
 					if (flag) {} else {}
@@ -486,6 +486,7 @@ describe("Core to target boundary", () => {
 				"forwarding-boundary.js",
 			),
 		);
+		const core = compilation.program;
 		const owner = core.functions.find((fn) =>
 			fn.blocks.some(
 				(block) =>
@@ -510,7 +511,7 @@ describe("Core to target boundary", () => {
 		);
 		expect(forwarding.some(({ id }) => branchArms.includes(id))).toBe(true);
 
-		const lowered = lowerCoreProgramToTarget(core);
+		const lowered = lowerCoreProgramToTarget(compilation);
 		const loweredOwner = lowered.functions[owner.functionIndex]!;
 		// Edge copies may add blocks; nothing may remove one.
 		expect(loweredOwner.blocks.length).toBeGreaterThanOrEqual(owner.blocks.length);

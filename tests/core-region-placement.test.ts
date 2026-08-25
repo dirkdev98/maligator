@@ -13,6 +13,7 @@ import {
 	deserializeVmDefinition,
 	serializeVmDefinition,
 } from "../src/compiler/target/serialize-vm.ts";
+import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 /** One RegExp.exec projection per function: a fresh locked literal, then an open receiver. */
 const OPPOSITE_PLACEMENTS = `globalThis.inline = function inline(value) {
@@ -202,10 +203,14 @@ describe("Core region property placement", () => {
 		for (const source of [OPPOSITE_PLACEMENTS, SPLIT_AND_SLICE]) {
 			const core = lockedCore(source, "placement-register-reuse.js");
 			const reused = lowerCoreProgramToVmDefinition(
-				lowerCoreProgramToTarget(core, { reuseRegisters: true }),
+				lowerCoreProgramToTarget(coreCompilationForTest(core), {
+					reuseRegisters: true,
+				}),
 			);
 			const distinct = lowerCoreProgramToVmDefinition(
-				lowerCoreProgramToTarget(core, { reuseRegisters: false }),
+				lowerCoreProgramToTarget(coreCompilationForTest(core), {
+					reuseRegisters: false,
+				}),
 			);
 			expect(distinct.functions.map(({ registerCount }) => registerCount)).not.toEqual(
 				reused.functions.map(({ registerCount }) => registerCount),
@@ -308,7 +313,9 @@ describe("Core region property placement", () => {
 		// receiver's missing locked identity is caught where the license is consumed.
 		expect(() => verifyCoreProgram(tampered, coreOpcodeRegistry)).not.toThrow();
 		expect(() =>
-			lowerCoreProgramToVmDefinition(lowerCoreProgramToTarget(tampered)),
+			lowerCoreProgramToVmDefinition(
+				lowerCoreProgramToTarget(coreCompilationForTest(tampered)),
+			),
 		).toThrow(/regexp-exec-projection/);
 	});
 

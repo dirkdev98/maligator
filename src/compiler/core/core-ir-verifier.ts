@@ -1,4 +1,5 @@
 import { effectSummariesEqual, effectSummaryCovers } from "../shared/effect-summary.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
@@ -1100,7 +1101,11 @@ function verifyCoreFunctionGraph(
  * a callee more precise must not invalidate a sound refinement derived from the
  * older, wider claim.
  */
-function verifySummaryClaims(program: CoreProgram, registry: CoreOpcodeRegistry): void {
+function verifySummaryClaims(
+	program: CoreProgram,
+	registry: CoreOpcodeRegistry,
+	compilationContext: CoreCompilationContext | undefined,
+): void {
 	const refined: Array<{
 		readonly functionIndex: number;
 		readonly instruction: CoreInstruction;
@@ -1153,7 +1158,7 @@ function verifySummaryClaims(program: CoreProgram, registry: CoreOpcodeRegistry)
 		}
 	}
 	if (refined.length === 0 && valueClaims.length === 0) return;
-	const summaries = analyzeCoreProgramSummaries(program, registry);
+	const summaries = analyzeCoreProgramSummaries(program, registry, compilationContext);
 	for (const { functionIndex, instruction, fact } of refined) {
 		const where = `instruction @${instruction.id} in function ${functionIndex}`;
 		if (instruction.opcode !== "call") {
@@ -1220,9 +1225,10 @@ export function verifyCoreProgram(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
 	context?: CoreVerificationContext,
+	compilationContext?: CoreCompilationContext,
 ): void {
 	withVerificationContext(context, () =>
-		verifyCoreProgramGraph(program, registry, context),
+		verifyCoreProgramGraph(program, registry, context, compilationContext),
 	);
 }
 
@@ -1496,13 +1502,13 @@ function verifyCoreProgramGraph(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
 	context: CoreVerificationContext | undefined,
+	compilationContext: CoreCompilationContext | undefined,
 ): void {
 	if (!Number.isSafeInteger(program.globalCount) || program.globalCount < 0) {
 		fail(`invalid global count ${program.globalCount}`);
 	}
-	const compilation = program.compilation;
-	if (compilation !== undefined) {
-		const globalValue: unknown = compilation.singleAssignmentGlobalSlots;
+	if (compilationContext !== undefined) {
+		const globalValue: unknown = compilationContext.data.singleAssignmentGlobalSlots;
 		if (!Array.isArray(globalValue))
 			fail("missing single-assignment global-slot metadata");
 		const globals = globalValue as ReadonlyArray<unknown>;
@@ -1518,7 +1524,7 @@ function verifyCoreProgramGraph(
 				fail(`invalid single-assignment global slot ${slot}`);
 			}
 		}
-		const capturedValue: unknown = compilation.singleAssignmentCapturedSlots;
+		const capturedValue: unknown = compilationContext.data.singleAssignmentCapturedSlots;
 		if (!Array.isArray(capturedValue))
 			fail("missing single-assignment captured-slot metadata");
 		const captured = capturedValue as ReadonlyArray<unknown>;
@@ -1607,5 +1613,5 @@ function verifyCoreProgramGraph(
 			},
 		);
 	}
-	verifySummaryClaims(program, registry);
+	verifySummaryClaims(program, registry, compilationContext);
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import {
 	buildCoreControlFlow,
 	coreTerminatorEdges,
@@ -24,6 +25,7 @@ import {
 	deserializeVmDefinition,
 	serializeVmDefinition,
 } from "../src/compiler/target/serialize-vm.ts";
+import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 function programWithConstants(): CoreProgram {
 	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
@@ -2823,10 +2825,12 @@ describe("Core IR optimizer", () => {
 			"core-inline.js",
 		);
 		let optimized: CoreProgram | undefined;
+		let optimizedContext: CoreCompilationContext | undefined;
 		compileSemanticProgramToVmDefinition(semantic, {
 			profile: true,
-			afterCoreOptimization(program) {
+			afterCoreOptimization(program, context) {
 				optimized = program;
+				optimizedContext = context;
 			},
 		});
 
@@ -2842,7 +2846,7 @@ describe("Core IR optimizer", () => {
 		expect(optimized!.sourcePositions[binary.sourcePosition!]).toMatchObject({
 			inlinedFunctionIndex: 2,
 		});
-		expect(optimized!.compilation?.optimizationDecisions).toContainEqual(
+		expect(optimizedContext!.optimizationDecisions).toContainEqual(
 			expect.objectContaining({
 				functionIndex: 1,
 				code: "optimization.applied.inline",
@@ -2993,10 +2997,12 @@ describe("Core IR optimizer", () => {
 			"core-inline-captured-activation.js",
 		);
 		let optimized: CoreProgram | undefined;
+		let optimizedContext: CoreCompilationContext | undefined;
 		compileSemanticProgramToVmDefinition(semantic, {
 			profile: true,
-			afterCoreOptimization(program) {
+			afterCoreOptimization(program, context) {
 				optimized = program;
+				optimizedContext = context;
 			},
 		});
 
@@ -3006,7 +3012,7 @@ describe("Core IR optimizer", () => {
 				.flatMap(({ instructions }) => instructions)
 				.some(({ opcode }) => opcode === "call"),
 		).toBe(true);
-		expect(optimized!.compilation?.optimizationDecisions).toContainEqual(
+		expect(optimizedContext!.optimizationDecisions).toContainEqual(
 			expect.objectContaining({
 				functionIndex: 1,
 				code: "optimization.declined.inner-closure",
@@ -3064,7 +3070,7 @@ describe("Core IR optimizer", () => {
 			optimized!.functions.flatMap(({ regions }) => regions.map(({ kind }) => kind)),
 		).toContain("string-slice-number");
 		const claimed = new Set(
-			lowerCoreProgramToTarget(optimized!).functions.flatMap(
+			lowerCoreProgramToTarget(coreCompilationForTest(optimized!)).functions.flatMap(
 				(fn) =>
 					fn.regions?.flatMap(({ claimedInstructions }) => claimedInstructions) ?? [],
 			),

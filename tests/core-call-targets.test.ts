@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import {
 	CORE_CALLEE_TARGETS_ANY_SCRIPT,
 	CORE_CALLEE_TARGETS_BOTTOM,
@@ -50,6 +51,14 @@ function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 	};
 }
 
+const productContexts = new WeakMap<CoreProgram, CoreCompilationContext>();
+
+function productContext(program: CoreProgram): CoreCompilationContext {
+	const context = productContexts.get(program);
+	if (context === undefined) throw new Error("missing product compilation context");
+	return context;
+}
+
 /** A one-block function whose body a caller supplies; index 0 by default. */
 function leafFunction(functionIndex: number): CoreFunction {
 	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
@@ -74,8 +83,9 @@ function optimizedCore(source: string, path: string, profile = false): CoreProgr
 		// Inlining runs before annotation and would consume the call sites this
 		// suite is about.
 		optimizationAblations: new Set(["inlining"] as const),
-		afterCoreOptimization(program) {
+		afterCoreOptimization(program, context) {
 			optimized = program;
+			productContexts.set(program, context);
 		},
 	});
 	return optimized!;
@@ -941,7 +951,7 @@ describe("callee-target annotation", () => {
 			anyScript: false,
 			opaque: true,
 		});
-		expect(program.compilation?.optimizationDecisions).toContainEqual(
+		expect(productContext(program).optimizationDecisions).toContainEqual(
 			expect.objectContaining({
 				functionIndex: run.functionIndex,
 				code: "optimization.declined.generated-code-cost",
@@ -965,35 +975,39 @@ describe("callee-target annotation", () => {
 			parseModule(source),
 		);
 		const conservative = conservativeCompilerProgramFacts();
-		const initial = constructSemanticProgramCore(semantic, {
+		const initialCompilation = constructSemanticProgramCore(semantic, {
 			collectOptimizationDiagnostics: true,
 			facts: {
 				...conservative,
 				world: { ...conservative.world, realms: false },
 			},
 		});
+		const initial = initialCompilation.program;
 		const initialCaller = initial.functions[functionIndexOfName(initial, "caller")]!;
 		const [initialSite] = callSites(initialCaller);
 		expect(
-			analyzeCoreCalleeTargets(initial).targets(
-				initialCaller.functionIndex,
-				initialSite!.inputs[0]!,
-			),
+			analyzeCoreCalleeTargets(
+				initial,
+				coreOpcodeRegistry,
+				initialCompilation.context,
+			).targets(initialCaller.functionIndex, initialSite!.inputs[0]!),
 		).toMatchObject({
 			functions: [functionIndexOfName(initial, "target")],
 			opaque: true,
 		});
 
-		const optimized = executeCoreOptimizations(initial, {
+		const optimization = executeCoreOptimizations(initial, {
+			context: initialCompilation.context,
 			ablations: new Set(["inlining"]),
 			verification: "per-pass",
-		}).program;
+		});
+		const optimized = optimization.program;
 		const caller = optimized.functions[functionIndexOfName(optimized, "caller")]!;
 		const [site] = callSites(caller);
 		expect(site?.attributes.directFunctionIndex).toBe(
 			functionIndexOfName(optimized, "target"),
 		);
-		expect(optimized.compilation?.optimizationDecisions).not.toContainEqual(
+		expect(optimization.context?.optimizationDecisions).not.toContainEqual(
 			expect.objectContaining({
 				functionIndex: caller.functionIndex,
 				code: "optimization.declined.generated-code-cost",
@@ -1124,24 +1138,24 @@ describe("callee-target annotation", () => {
 			caller(1);`,
 			"call-targets-service-realms.mjs",
 		);
-		const realmsProgram: CoreProgram = {
-			...program,
-			compilation: {
-				...program.compilation!,
-				facts: {
-					...program.compilation!.facts,
-					world: { ...program.compilation!.facts.world, realms: true },
-				},
+		const context = productContext(program);
+		const realmsContext: CoreCompilationContext = {
+			...context,
+			facts: {
+				...context.facts,
+				world: { ...context.facts.world, realms: true },
 			},
 		};
+		const realmsProgram = program;
 		const caller = realmsProgram.functions[functionIndexOfName(realmsProgram, "caller")]!;
 		const property = caller.blocks
 			.flatMap(({ instructions }) => instructions)
 			.find(({ opcode }) => opcode === "loadPropertyStatic")!;
-		const targets = analyzeCoreCalleeTargets(realmsProgram).targets(
-			caller.functionIndex,
-			property.outputs[0]!,
-		);
+		const targets = analyzeCoreCalleeTargets(
+			realmsProgram,
+			coreOpcodeRegistry,
+			realmsContext,
+		).targets(caller.functionIndex, property.outputs[0]!);
 		expect(targets.functions).toEqual([]);
 		expect(targets.opaque).toBe(true);
 	});
@@ -1152,18 +1166,15 @@ describe("callee-target annotation", () => {
 			callback(1);`,
 			"call-targets-cell-metadata.mjs",
 		);
-		expect(program.compilation).toBeDefined();
+		const context = productContext(program);
 		expect(() =>
-			verifyCoreProgram(
-				{
-					...program,
-					compilation: {
-						...program.compilation!,
-						singleAssignmentGlobalSlots: [program.globalCount],
-					},
+			verifyCoreProgram(program, coreOpcodeRegistry, undefined, {
+				...context,
+				data: {
+					...context.data,
+					singleAssignmentGlobalSlots: [program.globalCount],
 				},
-				coreOpcodeRegistry,
-			),
+			}),
 		).toThrow(/invalid single-assignment global slot/);
 	});
 
@@ -1177,10 +1188,12 @@ describe("callee-target annotation", () => {
 			parseModule(source),
 		);
 		let optimized: CoreProgram | undefined;
+		let optimizedContext: CoreCompilationContext | undefined;
 		compileSemanticProgramToVmDefinition(semantic, {
 			optimizationAblations: new Set(["inlining"] as const),
-			afterCoreOptimization(program) {
+			afterCoreOptimization(program, context) {
 				optimized = program;
+				optimizedContext = context;
 			},
 		});
 		const annotated = optimized!.functions.flatMap((fn) =>
@@ -1190,7 +1203,10 @@ describe("callee-target annotation", () => {
 		);
 		expect(annotated.length).toBeGreaterThan(0);
 
-		const lowered = lowerCoreProgramToTarget(optimized!);
+		const lowered = lowerCoreProgramToTarget({
+			program: optimized!,
+			context: optimizedContext!,
+		});
 		const targetInstructions = lowered.functions.flatMap((fn) =>
 			fn.blocks.flatMap(({ instructions }) => instructions),
 		);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
@@ -104,9 +105,14 @@ const ARGUMENTS_SOURCE = `
 	sum(1, 2);
 `;
 
-function optimizedCore(source: string, path: string): CoreProgram {
+function optimizedCore(source: string, path: string): CoreCompilation {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, path);
-	return executeCoreOptimizations(lowerSemanticProgramToCore(semantic)).program;
+	const lowered = lowerSemanticProgramToCore(semantic);
+	const optimized = executeCoreOptimizations(lowered.program, {
+		context: lowered.context,
+	});
+	if (optimized.context === undefined) throw new Error("optimization lost context");
+	return { program: optimized.program, context: optimized.context };
 }
 
 function optimizedTarget(source: string, path: string): CoreTargetProgram {
@@ -362,7 +368,8 @@ describe("Core target construction", () => {
 	});
 
 	it("rejects a Core-to-target class mismatch at the construction boundary", () => {
-		const core = optimizedCore(BRANCH_SOURCE, "boundary.js");
+		const compilation = optimizedCore(BRANCH_SOURCE, "boundary.js");
+		const core = compilation.program;
 		const functionIndex = core.functions.findIndex((fn) =>
 			fn.blocks.some(
 				(block, index) =>
@@ -396,7 +403,9 @@ describe("Core target construction", () => {
 			}),
 		};
 
-		expect(() => lowerCoreProgramToTarget(retyped)).toThrow(CoreTargetVerificationError);
+		expect(() => lowerCoreProgramToTarget({ ...compilation, program: retyped })).toThrow(
+			CoreTargetVerificationError,
+		);
 	});
 });
 

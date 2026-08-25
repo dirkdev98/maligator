@@ -78,6 +78,7 @@ import {
 	normalizeRootReasons,
 	returnProvenanceKey,
 } from "../shared/effect-summary.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	analyzeCoreCalleeTargets,
 	coreCalleeTargetsAreOpen,
@@ -1284,10 +1285,10 @@ export function coreCallSummaryClaimHolds(
 	);
 }
 
-function moduleEvaluationPaths(program: CoreProgram): ReadonlySet<string> {
-	const semantic = program.compilation?.semantic;
-	if (semantic === undefined) return new Set();
-	return new Set(semantic.graph?.evaluationOrder ?? [semantic.entrypointPath]);
+function moduleEvaluationPaths(
+	context: CoreCompilationContext | undefined,
+): ReadonlySet<string> {
+	return new Set(context?.data.moduleEvaluationOrder ?? []);
 }
 
 /**
@@ -1359,6 +1360,7 @@ function collectRootReasons(
 	program: CoreProgram,
 	targets: CoreCalleeTargetAnalysis,
 	published: ReadonlySet<number>,
+	context: CoreCompilationContext | undefined,
 ): ReadonlyMap<number, ReadonlyArray<SummaryRootReason>> {
 	const reasons = new Map<number, Set<SummaryRootReason>>();
 	const add = (functionIndex: number, reason: SummaryRootReason): void => {
@@ -1366,7 +1368,7 @@ function collectRootReasons(
 		if (existing === undefined) reasons.set(functionIndex, new Set([reason]));
 		else existing.add(reason);
 	};
-	const sourceClosed = program.compilation?.facts.closure.sourceClosure.kind === "known";
+	const sourceClosed = context?.facts.closure.sourceClosure.kind === "known";
 	for (const fn of program.functions) {
 		if (!sourceClosed) add(fn.functionIndex, "open-world");
 		if (published.has(fn.functionIndex)) add(fn.functionIndex, "published-identity");
@@ -1375,10 +1377,10 @@ function collectRootReasons(
 	// into it, so there is no per-module init to enumerate.
 	const entry = program.functions[0];
 	if (entry !== undefined) add(entry.functionIndex, "program-entry");
-	for (const index of program.compilation?.cjsModuleFunctionIndices ?? []) {
+	for (const index of context?.data.cjsModuleFunctionIndices ?? []) {
 		add(index, "commonjs-module");
 	}
-	for (const candidate of program.compilation?.hostInstallCandidates ?? []) {
+	for (const candidate of context?.data.hostInstallCandidates ?? []) {
 		for (const { slot } of candidate.exports) {
 			const installed = targets.globalSlot(slot);
 			if (installed.anyScript) {
@@ -1397,8 +1399,9 @@ function collectRootReasons(
 export function analyzeCoreProgramSummaries(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+	context?: CoreCompilationContext,
 ): CoreProgramSummaries {
-	const targets = analyzeCoreCalleeTargets(program, registry);
+	const targets = analyzeCoreCalleeTargets(program, registry, context);
 	const count = program.functions.length;
 	const byIndex = new Array<CoreFunction | undefined>(count);
 	for (const fn of program.functions) byIndex[fn.functionIndex] = fn;
@@ -1464,7 +1467,7 @@ export function analyzeCoreProgramSummaries(
 	}
 
 	const published = collectPublishedFunctions(program, registry, targets);
-	const rootReasons = collectRootReasons(program, targets, published);
+	const rootReasons = collectRootReasons(program, targets, published, context);
 	const summaries = program.functions.map((fn): CoreFunctionSummary => {
 		const solved = state[fn.functionIndex] ?? saturatedSummary(fn.parameters.length);
 		const reasons = rootReasons.get(fn.functionIndex) ?? [];
@@ -1487,7 +1490,7 @@ export function analyzeCoreProgramSummaries(
 		};
 	});
 
-	const evaluated = moduleEvaluationPaths(program);
+	const evaluated = moduleEvaluationPaths(context);
 	const modules = [...new Set(summaries.map(({ sourcePath }) => sourcePath))]
 		.sort()
 		.map((sourcePath): CoreModuleSummary => {
@@ -1541,10 +1544,8 @@ export function analyzeCoreProgramSummaries(
 		functions: summaries,
 		modules,
 		targets,
-		closureOpenings: (program.compilation?.facts.closure.openings ?? []).map(
-			({ kind }) => kind,
-		),
-		sourceClosed: program.compilation?.facts.closure.sourceClosure.kind === "known",
+		closureOpenings: (context?.facts.closure.openings ?? []).map(({ kind }) => kind),
+		sourceClosed: context?.facts.closure.sourceClosure.kind === "known",
 		statistics: {
 			functions: count,
 			callEdges,

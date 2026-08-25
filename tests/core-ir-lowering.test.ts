@@ -10,11 +10,12 @@ import {
 	lowerCoreProgramToTarget,
 } from "../src/compiler/target/core-target-lowering.ts";
 import { lowerCoreProgramToVmDefinition } from "../src/compiler/target/lower-vm.ts";
+import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 function lower(source: string) {
 	return lowerSemanticProgramToCore(
 		analyzeSourceAndRunSemanticAnalysis(source, "core-lowering.js"),
-	);
+	).program;
 }
 
 describe("Core IR lowering", () => {
@@ -50,7 +51,7 @@ describe("Core IR lowering", () => {
 		);
 		expect(exceptional.length).toBeGreaterThan(0);
 
-		const lowered = lowerCoreProgramToTarget(converted);
+		const lowered = lowerCoreProgramToTarget(coreCompilationForTest(converted));
 		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
 	});
@@ -129,7 +130,7 @@ describe("Core IR lowering", () => {
 			for (const value of [1, 2, 3]) total += value;
 			console.log(total);
 		`);
-		const lowered = lowerCoreProgramToTarget(converted);
+		const lowered = lowerCoreProgramToTarget(coreCompilationForTest(converted));
 		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.length).toBeGreaterThan(0);
 		expect(
@@ -153,7 +154,7 @@ describe("Core IR lowering", () => {
 			`),
 			{ ablations: new Set(["inlining", "interprocedural"]) },
 		).program;
-		const target = lowerCoreProgramToTarget(optimized);
+		const target = lowerCoreProgramToTarget(coreCompilationForTest(optimized));
 		const vm = lowerCoreProgramToVmDefinition(target);
 		const load = vm.functions
 			.flatMap((fn) => fn.instructions)
@@ -224,7 +225,7 @@ describe("Core IR lowering", () => {
 			`),
 			{ ablations: new Set(["inlining", "interprocedural"]) },
 		).program;
-		const target = lowerCoreProgramToTarget(optimized);
+		const target = lowerCoreProgramToTarget(coreCompilationForTest(optimized));
 		const vm = lowerCoreProgramToVmDefinition(target);
 		const store = vm.functions
 			.flatMap((fn) => fn.instructions)
@@ -245,15 +246,21 @@ describe("Core IR lowering", () => {
 	});
 
 	it("rejects a malformed selected Core region instead of dropping it", () => {
-		const optimized = executeCoreOptimizations(
-			lower(`
-				function project(value) {
-					const fields = value.split(";");
-					return fields[1] + fields.length;
-				}
-				project("a;b");
-			`),
-		).program;
+		const compilation = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+					function project(value) {
+						const fields = value.split(";");
+						return fields[1] + fields.length;
+					}
+					project("a;b");
+				`,
+				"core-lowering.js",
+			),
+		);
+		const optimized = executeCoreOptimizations(compilation.program, {
+			context: compilation.context,
+		}).program;
 		const functionIndex = optimized.functions.findIndex(({ regions }) =>
 			regions.some(({ kind }) => kind === "string-split-projection"),
 		);
@@ -276,7 +283,7 @@ describe("Core IR lowering", () => {
 				}),
 			}),
 		};
-		const allocated = lowerCoreProgramToTarget(malformed);
+		const allocated = lowerCoreProgramToTarget(coreCompilationForTest(malformed));
 		expect(() => lowerCoreProgramToVmDefinition(allocated)).toThrow(
 			/Invalid Core string-split-projection region during VM lowering/,
 		);
@@ -312,7 +319,7 @@ describe("Core IR lowering", () => {
 				`,
 				"core-immediates.js",
 			),
-		);
+		).program;
 		const call = converted.functions
 			.flatMap((fn) => fn.blocks)
 			.flatMap((block) => block.instructions)
@@ -382,7 +389,7 @@ describe("Core IR lowering", () => {
 			),
 		};
 
-		const lowered = lowerCoreProgramToTarget(switched);
+		const lowered = lowerCoreProgramToTarget(coreCompilationForTest(switched));
 		const instructions = lowered.functions[functionIndex]!.blocks.flatMap(
 			({ instructions }) => instructions,
 		);
@@ -405,7 +412,9 @@ describe("Core IR lowering", () => {
 			}
 			new Child();
 		`);
-		const lowered = lowerCoreProgramToTarget(executeCoreOptimizations(converted).program);
+		const lowered = lowerCoreProgramToTarget(
+			coreCompilationForTest(executeCoreOptimizations(converted).program),
+		);
 		const instructions = lowered.functions.flatMap((fn) =>
 			fn.blocks.flatMap((block) => block.instructions),
 		);

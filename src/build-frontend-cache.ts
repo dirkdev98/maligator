@@ -20,6 +20,7 @@ import {
 	compilerConfigurationIdentity,
 	compilerProducerIdentity,
 } from "./compiler-cache-identity.ts";
+import type { CoreCompilationContext } from "./compiler/core/core-compilation.ts";
 import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.ts";
 import type { CoreProgram } from "./compiler/core/core-ir.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
@@ -158,7 +159,7 @@ export interface CompileBuildFrontendOptions {
 	forceCompile?: boolean;
 	/** Split stable package dependencies into a separately cached development image. */
 	relocatable?: boolean;
-	afterCoreOptimization?: (program: CoreProgram) => void;
+	afterCoreOptimization?: (program: CoreProgram, context: CoreCompilationContext) => void;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	/** Optional self-hosted worker command for independent dependency islands. */
 	dependencyWorker?: DependencyFragmentWorker;

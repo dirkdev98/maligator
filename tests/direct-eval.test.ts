@@ -29,7 +29,7 @@ function generatedDirectEvalContext(source: string): DirectEvalContext {
 		"test.js",
 		parseScript(source, { strict: false }),
 	);
-	const program = lowerSemanticProgramToCore(semantic);
+	const program = lowerSemanticProgramToCore(semantic).program;
 	const instructions = program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
 	);
@@ -298,7 +298,7 @@ test("strict direct eval keeps var and function declarations off the global obje
 			eval: { callerStrict: true, direct: true },
 		},
 	);
-	const program = lowerSemanticProgramToCore(semantic, { evalDirect: true });
+	const program = lowerSemanticProgramToCore(semantic, { evalDirect: true }).program;
 	const instructions = program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
 	);

@@ -7,12 +7,6 @@
  * deliberately outside this module.
  */
 
-import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
-import type {
-	CompilerOptimizationDecision,
-	OptimizationPassDelta,
-} from "../shared/compiler-diagnostics.ts";
-import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import { EFFECT_DOMAINS, NO_EFFECT_SUMMARY } from "../shared/effect-summary.ts";
 import type { EffectDomain, EffectSummary } from "../shared/effect-summary.ts";
 
@@ -695,50 +689,6 @@ export interface CoreProgram {
 		readonly callerPosId?: number;
 	}>;
 	readonly globalCount: number;
-	/**
-	 * Whole-compilation data that is not part of function SSA. Standalone Core
-	 * unit tests may omit it; every product compilation supplies it before the
-	 * backend boundary.
-	 */
-	readonly compilation?: CoreCompilationMetadata;
-}
-
-/** A captured cell: its function index or negative per-iteration scope id, plus slot. */
-export interface CoreCapturedSlotRef {
-	readonly owner: number;
-	readonly index: number;
-}
-
-export interface CoreHostInstallCandidate {
-	readonly installer: string;
-	readonly exports: ReadonlyArray<{ readonly name: string; readonly slot: number }>;
-}
-
-export interface CoreCompilationMetadata {
-	readonly semantic: SemanticProgram;
-	readonly facts: CompilerProgramFacts;
-	readonly optimizationDecisions?: ReadonlyArray<CompilerOptimizationDecision>;
-	readonly optimizationTrace?: ReadonlyArray<OptimizationPassDelta>;
-	readonly cjsModuleFunctionIndices: ReadonlyArray<number>;
-	/** Host exports with assigned global slots; the backend drops unread slots. */
-	readonly hostInstallCandidates: ReadonlyArray<CoreHostInstallCandidate>;
-	/**
-	 * Compiler-owned cells the frontend declared single-assignment: the binding
-	 * behind the cell is initialized once and can never be reassigned, so every
-	 * read observes a value written by the one store the frontend emitted for it,
-	 * or the uninitialized sentinel. Import bindings alias their exporter's
-	 * binding, so an imported name contributes the exporter's cell rather than a
-	 * copy — a live alias stays one cell.
-	 *
-	 * A declaration alone proves nothing: a consumer must still check the graph
-	 * for the writers and readers the declaration cannot see (host installs,
-	 * family-level writers, namespace publication). `coreSingleAssignmentCells`
-	 * is that check.
-	 */
-	readonly singleAssignmentGlobalSlots: ReadonlyArray<number>;
-	readonly singleAssignmentCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
-	/** Slot-free installers retained by reachable global surfaces such as process. */
-	readonly retainedHostInstallers: ReadonlyArray<string>;
 }
 
 interface MutableCoreBlock {

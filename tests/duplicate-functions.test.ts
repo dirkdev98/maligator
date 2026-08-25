@@ -14,7 +14,7 @@ function compileScript(source: string, evalCompletion = false) {
 		"duplicate.js",
 		parseScript(source, { strict: false }),
 	);
-	return lowerSemanticProgramToCore(semantic, { evalCompletion });
+	return lowerSemanticProgramToCore(semantic, { evalCompletion }).program;
 }
 
 function instructionsOf(fn: CoreFunction): Array<CoreInstruction> {

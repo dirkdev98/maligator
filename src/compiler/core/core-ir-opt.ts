@@ -28,6 +28,7 @@ import {
 	authorityFallback,
 	normalizeFactRequirements,
 } from "../shared/fact-implication.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALLEE_TARGETS_ATTRIBUTE,
 	analyzeCoreCalleeTargets,
@@ -146,6 +147,8 @@ import {
 } from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
+	/** Explicit frontend/world context; absent for standalone open-world Core tests. */
+	readonly context?: CoreCompilationContext;
 	readonly maxRounds?: number;
 	readonly ablations?: ReadonlySet<OptimizationAblation>;
 	/** Run Core's value simplifiers. Disable only while importing an already optimized graph. */
@@ -551,7 +554,7 @@ function builtinSourceSite(
 const annotateKnownBuiltinCalls: CoreFunctionPass = {
 	name: "annotate-known-builtin-calls",
 	run(fn, analyses, program) {
-		const compilation = program.compilation;
+		const compilation = analyses.context;
 		if (compilation === undefined) return fn;
 		if (
 			!fn.blocks.some((block) =>
@@ -886,6 +889,7 @@ interface GuardedInlineCandidate {
 
 interface InlineProgramResult {
 	readonly program: CoreProgram;
+	readonly context?: CoreCompilationContext;
 	readonly changed: boolean;
 }
 
@@ -932,14 +936,18 @@ function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction
  */
 function annotateCoreDirectCallTargets(
 	program: CoreProgram,
-	analysis: CoreCalleeTargetAnalysis = analyzeCoreCalleeTargets(program),
+	context: CoreCompilationContext | undefined,
+	analysis: CoreCalleeTargetAnalysis = analyzeCoreCalleeTargets(
+		program,
+		coreOpcodeRegistry,
+		context,
+	),
 	recordDeclines = false,
 ): InlineProgramResult {
-	const compilation = program.compilation;
 	const decisions =
-		!recordDeclines || compilation?.optimizationDecisions === undefined
+		!recordDeclines || context?.optimizationDecisions === undefined
 			? undefined
-			: [...compilation.optimizationDecisions];
+			: [...context.optimizationDecisions];
 	const decisionCount = decisions?.length;
 	const functionsByIndex = new Map(
 		program.functions.map((fn) => [fn.functionIndex, fn] as const),
@@ -1069,13 +1077,15 @@ function annotateCoreDirectCallTargets(
 		decisions.length !== decisionCount;
 	const annotated = changed ? { ...program, functions } : program;
 	return {
-		program:
-			decisionsChanged && compilation !== undefined
-				? {
-						...annotated,
-						compilation: { ...compilation, optimizationDecisions: decisions },
-					}
-				: annotated,
+		program: annotated,
+		...(context === undefined
+			? {}
+			: {
+					context:
+						decisionsChanged && decisions !== undefined
+							? { ...context, optimizationDecisions: decisions }
+							: context,
+				}),
 		changed: changed || decisionsChanged,
 	};
 }
@@ -1609,16 +1619,16 @@ function guardedInlineFallbackCalls(fn: CoreFunction): ReadonlySet<CoreInstructi
 function inlineSimpleCoreFunctions(
 	program: CoreProgram,
 	verification: CoreVerificationProfile,
+	context: CoreCompilationContext | undefined,
 ): InlineProgramResult {
-	const compilation = program.compilation;
 	const decisions =
-		compilation?.optimizationDecisions === undefined
+		context?.optimizationDecisions === undefined
 			? undefined
-			: [...compilation.optimizationDecisions];
+			: [...context.optimizationDecisions];
 	const positions = program.sourcePositions.map((position) => ({
 		...position,
 	}));
-	const calleeTargets = analyzeCoreCalleeTargets(program);
+	const calleeTargets = analyzeCoreCalleeTargets(program, coreOpcodeRegistry, context);
 	const functionsByIndex = new Map(
 		program.functions.map((fn) => [fn.functionIndex, fn] as const),
 	);
@@ -1763,15 +1773,15 @@ function inlineSimpleCoreFunctions(
 			...program,
 			functions,
 			sourcePositions: positions,
-			...(compilation === undefined
-				? {}
-				: {
-						compilation: {
-							...compilation,
-							...(decisions === undefined ? {} : { optimizationDecisions: decisions }),
-						},
-					}),
 		},
+		...(context === undefined
+			? {}
+			: {
+					context:
+						decisions === undefined
+							? context
+							: { ...context, optimizationDecisions: decisions },
+				}),
 		changed,
 	};
 }
@@ -1789,7 +1799,7 @@ function stackObjectRegion(
 	fn: CoreFunction,
 	allocation: CoreInstruction,
 	analyses: CoreAnalysisManager,
-	program: CoreProgram,
+	_program: CoreProgram,
 ): CoreFunction["regions"][number] | undefined {
 	if (allocation.opcode !== "createObjectShaped" || allocation.outputs.length !== 1) {
 		return undefined;
@@ -1986,7 +1996,7 @@ function stackObjectRegion(
 			}
 		}
 		inheritedGuard = compilerGuardPlan(
-			[program.compilation?.facts.protectors.get("primitive-methods")],
+			[analyses.context?.facts.protectors.get("primitive-methods")],
 			[
 				{
 					kind: "fallback",
@@ -3017,7 +3027,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const projectedStringMethodIdentity = compilerFactIsWorldInvariant(
-			program.compilation?.facts.protectors.get("watched-methods"),
+			analyses.context?.facts.protectors.get("watched-methods"),
 		)
 			? "authority-invariant"
 			: "runtime-guarded";
@@ -3569,8 +3579,8 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 /** Select closed constant captures from one exact RegExp iterator step. */
 const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 	name: "select-regexp-iterator-projection-regions",
-	run(fn, analyses, program) {
-		const protector = program.compilation?.facts.protectors.get("watched-methods");
+	run(fn, analyses, _program) {
+		const protector = analyses.context?.facts.protectors.get("watched-methods");
 		const guard = compilerGuardPlan(
 			[protector],
 			[
@@ -5295,6 +5305,7 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 
 export interface CoreOptimizationResult {
 	readonly program: CoreProgram;
+	readonly context?: CoreCompilationContext;
 	readonly changed: boolean;
 	readonly passes: ReadonlyArray<{
 		readonly name: string;
@@ -5342,6 +5353,7 @@ function memoryResolution(
 }
 
 export class CoreAnalysisManager {
+	readonly context: CoreCompilationContext | undefined;
 	readonly #stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly #controlFlow = new WeakMap<CoreFunction, CoreControlFlow>();
 	readonly #canonicalValues = new WeakMap<
@@ -5363,13 +5375,18 @@ export class CoreAnalysisManager {
 	#summaries:
 		| {
 				readonly program: CoreProgram;
+				readonly context: CoreCompilationContext | undefined;
 				readonly functions: ReadonlyArray<CoreFunction>;
 				readonly analysis: CoreProgramSummaries;
 		  }
 		| undefined;
 
-	constructor(stringConstants: ReadonlyArray<ReadonlyArray<number>> = []) {
+	constructor(
+		stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+		context?: CoreCompilationContext,
+	) {
 		this.#stringConstants = stringConstants;
+		this.context = context;
 	}
 
 	controlFlow(fn: CoreFunction): CoreControlFlow {
@@ -5420,17 +5437,29 @@ export class CoreAnalysisManager {
 
 	summaries(program: CoreProgram): CoreProgramSummaries {
 		const cached = this.#summaries;
-		if (cached?.program === program) return cached.analysis;
+		if (cached?.program === program && cached.context === this.context) {
+			return cached.analysis;
+		}
 		if (
 			cached !== undefined &&
+			cached.context === this.context &&
 			cached.functions.length === program.functions.length &&
 			cached.functions.every((fn, index) => fn === program.functions[index])
 		) {
 			this.#summaries = { ...cached, program };
 			return cached.analysis;
 		}
-		const analysis = analyzeCoreProgramSummaries(program, coreOpcodeRegistry);
-		this.#summaries = { program, functions: program.functions, analysis };
+		const analysis = analyzeCoreProgramSummaries(
+			program,
+			coreOpcodeRegistry,
+			this.context,
+		);
+		this.#summaries = {
+			program,
+			context: this.context,
+			functions: program.functions,
+			analysis,
+		};
 		return analysis;
 	}
 
@@ -10771,20 +10800,26 @@ export function executeCoreOptimizations(
 		throw new Error(`Invalid Core optimization round limit ${maxRounds}`);
 	}
 	const verification = options.verification ?? "boundary";
+	let compilationContext = options.context;
 	// Owned boundary: no caller can hand an unverified graph to the optimizer.
-	verifyCoreProgram(program, coreOpcodeRegistry, { stage: "pre-optimization" });
+	verifyCoreProgram(
+		program,
+		coreOpcodeRegistry,
+		{ stage: "pre-optimization" },
+		compilationContext,
+	);
 	const verifyMutatedProgram = (
 		candidate: CoreProgram,
 		context: CoreVerificationContext,
 	): void => {
 		if (verification === "per-pass") {
-			verifyCoreProgram(candidate, coreOpcodeRegistry, context);
+			verifyCoreProgram(candidate, coreOpcodeRegistry, context, compilationContext);
 		}
 	};
-	let analyses = new CoreAnalysisManager(program.stringConstants);
+	let analyses = new CoreAnalysisManager(program.stringConstants, compilationContext);
 	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
 	const optimizationTrace: Array<OptimizationPassDelta> = [];
-	const collectOptimizationTrace = program.compilation?.optimizationTrace !== undefined;
+	const collectOptimizationTrace = compilationContext?.optimizationTrace !== undefined;
 	let tracedMetrics = collectOptimizationTrace
 		? coreOptimizationMetrics(program)
 		: undefined;
@@ -10809,8 +10844,9 @@ export function executeCoreOptimizations(
 	const inlineBefore = tracedMetrics;
 	const inlineAblated = options.ablations?.has("inlining") === true;
 	const inlineResult = inlineAblated
-		? { program: optimizationInput, changed: false }
-		: inlineSimpleCoreFunctions(optimizationInput, verification);
+		? { program: optimizationInput, context: compilationContext, changed: false }
+		: inlineSimpleCoreFunctions(optimizationInput, verification, compilationContext);
+	compilationContext = inlineResult.context;
 	if (inlineResult.changed) {
 		verifyMutatedProgram(inlineResult.program, {
 			stage: "normalization",
@@ -10823,7 +10859,15 @@ export function executeCoreOptimizations(
 			: coreOptimizationMetrics(inlineResult.program);
 	if (inlineAfter !== undefined) tracedMetrics = inlineAfter;
 	const directBefore = tracedMetrics;
-	const directResult = annotateCoreDirectCallTargets(inlineResult.program);
+	const directResult = annotateCoreDirectCallTargets(
+		inlineResult.program,
+		compilationContext,
+	);
+	compilationContext = directResult.context;
+	analyses = new CoreAnalysisManager(
+		directResult.program.stringConstants,
+		compilationContext,
+	);
 	if (directResult.changed) {
 		verifyMutatedProgram(directResult.program, {
 			stage: "normalization",
@@ -11000,12 +11044,18 @@ export function executeCoreOptimizations(
 	{
 		const targetRefreshBefore = tracedMetrics;
 		const targetRefreshInput = { ...workingProgram, functions };
-		const targetAnalysis = analyzeCoreCalleeTargets(targetRefreshInput);
+		const targetAnalysis = analyzeCoreCalleeTargets(
+			targetRefreshInput,
+			coreOpcodeRegistry,
+			compilationContext,
+		);
 		const targetRefresh = annotateCoreDirectCallTargets(
 			targetRefreshInput,
+			compilationContext,
 			targetAnalysis,
 			true,
 		);
+		compilationContext = targetRefresh.context;
 		for (const [index, fn] of targetRefresh.program.functions.entries()) {
 			traces.push({
 				name: "refresh-direct-call-targets",
@@ -11045,6 +11095,7 @@ export function executeCoreOptimizations(
 		const reachability = analyzeCoreFunctionReachability(
 			beforeCompaction,
 			targetAnalysis,
+			compilationContext,
 		);
 		// Shape provenance shares the final callee-target solve and scans only bodies
 		// that can execute. It stays analysis-only: compaction remaps its function
@@ -11055,7 +11106,12 @@ export function executeCoreOptimizations(
 			controlFlow: (fn) => analyses.controlFlow(fn),
 			executableFunctions: reachability.executable,
 		});
-		const compaction = compactCoreProgramFunctions(beforeCompaction, reachability);
+		const compaction = compactCoreProgramFunctions(
+			beforeCompaction,
+			reachability,
+			compilationContext,
+		);
+		compilationContext = compaction.context;
 		shapeProvenance = rebaseCoreShapeProvenance(
 			shapeProvenance,
 			compaction.oldToNew,
@@ -11064,11 +11120,16 @@ export function executeCoreOptimizations(
 		if (compaction.changed) {
 			const compactionBefore = tracedMetrics;
 			const refreshed = compaction.program;
-			verifyCoreProgram(refreshed, coreOpcodeRegistry, {
-				stage: "fixpoint",
-				pass: "eliminate-unreachable-functions",
-				round: maxRounds,
-			});
+			verifyCoreProgram(
+				refreshed,
+				coreOpcodeRegistry,
+				{
+					stage: "fixpoint",
+					pass: "eliminate-unreachable-functions",
+					round: maxRounds,
+				},
+				compilationContext,
+			);
 			traces.push({
 				name: "eliminate-unreachable-functions",
 				round: maxRounds,
@@ -11076,7 +11137,7 @@ export function executeCoreOptimizations(
 			});
 			workingProgram = refreshed;
 			functions = [...refreshed.functions];
-			analyses = new CoreAnalysisManager(refreshed.stringConstants);
+			analyses = new CoreAnalysisManager(refreshed.stringConstants, compilationContext);
 			changed = true;
 			if (compactionBefore !== undefined) {
 				const compactionAfter = coreOptimizationMetrics(refreshed);
@@ -11329,28 +11390,35 @@ export function executeCoreOptimizations(
 	const optimized: CoreProgram = {
 		...workingProgram,
 		functions,
-		...(workingProgram.compilation === undefined
-			? {}
-			: {
-					compilation: {
-						...workingProgram.compilation,
-						...(collectOptimizationTrace ? { optimizationTrace } : {}),
-						...(summaries === undefined
-							? {}
-							: {
-									facts: {
-										...workingProgram.compilation.facts,
-										functionEffects: coreFunctionEffectSummaries(summaries),
-										moduleEffects: coreModuleEffectSummaries(summaries),
-									},
-								}),
-					},
-				}),
 	};
+	const optimizedContext =
+		compilationContext === undefined
+			? undefined
+			: {
+					...compilationContext,
+					...(collectOptimizationTrace ? { optimizationTrace } : {}),
+					...(summaries === undefined
+						? {}
+						: {
+								facts: {
+									...compilationContext.facts,
+									functionEffects: coreFunctionEffectSummaries(summaries),
+									moduleEffects: coreModuleEffectSummaries(summaries),
+								},
+							}),
+				};
 	// Owned boundary: region selection is final, so every certificate this program
 	// carries must still describe the graph the backend will consume.
-	verifyCoreProgram(optimized, coreOpcodeRegistry, {
-		stage: "final-region-selection",
-	});
-	return { program: optimized, changed, passes: traces };
+	verifyCoreProgram(
+		optimized,
+		coreOpcodeRegistry,
+		{ stage: "final-region-selection" },
+		optimizedContext,
+	);
+	return {
+		program: optimized,
+		...(optimizedContext === undefined ? {} : { context: optimizedContext }),
+		changed,
+		passes: traces,
+	};
 }

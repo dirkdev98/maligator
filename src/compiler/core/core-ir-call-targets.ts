@@ -35,6 +35,7 @@
  * as a store of an unresolvable value.
  */
 
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreMemoryAccesses } from "./core-ir-memory.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
@@ -496,15 +497,15 @@ export interface CoreSingleAssignmentCells {
 function singleAssignmentCellsFromCensus(
 	program: CoreProgram,
 	census: SlotCensus,
+	context: CoreCompilationContext | undefined,
 ): CoreSingleAssignmentCells {
-	const compilation = program.compilation;
 	const hostSlots = new Set<number>();
-	for (const candidate of compilation?.hostInstallCandidates ?? []) {
+	for (const candidate of context?.data.hostInstallCandidates ?? []) {
 		for (const { slot } of candidate.exports) hostSlots.add(slot);
 	}
 	const globals = new Set<number>();
 	if (!census.globalOverwrite && !census.globalPublished) {
-		for (const slot of compilation?.singleAssignmentGlobalSlots ?? []) {
+		for (const slot of context?.data.singleAssignmentGlobalSlots ?? []) {
 			if (hostSlots.has(slot)) continue;
 			if (census.opaqueGlobalSlots.has(slot)) continue;
 			if (census.globalWriters.get(slot) !== 1) continue;
@@ -513,7 +514,7 @@ function singleAssignmentCellsFromCensus(
 	}
 	const captured = new Set<string>();
 	if (!census.capturedOverwrite && !census.capturedPublished) {
-		for (const { owner, index } of compilation?.singleAssignmentCapturedSlots ?? []) {
+		for (const { owner, index } of context?.data.singleAssignmentCapturedSlots ?? []) {
 			const key = capturedSlotKey(owner, index);
 			if (census.opaqueCapturedSlots.has(key)) continue;
 			if (census.capturedWriters.get(key) !== 1) continue;
@@ -531,8 +532,13 @@ function singleAssignmentCellsFromCensus(
 export function coreSingleAssignmentCells(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+	context?: CoreCompilationContext,
 ): CoreSingleAssignmentCells {
-	return singleAssignmentCellsFromCensus(program, censusSlotAccesses(program, registry));
+	return singleAssignmentCellsFromCensus(
+		program,
+		censusSlotAccesses(program, registry),
+		context,
+	);
 }
 
 /**
@@ -807,9 +813,10 @@ const ORIGIN_TOP = -1;
 export function analyzeCoreCalleeTargets(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+	context?: CoreCompilationContext,
 ): CoreCalleeTargetAnalysis {
 	const census = censusSlotAccesses(program, registry);
-	const stableCells = singleAssignmentCellsFromCensus(program, census);
+	const stableCells = singleAssignmentCellsFromCensus(program, census, context);
 	const cellForString = coreOwnCellResolver(program.stringConstants);
 	const valueBase = new Map<number, number>();
 	const valueLimit = new Map<number, number>();
@@ -1463,7 +1470,7 @@ export function analyzeCoreCalleeTargets(
 	// this graph. Function indices remain useful guarded candidates, but no global
 	// cell is a closed identity or a carrier of a contained allocation while realm
 	// creation is enabled.
-	if (program.compilation?.facts.world.realms === true) {
+	if (context?.facts.world.realms === true) {
 		for (const node of globalNodes.values()) {
 			addSeed(node, CORE_CALLEE_TARGETS_OPAQUE);
 			addOriginSeed(node, ORIGIN_TOP);
@@ -1488,7 +1495,7 @@ export function analyzeCoreCalleeTargets(
 	}
 	// The host installs its exports into these slots, so their writers are not in
 	// this graph at all.
-	for (const candidate of program.compilation?.hostInstallCandidates ?? []) {
+	for (const candidate of context?.data.hostInstallCandidates ?? []) {
 		for (const { slot } of candidate.exports) {
 			addSeed(globalNode(slot), CORE_CALLEE_TARGETS_OPAQUE);
 			addOriginSeed(globalNode(slot), ORIGIN_TOP);

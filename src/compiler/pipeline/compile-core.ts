@@ -1,4 +1,5 @@
 import { attachCoreCompilerSiteFacts } from "../core/compiler-site-facts.ts";
+import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
 import { executeCoreOptimizations } from "../core/core-ir-opt.ts";
 import type { CoreVerificationProfile } from "../core/core-ir-verifier.ts";
@@ -35,7 +36,7 @@ export interface CompileCoreOptions {
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
 	};
-	afterCoreOptimization?: (program: CoreProgram) => void;
+	afterCoreOptimization?: (program: CoreProgram, context: CoreCompilationContext) => void;
 	runPhase?: <T>(phase: CompileCorePhase, run: () => T) => T;
 }
 
@@ -56,15 +57,22 @@ export function compileSemanticProgramToVmDefinition(
 		runPhase,
 	});
 	const optimized = runPhase("core ir optimizations", () => {
-		const result = executeCoreOptimizations(core, {
+		const result = executeCoreOptimizations(core.program, {
+			context: core.context,
 			ablations: options.optimizationAblations,
 			...(options.coreVerification === undefined
 				? {}
 				: { verification: options.coreVerification }),
-		}).program;
-		return options.profile === true ? attachCoreCompilerSiteFacts(result) : result;
+		});
+		if (result.context === undefined) {
+			throw new Error("Product Core optimization lost compilation context");
+		}
+		const compilation = { program: result.program, context: result.context };
+		return options.profile === true
+			? attachCoreCompilerSiteFacts(compilation)
+			: compilation;
 	});
-	options.afterCoreOptimization?.(optimized);
+	options.afterCoreOptimization?.(optimized.program, optimized.context);
 	const lowered = runPhase("lower core ir", () =>
 		lowerCoreProgramToTarget(optimized, {
 			reuseRegisters: options.optimization !== "development",

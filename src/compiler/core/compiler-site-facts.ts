@@ -9,6 +9,7 @@ import type {
 	SourceSiteId,
 } from "../shared/compiler-facts.ts";
 import { knownFact, sourceSiteId } from "../shared/compiler-facts.ts";
+import type { CoreCompilation, CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreFunction, CoreInstruction, CoreProgram } from "./core-ir.ts";
 
 const allocationOpcodes = new Set([
@@ -109,9 +110,9 @@ function shapeFact(
 function immutableBindingFact(
 	program: CoreProgram,
 	instruction: CoreInstruction,
+	context: CoreCompilationContext,
 ): CompilerFact<"immutable"> | undefined {
-	const facts = program.compilation?.facts;
-	if (facts === undefined) return undefined;
+	const facts = context.facts;
 	if (instruction.opcode === "loadIntrinsic") {
 		const intrinsic = instruction.attributes.intrinsic;
 		return typeof intrinsic === "string"
@@ -194,11 +195,12 @@ function stackObjectFacts(fn: CoreFunction): Map<
 }
 
 /** Attach final residual facts directly to immutable Core instruction identities. */
-export function attachCoreCompilerSiteFacts(program: CoreProgram): CoreProgram {
-	const compilation = program.compilation;
-	if (compilation === undefined) return program;
+export function attachCoreCompilerSiteFacts(
+	compilation: CoreCompilation,
+): CoreCompilation {
+	const { program, context } = compilation;
 	const sites = new Map<string, CompilerSiteFacts>();
-	const instructionSites = compilation.facts.instructionSites;
+	const instructionSites = context.facts.instructionSites;
 
 	for (const fn of program.functions) {
 		const stackObjects = stackObjectFacts(fn);
@@ -212,7 +214,7 @@ export function attachCoreCompilerSiteFacts(program: CoreProgram): CoreProgram {
 					`residual:${instruction.opcode}`,
 				);
 				const shape = shapeFact(program, fn, instruction, sourceSite);
-				const immutableBinding = immutableBindingFact(program, instruction);
+				const immutableBinding = immutableBindingFact(program, instruction, context);
 				const builtin = knownBuiltinCall(instruction);
 				const isAllocation = allocationOpcodes.has(instruction.opcode);
 				const stackObject = stackObjects.get(instruction.id);
@@ -268,10 +270,10 @@ export function attachCoreCompilerSiteFacts(program: CoreProgram): CoreProgram {
 	}
 
 	return {
-		...program,
-		compilation: {
-			...compilation,
-			facts: { ...compilation.facts, sites },
+		program,
+		context: {
+			...context,
+			facts: { ...context.facts, sites },
 		},
 	};
 }

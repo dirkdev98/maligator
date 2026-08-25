@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { lowerSemanticProgramToCore as lowerSemanticProgramToCoreCompilation } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import type { CoreOptimizationOptions } from "../src/compiler/core/core-ir-opt.ts";
@@ -27,6 +27,13 @@ import type {
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
 import { lowerCoreProgramToVmDefinition } from "../src/compiler/target/lower-vm.ts";
+import { coreCompilationForTest } from "./helpers/core-compilation.ts";
+
+function lowerSemanticProgramToCore(
+	...parameters: Parameters<typeof lowerSemanticProgramToCoreCompilation>
+): CoreProgram {
+	return lowerSemanticProgramToCoreCompilation(...parameters).program;
+}
 
 const STRINGS: ReadonlyArray<ReadonlyArray<number>> = [
 	[],
@@ -1192,7 +1199,9 @@ describe("Core known own-slot selection", () => {
 			"invalid shaped-object origin",
 		);
 
-		const vm = lowerCoreProgramToVmDefinition(lowerCoreProgramToTarget(optimized));
+		const vm = lowerCoreProgramToVmDefinition(
+			lowerCoreProgramToTarget(coreCompilationForTest(optimized)),
+		);
 		const descriptor = vm.precompiledLiteralShapes.find(
 			(shape) => shape.functionIndex === origin.functionIndex,
 		);
@@ -1784,7 +1793,7 @@ describe("Core known own-slot selection", () => {
 		expect(coreSelectors).toHaveLength(1);
 		expect(coreLoads).toHaveLength(3);
 
-		const target = lowerCoreProgramToTarget(optimized);
+		const target = lowerCoreProgramToTarget(coreCompilationForTest(optimized));
 		const targetInstructions = target.functions
 			.flatMap(({ blocks }) => blocks)
 			.flatMap(({ instructions: blockInstructions }) => blockInstructions);
@@ -1842,7 +1851,7 @@ describe("Core known own-slot selection", () => {
 				.some((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes),
 		).toBe(false);
 
-		const target = lowerCoreProgramToTarget(optimized);
+		const target = lowerCoreProgramToTarget(coreCompilationForTest(optimized));
 		const targetInstructions = target.functions
 			.flatMap(({ blocks }) => blocks)
 			.flatMap(({ instructions: blockInstructions }) => blockInstructions);
@@ -1889,7 +1898,7 @@ describe("Core known own-slot selection", () => {
 			.flatMap((fn) => instructions(fn, "loadPropertyStatic"))
 			.find((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)!;
 		expect(coreLoad).toBeDefined();
-		const target = lowerCoreProgramToTarget(optimized);
+		const target = lowerCoreProgramToTarget(coreCompilationForTest(optimized));
 		const targetLoad = target.functions
 			.flatMap(({ blocks }) => blocks)
 			.flatMap(({ instructions: blockInstructions }) => blockInstructions)
@@ -1905,7 +1914,9 @@ describe("Core known own-slot selection", () => {
 		);
 
 		const rerun = executeCoreOptimizations(optimized, optimizationOptions).program;
-		expect(lowerCoreProgramToTarget(rerun).functions).toEqual(target.functions);
+		expect(lowerCoreProgramToTarget(coreCompilationForTest(rerun)).functions).toEqual(
+			target.functions,
+		);
 	});
 
 	it("carries a loop store certificate unchanged to the target", () => {
@@ -1930,7 +1941,7 @@ describe("Core known own-slot selection", () => {
 			.flatMap((fn) => instructions(fn, "storePropertyStatic"))
 			.find((instruction) => CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)!;
 		expect(coreStore).toBeDefined();
-		const target = lowerCoreProgramToTarget(optimized);
+		const target = lowerCoreProgramToTarget(coreCompilationForTest(optimized));
 		const targetStore = target.functions
 			.flatMap(({ blocks }) => blocks)
 			.flatMap(({ instructions: blockInstructions }) => blockInstructions)

@@ -1,3 +1,7 @@
+import type {
+	CoreCompilation,
+	CoreCompilationContext,
+} from "../core/core-compilation.ts";
 import { CORE_INTERNAL_TARGET_ATTRIBUTES } from "../core/core-ir-call-targets.ts";
 import {
 	buildCoreControlFlow,
@@ -35,6 +39,7 @@ const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 
 export interface CoreTargetProgram {
 	readonly core: CoreProgram;
+	readonly context: CoreCompilationContext;
 	readonly functions: Array<CoreTargetFunction>;
 	readonly gcRootRegisters: ReadonlyArray<ReadonlyArray<number> | undefined>;
 }
@@ -1287,24 +1292,22 @@ export interface LowerCoreToTargetOptions {
 }
 
 export function lowerCoreProgramToTarget(
-	core: CoreProgram,
+	compilation: CoreCompilation,
 	options: LowerCoreToTargetOptions = {},
 ): CoreTargetProgram {
-	const compilation = core.compilation;
-	if (compilation === undefined) {
-		throw new Error("Core program is missing product compilation metadata");
-	}
+	const { program: core, context } = compilation;
 	// Owned boundary: lowering may consume Core decisions but never repairs them.
-	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "pre-target" });
+	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "pre-target" }, context);
 	const lowered = core.functions.map((fn) =>
 		lowerFunctionToTarget(
 			fn,
-			compilation.facts.instructionSites,
+			context.facts.instructionSites,
 			options.reuseRegisters ?? true,
 		),
 	);
 	const program: CoreTargetProgram = {
 		core,
+		context,
 		functions: lowered.map(({ fn }) => fn),
 		gcRootRegisters: lowered.map(({ gcRootRegisters }, index) =>
 			core.functions[index]!.isGenerator || core.functions[index]!.isAsync

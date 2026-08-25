@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { attachCoreCompilerSiteFacts } from "../src/compiler/core/compiler-site-facts.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
@@ -131,18 +132,24 @@ test("profile remarks expose guarded known-own-slot lowering and native emission
 		}
 		read(3, () => {});
 	`;
-	const optimized = executeCoreOptimizations(
-		lowerSemanticProgramToCore(
-			analyzeSourceAndRunSemanticAnalysis(
-				source,
-				"/project/src/profile-known-own-slot.js",
-				parseScript(source, { strict: true }),
-			),
+	const lowered = lowerSemanticProgramToCore(
+		analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"/project/src/profile-known-own-slot.js",
+			parseScript(source, { strict: true }),
 		),
-		{ ablations: new Set(["inlining", "interprocedural"]) },
-	).program;
+	);
+	const optimized = executeCoreOptimizations(lowered.program, {
+		context: lowered.context,
+		ablations: new Set(["inlining", "interprocedural"]),
+	});
+	if (optimized.context === undefined) throw new Error("optimization lost context");
+	const compilation = attachCoreCompilerSiteFacts({
+		program: optimized.program,
+		context: optimized.context,
+	});
 	const definition = lowerCoreProgramToVmDefinition(
-		lowerCoreProgramToTarget(optimized),
+		lowerCoreProgramToTarget(compilation),
 		true,
 	);
 	emitVmDefinition(definition, { compiled: true });

@@ -8,6 +8,8 @@
  * function becomes executable is what lets an unreachable cycle stay dead.
  */
 
+import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALLEE_TARGETS_ATTRIBUTE,
 	analyzeCoreCalleeTargets,
@@ -52,6 +54,7 @@ export interface CoreFunctionReachability {
 
 export interface CoreFunctionCompactionResult {
 	readonly program: CoreProgram;
+	readonly context?: CoreCompilationContext;
 	readonly changed: boolean;
 	readonly oldToNew: ReadonlyMap<number, number>;
 }
@@ -119,16 +122,17 @@ function sourceFunctionIndices(
 export function analyzeCoreFunctionReachability(
 	program: CoreProgram,
 	targets?: CoreCalleeTargetAnalysis,
+	context?: CoreCompilationContext,
 ): CoreFunctionReachability {
 	const all = new Set(program.functions.map(({ functionIndex }) => functionIndex));
-	const sourceClosed = program.compilation?.facts.closure.sourceClosure.kind === "known";
+	const sourceClosed = context?.facts.closure.sourceClosure.kind === "known";
 	if (!sourceClosed) {
 		const reasons = new Map<number, ReadonlySet<CoreFunctionReachabilityReason>>();
 		for (const index of all) reasons.set(index, new Set(["any-script"]));
 		return { executable: all, retained: all, reasons, sourceClosed: false };
 	}
 
-	targets ??= analyzeCoreCalleeTargets(program, coreOpcodeRegistry);
+	targets ??= analyzeCoreCalleeTargets(program, coreOpcodeRegistry, context);
 	const executable = new Set<number>();
 	const retained = new Set<number>();
 	const reasons = new Map<number, Set<CoreFunctionReachabilityReason>>();
@@ -136,7 +140,7 @@ export function analyzeCoreFunctionReachability(
 	const structuralPending: Array<number> = [];
 	const structurallyScanned = new Set<number>();
 	const decisionPositions = new Map<number, Array<number>>();
-	for (const decision of program.compilation?.optimizationDecisions ?? []) {
+	for (const decision of context?.optimizationDecisions ?? []) {
 		const positions = decisionPositions.get(decision.functionIndex) ?? [];
 		positions.push(decision.positionId);
 		decisionPositions.set(decision.functionIndex, positions);
@@ -200,10 +204,10 @@ export function analyzeCoreFunctionReachability(
 	};
 
 	if (program.functions.length > 0) enter(0, "program-entry");
-	for (const index of program.compilation?.cjsModuleFunctionIndices ?? []) {
+	for (const index of context?.data.cjsModuleFunctionIndices ?? []) {
 		enter(index, "commonjs-module");
 	}
-	for (const candidate of program.compilation?.hostInstallCandidates ?? []) {
+	for (const candidate of context?.data.hostInstallCandidates ?? []) {
 		for (const { slot } of candidate.exports) {
 			enterTargets(targets.globalSlot(slot), "host-install");
 		}
@@ -426,14 +430,17 @@ function remapSemanticAttributes(
  */
 export function compactCoreProgramFunctions(
 	program: CoreProgram,
-	reachability: CoreFunctionReachability = analyzeCoreFunctionReachability(program),
+	reachability?: CoreFunctionReachability,
+	context?: CoreCompilationContext,
 ): CoreFunctionCompactionResult {
+	reachability ??= analyzeCoreFunctionReachability(program, undefined, context);
 	if (
 		!reachability.sourceClosed ||
 		reachability.retained.size === program.functions.length
 	) {
 		return {
 			program,
+			...(context === undefined ? {} : { context }),
 			changed: false,
 			oldToNew: new Map(
 				program.functions.map((fn) => [fn.functionIndex, fn.functionIndex]),
@@ -543,12 +550,46 @@ export function compactCoreProgramFunctions(
 			mutationEpoch: fn.mutationEpoch + 1,
 		};
 	});
-	const compilation = program.compilation;
 	const remapOwner = (owner: number): number =>
 		owner < 0 ? owner : remapRequired(oldToNew, owner, "captured-slot metadata");
+	const remappedContext =
+		context === undefined
+			? undefined
+			: {
+					...context,
+					data: {
+						...context.data,
+						cjsModuleFunctionIndices: context.data.cjsModuleFunctionIndices.map((index) =>
+							remapRequired(oldToNew, index, "CommonJS root"),
+						),
+						singleAssignmentCapturedSlots: context.data.singleAssignmentCapturedSlots
+							.filter(({ owner }) => owner < 0 || oldToNew.has(owner))
+							.map(({ owner, index }) => ({ owner: remapOwner(owner), index })),
+					},
+					...(context.optimizationDecisions === undefined
+						? {}
+						: {
+								optimizationDecisions: context.optimizationDecisions.flatMap(
+									(decision) => {
+										const mapped = oldToNew.get(decision.functionIndex);
+										return mapped === undefined
+											? []
+											: [{ ...decision, functionIndex: mapped }];
+									},
+								),
+							}),
+					facts: {
+						...context.facts,
+						functionEffects: new Map(),
+						moduleEffects: new Map(),
+						sites: new Map(),
+						instructionSites: new WeakMap<object, CompilerSiteFacts>(),
+					},
+				};
 	return {
 		changed: true,
 		oldToNew,
+		...(remappedContext === undefined ? {} : { context: remappedContext }),
 		program: {
 			...program,
 			functions,
@@ -566,41 +607,6 @@ export function compactCoreProgramFunctions(
 				}
 				return { ...position, inlinedFunctionIndex: mapped };
 			}),
-			...(compilation === undefined
-				? {}
-				: {
-						compilation: {
-							...compilation,
-							cjsModuleFunctionIndices: compilation.cjsModuleFunctionIndices.map(
-								(index) => remapRequired(oldToNew, index, "CommonJS root"),
-							),
-							singleAssignmentCapturedSlots: compilation.singleAssignmentCapturedSlots
-								.filter(({ owner }) => owner < 0 || oldToNew.has(owner))
-								.map(({ owner, index }) => ({
-									owner: remapOwner(owner),
-									index,
-								})),
-							...(compilation.optimizationDecisions === undefined
-								? {}
-								: {
-										optimizationDecisions: compilation.optimizationDecisions.flatMap(
-											(decision) => {
-												const mapped = oldToNew.get(decision.functionIndex);
-												return mapped === undefined
-													? []
-													: [{ ...decision, functionIndex: mapped }];
-											},
-										),
-									}),
-							facts: {
-								...compilation.facts,
-								functionEffects: new Map(),
-								moduleEffects: new Map(),
-								sites: new Map(),
-								instructionSites: new WeakMap(),
-							},
-						},
-					}),
 		},
 	};
 }

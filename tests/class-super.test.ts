@@ -15,7 +15,7 @@ function compile(source: string) {
 		"class-super.js",
 		parseScript(source, { strict: true }),
 	);
-	return { core: lowerSemanticProgramToCore(semantic), semantic };
+	return { core: lowerSemanticProgramToCore(semantic).program, semantic };
 }
 
 test("super reads retain their receiver through Core, lowering, and wire encoding", () => {

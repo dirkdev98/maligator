@@ -49,6 +49,12 @@ import type {
 	CompilerInstruction,
 	CompilerIntrinsic,
 } from "../shared/compiler-instruction.ts";
+import { coreProgramDataFromSemantic } from "./core-compilation.ts";
+import type {
+	CoreCapturedSlotRef,
+	CoreCompilation,
+	CoreHostInstallCandidate,
+} from "./core-compilation.ts";
 import {
 	emitCoreEntryInstructions,
 	finishDirectCoreFunction,
@@ -62,11 +68,7 @@ import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import { formatCoreFunction } from "./core-ir.ts";
-import type {
-	CoreCapturedSlotRef,
-	CoreHostInstallCandidate,
-	CoreProgram,
-} from "./core-ir.ts";
+import type { CoreProgram } from "./core-ir.ts";
 
 interface CoreFrontendContext {
 	/**
@@ -752,7 +754,7 @@ export function constructSemanticProgramCore(
 		facts?: CompilerProgramFacts;
 		collectOptimizationDiagnostics?: boolean;
 	} = {},
-): CoreProgram {
+): CoreCompilation {
 	const program: CoreFrontendContext = {
 		semantic,
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
@@ -864,16 +866,23 @@ export function constructSemanticProgramCore(
 		compileCjsWrappers(program);
 	}
 
-	const core = finishCoreProgram(program);
+	const compilation = finishCoreProgram(program);
 	if (debugEnabled) {
-		log.debug(core.functions.map((fn) => formatCoreFunction(fn)).join("\n"));
+		log.debug(
+			compilation.program.functions.map((fn) => formatCoreFunction(fn)).join("\n"),
+		);
 	}
-	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "construction" });
-	return core;
+	verifyCoreProgram(
+		compilation.program,
+		coreOpcodeRegistry,
+		{ stage: "construction" },
+		compilation.context,
+	);
+	return compilation;
 }
 
-function finishCoreProgram(program: CoreFrontendContext): CoreProgram {
-	return {
+function finishCoreProgram(program: CoreFrontendContext): CoreCompilation {
+	const core: CoreProgram = {
 		functions: program.functions.map((fn) =>
 			removeUnreachableCoreBlocks(finishDirectCoreFunction(fn)),
 		),
@@ -882,8 +891,11 @@ function finishCoreProgram(program: CoreFrontendContext): CoreProgram {
 		literalTemplateData: [...program.literalTemplateData],
 		sourcePositions: program.sourcePositions.map((position) => ({ ...position })),
 		globalCount: program.nextGlobalIndex,
-		compilation: {
-			semantic: program.semantic,
+	};
+	const singleAssignment = coreSingleAssignmentCellDeclarations(program);
+	return {
+		program: core,
+		context: {
 			facts: program.facts,
 			...(program.optimizationDecisions === undefined
 				? {}
@@ -891,14 +903,16 @@ function finishCoreProgram(program: CoreFrontendContext): CoreProgram {
 			...(program.optimizationTrace === undefined
 				? {}
 				: { optimizationTrace: [...program.optimizationTrace] }),
-			cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
-			hostInstallCandidates: coreHostInstallCandidates(program),
-			...coreSingleAssignmentCellDeclarations(program),
-			retainedHostInstallers: [program.hostProcess, program.hostBuffer]
-				.flatMap((host) => (host?.retained === true ? [host.installer] : []))
-				.filter(
-					(installer, index, installers) => installers.indexOf(installer) === index,
-				),
+			data: coreProgramDataFromSemantic(program.semantic, {
+				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
+				hostInstallCandidates: coreHostInstallCandidates(program),
+				...singleAssignment,
+				retainedHostInstallers: [program.hostProcess, program.hostBuffer]
+					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
+					.filter(
+						(installer, index, installers) => installers.indexOf(installer) === index,
+					),
+			}),
 		},
 	};
 }

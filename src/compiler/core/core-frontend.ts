@@ -1,7 +1,7 @@
 import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
-import type { CoreProgram } from "./core-ir.ts";
+import type { CoreCompilation } from "./core-compilation.ts";
 import { constructSemanticProgramCore } from "./semantic-lowering.ts";
 
 export interface CoreFrontendOptions {
@@ -17,7 +17,7 @@ export interface CoreFrontendOptions {
 export function lowerSemanticProgramToCore(
 	semantic: SemanticProgram,
 	options: CoreFrontendOptions = {},
-): CoreProgram {
+): CoreCompilation {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: "construct core ir", run: () => T): T => run());
 	return runPhase("construct core ir", () =>

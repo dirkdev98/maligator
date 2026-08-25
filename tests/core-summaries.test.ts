@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	coreOptimizationMetrics,
@@ -744,13 +745,18 @@ describe("summary consumers and proof boundary", () => {
 			"summary-unboxing.js",
 		);
 		let productCore: CoreProgram | undefined;
+		let productContext: CoreCompilationContext | undefined;
 		const vm = compileSemanticProgramToVmDefinition(semantic, {
 			optimizationAblations: new Set(["inlining"]),
-			afterCoreOptimization(program) {
+			afterCoreOptimization(program, context) {
 				productCore = program;
+				productContext = context;
 			},
 		});
-		const target = lowerCoreProgramToTarget(productCore!);
+		const target = lowerCoreProgramToTarget({
+			program: productCore!,
+			context: productContext!,
+		});
 		const emitted = emitVmDefinition(vm, { compiled: true });
 		expect(emitted).toMatch(/mal_ops_number_as_f64\(call_result_\d+\.value\)/);
 		expect(emitted).toMatch(/mal_value_to_boolean\(call_result_\d+\.value\)/);
@@ -1096,13 +1102,16 @@ describe("summary consumers and proof boundary", () => {
 			"summary-publication.js",
 		);
 		let optimized: CoreProgram | undefined;
+		let optimizedContext: CoreCompilationContext | undefined;
 		compileSemanticProgramToVmDefinition(semantic, {
 			optimizationAblations: new Set(["inlining"]),
-			afterCoreOptimization(program) {
+			afterCoreOptimization(program, context) {
 				optimized = program;
+				optimizedContext = context;
 			},
 		});
-		expect(optimized?.compilation?.facts.functionEffects.size).toBeGreaterThan(0);
-		expect(optimized?.compilation?.facts.moduleEffects.size).toBeGreaterThan(0);
+		expect(optimized).toBeDefined();
+		expect(optimizedContext?.facts.functionEffects.size).toBeGreaterThan(0);
+		expect(optimizedContext?.facts.moduleEffects.size).toBeGreaterThan(0);
 	});
 });

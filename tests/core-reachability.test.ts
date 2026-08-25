@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import {
-	analyzeCoreFunctionReachability,
-	compactCoreProgramFunctions,
+	analyzeCoreFunctionReachability as analyzeCoreFunctionReachabilityWithContext,
+	compactCoreProgramFunctions as compactCoreProgramFunctionsWithContext,
 } from "../src/compiler/core/core-ir-reachability.ts";
 import { CORE_KNOWN_OWN_SLOT_ATTRIBUTE } from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
@@ -37,12 +38,43 @@ function moduleFacts(path: string, sourceClosed: boolean): CompilerProgramFacts 
 		: configured;
 }
 
+const contexts = new WeakMap<CoreProgram, CoreCompilationContext>();
+
+function contextFor(program: CoreProgram): CoreCompilationContext {
+	const context = contexts.get(program);
+	if (context === undefined) throw new Error("missing reachability test context");
+	return context;
+}
+
+function analyzeCoreFunctionReachability(program: CoreProgram) {
+	return analyzeCoreFunctionReachabilityWithContext(
+		program,
+		undefined,
+		contextFor(program),
+	);
+}
+
+function compactCoreProgramFunctions(
+	program: CoreProgram,
+	reachability = analyzeCoreFunctionReachability(program),
+) {
+	const result = compactCoreProgramFunctionsWithContext(
+		program,
+		reachability,
+		contextFor(program),
+	);
+	if (result.context !== undefined) contexts.set(result.program, result.context);
+	return result;
+}
+
 function coreModule(source: string, sourceClosed: boolean): CoreProgram {
 	const path = sourceClosed ? "closed-reachability.mjs" : "open-reachability.mjs";
-	return lowerSemanticProgramToCore(
+	const compilation = lowerSemanticProgramToCore(
 		analyzeSourceAndRunSemanticAnalysis(source, path, parseModule(source)),
 		{ facts: moduleFacts(path, sourceClosed) },
 	);
+	contexts.set(compilation.program, compilation.context);
+	return compilation.program;
 }
 
 const DEAD_CYCLE = `
@@ -62,7 +94,9 @@ function leafFunction(functionIndex: number): CoreFunction {
 
 function closedProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 	const shell = coreModule("", true);
-	return { ...shell, functions };
+	const program = { ...shell, functions };
+	contexts.set(program, contextFor(shell));
+	return program;
 }
 
 function finitePlusOpaqueProgram(): CoreProgram {
@@ -151,18 +185,23 @@ function installedFunctionProgram(kind: "host" | "namespace"): CoreProgram {
 			: builder.appendInstruction(entry, "createUndefined", []);
 	builder.setTerminator(entry, { kind: "return", value: result! });
 	const shell = closedProgram([builder.finish(entry), leafFunction(1), leafFunction(2)]);
-	return {
+	const program = {
 		...shell,
 		stringConstants: [[120]],
 		globalCount: 1,
-		compilation: {
-			...shell.compilation!,
+	};
+	const context = contextFor(shell);
+	contexts.set(program, {
+		...context,
+		data: {
+			...context.data,
 			hostInstallCandidates:
 				kind === "host"
 					? [{ installer: "test", exports: [{ name: "installed", slot: 0 }] }]
 					: [],
 		},
-	};
+	});
+	return program;
 }
 
 describe("Core whole-program function reachability", () => {
@@ -220,18 +259,22 @@ describe("Core whole-program function reachability", () => {
 	});
 
 	it("traverses callees entered through direct Function.prototype.call dispatch", () => {
-		const optimized = executeCoreOptimizations(
-			coreModule(
-				`
+		const input = coreModule(
+			`
 					function dead() { return 0; }
 					function leaf(value) { return value + 1; }
 					function throughCall(value) { return leaf(value); }
 					globalThis.answer = throughCall.call(undefined, 41);
 				`,
-				true,
-			),
-			{ ablations: new Set(["inlining"]), verification: "per-pass" },
-		).program;
+			true,
+		);
+		const result = executeCoreOptimizations(input, {
+			context: contextFor(input),
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		});
+		const optimized = result.program;
+		contexts.set(optimized, result.context!);
 		const flattenedCall = optimized.functions[0]!.blocks.flatMap(
 			({ instructions }) => instructions,
 		).find(({ attributes }) => attributes.directFunctionCall === true);
@@ -274,13 +317,12 @@ describe("Core whole-program function reachability", () => {
 
 	it("keeps a CommonJS module wrapper as an explicit image entry", () => {
 		const shell = closedProgram([leafFunction(0), leafFunction(1), leafFunction(2)]);
-		const program: CoreProgram = {
-			...shell,
-			compilation: {
-				...shell.compilation!,
-				cjsModuleFunctionIndices: [1],
-			},
-		};
+		const program: CoreProgram = { ...shell };
+		const context = contextFor(shell);
+		contexts.set(program, {
+			...context,
+			data: { ...context.data, cjsModuleFunctionIndices: [1] },
+		});
 
 		expect(
 			[...analyzeCoreFunctionReachability(program).executable].sort(
@@ -306,20 +348,25 @@ describe("Core whole-program function reachability", () => {
 	});
 
 	it("restores a removed summary's narrowed call result before verification", () => {
-		const optimized = executeCoreOptimizations(
-			coreModule(
-				`
+		const input = coreModule(
+			`
           function live() { return 1.5; }
           globalThis.answer = live();
         `,
-				true,
-			),
-			{ ablations: new Set(["inlining"]), verification: "per-pass" },
-		).program;
+			true,
+		);
+		const optimization = executeCoreOptimizations(input, {
+			context: contextFor(input),
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		});
+		const optimized = optimization.program;
+		contexts.set(optimized, optimization.context!);
 		const expanded: CoreProgram = {
 			...optimized,
 			functions: [...optimized.functions, leafFunction(optimized.functions.length)],
 		};
+		contexts.set(expanded, contextFor(optimized));
 		const compacted = compactCoreProgramFunctions(expanded);
 		const call = compacted.program.functions[0]!.blocks.flatMap(
 			({ instructions }) => instructions,
@@ -333,6 +380,7 @@ describe("Core whole-program function reachability", () => {
 		expect(() => verifyCoreProgram(compacted.program, coreOpcodeRegistry)).not.toThrow();
 		expect(() =>
 			executeCoreOptimizations(expanded, {
+				context: contextFor(expanded),
 				ablations: new Set(["inlining", "interprocedural"]),
 				verification: "per-pass",
 			}),
@@ -347,20 +395,20 @@ describe("Core whole-program function reachability", () => {
 				{ line: 1, column: 1, inlinedFunctionIndex: 2, callerPosId: 1 },
 				{ line: 2, column: 1 },
 			],
-			compilation: {
-				...shell.compilation!,
-				optimizationDecisions: [
-					{
-						functionIndex: 0,
-						positionId: 0,
-						operation: "call",
-						phase: "optimization",
-						code: "optimization.applied.test",
-						outcome: "applied",
-					},
-				],
-			},
 		};
+		contexts.set(program, {
+			...contextFor(shell),
+			optimizationDecisions: [
+				{
+					functionIndex: 0,
+					positionId: 0,
+					operation: "call",
+					phase: "optimization",
+					code: "optimization.applied.test",
+					outcome: "applied",
+				},
+			],
+		});
 		const analysis = analyzeCoreFunctionReachability(program);
 		const compacted = compactCoreProgramFunctions(program, analysis);
 
@@ -390,13 +438,12 @@ describe("Core whole-program function reachability", () => {
 			leafFunction(1),
 			builder.finish(entry),
 		]);
-		const program: CoreProgram = {
-			...shell,
-			compilation: {
-				...shell.compilation!,
-				cjsModuleFunctionIndices: [2],
-			},
-		};
+		const program: CoreProgram = { ...shell };
+		const context = contextFor(shell);
+		contexts.set(program, {
+			...context,
+			data: { ...context.data, cjsModuleFunctionIndices: [2] },
+		});
 		const compacted = compactCoreProgramFunctions(program);
 		const known = compacted.program.functions[1]!.blocks.flatMap(
 			({ instructions }) => instructions,
