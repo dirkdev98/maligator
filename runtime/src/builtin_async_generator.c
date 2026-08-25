@@ -8,6 +8,7 @@
 #include "function_object.h"
 #include "generator_object.h"
 #include "intrinsics.h"
+#include "microtask.h"
 #include "object.h"
 #include "perf_stats.h"
 #include "promise_object.h"
@@ -146,8 +147,23 @@ static void mal_agen_resolve_result(
 
 /** Await the front return completion without removing it from the FIFO queue. */
 static void mal_agen_await_return(MalVm *vm, MalGeneratorObject *agen) {
+    MalValue return_value = agen->async_data->queue_head->value;
+    // AsyncGeneratorAwaitReturn cannot expose the PromiseResolve wrapper for a
+    // primitive completion. Keep the required turn by queueing its typed
+    // fulfillment continuation directly.
+    if (!mal_value_is_object(return_value)) {
+        agen->agen_running = true;
+        mal_vm_enqueue_async_generator_return_job(
+            vm,
+            mal_value_from_object((MalObject *) agen),
+            vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+            false,
+            return_value);
+        return;
+    }
+
     MalValue promise;
-    if (!mal_promise_resolve_value(vm, agen->async_data->queue_head->value, &promise)) {
+    if (!mal_promise_resolve_value(vm, return_value, &promise)) {
         MalValue error = vm->completion.value;
         vm->completion = mal_agen_normal();
         agen->agen_running = false;
