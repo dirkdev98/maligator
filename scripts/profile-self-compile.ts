@@ -20,16 +20,19 @@ interface SelfCompileSummary {
 	phases: Record<string, number>;
 }
 
-const HELP = `Usage: node scripts/profile-self-compile.ts [--json-out PATH] [--sample-out PATH]
+const HELP = `Usage: node scripts/profile-self-compile.ts [--quick] [--json-out PATH] [--sample-out PATH]
 
 Build and run the fully closed self-compile workload with exact runtime counters.
 This is a single-current-tree profile, not a base/head comparison.
+--quick compiles the closed shape-analysis module cone through the same native
+compiler and Core optimizer, providing a calibrated sub-minute inner loop.
 On macOS, --sample-out captures ten seconds of stacks during Core optimization.
 `;
 
 interface ProfileOptions {
 	jsonOut: string;
 	sampleOut?: string;
+	quick: boolean;
 }
 
 function profileOptions(args: Array<string>): ProfileOptions | undefined {
@@ -37,17 +40,22 @@ function profileOptions(args: Array<string>): ProfileOptions | undefined {
 		console.log(HELP);
 		return undefined;
 	}
-	let jsonOut = ".cache/self-compile-profile.json";
+	const quick = args.includes("--quick");
+	let jsonOut = quick
+		? ".cache/self-compile-quick-profile.json"
+		: ".cache/self-compile-profile.json";
 	let sampleOut: string | undefined;
-	for (let index = 0; index < args.length; index += 2) {
+	for (let index = 0; index < args.length; index++) {
 		const option = args[index];
+		if (option === "--quick") continue;
 		const value = args[index + 1];
 		if (value === undefined || value.startsWith("-")) throw new Error(HELP.trim());
 		if (option === "--json-out") jsonOut = value;
 		else if (option === "--sample-out") sampleOut = value;
 		else throw new Error(HELP.trim());
+		index++;
 	}
-	return { jsonOut, ...(sampleOut === undefined ? {} : { sampleOut }) };
+	return { jsonOut, quick, ...(sampleOut === undefined ? {} : { sampleOut }) };
 }
 
 function perfRecords(stderr: string): Array<PerfRecord> {
@@ -81,6 +89,8 @@ async function runWithSample(
 	args: Array<string>,
 	environment: NodeJS.ProcessEnv,
 	sampleOut: string,
+	sampleDelayMs: number,
+	sampleSeconds: number,
 ): Promise<ProfileProcessResult> {
 	const absoluteSample = path.resolve(sampleOut);
 	mkdirSync(path.dirname(absoluteSample), { recursive: true });
@@ -121,14 +131,14 @@ async function runWithSample(
 			}
 			const result = spawnSync(
 				"/usr/bin/sample",
-				[String(child.pid), "10", "-file", absoluteSample],
+				[String(child.pid), String(sampleSeconds), "-file", absoluteSample],
 				{ encoding: "utf8", timeout: 30_000 },
 			);
 			if (result.error !== undefined) reject(result.error);
 			else if (result.status !== 0)
 				reject(new Error(`sample failed (${String(result.status)}):\n${result.stderr}`));
 			else resolve();
-		}, 30_000);
+		}, sampleDelayMs);
 	});
 	try {
 		const [status] = await Promise.all([exit, sample]);
@@ -153,13 +163,22 @@ if (options !== undefined) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-profile-"));
 	try {
 		const buildEnvironment = { ...process.env, MAL_PERF_STATS: "1" };
+		const buildStartedAt = process.hrtime.bigint();
 		const binary = buildNativeBinary({
 			fixture: "bench/self-compile.mts",
 			name: "profile-self-compile",
 			config: SELF_COMPILE_CONFIG,
 			environment: buildEnvironment,
+			translationUnits: true,
 		});
-		const target = prepareSelfCompileSource(path.join(root, "source"));
+		const buildMs = Number(process.hrtime.bigint() - buildStartedAt) / 1e6;
+		const prepareStartedAt = process.hrtime.bigint();
+		const sourceRoot = path.join(root, "source");
+		const fullTarget = prepareSelfCompileSource(sourceRoot);
+		const target = options.quick
+			? path.join(root, "source/src/compiler/core/core-ir-shape-provenance.ts")
+			: fullTarget;
+		const prepareMs = Number(process.hrtime.bigint() - prepareStartedAt) / 1e6;
 		const output = path.join(root, "output");
 		let result: ProfileProcessResult;
 		if (options.sampleOut === undefined) {
@@ -183,6 +202,8 @@ if (options !== undefined) {
 				[target, output],
 				buildEnvironment,
 				options.sampleOut,
+				options.quick ? 3_000 : 30_000,
+				options.quick ? 5 : 10,
 			);
 		}
 		if (result.status !== 0) {
@@ -194,18 +215,25 @@ if (options !== undefined) {
 		const records = perfRecords(result.stderr);
 		if (records.length === 0) throw new Error("self-compile emitted no perf counters");
 		const report = {
-			schema: 1,
+			schema: 2,
 			world: "closed",
+			workload: options.quick ? "shape-analysis-cone" : "full-self-compile",
+			buildMs,
+			prepareMs,
 			wallMs: result.wallMs,
+			totalMs: buildMs + prepareMs + result.wallMs,
 			...summary,
-			digest: digestSelfCompileOutput(output),
+			digest: digestSelfCompileOutput(output, [
+				path.resolve(sourceRoot),
+				path.relative(process.cwd(), sourceRoot),
+			]),
 			perfRecords: records,
 		};
 		const absoluteOutput = path.resolve(options.jsonOut);
 		mkdirSync(path.dirname(absoluteOutput), { recursive: true });
 		writeFileSync(absoluteOutput, `${JSON.stringify(report, undefined, 2)}\n`);
 		console.log(
-			`self-compile profile: ${summary.units} units, ${summary.codeUnits} code units, ${(result.wallMs / 1000).toFixed(1)}s`,
+			`self-compile ${options.quick ? "quick " : ""}profile: ${summary.units} units, ${summary.codeUnits} code units, ${(result.wallMs / 1000).toFixed(1)}s run / ${((buildMs + prepareMs + result.wallMs) / 1000).toFixed(1)}s total`,
 		);
 		console.log(`digest: ${report.digest}`);
 		console.log(`exact counter records: ${records.length}`);

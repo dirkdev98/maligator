@@ -16,11 +16,20 @@ export const SELF_COMPILE_CONFIG = resolveBuildConfig({
 	surface: { webPlatform: false, node: true, maligator: true },
 });
 
-export function digestSelfCompileOutput(directory: string): string {
+export function digestSelfCompileOutput(
+	directory: string,
+	normalizePaths: ReadonlyArray<string> = [],
+): string {
 	const digest = createHash("sha256");
 	for (const name of readdirSync(directory).sort()) {
 		digest.update(name);
-		digest.update(readFileSync(path.join(directory, name)));
+		let source = readFileSync(path.join(directory, name), "utf8");
+		for (const normalizePath of normalizePaths) {
+			if (normalizePath.length > 0) {
+				source = source.split(normalizePath).join("<self-compile-source>");
+			}
+		}
+		digest.update(source);
 	}
 	return digest.digest("hex");
 }

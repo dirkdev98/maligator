@@ -31,7 +31,10 @@ import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semant
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
-import { emitProgramImage } from "./compiler/target/emit-program-image.ts";
+import {
+	emitProgramImage,
+	emitProgramTranslationUnits,
+} from "./compiler/target/emit-program-image.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
@@ -137,6 +140,11 @@ export interface BuildOptions {
 	profileEnabled?: boolean;
 	/** Use the probed production native plan (LTO and stripping where supported). */
 	production?: boolean;
+	/**
+	 * Emit bounded translation units for large native fixtures. This uses the same
+	 * parallel, independently cached generated-object path as product builds.
+	 */
+	translationUnits?: boolean;
 	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
 	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled` /
@@ -261,11 +269,14 @@ function linkProgramImage(
 	compiled: boolean,
 	name: string,
 ): BuildNativeBinaryResult {
-	const cSource = emitProgramImage(image, {
+	const emitOptions = {
 		compiled,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
-	});
+	};
+	const cSource = options.translationUnits
+		? emitProgramTranslationUnits(image, emitOptions)
+		: emitProgramImage(image, emitOptions);
 	const baseDerivation = buildDerivationFromConfig(config);
 	const derivation = options.profileEnabled
 		? {
