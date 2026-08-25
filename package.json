@@ -26,6 +26,7 @@
 		"bench": "node ./scripts/bench.ts",
 		"bench:dx": "node ./scripts/dx-performance.ts",
 		"bench:profile-overhead": "node ./scripts/profile-overhead.ts",
+		"bench:self-compile-profile": "node ./scripts/profile-self-compile.ts",
 		"env:check": "node ./scripts/agent-environment.ts",
 		"format": "node ./scripts/quality.ts format",
 		"generate:bytecode-operations": "node ./scripts/generate-bytecode-operations.ts",

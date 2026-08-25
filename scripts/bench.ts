@@ -11,24 +11,12 @@
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-	copyFileSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	readdirSync,
-	rmSync,
-	statSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
@@ -42,6 +30,11 @@ import {
 	planExpressHttpWorkload,
 } from "./bench-http.ts";
 import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
+import {
+	digestSelfCompileOutput,
+	prepareSelfCompileSource,
+	SELF_COMPILE_CONFIG,
+} from "./self-compile-workload.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
 const JAVASCRIPT_FIXTURE = "bench/javascript.mjs";
@@ -479,15 +472,6 @@ interface SelfCompileRun {
 	phases: SelfCompilePhases;
 }
 
-function digestDirectory(directory: string): string {
-	const digest = createHash("sha256");
-	for (const name of readdirSync(directory).sort()) {
-		digest.update(name);
-		digest.update(readFileSync(path.join(directory, name)));
-	}
-	return digest.digest("hex");
-}
-
 function runSelfCompile(
 	command: string,
 	args: Array<string>,
@@ -515,7 +499,7 @@ function runSelfCompile(
 		wallMs,
 		units: summary.units,
 		codeUnits: summary.codeUnits,
-		digest: digestDirectory(output),
+		digest: digestSelfCompileOutput(output),
 		phases: summary.phases,
 	};
 }
@@ -544,35 +528,6 @@ function assertComparableSelfCompile(
 	}
 }
 
-function copyStrippedTree(source: string, destination: string): void {
-	mkdirSync(destination, { recursive: true });
-	for (const entry of readdirSync(source, { withFileTypes: true })) {
-		const from = path.join(source, entry.name);
-		const to = path.join(destination, entry.name);
-		if (entry.isDirectory()) {
-			copyStrippedTree(from, to);
-		} else if (/\.(?:ts|mts|cts)$/.test(entry.name)) {
-			writeFileSync(to, stripCompactTypes(readFileSync(from, "utf8"), from));
-		} else if (entry.isFile()) {
-			copyFileSync(from, to);
-		}
-	}
-}
-
-function prepareSelfCompileSource(root: string): string {
-	mkdirSync(root, { recursive: true });
-	writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
-	copyStrippedTree(path.resolve("src"), path.join(root, "src"));
-	mkdirSync(path.join(root, "bench"), { recursive: true });
-	const fixture = path.resolve("bench/self-compile.mts");
-	writeFileSync(
-		path.join(root, "bench/self-compile.mts"),
-		stripCompactTypes(readFileSync(fixture, "utf8"), fixture),
-	);
-	symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
-	return path.join(root, "bench/self-compile.mts");
-}
-
 function medianPhases(values: ReadonlyArray<SelfCompilePhases>): SelfCompilePhases {
 	const field = (name: keyof SelfCompilePhases): number =>
 		median(values.map((value) => value[name]));
@@ -590,14 +545,10 @@ function medianPhases(values: ReadonlyArray<SelfCompilePhases>): SelfCompilePhas
 
 function benchSelfCompile(runs: number): SelfCompileMetrics {
 	const fixture = path.resolve("bench/self-compile.mts");
-	const config = resolveBuildConfig({
-		engine: { eval: false, realms: false, regexp: true, intl: { enabled: false } },
-		surface: { webPlatform: false, node: true, maligator: true },
-	});
 	const binary = buildNativeBinary({
 		fixture,
 		name: "bench-self-compile",
-		config,
+		config: SELF_COMPILE_CONFIG,
 	});
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-"));
 	const maligatorRuns: Array<SelfCompileRun> = [];
