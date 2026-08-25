@@ -14,6 +14,7 @@
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "microtask.h"
 #include "perf_stats.h"
 #include "primitive_wrapper_object.h"
 #include "proxy_object.h"
@@ -3931,6 +3932,19 @@ static bool mal_from_async_create_data_property(MalVm *vm, MalValue target, u32 
 // Await(value): PromiseResolve(value) then attach step/fail as its reactions. A
 // PromiseResolve throw rejects the capability immediately.
 static void mal_from_async_await(MalVm *vm, MalValue value, MalValue step, MalValue fail, MalValue reject) {
+    // The PromiseResolve wrapper for a primitive cannot escape this Await.
+    // Resume through the same reaction job without allocating that Promise.
+    if (!mal_value_is_object(value)) {
+        mal_vm_enqueue_reaction_job(
+            vm,
+            step,
+            false,
+            mal_value_new_undefined(),
+            mal_value_new_undefined(),
+            value);
+        return;
+    }
+
     MalValue promise;
     if (!mal_promise_resolve_value(vm, value, &promise)) {
         MalValue error = vm->completion.value;
