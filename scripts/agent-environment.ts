@@ -16,6 +16,80 @@ interface CpuActivity {
 	processInspectionAvailable: boolean;
 }
 
+export interface PowerActivity {
+	inspectionAvailable: boolean;
+	source: "ac" | "battery" | "unknown";
+	battery?: {
+		percentage?: number;
+		state: "charging" | "discharging" | "charged" | "unknown";
+		estimatedRemaining?: string;
+	};
+	/** Power provenance for interpreting performance-sensitive measurements. */
+	performanceContext: "ac" | "battery" | "unknown";
+}
+
+export function parseMacPowerActivity(output: string): PowerActivity {
+	const sourceLabel = /Now drawing from '([^']+)'/i.exec(output)?.[1];
+	const source =
+		sourceLabel === undefined
+			? "unknown"
+			: /battery/i.test(sourceLabel)
+				? "battery"
+				: /ac power/i.test(sourceLabel)
+					? "ac"
+					: "unknown";
+	const percentageText = /\b(\d{1,3})%/.exec(output)?.[1];
+	const percentage = percentageText === undefined ? undefined : Number(percentageText);
+	const state: NonNullable<PowerActivity["battery"]>["state"] = /\bdischarging\b/i.test(
+		output,
+	)
+		? "discharging"
+		: /\bcharging\b/i.test(output)
+			? "charging"
+			: /\bcharged\b/i.test(output)
+				? "charged"
+				: "unknown";
+	const estimatedRemaining = /(\d+:\d+ remaining|no estimate)/i.exec(output)?.[1];
+	const battery =
+		percentage === undefined && state === "unknown"
+			? undefined
+			: {
+					...(percentage === undefined ? {} : { percentage }),
+					state,
+					...(estimatedRemaining === undefined ? {} : { estimatedRemaining }),
+				};
+	return {
+		inspectionAvailable: source !== "unknown" || battery !== undefined,
+		source,
+		...(battery === undefined ? {} : { battery }),
+		performanceContext:
+			source === "battery" || state === "discharging"
+				? "battery"
+				: source === "ac"
+					? "ac"
+					: "unknown",
+	};
+}
+
+function powerActivity(): PowerActivity {
+	if (process.platform !== "darwin") {
+		return {
+			inspectionAvailable: false,
+			source: "unknown",
+			performanceContext: "unknown",
+		};
+	}
+	const result = spawnSync("pmset", ["-g", "batt"], { encoding: "utf8" });
+	if (result.status !== 0 || typeof result.stdout !== "string") {
+		return {
+			inspectionAvailable: false,
+			source: "unknown",
+			performanceContext: "unknown",
+		};
+	}
+	return parseMacPowerActivity(result.stdout);
+}
+
 function topCpuProcesses(): Pick<
 	CpuActivity,
 	"topProcesses" | "processInspectionAvailable"
@@ -103,13 +177,15 @@ async function inspectAgentEnvironment(workspace: string) {
 	}
 	const cache = inspectMaligatorCache();
 	const activity = cpuActivity();
+	const power = powerActivity();
 	const deferHeavyCommand = shouldDeferHeavyCommand(activity, cache.activeLeases);
 	return {
-		schema: 1 as const,
+		schema: 2 as const,
 		plan,
 		capabilities: { directories, loopbackListen: loopback },
 		activity: {
 			...activity,
+			power,
 			activeMaligatorCommands: cache.activeCommands,
 			recommendation: deferHeavyCommand ? "defer-heavy" : "ready",
 			performanceLock: false as const,
@@ -134,6 +210,15 @@ async function main(): Promise<void> {
 		);
 		console.log(
 			`CPU: ${report.activity.loadAverage1m.toFixed(2)} load / ${report.activity.logicalCpus} logical CPUs; ${report.activity.recommendation}`,
+		);
+		const power = report.activity.power;
+		const battery = power.battery;
+		const batteryDetails =
+			battery === undefined
+				? ""
+				: `; battery ${battery.percentage === undefined ? "unknown" : `${battery.percentage}%`}, ${battery.state}${battery.estimatedRemaining === undefined ? "" : `, ${battery.estimatedRemaining}`}`;
+		console.log(
+			`Power: ${power.inspectionAvailable ? power.source : "inspection unavailable"}${batteryDetails}; benchmark context ${power.performanceContext}`,
 		);
 		for (const command of report.activity.activeMaligatorCommands) {
 			console.log(`  active Maligator pid ${command.pid}: ${command.command}`);

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { shouldDeferHeavyCommand } from "../scripts/agent-environment.ts";
+import {
+	parseMacPowerActivity,
+	shouldDeferHeavyCommand,
+} from "../scripts/agent-environment.ts";
 import {
 	commandEnvironmentPlan,
 	mergeCommandRequirements,
@@ -40,5 +43,32 @@ describe("machine-readable command requirements", () => {
 				0,
 			),
 		).toBe(true);
+	});
+
+	it("reports nominal AC separately from a discharging battery", () => {
+		expect(
+			parseMacPowerActivity(
+				"Now drawing from 'AC Power'\n -InternalBattery-0\t100%; discharging; 7:09 remaining present: true\n",
+			),
+		).toEqual({
+			inspectionAvailable: true,
+			source: "ac",
+			battery: {
+				percentage: 100,
+				state: "discharging",
+				estimatedRemaining: "7:09 remaining",
+			},
+			performanceContext: "battery",
+		});
+		expect(
+			parseMacPowerActivity(
+				"Now drawing from 'Battery Power'\n -InternalBattery-0\t61%; discharging; 2:10 remaining present: true\n",
+			).source,
+		).toBe("battery");
+		expect(
+			parseMacPowerActivity(
+				"Now drawing from 'AC Power'\n -InternalBattery-0\t91%; charging; 0:31 remaining present: true\n",
+			).performanceContext,
+		).toBe("ac");
 	});
 });
