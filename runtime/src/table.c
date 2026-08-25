@@ -57,7 +57,15 @@ typedef struct MalTable {
     bool owner_released; // Map/Set finalizer ran; last iterator pin owns teardown
     i32 *slots;
     MalTableEntry *entries;
+    // Most compiler Maps/Sets never outgrow four hash slots. Co-locate that
+    // first slot vector with the table header: 80 bytes has the same aggregate
+    // size-class charge as the former 64-byte header plus 16-byte RAW vector,
+    // but needs one allocation/free instead of two. Entries remain separate so
+    // growing a collection never strands their much larger initial buffer.
+    i32 inline_slots[MAL_TABLE_SMALL_MIN_CAPACITY];
 } MalTable;
+
+static_assert(sizeof(MalTable) <= 80, "MalTable outgrew its inline-slot size class");
 
 static_assert(MAL_TABLE_ROLE_COUNT == MAL_PERF_TABLE_ROLE_COUNT, "table role stats mismatch");
 
@@ -145,13 +153,30 @@ static u32 mal_table_initial_capacity(const MalTable *table) {
         ? MAL_TABLE_GLOBAL_MIN_CAPACITY : MAL_TABLE_SMALL_MIN_CAPACITY;
 }
 
+static bool mal_table_slots_are_inline(const MalTable *table, const i32 *slots) {
+    return slots == table->inline_slots;
+}
+
+static i32 *mal_table_allocate_slots(MalTable *table, u32 capacity) {
+    if (capacity == MAL_TABLE_SMALL_MIN_CAPACITY) {
+        return table->inline_slots;
+    }
+    return mal_heap_alloc_raw_profiled(
+        mal_gc_current_heap(), capacity * sizeof(*table->slots),
+        MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
+}
+
+static void mal_table_free_slots(MalTable *table, i32 *slots) {
+    if (slots != nullptr && !mal_table_slots_are_inline(table, slots)) {
+        gc_free_raw(mal_gc_current_heap(), slots);
+    }
+}
+
 static void mal_table_allocate_storage(MalTable *table) {
     if (table->slot_capacity != 0) return;
     u32 capacity = mal_table_initial_capacity(table);
     MalHeap *heap = mal_gc_current_heap();
-    table->slots = mal_heap_alloc_raw_profiled(
-        heap, capacity * sizeof(*table->slots),
-        MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
+    table->slots = mal_table_allocate_slots(table, capacity);
     for (u32 i = 0; i < capacity; i++) table->slots[i] = MAL_TABLE_EMPTY;
     table->entries =
         mal_heap_alloc_raw_profiled(
@@ -187,9 +212,7 @@ static void mal_table_rehash(MalTable *table, u32 capacity) {
         stats->rehashes++;
         stats->rehash_entries += table->size;
     }
-    MalHeap *heap = mal_gc_current_heap();
-    i32 *slots = mal_heap_alloc_raw_profiled(
-        heap, capacity * sizeof(i32), MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
+    i32 *slots = mal_table_allocate_slots(table, capacity);
     for (u32 i = 0; i < capacity; i++) {
         slots[i] = MAL_TABLE_EMPTY;
     }
@@ -206,7 +229,7 @@ static void mal_table_rehash(MalTable *table, u32 capacity) {
         slots[index] = (i32) e;
     }
 
-    gc_free_raw(heap, table->slots);
+    mal_table_free_slots(table, table->slots);
     table->slots = slots;
     table->slot_capacity = capacity;
 }
@@ -249,11 +272,11 @@ static bool mal_table_should_compact(const MalTable *table) {
         && table->tombstone_count > table->size;
 }
 
-// All four allocations owned by a table (the struct, `slots`, `entries`, and each
-// entry's `data` descriptor blob) live in the GC RAW space so their bytes count
-// toward the collection trigger (big Maps/dictionaries used to under-trigger) and so
-// an emptied RAW block returns to the OS. The table is not a GC cell; it is traced
-// via its owner and freed explicitly by the owner's finalizer (or, for the VM-global
+// The table header, non-inline `slots`, `entries`, and each entry's `data`
+// descriptor blob live in the GC RAW space so their bytes count toward the
+// collection trigger (big Maps/dictionaries used to under-trigger) and so an
+// emptied RAW block returns to the OS. The table is not a GC cell; it is traced via
+// its owner and freed explicitly by the owner's finalizer (or, for the VM-global
 // symbol/atom tables, by mal_vm_free BEFORE mal_heap_free — see mal_table_free).
 MalTable *mal_table_new(MalTableMode mode, MalTableRole role) {
     MalHeap *heap = mal_gc_current_heap();
@@ -288,7 +311,7 @@ void mal_table_free(MalTable *table) {
         gc_free_raw(heap, table->entries[e].data);
     }
 
-    gc_free_raw(heap, table->slots);
+    mal_table_free_slots(table, table->slots);
     gc_free_raw(heap, table->entries);
     gc_free_raw(heap, table);
 }
@@ -339,9 +362,7 @@ bool mal_table_reserve(MalTable *table, usize desired_size) {
 
     MalHeap *heap = mal_gc_current_heap();
     if (table->slot_capacity == 0) {
-        table->slots = mal_heap_alloc_raw_profiled(
-            heap, target_slots * sizeof(*table->slots),
-            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
+        table->slots = mal_table_allocate_slots(table, target_slots);
         for (u32 i = 0; i < target_slots; i++) {
             table->slots[i] = MAL_TABLE_EMPTY;
         }
@@ -532,7 +553,7 @@ void mal_table_compact(MalTable *table) {
         table->handle_epoch = 1;
     }
     if (table->size == 0) {
-        gc_free_raw(mal_gc_current_heap(), table->slots);
+        mal_table_free_slots(table, table->slots);
         gc_free_raw(mal_gc_current_heap(), table->entries);
         table->slots = nullptr;
         table->entries = nullptr;
