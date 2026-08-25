@@ -20,7 +20,7 @@ export interface Test262BatchReport {
 		instructionCount: number;
 	};
 	physical: {
-		definitionCount: number;
+		imageCount: number;
 		sharedHelperCount: number;
 		functionCount: number;
 		instructionCount: number;
@@ -66,7 +66,7 @@ export function createTest262BatchReport(input: {
 			instructionCount: input.manifest.stats.instructionCount,
 		},
 		physical: {
-			definitionCount: input.manifest.physical.definitionCount,
+			imageCount: input.manifest.physical.imageCount,
 			sharedHelperCount: input.manifest.physical.sharedHelperCount,
 			functionCount: input.manifest.physical.functionCount,
 			instructionCount: input.manifest.physical.instructionCount,

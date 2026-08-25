@@ -19,7 +19,7 @@ function varDeclaredNames(semantic: SemanticProgram): Set<string> {
 }
 
 /**
- * Compile a single JavaScript script source into the binary definition wire
+ * Compile a single JavaScript script source into the binary runtime-image wire
  * format (program-image-codec.ts) — the `mal_runtime_image_load` / `mal_vm_splice_runtime_image`
  * input. This is the trimmed compiler entry that runtime `eval` runs: the script
  * front end (no module graph / bundler / native-C backend / disk build), then
@@ -83,12 +83,12 @@ export function compileSourceToBuffer(
 	if (options.inFieldInitializer && referencesArguments(semantic.files[0]?.ast.body)) {
 		throw new SyntaxError("'arguments' is not allowed in a class field initializer");
 	}
-	const definition = compileSemanticProgramToProgramImage(semantic, {
+	const image = compileSemanticProgramToProgramImage(semantic, {
 		semanticLowering: {
 			evalCompletion: options.completionValue,
 			evalDirect: options.direct,
 			directEvalContext,
 		},
 	});
-	return serializeRuntimeImage(definition.runtime, { debugInfo: options.debugInfo });
+	return serializeRuntimeImage(image.runtime, { debugInfo: options.debugInfo });
 }

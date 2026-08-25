@@ -53,8 +53,8 @@ function buildBinary(name: string, compiled: boolean): string {
 		path.resolve(fixture!),
 		parsed,
 	);
-	const definition = compileSemanticProgramToProgramImage(semanticProgram);
-	const cSource = emitProgramImage(definition, { compiled });
+	const image = compileSemanticProgramToProgramImage(semanticProgram);
+	const cSource = emitProgramImage(image, { compiled });
 	return buildLocalBinary({ context, name, cSource, verbose: false }).binaryPath;
 }
 

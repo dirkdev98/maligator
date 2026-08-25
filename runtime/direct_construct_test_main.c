@@ -18,7 +18,7 @@ int main(void) {
     if (vm.completion.kind == MAL_COMPLETION_THROW) return 1;
 
     // Probe is the fixture's first nested function. Exercise the helper directly
-    // so the same checks cover compiled and interpreter-only target definitions.
+    // so the same checks cover compiled and interpreter-only runtime images.
     MalValue callee = mal_vm_op_create_function(&vm, 1, nullptr);
     if (!result_is_object(mal_vm_construct_direct(
             &vm, 1, callee, nullptr, 0))) {

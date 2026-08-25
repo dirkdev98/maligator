@@ -56,8 +56,11 @@ import {
 } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
+	cacheFrontendCompilerArtifact,
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
+	frontendCompilerArtifactIdentity,
+	frontendCompilerArtifactUnchanged,
 	frontendDigest as digest,
 	frontendWirePath,
 	FrontendCompilationSession,
@@ -77,7 +80,8 @@ interface PlannedImport {
 interface CompiledArtifact {
 	wire: Uint8Array;
 	programImage: ReturnType<typeof compileSemanticProgramToProgramImage>;
-	artifact: BuildFragmentArtifact;
+	runtimeArtifact: BuildFragmentArtifact;
+	compilerArtifact: BuildFragmentArtifact;
 	cache: "hit" | "miss";
 }
 
@@ -109,7 +113,8 @@ export interface BuildFragmentArtifact {
 
 export interface CompiledBuildFragments {
 	wires: Array<Uint8Array>;
-	artifacts: Array<BuildFragmentArtifact>;
+	runtimeArtifacts: Array<BuildFragmentArtifact>;
+	compilerArtifact: BuildFragmentArtifact;
 	programImage: ReturnType<typeof compileSemanticProgramToProgramImage>;
 	artifactHits: number;
 	artifactMisses: number;
@@ -393,35 +398,45 @@ function compileArtifact(
 	try {
 		const reference = JSON.parse(readFileSync(mappingPath, "utf-8")) as {
 			schema?: number;
-			artifact?: BuildFragmentArtifact;
+			runtimeArtifact?: BuildFragmentArtifact;
+			compilerArtifact?: BuildFragmentArtifact;
 		};
 		if (
-			reference.schema !== 1 ||
-			reference.artifact === undefined ||
-			!validArtifact(reference.artifact, artifactRoot)
+			reference.schema !== 2 ||
+			reference.runtimeArtifact === undefined ||
+			reference.compilerArtifact === undefined ||
+			!validArtifact(reference.runtimeArtifact, artifactRoot) ||
+			!frontendCompilerArtifactUnchanged(reference.compilerArtifact, artifactRoot)
 		) {
 			throw new Error("invalid fragment artifact reference");
 		}
-		let artifactWire: Uint8Array | undefined;
+		let compilerWire: Uint8Array | undefined;
+		let runtimeWire: Uint8Array | undefined;
 		let programImage: ReturnType<typeof deserializeCompilerArtifact> | undefined;
-		const loadArtifact = () => {
-			if (artifactWire !== undefined) return artifactWire;
-			artifactWire = new Uint8Array(readFileSync(reference.artifact!.path));
-			if (digest(artifactWire) !== reference.artifact!.digest) {
+		const loadCompilerArtifact = () => {
+			if (compilerWire !== undefined) return compilerWire;
+			compilerWire = new Uint8Array(readFileSync(reference.compilerArtifact!.path));
+			if (digest(compilerWire) !== reference.compilerArtifact!.digest) {
 				throw new Error("corrupt fragment artifact");
 			}
-			return artifactWire;
+			return compilerWire;
 		};
 		const loadProgramImage = () =>
-			(programImage ??= deserializeCompilerArtifact(loadArtifact()));
+			(programImage ??= deserializeCompilerArtifact(loadCompilerArtifact()));
 		return {
 			get wire() {
-				return serializeRuntimeImage(loadProgramImage().runtime);
+				if (runtimeWire !== undefined) return runtimeWire;
+				runtimeWire = new Uint8Array(readFileSync(reference.runtimeArtifact!.path));
+				if (digest(runtimeWire) !== reference.runtimeArtifact!.digest) {
+					throw new Error("corrupt runtime fragment artifact");
+				}
+				return runtimeWire;
 			},
 			get programImage() {
 				return loadProgramImage();
 			},
-			artifact: reference.artifact,
+			runtimeArtifact: reference.runtimeArtifact,
+			compilerArtifact: reference.compilerArtifact,
 			cache: "hit",
 		};
 	} catch {
@@ -450,14 +465,20 @@ function compileArtifact(
 	const artifactWire = serializeCompilerArtifact(programImage);
 	const wire = serializeRuntimeImage(programImage.runtime);
 	options.phases.serializeMs += Date.now() - serializeStartedAt;
-	const wireDigest = digest(artifactWire);
-	cacheFrontendWire(artifactWire, artifactRoot);
-	const artifact = artifactIdentity(wireDigest, artifactRoot);
-	if (artifact === undefined) {
-		throw new Error(`fragment artifact is missing after publication: ${wireDigest}`);
+	const runtimeDigest = digest(wire);
+	const compilerDigest = digest(artifactWire);
+	cacheFrontendWire(wire, artifactRoot);
+	cacheFrontendCompilerArtifact(artifactWire, artifactRoot);
+	const runtimeArtifact = artifactIdentity(runtimeDigest, artifactRoot);
+	const compilerArtifact = frontendCompilerArtifactIdentity(compilerDigest, artifactRoot);
+	if (runtimeArtifact === undefined || compilerArtifact === undefined) {
+		throw new Error("fragment artifacts are missing after publication");
 	}
-	publish(mappingPath, `${JSON.stringify({ schema: 1, artifact })}\n`);
-	return { wire, programImage, artifact, cache: "miss" };
+	publish(
+		mappingPath,
+		`${JSON.stringify({ schema: 2, runtimeArtifact, compilerArtifact })}\n`,
+	);
+	return { wire, programImage, runtimeArtifact, compilerArtifact, cache: "miss" };
 }
 
 function linkageKey(
@@ -765,15 +786,20 @@ export function compileBuildFragments(
 		application,
 		options,
 	);
-	const artifacts = [...dependencyArtifacts, applicationArtifact];
-	const hits = artifacts.filter((artifact) => artifact.cache === "hit").length;
+	const hits =
+		dependencyArtifacts.filter((artifact) => artifact.cache === "hit").length +
+		(applicationArtifact.cache === "hit" ? 1 : 0);
 	return {
 		get wires() {
-			return artifacts.map((artifact) => artifact.wire);
+			return [
+				...dependencyArtifacts.map((artifact) => artifact.wire),
+				applicationArtifact.wire,
+			];
 		},
-		artifacts: [...dependencyArtifacts, applicationArtifact.artifact],
+		runtimeArtifacts: [...dependencyArtifacts, applicationArtifact.runtimeArtifact],
+		compilerArtifact: applicationArtifact.compilerArtifact,
 		programImage: applicationArtifact.programImage,
 		artifactHits: hits,
-		artifactMisses: artifacts.length - hits,
+		artifactMisses: dependencyArtifacts.length + 1 - hits,
 	};
 }

@@ -24,7 +24,7 @@ type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["oper
 
 export interface EmitOptions {
 	/**
-	 * Suffix for all emitted symbols, so multiple definitions can live in a
+	 * Suffix for all emitted symbols, so multiple program images can live in a
 	 * single translation unit (used by the batched test262 runner).
 	 */
 	symbolSuffix?: string;
@@ -362,13 +362,13 @@ function handlerArrayBody(fn: RuntimeImage["functions"][number]): string {
 }
 
 /**
- * Emit a C translation unit with the static MalProgramImage data.
+ * Emit a C translation unit with the static MalRuntimeImage data.
  */
-export function emitProgramImage(definition: ProgramImage, options: EmitOptions = {}) {
-	return emitProgramImageSource(definition, options, false).source;
+export function emitProgramImage(image: ProgramImage, options: EmitOptions = {}) {
+	return emitProgramImageSource(image, options, false).source;
 }
 
-interface EmittedVmSource {
+interface EmittedProgramImageSource {
 	source: string;
 	compiled: Array<CompiledFunction | null>;
 }
@@ -396,9 +396,9 @@ interface TranslationUnitPart {
 }
 
 /**
- * Move generated arrays out of the definition translation unit.
+ * Move generated arrays out of the runtime-image translation unit.
  *
- * Aggregate tables can point at other generated symbols, so the definition unit
+ * Aggregate tables can point at other generated symbols, so the runtime-image unit
  * retains declarations for every externalized array. The translation-unit packer
  * selects the dependency-minimal subset for each secondary unit. Keeping every
  * array external lets large contiguous metadata tables retain their runtime ABI
@@ -423,7 +423,7 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 		while (!definitionLines.at(-1)!.trimEnd().endsWith(";")) {
 			index++;
 			if (index >= lines.length) {
-				throw new Error(`unterminated generated data definition '${symbol}'`);
+				throw new Error(`unterminated generated data runtime '${symbol}'`);
 			}
 			definitionLines.push(lines[index]!);
 		}
@@ -506,9 +506,9 @@ function emitProgramImageSource(
 	options: EmitOptions,
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
-): EmittedVmSource {
-	const definition = image.runtime;
-	validateVmShapeCases(definition);
+): EmittedProgramImageSource {
+	const runtime = image.runtime;
+	validateVmShapeCases(runtime);
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
@@ -516,31 +516,31 @@ function emitProgramImageSource(
 	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.
 	const lines = options.includeHeader === false ? [] : [...C_HEADER_LINES];
 
-	for (let i = 0; i < definition.stringConstants.length; ++i) {
-		const constant = definition.stringConstants[i]!;
+	for (let i = 0; i < runtime.stringConstants.length; ++i) {
+		const constant = runtime.stringConstants[i]!;
 		lines.push(
 			`static const c16 mal_string_${i}_code_units${suffix}[] = ${stringCodeUnitsBody(constant)};`,
 		);
 	}
 
-	if (definition.stringConstants.length > 0) {
+	if (runtime.stringConstants.length > 0) {
 		lines.push(
 			"",
 			`${splitCompiledFunctions ? "" : "static "}MalString mal_strings${suffix}[] = {`,
 		);
-		for (let i = 0; i < definition.stringConstants.length; ++i) {
-			const constant = definition.stringConstants[i]!;
+		for (let i = 0; i < runtime.stringConstants.length; ++i) {
+			const constant = runtime.stringConstants[i]!;
 			lines.push(malStringRow(`mal_string_${i}_code_units${suffix}`, constant.length));
 		}
 		lines.push("};", "");
 	}
 
-	if (definition.bigintConstants.length > 0) {
+	if (runtime.bigintConstants.length > 0) {
 		// Immortal bigint constants with their 128-bit value baked at compile time.
 		lines.push(
 			`${splitCompiledFunctions ? "" : "static "}MalBigInt mal_bigints${suffix}[] = {`,
 		);
-		for (const value of definition.bigintConstants) {
+		for (const value of runtime.bigintConstants) {
 			lines.push(
 				`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .value = ${emitBigintValue(value)} },`,
 			);
@@ -551,7 +551,7 @@ function emitProgramImageSource(
 	// Native-backend functions. Emitted before the MalFunction table (which
 	// references their symbols) and after the constant pools (which they may
 	// reference). The bytecode is still emitted below as a fallback / for `new`.
-	let compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) => {
+	let compiled: Array<CompiledFunction | null> = runtime.functions.map((fn, i) => {
 		if (!useCompiled) return null;
 		const emitted = emitCompiledFunction(
 			fn,
@@ -590,13 +590,13 @@ function emitProgramImageSource(
 				if (
 					target !== undefined &&
 					compiledTargets.has(target) &&
-					!definition.functions[target]!.isClassConstructor
+					!runtime.functions[target]!.isClassConstructor
 				) {
 					directCompiledTargets.add(target);
 				}
 			}
 		}
-		compiled = definition.functions.map((fn, i) => {
+		compiled = runtime.functions.map((fn, i) => {
 			if (!compiledTargets.has(i)) return null;
 			return emitCompiledFunction(
 				fn,
@@ -647,7 +647,7 @@ function emitProgramImageSource(
 	// bytecode and handler tables are dead weight. Only uncompiled functions
 	// (generators/async) keep their overlay.
 	const omitBytecode = compiled.map((c) => c !== null);
-	const instructionDataByFunction = definition.functions.map((fn, i) =>
+	const instructionDataByFunction = runtime.functions.map((fn, i) =>
 		omitBytecode[i]
 			? { data: compiledKnownOwnSlotSeedData(fn), offsets: [] }
 			: instructionData(fn),
@@ -656,8 +656,8 @@ function emitProgramImageSource(
 	const positionInfo: Array<{ symbol: string; count: number }> = [];
 	const profileSiteSymbols: Array<string> = [];
 
-	for (let i = 0; i < definition.functions.length; ++i) {
-		const fn = definition.functions[i]!;
+	for (let i = 0; i < runtime.functions.length; ++i) {
+		const fn = runtime.functions[i]!;
 		if (!omitBytecode[i]) {
 			if (fn.mappedArgumentSlots.length > 0) {
 				lines.push(
@@ -721,8 +721,8 @@ function emitProgramImageSource(
 	}
 
 	lines.push(`static const MalFunction mal_functions${suffix}[] = {`);
-	for (let i = 0; i < definition.functions.length; ++i) {
-		const fn = definition.functions[i]!;
+	for (let i = 0; i < runtime.functions.length; ++i) {
+		const fn = runtime.functions[i]!;
 		lines.push(
 			...malFunctionRow(
 				fn,
@@ -752,8 +752,8 @@ function emitProgramImageSource(
 	}
 	lines.push("};", "");
 
-	for (const line of malProgramImageStruct(
-		definition,
+	for (const line of malRuntimeImageStruct(
+		runtime,
 		suffix,
 		debug,
 		undefined,
@@ -767,28 +767,28 @@ function emitProgramImageSource(
 }
 
 /**
- * Emit one definition/table translation unit plus bounded data and
+ * Emit one runtime-image/table translation unit plus bounded data and
  * compiled-function units.
  *
  * The native product compiler cannot materialize strings above 16 MiB. Keeping
- * compiled functions and leaf data arrays out of the definition unit avoids that
+ * compiled functions and leaf data arrays out of the runtime-image unit avoids that
  * ceiling and lets the C driver compile large programs as independent translation
  * units. A single generated function or array is indivisible; reject one that
  * exceeds the configured budget with a bounded diagnostic.
  */
 export function emitProgramTranslationUnits(
-	definition: ProgramImage,
+	image: ProgramImage,
 	options: EmitOptions = {},
 	maxCodeUnits = DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
 ): Array<string> {
 	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
-	const emitted = emitProgramImageSource(definition, options, true, maxCodeUnits);
+	const emitted = emitProgramImageSource(image, options, true, maxCodeUnits);
 	const splitData = externalizeDataArrays(emitted.source, maxCodeUnits);
 	if (splitData.source.length > maxCodeUnits) {
 		throw new RangeError(
-			`generated definition translation unit has ${splitData.source.length} code units; ` +
+			`generated runtime-image translation unit has ${splitData.source.length} code units; ` +
 				`maximum is ${maxCodeUnits}`,
 		);
 	}
@@ -907,8 +907,8 @@ export function emitProgramTranslationUnits(
 	return units;
 }
 
-function malProgramImageStruct(
-	definition: RuntimeImage,
+function malRuntimeImageStruct(
+	runtime: RuntimeImage,
 	suffix: string,
 	debug: boolean,
 	sharedLiteralTemplates?: string,
@@ -917,7 +917,7 @@ function malProgramImageStruct(
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
-	const precompiledShapeRows = definition.precompiledLiteralShapes;
+	const precompiledShapeRows = runtime.precompiledLiteralShapes;
 	for (let index = 0; index < precompiledShapeRows.length; index++) {
 		const shape = precompiledShapeRows[index]!;
 		lines.push(
@@ -936,38 +936,38 @@ function malProgramImageStruct(
 		}
 		lines.push("};", "");
 	}
-	const hasLiteralTemplates = definition.literalTemplateData.length > 0;
+	const hasLiteralTemplates = runtime.literalTemplateData.length > 0;
 	const literalTemplatesSymbol = hasLiteralTemplates
 		? (sharedLiteralTemplates ?? `mal_literal_templates${suffix}`)
 		: "nullptr";
 	if (hasLiteralTemplates && sharedLiteralTemplates === undefined) {
 		lines.push(
-			`static const u32 ${literalTemplatesSymbol}[] = { ${definition.literalTemplateData.join(", ")} };`,
+			`static const u32 ${literalTemplatesSymbol}[] = { ${runtime.literalTemplateData.join(", ")} };`,
 			"",
 		);
 	}
 
-	const hasCjs = definition.cjsModuleFunctionIndices.length > 0;
+	const hasCjs = runtime.cjsModuleFunctionIndices.length > 0;
 	if (hasCjs) {
 		lines.push(
-			`static const i32 mal_cjs_modules${suffix}[] = { ${definition.cjsModuleFunctionIndices.join(", ")} };`,
+			`static const i32 mal_cjs_modules${suffix}[] = { ${runtime.cjsModuleFunctionIndices.join(", ")} };`,
 			"",
 		);
 	}
 
-	const hasFiles = debug && definition.files.length > 0;
+	const hasFiles = debug && runtime.files.length > 0;
 	if (hasFiles) {
 		lines.push(`static const char *const mal_files${suffix}[] = {`);
-		for (const file of definition.files) {
+		for (const file of runtime.files) {
 			lines.push(`    "${cEscapeString(displayFilePath(file))}",`);
 		}
 		lines.push("};", "");
 	}
 
-	const hasPositions = debug && definition.sourcePositions.length > 0;
+	const hasPositions = debug && runtime.sourcePositions.length > 0;
 	if (hasPositions) {
 		lines.push(`static const MalSourcePos mal_source_positions${suffix}[] = {`);
-		for (const pos of definition.sourcePositions) {
+		for (const pos of runtime.sourcePositions) {
 			lines.push(
 				`    { .line = ${pos.line}, .column = ${pos.column}, .inlined_function_index = ${pos.inlinedFunctionIndex ?? -1}, .caller_pos_id = ${pos.callerPosId ?? -1} },`,
 			);
@@ -1029,7 +1029,7 @@ function malProgramImageStruct(
 	// host built-ins (and `process`) the program actually reached. Only reachable
 	// ones are emitted, so an ordinary program references no host symbol and the
 	// extern decls / arrays below are absent — nothing to resolve at link.
-	const hostInstalls = [...definition.hostInstalls];
+	const hostInstalls = [...runtime.hostInstalls];
 	if (
 		options.maligatorSurface === true &&
 		!hostInstalls.some((install) => install.installer === "mal_host_install_maligator")
@@ -1067,25 +1067,25 @@ function malProgramImageStruct(
 	}
 
 	lines.push(
-		`const MalProgramImage mal_vm_definition${suffix} = {`,
-		`    .function_count = ${definition.functionCount},`,
+		`const MalRuntimeImage mal_runtime_image${suffix} = {`,
+		`    .function_count = ${runtime.functionCount},`,
 		`    .functions = mal_functions${suffix},`,
 		"    .initialize_generated_data = nullptr,",
-		`    .string_constant_count = ${definition.stringConstants.length},`,
-		`    .string_constants = ${definition.stringConstants.length > 0 ? `mal_strings${suffix}` : "nullptr"},`,
-		`    .bigint_constant_count = ${definition.bigintConstants.length},`,
-		`    .bigint_constants = ${definition.bigintConstants.length > 0 ? `mal_bigints${suffix}` : "nullptr"},`,
-		`    .literal_template_data_count = ${definition.literalTemplateData.length},`,
+		`    .string_constant_count = ${runtime.stringConstants.length},`,
+		`    .string_constants = ${runtime.stringConstants.length > 0 ? `mal_strings${suffix}` : "nullptr"},`,
+		`    .bigint_constant_count = ${runtime.bigintConstants.length},`,
+		`    .bigint_constants = ${runtime.bigintConstants.length > 0 ? `mal_bigints${suffix}` : "nullptr"},`,
+		`    .literal_template_data_count = ${runtime.literalTemplateData.length},`,
 		`    .literal_template_data = ${literalTemplatesSymbol},`,
 		`    .precompiled_literal_shape_count = ${precompiledShapeRows.length},`,
 		`    .precompiled_literal_shapes = ${precompiledShapeRows.length > 0 ? `mal_precompiled_literal_shapes${suffix}` : "nullptr"},`,
-		`    .global_count = ${definition.globalCount},`,
-		`    .entry_path = "${cEscapeString(definition.entrypointPath)}",`,
-		`    .cjs_module_count = ${definition.cjsModuleFunctionIndices.length},`,
+		`    .global_count = ${runtime.globalCount},`,
+		`    .entry_path = "${cEscapeString(runtime.entrypointPath)}",`,
+		`    .cjs_module_count = ${runtime.cjsModuleFunctionIndices.length},`,
 		`    .cjs_module_function_indices = ${hasCjs ? `mal_cjs_modules${suffix}` : "nullptr"},`,
-		`    .file_count = ${hasFiles ? definition.files.length : 0},`,
+		`    .file_count = ${hasFiles ? runtime.files.length : 0},`,
 		`    .files = ${hasFiles ? `mal_files${suffix}` : "nullptr"},`,
-		`    .source_position_count = ${hasPositions ? definition.sourcePositions.length : 0},`,
+		`    .source_position_count = ${hasPositions ? runtime.sourcePositions.length : 0},`,
 		`    .source_positions = ${hasPositions ? `mal_source_positions${suffix}` : "nullptr"},`,
 		...(profileSiteCount === undefined
 			? []
@@ -1101,20 +1101,20 @@ function malProgramImageStruct(
 }
 
 /**
- * Emit several definitions into one translation unit, sharing byte-identical
+ * Emit several program images into one translation unit, sharing byte-identical
  * static arrays across them. The test262 harness compiles to the same ~730
  * instructions and ~60 string constants in every test, so emitting each unique
- * array once (and pointing every definition's small MalFunction/MalString table
+ * array once (and pointing every runtime image's small MalFunction/MalString table
  * at the shared symbol) collapses the dominant ~60% of the generated C.
  *
  * Sharing is purely content-addressed - only arrays whose emitted bytes are
- * identical merge - so it cannot change behaviour: two definitions share an
+ * identical merge - so it cannot change behaviour: two images share an
  * instruction array iff they would have emitted the same one anyway. The
- * definitions are named `mal_vm_definition_<index>` to match the batch footer.
+ * images are named `mal_runtime_image_<index>` to match the batch footer.
  * The caller prepends the shared `#include` header (as for the per-test path).
  */
 export function emitBatch(
-	definitions: Array<ProgramImage>,
+	images: Array<ProgramImage>,
 	options: Pick<EmitOptions, "compiled"> = {},
 ): string {
 	const useCompiled = options.compiled !== false;
@@ -1136,33 +1136,31 @@ export function emitBatch(
 		return symbol;
 	};
 
-	for (let d = 0; d < definitions.length; ++d) {
-		const image = definitions[d]!;
-		const definition = image.runtime;
+	for (let d = 0; d < images.length; ++d) {
+		const image = images[d]!;
+		const runtime = image.runtime;
 		const suffix = `_${d}`;
 		const literalTemplatesSymbol =
-			definition.literalTemplateData.length > 0
-				? intern("literals", "u32", `    ${definition.literalTemplateData.join(", ")}`)
+			runtime.literalTemplateData.length > 0
+				? intern("literals", "u32", `    ${runtime.literalTemplateData.join(", ")}`)
 				: undefined;
 
-		const stringSymbols = definition.stringConstants.map((constant) =>
+		const stringSymbols = runtime.stringConstants.map((constant) =>
 			intern("cu", "c16", `    ${constant.length > 0 ? constant.join(", ") : "0"}`),
 		);
 		if (stringSymbols.length > 0) {
-			// MalString rows are mutable (hashes are cached lazily), so each definition
+			// MalString rows are mutable (hashes are cached lazily), so each runtime
 			// keeps its own table; only the code-unit arrays are shared.
 			lines.push(`static MalString mal_strings${suffix}[] = {`);
 			for (let i = 0; i < stringSymbols.length; ++i) {
-				lines.push(
-					malStringRow(stringSymbols[i]!, definition.stringConstants[i]!.length),
-				);
+				lines.push(malStringRow(stringSymbols[i]!, runtime.stringConstants[i]!.length));
 			}
 			lines.push("};", "");
 		}
 
-		if (definition.bigintConstants.length > 0) {
+		if (runtime.bigintConstants.length > 0) {
 			lines.push(`static MalBigInt mal_bigints${suffix}[] = {`);
-			for (const value of definition.bigintConstants) {
+			for (const value of runtime.bigintConstants) {
 				lines.push(
 					`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .value = ${emitBigintValue(value)} },`,
 				);
@@ -1170,7 +1168,7 @@ export function emitBatch(
 			lines.push("};", "");
 		}
 
-		const compiled = definition.functions.map((fn, i) =>
+		const compiled = runtime.functions.map((fn, i) =>
 			// The batch path strips debug info, so compiled bodies emit no pos writes.
 			useCompiled
 				? emitCompiledFunction(
@@ -1202,8 +1200,8 @@ export function emitBatch(
 		const argumentSnapshotPlanCounts: Array<number> = [];
 		const mappedArgumentSlotsSymbols: Array<string> = [];
 		const handlerSymbols: Array<string> = [];
-		for (let i = 0; i < definition.functions.length; ++i) {
-			const fn = definition.functions[i]!;
+		for (let i = 0; i < runtime.functions.length; ++i) {
+			const fn = runtime.functions[i]!;
 			if (omitBytecode[i]) {
 				const seedData = compiledKnownOwnSlotSeedData(fn);
 				instructionSymbols.push("nullptr");
@@ -1256,10 +1254,10 @@ export function emitBatch(
 		}
 
 		lines.push(`static const MalFunction mal_functions${suffix}[] = {`);
-		for (let i = 0; i < definition.functions.length; ++i) {
+		for (let i = 0; i < runtime.functions.length; ++i) {
 			lines.push(
 				...malFunctionRow(
-					definition.functions[i]!,
+					runtime.functions[i]!,
 					instructionSymbols[i]!,
 					instructionDataSymbols[i]!,
 					instructionDataCounts[i]!,
@@ -1277,9 +1275,7 @@ export function emitBatch(
 		}
 		lines.push("};", "");
 
-		lines.push(
-			...malProgramImageStruct(definition, suffix, false, literalTemplatesSymbol),
-		);
+		lines.push(...malRuntimeImageStruct(runtime, suffix, false, literalTemplatesSymbol));
 		lines.push("");
 	}
 

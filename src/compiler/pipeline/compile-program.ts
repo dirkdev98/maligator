@@ -85,9 +85,9 @@ export function compileEntrypointToBuffer(
 	entrypointPath: string,
 	options: CompileEntrypointToBufferOptions = {},
 ): Uint8Array {
-	const definition = compileEntrypoint(entrypointPath, options);
+	const image = compileEntrypoint(entrypointPath, options);
 	const runPhase =
 		options.runPhase ??
 		(<T>(_phase: CompileEntrypointToBufferPhase, run: () => T): T => run());
-	return runPhase("serialize", () => serializeRuntimeImage(definition.runtime));
+	return runPhase("serialize", () => serializeRuntimeImage(image.runtime));
 }

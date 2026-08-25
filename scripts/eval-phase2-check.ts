@@ -7,12 +7,12 @@ import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-prog
 import { buildLoadDriver } from "../src/local-build.ts";
 
 /**
- * Differential validation for the definition wire format + C loader (eval Phase
+ * Differential validation for the runtime-image wire format + C loader (eval Phase
  * 2, slice 2). Each fixture is compiled two ways and must produce byte-identical
  * stdout + exit code:
  *   - C-baked:  node src/index.ts build <fixture> --name X  →  run its printed binary
  *   - loaded:   node src/index.ts build <fixture> --serialize X.malw  →  MaligatorLoad X.malw
- * Both run the same lowered definition — once compiled into C, once decoded from
+ * Both run the same lowered image — once compiled into C, once decoded from
  * the buffer — so identical behavior proves the serializer + loader are faithful.
  */
 

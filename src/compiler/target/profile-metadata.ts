@@ -427,15 +427,13 @@ interface FinalCompiledFunction {
 
 /** Publish remarks only after the backend has selected its final emitted variant. */
 export function finalizeCompilerRemarks(
-	definition: ProgramImage,
+	image: ProgramImage,
 	compiled: ReadonlyArray<FinalCompiledFunction | null>,
 ): void {
-	const sites = definition.diagnostics.profileSites;
+	const sites = image.diagnostics.profileSites;
 	if (sites === undefined) return;
-	const remarks: Array<CompilerRemark> = [
-		...(definition.diagnostics.profileRemarks ?? []),
-	];
-	for (const [functionIndex, fn] of definition.runtime.functions.entries()) {
+	const remarks: Array<CompilerRemark> = [...(image.diagnostics.profileRemarks ?? [])];
+	for (const [functionIndex, fn] of image.runtime.functions.entries()) {
 		const emitted = compiled[functionIndex];
 		if (emitted === null || emitted === undefined) {
 			for (const siteId of fn.profileSiteIds ?? []) {
@@ -467,7 +465,7 @@ export function finalizeCompilerRemarks(
 			});
 		}
 	}
-	definition.diagnostics.profileRemarks = remarks;
+	image.diagnostics.profileRemarks = remarks;
 }
 
 /** Derive dense runtime IDs plus conservative cross-build keys from the final
@@ -476,9 +474,9 @@ export function finalizeCompilerRemarks(
 export function buildProfileMetadata(
 	program: CoreProgram,
 	context: CoreCompilationContext,
-	definition: ProgramImage,
+	image: ProgramImage,
 ): void {
-	const runtime = definition.runtime;
+	const runtime = image.runtime;
 	const sourcePaths = context.data.sourceFiles.map((file) => normalizedPath(file.path));
 	const root = commonDirectory(sourcePaths);
 	const fileByPath = new Map(
@@ -650,7 +648,7 @@ export function buildProfileMetadata(
 				decisionSiteByKey.set(decisionKey, siteId);
 			}
 			const compilerSiteId =
-				definition.native.functions[functionIndex]?.compilerSiteIds?.[instructionIndex];
+				image.native.functions[functionIndex]?.compilerSiteIds?.[instructionIndex];
 			const compilerSite =
 				compilerSiteId === undefined
 					? undefined
@@ -681,6 +679,6 @@ export function buildProfileMetadata(
 		});
 	}
 
-	definition.diagnostics.profileSites = sites;
-	definition.diagnostics.profileRemarks = remarks;
+	image.diagnostics.profileSites = sites;
+	image.diagnostics.profileRemarks = remarks;
 }

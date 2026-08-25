@@ -46,7 +46,7 @@ describe("structural direct script-function calls", () => {
 		assertExactLines(runToStdout(interpreted, { env: STRESS_ENV }), expected);
 	});
 
-	it("reuses the shared frontend definition across backend variants", () => {
+	it("reuses the shared program image across backend variants", () => {
 		expect(frontendCacheEvents).toHaveLength(2);
 		expect(frontendCacheEvents[1]).toBe("hit");
 	});

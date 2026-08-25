@@ -8,7 +8,8 @@ the work itself is not duplicated.
 
 ## Current priorities
 
-1. Validate the direct Core IR pipeline and its Core-to-target contracts.
+1. Validate the direct Core IR pipeline and its Core-to-Execution and ProgramImage
+   contracts.
 2. Establish a strong common SSA optimization foundation and use it to recover
    performance.
 3. Exploit Maligator's world knowledge, explicit effects, precise roots, shapes, and
@@ -138,9 +139,10 @@ performance neutral or better while specializing locked builds.
 
 ## Compiler infrastructure
 
-- [ ] Generate compiler, VM, runtime opcode, builtin, effect, and constraint plumbing
-      from shared descriptor sources. Adding an operation must not leave lowering, GC,
-      or runtime declarations inconsistent.
+- [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand
+      schemas, lowering completeness, effects, representation constraints, safepoint
+      policy, and GC declarations. Adding an operation must not leave compiler, wire,
+      native-C, interpreter, or runtime contracts inconsistent.
 
 ## Compiler measurement and diagnostics
 

@@ -90,12 +90,19 @@ export function frontendWirePath(
 	return path.resolve(root, "artifacts", `${digest}.malw`);
 }
 
-export function frontendArtifactIdentity(
+/** Compiler-owned ProgramImage artifact; never pass this path to a runtime loader. */
+export function frontendCompilerArtifactPath(
 	digest: string,
 	root = FRONTEND_CACHE_DIRECTORY,
+): string {
+	return path.resolve(root, "compiler-artifacts", `${digest}.malc`);
+}
+
+function artifactIdentityAt(
+	digest: string,
+	file: string,
 ): FrontendArtifactIdentity | undefined {
 	try {
-		const file = frontendWirePath(digest, root);
 		const stats = statSync(file);
 		if (!stats.isFile()) return undefined;
 		return {
@@ -112,13 +119,26 @@ export function frontendArtifactIdentity(
 	}
 }
 
-export function frontendArtifactUnchanged(
-	artifact: FrontendArtifactIdentity,
+export function frontendArtifactIdentity(
+	digest: string,
 	root = FRONTEND_CACHE_DIRECTORY,
+): FrontendArtifactIdentity | undefined {
+	return artifactIdentityAt(digest, frontendWirePath(digest, root));
+}
+
+export function frontendCompilerArtifactIdentity(
+	digest: string,
+	root = FRONTEND_CACHE_DIRECTORY,
+): FrontendArtifactIdentity | undefined {
+	return artifactIdentityAt(digest, frontendCompilerArtifactPath(digest, root));
+}
+
+function artifactUnchanged(
+	artifact: FrontendArtifactIdentity,
+	current: FrontendArtifactIdentity | undefined,
 ): boolean {
-	if (!/^[0-9a-f]{64}$/.test(artifact.digest)) return false;
-	const current = frontendArtifactIdentity(artifact.digest, root);
 	return (
+		/^[0-9a-f]{64}$/.test(artifact.digest) &&
 		current !== undefined &&
 		current.path === artifact.path &&
 		current.size === artifact.size &&
@@ -126,6 +146,23 @@ export function frontendArtifactUnchanged(
 		current.ctimeMs === artifact.ctimeMs &&
 		current.ino === artifact.ino &&
 		current.dev === artifact.dev
+	);
+}
+
+export function frontendArtifactUnchanged(
+	artifact: FrontendArtifactIdentity,
+	root = FRONTEND_CACHE_DIRECTORY,
+): boolean {
+	return artifactUnchanged(artifact, frontendArtifactIdentity(artifact.digest, root));
+}
+
+export function frontendCompilerArtifactUnchanged(
+	artifact: FrontendArtifactIdentity,
+	root = FRONTEND_CACHE_DIRECTORY,
+): boolean {
+	return artifactUnchanged(
+		artifact,
+		frontendCompilerArtifactIdentity(artifact.digest, root),
 	);
 }
 
@@ -284,13 +321,11 @@ function validArtifact(file: string, expectedDigest: string): boolean {
 	}
 }
 
-/** Publish a VM image into the frontend-wide content-addressed artifact store. */
-export function cacheFrontendWire(
-	wire: Uint8Array,
-	root = FRONTEND_CACHE_DIRECTORY,
+function cacheFrontendArtifact(
+	contents: Uint8Array,
+	file: string,
+	digest: string,
 ): string {
-	const digest = frontendDigest(wire);
-	const file = frontendWirePath(digest, root);
 	if (validArtifact(file, digest)) return file;
 
 	const directory = path.dirname(file);
@@ -298,7 +333,7 @@ export function cacheFrontendWire(
 	const temporaryDirectory = mkdtempSync(path.join(directory, ".publish-"));
 	const temporaryPath = path.join(temporaryDirectory, path.basename(file));
 	try {
-		writeFileSync(temporaryPath, wire);
+		writeFileSync(temporaryPath, contents);
 		try {
 			renameSync(temporaryPath, file);
 		} catch (error) {
@@ -312,4 +347,26 @@ export function cacheFrontendWire(
 		throw new Error(`frontend artifact publication failed: ${file}`);
 	}
 	return file;
+}
+
+/** Publish a runtime-only MALW image into the frontend artifact store. */
+export function cacheFrontendWire(
+	wire: Uint8Array,
+	root = FRONTEND_CACHE_DIRECTORY,
+): string {
+	const digest = frontendDigest(wire);
+	return cacheFrontendArtifact(wire, frontendWirePath(digest, root), digest);
+}
+
+/** Publish a compiler-only MALC ProgramImage artifact into its separate store. */
+export function cacheFrontendCompilerArtifact(
+	artifact: Uint8Array,
+	root = FRONTEND_CACHE_DIRECTORY,
+): string {
+	const digest = frontendDigest(artifact);
+	return cacheFrontendArtifact(
+		artifact,
+		frontendCompilerArtifactPath(digest, root),
+		digest,
+	);
 }

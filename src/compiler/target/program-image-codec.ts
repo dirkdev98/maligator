@@ -735,7 +735,7 @@ function semanticProtectorGuardMasks(fact: VmSemanticProtectorFact): {
 }
 
 /**
- * Serialize a lowered definition to the binary wire format. With `debugInfo`
+ * Serialize a runtime image to the binary wire format. With `debugInfo`
  * false the file/source-position/per-function position tables are dropped
  * (matching emit-program-image's stripped batch path), yielding a smaller buffer whose
  * traces carry function names only.
@@ -815,7 +815,7 @@ function serializeImage(
 		w.i32Array([...descriptor.keyStringIndices]);
 	}
 
-	// Debug-info definition tables.
+	// Debug-info runtime-image tables.
 	if (debug) {
 		w.u32(def.files.length);
 		for (const file of def.files) {

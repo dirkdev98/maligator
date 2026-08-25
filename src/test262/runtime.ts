@@ -34,6 +34,7 @@ import { emitBatch, emitProgramImage } from "../compiler/target/emit-program-ima
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
+	serializeRuntimeImage,
 } from "../compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "../compiler/target/program-image.ts";
 import { buildLocalBinary } from "../local-build.ts";
@@ -553,13 +554,13 @@ function firstLine(text: string) {
 /**
  * The outcome of compiling one test. Kept side-effect free (apart from the
  * compile timing) so the same value can both drive the live run and be folded
- * into a cache manifest for replay on a later hit. `definition === undefined`
+ * into a cache manifest for replay on a later hit. `image === undefined`
  * means there is nothing to execute (skipped / failed to compile).
  * Emission to C is left to the caller, which picks per-test or shared-harness
  * batch emission.
  */
 interface CompileOutcome {
-	definition: ProgramImage | undefined;
+	image: ProgramImage | undefined;
 	/** Verdict resolved at compile time; "UNKNOWN" means the run decides. */
 	result: Test262Result;
 	failure: string | undefined;
@@ -568,26 +569,26 @@ interface CompileOutcome {
 		| undefined;
 }
 
-type DefinitionStats = NonNullable<CompileOutcome["stats"]>;
+type ImageStats = NonNullable<CompileOutcome["stats"]>;
 
-function definitionStats(definition: ProgramImage): DefinitionStats {
+function imageStats(image: ProgramImage): ImageStats {
 	const opcodes: Record<string, number> = {};
 	let instructionCount = 0;
-	for (const fn of definition.runtime.functions) {
+	for (const fn of image.runtime.functions) {
 		instructionCount += fn.instructions.length;
 		for (const instruction of fn.instructions) {
 			opcodes[instruction.opcode] = (opcodes[instruction.opcode] ?? 0) + 1;
 		}
 	}
 	return {
-		functionCount: definition.runtime.functions.length,
+		functionCount: image.runtime.functions.length,
 		instructionCount,
 		opcodes,
 	};
 }
 
-function combineDefinitionStats(stats: Array<DefinitionStats>): DefinitionStats {
-	const combined: DefinitionStats = {
+function combineImageStats(stats: Array<ImageStats>): ImageStats {
+	const combined: ImageStats = {
 		functionCount: 0,
 		instructionCount: 0,
 		opcodes: {},
@@ -611,7 +612,7 @@ function strictForTest262File(file: Test262File): boolean {
 }
 
 /**
- * Compile a test to a VM definition, resolving the SKIPPED and
+ * Compile a test to a program image, resolving the SKIPPED and
  * COMPILE_FAILED verdicts along the way. `source` is the pre-composed
  * harness+test (also the cache-key input), passed in so it is built exactly once
  * per test.
@@ -622,7 +623,7 @@ function test262CompileToC(
 	preParsed?: ReturnType<typeof parseScript>,
 ): CompileOutcome {
 	const outcome: CompileOutcome = {
-		definition: undefined,
+		image: undefined,
 		result: "UNKNOWN",
 		failure: undefined,
 		stats: undefined,
@@ -686,7 +687,7 @@ function test262CompileToC(
 					)
 				: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
 
-		const vmDefinition = compileSemanticProgramToProgramImage(semanticProgram);
+		const programImage = compileSemanticProgramToProgramImage(semanticProgram);
 
 		if (negativeAtCompile) {
 			// The source compiled cleanly, but a parse/early/resolution negative
@@ -696,9 +697,9 @@ function test262CompileToC(
 			return outcome;
 		}
 
-		outcome.stats = definitionStats(vmDefinition);
+		outcome.stats = imageStats(programImage);
 
-		outcome.definition = vmDefinition;
+		outcome.image = programImage;
 		return outcome;
 	} catch (e) {
 		if (negativeAtCompile && e instanceof SyntaxError) {
@@ -743,11 +744,11 @@ interface BatchEntry {
 }
 
 interface RunnableBatchEntry extends BatchEntry {
-	definition: ProgramImage;
+	image: ProgramImage;
 	mode: "shared" | "legacy";
 	helperIds: Array<string>;
-	logicalStats: DefinitionStats;
-	definitionIndex: number;
+	logicalStats: ImageStats;
+	imageIndex: number;
 	entryFunctionIndex: number;
 	helperFunctionIndices: Array<number>;
 }
@@ -756,16 +757,26 @@ interface WireBatchEntry extends BatchEntry {
 	wirePath: string;
 }
 
-function test262WirePath(source: string): string {
+interface Test262WireArtifactPaths {
+	directory: string;
+	runtime: string;
+	compiler: string;
+}
+
+function test262WireArtifactPaths(source: string): Test262WireArtifactPaths {
 	const variant = process.env.T262_VARIANT ?? "unknown";
 	const key = batchCacheKey(
 		buildFingerprint([], test262Toolchain().fingerprint),
-		`wire-v1-${variant}`,
+		`runtime-and-compiler-images-v3-${variant}`,
 		[source],
 	);
-	const directory = path.join(maligatorCacheDirectory(), "test262-wires", variant);
+	const directory = path.join(maligatorCacheDirectory(), "test262-wires", variant, key);
 	mkdirSync(directory, { recursive: true });
-	return path.join(directory, `${key}.malw`);
+	return {
+		directory,
+		runtime: path.join(directory, "runtime.malw"),
+		compiler: path.join(directory, "compiler.malc"),
+	};
 }
 
 async function executeWireBatch(
@@ -836,33 +847,39 @@ async function test262RunWireBatch(files: Array<Test262File>, workerId: number) 
 	const entries: Array<WireBatchEntry> = [];
 	for (const file of files) {
 		const source = composeSource(file);
-		const wirePath = test262WirePath(source);
-		let definition: ProgramImage | undefined;
-		if (existsSync(wirePath)) {
+		const artifactPaths = test262WireArtifactPaths(source);
+		let image: ProgramImage | undefined;
+		if (existsSync(artifactPaths.runtime) && existsSync(artifactPaths.compiler)) {
 			try {
-				definition = deserializeCompilerArtifact(readFileSync(wirePath));
-				touchCacheEntry(wirePath);
+				image = deserializeCompilerArtifact(readFileSync(artifactPaths.compiler));
+				const expectedRuntime = serializeRuntimeImage(image.runtime);
+				if (!readFileSync(artifactPaths.runtime).equals(expectedRuntime)) {
+					throw new Error("mismatched Test262 runtime and compiler artifacts");
+				}
+				touchCacheEntry(artifactPaths.directory);
 			} catch {
-				rmSync(wirePath, { force: true });
+				rmSync(artifactPaths.directory, { force: true, recursive: true });
 			}
 		}
 
-		if (definition === undefined) {
+		if (image === undefined) {
 			const outcome = test262CompileToC(file, source);
 			applyOutcome(file, outcome);
-			definition = outcome.definition;
-			if (definition === undefined) continue;
-			writeFileSync(wirePath, serializeCompilerArtifact(definition));
+			image = outcome.image;
+			if (image === undefined) continue;
+			mkdirSync(artifactPaths.directory, { recursive: true });
+			writeFileSync(artifactPaths.compiler, serializeCompilerArtifact(image));
+			writeFileSync(artifactPaths.runtime, serializeRuntimeImage(image.runtime));
 		} else {
 			applyOutcome(file, {
-				definition,
+				image,
 				result: "UNKNOWN",
 				failure: undefined,
-				stats: definitionStats(definition),
+				stats: imageStats(image),
 			});
 		}
 
-		entries.push({ file, index: entries.length, wirePath });
+		entries.push({ file, index: entries.length, wirePath: artifactPaths.runtime });
 	}
 
 	if (entries.length > 0) await executeWireBatch(entries, workerId);
@@ -950,7 +967,7 @@ function applyManifest(
 			continue;
 		}
 		applyOutcome(file, {
-			definition: undefined,
+			image: undefined,
 			result: entry.result as Test262Result,
 			failure: entry.failure,
 			stats: undefined,
@@ -1095,9 +1112,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		const plan = plans[i]!;
 		const canShare =
 			plan.kind === "shared" &&
-			plan.helpers.every(
-				(helper) => helperOutcomes.get(helper.id)?.definition !== undefined,
-			);
+			plan.helpers.every((helper) => helperOutcomes.get(helper.id)?.image !== undefined);
 		let mode: "shared" | "legacy" = canShare ? "shared" : "legacy";
 		let outcome =
 			plan.kind === "shared" && canShare
@@ -1118,7 +1133,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		const logicalStats =
 			outcome.stats === undefined
 				? undefined
-				: combineDefinitionStats([
+				: combineImageStats([
 						...(mode === "shared"
 							? helperIds.map((id) => helperOutcomes.get(id)!.stats!)
 							: []),
@@ -1127,7 +1142,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		const logicalOutcome = { ...outcome, stats: logicalStats };
 		applyOutcome(file, logicalOutcome);
 
-		if (outcome.definition === undefined) {
+		if (outcome.image === undefined) {
 			resolved.push({
 				path: file.path,
 				result: outcome.result,
@@ -1148,17 +1163,17 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		entries.push({
 			file,
 			index: entries.length,
-			definition: outcome.definition,
+			image: outcome.image,
 			mode,
 			helperIds,
 			logicalStats: logicalStats!,
-			definitionIndex: -1,
+			imageIndex: -1,
 			entryFunctionIndex: -1,
 			helperFunctionIndices: [],
 		});
 	}
 
-	const physicalDefinitions: Array<ProgramImage> = [];
+	const physicalImages: Array<ProgramImage> = [];
 	const sharedEntries = entries.filter((entry) => entry.mode === "shared");
 	const usedHelperIds = new Set(sharedEntries.flatMap((entry) => entry.helperIds));
 	const usedHelpers = [...helpers.values()].filter((helper) =>
@@ -1166,35 +1181,35 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	);
 	if (sharedEntries.length > 0) {
 		const sharedComponents = [
-			...usedHelpers.map((helper) => helperOutcomes.get(helper.id)!.definition!),
-			...sharedEntries.map((entry) => entry.definition),
+			...usedHelpers.map((helper) => helperOutcomes.get(helper.id)!.image!),
+			...sharedEntries.map((entry) => entry.image),
 		];
 		const merged = mergeProgramImages(sharedComponents);
-		physicalDefinitions.push(merged.image);
+		physicalImages.push(merged.image);
 		const helperBases = new Map(
 			usedHelpers.map(
 				(helper, index) => [helper.id, merged.functionBases[index]!] as const,
 			),
 		);
 		sharedEntries.forEach((entry, index) => {
-			entry.definitionIndex = 0;
+			entry.imageIndex = 0;
 			entry.entryFunctionIndex = merged.functionBases[usedHelpers.length + index]!;
 			entry.helperFunctionIndices = entry.helperIds.map((id) => helperBases.get(id)!);
 		});
 	}
 	for (const entry of entries) {
 		if (entry.mode === "legacy") {
-			entry.definitionIndex = physicalDefinitions.length;
+			entry.imageIndex = physicalImages.length;
 			entry.entryFunctionIndex = 0;
-			physicalDefinitions.push(entry.definition);
+			physicalImages.push(entry.image);
 		}
 	}
-	const physicalStats = combineDefinitionStats(
-		physicalDefinitions.map((definition) => definitionStats(definition)),
+	const physicalStats = combineImageStats(
+		physicalImages.map((image) => imageStats(image)),
 	);
 
 	const manifest: BatchManifest = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		hasBinary: entries.length > 0,
 		generatedCBytes: null,
 		entries: entries.map((entry) => ({
@@ -1206,7 +1221,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		resolved,
 		stats,
 		physical: {
-			definitionCount: physicalDefinitions.length,
+			imageCount: physicalImages.length,
 			sharedHelperCount: usedHelpers.length,
 			...physicalStats,
 		},
@@ -1224,7 +1239,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	// Emit the batch's C as one shared translation unit (deduping the harness),
 	// headers prepended once.
 	const compiled = !interpreterOnly();
-	const body = emitBatch(physicalDefinitions, { compiled });
+	const body = emitBatch(physicalImages, { compiled });
 	const helperIndices = entries.flatMap((entry) => entry.helperFunctionIndices);
 	const helperOffsets = [0];
 	for (const entry of entries) {
@@ -1251,10 +1266,10 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		body,
 		"",
 		"const MalRuntimeImage *const mal_test262_artifact_images[] = {",
-		...physicalDefinitions.map((_, index) => `    &mal_runtime_image_${index},`),
+		...physicalImages.map((_, index) => `    &mal_runtime_image_${index},`),
 		"};",
-		`const int mal_test262_artifact_image_count = ${physicalDefinitions.length};`,
-		`const int mal_test262_plan_image_indices[] = { ${entries.map((entry) => entry.definitionIndex).join(", ")} };`,
+		`const int mal_test262_artifact_image_count = ${physicalImages.length};`,
+		`const int mal_test262_plan_image_indices[] = { ${entries.map((entry) => entry.imageIndex).join(", ")} };`,
 		`const int mal_test262_plan_entry_indices[] = { ${entries.map((entry) => entry.entryFunctionIndex).join(", ")} };`,
 		`const int mal_test262_plan_helper_offsets[] = { ${helperOffsets.join(", ")} };`,
 		`const int mal_test262_plan_helper_indices[] = { ${helperIndices.length > 0 ? helperIndices.join(", ") : "0"} };`,
@@ -1413,10 +1428,10 @@ export async function test262RunSingle(
 ) {
 	const outcome = test262CompileToC(file, composeSource(file));
 	applyOutcome(file, outcome, includeStats);
-	if (outcome.definition === undefined) {
+	if (outcome.image === undefined) {
 		return;
 	}
-	const cSource = emitProgramImage(outcome.definition, { includeHeader: false });
+	const cSource = emitProgramImage(outcome.image, { includeHeader: false });
 
 	const baseName = path.join(BUILD_PATH, `t${workerId}`);
 

@@ -2,8 +2,8 @@
 //
 // maligator AOT-compiles this module (and the `compileSourceToBuffer` cone it
 // pulls in: the semantic analyzer, IR pipeline, lowering, serializer, and the
-// meriyah parser) into a wire definition that is `#embed`ded into the runtime
-// (compiler_wire.c). On the first `eval`, the runtime splices that definition
+// meriyah parser) into a runtime-image wire payload that is `#embed`ded into the
+// runtime (compiler_wire.c). On the first `eval`, the runtime splices that image
 // and runs this top level, which publishes the compile entry point as
 // `globalThis.__compile`. The eval intrinsic reads it into a rooted VM slot and
 // then deletes the global, so nothing leaks onto the global object.

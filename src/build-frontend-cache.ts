@@ -61,16 +61,19 @@ import { programImageStats } from "./compiler/target/program-image.ts";
 import type { ProgramImageStats } from "./compiler/target/program-image.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
+	cacheFrontendCompilerArtifact,
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
+	frontendCompilerArtifactIdentity,
+	frontendCompilerArtifactPath,
 	frontendDigest as digest,
 	FrontendCompilationSession,
 	frontendWirePath,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 2;
-const BUILD_FRONTEND_PIPELINE_VERSION = 2;
+const BUILD_FRONTEND_CACHE_SCHEMA = 3;
+const BUILD_FRONTEND_PIPELINE_VERSION = 3;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",
@@ -80,10 +83,11 @@ const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 2;
+	schema: 3;
 	identity: string;
 	contentKey: string;
-	artifacts: Array<BuildFrontendArtifactIdentity>;
+	runtimeArtifacts: Array<BuildFrontendArtifactIdentity>;
+	compilerArtifact: BuildFrontendArtifactIdentity;
 	imageStats: ProgramImageStats;
 	entrypoint: string;
 	dependencies: Array<BuildDependencyIdentity>;
@@ -123,7 +127,8 @@ export interface CompiledBuildFrontend {
 	dependencies: Array<string>;
 	moduleParses: { hits: number; misses: number };
 	fileDigests: { hits: number; misses: number };
-	artifacts: Array<BuildFrontendArtifact>;
+	/** Runtime-only MALW images in splice order. */
+	runtimeArtifacts: Array<BuildFrontendArtifact>;
 	imageStats: ProgramImageStats;
 	diagnostics: Array<CompilerDiagnostic>;
 	/** Open on a cache hit: a restored program image is returned without a graph. */
@@ -269,6 +274,21 @@ function artifactsUnchanged(
 	});
 }
 
+function compilerArtifactUnchanged(
+	artifact: BuildFrontendArtifactIdentity,
+	artifactRoot: string,
+): boolean {
+	const current = frontendCompilerArtifactIdentity(artifact.digest, artifactRoot);
+	return (
+		current !== undefined &&
+		current.size === artifact.size &&
+		current.mtimeMs === artifact.mtimeMs &&
+		current.ctimeMs === artifact.ctimeMs &&
+		current.ino === artifact.ino &&
+		current.dev === artifact.dev
+	);
+}
+
 function validArtifactIdentity(value: unknown): value is BuildFrontendArtifactIdentity {
 	if (typeof value !== "object" || value === null) return false;
 	const artifact = value as Partial<BuildFrontendArtifactIdentity>;
@@ -318,7 +338,7 @@ function loadCached(
 			programImage: ProgramImage;
 			wire: Uint8Array;
 			wires: Array<Uint8Array>;
-			artifacts: Array<BuildFrontendArtifact>;
+			runtimeArtifacts: Array<BuildFrontendArtifact>;
 			imageStats: ProgramImageStats;
 			dependencies: Array<BuildDependencyIdentity>;
 			diagnostics: Array<CompilerDiagnostic>;
@@ -329,30 +349,39 @@ function loadCached(
 		manifest?.schema !== BUILD_FRONTEND_CACHE_SCHEMA ||
 		manifest.entrypoint !== entrypoint ||
 		manifest.identity !== identity ||
-		!Array.isArray(manifest.artifacts) ||
-		manifest.artifacts.length === 0 ||
-		!manifest.artifacts.every(validArtifactIdentity) ||
+		!Array.isArray(manifest.runtimeArtifacts) ||
+		manifest.runtimeArtifacts.length === 0 ||
+		!manifest.runtimeArtifacts.every(validArtifactIdentity) ||
+		!validArtifactIdentity(manifest.compilerArtifact) ||
 		!validImageStats(manifest.imageStats) ||
 		!Array.isArray(manifest.diagnostics) ||
 		!Array.isArray(manifest.dependencies) ||
-		!artifactsUnchanged(manifest.artifacts, artifactRoot) ||
+		!artifactsUnchanged(manifest.runtimeArtifacts, artifactRoot) ||
+		!compilerArtifactUnchanged(manifest.compilerArtifact, artifactRoot) ||
 		!dependenciesUnchanged(manifest.dependencies, session)
 	) {
 		return undefined;
 	}
 	try {
-		let artifactWires: Array<Uint8Array> | undefined;
 		let runtimeWires: Array<Uint8Array> | undefined;
+		let compilerWire: Uint8Array | undefined;
 		let programImage: ProgramImage | undefined;
-		const loadArtifacts = () =>
-			(artifactWires ??= materializedArtifacts(manifest.artifacts, artifactRoot));
-		const loadProgramImage = () =>
-			(programImage ??= deserializeCompilerArtifact(loadArtifacts().at(-1)!));
 		const loadRuntimeWires = () =>
-			(runtimeWires ??= [
-				...loadArtifacts().slice(0, -1),
-				serializeRuntimeImage(loadProgramImage().runtime),
-			]);
+			(runtimeWires ??= materializedArtifacts(manifest.runtimeArtifacts, artifactRoot));
+		const loadCompilerArtifact = () => {
+			if (compilerWire !== undefined) return compilerWire;
+			compilerWire = new Uint8Array(
+				readFileSync(
+					frontendCompilerArtifactPath(manifest.compilerArtifact.digest, artifactRoot),
+				),
+			);
+			if (digest(compilerWire) !== manifest.compilerArtifact.digest) {
+				throw new Error("frontend compiler artifact digest mismatch");
+			}
+			return compilerWire;
+		};
+		const loadProgramImage = () =>
+			(programImage ??= deserializeCompilerArtifact(loadCompilerArtifact()));
 		return {
 			get programImage() {
 				return loadProgramImage();
@@ -363,7 +392,7 @@ function loadCached(
 			get wires() {
 				return loadRuntimeWires();
 			},
-			artifacts: manifest.artifacts.map((artifact) => ({
+			runtimeArtifacts: manifest.runtimeArtifacts.map((artifact) => ({
 				digest: artifact.digest,
 				path: frontendWirePath(artifact.digest, artifactRoot),
 				size: artifact.size,
@@ -503,7 +532,7 @@ export function compileBuildFrontend(
 					return cached.wire;
 				},
 				get wires() {
-					return cached.artifacts.length > 1 ? cached.wires : undefined;
+					return cached.runtimeArtifacts.length > 1 ? cached.wires : undefined;
 				},
 				cache: "hit",
 				closure: unanalyzedProgramClosure(
@@ -514,7 +543,7 @@ export function compileBuildFrontend(
 				dependencies: cached.dependencies.map((dependency) => dependency.path),
 				moduleParses: moduleParseStats(),
 				fileDigests: fileDigestStats(),
-				artifacts: cached.artifacts,
+				runtimeArtifacts: cached.runtimeArtifacts,
 				imageStats: cached.imageStats,
 				diagnostics: cached.diagnostics,
 			};
@@ -558,8 +587,9 @@ export function compileBuildFrontend(
 			: [];
 	let programImage: ProgramImage;
 	let wires: Array<Uint8Array> | undefined;
-	let artifactWires: Array<Uint8Array> | undefined;
-	let fragmentArtifactIdentities: Array<BuildFrontendArtifactIdentity> | undefined;
+	let compilerWire: Uint8Array | undefined;
+	let runtimeArtifactIdentities: Array<BuildFrontendArtifactIdentity> | undefined;
+	let compilerArtifactIdentity: BuildFrontendArtifactIdentity | undefined;
 	let loadFragmentWires: (() => Array<Uint8Array>) | undefined;
 	let fragmentArtifacts: { hits: number; misses: number } | undefined;
 	let fragmentFallback: string | undefined;
@@ -585,7 +615,7 @@ export function compileBuildFrontend(
 				entryPrelude,
 			});
 			programImage = fragments.programImage;
-			fragmentArtifactIdentities = fragments.artifacts.map(
+			runtimeArtifactIdentities = fragments.runtimeArtifacts.map(
 				({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
 					digest: artifactDigest,
 					size,
@@ -595,6 +625,22 @@ export function compileBuildFrontend(
 					dev,
 				}),
 			);
+			const {
+				digest: compilerDigest,
+				size,
+				mtimeMs,
+				ctimeMs,
+				ino,
+				dev,
+			} = fragments.compilerArtifact;
+			compilerArtifactIdentity = {
+				digest: compilerDigest,
+				size,
+				mtimeMs,
+				ctimeMs,
+				ino,
+				dev,
+			};
 			loadFragmentWires = () => fragments.wires;
 			fragmentArtifacts = {
 				hits: fragments.artifactHits,
@@ -608,7 +654,7 @@ export function compileBuildFrontend(
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 			programImage = compileProgramImage(semantic, facts, options, phases);
 			const serializeStartedAt = Date.now();
-			artifactWires = [serializeCompilerArtifact(programImage)];
+			compilerWire = serializeCompilerArtifact(programImage);
 			wires = [serializeRuntimeImage(programImage.runtime)];
 			phases.serializeMs += Date.now() - serializeStartedAt;
 		}
@@ -620,24 +666,38 @@ export function compileBuildFrontend(
 		}
 		programImage = compileProgramImage(semantic, facts, options, phases);
 		const serializeStartedAt = Date.now();
-		artifactWires = [serializeCompilerArtifact(programImage)];
+		compilerWire = serializeCompilerArtifact(programImage);
 		wires = [serializeRuntimeImage(programImage.runtime)];
 		phases.serializeMs = Date.now() - serializeStartedAt;
 	}
 	const dependencies = graphDependencies(graph, session);
 	session.flush();
 	const key = contentKey(identity, entrypoint, dependencies);
-	const artifacts =
-		fragmentArtifactIdentities ??
-		artifactWires!.map((fragmentWire) => {
-			const wireDigest = digest(fragmentWire);
-			cacheFrontendWire(fragmentWire, artifactRoot);
+	const runtimeArtifacts =
+		runtimeArtifactIdentities ??
+		wires!.map((runtimeWire) => {
+			const wireDigest = digest(runtimeWire);
+			cacheFrontendWire(runtimeWire, artifactRoot);
 			const artifact = artifactIdentity(wireDigest, artifactRoot);
 			if (artifact === undefined) {
 				throw new Error(`frontend artifact is missing after publication: ${wireDigest}`);
 			}
 			return artifact;
 		});
+	const compilerArtifact =
+		compilerArtifactIdentity ??
+		(() => {
+			const compilerDigest = digest(compilerWire!);
+			cacheFrontendCompilerArtifact(compilerWire!, artifactRoot);
+			const artifact = frontendCompilerArtifactIdentity(compilerDigest, artifactRoot);
+			if (artifact === undefined) {
+				throw new Error(
+					`frontend compiler artifact is missing after publication: ${compilerDigest}`,
+				);
+			}
+			const { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev } = artifact;
+			return { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev };
+		})();
 	const imageStats = programImageStats(programImage);
 	publish(
 		manifestPath(root, entrypoint, identity),
@@ -645,7 +705,8 @@ export function compileBuildFrontend(
 			schema: BUILD_FRONTEND_CACHE_SCHEMA,
 			identity,
 			contentKey: key,
-			artifacts,
+			runtimeArtifacts,
+			compilerArtifact,
 			imageStats,
 			entrypoint,
 			dependencies,
@@ -660,7 +721,7 @@ export function compileBuildFrontend(
 			return materializeWires().at(-1)!;
 		},
 		get wires() {
-			return artifacts.length > 1 ? materializeWires() : undefined;
+			return runtimeArtifacts.length > 1 ? materializeWires() : undefined;
 		},
 		cache: "miss",
 		closure: facts.closure,
@@ -669,7 +730,7 @@ export function compileBuildFrontend(
 		dependencies: dependencies.map((dependency) => dependency.path),
 		moduleParses: moduleParseStats(),
 		fileDigests: fileDigestStats(),
-		artifacts: artifacts.map((artifact) => ({
+		runtimeArtifacts: runtimeArtifacts.map((artifact) => ({
 			digest: artifact.digest,
 			path: frontendWirePath(artifact.digest, artifactRoot),
 			size: artifact.size,

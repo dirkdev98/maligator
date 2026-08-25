@@ -14,7 +14,7 @@ describe("Test262 batch reporting", () => {
 
 	it("projects persisted manifest totals and execution metrics into the report", () => {
 		const manifest = {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			hasBinary: true,
 			generatedCBytes: 12_345,
 			entries: [],
@@ -26,7 +26,7 @@ describe("Test262 batch reporting", () => {
 				opcodes: { Move: 12 },
 			},
 			physical: {
-				definitionCount: 1,
+				imageCount: 1,
 				sharedHelperCount: 3,
 				functionCount: 20,
 				instructionCount: 250,
@@ -57,7 +57,7 @@ describe("Test262 batch reporting", () => {
 				instructionCount: 400,
 			},
 			physical: {
-				definitionCount: 1,
+				imageCount: 1,
 				sharedHelperCount: 3,
 				functionCount: 20,
 				instructionCount: 250,

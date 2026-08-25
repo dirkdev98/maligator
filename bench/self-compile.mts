@@ -54,14 +54,14 @@ const compilePhases = {
 	"lower core ir": "optimizeMs",
 	"lower to vm": "lowerMs",
 } as const;
-const definition = compileEntrypoint(path.resolve(inputPath), {
+const image = compileEntrypoint(path.resolve(inputPath), {
 	stripTypes: (source) => source,
 	buildConfig: config,
 	runPhase: (phase, run) => measure(compilePhases[phase], run),
 });
 
 const emitStartedAt = Date.now();
-const units = emitProgramTranslationUnits(definition, { maligatorSurface: true });
+const units = emitProgramTranslationUnits(image, { maligatorSurface: true });
 phases.emitMs = Date.now() - emitStartedAt;
 
 const writeStartedAt = Date.now();

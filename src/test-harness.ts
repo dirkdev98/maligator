@@ -38,7 +38,7 @@ import type { LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 
-/** Entry-point C drivers linked with the emitted definition. */
+/** Entry-point C drivers linked with the emitted runtime image. */
 export const HOST_MAIN = "runtime/host_main.c";
 export const FIBER_MAIN = "runtime/fiber_test_main.c";
 export const REACTOR_MAIN = "runtime/reactor_test_main.c";
@@ -173,23 +173,23 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 }
 
 /**
- * Link an already-lowered VM definition through the ordinary native harness.
- * Backend boundary tests use this to share one handcrafted definition without
+ * Link an already-lowered program image through the ordinary native harness.
+ * Backend boundary tests use this to share one handcrafted image without
  * introducing a source-only compiler hook for advisory target metadata.
  */
 export function buildNativeProgramImage(
-	definition: ProgramImage,
+	image: ProgramImage,
 	options: Omit<BuildOptions, "fixture">,
 ): string {
 	const harnessOptions: BuildOptions = {
 		...options,
-		fixture: definition.runtime.entrypointPath,
+		fixture: image.runtime.entrypointPath,
 	};
 	const config = resolveHarnessBuildConfig(harnessOptions);
 	return linkProgramImage(
 		harnessOptions,
 		config,
-		definition,
+		image,
 		options.compiled ?? true,
 		options.name,
 	).binaryPath;
@@ -254,11 +254,11 @@ function compileFixtureProgramImage(
 function linkProgramImage(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
-	definition: ProgramImage,
+	image: ProgramImage,
 	compiled: boolean,
 	name: string,
 ): BuildNativeBinaryResult {
-	const cSource = emitProgramImage(definition, {
+	const cSource = emitProgramImage(image, {
 		compiled,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
@@ -298,7 +298,7 @@ export interface BackendPairResult {
 }
 
 /**
- * Emit and link both backends from one in-memory optimized definition, so a
+ * Emit and link both backends from one in-memory optimized program image, so a
  * compiled/interpreted difference can only come from emission — never from two
  * independent frontend, optimizer, or cache-restore runs producing different IR.
  */
@@ -306,19 +306,14 @@ export function buildBackendPairFromOneProgramImage(
 	options: Omit<BuildOptions, "compiled">,
 ): BackendPairResult {
 	const config = resolveHarnessBuildConfig(options);
-	const definition = compileFixtureProgramImage(options, config);
+	const image = compileFixtureProgramImage(options, config);
 	return {
-		compiled: linkProgramImage(
-			options,
-			config,
-			definition,
-			true,
-			`${options.name}-compiled`,
-		).binaryPath,
+		compiled: linkProgramImage(options, config, image, true, `${options.name}-compiled`)
+			.binaryPath,
 		interpreted: linkProgramImage(
 			options,
 			config,
-			definition,
+			image,
 			false,
 			`${options.name}-interpreted`,
 		).binaryPath,

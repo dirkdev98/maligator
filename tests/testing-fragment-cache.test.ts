@@ -140,7 +140,7 @@ describe("relocatable test fragment cache", () => {
 			"entry",
 			"runner",
 		]);
-		expect(compiledTest.wires[0]!.path).toBe(build.artifacts[0]!.path);
+		expect(compiledTest.wires[0]!.path).toBe(build.runtimeArtifacts[0]!.path);
 		expect(compiledTest.artifactHits).toBe(1);
 		expect(compiledTest.artifactMisses).toBe(3);
 	});

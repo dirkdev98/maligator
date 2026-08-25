@@ -63,7 +63,7 @@ describe("normal build frontend cache", () => {
 		expect(warm.phases.graphMs).toBe(0);
 		expect(warm.phases.semanticMs).toBe(0);
 		expect(warm.phases.compileMs).toBe(0);
-		expect(warm.artifacts).toEqual(cold.artifacts);
+		expect(warm.runtimeArtifacts).toEqual(cold.runtimeArtifacts);
 		expect(warm.imageStats).toEqual(cold.imageStats);
 	});
 
@@ -116,7 +116,7 @@ describe("normal build frontend cache", () => {
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
 		expect(warm.cache).toBe("hit");
-		const artifact = warm.artifacts[0]!;
+		const artifact = warm.runtimeArtifacts[0]!;
 		const times = statSync(artifact.path);
 		writeFileSync(artifact.path, new Uint8Array(artifact.size));
 		utimesSync(artifact.path, times.atime, times.mtime);

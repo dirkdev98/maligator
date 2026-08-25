@@ -241,34 +241,33 @@ const REMARK_EXPLANATIONS: Record<string, string> = {
 	"property.watched": "property access is specialized behind an invalidatable epoch",
 };
 
-function functionName(definition: ProgramImage, index: number): string {
-	const fn = definition.runtime.functions[index];
+function functionName(image: ProgramImage, index: number): string {
+	const fn = image.runtime.functions[index];
 	if (fn === undefined) return "<unknown>";
 	return (
-		String.fromCodePoint(
-			...(definition.runtime.stringConstants[fn.nameStringIndex] ?? []),
-		) || "<anonymous>"
+		String.fromCodePoint(...(image.runtime.stringConstants[fn.nameStringIndex] ?? [])) ||
+		"<anonymous>"
 	);
 }
 
 /** Freeze the compiler-side half of a capture next to the exact linked binary. */
 export function prepareProfile(
 	binaryPath: string,
-	definition: ProgramImage,
+	image: ProgramImage,
 	mode: PreparedProfile["mode"] = "sampling",
 ): PreparedProfile {
 	const prepared: PreparedProfile = {
 		schema: 3,
 		mode,
 		buildId: hash("sha256", readFileSync(binaryPath), "hex"),
-		entrypoint: definition.runtime.entrypointPath,
-		functions: definition.runtime.functions.map((fn, index) => ({
-			name: functionName(definition, index),
-			file: definition.runtime.files[fn.fileIndex] ?? "<unknown>",
+		entrypoint: image.runtime.entrypointPath,
+		functions: image.runtime.functions.map((fn, index) => ({
+			name: functionName(image, index),
+			file: image.runtime.files[fn.fileIndex] ?? "<unknown>",
 		})),
-		sites: definition.diagnostics.profileSites ?? [],
-		remarks: definition.diagnostics.profileRemarks ?? [],
-		optimizationTrace: definition.diagnostics.optimizationTrace ?? [],
+		sites: image.diagnostics.profileSites ?? [],
+		remarks: image.diagnostics.profileRemarks ?? [],
+		optimizationTrace: image.diagnostics.optimizationTrace ?? [],
 	};
 	prepared.captureIdentity = profileCaptureIdentity(prepared);
 	atomicJson(`${binaryPath}.profile.json`, prepared, true);

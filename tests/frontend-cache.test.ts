@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	cacheFrontendCompilerArtifact,
 	cacheFrontendWire,
+	frontendCompilerArtifactPath,
 	frontendDigest,
 	frontendWirePath,
 	FrontendCompilationSession,
@@ -22,6 +24,16 @@ describe("shared frontend artifact cache", () => {
 		writeFileSync(expected, Uint8Array.from([9]));
 		expect(cacheFrontendWire(wire, root)).toBe(expected);
 		expect(new Uint8Array(readFileSync(expected))).toEqual(wire);
+	});
+
+	it("keeps compiler artifacts physically separate from runtime images", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "mal-frontend-compiler-cache-"));
+		const artifact = Uint8Array.from([4, 3, 2, 1]);
+		const expected = frontendCompilerArtifactPath(frontendDigest(artifact), root);
+
+		expect(cacheFrontendCompilerArtifact(artifact, root)).toBe(expected);
+		expect(expected.endsWith(".malc")).toBe(true);
+		expect(new Uint8Array(readFileSync(expected))).toEqual(artifact);
 	});
 
 	it("reuses persistent file digests and distrusts changed stat identities", () => {

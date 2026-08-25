@@ -552,7 +552,7 @@ function compileAndBuild(
 			: undefined;
 	if (command.kind !== "build" && packagedRunner !== undefined) {
 		const wirePaths = reporter.phase("Cache development image", () =>
-			frontend.artifacts.map((artifact) => artifact.path),
+			frontend.runtimeArtifacts.map((artifact) => artifact.path),
 		);
 		const surfaceMask =
 			(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
@@ -662,7 +662,7 @@ function compileAndBuild(
 	});
 	if (command.kind !== "build" && !command.profile) {
 		const wirePaths = reporter.phase("Cache development image", () =>
-			frontend.artifacts.map((artifact) => artifact.path),
+			frontend.runtimeArtifacts.map((artifact) => artifact.path),
 		);
 		reporter.detail("Execution backend", "interpreted development image");
 		reporter.detail("Development images", wirePaths.join(", "));

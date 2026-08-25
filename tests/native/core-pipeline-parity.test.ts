@@ -46,7 +46,7 @@ describe("optimized Core through compiled and interpreted lowering", () => {
 	let locked: BackendPairResult;
 
 	beforeAll(() => {
-		// One optimized definition per world feeds both backends, so a mismatch below
+		// One optimized program image per world feeds both backends, so a mismatch below
 		// is an emission difference and cannot be a second frontend/optimizer run.
 		mutable = buildBackendPairFromOneProgramImage({
 			fixture,

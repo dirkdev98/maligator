@@ -748,7 +748,7 @@ describe("emit-program-image instruction packing", () => {
 			/positive integer/,
 		);
 		expect(() => emitProgramTranslationUnits(definition, {}, 100)).toThrow(
-			/generated definition translation unit/,
+			/generated runtime-image translation unit/,
 		);
 	});
 

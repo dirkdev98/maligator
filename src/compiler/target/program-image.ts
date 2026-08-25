@@ -689,7 +689,7 @@ export interface RuntimeImage {
 	 * uses, plus the slot-free global `process` installer, the native installer's C
 	 * symbol and any global slots it fills. Dead-code elimination drops unused
 	 * entries, so an ordinary program's manifest is empty. Installers run after VM
-	 * init / host attach and before execution; a definition decoded from the wire
+	 * init / host attach and before execution; a runtime image decoded from the wire
 	 * keeps the same name/slot entries but its installer pointer is unresolved (null).
 	 */
 	hostInstalls: Array<{
@@ -1976,7 +1976,7 @@ function vmShapeCaseTransparent(instruction: BytecodeInstruction): boolean {
 	}
 }
 
-/** Reject forged or stale shared shape-case certificates in a VM definition. */
+/** Reject forged or stale shared shape-case certificates in a runtime image. */
 export function validateVmShapeCases(definition: RuntimeImage): void {
 	// Also validates the shared precompiled-shape table and physical cache layout.
 	validateVmKnownOwnSlots(definition);
@@ -2063,7 +2063,7 @@ export function validateVmShapeCases(definition: RuntimeImage): void {
 				const instruction = fn.instructions[ip]!;
 				// The selector licenses one exact live receiver value, not a physical
 				// register forever. A definition of that register before a later use
-				// would let a forged VM definition apply the old case to a new object.
+				// would let a forged runtime image apply the old case to a new object.
 				// The final use may overwrite the receiver after reading it.
 				if (
 					ip < lastUseIp &&
@@ -2287,7 +2287,7 @@ function buildKnownShapeLayout(
  * runtime resolves a frame's position by finding the last entry with
  * start_ip <= instruction_pointer. Shared by the C-literal emitter (emit-program-image)
  * and the wire serializer (program-image-codec); it lives here, alongside the VM
- * definition types, so the self-hostable serializer cone never imports emit-program-image
+ * image types, so the self-hostable codec cone never imports emit-program-image
  * (which pulls node:path + the render-native-c native backend).
  */
 export function compressPositions(
@@ -2304,7 +2304,7 @@ export function compressPositions(
 }
 
 /**
- * Aggregate code-size metrics for a compiled definition: how many functions
+ * Aggregate code-size metrics for a compiled program image: how many functions
  * were emitted and the total instruction count across all of them.
  */
 export function programImageStats(definition: ProgramImage): ProgramImageStats {
@@ -2317,7 +2317,7 @@ export function programImageStats(definition: ProgramImage): ProgramImageStats {
 }
 
 /**
- * Lower the allocated Core target form to a VM definition that can be emitted as C.
+ * Lower verified execution semantics to the runtime and native program-image contracts.
  */
 export function lowerExecutionToProgramImage(
 	program: ExecutionProgram,

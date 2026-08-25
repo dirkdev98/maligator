@@ -296,7 +296,7 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("shape-case-receiver", receiverClobber);
 	});
 
-	it("pre-instantiates known literal shapes for initial and spliced wire definitions", () => {
+	it("pre-instantiates known literal shapes for initial and spliced runtime images", () => {
 		const shapedFunction: BytecodeFunction = {
 			...fn,
 			// Row 2 has no CREATE_OBJECT_SHAPED instruction: it is a portable

@@ -20,20 +20,20 @@ import * as path from "node:path";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 
 interface BatchManifest {
-	schemaVersion?: number;
+	schemaVersion: 2;
 	hasBinary: boolean;
 	entries: Array<{
 		path: string;
 		index: number;
-		stats?: { functionCount: number; instructionCount: number };
+		stats: { functionCount: number; instructionCount: number };
 	}>;
 	stats: {
 		compiledFiles: number;
 		functionCount: number;
 		instructionCount: number;
 	};
-	physical?: {
-		definitionCount: number;
+	physical: {
+		imageCount: number;
 		functionCount: number;
 		instructionCount: number;
 	};
@@ -68,22 +68,22 @@ const variants: Array<"strict" | "sloppy"> =
 		? ["strict", "sloppy"]
 		: [requestedVariant as "strict" | "sloppy"];
 
-function inspectorSource(definitionsSymbol: string, countSymbol: string): string {
+function inspectorSource(imagesSymbol: string, countSymbol: string): string {
 	return `
 #include <stdio.h>
 #include "vm.h"
 
-extern const MalRuntimeImage *const ${definitionsSymbol}[];
+extern const MalRuntimeImage *const ${imagesSymbol}[];
 extern const int ${countSymbol};
 
 int main(void) {
     for (int i = 0; i < ${countSymbol}; i++) {
-        const MalRuntimeImage *definition = ${definitionsSymbol}[i];
+        const MalRuntimeImage *image = ${imagesSymbol}[i];
         long long instructions = 0;
-        for (int f = 0; f < definition->function_count; f++) {
-            instructions += definition->functions[f].instruction_count;
+        for (int f = 0; f < image->function_count; f++) {
+            instructions += image->functions[f].instruction_count;
         }
-        printf("%d\\t%d\\t%lld\\n", i, definition->function_count, instructions);
+        printf("%d\\t%d\\t%lld\\n", i, image->function_count, instructions);
     }
     return 0;
 }
@@ -94,15 +94,9 @@ const helperSource = inspectorSource(
 	"mal_test262_artifact_images",
 	"mal_test262_artifact_image_count",
 );
-const legacyHelperSource = inspectorSource(
-	"mal_test262_definitions",
-	"mal_test262_definition_count",
-);
-
 function recoverVariant(
 	variant: "strict" | "sloppy",
 	helperObject: string,
-	legacyHelperObject: string,
 	executable: string,
 ): Array<CodeStats> {
 	const directory = path.join(
@@ -129,108 +123,59 @@ function recoverVariant(
 		const manifest = JSON.parse(
 			readFileSync(path.join(directory, manifestName), "utf8"),
 		) as BatchManifest;
-		if (!manifest.hasBinary) {
+		if (manifest.schemaVersion !== 2 || !manifest.hasBinary) {
 			continue;
 		}
 
-		const current = (manifest.schemaVersion ?? 0) >= 2 && manifest.physical !== undefined;
-		execFileSync("cc", [
-			current ? helperObject : legacyHelperObject,
-			objectPath,
-			"-o",
-			executable,
-		]);
+		execFileSync("cc", [helperObject, objectPath, "-o", executable]);
 		const output = execFileSync(executable, { encoding: "utf8" }).trim();
-		if (current) {
-			let physicalFunctions = 0;
-			let physicalInstructions = 0;
-			let physicalDefinitions = 0;
-			for (const line of output.length === 0 ? [] : output.split("\n")) {
-				const [, rawFunctions, rawInstructions] = line.split("\t");
-				physicalDefinitions++;
-				physicalFunctions += Number(rawFunctions);
-				physicalInstructions += Number(rawInstructions);
-			}
-			if (
-				physicalDefinitions !== manifest.physical!.definitionCount ||
-				physicalFunctions !== manifest.physical!.functionCount ||
-				physicalInstructions !== manifest.physical!.instructionCount
-			) {
-				throw new Error(
-					`${manifestName}: recovered physical ${physicalDefinitions} definitions/${physicalFunctions} functions/${physicalInstructions} instructions, expected ${manifest.physical!.definitionCount}/${manifest.physical!.functionCount}/${manifest.physical!.instructionCount}`,
-				);
-			}
-
-			let logicalFunctions = 0;
-			let logicalInstructions = 0;
-			for (const entry of manifest.entries) {
-				if (entry.stats === undefined) {
-					throw new Error(`${manifestName}: missing logical entry statistics`);
-				}
-				logicalFunctions += entry.stats.functionCount;
-				logicalInstructions += entry.stats.instructionCount;
-				const candidate = {
-					path: entry.path,
-					variant,
-					functionCount: entry.stats.functionCount,
-					instructionCount: entry.stats.instructionCount,
-				};
-				const previous = results.get(entry.path);
-				if (
-					previous !== undefined &&
-					(previous.functionCount !== candidate.functionCount ||
-						previous.instructionCount !== candidate.instructionCount)
-				) {
-					throw new Error(`${entry.path}: conflicting cached code statistics`);
-				}
-				results.set(entry.path, candidate);
-			}
-			if (
-				manifest.entries.length !== manifest.stats.compiledFiles ||
-				logicalFunctions !== manifest.stats.functionCount ||
-				logicalInstructions !== manifest.stats.instructionCount
-			) {
-				throw new Error(
-					`${manifestName}: attributed ${manifest.entries.length} files/${logicalFunctions} functions/${logicalInstructions} instructions, expected ${manifest.stats.compiledFiles}/${manifest.stats.functionCount}/${manifest.stats.instructionCount}`,
-				);
-			}
-			continue;
-		}
-
-		const byIndex = new Map(manifest.entries.map((entry) => [entry.index, entry.path]));
-		let batchFunctions = 0;
-		let batchInstructions = 0;
-
+		let physicalFunctions = 0;
+		let physicalInstructions = 0;
+		let physicalImages = 0;
 		for (const line of output.length === 0 ? [] : output.split("\n")) {
-			const [rawIndex, rawFunctions, rawInstructions] = line.split("\t");
-			const index = Number(rawIndex);
-			const functionCount = Number(rawFunctions);
-			const instructionCount = Number(rawInstructions);
-			const testPath = byIndex.get(index);
-			if (testPath === undefined) {
-				throw new Error(`${manifestName}: no path for definition index ${index}`);
-			}
-
-			batchFunctions += functionCount;
-			batchInstructions += instructionCount;
-			const candidate = { path: testPath, variant, functionCount, instructionCount };
-			const previous = results.get(testPath);
-			if (
-				previous !== undefined &&
-				(previous.functionCount !== functionCount ||
-					previous.instructionCount !== instructionCount)
-			) {
-				throw new Error(`${testPath}: conflicting cached code statistics`);
-			}
-			results.set(testPath, candidate);
+			const [, rawFunctions, rawInstructions] = line.split("\t");
+			physicalImages++;
+			physicalFunctions += Number(rawFunctions);
+			physicalInstructions += Number(rawInstructions);
 		}
-
 		if (
-			batchFunctions !== manifest.stats.functionCount ||
-			batchInstructions !== manifest.stats.instructionCount
+			physicalImages !== manifest.physical.imageCount ||
+			physicalFunctions !== manifest.physical.functionCount ||
+			physicalInstructions !== manifest.physical.instructionCount
 		) {
 			throw new Error(
-				`${manifestName}: recovered ${batchFunctions} functions/${batchInstructions} instructions, expected ${manifest.stats.functionCount}/${manifest.stats.instructionCount}`,
+				`${manifestName}: recovered physical ${physicalImages} images/${physicalFunctions} functions/${physicalInstructions} instructions, expected ${manifest.physical.imageCount}/${manifest.physical.functionCount}/${manifest.physical.instructionCount}`,
+			);
+		}
+
+		let logicalFunctions = 0;
+		let logicalInstructions = 0;
+		for (const entry of manifest.entries) {
+			logicalFunctions += entry.stats.functionCount;
+			logicalInstructions += entry.stats.instructionCount;
+			const candidate = {
+				path: entry.path,
+				variant,
+				functionCount: entry.stats.functionCount,
+				instructionCount: entry.stats.instructionCount,
+			};
+			const previous = results.get(entry.path);
+			if (
+				previous !== undefined &&
+				(previous.functionCount !== candidate.functionCount ||
+					previous.instructionCount !== candidate.instructionCount)
+			) {
+				throw new Error(`${entry.path}: conflicting cached code statistics`);
+			}
+			results.set(entry.path, candidate);
+		}
+		if (
+			manifest.entries.length !== manifest.stats.compiledFiles ||
+			logicalFunctions !== manifest.stats.functionCount ||
+			logicalInstructions !== manifest.stats.instructionCount
+		) {
+			throw new Error(
+				`${manifestName}: attributed ${manifest.entries.length} files/${logicalFunctions} functions/${logicalInstructions} instructions, expected ${manifest.stats.compiledFiles}/${manifest.stats.functionCount}/${manifest.stats.instructionCount}`,
 			);
 		}
 	}
@@ -242,23 +187,12 @@ const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "maligator-test262-st
 try {
 	const helperC = path.join(temporaryDirectory, "inspect.c");
 	const helperObject = path.join(temporaryDirectory, "inspect.o");
-	const legacyHelperC = path.join(temporaryDirectory, "inspect-legacy.c");
-	const legacyHelperObject = path.join(temporaryDirectory, "inspect-legacy.o");
 	const executable = path.join(temporaryDirectory, "inspect");
 	writeFileSync(helperC, helperSource);
-	writeFileSync(legacyHelperC, legacyHelperSource);
 	execFileSync("cc", ["-std=c23", "-Iruntime/src", "-c", helperC, "-o", helperObject]);
-	execFileSync("cc", [
-		"-std=c23",
-		"-Iruntime/src",
-		"-c",
-		legacyHelperC,
-		"-o",
-		legacyHelperObject,
-	]);
 
 	const recovered = variants.flatMap((variant) =>
-		recoverVariant(variant, helperObject, legacyHelperObject, executable),
+		recoverVariant(variant, helperObject, executable),
 	);
 	const ranked = recovered
 		.sort((left, right) => right.instructionCount - left.instructionCount)

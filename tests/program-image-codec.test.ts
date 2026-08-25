@@ -1460,7 +1460,7 @@ describe("program-image-codec", () => {
 		);
 	});
 
-	it("retains host installs in a stripped wire definition", () => {
+	it("retains host installs in a stripped runtime image", () => {
 		const restored = deserializeCompilerArtifact(
 			serializeCompilerArtifact(hostDefinition, { debugInfo: false }),
 		);
@@ -1473,7 +1473,7 @@ describe("program-image-codec", () => {
 		expect(() => deserializeCompilerArtifact(buffer)).toThrow(/truncated|corrupt|read/);
 	});
 
-	it("round-trips an ordinary wire definition with an empty manifest", () => {
+	it("round-trips an ordinary runtime image with an empty manifest", () => {
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
 		expect(restored.runtime.hostInstalls).toEqual([]);
 	});
