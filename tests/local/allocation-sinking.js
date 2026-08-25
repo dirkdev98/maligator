@@ -25,4 +25,39 @@ function exercise(count) {
 	return { checksum, retainedChecksum, retained: retained.length, identity };
 }
 
-console.log(JSON.stringify(exercise(8_192)));
+function sharedAcrossLoop(count) {
+	const shared = { value: 3 };
+	const copies = [];
+	for (let index = 0; index < count; index++) copies.push(shared);
+	copies[0].value = 11;
+	let matches = 0;
+	for (const value of copies) {
+		if (value === copies[0] && value.value === 11) matches++;
+	}
+	return matches;
+}
+
+function nestedRetainedObjects(count) {
+	let checksum = 0;
+	const retained = [];
+	for (let index = 0; index < count; index++) {
+		const payload = { value: index + 1 };
+		const wrapper = { payload };
+		checksum += wrapper.payload.value;
+		if ((index & 127) === 0) retained.push(wrapper);
+	}
+	let retainedChecksum = 0;
+	for (let index = 0; index < retained.length; index++) {
+		retained[index].payload.value += index;
+		retainedChecksum += retained[index].payload.value;
+	}
+	return { checksum, retainedChecksum };
+}
+
+console.log(
+	JSON.stringify({
+		vectors: exercise(8_192),
+		sharedAcrossLoop: sharedAcrossLoop(64),
+		nested: nestedRetainedObjects(2_048),
+	}),
+);
