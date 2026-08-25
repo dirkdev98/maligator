@@ -16,7 +16,7 @@
  * distribution of the bytes.
  */
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 #define CANARY 0x5a
 #define GUARD 64
@@ -193,7 +193,7 @@ static bool entropy_is_safe_under_concurrency(void) {
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
 
     struct {
         const char *name;

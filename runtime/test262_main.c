@@ -7,11 +7,11 @@
 
 // Harness entry for generated test262 translation units: run the compiled
 // program and report uncaught throws through the exit code.
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 int main(int argc, char **argv) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
 
     // Fill any reached host built-in / `process` global slots before execution.
     // A no-op for test262 (no node surface), kept uniform with the other entries;

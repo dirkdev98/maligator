@@ -9,8 +9,8 @@
 #include "heap_string.h"
 
 /*
- * Inverse of src/compiler/target/emit-vm.ts plus
- * src/compiler/target/serialize-vm.ts: decode the flat wire buffer into the
+ * Inverse of src/compiler/target/emit-program-image.ts plus
+ * src/compiler/target/program-image-codec.ts: decode the flat wire buffer into the
  * runtime structs. The per-opcode operand layout, the opcode tag
  * ordering (WireOp below), and the operator/intrinsic tables mirror the compiler
  * contracts. WIRE_VERSION guards incompatible layout changes.
@@ -28,7 +28,7 @@ typedef enum WireOp {
     WIRE_OP_COUNT,
 } WireOp;
 
-/* Wire tag -> MalBinaryOp. MUST match WIRE_BINOPS in serialize-vm.ts. */
+/* Wire tag -> MalBinaryOp. MUST match WIRE_BINOPS in program-image-codec.ts. */
 static const MalBinaryOp wire_binops[] = {
     MAL_BIN_ADD, MAL_BIN_SUB, MAL_BIN_MUL, MAL_BIN_DIV, MAL_BIN_REM, MAL_BIN_POW,
     MAL_BIN_BIT_AND, MAL_BIN_BIT_OR, MAL_BIN_BIT_XOR, MAL_BIN_SHL, MAL_BIN_SHR,
@@ -36,13 +36,13 @@ static const MalBinaryOp wire_binops[] = {
     MAL_BIN_NEQ, MAL_BIN_STRICT_EQ, MAL_BIN_STRICT_NEQ, MAL_BIN_IN, MAL_BIN_INSTANCEOF,
 };
 
-/* Wire tag -> MalUnaryOp. MUST match WIRE_UNOPS in serialize-vm.ts. */
+/* Wire tag -> MalUnaryOp. MUST match WIRE_UNOPS in program-image-codec.ts. */
 static const MalUnaryOp wire_unops[] = {
     MAL_UNARY_NOT, MAL_UNARY_NEGATE, MAL_UNARY_PLUS, MAL_UNARY_BIT_NOT, MAL_UNARY_TYPEOF,
     MAL_UNARY_TO_NUMERIC, MAL_UNARY_INCREMENT, MAL_UNARY_DECREMENT,
 };
 
-/* Wire tags mirror VM_MATH_*_NUMBER_OPERATIONS in lower-vm.ts. */
+/* Wire tags mirror VM_MATH_*_NUMBER_OPERATIONS in program-image.ts. */
 static const MalMathUnaryOp wire_math_unary_number_ops[] = {
     MAL_MATH_UNARY_ABS,
     MAL_MATH_UNARY_FLOOR,
@@ -83,7 +83,7 @@ static const MalDirectBuiltinOp wire_direct_builtin_ops[] = {
 #include "generated/primordial_registry.inc"
 };
 
-/* Wire tag -> MalTypeofResult. MUST match WIRE_TYPEOF_RESULTS in serialize-vm.ts. */
+/* Wire tag -> MalTypeofResult. MUST match WIRE_TYPEOF_RESULTS in program-image-codec.ts. */
 static const MalTypeofResult wire_typeof_results[] = {
     MAL_TYPEOF_UNDEFINED,
     MAL_TYPEOF_OBJECT,
@@ -95,7 +95,7 @@ static const MalTypeofResult wire_typeof_results[] = {
     MAL_TYPEOF_FUNCTION,
 };
 
-/* Wire tag -> MAL_INTRINSIC_*. MUST match WIRE_INTRINSICS in serialize-vm.ts. */
+/* Wire tag -> MAL_INTRINSIC_*. MUST match WIRE_INTRINSICS in program-image-codec.ts. */
 static const i32 wire_intrinsics[] = {
     MAL_INTRINSIC_OBJECT_CONSTRUCTOR,
     MAL_INTRINSIC_ARRAY_CONSTRUCTOR,
@@ -176,16 +176,16 @@ typedef struct MalLoadArenaBlock {
     _Alignas(16) u8 data[];
 } MalLoadArenaBlock;
 
-struct MalLoadedDefinition {
+struct MalLoadedRuntimeImage {
     MalLoadArenaBlock *arena;
-    MalProgramImage definition;
+    MalRuntimeImage runtime_image;
 };
 
 static usize align_up(usize value, usize align) {
     return (value + (align - 1)) & ~(align - 1);
 }
 
-static void *arena_raw(MalLoadedDefinition *L, usize bytes, usize align) {
+static void *arena_raw(MalLoadedRuntimeImage *L, usize bytes, usize align) {
     if (bytes > SIZE_MAX - align - sizeof(MalLoadArenaBlock)) {
         return nullptr;
     }
@@ -308,7 +308,7 @@ static u32 rd_count(Rd *r, usize min_each) {
     return n;
 }
 
-static void *arena(MalLoadedDefinition *L, Rd *r, usize bytes, usize align) {
+static void *arena(MalLoadedRuntimeImage *L, Rd *r, usize bytes, usize align) {
     if (!r->ok || bytes == 0) {
         return nullptr;
     }
@@ -320,7 +320,7 @@ static void *arena(MalLoadedDefinition *L, Rd *r, usize bytes, usize align) {
 }
 
 static void *arena_array(
-    MalLoadedDefinition *L, Rd *r, usize count, usize item_size, usize align
+    MalLoadedRuntimeImage *L, Rd *r, usize count, usize item_size, usize align
 ) {
     if (item_size != 0 && count > SIZE_MAX / item_size) {
         r->ok = false;
@@ -329,7 +329,7 @@ static void *arena_array(
     return arena(L, r, count * item_size, align);
 }
 
-static const i32 *rd_i32_array(MalLoadedDefinition *L, Rd *r, i32 *count_out) {
+static const i32 *rd_i32_array(MalLoadedRuntimeImage *L, Rd *r, i32 *count_out) {
     u32 n = rd_count(r, 1);
     *count_out = (i32) n;
     if (!r->ok || n == 0) {
@@ -483,7 +483,7 @@ static i32 rd_side_shape_case_load(Rd *r, I32Builder *builder) {
     return offset;
 }
 
-// ---- instruction decode (mirrors writeInstruction in serialize-vm.ts) ----
+// ---- instruction decode (mirrors writeInstruction in program-image-codec.ts) ----
 
 static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
     u8 tag = rd_u8(r);
@@ -1330,7 +1330,7 @@ static i32 argument_retention_limit(const MalFunction *fn) {
     return limit;
 }
 
-static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool debug) {
+static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool debug) {
     fn->name_string_index = rd_i32(r);
     u8 kind = rd_u8(r);
     switch (kind) {
@@ -1615,12 +1615,12 @@ static i32 mal_loaded_known_own_slot_offset(const MalInstruction *instruction) {
 }
 
 static const MalPrecompiledLiteralShape *mal_loaded_literal_shape(
-    const MalProgramImage *definition, i32 function_index, i32 shape_cache_index
+    const MalRuntimeImage *program, i32 function_index, i32 shape_cache_index
 ) {
     const MalPrecompiledLiteralShape *result = nullptr;
-    for (i32 index = 0; index < definition->precompiled_literal_shape_count; index++) {
+    for (i32 index = 0; index < program->precompiled_literal_shape_count; index++) {
         const MalPrecompiledLiteralShape *candidate =
-            &definition->precompiled_literal_shapes[index];
+            &program->precompiled_literal_shapes[index];
         if (candidate->function_index != function_index ||
             candidate->shape_cache_index != shape_cache_index) {
             continue;
@@ -1666,7 +1666,7 @@ static bool mal_loaded_strings_equal(const MalString *left, const MalString *rig
 }
 
 static bool mal_loaded_known_own_slot_valid(
-    const MalProgramImage *definition,
+    const MalRuntimeImage *program,
     u32 string_count,
     const MalFunction *owner,
     const MalInstruction *instruction
@@ -1686,7 +1686,7 @@ static bool mal_loaded_known_own_slot_valid(
         i32 shape_cache_index = data[3 + index * 3];
         i32 slot = data[4 + index * 3];
         if (shape_function_index < 0 ||
-            shape_function_index >= definition->function_count ||
+            shape_function_index >= program->function_count ||
             shape_cache_index < 0 || slot < 0) {
             return false;
         }
@@ -1697,7 +1697,7 @@ static bool mal_loaded_known_own_slot_valid(
             }
         }
         const MalPrecompiledLiteralShape *shape = mal_loaded_literal_shape(
-            definition, shape_function_index, shape_cache_index);
+            program, shape_function_index, shape_cache_index);
         if (shape == nullptr || slot >= shape->key_count ||
             shape->key_string_indices[slot] != string_index) {
             return false;
@@ -1737,7 +1737,7 @@ static bool mal_loaded_shape_case_transparent(const MalInstruction *instruction)
 }
 
 static bool mal_loaded_shape_case_load_valid(
-    const MalProgramImage *definition,
+    const MalRuntimeImage *program,
     u32 string_count,
     const MalFunction *fn,
     i32 ip,
@@ -1778,7 +1778,7 @@ static bool mal_loaded_shape_case_load_valid(
         i32 shape_cache_index = candidates[index * 2 + 1];
         i32 slot = load_data[3 + index];
         const MalPrecompiledLiteralShape *shape = mal_loaded_literal_shape(
-            definition, function_index, shape_cache_index);
+            program, function_index, shape_cache_index);
         if (shape == nullptr || slot < 0 || slot >= shape->key_count ||
             shape->key_string_indices[slot] != string_index) {
             return false;
@@ -1790,7 +1790,7 @@ static bool mal_loaded_shape_case_load_valid(
 }
 
 static bool mal_loaded_shape_case_selector_valid(
-    const MalProgramImage *definition,
+    const MalRuntimeImage *program,
     u32 string_count,
     const MalFunction *fn,
     i32 selector_ip
@@ -1809,7 +1809,7 @@ static bool mal_loaded_shape_case_selector_valid(
     for (i32 index = 0; index < count; index++) {
         i32 function_index = candidates[index * 2];
         i32 shape_cache_index = candidates[index * 2 + 1];
-        if (mal_loaded_literal_shape(definition, function_index, shape_cache_index) == nullptr) {
+        if (mal_loaded_literal_shape(program, function_index, shape_cache_index) == nullptr) {
             return false;
         }
         for (i32 previous = 0; previous < index; previous++) {
@@ -1830,7 +1830,7 @@ static bool mal_loaded_shape_case_selector_valid(
             instruction->as.load_property_static_shape_case.shape_case == dst) {
             if (crossed_barrier || receiver_redefined ||
                 !mal_loaded_shape_case_load_valid(
-                    definition, string_count, fn, ip, selector, instruction)) {
+                    program, string_count, fn, ip, selector, instruction)) {
                 return false;
             }
             uses++;
@@ -1847,13 +1847,13 @@ static bool mal_loaded_shape_case_selector_valid(
     return uses >= 2 && uses <= 16 && last_ip - selector_ip <= 64;
 }
 
-MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
+MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
     const u8 *buf,
     usize len,
     const char **out_err,
     MalHostInstallerResolver resolver) {
     const char *err = "ok";
-    MalLoadedDefinition *L = calloc(1, sizeof(MalLoadedDefinition));
+    MalLoadedRuntimeImage *L = calloc(1, sizeof(MalLoadedRuntimeImage));
     if (L == nullptr) {
         if (out_err != nullptr) {
             *out_err = "out of memory";
@@ -1875,7 +1875,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
     }
     u32 flags = rd_u32(&r);
     bool debug = (flags & WIRE_FLAG_HAS_DEBUG) != 0;
-    MalProgramImage *def = &L->definition;
+    MalRuntimeImage *def = &L->runtime_image;
     u32 global_count = rd_u32(&r);
     if (global_count > (u32) INT32_MAX) {
         r.ok = false;
@@ -2114,19 +2114,19 @@ fail:
     if (out_err != nullptr) {
         *out_err = err;
     }
-    mal_vm_loaded_definition_free(L);
+    mal_loaded_runtime_image_free(L);
     return nullptr;
 }
 
-MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char **out_err) {
-    return mal_vm_load_definition_with_host_resolver(buf, len, out_err, nullptr);
+MalLoadedRuntimeImage *mal_runtime_image_load(const u8 *buf, usize len, const char **out_err) {
+    return mal_runtime_image_load_with_host_resolver(buf, len, out_err, nullptr);
 }
 
-const MalProgramImage *mal_loaded_definition_get(const MalLoadedDefinition *loaded) {
-    return &loaded->definition;
+const MalRuntimeImage *mal_loaded_runtime_image_get(const MalLoadedRuntimeImage *loaded) {
+    return &loaded->runtime_image;
 }
 
-void mal_vm_loaded_definition_free(MalLoadedDefinition *loaded) {
+void mal_loaded_runtime_image_free(MalLoadedRuntimeImage *loaded) {
     if (loaded == nullptr) {
         return;
     }

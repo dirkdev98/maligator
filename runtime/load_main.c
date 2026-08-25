@@ -7,13 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Dev harness for the definition wire format (.malw, the serialize-vm.ts format).
+// Dev harness for the program wire format (.malw, the program-image-codec.ts format).
 //
 //   MaligatorLoad <prog.malw>            load into a fresh VM and run it
 //   MaligatorLoad --splice <base> <prog> init on <base>, run it, then splice
 //                                        <prog> at a nonzero base and run that
 //
-// The first mode is the slice-2 differential (a loaded program must behave like
+// The first mode is the slice-2 differential (a loaded runtime image must behave like
 // the C-baked path). The --splice mode is the slice-4 check: with a silent base
 // establishing nonzero function/global/string bases, the spliced program must
 // behave exactly as if run standalone — i.e. the rebasing is correct.
@@ -44,24 +44,24 @@ static u8 *read_file(const char *path, usize *len_out) {
     return buffer;
 }
 
-static MalLoadedDefinition *load(const char *path) {
+static MalLoadedRuntimeImage *load(const char *path) {
     usize len = 0;
     u8 *buffer = read_file(path, &len);
     if (buffer == nullptr) {
         return nullptr;
     }
     const char *err = "ok";
-    MalLoadedDefinition *loaded = mal_vm_load_definition(buffer, len, &err);
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(buffer, len, &err);
     free(buffer);
     if (loaded == nullptr) {
-        fprintf(stderr, "mal_vm_load_definition(%s): %s\n", path, err);
+        fprintf(stderr, "mal_runtime_image_load(%s): %s\n", path, err);
     }
     return loaded;
 }
 
-static void dump_loaded_scalars(const MalProgramImage *definition) {
-    for (i32 i = 0; i < definition->string_constant_count; i++) {
-        const MalString *string = &definition->string_constants[i];
+static void dump_loaded_scalars(const MalRuntimeImage *program) {
+    for (i32 i = 0; i < program->string_constant_count; i++) {
+        const MalString *string = &program->string_constants[i];
         const c16 *units = mal_string_code_units(string);
         printf("string[%d]", i);
         for (usize j = 0; j < mal_string_length(string); j++) {
@@ -69,16 +69,16 @@ static void dump_loaded_scalars(const MalProgramImage *definition) {
         }
         putchar('\n');
     }
-    for (i32 i = 0; i < definition->bigint_constant_count; i++) {
-        u128 bits = mal_bigint128_bits(mal_bigint_value(&definition->bigint_constants[i]));
+    for (i32 i = 0; i < program->bigint_constant_count; i++) {
+        u128 bits = mal_bigint128_bits(mal_bigint_value(&program->bigint_constants[i]));
         printf("bigint[%d] %016llx%016llx\n", i,
                (unsigned long long) (bits >> 64), (unsigned long long) bits);
     }
-    for (i32 i = 0; i < definition->literal_template_data_count; i++) {
-        printf("literal[%d] %08x\n", i, definition->literal_template_data[i]);
+    for (i32 i = 0; i < program->literal_template_data_count; i++) {
+        printf("literal[%d] %08x\n", i, program->literal_template_data[i]);
     }
-    for (i32 function_index = 0; function_index < definition->function_count; function_index++) {
-        const MalFunction *function = &definition->functions[function_index];
+    for (i32 function_index = 0; function_index < program->function_count; function_index++) {
+        const MalFunction *function = &program->functions[function_index];
         for (i32 instruction_index = 0; instruction_index < function->instruction_count; instruction_index++) {
             const MalInstruction *instruction = &function->instructions[instruction_index];
             if (instruction->opcode == MAL_OP_CREATE_F64) {
@@ -93,13 +93,13 @@ static void dump_loaded_scalars(const MalProgramImage *definition) {
 
 static bool precompiled_literal_shapes_ready(
     const MalVm *vm,
-    const MalProgramImage *definition,
+    const MalRuntimeImage *program,
     i32 function_base,
     i32 string_base
 ) {
-    for (i32 i = 0; i < definition->precompiled_literal_shape_count; i++) {
+    for (i32 i = 0; i < program->precompiled_literal_shape_count; i++) {
         const MalPrecompiledLiteralShape *descriptor =
-            &definition->precompiled_literal_shapes[i];
+            &program->precompiled_literal_shapes[i];
         i32 function_index = descriptor->function_index + function_base;
         MalShape **row = vm->literal_shape_cache[function_index];
         if (row == nullptr || row[descriptor->shape_cache_index] == nullptr) return false;
@@ -108,7 +108,7 @@ static bool precompiled_literal_shapes_ready(
         for (i32 key = 0; key < descriptor->key_count; key++) {
             i32 string_index = descriptor->key_string_indices[key] + string_base;
             if (string_index < 0
-                || string_index >= vm->definition->string_constant_count
+                || string_index >= vm->runtime_image->string_constant_count
                 || shape->props[key].slot != (u32) key
                 || shape->props[key].key != mal_value_from_heap(
                     (MalHeapHeader *) vm->string_constant_atoms[string_index])) {
@@ -127,22 +127,22 @@ int main(int argc, char **argv) {
     }
 
     MalVm vm;
-    MalLoadedDefinition *base = load(splice ? argv[2] : argv[1]);
+    MalLoadedRuntimeImage *base = load(splice ? argv[2] : argv[1]);
     if (base == nullptr) {
         return 2;
     }
     if (getenv("MAL_DUMP_LOADED_SCALARS") != nullptr) {
-        dump_loaded_scalars(mal_loaded_definition_get(base));
+        dump_loaded_scalars(mal_loaded_runtime_image_get(base));
     }
-    mal_vm_init(&vm, mal_loaded_definition_get(base));
+    mal_vm_init(&vm, mal_loaded_runtime_image_get(base));
     if (getenv("MAL_EXPECT_PRECOMPILED_SHAPES") != nullptr
         && !precompiled_literal_shapes_ready(
-            &vm, mal_loaded_definition_get(base), 0, 0)) {
+            &vm, mal_loaded_runtime_image_get(base), 0, 0)) {
         fprintf(stderr, "precompiled literal shapes were not initialized\n");
         return 1;
     }
 
-    // A from-wire definition's installers are unresolved (null), so this is a
+    // A from-wire program's installers are unresolved (null), so this is a
     // no-op here; the call site stays uniform with the C-baked entry points. The
     // launch context carries the loader's own command line (never consulted, as
     // the installers are null).
@@ -154,18 +154,18 @@ int main(int argc, char **argv) {
     mal_vm_run(&vm, callable);
     int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
 
-    MalLoadedDefinition *spliced = nullptr;
+    MalLoadedRuntimeImage *spliced = nullptr;
     if (splice) {
         spliced = load(argv[3]);
         if (spliced == nullptr) {
             return 2;
         }
         vm.completion = (MalCompletion){.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        i32 string_base = vm.definition->string_constant_count;
-        i32 entry = mal_vm_splice_definition(&vm, mal_loaded_definition_get(spliced));
+		i32 string_base = vm.runtime_image->string_constant_count;
+        i32 entry = mal_vm_splice_runtime_image(&vm, mal_loaded_runtime_image_get(spliced));
         if (getenv("MAL_EXPECT_PRECOMPILED_SHAPES") != nullptr
             && !precompiled_literal_shapes_ready(
-                &vm, mal_loaded_definition_get(spliced), entry, string_base)) {
+                &vm, mal_loaded_runtime_image_get(spliced), entry, string_base)) {
             fprintf(stderr, "spliced precompiled literal shapes were not initialized\n");
             return 1;
         }
@@ -181,8 +181,8 @@ int main(int argc, char **argv) {
         mal_gc_collect(&vm);
         mal_vm_free_callable(callable);
         mal_vm_free(&vm);
-        mal_vm_loaded_definition_free(base);
-        mal_vm_loaded_definition_free(spliced);
+        mal_loaded_runtime_image_free(base);
+        mal_loaded_runtime_image_free(spliced);
     }
 
     return code;

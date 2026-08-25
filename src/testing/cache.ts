@@ -18,8 +18,11 @@ import {
 } from "../compiler/frontend/semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
-import type { ProgramImage } from "../compiler/target/lower-vm.ts";
-import { serializeRuntimeImage, WIRE_VERSION } from "../compiler/target/serialize-vm.ts";
+import {
+	serializeRuntimeImage,
+	WIRE_VERSION,
+} from "../compiler/target/program-image-codec.ts";
+import type { ProgramImage } from "../compiler/target/program-image.ts";
 import type { DependencyFragmentWorker } from "../dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -232,7 +235,7 @@ function buildTestGraph(
 }
 
 export interface CompiledProfiledTestImage {
-	definition: ProgramImage;
+	programImage: ProgramImage;
 	entries: Array<string>;
 	dependencies: Array<string>;
 }
@@ -279,7 +282,7 @@ export function compileProfiledTestImage(
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	return {
-		definition: compileSemanticProgramToProgramImage(semantic, {
+		programImage: compileSemanticProgramToProgramImage(semantic, {
 			optimization: "full",
 			profile: true,
 		}),
@@ -443,12 +446,12 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 		const compileStartedAt = Date.now();
 		assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 		assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-		const definition = compileSemanticProgramToProgramImage(semantic, {
+		const programImage = compileSemanticProgramToProgramImage(semantic, {
 			optimization: "development",
 		});
 		phases.compileMs = Date.now() - compileStartedAt;
 		const serializeStartedAt = Date.now();
-		wire = serializeRuntimeImage(definition.runtime);
+		wire = serializeRuntimeImage(programImage.runtime);
 		phases.serializeMs = Date.now() - serializeStartedAt;
 		const cachedPath = cacheFrontendWire(wire, artifactRoot);
 		publish(

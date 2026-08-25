@@ -1,8 +1,8 @@
 /**
- * Sloppy-script variant of the emit-c differential oracle. The CLI parses
+ * Sloppy-script variant of the render-native-c differential oracle. The CLI parses
  * entrypoints as strict modules, so sloppy-only constructs (`with`, sloppy
  * `arguments`, ...) can't be reached through it. This mirrors the test262 script
- * compile path — parseScript(strict:false) → sema → IR → emit-c — building the
+ * compile path — parseScript(strict:false) → sema → IR → render-native-c — building the
  * fixture both compiled and interpreter-only, then diffing stdout.
  *
  * Usage: node scripts/diff-script.ts <fixture.js> [--strict] [--stress]
@@ -16,7 +16,7 @@ import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-vm.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 

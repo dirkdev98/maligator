@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildBackendPairFromOneDefinition,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -17,7 +17,7 @@ describe("Function and Reflect builtins", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		({ compiled, interpreted } = buildBackendPairFromOneDefinition({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/function-reflect-builtins.js",
 			name: "function-reflect-builtins",
 			outDir,

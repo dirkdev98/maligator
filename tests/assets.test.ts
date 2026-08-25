@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import { ASSET_FORMAT_VERSION, includeConfiguredAssets } from "../src/assets.ts";
 import { BuildConfigError } from "../src/build-config.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-vm.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 
 function fixture(): string {

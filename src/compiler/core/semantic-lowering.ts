@@ -267,7 +267,7 @@ interface CoreFrontendContext {
 	 * Host built-in (`node:*`) modules reachable in the graph, each with the
 	 * synthetic global bindings backing its exports (see
 	 * src/compiler/frontend/linker.ts). After
-	 * compilation lower-vm resolves the bindings that got a global slot to build the
+	 * compilation program-image resolves the bindings that got a global slot to build the
 	 * install manifest; an imported-but-unused export never gets a slot and drops
 	 * out (dead-code elimination). Empty unless a `node:*` module is imported.
 	 */
@@ -280,7 +280,7 @@ interface CoreFrontendContext {
 	/**
 	 * Free Node globals installed with `process` (see
 	 * src/compiler/frontend/linker.ts).
-	 * `retained` becomes true when reachable compilation encounters it; lower-vm
+	 * `retained` becomes true when reachable compilation encounters it; program-image
 	 * then emits its slot-free installer manifest. Null otherwise.
 	 */
 	hostProcess: { installer: string; retained: boolean } | null;

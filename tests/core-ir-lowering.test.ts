@@ -8,8 +8,8 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import {
 	coreRegisterClasses,
 	lowerCoreCompilationToExecution,
-} from "../src/compiler/target/core-target-lowering.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-vm.ts";
+} from "../src/compiler/target/lower-execution.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/program-image.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 function lower(source: string) {

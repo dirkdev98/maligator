@@ -24,7 +24,7 @@
  * reports through the usual RESULT protocol.
  */
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 /* Long enough that a burst of synchronous calls cannot drain through it, short
  * enough that the two jobs the pool does accept cost half a second. */
@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
 
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     mal_host_attach(&vm);
 
     MalHost *host = mal_host(&vm);

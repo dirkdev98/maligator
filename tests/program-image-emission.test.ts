@@ -12,21 +12,21 @@ import {
 	emitBatch,
 	emitProgramImage,
 	emitProgramTranslationUnits,
-} from "../src/compiler/target/emit-vm.ts";
+} from "../src/compiler/target/emit-program-image.ts";
+import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../src/compiler/target/program-image-codec.ts";
 import {
 	vmRegionLicense,
 	vmSemanticProtectorGuard,
-} from "../src/compiler/target/lower-vm.ts";
+} from "../src/compiler/target/program-image.ts";
 import type {
 	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
-} from "../src/compiler/target/lower-vm.ts";
-import { createConservativeNativePlan } from "../src/compiler/target/lower-vm.ts";
-import {
-	deserializeCompilerArtifact,
-	serializeCompilerArtifact,
-} from "../src/compiler/target/serialize-vm.ts";
+} from "../src/compiler/target/program-image.ts";
+import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { testProgramImage } from "./helpers/program-image.ts";
 
 const instructions: Array<BytecodeInstruction> = [
@@ -137,7 +137,7 @@ function withSpecializations(
 	};
 }
 
-describe("emit-vm instruction packing", () => {
+describe("emit-program-image instruction packing", () => {
 	it("combines semantic dependencies with one retained region twin", () => {
 		const license = vmRegionLicense(
 			[

@@ -20,11 +20,11 @@ import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-
 import {
 	coreRegisterClasses,
 	lowerCoreCompilationToExecution,
-} from "../src/compiler/target/core-target-lowering.ts";
+} from "../src/compiler/target/lower-execution.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-} from "../src/compiler/target/serialize-vm.ts";
+} from "../src/compiler/target/program-image-codec.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 function programWithConstants(): CoreProgram {

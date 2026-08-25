@@ -168,8 +168,8 @@ static MalString *mal_vm_string_constant_atom(MalVm *vm, const MalString *string
         vm->initial_string_constant_count);
     if (index < 0) {
         index = mal_vm_string_table_index(
-            string, vm->definition->string_constants,
-            vm->definition->string_constant_count);
+            string, vm->runtime_image->string_constants,
+            vm->runtime_image->string_constant_count);
     }
     if (index < 0) return nullptr;
     MAL_PERF_COUNT(property_constant_atom_hits);
@@ -393,7 +393,7 @@ static bool mal_vm_script_function_has_prototype(MalVm *vm, MalValue value) {
         return false;
     }
     i32 index = mal_function_object_function_index(mal_value_to_function_object(value));
-    const MalFunction *function = &vm->definition->functions[index];
+    const MalFunction *function = &vm->runtime_image->functions[index];
     return function->has_prototype && function->kind != MAL_FUNCTION_KIND_ASYNC;
 }
 
@@ -676,14 +676,14 @@ void mal_op_create_boolean(MalCallable *callable, const MalInstruction *instruct
 void mal_op_create_string(MalCallable *callable, const MalInstruction *instruction) {
     // The string constant is an immortal, pre-hashed static; hand back a
     // pointer instead of allocating a fresh MalString per execution.
-    MalString *string = &callable->vm->definition->string_constants[instruction->as.create_string.string_index];
+    MalString *string = &callable->vm->runtime_image->string_constants[instruction->as.create_string.string_index];
     callable->registers[instruction->as.create_string.dst] = mal_value_from_string(string);
 }
 
 void mal_op_create_bigint(MalCallable *callable, const MalInstruction *instruction) {
     // The bigint constant is an immortal static with its value baked at compile
     // time; hand back a pointer instead of parsing and allocating per execution.
-    MalBigInt *bigint = &callable->vm->definition->bigint_constants[instruction->as.create_bigint.bigint_index];
+    MalBigInt *bigint = &callable->vm->runtime_image->bigint_constants[instruction->as.create_bigint.bigint_index];
     callable->registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(bigint);
 }
 
@@ -698,7 +698,7 @@ static MalValue mal_op_value_operand(MalCallable *callable, i32 operand) {
     if (operand <= MAL_VALUE_OPERAND_STRING_BASE
         && operand >= MAL_VALUE_OPERAND_STRING_MIN) {
         i32 index = MAL_VALUE_OPERAND_STRING_BASE - operand;
-        return mal_value_from_string(&callable->vm->definition->string_constants[index]);
+        return mal_value_from_string(&callable->vm->runtime_image->string_constants[index]);
     }
     if (operand <= MAL_VALUE_OPERAND_I28_BASE && operand >= MAL_VALUE_OPERAND_I28_MIN) {
         i32 payload = MAL_VALUE_OPERAND_I28_BASE - operand;
@@ -874,18 +874,18 @@ static bool mal_literal_decode_value(
         }
         case MAL_LITERAL_STRING: {
             u32 index;
-            if (!mal_literal_read(cursor, &index) || index >= (u32) vm->definition->string_constant_count) {
+            if (!mal_literal_read(cursor, &index) || index >= (u32) vm->runtime_image->string_constant_count) {
                 return false;
             }
-            *out = mal_value_from_string(&vm->definition->string_constants[index]);
+            *out = mal_value_from_string(&vm->runtime_image->string_constants[index]);
             return true;
         }
         case MAL_LITERAL_BIGINT: {
             u32 index;
-            if (!mal_literal_read(cursor, &index) || index >= (u32) vm->definition->bigint_constant_count) {
+            if (!mal_literal_read(cursor, &index) || index >= (u32) vm->runtime_image->bigint_constant_count) {
                 return false;
             }
-            *out = mal_value_from_bigint(&vm->definition->bigint_constants[index]);
+            *out = mal_value_from_bigint(&vm->runtime_image->bigint_constants[index]);
             return true;
         }
         case MAL_LITERAL_HOLE:
@@ -926,9 +926,9 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset) {
     MalRootSpan active_root;
     mal_gc_root(&active_root, active, 0);
 
-    const u32 data_count = (u32) vm->definition->literal_template_data_count;
+    const u32 data_count = (u32) vm->runtime_image->literal_template_data_count;
     MalLiteralCursor cursor = {
-        .data = vm->definition->literal_template_data,
+        .data = vm->runtime_image->literal_template_data,
         .count = data_count,
         .pos = template_offset >= 0 ? (u32) template_offset : data_count,
     };
@@ -967,7 +967,7 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset) {
             u32 key_tag;
             ok = mal_literal_read(&cursor, &key_tag) && key_tag == MAL_LITERAL_KEY &&
                  mal_literal_read(&cursor, &key_index) &&
-                 key_index < (u32) vm->definition->string_constant_count;
+                 key_index < (u32) vm->runtime_image->string_constant_count;
             if (!ok) break;
         }
 
@@ -1049,7 +1049,7 @@ MalValue mal_vm_op_create_module_namespace(
     MalModuleNamespaceExport *exports =
         count > 0 ? malloc(sizeof(MalModuleNamespaceExport) * (usize) count) : nullptr;
     for (i32 i = 0; i < count; i++) {
-        exports[i].name = &vm->definition->string_constants[name_indices[i]];
+        exports[i].name = &vm->runtime_image->string_constants[name_indices[i]];
         exports[i].slot = slots[i];
     }
 
@@ -1078,7 +1078,7 @@ static MalArrayObject *mal_vm_build_template_string_array(MalVm *vm, const i32 *
     for (i32 i = 0; i < count; i++) {
         MalValue element = indices[i] < 0
                                ? mal_value_new_undefined()
-                               : mal_value_from_string(&vm->definition->string_constants[indices[i]]);
+                               : mal_value_from_string(&vm->runtime_image->string_constants[indices[i]]);
         MalKey key = mal_key_index(i);
         MalPropertyDesc desc = {.flags = MAL_PROPERTY_ENUMERABLE, .value = element};
         mal_object_define_own(&array->object, key, &desc);
@@ -1187,7 +1187,7 @@ void mal_op_with_exit(MalCallable *callable, const MalInstruction *instruction) 
 // then reads the static binding). A getter / @@unscopables probe can throw; callers
 // check the completion.
 MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
-    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
+    MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr; e = e->parent) {
@@ -1217,7 +1217,7 @@ void mal_op_with_get(MalCallable *callable, const MalInstruction *instruction) {
 // Shared: resolve the reference BASE (the with-object itself, not its value) so the
 // caller reads/writes the property through it. EMPTY sentinel on a miss.
 MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_index) {
-    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
+    MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr; e = e->parent) {
@@ -1251,7 +1251,7 @@ void mal_op_with_resolve_base(MalCallable *callable, const MalInstruction *instr
 // an accessor). Ordinary `with` env records have slot_count 1, so this is a
 // no-op for them.
 bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value) {
-    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
+    MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr; e = e->parent) {
@@ -1293,12 +1293,12 @@ void mal_op_create_empty(MalCallable *callable, const MalInstruction *instructio
     callable->registers[instruction->as.create_empty.dst] = mal_value_new_empty();
 }
 
-// Shared by the interpreter op and the native (emit-c) backend: throw a
+// Shared by the interpreter op and the native (render-native-c) backend: throw a
 // ReferenceError naming the binding when `value` is the uninitialized sentinel.
 // A no-op (no completion change) otherwise; callers check vm->completion.
 void mal_vm_op_throw_if_tdz(MalVm *vm, MalValue value, i32 name_string_index) {
     if (mal_value_is_empty(value)) {
-        MalString *constant = &vm->definition->string_constants[name_string_index];
+        MalString *constant = &vm->runtime_image->string_constants[name_string_index];
         MalValue message = mal_vm_add(
             vm, mal_value_from_string(constant),
             mal_value_from_string(mal_intrinsic_ascii(vm, "' before initialization")));
@@ -1330,7 +1330,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     // Generator/async-generator function objects inherit their respective
     // %GeneratorFunction.prototype% / %AsyncGenerator%.
     MalIntrinsic prototype_slot;
-    switch (vm->definition->functions[function_index].kind) {
+    switch (vm->runtime_image->functions[function_index].kind) {
         case MAL_FUNCTION_KIND_GENERATOR:
             prototype_slot = MAL_INTRINSIC_GENERATOR_FUNCTION_PROTOTYPE;
             break;
@@ -1345,10 +1345,10 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
             break;
     }
 
-    const MalFunction *definition = &vm->definition->functions[function_index];
+    const MalFunction *definition = &vm->runtime_image->functions[function_index];
     MalString *name = definition->name_string_index >= 0 &&
-            definition->name_string_index < vm->definition->string_constant_count
-        ? &vm->definition->string_constants[definition->name_string_index]
+            definition->name_string_index < vm->runtime_image->string_constant_count
+        ? &vm->runtime_image->string_constants[definition->name_string_index]
         : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
     MalFunctionObject *function = mal_function_object_new(
         &vm->heap,
@@ -1759,9 +1759,9 @@ static void mal_vm_fill_interp_call_cache(
         return;
     }
     i32 function_index = mal_function_object_function_index(mal_value_to_function_object(callee));
-    if (function_index < 0 || function_index >= vm->definition->function_count ||
-        vm->definition->functions[function_index].compiled != nullptr ||
-        vm->definition->functions[function_index].is_class_constructor) {
+    if (function_index < 0 || function_index >= vm->runtime_image->function_count ||
+        vm->runtime_image->functions[function_index].compiled != nullptr ||
+        vm->runtime_image->functions[function_index].is_class_constructor) {
         return;
     }
 
@@ -1807,7 +1807,7 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         mal_vm_remarshal_bound_args(vm, base, &resolution);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
             i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
-            const MalFunction *function = &vm->definition->functions[function_index];
+            const MalFunction *function = &vm->runtime_image->functions[function_index];
             MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
 
 #if MAL_REALMS
@@ -1912,7 +1912,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
 
     if (mal_value_is_function_object(resolution.callee)) {
         i32 callee_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
-        const MalFunction *callee_fn = &vm->definition->functions[callee_index];
+        const MalFunction *callee_fn = &vm->runtime_image->functions[callee_index];
         if (callee_fn->kind != MAL_FUNCTION_KIND_NORMAL || !callee_fn->has_prototype) {
             // Not a constructor: generators/async (non-normal kind) and, among
             // normal-kind functions, methods/getters/setters/arrows (no prototype).
@@ -1928,7 +1928,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             return;
         }
 
-        const MalFunction *function = &vm->definition->functions[callee_index];
+        const MalFunction *function = &vm->runtime_image->functions[callee_index];
 
 #if MAL_REALMS
         // Enter the constructor's realm BEFORE allocating the default `this`, so a
@@ -3049,7 +3049,7 @@ static bool mal_vm_function_is_generator(MalVm *vm, MalValue function_value) {
     }
 
     i32 index = mal_function_object_function_index(mal_value_to_function_object(function_value));
-    return vm->definition->functions[index].kind == MAL_FUNCTION_KIND_GENERATOR;
+    return vm->runtime_image->functions[index].kind == MAL_FUNCTION_KIND_GENERATOR;
 }
 
 /**
@@ -3074,8 +3074,8 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
     bool is_class_constructor = false;
     if (function_object != nullptr) {
         i32 index = mal_function_object_function_index(function_object);
-        kind = vm->definition->functions[index].kind;
-        is_class_constructor = vm->definition->functions[index].is_class_constructor;
+        kind = vm->runtime_image->functions[index].kind;
+        is_class_constructor = vm->runtime_image->functions[index].is_class_constructor;
     }
     bool is_generator_kind = kind == MAL_FUNCTION_KIND_GENERATOR || kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR;
 
@@ -3154,7 +3154,7 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
             // no `prototype`; async (non-generator) functions likewise. Only
             // constructors and generators materialize one.
             i32 function_index = mal_function_object_function_index(mal_value_to_function_object(object_value));
-            const MalFunction *fn = &vm->definition->functions[function_index];
+            const MalFunction *fn = &vm->runtime_image->functions[function_index];
             if (fn->has_prototype && fn->kind != MAL_FUNCTION_KIND_ASYNC) {
                 *value_out = mal_vm_function_prototype(vm, object_value);
                 return true;
@@ -3963,7 +3963,7 @@ bool mal_vm_is_constructor(MalVm *vm, MalValue value) {
     }
     if (mal_value_is_function_object(value)) {
         i32 index = mal_function_object_function_index(mal_value_to_function_object(value));
-        const MalFunction *fn = &vm->definition->functions[index];
+        const MalFunction *fn = &vm->runtime_image->functions[index];
         // A normal function or class constructor is a constructor; a
         // method/getter/setter/arrow (normal kind, no `prototype`) is not.
         return fn->kind == MAL_FUNCTION_KIND_NORMAL && fn->has_prototype;
@@ -5484,7 +5484,7 @@ void mal_op_delete_property(MalCallable *callable, const MalInstruction *instruc
 }
 
 void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index) {
-    MalString *constant = &vm->definition->string_constants[name_string_index];
+    MalString *constant = &vm->runtime_image->string_constants[name_string_index];
     MalValue name = mal_value_from_string(constant);
     MalValue message = mal_vm_add(
         vm, name, mal_value_from_string(mal_intrinsic_ascii(vm, " is not defined")));
@@ -6463,7 +6463,7 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     // Adopt the register buffer and any argument slice needed after suspension.
     generator->frame.vm = vm;
     generator->frame.function_index = function_index;
-    generator->frame.function = &vm->live_definition.functions[function_index];
+    generator->frame.function = &vm->live_runtime_image.functions[function_index];
     generator->frame.registers = registers;
     generator->frame.arguments = owned_arguments;
     generator->frame.argument_count = generator->frame.function->needs_arguments
@@ -6617,7 +6617,7 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
 
     state->frame.vm = vm;
     state->frame.function_index = function_index;
-    state->frame.function = &vm->live_definition.functions[function_index];
+    state->frame.function = &vm->live_runtime_image.functions[function_index];
     state->frame.registers = registers;
     state->frame.arguments = owned_arguments;
     state->frame.argument_count = state->frame.function->needs_arguments

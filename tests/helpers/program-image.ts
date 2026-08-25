@@ -1,10 +1,10 @@
-import { createConservativeNativePlan } from "../../src/compiler/target/lower-vm.ts";
+import { createConservativeNativePlan } from "../../src/compiler/target/program-image.ts";
 import type {
 	BytecodeFunction,
 	NativeFunctionPlan,
 	ProgramImage,
 	RuntimeImage,
-} from "../../src/compiler/target/lower-vm.ts";
+} from "../../src/compiler/target/program-image.ts";
 
 /** Build an explicit conservative native contract for a hand-authored fixture. */
 export function testProgramImage(runtime: RuntimeImage): ProgramImage {

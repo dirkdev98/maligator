@@ -37,15 +37,15 @@ static int mal_test262_run_wire(const char *path) {
         return 2;
     }
     const char *error = "ok";
-    MalLoadedDefinition *loaded = mal_vm_load_definition(buffer, length, &error);
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(buffer, length, &error);
     free(buffer);
     if (loaded == nullptr) {
-        fprintf(stderr, "mal_vm_load_definition(%s): %s\n", path, error);
+        fprintf(stderr, "mal_runtime_image_load(%s): %s\n", path, error);
         return 2;
     }
 
     MalVm vm;
-    mal_vm_init(&vm, mal_loaded_definition_get(loaded));
+    mal_vm_init(&vm, mal_loaded_runtime_image_get(loaded));
     mal_test262_install(&vm);
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);
@@ -55,7 +55,7 @@ static int mal_test262_run_wire(const char *path) {
         mal_gc_collect(&vm);
         mal_vm_free_callable(callable);
         mal_vm_free(&vm);
-        mal_vm_loaded_definition_free(loaded);
+        mal_loaded_runtime_image_free(loaded);
     }
     return code;
 }

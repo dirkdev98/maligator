@@ -10,7 +10,7 @@
 #include "object_ops.h"
 #include "value.h"
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 enum {
     BUFFER_IDENTITY_COUNT = 3,
@@ -120,10 +120,10 @@ static bool stream_graph_matches(
 
 static void install_fragmented(
     MalVm *vm, const MalHostLaunchContext *launch, bool reverse) {
-    const MalProgramImage *definition = vm->definition;
-    for (i32 step = 0; step < definition->host_install_count; step++) {
-        i32 index = reverse ? definition->host_install_count - step - 1 : step;
-        const MalHostInstall *install = &definition->host_installs[index];
+    const MalRuntimeImage *runtime = vm->runtime_image;
+    for (i32 step = 0; step < runtime->host_install_count; step++) {
+        i32 index = reverse ? runtime->host_install_count - step - 1 : step;
+        const MalHostInstall *install = &runtime->host_installs[index];
         if (install->installer == nullptr) continue;
         if (install->slot_count == 0) {
             install->installer(vm, nullptr, 0, launch);
@@ -182,7 +182,7 @@ static void install_second_realm(MalVm *vm, void *data) {
 
 int main(int argc, char **argv) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     bool reverse = getenv("MAL_NODE_INSTALL_REVERSE") != nullptr;
 

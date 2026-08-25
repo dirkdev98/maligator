@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import type { BytecodeInstruction } from "../src/compiler/target/lower-vm.ts";
+import type { BytecodeInstruction } from "../src/compiler/target/program-image.ts";
 
 function generatorYields(source: string): Array<BytecodeInstruction["opcode"]> {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(

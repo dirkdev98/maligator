@@ -663,8 +663,8 @@ void mal_profile_init(MalVm *vm) {
     state->compiler_enabled = getenv("MAL_PROFILE_COMPILER") != nullptr;
 #if MAL_PERF_STATS
     if (state->compiler_enabled) {
-        state->total_site_count = vm->definition->profile_site_count > 0
-            ? (u32) vm->definition->profile_site_count
+        state->total_site_count = vm->runtime_image->profile_site_count > 0
+            ? (u32) vm->runtime_image->profile_site_count
             : 0;
         state->counter_site_count = state->total_site_count;
         state->site_counters = calloc(

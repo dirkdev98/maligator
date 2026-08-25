@@ -5,16 +5,16 @@ import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
-} from "../src/compiler/target/core-target-lowering.ts";
+} from "../src/compiler/target/lower-execution.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/program-image.ts";
 import {
 	ExecutionVerificationError,
 	verifyExecutionProgram,
-} from "../src/compiler/target/core-target-verifier.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-vm.ts";
+} from "../src/compiler/target/verify-execution.ts";
 
 const BRANCH_SOURCE = `
 	function choose(flag, extra) {

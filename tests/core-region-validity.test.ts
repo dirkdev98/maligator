@@ -14,11 +14,11 @@ import type {
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import type { ProgramImage } from "../src/compiler/target/lower-vm.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-} from "../src/compiler/target/serialize-vm.ts";
+} from "../src/compiler/target/program-image-codec.ts";
+import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 
 /**
  * Reaches String#split projection, the indexed split cursor, RegExp.exec

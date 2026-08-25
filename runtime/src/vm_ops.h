@@ -874,7 +874,7 @@ static inline MalInlineCache *mal_vm_property_ic_at(
 MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm);
 
 /**
- * Inline dense-array index access for the native backend (emit-c), so a `obj[i]`
+ * Inline dense-array index access for the native backend (render-native-c), so a `obj[i]`
  * read/write of a dense array is a direct vector load/store rather than a nested
  * runtime call. A non-array object, a non-int32 key, or a dense miss falls back to
  * the inline-cached op (which handles every other case identically). At -O2 the
@@ -907,10 +907,10 @@ static inline i32 mal_vm_select_shape_case(
         i32 function_index = candidates[index * 2];
         i32 shape_cache_index = candidates[index * 2 + 1];
         if (function_index < 0 ||
-            function_index >= vm->definition->function_count ||
+            function_index >= vm->runtime_image->function_count ||
             shape_cache_index < 0 ||
             shape_cache_index >=
-                vm->definition->functions[function_index].literal_shape_count) {
+                vm->runtime_image->functions[function_index].literal_shape_count) {
             continue;
         }
         MalShape **row = vm->literal_shape_cache[function_index];
@@ -970,10 +970,10 @@ static inline void mal_vm_seed_known_own_slot_ic(
         i32 shape_cache_index = candidates[index * 3 + 1];
         i32 slot = candidates[index * 3 + 2];
         if (shape_function_index < 0 ||
-            shape_function_index >= vm->definition->function_count ||
+            shape_function_index >= vm->runtime_image->function_count ||
             shape_cache_index < 0 ||
             shape_cache_index >=
-                vm->definition->functions[shape_function_index].literal_shape_count ||
+                vm->runtime_image->functions[shape_function_index].literal_shape_count ||
             slot < 0 || slot >= UINT8_MAX) {
             continue;
         }

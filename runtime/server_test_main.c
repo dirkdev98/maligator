@@ -14,7 +14,7 @@
  * drives it with Node's fetch, asserts, and kills the process.
  */
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 /* 8 MiB dwarfs any socket buffer pair, so a peer that stops reading leaves this
  * response permanently mid-flight — the case the transaction deadline exists for. */
@@ -46,7 +46,7 @@ static void limits_handler(
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     mal_host_attach(&vm);
 
     bool limited = getenv("MAL_HTTP_TEST_LIMITS") != nullptr;

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
-	buildBackendPairFromOneDefinition,
+	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
@@ -48,14 +48,14 @@ describe("optimized Core through compiled and interpreted lowering", () => {
 	beforeAll(() => {
 		// One optimized definition per world feeds both backends, so a mismatch below
 		// is an emission difference and cannot be a second frontend/optimizer run.
-		mutable = buildBackendPairFromOneDefinition({
+		mutable = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "core-pipeline-parity-mutable",
 			mainFile: HOST_MAIN,
 			outDir,
 			config: configFor("mutable"),
 		});
-		locked = buildBackendPairFromOneDefinition({
+		locked = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "core-pipeline-parity-locked",
 			mainFile: HOST_MAIN,

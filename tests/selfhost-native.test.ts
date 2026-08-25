@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { hostInstallerSymbol } from "../src/compiler/frontend/host-modules.ts";
-import { cEscapeString } from "../src/compiler/target/emit-vm.ts";
+import { cEscapeString } from "../src/compiler/target/emit-program-image.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
 
 const roots: Array<string> = [];

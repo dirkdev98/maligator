@@ -45,14 +45,14 @@ static u8 *read_file(const char *path, usize *length_out) {
     return buffer;
 }
 
-static MalLoadedDefinition *load_definition(const char *path) {
+static MalLoadedRuntimeImage *load_runtime_image(const char *path) {
     usize length = 0;
     u8 *buffer = read_file(path, &length);
     if (buffer == nullptr) {
         return nullptr;
     }
     const char *error = "ok";
-    MalLoadedDefinition *loaded = mal_vm_load_definition_with_host_resolver(
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
         buffer, length, &error, mal_host_resolve_installer);
     free(buffer);
     if (loaded == nullptr) {
@@ -72,27 +72,27 @@ int mal_dev_run_wires(
     bool node) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (wire_count < 1) return 2;
-    MalLoadedDefinition *loaded = load_definition(wire_paths[0]);
+    MalLoadedRuntimeImage *loaded = load_runtime_image(wire_paths[0]);
     if (loaded == nullptr) {
         return 2;
     }
     MalDevelopmentAssets *development_assets = nullptr;
-    MalProgramImage root_definition = *mal_loaded_definition_get(loaded);
+    MalRuntimeImage root_program = *mal_loaded_runtime_image_get(loaded);
     if (asset_manifest_path != nullptr) {
         const char *asset_error = "unknown error";
         development_assets = mal_development_assets_load(asset_manifest_path, &asset_error);
         if (development_assets == nullptr) {
             fprintf(stderr, "could not load development assets %s: %s\n",
                 asset_manifest_path, asset_error);
-            mal_vm_loaded_definition_free(loaded);
+            mal_loaded_runtime_image_free(loaded);
             return 2;
         }
-        root_definition.assets = mal_development_assets_get(
-            development_assets, &root_definition.asset_count);
+        root_program.assets = mal_development_assets_get(
+            development_assets, &root_program.asset_count);
     }
 
     MalVm vm;
-    mal_vm_init(&vm, &root_definition);
+    mal_vm_init(&vm, &root_program);
     mal_host_attach(&vm);
 #if MAL_WEB_PLATFORM || MAL_NODE
     MalObject *global_this = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
@@ -127,7 +127,7 @@ int mal_dev_run_wires(
     MalHostLaunchContext launch = {
         .argc = argc,
         .argv = argv,
-        .script_path = entry_path != nullptr ? entry_path : root_definition.entry_path,
+        .script_path = entry_path != nullptr ? entry_path : root_program.entry_path,
     };
     if (development_assets != nullptr) {
         mal_host_install_maligator(&vm, nullptr, 0, &launch);
@@ -136,28 +136,28 @@ int mal_dev_run_wires(
     MalCallable **callables = calloc((usize) wire_count, sizeof(MalCallable *));
     if (callables == nullptr) {
         mal_development_assets_free(development_assets);
-        mal_vm_loaded_definition_free(loaded);
+        mal_loaded_runtime_image_free(loaded);
         return 2;
     }
     for (int index = 0; index < wire_count; index++) {
         i32 entry = 0;
-        const MalProgramImage *definition = vm.definition;
+		const MalRuntimeImage *program = vm.runtime_image;
         if (index > 0) {
-            MalLoadedDefinition *fragment = load_definition(wire_paths[index]);
+            MalLoadedRuntimeImage *fragment = load_runtime_image(wire_paths[index]);
             if (fragment == nullptr) {
                 vm.completion.kind = MAL_COMPLETION_THROW;
                 break;
             }
-            definition = mal_loaded_definition_get(fragment);
-            entry = mal_vm_splice_definition(&vm, definition);
+            program = mal_loaded_runtime_image_get(fragment);
+            entry = mal_vm_splice_runtime_image(&vm, program);
             if (entry < 0) {
-                mal_vm_loaded_definition_free(fragment);
+                mal_loaded_runtime_image_free(fragment);
                 break;
             }
-            mal_vm_retain_loaded_definition(&vm, fragment);
+            mal_vm_retain_loaded_runtime_image(&vm, fragment);
         }
         if (index == 0) mal_vm_run_host_installs(&vm, &launch);
-        else mal_vm_run_definition_host_installs(&vm, definition, &launch);
+        else mal_vm_run_program_host_installs(&vm, program, &launch);
         if (vm.completion.kind == MAL_COMPLETION_THROW) break;
         callables[index] = mal_vm_create_callable(&vm, entry);
         mal_vm_run(&vm, callables[index]);
@@ -186,6 +186,6 @@ int mal_dev_run_wires(
     }
     free(callables);
     mal_development_assets_free(development_assets);
-    mal_vm_loaded_definition_free(loaded);
+    mal_loaded_runtime_image_free(loaded);
     return code;
 }

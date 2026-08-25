@@ -48,7 +48,7 @@ import {
 	serializeCompilerArtifact,
 	serializeRuntimeImage,
 	COMPILER_ARTIFACT_VERSION,
-} from "./compiler/target/serialize-vm.ts";
+} from "./compiler/target/program-image-codec.ts";
 import {
 	compileDependencyFragments,
 	DEVELOPMENT_LINKED_MODULES_GLOBAL,
@@ -76,7 +76,7 @@ interface PlannedImport {
 
 interface CompiledArtifact {
 	wire: Uint8Array;
-	definition: ReturnType<typeof compileSemanticProgramToProgramImage>;
+	programImage: ReturnType<typeof compileSemanticProgramToProgramImage>;
 	artifact: BuildFragmentArtifact;
 	cache: "hit" | "miss";
 }
@@ -110,7 +110,7 @@ export interface BuildFragmentArtifact {
 export interface CompiledBuildFragments {
 	wires: Array<Uint8Array>;
 	artifacts: Array<BuildFragmentArtifact>;
-	definition: ReturnType<typeof compileSemanticProgramToProgramImage>;
+	programImage: ReturnType<typeof compileSemanticProgramToProgramImage>;
 	artifactHits: number;
 	artifactMisses: number;
 }
@@ -403,7 +403,7 @@ function compileArtifact(
 			throw new Error("invalid fragment artifact reference");
 		}
 		let artifactWire: Uint8Array | undefined;
-		let definition: ReturnType<typeof deserializeCompilerArtifact> | undefined;
+		let programImage: ReturnType<typeof deserializeCompilerArtifact> | undefined;
 		const loadArtifact = () => {
 			if (artifactWire !== undefined) return artifactWire;
 			artifactWire = new Uint8Array(readFileSync(reference.artifact!.path));
@@ -412,14 +412,14 @@ function compileArtifact(
 			}
 			return artifactWire;
 		};
-		const loadDefinition = () =>
-			(definition ??= deserializeCompilerArtifact(loadArtifact()));
+		const loadProgramImage = () =>
+			(programImage ??= deserializeCompilerArtifact(loadArtifact()));
 		return {
 			get wire() {
-				return serializeRuntimeImage(loadDefinition().runtime);
+				return serializeRuntimeImage(loadProgramImage().runtime);
 			},
-			get definition() {
-				return loadDefinition();
+			get programImage() {
+				return loadProgramImage();
 			},
 			artifact: reference.artifact,
 			cache: "hit",
@@ -432,7 +432,7 @@ function compileArtifact(
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	options.phases.semanticMs += Date.now() - semanticStartedAt;
-	const definition = compileSemanticProgramToProgramImage(semantic, {
+	const programImage = compileSemanticProgramToProgramImage(semantic, {
 		facts: options.facts,
 		optimization: "development",
 		runPhase(phase, run) {
@@ -447,8 +447,8 @@ function compileArtifact(
 		},
 	});
 	const serializeStartedAt = Date.now();
-	const artifactWire = serializeCompilerArtifact(definition);
-	const wire = serializeRuntimeImage(definition.runtime);
+	const artifactWire = serializeCompilerArtifact(programImage);
+	const wire = serializeRuntimeImage(programImage.runtime);
 	options.phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = digest(artifactWire);
 	cacheFrontendWire(artifactWire, artifactRoot);
@@ -457,7 +457,7 @@ function compileArtifact(
 		throw new Error(`fragment artifact is missing after publication: ${wireDigest}`);
 	}
 	publish(mappingPath, `${JSON.stringify({ schema: 1, artifact })}\n`);
-	return { wire, definition, artifact, cache: "miss" };
+	return { wire, programImage, artifact, cache: "miss" };
 }
 
 function linkageKey(
@@ -772,7 +772,7 @@ export function compileBuildFragments(
 			return artifacts.map((artifact) => artifact.wire);
 		},
 		artifacts: [...dependencyArtifacts, applicationArtifact.artifact],
-		definition: applicationArtifact.definition,
+		programImage: applicationArtifact.programImage,
 		artifactHits: hits,
 		artifactMisses: artifacts.length - hits,
 	};

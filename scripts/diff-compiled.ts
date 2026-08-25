@@ -1,10 +1,10 @@
 /**
- * Differential correctness oracle for the emit-c backend.
+ * Differential correctness oracle for the render-native-c backend.
  *
  * Builds a JS/TS fixture twice — once with the native compiled bodies (default)
  * and once forced through the bytecode interpreter (`--no-compiled`) — runs both,
  * and diffs stdout. The interpreter is the reference implementation; any
- * divergence is an emit-c miscompile. Runs each mode under GC stress too, so a
+ * divergence is an render-native-c miscompile. Runs each mode under GC stress too, so a
  * missed root in a compiled body surfaces.
  *
  * Usage: node scripts/diff-compiled.ts <fixture.js> [--stress]

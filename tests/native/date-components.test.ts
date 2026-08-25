@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertResultPass,
-	buildBackendPairFromOneDefinition,
+	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
 	runToStdout,
 	STRESS_ENV,
@@ -21,7 +21,7 @@ describe("Date component projection", () => {
 	let lockedCompiled: string;
 
 	beforeAll(() => {
-		const locked = buildBackendPairFromOneDefinition({
+		const locked = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/date-components.js",
 			name: "date-components-locked",
 			outDir,

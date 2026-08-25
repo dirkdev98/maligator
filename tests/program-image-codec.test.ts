@@ -1,25 +1,25 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-	buildArgumentSnapshotPlan,
-	VM_GUARDED_BUILTIN_OPERATIONS,
-} from "../src/compiler/target/lower-vm.ts";
-import type {
-	ProgramImage,
-	BytecodeFunction,
-	BytecodeInstruction,
-	NativeInstructionPlan,
-	VmRegion,
-} from "../src/compiler/target/lower-vm.ts";
-import { createConservativeNativePlan } from "../src/compiler/target/lower-vm.ts";
-import {
 	deserializeCompilerArtifact,
 	MAX_STRING_CODE_UNITS,
 	serializeCompilerArtifact,
 	WIRE_GUARDED_BUILTIN_TAG_COUNT,
 	WIRE_OPCODES,
 	WIRE_VERSION,
-} from "../src/compiler/target/serialize-vm.ts";
+} from "../src/compiler/target/program-image-codec.ts";
+import {
+	buildArgumentSnapshotPlan,
+	VM_GUARDED_BUILTIN_OPERATIONS,
+} from "../src/compiler/target/program-image.ts";
+import type {
+	ProgramImage,
+	BytecodeFunction,
+	BytecodeInstruction,
+	NativeInstructionPlan,
+	VmRegion,
+} from "../src/compiler/target/program-image.ts";
+import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
 // A definition exercising the tricky encodings: variable-length operand arrays
@@ -522,7 +522,7 @@ function shapeCaseDefinition(): ProgramImage {
 	);
 }
 
-describe("serialize-vm", () => {
+describe("program-image-codec", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);

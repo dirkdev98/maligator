@@ -22,10 +22,10 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
-import { verifyExecutionProgram } from "./core-target-verifier.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
+import { verifyExecutionProgram } from "./verify-execution.ts";
 
 type CompilerBinaryOperator = Extract<
 	CompilerInstruction,
@@ -2285,10 +2285,10 @@ function buildKnownShapeLayout(
  * Run-length compress a function's per-instruction position ids into
  * (start_ip, pos_id) entries: a new entry only where the position changes. The
  * runtime resolves a frame's position by finding the last entry with
- * start_ip <= instruction_pointer. Shared by the C-literal emitter (emit-vm)
- * and the wire serializer (serialize-vm); it lives here, alongside the VM
- * definition types, so the self-hostable serializer cone never imports emit-vm
- * (which pulls node:path + the emit-c native backend).
+ * start_ip <= instruction_pointer. Shared by the C-literal emitter (emit-program-image)
+ * and the wire serializer (program-image-codec); it lives here, alongside the VM
+ * definition types, so the self-hostable serializer cone never imports emit-program-image
+ * (which pulls node:path + the render-native-c native backend).
  */
 export function compressPositions(
 	positions: Array<number>,
@@ -2324,7 +2324,7 @@ export function lowerExecutionToProgramImage(
 	profile = false,
 ): ProgramImage {
 	// Consumer boundary: ExecutionProgram is structurally constructible and mutable,
-	// so construction-time verification cannot license a later lower-vm call.
+	// so construction-time verification cannot license a later program-image call.
 	verifyExecutionProgram(program);
 	const core = program.core;
 	const context = program.context;

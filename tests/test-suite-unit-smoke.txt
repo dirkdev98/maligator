@@ -4,6 +4,6 @@ tests/cli.test.ts
 tests/compact-type-strip.test.ts
 tests/compile.test.ts
 tests/module-graph.test.ts
-tests/serialize-vm.test.ts
+tests/program-image-codec.test.ts
 tests/test-suite.test.ts
 tests/testing-runtime.test.ts

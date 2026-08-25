@@ -7,13 +7,13 @@ import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
 import {
 	emitProgramImage,
 	emitProgramTranslationUnits,
-} from "../src/compiler/target/emit-vm.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-vm.ts";
+} from "../src/compiler/target/emit-program-image.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
 import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/program-image.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(

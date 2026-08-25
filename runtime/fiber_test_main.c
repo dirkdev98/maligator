@@ -26,11 +26,11 @@
  * fires at every safepoint (so GCs land while peers are suspended) and swept cells
  * are poisoned (so a missed root corrupts the held string loudly).
  *
- * The emitted `mal_vm_definition` (a trivial compiled program) is used only to
+ * The emitted `mal_runtime_image` (a trivial compiled program) is used only to
  * stand up a real VM with intrinsics + heap; its program body is never run.
  */
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 #define FIBER_COUNT 4
 #define ITER_PER_FIBER 12
@@ -130,7 +130,7 @@ static int count_runs(void) {
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     mal_host_attach(&vm); // scheduler drives the host reactor (empty here)
     g_vm = &vm;
 

@@ -31,8 +31,8 @@ import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semant
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
-import { emitProgramImage } from "./compiler/target/emit-vm.ts";
-import type { ProgramImage } from "./compiler/target/lower-vm.ts";
+import { emitProgramImage } from "./compiler/target/emit-program-image.ts";
+import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
@@ -163,10 +163,10 @@ export function buildNativeBinary(options: BuildOptions): string {
 /** Compile and link a fixture, retaining the exact context and linked artifacts. */
 export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinaryResult {
 	const config = resolveHarnessBuildConfig(options);
-	return linkDefinition(
+	return linkProgramImage(
 		options,
 		config,
-		compileFixtureDefinition(options, config),
+		compileFixtureProgramImage(options, config),
 		options.compiled ?? true,
 		options.name,
 	);
@@ -177,7 +177,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
  * Backend boundary tests use this to share one handcrafted definition without
  * introducing a source-only compiler hook for advisory target metadata.
  */
-export function buildNativeDefinition(
+export function buildNativeProgramImage(
 	definition: ProgramImage,
 	options: Omit<BuildOptions, "fixture">,
 ): string {
@@ -186,7 +186,7 @@ export function buildNativeDefinition(
 		fixture: definition.runtime.entrypointPath,
 	};
 	const config = resolveHarnessBuildConfig(harnessOptions);
-	return linkDefinition(
+	return linkProgramImage(
 		harnessOptions,
 		config,
 		definition,
@@ -220,7 +220,7 @@ function resolveHarnessBuildConfig(options: BuildOptions): ResolvedBuildConfig {
 	);
 }
 
-function compileFixtureDefinition(
+function compileFixtureProgramImage(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
 ): ProgramImage {
@@ -236,7 +236,7 @@ function compileFixtureDefinition(
 			enforcePolicies: false,
 		});
 		options.onFrontendCacheEvent?.({ cache: frontend.cache, entrypoint });
-		return frontend.definition;
+		return frontend.programImage;
 	}
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypoint, {
 		buildConfig: config,
@@ -251,7 +251,7 @@ function compileFixtureDefinition(
 	});
 }
 
-function linkDefinition(
+function linkProgramImage(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
 	definition: ProgramImage,
@@ -302,20 +302,20 @@ export interface BackendPairResult {
  * compiled/interpreted difference can only come from emission — never from two
  * independent frontend, optimizer, or cache-restore runs producing different IR.
  */
-export function buildBackendPairFromOneDefinition(
+export function buildBackendPairFromOneProgramImage(
 	options: Omit<BuildOptions, "compiled">,
 ): BackendPairResult {
 	const config = resolveHarnessBuildConfig(options);
-	const definition = compileFixtureDefinition(options, config);
+	const definition = compileFixtureProgramImage(options, config);
 	return {
-		compiled: linkDefinition(
+		compiled: linkProgramImage(
 			options,
 			config,
 			definition,
 			true,
 			`${options.name}-compiled`,
 		).binaryPath,
-		interpreted: linkDefinition(
+		interpreted: linkProgramImage(
 			options,
 			config,
 			definition,

@@ -50,15 +50,15 @@ import type {
 	CompilerProgramFacts,
 	ProgramClosureCertificate,
 } from "./compiler/shared/compiler-facts.ts";
-import type { ProgramImage } from "./compiler/target/lower-vm.ts";
-import { programImageStats } from "./compiler/target/lower-vm.ts";
-import type { ProgramImageStats } from "./compiler/target/lower-vm.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 	serializeRuntimeImage,
 	COMPILER_ARTIFACT_VERSION,
-} from "./compiler/target/serialize-vm.ts";
+} from "./compiler/target/program-image-codec.ts";
+import type { ProgramImage } from "./compiler/target/program-image.ts";
+import { programImageStats } from "./compiler/target/program-image.ts";
+import type { ProgramImageStats } from "./compiler/target/program-image.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -69,8 +69,8 @@ import {
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 1;
-const BUILD_FRONTEND_PIPELINE_VERSION = 1;
+const BUILD_FRONTEND_CACHE_SCHEMA = 2;
+const BUILD_FRONTEND_PIPELINE_VERSION = 2;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",
@@ -80,11 +80,11 @@ const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 1;
+	schema: 2;
 	identity: string;
 	contentKey: string;
 	artifacts: Array<BuildFrontendArtifactIdentity>;
-	definitionStats: ProgramImageStats;
+	imageStats: ProgramImageStats;
 	entrypoint: string;
 	dependencies: Array<BuildDependencyIdentity>;
 	diagnostics: Array<CompilerDiagnostic>;
@@ -115,7 +115,7 @@ export interface BuildFrontendPhases {
 }
 
 export interface CompiledBuildFrontend {
-	definition: ProgramImage;
+	programImage: ProgramImage;
 	wire: Uint8Array;
 	cache: "hit" | "miss";
 	frontendMs: number;
@@ -124,9 +124,9 @@ export interface CompiledBuildFrontend {
 	moduleParses: { hits: number; misses: number };
 	fileDigests: { hits: number; misses: number };
 	artifacts: Array<BuildFrontendArtifact>;
-	definitionStats: ProgramImageStats;
+	imageStats: ProgramImageStats;
 	diagnostics: Array<CompilerDiagnostic>;
-	/** Open on a cache hit: a restored definition is returned without a graph. */
+	/** Open on a cache hit: a restored program image is returned without a graph. */
 	closure: ProgramClosureCertificate;
 	wires?: Array<Uint8Array>;
 	fragmentArtifacts?: { hits: number; misses: number };
@@ -147,7 +147,7 @@ export interface CompileBuildFrontendOptions {
 	 * the compilation without changing the artifact it produces.
 	 */
 	coreVerification?: CoreVerificationProfile;
-	/** Include source-site identities and compiler remarks in the live definition. */
+	/** Include source-site identities and compiler remarks in the live program image. */
 	profile?: boolean;
 	cacheDirectory?: string;
 	session?: FrontendCompilationSession;
@@ -281,7 +281,7 @@ function validArtifactIdentity(value: unknown): value is BuildFrontendArtifactId
 	);
 }
 
-function validDefinitionStats(value: unknown): value is ProgramImageStats {
+function validImageStats(value: unknown): value is ProgramImageStats {
 	if (typeof value !== "object" || value === null) return false;
 	const stats = value as Partial<ProgramImageStats>;
 	return (
@@ -315,11 +315,11 @@ function loadCached(
 	session: FrontendCompilationSession,
 ):
 	| {
-			definition: ProgramImage;
+			programImage: ProgramImage;
 			wire: Uint8Array;
 			wires: Array<Uint8Array>;
 			artifacts: Array<BuildFrontendArtifact>;
-			definitionStats: ProgramImageStats;
+			imageStats: ProgramImageStats;
 			dependencies: Array<BuildDependencyIdentity>;
 			diagnostics: Array<CompilerDiagnostic>;
 	  }
@@ -332,7 +332,7 @@ function loadCached(
 		!Array.isArray(manifest.artifacts) ||
 		manifest.artifacts.length === 0 ||
 		!manifest.artifacts.every(validArtifactIdentity) ||
-		!validDefinitionStats(manifest.definitionStats) ||
+		!validImageStats(manifest.imageStats) ||
 		!Array.isArray(manifest.diagnostics) ||
 		!Array.isArray(manifest.dependencies) ||
 		!artifactsUnchanged(manifest.artifacts, artifactRoot) ||
@@ -343,19 +343,19 @@ function loadCached(
 	try {
 		let artifactWires: Array<Uint8Array> | undefined;
 		let runtimeWires: Array<Uint8Array> | undefined;
-		let definition: ProgramImage | undefined;
+		let programImage: ProgramImage | undefined;
 		const loadArtifacts = () =>
 			(artifactWires ??= materializedArtifacts(manifest.artifacts, artifactRoot));
-		const loadDefinition = () =>
-			(definition ??= deserializeCompilerArtifact(loadArtifacts().at(-1)!));
+		const loadProgramImage = () =>
+			(programImage ??= deserializeCompilerArtifact(loadArtifacts().at(-1)!));
 		const loadRuntimeWires = () =>
 			(runtimeWires ??= [
 				...loadArtifacts().slice(0, -1),
-				serializeRuntimeImage(loadDefinition().runtime),
+				serializeRuntimeImage(loadProgramImage().runtime),
 			]);
 		return {
-			get definition() {
-				return loadDefinition();
+			get programImage() {
+				return loadProgramImage();
 			},
 			get wire() {
 				return loadRuntimeWires().at(-1)!;
@@ -368,7 +368,7 @@ function loadCached(
 				path: frontendWirePath(artifact.digest, artifactRoot),
 				size: artifact.size,
 			})),
-			definitionStats: manifest.definitionStats,
+			imageStats: manifest.imageStats,
 			dependencies: manifest.dependencies,
 			diagnostics: manifest.diagnostics,
 		};
@@ -443,7 +443,7 @@ function publish(file: string, contents: string | Uint8Array): void {
 }
 
 /**
- * Compile or restore the normal-build frontend definition.
+ * Compile or restore the normal-build frontend program image.
  *
  * The artifact is the same relocatable VM wire consumed by the interpreter, now
  * including native-code generation metadata. Cache hits therefore skip parsing,
@@ -496,8 +496,8 @@ export function compileBuildFrontend(
 		if (cached !== undefined) {
 			session.flush();
 			return {
-				get definition() {
-					return cached.definition;
+				get programImage() {
+					return cached.programImage;
 				},
 				get wire() {
 					return cached.wire;
@@ -507,7 +507,7 @@ export function compileBuildFrontend(
 				},
 				cache: "hit",
 				closure: unanalyzedProgramClosure(
-					"a frontend cache hit restores a definition without inspecting a module graph",
+					"a frontend cache hit restores a program image without inspecting a module graph",
 				),
 				frontendMs: Date.now() - startedAt,
 				phases,
@@ -515,7 +515,7 @@ export function compileBuildFrontend(
 				moduleParses: moduleParseStats(),
 				fileDigests: fileDigestStats(),
 				artifacts: cached.artifacts,
-				definitionStats: cached.definitionStats,
+				imageStats: cached.imageStats,
 				diagnostics: cached.diagnostics,
 			};
 		}
@@ -556,7 +556,7 @@ export function compileBuildFrontend(
 					nodeEnabled: options.config.surface.node,
 				})
 			: [];
-	let definition: ProgramImage;
+	let programImage: ProgramImage;
 	let wires: Array<Uint8Array> | undefined;
 	let artifactWires: Array<Uint8Array> | undefined;
 	let fragmentArtifactIdentities: Array<BuildFrontendArtifactIdentity> | undefined;
@@ -584,7 +584,7 @@ export function compileBuildFrontend(
 				dependencyWorker: options.dependencyWorker,
 				entryPrelude,
 			});
-			definition = fragments.definition;
+			programImage = fragments.programImage;
 			fragmentArtifactIdentities = fragments.artifacts.map(
 				({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
 					digest: artifactDigest,
@@ -606,10 +606,10 @@ export function compileBuildFrontend(
 			const semantic = semanticForGraph();
 			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-			definition = compileDefinition(semantic, facts, options, phases);
+			programImage = compileProgramImage(semantic, facts, options, phases);
 			const serializeStartedAt = Date.now();
-			artifactWires = [serializeCompilerArtifact(definition)];
-			wires = [serializeRuntimeImage(definition.runtime)];
+			artifactWires = [serializeCompilerArtifact(programImage)];
+			wires = [serializeRuntimeImage(programImage.runtime)];
 			phases.serializeMs += Date.now() - serializeStartedAt;
 		}
 	} else {
@@ -618,10 +618,10 @@ export function compileBuildFrontend(
 			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 		}
-		definition = compileDefinition(semantic, facts, options, phases);
+		programImage = compileProgramImage(semantic, facts, options, phases);
 		const serializeStartedAt = Date.now();
-		artifactWires = [serializeCompilerArtifact(definition)];
-		wires = [serializeRuntimeImage(definition.runtime)];
+		artifactWires = [serializeCompilerArtifact(programImage)];
+		wires = [serializeRuntimeImage(programImage.runtime)];
 		phases.serializeMs = Date.now() - serializeStartedAt;
 	}
 	const dependencies = graphDependencies(graph, session);
@@ -638,7 +638,7 @@ export function compileBuildFrontend(
 			}
 			return artifact;
 		});
-	const definitionStats = programImageStats(definition);
+	const imageStats = programImageStats(programImage);
 	publish(
 		manifestPath(root, entrypoint, identity),
 		`${JSON.stringify({
@@ -646,7 +646,7 @@ export function compileBuildFrontend(
 			identity,
 			contentKey: key,
 			artifacts,
-			definitionStats,
+			imageStats,
 			entrypoint,
 			dependencies,
 			diagnostics,
@@ -655,7 +655,7 @@ export function compileBuildFrontend(
 
 	const materializeWires = () => (wires ??= loadFragmentWires!());
 	return {
-		definition,
+		programImage,
 		get wire() {
 			return materializeWires().at(-1)!;
 		},
@@ -674,14 +674,14 @@ export function compileBuildFrontend(
 			path: frontendWirePath(artifact.digest, artifactRoot),
 			size: artifact.size,
 		})),
-		definitionStats,
+		imageStats,
 		diagnostics,
 		fragmentArtifacts,
 		fragmentFallback,
 	};
 }
 
-function compileDefinition(
+function compileProgramImage(
 	semantic: Parameters<typeof compileSemanticProgramToProgramImage>[0],
 	facts: CompilerProgramFacts,
 	options: CompileBuildFrontendOptions,

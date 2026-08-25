@@ -29,10 +29,10 @@
  *   3. The turn loop idle-exits once nothing is runnable and nothing is pending
  *      (if it didn't, mal_sched_run would hang and the runner would time out).
  *
- * Uses a real isolate (mal_vm_definition) only to stand up heap + intrinsics.
+ * Uses a real isolate (mal_runtime_image) only to stand up heap + intrinsics.
  */
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 #define SLEEPER_COUNT 4
 #define SLEEP_STEP_MS 3
@@ -1122,7 +1122,7 @@ static void pipe_writer(void *arg) {
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     g_cross_thread_host = mal_host_attach(&vm);
 
     MalScheduler sched;

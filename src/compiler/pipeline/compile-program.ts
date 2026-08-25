@@ -14,8 +14,8 @@ import {
 	compilerProgramFactsFromConfig,
 	withProgramClosure,
 } from "../shared/compiler-facts.ts";
-import type { ProgramImage } from "../target/lower-vm.ts";
-import { serializeRuntimeImage } from "../target/serialize-vm.ts";
+import { serializeRuntimeImage } from "../target/program-image-codec.ts";
+import type { ProgramImage } from "../target/program-image.ts";
 import { compileSemanticProgramToProgramImage } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
 

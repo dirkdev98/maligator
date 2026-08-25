@@ -4,11 +4,11 @@
 
 #include <stdio.h>
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     if (vm.literal_shape_cache[0] == nullptr ||
         vm.literal_shape_cache[0][1] == nullptr ||
         vm.literal_shape_cache[0][2] == nullptr ||

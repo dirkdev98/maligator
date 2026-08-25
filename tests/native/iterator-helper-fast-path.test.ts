@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildBackendPairFromOneDefinition,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -17,7 +17,7 @@ describe("iterator and iterator-helper native fast paths", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		({ compiled, interpreted } = buildBackendPairFromOneDefinition({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/iterator-helper-fast-path.js",
 			name: "iterator-helper-fast-path",
 			outDir,

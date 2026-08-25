@@ -222,7 +222,7 @@ function parseBuild(args: Array<string>): CliCommand {
 			index++;
 			continue;
 		}
-		if (argument === "--emit-c" || argument === "--print") {
+		if (argument === "--render-native-c" || argument === "--print") {
 			command.internal.emitC = true;
 			continue;
 		}

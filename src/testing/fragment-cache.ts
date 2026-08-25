@@ -18,7 +18,10 @@ import {
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../compiler/shared/compiler-facts.ts";
-import { serializeRuntimeImage, WIRE_VERSION } from "../compiler/target/serialize-vm.ts";
+import {
+	serializeRuntimeImage,
+	WIRE_VERSION,
+} from "../compiler/target/program-image-codec.ts";
 import {
 	compileDependencyFragments,
 	DEVELOPMENT_LINKED_MODULES_GLOBAL,

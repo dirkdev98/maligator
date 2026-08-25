@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertResultPass,
-	buildBackendPairFromOneDefinition,
+	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
 	runToStdout,
 	STRESS_ENV,
@@ -20,7 +20,7 @@ describe("Object Map and Set builtins", () => {
 	let mutableCompiled: string;
 
 	beforeAll(() => {
-		const locked = buildBackendPairFromOneDefinition({
+		const locked = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "object-map-set-builtins-locked",
 			outDir,

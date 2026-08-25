@@ -25,7 +25,7 @@
 // loop (setTimeout callbacks + pending I/O, interleaved with microtasks) until the
 // isolate is idle. This is the entry a real host program / the Lambda bootstrap
 // uses, as opposed to test262_main which only runs the synchronous body.
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 #if MAL_DEVELOPMENT_API
 static const char development_wire_command[] = "--maligator-internal-run-wire";
@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
 
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
 
     // Attach the host context (reactor + timers) — the platform layer the engine
     // runs on. Then install host globals (not in the shared intrinsics, so only
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
     MalHostLaunchContext launch = {
         .argc = argc,
         .argv = argv,
-        .script_path = mal_vm_definition.entry_path,
+        .script_path = mal_runtime_image.entry_path,
     };
     mal_vm_run_host_installs(&vm, &launch);
 

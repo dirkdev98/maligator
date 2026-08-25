@@ -3,11 +3,11 @@ import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.t
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { vmExceptionHandlerTargets } from "../src/compiler/target/lower-vm.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-} from "../src/compiler/target/serialize-vm.ts";
+} from "../src/compiler/target/program-image-codec.ts";
+import { vmExceptionHandlerTargets } from "../src/compiler/target/program-image.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(

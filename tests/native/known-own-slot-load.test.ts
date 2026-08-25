@@ -7,8 +7,8 @@ import type {
 	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
-} from "../../src/compiler/target/lower-vm.ts";
-import { buildNativeDefinition, STRESS_ENV } from "../../src/test-harness.ts";
+} from "../../src/compiler/target/program-image.ts";
+import { buildNativeProgramImage, STRESS_ENV } from "../../src/test-harness.ts";
 import { testProgramImage } from "../helpers/program-image.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-known-own-slot-"));
@@ -188,14 +188,14 @@ describe("guarded known-own-slot accesses", () => {
 
 	beforeAll(() => {
 		const environment = { ...process.env, MAL_PERF_STATS: "1" };
-		compiled = buildNativeDefinition(definition, {
+		compiled = buildNativeProgramImage(definition, {
 			name: "known-own-slot-compiled",
 			compiled: true,
 			mainFile,
 			outDir,
 			environment,
 		});
-		interpreted = buildNativeDefinition(definition, {
+		interpreted = buildNativeProgramImage(definition, {
 			name: "known-own-slot-interpreted",
 			compiled: false,
 			mainFile,

@@ -10,7 +10,7 @@ import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semant
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
-import { emitProgramTranslationUnits } from "./compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { requireToolchain } from "./toolchain.ts";

@@ -13,7 +13,7 @@ MalRealm *mal_realm_new(MalVm *vm) {
     // Pre-fill active slots before linking: the collector scans every realm in
     // vm->realms, so a realm must hold only scannable MalValues the instant it
     // becomes reachable, even if the caller has not populated it yet.
-    for (i32 i = 0; i < vm->definition->global_count; i++) {
+    for (i32 i = 0; i < vm->runtime_image->global_count; i++) {
         realm->globals[i] = mal_value_new_undefined();
     }
     for (i32 i = 0; i < MAL_INTRINSIC_COUNT; i++) {

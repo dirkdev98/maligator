@@ -19,7 +19,7 @@
  * so running it on fibers is fine.
  */
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 #define MSG "ping-pong-42"
 
@@ -80,7 +80,7 @@ static void client_fiber(void *arg) {
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     mal_host_attach(&vm);
 
     MalScheduler sched;

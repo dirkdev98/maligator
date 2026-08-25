@@ -73,7 +73,7 @@ void mal_generator_release_frame(MalVm *vm, MalGeneratorObject *generator) {
         // Runtime eval may have reallocated the live function table since this
         // suspended/compiled frame last resumed. Refresh before SATB reads its
         // register count; the index remains the stable frame identity.
-        frame->function = &vm->live_definition.functions[frame->function_index];
+        frame->function = &vm->live_runtime_image.functions[frame->function_index];
         mal_gc_satb_shade_frame(frame);
     }
     mal_vm_release_coroutine_buffer(vm, frame->registers);

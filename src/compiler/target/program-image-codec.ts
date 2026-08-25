@@ -11,7 +11,7 @@ import {
 	VM_GUARDED_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
-} from "./lower-vm.ts";
+} from "./program-image.ts";
 import type {
 	ProgramImage,
 	BytecodeFunction,
@@ -22,12 +22,12 @@ import type {
 	VmGuardedBuiltinCall,
 	VmRegion,
 	VmSemanticProtectorFact,
-} from "./lower-vm.ts";
+} from "./program-image.ts";
 
 /**
  * Sequential binary wire format for a {@link ProgramImage}, consumed at
- * runtime by the C loader `mal_vm_load_definition` (runtime/src/vm_load.c). It is
- * the same data `emit-vm.ts` bakes into C literals, but as a buffer the running
+ * runtime by the C loader `mal_runtime_image_load` (runtime/src/vm_load.c). It is
+ * the same data `emit-program-image.ts` bakes into C literals, but as a buffer the running
  * VM can ingest without a C compile — the foundation of runtime `eval` and a
  * future bytecode cache.
  *
@@ -84,7 +84,8 @@ function taggedGuardedBuiltinOperation(operation: string | undefined): number {
 	const index = (TAGGED_GUARDED_BUILTIN_OPERATIONS as ReadonlyArray<string>).indexOf(
 		operation,
 	);
-	if (index < 0) throw new RangeError(`serialize-vm: unsupported builtin ${operation}`);
+	if (index < 0)
+		throw new RangeError(`program-image-codec: unsupported builtin ${operation}`);
 	return index + 1;
 }
 
@@ -97,7 +98,8 @@ function mathUnaryNumberTag(operation: string): number {
 	const tag = (VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).indexOf(
 		operation,
 	);
-	if (tag < 0) throw new RangeError(`serialize-vm: unsupported Math op ${operation}`);
+	if (tag < 0)
+		throw new RangeError(`program-image-codec: unsupported Math op ${operation}`);
 	return tag;
 }
 
@@ -105,14 +107,15 @@ function mathBinaryNumberTag(operation: string): number {
 	const tag = (VM_MATH_BINARY_NUMBER_OPERATIONS as ReadonlyArray<string>).indexOf(
 		operation,
 	);
-	if (tag < 0) throw new RangeError(`serialize-vm: unsupported Math op ${operation}`);
+	if (tag < 0)
+		throw new RangeError(`program-image-codec: unsupported Math op ${operation}`);
 	return tag;
 }
 
 function directBuiltinTag(operation: string): number {
 	const tag = (VM_DIRECT_BUILTIN_OPERATIONS as ReadonlyArray<string>).indexOf(operation);
 	if (tag < 0)
-		throw new RangeError(`serialize-vm: unsupported direct builtin ${operation}`);
+		throw new RangeError(`program-image-codec: unsupported direct builtin ${operation}`);
 	return tag;
 }
 
@@ -174,7 +177,7 @@ const TYPEOF_RESULT_TAG = new Map<string, number>(
 /**
  * Intrinsic wire order = a u16 index into this array; the C `wire_intrinsics[]`
  * table maps each index back to its `MAL_INTRINSIC_*` constant in the same order.
- * Mirrors `emitIntrinsic` in emit-vm.ts.
+ * Mirrors `emitIntrinsic` in emit-program-image.ts.
  */
 export const WIRE_INTRINSICS = [
 	"Object",
@@ -297,7 +300,7 @@ class Writer {
 				return;
 			}
 		}
-		throw new RangeError("serialize-vm: u32 out of range");
+		throw new RangeError("program-image-codec: u32 out of range");
 	}
 	i32(value: number): void {
 		const signed = value | 0;
@@ -335,7 +338,7 @@ class Reader {
 	}
 	private ensure(bytes: number): void {
 		if (bytes < 0 || this.pos + bytes > this.view.byteLength) {
-			throw new RangeError("serialize-vm: truncated or corrupt buffer");
+			throw new RangeError("program-image-codec: truncated or corrupt buffer");
 		}
 	}
 	u8(): number {
@@ -361,17 +364,17 @@ class Reader {
 		for (let shift = 0; shift <= 28; shift += 7) {
 			const byte = this.u8();
 			if (shift === 28 && (byte & 0xf0) !== 0) {
-				throw new RangeError("serialize-vm: invalid u32 varint");
+				throw new RangeError("program-image-codec: invalid u32 varint");
 			}
 			value += (byte & 0x7f) * 2 ** shift;
 			if ((byte & 0x80) === 0) {
 				if (shift > 0 && (byte & 0x7f) === 0) {
-					throw new RangeError("serialize-vm: non-canonical u32 varint");
+					throw new RangeError("program-image-codec: non-canonical u32 varint");
 				}
 				return value >>> 0;
 			}
 		}
-		throw new RangeError("serialize-vm: invalid u32 varint");
+		throw new RangeError("program-image-codec: invalid u32 varint");
 	}
 	i32(): number {
 		const value = this.u32();
@@ -403,7 +406,7 @@ class Reader {
 			count > 0x7fffffff ||
 			count > Math.floor(this.remaining() / minimumBytesPerItem)
 		) {
-			throw new RangeError("serialize-vm: truncated or corrupt buffer");
+			throw new RangeError("program-image-codec: truncated or corrupt buffer");
 		}
 		return count;
 	}
@@ -481,7 +484,9 @@ function stringSplitCursorGuardMasks(
 		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
 			dependencyMask |= 4;
 		} else {
-			throw new RangeError("serialize-vm: unsupported String.split cursor dependency");
+			throw new RangeError(
+				"program-image-codec: unsupported String.split cursor dependency",
+			);
 		}
 	}
 	let obligationMask = 0;
@@ -494,7 +499,7 @@ function stringSplitCursorGuardMasks(
 		(dependencyMask !== 1 && dependencyMask !== 4) ||
 		obligationMask !== 3
 	) {
-		throw new RangeError("serialize-vm: invalid String.split cursor guard plan");
+		throw new RangeError("program-image-codec: invalid String.split cursor guard plan");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -510,7 +515,7 @@ function stringSplitProjectionGuardMasks(
 			dependencyMask |= 4;
 		} else {
 			throw new RangeError(
-				"serialize-vm: unsupported String.split projection dependency",
+				"program-image-codec: unsupported String.split projection dependency",
 			);
 		}
 	}
@@ -524,7 +529,9 @@ function stringSplitProjectionGuardMasks(
 		(dependencyMask !== 1 && dependencyMask !== 4) ||
 		obligationMask !== 3
 	) {
-		throw new RangeError("serialize-vm: invalid String.split projection guard plan");
+		throw new RangeError(
+			"program-image-codec: invalid String.split projection guard plan",
+		);
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -539,7 +546,9 @@ function regexpExecProjectionGuardMasks(
 		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
 			dependencyMask |= 4;
 		} else {
-			throw new RangeError("serialize-vm: unsupported RegExp.exec projection dependency");
+			throw new RangeError(
+				"program-image-codec: unsupported RegExp.exec projection dependency",
+			);
 		}
 	}
 	let obligationMask = 0;
@@ -552,7 +561,9 @@ function regexpExecProjectionGuardMasks(
 		(dependencyMask !== 1 && dependencyMask !== 4) ||
 		obligationMask !== 3
 	) {
-		throw new RangeError("serialize-vm: invalid RegExp.exec projection guard plan");
+		throw new RangeError(
+			"program-image-codec: invalid RegExp.exec projection guard plan",
+		);
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -568,7 +579,7 @@ function regexpIteratorProjectionGuardMasks(
 			dependencyMask |= 4;
 		} else {
 			throw new RangeError(
-				"serialize-vm: unsupported RegExp iterator projection dependency",
+				"program-image-codec: unsupported RegExp iterator projection dependency",
 			);
 		}
 	}
@@ -582,7 +593,9 @@ function regexpIteratorProjectionGuardMasks(
 		(dependencyMask !== 1 && dependencyMask !== 4) ||
 		obligationMask !== 3
 	) {
-		throw new RangeError("serialize-vm: invalid RegExp iterator projection guard plan");
+		throw new RangeError(
+			"program-image-codec: invalid RegExp iterator projection guard plan",
+		);
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -618,13 +631,14 @@ function propertyPlacementHolds(
 /** Core's property-producer placement travels as a closed two-value tag. */
 function readPropertyPlacement(r: Reader): CorePropertyPlacement {
 	const tag = r.u8();
-	if (tag > 1) throw new RangeError("serialize-vm: invalid region property placement");
+	if (tag > 1)
+		throw new RangeError("program-image-codec: invalid region property placement");
 	return tag === 1 ? "call-fallback" : "in-place";
 }
 
 function writePropertyPlacement(w: Writer, placement: CorePropertyPlacement): void {
 	if (placement !== "in-place" && placement !== "call-fallback") {
-		throw new RangeError("serialize-vm: invalid region property placement");
+		throw new RangeError("program-image-codec: invalid region property placement");
 	}
 	w.u8(placement === "call-fallback" ? 1 : 0);
 }
@@ -639,7 +653,9 @@ function stringSliceNumberGuardMasks(
 		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
 			dependencyMask |= 4;
 		} else {
-			throw new RangeError("serialize-vm: unsupported String.slice Number dependency");
+			throw new RangeError(
+				"program-image-codec: unsupported String.slice Number dependency",
+			);
 		}
 	}
 	let obligationMask = 0;
@@ -652,7 +668,7 @@ function stringSliceNumberGuardMasks(
 		(dependencyMask !== 1 && dependencyMask !== 4) ||
 		obligationMask !== 1
 	) {
-		throw new RangeError("serialize-vm: invalid String.slice Number guard plan");
+		throw new RangeError("program-image-codec: invalid String.slice Number guard plan");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -667,7 +683,7 @@ function stackObjectPlanGuardMasks(
 		} else if (dependency.kind === "epoch" && dependency.family === "primitive-methods") {
 			dependencyMask |= 2;
 		} else {
-			throw new RangeError("serialize-vm: unsupported stack-object dependency");
+			throw new RangeError("program-image-codec: unsupported stack-object dependency");
 		}
 	}
 	let obligationMask = 0;
@@ -680,7 +696,7 @@ function stackObjectPlanGuardMasks(
 		![0, 1, 2].includes(dependencyMask) ||
 		obligationMask !== (license.materialization === "none" ? 1 : 3)
 	) {
-		throw new RangeError("serialize-vm: invalid stack-object guard plan");
+		throw new RangeError("program-image-codec: invalid stack-object guard plan");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -702,7 +718,9 @@ function semanticProtectorGuardMasks(fact: VmSemanticProtectorFact): {
 		} else if (dependency.kind === "epoch" && dependency.family === fact.family) {
 			dependencyMask |= 1 << SEMANTIC_PROTECTOR_TAGS[fact.family];
 		} else {
-			throw new RangeError("serialize-vm: mismatched semantic protector dependency");
+			throw new RangeError(
+				"program-image-codec: mismatched semantic protector dependency",
+			);
 		}
 	}
 	let obligationMask = 0;
@@ -711,7 +729,7 @@ function semanticProtectorGuardMasks(fact: VmSemanticProtectorFact): {
 	}
 	const epochMask = 1 << SEMANTIC_PROTECTOR_TAGS[fact.family];
 	if ((dependencyMask !== 1 && dependencyMask !== epochMask) || obligationMask !== 1) {
-		throw new RangeError("serialize-vm: invalid semantic protector fact");
+		throw new RangeError("program-image-codec: invalid semantic protector fact");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -719,7 +737,7 @@ function semanticProtectorGuardMasks(fact: VmSemanticProtectorFact): {
 /**
  * Serialize a lowered definition to the binary wire format. With `debugInfo`
  * false the file/source-position/per-function position tables are dropped
- * (matching emit-vm's stripped batch path), yielding a smaller buffer whose
+ * (matching emit-program-image's stripped batch path), yielding a smaller buffer whose
  * traces carry function names only.
  */
 export function serializeRuntimeImage(
@@ -759,7 +777,7 @@ function serializeImage(
 	for (const units of def.stringConstants) {
 		if (units.length > MAX_STRING_CODE_UNITS) {
 			throw new RangeError(
-				`serialize-vm: string constant has ${units.length} UTF-16 code units; maximum is ${MAX_STRING_CODE_UNITS}`,
+				`program-image-codec: string constant has ${units.length} UTF-16 code units; maximum is ${MAX_STRING_CODE_UNITS}`,
 			);
 		}
 		w.u32(units.length);
@@ -841,7 +859,7 @@ function serializeImage(
 		new Set(semanticProtectors.map((fact) => fact.family)).size !==
 			semanticProtectors.length
 	) {
-		throw new RangeError("serialize-vm: duplicate semantic protector facts");
+		throw new RangeError("program-image-codec: duplicate semantic protector facts");
 	}
 	w.u32(semanticProtectors.length);
 	for (const fact of semanticProtectors) {
@@ -857,7 +875,7 @@ function serializeImage(
 	for (const [functionIndex, fn] of def.functions.entries()) {
 		const native = compiler.native.functions[functionIndex];
 		if (native?.functionIndex !== functionIndex) {
-			throw new RangeError("serialize-vm: native function plan mismatch");
+			throw new RangeError("program-image-codec: native function plan mismatch");
 		}
 		w.u8(1);
 		w.i32Array([...native.gc.rootRegisters]);
@@ -883,7 +901,7 @@ function serializeImage(
 					(register < fn.parameterCount && representation !== "boxed"),
 			)
 		) {
-			throw new RangeError("serialize-vm: invalid register representations");
+			throw new RangeError("program-image-codec: invalid register representations");
 		}
 		w.u32(native.registerRepresentations.length);
 		for (const representation of native.registerRepresentations) {
@@ -891,7 +909,7 @@ function serializeImage(
 		}
 
 		if (native.instructions.length !== fn.instructions.length) {
-			throw new RangeError("serialize-vm: native instruction-plan count mismatch");
+			throw new RangeError("program-image-codec: native instruction-plan count mismatch");
 		}
 		const instructionMetadata = native.instructions.flatMap((plan, instructionIndex) =>
 			plan === undefined ? [] : [{ plan, instructionIndex }],
@@ -923,13 +941,17 @@ function serializeImage(
 								? guardedDependency.fact !== "primordials.locked"
 								: guardedDependency.family !== "watched-methods")))
 				) {
-					throw new RangeError("serialize-vm: invalid CALL specialization metadata");
+					throw new RangeError(
+						"program-image-codec: invalid CALL specialization metadata",
+					);
 				}
 				if (
 					plan.directStringCharCodeAtPosition !== undefined &&
 					guardedOperation !== "String.prototype.charCodeAt"
 				) {
-					throw new RangeError("serialize-vm: mismatched guarded builtin metadata");
+					throw new RangeError(
+						"program-image-codec: mismatched guarded builtin metadata",
+					);
 				}
 				w.u8(1);
 				w.i32(plan.directFunctionIndex ?? -1);
@@ -948,7 +970,7 @@ function serializeImage(
 					plan.directFunctionIndex < 0 ||
 					plan.directFunctionIndex >= def.functions.length
 				) {
-					throw new RangeError("serialize-vm: invalid direct CONSTRUCT target");
+					throw new RangeError("program-image-codec: invalid direct CONSTRUCT target");
 				}
 				w.u8(2);
 				w.i32(plan.directFunctionIndex);
@@ -957,7 +979,9 @@ function serializeImage(
 				instruction.opcode === "CREATE_ARRAY"
 			) {
 				if (!Number.isInteger(plan.length) || plan.length < 1 || plan.length > 65_536) {
-					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
+					throw new RangeError(
+						"program-image-codec: invalid indexed-fill reserve metadata",
+					);
 				}
 				w.u8(12);
 				w.i32(plan.length);
@@ -969,11 +993,15 @@ function serializeImage(
 					String.fromCharCode(...(def.stringConstants[instruction.stringIndex] ?? [])) !==
 					"length"
 				) {
-					throw new RangeError("serialize-vm: invalid primitive-String length hint");
+					throw new RangeError(
+						"program-image-codec: invalid primitive-String length hint",
+					);
 				}
 				w.u8(11);
 			} else {
-				throw new RangeError("serialize-vm: native instruction plan opcode mismatch");
+				throw new RangeError(
+					"program-image-codec: native instruction plan opcode mismatch",
+				);
 			}
 		}
 
@@ -1253,7 +1281,7 @@ function validateArgumentSnapshotPrefix(fn: BytecodeFunction): void {
 		expected = buildArgumentSnapshotPlan(fn);
 	} catch (error) {
 		throw new RangeError(
-			`serialize-vm: ${error instanceof Error ? error.message : "invalid argument snapshots"}`,
+			`program-image-codec: ${error instanceof Error ? error.message : "invalid argument snapshots"}`,
 		);
 	}
 	if (
@@ -1264,7 +1292,7 @@ function validateArgumentSnapshotPrefix(fn: BytecodeFunction): void {
 				move.source !== fn.argumentSnapshotPlan[i]?.source,
 		)
 	) {
-		throw new RangeError("serialize-vm: argument snapshot plan mismatch");
+		throw new RangeError("program-image-codec: argument snapshot plan mismatch");
 	}
 }
 
@@ -1275,7 +1303,7 @@ function validateMappedArguments(fn: BytecodeFunction): void {
 		(fn.mappedArguments && fn.strict) ||
 		fn.mappedArgumentSlots.some((slot) => slot < -1 || slot >= fn.capturedCount)
 	) {
-		throw new RangeError("serialize-vm: invalid mapped arguments metadata");
+		throw new RangeError("program-image-codec: invalid mapped arguments metadata");
 	}
 }
 
@@ -1293,7 +1321,7 @@ function validatePropertyIcIndices(fn: BytecodeFunction): void {
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				if (instruction.icIndex !== expected) {
 					throw new RangeError(
-						`serialize-vm: property IC index ${instruction.icIndex}, expected ${expected}`,
+						`program-image-codec: property IC index ${instruction.icIndex}, expected ${expected}`,
 					);
 				}
 				expected++;
@@ -1301,7 +1329,7 @@ function validatePropertyIcIndices(fn: BytecodeFunction): void {
 			case "CREATE_OBJECT_SHAPED":
 				if (instruction.shapeCacheIndex !== expectedLiteralShape) {
 					throw new RangeError(
-						`serialize-vm: literal shape index ${instruction.shapeCacheIndex}, expected ${expectedLiteralShape}`,
+						`program-image-codec: literal shape index ${instruction.shapeCacheIndex}, expected ${expectedLiteralShape}`,
 					);
 				}
 				expectedLiteralShape++;
@@ -1309,7 +1337,7 @@ function validatePropertyIcIndices(fn: BytecodeFunction): void {
 		}
 	}
 	if (expectedLiteralShape > fn.literalShapeCount) {
-		throw new RangeError("serialize-vm: literal shape count is too small");
+		throw new RangeError("program-image-codec: literal shape count is too small");
 	}
 }
 
@@ -1359,7 +1387,7 @@ function validateRegionEnvelope(
 		!instructionIpValid(region.license.admission.anchorIp) ||
 		!region.claimedIps.includes(region.license.admission.anchorIp)
 	) {
-		throw new RangeError("serialize-vm: invalid region envelope");
+		throw new RangeError("program-image-codec: invalid region envelope");
 	}
 }
 
@@ -1474,7 +1502,7 @@ function validateNumericFusionRegion(
 			);
 		})
 	) {
-		throw new RangeError("serialize-vm: invalid numeric-fusion region");
+		throw new RangeError("program-image-codec: invalid numeric-fusion region");
 	}
 }
 
@@ -1563,7 +1591,8 @@ function validateStackObjectPlanRegion(
 	) {
 		valid = false;
 	}
-	if (!valid) throw new RangeError("serialize-vm: invalid stack-object plan region");
+	if (!valid)
+		throw new RangeError("program-image-codec: invalid stack-object plan region");
 }
 
 function validateStringSliceNumberRegion(
@@ -1645,7 +1674,7 @@ function validateStringSliceNumberRegion(
 		payload.size !== region.claimedIps.length ||
 		region.claimedIps.some((ip) => !payload.has(ip))
 	) {
-		throw new RangeError("serialize-vm: invalid String.slice Number region");
+		throw new RangeError("program-image-codec: invalid String.slice Number region");
 	}
 }
 
@@ -1868,7 +1897,7 @@ function validateRegExpExecProjectionRegion(
 		payload.size !== region.claimedIps.length ||
 		region.claimedIps.some((ip) => !payload.has(ip))
 	) {
-		throw new RangeError("serialize-vm: invalid RegExp.exec projection region");
+		throw new RangeError("program-image-codec: invalid RegExp.exec projection region");
 	}
 }
 
@@ -1964,7 +1993,9 @@ function validateRegExpIteratorProjectionRegion(
 		payload.size !== region.claimedIps.length ||
 		region.claimedIps.some((ip) => !payload.has(ip))
 	) {
-		throw new RangeError("serialize-vm: invalid RegExp iterator projection region");
+		throw new RangeError(
+			"program-image-codec: invalid RegExp iterator projection region",
+		);
 	}
 }
 
@@ -2135,7 +2166,9 @@ function validateStringSplitProjectionRegion(
 		operationIps.length !== region.claimedIps.length ||
 		operationIps.some((ip) => !region.claimedIps.includes(ip))
 	) {
-		throw new RangeError("serialize-vm: invalid String.split projection region metadata");
+		throw new RangeError(
+			"program-image-codec: invalid String.split projection region metadata",
+		);
 	}
 }
 
@@ -2295,14 +2328,16 @@ function validateStringSplitCursorRegion(
 		) ||
 		region.cost.metadataOperations !== operationIps.length
 	) {
-		throw new RangeError("serialize-vm: invalid String.split cursor region metadata");
+		throw new RangeError(
+			"program-image-codec: invalid String.split cursor region metadata",
+		);
 	}
 }
 
 function opcodeTag(opcode: string): number {
 	const tag = OPCODE_TAG.get(opcode);
 	if (tag === undefined) {
-		throw new Error(`serialize-vm: unknown opcode ${opcode}`);
+		throw new Error(`program-image-codec: unknown opcode ${opcode}`);
 	}
 	return tag;
 }
@@ -2360,19 +2395,21 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			return;
 		case "CREATE_PRIVATE_NAMES":
 			if (i.capturedIndices.length === 0) {
-				throw new RangeError("serialize-vm: empty private-name batch");
+				throw new RangeError("program-image-codec: empty private-name batch");
 			}
 			w.i32(i.ownerFunctionIndex);
 			w.i32(i.capturedIndices.length);
 			w.i32Array(i.capturedIndices);
 			return;
 		case "LOAD_ARGUMENT":
-			if (i.index < 0) throw new RangeError("serialize-vm: negative argument index");
+			if (i.index < 0)
+				throw new RangeError("program-image-codec: negative argument index");
 			w.i32(i.dst);
 			w.i32(i.index);
 			return;
 		case "LOAD_STATIC_ARGUMENT":
-			if (i.index < 0) throw new RangeError("serialize-vm: negative argument index");
+			if (i.index < 0)
+				throw new RangeError("program-image-codec: negative argument index");
 			w.i32(i.dst);
 			w.i32(i.direct);
 			w.i32(i.fallback);
@@ -2385,7 +2422,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 				i.keyStringIndices.length !== i.count ||
 				i.valueRegisters.length !== i.count
 			) {
-				throw new RangeError("serialize-vm: invalid shaped object operands");
+				throw new RangeError("program-image-codec: invalid shaped object operands");
 			}
 			w.i32(i.dst);
 			w.i32(i.count);
@@ -2472,7 +2509,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "LOAD_INTRINSIC": {
 			const tag = INTRINSIC_TAG.get(i.intrinsic);
 			if (tag === undefined) {
-				throw new Error(`serialize-vm: unknown intrinsic ${i.intrinsic}`);
+				throw new Error(`program-image-codec: unknown intrinsic ${i.intrinsic}`);
 			}
 			w.i32(i.dst);
 			w.u16(tag);
@@ -2567,7 +2604,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			return;
 		case "INIT_PRIVATE_FIELDS":
 			if (i.keyRegisters.length === 0) {
-				throw new RangeError("serialize-vm: empty private-field batch");
+				throw new RangeError("program-image-codec: empty private-field batch");
 			}
 			w.i32(i.object);
 			w.i32(i.keyRegisters.length);
@@ -2694,7 +2731,9 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			return;
 		case "INIT_GLOBAL_VARS":
 			if (i.nameStringIndices.length === 0) {
-				throw new RangeError("serialize-vm: empty global-var initialization batch");
+				throw new RangeError(
+					"program-image-codec: empty global-var initialization batch",
+				);
 			}
 			w.i32(i.nameStringIndices.length);
 			w.i32Array(i.nameStringIndices);
@@ -2740,7 +2779,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "BINARY": {
 			const tag = BINOP_TAG.get(i.operator);
 			if (tag === undefined) {
-				throw new Error(`serialize-vm: unknown binary operator ${i.operator}`);
+				throw new Error(`program-image-codec: unknown binary operator ${i.operator}`);
 			}
 			w.i32(i.dst);
 			w.i32(i.left);
@@ -2751,7 +2790,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "UNARY": {
 			const tag = UNOP_TAG.get(i.operator);
 			if (tag === undefined) {
-				throw new Error(`serialize-vm: unknown unary operator ${i.operator}`);
+				throw new Error(`program-image-codec: unknown unary operator ${i.operator}`);
 			}
 			w.i32(i.dst);
 			w.i32(i.src);
@@ -2761,7 +2800,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "TYPEOF_COMPARE": {
 			const tag = TYPEOF_RESULT_TAG.get(i.expected);
 			if (tag === undefined) {
-				throw new Error(`serialize-vm: unknown typeof result ${i.expected}`);
+				throw new Error(`program-image-codec: unknown typeof result ${i.expected}`);
 			}
 			w.i32(i.dst);
 			w.i32(i.src);
@@ -2770,7 +2809,9 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			return;
 		}
 	}
-	throw new Error(`serialize-vm: unhandled opcode ${(i as { opcode: string }).opcode}`);
+	throw new Error(
+		`program-image-codec: unhandled opcode ${(i as { opcode: string }).opcode}`,
+	);
 }
 
 /**
@@ -2798,11 +2839,11 @@ function deserializeImage(
 	const magic = r.fixedU32();
 	const expectedMagic = compilerArtifact ? COMPILER_ARTIFACT_MAGIC : WIRE_MAGIC;
 	if (magic !== expectedMagic) {
-		throw new Error(`serialize-vm: bad magic 0x${magic.toString(16)}`);
+		throw new Error(`program-image-codec: bad magic 0x${magic.toString(16)}`);
 	}
 	const version = r.fixedU32();
 	if (version !== WIRE_VERSION) {
-		throw new Error(`serialize-vm: version ${version}, expected ${WIRE_VERSION}`);
+		throw new Error(`program-image-codec: version ${version}, expected ${WIRE_VERSION}`);
 	}
 	const debug = (r.u32() & FLAG_HAS_DEBUG) !== 0;
 	const globalCount = r.u32();
@@ -2819,7 +2860,7 @@ function deserializeImage(
 		const len = r.count(2);
 		if (len > MAX_STRING_CODE_UNITS) {
 			throw new RangeError(
-				`serialize-vm: string constant has ${len} UTF-16 code units; maximum is ${MAX_STRING_CODE_UNITS}`,
+				`program-image-codec: string constant has ${len} UTF-16 code units; maximum is ${MAX_STRING_CODE_UNITS}`,
 			);
 		}
 		const units = new Array<number>(len);
@@ -2910,7 +2951,7 @@ function deserializeImage(
 
 	const semanticProtectorCount = compilerArtifact ? r.count(3) : 0;
 	if (semanticProtectorCount > 3) {
-		throw new RangeError("serialize-vm: too many semantic protector facts");
+		throw new RangeError("program-image-codec: too many semantic protector facts");
 	}
 	const semanticProtectors: Array<VmSemanticProtectorFact> = [];
 	const seenSemanticProtectors = new Set<VmSemanticProtectorFact["family"]>();
@@ -2932,7 +2973,7 @@ function deserializeImage(
 			(dependencyMask !== 1 && dependencyMask !== 1 << tag) ||
 			obligationMask !== 1
 		) {
-			throw new RangeError("serialize-vm: invalid semantic protector fact");
+			throw new RangeError("program-image-codec: invalid semantic protector fact");
 		}
 		seenSemanticProtectors.add(family);
 		semanticProtectors.push({
@@ -2963,24 +3004,24 @@ function deserializeImage(
 		cjsModuleFunctionIndices,
 	};
 	if (!compilerArtifact) {
-		if (r.remaining() !== 0) throw new Error("serialize-vm: trailing data");
+		if (r.remaining() !== 0) throw new Error("program-image-codec: trailing data");
 		validateVmShapeCases(runtimeImage);
 		return runtimeImage;
 	}
 
 	const compilerMetadataFunctionCount = r.count(1);
 	if (compilerMetadataFunctionCount !== functions.length) {
-		throw new Error("serialize-vm: compiler metadata function count mismatch");
+		throw new Error("program-image-codec: compiler metadata function count mismatch");
 	}
 	const nativeFunctions: Array<NativeFunctionPlan> = [];
 	for (const [functionIndex, fn] of functions.entries()) {
 		const hasGcRootRegisters = r.u8();
 		if (hasGcRootRegisters > 1) {
-			throw new Error("serialize-vm: invalid GC-root metadata");
+			throw new Error("program-image-codec: invalid GC-root metadata");
 		}
 		const gcRootRegisters = r.i32Array();
 		if (hasGcRootRegisters === 0 && gcRootRegisters.length !== 0) {
-			throw new Error("serialize-vm: invalid GC-root metadata");
+			throw new Error("program-image-codec: invalid GC-root metadata");
 		}
 		const safepointCount = r.count(2);
 		const safepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
@@ -2992,14 +3033,14 @@ function deserializeImage(
 				instructionIp >= fn.instructions.length ||
 				rootRegisters.some((register) => register < 0 || register >= fn.registerCount)
 			) {
-				throw new RangeError("serialize-vm: invalid native safepoint metadata");
+				throw new RangeError("program-image-codec: invalid native safepoint metadata");
 			}
 			safepoints.push({ instructionIp, rootRegisters });
 		}
 
 		const representationCount = r.count(1);
 		if (representationCount !== fn.registerCount) {
-			throw new Error("serialize-vm: register representation count mismatch");
+			throw new Error("program-image-codec: register representation count mismatch");
 		}
 		const registerRepresentations = Array.from(
 			{ length: representationCount },
@@ -3007,11 +3048,11 @@ function deserializeImage(
 				const tag = r.u8();
 				if (tag === 0) return "boxed" as const;
 				if (register < fn.parameterCount) {
-					throw new Error("serialize-vm: non-boxed parameter representation");
+					throw new Error("program-image-codec: non-boxed parameter representation");
 				}
 				if (tag === 1) return "number" as const;
 				if (tag === 2) return "boolean" as const;
-				throw new Error("serialize-vm: invalid register representation tag");
+				throw new Error("program-image-codec: invalid register representation tag");
 			},
 		);
 
@@ -3027,13 +3068,15 @@ function deserializeImage(
 		) {
 			const instructionIndex = r.u32();
 			if (instructionIndex <= previousInstructionMetadataIndex) {
-				throw new RangeError("serialize-vm: unordered compiler instruction metadata");
+				throw new RangeError(
+					"program-image-codec: unordered compiler instruction metadata",
+				);
 			}
 			previousInstructionMetadataIndex = instructionIndex;
 			const instruction = fn.instructions[instructionIndex];
 			if (instruction === undefined) {
 				throw new RangeError(
-					"serialize-vm: compiler instruction metadata index out of range",
+					"program-image-codec: compiler instruction metadata index out of range",
 				);
 			}
 			const tag = r.u8();
@@ -3059,7 +3102,7 @@ function deserializeImage(
 					guardedBuiltinCount > 1 ||
 					((flags & 64) !== 0 && guardedBuiltinCount !== 1)
 				) {
-					throw new RangeError("serialize-vm: invalid CALL compiler metadata");
+					throw new RangeError("program-image-codec: invalid CALL compiler metadata");
 				}
 				let guardedBuiltinCall: VmGuardedBuiltinCall | undefined;
 				if (guardedBuiltinCount === 1) {
@@ -3092,7 +3135,9 @@ function deserializeImage(
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
 				const directFunctionIndex = r.i32();
 				if (directFunctionIndex < 0 || directFunctionIndex >= functions.length) {
-					throw new RangeError("serialize-vm: invalid CONSTRUCT compiler metadata");
+					throw new RangeError(
+						"program-image-codec: invalid CONSTRUCT compiler metadata",
+					);
 				}
 				nativeInstructions[instructionIndex] = {
 					kind: "construct",
@@ -3101,7 +3146,9 @@ function deserializeImage(
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
 				const reserveLength = r.i32();
 				if (reserveLength < 1 || reserveLength > 65_536) {
-					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
+					throw new RangeError(
+						"program-image-codec: invalid indexed-fill reserve metadata",
+					);
 				}
 				nativeInstructions[instructionIndex] = {
 					kind: "fresh-dense-reserve",
@@ -3112,12 +3159,14 @@ function deserializeImage(
 					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==
 					"length"
 				) {
-					throw new RangeError("serialize-vm: invalid primitive-String length hint");
+					throw new RangeError(
+						"program-image-codec: invalid primitive-String length hint",
+					);
 				}
 				nativeInstructions[instructionIndex] = { kind: "primitive-string-length" };
 			} else {
 				throw new RangeError(
-					"serialize-vm: compiler instruction metadata opcode mismatch",
+					"program-image-codec: compiler instruction metadata opcode mismatch",
 				);
 			}
 		}
@@ -3200,7 +3249,7 @@ function deserializeImage(
 						!stackObjectPlanContract &&
 						!numericFusionContract)
 				) {
-					throw new RangeError("serialize-vm: invalid function region contract");
+					throw new RangeError("program-image-codec: invalid function region contract");
 				}
 				let region: VmRegion;
 				if (kindTag === 2) {
@@ -3224,7 +3273,9 @@ function deserializeImage(
 						trimIdentityTag > 1 ||
 						primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS
 					) {
-						throw new RangeError("serialize-vm: invalid String.split cursor header");
+						throw new RangeError(
+							"program-image-codec: invalid String.split cursor header",
+						);
 					}
 					region = {
 						kind: "string-split-cursor",
@@ -3283,7 +3334,9 @@ function deserializeImage(
 					const separatorStringIndex = r.i32();
 					const resultRegisters = r.i32Array();
 					if (splitIdentityTag > 1) {
-						throw new RangeError("serialize-vm: invalid String.split identity decision");
+						throw new RangeError(
+							"program-image-codec: invalid String.split identity decision",
+						);
 					}
 					const loadCount = r.count(4);
 					const loads: Array<
@@ -3298,7 +3351,9 @@ function deserializeImage(
 							(loadKindTag !== 1 && loadKindTag !== 2) ||
 							(loadKindTag === 2 && index !== -1)
 						) {
-							throw new RangeError("serialize-vm: invalid String.split projection load");
+							throw new RangeError(
+								"program-image-codec: invalid String.split projection load",
+							);
 						}
 						loads.push({
 							ip,
@@ -3393,7 +3448,7 @@ function deserializeImage(
 							const methodIdentityTag = r.u8();
 							if (methodIdentityTag > 1) {
 								throw new RangeError(
-									"serialize-vm: invalid projected String method identity",
+									"program-image-codec: invalid projected String method identity",
 								);
 							}
 							consumer = {
@@ -3417,7 +3472,7 @@ function deserializeImage(
 							const methodIdentityTag = r.u8();
 							if (methodIdentityTag > 1) {
 								throw new RangeError(
-									"serialize-vm: invalid projected String method identity",
+									"program-image-codec: invalid projected String method identity",
 								);
 							}
 							consumer = {
@@ -3433,7 +3488,9 @@ function deserializeImage(
 								lengthPropertyIp,
 							};
 						} else if (consumerTag !== 0) {
-							throw new RangeError("serialize-vm: invalid RegExp.exec consumer tag");
+							throw new RangeError(
+								"program-image-codec: invalid RegExp.exec consumer tag",
+							);
 						}
 						loads.push({
 							ip,
@@ -3450,7 +3507,9 @@ function deserializeImage(
 							? constructorIntrinsicIp !== -1 || constructIp !== -1
 							: constructorIntrinsicIp < 0 || constructIp < 0)
 					) {
-						throw new RangeError("serialize-vm: invalid RegExp.exec projection header");
+						throw new RangeError(
+							"program-image-codec: invalid RegExp.exec projection header",
+						);
 					}
 					region = {
 						kind: "regexp-exec-projection",
@@ -3514,7 +3573,7 @@ function deserializeImage(
 					}
 					if (statefulEffect !== 1 || runtimeGuard !== 1) {
 						throw new RangeError(
-							"serialize-vm: invalid RegExp iterator projection header",
+							"program-image-codec: invalid RegExp iterator projection header",
 						);
 					}
 					region = {
@@ -3561,7 +3620,9 @@ function deserializeImage(
 					const sliceStart = r.f64();
 					const result = r.i32();
 					if (builtinIdentitiesTag > 1) {
-						throw new RangeError("serialize-vm: invalid String.slice identity decision");
+						throw new RangeError(
+							"program-image-codec: invalid String.slice identity decision",
+						);
 					}
 					region = {
 						kind: "string-slice-number",
@@ -3598,7 +3659,7 @@ function deserializeImage(
 				} else if (kindTag === 11) {
 					const siteCount = r.count(5);
 					if (siteCount === 0 || siteCount > 8) {
-						throw new RangeError("serialize-vm: invalid stack-object site count");
+						throw new RangeError("program-image-codec: invalid stack-object site count");
 					}
 					const sites: Array<
 						Extract<VmRegion, { kind: "stack-object-plan" }>["sites"][number]
@@ -3623,7 +3684,7 @@ function deserializeImage(
 							const tag = r.u8();
 							if (tag !== 1) {
 								throw new RangeError(
-									"serialize-vm: invalid stack-object materialization",
+									"program-image-codec: invalid stack-object materialization",
 								);
 							}
 							materializations.push({
@@ -3674,12 +3735,14 @@ function deserializeImage(
 						const finishIp = r.i32();
 						const firstUsePosition = r.u8();
 						if (firstUsePosition !== 1 && firstUsePosition !== 2) {
-							throw new RangeError("serialize-vm: invalid numeric-fusion use position");
+							throw new RangeError(
+								"program-image-codec: invalid numeric-fusion use position",
+							);
 						}
 						pairs.push({ firstIp, finishIp, firstUsePosition });
 					}
 					if (runtimeGuardTag !== 1) {
-						throw new RangeError("serialize-vm: invalid numeric-fusion guard");
+						throw new RangeError("program-image-codec: invalid numeric-fusion guard");
 					}
 					region = {
 						kind: "numeric-fusion",
@@ -3699,7 +3762,7 @@ function deserializeImage(
 						pairs,
 					};
 				} else {
-					throw new RangeError("serialize-vm: invalid function region kind");
+					throw new RangeError("program-image-codec: invalid function region kind");
 				}
 				validateRegion(fn, region, claimed, stringConstants, nativeInstructions);
 				regions.push(region);
@@ -3728,7 +3791,7 @@ function deserializeImage(
 		});
 	}
 	if (r.remaining() !== 0) {
-		throw new Error("serialize-vm: trailing data");
+		throw new Error("program-image-codec: trailing data");
 	}
 
 	const definition: ProgramImage = {
@@ -3886,7 +3949,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 		case "LOAD_ARGUMENT": {
 			const dst = r.i32();
 			const index = r.i32();
-			if (index < 0) throw new RangeError("serialize-vm: negative argument index");
+			if (index < 0) throw new RangeError("program-image-codec: negative argument index");
 			return { opcode, dst, index };
 		}
 		case "LOAD_STATIC_ARGUMENT": {
@@ -3894,7 +3957,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			const direct = r.i32();
 			const fallback = r.i32();
 			const index = r.i32();
-			if (index < 0) throw new RangeError("serialize-vm: negative argument index");
+			if (index < 0) throw new RangeError("program-image-codec: negative argument index");
 			return { opcode, dst, direct, fallback, index };
 		}
 		case "LOAD_THIS":
@@ -3912,7 +3975,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			const count = r.i32();
 			const capturedIndices = r.i32Array();
 			if (count < 1 || capturedIndices.length !== count) {
-				throw new RangeError("serialize-vm: invalid private-name batch");
+				throw new RangeError("program-image-codec: invalid private-name batch");
 			}
 			return { opcode, ownerFunctionIndex, capturedIndices };
 		}
@@ -3934,7 +3997,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				instruction.keyStringIndices.length !== instruction.count ||
 				instruction.valueRegisters.length !== instruction.count
 			) {
-				throw new RangeError("serialize-vm: invalid shaped object operands");
+				throw new RangeError("program-image-codec: invalid shaped object operands");
 			}
 			return instruction;
 		}
@@ -3968,7 +4031,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			const src = r.i32();
 			const operation = VM_MATH_UNARY_NUMBER_OPERATIONS[r.u8()];
 			if (operation === undefined) {
-				throw new RangeError("serialize-vm: invalid unary numeric Math operation");
+				throw new RangeError("program-image-codec: invalid unary numeric Math operation");
 			}
 			return { opcode, dst, src, operation };
 		}
@@ -3978,7 +4041,9 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			const right = r.i32();
 			const operation = VM_MATH_BINARY_NUMBER_OPERATIONS[r.u8()];
 			if (operation === undefined) {
-				throw new RangeError("serialize-vm: invalid binary numeric Math operation");
+				throw new RangeError(
+					"program-image-codec: invalid binary numeric Math operation",
+				);
 			}
 			return {
 				opcode,
@@ -3995,7 +4060,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			const arguments_ = r.i32Array();
 			const operation = VM_DIRECT_BUILTIN_OPERATIONS[r.u8()];
 			if (operation === undefined || argumentCount !== arguments_.length) {
-				throw new RangeError("serialize-vm: invalid direct builtin call");
+				throw new RangeError("program-image-codec: invalid direct builtin call");
 			}
 			return {
 				opcode,
@@ -4162,7 +4227,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			const count = r.i32();
 			const keyRegisters = r.i32Array();
 			if (count < 1 || keyRegisters.length !== count) {
-				throw new RangeError("serialize-vm: invalid private-field batch");
+				throw new RangeError("program-image-codec: invalid private-field batch");
 			}
 			return { opcode, object, keyRegisters };
 		}
@@ -4267,7 +4332,9 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				declarationConfigurable: r.u8() !== 0,
 			};
 			if (count < 1 || instruction.nameStringIndices.length !== count) {
-				throw new RangeError("serialize-vm: invalid global-var initialization batch");
+				throw new RangeError(
+					"program-image-codec: invalid global-var initialization batch",
+				);
 			}
 			return instruction;
 		}
@@ -4321,10 +4388,10 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			const src = r.i32();
 			const expected = WIRE_TYPEOF_RESULTS[r.u8()];
 			if (expected === undefined) {
-				throw new RangeError("serialize-vm: invalid typeof result");
+				throw new RangeError("program-image-codec: invalid typeof result");
 			}
 			return { opcode, dst, src, expected, negated: r.u8() !== 0 };
 		}
 	}
-	throw new Error(`serialize-vm: unhandled opcode tag for ${String(opcode)}`);
+	throw new Error(`program-image-codec: unhandled opcode tag for ${String(opcode)}`);
 }

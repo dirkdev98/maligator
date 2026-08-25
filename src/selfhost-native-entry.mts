@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
-import { emitProgramTranslationUnits } from "./compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 

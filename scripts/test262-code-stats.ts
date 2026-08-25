@@ -73,12 +73,12 @@ function inspectorSource(definitionsSymbol: string, countSymbol: string): string
 #include <stdio.h>
 #include "vm.h"
 
-extern const MalProgramImage *const ${definitionsSymbol}[];
+extern const MalRuntimeImage *const ${definitionsSymbol}[];
 extern const int ${countSymbol};
 
 int main(void) {
     for (int i = 0; i < ${countSymbol}; i++) {
-        const MalProgramImage *definition = ${definitionsSymbol}[i];
+        const MalRuntimeImage *definition = ${definitionsSymbol}[i];
         long long instructions = 0;
         for (int f = 0; f < definition->function_count; f++) {
             instructions += definition->functions[f].instruction_count;
@@ -91,8 +91,8 @@ int main(void) {
 }
 
 const helperSource = inspectorSource(
-	"mal_test262_artifact_definitions",
-	"mal_test262_artifact_definition_count",
+	"mal_test262_artifact_images",
+	"mal_test262_artifact_image_count",
 );
 const legacyHelperSource = inspectorSource(
 	"mal_test262_definitions",

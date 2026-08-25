@@ -5,8 +5,8 @@ import type {
 	BytecodeInstruction,
 	NativePlan,
 	RuntimeImage,
-} from "../src/compiler/target/lower-vm.ts";
-import { mergeProgramImages } from "../src/test262/vm-definition-merge.ts";
+} from "../src/compiler/target/program-image.ts";
+import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
 function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction {
@@ -37,7 +37,7 @@ function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction 
 	};
 }
 
-function definition(
+function image(
 	overrides: Partial<RuntimeImage> = {},
 	nativeOverrides: Partial<NativePlan> = {},
 ): ProgramImage {
@@ -63,7 +63,7 @@ function definition(
 	};
 }
 
-describe("Test262 VM definition merger", () => {
+describe("Test262 VM image merger", () => {
 	it("retains one shared semantic world and rejects mixed facts", () => {
 		const semanticProtectors: NativePlan["semanticProtectors"] = [
 			{
@@ -75,19 +75,19 @@ describe("Test262 VM definition merger", () => {
 			},
 		];
 		const merged = mergeProgramImages([
-			definition({}, { semanticProtectors }),
-			definition({}, { semanticProtectors }),
-		]).definition;
+			image({}, { semanticProtectors }),
+			image({}, { semanticProtectors }),
+		]).image;
 		expect(merged.native.semanticProtectors).toEqual(semanticProtectors);
 		expect(merged.native.semanticProtectors).not.toBe(semanticProtectors);
 
 		expect(() =>
-			mergeProgramImages([definition({}, { semanticProtectors }), definition()]),
+			mergeProgramImages([image({}, { semanticProtectors }), image()]),
 		).toThrow("semantic protector facts do not match");
 		expect(() =>
 			mergeProgramImages([
-				definition({}, { semanticProtectors }),
-				definition(
+				image({}, { semanticProtectors }),
+				image(
 					{},
 					{
 						semanticProtectors: [
@@ -105,8 +105,8 @@ describe("Test262 VM definition merger", () => {
 		).toThrow("semantic protector facts do not match");
 	});
 
-	it("clones and rebases every current definition-level index family", () => {
-		const first = definition({
+	it("clones and rebases every current image-level index family", () => {
+		const first = image({
 			functions: [
 				vmFunction([{ opcode: "RETURN", value: 0 }]),
 				vmFunction([{ opcode: "RETURN", value: 0 }]),
@@ -214,7 +214,7 @@ describe("Test262 VM definition merger", () => {
 			},
 		];
 		const secondFunction = vmFunction(indexed);
-		const secondBase = definition({
+		const secondBase = image({
 			functions: [secondFunction],
 			globalCount: 5,
 			literalTemplateData: [8, 2, 5, 0, 6, 0, 9, 1, 10, 0, 5, 0],
@@ -239,7 +239,7 @@ describe("Test262 VM definition merger", () => {
 				.with(17, { kind: "construct", directFunctionIndex: 0 }),
 		}));
 
-		const { definition: merged, functionBases } = mergeProgramImages([first, second]);
+		const { image: merged, functionBases } = mergeProgramImages([first, second]);
 		expect(functionBases).toEqual([0, 2]);
 		expect(merged.runtime.functionCount).toBe(3);
 		expect(merged.runtime.functions[2]!.nameStringIndex).toBe(2);
@@ -308,11 +308,11 @@ describe("Test262 VM definition merger", () => {
 		expect(second.runtime.functions[0]!.instructions).toEqual(indexed);
 	});
 
-	it("rejects malformed definition counts and literal-template streams", () => {
-		expect(() => mergeProgramImages([definition({ functionCount: 2 })])).toThrow(
+	it("rejects malformed image counts and literal-template streams", () => {
+		expect(() => mergeProgramImages([image({ functionCount: 2 })])).toThrow(
 			/functionCount/,
 		);
-		expect(() => mergeProgramImages([definition({ literalTemplateData: [5] })])).toThrow(
+		expect(() => mergeProgramImages([image({ literalTemplateData: [5] })])).toThrow(
 			/Truncated/,
 		);
 	});

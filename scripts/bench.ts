@@ -30,7 +30,7 @@ import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import {
-	buildBackendPairFromOneDefinition,
+	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
 	HOST_MAIN,
 } from "../src/test-harness.ts";
@@ -349,7 +349,7 @@ function benchJavascript(
 ): JavascriptMetrics {
 	const binaries: Partial<Record<JavascriptMode, string>> = {};
 	if (selectedModes.some((mode) => mode.startsWith("closed-"))) {
-		const closed = buildBackendPairFromOneDefinition({
+		const closed = buildBackendPairFromOneProgramImage({
 			fixture: JAVASCRIPT_FIXTURE,
 			name: "bench-javascript-closed",
 			config: CLOSED_CONFIG,
@@ -358,7 +358,7 @@ function benchJavascript(
 		binaries["closed-interpreted"] = closed.interpreted;
 	}
 	if (selectedModes.some((mode) => mode.startsWith("open-"))) {
-		const open = buildBackendPairFromOneDefinition({
+		const open = buildBackendPairFromOneProgramImage({
 			fixture: JAVASCRIPT_FIXTURE,
 			name: "bench-javascript-open",
 			config: OPEN_CONFIG,

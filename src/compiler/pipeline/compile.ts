@@ -2,7 +2,7 @@ import { referencesArguments } from "../core/semantic-lowering.ts";
 import { decodeDirectEvalContext } from "../frontend/direct-eval-context.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../frontend/semantic-analysis.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
-import { serializeRuntimeImage } from "../target/serialize-vm.ts";
+import { serializeRuntimeImage } from "../target/program-image-codec.ts";
 import { compileSemanticProgramToProgramImage } from "./compile-core.ts";
 
 /** VarDeclaredNames of the eval script, represented by its hoisted Program bindings. */
@@ -20,7 +20,7 @@ function varDeclaredNames(semantic: SemanticProgram): Set<string> {
 
 /**
  * Compile a single JavaScript script source into the binary definition wire
- * format (serialize-vm.ts) — the `mal_vm_load_definition` / `mal_vm_splice_definition`
+ * format (program-image-codec.ts) — the `mal_runtime_image_load` / `mal_vm_splice_runtime_image`
  * input. This is the trimmed compiler entry that runtime `eval` runs: the script
  * front end (no module graph / bundler / native-C backend / disk build), then
  * lower + serialize. The same function is what gets self-hosted and exposed to

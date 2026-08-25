@@ -20,7 +20,7 @@
 // so public helpers explicitly root every transient MalValue. Native entry points
 // lift only their own suppression once those roots are installed. The baked
 // compiler's `__compile` closure and eval'd functions that outlive a call remain
-// owned by vm->compiler_fn (a traced root) and vm->loaded_defs.
+// owned by vm->compiler_fn (a traced root) and vm->loaded_images.
 
 // Install the baked compiler on first use: splice it, run its top level (which
 // assigns globalThis.__compile), capture that into the rooted vm->compiler_fn,
@@ -51,13 +51,13 @@ static bool ensure_compiler(MalVm *vm) {
     usize len = 0;
     const u8 *bytes = mal_compiler_wire_bytes(&len);
     const char *err = "ok";
-    MalLoadedDefinition *loaded = mal_vm_load_definition(bytes, len, &err);
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(bytes, len, &err);
     if (loaded == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, "eval: baked compiler failed to load");
         goto done;
     }
-    mal_vm_retain_loaded_definition(vm, loaded);
-    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
+    mal_vm_retain_loaded_runtime_image(vm, loaded);
+    i32 entry = mal_vm_splice_runtime_image(vm, mal_loaded_runtime_image_get(loaded));
     if (entry < 0) {
         goto done; // splice set a pending RangeError (constant-table overflow)
     }
@@ -84,11 +84,11 @@ done:
 #endif
 }
 
-// Compile `source` (a JS string value) to a loaded definition via the baked
+// Compile `source` (a JS string value) to a loaded runtime image via the baked
 // compiler. `direct` selects direct-eval mode (free identifiers resolve against
 // the caller scope). Returns nullptr with a pending throw on a compile or load
 // failure.
-static MalLoadedDefinition *compile_source(MalVm *vm, MalValue source, bool direct, bool caller_strict,
+static MalLoadedRuntimeImage *compile_source(MalVm *vm, MalValue source, bool direct, bool caller_strict,
                                              bool in_param_expr, bool in_field_initializer,
                                              MalValue direct_eval_context) {
     MalValue roots[7] = {source, mal_value_new_boolean(direct),
@@ -99,7 +99,7 @@ static MalLoadedDefinition *compile_source(MalVm *vm, MalValue source, bool dire
                           mal_value_new_undefined()};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 7);
-    MalLoadedDefinition *loaded = nullptr;
+    MalLoadedRuntimeImage *loaded = nullptr;
 
     if (!ensure_compiler(vm)) {
         goto done;
@@ -122,7 +122,7 @@ static MalLoadedDefinition *compile_source(MalVm *vm, MalValue source, bool dire
     const char *err = "ok";
     // A parse error surfaces as a compiler throw above; a load failure here means
     // the wire buffer itself is malformed, which is an internal error.
-    loaded = mal_vm_load_definition(data, len, &err);
+    loaded = mal_runtime_image_load(data, len, &err);
     if (loaded == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, err);
     }
@@ -133,7 +133,7 @@ done:
 }
 
 static MalValue run_loaded_source(
-    MalVm *vm, MalLoadedDefinition *loaded, MalValue function_prototype
+    MalVm *vm, MalLoadedRuntimeImage *loaded, MalValue function_prototype
 ) {
     MalValue roots[3] = {
         mal_value_new_undefined(),
@@ -144,8 +144,8 @@ static MalValue run_loaded_source(
     mal_gc_root(&root_span, roots, 3);
     MalValue result = mal_value_new_undefined();
 
-    mal_vm_retain_loaded_definition(vm, loaded);
-    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
+    mal_vm_retain_loaded_runtime_image(vm, loaded);
+    i32 entry = mal_vm_splice_runtime_image(vm, mal_loaded_runtime_image_get(loaded));
     if (entry < 0) {
         goto done;
     }
@@ -176,7 +176,7 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
 
     // Indirect eval: always sloppy (no containing strict context), never a
     // parameter-expression or field-initializer context.
-    MalLoadedDefinition *loaded = compile_source(
+    MalLoadedRuntimeImage *loaded = compile_source(
         vm, roots[0], false, false, false, false, mal_value_new_undefined());
     if (loaded == nullptr) {
         goto done;
@@ -229,7 +229,7 @@ MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
     *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_NONE;
     mal_vm_realm_switch_to(vm, caller_realm);
 
-    MalLoadedDefinition *loaded = compile_source(
+    MalLoadedRuntimeImage *loaded = compile_source(
         vm, source, false, false, false, false, mal_value_new_undefined());
     if (loaded == nullptr) {
 #if MAL_EVAL
@@ -245,8 +245,8 @@ MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
         goto done;
     }
 
-    mal_vm_retain_loaded_definition(vm, loaded);
-    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
+    mal_vm_retain_loaded_runtime_image(vm, loaded);
+    i32 entry = mal_vm_splice_runtime_image(vm, mal_loaded_runtime_image_get(loaded));
     if (entry < 0) {
         *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_SANITIZE;
         completion = vm->completion;
@@ -284,13 +284,13 @@ MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, b
     mal_gc_root(&root_span, roots, 7);
     MalValue result = mal_value_new_undefined();
 
-    MalLoadedDefinition *loaded = compile_source(vm, roots[0], true, caller_strict, in_param_expr,
+    MalLoadedRuntimeImage *loaded = compile_source(vm, roots[0], true, caller_strict, in_param_expr,
                                                    in_field_initializer, roots[4]);
     if (loaded == nullptr) {
         goto done;
     }
-    mal_vm_retain_loaded_definition(vm, loaded);
-    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
+    mal_vm_retain_loaded_runtime_image(vm, loaded);
+    i32 entry = mal_vm_splice_runtime_image(vm, mal_loaded_runtime_image_get(loaded));
     if (entry < 0) {
         goto done;
     }
@@ -401,7 +401,7 @@ MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_coun
         goto done;
     }
 
-    MalLoadedDefinition *loaded = compile_source(
+    MalLoadedRuntimeImage *loaded = compile_source(
         vm, roots[2], false, false, false, false, mal_value_new_undefined());
     if (loaded == nullptr) {
 #if MAL_EVAL

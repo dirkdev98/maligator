@@ -521,7 +521,7 @@ typedef struct MalInstruction {
         struct {
             i32 object, prototype;
 
-            // Object literal `__proto__:` definitions ignore values that are
+            // Object literal `__proto__:` property definitions ignore values that are
             // neither object nor null; class extends wiring always applies.
             bool literal;
         } set_prototype;
@@ -679,7 +679,7 @@ typedef struct MalExceptionHandler {
 /**
  * Debug-info: one run in a function's position table. Instructions in
  * [start_ip, next entry's start_ip) map to source position `pos_id` (an index
- * into MalProgramImage.source_positions). Sorted ascending by start_ip; a frame's
+ * into MalRuntimeImage.source_positions). Sorted ascending by start_ip; a frame's
  * position is the last entry with start_ip <= its instruction pointer.
  */
 typedef struct MalLineEntry {
@@ -814,7 +814,7 @@ typedef struct MalFunction {
     i32 handler_count;
 
     /**
-     * Debug-info (stack traces). file_index points into MalProgramImage.files;
+     * Debug-info (stack traces). file_index points into MalRuntimeImage.files;
      * positions is a run-length position table (position_count entries) mapping
      * instruction pointers to source positions. position_count is 0 / positions
      * is nullptr for stripped builds.
@@ -866,7 +866,7 @@ typedef struct MalHostInstallSlot {
 
 /**
  * Engine-neutral launch context threaded to every host installer. Alongside the
- * process command line, a host driver may expose the compiled definition's source
+ * process command line, a host driver may expose the compiled program's source
  * entry so Node's script argv slot preserves ordinary entrypoint detection.
  */
 typedef struct MalHostLaunchContext {
@@ -881,7 +881,7 @@ typedef struct MalHostLaunchContext {
  * the launch context (the process command line). Defined in the native
  * host-module layer; the compiler emits a direct reference to it for each
  * reached built-in. A null pointer (an unresolved installer in a from-wire
- * definition) is skipped, leaving the slots at their init value (undefined).
+ * program) is skipped, leaving the slots at their init value (undefined).
  */
 typedef void (*MalHostInstaller)(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
@@ -930,7 +930,7 @@ typedef struct MalPrecompiledLiteralShape {
     const i32 *key_string_indices;
 } MalPrecompiledLiteralShape;
 
-typedef struct MalProgramImage {
+typedef struct MalRuntimeImage {
     i32 function_count;
     const MalFunction *functions;
 
@@ -988,7 +988,7 @@ typedef struct MalProgramImage {
     i32 source_position_count;
     const MalSourcePos *source_positions;
 #if MAL_PROFILE
-    /** Number of dense operation sites in this exact generated definition. */
+    /** Number of dense operation sites in this exact generated program. */
     i32 profile_site_count;
 #endif
 
@@ -999,12 +999,12 @@ typedef struct MalProgramImage {
     /**
      * Host-install manifest (see MalHostInstall). Run by mal_vm_run_host_installs
      * after VM init / host attach and before execution. Zero/null for an ordinary
-     * program and for a from-wire definition (whose installer pointers are
+     * program and for a from-wire program (whose installer pointers are
      * unresolved), so both run no installers.
      */
     i32 host_install_count;
     const MalHostInstall *host_installs;
-} MalProgramImage;
+} MalRuntimeImage;
 
 /**
  * A CommonJS module's registry slot. `module_object` is its `module` object
@@ -1090,9 +1090,9 @@ typedef struct MalStackTrace {
     MalStackFrameRecord frames[];
 } MalStackTrace;
 
-// Opaque loaded definition (vm_load.h); the VM retains the ones it splices at
-// runtime for `eval` so their arenas outlive the spliced functions.
-typedef struct MalLoadedDefinition MalLoadedDefinition;
+// Opaque loaded runtime image (vm_load.h); the VM retains the ones it splices
+// for `eval` so their arenas outlive the spliced functions.
+typedef struct MalLoadedRuntimeImage MalLoadedRuntimeImage;
 
 #if MAL_REALMS
 /**
@@ -1151,7 +1151,7 @@ MalValue mal_realm_global(const MalRealm *realm);
  * value is an unrooted identity guard, not an owning reference: heap_epoch must
  * match before it is trusted, closing the freed-cell/reuse ABA hole. Function
  * rows are always re-derived from callee_function_index because eval can realloc
- * the definition's function table.
+ * the runtime image's function table.
  */
 typedef struct MalInterpCallCacheEntry {
     MalValue callee;
@@ -1201,24 +1201,24 @@ typedef struct MalSemanticEpochs {
 } MalSemanticEpochs;
 
 typedef struct MalVm {
-    const MalProgramImage *definition;
+    const MalRuntimeImage *runtime_image;
 
     /** Initial immutable string table retained for native code's direct constants. */
     const MalString *initial_string_constants;
     i32 initial_string_constant_count;
 
     /**
-     * VM-owned, mutable definition that `definition` points at. Initialized as a
-     * shallow copy of the program definition with its function / string-constant /
+     * VM-owned, mutable runtime image that `runtime_image` points at. Initialized
+     * as a shallow copy of the input image with its function / string-constant /
      * bigint-constant / literal-template / CommonJS module tables relocated into
      * growable VM-owned
      * storage (the
      * instruction, handler, and code-unit data the rows point at stays in place —
      * static, or a loader arena). Runtime eval splices more functions, globals,
-     * and constants in via mal_vm_splice_definition without disturbing the const
-     * `vm->definition->...` access paths. The *_capacity fields size that growth.
+     * and constants in via mal_vm_splice_runtime_image without disturbing the const
+     * `vm->runtime_image->...` access paths. The *_capacity fields size that growth.
      */
-    MalProgramImage live_definition;
+    MalRuntimeImage live_runtime_image;
     i32 function_capacity;
     i32 string_capacity;
     i32 bigint_capacity;
@@ -1228,11 +1228,11 @@ typedef struct MalVm {
     i32 source_position_capacity;
     i32 global_capacity;
 
-    /** Lazily atomized debug filenames, indexed with live_definition.files. */
+    /** Lazily atomized debug filenames, indexed with live_runtime_image.files. */
     MalString **file_string_atoms;
 
     /**
-     * Definition-local CommonJS ids are rebased at the require seam. Runtime
+     * Runtime-image-local CommonJS ids are rebased at the require seam. Runtime
      * splices remain interpreted, so the active frame identifies which module
      * table segment an id belongs to without rewriting numeric operands.
      */
@@ -1251,9 +1251,9 @@ typedef struct MalVm {
     struct MalShape ***literal_shape_cache;
 
     /**
-     * Canonical property atom for each definition string constant. This keeps
+     * Canonical property atom for each runtime-image string constant. This keeps
      * static property instructions and shaped literals identity-stable even
-     * when eval splices a duplicate string constant from another definition.
+     * when eval splices a duplicate string constant from another image.
      */
     struct MalString **string_constant_atoms;
 
@@ -1312,7 +1312,7 @@ typedef struct MalVm {
     /** Bounded plain interpreted-function call cache; see vm_ops.c. */
     MalInterpCallCacheEntry *interp_call_cache;
 
-    /** Bounded cache indexed by definition string index; see vm_ops.c. */
+    /** Bounded cache indexed by runtime-image string index; see vm_ops.c. */
     MalGlobalPropertyCacheEntry *global_property_cache;
 
     /** Ordinary Map.prototype.get -> set cache; direct collection helpers bypass it. */
@@ -1423,15 +1423,15 @@ typedef struct MalVm {
      * compiler's published `__compile(source) -> Uint8Array`, captured into this
      * rooted slot on first eval (then deleted off globalThis). It closes over the
      * whole baked compiler environment, so tracing it as a root keeps that alive.
-     * `loaded_defs` retains every definition spliced at runtime (the baked
+     * `loaded_images` retains every program spliced at runtime (the baked
      * compiler plus each eval'd snippet): the spliced functions reference their
      * instruction data in-place in these arenas, freed as a unit at teardown.
      */
     MalValue compiler_fn;
     bool compiler_installed;
-    MalLoadedDefinition **loaded_defs;
-    i32 loaded_def_count;
-    i32 loaded_def_capacity;
+    MalLoadedRuntimeImage **loaded_images;
+    i32 loaded_image_count;
+    i32 loaded_image_capacity;
 
     /**
      * Promises that rejected while unhandled (no reject handler attached at
@@ -1568,7 +1568,7 @@ typedef struct MalVm {
     i32 captured_trace_live_count;
 
     /**
-     * CommonJS module registry, sized to definition->cjs_module_count (null when
+     * CommonJS module registry, sized to program->cjs_module_count (null when
      * the program has none). Each slot caches a module's `module` object after
      * (and during) its first require, so require() returns `module.exports` live.
      */
@@ -1808,7 +1808,7 @@ typedef struct MalVmFrame {
      */
     MalVm *vm;
     /**
-     * Resolved (cached) pointer into vm->live_definition.functions, used by the
+     * Resolved (cached) pointer into vm->live_runtime_image.functions, used by the
      * hot loop. `function_index` is the source of truth: a runtime-eval splice
      * may realloc the function table and move it, so the splice re-resolves
      * `function` for every live frame from its index (and a generator resume
@@ -1894,7 +1894,7 @@ typedef MalVmFrame MalCallable;
  * and language-state phases. Host attachment and host installs happen only
  * after this contract completes.
  */
-void mal_vm_init(MalVm *vm, const MalProgramImage *definition);
+void mal_vm_init(MalVm *vm, const MalRuntimeImage *program);
 
 /** Register one idempotent runtime-module teardown with the owning isolate. */
 bool mal_vm_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm));
@@ -1916,19 +1916,19 @@ void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values);
 void mal_vm_free_coroutine_buffer_pool(MalVm *vm);
 
 /**
- * Run the definition's host-install manifest: for each reached `node:*` built-in
+ * Run the program's host-install manifest: for each reached `node:*` built-in
  * / `process`, call its installer to fill the export global slots. Call after
  * mal_vm_init (and, for a host program, after mal_host_attach) and before running
  * the entry — the compiled program reads those slots via LOAD_GLOBAL. `launch`
  * carries the process command line for the installers that need it (`process`);
  * pass the driver's own argc/argv. A no-op when the manifest is empty (every
- * ordinary program) or an installer is unresolved (a from-wire definition), so it
+ * ordinary program) or an installer is unresolved (a from-wire program), so it
  * is safe to call unconditionally.
  */
-static inline void mal_vm_run_definition_host_installs(
-    MalVm *vm, const MalProgramImage *definition, const MalHostLaunchContext *launch) {
-    for (i32 i = 0; i < definition->host_install_count; i++) {
-        const MalHostInstall *install = &definition->host_installs[i];
+static inline void mal_vm_run_program_host_installs(
+    MalVm *vm, const MalRuntimeImage *program, const MalHostLaunchContext *launch) {
+    for (i32 i = 0; i < program->host_install_count; i++) {
+        const MalHostInstall *install = &program->host_installs[i];
         if (install->installer != nullptr) {
 #if MAL_PROFILE && MAL_PERF_STATS
             u8 previous_profile_category = vm->heap.profile_native_category;
@@ -1944,13 +1944,13 @@ static inline void mal_vm_run_definition_host_installs(
 
 static inline void mal_vm_run_host_installs(MalVm *vm, const MalHostLaunchContext *launch) {
     if (launch != nullptr) vm->launch = *launch;
-    mal_vm_run_definition_host_installs(vm, vm->definition, launch);
+    mal_vm_run_program_host_installs(vm, vm->runtime_image, launch);
 }
 
 void mal_vm_free(MalVm *vm);
 
 /**
- * Append a loaded definition's functions, globals, and string/bigint constants
+ * Append a loaded runtime image's functions, globals, and string/bigint constants
  * to the running VM, rebasing every internal reference (function indices, global
  * slots, string/bigint constant indices) by the current table sizes, and return
  * the function-index base the spliced functions start at — so the caller can
@@ -1964,10 +1964,10 @@ void mal_vm_free(MalVm *vm);
  * (no live frames) — it may realloc the function table, which would dangle a
  * running frame's function pointer.
  */
-i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded);
+i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded);
 
 /** Retain a loaded arena after a successful splice until VM teardown. */
-void mal_vm_retain_loaded_definition(MalVm *vm, MalLoadedDefinition *loaded);
+void mal_vm_retain_loaded_runtime_image(MalVm *vm, MalLoadedRuntimeImage *loaded);
 
 /** Allocate a captured-slot environment node (parent chain + `count` slots
  * initialized to undefined) as a GC cell. Used by both the interpreter and

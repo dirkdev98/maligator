@@ -191,7 +191,7 @@ static inline void mal_gc_card(MalHeapHeader *owner, MalValue new_value) {
 /*
  * Compiled root frame: a shadow-stack node holding the
  * GC-live MalValues of a compiled function that are live across a safepoint.
- * emit-c declares one per such function, links it on entry, unlinks on every
+ * render-native-c declares one per such function, links it on entry, unlinks on every
  * exit; the collector walks the chain. The interpreter's MalVmFrame is the
  * sibling representation. `desc` is baked, static program-image data.
  */

@@ -23,8 +23,8 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-vm.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
 
 function coreProgram(
 	functions: ReadonlyArray<CoreFunction>,

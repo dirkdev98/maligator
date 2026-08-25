@@ -857,14 +857,14 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 // truth) before tracing: an eval splice can realloc the function
                 // table and move it, dangling the cached gen->frame.function until
                 // the coroutine next resumes (which re-resolves the same way, see
-                // mal_vm_resume_generator). mal_vm_splice_definition only fixes up
+                // mal_vm_resume_generator). mal_vm_splice_runtime_image only fixes up
                 // the live vm->frames, not suspended coroutine frames, and this
                 // trace runs before the resume. frame.function is null for a
                 // never-populated frame (mal_generator_object_new), which stays a
                 // no-op trace.
                 if (gen->frame.function != nullptr) {
                     gen->frame.function =
-                        &g_gc_vm->live_definition.functions[gen->frame.function_index];
+                        &g_gc_vm->live_runtime_image.functions[gen->frame.function_index];
                 }
                 mal_gc_trace_frame(&gen->frame);
             }
@@ -1042,11 +1042,11 @@ static void mal_gc_scan_roots(MalVm *vm) {
     // Every realm's globals and intrinsics are roots. The VM aliases point into the
     // current realm, which this loop already covers.
     for (MalRealm *realm = vm->realms; realm != nullptr; realm = realm->next) {
-        mal_gc_mark_values(realm->globals, vm->definition->global_count);
+        mal_gc_mark_values(realm->globals, vm->runtime_image->global_count);
         mal_gc_mark_values(realm->intrinsics, MAL_INTRINSIC_COUNT);
     }
 #else
-    mal_gc_mark_values(vm->globals, vm->definition->global_count);
+    mal_gc_mark_values(vm->globals, vm->runtime_image->global_count);
     mal_gc_mark_values(vm->intrinsics, MAL_INTRINSIC_COUNT);
 #endif
     mal_gc_mark_values(vm->unhandled_rejections, vm->unhandled_count);
@@ -1067,7 +1067,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
     mal_gc_mark_value(vm->compiler_fn);
 
     if (vm->cjs_registry != nullptr) {
-        for (i32 i = 0; i < vm->definition->cjs_module_count; ++i) {
+        for (i32 i = 0; i < vm->runtime_image->cjs_module_count; ++i) {
             mal_gc_mark_value(vm->cjs_registry[i].module_object);
         }
     }

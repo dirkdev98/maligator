@@ -97,18 +97,18 @@ static void mal_host_throw_errno(
 #if MAL_DEVELOPMENT_API
 static MalValue mal_test_run_wire_bytes(MalVm *vm, const u8 *bytes, usize length) {
     const char *error = "invalid VM wire";
-    MalLoadedDefinition *loaded = mal_vm_load_definition_with_host_resolver(
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
         bytes, length, &error, mal_host_resolve_installer);
     if (loaded == nullptr) {
         mal_asset_throw_utf8(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, error);
         return mal_value_new_undefined();
     }
 
-    mal_vm_retain_loaded_definition(vm, loaded);
-    const MalProgramImage *definition = mal_loaded_definition_get(loaded);
-    i32 entry = mal_vm_splice_definition(vm, definition);
+    mal_vm_retain_loaded_runtime_image(vm, loaded);
+    const MalRuntimeImage *program = mal_loaded_runtime_image_get(loaded);
+    i32 entry = mal_vm_splice_runtime_image(vm, program);
     if (entry < 0) return mal_value_new_undefined();
-    mal_vm_run_definition_host_installs(vm, definition, &vm->launch);
+    mal_vm_run_program_host_installs(vm, program, &vm->launch);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
 
     MalValue callable = mal_vm_op_create_function(vm, entry, nullptr);
@@ -217,8 +217,8 @@ static MalValue mal_test_set_development_assets(
     host->development_assets = loaded;
     host->development_assets_free =
         loaded == nullptr ? nullptr : mal_test_development_assets_free;
-    vm->live_definition.assets = assets;
-    vm->live_definition.asset_count = asset_count;
+    vm->live_runtime_image.assets = assets;
+    vm->live_runtime_image.asset_count = asset_count;
     return mal_value_new_undefined();
 }
 
@@ -423,8 +423,8 @@ static bool mal_asset_safe_relative_path(const char *path) {
 }
 
 static const MalAsset *mal_asset_find(const MalVm *vm, const char *name) {
-    for (i32 i = 0; i < vm->definition->asset_count; i++) {
-        const MalAsset *asset = &vm->definition->assets[i];
+    for (i32 i = 0; i < vm->runtime_image->asset_count; i++) {
+        const MalAsset *asset = &vm->runtime_image->assets[i];
         if (strcmp(asset->name, name) == 0) return asset;
     }
     return nullptr;

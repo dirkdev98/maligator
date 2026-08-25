@@ -30,12 +30,12 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semant
 import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "../compiler/pipeline/compile-program.ts";
-import { emitBatch, emitProgramImage } from "../compiler/target/emit-vm.ts";
-import type { ProgramImage } from "../compiler/target/lower-vm.ts";
+import { emitBatch, emitProgramImage } from "../compiler/target/emit-program-image.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-} from "../compiler/target/serialize-vm.ts";
+} from "../compiler/target/program-image-codec.ts";
+import type { ProgramImage } from "../compiler/target/program-image.ts";
 import { buildLocalBinary } from "../local-build.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";
 import { ensureNativeArtifacts } from "../runtime-build.ts";
@@ -56,6 +56,7 @@ import type { BatchManifest } from "./artifact-cache.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
 import { test262RuntimeNegativeVerdict } from "./policy.ts";
+import { mergeProgramImages } from "./program-image-merge.ts";
 import { createTest262BatchReport } from "./report.ts";
 import type {
 	Test262BatchCacheState,
@@ -68,7 +69,6 @@ import {
 } from "./shared-helper-plan.ts";
 import type { Test262SharedHelper, Test262SourcePlan } from "./shared-helper-plan.ts";
 import type { Test262File, Test262Result } from "./types.ts";
-import { mergeProgramImages } from "./vm-definition-merge.ts";
 
 const execFileAsync = promisify(execFile);
 let selectedToolchain: Toolchain | undefined;
@@ -162,7 +162,7 @@ function wireBackend(): boolean {
 }
 
 /**
- * Force every test function through the bytecode interpreter (no emit-c bodies).
+ * Force every test function through the bytecode interpreter (no render-native-c bodies).
  * Used to stress the GC: collection is only safe with no compiled frame on the C
  * stack, so an all-interpreter build lets a safepoint collect at every poll. Set
  * MAL_INTERP=1. Folded into the cache key so it cannot reuse compiled artifacts.
@@ -1170,7 +1170,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 			...sharedEntries.map((entry) => entry.definition),
 		];
 		const merged = mergeProgramImages(sharedComponents);
-		physicalDefinitions.push(merged.definition);
+		physicalDefinitions.push(merged.image);
 		const helperBases = new Map(
 			usedHelpers.map(
 				(helper, index) => [helper.id, merged.functionBases[index]!] as const,
@@ -1250,11 +1250,11 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		"",
 		body,
 		"",
-		"const MalProgramImage *const mal_test262_artifact_definitions[] = {",
-		...physicalDefinitions.map((_, index) => `    &mal_vm_definition_${index},`),
+		"const MalRuntimeImage *const mal_test262_artifact_images[] = {",
+		...physicalDefinitions.map((_, index) => `    &mal_runtime_image_${index},`),
 		"};",
-		`const int mal_test262_artifact_definition_count = ${physicalDefinitions.length};`,
-		`const int mal_test262_plan_definition_indices[] = { ${entries.map((entry) => entry.definitionIndex).join(", ")} };`,
+		`const int mal_test262_artifact_image_count = ${physicalDefinitions.length};`,
+		`const int mal_test262_plan_image_indices[] = { ${entries.map((entry) => entry.definitionIndex).join(", ")} };`,
 		`const int mal_test262_plan_entry_indices[] = { ${entries.map((entry) => entry.entryFunctionIndex).join(", ")} };`,
 		`const int mal_test262_plan_helper_offsets[] = { ${helperOffsets.join(", ")} };`,
 		`const int mal_test262_plan_helper_indices[] = { ${helperIndices.length > 0 ? helperIndices.join(", ") : "0"} };`,

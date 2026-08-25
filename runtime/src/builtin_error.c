@@ -76,7 +76,7 @@ bool mal_builtin_value_has_error_data(MalVm *vm, MalValue value) {
  * marker is minted (errors created during early intrinsics init).
  */
 static bool mal_error_capture_stack(MalVm *vm, MalObject *error) {
-    if (mal_value_is_undefined(MAL_ERROR_STACK_MARKER(vm)) || vm->definition->file_count == 0) {
+    if (mal_value_is_undefined(MAL_ERROR_STACK_MARKER(vm)) || vm->runtime_image->file_count == 0) {
         return true;
     }
     MalStackTrace *trace = mal_vm_capture_stack(vm);
@@ -625,18 +625,18 @@ static void mal_error_callsite_define_method(
 static MalString *mal_error_file_string(MalVm *vm, i32 file_index) {
     MalString *cached = vm->file_string_atoms[file_index];
     if (cached == nullptr) {
-        cached = mal_intrinsic_ascii(vm, vm->definition->files[file_index]);
+        cached = mal_intrinsic_ascii(vm, vm->runtime_image->files[file_index]);
         vm->file_string_atoms[file_index] = cached;
     }
     return cached;
 }
 
 static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_id) {
-    const MalFunction *function = &vm->definition->functions[function_index];
-    bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
-    const MalSourcePos *pos = have_pos ? &vm->definition->source_positions[pos_id] : nullptr;
-    bool have_file = function->file_index >= 0 && function->file_index < vm->definition->file_count;
-    const MalString *name = &vm->definition->string_constants[function->name_string_index];
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
+    bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
+    const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
+    bool have_file = function->file_index >= 0 && function->file_index < vm->runtime_image->file_count;
+    const MalString *name = &vm->runtime_image->string_constants[function->name_string_index];
     MalValue slots[MAL_CALLSITE_SLOT_COUNT] = {
         have_file
             ? mal_value_from_string(
@@ -668,10 +668,10 @@ static MalArrayObject *mal_error_callsite_array(MalVm *vm, const MalStackTrace *
             i32 pos_id = record->pos_id;
             i32 guard = 0;
             while (guard++ < 100000) {
-                bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
-                const MalSourcePos *pos = have_pos ? &vm->definition->source_positions[pos_id] : nullptr;
+                bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
+                const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
                 bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
-                    pos->inlined_function_index < vm->definition->function_count;
+                    pos->inlined_function_index < vm->runtime_image->function_count;
                 i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
                 if (logical_index++ >= trace->frame_skip) {
                     if (trace->frame_limit >= 0 && emitted >= trace->frame_limit) {
@@ -700,10 +700,10 @@ static i32 mal_error_trace_constructor_skip(MalVm *vm, const MalStackTrace *trac
             i32 pos_id = record->pos_id;
             i32 guard = 0;
             while (guard++ < 100000) {
-                bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
-                const MalSourcePos *pos = have_pos ? &vm->definition->source_positions[pos_id] : nullptr;
+                bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
+                const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
                 bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
-                    pos->inlined_function_index < vm->definition->function_count;
+                    pos->inlined_function_index < vm->runtime_image->function_count;
                 i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
                 logical_count++;
                 if (function_index == constructor_index) {

@@ -4,7 +4,8 @@ import {
 	emitIntrinsic,
 	emitTypeofResult,
 	emitUnaryOperator,
-} from "./emit-vm.ts";
+} from "./emit-program-image.ts";
+import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
@@ -12,7 +13,7 @@ import {
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
-} from "./lower-vm.ts";
+} from "./program-image.ts";
 import type {
 	BytecodeFunction,
 	NativeFunctionPlan,
@@ -25,8 +26,7 @@ import type {
 	VmSemanticDependency,
 	VmSemanticProtectorFact,
 	VmStackObjectPlanRegion,
-} from "./lower-vm.ts";
-import { profileOperationForInstruction } from "./profile-metadata.ts";
+} from "./program-image.ts";
 
 /**
  * The native-C backend: lower an eligible function straight to a C function
@@ -3710,7 +3710,7 @@ function emitInstruction(
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`if (mal_vm_callee_has_index(vm, ${directCallee}, ${target})) {`,
 						`  if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
-						`  const MalFunction *${directFunction} = &vm->definition->functions[${target}];`,
+						`  const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
 						`  MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
 						`  mal_vm_leave_compiled(vm);`,
 						`  if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,

@@ -12,8 +12,8 @@
 // Batch driver for generated test262 translation units: every test runs in a
 // forked child for crash and timeout isolation, while the process image
 // (code signature, dyld work) is paid for only once per batch.
-extern const MalProgramImage *const mal_test262_artifact_definitions[];
-extern const int mal_test262_plan_definition_indices[];
+extern const MalRuntimeImage *const mal_test262_artifact_images[];
+extern const int mal_test262_plan_image_indices[];
 extern const int mal_test262_plan_entry_indices[];
 extern const int mal_test262_plan_helper_offsets[];
 extern const int mal_test262_plan_helper_indices[];
@@ -28,7 +28,7 @@ static int mal_test262_run_entry(MalVm *vm, int function_index) {
 
 static int mal_test262_run_single(int index) {
     MalVm vm;
-    mal_vm_init(&vm, mal_test262_artifact_definitions[mal_test262_plan_definition_indices[index]]);
+    mal_vm_init(&vm, mal_test262_artifact_images[mal_test262_plan_image_indices[index]]);
     mal_test262_install(&vm);
 
     int helper_start = mal_test262_plan_helper_offsets[index];

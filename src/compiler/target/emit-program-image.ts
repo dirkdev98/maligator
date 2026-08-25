@@ -1,8 +1,7 @@
 import path from "node:path";
 import type { IncludedAsset } from "../../assets.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
-import { emitCompiledFunction } from "./emit-c.ts";
-import type { CompiledFunction } from "./emit-c.ts";
+import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
@@ -11,14 +10,15 @@ import {
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
-} from "./lower-vm.ts";
+} from "./program-image.ts";
 import type {
 	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
 	RuntimeImage,
-} from "./lower-vm.ts";
-import { finalizeCompilerRemarks } from "./profile-metadata.ts";
+} from "./program-image.ts";
+import { emitCompiledFunction } from "./render-native-c.ts";
+import type { CompiledFunction } from "./render-native-c.ts";
 
 type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
 
@@ -40,7 +40,7 @@ export interface EmitOptions {
 	debugInfo?: boolean;
 
 	/**
-	 * Emit the native-backend (emit-c) compiled function bodies and wire them
+	 * Emit the native-C compiled function bodies and wire them
 	 * into `MalFunction.compiled`. Defaults to true. Set false to force every
 	 * function through the bytecode interpreter — used for profiling the pure
 	 * interpreter path against the native overlay.
@@ -125,7 +125,7 @@ const C_HEADER_LINES = [
 	'#include "builtin_string.h"',
 	'#include "builtin_regexp.h"',
 	'#include "builtin_math.h"',
-	// The compiled (emit-c) for-of lowering uses the iterator-record helpers.
+	// Native-C for-of lowering uses the iterator-record helpers.
 	'#include "builtin_iterator.h"',
 	// for-await lowering uses mal_vm_get_async_iterator.
 	'#include "builtin_async_iterator.h"',

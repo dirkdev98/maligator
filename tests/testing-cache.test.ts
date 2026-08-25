@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import { deserializeRuntimeImage } from "../src/compiler/target/serialize-vm.ts";
+import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 import {
 	compileIsolatedTestImage,
 	compileTestFile,

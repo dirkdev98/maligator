@@ -46,7 +46,7 @@ static u64 g_loaded_instruction_data_count = 0;
 static MalShape **mal_vm_ensure_literal_shape_cache(
     MalVm *vm, i32 function_index
 ) {
-    const MalFunction *function = &vm->definition->functions[function_index];
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
     if (function->literal_shape_count > 0
         && vm->literal_shape_cache[function_index] == nullptr) {
         vm->literal_shape_cache[function_index] = calloc(
@@ -87,7 +87,7 @@ static void mal_vm_seed_function_known_own_slot_ics(
             }
             const i32 *data = &function->instruction_data[data_offset];
             i32 candidate_count = data[1];
-            if (data[0] < 0 || data[0] >= vm->definition->string_constant_count ||
+            if (data[0] < 0 || data[0] >= vm->runtime_image->string_constant_count ||
                 candidate_count <= 0 ||
                 candidate_count > (function->instruction_data_count - data_offset - 2) / 3) {
                 continue;
@@ -114,7 +114,7 @@ static void mal_vm_seed_function_known_own_slot_ics(
         i32 ic_index = data[offset++];
         i32 string_index = data[offset++];
         i32 candidate_count = data[offset++];
-        if (string_index < 0 || string_index >= vm->definition->string_constant_count ||
+        if (string_index < 0 || string_index >= vm->runtime_image->string_constant_count ||
             candidate_count <= 0 || candidate_count > (count - offset) / 3 ||
             ic_index < 0 || ic_index >= function->property_ic_count) {
             return;
@@ -128,7 +128,7 @@ static void mal_vm_seed_function_known_own_slot_ics(
 
 void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
     MalPropertyCachePool *pool = &vm->property_cache[function_index];
-    const MalFunction *function = &vm->definition->functions[function_index];
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
     i32 property_count = function->property_ic_count;
     bool created_property_cache = false;
     if (property_count > 0 && pool->sites == nullptr) {
@@ -147,13 +147,13 @@ void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
     // dense cache pool is created, instead of rebuilding the key and checking
     // for an empty row on every dynamic access. Precompiled shape rows exist
     // before any function can execute, both at VM initialization and after a
-    // definition splice. A later generic fallback may replace the row; the
+    // program splice. A later generic fallback may replace the row; the
     // instruction's explicit bounded candidates remain its exact backup guard.
     mal_vm_seed_function_known_own_slot_ics(vm, function, pool);
 }
 
 static void mal_vm_materialize_precompiled_literal_shapes(
-    MalVm *vm, const MalProgramImage *definition, i32 function_base, i32 string_base);
+    MalVm *vm, const MalRuntimeImage *program, i32 function_base, i32 string_base);
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
 #define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
@@ -514,104 +514,104 @@ static void mal_vm_init_engine_state(MalVm *vm) {
 }
 
 /** Phase 2: adopt immutable input tables into VM-owned, spliceable storage. */
-static void mal_vm_adopt_program_image(MalVm *vm, const MalProgramImage *definition) {
-	if (definition->initialize_generated_data != nullptr) {
-        definition->initialize_generated_data();
+static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program) {
+	if (program->initialize_generated_data != nullptr) {
+        program->initialize_generated_data();
     }
 
     // Relocate the program's function / string / bigint / literal-template tables into
-    // VM-owned growable storage behind a mutable `live_definition` (see vm.h), so
+    // VM-owned growable storage behind a mutable `live_runtime_image` (see vm.h), so
     // runtime eval can splice more in later while the const access paths keep
     // working. The instruction/handler/code-unit data the rows point at is left
     // in place (static, or the loader arena). Counts of 0 use a capacity of 1 so
     // a later splice always has a real array to grow.
-    vm->live_definition = *definition;
-    for (i32 i = 0; i < definition->function_count; i++) {
-        g_loaded_instruction_count += (u64) definition->functions[i].instruction_count;
+    vm->live_runtime_image = *program;
+    for (i32 i = 0; i < program->function_count; i++) {
+        g_loaded_instruction_count += (u64) program->functions[i].instruction_count;
         g_loaded_instruction_data_count +=
-            (u64) definition->functions[i].instruction_data_count;
+            (u64) program->functions[i].instruction_data_count;
     }
-    vm->definition = &vm->live_definition;
+    vm->runtime_image = &vm->live_runtime_image;
 
-    i32 function_count = definition->function_count;
+    i32 function_count = program->function_count;
     vm->function_capacity = function_count > 0 ? function_count : 1;
     MalFunction *functions = malloc(sizeof(MalFunction) * (usize) vm->function_capacity);
     if (function_count > 0) {
-        memcpy(functions, definition->functions, sizeof(MalFunction) * (usize) function_count);
+        memcpy(functions, program->functions, sizeof(MalFunction) * (usize) function_count);
     }
-    vm->live_definition.functions = functions;
+    vm->live_runtime_image.functions = functions;
 
-    i32 string_count = definition->string_constant_count;
-    vm->initial_string_constants = definition->string_constants;
+    i32 string_count = program->string_constant_count;
+    vm->initial_string_constants = program->string_constants;
     vm->initial_string_constant_count = string_count;
     // Fixed capacity, never reallocated (see MAL_MAX_STRING_CONSTANTS): string
     // cells must keep stable addresses because values point at them.
     vm->string_capacity = string_count > MAL_MAX_STRING_CONSTANTS ? string_count : MAL_MAX_STRING_CONSTANTS;
     MalString *strings = malloc(sizeof(MalString) * (usize) vm->string_capacity);
     if (string_count > 0) {
-        memcpy(strings, definition->string_constants, sizeof(MalString) * (usize) string_count);
+        memcpy(strings, program->string_constants, sizeof(MalString) * (usize) string_count);
     }
-    vm->live_definition.string_constants = strings;
+    vm->live_runtime_image.string_constants = strings;
     vm->string_constant_atoms =
         calloc((usize) vm->string_capacity, sizeof(MalString *));
 
     // Fixed capacity, never reallocated (see MAL_MAX_BIGINT_CONSTANTS): like
     // strings, BigInt values point at their cells.
-    i32 bigint_count = definition->bigint_constant_count;
+    i32 bigint_count = program->bigint_constant_count;
     vm->bigint_capacity = bigint_count > MAL_MAX_BIGINT_CONSTANTS ? bigint_count : MAL_MAX_BIGINT_CONSTANTS;
     MalBigInt *bigints = malloc(sizeof(MalBigInt) * (usize) vm->bigint_capacity);
     if (bigint_count > 0) {
-        memcpy(bigints, definition->bigint_constants, sizeof(MalBigInt) * (usize) bigint_count);
+        memcpy(bigints, program->bigint_constants, sizeof(MalBigInt) * (usize) bigint_count);
     }
-    vm->live_definition.bigint_constants = bigints;
+    vm->live_runtime_image.bigint_constants = bigints;
 
-    i32 literal_template_count = definition->literal_template_data_count;
+    i32 literal_template_count = program->literal_template_data_count;
     vm->literal_template_capacity = literal_template_count > 0 ? literal_template_count : 1;
     u32 *literal_templates = malloc(sizeof(u32) * (usize) vm->literal_template_capacity);
     if (literal_template_count > 0) {
-        memcpy(literal_templates, definition->literal_template_data,
+        memcpy(literal_templates, program->literal_template_data,
                sizeof(u32) * (usize) literal_template_count);
     }
-    vm->live_definition.literal_template_data = literal_templates;
+    vm->live_runtime_image.literal_template_data = literal_templates;
 
-    i32 cjs_module_count = definition->cjs_module_count;
+    i32 cjs_module_count = program->cjs_module_count;
     vm->cjs_module_capacity = cjs_module_count > 0 ? cjs_module_count : 1;
     i32 *cjs_module_function_indices =
         malloc(sizeof(i32) * (usize) vm->cjs_module_capacity);
     if (cjs_module_count > 0) {
         memcpy(
             cjs_module_function_indices,
-            definition->cjs_module_function_indices,
+            program->cjs_module_function_indices,
             sizeof(i32) * (usize) cjs_module_count);
     }
-    vm->live_definition.cjs_module_function_indices =
+    vm->live_runtime_image.cjs_module_function_indices =
         cjs_module_function_indices;
-    i32 file_count = definition->file_count;
+    i32 file_count = program->file_count;
     vm->file_capacity = file_count > 0 ? file_count : 1;
     const char **files = malloc(sizeof(char *) * (usize) vm->file_capacity);
     if (file_count > 0) {
-        memcpy(files, definition->files, sizeof(char *) * (usize) file_count);
+        memcpy(files, program->files, sizeof(char *) * (usize) file_count);
     }
-    vm->live_definition.files = files;
+    vm->live_runtime_image.files = files;
     vm->file_string_atoms = calloc(
         (usize) vm->file_capacity, sizeof(MalString *));
 
-    i32 source_position_count = definition->source_position_count;
+    i32 source_position_count = program->source_position_count;
     vm->source_position_capacity =
         source_position_count > 0 ? source_position_count : 1;
     MalSourcePos *source_positions = malloc(
         sizeof(MalSourcePos) * (usize) vm->source_position_capacity);
     if (source_position_count > 0) {
-        memcpy(source_positions, definition->source_positions,
+        memcpy(source_positions, program->source_positions,
                sizeof(MalSourcePos) * (usize) source_position_count);
     }
-    vm->live_definition.source_positions = source_positions;
+    vm->live_runtime_image.source_positions = source_positions;
 	vm->function_cjs_module_bases =
 		calloc((usize) vm->function_capacity, sizeof(i32));
 }
 
 /** Phase 3: allocate execution stacks, caches, queues, and host-neutral state. */
-static void mal_vm_init_execution_state(MalVm *vm, const MalProgramImage *definition) {
+static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *program) {
 	vm->property_cache =
         calloc((usize) vm->function_capacity, sizeof(MalPropertyCachePool));
     vm->literal_shape_cache =
@@ -646,7 +646,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalProgramImage *defini
     vm->interp_call_cache = nullptr;
     vm->global_property_cache = nullptr;
     mal_vm_invalidate_map_get_set_cache(vm);
-    vm->global_capacity = definition->global_count > 0 ? definition->global_count : 1;
+    vm->global_capacity = program->global_count > 0 ? program->global_count : 1;
 #if !MAL_REALMS
     vm->globals = malloc(sizeof(MalValue) * (usize) vm->global_capacity);
 #endif
@@ -677,9 +677,9 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalProgramImage *defini
 
     vm->compiler_fn = mal_value_new_undefined();
     vm->compiler_installed = false;
-    vm->loaded_defs = nullptr;
-    vm->loaded_def_count = 0;
-    vm->loaded_def_capacity = 0;
+    vm->loaded_images = nullptr;
+    vm->loaded_image_count = 0;
+    vm->loaded_image_capacity = 0;
 
     vm->native_frames = nullptr;
     vm->native_frame_count = 0;
@@ -727,7 +727,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalProgramImage *defini
 }
 
 /** Phase 4: create language heap roots, intrinsics, module state, and the main fiber. */
-static void mal_vm_init_language_state(MalVm *vm, const MalProgramImage *definition) {
+static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program) {
 	mal_heap_init(&vm->heap, 0);
     vm->heap.native_function_length_key =
         mal_string_new_ascii(&vm->heap, "length", 6);
@@ -742,7 +742,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalProgramImage *definit
     // Enter the initial realm: sets both VM aliases and primes heap.current_realm.
     mal_realm_switch(vm, vm->initial_realm);
 #else
-    for (i32 i = 0; i < definition->global_count; i++) {
+    for (i32 i = 0; i < program->global_count; i++) {
         vm->globals[i] = mal_value_new_undefined();
     }
 #endif
@@ -752,14 +752,14 @@ static void mal_vm_init_language_state(MalVm *vm, const MalProgramImage *definit
     vm->symbol_registry = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_SYMBOL_REGISTRY);
     // Must exist before mal_intrinsics_init, which interns keys through it.
     vm->atoms = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
-    for (i32 i = 0; i < definition->string_constant_count; i++) {
+    for (i32 i = 0; i < program->string_constant_count; i++) {
         vm->string_constant_atoms[i] = mal_property_atomize_string(
-            vm, (MalString *) &vm->definition->string_constants[i]);
+            vm, (MalString *) &vm->runtime_image->string_constants[i]);
     }
     // A guarded own-slot load may execute before its source allocation site.
     // Build only those named literal shapes now, after their canonical atoms
     // exist, so both compiled and interpreted guards can hit on first use.
-    mal_vm_materialize_precompiled_literal_shapes(vm, definition, 0, 0);
+    mal_vm_materialize_precompiled_literal_shapes(vm, program, 0, 0);
     for (u32 i = 0; i < MAL_HOT_KEY_COUNT; i++) {
         vm->hot_intrinsic_keys[i] = nullptr;
     }
@@ -777,9 +777,9 @@ static void mal_vm_init_language_state(MalVm *vm, const MalProgramImage *definit
     vm->allocation_error = mal_vm_create_allocation_error(vm);
 
     // CommonJS module registry: one lazily-loaded slot per CJS module.
-    if (definition->cjs_module_count > 0) {
-        vm->cjs_registry = malloc(sizeof(MalCjsModuleSlot) * (usize) definition->cjs_module_count);
-        for (i32 i = 0; i < definition->cjs_module_count; i++) {
+    if (program->cjs_module_count > 0) {
+        vm->cjs_registry = malloc(sizeof(MalCjsModuleSlot) * (usize) program->cjs_module_count);
+        for (i32 i = 0; i < program->cjs_module_count; i++) {
             vm->cjs_registry[i] = (MalCjsModuleSlot) {
                 .module_object = mal_value_new_undefined(),
                 .loaded = false,
@@ -797,11 +797,11 @@ static void mal_vm_init_language_state(MalVm *vm, const MalProgramImage *definit
 	mal_profile_init(vm);
 }
 
-void mal_vm_init(MalVm *vm, const MalProgramImage *definition) {
+void mal_vm_init(MalVm *vm, const MalRuntimeImage *program) {
 	mal_vm_init_engine_state(vm);
-	mal_vm_adopt_program_image(vm, definition);
-	mal_vm_init_execution_state(vm, definition);
-	mal_vm_init_language_state(vm, definition);
+	mal_vm_adopt_program_image(vm, program);
+	mal_vm_init_execution_state(vm, program);
+	mal_vm_init_language_state(vm, program);
 }
 
 MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
@@ -810,7 +810,7 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
             vm->frames[vm->frame_count - 1].function_index;
         id += vm->function_cjs_module_bases[caller_function_index];
     }
-    if (id < 0 || id >= vm->definition->cjs_module_count) {
+    if (id < 0 || id >= vm->runtime_image->cjs_module_count) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "invalid CommonJS module id");
         return mal_value_new_undefined();
     }
@@ -845,8 +845,8 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
         mal_value_new_undefined(),
         mal_value_new_undefined(),
     };
-    i32 function_index = vm->definition->cjs_module_function_indices[id];
-    const MalFunction *function = &vm->definition->functions[function_index];
+    i32 function_index = vm->runtime_image->cjs_module_function_indices[id];
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
     if (function->compiled != nullptr) {
         if (mal_vm_enter_compiled(vm, function_index)) {
             function->compiled(
@@ -935,15 +935,15 @@ void mal_vm_free(MalVm *vm) {
 
     // Definitions spliced at runtime for eval: their arenas back the spliced
     // functions' instruction data, so they are released only now, at teardown.
-    for (i32 i = 0; i < vm->loaded_def_count; i++) {
-        mal_vm_loaded_definition_free(vm->loaded_defs[i]);
+    for (i32 i = 0; i < vm->loaded_image_count; i++) {
+        mal_loaded_runtime_image_free(vm->loaded_images[i]);
     }
-    free(vm->loaded_defs);
+    free(vm->loaded_images);
     if (vm->property_cache != nullptr) {
-        for (i32 i = 0; i < vm->definition->function_count; i++) {
+        for (i32 i = 0; i < vm->runtime_image->function_count; i++) {
             MalPropertyCachePool *pool = &vm->property_cache[i];
             if (pool->sites != nullptr) {
-                for (i32 j = 0; j < vm->definition->functions[i].property_ic_count; j++) {
+                for (i32 j = 0; j < vm->runtime_image->functions[i].property_ic_count; j++) {
                     mal_object_unregister_prototype_cache(&pool->sites[j]);
                 }
             }
@@ -953,7 +953,7 @@ void mal_vm_free(MalVm *vm) {
     }
     mal_object_release_idle_prototype_dependencies();
     if (vm->literal_shape_cache != nullptr) {
-        for (i32 i = 0; i < vm->definition->function_count; i++) {
+        for (i32 i = 0; i < vm->runtime_image->function_count; i++) {
             free(vm->literal_shape_cache[i]);
         }
         free(vm->literal_shape_cache);
@@ -979,16 +979,16 @@ void mal_vm_free(MalVm *vm) {
     free(vm->function_cjs_module_bases);
 
     // The VM-owned constant/template tables (the instruction/code-unit data their
-    // rows point at is owned elsewhere — static, or the caller's loaded definition).
-    free((MalFunction *) vm->live_definition.functions);
+    // rows point at is owned elsewhere — static, or the caller's loaded runtime image).
+    free((MalFunction *) vm->live_runtime_image.functions);
     free(vm->string_constant_atoms);
-    free((MalString *) vm->live_definition.string_constants);
-    free((MalBigInt *) vm->live_definition.bigint_constants);
-    free((u32 *) vm->live_definition.literal_template_data);
-    free((i32 *) vm->live_definition.cjs_module_function_indices);
+    free((MalString *) vm->live_runtime_image.string_constants);
+    free((MalBigInt *) vm->live_runtime_image.bigint_constants);
+    free((u32 *) vm->live_runtime_image.literal_template_data);
+    free((i32 *) vm->live_runtime_image.cjs_module_function_indices);
     free(vm->file_string_atoms);
-    free((char **) vm->live_definition.files);
-    free((MalSourcePos *) vm->live_definition.source_positions);
+    free((char **) vm->live_runtime_image.files);
+    free((MalSourcePos *) vm->live_runtime_image.source_positions);
 
     // Free any microtasks left queued (e.g. the program exited with pending
     // jobs). The MalValues they hold live in the heap, freed below.
@@ -1053,7 +1053,7 @@ void mal_vm_free(MalVm *vm) {
     vm->intrinsics = nullptr;
 #endif
 
-    vm->definition = nullptr;
+    vm->runtime_image = nullptr;
     vm->globals = nullptr;
     vm->value_stack = nullptr;
     vm->value_stack_size = 0;
@@ -1066,9 +1066,9 @@ void mal_vm_free(MalVm *vm) {
 // Rebase a spliced instruction's references into the merged tables. Function
 // indices, global slots, and string/bigint constant indices shift by the base
 // table sizes; register operands and IP-relative fields are function-local and
-// untouched. Side data lives in the loaded arena (mutable); static definitions
+// untouched. Side data lives in the loaded arena (mutable); static runtime images
 // never pass through this splice path. Mirrors the reference list in
-// src/compiler/target/serialize-vm.ts.
+// src/compiler/target/program-image-codec.ts.
 static i32 mal_vm_rebase_value_operand(i32 operand, i32 string_base) {
     if (operand >= 0) return operand;
     if (operand > MAL_VALUE_OPERAND_STRING_BASE || operand < MAL_VALUE_OPERAND_STRING_MIN) {
@@ -1296,8 +1296,8 @@ static bool mal_vm_rebase_literal_templates(
     return true;
 }
 
-i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded) {
-    MalProgramImage *live = &vm->live_definition;
+i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
+    MalRuntimeImage *live = &vm->live_runtime_image;
     i32 fn_base = live->function_count;
     i32 global_base = live->global_count;
     i32 string_base = live->string_constant_count;
@@ -1340,7 +1340,7 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded) {
     live->bigint_constant_count = new_bigints;
 
     // Literal templates are index-addressed immutable words. Append a rebased
-    // copy so spliced instructions can use one merged definition table.
+    // copy so spliced instructions can use one merged program table.
     i32 new_template_count = template_base + loaded->literal_template_data_count;
     if (new_template_count > vm->literal_template_capacity) {
         vm->literal_template_capacity = new_template_count;
@@ -1387,7 +1387,7 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded) {
 #endif
     live->global_count = new_globals;
 
-    // Portable host exports are definition-local global slots. Rebase their
+    // Portable host exports are program-local global slots. Rebase their
     // loader-owned slot tables so the embedding can install them after splice.
     for (i32 i = 0; i < loaded->host_install_count; i++) {
         MalHostInstall *install = (MalHostInstall *) &loaded->host_installs[i];
@@ -1397,7 +1397,7 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded) {
         }
     }
 
-    // Debug tables: append definition-local paths and source positions. Inline
+    // Debug tables: append program-local paths and source positions. Inline
     // chains refer to function/source-position indices and must be rebased just
     // like bytecode operands.
     i32 new_file_count = file_base + loaded->file_count;
@@ -1473,7 +1473,7 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded) {
     }
     live->function_count = new_functions;
 
-    // CommonJS module ids are definition-local numeric values. Append the
+    // CommonJS module ids are program-local numeric values. Append the
     // module-to-function rows here; the caller function's segment base is
     // applied by mal_vm_cjs_require so no instruction data needs rewriting.
     i32 new_cjs_module_count =
@@ -1532,22 +1532,22 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded) {
     return fn_base;
 }
 
-void mal_vm_retain_loaded_definition(MalVm *vm, MalLoadedDefinition *loaded) {
-    if (vm->loaded_def_count == vm->loaded_def_capacity) {
-        vm->loaded_def_capacity =
-            vm->loaded_def_capacity == 0 ? 4 : vm->loaded_def_capacity * 2;
-        vm->loaded_defs = realloc(
-            vm->loaded_defs,
-            sizeof(MalLoadedDefinition *) * (usize) vm->loaded_def_capacity);
+void mal_vm_retain_loaded_runtime_image(MalVm *vm, MalLoadedRuntimeImage *loaded) {
+    if (vm->loaded_image_count == vm->loaded_image_capacity) {
+        vm->loaded_image_capacity =
+            vm->loaded_image_capacity == 0 ? 4 : vm->loaded_image_capacity * 2;
+        vm->loaded_images = realloc(
+            vm->loaded_images,
+            sizeof(MalLoadedRuntimeImage *) * (usize) vm->loaded_image_capacity);
     }
-    vm->loaded_defs[vm->loaded_def_count++] = loaded;
+    vm->loaded_images[vm->loaded_image_count++] = loaded;
 }
 
 MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     MalCallable *callable = malloc(sizeof(MalCallable));
 
     callable->vm = vm;
-    callable->function = &vm->definition->functions[function_index];
+    callable->function = &vm->runtime_image->functions[function_index];
     callable->function_index = function_index;
     // mal_vm_run pushes a fresh activation; this handle only carries the
     // function pointer, so it needs no register/argument storage of its own.
@@ -1751,7 +1751,7 @@ bool mal_vm_push_function_frame(
     i32 return_register,
     i32 caller_frame_index
 ) {
-    const MalFunction *function = &vm->definition->functions[function_index];
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
     i32 register_count = function->register_count;
     i32 param_count = function->parameter_count;
     bool wants_args = arg_count > 0 && arg_count <= function->argument_retention_limit;
@@ -2084,12 +2084,12 @@ static void mal_vm_run_until_frame_count(
                 continue;
             case MAL_OP_CREATE_STRING:
                 registers[instruction->as.create_string.dst] = mal_value_from_string(
-                    &vm->definition->string_constants[instruction->as.create_string.string_index]);
+                    &vm->runtime_image->string_constants[instruction->as.create_string.string_index]);
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             case MAL_OP_CREATE_BIGINT:
                 registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(
-                    &vm->definition->bigint_constants[instruction->as.create_bigint.bigint_index]);
+                    &vm->runtime_image->bigint_constants[instruction->as.create_bigint.bigint_index]);
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             case MAL_OP_CREATE_OBJECT:
@@ -3076,7 +3076,7 @@ void mal_vm_report_unhandled_rejections(MalVm *vm) {
 
 void mal_vm_run(MalVm *vm, MalCallable *callable) {
     i32 entry_index = callable->function_index;
-    const MalFunction *entry = &vm->definition->functions[entry_index];
+    const MalFunction *entry = &vm->runtime_image->functions[entry_index];
     MalCompletion script_completion;
 
     if (entry->compiled != nullptr) {
@@ -3100,10 +3100,10 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
                 mal_value_new_undefined(), nullptr
             );
             mal_vm_leave_compiled(vm);
-            // Runtime eval can splice functions into the live definition and move
+            // Runtime eval can splice functions into the live program and move
             // its function table. The index is stable; a pointer cached across the
             // compiled call is not.
-            entry = &vm->definition->functions[entry_index];
+            entry = &vm->runtime_image->functions[entry_index];
             // A compiled async entry (a top-level-await module) returns its result
             // promise; record it so a rejected module evaluation fails the run,
             // mirroring mal_async_function_start's caller-less branch.
@@ -3157,7 +3157,7 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
 void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode) {
     // Re-resolve in case a runtime-eval splice moved the function table while
     // this generator was suspended (function_index is the source of truth).
-    const MalFunction *function = &vm->live_definition.functions[generator->frame.function_index];
+    const MalFunction *function = &vm->live_runtime_image.functions[generator->frame.function_index];
 
     // SATB resume seam (concurrent cycle): a suspended coroutine's frame is heap
     // state (traced via the generator cell); resuming migrates it to root state.
@@ -3288,7 +3288,7 @@ bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     // current source position into pos_id as it runs. Skipped when debug info is
     // stripped (no file table) — keeping the compiled call path overhead-free, in
     // lockstep with the backend, which emits no pos writes in that mode.
-    if (vm->definition->file_count == 0) {
+    if (vm->runtime_image->file_count == 0) {
         return true;
     }
     MAL_PERF_COUNT(compiled_debug_frame_entries);
@@ -3583,12 +3583,12 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
             i32 pos_id = record->pos_id;
             i32 guard = 0;
             while (guard++ < 100000) {
-                bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
-                const MalSourcePos *pos = have_pos ? &vm->definition->source_positions[pos_id] : nullptr;
+                bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
+                const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
                 bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
-                    pos->inlined_function_index < vm->definition->function_count;
+                    pos->inlined_function_index < vm->runtime_image->function_count;
                 i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
-                const MalFunction *function = &vm->definition->functions[function_index];
+                const MalFunction *function = &vm->runtime_image->functions[function_index];
 
                 if (logical_index++ < trace->frame_skip) {
                     if (!inlined) {
@@ -3608,18 +3608,18 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
 
                 mal_stack_buf_push_ascii(&buf, "\n    at ");
 
-                const MalString *name = &vm->definition->string_constants[function->name_string_index];
+                const MalString *name = &vm->runtime_image->string_constants[function->name_string_index];
                 if (mal_string_length(name) > 0) {
                     mal_stack_buf_push_string(&buf, name);
                 } else {
                     mal_stack_buf_push_ascii(&buf, "<anonymous>");
                 }
 
-                bool have_file = function->file_index >= 0 && function->file_index < vm->definition->file_count;
+                bool have_file = function->file_index >= 0 && function->file_index < vm->runtime_image->file_count;
                 if (have_file || have_pos) {
                     mal_stack_buf_push_ascii(&buf, " (");
                     if (have_file) {
-                        mal_stack_buf_push_ascii(&buf, vm->definition->files[function->file_index]);
+                        mal_stack_buf_push_ascii(&buf, vm->runtime_image->files[function->file_index]);
                     }
                     if (have_pos) {
                         mal_stack_buf_push_ascii(&buf, ":");
@@ -3675,7 +3675,7 @@ MalValue mal_vm_interpret_function(
     // (the same slot a top-level-await entry uses). Capture and restore it so the
     // promise — not the body's undefined — is returned, and the real entry promise
     // is preserved across the call.
-    const MalFunction *function = &vm->definition->functions[function_index];
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
     bool returns_promise = function->kind == MAL_FUNCTION_KIND_ASYNC;
     MalValue saved_entry_async_promise = vm->entry_async_promise;
 
@@ -3856,7 +3856,7 @@ MalCompletion mal_vm_call_value(
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     } else if (mal_value_is_function_object(resolution.callee)) {
         i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
-        const MalFunction *function = &vm->definition->functions[function_index];
+        const MalFunction *function = &vm->runtime_image->functions[function_index];
         MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
 
         if (!mal_vm_require_ordinary_call_target(vm, function)) {
@@ -3935,8 +3935,8 @@ MalCompletion mal_vm_call_cached(
     if (mal_value_is_function_object(callee)) {
         function_object = mal_value_to_function_object(callee);
         function_index = mal_function_object_function_index(function_object);
-        if (function_index >= 0 && function_index < vm->definition->function_count) {
-            const MalFunction *candidate = &vm->definition->functions[function_index];
+        if (function_index >= 0 && function_index < vm->runtime_image->function_count) {
+            const MalFunction *candidate = &vm->runtime_image->functions[function_index];
             if (candidate->compiled != nullptr) {
                 function = candidate;
                 for (u32 v = 0; v < cc->count; v++) {
@@ -4006,13 +4006,13 @@ MalCompletion mal_vm_call_cached(
     MAL_PERF_COUNT(call_cache_dispatch_misses);
     MalCompletion completion = mal_vm_call_value(vm, callee, this_value, args, arg_count);
     // Bound/proxy/interpreted callees and class constructors stay on the dispatch
-    // path. Re-read the definition row after the call because eval/new Function may
+    // path. Re-read the program row after the call because eval/new Function may
     // have realloc'd it.
     if (mal_value_is_function_object(callee)) {
         i32 index = mal_function_object_function_index(mal_value_to_function_object(callee));
-        if (index >= 0 && index < vm->definition->function_count &&
-            vm->definition->functions[index].compiled != nullptr &&
-            !vm->definition->functions[index].is_class_constructor) {
+        if (index >= 0 && index < vm->runtime_image->function_count &&
+            vm->runtime_image->functions[index].compiled != nullptr &&
+            !vm->runtime_image->functions[index].is_class_constructor) {
             if (cc->heap_identity != vm->heap.identity || cc->epoch != vm->heap.epoch) {
                 cc->count = 0;
                 cc->heap_identity = vm->heap.identity;
@@ -4100,7 +4100,7 @@ MalCompletion mal_vm_call_direct(
     }
     if (!mal_value_is_function_object(callee) ||
         expected_function_index < 0 ||
-        expected_function_index >= vm->definition->function_count) {
+        expected_function_index >= vm->runtime_image->function_count) {
         return mal_vm_call_cached(
             vm, fallback_cache, callee, this_value, args, arg_count);
     }
@@ -4112,7 +4112,7 @@ MalCompletion mal_vm_call_direct(
             vm, fallback_cache, callee, this_value, args, arg_count);
     }
 
-    const MalFunction *function = &vm->definition->functions[function_index];
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
     MalEnv *env = function_object->creation_env;
     MalCompletion completion;
 
@@ -4195,7 +4195,7 @@ MalCompletion mal_vm_construct_direct(
     }
     if (!mal_value_is_function_object(callee) ||
         expected_function_index < 0 ||
-        expected_function_index >= vm->definition->function_count) {
+        expected_function_index >= vm->runtime_image->function_count) {
         return mal_vm_construct_value(vm, callee, args, arg_count);
     }
 
@@ -4205,7 +4205,7 @@ MalCompletion mal_vm_construct_direct(
         return mal_vm_construct_value(vm, callee, args, arg_count);
     }
 
-    const MalFunction *function = &vm->definition->functions[function_index];
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
     if (function->kind != MAL_FUNCTION_KIND_NORMAL || !function->has_prototype) {
         return mal_vm_construct_value(vm, callee, args, arg_count);
     }
@@ -4427,7 +4427,7 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
         mal_gc_unroot(&native_root);
     } else if (mal_value_is_function_object(resolution.callee)) {
         i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
-        const MalFunction *function = &vm->definition->functions[function_index];
+        const MalFunction *function = &vm->runtime_image->functions[function_index];
         if (function->kind != MAL_FUNCTION_KIND_NORMAL || !function->has_prototype) {
             // Not a constructor: generators/async (non-normal kind) and, among
             // normal-kind functions, methods/getters/setters/arrows (which own no
@@ -4478,10 +4478,10 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env, resolution.callee, nullptr);
                     mal_gc_callee_roots_end(&ncr);
                     mal_vm_leave_compiled(vm);
-                    // Direct eval may splice a definition and reallocate the function table
+                    // Direct eval may splice a program and reallocate the function table
                     // while the compiled constructor runs. The stable index survives; the
                     // pre-call pointer does not.
-                    function = &vm->definition->functions[function_index];
+                    function = &vm->runtime_image->functions[function_index];
 #if MAL_REALMS
                     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
@@ -4555,13 +4555,13 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
     }
 
     if (mal_value_is_function_object(callee)) {
-        i32 name_index = vm->definition->functions[
+        i32 name_index = vm->runtime_image->functions[
             mal_function_object_function_index(mal_value_to_function_object(callee))
         ].name_string_index;
 
-        if (name_index >= 0 && name_index < vm->definition->string_constant_count) {
+        if (name_index >= 0 && name_index < vm->runtime_image->string_constant_count) {
             // The baked constant is already an immortal MalString; hand it back.
-            return &vm->definition->string_constants[name_index];
+            return &vm->runtime_image->string_constants[name_index];
         }
 
         return mal_string_new_ascii(&vm->heap, "", 0);
@@ -4577,20 +4577,20 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
  * it does not perturb that code's layout.
  */
 static void mal_vm_materialize_precompiled_literal_shapes(
-    MalVm *vm, const MalProgramImage *definition, i32 function_base, i32 string_base
+    MalVm *vm, const MalRuntimeImage *program, i32 function_base, i32 string_base
 ) {
-    for (i32 index = 0; index < definition->precompiled_literal_shape_count; index++) {
+    for (i32 index = 0; index < program->precompiled_literal_shape_count; index++) {
         const MalPrecompiledLiteralShape *descriptor =
-            &definition->precompiled_literal_shapes[index];
+            &program->precompiled_literal_shapes[index];
         i32 function_index = descriptor->function_index + function_base;
         if (function_index < 0
-            || function_index >= vm->definition->function_count
+            || function_index >= vm->runtime_image->function_count
             || descriptor->shape_cache_index < 0
             || descriptor->key_count < 1
             || descriptor->key_count > MAL_SHAPE_MAX_INLINE_SLOTS) {
             continue;
         }
-        const MalFunction *function = &vm->definition->functions[function_index];
+        const MalFunction *function = &vm->runtime_image->functions[function_index];
         if (descriptor->shape_cache_index >= function->literal_shape_count) continue;
         MalShape **row = vm->literal_shape_cache[function_index];
         if (row != nullptr && row[descriptor->shape_cache_index] != nullptr) continue;
@@ -4600,7 +4600,7 @@ static void mal_vm_materialize_precompiled_literal_shapes(
         for (i32 key = 0; key < descriptor->key_count; key++) {
             i32 string_index = descriptor->key_string_indices[key] + string_base;
             if (string_index < 0
-                || string_index >= vm->definition->string_constant_count
+                || string_index >= vm->runtime_image->string_constant_count
                 || vm->string_constant_atoms[string_index] == nullptr) {
                 valid = false;
                 break;

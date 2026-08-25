@@ -1,13 +1,13 @@
-import { rebaseVmValueOperand } from "../compiler/target/lower-vm.ts";
+import { rebaseVmValueOperand } from "../compiler/target/program-image.ts";
 import type {
 	ProgramImage,
 	BytecodeInstruction,
 	NativeInstructionPlan,
 	VmRegion,
-} from "../compiler/target/lower-vm.ts";
+} from "../compiler/target/program-image.ts";
 
 export interface MergedProgramImage {
-	definition: ProgramImage;
+	image: ProgramImage;
 	functionBases: Array<number>;
 }
 
@@ -288,7 +288,7 @@ function cloneInstruction(
 			return { ...instruction, excluded: [...instruction.excluded] };
 
 		// Registers, instruction pointers, literal values, intrinsic/operator ids,
-		// and synthetic negative environment scope ids are definition-local values.
+		// and synthetic negative environment scope ids are image-local values.
 		case "MOVE":
 		case "RETURN":
 		case "JUMP_IF":
@@ -412,11 +412,11 @@ function cloneLiteralTemplates(
 	return cloned;
 }
 
-/** Merge immutable definitions while cloning and rebasing every indexed table. */
-export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProgramImage {
+/** Merge immutable images while cloning and rebasing every indexed table. */
+export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramImage {
 	const mergedNativeFunctions: Array<ProgramImage["native"]["functions"][number]> = [];
 	const mergedRuntime: ProgramImage["runtime"] = {
-		entrypointPath: definitions[0]?.runtime.entrypointPath ?? "",
+		entrypointPath: images[0]?.runtime.entrypointPath ?? "",
 		functionCount: 0,
 		functions: [],
 		stringConstants: [],
@@ -429,21 +429,20 @@ export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProg
 		cjsModuleFunctionIndices: [],
 		hostInstalls: [],
 	};
-	const semanticDefinitions = definitions.filter(
-		(definition) => definition.native.semanticProtectors.length > 0,
+	const semanticImages = images.filter(
+		(image) => image.native.semanticProtectors.length > 0,
 	);
 	let semanticProtectors: ProgramImage["native"]["semanticProtectors"] = [];
-	if (semanticDefinitions.length > 0) {
-		const firstFacts = semanticDefinitions[0]!.native.semanticProtectors;
+	if (semanticImages.length > 0) {
+		const firstFacts = semanticImages[0]!.native.semanticProtectors;
 		const signature = JSON.stringify(firstFacts);
 		if (
-			semanticDefinitions.length !== definitions.length ||
-			semanticDefinitions.some(
-				(definition) =>
-					JSON.stringify(definition.native.semanticProtectors) !== signature,
+			semanticImages.length !== images.length ||
+			semanticImages.some(
+				(image) => JSON.stringify(image.native.semanticProtectors) !== signature,
 			)
 		) {
-			throw new Error("VM definition semantic protector facts do not match");
+			throw new Error("VM image semantic protector facts do not match");
 		}
 		semanticProtectors = firstFacts.map((fact) => ({
 			family: fact.family,
@@ -455,13 +454,13 @@ export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProg
 	}
 	const functionBases: Array<number> = [];
 
-	for (const image of definitions) {
-		const definition = image.runtime;
-		if (definition.functionCount !== definition.functions.length) {
-			throw new Error("VM definition functionCount does not match functions.length");
+	for (const programImage of images) {
+		const runtime = programImage.runtime;
+		if (runtime.functionCount !== runtime.functions.length) {
+			throw new Error("runtime image functionCount does not match functions.length");
 		}
-		if (image.native.functions.length !== definition.functions.length) {
-			throw new Error("VM definition native-plan count does not match functions.length");
+		if (programImage.native.functions.length !== runtime.functions.length) {
+			throw new Error("native-plan count does not match runtime functions.length");
 		}
 		const base: RebaseBases = {
 			function: mergedRuntime.functions.length,
@@ -475,23 +474,23 @@ export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProg
 		functionBases.push(base.function);
 
 		mergedRuntime.stringConstants.push(
-			...definition.stringConstants.map((value) => [...value]),
+			...runtime.stringConstants.map((value) => [...value]),
 		);
-		mergedRuntime.bigintConstants.push(...definition.bigintConstants);
+		mergedRuntime.bigintConstants.push(...runtime.bigintConstants);
 		mergedRuntime.literalTemplateData.push(
-			...cloneLiteralTemplates(definition.literalTemplateData, base.string, base.bigint),
+			...cloneLiteralTemplates(runtime.literalTemplateData, base.string, base.bigint),
 		);
 		mergedRuntime.precompiledLiteralShapes.push(
-			...definition.precompiledLiteralShapes.map((descriptor) => ({
+			...runtime.precompiledLiteralShapes.map((descriptor) => ({
 				functionIndex: descriptor.functionIndex + base.function,
 				shapeCacheIndex: descriptor.shapeCacheIndex,
 				keyStringIndices: descriptor.keyStringIndices.map((index) => index + base.string),
 			})),
 		);
-		mergedRuntime.globalCount += definition.globalCount;
-		mergedRuntime.files.push(...definition.files);
+		mergedRuntime.globalCount += runtime.globalCount;
+		mergedRuntime.files.push(...runtime.files);
 		mergedRuntime.sourcePositions.push(
-			...definition.sourcePositions.map((position) => ({
+			...runtime.sourcePositions.map((position) => ({
 				...position,
 				inlinedFunctionIndex:
 					position.inlinedFunctionIndex === undefined
@@ -504,10 +503,10 @@ export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProg
 			})),
 		);
 		mergedRuntime.cjsModuleFunctionIndices.push(
-			...definition.cjsModuleFunctionIndices.map((index) => index + base.function),
+			...runtime.cjsModuleFunctionIndices.map((index) => index + base.function),
 		);
 		mergedRuntime.hostInstalls.push(
-			...definition.hostInstalls.map((install) => ({
+			...runtime.hostInstalls.map((install) => ({
 				installer: install.installer,
 				exports: install.exports.map((entry) => ({
 					...entry,
@@ -516,7 +515,7 @@ export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProg
 			})),
 		);
 		mergedRuntime.functions.push(
-			...definition.functions.map((fn) => ({
+			...runtime.functions.map((fn) => ({
 				...fn,
 				nameStringIndex: shifted(fn.nameStringIndex, base.string),
 				instructions: fn.instructions.map((instruction) =>
@@ -529,7 +528,7 @@ export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProg
 			})),
 		);
 		mergedNativeFunctions.push(
-			...image.native.functions.map((native, localFunctionIndex) => ({
+			...programImage.native.functions.map((native, localFunctionIndex) => ({
 				functionIndex: base.function + localFunctionIndex,
 				mode: native.mode,
 				registerRepresentations: [...native.registerRepresentations],
@@ -562,5 +561,5 @@ export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProg
 		native: { semanticProtectors, functions: mergedNativeFunctions },
 		diagnostics: {},
 	};
-	return { definition: merged, functionBases };
+	return { image: merged, functionBases };
 }

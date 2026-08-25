@@ -16,7 +16,7 @@
 #error "realm_test_main.c requires MAL_REALMS"
 #endif
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 typedef struct RealmFixture {
     MalValue probe;
@@ -81,7 +81,7 @@ static bool realm_is_current(const MalVm *vm, const MalRealm *realm) {
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
 
     MalRealm *realm_one = vm.initial_realm;
     MalValue global_one = mal_realm_global(realm_one);
@@ -149,7 +149,7 @@ int main(void) {
             mal_value_to_object(object_proto_two) &&
         vm.current_realm == realm_one;
 
-    bool enough_globals = vm.definition->global_count >= 3;
+    bool enough_globals = vm.runtime_image->global_count >= 3;
     bool globals_isolate = false;
     bool cross_realm_identity = false;
     MalValue shared_object = mal_value_new_undefined();
@@ -332,9 +332,9 @@ int main(void) {
     dates[1] = date_two.value;
     MalString *to_string_name = mal_intrinsic_ascii(&vm, "toString");
     MalValue to_string_key = mal_value_new_undefined();
-    for (i32 i = 0; i < vm.definition->string_constant_count; i++) {
-        if (mal_string_equals(&vm.definition->string_constants[i], to_string_name)) {
-            to_string_key = mal_value_from_string(&vm.definition->string_constants[i]);
+    for (i32 i = 0; i < vm.runtime_image->string_constant_count; i++) {
+        if (mal_string_equals(&vm.runtime_image->string_constants[i], to_string_name)) {
+            to_string_key = mal_value_from_string(&vm.runtime_image->string_constants[i]);
             break;
         }
     }
@@ -377,10 +377,10 @@ int main(void) {
 
     i32 call_cache_function_index = -1;
     MalString *call_cache_function_name = mal_intrinsic_ascii(&vm, "realmCallCacheThis");
-    for (i32 i = 0; i < vm.definition->function_count; i++) {
-        i32 name_index = vm.definition->functions[i].name_string_index;
+    for (i32 i = 0; i < vm.runtime_image->function_count; i++) {
+        i32 name_index = vm.runtime_image->functions[i].name_string_index;
         if (name_index >= 0 &&
-            mal_string_equals(&vm.definition->string_constants[name_index], call_cache_function_name)) {
+            mal_string_equals(&vm.runtime_image->string_constants[name_index], call_cache_function_name)) {
             call_cache_function_index = i;
             break;
         }
@@ -395,7 +395,7 @@ int main(void) {
     MalCompletion call_cache_two = {.kind = MAL_COMPLETION_THROW};
     bool call_cache_overflow_realm = false;
     if (call_cache_function_index >= 0 &&
-        vm.definition->functions[call_cache_function_index].compiled != nullptr) {
+        vm.runtime_image->functions[call_cache_function_index].compiled != nullptr) {
         mal_realm_switch(&vm, realm_one);
         call_cache_closures[0] = mal_vm_op_create_function(
             &vm, call_cache_function_index, nullptr);

@@ -9,14 +9,14 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../../src/compiler/pipeline/compile-program.ts";
-import type {
-	RuntimeImage,
-	BytecodeFunction,
-} from "../../src/compiler/target/lower-vm.ts";
 import {
 	serializeRuntimeImage,
 	WIRE_OPCODES,
-} from "../../src/compiler/target/serialize-vm.ts";
+} from "../../src/compiler/target/program-image-codec.ts";
+import type {
+	RuntimeImage,
+	BytecodeFunction,
+} from "../../src/compiler/target/program-image.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 
 const fn: BytecodeFunction = {

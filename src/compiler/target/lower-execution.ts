@@ -26,7 +26,6 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
-import { verifyExecutionProgram } from "./core-target-verifier.ts";
 import type {
 	ExecutionFunction,
 	ExecutionMove,
@@ -34,6 +33,7 @@ import type {
 	ExecutionProgram,
 	ExecutionSafepoint,
 } from "./execution-ir.ts";
+import { verifyExecutionProgram } from "./verify-execution.ts";
 export type {
 	ExecutionFunction,
 	ExecutionMove,
@@ -1260,7 +1260,7 @@ export function lowerCoreCompilationToExecution(
 				: gcRootRegisters,
 		),
 	};
-	// Owned boundary: no lower-vm consumer may observe an unverified target program.
+	// Owned boundary: no program-image consumer may observe an unverified target program.
 	verifyExecutionProgram(program);
 	return program;
 }

@@ -26,7 +26,7 @@
  * nothing detaches a digest state or a derived tag.
  */
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 #define SECRET_LENGTH 96
 #define SECRET_BYTE 0xa7
@@ -194,7 +194,7 @@ static bool a_transferred_store_stays_sensitive(MalVm *vm) {
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     mal_array_buffer_object_set_release_observer(secret_release_observer);
 
     struct {

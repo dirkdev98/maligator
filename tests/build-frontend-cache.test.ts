@@ -16,7 +16,7 @@ import {
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import { emitProgramTranslationUnits } from "../src/compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 
 function temporaryDirectory(): string {
 	return mkdtempSync(path.join(tmpdir(), "mal-build-frontend-cache-"));
@@ -55,16 +55,16 @@ describe("normal build frontend cache", () => {
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
-		expect(warm.definition).toEqual(cold.definition);
+		expect(warm.programImage).toEqual(cold.programImage);
 		expect(warm.wire).toEqual(cold.wire);
-		expect(emitProgramTranslationUnits(warm.definition)).toEqual(
-			emitProgramTranslationUnits(cold.definition),
+		expect(emitProgramTranslationUnits(warm.programImage)).toEqual(
+			emitProgramTranslationUnits(cold.programImage),
 		);
 		expect(warm.phases.graphMs).toBe(0);
 		expect(warm.phases.semanticMs).toBe(0);
 		expect(warm.phases.compileMs).toBe(0);
 		expect(warm.artifacts).toEqual(cold.artifacts);
-		expect(warm.definitionStats).toEqual(cold.definitionStats);
+		expect(warm.imageStats).toEqual(cold.imageStats);
 	});
 
 	it("separates cache entries by module aliases", () => {
@@ -141,8 +141,8 @@ describe("normal build frontend cache", () => {
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
-		expect(emitProgramTranslationUnits(warm.definition)).toEqual(
-			emitProgramTranslationUnits(cold.definition),
+		expect(emitProgramTranslationUnits(warm.programImage)).toEqual(
+			emitProgramTranslationUnits(cold.programImage),
 		);
 	});
 
@@ -162,14 +162,14 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.native.functions.flatMap((fn) =>
+		const coldRegions = cold.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-split-projection"),
 		);
-		const warmRegions = warm.definition.native.functions.flatMap((fn) =>
+		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-split-projection"),
 		);
-		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -196,14 +196,14 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.native.functions.flatMap((fn) =>
+		const coldRegions = cold.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 		);
-		const warmRegions = warm.definition.native.functions.flatMap((fn) =>
+		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 		);
-		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -226,14 +226,14 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.native.functions.flatMap((fn) =>
+		const coldRegions = cold.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-slice-number"),
 		);
-		const warmRegions = warm.definition.native.functions.flatMap((fn) =>
+		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "string-slice-number"),
 		);
-		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -260,14 +260,14 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.native.functions.flatMap((fn) =>
+		const coldRegions = cold.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-iterator-projection"),
 		);
-		const warmRegions = warm.definition.native.functions.flatMap((fn) =>
+		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
 			fn.specializations.filter((region) => region.kind === "regexp-iterator-projection"),
 		);
-		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -290,8 +290,8 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
-		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.programImage).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.programImage).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");

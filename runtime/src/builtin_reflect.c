@@ -58,7 +58,7 @@ static bool mal_reflect_is_constructor(MalVm *vm, MalValue value) {
     }
     if (mal_value_is_function_object(value)) {
         i32 index = mal_function_object_function_index(mal_value_to_function_object(value));
-        return vm->definition->functions[index].kind == MAL_FUNCTION_KIND_NORMAL;
+        return vm->runtime_image->functions[index].kind == MAL_FUNCTION_KIND_NORMAL;
     }
     return false;
 }

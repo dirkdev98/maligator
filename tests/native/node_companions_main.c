@@ -4,7 +4,7 @@
 
 #include "intrinsics.h"
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 static const MalIntrinsic companion_slots[] = {
     MAL_INTRINSIC_NODE_URL_CONSTRUCTOR,
@@ -17,9 +17,9 @@ static const MalIntrinsic companion_slots[] = {
 
 static void install_fragmented(
     MalVm *vm, const MalHostLaunchContext *launch, bool reverse) {
-    for (i32 step = 0; step < vm->definition->host_install_count; step++) {
-        i32 index = reverse ? vm->definition->host_install_count - step - 1 : step;
-        const MalHostInstall *install = &vm->definition->host_installs[index];
+    for (i32 step = 0; step < vm->runtime_image->host_install_count; step++) {
+        i32 index = reverse ? vm->runtime_image->host_install_count - step - 1 : step;
+        const MalHostInstall *install = &vm->runtime_image->host_installs[index];
         if (install->installer == nullptr) continue;
         if (install->slot_count == 0) {
             install->installer(vm, nullptr, 0, launch);
@@ -70,7 +70,7 @@ static void check_second_realm(MalVm *vm, void *data) {
 
 int main(int argc, char **argv) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     bool reverse = getenv("MAL_NODE_INSTALL_REVERSE") != nullptr;
     MalValue first[countof(companion_slots)];

@@ -45,7 +45,7 @@ import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { formatCoreFunction } from "./compiler/core/core-ir.ts";
 import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
-import { emitProgramTranslationUnits } from "./compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
@@ -531,14 +531,14 @@ function compileAndBuild(
 	reporter.detail("Dependencies", dependencies.length);
 	for (const dependency of dependencies) reporter.detail("Dependency", dependency);
 
-	const stats = frontend.definitionStats;
+	const stats = frontend.imageStats;
 	reporter.detail("Functions", stats.functionCount);
 	reporter.detail("Instructions", stats.instructionCount);
 
 	const serializePath =
 		command.kind === "build" ? command.internal.serializePath : undefined;
 	if (serializePath !== undefined) {
-		reporter.phase("Write portable definition", () =>
+		reporter.phase("Write runtime image", () =>
 			writeFileSync(serializePath, frontend.wire),
 		);
 		reporter.detail("Serialized bytes", frontend.wire.length);
@@ -711,9 +711,9 @@ function compileAndBuild(
 		};
 	}
 
-	const vmDefinition = frontend.definition;
+	const programImage = frontend.programImage;
 	const output = reporter.phase("Generate native code", () =>
-		emitProgramTranslationUnits(vmDefinition, {
+		emitProgramTranslationUnits(programImage, {
 			compiled: command.kind !== "build" || command.internal.compiled,
 			assets,
 			maligatorSurface: buildConfig.surface.maligator,
@@ -765,7 +765,7 @@ function compileAndBuild(
 		? reporter.phase("Prepare profile metadata", () =>
 				prepareProfile(
 					binaryPath,
-					frontend.definition,
+					frontend.programImage,
 					command.profileCompiler === true ? "compiler" : "sampling",
 				),
 			)
@@ -1269,7 +1269,7 @@ function executeProfiledTests(
 		cacheDirectory: maligatorCacheDirectory(),
 		session: new FrontendCompilationSession(),
 	});
-	const source = emitProgramTranslationUnits(compiled.definition, {
+	const source = emitProgramTranslationUnits(compiled.programImage, {
 		compiled: true,
 		assets,
 		maligatorSurface: config.surface.maligator,
@@ -1288,7 +1288,7 @@ function executeProfiledTests(
 	}).binaryPath;
 	const profile = prepareProfile(
 		binary,
-		compiled.definition,
+		compiled.programImage,
 		command.profileCompiler === true ? "compiler" : "sampling",
 	);
 	const capture = createProfileCapture("test", profile);

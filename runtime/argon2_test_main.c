@@ -28,7 +28,7 @@
  * vectors and the JavaScript fixtures.
  */
 
-extern const MalProgramImage mal_vm_definition;
+extern const MalRuntimeImage mal_runtime_image;
 
 typedef struct Argon2Gate {
     pthread_mutex_t mutex;
@@ -748,7 +748,7 @@ static bool argon2_backend_matches_the_rfc_vector(void) {
 
 int main(void) {
     MalVm vm;
-    mal_vm_init(&vm, &mal_vm_definition);
+    mal_vm_init(&vm, &mal_runtime_image);
 
     struct {
         const char *name;

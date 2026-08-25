@@ -9,9 +9,9 @@ import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { OptimizationAblation } from "../shared/compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
-import { lowerCoreCompilationToExecution } from "../target/core-target-lowering.ts";
-import { lowerExecutionToProgramImage } from "../target/lower-vm.ts";
-import type { ProgramImage } from "../target/lower-vm.ts";
+import { lowerCoreCompilationToExecution } from "../target/lower-execution.ts";
+import { lowerExecutionToProgramImage } from "../target/program-image.ts";
+import type { ProgramImage } from "../target/program-image.ts";
 
 export type CompileCorePhase =
 	| "construct core ir"

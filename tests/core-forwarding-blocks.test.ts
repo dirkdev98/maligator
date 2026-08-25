@@ -12,7 +12,7 @@ import type {
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
 
 const PASS = "fold-empty-forwarding-blocks";
 

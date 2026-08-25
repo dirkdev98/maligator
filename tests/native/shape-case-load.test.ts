@@ -7,8 +7,8 @@ import type {
 	ProgramImage,
 	BytecodeFunction,
 	BytecodeInstruction,
-} from "../../src/compiler/target/lower-vm.ts";
-import { buildNativeDefinition, STRESS_ENV } from "../../src/test-harness.ts";
+} from "../../src/compiler/target/program-image.ts";
+import { buildNativeProgramImage, STRESS_ENV } from "../../src/test-harness.ts";
 import { testProgramImage, withNativeFunctionPlan } from "../helpers/program-image.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shape-case-load-"));
@@ -184,14 +184,14 @@ describe("shared shape-case property loads", () => {
 
 	beforeAll(() => {
 		const environment = { ...process.env, MAL_PERF_STATS: "1" };
-		compiled = buildNativeDefinition(definition, {
+		compiled = buildNativeProgramImage(definition, {
 			name: "shape-case-load-compiled",
 			compiled: true,
 			mainFile,
 			outDir,
 			environment,
 		});
-		interpreted = buildNativeDefinition(definition, {
+		interpreted = buildNativeProgramImage(definition, {
 			name: "shape-case-load-interpreted",
 			compiled: false,
 			mainFile,
