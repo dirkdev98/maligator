@@ -645,6 +645,18 @@ static MalValue temporal_write_to_string(MalVm *vm, MalTemporalWrite *write) {
     return mal_value_from_string(string);
 }
 
+/** Reuse the VM-lifetime atom for small finite Temporal field vocabularies. */
+static MalValue temporal_write_to_atom(MalVm *vm, MalTemporalWrite *write) {
+    if (write->diplomat.grow_failed || write->diplomat.len >= 64) {
+        return temporal_write_to_string(vm, write);
+    }
+    byte name[64];
+    memcpy(name, write->diplomat.buf, write->diplomat.len);
+    name[write->diplomat.len] = '\0';
+    temporal_write_destroy(write);
+    return mal_value_from_string(mal_intrinsic_ascii(vm, name));
+}
+
 static bool temporal_i32_integer(MalVm *vm, MalValue value, i32 *out) {
     f64 number;
     if (!mal_vm_to_number(vm, value, &number)) return false;
@@ -750,6 +762,12 @@ static bool temporal_calendar_string(
 
 static MalValue temporal_calendar_identifier(MalVm *vm, const Calendar *calendar) {
     DiplomatStringView identifier = temporal_rs_Calendar_identifier(calendar);
+    if (identifier.len < 32) {
+        byte name[32];
+        memcpy(name, identifier.data, identifier.len);
+        name[identifier.len] = '\0';
+        return mal_value_from_string(mal_intrinsic_ascii(vm, name));
+    }
     return mal_value_from_string(mal_string_from_utf8(
         &vm->heap, (const byte *) identifier.data, identifier.len));
 }
@@ -1863,7 +1881,7 @@ static MalValue plain_date_month_code(
     if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
     TEMPORAL_WRITE(write, 8);
     temporal_rs_PlainDate_month_code(object->handle, &write.diplomat);
-    return temporal_write_to_string(vm, &write);
+    return temporal_write_to_atom(vm, &write);
 }
 
 static MalValue plain_date_in_leap_year(
@@ -1889,7 +1907,7 @@ static MalValue plain_date_era(
         temporal_write_destroy(&write);
         return mal_value_new_undefined();
     }
-    return temporal_write_to_string(vm, &write);
+    return temporal_write_to_atom(vm, &write);
 }
 
 static MalValue plain_date_era_year(
@@ -2426,7 +2444,7 @@ static MalValue plain_date_time_month_code(
     if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
     TEMPORAL_WRITE(write, 8);
     temporal_rs_PlainDateTime_month_code(object->handle, &write.diplomat);
-    return temporal_write_to_string(vm, &write);
+    return temporal_write_to_atom(vm, &write);
 }
 
 static MalValue plain_date_time_in_leap_year(
@@ -2477,7 +2495,7 @@ static MalValue plain_date_time_era(
         temporal_write_destroy(&write);
         return mal_value_new_undefined();
     }
-    return temporal_write_to_string(vm, &write);
+    return temporal_write_to_atom(vm, &write);
 }
 
 static MalValue plain_date_time_era_year(
@@ -2932,7 +2950,7 @@ static MalValue plain_year_month_month_code(
     if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
     TEMPORAL_WRITE(write, 8);
     temporal_rs_PlainYearMonth_month_code(object->handle, &write.diplomat);
-    return temporal_write_to_string(vm, &write);
+    return temporal_write_to_atom(vm, &write);
 }
 
 static MalValue plain_year_month_in_leap_year(
@@ -3093,7 +3111,7 @@ static MalValue plain_year_month_era(
         temporal_write_destroy(&write);
         return mal_value_new_undefined();
     }
-    return temporal_write_to_string(vm, &write);
+    return temporal_write_to_atom(vm, &write);
 }
 
 static MalValue plain_year_month_era_year(
@@ -3360,7 +3378,7 @@ static MalValue plain_month_day_month_code(
     if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
     TEMPORAL_WRITE(write, 8);
     temporal_rs_PlainMonthDay_month_code(object->handle, &write.diplomat);
-    return temporal_write_to_string(vm, &write);
+    return temporal_write_to_atom(vm, &write);
 }
 
 static MalValue plain_month_day_equals(
@@ -4306,7 +4324,9 @@ static MalValue zoned_date_time_string_getter(
             return temporal_throw(vm, result.err);
         }
     }
-    return temporal_write_to_string(vm, &write);
+    return month_code
+        ? temporal_write_to_atom(vm, &write)
+        : temporal_write_to_string(vm, &write);
 }
 
 #define ZONED_STRING_GETTER(c_name, timezone, month_code) \
@@ -4382,7 +4402,7 @@ static MalValue zoned_date_time_era(
         temporal_write_destroy(&write);
         return mal_value_new_undefined();
     }
-    return temporal_write_to_string(vm, &write);
+    return temporal_write_to_atom(vm, &write);
 }
 
 static MalValue zoned_date_time_era_year(

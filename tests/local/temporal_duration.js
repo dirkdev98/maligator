@@ -73,6 +73,17 @@ check(date.dayOfYear === 60);
 check(date.inLeapYear === true);
 check(date.add({ years: 1 }).toString() === "2025-02-28");
 check(date.until("2024-03-02").days === 2);
+const gregorianDate = Temporal.PlainDate.from({
+	year: 2024,
+	month: 8,
+	day: 25,
+	calendar: "gregory",
+});
+check(
+	gregorianDate.calendarId === "gregory" &&
+		gregorianDate.monthCode === "M08" &&
+		gregorianDate.era === "ce",
+);
 
 const dateTime = Temporal.PlainDateTime.from("2024-02-29T23:59:58.123456789");
 check(dateTime.toPlainDate().equals(date));
