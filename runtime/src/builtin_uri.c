@@ -222,14 +222,11 @@ static bool mal_uri_decode_escape(
 static MalValue mal_uri_decode(MalVm *vm, MalString *string, bool preserve_reserved) {
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
-    usize result_length = 0;
+    usize result_length = length;
     bool changed = false;
 
     for (usize k = 0; k < length; k++) {
         if (units[k] != '%') {
-            if (!mal_uri_result_length_add(vm, &result_length, 1)) {
-                return mal_value_new_undefined();
-            }
             continue;
         }
         MalUriDecodedEscape decoded;
@@ -237,13 +234,12 @@ static MalValue mal_uri_decode(MalVm *vm, MalString *string, bool preserve_reser
             mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
             return mal_value_new_undefined();
         }
-        usize appended = decoded.preserved
-            ? decoded.end - k + 1
-            : decoded.code_point <= 0xFFFF ? 1 : 2;
-        if (!mal_uri_result_length_add(vm, &result_length, appended)) {
-            return mal_value_new_undefined();
+        if (!decoded.preserved) {
+            usize consumed = decoded.end - k + 1;
+            usize appended = decoded.code_point <= 0xFFFF ? 1 : 2;
+            result_length -= consumed - appended;
+            changed = true;
         }
-        changed |= !decoded.preserved;
         k = decoded.end;
     }
 
