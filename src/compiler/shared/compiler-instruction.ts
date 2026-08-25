@@ -286,8 +286,8 @@ export type CompilerInstruction =
 			knownBuiltinCall?: KnownBuiltinCall;
 			/**
 			 * COMPILE-ONLY: the exact ordinary script-function index held by the callee.
-			 * Native lowering guards the live callee before entering this target and
-			 * falls back to generic dispatch on a mismatch.
+			 * Closed callee-target analysis has ruled out every mismatch, so native
+			 * lowering enters this target without an identity guard or dispatch fallback.
 			 */
 			directFunctionIndex?: number;
 			/** Native-only ABI sibling selected for this exact direct target. */
@@ -437,6 +437,10 @@ export type CompilerInstruction =
 			registers: [number, number];
 			stringIndex: number;
 			knownOwnSlot?: CompilerKnownOwnSlot;
+			/** COMPILE-ONLY: Core proved this receiver remains a contained ordinary
+			 * shaped allocation and this key is its writable data slot. Native code
+			 * may address the slot exactly, without a shape guard, IC, or fallback. */
+			exactOwnSlot?: number;
 			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
 			 * primitive-String consumer, so native code may try the String brand first. */
 			primitiveStringLength?: true;
@@ -470,6 +474,8 @@ export type CompilerInstruction =
 			registers: [number, number];
 			stringIndex: number;
 			knownOwnSlot?: CompilerKnownOwnSlot;
+			/** COMPILE-ONLY counterpart of the exact contained-slot load fact. */
+			exactOwnSlot?: number;
 	  }
 	| {
 			type: "toPropertyKey";

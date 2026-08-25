@@ -6,6 +6,7 @@ import {
 	coreTerminatorEdges,
 } from "../core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../core/core-ir-opcodes.ts";
+import { CORE_OWN_DATA_CELL_FACT } from "../core/core-ir-provenance.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
 import { CORE_INTERNAL_SUMMARY_ATTRIBUTES } from "../core/core-ir-summaries.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
@@ -119,7 +120,7 @@ export function physicalRegisterClass(
 /**
  * Attributes a target instruction may carry. Core-internal analysis metadata,
  * such as a call site's bounded target set, stops here: the only target-visible
- * product of that analysis is the guarded `directFunctionIndex` lowering.
+ * product of that analysis is the exact call `directFunctionIndex` lowering.
  */
 function targetAttributes(
 	attributes: CoreInstructionAttributes,
@@ -135,6 +136,53 @@ function targetAttributes(
 	return attributes;
 }
 
+/**
+ * Materialize Core's independently re-proved containment certificate as the
+ * physical slot it names. The fact is intentionally consumed here, after the
+ * pre-target verifier has reconstructed allocation provenance: the backend does
+ * not rediscover escape or shape facts, and no descriptive Core fact payload is
+ * allowed to become native authority on its own.
+ */
+function exactContainedOwnSlot(
+	core: CoreFunction,
+	instruction: CoreInstruction,
+): number | undefined {
+	if (
+		(instruction.opcode !== "loadPropertyStatic" &&
+			instruction.opcode !== "storePropertyStatic") ||
+		instruction.effectRefinement === undefined
+	) {
+		return undefined;
+	}
+	const fact = core.facts.find(
+		(candidate) => candidate.id === instruction.effectRefinement!.proof,
+	);
+	if (fact?.kind !== CORE_OWN_DATA_CELL_FACT) return undefined;
+	const value =
+		typeof fact.value === "object" && fact.value !== null
+			? (fact.value as Record<string, unknown>)
+			: undefined;
+	const cell =
+		typeof value?.cell === "object" && value.cell !== null
+			? (value.cell as Record<string, unknown>)
+			: undefined;
+	if (
+		typeof value?.allocation !== "number" ||
+		cell?.kind !== "object-slot" ||
+		typeof cell.key !== "number"
+	) {
+		return undefined;
+	}
+	const allocation = core.blocks
+		.flatMap(({ instructions }) => instructions)
+		.find(({ id }) => id === value.allocation);
+	if (allocation?.opcode !== "createObjectShaped") return undefined;
+	const keys = allocation.attributes.keyStringIndices;
+	if (!Array.isArray(keys)) return undefined;
+	const slot = keys.indexOf(cell.key);
+	return slot >= 0 ? slot : undefined;
+}
+
 function rebuildInstruction(
 	core: CoreFunction,
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
@@ -142,6 +190,7 @@ function rebuildInstruction(
 	regionNamed: boolean,
 ): CompilerInstruction {
 	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
+	const exactOwnSlot = exactContainedOwnSlot(core, instruction);
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	// A region certificate's contract is stated over the instruction's operands, so
 	// embedding one of them as a constant would change the shape the certificate
@@ -161,6 +210,7 @@ function rebuildInstruction(
 	return {
 		type: instruction.opcode,
 		...targetAttributes(instruction.attributes),
+		...(exactOwnSlot === undefined ? {} : { exactOwnSlot }),
 		...(immediateValues.length === 0 ? {} : { immediateValues }),
 		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}

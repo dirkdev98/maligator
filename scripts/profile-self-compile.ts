@@ -2,7 +2,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildNativeBinary } from "../src/test-harness.ts";
+import {
+	createProfileCapture,
+	finalizeProfileCapture,
+	prepareProfile,
+} from "../src/profile-artifact.ts";
+import { buildNativeBinaryResult } from "../src/test-harness.ts";
 import {
 	digestSelfCompileOutput,
 	prepareSelfCompileSource,
@@ -26,6 +31,8 @@ Build and run the fully closed self-compile workload with exact runtime counters
 This is a single-current-tree profile, not a base/head comparison.
 --quick compiles the closed shape-analysis module cone through the same native
 compiler and Core optimizer, providing a calibrated sub-minute inner loop.
+--compiler-profile additionally records exact source-site execution, fallback,
+allocation, boxing, safepoint, GC, and runtime-dispatch counters.
 On macOS, --sample-out captures ten seconds of stacks during Core optimization.
 `;
 
@@ -33,6 +40,7 @@ interface ProfileOptions {
 	jsonOut: string;
 	sampleOut?: string;
 	quick: boolean;
+	compilerProfile: boolean;
 }
 
 function profileOptions(args: Array<string>): ProfileOptions | undefined {
@@ -41,13 +49,14 @@ function profileOptions(args: Array<string>): ProfileOptions | undefined {
 		return undefined;
 	}
 	const quick = args.includes("--quick");
+	const compilerProfile = args.includes("--compiler-profile");
 	let jsonOut = quick
 		? ".cache/self-compile-quick-profile.json"
 		: ".cache/self-compile-profile.json";
 	let sampleOut: string | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index];
-		if (option === "--quick") continue;
+		if (option === "--quick" || option === "--compiler-profile") continue;
 		const value = args[index + 1];
 		if (value === undefined || value.startsWith("-")) throw new Error(HELP.trim());
 		if (option === "--json-out") jsonOut = value;
@@ -55,7 +64,12 @@ function profileOptions(args: Array<string>): ProfileOptions | undefined {
 		else throw new Error(HELP.trim());
 		index++;
 	}
-	return { jsonOut, quick, ...(sampleOut === undefined ? {} : { sampleOut }) };
+	return {
+		jsonOut,
+		quick,
+		compilerProfile,
+		...(sampleOut === undefined ? {} : { sampleOut }),
+	};
 }
 
 function perfRecords(stderr: string): Array<PerfRecord> {
@@ -164,14 +178,25 @@ if (options !== undefined) {
 	try {
 		const buildEnvironment = { ...process.env, MAL_PERF_STATS: "1" };
 		const buildStartedAt = process.hrtime.bigint();
-		const binary = buildNativeBinary({
+		const built = buildNativeBinaryResult({
 			fixture: "bench/self-compile.mts",
 			name: "profile-self-compile",
 			config: SELF_COMPILE_CONFIG,
 			environment: buildEnvironment,
+			profileEnabled: options.compilerProfile,
 			translationUnits: true,
 		});
+		const binary = built.binaryPath;
 		const buildMs = Number(process.hrtime.bigint() - buildStartedAt) / 1e6;
+		const compilerProfile = options.compilerProfile
+			? (() => {
+					const prepared = prepareProfile(binary, built.programImage, "compiler");
+					return {
+						prepared,
+						capture: createProfileCapture("self-compile", prepared),
+					};
+				})()
+			: undefined;
 		const prepareStartedAt = process.hrtime.bigint();
 		const sourceRoot = path.join(root, "source");
 		const fullTarget = prepareSelfCompileSource(sourceRoot);
@@ -180,11 +205,16 @@ if (options !== undefined) {
 			: fullTarget;
 		const prepareMs = Number(process.hrtime.bigint() - prepareStartedAt) / 1e6;
 		const output = path.join(root, "output");
+		const runtimeEnvironment = {
+			...buildEnvironment,
+			...(compilerProfile?.capture.environment ?? {}),
+			...(compilerProfile === undefined ? {} : { MAL_PROFILE_COMPILER: "1" }),
+		};
 		let result: ProfileProcessResult;
 		if (options.sampleOut === undefined) {
 			const startedAt = process.hrtime.bigint();
 			const completed = spawnSync(binary, [target, output], {
-				env: buildEnvironment,
+				env: runtimeEnvironment,
 				encoding: "utf8",
 				maxBuffer: 64 * 1024 * 1024,
 				timeout: 900_000,
@@ -200,7 +230,7 @@ if (options !== undefined) {
 			result = await runWithSample(
 				binary,
 				[target, output],
-				buildEnvironment,
+				runtimeEnvironment,
 				options.sampleOut,
 				options.quick ? 3_000 : 30_000,
 				options.quick ? 5 : 10,
@@ -213,7 +243,17 @@ if (options !== undefined) {
 		}
 		const summary = JSON.parse(result.stdout.trim()) as SelfCompileSummary;
 		const records = perfRecords(result.stderr);
-		if (records.length === 0) throw new Error("self-compile emitted no perf counters");
+		if (records.length === 0 && !options.compilerProfile) {
+			throw new Error("self-compile emitted no perf counters");
+		}
+		const finalizedCompilerProfile =
+			compilerProfile === undefined
+				? undefined
+				: finalizeProfileCapture(
+						compilerProfile.capture.directory,
+						compilerProfile.prepared,
+						"self-compile",
+					);
 		const report = {
 			schema: 2,
 			world: "closed",
@@ -228,6 +268,14 @@ if (options !== undefined) {
 				path.relative(process.cwd(), sourceRoot),
 			]),
 			perfRecords: records,
+			...(finalizedCompilerProfile === undefined
+				? {}
+				: {
+						compilerProfile: {
+							directory: compilerProfile!.capture.directory,
+							findings: finalizedCompilerProfile.findings,
+						},
+					}),
 		};
 		const absoluteOutput = path.resolve(options.jsonOut);
 		mkdirSync(path.dirname(absoluteOutput), { recursive: true });
@@ -236,8 +284,11 @@ if (options !== undefined) {
 			`self-compile ${options.quick ? "quick " : ""}profile: ${summary.units} units, ${summary.codeUnits} code units, ${(result.wallMs / 1000).toFixed(1)}s run / ${((buildMs + prepareMs + result.wallMs) / 1000).toFixed(1)}s total`,
 		);
 		console.log(`digest: ${report.digest}`);
-		console.log(`exact counter records: ${records.length}`);
+		console.log(`runtime perf counter records: ${records.length}`);
 		console.log(`raw profile: ${absoluteOutput}`);
+		if (compilerProfile !== undefined) {
+			console.log(`compiler profile: ${compilerProfile.capture.directory}`);
+		}
 		if (options.sampleOut !== undefined) {
 			console.log(`Core optimization sample: ${path.resolve(options.sampleOut)}`);
 		}

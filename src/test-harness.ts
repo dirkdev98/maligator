@@ -161,7 +161,11 @@ export interface BuildOptions {
 	onFrontendCacheEvent?: (event: { cache: "hit" | "miss"; entrypoint: string }) => void;
 }
 
-export type BuildNativeBinaryResult = LocalBuildResult;
+export interface BuildNativeBinaryResult extends LocalBuildResult {
+	/** Exact optimized image linked into this binary. Diagnostic/profile callers
+	 * can bind metadata to the executable without recompiling the frontend. */
+	readonly programImage: ProgramImage;
+}
 
 /**
  * Compile a fixture through the full pipeline (semantic → ir → opt → regalloc →
@@ -174,13 +178,15 @@ export function buildNativeBinary(options: BuildOptions): string {
 /** Compile and link a fixture, retaining the exact context and linked artifacts. */
 export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinaryResult {
 	const config = resolveHarnessBuildConfig(options);
-	return linkProgramImage(
+	const programImage = compileFixtureProgramImage(options, config);
+	const linked = linkProgramImage(
 		options,
 		config,
-		compileFixtureProgramImage(options, config),
+		programImage,
 		options.compiled ?? true,
 		options.name,
 	);
+	return { ...linked, programImage };
 }
 
 /**
@@ -268,7 +274,7 @@ function linkProgramImage(
 	image: ProgramImage,
 	compiled: boolean,
 	name: string,
-): BuildNativeBinaryResult {
+): LocalBuildResult {
 	const emitOptions = {
 		compiled,
 		assets: includeConfiguredAssets(config.assets),

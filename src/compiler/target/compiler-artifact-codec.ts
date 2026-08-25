@@ -28,7 +28,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 28;
+export const COMPILER_ARTIFACT_VERSION = 29;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -553,6 +553,22 @@ function writeCompilerArtifact(
 					);
 				}
 				w.u8(11);
+			} else if (
+				plan.kind === "exact-own-slot" &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+			) {
+				if (
+					!Number.isSafeInteger(plan.slot) ||
+					plan.slot < 0 ||
+					plan.slot > 0xffff_ffff
+				) {
+					throw new RangeError("program-image-codec: invalid exact own slot");
+				}
+				w.u8(13);
+				w.u32(plan.slot);
 			} else {
 				throw new RangeError(
 					"program-image-codec: native instruction plan opcode mismatch",
@@ -2060,6 +2076,17 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					);
 				}
 				nativeInstructions[instructionIndex] = { kind: "primitive-string-length" };
+			} else if (
+				tag === 13 &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+			) {
+				nativeInstructions[instructionIndex] = {
+					kind: "exact-own-slot",
+					slot: r.u32(),
+				};
 			} else {
 				throw new RangeError(
 					"program-image-codec: compiler instruction metadata opcode mismatch",

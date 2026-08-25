@@ -637,7 +637,7 @@ static void mal_perf_stats_print(void) {
         "compiled_exact_hits=%llu compiled_family_hits=%llu native_exact_hits=%llu "
         "way_checks=%llu dispatch_misses=%llu compiled_fills=%llu native_fills=%llu "
         "compiled_enters=%llu compiled_debug_frames=%llu "
-        "direct_entry_hits=%llu direct_entry_fallbacks=%llu\n",
+        "direct_entry_hits=%llu\n",
         (unsigned long long) mal_perf_stats.call_cache_probes,
         (unsigned long long) mal_perf_stats.call_cache_exact_identity_hits,
         (unsigned long long) mal_perf_stats.call_cache_compiled_exact_hits,
@@ -649,8 +649,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.call_cache_native_fills,
         (unsigned long long) mal_perf_stats.compiled_enter_calls,
         (unsigned long long) mal_perf_stats.compiled_debug_frame_entries,
-        (unsigned long long) mal_perf_stats.direct_entry_hits,
-        (unsigned long long) mal_perf_stats.direct_entry_fallbacks
+        (unsigned long long) mal_perf_stats.direct_entry_hits
     );
     for (usize i = 0; i < MAL_PERF_NATIVE_NAME_CAPACITY; i++) {
         const MalPerfNativeName *entry = &mal_perf_native_names[i];

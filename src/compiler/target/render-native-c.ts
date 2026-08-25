@@ -1911,7 +1911,12 @@ function profileDecisionsForInstruction(
 			);
 		}
 	} else if (operation === "property") {
-		if (source.includes("mal_vm_try_load_known_own_slots(")) {
+		if (
+			source.includes("mal_vm_object_slot_store(mal_value_to_object(") ||
+			/\bmal_value_to_object\([^)]*\)->slots\[\d+\]/.test(source)
+		) {
+			decisions.push(decision("property.exact-own-slot", "applied"));
+		} else if (source.includes("mal_vm_try_load_known_own_slots(")) {
 			decisions.push(
 				decision("property.known-own-slot", "guarded", "exact-shape-fallback"),
 			);
@@ -2249,6 +2254,21 @@ function emitInstruction(
 	// Where `this` is stored: a derived constructor's is a mutable rooted slot
 	// (super() rebinds it); everything else reads the immutable `this_value` param.
 	const thisRef = thisSlot >= 0 ? `__gc_slots[${thisSlot}]` : "this_value";
+
+	if (nativePlan?.kind === "exact-own-slot") {
+		switch (instruction.opcode) {
+			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+				return [
+					`r${instruction.dst} = mal_value_to_object(${boxed(instruction.object)})->slots[${nativePlan.slot}];`,
+				];
+			case "STORE_PROPERTY_STATIC":
+			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+				return [
+					`mal_vm_object_slot_store(mal_value_to_object(${boxed(instruction.object)}), ${nativePlan.slot}, ${boxed(instruction.value)});`,
+				];
+		}
+	}
 
 	switch (instruction.opcode) {
 		case "MOVE": {
@@ -3871,21 +3891,13 @@ function emitInstruction(
 								: callResult(directValue);
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
-						`if (mal_vm_callee_has_index(vm, ${directCallee}, ${target})) {`,
-						`  MAL_PERF_COUNT(direct_entry_hits);`,
-						`  if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
-						`  const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
-						`  ${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)})${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
-						`  mal_vm_leave_compiled(vm);`,
-						`  if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-						`  r${instruction.dst} = ${directResult};`,
-						`} else {`,
-						`  MAL_PERF_COUNT(direct_entry_fallbacks);`,
-						`  static MalCallCache __cc_${ip};`,
-						`  MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${target}, ${directCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-						`}`,
+						`MAL_PERF_COUNT(direct_entry_hits);`,
+						`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
+						`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
+						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)})${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
+						`mal_vm_leave_compiled(vm);`,
+						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`r${instruction.dst} = ${directResult};`,
 						poll,
 					];
 				}
@@ -3895,19 +3907,12 @@ function emitInstruction(
 					const directValue = `__direct_value_${ip}`;
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
-						`if (mal_vm_callee_has_index(vm, ${directCallee}, ${target})) {`,
-						`  if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
-						`  const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
-						`  MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
-						`  mal_vm_leave_compiled(vm);`,
-						`  if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-						`  r${instruction.dst} = ${callResult(directValue)};`,
-						`} else {`,
-						`  static MalCallCache __cc_${ip};`,
-						`  MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${target}, ${directCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-						`}`,
+						`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
+						`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
+						`MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
+						`mal_vm_leave_compiled(vm);`,
+						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`r${instruction.dst} = ${callResult(directValue)};`,
 						poll,
 					];
 				}

@@ -244,7 +244,7 @@ test("profile remarks retain applied substitutions after the call disappears", (
 	expect(site.line).toBe(4);
 });
 
-test("profile remarks classify residual direct-call helpers as guarded compiled calls", () => {
+test("profile remarks classify closed direct calls as applied compiled calls", () => {
 	const definition = compile(`
 		function outer(value) {
 			function expensive(input) {
@@ -255,20 +255,14 @@ test("profile remarks classify residual direct-call helpers as guarded compiled 
 		}
 		globalThis.keep = outer;
 	`);
-	const emitted = emitProgramTranslationUnits(
-		definition,
-		{},
-		Number.MAX_SAFE_INTEGER,
-	).join("\n");
-	expect(emitted).toContain("mal_vm_call_direct(");
+	emitProgramTranslationUnits(definition, {}, Number.MAX_SAFE_INTEGER);
 
 	expect(definition.diagnostics.profileRemarks).toContainEqual(
 		expect.objectContaining({
 			phase: "native-backend",
 			operation: "call",
 			code: "call.direct-compiled",
-			outcome: "guarded",
-			reasonCode: "callee-identity-guard",
+			outcome: "applied",
 		}),
 	);
 });

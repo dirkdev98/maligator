@@ -545,6 +545,7 @@ export type NativeInstructionPlan =
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
+	| { readonly kind: "exact-own-slot"; readonly slot: number }
 	| { readonly kind: "primitive-string-length" };
 
 /**
@@ -816,9 +817,15 @@ function nativeInstructionPlanFromExecution(
 						length: instruction.freshDenseReserveLength,
 					};
 		case "loadPropertyStatic":
-			return instruction.primitiveStringLength === true
-				? { kind: "primitive-string-length" }
-				: undefined;
+			return instruction.exactOwnSlot !== undefined
+				? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }
+				: instruction.primitiveStringLength === true
+					? { kind: "primitive-string-length" }
+					: undefined;
+		case "storePropertyStatic":
+			return instruction.exactOwnSlot === undefined
+				? undefined
+				: { kind: "exact-own-slot", slot: instruction.exactOwnSlot };
 		default:
 			return undefined;
 	}

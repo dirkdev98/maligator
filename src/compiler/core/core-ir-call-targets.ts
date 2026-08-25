@@ -1969,9 +1969,9 @@ function containAllocations(input: ContainmentInput): {
 /**
  * Instruction attribute carrying a call site's bounded target set.
  *
- * Core-internal: the only target-visible product of this analysis is the
- * existing guarded `directFunctionIndex` lowering, so this attribute is dropped
- * at the Core-to-target boundary rather than lowered or serialized.
+ * Core-internal: target lowering consumes a closed call target as an exact
+ * `directFunctionIndex`; open finite target sets remain guard/fallback facts.
+ * This complete lattice state is dropped rather than lowered or serialized.
  */
 export const CORE_CALLEE_TARGETS_ATTRIBUTE = "calleeTargets";
 

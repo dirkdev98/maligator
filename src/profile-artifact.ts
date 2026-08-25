@@ -220,7 +220,7 @@ const REMARK_EXPLANATIONS: Record<string, string> = {
 	"allocation.virtualized": "allocation is virtualized behind a materialization guard",
 	"boxing.value-materialization": "native value is materialized in boxed representation",
 	"call.builtin-direct": "call uses a semantics-preserving runtime direct helper",
-	"call.direct-compiled": "call targets compiled code behind a callee guard",
+	"call.direct-compiled": "call targets compiled code directly",
 	"call.direct-native": "call uses the native-number compiled ABI",
 	"call.inline-cache": "dynamic call retains its runtime target cache",
 	"call.projected": "call result is projected behind a semantic fallback",

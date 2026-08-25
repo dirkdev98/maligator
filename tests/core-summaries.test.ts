@@ -23,7 +23,6 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 
 function coreProgram(
@@ -697,7 +696,7 @@ describe("summary consumers and proof boundary", () => {
 		});
 	});
 
-	it("relays closed script result representations across the boxed ABI", () => {
+	it("relays closed script result representations into native calls", () => {
 		const program = coreProgram([
 			returnF64(0),
 			directCaller(1, 0),
@@ -746,7 +745,7 @@ describe("summary consumers and proof boundary", () => {
 		);
 		let productCore: CoreProgram | undefined;
 		let productContext: CoreCompilationContext | undefined;
-		const vm = compileSemanticProgramToProgramImage(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			optimizationAblations: new Set(["inlining"]),
 			afterCoreOptimization(program, context) {
 				productCore = program;
@@ -757,9 +756,6 @@ describe("summary consumers and proof boundary", () => {
 			program: productCore!,
 			context: productContext!,
 		});
-		const emitted = emitProgramImage(vm, { compiled: true });
-		expect(emitted).toMatch(/mal_ops_number_as_f64\(call_result_\d+\.value\)/);
-		expect(emitted).toMatch(/mal_value_to_boolean\(call_result_\d+\.value\)/);
 		const functionIndex = (name: string): number =>
 			productCore!.functions.find(
 				(fn) =>
