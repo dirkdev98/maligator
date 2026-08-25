@@ -46,9 +46,9 @@ import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-	serializeRuntimeImage,
 	COMPILER_ARTIFACT_VERSION,
-} from "./compiler/target/program-image-codec.ts";
+} from "./compiler/target/compiler-artifact-codec.ts";
+import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import {
 	compileDependencyFragments,
 	DEVELOPMENT_LINKED_MODULES_GLOBAL,

@@ -5,12 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-	WIRE_OPCODES,
-} from "../src/compiler/target/program-image-codec.ts";
+} from "../src/compiler/target/compiler-artifact-codec.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { WIRE_OPCODES } from "../src/compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 
 /**

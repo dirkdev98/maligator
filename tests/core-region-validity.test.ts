@@ -17,7 +17,7 @@ import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-} from "../src/compiler/target/program-image-codec.ts";
+} from "../src/compiler/target/compiler-artifact-codec.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 
 /**

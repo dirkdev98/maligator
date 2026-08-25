@@ -6,7 +6,7 @@ import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/c
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-} from "../src/compiler/target/program-image-codec.ts";
+} from "../src/compiler/target/compiler-artifact-codec.ts";
 import { vmExceptionHandlerTargets } from "../src/compiler/target/program-image.ts";
 
 function compile(source: string) {

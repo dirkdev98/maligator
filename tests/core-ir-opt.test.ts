@@ -17,12 +17,12 @@ import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts"
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-} from "../src/compiler/target/program-image-codec.ts";
+} from "../src/compiler/target/compiler-artifact-codec.ts";
+import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 function programWithConstants(): CoreProgram {

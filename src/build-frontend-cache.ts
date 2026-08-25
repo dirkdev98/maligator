@@ -53,9 +53,9 @@ import type {
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-	serializeRuntimeImage,
 	COMPILER_ARTIFACT_VERSION,
-} from "./compiler/target/program-image-codec.ts";
+} from "./compiler/target/compiler-artifact-codec.ts";
+import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { programImageStats } from "./compiler/target/program-image.ts";
 import type { ProgramImageStats } from "./compiler/target/program-image.ts";

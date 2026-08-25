@@ -30,12 +30,12 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semant
 import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "../compiler/pipeline/compile-program.ts";
-import { emitBatch, emitProgramImage } from "../compiler/target/emit-program-image.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
-	serializeRuntimeImage,
-} from "../compiler/target/program-image-codec.ts";
+} from "../compiler/target/compiler-artifact-codec.ts";
+import { emitBatch, emitProgramImage } from "../compiler/target/emit-program-image.ts";
+import { serializeRuntimeImage } from "../compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "../compiler/target/program-image.ts";
 import { buildLocalBinary } from "../local-build.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";

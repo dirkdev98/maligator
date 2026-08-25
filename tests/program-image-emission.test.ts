@@ -9,14 +9,14 @@ import {
 } from "../src/compiler/shared/builtin-registry.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
+import {
 	emitBatch,
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
-import {
-	deserializeCompilerArtifact,
-	serializeCompilerArtifact,
-} from "../src/compiler/target/program-image-codec.ts";
 import {
 	vmRegionLicense,
 	vmSemanticProtectorGuard,

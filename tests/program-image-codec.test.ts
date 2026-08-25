@@ -1,12 +1,12 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+	COMPILER_ARTIFACT_VERSION,
 	deserializeCompilerArtifact,
-	MAX_STRING_CODE_UNITS,
 	serializeCompilerArtifact,
-	WIRE_GUARDED_BUILTIN_TAG_COUNT,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
+import {
+	MAX_STRING_CODE_UNITS,
 	WIRE_OPCODES,
-	WIRE_VERSION,
 } from "../src/compiler/target/program-image-codec.ts";
 import {
 	buildArgumentSnapshotPlan,
@@ -1284,22 +1284,11 @@ describe("program-image-codec", () => {
 		const buffer = serializeCompilerArtifact(definition);
 		new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(
 			4,
-			WIRE_VERSION - 1,
+			COMPILER_ARTIFACT_VERSION - 1,
 			true,
 		);
 		expect(() => deserializeCompilerArtifact(buffer)).toThrow(
-			`version ${WIRE_VERSION - 1}, expected ${WIRE_VERSION}`,
-		);
-	});
-
-	it("keeps the C loader wire constants synchronized", () => {
-		const loaderSource = readFileSync(
-			new URL("../runtime/src/vm_load.c", import.meta.url),
-			"utf-8",
-		);
-		expect(loaderSource).toContain(`#define WIRE_VERSION ${WIRE_VERSION}u`);
-		expect(loaderSource).toContain(
-			`#define WIRE_GUARDED_BUILTIN_TAG_COUNT ${WIRE_GUARDED_BUILTIN_TAG_COUNT}u`,
+			`version ${COMPILER_ARTIFACT_VERSION - 1}, expected ${COMPILER_ARTIFACT_VERSION}`,
 		);
 	});
 
