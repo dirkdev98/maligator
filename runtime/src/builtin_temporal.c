@@ -110,6 +110,12 @@ static MalValue temporal_throw_type(MalVm *vm, const byte *message) {
     return mal_value_new_undefined();
 }
 
+static void *temporal_handle_if_kind(MalValue value, MalTemporalKind kind) {
+    if (!mal_value_is_temporal_object(value)) return nullptr;
+    MalTemporalObject *object = mal_value_to_temporal_object(value);
+    return object->kind == kind ? object->handle : nullptr;
+}
+
 static bool duration_this(MalVm *vm, MalValue value, MalTemporalObject **out) {
     if (!mal_value_is_temporal_object(value)) {
         temporal_throw_type(vm, "Temporal.Duration method called on incompatible receiver");
@@ -832,11 +838,27 @@ static MalValue duration_compare(
     MalValue new_target, MalValue callee
 ) {
     (void) this_value; (void) new_target; (void) callee;
-    Duration *one = duration_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    MalValue one_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalValue two_value = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    Duration *one_borrowed = temporal_handle_if_kind(
+        one_value, MAL_TEMPORAL_DURATION);
+    Duration *two_borrowed = temporal_handle_if_kind(
+        two_value, MAL_TEMPORAL_DURATION);
+    if (one_borrowed != nullptr && two_borrowed != nullptr) {
+        RelativeTo relative;
+        if (!duration_relative_to(
+                vm, arg_count > 2 ? args[2] : mal_value_new_undefined(),
+                &relative)) {
+            return mal_value_new_undefined();
+        }
+        temporal_rs_Duration_compare_result result =
+            temporal_rs_Duration_compare(one_borrowed, two_borrowed, relative);
+        return result.is_ok ? mal_value_from_i32(result.ok)
+                            : temporal_throw(vm, result.err);
+    }
+    Duration *one = duration_from_like(vm, one_value);
     if (one == nullptr) return mal_value_new_undefined();
-    Duration *two = duration_from_like(
-        vm, arg_count > 1 ? args[1] : mal_value_new_undefined());
+    Duration *two = duration_from_like(vm, two_value);
     if (two == nullptr) {
         temporal_rs_Duration_destroy(one);
         return mal_value_new_undefined();
@@ -1216,11 +1238,21 @@ static MalValue plain_time_compare(
     MalValue new_target, MalValue callee
 ) {
     (void) this_value; (void) new_target; (void) callee;
+    MalValue one_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalValue two_value = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    PlainTime *one_borrowed = temporal_handle_if_kind(
+        one_value, MAL_TEMPORAL_PLAIN_TIME);
+    PlainTime *two_borrowed = temporal_handle_if_kind(
+        two_value, MAL_TEMPORAL_PLAIN_TIME);
+    if (one_borrowed != nullptr && two_borrowed != nullptr) {
+        return mal_value_from_i32(
+            temporal_rs_PlainTime_compare(one_borrowed, two_borrowed));
+    }
     PlainTime *one = plain_time_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, one_value, mal_value_new_undefined());
     if (one == nullptr) return mal_value_new_undefined();
     PlainTime *two = plain_time_from_like(
-        vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, two_value, mal_value_new_undefined());
     if (two == nullptr) {
         temporal_rs_PlainTime_destroy(one);
         return mal_value_new_undefined();
@@ -1280,8 +1312,15 @@ static MalValue plain_time_equals(
     (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue other_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    PlainTime *borrowed = temporal_handle_if_kind(
+        other_value, MAL_TEMPORAL_PLAIN_TIME);
+    if (borrowed != nullptr) {
+        return mal_value_new_boolean(
+            temporal_rs_PlainTime_equals(object->handle, borrowed));
+    }
     PlainTime *other = plain_time_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, other_value, mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     bool equal = temporal_rs_PlainTime_equals(object->handle, other);
     temporal_rs_PlainTime_destroy(other);
@@ -1827,11 +1866,21 @@ static MalValue plain_date_compare(
     MalValue new_target, MalValue callee
 ) {
     (void) this_value; (void) new_target; (void) callee;
+    MalValue one_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalValue two_value = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    PlainDate *one_borrowed = temporal_handle_if_kind(
+        one_value, MAL_TEMPORAL_PLAIN_DATE);
+    PlainDate *two_borrowed = temporal_handle_if_kind(
+        two_value, MAL_TEMPORAL_PLAIN_DATE);
+    if (one_borrowed != nullptr && two_borrowed != nullptr) {
+        return mal_value_from_i32(
+            temporal_rs_PlainDate_compare(one_borrowed, two_borrowed));
+    }
     PlainDate *one = plain_date_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, one_value, mal_value_new_undefined());
     if (one == nullptr) return mal_value_new_undefined();
     PlainDate *two = plain_date_from_like(
-        vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, two_value, mal_value_new_undefined());
     if (two == nullptr) {
         temporal_rs_PlainDate_destroy(one);
         return mal_value_new_undefined();
@@ -2007,8 +2056,15 @@ static MalValue plain_date_equals(
     (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue other_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    PlainDate *borrowed = temporal_handle_if_kind(
+        other_value, MAL_TEMPORAL_PLAIN_DATE);
+    if (borrowed != nullptr) {
+        return mal_value_new_boolean(
+            temporal_rs_PlainDate_equals(object->handle, borrowed));
+    }
     PlainDate *other = plain_date_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, other_value, mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     bool equal = temporal_rs_PlainDate_equals(object->handle, other);
     temporal_rs_PlainDate_destroy(other);
@@ -2384,11 +2440,21 @@ static MalValue plain_date_time_compare(
     MalValue new_target, MalValue callee
 ) {
     (void) this_value; (void) new_target; (void) callee;
+    MalValue one_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalValue two_value = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    PlainDateTime *one_borrowed = temporal_handle_if_kind(
+        one_value, MAL_TEMPORAL_PLAIN_DATE_TIME);
+    PlainDateTime *two_borrowed = temporal_handle_if_kind(
+        two_value, MAL_TEMPORAL_PLAIN_DATE_TIME);
+    if (one_borrowed != nullptr && two_borrowed != nullptr) {
+        return mal_value_from_i32(
+            temporal_rs_PlainDateTime_compare(one_borrowed, two_borrowed));
+    }
     PlainDateTime *one = plain_date_time_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, one_value, mal_value_new_undefined());
     if (one == nullptr) return mal_value_new_undefined();
     PlainDateTime *two = plain_date_time_from_like(
-        vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, two_value, mal_value_new_undefined());
     if (two == nullptr) {
         temporal_rs_PlainDateTime_destroy(one);
         return mal_value_new_undefined();
@@ -2564,8 +2630,15 @@ static MalValue plain_date_time_equals(
     (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue other_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    PlainDateTime *borrowed = temporal_handle_if_kind(
+        other_value, MAL_TEMPORAL_PLAIN_DATE_TIME);
+    if (borrowed != nullptr) {
+        return mal_value_new_boolean(
+            temporal_rs_PlainDateTime_equals(object->handle, borrowed));
+    }
     PlainDateTime *other = plain_date_time_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, other_value, mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     bool equal = temporal_rs_PlainDateTime_equals(object->handle, other);
     temporal_rs_PlainDateTime_destroy(other);
@@ -2900,11 +2973,21 @@ static MalValue plain_year_month_compare(
     MalValue new_target, MalValue callee
 ) {
     (void) this_value; (void) new_target; (void) callee;
+    MalValue one_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalValue two_value = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    PlainYearMonth *one_borrowed = temporal_handle_if_kind(
+        one_value, MAL_TEMPORAL_PLAIN_YEAR_MONTH);
+    PlainYearMonth *two_borrowed = temporal_handle_if_kind(
+        two_value, MAL_TEMPORAL_PLAIN_YEAR_MONTH);
+    if (one_borrowed != nullptr && two_borrowed != nullptr) {
+        return mal_value_from_i32(
+            temporal_rs_PlainYearMonth_compare(one_borrowed, two_borrowed));
+    }
     PlainYearMonth *one = plain_year_month_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, one_value, mal_value_new_undefined());
     if (one == nullptr) return mal_value_new_undefined();
     PlainYearMonth *two = plain_year_month_from_like(
-        vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, two_value, mal_value_new_undefined());
     if (two == nullptr) {
         temporal_rs_PlainYearMonth_destroy(one);
         return mal_value_new_undefined();
@@ -2971,8 +3054,15 @@ static MalValue plain_year_month_equals(
     (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue other_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    PlainYearMonth *borrowed = temporal_handle_if_kind(
+        other_value, MAL_TEMPORAL_PLAIN_YEAR_MONTH);
+    if (borrowed != nullptr) {
+        return mal_value_new_boolean(
+            temporal_rs_PlainYearMonth_equals(object->handle, borrowed));
+    }
     PlainYearMonth *other = plain_year_month_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, other_value, mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     bool equal = temporal_rs_PlainYearMonth_equals(object->handle, other);
     temporal_rs_PlainYearMonth_destroy(other);
@@ -3388,8 +3478,15 @@ static MalValue plain_month_day_equals(
     (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue other_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    PlainMonthDay *borrowed = temporal_handle_if_kind(
+        other_value, MAL_TEMPORAL_PLAIN_MONTH_DAY);
+    if (borrowed != nullptr) {
+        return mal_value_new_boolean(
+            temporal_rs_PlainMonthDay_equals(object->handle, borrowed));
+    }
     PlainMonthDay *other = plain_month_day_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+        vm, other_value, mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     bool equal = temporal_rs_PlainMonthDay_equals(object->handle, other);
     temporal_rs_PlainMonthDay_destroy(other);
@@ -3667,11 +3764,19 @@ static MalValue instant_compare(
     MalValue new_target, MalValue callee
 ) {
     (void) this_value; (void) new_target; (void) callee;
-    Instant *one = instant_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    MalValue one_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalValue two_value = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    Instant *one_borrowed = temporal_handle_if_kind(
+        one_value, MAL_TEMPORAL_INSTANT);
+    Instant *two_borrowed = temporal_handle_if_kind(
+        two_value, MAL_TEMPORAL_INSTANT);
+    if (one_borrowed != nullptr && two_borrowed != nullptr) {
+        return mal_value_from_i32(
+            temporal_rs_Instant_compare(one_borrowed, two_borrowed));
+    }
+    Instant *one = instant_from_like(vm, one_value);
     if (one == nullptr) return mal_value_new_undefined();
-    Instant *two = instant_from_like(
-        vm, arg_count > 1 ? args[1] : mal_value_new_undefined());
+    Instant *two = instant_from_like(vm, two_value);
     if (two == nullptr) {
         temporal_rs_Instant_destroy(one);
         return mal_value_new_undefined();
@@ -3731,8 +3836,14 @@ static MalValue instant_equals(
     (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
-    Instant *other = instant_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    MalValue other_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    Instant *borrowed = temporal_handle_if_kind(
+        other_value, MAL_TEMPORAL_INSTANT);
+    if (borrowed != nullptr) {
+        return mal_value_new_boolean(
+            temporal_rs_Instant_equals(object->handle, borrowed));
+    }
+    Instant *other = instant_from_like(vm, other_value);
     if (other == nullptr) return mal_value_new_undefined();
     bool equal = temporal_rs_Instant_equals(object->handle, other);
     temporal_rs_Instant_destroy(other);
@@ -4230,11 +4341,22 @@ static MalValue zoned_date_time_compare(
     MalValue new_target, MalValue callee
 ) {
     (void) this_value; (void) new_target; (void) callee;
+    MalValue one_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalValue two_value = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    ZonedDateTime *one_borrowed = temporal_handle_if_kind(
+        one_value, MAL_TEMPORAL_ZONED_DATE_TIME);
+    ZonedDateTime *two_borrowed = temporal_handle_if_kind(
+        two_value, MAL_TEMPORAL_ZONED_DATE_TIME);
+    if (one_borrowed != nullptr && two_borrowed != nullptr) {
+        return mal_value_from_i32(
+            temporal_rs_ZonedDateTime_compare_instant(
+                one_borrowed, two_borrowed));
+    }
     ZonedDateTime *one = zoned_date_time_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+        vm, one_value);
     if (one == nullptr) return mal_value_new_undefined();
     ZonedDateTime *two = zoned_date_time_from_like(
-        vm, arg_count > 1 ? args[1] : mal_value_new_undefined());
+        vm, two_value);
     if (two == nullptr) {
         temporal_rs_ZonedDateTime_destroy(one);
         return mal_value_new_undefined();
@@ -4484,8 +4606,14 @@ static MalValue zoned_date_time_equals(
     (void) new_target; (void) callee;
     MalTemporalObject *object;
     if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    ZonedDateTime *other = zoned_date_time_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    MalValue other_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    ZonedDateTime *borrowed = temporal_handle_if_kind(
+        other_value, MAL_TEMPORAL_ZONED_DATE_TIME);
+    if (borrowed != nullptr) {
+        return mal_value_new_boolean(
+            temporal_rs_ZonedDateTime_equals(object->handle, borrowed));
+    }
+    ZonedDateTime *other = zoned_date_time_from_like(vm, other_value);
     if (other == nullptr) return mal_value_new_undefined();
     bool equal = temporal_rs_ZonedDateTime_equals(object->handle, other);
     temporal_rs_ZonedDateTime_destroy(other);

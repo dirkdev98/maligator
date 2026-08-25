@@ -108,6 +108,20 @@ check(zoned.toPlainDateTime().toString() === "1970-01-01T00:00:00");
 check(zoned.add({ days: 1 }).day === 2);
 check(instant.toZonedDateTimeISO("UTC").toInstant().equals(instant));
 check(Temporal.ZonedDateTime.from("2024-02-29T12:30+01:00[+01:00]").hour === 12);
+check(Temporal.Duration.compare(duration, duration) === 0);
+check(Temporal.PlainTime.compare(time, time) === 0 && time.equals(time));
+check(Temporal.PlainDate.compare(date, date) === 0 && date.equals(date));
+check(
+	Temporal.PlainDateTime.compare(dateTime, dateTime) === 0 &&
+		dateTime.equals(dateTime),
+);
+check(
+	Temporal.PlainYearMonth.compare(yearMonth, yearMonth) === 0 &&
+		yearMonth.equals(yearMonth),
+);
+check(monthDay.equals(monthDay));
+check(Temporal.Instant.compare(instant, instant) === 0 && instant.equals(instant));
+check(Temporal.ZonedDateTime.compare(zoned, zoned) === 0 && zoned.equals(zoned));
 check(typeof Temporal.Now.instant().epochNanoseconds === "bigint");
 check(
 	typeof Temporal.Now.timeZoneId() === "string" && Temporal.Now.timeZoneId().length > 0,
