@@ -71,6 +71,7 @@ typedef struct MalHttpWireWrite {
     u64 token;
     bool notify;
     bool final;
+    bool bytes_inline;
     struct MalHttpWireWrite *next;
 } MalHttpWireWrite;
 
@@ -141,6 +142,7 @@ static bool conn_arm_write(MalHttpConn *c);
 static void conn_process_stream(MalHttpConn *c);
 static void conn_stream_reset_request(MalHttpConn *c);
 static void conn_close(MalHttpConn *c);
+static void conn_wire_write_free(MalHttpWireWrite *write);
 
 static i64 server_timeout_ns(u32 configured, u32 fallback) {
     u32 milliseconds = configured == 0 ? fallback : configured;
@@ -213,8 +215,7 @@ static void conn_close(MalHttpConn *c) {
     MalHttpWireWrite *write = c->write_head;
     while (write != nullptr) {
         MalHttpWireWrite *next = write->next;
-        free(write->bytes);
-        free(write);
+        conn_wire_write_free(write);
         write = next;
     }
     MalHttpResponseCompleteCallback response_callback = c->response_callback;
@@ -261,6 +262,19 @@ static bool conn_size_add(usize *total, usize added) {
     return true;
 }
 
+static usize conn_u64_decimal(byte *out, u64 value) {
+    byte reversed[20];
+    usize length = 0;
+    do {
+        reversed[length++] = (byte) ('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+    for (usize i = 0; i < length; i++) {
+        out[i] = reversed[length - i - 1];
+    }
+    return length;
+}
+
 static bool conn_queue_write(MalHttpConn *c, MalHttpWireWrite *write) {
     bool was_empty = c->write_tail == nullptr;
     if (was_empty) c->write_head = write;
@@ -274,6 +288,11 @@ static bool conn_queue_write(MalHttpConn *c, MalHttpWireWrite *write) {
     return true;
 }
 
+static void conn_wire_write_free(MalHttpWireWrite *write) {
+    if (!write->bytes_inline) free(write->bytes);
+    free(write);
+}
+
 bool mal_http_conn_response_start(
     MalHttpConn *c,
     int status,
@@ -284,67 +303,94 @@ bool mal_http_conn_response_start(
     i64 expected_body_length,
     bool chunked) {
     static const char default_ct[] = "Content-Type: text/plain; charset=utf-8\r\n";
-    if (c == nullptr || reason == nullptr || c->response_started || c->response_ended
+    if (c == nullptr || reason == nullptr || status < 100 || status > 999
+        || c->response_started || c->response_ended
         || (chunked && (declared_content_length >= 0 || expected_body_length >= 0))) {
         return false;
     }
     bool keep_alive = c->keep_alive && !c->server->closing;
-    int status_length = snprintf(nullptr, 0, "HTTP/1.1 %d %s\r\n", status, reason);
-    int framing_length;
+    byte status_prefix[] = "HTTP/1.1 000 ";
+    status_prefix[9] = (byte) ('0' + status / 100);
+    status_prefix[10] = (byte) ('0' + status / 10 % 10);
+    status_prefix[11] = (byte) ('0' + status % 10);
+    usize status_prefix_length = sizeof(status_prefix) - 1;
+    usize reason_length = strlen(reason);
+    byte framing_buffer[96];
+    const char *framing;
+    usize framing_length;
     if (chunked) {
-        framing_length = snprintf(nullptr, 0,
-            "Transfer-Encoding: chunked\r\nConnection: %s\r\n\r\n",
-            keep_alive ? "keep-alive" : "close");
+        static const char keep_alive_framing[] =
+            "Transfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n";
+        static const char close_framing[] =
+            "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+        if (keep_alive) {
+            framing = keep_alive_framing;
+            framing_length = sizeof(keep_alive_framing) - 1;
+        } else {
+            framing = close_framing;
+            framing_length = sizeof(close_framing) - 1;
+        }
     } else if (declared_content_length >= 0) {
-        framing_length = snprintf(nullptr, 0,
-            "Content-Length: %lld\r\nConnection: %s\r\n\r\n",
-            (long long) declared_content_length,
-            keep_alive ? "keep-alive" : "close");
+        static const char prefix[] = "Content-Length: ";
+        static const char keep_alive_suffix[] =
+            "\r\nConnection: keep-alive\r\n\r\n";
+        static const char close_suffix[] = "\r\nConnection: close\r\n\r\n";
+        memcpy(framing_buffer, prefix, sizeof(prefix) - 1);
+        framing_length = sizeof(prefix) - 1;
+        framing_length += conn_u64_decimal(
+            framing_buffer + framing_length, (u64) declared_content_length);
+        const char *suffix;
+        usize suffix_length;
+        if (keep_alive) {
+            suffix = keep_alive_suffix;
+            suffix_length = sizeof(keep_alive_suffix) - 1;
+        } else {
+            suffix = close_suffix;
+            suffix_length = sizeof(close_suffix) - 1;
+        }
+        memcpy(framing_buffer + framing_length, suffix, suffix_length);
+        framing_length += suffix_length;
+        framing = (const char *) framing_buffer;
     } else {
-        framing_length = snprintf(nullptr, 0, "Connection: %s\r\n\r\n",
-            keep_alive ? "keep-alive" : "close");
+        static const char keep_alive_framing[] =
+            "Connection: keep-alive\r\n\r\n";
+        static const char close_framing[] = "Connection: close\r\n\r\n";
+        if (keep_alive) {
+            framing = keep_alive_framing;
+            framing_length = sizeof(keep_alive_framing) - 1;
+        } else {
+            framing = close_framing;
+            framing_length = sizeof(close_framing) - 1;
+        }
     }
     const char *header_bytes = headers == nullptr ? default_ct : headers;
     usize header_length = headers == nullptr ? sizeof(default_ct) - 1 : headers_len;
     usize total = 0;
-    if (status_length < 0 || framing_length < 0
-        || !conn_size_add(&total, (usize) status_length)
+    if (framing_length > sizeof(framing_buffer)
+        || !conn_size_add(&total, status_prefix_length)
+        || !conn_size_add(&total, reason_length)
+        || !conn_size_add(&total, 2)
         || !conn_size_add(&total, header_length)
-        || !conn_size_add(&total, (usize) framing_length)) {
+        || !conn_size_add(&total, framing_length)) {
         return false;
     }
-    if (total == SIZE_MAX) return false;
-    MalHttpWireWrite *write = calloc(1, sizeof(*write));
+    if (total > SIZE_MAX - sizeof(MalHttpWireWrite)) return false;
+    MalHttpWireWrite *write = calloc(1, sizeof(*write) + total);
     if (write == nullptr) return false;
-    write->bytes = malloc(total + 1);
-    if (write->bytes == nullptr) {
-        free(write);
-        return false;
-    }
+    write->bytes = (byte *) (write + 1);
+    write->bytes_inline = true;
     usize offset = 0;
-    int written = snprintf(
-        (char *) write->bytes + offset, total - offset + 1,
-        "HTTP/1.1 %d %s\r\n", status, reason);
-    if (written != status_length) goto fail;
-    offset += (usize) written;
+    memcpy(write->bytes + offset, status_prefix, status_prefix_length);
+    offset += status_prefix_length;
+    memcpy(write->bytes + offset, reason, reason_length);
+    offset += reason_length;
+    memcpy(write->bytes + offset, "\r\n", 2);
+    offset += 2;
     if (header_length > 0) {
         memcpy(write->bytes + offset, header_bytes, header_length);
         offset += header_length;
     }
-    if (chunked) {
-        written = snprintf((char *) write->bytes + offset, total - offset + 1,
-            "Transfer-Encoding: chunked\r\nConnection: %s\r\n\r\n",
-            keep_alive ? "keep-alive" : "close");
-    } else if (declared_content_length >= 0) {
-        written = snprintf((char *) write->bytes + offset, total - offset + 1,
-            "Content-Length: %lld\r\nConnection: %s\r\n\r\n",
-            (long long) declared_content_length,
-            keep_alive ? "keep-alive" : "close");
-    } else {
-        written = snprintf((char *) write->bytes + offset, total - offset + 1,
-            "Connection: %s\r\n\r\n", keep_alive ? "keep-alive" : "close");
-    }
-    if (written != framing_length) goto fail;
+    memcpy(write->bytes + offset, framing, framing_length);
     write->length = total;
     c->response_started = true;
     c->response_chunked = chunked;
@@ -355,16 +401,10 @@ bool mal_http_conn_response_start(
         c->response_chunked = false;
         c->response_remaining = 0;
         c->awaiting_response = true;
-        free(write->bytes);
-        free(write);
+        conn_wire_write_free(write);
         return false;
     }
     return true;
-
-fail:
-    free(write->bytes);
-    free(write);
-    return false;
 }
 
 static bool conn_response_write_owned(
@@ -808,8 +848,7 @@ static void conn_write_cb(void *data) {
             bool final = write->final;
             bool notify = write->notify;
             u64 token = write->token;
-            free(write->bytes);
-            free(write);
+            conn_wire_write_free(write);
             if (notify && c->write_callback != nullptr) {
                 c->write_callback(c->write_data, token);
             }
