@@ -28,9 +28,11 @@
  * existing 48-byte managed-cell class; larger and grown objects use a separate
  * buffer. Object identity is the MalObject address, which never moves, so a
  * coallocated slot migrates rather than reallocating its cell. Index (array) keys never enter a shape;
- * anything a shape can't represent (delete, accessors, descriptor transitions,
- * a sealed/frozen object, an integer key) drops the object to dictionary mode
- * (a plain MalTable — exactly today's behavior), so the change is additive.
+ * anything a shape can't represent (delete, accessors, arbitrary descriptor
+ * transitions, an integer key) drops the object to dictionary mode (a plain
+ * MalTable). Seal/freeze transitions remain shaped: all shaped properties are
+ * data properties, so their uniform integrity-level attribute change is another
+ * immutable, interned layout.
  *
  * Each heap owns a transition tree rooted at its empty shape; adding a named
  * property (key + attrs) transitions to a child, interned so objects in that
@@ -165,6 +167,13 @@ static inline i32 mal_shape_find(
  * return the same child. The new property occupies slot `shape->inline_count`.
  */
 MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs);
+
+/**
+ * Return the interned sealed/frozen variant of `shape`. Property order, keys,
+ * and slots are unchanged; configurable is cleared on every property and
+ * writable is additionally cleared when `clear_writable` is true.
+ */
+MalShape *mal_shape_set_integrity(MalShape *shape, bool clear_writable);
 
 /** True for a default data-property attribute set (writable+enumerable+configurable). */
 bool mal_shape_attrs_are_default(u8 attrs);

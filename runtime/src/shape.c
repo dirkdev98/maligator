@@ -23,12 +23,19 @@ typedef struct MalShapeFindCacheEntry {
 static _Thread_local MalShapeFindCacheEntry
     mal_shape_find_cache[MAL_SHAPE_FIND_CACHE_SIZE];
 
-/** A transition edge: parent + (key, attrs) -> child. */
+typedef enum MalShapeTransitionKind {
+    MAL_SHAPE_TRANSITION_ADD,
+    MAL_SHAPE_TRANSITION_SEAL,
+    MAL_SHAPE_TRANSITION_FREEZE,
+} MalShapeTransitionKind;
+
+/** An interned layout edge: property append or uniform integrity transition. */
 struct MalShapeTransition {
     MalValue key;
     MalShape *child;
     MalShapeTransition *next;
     u8 attrs;
+    u8 kind;
 };
 
 typedef struct MalShapeTransitionIndexSlot {
@@ -157,6 +164,7 @@ static MalShapeTransitionIndex *mal_shape_transition_index_build(
         mal_shape_transition_index_new(MAL_SHAPE_TRANSITION_INDEX_THRESHOLD * 2);
     for (MalShapeTransition *transition = transitions;
          transition != nullptr; transition = transition->next) {
+        if (transition->kind != MAL_SHAPE_TRANSITION_ADD) continue;
         index = mal_shape_transition_index_add(index, transition);
     }
     MAL_PERF_COUNT(shape_transition_index_builds);
@@ -332,6 +340,7 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     if (search_list) {
         for (MalShapeTransition *transition = shape->transitions;
              transition != nullptr; transition = transition->next) {
+            if (transition->kind != MAL_SHAPE_TRANSITION_ADD) continue;
             comparisons++;
             if (transition->attrs == attrs &&
                 mal_key_value_equals(transition->key, key.value)) {
@@ -380,6 +389,7 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     MalShapeTransition *transition = malloc(sizeof(MalShapeTransition));
     transition->key = key.value;
     transition->attrs = attrs;
+    transition->kind = MAL_SHAPE_TRANSITION_ADD;
     transition->child = child;
     transition->next = shape->transitions;
     shape->transitions = transition;
@@ -393,10 +403,59 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     return child;
 }
 
+MalShape *mal_shape_set_integrity(MalShape *shape, bool clear_writable) {
+    u8 clear = (u8) MAL_PROPERTY_CONFIGURABLE;
+    if (clear_writable) clear |= (u8) MAL_PROPERTY_WRITABLE;
+
+    bool changed = false;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        if ((shape->props[i].attrs & clear) != 0) {
+            changed = true;
+            break;
+        }
+    }
+    if (!changed) return shape;
+
+    u8 kind = clear_writable
+        ? MAL_SHAPE_TRANSITION_FREEZE
+        : MAL_SHAPE_TRANSITION_SEAL;
+    for (MalShapeTransition *transition = shape->transitions;
+         transition != nullptr; transition = transition->next) {
+        if (transition->kind == kind) return transition->child;
+    }
+
+    MalShape *child = malloc(sizeof(MalShape));
+    child->header = (MalHeapHeader) {
+        .type = MAL_HEAP_SHAPE,
+        .storage = MAL_HEAP_STORAGE_DYNAMIC,
+    };
+    child->inline_count = shape->inline_count;
+    child->props = malloc(sizeof(MalShapeProp) * child->inline_count);
+    memcpy(
+        child->props, shape->props,
+        sizeof(MalShapeProp) * child->inline_count);
+    for (u32 i = 0; i < child->inline_count; i++) {
+        child->props[i].attrs &= (u8) ~clear;
+    }
+    child->transition_index = nullptr;
+    child->transitions = nullptr;
+
+    MalShapeTransition *transition = malloc(sizeof(MalShapeTransition));
+    transition->key = 0;
+    transition->attrs = 0;
+    transition->kind = kind;
+    transition->child = child;
+    transition->next = shape->transitions;
+    shape->transitions = transition;
+    return child;
+}
+
 static void mal_shape_visit_child_keys(MalShape *shape, void (*visit)(MalValue)) {
     for (MalShapeTransition *transition = shape->transitions;
          transition != nullptr; transition = transition->next) {
-        visit(transition->key);
+        if (transition->kind == MAL_SHAPE_TRANSITION_ADD) {
+            visit(transition->key);
+        }
         mal_shape_visit_child_keys(transition->child, visit);
     }
 }

@@ -198,9 +198,19 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     if (object->watched_method_proto) {
         mal_invalidate_primitive_method_protector();
     }
-    if (has_shape_properties) {
-        // Attribute changes require dictionary descriptors. Migrate once rather
-        // than once per property through mal_object_define_own.
+    if (has_shape_properties && object->overflow == nullptr) {
+        // Shaped storage contains data properties only. Seal/freeze changes their
+        // attributes uniformly, so move to the canonical integrity variant without
+        // allocating a per-object dictionary or moving any values.
+        if (mal_object_note_prototype_mutation(object)) {
+            MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+        }
+        object->shape = mal_shape_set_integrity(object->shape, clear_writable);
+        return;
+    } else if (has_shape_properties) {
+        // Defensive mixed-representation fallback. Ordinary operations currently
+        // dictionarize before adding overflow properties, but exotic evolution
+        // must not make integrity handling incomplete.
         mal_object_dictionarize(object);
     } else if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_define_invalidations);
