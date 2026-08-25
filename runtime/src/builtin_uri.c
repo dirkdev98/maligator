@@ -83,15 +83,12 @@ static inline void mal_uri_write_octet(c16 *output, usize *offset, u8 octet) {
 static MalValue mal_uri_encode(MalVm *vm, MalString *string, bool component) {
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
-    usize result_length = 0;
+    usize result_length = length;
     bool changed = false;
 
     for (usize k = 0; k < length; k++) {
         c16 c = units[k];
         if (mal_uri_encode_unescaped(c, component)) {
-            if (!mal_uri_result_length_add(vm, &result_length, 1)) {
-                return mal_value_new_undefined();
-            }
             continue;
         }
 
@@ -105,7 +102,8 @@ static MalValue mal_uri_encode(MalVm *vm, MalString *string, bool component) {
         usize utf8_length = code_point <= 0x7F
             ? 1
             : code_point <= 0x7FF ? 2 : code_point <= 0xFFFF ? 3 : 4;
-        if (!mal_uri_result_length_add(vm, &result_length, utf8_length * 3)) {
+        if (!mal_uri_result_length_add(
+                vm, &result_length, utf8_length * 3 - width)) {
             return mal_value_new_undefined();
         }
         changed = true;
