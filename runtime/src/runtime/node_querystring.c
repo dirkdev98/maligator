@@ -22,6 +22,24 @@
 
 static MalValue qs_decode(MalVm *vm, MalString *source, usize start, usize length) {
     const c16 *units = mal_string_code_units(source) + start;
+    bool has_plus = false;
+    bool has_percent = false;
+    for (usize i = 0; i < length; i++) {
+        has_plus |= units[i] == '+';
+        has_percent |= units[i] == '%';
+    }
+    if (!has_plus && !has_percent) {
+        return mal_value_from_string(
+            mal_string_new_slice(&vm->heap, source, start, length));
+    }
+    if (!has_percent) {
+        c16 *decoded = mal_heap_alloc_raw(&vm->heap, length * sizeof(*decoded));
+        for (usize i = 0; i < length; i++) {
+            decoded[i] = units[i] == '+' ? ' ' : units[i];
+        }
+        return mal_value_from_string(
+            mal_string_new_owned(&vm->heap, decoded, length));
+    }
     usize utf8_length;
     byte *utf8 = mal_utf8_encode(units, length, &utf8_length);
     if (utf8 == nullptr) {

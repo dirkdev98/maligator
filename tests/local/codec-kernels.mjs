@@ -289,6 +289,8 @@ check(
 	"query decoders share only percent hex semantics",
 	querystring.parse("x=%66%6F%6f&bad=%GG").x === "foo" &&
 		querystring.parse("x=%66%6F%6f&bad=%GG").bad === "%GG" &&
+		querystring.parse("plain=Málaga 東京&plus=a+b").plain === "Málaga 東京" &&
+		querystring.parse("plain=Málaga 東京&plus=a+b").plus === "a b" &&
 		new URLSearchParams("x=%66%6F%6f&bad=%GG").get("x") === "foo" &&
 		new URLSearchParams("x=%66%6F%6f&bad=%GG").get("bad") === "%GG" &&
 		new URLSearchParams({ x: "ÿ" }).toString() === "x=%C3%BF",
