@@ -667,6 +667,14 @@ static void mal_vm_run_thenable_job(MalVm *vm, MalJob *job) {
 }
 
 void mal_vm_drain_microtasks(MalVm *vm) {
+#if MAL_NODE
+    // Promise chains normally capture the context already installed by the
+    // preceding reaction. Keep one rooted scope across that run of jobs and
+    // restore the checkpoint's caller context only when the capture changes or
+    // the queue empties.
+    MalAsyncContextScope async_scope;
+    bool async_scope_active = false;
+#endif
     while (vm->job_head != nullptr) {
         MalJob *job = vm->job_head;
         vm->job_head = job->next;
@@ -678,8 +686,13 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         // collection, and its capabilities are settled afterwards.
         vm->active_job = job;
 #if MAL_NODE
-        MalAsyncContextScope async_scope;
-        mal_async_context_scope_enter(vm, &async_scope, job->async_context);
+        if (!async_scope_active) {
+            mal_async_context_scope_enter(vm, &async_scope, job->async_context);
+            async_scope_active = true;
+        } else if (job->async_context != vm->async_context) {
+            mal_async_context_scope_exit(vm, &async_scope);
+            mal_async_context_scope_enter(vm, &async_scope, job->async_context);
+        }
 #endif
         switch (job->kind) {
             case MAL_JOB_PROMISE_REACTION:
@@ -698,9 +711,6 @@ void mal_vm_drain_microtasks(MalVm *vm) {
                 mal_vm_run_async_from_sync_job(vm, job);
                 break;
         }
-#if MAL_NODE
-        mal_async_context_scope_exit(vm, &async_scope);
-#endif
         mal_job_recycle(vm, job);
 
         // A job must not leave a pending throw behind to poison the next job's
@@ -708,6 +718,11 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         // needed.
         vm->completion = mal_completion_normal();
     }
+#if MAL_NODE
+    if (async_scope_active) {
+        mal_async_context_scope_exit(vm, &async_scope);
+    }
+#endif
 
     // Microtask checkpoint: report promises that rejected and were never handled,
     // and release WeakRef targets pinned during this turn (ClearKeptObjects).
