@@ -43,8 +43,8 @@ import type {
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 27;
-export const COMPILER_ARTIFACT_VERSION = 27;
+export const WIRE_VERSION = 28;
+export const COMPILER_ARTIFACT_VERSION = 28;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -911,6 +911,54 @@ function serializeImage(
 			w.u8(representationTag(representation));
 		}
 
+		if (native.directEntries.length > 4) {
+			throw new RangeError("program-image-codec: too many native direct entries");
+		}
+		w.u32(native.directEntries.length);
+		for (const [entryIndex, entry] of native.directEntries.entries()) {
+			if (
+				entry.id !== entryIndex ||
+				entry.parameterRepresentations.length !== fn.parameterCount ||
+				entry.registerRepresentations.length !== fn.registerCount ||
+				entry.parameterRepresentations.some(
+					(representation, register) =>
+						representationTag(representation) < 0 ||
+						entry.registerRepresentations[register] !== representation,
+				) ||
+				entry.registerRepresentations.some(
+					(representation, register) =>
+						representationTag(representation) < 0 ||
+						(register >= fn.parameterCount &&
+							representation !== native.registerRepresentations[register]),
+				) ||
+				representationTag(entry.resultRepresentation) < 0
+			) {
+				throw new RangeError("program-image-codec: invalid native direct entry");
+			}
+			nativeFrameRootRegisters(fn, entry);
+			w.u32(entry.id);
+			w.u8(representationTag(entry.resultRepresentation));
+			w.u32(entry.parameterRepresentations.length);
+			for (const representation of entry.parameterRepresentations) {
+				w.u8(representationTag(representation));
+			}
+			w.u32(entry.registerRepresentations.length);
+			for (const representation of entry.registerRepresentations) {
+				w.u8(representationTag(representation));
+			}
+			w.u32(entry.gc.safepoints.length);
+			for (const safepoint of entry.gc.safepoints) {
+				if (safepoint.kind === "conservative") {
+					throw new RangeError(
+						"program-image-codec: direct-entry safepoints must carry exact roots",
+					);
+				}
+				w.u8(safepoint.kind === "operation" ? 0 : 1);
+				w.i32(safepoint.instructionIp);
+				w.i32Array([...safepoint.rootRegisters]);
+			}
+		}
+
 		if (native.instructions.length !== fn.instructions.length) {
 			throw new RangeError("program-image-codec: native instruction-plan count mismatch");
 		}
@@ -930,6 +978,13 @@ function serializeImage(
 						(!Number.isInteger(plan.directFunctionIndex) ||
 							plan.directFunctionIndex < 0 ||
 							plan.directFunctionIndex >= def.functions.length)) ||
+					(plan.directEntryId !== undefined &&
+						(plan.directFunctionIndex === undefined ||
+							!Number.isInteger(plan.directEntryId) ||
+							plan.directEntryId < 0 ||
+							compiler.native.functions[plan.directFunctionIndex]?.directEntries[
+								plan.directEntryId
+							]?.id !== plan.directEntryId)) ||
 					(plan.directCallTargetFunctionIndex !== undefined &&
 						(!Number.isInteger(plan.directCallTargetFunctionIndex) ||
 							plan.directCallTargetFunctionIndex < 0 ||
@@ -959,6 +1014,7 @@ function serializeImage(
 				w.u8(1);
 				w.i32(plan.directFunctionIndex ?? -1);
 				w.i32(plan.directCallTargetFunctionIndex ?? -1);
+				w.i32(plan.directEntryId ?? -1);
 				w.u8(
 					(plan.directFunctionCall === true ? 1 : 0) |
 						(guardedOperation === "Array.prototype.push" ? 2 : 0) |
@@ -3057,6 +3113,84 @@ function deserializeImage(
 				throw new Error("program-image-codec: invalid register representation tag");
 			},
 		);
+		const directEntryCount = r.count(1);
+		if (directEntryCount > 4) {
+			throw new RangeError("program-image-codec: too many native direct entries");
+		}
+		const directEntries: Array<NativeFunctionPlan["directEntries"][number]> = [];
+		const readRepresentation = (): "boxed" | "number" | "boolean" => {
+			const tag = r.u8();
+			if (tag === 0) return "boxed";
+			if (tag === 1) return "number";
+			if (tag === 2) return "boolean";
+			throw new Error("program-image-codec: invalid direct-entry representation tag");
+		};
+		for (let entryIndex = 0; entryIndex < directEntryCount; entryIndex++) {
+			const id = r.u32();
+			const resultRepresentation = readRepresentation();
+			const parameterCount = r.count(1);
+			if (id !== entryIndex || parameterCount !== fn.parameterCount) {
+				throw new Error("program-image-codec: invalid direct-entry signature");
+			}
+			const parameterRepresentations = Array.from(
+				{ length: parameterCount },
+				readRepresentation,
+			);
+			const directRegisterCount = r.count(1);
+			if (directRegisterCount !== fn.registerCount) {
+				throw new Error("program-image-codec: direct-entry register count mismatch");
+			}
+			const directRegisterRepresentations = Array.from(
+				{ length: directRegisterCount },
+				readRepresentation,
+			);
+			if (
+				parameterRepresentations.some(
+					(representation, register) =>
+						directRegisterRepresentations[register] !== representation,
+				) ||
+				directRegisterRepresentations.some(
+					(representation, register) =>
+						register >= fn.parameterCount &&
+						representation !== registerRepresentations[register],
+				)
+			) {
+				throw new Error("program-image-codec: invalid direct-entry register classes");
+			}
+			const directSafepointCount = r.count(2);
+			const directSafepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
+			for (
+				let safepointIndex = 0;
+				safepointIndex < directSafepointCount;
+				safepointIndex++
+			) {
+				const kindTag = r.u8();
+				const instructionIp = r.i32();
+				const rootRegisters = r.i32Array();
+				if (
+					kindTag > 1 ||
+					instructionIp < 0 ||
+					instructionIp >= fn.instructions.length ||
+					rootRegisters.some((register) => register < 0 || register >= fn.registerCount)
+				) {
+					throw new RangeError("program-image-codec: invalid direct-entry safepoint");
+				}
+				directSafepoints.push({
+					kind: kindTag === 0 ? "operation" : "loop-backedge",
+					instructionIp,
+					rootRegisters,
+				});
+			}
+			const entry = {
+				id,
+				parameterRepresentations,
+				resultRepresentation,
+				registerRepresentations: directRegisterRepresentations,
+				gc: { safepoints: directSafepoints },
+			};
+			nativeFrameRootRegisters(fn, entry);
+			directEntries.push(entry);
+		}
 
 		const nativeInstructions: Array<NativeInstructionPlan | undefined> = Array.from({
 			length: fn.instructions.length,
@@ -3085,6 +3219,7 @@ function deserializeImage(
 			if (tag === 1 && instruction.opcode === "CALL") {
 				const directFunctionIndex = r.i32();
 				const directCallTargetFunctionIndex = r.i32();
+				const directEntryId = r.i32();
 				const flags = r.u8();
 				const collectionTag = r.u8();
 				const guardedBuiltinCount =
@@ -3096,6 +3231,8 @@ function deserializeImage(
 					directFunctionIndex >= functions.length ||
 					directCallTargetFunctionIndex < -1 ||
 					directCallTargetFunctionIndex >= functions.length ||
+					directEntryId < -1 ||
+					(directEntryId >= 0 && (directFunctionIndex < 0 || directEntryId >= 4)) ||
 					flags > 127 ||
 					(flags & 24) !== 0 ||
 					((flags & 32) !== 0 && (flags & 4) === 0) ||
@@ -3130,6 +3267,7 @@ function deserializeImage(
 					kind: "call",
 					...(directFunctionIndex < 0 ? {} : { directFunctionIndex }),
 					...(directCallTargetFunctionIndex < 0 ? {} : { directCallTargetFunctionIndex }),
+					...(directEntryId < 0 ? {} : { directEntryId }),
 					...((flags & 1) === 0 ? {} : { directFunctionCall: true }),
 					...((flags & 32) === 0 ? {} : { directStringCharCodeAtPosition: "inBounds" }),
 					...(guardedBuiltinCall === undefined ? {} : { guardedBuiltinCall }),
@@ -3774,12 +3912,27 @@ function deserializeImage(
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 			registerRepresentations,
+			directEntries,
 			gc: { safepoints },
 			instructions: nativeInstructions,
 			specializations: regions,
 		};
 		nativeFrameRootRegisters(fn, nativeFunction);
 		nativeFunctions.push(nativeFunction);
+	}
+	for (const native of nativeFunctions) {
+		for (const plan of native.instructions) {
+			if (plan?.kind !== "call" || plan.directEntryId === undefined) continue;
+			if (
+				plan.directFunctionIndex === undefined ||
+				nativeFunctions[plan.directFunctionIndex]?.directEntries[plan.directEntryId]
+					?.id !== plan.directEntryId
+			) {
+				throw new RangeError(
+					"program-image-codec: direct-entry call names an unknown ABI",
+				);
+			}
+		}
 	}
 	if (r.remaining() !== 0) {
 		throw new Error("program-image-codec: trailing data");

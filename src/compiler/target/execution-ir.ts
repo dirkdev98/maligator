@@ -19,6 +19,8 @@ export interface ExecutionProgram {
 
 export type ExecutionMove = Extract<CompilerInstruction, { type: "move" }>;
 
+export type ExecutionRegisterRepresentation = "boxed" | "number" | "boolean";
+
 /** A simultaneous assignment and its cycle-safe sequential realization. */
 export interface ExecutionParallelCopy {
 	readonly kind: "edge" | "handler-input";
@@ -48,6 +50,24 @@ export type ExecutionSafepoint =
 			readonly rootRegisters: ReadonlyArray<number>;
 	  };
 
+/**
+ * One ordinary-call entry contract selected from closed-world call-site facts.
+ *
+ * The canonical function entry remains boxed and is always the semantic fallback.
+ * A direct entry is an additional native-only sibling: an exact callee guard may
+ * transport proven scalar parameters and/or a proven scalar result without
+ * changing the bytecode ABI or making open-world calls depend on speculation.
+ */
+export interface ExecutionDirectEntry {
+	readonly id: number;
+	readonly parameterRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
+	readonly resultRepresentation: ExecutionRegisterRepresentation;
+	readonly registerRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
+	readonly gc: {
+		readonly safepoints: ReadonlyArray<ExecutionSafepoint>;
+	};
+}
+
 export interface ExecutionFunction {
 	readonly sourcePath: string;
 	readonly functionIndex: number;
@@ -66,7 +86,9 @@ export interface ExecutionFunction {
 	readonly registerCount: number;
 	/** First register introduced by execution lowering rather than Core allocation. */
 	readonly allocatedRegisterCount: number;
-	readonly registerRepresentations: ReadonlyArray<"boxed" | "number" | "boolean">;
+	readonly registerRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
+	/** Bounded native-only ordinary-call ABIs; bytecode continues to use boxed entry. */
+	readonly directEntries: ReadonlyArray<ExecutionDirectEntry>;
 	readonly capturedCount: number;
 	readonly strict: boolean;
 	readonly isClassConstructor: boolean;

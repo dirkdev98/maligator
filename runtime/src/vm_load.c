@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 27u
+#define WIRE_VERSION 28u
 #define WIRE_FLAG_HAS_DEBUG 1u
 #define WIRE_GUARDED_BUILTIN_TAG_COUNT 52u
 

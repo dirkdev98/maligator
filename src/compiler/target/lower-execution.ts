@@ -15,7 +15,9 @@ import type {
 	CoreFunction,
 	CoreImmediate,
 	CoreInstructionAttributes,
+	CoreInstruction,
 	CoreInstructionId,
+	CoreProgram,
 	CoreRegion,
 	CoreRepresentation,
 	CoreValueId,
@@ -28,6 +30,7 @@ import type {
 } from "../shared/compiler-instruction.ts";
 import type {
 	ExecutionFunction,
+	ExecutionDirectEntry,
 	ExecutionMove,
 	ExecutionParallelCopy,
 	ExecutionProgram,
@@ -39,12 +42,138 @@ import {
 } from "./execution-liveness.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
 export type {
+	ExecutionDirectEntry,
 	ExecutionFunction,
 	ExecutionMove,
 	ExecutionParallelCopy,
 	ExecutionProgram,
 	ExecutionSafepoint,
 } from "./execution-ir.ts";
+
+const MAX_DIRECT_ENTRIES_PER_FUNCTION = 4;
+
+interface PlannedDirectEntry {
+	readonly id: number;
+	readonly parameterRepresentations: ReadonlyArray<"boxed" | "number" | "boolean">;
+	readonly resultRepresentation: "boxed" | "number" | "boolean";
+}
+
+interface DirectEntryPlan {
+	readonly entriesByFunction: ReadonlyArray<ReadonlyArray<PlannedDirectEntry>>;
+	readonly entryByCall: ReadonlyMap<CoreInstruction, number>;
+}
+
+function corePhysicalRepresentation(
+	representation: CoreRepresentation,
+): "boxed" | "number" | "boolean" {
+	return physicalRegisterClass(representation);
+}
+
+function directEntryResultRepresentation(
+	fn: CoreFunction,
+): "boxed" | "number" | "boolean" {
+	const representationsByValue = new Map(
+		fn.values.map(({ id, representation }) => [id, representation] as const),
+	);
+	const returns = fn.blocks.flatMap(({ terminator }) =>
+		terminator.kind === "return" ? [terminator.value] : [],
+	);
+	if (returns.length === 0) return "boxed";
+	const representations = returns.map((value) =>
+		corePhysicalRepresentation(representationsByValue.get(value)!),
+	);
+	const first = representations[0]!;
+	return first !== "boxed" && representations.every((entry) => entry === first)
+		? first
+		: "boxed";
+}
+
+const RAW_ARGUMENT_OPCODES = new Set([
+	"loadArgumentCount",
+	"loadArgument",
+	"loadStaticArgument",
+	"createArgumentsObject",
+	"createRestArguments",
+]);
+
+function supportsDirectEntry(fn: CoreFunction): boolean {
+	return (
+		!fn.isGenerator &&
+		!fn.isAsync &&
+		!fn.metadata.isClassConstructor &&
+		!fn.metadata.isDerivedConstructor &&
+		!fn.metadata.mappedArguments &&
+		!fn.blocks.some(({ instructions }) =>
+			instructions.some(({ opcode }) => RAW_ARGUMENT_OPCODES.has(opcode)),
+		)
+	);
+}
+
+/** Select a bounded set of explicit native ABIs from the final closed call graph. */
+function planDirectEntries(core: CoreProgram): DirectEntryPlan {
+	interface Candidate {
+		readonly key: string;
+		readonly parameters: ReadonlyArray<"boxed" | "number" | "boolean">;
+		readonly result: "boxed" | "number" | "boolean";
+		readonly calls: Array<CoreInstruction>;
+	}
+	const candidates = core.functions.map(() => new Map<string, Candidate>());
+	for (const caller of core.functions) {
+		const callerRepresentations = new Map(
+			caller.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		for (const block of caller.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.opcode !== "call") continue;
+				if (instruction.attributes.directFunctionCall === true) continue;
+				const targetIndex = instruction.attributes.directFunctionIndex;
+				if (typeof targetIndex !== "number") continue;
+				const target = core.functions[targetIndex];
+				if (target === undefined || !supportsDirectEntry(target)) continue;
+				const parameters = target.parameters.map((_, index) => {
+					const argument = instruction.inputs[index + 2];
+					return argument === undefined
+						? ("boxed" as const)
+						: corePhysicalRepresentation(callerRepresentations.get(argument)!);
+				});
+				const result = directEntryResultRepresentation(target);
+				if (result === "boxed" && parameters.every((entry) => entry === "boxed")) {
+					continue;
+				}
+				const key = `${parameters.join(",")}->${result}`;
+				const existing = candidates[targetIndex]!.get(key);
+				if (existing === undefined) {
+					candidates[targetIndex]!.set(key, {
+						key,
+						parameters,
+						result,
+						calls: [instruction],
+					});
+				} else {
+					existing.calls.push(instruction);
+				}
+			}
+		}
+	}
+	const entryByCall = new Map<CoreInstruction, number>();
+	const entriesByFunction = candidates.map((bySignature) =>
+		[...bySignature.values()]
+			.sort(
+				(left, right) =>
+					right.calls.length - left.calls.length || left.key.localeCompare(right.key),
+			)
+			.slice(0, MAX_DIRECT_ENTRIES_PER_FUNCTION)
+			.map((candidate, id): PlannedDirectEntry => {
+				for (const call of candidate.calls) entryByCall.set(call, id);
+				return {
+					id,
+					parameterRepresentations: candidate.parameters,
+					resultRepresentation: candidate.result,
+				};
+			}),
+	);
+	return { entriesByFunction, entryByCall };
+}
 
 const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	...CORE_INTERNAL_TARGET_ATTRIBUTES,
@@ -304,6 +433,7 @@ function lowerCoreRegions(
 export function coreRegisterClasses(
 	core: CoreFunction,
 	reuseRegisters = true,
+	reservedAbiColors: ReadonlySet<number> = new Set(),
 ): {
 	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
 	readonly registers: Map<CoreValueId, number>;
@@ -642,6 +772,7 @@ export function coreRegisterClasses(
 			.map((partner) => registers.get(partner))
 			.find((candidate): candidate is number => {
 				if (candidate === undefined) return false;
+				if (reservedAbiColors.has(candidate)) return false;
 				if (colorRepresentations.get(candidate) !== representation) return false;
 				if (
 					active.some(
@@ -665,6 +796,7 @@ export function coreRegisterClasses(
 		if (preferredColor === undefined) {
 			while (
 				unavailable.has(color) ||
+				reservedAbiColors.has(color) ||
 				(colorRepresentations.has(color) &&
 					colorRepresentations.get(color) !== representation) ||
 				(abiIntervals.has(color) &&
@@ -862,6 +994,8 @@ interface LoweredCoreFunction {
 
 function lowerFunctionToTarget(
 	core: CoreFunction,
+	plannedDirectEntries: ReadonlyArray<PlannedDirectEntry>,
+	directEntryByCall: ReadonlyMap<CoreInstruction, number>,
 	instructionSites?: WeakMap<object, CompilerSiteFacts>,
 	reuseRegisters = true,
 ): LoweredCoreFunction {
@@ -880,7 +1014,17 @@ function lowerFunctionToTarget(
 		registers: allocatedRegisters,
 		registerRepresentations,
 		safepoints: coreSafepoints,
-	} = coreRegisterClasses(core, reuseRegisters);
+	} = coreRegisterClasses(
+		core,
+		reuseRegisters,
+		new Set(
+			plannedDirectEntries.flatMap(({ parameterRepresentations }) =>
+				parameterRepresentations.flatMap((representation, index) =>
+					representation === "boxed" ? [] : [index],
+				),
+			),
+		),
+	);
 	const parallelCopies: Array<ExecutionParallelCopy> = [];
 	const temporaryRegisters: Array<number> = [];
 	const nextRegister = {
@@ -975,6 +1119,10 @@ function lowerFunctionToTarget(
 				registerForValue,
 				protectedInstructions.has(instruction.id),
 			);
+			const directEntryId = directEntryByCall.get(instruction);
+			if (directEntryId !== undefined && lowered.type === "call") {
+				lowered.directEntryId = directEntryId;
+			}
 			const compilerSite = instructionSites?.get(instruction);
 			if (compilerSite !== undefined) instructionSites?.set(lowered, compilerSite);
 			let resultMove: CompilerInstruction | undefined;
@@ -1160,7 +1308,7 @@ function lowerFunctionToTarget(
 			return physicalRegisterClass(representation);
 		},
 	);
-	const fnWithoutGc: Omit<ExecutionFunction, "gc"> = {
+	const fnWithoutGc: Omit<ExecutionFunction, "gc" | "directEntries"> = {
 		sourcePath: core.metadata.sourcePath,
 		functionIndex: core.functionIndex,
 		nameStringIndex: core.metadata.nameStringIndex,
@@ -1190,6 +1338,7 @@ function lowerFunctionToTarget(
 	};
 	const analysisFunction: ExecutionFunction = {
 		...fnWithoutGc,
+		directEntries: [],
 		gc: { safepoints: [] },
 	};
 	const backedges = executionLoopBackedgeInstructions(analysisFunction);
@@ -1224,9 +1373,36 @@ function lowerFunctionToTarget(
 				instructionOrder.get(left.instruction)! -
 				instructionOrder.get(right.instruction)!,
 		);
+	const directEntries: Array<ExecutionDirectEntry> = plannedDirectEntries.map((entry) => {
+		const registerRepresentations = [...physicalRepresentations];
+		for (const [parameter, representation] of entry.parameterRepresentations.entries()) {
+			registerRepresentations[parameter] = representation;
+		}
+		const variantFunction: ExecutionFunction = {
+			...fnWithoutGc,
+			registerRepresentations,
+			directEntries: [],
+			gc: { safepoints: [] },
+		};
+		const variantRoots = executionSafepointRootRegisters(
+			variantFunction,
+			new Set(pendingSafepoints.map(({ instruction }) => instruction)),
+		);
+		return {
+			...entry,
+			registerRepresentations,
+			gc: {
+				safepoints: safepoints.map((safepoint) => ({
+					...safepoint,
+					rootRegisters: variantRoots.get(safepoint.instruction) ?? [],
+				})),
+			},
+		};
+	});
 	return {
 		fn: {
 			...fnWithoutGc,
+			directEntries,
 			gc: { safepoints },
 		},
 	};
@@ -1244,9 +1420,12 @@ export function lowerCoreCompilationToExecution(
 	const { program: core, context } = compilation;
 	// Owned boundary: lowering may consume Core decisions but never repairs them.
 	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "pre-target" }, context);
+	const directEntries = planDirectEntries(core);
 	const lowered = core.functions.map((fn) =>
 		lowerFunctionToTarget(
 			fn,
+			directEntries.entriesByFunction[fn.functionIndex]!,
+			directEntries.entryByCall,
 			context.facts.instructionSites,
 			options.reuseRegisters ?? true,
 		),

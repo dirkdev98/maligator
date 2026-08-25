@@ -719,6 +719,8 @@ export interface NativeFunctionPlan {
 	readonly functionIndex: number;
 	readonly mode: "direct" | "resumable";
 	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
+	/** Native-only ordinary-call siblings selected by closed-world call facts. */
+	readonly directEntries: ReadonlyArray<NativeDirectEntryPlan>;
 	readonly gc: {
 		readonly safepoints: ReadonlyArray<{
 			readonly kind: "operation" | "loop-backedge" | "conservative";
@@ -732,10 +734,19 @@ export interface NativeFunctionPlan {
 	readonly compilerSiteIds?: ReadonlyArray<string | undefined>;
 }
 
+export interface NativeDirectEntryPlan {
+	readonly id: number;
+	readonly parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
+	readonly resultRepresentation: VmRegisterRepresentation;
+	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
+	readonly gc: NativeFunctionPlan["gc"];
+}
+
 export type NativeInstructionPlan =
 	| {
 			readonly kind: "call";
 			readonly directFunctionIndex?: number;
+			readonly directEntryId?: number;
 			readonly directFunctionCall?: true;
 			readonly directCallTargetFunctionIndex?: number;
 			readonly guardedBuiltinCall?: VmGuardedBuiltinCall;
@@ -763,6 +774,7 @@ export function createConservativeNativePlan(
 				{ length: fn.registerCount },
 				() => "boxed" as const,
 			),
+			directEntries: [],
 			gc: {
 				safepoints: fn.instructions.map((_, instructionIp) => ({
 					kind: "conservative" as const,
@@ -786,7 +798,7 @@ export function createConservativeNativePlan(
  */
 export function nativeFrameRootRegisters(
 	fn: BytecodeFunction,
-	native: NativeFunctionPlan,
+	native: Pick<NativeFunctionPlan, "registerRepresentations" | "gc">,
 ): ReadonlyArray<number> {
 	const seenIps = new Set<number>();
 	const frameRoots = new Set<number>();
@@ -2522,6 +2534,7 @@ interface LoweredFunctionPlans {
 
 type AnnotatedBytecodeInstruction = BytecodeInstruction & {
 	readonly directFunctionIndex?: number;
+	readonly directEntryId?: number;
 	readonly directFunctionCall?: true;
 	readonly directCallTargetFunctionIndex?: number;
 	readonly guardedBuiltinCall?: VmGuardedBuiltinCall;
@@ -2536,6 +2549,7 @@ function nativeInstructionPlan(
 	switch (instruction.opcode) {
 		case "CALL":
 			return instruction.directFunctionIndex === undefined &&
+				instruction.directEntryId === undefined &&
 				instruction.directFunctionCall !== true &&
 				instruction.directCallTargetFunctionIndex === undefined &&
 				instruction.guardedBuiltinCall === undefined &&
@@ -2544,6 +2558,7 @@ function nativeInstructionPlan(
 				: {
 						kind: "call",
 						directFunctionIndex: instruction.directFunctionIndex,
+						directEntryId: instruction.directEntryId,
 						directFunctionCall: instruction.directFunctionCall,
 						directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
 						guardedBuiltinCall: instruction.guardedBuiltinCall,
@@ -4258,12 +4273,27 @@ function lowerExecutionFunctionPlans(
 			? []
 			: [{ kind, instructionIp, rootRegisters: [...rootRegisters] }];
 	});
+	const directEntries: Array<NativeDirectEntryPlan> = fn.directEntries.map((entry) => ({
+		id: entry.id,
+		parameterRepresentations: [...entry.parameterRepresentations],
+		resultRepresentation: entry.resultRepresentation,
+		registerRepresentations: [...entry.registerRepresentations],
+		gc: {
+			safepoints: entry.gc.safepoints.flatMap(({ kind, instruction, rootRegisters }) => {
+				const instructionIp = instructionIndexByTargetInstruction.get(instruction);
+				return instructionIp === undefined
+					? []
+					: [{ kind, instructionIp, rootRegisters: [...rootRegisters] }];
+			}),
+		},
+	}));
 	return {
 		bytecode,
 		native: {
 			functionIndex: fn.functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 			registerRepresentations: [...fn.registerRepresentations],
+			directEntries,
 			gc: { safepoints },
 			instructions: nativeInstructions,
 			specializations: regions,
@@ -4524,6 +4554,7 @@ function lowerInstructionToBytecodeInstruction(
 						encodeVmValueOperand(register, instruction.immediateValues?.[index + 3]),
 					),
 				directFunctionIndex: instruction.directFunctionIndex,
+				directEntryId: instruction.directEntryId,
 				directFunctionCall: instruction.directFunctionCall,
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
 				guardedBuiltinCall,

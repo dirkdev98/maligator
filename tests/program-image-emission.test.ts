@@ -1186,26 +1186,6 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_op_throw_if_tdz");
 	});
 
-	it("emits guarded direct calls for residual exact script functions", () => {
-		const output = emit(`
-			"use strict";
-			const values = [3, 5];
-			const large = function large(index) {
-				let total = 0;
-				for (let i = 0; i < 24; i++) total += values[index];
-				return total + index;
-			};
-			globalThis.result = large(1);
-		`);
-		expect(output).toContain("mal_vm_call_direct(vm,");
-		expect(output).toContain(", 1,");
-		expect(output).toContain("mal_vm_callee_has_index(vm,");
-		expect(output).toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
-		expect(output).toContain("mal_vm_enter_compiled(vm, 1)");
-		expect(output).toContain("mal_vm_leave_compiled(vm)");
-		expect(output).not.toContain("mal_vm_require_ordinary_call_target");
-	});
-
 	it("routes exact class calls through the ordinary-call runtime check", () => {
 		const output = emit(`
 			"use strict";

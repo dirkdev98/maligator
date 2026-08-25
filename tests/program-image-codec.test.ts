@@ -966,6 +966,7 @@ describe("program-image-codec", () => {
 					return {
 						kind: "call",
 						directFunctionIndex: 0,
+						directEntryId: 0,
 						directFunctionCall: true,
 						directCallTargetFunctionIndex: 0,
 						guardedBuiltinCall: {
@@ -1011,6 +1012,29 @@ describe("program-image-codec", () => {
 			0,
 			(plan) => ({
 				...plan,
+				directEntries: [
+					{
+						id: 0,
+						parameterRepresentations: ["number"],
+						resultRepresentation: "boxed",
+						registerRepresentations: plan.registerRepresentations.map(
+							(representation, register) =>
+								register === 0 ? ("number" as const) : representation,
+						),
+						gc: {
+							safepoints: plan.gc.safepoints.map((safepoint) => ({
+								...safepoint,
+								kind:
+									safepoint.kind === "conservative"
+										? ("operation" as const)
+										: safepoint.kind,
+								rootRegisters: safepoint.rootRegisters.filter(
+									(register) => register !== 0,
+								),
+							})),
+						},
+					},
+				],
 				instructions: nativeInstructions,
 			}),
 		);

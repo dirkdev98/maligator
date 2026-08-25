@@ -290,6 +290,8 @@ export type CompilerInstruction =
 			 * falls back to generic dispatch on a mismatch.
 			 */
 			directFunctionIndex?: number;
+			/** Native-only ABI sibling selected for this exact direct target. */
+			directEntryId?: number;
 			/**
 			 * COMPILE-ONLY: this is an exact `target.call(thisArg, ...args)` property-call
 			 * shape. Native lowering guards the loaded method against the retained

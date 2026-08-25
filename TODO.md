@@ -99,9 +99,15 @@ performance neutral or better while specializing locked builds.
       constructor-derived, stable-field, and call-result paths; immediately consume
       new finite target sets in dispatch, inlining, effect analysis, and reachability.
 
-- [ ] Extend representation constraints through parameters, arguments, block
-      arguments, clones, joins, and materialization; immediately consume them for
-      unboxing, ABI specialization, box elimination, and reduced rooting.
+- [x] Establish a bounded native direct-entry ABI for exact guarded ordinary script
+      calls: retain the canonical boxed bytecode/compiled entry as fallback, transport
+      proven scalar parameters and results through explicit Program Image contracts,
+      and carry variant-specific exact GC roots through codec and C emission.
+
+- [ ] Extend representation constraints through remaining block arguments, clones,
+      joins, captures, indirect target sets, and materialization; immediately consume
+      them for unboxing, additional ABI specialization, box elimination, and reduced
+      rooting.
 
 - [x] Collect bounded shape-origin provenance across allocations, block arguments,
       call results, captures, globals, and constructor results; consume it through
@@ -524,8 +530,6 @@ observed.
 
 - Add concurrent marker or parallel GC workers only when a realistic large-heap
   workload shows mutator marking is a leading cost.
-- Move compiled-call arguments through a separately rootable seam only if a rooting
-  audit supports exact live-across-safepoint frames.
 - Elide SATB barriers only if concurrent GC becomes the default and a realistic
   store-heavy workload makes the barrier material.
 - Revisit MalVm and host-structure layout when multiple VMs or isolates are active in

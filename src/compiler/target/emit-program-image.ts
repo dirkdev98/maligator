@@ -17,7 +17,7 @@ import type {
 	BytecodeInstruction,
 	RuntimeImage,
 } from "./program-image.ts";
-import { emitCompiledFunction } from "./render-native-c.ts";
+import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
 
 type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
@@ -136,6 +136,21 @@ const C_HEADER_LINES = [
 
 const COMPILED_FUNCTION_DECLARATION =
 	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state)";
+
+function directEntryDeclaration(
+	entry: CompiledFunction["directEntries"][number],
+): string {
+	const cType = (representation: "boxed" | "number" | "boolean"): string =>
+		representation === "number"
+			? "double"
+			: representation === "boolean"
+				? "bool"
+				: "MalValue";
+	const parameters = entry.parameterRepresentations.map(
+		(representation, index) => `${cType(representation)} p${index}`,
+	);
+	return `${cType(entry.resultRepresentation)} ${entry.symbol}(MalVm *vm, MalValue this_value${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, MalEnv *env, MalValue callee)`;
+}
 
 /** Keep native/self-hosted compiler strings comfortably below the 16 MiB engine limit. */
 // Eight MiB accommodates large indivisible dependency functions while staying
@@ -395,6 +410,127 @@ interface TranslationUnitPart {
 	declarations: Set<string>;
 }
 
+interface NativeCompilationAvailability {
+	directCompiledTargets: Set<number>;
+	directCompiledEntries: Map<
+		string,
+		ProgramImage["native"]["functions"][number]["directEntries"][number]
+	>;
+}
+
+function nativeCompilationAvailability(
+	image: ProgramImage,
+	compiled: ReadonlyArray<CompiledFunction | null>,
+): NativeCompilationAvailability {
+	const compiledTargets = new Set<number>();
+	compiled.forEach((fn, index) => {
+		if (fn !== null) compiledTargets.add(index);
+	});
+	const directCompiledTargets = new Set<number>();
+	for (const [callerIndex, native] of image.native.functions.entries()) {
+		if (!compiledTargets.has(callerIndex)) continue;
+		for (const instruction of native.instructions) {
+			if (instruction?.kind !== "call") continue;
+			const target = instruction.directFunctionIndex;
+			if (
+				target !== undefined &&
+				compiledTargets.has(target) &&
+				!image.runtime.functions[target]!.isClassConstructor
+			) {
+				directCompiledTargets.add(target);
+			}
+		}
+	}
+	const directCompiledEntries: NativeCompilationAvailability["directCompiledEntries"] =
+		new Map();
+	for (const [functionIndex, fn] of compiled.entries()) {
+		if (fn === null) continue;
+		for (const emittedEntry of fn.directEntries) {
+			const entry = image.native.functions[functionIndex]!.directEntries[emittedEntry.id];
+			if (entry !== undefined) {
+				directCompiledEntries.set(
+					directCompiledEntryKey(functionIndex, emittedEntry.id),
+					entry,
+				);
+			}
+		}
+	}
+	return { directCompiledTargets, directCompiledEntries };
+}
+
+function compiledAvailabilityKey(
+	compiled: ReadonlyArray<CompiledFunction | null>,
+): string {
+	return compiled
+		.map((fn) =>
+			fn === null ? "-" : fn.directEntries.map((entry) => entry.id).join(","),
+		)
+		.join(";");
+}
+
+function emitNativeFunctions(
+	image: ProgramImage,
+	options: {
+		useCompiled: boolean;
+		suffix: string;
+		debug: boolean;
+		linkage: "static" | "external";
+		maxCodeUnits?: number;
+	},
+): {
+	compiled: Array<CompiledFunction | null>;
+	availability: NativeCompilationAvailability;
+} {
+	const headerCodeUnits = C_HEADER_LINES.join("\n").length + 1;
+	const fits = (source: string): boolean =>
+		options.maxCodeUnits === undefined ||
+		source.length + headerCodeUnits <= options.maxCodeUnits;
+	const emit = (
+		functionIndex: number,
+		availability: NativeCompilationAvailability,
+	): CompiledFunction | null => {
+		if (!options.useCompiled) return null;
+		const emitted = emitCompiledFunction(
+			image.runtime.functions[functionIndex]!,
+			image.native.functions[functionIndex]!,
+			functionIndex,
+			options.suffix,
+			options.debug,
+			options.linkage,
+			availability.directCompiledTargets,
+			image.native.semanticProtectors,
+			availability.directCompiledEntries,
+		);
+		if (emitted === null || !fits(emitted.source)) return null;
+		return {
+			...emitted,
+			// A typed entry is an optional native overlay. Keep it independently
+			// bounded so duplicating a large body can never evict the canonical ABI.
+			directEntries: emitted.directEntries.filter((entry) => fits(entry.source)),
+		};
+	};
+
+	const unavailable: NativeCompilationAvailability = {
+		directCompiledTargets: new Set(),
+		directCompiledEntries: new Map(),
+	};
+	let compiled = image.runtime.functions.map((_fn, index) => emit(index, unavailable));
+	for (let iteration = 0; iteration <= image.runtime.functions.length + 1; iteration++) {
+		const availability = nativeCompilationAvailability(image, compiled);
+		const next = image.runtime.functions.map((_fn, index) =>
+			compiled[index] === null ? null : emit(index, availability),
+		);
+		if (compiledAvailabilityKey(next) === compiledAvailabilityKey(compiled)) {
+			return {
+				compiled: next,
+				availability: nativeCompilationAvailability(image, next),
+			};
+		}
+		compiled = next;
+	}
+	throw new Error("native compiled-entry availability did not stabilize");
+}
+
 /**
  * Move generated arrays out of the runtime-image translation unit.
  *
@@ -551,71 +687,40 @@ function emitProgramImageSource(
 	// Native-backend functions. Emitted before the MalFunction table (which
 	// references their symbols) and after the constant pools (which they may
 	// reference). The bytecode is still emitted below as a fallback / for `new`.
-	let compiled: Array<CompiledFunction | null> = runtime.functions.map((fn, i) => {
-		if (!useCompiled) return null;
-		const emitted = emitCompiledFunction(
-			fn,
-			image.native.functions[i]!,
-			i,
-			suffix,
-			debug,
-			splitCompiledFunctions ? "external" : "static",
-			new Set(),
-			image.native.semanticProtectors,
-		);
-		if (emitted === null) return null;
-		if (
-			maxCompiledFunctionCodeUnits !== undefined &&
-			emitted.source.length + C_HEADER_LINES.join("\n").length + 1 >
-				maxCompiledFunctionCodeUnits
-		) {
-			return null;
-		}
-		return emitted;
+	// Exact script calls may target either the canonical compiled ABI or one of the
+	// explicit typed siblings. Iterate to a fixed point because a size-bounded
+	// split build can independently reject a canonical body or typed sibling, and
+	// no remaining caller may retain a reference to a body that was not emitted.
+	const nativeEmission = emitNativeFunctions(image, {
+		useCompiled,
+		suffix,
+		debug,
+		linkage: splitCompiledFunctions ? "external" : "static",
+		maxCodeUnits: maxCompiledFunctionCodeUnits,
 	});
-	// A single translation unit can make an exact script call a real direct C
-	// call. First determine which functions lower successfully, then re-emit with
-	// that closed target set; split units retain the external runtime call seam so
-	// they need no cross-unit availability/linkage protocol.
-	if (!splitCompiledFunctions && maxCompiledFunctionCodeUnits === undefined) {
-		const compiledTargets = new Set<number>();
-		compiled.forEach((fn, index) => {
-			if (fn !== null) compiledTargets.add(index);
-		});
-		const directCompiledTargets = new Set<number>();
-		for (const native of image.native.functions) {
-			for (const instruction of native.instructions) {
-				if (instruction?.kind !== "call") continue;
-				const target = instruction.directFunctionIndex;
-				if (
-					target !== undefined &&
-					compiledTargets.has(target) &&
-					!runtime.functions[target]!.isClassConstructor
-				) {
-					directCompiledTargets.add(target);
-				}
-			}
-		}
-		compiled = runtime.functions.map((fn, i) => {
-			if (!compiledTargets.has(i)) return null;
-			return emitCompiledFunction(
-				fn,
-				image.native.functions[i]!,
-				i,
-				suffix,
-				debug,
-				"static",
-				directCompiledTargets,
-				image.native.semanticProtectors,
-			);
-		});
-		if (directCompiledTargets.size > 0) {
+	const compiled = nativeEmission.compiled;
+	{
+		const { directCompiledTargets } = nativeEmission.availability;
+		if (!splitCompiledFunctions && directCompiledTargets.size > 0) {
 			for (let index = 0; index < compiled.length; index++) {
 				const fn = compiled[index];
 				if (fn !== undefined && fn !== null && directCompiledTargets.has(index)) {
 					lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
 				}
 			}
+		}
+		if (!splitCompiledFunctions) {
+			for (const fn of compiled) {
+				for (const entry of fn?.directEntries ?? []) {
+					lines.push(`static ${directEntryDeclaration(entry)};`);
+				}
+			}
+		}
+		if (
+			!splitCompiledFunctions &&
+			(directCompiledTargets.size > 0 ||
+				compiled.some((fn) => (fn?.directEntries.length ?? 0) > 0))
+		) {
 			lines.push("");
 		}
 	}
@@ -631,13 +736,22 @@ function emitProgramImageSource(
 				lines.push(`MAL_DECLARE_COMPILED(${fn.symbol});`);
 			}
 		}
+		for (const fn of compiled) {
+			for (const entry of fn?.directEntries ?? []) {
+				lines.push(`${directEntryDeclaration(entry)};`);
+			}
+		}
 		if (compiled.some((fn) => fn !== null)) {
 			lines.push("#undef MAL_DECLARE_COMPILED", "");
 		}
 	} else {
 		for (const fn of compiled) {
 			if (fn !== null) {
-				lines.push(fn.source, "");
+				lines.push(
+					fn.source,
+					...fn.directEntries.flatMap((entry) => ["", entry.source]),
+					"",
+				);
 			}
 		}
 	}
@@ -815,6 +929,14 @@ export function emitProgramTranslationUnits(
 								},
 							],
 			),
+		)
+		.concat(
+			emitted.compiled.flatMap((fn) =>
+				(fn?.directEntries ?? []).map((entry) => ({
+					symbol: entry.symbol,
+					source: `${directEntryDeclaration(entry)};`,
+				})),
+			),
 		);
 	const declarationsBySymbol = new Map(
 		generatedDeclarations.map((declaration) => [declaration.symbol, declaration]),
@@ -902,6 +1024,9 @@ export function emitProgramTranslationUnits(
 	for (const fn of emitted.compiled) {
 		if (fn === null) continue;
 		append({ kind: "compiled function", symbol: fn.symbol, source: fn.source });
+		for (const entry of fn.directEntries) {
+			append({ kind: "compiled function", symbol: entry.symbol, source: entry.source });
+		}
 	}
 	flush();
 	return units;
@@ -1168,24 +1293,40 @@ export function emitBatch(
 			lines.push("};", "");
 		}
 
-		const compiled = runtime.functions.map((fn, i) =>
-			// The batch path strips debug info, so compiled bodies emit no pos writes.
-			useCompiled
-				? emitCompiledFunction(
-						fn,
-						image.native.functions[i]!,
-						i,
-						suffix,
-						false,
-						"static",
-						new Set(),
-						image.native.semanticProtectors,
-					)
-				: null,
-		);
+		// The batch path strips debug info, so compiled bodies emit no pos writes.
+		// It uses the same fixed-point entry selection as product emit-C; otherwise
+		// the test262 backend would carry typed bodies that no call could reach.
+		const nativeEmission = emitNativeFunctions(image, {
+			useCompiled,
+			suffix,
+			debug: false,
+			linkage: "static",
+		});
+		const { compiled } = nativeEmission;
+		for (const functionIndex of nativeEmission.availability.directCompiledTargets) {
+			const fn = compiled[functionIndex];
+			if (fn !== undefined && fn !== null) {
+				lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
+			}
+		}
+		for (const fn of compiled) {
+			for (const entry of fn?.directEntries ?? []) {
+				lines.push(`static ${directEntryDeclaration(entry)};`);
+			}
+		}
+		if (
+			nativeEmission.availability.directCompiledTargets.size > 0 ||
+			compiled.some((fn) => (fn?.directEntries.length ?? 0) > 0)
+		) {
+			lines.push("");
+		}
 		for (const fn of compiled) {
 			if (fn !== null) {
-				lines.push(fn.source, "");
+				lines.push(
+					fn.source,
+					...fn.directEntries.flatMap((entry) => ["", entry.source]),
+					"",
+				);
 			}
 		}
 

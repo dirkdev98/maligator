@@ -532,6 +532,19 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				functionIndex: base.function + localFunctionIndex,
 				mode: native.mode,
 				registerRepresentations: [...native.registerRepresentations],
+				directEntries: native.directEntries.map((entry) => ({
+					id: entry.id,
+					parameterRepresentations: [...entry.parameterRepresentations],
+					resultRepresentation: entry.resultRepresentation,
+					registerRepresentations: [...entry.registerRepresentations],
+					gc: {
+						safepoints: entry.gc.safepoints.map((safepoint) => ({
+							kind: safepoint.kind,
+							instructionIp: safepoint.instructionIp,
+							rootRegisters: [...safepoint.rootRegisters],
+						})),
+					},
+				})),
 				gc: {
 					safepoints: native.gc.safepoints.map((safepoint) => ({
 						kind: safepoint.kind,

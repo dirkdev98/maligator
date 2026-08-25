@@ -18,6 +18,7 @@ import {
 import type {
 	BytecodeFunction,
 	NativeFunctionPlan,
+	NativeDirectEntryPlan,
 	NativeInstructionPlan,
 	VmGuardPlan,
 	BytecodeInstruction,
@@ -124,6 +125,23 @@ export interface CompiledFunction {
 	profileDecisions: Array<BackendProfileDecision>;
 	/** The full `static MalValue ...(...) { ... }` definition. */
 	source: string;
+	/** Additional native-only ordinary-call symbols emitted beside the canonical body. */
+	directEntries: Array<{
+		id: number;
+		symbol: string;
+		/**
+		 * Independently emitted definition so an optional ABI sibling cannot evict the canonical body.
+		 */
+		source: string;
+		parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
+		resultRepresentation: VmRegisterRepresentation;
+	}>;
+}
+
+export type DirectCompiledEntries = ReadonlyMap<string, NativeDirectEntryPlan>;
+
+export function directCompiledEntryKey(functionIndex: number, entryId: number): string {
+	return `${functionIndex}:${entryId}`;
 }
 
 /**
@@ -341,7 +359,7 @@ function binaryOpCanThrow(operator: string): boolean {
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
  */
-export function emitCompiledFunction(
+function emitCompiledVariant(
 	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
 	index: number,
@@ -350,11 +368,14 @@ export function emitCompiledFunction(
 	linkage: "static" | "external" = "static",
 	directCompiledTargets: ReadonlySet<number> = new Set(),
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
+	directCompiledEntries: DirectCompiledEntries = new Map(),
+	directEntry?: NativeDirectEntryPlan,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
 	// rather than the straight-line shape below (see emitResumableFunction).
 	if (fn.isGenerator || fn.isAsync) {
+		if (directEntry !== undefined) return null;
 		return emitResumableFunction(
 			fn,
 			native,
@@ -365,6 +386,14 @@ export function emitCompiledFunction(
 			semanticProtectors,
 		);
 	}
+	const nativeContract: NativeFunctionPlan =
+		directEntry === undefined
+			? native
+			: {
+					...native,
+					registerRepresentations: directEntry.registerRepresentations,
+					gc: directEntry.gc,
+				};
 
 	// A function with its own captured slots needs a per-activation MalEnv node
 	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self) and
@@ -375,18 +404,20 @@ export function emitCompiledFunction(
 	const capturesEnv = fn.capturedCount > 0;
 
 	if (
-		native.registerRepresentations.length !== fn.registerCount ||
-		native.registerRepresentations.some(
+		nativeContract.registerRepresentations.length !== fn.registerCount ||
+		nativeContract.registerRepresentations.some(
 			(representation, register) =>
 				(representation !== "boxed" &&
 					representation !== "number" &&
 					representation !== "boolean") ||
-				(register < fn.parameterCount && representation !== "boxed"),
+				(register < fn.parameterCount &&
+					representation !==
+						(directEntry?.parameterRepresentations[register] ?? "boxed")),
 		)
 	) {
 		throw new Error(`Invalid register representations for function ${index}`);
 	}
-	const reps = [...native.registerRepresentations];
+	const reps = [...nativeContract.registerRepresentations];
 
 	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
 	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
@@ -401,7 +432,7 @@ export function emitCompiledFunction(
 	// contract by allocating the union of its exact maps. It never re-runs liveness
 	// or infers GC policy from bytecode; a later dynamic-map frame can consume the
 	// individual maps without changing the ExecutionProgram or NativePlan boundary.
-	const rootRegisters = new Set(nativeFrameRootRegisters(fn, native));
+	const rootRegisters = new Set(nativeFrameRootRegisters(fn, nativeContract));
 	const valueRegs: Array<number> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
 		const isBoxed = reps[i] !== "number" && reps[i] !== "boolean";
@@ -422,7 +453,7 @@ export function emitCompiledFunction(
 	const stackSlotsBase = slotCount + (fn.isDerivedConstructor ? 1 : 0);
 	const stackObjectSites = new Map<number, StackObjectSite>();
 	let nextStackSlot = stackSlotsBase;
-	const stackObjectPlanRegions = native.specializations.filter(
+	const stackObjectPlanRegions = nativeContract.specializations.filter(
 		(region): region is VmStackObjectPlanRegion => region.kind === "stack-object-plan",
 	);
 	for (const region of stackObjectPlanRegions) {
@@ -503,7 +534,7 @@ export function emitCompiledFunction(
 		}
 	}
 	const stringSplitProjectionSites = new Map<number, NativeStringSplitProjectionSite>();
-	for (const projection of native.specializations.filter(
+	for (const projection of nativeContract.specializations.filter(
 		(region): region is NativeStringSplitProjection =>
 			region.kind === "string-split-projection",
 	)) {
@@ -535,7 +566,7 @@ export function emitCompiledFunction(
 		nextStackSlot += elementLoads.length;
 	}
 	const stringSplitCursorSites = new Map<number, NativeStringSplitCursorSite>();
-	const stringSplitCursorRegions = native.specializations.filter(
+	const stringSplitCursorRegions = nativeContract.specializations.filter(
 		(region): region is NativeStringSplitCursor => region.kind === "string-split-cursor",
 	);
 	for (const cursor of stringSplitCursorRegions) {
@@ -562,7 +593,7 @@ export function emitCompiledFunction(
 		nextStackSlot += hoistTrimIdentity ? 3 : 2;
 	}
 	const regexpExecProjectionSites = new Map<number, NativeRegExpExecProjectionSite>();
-	for (const projection of native.specializations.filter(
+	for (const projection of nativeContract.specializations.filter(
 		(region): region is Extract<VmRegion, { kind: "regexp-exec-projection" }> =>
 			region.kind === "regexp-exec-projection",
 	)) {
@@ -595,7 +626,7 @@ export function emitCompiledFunction(
 		number,
 		NativeRegExpIteratorProjectionSite
 	>();
-	for (const projection of native.specializations.filter(
+	for (const projection of nativeContract.specializations.filter(
 		(region): region is Extract<VmRegion, { kind: "regexp-iterator-projection" }> =>
 			region.kind === "regexp-iterator-projection",
 	)) {
@@ -640,8 +671,8 @@ export function emitCompiledFunction(
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const body = emitBody(
 		fn,
-		native.specializations,
-		native.instructions,
+		nativeContract.specializations,
+		nativeContract.instructions,
 		suffix,
 		reps,
 		debug,
@@ -657,6 +688,8 @@ export function emitCompiledFunction(
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
 		directCompiledTargets,
+		directCompiledEntries,
+		directEntry?.resultRepresentation,
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 	);
@@ -671,17 +704,28 @@ export function emitCompiledFunction(
 		return null;
 	}
 
-	const symbol = `mal_compiled_${index}${suffix}`;
+	const symbol =
+		directEntry === undefined
+			? `mal_compiled_${index}${suffix}`
+			: `mal_direct_${index}_${directEntry.id}${suffix}`;
 	const lines: Array<string> = [];
 
+	const directParameters = directEntry?.parameterRepresentations.map(
+		(representation, parameter) => `${cTypeOf(representation)} p${parameter}`,
+	);
 	lines.push(
-		`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
+		directEntry === undefined
+			? `${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
+			: `${linkage === "static" ? "static " : ""}${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`,
 	);
 	lines.push(`    (void) this_value;`);
-	lines.push(`    (void) new_target;`);
+	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
-	lines.push(`    (void) entry_state;`);
+	if (directEntry === undefined) lines.push(`    (void) entry_state;`);
+	if (directEntry !== undefined && body.some((line) => line.includes("new_target"))) {
+		lines.push(`    const MalValue new_target = MAL_VALUE_UNDEFINED;`);
+	}
 	if (
 		body.some(
 			(line) =>
@@ -726,10 +770,15 @@ export function emitCompiledFunction(
 		}
 	}
 
-	// Parameters adopt the incoming arguments boxed; non-parameter
+	// Parameters adopt either the canonical boxed slice or the selected typed ABI;
+	// non-parameter
 	// registers start at a rep-appropriate zero.
 	for (let i = 0; i < fn.parameterCount; i++) {
-		lines.push(`    r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`);
+		lines.push(
+			directEntry === undefined
+				? `    r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`
+				: `    r${i} = p${i};`,
+		);
 	}
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
@@ -782,18 +831,23 @@ export function emitCompiledFunction(
 	// helper (returning before super() is a ReferenceError); everything else uses
 	// mal_ops_construct_result (with new_target set for a [[Construct]] call).
 	lines.push(
-		thisSlot >= 0
-			? `    ${gcUnlink}return mal_vm_op_derived_construct_return(vm, MAL_VALUE_UNDEFINED, __gc_slots[${thisSlot}]);`
-			: !fn.hasPrototype
-				? `    ${gcUnlink}return MAL_VALUE_UNDEFINED;`
-				: `    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
+		directEntry !== undefined
+			? `    ${gcUnlink}return ${zeroOf(directEntry.resultRepresentation)};`
+			: thisSlot >= 0
+				? `    ${gcUnlink}return mal_vm_op_derived_construct_return(vm, MAL_VALUE_UNDEFINED, __gc_slots[${thisSlot}]);`
+				: !fn.hasPrototype
+					? `    ${gcUnlink}return MAL_VALUE_UNDEFINED;`
+					: `    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
 	);
 	// Shared throw-exit: unlink the root frame and leave the compiled frame with the
 	// throw pending (the dispatch caller observes vm->completion). Reached only by
 	// `goto` from a no-handler throw; placed after the unconditional fall-off return
 	// so control never falls into it. Omitted when nothing routes here.
 	if (bodyUsesThrowExit(body)) {
-		lines.push(`__throw_exit:;`, `    ${gcUnlink}return MAL_VALUE_UNDEFINED;`);
+		lines.push(
+			`__throw_exit:;`,
+			`    ${gcUnlink}return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
+		);
 	}
 	lines.push("}");
 	for (const i of valueRegs) {
@@ -803,6 +857,58 @@ export function emitCompiledFunction(
 		symbol,
 		source: lines.join("\n"),
 		profileDecisions,
+		directEntries: [],
+	};
+}
+
+/** Emit the canonical boxed entry and every independently lowerable typed sibling. */
+export function emitCompiledFunction(
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
+	index: number,
+	suffix: string,
+	debug: boolean,
+	linkage: "static" | "external" = "static",
+	directCompiledTargets: ReadonlySet<number> = new Set(),
+	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
+	directCompiledEntries: DirectCompiledEntries = new Map(),
+): CompiledFunction | null {
+	const canonical = emitCompiledVariant(
+		fn,
+		native,
+		index,
+		suffix,
+		debug,
+		linkage,
+		directCompiledTargets,
+		semanticProtectors,
+		directCompiledEntries,
+	);
+	if (canonical === null) return null;
+	const variants = native.directEntries.flatMap((entry) => {
+		const emitted = emitCompiledVariant(
+			fn,
+			native,
+			index,
+			suffix,
+			debug,
+			linkage,
+			directCompiledTargets,
+			semanticProtectors,
+			directCompiledEntries,
+			entry,
+		);
+		return emitted === null ? [] : [{ entry, emitted }];
+	});
+	return {
+		...canonical,
+		directEntries: variants.map(({ entry, emitted }) => ({
+			id: entry.id,
+			symbol: emitted.symbol,
+			source: emitted.source,
+			parameterRepresentations: entry.parameterRepresentations,
+			resultRepresentation: entry.resultRepresentation,
+		})),
 	};
 }
 
@@ -882,6 +988,8 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Set(),
+		new Map(),
+		undefined,
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 	);
@@ -1028,6 +1136,7 @@ function emitResumableFunction(
 		symbol,
 		source: lines.join("\n"),
 		profileDecisions,
+		directEntries: [],
 	};
 }
 
@@ -1272,6 +1381,8 @@ function emitBody(
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
 	directCompiledTargets: ReadonlySet<number>,
+	directCompiledEntries: DirectCompiledEntries,
+	directResultRepresentation: VmRegisterRepresentation | undefined,
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
 ): Array<string> | null {
@@ -1652,6 +1763,8 @@ function emitBody(
 				stackObjectMaterialization: stackObjectMaterializations.get(ip),
 				stackObjectInheritedAccess: stackObjectInheritedAccesses.get(ip),
 				directCompiledTargets,
+				directCompiledEntries,
+				directResultRepresentation,
 				mathUnaryCall: mathUnaryCalls.has(ip),
 				mathBinaryCall: mathBinaryCalls.has(ip),
 				mappedArguments: fn.mappedArguments,
@@ -1753,7 +1866,11 @@ function profileDecisionsForInstruction(
 	const decisions: Array<BackendProfileDecision> = [];
 
 	if (operation === "call" || operation === "construct") {
-		if (/mal_compiled_\d+/.test(source)) {
+		if (/mal_direct_\d+_\d+/.test(source)) {
+			decisions.push(
+				decision(`${operation}.direct-native`, "guarded", "callee-identity-guard"),
+			);
+		} else if (/mal_compiled_\d+/.test(source)) {
 			decisions.push(
 				decision(
 					`${operation}.direct-compiled`,
@@ -1981,6 +2098,8 @@ interface NativeInstructionContext {
 	readonly stackObjectMaterialization?: StackObjectSite;
 	readonly stackObjectInheritedAccess?: StackObjectSite;
 	readonly directCompiledTargets: ReadonlySet<number>;
+	readonly directCompiledEntries: DirectCompiledEntries;
+	readonly directResultRepresentation?: VmRegisterRepresentation;
 	readonly mathUnaryCall: boolean;
 	readonly mathBinaryCall: boolean;
 	readonly mappedArguments: boolean;
@@ -2013,6 +2132,8 @@ function emitInstruction(
 		stackObjectMaterialization,
 		stackObjectInheritedAccess,
 		directCompiledTargets,
+		directCompiledEntries,
+		directResultRepresentation,
 		mathUnaryCall,
 		mathBinaryCall,
 		mappedArguments,
@@ -2028,6 +2149,8 @@ function emitInstruction(
 	const genericContext: NativeInstructionContext = {
 		nativePlan,
 		directCompiledTargets,
+		directCompiledEntries,
+		directResultRepresentation,
 		mathUnaryCall,
 		mathBinaryCall,
 		mappedArguments,
@@ -2078,6 +2201,13 @@ function emitInstruction(
 			return reps[decoded.register] === "number" ? `r${decoded.register}` : null;
 		}
 		return decoded.kind === "number" ? cF64Literal(decoded.value) : null;
+	};
+	const nativeBooleanOperand = (operand: number): string | null => {
+		const decoded = decodeVmValueOperand(operand);
+		if (decoded.kind === "register") {
+			return reps[decoded.register] === "boolean" ? `r${decoded.register}` : null;
+		}
+		return decoded.kind === "boolean" ? (decoded.value ? "true" : "false") : null;
 	};
 	// Read register r as a raw double (only valid for a number-rep register).
 	const num = (r: number): string => `r${r}`;
@@ -3697,6 +3827,72 @@ function emitInstruction(
 			}
 			if (callPlan?.directFunctionIndex !== undefined) {
 				const target = callPlan.directFunctionIndex;
+				const directEntry =
+					callPlan.directEntryId === undefined
+						? undefined
+						: directCompiledEntries.get(
+								directCompiledEntryKey(target, callPlan.directEntryId),
+							);
+				if (directEntry !== undefined) {
+					const directCallee = `__direct_callee_${ip}`;
+					const directFunction = `__direct_function_${ip}`;
+					const directValue = `__direct_value_${ip}`;
+					const parameters = directEntry.parameterRepresentations.map(
+						(representation, parameter) => {
+							const operand = args[parameter];
+							if (operand === undefined) {
+								if (representation !== "boxed") {
+									throw new Error("Missing direct scalar argument");
+								}
+								return "MAL_VALUE_UNDEFINED";
+							}
+							if (representation === "number") {
+								const value = nativeNumberOperand(operand);
+								if (value === null)
+									throw new Error("Direct number argument lost its representation proof");
+								return value;
+							}
+							if (representation === "boolean") {
+								const value = nativeBooleanOperand(operand);
+								if (value === null)
+									throw new Error(
+										"Direct boolean argument lost its representation proof",
+									);
+								return value;
+							}
+							return boxedOperand(operand);
+						},
+					);
+					const directResult =
+						directEntry.resultRepresentation === "number"
+							? reps[instruction.dst] === "number"
+								? directValue
+								: `mal_ops_number_value(${directValue})`
+							: directEntry.resultRepresentation === "boolean"
+								? reps[instruction.dst] === "boolean"
+									? directValue
+									: `mal_value_new_boolean(${directValue})`
+								: callResult(directValue);
+					return [
+						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
+						`if (mal_vm_callee_has_index(vm, ${directCallee}, ${target})) {`,
+						`  MAL_PERF_COUNT(direct_entry_hits);`,
+						`  if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
+						`  const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
+						`  ${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)})${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
+						`  mal_vm_leave_compiled(vm);`,
+						`  if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${directResult};`,
+						`} else {`,
+						`  MAL_PERF_COUNT(direct_entry_fallbacks);`,
+						`  static MalCallCache __cc_${ip};`,
+						`  MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${target}, ${directCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+						`}`,
+						poll,
+					];
+				}
 				if (directCompiledTargets.has(target)) {
 					const directCallee = `__direct_callee_${ip}`;
 					const directFunction = `__direct_function_${ip}`;
@@ -3940,6 +4136,23 @@ function emitInstruction(
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
 			let value =
 				instruction.value < 0 ? "MAL_VALUE_UNDEFINED" : boxed(instruction.value);
+			if (directResultRepresentation !== undefined) {
+				if (stackObjectMaterialization !== undefined) return null;
+				if (instruction.value < 0) {
+					return [`${gcUnlink}return ${zeroOf(directResultRepresentation)};`];
+				}
+				const directValue =
+					directResultRepresentation === "number"
+						? reps[instruction.value] === "number"
+							? `r${instruction.value}`
+							: `mal_ops_number_as_f64(${boxed(instruction.value)})`
+						: directResultRepresentation === "boolean"
+							? reps[instruction.value] === "boolean"
+								? `r${instruction.value}`
+								: `mal_value_to_boolean(${boxed(instruction.value)})`
+							: boxed(instruction.value);
+				return [`${gcUnlink}return ${directValue};`];
+			}
 			const materialize: Array<string> = [];
 			if (stackObjectMaterialization !== undefined) {
 				const materialized = `materialized_ret_${ip}`;
