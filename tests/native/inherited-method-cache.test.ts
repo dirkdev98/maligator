@@ -7,6 +7,7 @@ import {
 	assertExactLines,
 	buildNativeBinary,
 	runToStdout,
+	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
@@ -28,6 +29,8 @@ describe("inherited built-in method and native call caches", () => {
 	let localValidityInterpreted: string;
 	let userlandCompiled: string;
 	let userlandInterpreted: string;
+	let polymorphicCompiled: string;
+	let polymorphicInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -125,6 +128,18 @@ describe("inherited built-in method and native call caches", () => {
 			compiled: false,
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		polymorphicCompiled = buildNativeBinary({
+			fixture: "tests/local/inherited-polymorphic-cache.js",
+			name: "inherited-polymorphic-cache",
+			compiled: true,
+			outDir,
+		});
+		polymorphicInterpreted = buildNativeBinary({
+			fixture: "tests/local/inherited-polymorphic-cache.js",
+			name: "inherited-polymorphic-cache-ni",
+			compiled: false,
+			outDir,
 		});
 	});
 
@@ -246,6 +261,28 @@ describe("inherited built-in method and native call caches", () => {
 	});
 
 	it.each([
+		["compiled", () => polymorphicCompiled],
+		["interpreted", () => polymorphicInterpreted],
+	])(
+		"preserves alternating inherited methods and mutation semantics in %s mode",
+		(_name, binary) => {
+			assertExactLines(runToStdout(binary(), { env: { MAL_HOST_GC: "1" } }), [
+				"inherited-polymorphic-cache PASS",
+			]);
+		},
+	);
+
+	it("keeps alternating inherited methods sound under GC stress", () => {
+		assertExactLines(
+			runToStdout(polymorphicCompiled, {
+				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+				timeoutMs: 60_000,
+			}),
+			["inherited-polymorphic-cache PASS"],
+		);
+	});
+
+	it.each([
 		["compiled", () => ordinaryCompiled],
 		["interpreted", () => ordinaryInterpreted],
 	])(
@@ -262,7 +299,7 @@ describe("inherited built-in method and native call caches", () => {
 				["inherited-ordinary-cache PASS"],
 			);
 		},
-		90_000,
+		scaledNativeRunTimeoutMs(90_000),
 	);
 
 	it.each([

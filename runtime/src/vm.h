@@ -1265,6 +1265,13 @@ typedef struct MalVm {
      */
     struct MalPropertyStubEntry *property_stub;
 
+    /**
+     * Shared inherited-property stub rows. Unlike the shape-only own-property
+     * table, every full cache row is registered against its exact prototype
+     * chain and is invalidated eagerly on mutation.
+     */
+    struct MalInlineCache *inherited_property_stub;
+
     /** Process launch context retained for host modules loaded from portable wire. */
     MalHostLaunchContext launch;
 

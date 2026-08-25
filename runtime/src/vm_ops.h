@@ -821,6 +821,15 @@ static inline MalIntrinsic mal_vm_primitive_method_proto_slot(u8 kind) {
 #define MAL_STUB_CACHE_BITS 10
 #define MAL_STUB_CACHE_SIZE (1u << MAL_STUB_CACHE_BITS)
 
+// Inherited data-property rows need exact prototype-chain invalidation, so they
+// cannot share the compact shape-only stub above. Keep a separate direct-mapped
+// table of full cache rows: each entry is independently registered against the
+// objects in its resolved chain and is eagerly cleared by prototype mutation.
+// A polymorphic site can then reuse several receiver/prototype families without
+// enlarging every emitted inline-cache row.
+#define MAL_INHERITED_STUB_CACHE_BITS 10
+#define MAL_INHERITED_STUB_CACHE_SIZE (1u << MAL_INHERITED_STUB_CACHE_BITS)
+
 typedef struct MalPropertyStubEntry {
     const struct MalShape *shape;
     MalValue key;
@@ -843,6 +852,20 @@ static inline u32 mal_stub_hash(const struct MalShape *shape, MalValue key) {
     h *= UINT64_C(0x94d049bb133111eb);
     h ^= h >> 31;
     return (u32) h & (MAL_STUB_CACHE_SIZE - 1u);
+}
+
+/** Direct-mapped index for an exact inherited receiver family. */
+static inline u32 mal_inherited_stub_hash(
+    const struct MalShape *shape, const struct MalObject *prototype, MalValue key
+) {
+    u64 h = ((u64) (uptr) shape >> 4) ^ ((u64) (uptr) prototype >> 3) ^
+        ((u64) key * UINT64_C(0x9e3779b97f4a7c15));
+    h ^= h >> 30;
+    h *= UINT64_C(0xbf58476d1ce4e5b9);
+    h ^= h >> 27;
+    h *= UINT64_C(0x94d049bb133111eb);
+    h ^= h >> 31;
+    return (u32) h & (MAL_INHERITED_STUB_CACHE_SIZE - 1u);
 }
 
 /**
@@ -872,6 +895,9 @@ static inline MalInlineCache *mal_vm_property_ic_at(
 
 /** Lazily allocate the shared megamorphic property stub array. */
 MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm);
+
+/** Lazily allocate independently-invalidated inherited property stub rows. */
+MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm);
 
 /**
  * Inline dense-array index access for the native backend (render-native-c), so a `obj[i]`

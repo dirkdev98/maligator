@@ -1710,6 +1710,18 @@ MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm) {
     return vm->property_stub;
 }
 
+MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm) {
+    if (vm->inherited_property_stub == nullptr) {
+        vm->inherited_property_stub = calloc(
+            (usize) MAL_INHERITED_STUB_CACHE_SIZE, sizeof(MalInlineCache));
+        MAL_PERF_COUNT(inherited_property_stub_cache_allocations);
+        MAL_PERF_ADD(
+            inherited_property_stub_cache_bytes,
+            (u64) MAL_INHERITED_STUB_CACHE_SIZE * sizeof(MalInlineCache));
+    }
+    return vm->inherited_property_stub;
+}
+
 /**
  * Enter a cached plain interpreted function through the same realm/frame seam as
  * the generic dispatcher. No collectable pointer is retained by the cache: the
@@ -4241,7 +4253,7 @@ static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey ke
 
 static bool mal_ic_try_record_inherited_slot(
     MalValue receiver, MalValue key_value, MalPropertyResolution resolution,
-    MalInlineCache *ic
+    MalInlineCache *ic, bool count_fill
 ) {
     if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT) ||
         (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
@@ -4288,7 +4300,7 @@ static bool mal_ic_try_record_inherited_slot(
         ic->megamorphic = false;
         ic->mode = MAL_IC_MODE_INHERITED_VALUE;
         ic->receiver_type = MAL_HEAP_OBJECT;
-        MAL_PERF_COUNT(ic_inherited_fills);
+        if (count_fill) MAL_PERF_COUNT(ic_inherited_fills);
         return true;
     }
 
@@ -4326,7 +4338,7 @@ static bool mal_ic_try_record_inherited_slot(
     ic->megamorphic = false;
     ic->mode = mode;
     ic->receiver_type = MAL_HEAP_OBJECT;
-    MAL_PERF_COUNT(ic_inherited_fills);
+    if (count_fill) MAL_PERF_COUNT(ic_inherited_fills);
     return true;
 }
 
@@ -4433,7 +4445,15 @@ static void mal_ic_try_record_inherited(
         return;
     }
 
-    if (mal_ic_try_record_inherited_slot(receiver, key_value, resolution, ic)) {
+    if (mal_ic_try_record_inherited_slot(
+            receiver, key_value, resolution, ic, true)) {
+        MalInlineCache *stub =
+            &mal_vm_inherited_property_stub_cache(vm)[mal_inherited_stub_hash(
+                object->shape, object->prototype, key_value)];
+        if (stub != ic) {
+            (void) mal_ic_try_record_inherited_slot(
+                receiver, key_value, resolution, stub, false);
+        }
         return;
     }
 
@@ -4494,6 +4514,18 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
     MalValue inherited_value;
     if (mal_vm_inherited_try_load(object_value, key_value, ic, &inherited_value)) {
         return inherited_value;
+    }
+    if (vm->inherited_property_stub != nullptr &&
+        mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) &&
+        mal_value_is_string(key_value)) {
+        const MalObject *object = mal_value_to_object(object_value);
+        const MalInlineCache *stub =
+            &vm->inherited_property_stub[mal_inherited_stub_hash(
+                object->shape, object->prototype, key_value)];
+        if (mal_vm_inherited_try_load(
+                object_value, key_value, stub, &inherited_value)) {
+            return inherited_value;
+        }
     }
     // Array `.length`: an exotic own field (not a shape slot, and arrays are not
     // MAL_HEAP_OBJECT). Read it directly and record an exact-key mode so subsequent

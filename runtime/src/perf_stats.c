@@ -334,7 +334,9 @@ static void mal_perf_stats_print(void) {
         "error_trace_stores=%llu error_trace_releases=%llu error_trace_peak_live=%llu "
         "function_property_cache_allocations=%llu function_property_cache_bytes=%llu "
         "function_literal_cache_allocations=%llu function_literal_cache_bytes=%llu "
-        "property_stub_cache_allocations=%llu interp_call_cache_allocations=%llu "
+        "property_stub_cache_allocations=%llu "
+        "inherited_property_stub_cache_allocations=%llu "
+        "inherited_property_stub_cache_bytes=%llu interp_call_cache_allocations=%llu "
         "global_property_cache_allocations=%llu\n",
         (unsigned long long) mal_perf_stats.object_empty_creations,
         (unsigned long long) mal_perf_stats.object_shaped_creations,
@@ -353,6 +355,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.function_literal_cache_allocations,
         (unsigned long long) mal_perf_stats.function_literal_cache_bytes,
         (unsigned long long) mal_perf_stats.property_stub_cache_allocations,
+        (unsigned long long) mal_perf_stats.inherited_property_stub_cache_allocations,
+        (unsigned long long) mal_perf_stats.inherited_property_stub_cache_bytes,
         (unsigned long long) mal_perf_stats.interp_call_cache_allocations,
         (unsigned long long) mal_perf_stats.global_property_cache_allocations
     );

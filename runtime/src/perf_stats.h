@@ -199,6 +199,8 @@ typedef struct MalPerfStats {
     u64 function_literal_cache_allocations;
     u64 function_literal_cache_bytes;
     u64 property_stub_cache_allocations;
+    u64 inherited_property_stub_cache_allocations;
+    u64 inherited_property_stub_cache_bytes;
     u64 interp_call_cache_allocations;
     u64 global_property_cache_allocations;
 
