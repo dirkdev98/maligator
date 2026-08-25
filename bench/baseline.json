@@ -25,26 +25,26 @@
       "allocation": 77034407
     },
     "node": {
-      "wallMs": 386.463875,
+      "wallMs": 416.610959,
       "phaseMs": {
-        "core": 60,
-        "objects": 44,
-        "collections": 74,
-        "text": 72,
-        "async": 50,
-        "allocation": 48
+        "core": 55,
+        "objects": 41,
+        "collections": 68,
+        "text": 68,
+        "async": 46,
+        "allocation": 101
       }
     },
     "modes": {
       "closed-compiled": {
-        "wallMs": 1864.752667,
+        "wallMs": 1595.0305,
         "phaseMs": {
-          "core": 193,
-          "objects": 718,
-          "collections": 291,
-          "text": 229,
-          "async": 105,
-          "allocation": 324
+          "core": 179,
+          "objects": 669,
+          "collections": 274,
+          "text": 219,
+          "async": 98,
+          "allocation": 149
         },
         "world": "closed",
         "backend": "compiled",
@@ -53,24 +53,24 @@
           "eval": false,
           "realms": false
         },
-        "ratio": 4.825166820572816,
-        "balancedRatio": 4.586283089766317,
-        "binaryBytes": 2464472,
-        "collections": 213,
-        "allocatedMb": 1056.388931274414,
-        "peakLiveKb": 13941.265625,
-        "maxPauseMs": 5.102,
-        "rssMb": 62.546875
+        "ratio": 3.8285850756988853,
+        "balancedRatio": 3.5969999537721464,
+        "binaryBytes": 2464488,
+        "collections": 129,
+        "allocatedMb": 543.7562408447266,
+        "peakLiveKb": 13192.21875,
+        "maxPauseMs": 2.341,
+        "rssMb": 42.203125
       },
       "open-compiled": {
-        "wallMs": 2461.450625,
+        "wallMs": 2307.351542,
         "phaseMs": {
-          "core": 194,
-          "objects": 734,
-          "collections": 300,
-          "text": 235,
-          "async": 111,
-          "allocation": 873
+          "core": 181,
+          "objects": 691,
+          "collections": 283,
+          "text": 223,
+          "async": 103,
+          "allocation": 823
         },
         "world": "open",
         "backend": "compiled",
@@ -79,24 +79,24 @@
           "eval": true,
           "realms": true
         },
-        "ratio": 6.369160959740416,
-        "balancedRatio": 5.536994907705147,
-        "binaryBytes": 4595208,
+        "ratio": 5.538384173902636,
+        "balancedRatio": 4.898241955946793,
+        "binaryBytes": 4380552,
         "collections": 476,
         "allocatedMb": 2090.566131591797,
         "peakLiveKb": 16301.53125,
-        "maxPauseMs": 7.082,
-        "rssMb": 68.875
+        "maxPauseMs": 7.391,
+        "rssMb": 68.828125
       },
       "closed-interpreted": {
-        "wallMs": 4845.794166,
+        "wallMs": 4389.235792,
         "phaseMs": {
-          "core": 813,
-          "objects": 1607,
-          "collections": 487,
-          "text": 317,
-          "async": 151,
-          "allocation": 1475
+          "core": 770,
+          "objects": 1516,
+          "collections": 462,
+          "text": 299,
+          "async": 141,
+          "allocation": 1205
         },
         "world": "closed",
         "backend": "interpreted",
@@ -105,24 +105,24 @@
           "eval": false,
           "realms": false
         },
-        "ratio": 12.53880240682263,
-        "balancedRatio": 10.487710839983277,
+        "ratio": 10.53557449025243,
+        "balancedRatio": 9.093776553751566,
         "binaryBytes": 2281424,
-        "collections": 219,
-        "allocatedMb": 1119.4104309082031,
-        "peakLiveKb": 16292.921875,
-        "maxPauseMs": 8.315,
-        "rssMb": 68.546875
+        "collections": 145,
+        "allocatedMb": 606.7777404785156,
+        "peakLiveKb": 15985.828125,
+        "maxPauseMs": 2.087,
+        "rssMb": 42.421875
       },
       "open-interpreted": {
-        "wallMs": 6234.873708,
+        "wallMs": 5885.442167,
         "phaseMs": {
-          "core": 809,
-          "objects": 1634,
-          "collections": 512,
-          "text": 325,
-          "async": 160,
-          "allocation": 2785
+          "core": 772,
+          "objects": 1544,
+          "collections": 488,
+          "text": 304,
+          "async": 147,
+          "allocation": 2627
         },
         "world": "open",
         "backend": "interpreted",
@@ -131,14 +131,14 @@
           "eval": true,
           "realms": true
         },
-        "ratio": 16.13313458599462,
-        "balancedRatio": 11.944095913342608,
-        "binaryBytes": 4445272,
+        "ratio": 14.126949951405384,
+        "balancedRatio": 10.588846160638017,
+        "binaryBytes": 4230616,
         "collections": 471,
         "allocatedMb": 2153.587631225586,
         "peakLiveKb": 22642.703125,
-        "maxPauseMs": 9.735,
-        "rssMb": 87.78125
+        "maxPauseMs": 8.774,
+        "rssMb": 87.6875
       }
     }
   },
