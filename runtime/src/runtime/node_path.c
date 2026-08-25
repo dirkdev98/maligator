@@ -116,11 +116,11 @@ static bool path_buf_check(MalVm *vm, const MalPathBuf *buffer) {
     return false;
 }
 
-static MalValue path_buf_to_value(MalVm *vm, const MalPathBuf *buffer) {
+static MalValue path_buf_to_value(MalVm *vm, MalPathBuf *buffer) {
     if (!path_buf_check(vm, buffer)) {
         return mal_value_new_undefined();
     }
-    return mal_value_from_string(mal_u16_buffer_copy(&vm->heap, buffer));
+    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, buffer));
 }
 
 /* Node validateString: a non-string argument is an ERR_INVALID_ARG_TYPE TypeError.
