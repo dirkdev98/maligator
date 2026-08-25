@@ -186,17 +186,23 @@ static MalValue sd_allocation_error(MalVm *vm) {
     return mal_value_new_undefined();
 }
 
-static byte *sd_join_pending(
-    u32 packed, const byte *data, usize length, usize *total_out
+static const byte *sd_join_pending(
+    u32 packed, const byte *data, usize length, byte **owned_out, usize *total_out
 ) {
     byte saved[3];
     usize saved_length = sd_pending_unpack(packed, saved);
     if (length > SIZE_MAX - saved_length) return nullptr;
     usize total = saved_length + length;
+    if (saved_length == 0) {
+        *owned_out = nullptr;
+        *total_out = length;
+        return data;
+    }
     byte *joined = malloc(total == 0 ? 1 : total);
     if (joined == nullptr) return nullptr;
-    if (saved_length > 0) memcpy(joined, saved, saved_length);
+    memcpy(joined, saved, saved_length);
     if (length > 0) memcpy(joined + saved_length, data, length);
+    *owned_out = joined;
     *total_out = total;
     return joined;
 }
@@ -231,25 +237,27 @@ static MalValue sd_decode_utf8(
     MalVm *vm, MalStringDecoderState *state, const byte *data, usize length,
     bool final
 ) {
+    byte *owned;
     usize total;
-    byte *joined = sd_join_pending(state->pending, data, length, &total);
+    const byte *joined = sd_join_pending(
+        state->pending, data, length, &owned, &total);
     if (joined == nullptr) return sd_allocation_error(vm);
 
     usize retained = final ? 0 : sd_utf8_incomplete_tail(joined, total);
     usize decoded_length = total - retained;
     if (decoded_length > MAL_STRING_MAX_CODE_UNITS * 2) {
-        free(joined);
+        free(owned);
         return sd_checked_output(vm, MAL_STRING_MAX_CODE_UNITS + 1);
     }
     usize unit_count;
     c16 *units = mal_utf8_decode(joined, decoded_length, &unit_count);
     if (units == nullptr) {
-        free(joined);
+        free(owned);
         return sd_allocation_error(vm);
     }
     if (!sd_checked_output(vm, unit_count)) {
         free(units);
-        free(joined);
+        free(owned);
         return mal_value_new_undefined();
     }
 
@@ -261,7 +269,7 @@ static MalValue sd_decode_utf8(
         sd_write_pending(vm, state, next_pending);
     }
     free(units);
-    free(joined);
+    free(owned);
     return result;
 }
 
@@ -276,8 +284,10 @@ static MalValue sd_decode_utf16le(
 ) {
     byte old[3];
     usize old_length = sd_pending_unpack(state->pending, old);
+    byte *owned;
     usize total;
-    byte *joined = sd_join_pending(state->pending, data, length, &total);
+    const byte *joined = sd_join_pending(
+        state->pending, data, length, &owned, &total);
     if (joined == nullptr) return sd_allocation_error(vm);
 
     usize output_bytes;
@@ -305,12 +315,12 @@ static MalValue sd_decode_utf16le(
 
     usize unit_count = output_bytes / 2;
     if (!sd_checked_output(vm, unit_count)) {
-        free(joined);
+        free(owned);
         return mal_value_new_undefined();
     }
     c16 *units = malloc(sizeof(c16) * (unit_count == 0 ? 1 : unit_count));
     if (units == nullptr) {
-        free(joined);
+        free(owned);
         return sd_allocation_error(vm);
     }
     for (usize i = 0; i < unit_count; i++) {
@@ -326,7 +336,7 @@ static MalValue sd_decode_utf16le(
         sd_write_pending(vm, state, next_pending);
     }
     free(units);
-    free(joined);
+    free(owned);
     return result;
 }
 
@@ -334,8 +344,10 @@ static MalValue sd_decode_base64(
     MalVm *vm, MalStringDecoderState *state, const byte *data, usize length,
     bool final
 ) {
+    byte *owned;
     usize total;
-    byte *joined = sd_join_pending(state->pending, data, length, &total);
+    const byte *joined = sd_join_pending(
+        state->pending, data, length, &owned, &total);
     if (joined == nullptr) return sd_allocation_error(vm);
     usize consumed = total - total % 3;
     usize retained = total - consumed;
@@ -344,17 +356,17 @@ static MalValue sd_decode_base64(
     usize output_length;
     if (!mal_base64_encoded_length(
             input_length, padding, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
-        free(joined);
+        free(owned);
         sd_checked_output(vm, MAL_STRING_MAX_CODE_UNITS + 1);
         return mal_value_new_undefined();
     }
     if (!sd_checked_output(vm, output_length)) {
-        free(joined);
+        free(owned);
         return mal_value_new_undefined();
     }
     c16 *units = malloc(sizeof(c16) * (output_length == 0 ? 1 : output_length));
     if (units == nullptr) {
-        free(joined);
+        free(owned);
         return sd_allocation_error(vm);
     }
     usize read = 0;
@@ -383,7 +395,7 @@ static MalValue sd_decode_base64(
         sd_write_pending(vm, state, next_pending);
     }
     free(units);
-    free(joined);
+    free(owned);
     return result;
 }
 
