@@ -7,6 +7,7 @@
 #include "object_ops.h"
 #include "perf_stats.h"
 #include "table.h"
+#include "typed_array_object.h"
 #include "value_ops.h" // mal_ops_number_value, for the numeric-index fast paths
 #include "vm.h"
 
@@ -1527,16 +1528,31 @@ static inline bool mal_vm_try_store_known_own_slots(
 static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, MalValue *out);
 static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value);
 
-static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
-    if ((mal_value_is_int32(key_value) || mal_value_is_f64(key_value)) &&
-        mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
-        f64 index = mal_value_is_int32(key_value)
-            ? (f64) mal_value_to_i32(key_value)
-            : mal_value_to_f64(key_value);
-        MalValue out;
-        if (mal_vm_array_try_load(
-                (const MalArrayObject *) mal_value_to_heap(object_value), index, &out)) {
-            return out;
+static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
+    if (index >= 0 && index < (f64) UINT32_MAX) {
+        u32 integer = (u32) index;
+        if ((f64) integer == index) return integer;
+    }
+    return UINT32_MAX;
+}
+
+static inline MalValue mal_vm_indexed_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
+    if (mal_ops_is_number(key_value)) {
+        f64 index = mal_ops_number_as_f64(key_value);
+        if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+            MalValue out;
+            if (mal_vm_array_try_load(
+                    (const MalArrayObject *) mal_value_to_heap(object_value), index, &out)) {
+                return out;
+            }
+        } else if (mal_value_is_typed_array_object(object_value)) {
+            // Every Number property key becomes a CanonicalNumericIndexString.
+            // Integer-indexed exotic [[Get]] therefore owns the miss as well as
+            // the hit: invalid, detached, and out-of-bounds indices are undefined
+            // and never continue into the prototype/property machinery.
+            return mal_typed_array_object_get(
+                vm, mal_value_to_typed_array_object(object_value),
+                mal_vm_typed_array_numeric_index(index));
         }
     }
     // Inline the monomorphic object-shape hit so a repeat `o.k` read is a shape +
@@ -1554,14 +1570,30 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
     return mal_vm_op_load_property_ic(vm, object_value, key_value, ic);
 }
 
-static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic) {
-    if ((mal_value_is_int32(key_value) || mal_value_is_f64(key_value)) &&
-        mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
-        f64 index = mal_value_is_int32(key_value)
-            ? (f64) mal_value_to_i32(key_value)
-            : mal_value_to_f64(key_value);
-        if (mal_vm_array_try_store(
-                (MalArrayObject *) mal_value_to_heap(object_value), index, value)) {
+static inline void mal_vm_indexed_fast_store(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic) {
+    if (mal_ops_is_number(key_value)) {
+        f64 index = mal_ops_number_as_f64(key_value);
+        if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+            if (mal_vm_array_try_store(
+                    (MalArrayObject *) mal_value_to_heap(object_value), index, value)) {
+                return;
+            }
+        } else if (mal_value_is_typed_array_object(object_value)) {
+            MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
+            if (array->buffer->immutable) {
+                if (strict) {
+                    mal_vm_throw_error(
+                        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                        "Cannot assign to read only property");
+                }
+                return;
+            }
+            // IntegerIndexedElementSet coerces the value before validating the
+            // current view extent. UINT32_MAX is the existing invalid-index
+            // sentinel, so fractional/negative/infinite/NaN and out-of-bounds
+            // numeric keys retain the generic path's observable coercion order.
+            mal_typed_array_object_set(
+                vm, array, mal_vm_typed_array_numeric_index(index), value);
             return;
         }
     }
@@ -1627,7 +1659,7 @@ static inline bool mal_vm_array_try_has(const MalArrayObject *arr, f64 index) {
  * (an overwrite of a present element — own data shadows any inherited setter — or a
  * fresh index under the fast-elements protector on the default %Array.prototype% with
  * a writable length); false when the general [[Set]] is required. Never runs user code.
- * Mirrors the dense arms of mal_vm_array_fast_store_index exactly.
+ * Mirrors the dense Array arms of mal_vm_indexed_fast_store_index exactly.
  */
 static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value) {
     if (index >= 0 && index < (f64) UINT32_MAX) {
@@ -1666,23 +1698,23 @@ bool mal_vm_try_fresh_dense_indexed_fill_reserve(MalVm *vm, MalValue array_value
  * identical (`mal_ops_number_value` canonicalizes exactly as the interpreter's key
  * boxing, so `obj[0]`-on-a-plain-object still services the monomorphic object IC).
  */
-static inline MalValue mal_vm_array_fast_load_index(MalVm *vm, MalValue object_value, f64 index,
-                                                    MalInlineCache *ic) {
+static inline MalValue mal_vm_indexed_fast_load_index(MalVm *vm, MalValue object_value, f64 index,
+                                                      MalInlineCache *ic) {
     MalArrayObject *array = mal_vm_as_array(object_value);
     MalValue out;
     if (array != nullptr && mal_vm_array_try_load(array, index, &out)) {
         return out;
     }
-    return mal_vm_array_fast_load(vm, object_value, mal_ops_number_value(index), ic);
+    return mal_vm_indexed_fast_load(vm, object_value, mal_ops_number_value(index), ic);
 }
 
-static inline void mal_vm_array_fast_store_index(MalVm *vm, MalValue object_value, f64 index, MalValue value,
-                                                 bool strict, MalInlineCache *ic) {
+static inline void mal_vm_indexed_fast_store_index(MalVm *vm, MalValue object_value, f64 index, MalValue value,
+                                                   bool strict, MalInlineCache *ic) {
     MalArrayObject *array = mal_vm_as_array(object_value);
     if (array != nullptr && mal_vm_array_try_store(array, index, value)) {
         return;
     }
-    mal_vm_array_fast_store(vm, object_value, mal_ops_number_value(index), value, strict, ic);
+    mal_vm_indexed_fast_store(vm, object_value, mal_ops_number_value(index), value, strict, ic);
 }
 
 /**

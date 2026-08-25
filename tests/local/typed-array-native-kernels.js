@@ -53,6 +53,95 @@ for (const [Ctor, bigint] of variants) {
 	);
 }
 
+function dynamicLoad(view, key) {
+	return view[key];
+}
+
+function dynamicStore(view, key, value) {
+	view[key] = value;
+}
+
+const dynamic = new Uint32Array(16);
+let dynamicChecksum = 0;
+for (let index = 0; index < 5000; index++) {
+	const key = index & 15;
+	const value = index * 3 + 1;
+	dynamicStore(dynamic, key, value);
+	dynamicChecksum += dynamicLoad(dynamic, key);
+}
+check(
+	"dynamic integer-indexed load/store",
+	dynamicChecksum === 37497500 && dynamicLoad(dynamic, "0") === dynamic[0],
+);
+
+dynamicStore(dynamic, -0, 91);
+check("dynamic negative zero addresses zero", dynamicLoad(dynamic, -0) === 91);
+
+Object.defineProperty(Uint32Array.prototype, "99", {
+	configurable: true,
+	value: 1234,
+});
+let invalidStoreCoercions = 0;
+dynamicStore(dynamic, 99, {
+	valueOf() {
+		invalidStoreCoercions++;
+		return 77;
+	},
+});
+check(
+	"dynamic out-of-bounds index owns the miss and coerces the store value",
+	dynamicLoad(dynamic, 99) === undefined && invalidStoreCoercions === 1,
+);
+check(
+	"dynamic invalid numeric indices stay integer-indexed exotic",
+	[-1, 1.5, 4294967295, Infinity, NaN].every(
+		(key) => dynamicLoad(dynamic, key) === undefined,
+	),
+);
+delete Uint32Array.prototype[99];
+
+const detachedDynamic = new Uint8Array([4]);
+detachedDynamic.buffer.transfer();
+let detachedStoreCoercions = 0;
+dynamicStore(detachedDynamic, 0, {
+	valueOf() {
+		detachedStoreCoercions++;
+		return 5;
+	},
+});
+check(
+	"dynamic detached view observes the current extent",
+	dynamicLoad(detachedDynamic, 0) === undefined && detachedStoreCoercions === 1,
+);
+
+const resizedDynamicBuffer = new ArrayBuffer(8, { maxByteLength: 8 });
+const resizedDynamic = new Uint8Array(resizedDynamicBuffer, 4, 4);
+resizedDynamicBuffer.resize(2);
+let resizedStoreCoercions = 0;
+dynamicStore(resizedDynamic, 0, {
+	valueOf() {
+		resizedStoreCoercions++;
+		return 6;
+	},
+});
+check(
+	"dynamic out-of-bounds fixed view observes resize",
+	dynamicLoad(resizedDynamic, 0) === undefined && resizedStoreCoercions === 1,
+);
+
+const dynamicBigInt = new BigInt64Array(2);
+dynamicStore(dynamicBigInt, 1, 17n);
+let dynamicBigIntRejectedNumber = false;
+try {
+	dynamicStore(dynamicBigInt, 0, 17);
+} catch (error) {
+	dynamicBigIntRejectedNumber = error instanceof TypeError;
+}
+check(
+	"dynamic BigInt element coercion",
+	dynamicLoad(dynamicBigInt, 1) === 17n && dynamicBigIntRejectedNumber,
+);
+
 const clamped = new Uint8ClampedArray(4);
 clamped.fill(2.5, 0, 1);
 clamped.fill(3.5, 1, 2);

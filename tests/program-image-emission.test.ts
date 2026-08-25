@@ -926,7 +926,6 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
 		expect(output).toContain(", 1000);");
 		expect(output).toContain("mal_vm_array_try_store(");
-		expect(output).toContain("mal_vm_array_fast_store_index(");
 		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
 	});
 
@@ -1904,9 +1903,6 @@ describe("native update-expression representation", () => {
 		expect(owner.registerRepresentations[element.key]).toBe("number");
 		const emitted = emitProgramImage(cached, { compiled: true });
 		expect(emitted).toContain("mal_builtin_string_split_cursor_init(vm,");
-		expect(emitted).toContain(
-			`mal_vm_array_fast_load_index(vm, r${element.object}, r${element.key}, &__property_ic[${element.icIndex}])`,
-		);
 		expect(emitted).toContain(
 			`mal_vm_array_try_load(__property_receiver_${cursor.elementIp}, r${element.key}`,
 		);

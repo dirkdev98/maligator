@@ -4561,7 +4561,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
             }
         }
         // Polymorphic overflow: a previously-seen alternate shape for the same key
-        // (matches the inline fast path in mal_vm_array_fast_load).
+        // (matches the inline fast path in mal_vm_indexed_fast_load).
         if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 &&
             ic->slot != MAL_IC_VALUE_SLOT && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
@@ -4868,7 +4868,7 @@ void mal_vm_op_store_property_ic(
 }
 
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction) {
-    callable->registers[instruction->as.load_property.dst] = mal_vm_array_fast_load(
+    callable->registers[instruction->as.load_property.dst] = mal_vm_indexed_fast_load(
         callable->vm,
         callable->registers[instruction->as.load_property.object],
         callable->registers[instruction->as.load_property.key],
@@ -4880,7 +4880,7 @@ void mal_op_load_property_static(MalCallable *callable, const MalInstruction *in
     MalValue key = mal_value_from_string(
         callable->vm->string_constant_atoms[
             instruction->as.load_property_static.string_index]);
-    callable->registers[instruction->as.load_property_static.dst] = mal_vm_array_fast_load(
+    callable->registers[instruction->as.load_property_static.dst] = mal_vm_indexed_fast_load(
         callable->vm,
         callable->registers[instruction->as.load_property_static.object],
         key,
@@ -4895,7 +4895,7 @@ void mal_op_load_property_static_known_own_slot_fallback(
         callable, instruction->as.load_property_static_known_own_slot.data_offset);
     MalValue key = mal_value_from_string(callable->vm->string_constant_atoms[data[0]]);
     callable->registers[instruction->as.load_property_static_known_own_slot.dst] =
-        mal_vm_array_fast_load(
+        mal_vm_indexed_fast_load(
             callable->vm,
             callable->registers[
                 instruction->as.load_property_static_known_own_slot.object],
@@ -4943,7 +4943,7 @@ void mal_op_load_property_static_shape_case_fallback(
         callable, instruction->as.load_property_static_shape_case.data_offset);
     MalValue key = mal_value_from_string(callable->vm->string_constant_atoms[data[0]]);
     callable->registers[instruction->as.load_property_static_shape_case.dst] =
-        mal_vm_array_fast_load(
+        mal_vm_indexed_fast_load(
             callable->vm,
             callable->registers[instruction->as.load_property_static_shape_case.object],
             key,
@@ -5069,7 +5069,7 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
 }
 
 void mal_op_store_property(MalCallable *callable, const MalInstruction *instruction) {
-    mal_vm_array_fast_store(
+    mal_vm_indexed_fast_store(
         callable->vm,
         callable->registers[instruction->as.store_property.object],
         callable->registers[instruction->as.store_property.key],
@@ -5083,7 +5083,7 @@ void mal_op_store_property_static(MalCallable *callable, const MalInstruction *i
     MalValue key = mal_value_from_string(
         callable->vm->string_constant_atoms[
             instruction->as.store_property_static.string_index]);
-    mal_vm_array_fast_store(
+    mal_vm_indexed_fast_store(
         callable->vm,
         callable->registers[instruction->as.store_property_static.object],
         key,
@@ -5099,7 +5099,7 @@ void mal_op_store_property_static_known_own_slot_fallback(
     const i32 *data = mal_op_instruction_data(
         callable, instruction->as.store_property_static_known_own_slot.data_offset);
     MalValue key = mal_value_from_string(callable->vm->string_constant_atoms[data[0]]);
-    mal_vm_array_fast_store(
+    mal_vm_indexed_fast_store(
         callable->vm,
         callable->registers[
             instruction->as.store_property_static_known_own_slot.object],

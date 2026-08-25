@@ -1982,8 +1982,8 @@ function profileFallbackFunctions(instruction: BytecodeInstruction): Array<strin
 	}
 	if (operation === "property") {
 		return [
-			"mal_vm_array_fast_load_index(",
-			"mal_vm_array_fast_store_index(",
+			"mal_vm_indexed_fast_load_index(",
+			"mal_vm_indexed_fast_store_index(",
 			"mal_vm_op_load_property_ic(",
 			"mal_vm_op_store_property_ic(",
 		];
@@ -2752,12 +2752,12 @@ function emitInstruction(
 								`if (${receiverName} && mal_vm_array_try_load(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = __v_${ip};`,
 								`} else {`,
-								`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+								`  r${instruction.dst} = mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
 								`  ${throwCheck}`,
 								`}`,
 							]
 						: [
-								`r${instruction.dst} = mal_vm_array_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+								`r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
 								throwCheck,
 							];
 				if (nativeStringSplitCursorAction?.role === "element") {
@@ -2899,12 +2899,12 @@ function emitInstruction(
 					? [
 							`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
 							`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
-							`  mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+							`  mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
 							`  ${throwCheck}`,
 							`}`,
 						]
 					: [
-							`mal_vm_array_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+							`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
 							throwCheck,
 						];
 			}
