@@ -8,15 +8,17 @@ the work itself is not duplicated.
 
 ## Current priorities
 
-1. Validate the direct Core IR pipeline and its Core-to-Execution and ProgramImage
-   contracts.
-2. Establish a strong common SSA optimization foundation and use it to recover
-   performance.
-3. Exploit Maligator's world knowledge, explicit effects, precise roots, shapes, and
-   AOT source closure through generic analyses.
-4. Stabilize alpha releases and recoverable resource handling.
-5. Advance ECMAScript, WinterTC, Node, and ecosystem correctness.
-6. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
+1. Close the runtime/native terminal refactor with current contract, phase, size, and
+   benchmark evidence.
+2. Utilize the facts and effects already available in Core through generic SSA,
+   dataflow, representation, escape, region, and whole-program optimizations.
+3. Extend fact and effect precision only together with a concrete optimization that
+   consumes it and measured evidence that the additional complexity pays for itself.
+4. Complete source-closure reduction and generated-code cost modeling so specialization
+   improves runtime without making compilation or artifacts impractical.
+5. Stabilize alpha releases and recoverable resource handling.
+6. Advance ECMAScript, WinterTC, Node, and ecosystem correctness.
+7. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
    foundations are ready.
 
 ## Development experience and stability
@@ -80,42 +82,28 @@ Runtime eval may remove source closure without invalidating authority closure.
 
 ## Fact-driven optimization
 
-Prefer consuming facts already available in Core. Extend an analysis only together
-with the optimization that consumes the additional precision. Keep mutable-world
-performance neutral or better while specializing locked builds.
+Prefer utilizing facts and effects already available in Core. Extend their precision
+only together with the optimization that consumes it. Keep mutable-world performance
+neutral or better while specializing locked builds.
 
-- [x] Consume existing allocation-layout, own-cell, containment, and escape facts for
-      property-load elimination, memory forwarding, dead-allocation elimination,
-      allocation sinking, and initial scalar replacement.
-
-- [ ] Consume existing guarded-region admission and authority-closure facts to admit
-      eligible regions once and remove redundant guards, fallback paths, property
-      loads, and helper calls.
-
-- [x] Consume existing source-closure, root-reason, and reachability facts to remove
-      provably unreachable function bodies and function objects.
-
-- [ ] Extend bounded callee discovery through remaining import, lexical,
-      constructor-derived, stable-field, and call-result paths; immediately consume
-      new finite target sets in dispatch, inlining, effect analysis, and reachability.
-
-- [x] Establish a bounded native direct-entry ABI for exact guarded ordinary script
-      calls: retain the canonical boxed bytecode/compiled entry as fallback, transport
-      proven scalar parameters and results through explicit Program Image contracts,
-      and carry variant-specific exact GC roots through codec and C emission.
+The current base already has initial scalar replacement and allocation sinking,
+whole-program reachability DCE, guarded shape-origin loads, exact execution safepoint
+maps, and bounded scalar native direct entries. Runtime-wire compilation and native
+products share optimized Core but now terminate independently.
 
 - [ ] Extend representation constraints through remaining block arguments, clones,
       joins, captures, indirect target sets, and materialization; immediately consume
       them for unboxing, additional ABI specialization, box elimination, and reduced
       rooting.
 
-- [x] Collect bounded shape-origin provenance across allocations, block arguments,
-      call results, captures, globals, and constructor results; consume it through
-      exact runtime-guarded own-slot loads and shared shape cases in both backends.
+- [ ] Extend bounded callee discovery through remaining import, lexical,
+      constructor-derived, stable-field, and call-result paths; immediately consume
+      new finite target sets in direct-entry selection, dispatch, inlining, effect
+      analysis, and reachability.
 
-- [ ] Collect live value-class and alias facts across stores and calls; consume them
-      for guarded unboxing, redundant-check elimination, and memory optimization only
-      where representative output can amortize the required runtime admission.
+- [ ] Consume existing guarded-region admission and authority-closure facts to admit
+      eligible regions once and remove redundant guards, fallback paths, property
+      loads, and helper calls.
 
 - [ ] Extend escape and containment facts across inlining, joins, exceptions, and
       suspension; immediately consume them for scalar replacement, stack allocation,
@@ -125,18 +113,23 @@ performance neutral or better while specializing locked builds.
       throw, and suspension facts one dimension at a time; consume each addition in
       the call-site optimizations that motivated it.
 
-- [ ] Collect local exception-flow facts for values, handlers, completion order, stack
-      observation, and effects; consume them to lower equivalent local throw and catch
-      regions to ordinary control flow.
+- [ ] Consume the exact per-safepoint root maps already carried by ExecutionProgram
+      and NativePlan to move beyond the current per-function union shadow frame where
+      measurement justifies the extra root updates. Preserve hidden allocations,
+      exceptional exits, loop polling, direct-entry variants, and every GC mode.
 
 - [ ] Complete module, export, publication, eval, reflection, Realm, host,
       retained-identity, and open-edge reachability modeling; immediately consume the
       closed graph to remove unreachable functions, helpers, metadata, and disabled
       feature support.
 
-- [ ] Collect precise safepoint liveness and consume it to minimize root placement and
-      shorten rooted lifetimes while remaining correct for hidden allocations,
-      exceptional exits, and every GC mode.
+- [ ] Collect live value-class and alias facts across stores and calls; consume them
+      for guarded unboxing, redundant-check elimination, and memory optimization only
+      where representative output can amortize the required runtime admission.
+
+- [ ] Collect local exception-flow facts for values, handlers, completion order, stack
+      observation, and effects; consume them to lower equivalent local throw and catch
+      regions to ordinary control flow.
 
 - [ ] Collect generated-code cost facts for helper calls, guards, boxing, root slots,
       safepoints, duplication, loop frequency, downstream C compilation, and binary
@@ -152,9 +145,10 @@ performance neutral or better while specializing locked builds.
 
 ## Compiler measurement and diagnostics
 
-- [x] Replace historical microbenchmarks with one checksummed, phase-balanced
-      JavaScript workload across the closed/open and compiled/interpreted matrix,
-      plus closed HTTP/Express and closed self-compile families.
+- [ ] Refresh the production-plan JavaScript, HTTP/Express, and self-compile baseline
+      at the post-terminal-refactor HEAD before ranking performance work. Use warmed
+      paired comparisons with matching checksums and retain the pre-refactor baseline
+      as the comparison point rather than mixing the two architectures.
 
 - [ ] Report cold process time separately from warmed kernel time and retain sample
       dispersion. Record host, toolchain, flags, world policy, eval policy, and runtime
