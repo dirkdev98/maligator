@@ -105,7 +105,7 @@ test("committed benchmark baseline uses the explicit three-family schema", () =>
 		"schema",
 		"selfCompile",
 	]);
-	expect(baseline).toHaveProperty("schema", 2);
+	expect(baseline).toHaveProperty("schema", 3);
 	expect(baseline).not.toHaveProperty("entries");
 	expect(baseline).not.toHaveProperty("commit");
 	expect(baseline).not.toHaveProperty("dirty");
@@ -129,6 +129,11 @@ test("committed benchmark baseline uses the explicit three-family schema", () =>
 
 	const javascript = baseline!.javascript as {
 		runs: number;
+		nativeBuild: {
+			mode: string;
+			optimizationFlags: Array<string>;
+			lto: boolean;
+		};
 		modes: Record<
 			string,
 			{
@@ -139,6 +144,9 @@ test("committed benchmark baseline uses the explicit three-family schema", () =>
 		>;
 	};
 	expect(javascript.runs).toBeGreaterThanOrEqual(5);
+	expect(javascript.nativeBuild.mode).toBe("production");
+	expect(javascript.nativeBuild.optimizationFlags).toContain("-O2");
+	expect(javascript.nativeBuild.optimizationFlags).toContain("-g0");
 	expect(Object.keys(javascript.modes).sort()).toEqual([
 		"closed-compiled",
 		"closed-interpreted",

@@ -502,7 +502,7 @@ npm run test:full:report
 
 npm run type-check
 npm run lint
-npm run bench                              # balanced JavaScript + closed HTTP/Express
+npm run bench                              # production-plan JavaScript + closed HTTP/Express
 npm run bench -- javascript --mode open-interpreted
 npm run bench -- --full --update           # add closed self-compile; hard-cut baseline
 npm run bench -- javascript --compare HEAD --runs 5

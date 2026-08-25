@@ -32,9 +32,11 @@ that its lockfile matches the working tree, warms both trees, and alternates the
 base/head execution order. `--changed` maps the Git diff to the smallest relevant
 benchmark lanes. It starts with the requested number of pairs and may collect up to
 15 while a result remains uncertain. The JavaScript family runs one deterministic
-ES module across the closed/open x compiled/interpreted matrix; the HTTP family
-runs the fully closed compiled bare and Express servers. `--full` adds the slower
-fully closed self-compile family.
+ES module through the probed production native plan across the closed/open x
+compiled/interpreted matrix and records the exact compiler, target, optimization
+flags, LTO, and strip decisions in its snapshot. The HTTP family runs the fully
+closed compiled bare and Express servers. `--full` adds the slower fully closed
+self-compile family.
 
 Every classified metric reports the paired median change and a bootstrapped 95%
 confidence interval. Wall time and throughput require a 3% effect; p99 latency,

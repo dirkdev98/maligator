@@ -36,6 +36,7 @@ import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
+import type { NativeBuildContext } from "./native-build-context.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 
 /** Entry-point C drivers linked with the emitted runtime image. */
@@ -134,6 +135,8 @@ export interface BuildOptions {
 	temporalEnabled?: boolean;
 	/** Compile the production profile recorder into this native fixture. */
 	profileEnabled?: boolean;
+	/** Use the probed production native plan (LTO and stripping where supported). */
+	production?: boolean;
 	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
 	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled` /
@@ -280,6 +283,7 @@ function linkProgramImage(
 		features: derivation.features,
 		environment: options.environment,
 		compilerBake: options.compilerBake ?? defaultCompilerBake(),
+		production: options.production,
 	});
 	return buildLocalBinary({
 		context,
@@ -295,6 +299,8 @@ function linkProgramImage(
 export interface BackendPairResult {
 	compiled: string;
 	interpreted: string;
+	/** Exact native build context shared by both backend links. */
+	context: NativeBuildContext;
 }
 
 /**
@@ -307,16 +313,30 @@ export function buildBackendPairFromOneProgramImage(
 ): BackendPairResult {
 	const config = resolveHarnessBuildConfig(options);
 	const image = compileFixtureProgramImage(options, config);
+	const compiled = linkProgramImage(
+		options,
+		config,
+		image,
+		true,
+		`${options.name}-compiled`,
+	);
+	const interpreted = linkProgramImage(
+		options,
+		config,
+		image,
+		false,
+		`${options.name}-interpreted`,
+	);
+	if (
+		compiled.context.plan.mode !== interpreted.context.plan.mode ||
+		compiled.context.toolchain.fingerprint !== interpreted.context.toolchain.fingerprint
+	) {
+		throw new Error("backend pair resolved different native build contexts");
+	}
 	return {
-		compiled: linkProgramImage(options, config, image, true, `${options.name}-compiled`)
-			.binaryPath,
-		interpreted: linkProgramImage(
-			options,
-			config,
-			image,
-			false,
-			`${options.name}-interpreted`,
-		).binaryPath,
+		compiled: compiled.binaryPath,
+		interpreted: interpreted.binaryPath,
+		context: compiled.context,
 	};
 }
 

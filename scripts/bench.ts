@@ -1,8 +1,8 @@
 /**
  * Maligator's benchmark contract has three deliberately different families:
  *
- * - javascript: one balanced core-language ES module under the complete
- *   closed/open x compiled/interpreted matrix, plus one Node reference.
+ * - javascript: one balanced core-language ES module under the production native
+ *   plan across the complete closed/open x compiled/interpreted matrix, plus Node.
  * - http: the closed compiled bare and Express flagship servers versus Node.
  * - self-compile: the closed compiled Maligator compiler versus its Node host.
  *
@@ -45,7 +45,7 @@ import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
 const JAVASCRIPT_FIXTURE = "bench/javascript.mjs";
-const BENCHMARK_SCHEMA = 2;
+const BENCHMARK_SCHEMA = 3;
 const JAVASCRIPT_MODES = [
 	"closed-compiled",
 	"open-compiled",
@@ -110,6 +110,15 @@ interface JavascriptModeMetrics extends JavascriptReferenceMetrics {
 interface JavascriptMetrics {
 	workload: string;
 	runs: number;
+	nativeBuild: {
+		mode: "production";
+		optimizationFlags: ReadonlyArray<string>;
+		lto: boolean;
+		strip: boolean;
+		compiler: string;
+		compilerVersion: string;
+		target: string;
+	};
 	phaseChecksums: Record<string, number>;
 	node: JavascriptReferenceMetrics;
 	modes: Partial<Record<JavascriptMode, JavascriptModeMetrics>>;
@@ -160,7 +169,7 @@ interface SelfCompileMetrics {
 }
 
 interface BenchmarkSnapshot {
-	schema: 2;
+	schema: 3;
 	javascript?: JavascriptMetrics;
 	http?: HttpMetrics;
 	selfCompile?: SelfCompileMetrics;
@@ -348,23 +357,36 @@ function benchJavascript(
 	selectedModes: ReadonlyArray<JavascriptMode>,
 ): JavascriptMetrics {
 	const binaries: Partial<Record<JavascriptMode, string>> = {};
+	let nativeBuildContext:
+		| ReturnType<typeof buildBackendPairFromOneProgramImage>["context"]
+		| undefined;
 	if (selectedModes.some((mode) => mode.startsWith("closed-"))) {
 		const closed = buildBackendPairFromOneProgramImage({
 			fixture: JAVASCRIPT_FIXTURE,
 			name: "bench-javascript-closed",
 			config: CLOSED_CONFIG,
+			production: true,
 		});
 		binaries["closed-compiled"] = closed.compiled;
 		binaries["closed-interpreted"] = closed.interpreted;
+		nativeBuildContext = closed.context;
 	}
 	if (selectedModes.some((mode) => mode.startsWith("open-"))) {
 		const open = buildBackendPairFromOneProgramImage({
 			fixture: JAVASCRIPT_FIXTURE,
 			name: "bench-javascript-open",
 			config: OPEN_CONFIG,
+			production: true,
 		});
 		binaries["open-compiled"] = open.compiled;
 		binaries["open-interpreted"] = open.interpreted;
+		nativeBuildContext ??= open.context;
+	}
+	if (nativeBuildContext === undefined) {
+		throw new Error("JavaScript benchmark selected no native backend");
+	}
+	if (nativeBuildContext.plan.mode !== "production") {
+		throw new Error("JavaScript benchmark requires a production native build");
 	}
 	const binaryFor = (mode: JavascriptMode): string => {
 		const binary = binaries[mode];
@@ -434,6 +456,15 @@ function benchJavascript(
 	return {
 		workload: "javascript-v1",
 		runs,
+		nativeBuild: {
+			mode: "production",
+			optimizationFlags: ["-O2", "-g0", ...nativeBuildContext.plan.ltoFlags],
+			lto: nativeBuildContext.plan.lto,
+			strip: nativeBuildContext.plan.strip,
+			compiler: nativeBuildContext.toolchain.tools.cc.path,
+			compilerVersion: nativeBuildContext.toolchain.tools.cc.version,
+			target: nativeBuildContext.toolchain.rustTarget,
+		},
 		phaseChecksums: warmReference.checksums,
 		node,
 		modes,
@@ -859,8 +890,8 @@ function report(
 const HELP = `Usage: node scripts/bench.ts [javascript|http|self-compile] [options]
 
 Benchmark families:
-  javascript    One balanced ES-module workload across closed/open x
-                compiled/interpreted, plus a Node reference.
+  javascript    One balanced ES-module workload under the production native plan
+                across closed/open x compiled/interpreted, plus a Node reference.
   http          Fully closed compiled bare HTTP and Express versus Node.
   self-compile  Fully closed compiled Maligator compiler versus its Node host.
 
