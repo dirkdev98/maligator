@@ -2743,11 +2743,7 @@ function emitInstruction(
 			// the stack across the whole function; the temp promotes back to a register once
 			// the try_* helper inlines.
 			const receiverName = `__property_receiver_${ip}`;
-			if (
-				instruction.opcode === "LOAD_PROPERTY" &&
-				(reps[instruction.key] === "number" ||
-					nativeStringSplitCursorAction?.role === "element")
-			) {
+			if (instruction.opcode === "LOAD_PROPERTY") {
 				const ordinary =
 					reps[instruction.key] === "number"
 						? [
@@ -2806,10 +2802,7 @@ function emitInstruction(
 				}
 				return ordinary;
 			}
-			const probe =
-				instruction.opcode === "LOAD_PROPERTY_STATIC"
-					? `(${receiverName} && mal_vm_object_try_load_static(${receiverName}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
-					: `(${receiverName} && mal_vm_object_try_load(${receiverName}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
+			const probe = `(${receiverName} && mal_vm_object_try_load_static(${receiverName}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
 			const ordinary = [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`MalValue __v_${ip};`,
@@ -2901,19 +2894,21 @@ function emitInstruction(
 			// See LOAD_PROPERTY: a monomorphic data-slot/dense-element hit runs no user code;
 			// the general [[Set]] fallback keeps the throw check.
 			const receiverName = `__property_receiver_${ip}`;
-			if (instruction.opcode === "STORE_PROPERTY" && reps[instruction.key] === "number") {
-				return [
-					`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-					`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
-					`  mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-					`  ${throwCheck}`,
-					`}`,
-				];
+			if (instruction.opcode === "STORE_PROPERTY") {
+				return reps[instruction.key] === "number"
+					? [
+							`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+							`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+							`  mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+							`  ${throwCheck}`,
+							`}`,
+						]
+					: [
+							`mal_vm_array_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+							throwCheck,
+						];
 			}
-			const probe =
-				instruction.opcode === "STORE_PROPERTY_STATIC"
-					? `${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`
-					: `${receiverName} && mal_vm_object_try_store(${receiverName}, ${key}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`;
+			const probe = `${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`;
 			return [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`if (!(${probe})) {`,

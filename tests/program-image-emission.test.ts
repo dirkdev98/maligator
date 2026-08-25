@@ -998,22 +998,6 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("+= 1.0;");
 	});
 
-	it("keeps unknown property-key parameters boxed", () => {
-		const output = emit(
-			`"use strict"; function load(array, index) { return array[index]; } globalThis.load = load;`,
-		);
-		expect(output).toContain("mal_vm_object_try_load(");
-		expect(output).toContain("mal_vm_op_load_property_ic(");
-	});
-
-	it("keeps unknown property-key stores boxed", () => {
-		const output = emit(
-			`"use strict"; function store(array, index, value) { array[index] = value; } globalThis.store = store;`,
-		);
-		expect(output).toContain("mal_vm_object_try_store(");
-		expect(output).toContain("mal_vm_op_store_property_ic(");
-	});
-
 	it("does not invent a recursive numeric ABI from VM use sites", () => {
 		const output = emit(
 			`"use strict"; function recurse(value, depth, callback) { if (depth === 0) return value * value; return callback(value - 1, depth - 1, callback); } globalThis.recurse = recurse;`,
@@ -1077,7 +1061,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(" += ");
 	});
 
-	it("emits independent per-site property guards without backend regions", () => {
+	it("emits independent static per-site property guards without backend regions", () => {
 		const staticOutput = emit(
 			`"use strict"; function read(object) { object.a = object.a + 1; return object.a + object.b; } globalThis.read = read;`,
 		);
@@ -1085,15 +1069,9 @@ describe("native update-expression representation", () => {
 		expect(staticOutput).toContain("mal_vm_object_try_store_static(");
 		expect(staticOutput).not.toContain("mal_perf_ic_load_region_hit");
 		expect(staticOutput).not.toContain("mal_perf_ic_store_region_hit");
-
-		const dynamicOutput = emit(
-			`"use strict"; function read(object, key) { return object.a + object[key]; } globalThis.read = read;`,
-		);
-		expect(dynamicOutput).toContain("mal_vm_object_try_load(");
-		expect(dynamicOutput).not.toMatch(/__rg\d+_c->keys\[/);
 	});
 
-	it("uses key-free probes only for non-consolidated static property sites", () => {
+	it("uses key-free probes for non-consolidated static property sites", () => {
 		const staticOutput = emit(
 			`"use strict"; function load(object) { return object.value; } function store(object, value) { object.value = value; } globalThis.keep = [load, store];`,
 		);
@@ -1113,17 +1091,6 @@ describe("native update-expression representation", () => {
 		const loopOutput = emitProgramImage(loopDefinition, { compiled: true });
 		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
-
-		const dynamicOutput = emit(
-			`"use strict"; function load(object, key) { return object[key]; } function store(object, key, value) { object[key] = value; } globalThis.keep = [load, store];`,
-		);
-		expect(dynamicOutput).toContain("mal_vm_object_try_load(");
-		expect(dynamicOutput).toContain("mal_vm_object_try_store(");
-		expect(dynamicOutput).not.toContain("mal_vm_object_try_load_static(");
-		expect(dynamicOutput).not.toContain("mal_vm_local_inherited_value_try_load_static(");
-		expect(dynamicOutput).not.toContain(
-			"mal_vm_local_watched_inherited_value_try_load_static(",
-		);
 	});
 
 	it("does not synthesize watched epochs for ordinary resumable property loads", () => {
