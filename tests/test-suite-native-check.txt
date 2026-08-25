@@ -1,5 +1,6 @@
 # High-density developer-gate complement. Keep disjoint from native smoke.
 tests/native/drivers.test.ts
+tests/native/allocation-sinking.test.ts
 tests/native/eval-gc-runtime-compilation-p0.test.ts
 tests/native/express-smoke.test.ts
 tests/native/function-call-direct.test.ts

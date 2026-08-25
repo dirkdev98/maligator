@@ -8931,6 +8931,233 @@ const eliminateDeadAllocations: CoreFunctionPass = {
 	},
 };
 
+interface FreshAllocationSinkCandidate {
+	readonly allocation: CoreInstruction;
+	readonly sourceBlock: CoreBlockId;
+	readonly sourceIndex: number;
+	readonly use: CoreInstruction;
+}
+
+function sameCoreHandler(
+	left: CoreBlock["handler"],
+	right: CoreBlock["handler"],
+): boolean {
+	if (left === undefined || right === undefined) return left === right;
+	return (
+		left.block === right.block &&
+		left.arguments.length === right.arguments.length &&
+		left.arguments.every((argument, index) => argument === right.arguments[index])
+	);
+}
+
+/**
+ * Delay a fresh aggregate until the only instruction that can observe it.
+ *
+ * Scalar forwarding often erases every ordinary use of an object while leaving
+ * one cold publication, such as storing the object in a retained record. Keeping
+ * the allocation at its original merge point then allocates on hot paths that
+ * never publish the identity. This pass moves the allocation to immediately
+ * before that unique consuming instruction.
+ *
+ * The move is deliberately CFG- and exception-aware. Every initializer must be
+ * available at the destination; the allocation and consumer retain the same
+ * handler; and both blocks must belong to exactly the same reducible and
+ * irreducible cycles. The cycle rule prevents moving a once-per-entry allocation
+ * into a loop that can execute it repeatedly. Moving within the same block does
+ * not reduce execution frequency, so it is left to register allocation and
+ * precise liveness instead. Initializer SSA values remain live through the move,
+ * so delaying the aggregate does not expose its occupants to earlier collection.
+ */
+const sinkFreshAllocations: CoreFunctionPass = {
+	name: "sink-fresh-allocations",
+	ablation: "escape",
+	run(fn, analyses) {
+		const cfg = analyses.controlFlow(fn);
+		const { instructions: protectedInstructions, inputs: protectedInputs } =
+			regionProtectedValues(fn);
+		const instructionLocations = new Map<
+			CoreInstructionId,
+			{
+				readonly block: CoreBlockId;
+				readonly index: number;
+				readonly instruction: CoreInstruction;
+			}
+		>();
+		const uses = new Map<
+			CoreValueId,
+			Array<{
+				readonly kind: "instruction" | "control";
+				readonly instruction?: CoreInstruction;
+				readonly block: CoreBlockId;
+			}>
+		>();
+		const noteUse = (
+			value: CoreValueId,
+			use: {
+				readonly kind: "instruction" | "control";
+				readonly instruction?: CoreInstruction;
+				readonly block: CoreBlockId;
+			},
+		): void => {
+			const current = uses.get(value);
+			if (current === undefined) uses.set(value, [use]);
+			else current.push(use);
+		};
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				instructionLocations.set(instruction.id, {
+					block: block.id,
+					index,
+					instruction,
+				});
+				for (const input of instruction.inputs) {
+					noteUse(input, { kind: "instruction", instruction, block: block.id });
+				}
+			}
+			for (const argument of block.handler?.arguments ?? []) {
+				noteUse(argument, { kind: "control", block: block.id });
+			}
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				for (const argument of edge.arguments) {
+					noteUse(argument, { kind: "control", block: block.id });
+				}
+			}
+			switch (block.terminator.kind) {
+				case "branch":
+				case "guard":
+					noteUse(block.terminator.condition, { kind: "control", block: block.id });
+					break;
+				case "switch":
+					noteUse(block.terminator.discriminant, { kind: "control", block: block.id });
+					break;
+				case "return":
+				case "throw":
+					noteUse(block.terminator.value, { kind: "control", block: block.id });
+					break;
+				case "jump":
+				case "unreachable":
+					break;
+			}
+		}
+
+		const values = new Map(fn.values.map((value) => [value.id, value] as const));
+		const factSubjects = new Set(
+			fn.facts.flatMap((fact) =>
+				fact.claims.flatMap((claim) => (claim.kind === "effect" ? [] : [claim.subject])),
+			),
+		);
+		const factInstructions = new Set(
+			fn.facts.flatMap((fact) =>
+				fact.claims.flatMap((claim) =>
+					claim.kind === "effect" ? [claim.instruction] : [],
+				),
+			),
+		);
+		const sameCycleContext = (left: CoreBlockId, right: CoreBlockId): boolean =>
+			cfg.loops.every(({ blocks }) => blocks.has(left) === blocks.has(right)) &&
+			cfg.irreducibleCycles.every(({ blocks }) => blocks.has(left) === blocks.has(right));
+		const valueAvailableAt = (
+			value: CoreValueId,
+			block: CoreBlockId,
+			point: number,
+		): boolean => {
+			const definition = values.get(value)?.definition;
+			if (definition === undefined) return false;
+			if (definition.kind === "block-parameter") {
+				return definition.block === block || cfg.dominates(definition.block, block);
+			}
+			const location = instructionLocations.get(definition.instruction);
+			if (location === undefined) return false;
+			return location.block === block
+				? location.index < point
+				: cfg.instructionDominatesBlock(location.block, block);
+		};
+
+		const candidates: Array<FreshAllocationSinkCandidate> = [];
+		for (const block of fn.blocks) {
+			for (const [sourceIndex, allocation] of block.instructions.entries()) {
+				const descriptor = coreOpcodeRegistry.require(allocation.opcode);
+				const output = allocation.outputs[0];
+				if (
+					descriptor.allocation === undefined ||
+					allocation.outputs.length !== 1 ||
+					output === undefined ||
+					allocation.effectRefinement !== undefined ||
+					protectedInstructions.has(allocation.id) ||
+					protectedInputs.has(output) ||
+					factSubjects.has(output) ||
+					factInstructions.has(allocation.id)
+				) {
+					continue;
+				}
+				const valueUses = uses.get(output) ?? [];
+				const use = valueUses.length === 1 ? valueUses[0] : undefined;
+				const consumer = use?.kind === "instruction" ? use.instruction : undefined;
+				const consumerLocation =
+					consumer === undefined ? undefined : instructionLocations.get(consumer.id);
+				if (
+					consumer === undefined ||
+					consumerLocation === undefined ||
+					consumerLocation.block === block.id ||
+					protectedInstructions.has(consumer.id) ||
+					!cfg.instructionDominatesBlock(block.id, consumerLocation.block) ||
+					!sameCoreHandler(block.handler, fn.blocks[consumerLocation.block]!.handler) ||
+					!sameCycleContext(block.id, consumerLocation.block) ||
+					!allocation.inputs.every((input) =>
+						valueAvailableAt(input, consumerLocation.block, consumerLocation.index),
+					)
+				) {
+					continue;
+				}
+				candidates.push({
+					allocation,
+					sourceBlock: block.id,
+					sourceIndex,
+					use: consumer,
+				});
+			}
+		}
+		if (candidates.length === 0) return fn;
+
+		// If one movable allocation consumes another, move the outer allocation in
+		// this round and reconsider the inner one against its new destination in the
+		// next fixpoint round. This keeps initializer-availability checks local and
+		// avoids inventing a relocation dependency graph in the pass.
+		const movableAllocations = new Set(candidates.map(({ allocation }) => allocation.id));
+		const selected = candidates.filter(({ use }) => !movableAllocations.has(use.id));
+		if (selected.length === 0) return fn;
+		selected.sort(
+			(left, right) =>
+				left.sourceBlock - right.sourceBlock || left.sourceIndex - right.sourceIndex,
+		);
+		const moved = new Set(selected.map(({ allocation }) => allocation.id));
+		const before = new Map<CoreInstructionId, Array<CoreInstruction>>();
+		for (const { allocation, use } of selected) {
+			const current = before.get(use.id);
+			if (current === undefined) before.set(use.id, [allocation]);
+			else current.push(allocation);
+		}
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			const instructions: Array<CoreInstruction> = [];
+			for (const instruction of block.instructions) {
+				if (moved.has(instruction.id)) continue;
+				instructions.push(...(before.get(instruction.id) ?? []), instruction);
+			}
+			return instructions.length === block.instructions.length &&
+				instructions.every(
+					(instruction, index) => instruction === block.instructions[index],
+				)
+				? block
+				: { ...block, instructions };
+		});
+		return pruneVacuousHandlers({
+			...fn,
+			blocks,
+			mutationEpoch: fn.mutationEpoch + 1,
+		});
+	},
+};
+
 function loopHasExceptionalControl(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
@@ -10648,6 +10875,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	forwardMemoryAccesses,
 	eliminateDeadStores,
 	eliminateDeadAllocations,
+	sinkFreshAllocations,
 	loopInvariantCodeMotion,
 	optimizeLoopRanges,
 	copyAndValueNumber,
