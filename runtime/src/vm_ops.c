@@ -2278,8 +2278,11 @@ void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instructio
                 vm, receiver, &vm->value_stack[base], argument_count);
             break;
         case MAL_DIRECT_BUILTIN_ARRAY_PUSH:
-            result = mal_builtin_array_push_known(
+            result = mal_builtin_array_push_contained(
                 vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_ARRAY_POP:
+            result = mal_builtin_array_pop_contained(vm, receiver);
             break;
         case MAL_DIRECT_BUILTIN_OBJECT_HAS_OWN:
             result = mal_builtin_object_has_own_known(

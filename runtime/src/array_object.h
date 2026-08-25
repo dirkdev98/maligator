@@ -111,6 +111,20 @@ bool mal_array_object_dense_append_many(
 );
 
 /**
+ * Dense operations for an Array whose whole lifetime is compiler-contained.
+ * The compiler proves the ordinary, extensible, writable, contiguous invariants;
+ * these helpers assert that contract and omit the corresponding dynamic guards.
+ * Push returns false only at the uint32 Array-length boundary. Pop reports
+ * whether an element was present and applies the SATB deletion barrier.
+ */
+bool mal_array_object_contained_dense_push(
+    MalArrayObject *array, const MalValue *values, u32 count
+);
+bool mal_array_object_contained_dense_pop(
+    MalArrayObject *array, MalValue *value_out
+);
+
+/**
  * Append values into the unpublished tail of a native-built dense Array. Unlike
  * dense_append_many, the Array may already have its final length (the usual
  * ArraySpeciesCreate/copy-by-change shape); `start` must equal dense_count. The

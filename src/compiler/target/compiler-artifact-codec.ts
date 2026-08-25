@@ -28,7 +28,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 29;
+export const COMPILER_ARTIFACT_VERSION = 32;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -52,6 +52,20 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 			operation.startsWith("Array.prototype.") && operation !== "Array.prototype.push",
 	),
 ] as const;
+const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
+	"Array.prototype.forEach",
+	"Array.prototype.some",
+	"Array.prototype.every",
+	"Array.prototype.find",
+	"Array.prototype.findIndex",
+	"Array.prototype.map",
+	"Array.prototype.filter",
+	"Array.prototype.reduce",
+	"Array.prototype.reduceRight",
+	"Array.prototype.findLast",
+	"Array.prototype.findLastIndex",
+	"Array.prototype.flatMap",
+]);
 
 function taggedGuardedBuiltinOperation(operation: string | undefined): number {
 	if (
@@ -486,6 +500,12 @@ function writeCompilerArtifact(
 							plan.directCallTargetFunctionIndex < 0 ||
 							plan.directCallTargetFunctionIndex >= def.functions.length ||
 							plan.directFunctionCall !== true)) ||
+					(plan.directCallbackFunctionIndex !== undefined &&
+						(!Number.isInteger(plan.directCallbackFunctionIndex) ||
+							plan.directCallbackFunctionIndex < 0 ||
+							plan.directCallbackFunctionIndex >= def.functions.length ||
+							guardedOperation === undefined ||
+							!ARRAY_ITERATION_CALLBACK_OPERATIONS.has(guardedOperation))) ||
 					(guardedBuiltin !== undefined &&
 						(guardedBuiltin.guard.dependencies.length !== 1 ||
 							guardedBuiltin.guard.obligations.length !== 1 ||
@@ -510,6 +530,7 @@ function writeCompilerArtifact(
 				w.u8(1);
 				w.i32(plan.directFunctionIndex ?? -1);
 				w.i32(plan.directCallTargetFunctionIndex ?? -1);
+				w.i32(plan.directCallbackFunctionIndex ?? -1);
 				w.i32(plan.directEntryId ?? -1);
 				w.u8(
 					(plan.directFunctionCall === true ? 1 : 0) |
@@ -540,6 +561,17 @@ function writeCompilerArtifact(
 				}
 				w.u8(12);
 				w.i32(plan.length);
+			} else if (
+				plan.kind === "exact-array-length" &&
+				instruction.opcode === "LOAD_PROPERTY_STATIC"
+			) {
+				if (
+					String.fromCharCode(...(def.stringConstants[instruction.stringIndex] ?? [])) !==
+					"length"
+				) {
+					throw new RangeError("program-image-codec: invalid exact Array length hint");
+				}
+				w.u8(14);
 			} else if (
 				plan.kind === "primitive-string-length" &&
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
@@ -1991,6 +2023,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			if (tag === 1 && instruction.opcode === "CALL") {
 				const directFunctionIndex = r.i32();
 				const directCallTargetFunctionIndex = r.i32();
+				const directCallbackFunctionIndex = r.i32();
 				const directEntryId = r.i32();
 				const flags = r.u8();
 				const collectionTag = r.u8();
@@ -2003,6 +2036,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					directFunctionIndex >= functions.length ||
 					directCallTargetFunctionIndex < -1 ||
 					directCallTargetFunctionIndex >= functions.length ||
+					directCallbackFunctionIndex < -1 ||
+					directCallbackFunctionIndex >= functions.length ||
 					directEntryId < -1 ||
 					(directEntryId >= 0 && (directFunctionIndex < 0 || directEntryId >= 4)) ||
 					flags > 127 ||
@@ -2035,10 +2070,18 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						},
 					};
 				}
+				if (
+					directCallbackFunctionIndex >= 0 &&
+					(guardedBuiltinCall === undefined ||
+						!ARRAY_ITERATION_CALLBACK_OPERATIONS.has(guardedBuiltinCall.operation))
+				) {
+					throw new RangeError("program-image-codec: invalid exact callback metadata");
+				}
 				nativeInstructions[instructionIndex] = {
 					kind: "call",
 					...(directFunctionIndex < 0 ? {} : { directFunctionIndex }),
 					...(directCallTargetFunctionIndex < 0 ? {} : { directCallTargetFunctionIndex }),
+					...(directCallbackFunctionIndex < 0 ? {} : { directCallbackFunctionIndex }),
 					...(directEntryId < 0 ? {} : { directEntryId }),
 					...((flags & 1) === 0 ? {} : { directFunctionCall: true }),
 					...((flags & 32) === 0 ? {} : { directStringCharCodeAtPosition: "inBounds" }),
@@ -2066,6 +2109,14 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					kind: "fresh-dense-reserve",
 					length: reserveLength,
 				};
+			} else if (tag === 14 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
+				if (
+					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==
+					"length"
+				) {
+					throw new RangeError("program-image-codec: invalid exact Array length hint");
+				}
+				nativeInstructions[instructionIndex] = { kind: "exact-array-length" };
 			} else if (tag === 11 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
 				if (
 					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==

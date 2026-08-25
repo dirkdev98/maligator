@@ -540,12 +540,14 @@ export type NativeInstructionPlan =
 			readonly directEntryId?: number;
 			readonly directFunctionCall?: true;
 			readonly directCallTargetFunctionIndex?: number;
+			readonly directCallbackFunctionIndex?: number;
 			readonly guardedBuiltinCall?: VmGuardedBuiltinCall;
 			readonly directStringCharCodeAtPosition?: "inBounds";
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
 	| { readonly kind: "exact-own-slot"; readonly slot: number }
+	| { readonly kind: "exact-array-length" }
 	| { readonly kind: "primitive-string-length" };
 
 /**
@@ -785,6 +787,7 @@ function nativeInstructionPlanFromExecution(
 				instruction.directEntryId === undefined &&
 				instruction.directFunctionCall !== true &&
 				instruction.directCallTargetFunctionIndex === undefined &&
+				instruction.directCallbackFunctionIndex === undefined &&
 				guardedBuiltinCall === undefined &&
 				instruction.directStringCharCodeAtPosition === undefined
 			)
@@ -795,6 +798,7 @@ function nativeInstructionPlanFromExecution(
 				directEntryId: instruction.directEntryId,
 				directFunctionCall: instruction.directFunctionCall,
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
+				directCallbackFunctionIndex: instruction.directCallbackFunctionIndex,
 				guardedBuiltinCall,
 				directStringCharCodeAtPosition:
 					guardedBuiltinCall === undefined
@@ -819,9 +823,11 @@ function nativeInstructionPlanFromExecution(
 		case "loadPropertyStatic":
 			return instruction.exactOwnSlot !== undefined
 				? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }
-				: instruction.primitiveStringLength === true
-					? { kind: "primitive-string-length" }
-					: undefined;
+				: instruction.exactArrayLength === true
+					? { kind: "exact-array-length" }
+					: instruction.primitiveStringLength === true
+						? { kind: "primitive-string-length" }
+						: undefined;
 		case "storePropertyStatic":
 			return instruction.exactOwnSlot === undefined
 				? undefined

@@ -73,6 +73,7 @@ import type {
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import {
+	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_OWN_DATA_CELL_FACT,
 	coreOwnCellsEqual,
 	coreOwnCellResolver,
@@ -847,6 +848,194 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 	},
 };
 
+const CONTAINED_FRESH_ARRAY_OPERATIONS = new Set([
+	"Array.prototype.push",
+	"Array.prototype.pop",
+]);
+
+/**
+ * Erase the property and generic call seams for private worklist arrays.
+ *
+ * A locked world proves the intrinsic method identity. Allocation provenance
+ * then proves the stronger local half: the initially dense fresh Array never
+ * leaves this activation and every use of its reference is a non-escaping dense
+ * read, an ordinary length read, or the receiver of one of these exact builtin
+ * calls. The receiver exemptions
+ * are admitted only while proving containment; passing the same Array as an
+ * argument, storing it, returning it, editing its shape, or using any other
+ * method still escapes the allocation and rejects every candidate on it.
+ *
+ * This is a whole-lifetime representation fact. The backend may therefore enter
+ * the contained dense Array algorithm directly, without a callee cache, own-
+ * shadow check, prototype/protector guard, or generic fallback.
+ */
+const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
+	name: "rewrite-contained-fresh-array-builtins",
+	run(fn, analyses, program) {
+		if (analyses.context?.facts.world.primordialPolicy !== "locked") return fn;
+
+		const canonical = analyses.canonicalValues(fn);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const definitions = new Map<CoreValueId, CoreInstruction>();
+		const useCounts = new Map<CoreValueId, number>();
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) definitions.set(output, instruction);
+				for (const input of instruction.inputs) {
+					useCounts.set(input, (useCounts.get(input) ?? 0) + 1);
+				}
+			}
+		}
+
+		interface Candidate {
+			readonly call: CoreInstruction;
+			readonly property: CoreInstruction;
+			readonly allocation: CoreInstructionId;
+			readonly operation: "Array.prototype.push" | "Array.prototype.pop";
+			readonly forwardedArguments: ReadonlyArray<CoreValueId>;
+		}
+		const candidates: Array<Candidate> = [];
+		const assumedNonEscapingOperands = new Map<CoreInstructionId, Set<number>>();
+		const assumeNonEscaping = (instruction: CoreInstructionId, operand: number): void => {
+			const existing = assumedNonEscapingOperands.get(instruction);
+			if (existing === undefined) {
+				assumedNonEscapingOperands.set(instruction, new Set([operand]));
+			} else {
+				existing.add(operand);
+			}
+		};
+		const ordinaryProvenance = analyses.provenance(fn);
+
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.opcode !== "call" || instruction.inputs.length < 2) continue;
+				const known = attributeObject(instruction.attributes.knownBuiltinCall);
+				const operation = known?.operation;
+				if (
+					typeof operation !== "string" ||
+					!CONTAINED_FRESH_ARRAY_OPERATIONS.has(operation)
+				) {
+					continue;
+				}
+				const exact = exactBuiltinCallDescriptor(operation);
+				const proof = coreKnownBuiltinProof(instruction, operation, {
+					lowering: "exact-builtin-call",
+				});
+				if (
+					exact?.receiverProof !== "fresh-array" ||
+					proof === undefined ||
+					!coreProofIsWorldInvariant(proof.proof)
+				) {
+					continue;
+				}
+
+				const callee = instruction.inputs[0]!;
+				const receiver = instruction.inputs[1]!;
+				const property = definitions.get(root(callee));
+				if (
+					property?.opcode !== "loadPropertyStatic" ||
+					property.outputs.length !== 1 ||
+					property.outputs[0] !== callee ||
+					property.inputs.length !== 1 ||
+					root(property.inputs[0]!) !== root(receiver) ||
+					useCounts.get(callee) !== 1 ||
+					coreValueUsedByControlFlow(fn, root, callee)
+				) {
+					continue;
+				}
+				const layout = ordinaryProvenance.allocationOf(receiver);
+				if (layout?.kind !== "indexed" || layout.elements.size !== layout.length) {
+					continue;
+				}
+
+				const arguments_ = instruction.inputs.slice(2);
+				candidates.push({
+					call: instruction,
+					property,
+					allocation: layout.instruction,
+					operation: operation as Candidate["operation"],
+					forwardedArguments:
+						exact.forwardedArgumentLimit === undefined
+							? arguments_
+							: arguments_.slice(0, exact.forwardedArgumentLimit),
+				});
+				assumeNonEscaping(property.id, 0);
+				assumeNonEscaping(instruction.id, 1);
+			}
+		}
+		if (candidates.length === 0) return fn;
+
+		// A numeric computed read cannot coerce user code, and a locked primordial
+		// chain contains no indexed accessor that could retain the receiver. It does
+		// not change the Array's dense representation even when the number is outside
+		// the current length. Keep the ordinary read for now, but let the lifetime
+		// proof use this independently established non-escape fact.
+		const candidateAllocations = new Set(candidates.map(({ allocation }) => allocation));
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.opcode !== "loadProperty" || instruction.inputs.length < 2) {
+					continue;
+				}
+				const layout = ordinaryProvenance.allocationOf(instruction.inputs[0]!);
+				const keyRepresentation = representations.get(root(instruction.inputs[1]!));
+				if (
+					layout?.kind === "indexed" &&
+					candidateAllocations.has(layout.instruction) &&
+					(keyRepresentation === "f64" || keyRepresentation === "i32")
+				) {
+					assumeNonEscaping(instruction.id, 0);
+				}
+			}
+		}
+
+		const conditionalProvenance = coreProvenance(
+			fn,
+			analyses.controlFlow(fn),
+			program.stringConstants,
+			{ assumedNonEscapingOperands },
+		);
+		const retained = candidates.filter(
+			(candidate) => conditionalProvenance.escape(candidate.allocation) === "contained",
+		);
+		if (retained.length === 0) return fn;
+
+		const byCall = new Map(retained.map((candidate) => [candidate.call.id, candidate]));
+		const removedInstructions = new Set(
+			retained.map((candidate) => candidate.property.id),
+		);
+		const removedValues = new Set(
+			retained.flatMap((candidate) => candidate.property.outputs),
+		);
+		return {
+			...fn,
+			blocks: fn.blocks.map((block) => ({
+				...block,
+				instructions: block.instructions
+					.filter((instruction) => !removedInstructions.has(instruction.id))
+					.map((instruction): CoreInstruction => {
+						const candidate = byCall.get(instruction.id);
+						return candidate === undefined
+							? instruction
+							: {
+									...instruction,
+									opcode: "callBuiltin",
+									inputs: [instruction.inputs[1]!, ...candidate.forwardedArguments],
+									attributes: {
+										operation: candidate.operation,
+										knownBuiltinCall: instruction.attributes.knownBuiltinCall!,
+									},
+								};
+					}),
+			})),
+			values: fn.values.filter(({ id }) => !removedValues.has(id)),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
 const MAX_INLINE_INSTRUCTIONS = 40;
 const MAX_INLINE_TOTAL_COST = MAX_INLINE_INSTRUCTIONS * 8;
 const MAX_GUARDED_INLINE_COST = 48;
@@ -911,6 +1100,21 @@ function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction
 	}
 	return definitions;
 }
+
+const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
+	"Array.prototype.forEach",
+	"Array.prototype.some",
+	"Array.prototype.every",
+	"Array.prototype.find",
+	"Array.prototype.findIndex",
+	"Array.prototype.map",
+	"Array.prototype.filter",
+	"Array.prototype.reduce",
+	"Array.prototype.reduceRight",
+	"Array.prototype.findLast",
+	"Array.prototype.findLastIndex",
+	"Array.prototype.flatMap",
+]);
 
 /**
  * Annotate call and construct sites from the program's bounded callee-target
@@ -995,6 +1199,7 @@ function annotateCoreDirectCallTargets(
 					delete attributes.directFunctionIndex;
 					delete attributes.directFunctionCall;
 					delete attributes.directCallTargetFunctionIndex;
+					delete attributes.directCallbackFunctionIndex;
 					delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
 					if (
 						instruction.opcode === "call" &&
@@ -1022,6 +1227,20 @@ function annotateCoreDirectCallTargets(
 					if (targets.functions.length > 0) {
 						attributes[CORE_CALLEE_TARGETS_ATTRIBUTE] =
 							coreCalleeTargetsAttribute(targets);
+					}
+					const knownBuiltin = attributeObject(instruction.attributes.knownBuiltinCall);
+					const callback = instruction.inputs[2];
+					if (
+						instruction.opcode === "call" &&
+						callback !== undefined &&
+						knownBuiltinIdentity(instruction) &&
+						typeof knownBuiltin?.operation === "string" &&
+						ARRAY_ITERATION_CALLBACK_OPERATIONS.has(knownBuiltin.operation)
+					) {
+						const callbackTarget = closedTarget(callback);
+						if (callbackTarget !== undefined && functionsByIndex.has(callbackTarget)) {
+							attributes.directCallbackFunctionIndex = callbackTarget;
+						}
 					}
 					if (instruction.opcode === "call" && instruction.inputs.length >= 2) {
 						const calleeDefinition = definitions.get(moveRoot(callee));
@@ -6681,10 +6900,28 @@ function immediateForValue(
 /** Re-solve the narrow representation facts exposed by SCCP and copy cleanup. */
 const refineValueRepresentations: CoreFunctionPass = {
 	name: "refine-value-representations",
-	run(fn, analyses) {
+	run(fn, analyses, program) {
 		const representations = new Map(
 			fn.values.map(({ id, representation }) => [id, representation] as const),
 		);
+		const possibleArrayLengthLoads = fn.blocks.flatMap((block) =>
+			block.instructions.filter(
+				(instruction) =>
+					instruction.opcode === "loadPropertyStatic" &&
+					instruction.inputs.length === 1 &&
+					typeof instruction.attributes.stringIndex === "number" &&
+					decodeString(program, instruction.attributes.stringIndex) === "length",
+			),
+		);
+		const freshArrayLengthLoads = new Set<CoreInstructionId>();
+		if (possibleArrayLengthLoads.length > 0) {
+			const provenance = analyses.provenance(fn);
+			for (const instruction of possibleArrayLengthLoads) {
+				if (provenance.allocationOf(instruction.inputs[0]!)?.kind === "indexed") {
+					freshArrayLengthLoads.add(instruction.id);
+				}
+			}
+		}
 		const ordinaryIncoming = fn.blocks.map(() => new Array<CoreEdge>());
 		const handlerTargets = new Set<CoreBlockId>();
 		for (const source of fn.blocks) {
@@ -6715,6 +6952,12 @@ const refineValueRepresentations: CoreFunctionPass = {
 			return block.instructions.some((instruction) => {
 				const operator = instructionAttribute(instruction, "operator");
 				return instruction.outputs.some((output, index) => {
+					if (index === 0 && freshArrayLengthLoads.has(instruction.id)) {
+						return (
+							representations.get(output) === "boxed" ||
+							instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] !== true
+						);
+					}
 					if (representations.get(output) !== "boxed") return false;
 					if (
 						instruction.opcode === "createF64" ||
@@ -6756,7 +6999,11 @@ const refineValueRepresentations: CoreFunctionPass = {
 		});
 		if (!hasCandidate) return fn;
 		const cfg = analyses.controlFlow(fn);
-		let changed = false;
+		let changed = possibleArrayLengthLoads.some(
+			(instruction) =>
+				freshArrayLengthLoads.has(instruction.id) &&
+				instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] !== true,
+		);
 		let progress = true;
 		const narrow = (
 			value: CoreValueId,
@@ -6803,7 +7050,8 @@ const refineValueRepresentations: CoreFunctionPass = {
 							instruction.opcode === "createF64" ||
 							instruction.opcode === "createNumber" ||
 							instruction.opcode === "mathUnaryNumber" ||
-							instruction.opcode === "mathBinaryNumber"
+							instruction.opcode === "mathBinaryNumber" ||
+							(index === 0 && freshArrayLengthLoads.has(instruction.id))
 						) {
 							candidate = "f64";
 						} else if (
@@ -6848,6 +7096,18 @@ const refineValueRepresentations: CoreFunctionPass = {
 			...fn,
 			blocks: fn.blocks.map((block) => ({
 				...block,
+				instructions: block.instructions.map((instruction) =>
+					freshArrayLengthLoads.has(instruction.id) &&
+					instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] !== true
+						? {
+								...instruction,
+								attributes: {
+									...instruction.attributes,
+									[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE]: true,
+								},
+							}
+						: instruction,
+				),
 				parameters: block.parameters.map((parameter) => ({
 					...parameter,
 					representation: representations.get(parameter.value)!,
@@ -10940,6 +11200,7 @@ function withRegionAdmission(pass: CoreFunctionPass): CoreFunctionPass {
 }
 
 const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	rewriteContainedFreshArrayBuiltins,
 	annotateFreshDenseIndexedReserves,
 	annotateBoundedStringCharCodeAtPositions,
 	withRegionAdmission(selectStackObjectRegions),

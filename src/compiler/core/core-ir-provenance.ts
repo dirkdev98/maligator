@@ -41,6 +41,10 @@ import type {
  */
 export const CORE_OWN_DATA_CELL_FACT = "own-data-cell";
 
+/** Fresh-Array length load whose Number result and exact receiver brand were
+ * independently re-proved. Lowering consumes this as native authority. */
+export const CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE = "freshArrayLengthNumber";
+
 /** Key spelling carried by an opcode before `ToPropertyKey` normalization. */
 export type CoreAccessKey =
 	| { readonly kind: "string-constant"; readonly index: number }
@@ -121,6 +125,23 @@ export interface CoreProvenance {
 	 * such a value.
 	 */
 	cannotBeHeldWeakly(value: CoreValueId): boolean;
+}
+
+/**
+ * Additional non-escaping uses proved by a consumer before asking provenance to
+ * close an allocation. The exemption is deliberately operand-granular: proving
+ * that a builtin does not retain its receiver must not silently exempt the same
+ * value when it is also passed as an argument.
+ *
+ * This is an assumption boundary, not an analysis result. A caller must prove
+ * the complete semantics of every listed operand independently; provenance then
+ * continues to reject every unlisted use of the allocation.
+ */
+export interface CoreProvenanceOptions {
+	readonly assumedNonEscapingOperands?: ReadonlyMap<
+		CoreInstructionId,
+		ReadonlySet<number>
+	>;
 }
 
 function numberArray(value: unknown): ReadonlyArray<number> | undefined {
@@ -387,6 +408,7 @@ export function coreProvenance(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	options: CoreProvenanceOptions = {},
 ): CoreProvenance {
 	const roots = coreCanonicalValueRoots(fn, cfg);
 	const canonical = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -588,6 +610,11 @@ export function coreProvenance(
 					const layout = layoutOf(input);
 					if (layout === undefined) continue;
 					if (observes) continue;
+					if (
+						options.assumedNonEscapingOperands?.get(instruction.id)?.has(operand) === true
+					) {
+						continue;
+					}
 					const claim = callClaims.get(instruction.id);
 					const callEscape =
 						claim === undefined

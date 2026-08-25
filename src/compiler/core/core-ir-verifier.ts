@@ -14,6 +14,7 @@ import {
 } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
+	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_OWN_DATA_CELL_FACT,
 	coreOwnCellResolver,
 	coreOwnCellsEqual,
@@ -1498,6 +1499,43 @@ function verifyKnownOwnSlotClaims(
 	}
 }
 
+function verifyFreshArrayLengthClaims(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	const claims = fn.blocks.flatMap((block) =>
+		block.instructions.filter(
+			(instruction) => CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE in instruction.attributes,
+		),
+	);
+	if (claims.length === 0) return;
+	const cfg = buildCoreControlFlow(fn, registry);
+	const provenance = coreProvenance(fn, cfg, stringConstants);
+	const representations = new Map(
+		fn.values.map(({ id, representation }) => [id, representation] as const),
+	);
+	for (const instruction of claims) {
+		const stringIndex = instruction.attributes.stringIndex;
+		const units =
+			typeof stringIndex === "number" ? stringConstants[stringIndex] : undefined;
+		const isLength =
+			units?.length === 6 &&
+			units.every((unit, index) => unit === [0x6c, 0x65, 0x6e, 0x67, 0x74, 0x68][index]);
+		if (
+			instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] !== true ||
+			instruction.opcode !== "loadPropertyStatic" ||
+			instruction.inputs.length !== 1 ||
+			instruction.outputs.length !== 1 ||
+			!isLength ||
+			provenance.allocationOf(instruction.inputs[0]!)?.kind !== "indexed" ||
+			representations.get(instruction.outputs[0]!) !== "f64"
+		) {
+			fail(`instruction @${instruction.id} carries an invalid fresh Array length claim`);
+		}
+	}
+}
+
 function verifyCoreProgramGraph(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
@@ -1595,6 +1633,7 @@ function verifyCoreProgramGraph(
 			fail(`function ${index} has unknown name string ${fn.metadata.nameStringIndex}`);
 		}
 		verifyCoreFunction(fn, registry, context, program.stringConstants);
+		verifyFreshArrayLengthClaims(fn, registry, program.stringConstants);
 		withVerificationContext(
 			context === undefined ? undefined : { ...context, functionIndex: index },
 			() => {

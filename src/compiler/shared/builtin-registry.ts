@@ -71,6 +71,11 @@ export const exactBuiltinCallDescriptors = {
 		receiverProof: "fresh-array",
 		cOperation: "MAL_DIRECT_BUILTIN_ARRAY_PUSH",
 	},
+	"Array.prototype.pop": {
+		receiverProof: "fresh-array",
+		forwardedArgumentLimit: 0,
+		cOperation: "MAL_DIRECT_BUILTIN_ARRAY_POP",
+	},
 	"Object.hasOwn": {
 		receiverProof: "intrinsic-object",
 		forwardedArgumentLimit: 2,
@@ -519,6 +524,25 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		result: "array-length",
 		realm: "semantic-identity",
 		lowerings: ["generic", "guarded-dense-append", "exact-builtin-call"],
+	},
+	{
+		id: "Array.prototype.pop",
+		owner: "Array.prototype",
+		key: "pop",
+		receiver: "any",
+		arity: { minimum: 0 },
+		evaluationOrder: "receiver-then-arguments",
+		coercionOrder: ["receiver-length"],
+		effects: [
+			"property-access",
+			"call-user-code",
+			"write-prototype",
+			"throw",
+			"safepoint",
+		],
+		result: "array-element-or-undefined",
+		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
 	},
 	{
 		id: "String.prototype.charCodeAt",

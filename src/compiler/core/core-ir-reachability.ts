@@ -241,7 +241,11 @@ export function analyzeCoreFunctionReachability(
 					const target = attributeNumber(instruction, "functionIndex");
 					if (target !== undefined) retain(target, "runtime-identity");
 				}
-				for (const key of ["directFunctionIndex", "directCallTargetFunctionIndex"]) {
+				for (const key of [
+					"directFunctionIndex",
+					"directCallTargetFunctionIndex",
+					"directCallbackFunctionIndex",
+				]) {
 					const target = attributeNumber(instruction, key);
 					if (target !== undefined) enter(target, "runtime-identity");
 				}
@@ -326,7 +330,11 @@ export function analyzeCoreFunctionReachability(
 					const index = attributeNumber(instruction, "functionIndex");
 					if (index !== undefined && index >= 0) retain(index, "runtime-identity");
 				}
-				for (const key of ["directFunctionIndex", "directCallTargetFunctionIndex"]) {
+				for (const key of [
+					"directFunctionIndex",
+					"directCallTargetFunctionIndex",
+					"directCallbackFunctionIndex",
+				]) {
 					const index = attributeNumber(instruction, key);
 					if (index !== undefined) retain(index, "runtime-identity");
 				}
@@ -402,7 +410,11 @@ function remapSemanticAttributes(
 	// The optimizer solves these annotations on the exact pre-compaction graph.
 	// Removing rows may reveal more precision, but cannot invalidate an existing
 	// guarded candidate, so retained singleton indices can be densely rebased.
-	for (const key of ["directFunctionIndex", "directCallTargetFunctionIndex"]) {
+	for (const key of [
+		"directFunctionIndex",
+		"directCallTargetFunctionIndex",
+		"directCallbackFunctionIndex",
+	]) {
 		const target = attributes[key];
 		if (typeof target === "number") {
 			attributes[key] = remapRequired(oldToNew, target, key);

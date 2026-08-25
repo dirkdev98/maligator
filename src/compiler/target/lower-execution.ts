@@ -6,7 +6,10 @@ import {
 	coreTerminatorEdges,
 } from "../core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../core/core-ir-opcodes.ts";
-import { CORE_OWN_DATA_CELL_FACT } from "../core/core-ir-provenance.ts";
+import {
+	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
+	CORE_OWN_DATA_CELL_FACT,
+} from "../core/core-ir-provenance.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
 import { CORE_INTERNAL_SUMMARY_ATTRIBUTES } from "../core/core-ir-summaries.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
@@ -64,6 +67,7 @@ export interface DirectEntryPlan {
 const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	...CORE_INTERNAL_TARGET_ATTRIBUTES,
 	...CORE_INTERNAL_SUMMARY_ATTRIBUTES,
+	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 ]);
 
 interface LoweredParallelCopy {
@@ -191,6 +195,9 @@ function rebuildInstruction(
 ): CompilerInstruction {
 	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
 	const exactOwnSlot = exactContainedOwnSlot(core, instruction);
+	const exactArrayLength =
+		instruction.opcode === "loadPropertyStatic" &&
+		instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] === true;
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	// A region certificate's contract is stated over the instruction's operands, so
 	// embedding one of them as a constant would change the shape the certificate
@@ -211,6 +218,7 @@ function rebuildInstruction(
 		type: instruction.opcode,
 		...targetAttributes(instruction.attributes),
 		...(exactOwnSlot === undefined ? {} : { exactOwnSlot }),
+		...(exactArrayLength ? { exactArrayLength: true } : {}),
 		...(immediateValues.length === 0 ? {} : { immediateValues }),
 		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}

@@ -2260,14 +2260,24 @@ function emitInstruction(
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				return [
+					"MAL_PERF_COUNT(exact_own_slot_loads);",
 					`r${instruction.dst} = mal_value_to_object(${boxed(instruction.object)})->slots[${nativePlan.slot}];`,
 				];
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				return [
+					"MAL_PERF_COUNT(exact_own_slot_stores);",
 					`mal_vm_object_slot_store(mal_value_to_object(${boxed(instruction.object)}), ${nativePlan.slot}, ${boxed(instruction.value)});`,
 				];
 		}
+	}
+	if (
+		nativePlan?.kind === "exact-array-length" &&
+		instruction.opcode === "LOAD_PROPERTY_STATIC"
+	) {
+		return [
+			`r${instruction.dst} = (f64) mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)}));`,
+		];
 	}
 
 	switch (instruction.opcode) {
@@ -3359,7 +3369,14 @@ function emitInstruction(
 					: `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`;
 			if (instruction.operation === "Array.prototype.push") {
 				return [
-					`r${instruction.dst} = mal_builtin_array_push_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					`r${instruction.dst} = mal_builtin_array_push_contained(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
+			if (instruction.operation === "Array.prototype.pop") {
+				return [
+					`r${instruction.dst} = mal_builtin_array_pop_contained(vm, ${boxedOperand(instruction.thisValue)});`,
 					throwCheck,
 					poll,
 				];
@@ -3771,6 +3788,47 @@ function emitInstruction(
 				];
 			}
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
+			const arrayIterationOperation =
+				guardedBuiltinOperation === undefined
+					? undefined
+					: {
+							"Array.prototype.forEach": "MAL_BUILTIN_ARRAY_ITERATION_FOR_EACH",
+							"Array.prototype.some": "MAL_BUILTIN_ARRAY_ITERATION_SOME",
+							"Array.prototype.every": "MAL_BUILTIN_ARRAY_ITERATION_EVERY",
+							"Array.prototype.find": "MAL_BUILTIN_ARRAY_ITERATION_FIND",
+							"Array.prototype.findIndex": "MAL_BUILTIN_ARRAY_ITERATION_FIND_INDEX",
+							"Array.prototype.map": "MAL_BUILTIN_ARRAY_ITERATION_MAP",
+							"Array.prototype.filter": "MAL_BUILTIN_ARRAY_ITERATION_FILTER",
+							"Array.prototype.reduce": "MAL_BUILTIN_ARRAY_ITERATION_REDUCE",
+							"Array.prototype.reduceRight": "MAL_BUILTIN_ARRAY_ITERATION_REDUCE_RIGHT",
+							"Array.prototype.findLast": "MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST",
+							"Array.prototype.findLastIndex":
+								"MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST_INDEX",
+							"Array.prototype.flatMap": "MAL_BUILTIN_ARRAY_ITERATION_FLAT_MAP",
+						}[
+							guardedBuiltinOperation as
+								| "Array.prototype.forEach"
+								| "Array.prototype.some"
+								| "Array.prototype.every"
+								| "Array.prototype.find"
+								| "Array.prototype.findIndex"
+								| "Array.prototype.map"
+								| "Array.prototype.filter"
+								| "Array.prototype.reduce"
+								| "Array.prototype.reduceRight"
+								| "Array.prototype.findLast"
+								| "Array.prototype.findLastIndex"
+								| "Array.prototype.flatMap"
+						];
+			if (arrayIterationOperation !== undefined) {
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex ?? -1}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					poll,
+				];
+			}
 			if (
 				guardedBuiltinOperation === "Map.prototype.get" ||
 				guardedBuiltinOperation === "Map.prototype.set" ||

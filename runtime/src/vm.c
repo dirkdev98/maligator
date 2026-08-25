@@ -4096,10 +4096,9 @@ call_compiled:
         : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
 }
 
-MalCompletion mal_vm_call_direct(
+MalCompletion mal_vm_call_exact_script(
     MalVm *vm,
-    MalCallCache *fallback_cache,
-    i32 expected_function_index,
+    i32 function_index,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -4108,20 +4107,7 @@ MalCompletion mal_vm_call_direct(
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return vm->completion;
     }
-    if (!mal_value_is_function_object(callee) ||
-        expected_function_index < 0 ||
-        expected_function_index >= vm->runtime_image->function_count) {
-        return mal_vm_call_cached(
-            vm, fallback_cache, callee, this_value, args, arg_count);
-    }
-
     MalFunctionObject *function_object = mal_value_to_function_object(callee);
-    i32 function_index = mal_function_object_function_index(function_object);
-    if (function_index != expected_function_index) {
-        return mal_vm_call_cached(
-            vm, fallback_cache, callee, this_value, args, arg_count);
-    }
-
     const MalFunction *function = &vm->runtime_image->functions[function_index];
     MalEnv *env = function_object->creation_env;
     MalCompletion completion;
@@ -4157,6 +4143,34 @@ MalCompletion mal_vm_call_direct(
     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
     return completion;
+}
+
+MalCompletion mal_vm_call_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    i32 expected_function_index,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+    if (!mal_value_is_function_object(callee) ||
+        expected_function_index < 0 ||
+        expected_function_index >= vm->runtime_image->function_count) {
+        return mal_vm_call_cached(
+            vm, fallback_cache, callee, this_value, args, arg_count);
+    }
+
+    MalFunctionObject *function_object = mal_value_to_function_object(callee);
+    if (mal_function_object_function_index(function_object) != expected_function_index) {
+        return mal_vm_call_cached(
+            vm, fallback_cache, callee, this_value, args, arg_count);
+    }
+    return mal_vm_call_exact_script(
+        vm, expected_function_index, callee, this_value, args, arg_count);
 }
 
 MalCompletion mal_vm_call_function_call_direct(

@@ -47,6 +47,10 @@ function cloneNativeInstructionPlan(
 				plan.directCallTargetFunctionIndex === undefined
 					? undefined
 					: plan.directCallTargetFunctionIndex + base.function,
+			directCallbackFunctionIndex:
+				plan.directCallbackFunctionIndex === undefined
+					? undefined
+					: plan.directCallbackFunctionIndex + base.function,
 			guardedBuiltinCall:
 				plan.guardedBuiltinCall === undefined
 					? undefined

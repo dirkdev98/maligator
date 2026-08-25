@@ -301,6 +301,12 @@ export type CompilerInstruction =
 			/** Exact ordinary script target used by directFunctionCall, when known. */
 			directCallTargetFunctionIndex?: number;
 			/**
+			 * COMPILE-ONLY: exact ordinary script target of the callback argument for a
+			 * statically identified callback-driving builtin. Native lowering may carry
+			 * this proof into the builtin's repeated callback seam without a guard.
+			 */
+			directCallbackFunctionIndex?: number;
+			/**
 			 * COMPILE-ONLY: the Number position is statically known to be an exact
 			 * non-negative integer and, for `inBounds`, below this primitive String
 			 * receiver's length on every path reaching the call.
@@ -441,6 +447,9 @@ export type CompilerInstruction =
 			 * shaped allocation and this key is its writable data slot. Native code
 			 * may address the slot exactly, without a shape guard, IC, or fallback. */
 			exactOwnSlot?: number;
+			/** COMPILE-ONLY: Core proved this is the non-configurable Number length
+			 * cell of a fresh ordinary Array. Native code may read it unboxed. */
+			exactArrayLength?: true;
 			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
 			 * primitive-String consumer, so native code may try the String brand first. */
 			primitiveStringLength?: true;

@@ -314,6 +314,23 @@ static bool mal_builtin_array_delete_index_or_throw(MalVm *vm, MalValue receiver
         && mal_builtin_array_delete_or_throw(vm, receiver, key);
 }
 
+/** Consume a generated-code callback target fact when it names this exact value. */
+static MalCompletion mal_builtin_array_call_callback(
+    MalVm *vm,
+    MalValue callback,
+    MalValue this_arg,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalExactScriptCall *exact = vm->exact_script_call;
+    if (exact != nullptr && exact->callee == callback) {
+        MAL_PERF_COUNT(array_iteration_exact_callback_calls);
+        return mal_vm_call_exact_script(
+            vm, exact->function_index, callback, this_arg, args, arg_count);
+    }
+    return mal_vm_call_value(vm, callback, this_arg, args, arg_count);
+}
+
 /**
  * Call a (element, index, array) style callback on the given this, propagating
  * abnormal completions to the VM.
@@ -325,7 +342,8 @@ static bool mal_builtin_array_invoke(MalVm *vm, MalValue callback, MalValue this
     // roots, so make the argument buffer a scanned root across the call.
     MalRootSpan span;
     mal_gc_root(&span, args, 3);
-    MalCompletion completion = mal_vm_call_value(vm, callback, this_arg, args, 3);
+    MalCompletion completion = mal_builtin_array_call_callback(
+        vm, callback, this_arg, args, 3);
     mal_gc_unroot(&span);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
@@ -340,7 +358,8 @@ static bool mal_builtin_array_invoke_wide(MalVm *vm, MalValue callback, MalValue
     MalValue args[] = {element, mal_ops_number_value(index), this_value};
     MalRootSpan span;
     mal_gc_root(&span, args, 3);
-    MalCompletion completion = mal_vm_call_value(vm, callback, this_arg, args, 3);
+    MalCompletion completion = mal_builtin_array_call_callback(
+        vm, callback, this_arg, args, 3);
     mal_gc_unroot(&span);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
@@ -1306,7 +1325,8 @@ static MalValue mal_builtin_array_reduce(MalVm *vm, MalValue this_value, const M
         roots[1] = element;
 
         MalValue callback_args[] = {accumulator, element, mal_value_from_i32((i32) index), this_value};
-        MalCompletion completion = mal_vm_call_value(vm, args[0], mal_value_new_undefined(), callback_args, 4);
+        MalCompletion completion = mal_builtin_array_call_callback(
+            vm, args[0], mal_value_new_undefined(), callback_args, 4);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
             goto done;
@@ -1373,7 +1393,8 @@ static MalValue mal_builtin_array_reduce_right(MalVm *vm, MalValue this_value, c
         roots[1] = element;
 
         MalValue callback_args[] = {accumulator, element, mal_ops_number_value(index), this_value};
-        MalCompletion completion = mal_vm_call_value(vm, args[0], mal_value_new_undefined(), callback_args, 4);
+        MalCompletion completion = mal_builtin_array_call_callback(
+            vm, args[0], mal_value_new_undefined(), callback_args, 4);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
             goto done;
@@ -1760,6 +1781,25 @@ MalValue mal_builtin_array_push_known(
         vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH]);
 }
 
+MalValue mal_builtin_array_push_contained(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
+) {
+    assert(arg_count >= 0);
+    MalArrayObject *array = mal_value_to_array_object(this_value);
+    if (mal_array_object_contained_dense_push(array, args, (u32) arg_count)) {
+        MAL_PERF_COUNT(array_contained_pushes);
+        return mal_ops_number_value((f64) array->length);
+    }
+
+    // The only rejected exact state is the uint32 Array-length boundary. Run the
+    // intrinsic algorithm directly to preserve its partial writes and RangeError;
+    // property resolution and dynamic call dispatch remain statically erased.
+    MAL_PERF_COUNT(array_contained_push_overflows);
+    return mal_builtin_array_push(
+        vm, this_value, args, arg_count, MAL_VALUE_UNDEFINED,
+        vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH]);
+}
+
 bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
     MalValue callee = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH];
     MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
@@ -1884,6 +1924,18 @@ static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalV
 done:
     mal_gc_unroot(&this_span);
     return ret;
+}
+
+MalValue mal_builtin_array_pop_contained(MalVm *vm, MalValue this_value) {
+    (void) vm;
+    MalArrayObject *array = mal_value_to_array_object(this_value);
+    MalValue result = MAL_VALUE_UNDEFINED;
+    if (mal_array_object_contained_dense_pop(array, &result)) {
+        MAL_PERF_COUNT(array_contained_pops);
+    } else {
+        MAL_PERF_COUNT(array_contained_empty_pops);
+    }
+    return result;
 }
 
 static MalValue mal_builtin_array_shift(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -4348,6 +4400,95 @@ bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver) {
         mal_array_method_is_default_builtin(
             vm, receiver, (const byte *) "map", mal_builtin_array_map) &&
         mal_array_default_species(vm, receiver);
+}
+
+MalCompletion mal_builtin_array_iteration_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalBuiltinArrayIterationOp operation,
+    i32 callback_function_index,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalNativeFunctionCallback expected = nullptr;
+    switch (operation) {
+        case MAL_BUILTIN_ARRAY_ITERATION_FOR_EACH:
+            expected = mal_builtin_array_for_each;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_SOME:
+            expected = mal_builtin_array_some;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_EVERY:
+            expected = mal_builtin_array_every;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_FIND:
+            expected = mal_builtin_array_find;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_FIND_INDEX:
+            expected = mal_builtin_array_find_index;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_MAP:
+            expected = mal_builtin_array_map;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_FILTER:
+            expected = mal_builtin_array_filter;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_REDUCE:
+            expected = mal_builtin_array_reduce;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_REDUCE_RIGHT:
+            expected = mal_builtin_array_reduce_right;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST:
+            expected = mal_builtin_array_find_last;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST_INDEX:
+            expected = mal_builtin_array_find_last_index;
+            break;
+        case MAL_BUILTIN_ARRAY_ITERATION_FLAT_MAP:
+            expected = mal_builtin_array_flat_map;
+            break;
+        default:
+            abort();
+    }
+
+    bool exact = arg_count >= 0 && mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) == expected;
+#if MAL_REALMS
+    exact = exact && mal_vm_callee_realm(vm, callee) == vm->current_realm;
+#endif
+    if (exact) {
+        MAL_PERF_COUNT(array_iteration_direct_hits);
+        MalExactScriptCall callback_call = {
+            .previous = vm->exact_script_call,
+            .callee = arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED,
+            .function_index = callback_function_index,
+        };
+        if (callback_function_index >= 0) {
+            vm->exact_script_call = &callback_call;
+        }
+        MalValue value = expected(
+            vm,
+            this_value,
+            args,
+            arg_count,
+            MAL_VALUE_UNDEFINED,
+            callee
+        );
+        if (callback_function_index >= 0) {
+            vm->exact_script_call = callback_call.previous;
+        }
+        return vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    }
+
+    MAL_PERF_COUNT(array_iteration_direct_fallbacks);
+    return mal_vm_call_cached(
+        vm, fallback_cache, callee, this_value, args, arg_count);
 }
 
 /**

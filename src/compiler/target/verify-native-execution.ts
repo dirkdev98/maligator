@@ -43,6 +43,21 @@ function immediateRepresentation(value: unknown): "boxed" | "number" | "boolean"
 	return kind === "number" ? "number" : kind === "boolean" ? "boolean" : "boxed";
 }
 
+const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
+	"Array.prototype.forEach",
+	"Array.prototype.some",
+	"Array.prototype.every",
+	"Array.prototype.find",
+	"Array.prototype.findIndex",
+	"Array.prototype.map",
+	"Array.prototype.filter",
+	"Array.prototype.reduce",
+	"Array.prototype.reduceRight",
+	"Array.prototype.findLast",
+	"Array.prototype.findLastIndex",
+	"Array.prototype.flatMap",
+]);
+
 /** Verify the canonical target plus every native-only direct-entry ABI variant. */
 export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 	verifyExecutionProgram(program);
@@ -123,9 +138,23 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 	for (const [functionIndex, fn] of program.functions.entries()) {
 		for (const { instructions } of fn.blocks) {
 			for (const instruction of instructions) {
-				if (instruction.type !== "call" || instruction.directEntryId === undefined)
-					continue;
+				if (instruction.type !== "call") continue;
 				const context = { functionIndex, opcode: instruction.type };
+				if (instruction.directCallbackFunctionIndex !== undefined) {
+					if (
+						program.functions[instruction.directCallbackFunctionIndex] === undefined ||
+						!ARRAY_ITERATION_CALLBACK_OPERATIONS.has(
+							instruction.knownBuiltinCall?.operation ?? "",
+						) ||
+						instruction.registers.length < 4
+					) {
+						fail(
+							"exact callback target is not attached to an Array callback call",
+							context,
+						);
+					}
+				}
+				if (instruction.directEntryId === undefined) continue;
 				const targetIndex = instruction.directFunctionIndex;
 				if (targetIndex === undefined) {
 					fail("direct-entry call has no exact function target", context);

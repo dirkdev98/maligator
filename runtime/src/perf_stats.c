@@ -286,13 +286,16 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-known-own-slot-stats] probes=%llu hits=%llu fallbacks=%llu "
-        "store_probes=%llu store_hits=%llu store_fallbacks=%llu\n",
+        "store_probes=%llu store_hits=%llu store_fallbacks=%llu "
+        "exact_loads=%llu exact_stores=%llu\n",
         (unsigned long long) mal_perf_stats.known_own_slot_load_probes,
         (unsigned long long) mal_perf_stats.known_own_slot_load_hits,
         (unsigned long long) mal_perf_stats.known_own_slot_load_fallbacks,
         (unsigned long long) mal_perf_stats.known_own_slot_store_probes,
         (unsigned long long) mal_perf_stats.known_own_slot_store_hits,
-        (unsigned long long) mal_perf_stats.known_own_slot_store_fallbacks
+        (unsigned long long) mal_perf_stats.known_own_slot_store_fallbacks,
+        (unsigned long long) mal_perf_stats.exact_own_slot_loads,
+        (unsigned long long) mal_perf_stats.exact_own_slot_stores
     );
     fprintf(
         stderr,
@@ -443,7 +446,11 @@ static void mal_perf_stats_print(void) {
 		"indexed_fill_reserves=%llu indexed_fill_reserved_slots=%llu "
 		"indexed_fill_allocations_avoided=%llu indexed_fill_raw_bytes_avoided=%llu "
 		"indexed_fill_guard_fallbacks=%llu "
-		"push_direct_hits=%llu push_direct_fallbacks=%llu\n",
+		"push_direct_hits=%llu push_direct_fallbacks=%llu "
+		"contained_pushes=%llu contained_push_overflows=%llu "
+		"contained_pops=%llu contained_empty_pops=%llu "
+        "iteration_direct_hits=%llu iteration_direct_fallbacks=%llu "
+        "iteration_exact_callback_calls=%llu\n",
         (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
         (unsigned long long) mal_perf_stats.array_fresh_dense_fallbacks,
@@ -456,7 +463,14 @@ static void mal_perf_stats_print(void) {
 		(unsigned long long) mal_perf_stats.array_indexed_fill_raw_bytes_avoided,
 		(unsigned long long) mal_perf_stats.array_indexed_fill_guard_fallbacks,
 		(unsigned long long) mal_perf_stats.array_push_direct_hits,
-        (unsigned long long) mal_perf_stats.array_push_direct_fallbacks
+        (unsigned long long) mal_perf_stats.array_push_direct_fallbacks,
+		(unsigned long long) mal_perf_stats.array_contained_pushes,
+		(unsigned long long) mal_perf_stats.array_contained_push_overflows,
+		(unsigned long long) mal_perf_stats.array_contained_pops,
+		(unsigned long long) mal_perf_stats.array_contained_empty_pops,
+        (unsigned long long) mal_perf_stats.array_iteration_direct_hits,
+        (unsigned long long) mal_perf_stats.array_iteration_direct_fallbacks,
+        (unsigned long long) mal_perf_stats.array_iteration_exact_callback_calls
     );
     fprintf(
         stderr,

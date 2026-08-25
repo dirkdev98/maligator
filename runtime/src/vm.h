@@ -1200,6 +1200,19 @@ typedef struct MalSemanticEpochs {
     u64 watched_methods;
 } MalSemanticEpochs;
 
+/**
+ * Dynamically scoped exact script-call fact published by generated code while a
+ * native builtin repeatedly invokes one of its arguments. The callee remains
+ * rooted by the generated caller's argument register; this context only carries
+ * the independently proved function coordinate. `previous` makes nested and
+ * re-entrant builtin calls restore the enclosing fact exactly.
+ */
+typedef struct MalExactScriptCall {
+    struct MalExactScriptCall *previous;
+    MalValue callee;
+    i32 function_index;
+} MalExactScriptCall;
+
 typedef struct MalVm {
     const MalRuntimeImage *runtime_image;
 
@@ -1324,6 +1337,9 @@ typedef struct MalVm {
 
     /** Ordinary Map.prototype.get -> set cache; direct collection helpers bypass it. */
     MalMapGetSetCacheEntry map_get_set_cache;
+
+    /** Innermost generated-code proof for a native builtin's script callback. */
+    MalExactScriptCall *exact_script_call;
 
     MalHeap heap;
     /** Per-isolate collector working state (grey worklist, weak lists, remembered
@@ -2099,6 +2115,22 @@ MalCompletion mal_vm_call_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,
     i32 expected_function_index,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
+/**
+ * Exact ordinary script-function call. Generated code has proved that `callee`
+ * is a plain function object for `function_index`; this path deliberately has no
+ * identity/type guard and no generic fallback. It still performs every semantic
+ * part of [[Call]]: realm switching, class rejection, this binding, compiled
+ * stack accounting, interpreted fallback, and abrupt completion propagation.
+ */
+MalCompletion mal_vm_call_exact_script(
+    MalVm *vm,
+    i32 function_index,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
