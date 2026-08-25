@@ -4,6 +4,7 @@
 #include "function_object.h"
 #include "gc.h"
 #include "intrinsics.h"
+#include "microtask.h"
 #include "object.h"
 #include "value.h"
 #include "vm.h"
@@ -83,6 +84,23 @@ static MalValue mal_async_from_sync_continuation(
         return rejected;
     }
     bool done = mal_value_is_truthy(done_value);
+
+    // PromiseResolve(%Promise%, primitive) produces an inaccessible fulfilled
+    // Promise here. Queue the typed continuation directly while preserving the
+    // required asynchronous turn and iterator-close policy.
+    if (!mal_value_is_object(value_value)) {
+        mal_vm_enqueue_async_from_sync_job(
+            vm,
+            roots[1],
+            cap_promise,
+            cap_reject,
+            done,
+            close_on_rejection,
+            false,
+            value_value);
+        mal_gc_unroot(&span);
+        return cap_promise;
+    }
 
     if (!mal_promise_resolve_value(vm, value_value, &roots[2])) {
         if (!done && close_on_rejection) {
