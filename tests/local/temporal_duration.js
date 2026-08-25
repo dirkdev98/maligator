@@ -122,6 +122,14 @@ check(
 check(monthDay.equals(monthDay));
 check(Temporal.Instant.compare(instant, instant) === 0 && instant.equals(instant));
 check(Temporal.ZonedDateTime.compare(zoned, zoned) === 0 && zoned.equals(zoned));
+const oneSecond = new Temporal.Duration(0, 0, 0, 0, 0, 0, 1);
+check(Temporal.Duration.from("PT2S").add(oneSecond).seconds === 3);
+check(time.add(oneSecond).second === 57);
+check(dateTime.add(oneSecond).second === 59);
+check(instant.add(oneSecond).epochNanoseconds === 123456789n);
+check(zoned.add(oneSecond).second === 1);
+check(date.add(new Temporal.Duration(0, 0, 0, 1)).day === 1);
+check(yearMonth.add(new Temporal.Duration(0, 1)).month === 3);
 check(typeof Temporal.Now.instant().epochNanoseconds === "bigint");
 check(
 	typeof Temporal.Now.timeZoneId() === "string" && Temporal.Now.timeZoneId().length > 0,

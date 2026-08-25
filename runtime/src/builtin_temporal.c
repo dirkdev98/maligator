@@ -310,6 +310,18 @@ static Duration *duration_from_like(MalVm *vm, MalValue input) {
     return result.ok;
 }
 
+static Duration *duration_from_like_readonly(
+    MalVm *vm, MalValue input, bool *owned
+) {
+    Duration *borrowed = temporal_handle_if_kind(input, MAL_TEMPORAL_DURATION);
+    if (borrowed != nullptr) {
+        *owned = false;
+        return borrowed;
+    }
+    *owned = true;
+    return duration_from_like(vm, input);
+}
+
 static MalValue duration_from(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee
@@ -386,8 +398,9 @@ static MalValue duration_add_or_subtract(
 ) {
     MalTemporalObject *object;
     if (!duration_this(vm, this_value, &object)) return mal_value_new_undefined();
-    Duration *other = duration_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    bool owned;
+    Duration *other = duration_from_like_readonly(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &owned);
     if (other == nullptr) return mal_value_new_undefined();
     Duration *result_handle = nullptr;
     TemporalError error = {0};
@@ -405,7 +418,7 @@ static MalValue duration_add_or_subtract(
         if (is_ok) result_handle = result.ok;
         else error = result.err;
     }
-    temporal_rs_Duration_destroy(other);
+    if (owned) temporal_rs_Duration_destroy(other);
     if (!is_ok) return temporal_throw(vm, error);
     return duration_wrap_intrinsic(vm, result_handle);
 }
@@ -1268,8 +1281,9 @@ static MalValue plain_time_add_or_subtract(
 ) {
     MalTemporalObject *object;
     if (!plain_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    Duration *duration = duration_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    bool owned;
+    Duration *duration = duration_from_like_readonly(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &owned);
     if (duration == nullptr) return mal_value_new_undefined();
     PlainTime *handle = nullptr;
     TemporalError error = {0};
@@ -1285,7 +1299,7 @@ static MalValue plain_time_add_or_subtract(
         ok = result.is_ok;
         if (ok) handle = result.ok; else error = result.err;
     }
-    temporal_rs_Duration_destroy(duration);
+    if (owned) temporal_rs_Duration_destroy(duration);
     return ok ? plain_time_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
 }
 
@@ -2007,13 +2021,14 @@ static MalValue plain_date_add_or_subtract(
 ) {
     MalTemporalObject *object;
     if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
-    Duration *duration = duration_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    bool owned;
+    Duration *duration = duration_from_like_readonly(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &owned);
     if (duration == nullptr) return mal_value_new_undefined();
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
-        temporal_rs_Duration_destroy(duration);
+        if (owned) temporal_rs_Duration_destroy(duration);
         return mal_value_new_undefined();
     }
     PlainDate *handle = nullptr;
@@ -2029,7 +2044,7 @@ static MalValue plain_date_add_or_subtract(
             temporal_rs_PlainDate_add(object->handle, duration, option);
         ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
     }
-    temporal_rs_Duration_destroy(duration);
+    if (owned) temporal_rs_Duration_destroy(duration);
     return ok ? plain_date_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
 }
 
@@ -2581,13 +2596,14 @@ static MalValue plain_date_time_add_or_subtract(
 ) {
     MalTemporalObject *object;
     if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    Duration *duration = duration_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    bool owned;
+    Duration *duration = duration_from_like_readonly(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &owned);
     if (duration == nullptr) return mal_value_new_undefined();
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
-        temporal_rs_Duration_destroy(duration);
+        if (owned) temporal_rs_Duration_destroy(duration);
         return mal_value_new_undefined();
     }
     PlainDateTime *handle = nullptr;
@@ -2603,7 +2619,7 @@ static MalValue plain_date_time_add_or_subtract(
             temporal_rs_PlainDateTime_add(object->handle, duration, option);
         ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
     }
-    temporal_rs_Duration_destroy(duration);
+    if (owned) temporal_rs_Duration_destroy(duration);
     return ok ? plain_date_time_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
 }
 
@@ -3221,13 +3237,14 @@ static MalValue plain_year_month_add_or_subtract(
 ) {
     MalTemporalObject *object;
     if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
-    Duration *duration = duration_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    bool owned;
+    Duration *duration = duration_from_like_readonly(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &owned);
     if (duration == nullptr) return mal_value_new_undefined();
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
-        temporal_rs_Duration_destroy(duration);
+        if (owned) temporal_rs_Duration_destroy(duration);
         return mal_value_new_undefined();
     }
     PlainYearMonth *handle = nullptr;
@@ -3242,7 +3259,7 @@ static MalValue plain_year_month_add_or_subtract(
             temporal_rs_PlainYearMonth_add(object->handle, duration, overflow);
         ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
     }
-    temporal_rs_Duration_destroy(duration);
+    if (owned) temporal_rs_Duration_destroy(duration);
     return ok ? plain_year_month_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
 }
 
@@ -3792,8 +3809,9 @@ static MalValue instant_add_or_subtract(
 ) {
     MalTemporalObject *object;
     if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
-    Duration *duration = duration_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    bool owned;
+    Duration *duration = duration_from_like_readonly(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &owned);
     if (duration == nullptr) return mal_value_new_undefined();
     Instant *handle = nullptr;
     TemporalError error = {0};
@@ -3809,7 +3827,7 @@ static MalValue instant_add_or_subtract(
         ok = result.is_ok;
         if (ok) handle = result.ok; else error = result.err;
     }
-    temporal_rs_Duration_destroy(duration);
+    if (owned) temporal_rs_Duration_destroy(duration);
     return ok ? instant_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
 }
 
@@ -4560,13 +4578,14 @@ static MalValue zoned_date_time_add_or_subtract(
 ) {
     MalTemporalObject *object;
     if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
-    Duration *duration = duration_from_like(
-        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    bool owned;
+    Duration *duration = duration_from_like_readonly(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &owned);
     if (duration == nullptr) return mal_value_new_undefined();
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
-        temporal_rs_Duration_destroy(duration);
+        if (owned) temporal_rs_Duration_destroy(duration);
         return mal_value_new_undefined();
     }
     ZonedDateTime *handle = nullptr;
@@ -4584,7 +4603,7 @@ static MalValue zoned_date_time_add_or_subtract(
             (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
         ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
     }
-    temporal_rs_Duration_destroy(duration);
+    if (owned) temporal_rs_Duration_destroy(duration);
     return ok ? zoned_date_time_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
 }
 
