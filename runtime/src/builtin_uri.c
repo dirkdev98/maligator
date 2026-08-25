@@ -402,22 +402,21 @@ static MalValue mal_builtin_unescape(MalVm *vm, MalValue this_value, const MalVa
 
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
-    usize result_length = 0;
+    usize result_length = length;
     bool changed = false;
     for (usize i = 0; i < length; i++) {
         c16 decoded;
         u8 octet;
         if (units[i] == '%' && i + 5 < length && units[i + 1] == 'u' &&
             mal_uri_hex_quad(units + i + 2, &decoded)) {
+            result_length -= 5;
             i += 5;
             changed = true;
         } else if (units[i] == '%' && i + 2 < length &&
                    mal_uri_hex_pair(units[i + 1], units[i + 2], &octet)) {
+            result_length -= 2;
             i += 2;
             changed = true;
-        }
-        if (!mal_uri_result_length_add(vm, &result_length, 1)) {
-            return mal_value_new_undefined();
         }
     }
     if (!changed) {
