@@ -8,11 +8,11 @@ import { buildNativeBinary, STRESS_ENV } from "../../src/test-harness.ts";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-async-generator-direct-promise-"));
 const expected = "async-generator-direct-promise PASS";
 
-function run(binary: string, env: NodeJS.ProcessEnv = {}): string {
+function run(binary: string, env: NodeJS.ProcessEnv = {}, timeout = 120_000): string {
 	const result = spawnSync(binary, [], {
 		env: { ...process.env, MAL_HOST_GC: "1", ...env },
 		encoding: "utf8",
-		timeout: 120_000,
+		timeout,
 	});
 	if (result.error !== undefined) throw result.error;
 	expect(result.status, result.stderr).toBe(0);
@@ -87,9 +87,10 @@ describe("direct async-generator request Promises", () => {
 	] as const)(
 		"retains pending %s requests under GC stress",
 		(_name, binary) => {
-			run(binary(), STRESS_ENV);
+			// The interpreted verifier takes about 160s on current arm64 hosts.
+			run(binary(), STRESS_ENV, 240_000);
 		},
-		120_000,
+		250_000,
 	);
 
 	it("retains pending requests under concurrent GC", () => {
