@@ -191,8 +191,7 @@ check(
 const boundedHex = Buffer.alloc(2, 0xff);
 check(
 	"write stops hex decoding at the first invalid pair",
-	boundedHex.write("41zz", 0, 2, "hex") === 1 &&
-		boundedHex.toString("hex") === "41ff",
+	boundedHex.write("41zz", 0, 2, "hex") === 1 && boundedHex.toString("hex") === "41ff",
 );
 check("write handles an empty destination", Buffer.alloc(0).write("x") === 0);
 const partialUtf16 = Buffer.alloc(3, 0xff);

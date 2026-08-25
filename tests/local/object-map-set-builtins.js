@@ -691,8 +691,7 @@ const customWeakMap = Reflect.construct(
 );
 check(
 	"WeakMap constructor calls a captured custom adder",
-	customWeakAdderCalls === 1 &&
-		!WeakMap.prototype.has.call(customWeakMap, customWeakKey),
+	customWeakAdderCalls === 1 && !WeakMap.prototype.has.call(customWeakMap, customWeakKey),
 );
 
 const capturedMapAdderPrototype = Object.create(Map.prototype);

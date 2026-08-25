@@ -112,8 +112,7 @@ check(Temporal.Duration.compare(duration, duration) === 0);
 check(Temporal.PlainTime.compare(time, time) === 0 && time.equals(time));
 check(Temporal.PlainDate.compare(date, date) === 0 && date.equals(date));
 check(
-	Temporal.PlainDateTime.compare(dateTime, dateTime) === 0 &&
-		dateTime.equals(dateTime),
+	Temporal.PlainDateTime.compare(dateTime, dateTime) === 0 && dateTime.equals(dateTime),
 );
 check(
 	Temporal.PlainYearMonth.compare(yearMonth, yearMonth) === 0 &&
