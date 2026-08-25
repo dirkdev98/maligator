@@ -7,7 +7,7 @@ import { CoreFunctionBuilder, coreValueId } from "../src/compiler/core/core-ir.t
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 /** Source that reaches region selection, so certificates take part in every contract. */

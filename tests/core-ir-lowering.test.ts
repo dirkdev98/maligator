@@ -5,11 +5,9 @@ import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import {
-	coreRegisterClasses,
-	lowerCoreCompilationToExecution,
-} from "../src/compiler/target/lower-execution.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/program-image.ts";
+import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 function lower(source: string) {

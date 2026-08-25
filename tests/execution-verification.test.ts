@@ -5,12 +5,12 @@ import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
 } from "../src/compiler/target/lower-execution.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/program-image.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import {
 	ExecutionVerificationError,
 	verifyExecutionProgram,

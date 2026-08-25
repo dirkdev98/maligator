@@ -24,7 +24,7 @@ import type {
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 
 function coreProgram(
 	functions: ReadonlyArray<CoreFunction>,

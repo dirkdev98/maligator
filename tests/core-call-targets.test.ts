@@ -38,7 +38,7 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 
 function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 	return {

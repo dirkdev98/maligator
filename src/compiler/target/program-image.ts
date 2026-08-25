@@ -2389,16 +2389,26 @@ export function programImageStats(definition: ProgramImage): ProgramImageStats {
 	return { functionCount: definition.runtime.functions.length, instructionCount };
 }
 
-/**
- * Lower verified execution semantics to the runtime and native program-image contracts.
- */
-export function lowerExecutionToProgramImage(
+interface LoweredRuntimeParts<T extends LoweredRuntimeFunctionPlan> {
+	readonly runtime: RuntimeImage;
+	readonly functionPlans: Array<T>;
+}
+
+function lowerExecutionToRuntimeParts(
 	program: ExecutionProgram,
-	profile = false,
-): ProgramImage {
-	// Consumer boundary: ExecutionProgram is structurally constructible and mutable,
-	// so construction-time verification cannot license a later program-image call.
-	verifyExecutionProgram(program);
+	profile: boolean,
+	includeNative: true,
+): LoweredRuntimeParts<LoweredFunctionPlans>;
+function lowerExecutionToRuntimeParts(
+	program: ExecutionProgram,
+	profile: boolean,
+	includeNative: false,
+): LoweredRuntimeParts<LoweredRuntimeFunctionPlan>;
+function lowerExecutionToRuntimeParts(
+	program: ExecutionProgram,
+	profile: boolean,
+	includeNative: boolean,
+): LoweredRuntimeParts<LoweredRuntimeFunctionPlan> {
 	const core = program.core;
 	const context = program.context;
 	// Build the debug-info file table: distinct source paths in first-seen order.
@@ -2414,18 +2424,63 @@ export function lowerExecutionToProgramImage(
 		return index;
 	};
 	const knownShapeLayout = buildKnownShapeLayout(core, program.functions);
-	const functionPlans = program.functions.map((fn, index) =>
-		lowerExecutionFunctionPlans(
-			fn,
-			fileIndexFor(fn.sourcePath),
-			core.stringConstants,
-			knownShapeLayout.origins,
-			knownShapeLayout.literalShapeCounts[index]!,
-			profile ? context.facts.instructionSites : undefined,
-		),
-	);
+	const functionPlans = includeNative
+		? program.functions.map((fn, index) =>
+				lowerExecutionFunctionPlans(
+					fn,
+					fileIndexFor(fn.sourcePath),
+					core.stringConstants,
+					knownShapeLayout.origins,
+					knownShapeLayout.literalShapeCounts[index]!,
+					profile ? context.facts.instructionSites : undefined,
+					true,
+				),
+			)
+		: program.functions.map((fn, index) =>
+				lowerExecutionFunctionPlans(
+					fn,
+					fileIndexFor(fn.sourcePath),
+					core.stringConstants,
+					knownShapeLayout.origins,
+					knownShapeLayout.literalShapeCounts[index]!,
+					undefined,
+					false,
+				),
+			);
 	const functions = functionPlans.map(({ bytecode }) => bytecode);
+	const runtime: RuntimeImage = {
+		entrypointPath: context.data.entrypointPath,
+		functionCount: program.functions.length,
+		functions,
+		stringConstants: core.stringConstants.map((units) => [...units]),
+		bigintConstants: [...core.bigintConstants],
+		literalTemplateData: [...core.literalTemplateData],
+		precompiledLiteralShapes: [...knownShapeLayout.precompiledLiteralShapes],
+		globalCount: core.globalCount,
+		cjsModuleFunctionIndices: [...context.data.cjsModuleFunctionIndices],
+		hostInstalls: buildHostInstalls(context, functions),
+		files,
+		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),
+	};
+	validateVmShapeCases(runtime);
+	return { runtime, functionPlans };
+}
 
+/** Lower verified execution semantics to the portable runtime contract only. */
+export function lowerExecutionToRuntimeImage(program: ExecutionProgram): RuntimeImage {
+	// Consumer boundary: ExecutionProgram is structurally constructible and mutable,
+	// so construction-time verification cannot license a later terminal lowering.
+	verifyExecutionProgram(program);
+	return lowerExecutionToRuntimeParts(program, false, false).runtime;
+}
+
+/** Materialize the native product after its terminal has verified every ABI variant. */
+export function lowerVerifiedExecutionToProgramImage(
+	program: ExecutionProgram,
+	profile = false,
+): ProgramImage {
+	const { runtime, functionPlans } = lowerExecutionToRuntimeParts(program, profile, true);
+	const context = program.context;
 	const semanticProtectors = (
 		["primitive-methods", "watched-methods", "array-elements"] as const
 	).map((family) => {
@@ -2445,20 +2500,6 @@ export function lowerExecutionToProgramImage(
 		}
 		return { family, guard };
 	});
-	const runtime: RuntimeImage = {
-		entrypointPath: context.data.entrypointPath,
-		functionCount: program.functions.length,
-		functions,
-		stringConstants: core.stringConstants.map((units) => [...units]),
-		bigintConstants: [...core.bigintConstants],
-		literalTemplateData: [...core.literalTemplateData],
-		precompiledLiteralShapes: [...knownShapeLayout.precompiledLiteralShapes],
-		globalCount: core.globalCount,
-		cjsModuleFunctionIndices: [...context.data.cjsModuleFunctionIndices],
-		hostInstalls: buildHostInstalls(context, functions),
-		files,
-		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),
-	};
 	const definition: ProgramImage = {
 		runtime,
 		native: {
@@ -2471,8 +2512,7 @@ export function lowerExecutionToProgramImage(
 				: {}),
 		},
 	};
-	validateVmShapeCases(runtime);
-	if (profile) buildProfileMetadata(core, context, definition);
+	if (profile) buildProfileMetadata(program.core, context, definition);
 	return definition;
 }
 
@@ -2527,7 +2567,11 @@ function buildHostInstalls(
 	return manifest;
 }
 
-interface LoweredFunctionPlans {
+interface LoweredRuntimeFunctionPlan {
+	readonly bytecode: BytecodeFunction;
+}
+
+interface LoweredFunctionPlans extends LoweredRuntimeFunctionPlan {
 	readonly bytecode: BytecodeFunction;
 	readonly native: NativeFunctionPlan;
 }
@@ -2624,8 +2668,27 @@ function lowerExecutionFunctionPlans(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
 	literalShapeCount: number,
+	instructionSites: WeakMap<object, { id: string }> | undefined,
+	includeNative: true,
+): LoweredFunctionPlans;
+function lowerExecutionFunctionPlans(
+	fn: ExecutionFunction,
+	fileIndex: number,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
+	literalShapeCount: number,
+	instructionSites: undefined,
+	includeNative: false,
+): LoweredRuntimeFunctionPlan;
+function lowerExecutionFunctionPlans(
+	fn: ExecutionFunction,
+	fileIndex: number,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
+	literalShapeCount: number,
 	instructionSites?: WeakMap<object, { id: string }>,
-): LoweredFunctionPlans {
+	includeNative = true,
+): LoweredRuntimeFunctionPlan | LoweredFunctionPlans {
 	// Source-position and exception-range markers carry no executable opcode, so
 	// block start IPs count only instructions that survive flattening.
 	const blockStartIps = new Map<number, number>();
@@ -2781,6 +2844,53 @@ function lowerExecutionFunctionPlans(
 	if (physicalLiteralShapeCount > literalShapeCount) {
 		throw new Error(`Literal shape cache underflow in function ${fn.functionIndex}`);
 	}
+	// Classified length/legacy index reads form an entry prefix. Frame creation
+	// snapshots that prefix before parameter initialization and starts interpretation
+	// after it. Fused static reads retain arguments for their lazy missing-index path.
+	let argumentSnapshotCount = 0;
+	while (
+		instructions[argumentSnapshotCount]?.opcode === "LOAD_ARGUMENT_COUNT" ||
+		instructions[argumentSnapshotCount]?.opcode === "LOAD_ARGUMENT"
+	) {
+		argumentSnapshotCount++;
+	}
+	const needsArguments =
+		computeArgumentRetentionLimit({
+			argumentSnapshotCount,
+			instructions,
+		}) >= 0;
+	const argumentSnapshotPlan = buildArgumentSnapshotPlan({
+		argumentSnapshotCount,
+		instructions,
+		parameterCount: fn.parameterCount,
+		registerCount: fn.registerCount,
+	});
+
+	const bytecodeInstructions = instructions.map(runtimeInstruction);
+	const bytecode: BytecodeFunction = {
+		nameStringIndex: fn.nameStringIndex,
+		isGenerator: fn.isGenerator,
+		isAsync: fn.isAsync,
+		parameterCount: fn.parameterCount,
+		mappedArguments: fn.mappedArguments,
+		mappedArgumentSlots: [...fn.mappedArgumentSlots],
+		length: fn.length,
+		registerCount: fn.registerCount,
+		capturedCount: fn.capturedCount,
+		strict: fn.strict,
+		needsArguments,
+		argumentSnapshotCount,
+		argumentSnapshotPlan,
+		isDerivedConstructor: fn.isDerivedConstructor,
+		isClassConstructor: fn.isClassConstructor,
+		hasPrototype: fn.hasPrototype,
+		literalShapeCount,
+		instructions: bytecodeInstructions,
+		handlers,
+		fileIndex,
+		positions,
+	};
+	if (!includeNative) return { bytecode };
 	const regions: Array<VmRegion> = [];
 	const claimedRegionInstructions = new Set<number>();
 	const coreRegionError = (kind: string, reason: string): Error =>
@@ -3804,7 +3914,12 @@ function lowerExecutionFunctionPlans(
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
 					kind: "string-slice-number",
-					license: { guard, genericTwin: "retained", materialization: "none", admission },
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "none",
+						admission,
+					},
 					representation: "primitive-string-span-number",
 					anchors: resolvedAnchors,
 					claimedIps: resolvedClaimedIps,
@@ -4220,53 +4335,7 @@ function lowerExecutionFunctionPlans(
 			}
 		}
 	}
-	// Classified length/legacy index reads form an entry prefix. Frame creation
-	// snapshots that prefix before parameter initialization and starts interpretation
-	// after it. Fused static reads retain arguments for their lazy missing-index path.
-	let argumentSnapshotCount = 0;
-	while (
-		instructions[argumentSnapshotCount]?.opcode === "LOAD_ARGUMENT_COUNT" ||
-		instructions[argumentSnapshotCount]?.opcode === "LOAD_ARGUMENT"
-	) {
-		argumentSnapshotCount++;
-	}
-	const needsArguments =
-		computeArgumentRetentionLimit({
-			argumentSnapshotCount,
-			instructions,
-		}) >= 0;
-	const argumentSnapshotPlan = buildArgumentSnapshotPlan({
-		argumentSnapshotCount,
-		instructions,
-		parameterCount: fn.parameterCount,
-		registerCount: fn.registerCount,
-	});
-
 	const nativeInstructions = instructions.map(nativeInstructionPlan);
-	const bytecodeInstructions = instructions.map(runtimeInstruction);
-	const bytecode: BytecodeFunction = {
-		nameStringIndex: fn.nameStringIndex,
-		isGenerator: fn.isGenerator,
-		isAsync: fn.isAsync,
-		parameterCount: fn.parameterCount,
-		mappedArguments: fn.mappedArguments,
-		mappedArgumentSlots: [...fn.mappedArgumentSlots],
-		length: fn.length,
-		registerCount: fn.registerCount,
-		capturedCount: fn.capturedCount,
-		strict: fn.strict,
-		needsArguments,
-		argumentSnapshotCount,
-		argumentSnapshotPlan,
-		isDerivedConstructor: fn.isDerivedConstructor,
-		isClassConstructor: fn.isClassConstructor,
-		hasPrototype: fn.hasPrototype,
-		literalShapeCount,
-		instructions: bytecodeInstructions,
-		handlers,
-		fileIndex,
-		positions,
-	};
 	const safepoints = fn.gc.safepoints.flatMap(({ kind, instruction, rootRegisters }) => {
 		const instructionIp = instructionIndexByTargetInstruction.get(instruction);
 		return instructionIp === undefined

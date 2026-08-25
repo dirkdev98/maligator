@@ -11,9 +11,9 @@ import {
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-execution.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/program-image.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
