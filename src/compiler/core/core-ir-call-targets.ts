@@ -120,6 +120,21 @@ export function coreCalleeTargetsEqual(
 	);
 }
 
+function sortedFunctionTargetsContain(
+	superset: ReadonlyArray<number>,
+	subset: ReadonlyArray<number>,
+): boolean {
+	let supersetIndex = 0;
+	for (const candidate of subset) {
+		while (supersetIndex < superset.length && superset[supersetIndex]! < candidate) {
+			supersetIndex++;
+		}
+		if (superset[supersetIndex] !== candidate) return false;
+		supersetIndex++;
+	}
+	return true;
+}
+
 /**
  * Component-wise join. Overflow past the cap widens the script component to
  * `anyScript`; the opacity bit is an independent logical or, so joining an
@@ -129,6 +144,7 @@ export function joinCoreCalleeTargets(
 	left: CoreCalleeTargets,
 	right: CoreCalleeTargets,
 ): CoreCalleeTargets {
+	if (left === right) return left;
 	const opaque = left.opaque || right.opaque;
 	if (left.anyScript || right.anyScript) {
 		return opaque ? CORE_CALLEE_TARGETS_TOP : CORE_CALLEE_TARGETS_ANY_SCRIPT;
@@ -136,13 +152,63 @@ export function joinCoreCalleeTargets(
 	if (left.functions.length === 0 && right.functions.length === 0) {
 		return opaque ? CORE_CALLEE_TARGETS_OPAQUE : CORE_CALLEE_TARGETS_BOTTOM;
 	}
-	const merged = new Set(left.functions);
-	for (const entry of right.functions) merged.add(entry);
-	if (merged.size > CORE_CALLEE_TARGET_CAP) {
-		return opaque ? CORE_CALLEE_TARGETS_TOP : CORE_CALLEE_TARGETS_ANY_SCRIPT;
+	if (left.functions.length === 0) {
+		if (!left.opaque || right.opaque) return right;
+		return Object.freeze({
+			functions: right.functions,
+			anyScript: false,
+			opaque: true,
+		});
+	}
+	if (right.functions.length === 0) {
+		if (!right.opaque || left.opaque) return left;
+		return Object.freeze({
+			functions: left.functions,
+			anyScript: false,
+			opaque: true,
+		});
+	}
+	if (
+		left.opaque === opaque &&
+		sortedFunctionTargetsContain(left.functions, right.functions)
+	) {
+		return left;
+	}
+	if (
+		right.opaque === opaque &&
+		sortedFunctionTargetsContain(right.functions, left.functions)
+	) {
+		return right;
+	}
+
+	const merged: Array<number> = [];
+	let leftIndex = 0;
+	let rightIndex = 0;
+	while (leftIndex < left.functions.length || rightIndex < right.functions.length) {
+		const leftTarget = left.functions[leftIndex];
+		const rightTarget = right.functions[rightIndex];
+		let target: number;
+		if (
+			rightTarget === undefined ||
+			(leftTarget !== undefined && leftTarget < rightTarget)
+		) {
+			target = leftTarget!;
+			leftIndex++;
+		} else if (leftTarget === undefined || rightTarget < leftTarget) {
+			target = rightTarget;
+			rightIndex++;
+		} else {
+			target = leftTarget;
+			leftIndex++;
+			rightIndex++;
+		}
+		merged.push(target);
+		if (merged.length > CORE_CALLEE_TARGET_CAP) {
+			return opaque ? CORE_CALLEE_TARGETS_TOP : CORE_CALLEE_TARGETS_ANY_SCRIPT;
+		}
 	}
 	return Object.freeze({
-		functions: Object.freeze([...merged].sort((first, second) => first - second)),
+		functions: Object.freeze(merged),
 		anyScript: false,
 		opaque,
 	});
