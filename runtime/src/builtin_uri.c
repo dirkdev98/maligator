@@ -343,12 +343,13 @@ static MalValue mal_builtin_escape(MalVm *vm, MalValue this_value, const MalValu
 
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
-    usize result_length = 0;
+    usize result_length = length;
     bool changed = false;
     for (usize i = 0; i < length; i++) {
         c16 unit = units[i];
         usize width = mal_uri_escape_unescaped(unit) ? 1 : unit < 256 ? 3 : 6;
-        if (!mal_uri_result_length_add(vm, &result_length, width)) {
+        if (width > 1 &&
+            !mal_uri_result_length_add(vm, &result_length, width - 1)) {
             return mal_value_new_undefined();
         }
         changed |= width != 1;
