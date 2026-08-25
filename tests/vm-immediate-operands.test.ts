@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
 	decodeVmValueOperand,
 	encodeVmValueOperand,
@@ -8,7 +8,7 @@ import {
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "immediate-operands.js");
-	return compileSemanticProgramToVmDefinition(semantic);
+	return compileSemanticProgramToProgramImage(semantic);
 }
 
 describe("tagged VM call operands", () => {

@@ -14,9 +14,9 @@ import { normalizeNativeFeatures } from "../src/build-flags.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
-import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-vm.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 
@@ -53,8 +53,8 @@ function buildBinary(name: string, compiled: boolean): string {
 		path.resolve(fixture!),
 		parsed,
 	);
-	const definition = compileSemanticProgramToVmDefinition(semanticProgram);
-	const cSource = emitVmDefinition(definition, { compiled });
+	const definition = compileSemanticProgramToProgramImage(semanticProgram);
+	const cSource = emitProgramImage(definition, { compiled });
 	return buildLocalBinary({ context, name, cSource, verbose: false }).binaryPath;
 }
 

@@ -12,10 +12,10 @@ import {
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
-import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
+import type { ProgramImage, BytecodeFunction, BytecodeInstruction } from "./lower-vm.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 
-type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
+type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
 
 export interface EmitOptions {
 	/**
@@ -148,7 +148,7 @@ function malStringRow(symbol: string, length: number): string {
 	return `    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = ${length}, .code_units = ${symbol} },`;
 }
 
-function malFunctionKind(fn: VmDefinition["functions"][number]): string {
+function malFunctionKind(fn: ProgramImage["functions"][number]): string {
 	return fn.isAsync && fn.isGenerator
 		? "MAL_FUNCTION_KIND_ASYNC_GENERATOR"
 		: fn.isAsync
@@ -160,7 +160,7 @@ function malFunctionKind(fn: VmDefinition["functions"][number]): string {
 
 /** One MalFunction table row, given the (possibly shared) symbols it points at. */
 function malFunctionRow(
-	fn: VmDefinition["functions"][number],
+	fn: ProgramImage["functions"][number],
 	instructionsSymbol: string,
 	instructionDataSymbol: string,
 	instructionDataCount: number,
@@ -211,7 +211,7 @@ function malFunctionRow(
 	return [`    { ${fields.join(", ")} },`];
 }
 
-function argumentSnapshotPlanBody(fn: VmFunction): string {
+function argumentSnapshotPlanBody(fn: BytecodeFunction): string {
 	return fn.argumentSnapshotPlan
 		.map(
 			(move) => `    { .destination = ${move.destination}, .source = ${move.source} },`,
@@ -220,14 +220,14 @@ function argumentSnapshotPlanBody(fn: VmFunction): string {
 }
 
 /** The body (rows, no braces) of a function's MalLineEntry position table. */
-function positionArrayBody(fn: VmFunction): string {
+function positionArrayBody(fn: BytecodeFunction): string {
 	return compressPositions(fn.positions)
 		.map((run) => `    { .start_ip = ${run.startIp}, .pos_id = ${run.posId} },`)
 		.join("\n");
 }
 
 function instructionArrayBody(
-	fn: VmDefinition["functions"][number],
+	fn: ProgramImage["functions"][number],
 	dataOffsets: Array<number | undefined>,
 ): string {
 	return fn.instructions
@@ -235,7 +235,7 @@ function instructionArrayBody(
 		.join("\n");
 }
 
-function instructionData(fn: VmDefinition["functions"][number]): {
+function instructionData(fn: ProgramImage["functions"][number]): {
 	data: Array<number>;
 	offsets: Array<number | undefined>;
 } {
@@ -324,7 +324,7 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 }
 
 function compiledKnownOwnSlotSeedData(
-	fn: VmDefinition["functions"][number],
+	fn: ProgramImage["functions"][number],
 ): Array<number> {
 	const data: Array<number> = [0];
 	for (const instruction of fn.instructions) {
@@ -347,7 +347,7 @@ function compiledKnownOwnSlotSeedData(
 	return data[0] === 0 ? [] : data;
 }
 
-function handlerArrayBody(fn: VmDefinition["functions"][number]): string {
+function handlerArrayBody(fn: ProgramImage["functions"][number]): string {
 	return fn.handlers
 		.map(
 			(handler) =>
@@ -357,10 +357,10 @@ function handlerArrayBody(fn: VmDefinition["functions"][number]): string {
 }
 
 /**
- * Emit a C translation unit with the static MalVmDefinition data.
+ * Emit a C translation unit with the static MalProgramImage data.
  */
-export function emitVmDefinition(definition: VmDefinition, options: EmitOptions = {}) {
-	return emitVmDefinitionSource(definition, options, false).source;
+export function emitProgramImage(definition: ProgramImage, options: EmitOptions = {}) {
+	return emitProgramImageSource(definition, options, false).source;
 }
 
 interface EmittedVmSource {
@@ -496,8 +496,8 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 	return { source: splitSource, definitions };
 }
 
-function emitVmDefinitionSource(
-	definition: VmDefinition,
+function emitProgramImageSource(
+	definition: ProgramImage,
 	options: EmitOptions,
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
@@ -549,6 +549,7 @@ function emitVmDefinitionSource(
 		if (!useCompiled) return null;
 		const emitted = emitCompiledFunction(
 			fn,
+			definition.nativePlan.functions[i]!,
 			i,
 			suffix,
 			debug,
@@ -576,9 +577,9 @@ function emitVmDefinitionSource(
 			if (fn !== null) compiledTargets.add(index);
 		});
 		const directCompiledTargets = new Set<number>();
-		for (const fn of definition.functions) {
-			for (const instruction of fn.instructions) {
-				if (instruction.opcode !== "CALL") continue;
+		for (const native of definition.nativePlan.functions) {
+			for (const instruction of native.instructions) {
+				if (instruction?.kind !== "call") continue;
 				const target = instruction.directFunctionIndex;
 				if (
 					target !== undefined &&
@@ -593,6 +594,7 @@ function emitVmDefinitionSource(
 			if (!compiledTargets.has(i)) return null;
 			return emitCompiledFunction(
 				fn,
+				definition.nativePlan.functions[i]!,
 				i,
 				suffix,
 				debug,
@@ -744,7 +746,7 @@ function emitVmDefinitionSource(
 	}
 	lines.push("};", "");
 
-	for (const line of malVmDefinitionStruct(
+	for (const line of malProgramImageStruct(
 		definition,
 		suffix,
 		debug,
@@ -767,15 +769,15 @@ function emitVmDefinitionSource(
  * units. A single generated function or array is indivisible; reject one that
  * exceeds the configured budget with a bounded diagnostic.
  */
-export function emitVmTranslationUnits(
-	definition: VmDefinition,
+export function emitProgramTranslationUnits(
+	definition: ProgramImage,
 	options: EmitOptions = {},
 	maxCodeUnits = DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
 ): Array<string> {
 	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
-	const emitted = emitVmDefinitionSource(definition, options, true, maxCodeUnits);
+	const emitted = emitProgramImageSource(definition, options, true, maxCodeUnits);
 	const splitData = externalizeDataArrays(emitted.source, maxCodeUnits);
 	if (splitData.source.length > maxCodeUnits) {
 		throw new RangeError(
@@ -898,8 +900,8 @@ export function emitVmTranslationUnits(
 	return units;
 }
 
-function malVmDefinitionStruct(
-	definition: VmDefinition,
+function malProgramImageStruct(
+	definition: ProgramImage,
 	suffix: string,
 	debug: boolean,
 	sharedLiteralTemplates?: string,
@@ -1057,7 +1059,7 @@ function malVmDefinitionStruct(
 	}
 
 	lines.push(
-		`const MalVmDefinition mal_vm_definition${suffix} = {`,
+		`const MalProgramImage mal_vm_definition${suffix} = {`,
 		`    .function_count = ${definition.functionCount},`,
 		`    .functions = mal_functions${suffix},`,
 		"    .initialize_generated_data = nullptr,",
@@ -1104,7 +1106,7 @@ function malVmDefinitionStruct(
  * The caller prepends the shared `#include` header (as for the per-test path).
  */
 export function emitBatch(
-	definitions: Array<VmDefinition>,
+	definitions: Array<ProgramImage>,
 	options: Pick<EmitOptions, "compiled"> = {},
 ): string {
 	const useCompiled = options.compiled !== false;
@@ -1164,6 +1166,7 @@ export function emitBatch(
 			useCompiled
 				? emitCompiledFunction(
 						fn,
+						definition.nativePlan.functions[i]!,
 						i,
 						suffix,
 						false,
@@ -1266,7 +1269,7 @@ export function emitBatch(
 		lines.push("};", "");
 
 		lines.push(
-			...malVmDefinitionStruct(definition, suffix, false, literalTemplatesSymbol),
+			...malProgramImageStruct(definition, suffix, false, literalTemplatesSymbol),
 		);
 		lines.push("");
 	}
@@ -1274,7 +1277,7 @@ export function emitBatch(
 	return lines.join("\n");
 }
 
-function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
+function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) {
 	const sideDataOffset = (): number => {
 		if (dataOffset === undefined) throw new Error("missing instruction side-data offset");
 		return dataOffset;
@@ -1527,7 +1530,7 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 }
 
 export function emitIntrinsic(
-	intrinsic: Extract<VmInstruction, { opcode: "LOAD_INTRINSIC" }>["intrinsic"],
+	intrinsic: Extract<BytecodeInstruction, { opcode: "LOAD_INTRINSIC" }>["intrinsic"],
 ) {
 	switch (intrinsic) {
 		case "Object":
@@ -1664,7 +1667,7 @@ export function emitIntrinsic(
 }
 
 export function emitUnaryOperator(
-	operator: Extract<VmInstruction, { opcode: "UNARY" }>["operator"],
+	operator: Extract<BytecodeInstruction, { opcode: "UNARY" }>["operator"],
 ) {
 	switch (operator) {
 		case "!":
@@ -1689,7 +1692,7 @@ export function emitUnaryOperator(
 }
 
 export function emitTypeofResult(
-	result: Extract<VmInstruction, { opcode: "TYPEOF_COMPARE" }>["expected"],
+	result: Extract<BytecodeInstruction, { opcode: "TYPEOF_COMPARE" }>["expected"],
 ) {
 	switch (result) {
 		case "undefined":

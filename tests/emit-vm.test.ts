@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
 	directBuiltinOperationIds,
 	exactBuiltinCallDescriptor,
@@ -10,24 +10,26 @@ import {
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	emitBatch,
-	emitVmDefinition,
-	emitVmTranslationUnits,
+	emitProgramImage,
+	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-vm.ts";
 import {
 	vmRegionLicense,
 	vmSemanticProtectorGuard,
 } from "../src/compiler/target/lower-vm.ts";
 import type {
-	VmDefinition,
-	VmFunction,
-	VmInstruction,
+	ProgramImage,
+	BytecodeFunction,
+	BytecodeInstruction,
 } from "../src/compiler/target/lower-vm.ts";
+import { createConservativeNativePlan } from "../src/compiler/target/lower-vm.ts";
 import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
 } from "../src/compiler/target/serialize-vm.ts";
+import { testProgramImage } from "./helpers/program-image.ts";
 
-const instructions: Array<VmInstruction> = [
+const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CREATE_F64", dst: 0, value: -0 },
 	{ opcode: "CREATE_F64", dst: 0, value: Number.POSITIVE_INFINITY },
 	{ opcode: "CREATE_F64", dst: 0, value: Number.NaN },
@@ -74,7 +76,7 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "RETURN", value: 6 },
 ];
 
-const fn: VmFunction = {
+const fn: BytecodeFunction = {
 	nameStringIndex: -1,
 	isGenerator: false,
 	isAsync: false,
@@ -96,10 +98,9 @@ const fn: VmFunction = {
 	handlers: [],
 	fileIndex: 0,
 	positions: [],
-	registerRepresentations: Array.from({ length: 12 }, () => "boxed"),
 };
 
-const definition: VmDefinition = {
+const definition: ProgramImage = testProgramImage({
 	entrypointPath: "/fixture/entry.mjs",
 	functionCount: 1,
 	functions: [fn],
@@ -112,7 +113,28 @@ const definition: VmDefinition = {
 	sourcePositions: [],
 	cjsModuleFunctionIndices: [],
 	hostInstalls: [],
-};
+});
+
+function specializations(definition: ProgramImage) {
+	return definition.nativePlan.functions.flatMap((fn) => fn.specializations);
+}
+
+function withSpecializations(
+	definition: ProgramImage,
+	functionIndex: number,
+	next: ProgramImage["nativePlan"]["functions"][number]["specializations"],
+): ProgramImage {
+	const owner = definition.nativePlan.functions[functionIndex]!;
+	return {
+		...definition,
+		nativePlan: {
+			functions: definition.nativePlan.functions.with(functionIndex, {
+				...owner,
+				specializations: next,
+			}),
+		},
+	};
+}
 
 describe("emit-vm instruction packing", () => {
 	it("combines semantic dependencies with one retained region twin", () => {
@@ -203,14 +225,14 @@ describe("emit-vm instruction packing", () => {
 				},
 			],
 		};
-		expect(emitVmDefinition(descriptorDefinition, { compiled: false })).toContain(
+		expect(emitProgramImage(descriptorDefinition, { compiled: false })).toContain(
 			".as.define_property = { .object = 1, .key = 2, .value = 3, .enumerable = true, .writable = false, .configurable = false }",
 		);
 	});
 
 	it("emits every registered direct builtin operation into interpreted C", () => {
 		for (const operation of directBuiltinOperationIds) {
-			const emitted = emitVmDefinition(
+			const emitted = emitProgramImage(
 				{
 					...definition,
 					functions: [
@@ -238,7 +260,7 @@ describe("emit-vm instruction packing", () => {
 	});
 
 	it("emits one flattened side table and raw f64 words", () => {
-		const output = emitVmDefinition(definition, { compiled: false });
+		const output = emitProgramImage(definition, { compiled: false });
 		expect(output).toContain(
 			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, 7, 8, 1, 9, 2, 10, 11, 3, 0, 2, 3, 2, 1, 4, 2, 8, 9 };",
 		);
@@ -268,7 +290,7 @@ describe("emit-vm instruction packing", () => {
 	});
 
 	it("emits guarded known-own-slot accesses in monolithic and split outputs", () => {
-		const specializedInstructions: Array<VmInstruction> = [
+		const specializedInstructions: Array<BytecodeInstruction> = [
 			{
 				opcode: "CREATE_OBJECT_SHAPED",
 				dst: 1,
@@ -295,7 +317,7 @@ describe("emit-vm instruction packing", () => {
 			},
 			{ opcode: "RETURN", value: 5 },
 		];
-		const specialized: VmDefinition = {
+		const specialized: ProgramImage = {
 			...definition,
 			precompiledLiteralShapes: [
 				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [1, 2] },
@@ -308,14 +330,14 @@ describe("emit-vm instruction packing", () => {
 				},
 			],
 		};
-		const interpreted = emitVmDefinition(specialized, { compiled: false });
-		const compiled = emitVmDefinition(specialized, { compiled: true });
-		const split = emitVmTranslationUnits(
+		const interpreted = emitProgramImage(specialized, { compiled: false });
+		const compiled = emitProgramImage(specialized, { compiled: true });
+		const split = emitProgramTranslationUnits(
 			specialized,
 			{ compiled: true },
 			Number.MAX_SAFE_INTEGER,
 		).join("\n");
-		const splitInterpreted = emitVmTranslationUnits(
+		const splitInterpreted = emitProgramTranslationUnits(
 			specialized,
 			{ compiled: false },
 			Number.MAX_SAFE_INTEGER,
@@ -356,7 +378,7 @@ describe("emit-vm instruction packing", () => {
 			expect(output).toContain("mal_vm_op_store_property_ic(vm,");
 		}
 
-		const syntheticInstructions: Array<VmInstruction> = [
+		const syntheticInstructions: Array<BytecodeInstruction> = [
 			{ opcode: "CREATE_UNDEFINED", dst: 1 },
 			{
 				opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
@@ -368,7 +390,7 @@ describe("emit-vm instruction packing", () => {
 			},
 			{ opcode: "RETURN", value: 5 },
 		];
-		const synthetic: VmDefinition = {
+		const synthetic: ProgramImage = {
 			...specialized,
 			functions: [
 				{
@@ -380,14 +402,14 @@ describe("emit-vm instruction packing", () => {
 			],
 		};
 		for (const output of [
-			emitVmDefinition(synthetic, { compiled: true }),
-			emitVmDefinition(synthetic, { compiled: false }),
+			emitProgramImage(synthetic, { compiled: true }),
+			emitProgramImage(synthetic, { compiled: false }),
 		]) {
 			expect(output).toContain(".literal_shape_count = 1");
 			expect(output).toContain(".shape_cache_index = 0");
 		}
 
-		const malformed: VmDefinition = {
+		const malformed: ProgramImage = {
 			...specialized,
 			functions: [
 				{
@@ -403,8 +425,8 @@ describe("emit-vm instruction packing", () => {
 				},
 			],
 		};
-		expect(() => emitVmDefinition(malformed)).toThrow(/invalid known-own-slot access/);
-		expect(() => emitVmTranslationUnits(malformed)).toThrow(
+		expect(() => emitProgramImage(malformed)).toThrow(/invalid known-own-slot access/);
+		expect(() => emitProgramTranslationUnits(malformed)).toThrow(
 			/invalid known-own-slot access/,
 		);
 
@@ -412,8 +434,8 @@ describe("emit-vm instruction packing", () => {
 			specializedInstructions[0]!,
 			{ ...specializedInstructions[0]!, dst: 2 },
 			...specializedInstructions.slice(1),
-		] as Array<VmInstruction>;
-		const duplicateShapeRow: VmDefinition = {
+		] as Array<BytecodeInstruction>;
+		const duplicateShapeRow: ProgramImage = {
 			...specialized,
 			functions: [
 				{
@@ -423,7 +445,7 @@ describe("emit-vm instruction packing", () => {
 				},
 			],
 		};
-		expect(() => emitVmDefinition(duplicateShapeRow)).toThrow(/literal shape index/);
+		expect(() => emitProgramImage(duplicateShapeRow)).toThrow(/literal shape index/);
 	});
 
 	it("emits terminal yields for interpreted and compiled generators", () => {
@@ -436,14 +458,24 @@ describe("emit-vm instruction packing", () => {
 					instructions: [
 						{ opcode: "GENERATOR_START" },
 						{ opcode: "TERMINAL_YIELD", yieldedSrc: 6 },
-					] as Array<VmInstruction>,
+					] as Array<BytecodeInstruction>,
 				},
 			],
+			nativePlan: createConservativeNativePlan([
+				{
+					...fn,
+					isGenerator: true,
+					instructions: [
+						{ opcode: "GENERATOR_START" },
+						{ opcode: "TERMINAL_YIELD", yieldedSrc: 6 },
+					] as Array<BytecodeInstruction>,
+				},
+			]),
 		};
-		expect(emitVmDefinition(terminal, { compiled: false })).toContain(
+		expect(emitProgramImage(terminal, { compiled: false })).toContain(
 			".opcode = MAL_OP_TERMINAL_YIELD, .as.terminal_yield = { .yielded_src = 6 }",
 		);
-		expect(emitVmDefinition(terminal)).toContain("mal_vm_op_terminal_yield_compiled");
+		expect(emitProgramImage(terminal)).toContain("mal_vm_op_terminal_yield_compiled");
 	});
 
 	it("emits and references shared side tables in batches", () => {
@@ -453,7 +485,7 @@ describe("emit-vm instruction packing", () => {
 	});
 
 	it("emits native bulk-private helper calls", () => {
-		const output = emitVmDefinition(definition);
+		const output = emitProgramImage(definition);
 		expect(output).toContain("mal_vm_op_create_private_names(vm, env, 0, 2");
 		expect(output).toContain("mal_vm_op_init_private_fields(vm, r6, 2");
 		expect(output).toContain("mal_vm_typeof_compare(r6, MAL_TYPEOF_NUMBER)");
@@ -469,9 +501,10 @@ describe("emit-vm instruction packing", () => {
 			...definition,
 			functionCount: functions.length,
 			functions,
+			nativePlan: createConservativeNativePlan(functions),
 		};
 		const budget = 20_000;
-		const units = emitVmTranslationUnits(splitDefinition, {}, budget);
+		const units = emitProgramTranslationUnits(splitDefinition, {}, budget);
 
 		expect(units.length).toBeGreaterThan(2);
 		expect(units.every((unit) => unit.length <= budget)).toBe(true);
@@ -509,12 +542,13 @@ describe("emit-vm instruction packing", () => {
 			[...String(index).padEnd(40, "x")].map((character) => character.charCodeAt(0)),
 		);
 		const budget = 100_000;
-		const units = emitVmTranslationUnits(
+		const units = emitProgramTranslationUnits(
 			{
 				...definition,
 				functionCount: functions.length,
 				functions,
 				stringConstants,
+				nativePlan: createConservativeNativePlan(functions),
 			},
 			{},
 			budget,
@@ -535,7 +569,7 @@ describe("emit-vm instruction packing", () => {
 	});
 
 	it("gives split async functions external linkage", () => {
-		const asyncFunction: VmFunction = {
+		const asyncFunction: BytecodeFunction = {
 			...fn,
 			isAsync: true,
 			registerCount: 1,
@@ -545,8 +579,12 @@ describe("emit-vm instruction packing", () => {
 				{ opcode: "RETURN", value: 0 },
 			],
 		};
-		const units = emitVmTranslationUnits(
-			{ ...definition, functions: [asyncFunction] },
+		const units = emitProgramTranslationUnits(
+			{
+				...definition,
+				functions: [asyncFunction],
+				nativePlan: createConservativeNativePlan([asyncFunction]),
+			},
 			{},
 			Number.MAX_SAFE_INTEGER,
 		);
@@ -566,13 +604,18 @@ describe("emit-vm instruction packing", () => {
 			...definition,
 			functionCount: functions.length,
 			functions,
+			nativePlan: createConservativeNativePlan(functions),
 			sourcePositions: instructions.map((_, index) => ({
 				line: index + 1,
 				column: index,
 			})),
 		};
 		const budget = 30_000;
-		const units = emitVmTranslationUnits(splitDefinition, { compiled: false }, budget);
+		const units = emitProgramTranslationUnits(
+			splitDefinition,
+			{ compiled: false },
+			budget,
+		);
 		const data = units.slice(1).join("\n");
 
 		expect(units.length).toBeGreaterThan(2);
@@ -604,13 +647,14 @@ describe("emit-vm instruction packing", () => {
 			[...String(index).padEnd(80, "x")].map((character) => character.charCodeAt(0)),
 		);
 		const budget = 100_000;
-		const units = emitVmTranslationUnits(
+		const units = emitProgramTranslationUnits(
 			{
 				...definition,
 				functionCount: functions.length,
 				functions,
 				sourcePositions,
 				stringConstants,
+				nativePlan: createConservativeNativePlan(functions),
 			},
 			{},
 			budget,
@@ -643,18 +687,19 @@ describe("emit-vm instruction packing", () => {
 			})),
 			{ opcode: "RETURN" as const, value: 0 },
 		];
-		const units = emitVmTranslationUnits(
+		const functions = [
+			{
+				...fn,
+				capturedCount: 0,
+				registerCount: 3,
+				instructions,
+			},
+		];
+		const units = emitProgramTranslationUnits(
 			{
 				...definition,
-				functions: [
-					{
-						...fn,
-						capturedCount: 0,
-						registerCount: 3,
-						registerRepresentations: Array.from({ length: 3 }, () => "boxed"),
-						instructions,
-					},
-				],
+				functions,
+				nativePlan: createConservativeNativePlan(functions),
 			},
 			{},
 			20_000,
@@ -669,8 +714,10 @@ describe("emit-vm instruction packing", () => {
 	});
 
 	it("rejects an invalid translation-unit budget", () => {
-		expect(() => emitVmTranslationUnits(definition, {}, 0)).toThrow(/positive integer/);
-		expect(() => emitVmTranslationUnits(definition, {}, 100)).toThrow(
+		expect(() => emitProgramTranslationUnits(definition, {}, 0)).toThrow(
+			/positive integer/,
+		);
+		expect(() => emitProgramTranslationUnits(definition, {}, 100)).toThrow(
 			/generated definition translation unit/,
 		);
 	});
@@ -680,13 +727,13 @@ describe("emit-vm instruction packing", () => {
 			...definition,
 			functions: [{ ...fn, instructions: [{ opcode: "RETURN", value: 0 } as const] }],
 		};
-		expect(emitVmDefinition(simple, { compiled: false })).toContain(
+		expect(emitProgramImage(simple, { compiled: false })).toContain(
 			".instruction_data_count = 0, .instruction_data = nullptr",
 		);
 	});
 
 	it("aliases an asset to existing linked immutable bytes", () => {
-		const output = emitVmDefinition(definition, {
+		const output = emitProgramImage(definition, {
 			compiled: false,
 			assets: [
 				{
@@ -716,30 +763,30 @@ describe("emit-vm instruction packing", () => {
 });
 
 describe("native update-expression representation", () => {
-	function lower(source: string): VmDefinition {
+	function lower(source: string): ProgramImage {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			source,
 			"update-expression-representation.js",
 			parseScript(source, { strict: false }),
 		);
-		return compileSemanticProgramToVmDefinition(semantic);
+		return compileSemanticProgramToProgramImage(semantic);
 	}
 
 	function emit(source: string): string {
-		return emitVmDefinition(lower(source), { compiled: true });
+		return emitProgramImage(lower(source), { compiled: true });
 	}
 
 	function emitLocked(source: string): string {
-		return emitVmDefinition(lockedDefinition(source), { compiled: true });
+		return emitProgramImage(lockedDefinition(source), { compiled: true });
 	}
 
-	function lockedDefinition(source: string): VmDefinition {
+	function lockedDefinition(source: string): ProgramImage {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			source,
 			"locked-native-representation.js",
 			parseScript(source, { strict: false }),
 		);
-		return compileSemanticProgramToVmDefinition(semantic, {
+		return compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		});
 	}
@@ -794,28 +841,22 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.summarize = summarize;
 		`);
-		const functionIndex = definition.functions.findIndex(
-			(fn) => (fn.regions?.length ?? 0) > 0,
+		const functionIndex = definition.nativePlan.functions.findIndex(
+			(fn) => fn.specializations.length > 0,
 		);
 		expect(functionIndex).toBeGreaterThanOrEqual(0);
-		const fn = definition.functions[functionIndex]!;
-		const region = fn.regions![0]!;
-		const malformed: VmDefinition = {
-			...definition,
-			functions: definition.functions.with(functionIndex, {
-				...fn,
-				regions: [
-					{
-						...region,
-						controlFlow: {
-							...region.controlFlow,
-							ordinaryBlockIps: [],
-						},
-					},
-				],
-			}),
-		};
-		expect(() => serializeVmDefinition(malformed)).toThrow(/invalid region envelope/);
+		const native = definition.nativePlan.functions[functionIndex]!;
+		const region = native.specializations[0]!;
+		const malformed = withSpecializations(definition, functionIndex, [
+			{
+				...region,
+				controlFlow: {
+					...region.controlFlow,
+					ordinaryBlockIps: [],
+				},
+			},
+		]);
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(/invalid region envelope/);
 	});
 
 	it("pre-reserves a pristine indexed fill and retains guarded array stores", () => {
@@ -870,10 +911,10 @@ describe("native update-expression representation", () => {
 	it("keeps iterator execution generic until Core owns a cursor region", () => {
 		const source = `"use strict"; function sum(values) { let total = 0; for (const value of values) total += value; return total; } globalThis.sum = sum;`;
 		const definition = lower(source);
-		expect(deserializeVmDefinition(serializeVmDefinition(definition))).toEqual(
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
 			definition,
 		);
-		const output = emitVmDefinition(definition, { compiled: true });
+		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).not.toContain("MalIteratorObject *__dense_iter_");
 		expect(output).not.toContain("mal_vm_iterator_step_dense_array_cursor(vm,");
 		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
@@ -1006,10 +1047,10 @@ describe("native update-expression representation", () => {
 
 		const loopSource = `"use strict"; function load(object, count, initial) { let value = initial; for (let i = 0; i < count; i++) value = object.value; return value; } globalThis.load = load;`;
 		const loopDefinition = lower(loopSource);
-		expect(deserializeVmDefinition(serializeVmDefinition(loopDefinition))).toEqual(
-			loopDefinition,
-		);
-		const loopOutput = emitVmDefinition(loopDefinition, { compiled: true });
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(loopDefinition)),
+		).toEqual(loopDefinition);
+		const loopOutput = emitProgramImage(loopDefinition, { compiled: true });
 		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
 
@@ -1076,10 +1117,10 @@ describe("native update-expression representation", () => {
 	it("guards direct unary and binary Math calls by exact callbacks", () => {
 		const source = `"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } function constants() { const a = 1.25; const b = -0; return Math.floor(a) + Math.max(a, b); } globalThis.keep = [calculate, constants];`;
 		const definition = lower(source);
-		expect(deserializeVmDefinition(serializeVmDefinition(definition))).toEqual(
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
 			definition,
 		);
-		const output = emitVmDefinition(definition, { compiled: true });
+		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("mal_builtin_math_unary_fast");
 		expect(output).toContain("mal_builtin_math_binary_fast");
 		expect(output).not.toContain("mal_builtin_math_unary_number_known");
@@ -1204,10 +1245,10 @@ describe("native update-expression representation", () => {
 			globalThis.codeUnit = codeUnit;
 		`;
 		const definition = lower(code);
-		expect(deserializeVmDefinition(serializeVmDefinition(definition))).toEqual(
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
 			definition,
 		);
-		const output = emitVmDefinition(definition, { compiled: true });
+		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).not.toContain("mal_vm_local_watched_primitive_value_try_load_static");
 		expect(output).not.toContain("mal_builtin_string_char_code_at_number(");
 		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
@@ -1219,8 +1260,8 @@ describe("native update-expression representation", () => {
 			"locked-string-char-code-at.js",
 			parseScript(code, { strict: false }),
 		);
-		const lockedOutput = emitVmDefinition(
-			compileSemanticProgramToVmDefinition(semantic, {
+		const lockedOutput = emitProgramImage(
+			compileSemanticProgramToProgramImage(semantic, {
 				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 			}),
 			{ compiled: true },
@@ -1310,10 +1351,9 @@ describe("native update-expression representation", () => {
 				{ strict: false },
 			),
 		);
-		const lowered = compileSemanticProgramToVmDefinition(semantic);
-		const projections = lowered.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "string-split-projection") ?? [],
+		const lowered = compileSemanticProgramToProgramImage(semantic);
+		const projections = specializations(lowered).filter(
+			(region) => region.kind === "string-split-projection",
 		);
 		expect(projections).toHaveLength(1);
 		expect(projections[0]).toMatchObject({
@@ -1329,11 +1369,11 @@ describe("native update-expression representation", () => {
 				},
 			},
 		});
-		const lockedProjections = compileSemanticProgramToVmDefinition(semantic, {
+		const lockedDefinition = compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
-		}).functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "string-split-projection") ?? [],
+		});
+		const lockedProjections = specializations(lockedDefinition).filter(
+			(region) => region.kind === "string-split-projection",
 		);
 		expect(lockedProjections).toHaveLength(1);
 		expect(lockedProjections[0]).toMatchObject({
@@ -1341,64 +1381,57 @@ describe("native update-expression representation", () => {
 			propertyPlacement: "call-fallback",
 		});
 
-		const cached = deserializeVmDefinition(
-			serializeVmDefinition(lowered, { debugInfo: false }),
+		const cached = deserializeCompilerArtifact(
+			serializeCompilerArtifact(lowered, { debugInfo: false }),
 		);
 		expect(
-			cached.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "string-split-projection") ?? [],
+			specializations(cached).filter(
+				(region) => region.kind === "string-split-projection",
 			),
 		).toEqual(projections);
-		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+		expect(emitProgramImage(cached, { compiled: true })).toContain(
 			"mal_builtin_string_split_projection(vm,",
 		);
 
-		const functionIndex = lowered.functions.findIndex((fn) =>
-			fn.regions?.some((region) => region.kind === "string-split-projection"),
+		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+			fn.specializations.some((region) => region.kind === "string-split-projection"),
 		);
-		const owner = lowered.functions[functionIndex]!;
-		const regionIndex = owner.regions!.findIndex(
+		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const regionIndex = owner.specializations.findIndex(
 			(region) => region.kind === "string-split-projection",
 		);
-		const region = owner.regions![regionIndex]!;
+		const region = owner.specializations[regionIndex]!;
 		if (region.kind !== "string-split-projection") {
 			throw new Error("missing split projection region");
 		}
-		const malformed: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, {
-					...region,
-					loads: region.loads.with(0, { ...region.loads[0]!, dst: -1 }),
-				}),
+		const malformed = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, {
+				...region,
+				loads: region.loads.with(0, { ...region.loads[0]!, dst: -1 }),
 			}),
-		};
-		expect(() => serializeVmDefinition(malformed)).toThrow(
+		);
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(
 			/invalid String\.split projection region metadata/,
 		);
-		const invalidIdentity: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, {
-					...region,
-					splitIdentity: "authority-invariant",
-				}),
+		const invalidIdentity = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, {
+				...region,
+				splitIdentity: "authority-invariant",
 			}),
-		};
-		expect(() => serializeVmDefinition(invalidIdentity)).toThrow(
+		);
+		expect(() => serializeCompilerArtifact(invalidIdentity)).toThrow(
 			/invalid String\.split projection region metadata/,
 		);
-		const invalidForEmission: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, { ...region, loads: [] }),
-			}),
-		};
-		expect(() => emitVmDefinition(invalidForEmission, { compiled: true })).toThrow(
+		const invalidForEmission = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, { ...region, loads: [] }),
+		);
+		expect(() => emitProgramImage(invalidForEmission, { compiled: true })).toThrow(
 			/Invalid Core string-split projection/,
 		);
 	});
@@ -1414,10 +1447,9 @@ describe("native update-expression representation", () => {
 			"regexp-exec-projection-lowering.js",
 			parseScript(source, { strict: false }),
 		);
-		const lowered = compileSemanticProgramToVmDefinition(semantic);
-		const projections = lowered.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+		const lowered = compileSemanticProgramToProgramImage(semantic);
+		const projections = specializations(lowered).filter(
+			(region) => region.kind === "regexp-exec-projection",
 		);
 		expect(projections).toHaveLength(1);
 		expect(projections[0]).toMatchObject({
@@ -1436,51 +1468,46 @@ describe("native update-expression representation", () => {
 		expect(projections[0]!.nullChecks).toHaveLength(1);
 		expect(projections[0]!.loads[0]?.consumer?.kind).toBe("number");
 
-		const cached = deserializeVmDefinition(
-			serializeVmDefinition(lowered, { debugInfo: false }),
+		const cached = deserializeCompilerArtifact(
+			serializeCompilerArtifact(lowered, { debugInfo: false }),
 		);
 		expect(
-			cached.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+			specializations(cached).filter(
+				(region) => region.kind === "regexp-exec-projection",
 			),
 		).toEqual(projections);
-		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+		expect(emitProgramImage(cached, { compiled: true })).toContain(
 			"mal_regexp_exec_capture_projection(vm,",
 		);
 
-		const functionIndex = lowered.functions.findIndex((fn) =>
-			fn.regions?.some((region) => region.kind === "regexp-exec-projection"),
+		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+			fn.specializations.some((region) => region.kind === "regexp-exec-projection"),
 		);
-		const owner = lowered.functions[functionIndex]!;
-		const regionIndex = owner.regions!.findIndex(
+		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const regionIndex = owner.specializations.findIndex(
 			(region) => region.kind === "regexp-exec-projection",
 		);
-		const region = owner.regions![regionIndex]!;
+		const region = owner.specializations[regionIndex]!;
 		if (region.kind !== "regexp-exec-projection") {
 			throw new Error("missing RegExp.exec projection region");
 		}
-		const malformed: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, {
-					...region,
-					lastIndexEffect: "broken" as never,
-				}),
+		const malformed = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, {
+				...region,
+				lastIndexEffect: "broken" as never,
 			}),
-		};
-		expect(() => serializeVmDefinition(malformed)).toThrow(
+		);
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(
 			/invalid RegExp\.exec projection region/,
 		);
-		const invalidForEmission: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, { ...region, loads: [] }),
-			}),
-		};
-		expect(() => emitVmDefinition(invalidForEmission, { compiled: true })).toThrow(
+		const invalidForEmission = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, { ...region, loads: [] }),
+		);
+		expect(() => emitProgramImage(invalidForEmission, { compiled: true })).toThrow(
 			/Invalid Core RegExp\.exec projection/,
 		);
 	});
@@ -1496,9 +1523,9 @@ describe("native update-expression representation", () => {
 			"regexp-projected-string-method-identity.js",
 			parseScript(source, { strict: false }),
 		);
-		const projectedIdentities = (lowered: VmDefinition) => {
-			const region = lowered.functions
-				.flatMap((fn) => fn.regions ?? [])
+		const projectedIdentities = (lowered: ProgramImage) => {
+			const region = lowered.nativePlan.functions
+				.flatMap((fn) => fn.specializations)
 				.find((candidate) => candidate.kind === "regexp-exec-projection");
 			if (region?.kind !== "regexp-exec-projection") {
 				throw new Error("missing RegExp.exec projection region");
@@ -1513,11 +1540,11 @@ describe("native update-expression representation", () => {
 			};
 		};
 
-		const mutable = compileSemanticProgramToVmDefinition(semantic);
+		const mutable = compileSemanticProgramToProgramImage(semantic);
 		const mutableProjection = projectedIdentities(mutable);
 		expect(mutableProjection.identities).toEqual(["runtime-guarded", "runtime-guarded"]);
 
-		const locked = compileSemanticProgramToVmDefinition(semantic, {
+		const locked = compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		});
 		const lockedProjection = projectedIdentities(locked);
@@ -1527,7 +1554,9 @@ describe("native update-expression representation", () => {
 		]);
 		expect(
 			projectedIdentities(
-				deserializeVmDefinition(serializeVmDefinition(locked, { debugInfo: false })),
+				deserializeCompilerArtifact(
+					serializeCompilerArtifact(locked, { debugInfo: false }),
+				),
 			).identities,
 		).toEqual(lockedProjection.identities);
 
@@ -1536,37 +1565,39 @@ describe("native update-expression representation", () => {
 			throw new Error("missing charCodeAtZero consumer");
 		}
 		const charConsumer = firstLoad.consumer;
-		const malformed: VmDefinition = {
+		const malformed: ProgramImage = {
 			...locked,
-			functions: locked.functions.map((fn) => ({
-				...fn,
-				regions: fn.regions?.map((region) =>
-					region === lockedProjection.region
-						? {
-								...region,
-								loads: region.loads.with(0, {
-									...firstLoad,
-									consumer: {
-										...charConsumer,
-										methodIdentity: "runtime-guarded",
-									},
-								}),
-							}
-						: region,
-				),
-			})),
+			nativePlan: {
+				functions: locked.nativePlan.functions.map((fn) => ({
+					...fn,
+					specializations: fn.specializations.map((region) =>
+						region === lockedProjection.region
+							? {
+									...region,
+									loads: region.loads.with(0, {
+										...firstLoad,
+										consumer: {
+											...charConsumer,
+											methodIdentity: "runtime-guarded",
+										},
+									}),
+								}
+							: region,
+					),
+				})),
+			},
 		};
-		expect(() => serializeVmDefinition(malformed)).toThrow(
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(
 			/invalid RegExp\.exec projection region/,
 		);
 
-		const ownerIndex = locked.functions.findIndex((fn) =>
-			fn.regions?.includes(lockedProjection.region),
+		const ownerIndex = locked.nativePlan.functions.findIndex((fn) =>
+			fn.specializations.includes(lockedProjection.region),
 		);
 		const owner = locked.functions[ownerIndex]!;
 		const charCall = owner.instructions[charConsumer.callIp];
 		if (charCall?.opcode !== "CALL") throw new Error("missing projected char call");
-		const invalidZero: VmDefinition = {
+		const invalidZero: ProgramImage = {
 			...locked,
 			functions: locked.functions.with(ownerIndex, {
 				...owner,
@@ -1576,7 +1607,7 @@ describe("native update-expression representation", () => {
 				}),
 			}),
 		};
-		expect(() => serializeVmDefinition(invalidZero)).toThrow(
+		expect(() => serializeCompilerArtifact(invalidZero)).toThrow(
 			/invalid RegExp\.exec projection region/,
 		);
 
@@ -1595,7 +1626,7 @@ describe("native update-expression representation", () => {
 		) {
 			throw new Error("missing projected case properties");
 		}
-		const invalidCaseChain: VmDefinition = {
+		const invalidCaseChain: ProgramImage = {
 			...locked,
 			functions: locked.functions.with(ownerIndex, {
 				...owner,
@@ -1605,7 +1636,7 @@ describe("native update-expression representation", () => {
 				}),
 			}),
 		};
-		expect(() => serializeVmDefinition(invalidCaseChain)).toThrow(
+		expect(() => serializeCompilerArtifact(invalidCaseChain)).toThrow(
 			/invalid RegExp\.exec projection region/,
 		);
 	});
@@ -1623,9 +1654,9 @@ describe("native update-expression representation", () => {
 			"string-slice-number-lowering.js",
 			parseScript(source, { strict: false }),
 		);
-		const lowered = compileSemanticProgramToVmDefinition(semantic);
-		const regions = lowered.functions.flatMap(
-			(fn) => fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+		const lowered = compileSemanticProgramToProgramImage(semantic);
+		const regions = specializations(lowered).filter(
+			(region) => region.kind === "string-slice-number",
 		);
 		expect(regions).toHaveLength(1);
 		expect(regions[0]).toMatchObject({
@@ -1643,64 +1674,58 @@ describe("native update-expression representation", () => {
 			},
 		});
 		expect(regions[0]!.controlFlow.exceptionalHandlerIps).not.toHaveLength(0);
-		const lockedRegions = compileSemanticProgramToVmDefinition(semantic, {
+		const lockedDefinition = compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
-		}).functions.flatMap(
-			(fn) => fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+		});
+		const lockedRegions = specializations(lockedDefinition).filter(
+			(region) => region.kind === "string-slice-number",
 		);
 		expect(lockedRegions).toHaveLength(1);
 		expect(lockedRegions[0]).toMatchObject({
 			builtinIdentities: "authority-invariant",
 		});
 
-		const cached = deserializeVmDefinition(
-			serializeVmDefinition(lowered, { debugInfo: false }),
+		const cached = deserializeCompilerArtifact(
+			serializeCompilerArtifact(lowered, { debugInfo: false }),
 		);
 		expect(
-			cached.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
-			),
+			specializations(cached).filter((region) => region.kind === "string-slice-number"),
 		).toEqual(regions);
-		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+		expect(emitProgramImage(cached, { compiled: true })).toContain(
 			"mal_builtin_string_slice_to_number_direct(vm,",
 		);
 
-		const functionIndex = lowered.functions.findIndex((fn) =>
-			fn.regions?.some((region) => region.kind === "string-slice-number"),
+		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+			fn.specializations.some((region) => region.kind === "string-slice-number"),
 		);
-		const owner = lowered.functions[functionIndex]!;
-		const regionIndex = owner.regions!.findIndex(
+		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const regionIndex = owner.specializations.findIndex(
 			(region) => region.kind === "string-slice-number",
 		);
-		const region = owner.regions![regionIndex]!;
+		const region = owner.specializations[regionIndex]!;
 		if (region.kind !== "string-slice-number") {
 			throw new Error("missing String.slice Number region");
 		}
-		const malformed: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, {
-					...region,
-					sliceStart: Number.POSITIVE_INFINITY,
-				}),
+		const malformed = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, {
+				...region,
+				sliceStart: Number.POSITIVE_INFINITY,
 			}),
-		};
-		expect(() => serializeVmDefinition(malformed)).toThrow(
+		);
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(
 			/invalid String\.slice Number region/,
 		);
-		const invalidIdentity: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, {
-					...region,
-					builtinIdentities: "authority-invariant",
-				}),
+		const invalidIdentity = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, {
+				...region,
+				builtinIdentities: "authority-invariant",
 			}),
-		};
-		expect(() => serializeVmDefinition(invalidIdentity)).toThrow(
+		);
+		expect(() => serializeCompilerArtifact(invalidIdentity)).toThrow(
 			/invalid String\.slice Number region/,
 		);
 	});
@@ -1716,11 +1741,9 @@ describe("native update-expression representation", () => {
 			"regexp-iterator-projection-lowering.js",
 			parseScript(source, { strict: false }),
 		);
-		const lowered = compileSemanticProgramToVmDefinition(semantic);
-		const projections = lowered.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
-				[],
+		const lowered = compileSemanticProgramToProgramImage(semantic);
+		const projections = specializations(lowered).filter(
+			(region) => region.kind === "regexp-iterator-projection",
 		);
 		expect(projections).toHaveLength(1);
 		expect(projections[0]).toMatchObject({
@@ -1740,52 +1763,46 @@ describe("native update-expression representation", () => {
 		});
 		expect(projections[0]!.controlFlow.exceptionalHandlerIps).not.toHaveLength(0);
 
-		const cached = deserializeVmDefinition(
-			serializeVmDefinition(lowered, { debugInfo: false }),
+		const cached = deserializeCompilerArtifact(
+			serializeCompilerArtifact(lowered, { debugInfo: false }),
 		);
 		expect(
-			cached.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
-					[],
+			specializations(cached).filter(
+				(region) => region.kind === "regexp-iterator-projection",
 			),
 		).toEqual(projections);
-		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+		expect(emitProgramImage(cached, { compiled: true })).toContain(
 			"mal_regexp_try_exact_iterator_capture_projection(vm,",
 		);
 
-		const functionIndex = lowered.functions.findIndex((fn) =>
-			fn.regions?.some((region) => region.kind === "regexp-iterator-projection"),
+		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+			fn.specializations.some((region) => region.kind === "regexp-iterator-projection"),
 		);
-		const owner = lowered.functions[functionIndex]!;
-		const regionIndex = owner.regions!.findIndex(
+		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const regionIndex = owner.specializations.findIndex(
 			(region) => region.kind === "regexp-iterator-projection",
 		);
-		const region = owner.regions![regionIndex]!;
+		const region = owner.specializations[regionIndex]!;
 		if (region.kind !== "regexp-iterator-projection") {
 			throw new Error("missing RegExp iterator projection region");
 		}
-		const malformed: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, {
-					...region,
-					runtimeGuard: "broken" as never,
-				}),
+		const malformed = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, {
+				...region,
+				runtimeGuard: "broken" as never,
 			}),
-		};
-		expect(() => serializeVmDefinition(malformed)).toThrow(
+		);
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(
 			/invalid RegExp iterator projection region/,
 		);
-		const invalidForEmission: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, { ...region, loads: [] }),
-			}),
-		};
-		expect(() => emitVmDefinition(invalidForEmission, { compiled: true })).toThrow(
+		const invalidForEmission = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(regionIndex, { ...region, loads: [] }),
+		);
+		expect(() => emitProgramImage(invalidForEmission, { compiled: true })).toThrow(
 			/Invalid Core RegExp iterator projection/,
 		);
 	});
@@ -1805,9 +1822,9 @@ describe("native update-expression representation", () => {
 			"split-cursor-lowering.js",
 			parseScript(source, { strict: false }),
 		);
-		const lowered = compileSemanticProgramToVmDefinition(semantic);
-		const cursors = lowered.functions.flatMap(
-			(fn) => fn.regions?.filter((region) => region.kind === "string-split-cursor") ?? [],
+		const lowered = compileSemanticProgramToProgramImage(semantic);
+		const cursors = specializations(lowered).filter(
+			(region) => region.kind === "string-split-cursor",
 		);
 		expect(cursors).toHaveLength(1);
 		expect(cursors[0]).toMatchObject({
@@ -1826,10 +1843,11 @@ describe("native update-expression representation", () => {
 			},
 		});
 		expect(cursors[0]?.primitiveStringLengthIps).toHaveLength(1);
-		const lockedCursors = compileSemanticProgramToVmDefinition(semantic, {
+		const lockedDefinition = compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
-		}).functions.flatMap(
-			(fn) => fn.regions?.filter((region) => region.kind === "string-split-cursor") ?? [],
+		});
+		const lockedCursors = specializations(lockedDefinition).filter(
+			(region) => region.kind === "string-split-cursor",
 		);
 		expect(lockedCursors).toHaveLength(1);
 		expect(lockedCursors[0]).toMatchObject({
@@ -1839,42 +1857,38 @@ describe("native update-expression representation", () => {
 			license: { admission: { validity: "once" } },
 		});
 
-		const cached = deserializeVmDefinition(
-			serializeVmDefinition(lowered, { debugInfo: false }),
+		const cached = deserializeCompilerArtifact(
+			serializeCompilerArtifact(lowered, { debugInfo: false }),
 		);
 		expect(
-			cached.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "string-split-cursor") ?? [],
-			),
+			specializations(cached).filter((region) => region.kind === "string-split-cursor"),
 		).toEqual(cursors);
-		const functionIndex = lowered.functions.findIndex((fn) =>
-			fn.regions?.some((region) => region.kind === "string-split-cursor"),
+		const functionIndex = lowered.nativePlan.functions.findIndex((fn) =>
+			fn.specializations.some((region) => region.kind === "string-split-cursor"),
 		);
-		const owner = lowered.functions[functionIndex]!;
-		const cursor = owner.regions!.find(
+		const owner = lowered.nativePlan.functions[functionIndex]!;
+		const bytecode = lowered.functions[functionIndex]!;
+		const cursor = owner.specializations.find(
 			(region) => region.kind === "string-split-cursor",
 		)!;
-		const cursorIndex = owner.regions!.indexOf(cursor);
-		const invalidIdentity: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(cursorIndex, {
-					...cursor,
-					trimIdentity: "authority-invariant",
-				}),
+		const cursorIndex = owner.specializations.indexOf(cursor);
+		const invalidIdentity = withSpecializations(
+			lowered,
+			functionIndex,
+			owner.specializations.with(cursorIndex, {
+				...cursor,
+				trimIdentity: "authority-invariant",
 			}),
-		};
-		expect(() => serializeVmDefinition(invalidIdentity)).toThrow(
+		);
+		expect(() => serializeCompilerArtifact(invalidIdentity)).toThrow(
 			/invalid String\.split cursor region metadata/,
 		);
-		const element = owner.instructions[cursor.elementIp]!;
+		const element = bytecode.instructions[cursor.elementIp]!;
 		expect(element.opcode).toBe("LOAD_PROPERTY");
 		if (element.opcode !== "LOAD_PROPERTY")
 			throw new Error("expected cursor element load");
 		expect(owner.registerRepresentations[element.key]).toBe("number");
-		const emitted = emitVmDefinition(cached, { compiled: true });
+		const emitted = emitProgramImage(cached, { compiled: true });
 		expect(emitted).toContain("mal_builtin_string_split_cursor_init(vm,");
 		expect(emitted).toContain(
 			`mal_vm_array_fast_load_index(vm, r${element.object}, r${element.key}, &__property_ic[${element.icIndex}])`,
@@ -1882,14 +1896,11 @@ describe("native update-expression representation", () => {
 		expect(emitted).toContain(
 			`mal_vm_array_try_load(__property_receiver_${cursor.elementIp}, r${element.key}`,
 		);
-		const duplicate: VmDefinition = {
-			...lowered,
-			functions: lowered.functions.with(functionIndex, {
-				...owner,
-				regions: [...owner.regions!, cursor],
-			}),
-		};
-		expect(() => emitVmDefinition(duplicate, { compiled: true })).toThrow(
+		const duplicate = withSpecializations(lowered, functionIndex, [
+			...owner.specializations,
+			cursor,
+		]);
+		expect(() => emitProgramImage(duplicate, { compiled: true })).toThrow(
 			/Duplicate Core string-split cursor/,
 		);
 	});
@@ -2316,7 +2327,7 @@ describe("native static typeof facts", () => {
 			"static-typeof-facts.js",
 			parseScript(source, { strict: false }),
 		);
-		return emitVmDefinition(compileSemanticProgramToVmDefinition(semantic), {
+		return emitProgramImage(compileSemanticProgramToProgramImage(semantic), {
 			compiled: true,
 		});
 	}

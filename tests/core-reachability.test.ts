@@ -14,7 +14,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import type { CompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	compilerProgramFactsFromConfig,
@@ -495,7 +495,7 @@ describe("Core whole-program function reachability", () => {
 	it("publishes the compact function table to VM lowering", () => {
 		const path = "closed-reachability-product.mjs";
 		let optimized: CoreProgram | undefined;
-		const definition = compileSemanticProgramToVmDefinition(
+		const definition = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(DEAD_CYCLE, path, parseModule(DEAD_CYCLE)),
 			{
 				facts: moduleFacts(path, true),

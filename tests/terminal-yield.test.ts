@@ -1,29 +1,29 @@
 import { expect, test } from "vitest";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
-import type { VmInstruction } from "../src/compiler/target/lower-vm.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import type { BytecodeInstruction } from "../src/compiler/target/lower-vm.ts";
 
-function generatorYields(source: string): Array<VmInstruction["opcode"]> {
+function generatorYields(source: string): Array<BytecodeInstruction["opcode"]> {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
 		source,
 		"terminal-yield.js",
 		parseScript(source, { strict: true }),
 	);
-	const definition = compileSemanticProgramToVmDefinition(semantic);
+	const definition = compileSemanticProgramToProgramImage(semantic);
 	const generator = definition.functions.find((fn) => fn.isGenerator)!;
 	return generator.instructions
 		.map((instruction) => instruction.opcode)
 		.filter((opcode) => opcode === "YIELD" || opcode === "TERMINAL_YIELD");
 }
 
-function generatorOpcodes(source: string): Array<VmInstruction["opcode"]> {
+function generatorOpcodes(source: string): Array<BytecodeInstruction["opcode"]> {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
 		source,
 		"generator-prologue.js",
 		parseScript(source, { strict: true }),
 	);
-	const definition = compileSemanticProgramToVmDefinition(semantic);
+	const definition = compileSemanticProgramToProgramImage(semantic);
 	return definition.functions
 		.find((fn) => fn.isGenerator)!
 		.instructions.map((instruction) => instruction.opcode);

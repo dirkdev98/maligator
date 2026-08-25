@@ -5,14 +5,14 @@ import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.t
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
 import {
-	emitVmDefinition,
-	emitVmTranslationUnits,
+	emitProgramImage,
+	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-vm.ts";
-import { lowerCoreProgramToVmDefinition } from "../src/compiler/target/lower-vm.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-vm.ts";
 import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
 
 function compile(source: string) {
@@ -21,7 +21,7 @@ function compile(source: string) {
 		"/project/src/profile-fixture.js",
 		parseScript(source, { strict: true }),
 	);
-	return compileSemanticProgramToVmDefinition(semantic, {
+	return compileSemanticProgramToProgramImage(semantic, {
 		facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		profile: true,
 	});
@@ -34,7 +34,7 @@ test("ordinary compilation skips profile-only metadata", () => {
 		"/project/src/ordinary-fixture.js",
 		parseScript(source, { strict: true }),
 	);
-	const definition = compileSemanticProgramToVmDefinition(semantic);
+	const definition = compileSemanticProgramToProgramImage(semantic);
 
 	expect(definition.profileSites).toBeUndefined();
 	expect(definition.profileRemarks).toBeUndefined();
@@ -63,7 +63,7 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 	const definition = compile(
 		`function hot(object, key) { object.fixed = {}; return object[key]; } hot(globalThis, "x");`,
 	);
-	emitVmDefinition(definition);
+	emitProgramImage(definition);
 	const sites = definition.profileSites!;
 	const remarks = definition.profileRemarks!;
 
@@ -148,11 +148,11 @@ test("profile remarks expose guarded known-own-slot lowering and native emission
 		program: optimized.program,
 		context: optimized.context,
 	});
-	const definition = lowerCoreProgramToVmDefinition(
-		lowerCoreProgramToTarget(compilation),
+	const definition = lowerExecutionToProgramImage(
+		lowerCoreCompilationToExecution(compilation),
 		true,
 	);
-	emitVmDefinition(definition, { compiled: true });
+	emitProgramImage(definition, { compiled: true });
 
 	expect(definition.profileRemarks).toContainEqual(
 		expect.objectContaining({
@@ -248,9 +248,11 @@ test("profile remarks classify residual direct-call helpers as guarded compiled 
 		}
 		globalThis.keep = outer;
 	`);
-	const emitted = emitVmTranslationUnits(definition, {}, Number.MAX_SAFE_INTEGER).join(
-		"\n",
-	);
+	const emitted = emitProgramTranslationUnits(
+		definition,
+		{},
+		Number.MAX_SAFE_INTEGER,
+	).join("\n");
 	expect(emitted).toContain("mal_vm_call_direct(");
 
 	expect(definition.profileRemarks).toContainEqual(

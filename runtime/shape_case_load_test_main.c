@@ -3,7 +3,7 @@
 
 #include <stdio.h>
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 int main(void) {
     MalVm vm;

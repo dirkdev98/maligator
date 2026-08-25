@@ -2,8 +2,8 @@ import { referencesArguments } from "../core/semantic-lowering.ts";
 import { decodeDirectEvalContext } from "../frontend/direct-eval-context.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../frontend/semantic-analysis.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
-import { serializeVmDefinition } from "../target/serialize-vm.ts";
-import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
+import { serializeRuntimeImage } from "../target/serialize-vm.ts";
+import { compileSemanticProgramToProgramImage } from "./compile-core.ts";
 
 /** VarDeclaredNames of the eval script, represented by its hoisted Program bindings. */
 function varDeclaredNames(semantic: SemanticProgram): Set<string> {
@@ -83,12 +83,12 @@ export function compileSourceToBuffer(
 	if (options.inFieldInitializer && referencesArguments(semantic.files[0]?.ast.body)) {
 		throw new SyntaxError("'arguments' is not allowed in a class field initializer");
 	}
-	const definition = compileSemanticProgramToVmDefinition(semantic, {
+	const definition = compileSemanticProgramToProgramImage(semantic, {
 		semanticLowering: {
 			evalCompletion: options.completionValue,
 			evalDirect: options.direct,
 			directEvalContext,
 		},
 	});
-	return serializeVmDefinition(definition, { debugInfo: options.debugInfo });
+	return serializeRuntimeImage(definition, { debugInfo: options.debugInfo });
 }

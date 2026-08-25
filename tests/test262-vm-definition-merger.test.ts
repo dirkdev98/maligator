@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type {
-	VmDefinition,
-	VmFunction,
-	VmInstruction,
+	ProgramImage,
+	BytecodeFunction,
+	BytecodeInstruction,
 } from "../src/compiler/target/lower-vm.ts";
-import { mergeVmDefinitions } from "../src/test262/vm-definition-merge.ts";
+import { mergeProgramImages } from "../src/test262/vm-definition-merge.ts";
+import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
-function vmFunction(instructions: Array<VmInstruction>): VmFunction {
+function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction {
 	return {
 		nameStringIndex: 0,
 		isGenerator: false,
@@ -31,33 +32,33 @@ function vmFunction(instructions: Array<VmInstruction>): VmFunction {
 		handlers: [{ startIp: 0, endIp: 1, handlerIp: 1 }],
 		fileIndex: 0,
 		positions: instructions.map(() => 0),
-		gcRootRegisters: [0, 2],
-		registerRepresentations: Array.from({ length: 8 }, () => "boxed"),
 	};
 }
 
-function definition(overrides: Partial<VmDefinition> = {}): VmDefinition {
+function definition(overrides: Partial<ProgramImage> = {}): ProgramImage {
 	const functions = overrides.functions ?? [vmFunction([{ opcode: "RETURN", value: 0 }])];
 	return {
-		entrypointPath: "input.js",
-		functionCount: functions.length,
-		functions,
-		stringConstants: [[65]],
-		bigintConstants: [1n],
-		literalTemplateData: [8, 0],
-		precompiledLiteralShapes: [],
-		globalCount: 1,
-		files: ["input.js"],
-		sourcePositions: [{ line: 1, column: 0 }],
-		cjsModuleFunctionIndices: [],
-		hostInstalls: [],
+		...testProgramImage({
+			entrypointPath: "input.js",
+			functionCount: functions.length,
+			functions,
+			stringConstants: [[65]],
+			bigintConstants: [1n],
+			literalTemplateData: [8, 0],
+			precompiledLiteralShapes: [],
+			globalCount: 1,
+			files: ["input.js"],
+			sourcePositions: [{ line: 1, column: 0 }],
+			cjsModuleFunctionIndices: [],
+			hostInstalls: [],
+		}),
 		...overrides,
 	};
 }
 
 describe("Test262 VM definition merger", () => {
 	it("retains one shared semantic world and rejects mixed facts", () => {
-		const semanticProtectors: NonNullable<VmDefinition["semanticProtectors"]> = [
+		const semanticProtectors: NonNullable<ProgramImage["semanticProtectors"]> = [
 			{
 				family: "array-elements",
 				guard: {
@@ -66,7 +67,7 @@ describe("Test262 VM definition merger", () => {
 				},
 			},
 		];
-		const merged = mergeVmDefinitions([
+		const merged = mergeProgramImages([
 			definition({ semanticProtectors }),
 			definition({ semanticProtectors }),
 		]).definition;
@@ -74,10 +75,10 @@ describe("Test262 VM definition merger", () => {
 		expect(merged.semanticProtectors).not.toBe(semanticProtectors);
 
 		expect(() =>
-			mergeVmDefinitions([definition({ semanticProtectors }), definition()]),
+			mergeProgramImages([definition({ semanticProtectors }), definition()]),
 		).toThrow("semantic protector facts do not match");
 		expect(() =>
-			mergeVmDefinitions([
+			mergeProgramImages([
 				definition({ semanticProtectors }),
 				definition({
 					semanticProtectors: [
@@ -104,7 +105,7 @@ describe("Test262 VM definition merger", () => {
 			stringConstants: [[65], [66]],
 			globalCount: 3,
 		});
-		const indexed: Array<VmInstruction> = [
+		const indexed: Array<BytecodeInstruction> = [
 			{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 0 },
 			{ opcode: "GUARD_FUNCTION_INDEX", dst: 0, callee: 1, functionIndex: 0 },
 			{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 0, index: 0 },
@@ -145,9 +146,6 @@ describe("Test262 VM definition merger", () => {
 				thisValue: 2,
 				argumentCount: 0,
 				arguments: [],
-				directFunctionIndex: 0,
-				directFunctionCall: true,
-				directCallTargetFunctionIndex: 0,
 			},
 			{
 				opcode: "CONSTRUCT",
@@ -155,7 +153,6 @@ describe("Test262 VM definition merger", () => {
 				callee: 1,
 				argumentCount: 0,
 				arguments: [],
-				directFunctionIndex: 0,
 			},
 			{
 				opcode: "BINARY",
@@ -207,7 +204,7 @@ describe("Test262 VM definition merger", () => {
 			},
 		];
 		const secondFunction = vmFunction(indexed);
-		const second = definition({
+		const secondBase = definition({
 			functions: [secondFunction],
 			globalCount: 5,
 			literalTemplateData: [8, 2, 5, 0, 6, 0, 9, 1, 10, 0, 5, 0],
@@ -220,8 +217,19 @@ describe("Test262 VM definition merger", () => {
 				{ installer: "install_test", exports: [{ name: "value", slot: 0 }] },
 			],
 		});
+		const second = withNativeFunctionPlan(secondBase, 0, (plan) => ({
+			...plan,
+			instructions: plan.instructions
+				.with(16, {
+					kind: "call",
+					directFunctionIndex: 0,
+					directFunctionCall: true,
+					directCallTargetFunctionIndex: 0,
+				})
+				.with(17, { kind: "construct", directFunctionIndex: 0 }),
+		}));
 
-		const { definition: merged, functionBases } = mergeVmDefinitions([first, second]);
+		const { definition: merged, functionBases } = mergeProgramImages([first, second]);
 		expect(functionBases).toEqual([0, 2]);
 		expect(merged.functionCount).toBe(3);
 		expect(merged.functions[2]!.nameStringIndex).toBe(2);
@@ -269,12 +277,13 @@ describe("Test262 VM definition merger", () => {
 			capturedIndices: [0, 2],
 		});
 		expect(rebased[15]).toMatchObject({ object: 0, keyRegisters: [1, 2] });
-		expect(rebased[16]).toMatchObject({ directFunctionIndex: 2 });
-		expect(rebased[16]).toMatchObject({
+		const rebasedNative = merged.nativePlan.functions[2]!.instructions;
+		expect(rebasedNative[16]).toMatchObject({
+			directFunctionIndex: 2,
 			directFunctionCall: true,
 			directCallTargetFunctionIndex: 2,
 		});
-		expect(rebased[17]).toMatchObject({ directFunctionIndex: 2 });
+		expect(rebasedNative[17]).toMatchObject({ directFunctionIndex: 2 });
 		expect(rebased[18]).toMatchObject({ opcode: "BINARY", operator: "+" });
 		expect(rebased.at(-2)).toMatchObject({
 			opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
@@ -290,10 +299,10 @@ describe("Test262 VM definition merger", () => {
 	});
 
 	it("rejects malformed definition counts and literal-template streams", () => {
-		expect(() => mergeVmDefinitions([definition({ functionCount: 2 })])).toThrow(
+		expect(() => mergeProgramImages([definition({ functionCount: 2 })])).toThrow(
 			/functionCount/,
 		);
-		expect(() => mergeVmDefinitions([definition({ literalTemplateData: [5] })])).toThrow(
+		expect(() => mergeProgramImages([definition({ literalTemplateData: [5] })])).toThrow(
 			/Truncated/,
 		);
 	});

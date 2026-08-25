@@ -14,7 +14,7 @@
  * drives it with Node's fetch, asserts, and kills the process.
  */
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 /* 8 MiB dwarfs any socket buffer pair, so a peer that stops reading leaves this
  * response permanently mid-flight — the case the transaction deadline exists for. */

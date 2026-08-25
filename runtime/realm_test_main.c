@@ -16,7 +16,7 @@
 #error "realm_test_main.c requires MAL_REALMS"
 #endif
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 typedef struct RealmFixture {
     MalValue probe;

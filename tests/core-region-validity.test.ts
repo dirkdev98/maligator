@@ -12,12 +12,12 @@ import type {
 	CoreRegion,
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import type { VmDefinition } from "../src/compiler/target/lower-vm.ts";
+import type { ProgramImage } from "../src/compiler/target/lower-vm.ts";
 import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
 } from "../src/compiler/target/serialize-vm.ts";
 
 /**
@@ -38,12 +38,12 @@ const REGION_SOURCE = `globalThis.run = function run(value, separator) {
 
 interface Compiled {
 	readonly core: CoreProgram;
-	readonly definition: VmDefinition;
+	readonly definition: ProgramImage;
 }
 
 function compile(primordials: "locked" | "mutable"): Compiled {
 	let core: CoreProgram | undefined;
-	const definition = compileSemanticProgramToVmDefinition(
+	const definition = compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			REGION_SOURCE,
 			`region-validity-${primordials}.js`,
@@ -209,9 +209,13 @@ describe("guarded-region admission validity", () => {
 	it("carries the admission decision across wire serialization", () => {
 		for (const primordials of ["locked", "mutable"] as const) {
 			const { definition } = compile(primordials);
-			const restored = deserializeVmDefinition(serializeVmDefinition(definition));
-			const original = definition.functions.flatMap((fn) => fn.regions ?? []);
-			const roundTripped = restored.functions.flatMap((fn) => fn.regions ?? []);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
+			const original = definition.nativePlan.functions.flatMap(
+				(fn) => fn.specializations,
+			);
+			const roundTripped = restored.nativePlan.functions.flatMap(
+				(fn) => fn.specializations,
+			);
 
 			expect(original.length).toBeGreaterThan(0);
 			expect(roundTripped.map((region) => region.license.admission)).toEqual(
@@ -222,33 +226,36 @@ describe("guarded-region admission validity", () => {
 
 	it("rejects a wire admission anchor outside the region's claims", () => {
 		const { definition } = compile("locked");
-		const functionIndex = definition.functions.findIndex((fn) =>
-			(fn.regions ?? []).some(({ kind }) => kind === "string-split-cursor"),
+		const functionIndex = definition.nativePlan.functions.findIndex((fn) =>
+			fn.specializations.some(({ kind }) => kind === "string-split-cursor"),
 		);
-		const owner = definition.functions[functionIndex]!;
-		const regionIndex = owner.regions!.findIndex(
+		const owner = definition.nativePlan.functions[functionIndex]!;
+		const bytecode = definition.functions[functionIndex]!;
+		const regionIndex = owner.specializations.findIndex(
 			({ kind }) => kind === "string-split-cursor",
 		);
-		const region = owner.regions![regionIndex]!;
+		const region = owner.specializations[regionIndex]!;
 		if (region.kind !== "string-split-cursor") throw new Error("unreachable");
-		const foreign = owner.instructions.findIndex(
+		const foreign = bytecode.instructions.findIndex(
 			(_instruction, ip) => !region.claimedIps.includes(ip),
 		);
-		const tampered: VmDefinition = {
+		const tampered: ProgramImage = {
 			...definition,
-			functions: definition.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions!.with(regionIndex, {
-					...region,
-					license: {
-						...region.license,
-						admission: { ...region.license.admission, anchorIp: foreign },
-					},
+			nativePlan: {
+				functions: definition.nativePlan.functions.with(functionIndex, {
+					...owner,
+					specializations: owner.specializations.with(regionIndex, {
+						...region,
+						license: {
+							...region.license,
+							admission: { ...region.license.admission, anchorIp: foreign },
+						},
+					}),
 				}),
-			}),
+			},
 		};
 
-		expect(() => serializeVmDefinition(tampered)).toThrow(/invalid region envelope/);
+		expect(() => serializeCompilerArtifact(tampered)).toThrow(/invalid region envelope/);
 	});
 });
 

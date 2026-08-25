@@ -4,16 +4,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import type {
-	VmDefinition,
-	VmFunction,
-	VmInstruction,
+	ProgramImage,
+	BytecodeFunction,
+	BytecodeInstruction,
 } from "../../src/compiler/target/lower-vm.ts";
 import { buildNativeDefinition, STRESS_ENV } from "../../src/test-harness.ts";
+import { testProgramImage } from "../helpers/program-image.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-known-own-slot-"));
 const mainFile = "runtime/known_own_slot_test_main.c";
 
-const instructions: Array<VmInstruction> = [
+const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
 	{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
 	{ opcode: "CREATE_NUMBER", dst: 2, value: 0 },
@@ -123,7 +124,7 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "RETURN", value: 10 },
 ];
 
-const fn: VmFunction = {
+const fn: BytecodeFunction = {
 	nameStringIndex: -1,
 	isGenerator: false,
 	isAsync: false,
@@ -145,10 +146,9 @@ const fn: VmFunction = {
 	handlers: [],
 	fileIndex: 0,
 	positions: [],
-	registerRepresentations: Array.from({ length: 14 }, () => "boxed"),
 };
 
-const definition: VmDefinition = {
+const definition: ProgramImage = testProgramImage({
 	entrypointPath: "/fixture/known-own-slot.mjs",
 	functionCount: 1,
 	functions: [fn],
@@ -164,7 +164,7 @@ const definition: VmDefinition = {
 	sourcePositions: [],
 	cjsModuleFunctionIndices: [],
 	hostInstalls: [],
-};
+});
 
 function run(binary: string, environment: NodeJS.ProcessEnv = {}): string {
 	const result = spawnSync(binary, [], {

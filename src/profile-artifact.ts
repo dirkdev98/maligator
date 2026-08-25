@@ -2,7 +2,7 @@ import { hash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { OptimizationPassDelta } from "./compiler/shared/compiler-diagnostics.ts";
-import type { VmDefinition } from "./compiler/target/lower-vm.ts";
+import type { ProgramImage } from "./compiler/target/lower-vm.ts";
 import type { CompilerRemark, ProfileSite } from "./compiler/target/profile-metadata.ts";
 import { profilePhaseName } from "./profile-phases.ts";
 
@@ -241,7 +241,7 @@ const REMARK_EXPLANATIONS: Record<string, string> = {
 	"property.watched": "property access is specialized behind an invalidatable epoch",
 };
 
-function functionName(definition: VmDefinition, index: number): string {
+function functionName(definition: ProgramImage, index: number): string {
 	const fn = definition.functions[index];
 	if (fn === undefined) return "<unknown>";
 	return (
@@ -253,7 +253,7 @@ function functionName(definition: VmDefinition, index: number): string {
 /** Freeze the compiler-side half of a capture next to the exact linked binary. */
 export function prepareProfile(
 	binaryPath: string,
-	definition: VmDefinition,
+	definition: ProgramImage,
 	mode: PreparedProfile["mode"] = "sampling",
 ): PreparedProfile {
 	const prepared: PreparedProfile = {

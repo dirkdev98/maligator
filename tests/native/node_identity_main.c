@@ -10,7 +10,7 @@
 #include "object_ops.h"
 #include "value.h"
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 enum {
     BUFFER_IDENTITY_COUNT = 3,
@@ -120,7 +120,7 @@ static bool stream_graph_matches(
 
 static void install_fragmented(
     MalVm *vm, const MalHostLaunchContext *launch, bool reverse) {
-    const MalVmDefinition *definition = vm->definition;
+    const MalProgramImage *definition = vm->definition;
     for (i32 step = 0; step < definition->host_install_count; step++) {
         i32 index = reverse ? definition->host_install_count - step - 1 : step;
         const MalHostInstall *install = &definition->host_installs[index];

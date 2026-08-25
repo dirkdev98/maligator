@@ -45,7 +45,7 @@ import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { formatCoreFunction } from "./compiler/core/core-ir.ts";
 import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
-import { emitVmTranslationUnits } from "./compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "./compiler/target/emit-vm.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
@@ -713,7 +713,7 @@ function compileAndBuild(
 
 	const vmDefinition = frontend.definition;
 	const output = reporter.phase("Generate native code", () =>
-		emitVmTranslationUnits(vmDefinition, {
+		emitProgramTranslationUnits(vmDefinition, {
 			compiled: command.kind !== "build" || command.internal.compiled,
 			assets,
 			maligatorSurface: buildConfig.surface.maligator,
@@ -1269,7 +1269,7 @@ function executeProfiledTests(
 		cacheDirectory: maligatorCacheDirectory(),
 		session: new FrontendCompilationSession(),
 	});
-	const source = emitVmTranslationUnits(compiled.definition, {
+	const source = emitProgramTranslationUnits(compiled.definition, {
 		compiled: true,
 		assets,
 		maligatorSurface: config.surface.maligator,

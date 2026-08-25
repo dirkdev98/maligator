@@ -12,7 +12,7 @@ import type {
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
 
 const PASS = "fold-empty-forwarding-blocks";
 
@@ -511,7 +511,7 @@ describe("Core to target boundary", () => {
 		);
 		expect(forwarding.some(({ id }) => branchArms.includes(id))).toBe(true);
 
-		const lowered = lowerCoreProgramToTarget(compilation);
+		const lowered = lowerCoreCompilationToExecution(compilation);
 		const loweredOwner = lowered.functions[owner.functionIndex]!;
 		// Edge copies may add blocks; nothing may remove one.
 		expect(loweredOwner.blocks.length).toBeGreaterThanOrEqual(owner.blocks.length);

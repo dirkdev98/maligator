@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 
-describe("compileSemanticProgramToVmDefinition", () => {
+describe("compileSemanticProgramToProgramImage", () => {
 	it("runs phases in order and inspects optimized IR before allocation", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis("1 + 2", "pipeline.js");
 		const events: Array<string> = [];
 
-		const definition = compileSemanticProgramToVmDefinition(semantic, {
+		const definition = compileSemanticProgramToProgramImage(semantic, {
 			runPhase: (phase, run) => {
 				events.push(`start:${phase}`);
 				const result = run();
@@ -33,7 +33,7 @@ describe("compileSemanticProgramToVmDefinition", () => {
 
 	it("forwards eval lowering options", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis("value", "eval");
-		const definition = compileSemanticProgramToVmDefinition(semantic, {
+		const definition = compileSemanticProgramToProgramImage(semantic, {
 			semanticLowering: { evalCompletion: true, evalDirect: true },
 		});
 
@@ -46,7 +46,7 @@ describe("compileSemanticProgramToVmDefinition", () => {
 			"development.js",
 		);
 
-		const definition = compileSemanticProgramToVmDefinition(semantic, {
+		const definition = compileSemanticProgramToProgramImage(semantic, {
 			optimization: "development",
 		});
 
@@ -71,7 +71,7 @@ describe("compileSemanticProgramToVmDefinition", () => {
 		);
 
 		expect(() =>
-			compileSemanticProgramToVmDefinition(semantic, {
+			compileSemanticProgramToProgramImage(semantic, {
 				optimization: "full",
 			}),
 		).not.toThrow();

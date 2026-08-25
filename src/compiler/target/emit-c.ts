@@ -14,9 +14,11 @@ import {
 	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
 import type {
-	VmFunction,
+	BytecodeFunction,
+	NativeFunctionPlan,
+	NativeInstructionPlan,
 	VmGuardPlan,
-	VmInstruction,
+	BytecodeInstruction,
 	VmRegion,
 	VmRegionLicense,
 	VmRegisterRepresentation,
@@ -155,11 +157,11 @@ interface CoroutineContext {
  * is a broken certificate rather than a reason to emit the load anyway.
  */
 function regionFallbackPropertyLoad(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	placement: CorePropertyPlacement,
 	propertyIp: number,
 	lockedIdentity: boolean,
-): Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }> | undefined {
+): Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }> | undefined {
 	if (placement !== "call-fallback") return undefined;
 	const instruction = fn.instructions[propertyIp];
 	if (instruction?.opcode !== "LOAD_PROPERTY_STATIC") {
@@ -181,7 +183,7 @@ function regionFallbackPropertyLoad(
  * is advanced past the suspend before the frame is saved, so the resume IP is the
  * following instruction.
  */
-function resumePointsOf(fn: VmFunction): Array<number> {
+function resumePointsOf(fn: BytecodeFunction): Array<number> {
 	const points: Array<number> = [];
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		const opcode = fn.instructions[ip]!.opcode;
@@ -339,7 +341,8 @@ function binaryOpCanThrow(operator: string): boolean {
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
  */
 export function emitCompiledFunction(
-	fn: VmFunction,
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
 	debug: boolean,
@@ -351,7 +354,15 @@ export function emitCompiledFunction(
 	// function (a heap register frame + entry dispatch to the saved resume point)
 	// rather than the straight-line shape below (see emitResumableFunction).
 	if (fn.isGenerator || fn.isAsync) {
-		return emitResumableFunction(fn, index, suffix, debug, linkage, semanticProtectors);
+		return emitResumableFunction(
+			fn,
+			native,
+			index,
+			suffix,
+			debug,
+			linkage,
+			semanticProtectors,
+		);
 	}
 
 	// A function with its own captured slots needs a per-activation MalEnv node
@@ -363,8 +374,8 @@ export function emitCompiledFunction(
 	const capturesEnv = fn.capturedCount > 0;
 
 	if (
-		fn.registerRepresentations.length !== fn.registerCount ||
-		fn.registerRepresentations.some(
+		native.registerRepresentations.length !== fn.registerCount ||
+		native.registerRepresentations.some(
 			(representation, register) =>
 				(representation !== "boxed" &&
 					representation !== "number" &&
@@ -374,7 +385,7 @@ export function emitCompiledFunction(
 	) {
 		throw new Error(`Invalid register representations for function ${index}`);
 	}
-	const reps = [...fn.registerRepresentations];
+	const reps = [...native.registerRepresentations];
 
 	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
 	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
@@ -395,12 +406,11 @@ export function emitCompiledFunction(
 	// the set is absent (generator/async, which this backend does not compile, or a
 	// future op without Core effect metadata), fall back to rooting every boxed
 	// register.
-	const rootRegisters =
-		fn.gcRootRegisters !== undefined ? new Set(fn.gcRootRegisters) : null;
+	const rootRegisters = new Set(native.gc.rootRegisters);
 	const valueRegs: Array<number> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
 		const isBoxed = reps[i] !== "number" && reps[i] !== "boolean";
-		if (isBoxed && (rootRegisters === null || rootRegisters.has(i))) {
+		if (isBoxed && rootRegisters.has(i)) {
 			valueRegs.push(i);
 		}
 	}
@@ -417,7 +427,7 @@ export function emitCompiledFunction(
 	const stackSlotsBase = slotCount + (fn.isDerivedConstructor ? 1 : 0);
 	const stackObjectSites = new Map<number, StackObjectSite>();
 	let nextStackSlot = stackSlotsBase;
-	const stackObjectPlanRegions = (fn.regions ?? []).filter(
+	const stackObjectPlanRegions = native.specializations.filter(
 		(region): region is VmStackObjectPlanRegion => region.kind === "stack-object-plan",
 	);
 	for (const region of stackObjectPlanRegions) {
@@ -498,7 +508,7 @@ export function emitCompiledFunction(
 		}
 	}
 	const stringSplitProjectionSites = new Map<number, NativeStringSplitProjectionSite>();
-	for (const projection of (fn.regions ?? []).filter(
+	for (const projection of native.specializations.filter(
 		(region): region is NativeStringSplitProjection =>
 			region.kind === "string-split-projection",
 	)) {
@@ -530,7 +540,7 @@ export function emitCompiledFunction(
 		nextStackSlot += elementLoads.length;
 	}
 	const stringSplitCursorSites = new Map<number, NativeStringSplitCursorSite>();
-	const stringSplitCursorRegions = (fn.regions ?? []).filter(
+	const stringSplitCursorRegions = native.specializations.filter(
 		(region): region is NativeStringSplitCursor => region.kind === "string-split-cursor",
 	);
 	for (const cursor of stringSplitCursorRegions) {
@@ -557,7 +567,7 @@ export function emitCompiledFunction(
 		nextStackSlot += hoistTrimIdentity ? 3 : 2;
 	}
 	const regexpExecProjectionSites = new Map<number, NativeRegExpExecProjectionSite>();
-	for (const projection of (fn.regions ?? []).filter(
+	for (const projection of native.specializations.filter(
 		(region): region is Extract<VmRegion, { kind: "regexp-exec-projection" }> =>
 			region.kind === "regexp-exec-projection",
 	)) {
@@ -590,7 +600,7 @@ export function emitCompiledFunction(
 		number,
 		NativeRegExpIteratorProjectionSite
 	>();
-	for (const projection of (fn.regions ?? []).filter(
+	for (const projection of native.specializations.filter(
 		(region): region is Extract<VmRegion, { kind: "regexp-iterator-projection" }> =>
 			region.kind === "regexp-iterator-projection",
 	)) {
@@ -635,6 +645,8 @@ export function emitCompiledFunction(
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const body = emitBody(
 		fn,
+		native.specializations,
+		native.instructions,
 		suffix,
 		reps,
 		debug,
@@ -814,7 +826,8 @@ export function emitCompiledFunction(
  * by register index).
  */
 function emitResumableFunction(
-	fn: VmFunction,
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
 	debug: boolean,
@@ -857,6 +870,8 @@ function emitResumableFunction(
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const body = emitBody(
 		fn,
+		native.specializations,
+		native.instructions,
 		suffix,
 		reps,
 		debug,
@@ -1046,10 +1061,7 @@ function zeroOf(rep: RegisterRep): string {
  * Allocation and GC are safe: this runtime's collector does not run finalizers or
  * jobs inside a safepoint. Unknown instructions fail closed.
  */
-type NativeStringSplitProjection = Extract<
-	NonNullable<VmFunction["regions"]>[number],
-	{ kind: "string-split-projection" }
->;
+type NativeStringSplitProjection = Extract<VmRegion, { kind: "string-split-projection" }>;
 
 interface NativeStringSplitProjectionSite {
 	projection: NativeStringSplitProjection;
@@ -1064,13 +1076,10 @@ interface NativeStringSplitProjectionAction {
 	site: NativeStringSplitProjectionSite;
 	role: "property" | "call" | "element" | "length";
 	load?: NativeStringSplitProjection["loads"][number];
-	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+	propertyLoad?: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
-type NativeStringSplitCursor = Extract<
-	NonNullable<VmFunction["regions"]>[number],
-	{ kind: "string-split-cursor" }
->;
+type NativeStringSplitCursor = Extract<VmRegion, { kind: "string-split-cursor" }>;
 
 interface NativeStringSplitCursorSite {
 	cursor: NativeStringSplitCursor;
@@ -1090,7 +1099,7 @@ interface NativeStringSplitCursorSite {
 interface NativeStringSplitCursorAction {
 	site: NativeStringSplitCursorSite;
 	role: "property" | "call" | "length" | "element" | "trimProperty" | "trimCall";
-	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+	propertyLoad?: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
 type NativeRegExpExecProjection = Extract<VmRegion, { kind: "regexp-exec-projection" }>;
@@ -1118,7 +1127,7 @@ interface NativeRegExpExecProjectionAction {
 		| "caseLowerCall"
 		| "caseLength";
 	load?: NativeRegExpExecProjection["loads"][number];
-	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+	propertyLoad?: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
 type NativeRegExpIteratorProjection = Extract<
@@ -1145,7 +1154,7 @@ interface NativeStringSliceNumberFusionAction {
 	fusion: NativeStringSliceNumberFusion;
 	role: "property" | "slice" | "number";
 	lockedIdentity: boolean;
-	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+	propertyLoad?: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
 interface StackObjectSite {
@@ -1242,7 +1251,7 @@ function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
 interface NativeNumericFusionAction {
 	readonly role: "start" | "finish";
 	readonly id: number;
-	readonly first: Extract<VmInstruction, { opcode: "BINARY" }>;
+	readonly first: Extract<BytecodeInstruction, { opcode: "BINARY" }>;
 }
 
 /**
@@ -1250,7 +1259,9 @@ interface NativeNumericFusionAction {
  * Returns null if any instruction is not yet lowerable.
  */
 function emitBody(
-	fn: VmFunction,
+	fn: BytecodeFunction,
+	specializations: ReadonlyArray<VmRegion>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 	suffix: string,
 	reps: Array<RegisterRep>,
 	debug: boolean,
@@ -1270,7 +1281,7 @@ function emitBody(
 	profileDecisions: Array<BackendProfileDecision>,
 ): Array<string> | null {
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
-	for (const region of (fn.regions ?? []).filter(
+	for (const region of specializations.filter(
 		(candidate) => candidate.kind === "numeric-fusion",
 	)) {
 		for (const pair of region.pairs) {
@@ -1318,7 +1329,9 @@ function emitBody(
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		const instruction = fn.instructions[ip]!;
 		if (instruction.opcode !== "CALL") continue;
-		const operation = instruction.guardedBuiltinCall?.operation;
+		const plan = nativeInstructions[ip];
+		const operation =
+			plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined;
 		if (
 			operation !== undefined &&
 			instruction.arguments.length === 1 &&
@@ -1490,7 +1503,7 @@ function emitBody(
 		number,
 		NativeStringSliceNumberFusionAction
 	>();
-	const stringSliceNumberRegions = (fn.regions ?? []).filter(
+	const stringSliceNumberRegions = specializations.filter(
 		(region): region is NativeStringSliceNumberFusion =>
 			region.kind === "string-slice-number",
 	);
@@ -1638,6 +1651,7 @@ function emitBody(
 			thisSlot,
 			coro,
 			{
+				nativePlan: nativeInstructions[ip],
 				stackObjectSite: stackObjectSites.get(ip),
 				stackObjectAccess: stackObjectAccesses.get(ip),
 				stackObjectMaterialization: stackObjectMaterializations.get(ip),
@@ -1708,17 +1722,17 @@ function emitBody(
 	return lines;
 }
 
-function profileOperationInstruction(instruction: VmInstruction): boolean {
+function profileOperationInstruction(instruction: BytecodeInstruction): boolean {
 	return profileDecisionOperation(instruction) !== "execute";
 }
 
-function profileDecisionOperation(instruction: VmInstruction): string {
+function profileDecisionOperation(instruction: BytecodeInstruction): string {
 	return profileOperationForInstruction(instruction);
 }
 
 /** Classify the exact emitted body, after every native specialization pass. */
 function profileDecisionsForInstruction(
-	instruction: VmInstruction,
+	instruction: BytecodeInstruction,
 	instructionIndex: number,
 	emitted: ReadonlyArray<string>,
 ): Array<BackendProfileDecision> {
@@ -1846,7 +1860,7 @@ function profileDecisionsForInstruction(
 	return decisions;
 }
 
-function profileFallbackFunctions(instruction: VmInstruction): Array<string> {
+function profileFallbackFunctions(instruction: BytecodeInstruction): Array<string> {
 	const operation = profileDecisionOperation(instruction);
 	if (operation === "call" || operation === "construct") {
 		return operation === "construct"
@@ -1889,7 +1903,7 @@ function instrumentProfileBoxing(line: string, siteId: number): string {
 }
 
 function instrumentProfileFallback(
-	instruction: VmInstruction,
+	instruction: BytecodeInstruction,
 	line: string,
 	siteId: number,
 ): string {
@@ -1966,6 +1980,7 @@ function instrumentProfileExpressions(
  * forms) is the main way this backend grows.
  */
 interface NativeInstructionContext {
+	readonly nativePlan?: NativeInstructionPlan;
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;
@@ -1985,7 +2000,7 @@ interface NativeInstructionContext {
 }
 
 function emitInstruction(
-	instruction: VmInstruction,
+	instruction: BytecodeInstruction,
 	ip: number,
 	suffix: string,
 	reps: Array<RegisterRep>,
@@ -1997,6 +2012,7 @@ function emitInstruction(
 	context: NativeInstructionContext,
 ): Array<string> | null {
 	const {
+		nativePlan,
 		stackObjectSite,
 		stackObjectAccess,
 		stackObjectMaterialization,
@@ -2015,6 +2031,7 @@ function emitInstruction(
 		numericFusionAction,
 	} = context;
 	const genericContext: NativeInstructionContext = {
+		nativePlan,
 		directCompiledTargets,
 		mathUnaryCall,
 		mathBinaryCall,
@@ -2237,10 +2254,10 @@ function emitInstruction(
 			];
 		}
 		case "CREATE_ARRAY":
-			if (instruction.freshDenseReserveLength !== undefined) {
+			if (nativePlan?.kind === "fresh-dense-reserve") {
 				return [
 					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
-					`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.freshDenseReserveLength});`,
+					`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${nativePlan.length});`,
 				];
 			}
 			return [`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`];
@@ -2733,7 +2750,7 @@ function emitInstruction(
 			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-				instruction.primitiveStringLength === true
+				nativePlan?.kind === "primitive-string-length"
 			) {
 				return [
 					`if (mal_value_is_string(${boxed(instruction.object)})) {`,
@@ -3341,6 +3358,7 @@ function emitInstruction(
 			];
 		}
 		case "CALL": {
+			const callPlan = nativePlan?.kind === "call" ? nativePlan : undefined;
 			// Marshal argument registers into a temporary array (boxing numbers),
 			// then dispatch through mal_vm_call_value, which handles bound, native,
 			// compiled and interpreted callees and returns a completion. A throw
@@ -3611,7 +3629,7 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			const guardedBuiltinOperation = instruction.guardedBuiltinCall?.operation;
+			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
 			if (
 				guardedBuiltinOperation === "Map.prototype.get" ||
 				guardedBuiltinOperation === "Map.prototype.set" ||
@@ -3638,7 +3656,7 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (vmCallProvesBuiltin(instruction, "Array.prototype.push")) {
+			if (vmCallProvesBuiltin(callPlan, "Array.prototype.push")) {
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, nullptr);`,
@@ -3647,11 +3665,11 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (vmCallProvesBuiltin(instruction, "String.prototype.charCodeAt")) {
+			if (vmCallProvesBuiltin(callPlan, "String.prototype.charCodeAt")) {
 				const boundedArgument =
 					args.length === 1 ? decodeVmValueOperand(args[0]!) : undefined;
 				const boundedPosition =
-					instruction.directStringCharCodeAtPosition === "inBounds" &&
+					callPlan?.directStringCharCodeAtPosition === "inBounds" &&
 					boundedArgument?.kind === "register" &&
 					reps[boundedArgument.register] === "number"
 						? `r${boundedArgument.register}`
@@ -3673,17 +3691,17 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (instruction.directFunctionCall) {
+			if (callPlan?.directFunctionCall) {
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_vm_call_function_call_direct(vm, &__cc_${ip}, ${instruction.directCallTargetFunctionIndex ?? -1}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_vm_call_function_call_direct(vm, &__cc_${ip}, ${callPlan.directCallTargetFunctionIndex ?? -1}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
 			}
-			if (instruction.directFunctionIndex !== undefined) {
-				const target = instruction.directFunctionIndex;
+			if (callPlan?.directFunctionIndex !== undefined) {
+				const target = callPlan.directFunctionIndex;
 				if (directCompiledTargets.has(target)) {
 					const directCallee = `__direct_callee_${ip}`;
 					const directFunction = `__direct_function_${ip}`;
@@ -3708,7 +3726,7 @@ function emitInstruction(
 				}
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${instruction.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${callPlan.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
@@ -3717,7 +3735,7 @@ function emitInstruction(
 			if (mathUnaryCall) {
 				const argument = instruction.arguments[0]!;
 				const nativeOperation = MATH_UNARY_NATIVE_OP.get(
-					instruction.guardedBuiltinCall?.operation ?? "",
+					callPlan?.guardedBuiltinCall?.operation ?? "",
 				);
 				const nativeArgument = nativeNumberOperand(argument);
 				if (
@@ -3748,7 +3766,7 @@ function emitInstruction(
 				const left = instruction.arguments[0]!;
 				const right = instruction.arguments[1]!;
 				const nativeOperation = MATH_BINARY_NATIVE_OP.get(
-					instruction.guardedBuiltinCall?.operation ?? "",
+					callPlan?.guardedBuiltinCall?.operation ?? "",
 				);
 				const nativeLeft = nativeNumberOperand(left);
 				const nativeRight = nativeNumberOperand(right);
@@ -3789,6 +3807,7 @@ function emitInstruction(
 			];
 		}
 		case "CONSTRUCT": {
+			const constructPlan = nativePlan?.kind === "construct" ? nativePlan : undefined;
 			// `new callee(args)`: marshal args (boxing numbers) and dispatch through
 			// the guarded direct helper for exact script targets, otherwise generic
 			// construction. Both return the completed [[Construct]] result.
@@ -3799,9 +3818,9 @@ function emitInstruction(
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `construct_result_${ip}`;
 			const construct =
-				instruction.directFunctionIndex === undefined
+				constructPlan === undefined
 					? `mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`
-					: `mal_vm_construct_direct(vm, ${instruction.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
+					: `mal_vm_construct_direct(vm, ${constructPlan.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
 			return [
 				`MalCompletion ${tmp} = ${construct};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,

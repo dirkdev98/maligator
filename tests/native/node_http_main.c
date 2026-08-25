@@ -5,7 +5,7 @@
 #include "intrinsics.h"
 #include "object.h"
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 enum { HTTP_IDENTITY_COUNT = 7 };
 

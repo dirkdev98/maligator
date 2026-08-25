@@ -1,12 +1,13 @@
 import { rebaseVmValueOperand } from "../compiler/target/lower-vm.ts";
 import type {
-	VmDefinition,
-	VmInstruction,
+	ProgramImage,
+	BytecodeInstruction,
+	NativeInstructionPlan,
 	VmRegion,
 } from "../compiler/target/lower-vm.ts";
 
-export interface MergedVmDefinition {
-	definition: VmDefinition;
+export interface MergedProgramImage {
+	definition: ProgramImage;
 	functionBases: Array<number>;
 }
 
@@ -28,6 +29,42 @@ function assertNever(value: never): never {
 
 function shifted(index: number, base: number): number {
 	return index < 0 ? index : index + base;
+}
+
+function cloneNativeInstructionPlan(
+	plan: NativeInstructionPlan | undefined,
+	base: RebaseBases,
+): NativeInstructionPlan | undefined {
+	if (plan === undefined) return undefined;
+	if (plan.kind === "call") {
+		return {
+			...plan,
+			directFunctionIndex:
+				plan.directFunctionIndex === undefined
+					? undefined
+					: plan.directFunctionIndex + base.function,
+			directCallTargetFunctionIndex:
+				plan.directCallTargetFunctionIndex === undefined
+					? undefined
+					: plan.directCallTargetFunctionIndex + base.function,
+			guardedBuiltinCall:
+				plan.guardedBuiltinCall === undefined
+					? undefined
+					: {
+							operation: plan.guardedBuiltinCall.operation,
+							guard: {
+								dependencies: plan.guardedBuiltinCall.guard.dependencies.map(
+									(dependency) => ({ ...dependency }),
+								),
+								obligations: [...plan.guardedBuiltinCall.guard.obligations],
+							},
+						},
+		};
+	}
+	if (plan.kind === "construct") {
+		return { ...plan, directFunctionIndex: plan.directFunctionIndex + base.function };
+	}
+	return { ...plan };
 }
 
 function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
@@ -124,7 +161,10 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	}
 }
 
-function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInstruction {
+function cloneInstruction(
+	instruction: BytecodeInstruction,
+	base: RebaseBases,
+): BytecodeInstruction {
 	switch (instruction.opcode) {
 		case "CREATE_FUNCTION":
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
@@ -222,14 +262,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CALL":
 			return {
 				...instruction,
-				directFunctionIndex:
-					instruction.directFunctionIndex === undefined
-						? undefined
-						: instruction.directFunctionIndex + base.function,
-				directCallTargetFunctionIndex:
-					instruction.directCallTargetFunctionIndex === undefined
-						? undefined
-						: instruction.directCallTargetFunctionIndex + base.function,
 				callee: rebaseVmValueOperand(instruction.callee, base.string),
 				thisValue: rebaseVmValueOperand(instruction.thisValue, base.string),
 				arguments: instruction.arguments.map((operand) =>
@@ -247,10 +279,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CONSTRUCT":
 			return {
 				...instruction,
-				directFunctionIndex:
-					instruction.directFunctionIndex === undefined
-						? undefined
-						: instruction.directFunctionIndex + base.function,
 				callee: rebaseVmValueOperand(instruction.callee, base.string),
 				arguments: instruction.arguments.map((operand) =>
 					rebaseVmValueOperand(operand, base.string),
@@ -385,8 +413,10 @@ function cloneLiteralTemplates(
 }
 
 /** Merge immutable definitions while cloning and rebasing every indexed table. */
-export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDefinition {
-	const merged: VmDefinition = {
+export function mergeProgramImages(definitions: Array<ProgramImage>): MergedProgramImage {
+	const mergedNativeFunctions: Array<ProgramImage["nativePlan"]["functions"][number]> =
+		[];
+	const merged: ProgramImage = {
 		entrypointPath: definitions[0]?.entrypointPath ?? "",
 		functionCount: 0,
 		functions: [],
@@ -399,6 +429,7 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 		sourcePositions: [],
 		cjsModuleFunctionIndices: [],
 		hostInstalls: [],
+		nativePlan: { functions: mergedNativeFunctions },
 	};
 	const semanticDefinitions = definitions.filter(
 		(definition) => definition.semanticProtectors !== undefined,
@@ -427,6 +458,9 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 	for (const definition of definitions) {
 		if (definition.functionCount !== definition.functions.length) {
 			throw new Error("VM definition functionCount does not match functions.length");
+		}
+		if (definition.nativePlan.functions.length !== definition.functions.length) {
+			throw new Error("VM definition native-plan count does not match functions.length");
 		}
 		const base: RebaseBases = {
 			function: merged.functions.length,
@@ -488,11 +522,33 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 				handlers: fn.handlers.map((handler) => ({ ...handler })),
 				fileIndex: shifted(fn.fileIndex, base.file),
 				positions: fn.positions.map((position) => shifted(position, base.position)),
-				gcRootRegisters:
-					fn.gcRootRegisters === undefined ? undefined : [...fn.gcRootRegisters],
-				registerRepresentations: [...fn.registerRepresentations],
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
-				regions: fn.regions?.map((region) => cloneRegion(region, base)),
+			})),
+		);
+		mergedNativeFunctions.push(
+			...definition.nativePlan.functions.map((native, localFunctionIndex) => ({
+				functionIndex: base.function + localFunctionIndex,
+				mode: native.mode,
+				registerRepresentations: [...native.registerRepresentations],
+				gc: {
+					rootRegisters: [...native.gc.rootRegisters],
+					safepoints: native.gc.safepoints.map((safepoint) => ({
+						instructionIp: safepoint.instructionIp,
+						rootRegisters: [...safepoint.rootRegisters],
+					})),
+				},
+				abi: {
+					parameters: [...native.abi.parameters],
+					result: native.abi.result,
+					argumentsRootedByCaller: true as const,
+				},
+				instructions: native.instructions.map((plan) =>
+					cloneNativeInstructionPlan(plan, base),
+				),
+				specializations: native.specializations.map((region) =>
+					cloneRegion(region, base),
+				),
+				compilerSiteIds: native.compilerSiteIds ? [...native.compilerSiteIds] : undefined,
 			})),
 		);
 	}

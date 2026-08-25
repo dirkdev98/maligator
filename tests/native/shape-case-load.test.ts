@@ -4,16 +4,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import type {
-	VmDefinition,
-	VmFunction,
-	VmInstruction,
+	ProgramImage,
+	BytecodeFunction,
+	BytecodeInstruction,
 } from "../../src/compiler/target/lower-vm.ts";
 import { buildNativeDefinition, STRESS_ENV } from "../../src/test-harness.ts";
+import { testProgramImage, withNativeFunctionPlan } from "../helpers/program-image.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shape-case-load-"));
 const mainFile = "runtime/shape_case_load_test_main.c";
 
-const instructions: Array<VmInstruction> = [
+const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CREATE_NUMBER", dst: 0, value: 1 },
 	{ opcode: "CREATE_NUMBER", dst: 1, value: 2 },
 	{ opcode: "CREATE_NUMBER", dst: 2, value: 3 },
@@ -111,7 +112,7 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "RETURN", value: 17 },
 ];
 
-const fn: VmFunction = {
+const fn: BytecodeFunction = {
 	nameStringIndex: -1,
 	isGenerator: false,
 	isAsync: false,
@@ -133,27 +134,33 @@ const fn: VmFunction = {
 	handlers: [],
 	fileIndex: 0,
 	positions: [],
-	registerRepresentations: Array.from({ length: 18 }, (_, index) =>
-		index === 7 || index === 13 ? "number" : "boxed",
-	),
 };
 
-const definition: VmDefinition = {
-	entrypointPath: "/fixture/shape-case-load.mjs",
-	functionCount: 1,
-	functions: [fn],
-	stringConstants: [[120], [121], [122], [119]],
-	bigintConstants: [],
-	literalTemplateData: [],
-	precompiledLiteralShapes: [
-		{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1, 2] },
-	],
-	globalCount: 1,
-	files: [],
-	sourcePositions: [],
-	cjsModuleFunctionIndices: [],
-	hostInstalls: [],
-};
+const definition: ProgramImage = withNativeFunctionPlan(
+	testProgramImage({
+		entrypointPath: "/fixture/shape-case-load.mjs",
+		functionCount: 1,
+		functions: [fn],
+		stringConstants: [[120], [121], [122], [119]],
+		bigintConstants: [],
+		literalTemplateData: [],
+		precompiledLiteralShapes: [
+			{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1, 2] },
+		],
+		globalCount: 1,
+		files: [],
+		sourcePositions: [],
+		cjsModuleFunctionIndices: [],
+		hostInstalls: [],
+	}),
+	0,
+	(plan) => ({
+		...plan,
+		registerRepresentations: Array.from({ length: 18 }, (_, index) =>
+			index === 7 || index === 13 ? "number" : "boxed",
+		),
+	}),
+);
 
 function run(binary: string, environment: NodeJS.ProcessEnv = {}): string {
 	const result = spawnSync(binary, [], {

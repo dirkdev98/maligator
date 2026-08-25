@@ -28,7 +28,7 @@
  * vectors and the JavaScript fixtures.
  */
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 typedef struct Argon2Gate {
     pthread_mutex_t mutex;

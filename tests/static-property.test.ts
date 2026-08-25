@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 
 function compile(source: string) {
-	return compileSemanticProgramToVmDefinition(
+	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			source,
 			"static-property-test.js",

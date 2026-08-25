@@ -17,9 +17,9 @@ import {
 	collectDisallowedRegexpUsage,
 } from "../compiler/frontend/semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "../compiler/pipeline/compile-core.ts";
-import type { VmDefinition } from "../compiler/target/lower-vm.ts";
-import { serializeVmDefinition, WIRE_VERSION } from "../compiler/target/serialize-vm.ts";
+import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
+import type { ProgramImage } from "../compiler/target/lower-vm.ts";
+import { serializeRuntimeImage, WIRE_VERSION } from "../compiler/target/serialize-vm.ts";
 import type { DependencyFragmentWorker } from "../dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -232,7 +232,7 @@ function buildTestGraph(
 }
 
 export interface CompiledProfiledTestImage {
-	definition: VmDefinition;
+	definition: ProgramImage;
 	entries: Array<string>;
 	dependencies: Array<string>;
 }
@@ -279,7 +279,7 @@ export function compileProfiledTestImage(
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	return {
-		definition: compileSemanticProgramToVmDefinition(semantic, {
+		definition: compileSemanticProgramToProgramImage(semantic, {
 			optimization: "full",
 			profile: true,
 		}),
@@ -314,8 +314,8 @@ export function compileIsolatedTestImage(
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	return {
-		wire: serializeVmDefinition(
-			compileSemanticProgramToVmDefinition(semantic, { optimization: "development" }),
+		wire: serializeRuntimeImage(
+			compileSemanticProgramToProgramImage(semantic, { optimization: "development" }),
 		),
 		entries,
 		dependencies,
@@ -442,12 +442,12 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 		const compileStartedAt = Date.now();
 		assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 		assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-		const definition = compileSemanticProgramToVmDefinition(semantic, {
+		const definition = compileSemanticProgramToProgramImage(semantic, {
 			optimization: "development",
 		});
 		phases.compileMs = Date.now() - compileStartedAt;
 		const serializeStartedAt = Date.now();
-		wire = serializeVmDefinition(definition);
+		wire = serializeRuntimeImage(definition);
 		phases.serializeMs = Date.now() - serializeStartedAt;
 		const cachedPath = cacheFrontendWire(wire, artifactRoot);
 		publish(

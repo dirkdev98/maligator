@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
-import { deserializeVmDefinition } from "../src/compiler/target/serialize-vm.ts";
+import { deserializeRuntimeImage } from "../src/compiler/target/serialize-vm.ts";
 
 // The trimmed compiler entry composes parse → sema → ir → opt → regalloc →
 // lower → serialize for a script source, producing a loadable wire buffer. End-
@@ -9,14 +9,14 @@ import { deserializeVmDefinition } from "../src/compiler/target/serialize-vm.ts"
 describe("compileSourceToBuffer", () => {
 	it("produces a decodable definition for a script", () => {
 		const buffer = compileSourceToBuffer("const x = 1 + 2; const y = `v=${x}`;");
-		const def = deserializeVmDefinition(buffer);
+		const def = deserializeRuntimeImage(buffer);
 		expect(def.functions.length).toBeGreaterThanOrEqual(1);
 		expect(def.functions[0]!.instructions.length).toBeGreaterThan(0);
 		expect(def.globalCount).toBeGreaterThan(0);
 	});
 
 	it("captures string constants used by the script", () => {
-		const def = deserializeVmDefinition(
+		const def = deserializeRuntimeImage(
 			compileSourceToBuffer('const s = "hello world";'),
 		);
 		const decoder = (units: Array<number>) => String.fromCharCode(...units);
@@ -24,7 +24,7 @@ describe("compileSourceToBuffer", () => {
 	});
 
 	it("emits a function per nested function", () => {
-		const def = deserializeVmDefinition(
+		const def = deserializeRuntimeImage(
 			compileSourceToBuffer(
 				"function a(){ return 1; } function b(){ return a() + 1; } b();",
 			),

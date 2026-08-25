@@ -790,7 +790,7 @@ typedef struct MalExceptionHandler {
 /**
  * Debug-info: one run in a function's position table. Instructions in
  * [start_ip, next entry's start_ip) map to source position `pos_id` (an index
- * into MalVmDefinition.source_positions). Sorted ascending by start_ip; a frame's
+ * into MalProgramImage.source_positions). Sorted ascending by start_ip; a frame's
  * position is the last entry with start_ip <= its instruction pointer.
  */
 typedef struct MalLineEntry {
@@ -925,7 +925,7 @@ typedef struct MalFunction {
     i32 handler_count;
 
     /**
-     * Debug-info (stack traces). file_index points into MalVmDefinition.files;
+     * Debug-info (stack traces). file_index points into MalProgramImage.files;
      * positions is a run-length position table (position_count entries) mapping
      * instruction pointers to source positions. position_count is 0 / positions
      * is nullptr for stripped builds.
@@ -1041,7 +1041,7 @@ typedef struct MalPrecompiledLiteralShape {
     const i32 *key_string_indices;
 } MalPrecompiledLiteralShape;
 
-typedef struct MalVmDefinition {
+typedef struct MalProgramImage {
     i32 function_count;
     const MalFunction *functions;
 
@@ -1115,7 +1115,7 @@ typedef struct MalVmDefinition {
      */
     i32 host_install_count;
     const MalHostInstall *host_installs;
-} MalVmDefinition;
+} MalProgramImage;
 
 /**
  * A CommonJS module's registry slot. `module_object` is its `module` object
@@ -1312,7 +1312,7 @@ typedef struct MalSemanticEpochs {
 } MalSemanticEpochs;
 
 typedef struct MalVm {
-    const MalVmDefinition *definition;
+    const MalProgramImage *definition;
 
     /** Initial immutable string table retained for native code's direct constants. */
     const MalString *initial_string_constants;
@@ -1329,7 +1329,7 @@ typedef struct MalVm {
      * and constants in via mal_vm_splice_definition without disturbing the const
      * `vm->definition->...` access paths. The *_capacity fields size that growth.
      */
-    MalVmDefinition live_definition;
+    MalProgramImage live_definition;
     i32 function_capacity;
     i32 string_capacity;
     i32 bigint_capacity;
@@ -2000,7 +2000,7 @@ static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 136 : 128),
 
 typedef MalVmFrame MalCallable;
 
-void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
+void mal_vm_init(MalVm *vm, const MalProgramImage *definition);
 
 /** Register one idempotent runtime-module teardown with the owning isolate. */
 bool mal_vm_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm));
@@ -2032,7 +2032,7 @@ void mal_vm_free_coroutine_buffer_pool(MalVm *vm);
  * is safe to call unconditionally.
  */
 static inline void mal_vm_run_definition_host_installs(
-    MalVm *vm, const MalVmDefinition *definition, const MalHostLaunchContext *launch) {
+    MalVm *vm, const MalProgramImage *definition, const MalHostLaunchContext *launch) {
     for (i32 i = 0; i < definition->host_install_count; i++) {
         const MalHostInstall *install = &definition->host_installs[i];
         if (install->installer != nullptr) {
@@ -2070,7 +2070,7 @@ void mal_vm_free(MalVm *vm);
  * (no live frames) — it may realloc the function table, which would dangle a
  * running frame's function pointer.
  */
-i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded);
+i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded);
 
 /** Retain a loaded arena after a successful splice until VM teardown. */
 void mal_vm_retain_loaded_definition(MalVm *vm, MalLoadedDefinition *loaded);

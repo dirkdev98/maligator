@@ -1,7 +1,4 @@
-import type {
-	CoreCompilation,
-	CoreCompilationContext,
-} from "../core/core-compilation.ts";
+import type { CoreCompilation } from "../core/core-compilation.ts";
 import { CORE_INTERNAL_TARGET_ATTRIBUTES } from "../core/core-ir-call-targets.ts";
 import {
 	buildCoreControlFlow,
@@ -19,7 +16,6 @@ import type {
 	CoreImmediate,
 	CoreInstructionAttributes,
 	CoreInstructionId,
-	CoreProgram,
 	CoreRegion,
 	CoreRepresentation,
 	CoreValueId,
@@ -30,80 +26,29 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
-import { verifyCoreTargetProgram } from "./core-target-verifier.ts";
+import { verifyExecutionProgram } from "./core-target-verifier.ts";
+import type {
+	ExecutionFunction,
+	ExecutionMove,
+	ExecutionParallelCopy,
+	ExecutionProgram,
+	ExecutionSafepoint,
+} from "./execution-ir.ts";
+export type {
+	ExecutionFunction,
+	ExecutionMove,
+	ExecutionParallelCopy,
+	ExecutionProgram,
+	ExecutionSafepoint,
+} from "./execution-ir.ts";
 
 const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	...CORE_INTERNAL_TARGET_ATTRIBUTES,
 	...CORE_INTERNAL_SUMMARY_ATTRIBUTES,
 ]);
 
-export interface CoreTargetProgram {
-	readonly core: CoreProgram;
-	readonly context: CoreCompilationContext;
-	readonly functions: Array<CoreTargetFunction>;
-	readonly gcRootRegisters: ReadonlyArray<ReadonlyArray<number> | undefined>;
-}
-
-export type CoreTargetMove = Extract<CompilerInstruction, { type: "move" }>;
-
-/**
- * Simultaneous register assignment lowered from one Core edge or exception-handler
- * input list. The declared assignments are the contract; `moves` is the sequential
- * implementation, which may route a cycle through `temporaries`.
- */
-export interface CoreTargetParallelCopy {
-	readonly kind: "edge" | "handler-input";
-	readonly assignments: ReadonlyArray<{
-		readonly destination: number;
-		readonly source: number;
-	}>;
-	readonly moves: ReadonlyArray<CoreTargetMove>;
-	readonly temporaries: ReadonlyArray<number>;
-}
-
-export interface CoreTargetSafepoint {
-	/** Core instruction that emitted `instruction`. */
-	readonly coreInstruction: CoreInstructionId;
-	/** Core collection points realized while this target instruction executes. */
-	readonly realizedCoreInstructions: ReadonlyArray<CoreInstructionId>;
-	readonly instruction: CompilerInstruction;
-}
-
-export interface CoreTargetFunction {
-	readonly sourcePath: string;
-	readonly functionIndex: number;
-	readonly nameStringIndex: number;
-	readonly blocks: Array<{ readonly instructions: Array<CompilerInstruction> }>;
-	readonly regions?: ReadonlyArray<CoreAllocatedRegion>;
-	readonly isGenerator: boolean;
-	readonly isAsync: boolean;
-	readonly parameterCount: number;
-	readonly mappedArgumentSlots: Array<number>;
-	readonly mappedArguments: boolean;
-	readonly length: number;
-	readonly registerCount: number;
-	/** First register introduced by target lowering rather than Core allocation. */
-	readonly allocatedRegisterCount: number;
-	/** Physical register classes selected from canonical Core value representations. */
-	readonly registerRepresentations: ReadonlyArray<"boxed" | "number" | "boolean">;
-	readonly capturedCount: number;
-	readonly strict: boolean;
-	readonly isClassConstructor: boolean;
-	readonly isDerivedConstructor: boolean;
-	readonly hasPrototype: boolean;
-	/**
-	 * Target collection points with their Core provenance. Target lowering also
-	 * emits comparisons and copies with no Core effects, while embedded immediates
-	 * can realize an omitted Core producer at their consuming call.
-	 */
-	readonly safepoints: ReadonlyArray<CoreTargetSafepoint>;
-	readonly parallelCopies: ReadonlyArray<CoreTargetParallelCopy>;
-	/** Registers introduced after allocation, for copy cycles and target constraints. */
-	readonly temporaryRegisters: ReadonlyArray<number>;
-}
-
 interface LoweredParallelCopy {
-	readonly moves: Array<CoreTargetMove>;
+	readonly moves: Array<ExecutionMove>;
 	readonly temporaries: Array<number>;
 }
 
@@ -115,7 +60,7 @@ function parallelMoves(
 	const pending = assignments
 		.filter(({ destination, source }) => destination !== source)
 		.map((assignment) => ({ ...assignment }));
-	const moves: Array<CoreTargetMove> = [];
+	const moves: Array<ExecutionMove> = [];
 	const temporaries: Array<number> = [];
 	while (pending.length > 0) {
 		const ready = pending.findIndex(
@@ -326,8 +271,8 @@ function lowerCoreRegions(
 	instructions: ReadonlyMap<CoreInstructionId, CompilerInstruction>,
 	blocks: ReadonlyMap<CoreBlockId, number>,
 	values: ReadonlyMap<CoreValueId, number>,
-): ReadonlyArray<CoreAllocatedRegion> | undefined {
-	if (regions.length === 0) return undefined;
+): ReadonlyArray<CoreAllocatedRegion> {
+	if (regions.length === 0) return [];
 	const requireInstruction = (id: CoreInstructionId): CompilerInstruction => {
 		const instruction = instructions.get(id);
 		if (instruction === undefined) {
@@ -816,7 +761,7 @@ function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructi
  * names both ends out of embedding — the producer so it stays materialized, and
  * the consuming call so its operands keep the shape the certificate's contract is
  * stated over — and both decisions read the same protected set here so they cannot
- * disagree. `CoreTargetSafepoint` re-attributes an omitted producer's collection
+ * disagree. `ExecutionSafepoint` re-attributes an omitted producer's collection
  * point to the consuming call.
  */
 function immediateOnlyInstructions(
@@ -946,7 +891,7 @@ function coreBlockLayout(core: CoreFunction): Array<CoreBlockId> {
 }
 
 interface LoweredCoreFunction {
-	readonly fn: CoreTargetFunction;
+	readonly fn: ExecutionFunction;
 	readonly gcRootRegisters: ReadonlyArray<number>;
 }
 
@@ -973,7 +918,7 @@ function lowerFunctionToTarget(
 		safepoints: coreSafepoints,
 	} = coreRegisterClasses(core, reuseRegisters);
 	const gcRootRegisters = new Set(allocatedGcRootRegisters);
-	const parallelCopies: Array<CoreTargetParallelCopy> = [];
+	const parallelCopies: Array<ExecutionParallelCopy> = [];
 	const temporaryRegisters: Array<number> = [];
 	const nextRegister = {
 		value: Math.max(-1, ...allocatedRegisters.values()) + 1,
@@ -1020,7 +965,7 @@ function lowerFunctionToTarget(
 			: lowered + 1;
 	};
 
-	const safepoints: Array<CoreTargetSafepoint> = [];
+	const safepoints: Array<ExecutionSafepoint> = [];
 	const coreValueDefinitions = new Map(
 		core.values.map(({ id, definition }) => [id, definition] as const),
 	);
@@ -1258,7 +1203,7 @@ function lowerFunctionToTarget(
 			functionIndex: core.functionIndex,
 			nameStringIndex: core.metadata.nameStringIndex,
 			blocks,
-			regions: lowerCoreRegions(
+			specializations: lowerCoreRegions(
 				core.regions,
 				loweredInstructions,
 				loweredBlockForCore,
@@ -1287,14 +1232,14 @@ function lowerFunctionToTarget(
 }
 
 /** Select and allocate canonical Core into the VM target form. */
-export interface LowerCoreToTargetOptions {
+export interface LowerCoreToExecutionOptions {
 	readonly reuseRegisters?: boolean;
 }
 
-export function lowerCoreProgramToTarget(
+export function lowerCoreCompilationToExecution(
 	compilation: CoreCompilation,
-	options: LowerCoreToTargetOptions = {},
-): CoreTargetProgram {
+	options: LowerCoreToExecutionOptions = {},
+): ExecutionProgram {
 	const { program: core, context } = compilation;
 	// Owned boundary: lowering may consume Core decisions but never repairs them.
 	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "pre-target" }, context);
@@ -1305,7 +1250,7 @@ export function lowerCoreProgramToTarget(
 			options.reuseRegisters ?? true,
 		),
 	);
-	const program: CoreTargetProgram = {
+	const program: ExecutionProgram = {
 		core,
 		context,
 		functions: lowered.map(({ fn }) => fn),
@@ -1316,6 +1261,6 @@ export function lowerCoreProgramToTarget(
 		),
 	};
 	// Owned boundary: no lower-vm consumer may observe an unverified target program.
-	verifyCoreTargetProgram(program);
+	verifyExecutionProgram(program);
 	return program;
 }

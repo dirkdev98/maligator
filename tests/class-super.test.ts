@@ -2,11 +2,11 @@ import { expect, test } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { vmExceptionHandlerTargets } from "../src/compiler/target/lower-vm.ts";
 import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
 } from "../src/compiler/target/serialize-vm.ts";
 
 function compile(source: string) {
@@ -41,12 +41,12 @@ test("super reads retain their receiver through Core, lowering, and wire encodin
 		expect(load.outputs).toHaveLength(1);
 	}
 
-	const vm = compileSemanticProgramToVmDefinition(semantic);
+	const vm = compileSemanticProgramToProgramImage(semantic);
 	const lowered = vm.functions.flatMap((fn) => fn.instructions);
 	expect(
 		lowered.filter((instruction) => instruction.opcode === "LOAD_SUPER_PROPERTY"),
 	).toHaveLength(superLoads.length);
-	const roundTripped = deserializeVmDefinition(serializeVmDefinition(vm));
+	const roundTripped = deserializeCompilerArtifact(serializeCompilerArtifact(vm));
 	expect(
 		roundTripped.functions
 			.flatMap((fn) => fn.instructions)
@@ -95,8 +95,8 @@ test("class heritage defines the constructor prototype without ordinary assignme
 		configurable: false,
 	});
 
-	const roundTripped = deserializeVmDefinition(
-		serializeVmDefinition(compileSemanticProgramToVmDefinition(semantic)),
+	const roundTripped = deserializeCompilerArtifact(
+		serializeCompilerArtifact(compileSemanticProgramToProgramImage(semantic)),
 	);
 	expect(
 		roundTripped.functions
@@ -120,7 +120,7 @@ test("captured derived this keeps its TDZ check through target lowering", () => 
 		}
 		new Derived();
 	`);
-	const definition = compileSemanticProgramToVmDefinition(semantic);
+	const definition = compileSemanticProgramToProgramImage(semantic);
 	const capturedArrow = definition.functions.find(
 		(fn) =>
 			!fn.hasPrototype &&
@@ -143,7 +143,7 @@ test("a derived this read participates in its surrounding exception handler", ()
 		}
 		new Derived();
 	`);
-	const definition = compileSemanticProgramToVmDefinition(semantic);
+	const definition = compileSemanticProgramToProgramImage(semantic);
 	const derived = definition.functions.find((fn) => fn.isDerivedConstructor);
 	expect(derived).toBeDefined();
 	const loadThis = derived!.instructions.findIndex(

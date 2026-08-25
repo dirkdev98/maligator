@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
-import { emitVmTranslationUnits } from "../src/compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "../src/compiler/target/emit-vm.ts";
 
 const inputPath = process.argv[2];
 const outputDirectory = process.argv[3];
@@ -61,7 +61,7 @@ const definition = compileEntrypoint(path.resolve(inputPath), {
 });
 
 const emitStartedAt = Date.now();
-const units = emitVmTranslationUnits(definition, { maligatorSurface: true });
+const units = emitProgramTranslationUnits(definition, { maligatorSurface: true });
 phases.emitMs = Date.now() - emitStartedAt;
 
 const writeStartedAt = Date.now();

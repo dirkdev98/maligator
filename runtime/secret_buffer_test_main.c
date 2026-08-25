@@ -26,7 +26,7 @@
  * nothing detaches a digest state or a derived tag.
  */
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 #define SECRET_LENGTH 96
 #define SECRET_BYTE 0xa7

@@ -12,15 +12,19 @@ import {
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
 import type {
-	VmDefinition,
-	VmFunction,
-	VmInstruction,
+	ProgramImage,
+	BytecodeFunction,
+	BytecodeInstruction,
+	NativeFunctionPlan,
+	NativeInstructionPlan,
+	RuntimeImage,
+	VmGuardedBuiltinCall,
 	VmRegion,
 	VmSemanticProtectorFact,
 } from "./lower-vm.ts";
 
 /**
- * Sequential binary wire format for a {@link VmDefinition}, consumed at
+ * Sequential binary wire format for a {@link ProgramImage}, consumed at
  * runtime by the C loader `mal_vm_load_definition` (runtime/src/vm_load.c). It is
  * the same data `emit-vm.ts` bakes into C literals, but as a buffer the running
  * VM can ingest without a C compile — the foundation of runtime `eval` and a
@@ -35,8 +39,10 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
+export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 24;
+export const WIRE_VERSION = 25;
+export const COMPILER_ARTIFACT_VERSION = 25;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -699,7 +705,7 @@ function regexpIteratorProjectionGuardMasks(
  * shares its handler coverage, so its throw is still caught in the same place.
  */
 function propertyPlacementHolds(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	placement: CorePropertyPlacement,
 	propertyIp: number,
 	callIp: number,
@@ -827,15 +833,31 @@ function semanticProtectorGuardMasks(fact: VmSemanticProtectorFact): {
  * (matching emit-vm's stripped batch path), yielding a smaller buffer whose
  * traces carry function names only.
  */
-export function serializeVmDefinition(
-	def: VmDefinition,
+export function serializeRuntimeImage(
+	image: RuntimeImage,
 	options: { debugInfo?: boolean } = {},
+): Uint8Array {
+	return serializeImage(image, undefined, WIRE_MAGIC, options);
+}
+
+export function serializeCompilerArtifact(
+	def: ProgramImage,
+	options: { debugInfo?: boolean } = {},
+): Uint8Array {
+	return serializeImage(def, def, COMPILER_ARTIFACT_MAGIC, options);
+}
+
+function serializeImage(
+	def: RuntimeImage,
+	compiler: ProgramImage | undefined,
+	magic: number,
+	options: { debugInfo?: boolean },
 ): Uint8Array {
 	validateVmShapeCases(def);
 	const debug = options.debugInfo !== false;
 	const w = new Writer();
 
-	w.fixedU32(WIRE_MAGIC);
+	w.fixedU32(magic);
 	w.fixedU32(WIRE_VERSION);
 	w.u32(debug ? FLAG_HAS_DEBUG : 0);
 	w.u32(def.globalCount);
@@ -938,14 +960,23 @@ export function serializeVmDefinition(
 		w.u8(obligationMask);
 	}
 
-	// Native-code generation needs metadata that the interpreter ignores. Keep it
-	// in the portable definition so a content-addressed frontend cache can restore
-	// a byte-for-byte equivalent AOT input instead of rerunning analysis and IR
-	// lowering. The C loader validates and skips this tail.
-	w.u32(def.functions.length);
-	for (const fn of def.functions) {
-		w.u8(fn.gcRootRegisters === undefined ? 0 : 1);
-		w.i32Array([...(fn.gcRootRegisters ?? [])]);
+	if (compiler === undefined) return w.finish();
+
+	// The compiler artifact appends native-only plans to the runtime payload. Its
+	// distinct magic prevents this richer artifact from ever reaching the VM loader.
+	w.u32(compiler.functions.length);
+	for (const [functionIndex, fn] of def.functions.entries()) {
+		const native = compiler.nativePlan.functions[functionIndex];
+		if (native?.functionIndex !== functionIndex) {
+			throw new RangeError("serialize-vm: native function plan mismatch");
+		}
+		w.u8(1);
+		w.i32Array([...native.gc.rootRegisters]);
+		w.u32(native.gc.safepoints.length);
+		for (const safepoint of native.gc.safepoints) {
+			w.i32(safepoint.instructionIp);
+			w.i32Array([...safepoint.rootRegisters]);
+		}
 
 		const representationTag = (representation: string): number =>
 			representation === "boxed"
@@ -956,8 +987,8 @@ export function serializeVmDefinition(
 						? 2
 						: -1;
 		if (
-			fn.registerRepresentations.length !== fn.registerCount ||
-			fn.registerRepresentations.some(
+			native.registerRepresentations.length !== fn.registerCount ||
+			native.registerRepresentations.some(
 				(representation, register) =>
 					representationTag(representation) < 0 ||
 					(register < fn.parameterCount && representation !== "boxed"),
@@ -965,57 +996,35 @@ export function serializeVmDefinition(
 		) {
 			throw new RangeError("serialize-vm: invalid register representations");
 		}
-		w.u32(fn.registerRepresentations.length);
-		for (const representation of fn.registerRepresentations) {
+		w.u32(native.registerRepresentations.length);
+		for (const representation of native.registerRepresentations) {
 			w.u8(representationTag(representation));
 		}
 
-		const instructionMetadata = fn.instructions
-			.map((instruction, instructionIndex) => ({ instruction, instructionIndex }))
-			.filter(({ instruction }) => {
-				if (instruction.opcode === "CALL") {
-					return (
-						instruction.directFunctionIndex !== undefined ||
-						instruction.directFunctionCall === true ||
-						instruction.directCallTargetFunctionIndex !== undefined ||
-						instruction.guardedBuiltinCall !== undefined
-					);
-				}
-				if (instruction.opcode === "CONSTRUCT") {
-					return instruction.directFunctionIndex !== undefined;
-				}
-				if (
-					instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-					instruction.opcode === "STORE_PROPERTY"
-				) {
-					return (
-						instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-						instruction.primitiveStringLength === true
-					);
-				}
-				if (instruction.opcode === "CREATE_ARRAY") {
-					return instruction.freshDenseReserveLength !== undefined;
-				}
-				return false;
-			});
+		if (native.instructions.length !== fn.instructions.length) {
+			throw new RangeError("serialize-vm: native instruction-plan count mismatch");
+		}
+		const instructionMetadata = native.instructions.flatMap((plan, instructionIndex) =>
+			plan === undefined ? [] : [{ plan, instructionIndex }],
+		);
 		w.u32(instructionMetadata.length);
-		for (const { instruction, instructionIndex } of instructionMetadata) {
+		for (const { plan, instructionIndex } of instructionMetadata) {
+			const instruction = fn.instructions[instructionIndex]!;
 			w.u32(instructionIndex);
-			if (instruction.opcode === "CALL") {
-				const guardedBuiltin = instruction.guardedBuiltinCall;
+			if (plan.kind === "call" && instruction.opcode === "CALL") {
+				const guardedBuiltin = plan.guardedBuiltinCall;
 				const guardedOperation = guardedBuiltin?.operation;
 				const guardedDependency = guardedBuiltin?.guard.dependencies[0];
 				if (
-					(instruction.directFunctionIndex !== undefined &&
-						(!Number.isInteger(instruction.directFunctionIndex) ||
-							instruction.directFunctionIndex < 0 ||
-							instruction.directFunctionIndex >= def.functions.length)) ||
-					(instruction.directCallTargetFunctionIndex !== undefined &&
-						(!Number.isInteger(instruction.directCallTargetFunctionIndex) ||
-							instruction.directCallTargetFunctionIndex < 0 ||
-							instruction.directCallTargetFunctionIndex >= def.functions.length ||
-							instruction.directFunctionCall !== true)) ||
+					(plan.directFunctionIndex !== undefined &&
+						(!Number.isInteger(plan.directFunctionIndex) ||
+							plan.directFunctionIndex < 0 ||
+							plan.directFunctionIndex >= def.functions.length)) ||
+					(plan.directCallTargetFunctionIndex !== undefined &&
+						(!Number.isInteger(plan.directCallTargetFunctionIndex) ||
+							plan.directCallTargetFunctionIndex < 0 ||
+							plan.directCallTargetFunctionIndex >= def.functions.length ||
+							plan.directFunctionCall !== true)) ||
 					(guardedBuiltin !== undefined &&
 						(guardedBuiltin.guard.dependencies.length !== 1 ||
 							guardedBuiltin.guard.obligations.length !== 1 ||
@@ -1028,48 +1037,44 @@ export function serializeVmDefinition(
 					throw new RangeError("serialize-vm: invalid CALL specialization metadata");
 				}
 				if (
-					instruction.directStringCharCodeAtPosition !== undefined &&
+					plan.directStringCharCodeAtPosition !== undefined &&
 					guardedOperation !== "String.prototype.charCodeAt"
 				) {
 					throw new RangeError("serialize-vm: mismatched guarded builtin metadata");
 				}
 				w.u8(1);
-				w.i32(instruction.directFunctionIndex ?? -1);
-				w.i32(instruction.directCallTargetFunctionIndex ?? -1);
+				w.i32(plan.directFunctionIndex ?? -1);
+				w.i32(plan.directCallTargetFunctionIndex ?? -1);
 				w.u8(
-					(instruction.directFunctionCall === true ? 1 : 0) |
+					(plan.directFunctionCall === true ? 1 : 0) |
 						(guardedOperation === "Array.prototype.push" ? 2 : 0) |
 						(guardedOperation === "String.prototype.charCodeAt" ? 4 : 0) |
-						(instruction.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
+						(plan.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
 						(guardedDependency?.kind === "world" ? 64 : 0),
 				);
 				w.u8(taggedGuardedBuiltinOperation(guardedOperation));
-			} else if (instruction.opcode === "CONSTRUCT") {
+			} else if (plan.kind === "construct" && instruction.opcode === "CONSTRUCT") {
 				if (
-					!Number.isInteger(instruction.directFunctionIndex) ||
-					instruction.directFunctionIndex! < 0 ||
-					instruction.directFunctionIndex! >= def.functions.length
+					!Number.isInteger(plan.directFunctionIndex) ||
+					plan.directFunctionIndex < 0 ||
+					plan.directFunctionIndex >= def.functions.length
 				) {
 					throw new RangeError("serialize-vm: invalid direct CONSTRUCT target");
 				}
 				w.u8(2);
-				w.i32(instruction.directFunctionIndex!);
+				w.i32(plan.directFunctionIndex);
 			} else if (
-				instruction.opcode === "CREATE_ARRAY" &&
-				instruction.freshDenseReserveLength !== undefined
+				plan.kind === "fresh-dense-reserve" &&
+				instruction.opcode === "CREATE_ARRAY"
 			) {
-				if (
-					!Number.isInteger(instruction.freshDenseReserveLength) ||
-					instruction.freshDenseReserveLength < 1 ||
-					instruction.freshDenseReserveLength > 65_536
-				) {
+				if (!Number.isInteger(plan.length) || plan.length < 1 || plan.length > 65_536) {
 					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
 				}
 				w.u8(12);
-				w.i32(instruction.freshDenseReserveLength);
+				w.i32(plan.length);
 			} else if (
-				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-				instruction.primitiveStringLength === true
+				plan.kind === "primitive-string-length" &&
+				instruction.opcode === "LOAD_PROPERTY_STATIC"
 			) {
 				if (
 					String.fromCharCode(...(def.stringConstants[instruction.stringIndex] ?? [])) !==
@@ -1078,14 +1083,22 @@ export function serializeVmDefinition(
 					throw new RangeError("serialize-vm: invalid primitive-String length hint");
 				}
 				w.u8(11);
+			} else {
+				throw new RangeError("serialize-vm: native instruction plan opcode mismatch");
 			}
 		}
 
-		const regions = [...(fn.regions ?? [])];
+		const regions = [...native.specializations];
 		w.u32(regions.length);
 		const claimedRegionInstructions = new Set<number>();
 		for (const region of regions) {
-			validateRegion(fn, region, claimedRegionInstructions, def.stringConstants);
+			validateRegion(
+				fn,
+				region,
+				claimedRegionInstructions,
+				def.stringConstants,
+				native.instructions,
+			);
 			const kindTag =
 				region.kind === "string-split-cursor"
 					? 2
@@ -1297,7 +1310,7 @@ export function serializeVmDefinition(
 	return w.finish();
 }
 
-function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
+function writeFunction(w: Writer, fn: BytecodeFunction, debug: boolean): void {
 	validateArgumentSnapshotPrefix(fn);
 	validateMappedArguments(fn);
 	validatePropertyIcIndices(fn);
@@ -1345,7 +1358,7 @@ function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	}
 }
 
-function validateArgumentSnapshotPrefix(fn: VmFunction): void {
+function validateArgumentSnapshotPrefix(fn: BytecodeFunction): void {
 	let expected;
 	try {
 		expected = buildArgumentSnapshotPlan(fn);
@@ -1366,7 +1379,7 @@ function validateArgumentSnapshotPrefix(fn: VmFunction): void {
 	}
 }
 
-function validateMappedArguments(fn: VmFunction): void {
+function validateMappedArguments(fn: BytecodeFunction): void {
 	if (
 		fn.mappedArgumentSlots.length > fn.parameterCount ||
 		(!fn.mappedArguments && fn.mappedArgumentSlots.length !== 0) ||
@@ -1377,7 +1390,7 @@ function validateMappedArguments(fn: VmFunction): void {
 	}
 }
 
-function validatePropertyIcIndices(fn: VmFunction): void {
+function validatePropertyIcIndices(fn: BytecodeFunction): void {
 	let expected = 0;
 	let expectedLiteralShape = 0;
 	for (const instruction of fn.instructions) {
@@ -1412,7 +1425,7 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 }
 
 function validateRegionEnvelope(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: VmRegion,
 	claimed: Set<number>,
 ): void {
@@ -1461,28 +1474,42 @@ function validateRegionEnvelope(
 	}
 }
 
+function nativeCallPlanAt(
+	plans: ReadonlyArray<NativeInstructionPlan | undefined>,
+	ip: number,
+): Extract<NativeInstructionPlan, { kind: "call" }> | undefined {
+	const plan = plans[ip];
+	return plan?.kind === "call" ? plan : undefined;
+}
+
 function validateRegion(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: VmRegion,
 	claimed: Set<number>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
 		case "string-split-cursor":
-			validateStringSplitCursorRegion(fn, region);
+			validateStringSplitCursorRegion(fn, region, nativeInstructions);
 			break;
 		case "string-split-projection":
-			validateStringSplitProjectionRegion(fn, region, stringConstants);
+			validateStringSplitProjectionRegion(
+				fn,
+				region,
+				stringConstants,
+				nativeInstructions,
+			);
 			break;
 		case "regexp-exec-projection":
-			validateRegExpExecProjectionRegion(fn, region, stringConstants);
+			validateRegExpExecProjectionRegion(fn, region, stringConstants, nativeInstructions);
 			break;
 		case "regexp-iterator-projection":
 			validateRegExpIteratorProjectionRegion(fn, region);
 			break;
 		case "string-slice-number":
-			validateStringSliceNumberRegion(fn, region, stringConstants);
+			validateStringSliceNumberRegion(fn, region, stringConstants, nativeInstructions);
 			break;
 		case "stack-object-plan":
 			validateStackObjectPlanRegion(fn, region);
@@ -1497,7 +1524,7 @@ function validateRegion(
 }
 
 function validateNumericFusionRegion(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "numeric-fusion" }>,
 ): void {
 	const payloadIps = region.pairs.flatMap((pair) => [pair.firstIp, pair.finishIp]);
@@ -1563,7 +1590,7 @@ function validateNumericFusionRegion(
 }
 
 function validateStackObjectPlanRegion(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "stack-object-plan" }>,
 ): void {
 	const { dependencyMask } = stackObjectPlanGuardMasks(region.license);
@@ -1651,13 +1678,15 @@ function validateStackObjectPlanRegion(
 }
 
 function validateStringSliceNumberRegion(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "string-slice-number" }>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
 	stringSliceNumberGuardMasks(region.license);
 	const property = fn.instructions[region.propertyIp];
 	const sliceCall = fn.instructions[region.sliceCallIp];
+	const sliceCallPlan = nativeCallPlanAt(nativeInstructions, region.sliceCallIp);
 	const sliceStartInstruction = fn.instructions[region.sliceStartIp];
 	const numberIntrinsic = fn.instructions[region.numberIntrinsicIp];
 	const numberCall = fn.instructions[region.numberCallIp];
@@ -1667,8 +1696,8 @@ function validateStringSliceNumberRegion(
 			: undefined;
 	const expectedBuiltinIdentities =
 		sliceCall?.opcode === "CALL" &&
-		sliceCall.guardedBuiltinCall !== undefined &&
-		vmGuardIsWorldInvariant(sliceCall.guardedBuiltinCall.guard)
+		sliceCallPlan?.guardedBuiltinCall !== undefined &&
+		vmGuardIsWorldInvariant(sliceCallPlan.guardedBuiltinCall.guard)
 			? "authority-invariant"
 			: "runtime-guarded";
 	const payload = new Set([
@@ -1694,7 +1723,7 @@ function validateStringSliceNumberRegion(
 		property?.opcode !== "LOAD_PROPERTY_STATIC" ||
 		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !== "slice" ||
 		sliceCall?.opcode !== "CALL" ||
-		sliceCall.guardedBuiltinCall?.operation !== "String.prototype.slice" ||
+		sliceCallPlan?.guardedBuiltinCall?.operation !== "String.prototype.slice" ||
 		sliceCall.arguments.length !== 1 ||
 		property.dst !== sliceCall.callee ||
 		property.object !== sliceCall.thisValue ||
@@ -1732,13 +1761,15 @@ function validateStringSliceNumberRegion(
 }
 
 function validateRegExpExecProjectionRegion(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "regexp-exec-projection" }>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
 	regexpExecProjectionGuardMasks(region.license);
 	const property = fn.instructions[region.propertyIp];
 	const call = fn.instructions[region.callIp];
+	const callPlan = nativeCallPlanAt(nativeInstructions, region.callIp);
 	const aliases = new Set(region.resultRegisters);
 	let valid =
 		region.representation === "regexp-capture-spans" &&
@@ -1749,7 +1780,7 @@ function validateRegExpExecProjectionRegion(
 		property?.opcode === "LOAD_PROPERTY_STATIC" &&
 		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) === "exec" &&
 		call?.opcode === "CALL" &&
-		call.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
+		callPlan?.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
 		call.arguments.length === 1 &&
 		property.dst === call.callee &&
 		property.object === call.thisValue &&
@@ -1824,10 +1855,10 @@ function validateRegExpExecProjectionRegion(
 		? "authority-invariant"
 		: "runtime-guarded";
 	const staticPropertyMatches = (
-		instruction: VmInstruction | undefined,
+		instruction: BytecodeInstruction | undefined,
 		object: number,
 		name: string,
-	): instruction is Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }> =>
+	): instruction is Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }> =>
 		instruction?.opcode === "LOAD_PROPERTY_STATIC" &&
 		instruction.object === object &&
 		String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) === name;
@@ -1953,7 +1984,7 @@ function validateRegExpExecProjectionRegion(
 }
 
 function validateRegExpIteratorProjectionRegion(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "regexp-iterator-projection" }>,
 ): void {
 	regexpIteratorProjectionGuardMasks(region.license);
@@ -2049,9 +2080,10 @@ function validateRegExpIteratorProjectionRegion(
 }
 
 function validateStringSplitProjectionRegion(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "string-split-projection" }>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
 	const { dependencyMask } = stringSplitProjectionGuardMasks(region.license);
 	const stringConstantEquals = (index: number, value: string): boolean => {
@@ -2064,6 +2096,7 @@ function validateStringSplitProjectionRegion(
 	const callIp = region.anchors[0]!;
 	const firstLoadIp = region.anchors[1]!;
 	const call = fn.instructions[callIp];
+	const callPlan = nativeCallPlanAt(nativeInstructions, callIp);
 	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
 	const registerValid = (register: number) =>
 		Number.isInteger(register) && register >= 0 && register < fn.registerCount;
@@ -2072,7 +2105,7 @@ function validateStringSplitProjectionRegion(
 	const latestDefinition = (
 		register: number,
 		beforeIp: number,
-	): VmInstruction | undefined => {
+	): BytecodeInstruction | undefined => {
 		for (let ip = beforeIp - 1; ip >= 0; ip--) {
 			const instruction = fn.instructions[ip]!;
 			if (vmInstructionWriteRegisters(instruction).includes(register)) return instruction;
@@ -2089,15 +2122,15 @@ function validateStringSplitProjectionRegion(
 				stringConstantEquals(property.stringIndex, "split") &&
 				call.callee === region.callee &&
 				call.thisValue === region.receiver &&
-				call.guardedBuiltinCall?.operation === "String.prototype.split" &&
-				call.guardedBuiltinCall.guard.dependencies.length === 1 &&
+				callPlan?.guardedBuiltinCall?.operation === "String.prototype.split" &&
+				callPlan.guardedBuiltinCall.guard.dependencies.length === 1 &&
 				(dependencyMask === 1
-					? call.guardedBuiltinCall.guard.dependencies[0]?.kind === "world"
-					: call.guardedBuiltinCall.guard.dependencies[0]?.kind === "epoch" &&
-						call.guardedBuiltinCall.guard.dependencies[0]?.family ===
+					? callPlan.guardedBuiltinCall.guard.dependencies[0]?.kind === "world"
+					: callPlan.guardedBuiltinCall.guard.dependencies[0]?.kind === "epoch" &&
+						callPlan.guardedBuiltinCall.guard.dependencies[0]?.family ===
 							"watched-methods") &&
-				call.guardedBuiltinCall.guard.obligations.length === 1 &&
-				call.guardedBuiltinCall.guard.obligations[0] === "fallback"
+				callPlan.guardedBuiltinCall.guard.obligations.length === 1 &&
+				callPlan.guardedBuiltinCall.guard.obligations[0] === "fallback"
 			: call?.opcode === "CALL_BUILTIN" &&
 				dependencyMask === 1 &&
 				region.propertyIp === -1 &&
@@ -2107,8 +2140,8 @@ function validateStringSplitProjectionRegion(
 	const expectedSplitIdentity =
 		call?.opcode === "CALL_BUILTIN" ||
 		(call?.opcode === "CALL" &&
-			call.guardedBuiltinCall !== undefined &&
-			vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard))
+			callPlan?.guardedBuiltinCall !== undefined &&
+			vmGuardIsWorldInvariant(callPlan.guardedBuiltinCall.guard))
 			? "authority-invariant"
 			: "runtime-guarded";
 	const separator =
@@ -2218,8 +2251,9 @@ function validateStringSplitProjectionRegion(
 }
 
 function validateStringSplitCursorRegion(
-	fn: VmFunction,
+	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "string-split-cursor" }>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
 	stringSplitCursorGuardMasks(region.license);
 	const callIp = region.anchors[0]!;
@@ -2227,6 +2261,7 @@ function validateStringSplitCursorRegion(
 	const lengthIp = region.anchors[2]!;
 	const backedgeIp = region.anchors[3]!;
 	const call = fn.instructions[callIp];
+	const callPlan = nativeCallPlanAt(nativeInstructions, callIp);
 	const headerBranch = fn.instructions[headerBranchIp];
 	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
 	const length = fn.instructions[lengthIp];
@@ -2239,6 +2274,7 @@ function validateStringSplitCursorRegion(
 	const element = fn.instructions[region.elementIp];
 	const trimProperty = fn.instructions[region.trimPropertyIp];
 	const trimCall = fn.instructions[region.trimCallIp];
+	const trimCallPlan = nativeCallPlanAt(nativeInstructions, region.trimCallIp);
 	const increment = fn.instructions[backedgeIp - 1];
 	const backedge = fn.instructions[backedgeIp];
 	const operationIps = [
@@ -2264,7 +2300,7 @@ function validateStringSplitCursorRegion(
 				property.dst === region.callee &&
 				property.object === region.receiver &&
 				call.callee === region.callee &&
-				call.guardedBuiltinCall?.operation === "String.prototype.split"
+				callPlan?.guardedBuiltinCall?.operation === "String.prototype.split"
 			: call?.opcode === "CALL_BUILTIN" &&
 				region.propertyIp === -1 &&
 				region.callee === -1 &&
@@ -2272,14 +2308,14 @@ function validateStringSplitCursorRegion(
 	const expectedSplitIdentity =
 		call?.opcode === "CALL_BUILTIN" ||
 		(call?.opcode === "CALL" &&
-			call.guardedBuiltinCall !== undefined &&
-			vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard))
+			callPlan?.guardedBuiltinCall !== undefined &&
+			vmGuardIsWorldInvariant(callPlan.guardedBuiltinCall.guard))
 			? "authority-invariant"
 			: "runtime-guarded";
 	const expectedTrimIdentity =
 		trimCall?.opcode === "CALL" &&
-		trimCall.guardedBuiltinCall !== undefined &&
-		vmGuardIsWorldInvariant(trimCall.guardedBuiltinCall.guard)
+		trimCallPlan?.guardedBuiltinCall !== undefined &&
+		vmGuardIsWorldInvariant(trimCallPlan.guardedBuiltinCall.guard)
 			? "authority-invariant"
 			: "runtime-guarded";
 	const primitiveLengthIps = new Set(region.primitiveStringLengthIps);
@@ -2295,6 +2331,7 @@ function validateStringSplitCursorRegion(
 		if (primitiveLengthIps.has(ip)) {
 			primitiveLengthsValid =
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeInstructions[ip]?.kind === "primitive-string-length" &&
 				trimAliases.has(instruction.object);
 		}
 		const moveAlias = instruction.opcode === "MOVE" && trimAliases.has(instruction.src);
@@ -2346,7 +2383,7 @@ function validateStringSplitCursorRegion(
 		trimCall.callee !== trimProperty.dst ||
 		trimCall.thisValue !== element.dst ||
 		trimCall.argumentCount !== 0 ||
-		trimCall.guardedBuiltinCall?.operation !== "String.prototype.trim" ||
+		trimCallPlan?.guardedBuiltinCall?.operation !== "String.prototype.trim" ||
 		increment?.opcode !== "UNARY" ||
 		increment.operator !== "increment" ||
 		increment.src !== region.index ||
@@ -2381,7 +2418,7 @@ function opcodeTag(opcode: string): number {
 	return tag;
 }
 
-function writeInstruction(w: Writer, i: VmInstruction): void {
+function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 	w.u8(opcodeTag(i.opcode));
 	switch (i.opcode) {
 		case "MOVE":
@@ -2848,16 +2885,30 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 }
 
 /**
- * Read a buffer produced by {@link serializeVmDefinition} back into a
- * {@link VmDefinition}. Used by the round-trip test and as the executable
+ * Read a buffer produced by the matching codec back into an image.
+ * {@link ProgramImage}. Used by the round-trip test and as the executable
  * reference for the C loader. The only intentional lossy point is
  * `TRY_BEGIN.handlerIp` (restored as 0); a stripped (debug-off) buffer yields
  * empty file/sourcePosition tables and empty per-function `positions`.
  */
-export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
+export function deserializeRuntimeImage(bytes: Uint8Array): RuntimeImage {
+	return deserializeImage(bytes, false);
+}
+
+export function deserializeCompilerArtifact(bytes: Uint8Array): ProgramImage {
+	return deserializeImage(bytes, true);
+}
+
+function deserializeImage(bytes: Uint8Array, compilerArtifact: false): RuntimeImage;
+function deserializeImage(bytes: Uint8Array, compilerArtifact: true): ProgramImage;
+function deserializeImage(
+	bytes: Uint8Array,
+	compilerArtifact: boolean,
+): RuntimeImage | ProgramImage {
 	const r = new Reader(bytes);
 	const magic = r.fixedU32();
-	if (magic !== WIRE_MAGIC) {
+	const expectedMagic = compilerArtifact ? COMPILER_ARTIFACT_MAGIC : WIRE_MAGIC;
+	if (magic !== expectedMagic) {
 		throw new Error(`serialize-vm: bad magic 0x${magic.toString(16)}`);
 	}
 	const version = r.fixedU32();
@@ -2907,12 +2958,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	const cjsModuleFunctionIndices = r.i32Array();
 
 	const functionCount = r.count(1);
-	const functions: Array<VmFunction> = [];
+	const functions: Array<BytecodeFunction> = [];
 	for (let f = 0; f < functionCount; ++f) {
 		functions.push(readFunction(r));
 	}
 	const precompiledLiteralShapeCount = r.count(3);
-	const precompiledLiteralShapes: VmDefinition["precompiledLiteralShapes"] = [];
+	const precompiledLiteralShapes: ProgramImage["precompiledLiteralShapes"] = [];
 	for (let shape = 0; shape < precompiledLiteralShapeCount; shape++) {
 		precompiledLiteralShapes.push({
 			functionIndex: r.i32(),
@@ -2922,7 +2973,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	}
 
 	const files: Array<string> = [];
-	const sourcePositions: VmDefinition["sourcePositions"] = [];
+	const sourcePositions: ProgramImage["sourcePositions"] = [];
 	const fileCount = r.count(1);
 	for (let f = 0; f < fileCount; ++f) {
 		const len = r.count(1);
@@ -2938,7 +2989,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		const column = r.i32();
 		const inlinedFunctionIndex = r.i32();
 		const callerPosId = r.i32();
-		const pos: VmDefinition["sourcePositions"][number] = { line, column };
+		const pos: ProgramImage["sourcePositions"][number] = { line, column };
 		if (inlinedFunctionIndex !== -1) {
 			pos.inlinedFunctionIndex = inlinedFunctionIndex;
 		}
@@ -2950,7 +3001,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	void debug;
 
 	const hostInstallCount = r.u32();
-	const hostInstalls: VmDefinition["hostInstalls"] = [];
+	const hostInstalls: ProgramImage["hostInstalls"] = [];
 	for (let index = 0; index < hostInstallCount; index++) {
 		const installerLength = r.count(1);
 		const installerBytes = new Array<number>(installerLength);
@@ -3008,11 +3059,33 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		});
 	}
 
+	const runtimeImage: RuntimeImage = {
+		entrypointPath,
+		functionCount,
+		functions,
+		stringConstants,
+		bigintConstants,
+		literalTemplateData,
+		precompiledLiteralShapes,
+		globalCount,
+		...(semanticProtectors.length === 0 ? {} : { semanticProtectors }),
+		hostInstalls,
+		files,
+		sourcePositions,
+		cjsModuleFunctionIndices,
+	};
+	if (!compilerArtifact) {
+		if (r.remaining() !== 0) throw new Error("serialize-vm: trailing data");
+		validateVmShapeCases(runtimeImage);
+		return runtimeImage;
+	}
+
 	const compilerMetadataFunctionCount = r.count(1);
 	if (compilerMetadataFunctionCount !== functions.length) {
 		throw new Error("serialize-vm: compiler metadata function count mismatch");
 	}
-	for (const fn of functions) {
+	const nativeFunctions: Array<NativeFunctionPlan> = [];
+	for (const [functionIndex, fn] of functions.entries()) {
 		const hasGcRootRegisters = r.u8();
 		if (hasGcRootRegisters > 1) {
 			throw new Error("serialize-vm: invalid GC-root metadata");
@@ -3021,13 +3094,26 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		if (hasGcRootRegisters === 0 && gcRootRegisters.length !== 0) {
 			throw new Error("serialize-vm: invalid GC-root metadata");
 		}
-		if (hasGcRootRegisters === 1) fn.gcRootRegisters = gcRootRegisters;
+		const safepointCount = r.count(2);
+		const safepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
+		for (let safepointIndex = 0; safepointIndex < safepointCount; safepointIndex++) {
+			const instructionIp = r.i32();
+			const rootRegisters = r.i32Array();
+			if (
+				instructionIp < 0 ||
+				instructionIp >= fn.instructions.length ||
+				rootRegisters.some((register) => register < 0 || register >= fn.registerCount)
+			) {
+				throw new RangeError("serialize-vm: invalid native safepoint metadata");
+			}
+			safepoints.push({ instructionIp, rootRegisters });
+		}
 
 		const representationCount = r.count(1);
 		if (representationCount !== fn.registerCount) {
 			throw new Error("serialize-vm: register representation count mismatch");
 		}
-		fn.registerRepresentations = Array.from(
+		const registerRepresentations = Array.from(
 			{ length: representationCount },
 			(_, register) => {
 				const tag = r.u8();
@@ -3041,6 +3127,9 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			},
 		);
 
+		const nativeInstructions: Array<NativeInstructionPlan | undefined> = Array.from({
+			length: fn.instructions.length,
+		});
 		const instructionMetadataCount = r.count(2);
 		let previousInstructionMetadataIndex = -1;
 		for (
@@ -3084,13 +3173,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				) {
 					throw new RangeError("serialize-vm: invalid CALL compiler metadata");
 				}
-				if (directFunctionIndex >= 0)
-					instruction.directFunctionIndex = directFunctionIndex;
-				if (directCallTargetFunctionIndex >= 0) {
-					instruction.directCallTargetFunctionIndex = directCallTargetFunctionIndex;
-				}
-				if ((flags & 1) !== 0) instruction.directFunctionCall = true;
-				if ((flags & 32) !== 0) instruction.directStringCharCodeAtPosition = "inBounds";
+				let guardedBuiltinCall: VmGuardedBuiltinCall | undefined;
 				if (guardedBuiltinCount === 1) {
 					const operation =
 						(flags & 2) !== 0
@@ -3098,7 +3181,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							: (flags & 4) !== 0
 								? "String.prototype.charCodeAt"
 								: TAGGED_GUARDED_BUILTIN_OPERATIONS[collectionTag - 1]!;
-					instruction.guardedBuiltinCall = {
+					guardedBuiltinCall = {
 						operation,
 						guard: {
 							dependencies: [
@@ -3110,18 +3193,32 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						},
 					};
 				}
+				nativeInstructions[instructionIndex] = {
+					kind: "call",
+					...(directFunctionIndex < 0 ? {} : { directFunctionIndex }),
+					...(directCallTargetFunctionIndex < 0 ? {} : { directCallTargetFunctionIndex }),
+					...((flags & 1) === 0 ? {} : { directFunctionCall: true }),
+					...((flags & 32) === 0 ? {} : { directStringCharCodeAtPosition: "inBounds" }),
+					...(guardedBuiltinCall === undefined ? {} : { guardedBuiltinCall }),
+				};
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
 				const directFunctionIndex = r.i32();
 				if (directFunctionIndex < 0 || directFunctionIndex >= functions.length) {
 					throw new RangeError("serialize-vm: invalid CONSTRUCT compiler metadata");
 				}
-				instruction.directFunctionIndex = directFunctionIndex;
+				nativeInstructions[instructionIndex] = {
+					kind: "construct",
+					directFunctionIndex,
+				};
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
 				const reserveLength = r.i32();
 				if (reserveLength < 1 || reserveLength > 65_536) {
 					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
 				}
-				instruction.freshDenseReserveLength = reserveLength;
+				nativeInstructions[instructionIndex] = {
+					kind: "fresh-dense-reserve",
+					length: reserveLength,
+				};
 			} else if (tag === 11 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
 				if (
 					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==
@@ -3129,7 +3226,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				) {
 					throw new RangeError("serialize-vm: invalid primitive-String length hint");
 				}
-				instruction.primitiveStringLength = true;
+				nativeInstructions[instructionIndex] = { kind: "primitive-string-length" };
 			} else {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",
@@ -3137,8 +3234,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			}
 		}
 		const regionCount = r.count(17);
+		const regions: Array<VmRegion> = [];
 		if (regionCount > 0) {
-			const regions: Array<VmRegion> = [];
 			const claimed = new Set<number>();
 			for (let regionIndex = 0; regionIndex < regionCount; regionIndex++) {
 				const kindTag = r.u8();
@@ -3716,36 +3813,45 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				} else {
 					throw new RangeError("serialize-vm: invalid function region kind");
 				}
-				validateRegion(fn, region, claimed, stringConstants);
+				validateRegion(fn, region, claimed, stringConstants, nativeInstructions);
 				regions.push(region);
 			}
-			fn.regions = regions;
 		}
+		nativeFunctions.push({
+			functionIndex,
+			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
+			registerRepresentations,
+			gc: {
+				rootRegisters:
+					hasGcRootRegisters === 1
+						? gcRootRegisters
+						: registerRepresentations.flatMap((representation, register) =>
+								representation === "boxed" ? [register] : [],
+							),
+				safepoints,
+			},
+			abi: {
+				parameters: Array.from({ length: fn.parameterCount }, () => "boxed" as const),
+				result: "boxed",
+				argumentsRootedByCaller: true,
+			},
+			instructions: nativeInstructions,
+			specializations: regions,
+		});
 	}
 	if (r.remaining() !== 0) {
 		throw new Error("serialize-vm: trailing data");
 	}
 
-	const definition: VmDefinition = {
-		entrypointPath,
-		functionCount,
-		functions,
-		stringConstants,
-		bigintConstants,
-		literalTemplateData,
-		precompiledLiteralShapes,
-		globalCount,
-		...(semanticProtectors.length === 0 ? {} : { semanticProtectors }),
-		hostInstalls,
-		files,
-		sourcePositions,
-		cjsModuleFunctionIndices,
+	const definition: ProgramImage = {
+		...runtimeImage,
+		nativePlan: { functions: nativeFunctions },
 	};
 	validateVmShapeCases(definition);
 	return definition;
 }
 
-function readFunction(r: Reader): VmFunction {
+function readFunction(r: Reader): BytecodeFunction {
 	const nameStringIndex = r.i32();
 	const kind = r.u8();
 	const strict = r.u8() !== 0;
@@ -3756,7 +3862,7 @@ function readFunction(r: Reader): VmFunction {
 	const mappedArguments = r.u8() !== 0;
 	const argumentSnapshotCount = r.count(1);
 	const argumentSnapshotPlanCount = r.count(2);
-	const argumentSnapshotPlan: VmFunction["argumentSnapshotPlan"] = [];
+	const argumentSnapshotPlan: BytecodeFunction["argumentSnapshotPlan"] = [];
 	for (let i = 0; i < argumentSnapshotPlanCount; i++) {
 		argumentSnapshotPlan.push({ destination: r.i32(), source: r.i32() });
 	}
@@ -3771,7 +3877,7 @@ function readFunction(r: Reader): VmFunction {
 	const literalShapeCount = r.count(1);
 
 	const instructionCount = r.count(1);
-	const instructions: Array<VmInstruction> = [];
+	const instructions: Array<BytecodeInstruction> = [];
 	let propertyIcCount = 0;
 	let physicalLiteralShapeCount = 0;
 	for (let i = 0; i < instructionCount; ++i) {
@@ -3794,7 +3900,7 @@ function readFunction(r: Reader): VmFunction {
 	}
 
 	const handlerCount = r.count(3);
-	const handlers: VmFunction["handlers"] = [];
+	const handlers: BytecodeFunction["handlers"] = [];
 	for (let h = 0; h < handlerCount; ++h) {
 		handlers.push({ startIp: r.i32(), endIp: r.i32(), handlerIp: r.i32() });
 	}
@@ -3806,7 +3912,7 @@ function readFunction(r: Reader): VmFunction {
 	}
 	const positions = expandPositions(runs, instructionCount);
 
-	const fn: VmFunction = {
+	const fn: BytecodeFunction = {
 		nameStringIndex,
 		isGenerator: kind === 1 || kind === 3,
 		isAsync: kind === 2 || kind === 3,
@@ -3828,7 +3934,6 @@ function readFunction(r: Reader): VmFunction {
 		handlers,
 		fileIndex,
 		positions,
-		registerRepresentations: Array.from({ length: registerCount }, () => "boxed"),
 	};
 	validateArgumentSnapshotPrefix(fn);
 	validateMappedArguments(fn);
@@ -3854,7 +3959,7 @@ function expandPositions(
 	return positions;
 }
 
-function readInstruction(r: Reader): VmInstruction {
+function readInstruction(r: Reader): BytecodeInstruction {
 	const opcode = WIRE_OPCODES[r.u8()];
 	switch (opcode) {
 		case "MOVE":
@@ -3923,7 +4028,10 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, ownerFunctionIndex, capturedIndices };
 		}
 		case "CREATE_OBJECT_SHAPED": {
-			const instruction: Extract<VmInstruction, { opcode: "CREATE_OBJECT_SHAPED" }> = {
+			const instruction: Extract<
+				BytecodeInstruction,
+				{ opcode: "CREATE_OBJECT_SHAPED" }
+			> = {
 				opcode,
 				dst: r.i32(),
 				count: r.i32(),
@@ -4039,7 +4147,7 @@ function readInstruction(r: Reader): VmInstruction {
 			const dst = r.i32();
 			const intrinsic = WIRE_INTRINSICS[r.u16()];
 			return { opcode, dst, intrinsic } as Extract<
-				VmInstruction,
+				BytecodeInstruction,
 				{ opcode: "LOAD_INTRINSIC" }
 			>;
 		}
@@ -4264,7 +4372,7 @@ function readInstruction(r: Reader): VmInstruction {
 			};
 		case "INIT_GLOBAL_VARS": {
 			const count = r.i32();
-			const instruction: Extract<VmInstruction, { opcode: "INIT_GLOBAL_VARS" }> = {
+			const instruction: Extract<BytecodeInstruction, { opcode: "INIT_GLOBAL_VARS" }> = {
 				opcode,
 				nameStringIndices: r.i32Array(),
 				declarationConfigurable: r.u8() !== 0,
@@ -4305,7 +4413,7 @@ function readInstruction(r: Reader): VmInstruction {
 				left: r.i32(),
 				right: r.i32(),
 				operator: WIRE_BINOPS[r.u8()] as Extract<
-					VmInstruction,
+					BytecodeInstruction,
 					{ opcode: "BINARY" }
 				>["operator"],
 			};
@@ -4315,7 +4423,7 @@ function readInstruction(r: Reader): VmInstruction {
 				dst: r.i32(),
 				src: r.i32(),
 				operator: WIRE_UNOPS[r.u8()] as Extract<
-					VmInstruction,
+					BytecodeInstruction,
 					{ opcode: "UNARY" }
 				>["operator"],
 			};

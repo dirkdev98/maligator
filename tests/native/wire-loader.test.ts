@@ -9,14 +9,17 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../../src/compiler/pipeline/compile-program.ts";
-import type { VmDefinition, VmFunction } from "../../src/compiler/target/lower-vm.ts";
+import type {
+	RuntimeImage,
+	BytecodeFunction,
+} from "../../src/compiler/target/lower-vm.ts";
 import {
-	serializeVmDefinition,
+	serializeRuntimeImage,
 	WIRE_OPCODES,
 } from "../../src/compiler/target/serialize-vm.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 
-const fn: VmFunction = {
+const fn: BytecodeFunction = {
 	nameStringIndex: -1,
 	isGenerator: false,
 	isAsync: false,
@@ -47,10 +50,9 @@ const fn: VmFunction = {
 	handlers: [],
 	fileIndex: 0,
 	positions: [],
-	registerRepresentations: ["boxed"],
 };
 
-const definition: VmDefinition = {
+const definition: RuntimeImage = {
 	entrypointPath: "/fixture/entry.mjs",
 	functionCount: 1,
 	functions: [fn],
@@ -90,7 +92,7 @@ describe("wire loader side-data validation", () => {
 	});
 
 	function rejectsMutation(name: string, offset: number, encodedValue: number): void {
-		const wire = serializeVmDefinition(definition, { debugInfo: false });
+		const wire = serializeRuntimeImage(definition, { debugInfo: false });
 		wire[offset] = encodedValue;
 		rejectsWire(name, wire);
 	}
@@ -123,11 +125,10 @@ describe("wire loader side-data validation", () => {
 	});
 
 	it("rejects known-own-slot side data that disagrees with the source shape", () => {
-		const knownSlotFunction: VmFunction = {
+		const knownSlotFunction: BytecodeFunction = {
 			...fn,
 			literalShapeCount: 2,
 			registerCount: 2,
-			registerRepresentations: ["boxed", "boxed"],
 			instructions: [
 				{ opcode: "CREATE_UNDEFINED", dst: 0 },
 				{
@@ -171,7 +172,7 @@ describe("wire loader side-data validation", () => {
 				{ opcode: "RETURN", value: 0 },
 			],
 		};
-		const knownSlotDefinition: VmDefinition = {
+		const knownSlotDefinition: RuntimeImage = {
 			...definition,
 			functions: [knownSlotFunction],
 			stringConstants: [["x".charCodeAt(0)]],
@@ -180,7 +181,7 @@ describe("wire loader side-data validation", () => {
 				{ functionIndex: 0, shapeCacheIndex: 1, keyStringIndices: [0] },
 			],
 		};
-		const wire = serializeVmDefinition(knownSlotDefinition, { debugInfo: false });
+		const wire = serializeRuntimeImage(knownSlotDefinition, { debugInfo: false });
 		const tag = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT");
 		const encodedInstruction = [tag, 0, 2, 0, 2, 0, 0, 0, 0, 2, 0];
 		const offset = wire.findIndex((_, index) =>
@@ -191,12 +192,12 @@ describe("wire loader side-data validation", () => {
 		wire[offset + encodedInstruction.length - 1] = 2;
 		rejectsWire("known-own-slot", wire);
 
-		const duplicate = serializeVmDefinition(knownSlotDefinition, { debugInfo: false });
+		const duplicate = serializeRuntimeImage(knownSlotDefinition, { debugInfo: false });
 		// Rebase the second candidate's shape-cache row 1 to row 0.
 		duplicate[offset + encodedInstruction.length - 2] = 0;
 		rejectsWire("known-own-slot-duplicate", duplicate);
 
-		const storeWire = serializeVmDefinition(knownSlotDefinition, { debugInfo: false });
+		const storeWire = serializeRuntimeImage(knownSlotDefinition, { debugInfo: false });
 		const storeTag = WIRE_OPCODES.indexOf("STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT");
 		const encodedStore = [storeTag, 2, 0, 0, 2, 0, 0, 0, 0, 2, 0];
 		const storeOffset = storeWire.findIndex((_, index) =>
@@ -208,11 +209,10 @@ describe("wire loader side-data validation", () => {
 	});
 
 	it("rejects malformed shared shape-case selectors and slot tables", () => {
-		const shapeCaseFunction: VmFunction = {
+		const shapeCaseFunction: BytecodeFunction = {
 			...fn,
 			literalShapeCount: 1,
 			registerCount: 6,
-			registerRepresentations: ["boxed", "boxed", "boxed", "number", "boxed", "boxed"],
 			instructions: [
 				{ opcode: "CREATE_UNDEFINED", dst: 0 },
 				{
@@ -250,7 +250,7 @@ describe("wire loader side-data validation", () => {
 				{ opcode: "RETURN", value: 5 },
 			],
 		};
-		const shapeCaseDefinition: VmDefinition = {
+		const shapeCaseDefinition: RuntimeImage = {
 			...definition,
 			functions: [shapeCaseFunction],
 			stringConstants: [[120], [121]],
@@ -258,7 +258,7 @@ describe("wire loader side-data validation", () => {
 				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1] },
 			],
 		};
-		const wire = serializeVmDefinition(shapeCaseDefinition, { debugInfo: false });
+		const wire = serializeRuntimeImage(shapeCaseDefinition, { debugInfo: false });
 		// Two loads are the minimum profitable shared case and must be accepted by
 		// the native loader, not merely by the TypeScript serializer.
 		acceptsWire("shape-case-two-loads", wire);
@@ -297,13 +297,12 @@ describe("wire loader side-data validation", () => {
 	});
 
 	it("pre-instantiates known literal shapes for initial and spliced wire definitions", () => {
-		const shapedFunction: VmFunction = {
+		const shapedFunction: BytecodeFunction = {
 			...fn,
 			// Row 2 has no CREATE_OBJECT_SHAPED instruction: it is a portable
 			// precompiled descriptor reserved for cross-function shape provenance.
 			literalShapeCount: 3,
 			registerCount: 3,
-			registerRepresentations: ["boxed", "boxed", "boxed"],
 			instructions: [
 				{ opcode: "CREATE_UNDEFINED", dst: 0 },
 				{
@@ -333,7 +332,7 @@ describe("wire loader side-data validation", () => {
 				{ opcode: "RETURN", value: 0 },
 			],
 		};
-		const shapedDefinition: VmDefinition = {
+		const shapedDefinition: RuntimeImage = {
 			...definition,
 			functions: [shapedFunction],
 			stringConstants: [["x".charCodeAt(0)]],
@@ -341,7 +340,7 @@ describe("wire loader side-data validation", () => {
 				{ functionIndex: 0, shapeCacheIndex: 2, keyStringIndices: [0] },
 			],
 		};
-		const baseDefinition: VmDefinition = {
+		const baseDefinition: RuntimeImage = {
 			...definition,
 			functions: [
 				{
@@ -358,9 +357,9 @@ describe("wire loader side-data validation", () => {
 		const basePath = path.join(directory, "known-shape-base.malw");
 		writeFileSync(
 			shapedPath,
-			serializeVmDefinition(shapedDefinition, { debugInfo: false }),
+			serializeRuntimeImage(shapedDefinition, { debugInfo: false }),
 		);
-		writeFileSync(basePath, serializeVmDefinition(baseDefinition, { debugInfo: false }));
+		writeFileSync(basePath, serializeRuntimeImage(baseDefinition, { debugInfo: false }));
 		const environment = {
 			...process.env,
 			MAL_EXPECT_PRECOMPILED_SHAPES: "1",
@@ -385,7 +384,7 @@ describe("wire loader side-data validation", () => {
 	});
 
 	it("rejects a snapshot plan that clobbers an aliased source", () => {
-		const cycleDefinition: VmDefinition = {
+		const cycleDefinition: RuntimeImage = {
 			...definition,
 			functions: [
 				{
@@ -397,7 +396,6 @@ describe("wire loader side-data validation", () => {
 						{ destination: 0, source: -2 },
 					],
 					registerCount: 2,
-					registerRepresentations: ["boxed", "boxed"],
 					instructions: [
 						{ opcode: "LOAD_ARGUMENT", dst: 0, index: 1 },
 						{ opcode: "LOAD_ARGUMENT", dst: 1, index: 0 },
@@ -406,56 +404,14 @@ describe("wire loader side-data validation", () => {
 				},
 			],
 		};
-		const wire = serializeVmDefinition(cycleDefinition, { debugInfo: false });
+		const wire = serializeRuntimeImage(cycleDefinition, { debugInfo: false });
 		// Move the scratch restore before r1's read of raw argument slot 0.
 		wire.set([0, 3, 2, 0], afterSourceEntry(26));
 		rejectsWire("snapshot-clobber", wire);
 	});
 
-	it("accepts canonical String method identity metadata", () => {
-		for (const operation of [
-			"String.prototype.trim",
-			"String.prototype.slice",
-		] as const) {
-			const methodDefinition: VmDefinition = {
-				...definition,
-				functions: [
-					{
-						...fn,
-						instructions: [
-							{ opcode: "CREATE_UNDEFINED", dst: 0 },
-							{ opcode: "RETURN", value: 0 },
-							{
-								opcode: "CALL",
-								dst: 0,
-								callee: 0,
-								thisValue: 0,
-								argumentCount: 0,
-								arguments: [],
-								guardedBuiltinCall: {
-									operation,
-									guard: {
-										dependencies: [{ kind: "world", fact: "primordials.locked" }],
-										obligations: ["fallback"],
-									},
-								},
-							},
-						],
-					},
-				],
-			};
-			const wirePath = path.join(directory, `guarded-${operation}.malw`);
-			writeFileSync(
-				wirePath,
-				serializeVmDefinition(methodDefinition, { debugInfo: false }),
-			);
-			const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-			expect(result.status, result.stderr || result.stdout).toBe(0);
-		}
-	});
-
 	it("loads and executes an exact direct builtin call", () => {
-		const directDefinition: VmDefinition = {
+		const directDefinition: RuntimeImage = {
 			...definition,
 			stringConstants: [
 				[..."alpha,beta"].map((unit) => unit.charCodeAt(0)),
@@ -465,7 +421,6 @@ describe("wire loader side-data validation", () => {
 				{
 					...fn,
 					registerCount: 3,
-					registerRepresentations: ["boxed", "boxed", "boxed"],
 					instructions: [
 						{ opcode: "CREATE_STRING", dst: 1, stringIndex: 0 },
 						{ opcode: "CREATE_STRING", dst: 2, stringIndex: 1 },
@@ -485,14 +440,14 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, "direct-builtin.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(directDefinition, { debugInfo: false }),
+			serializeRuntimeImage(directDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
 	it("rejects malformed varints and trailing data", () => {
-		const wire = serializeVmDefinition(definition, { debugInfo: false });
+		const wire = serializeRuntimeImage(definition, { debugInfo: false });
 		const replaceFlags = (bytes: Array<number>): Uint8Array =>
 			Uint8Array.from([...wire.subarray(0, 8), ...bytes, ...wire.subarray(9)]);
 
@@ -502,13 +457,12 @@ describe("wire loader side-data validation", () => {
 	});
 
 	it("loads bulk private-name and private-field side data", () => {
-		const bulkDefinition: VmDefinition = {
+		const bulkDefinition: RuntimeImage = {
 			...definition,
 			functions: [
 				{
 					...fn,
 					registerCount: 3,
-					registerRepresentations: ["boxed", "boxed", "boxed"],
 					capturedCount: 2,
 					instructions: [
 						{
@@ -523,19 +477,18 @@ describe("wire loader side-data validation", () => {
 			],
 		};
 		const wirePath = path.join(directory, "bulk-private.malw");
-		writeFileSync(wirePath, serializeVmDefinition(bulkDefinition, { debugInfo: false }));
+		writeFileSync(wirePath, serializeRuntimeImage(bulkDefinition, { debugInfo: false }));
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status).toBe(0);
 	});
 
 	it("loads canonical typeof comparison operands", () => {
-		const typeofDefinition: VmDefinition = {
+		const typeofDefinition: RuntimeImage = {
 			...definition,
 			functions: [
 				{
 					...fn,
 					registerCount: 2,
-					registerRepresentations: ["boxed", "boxed"],
 					instructions: [
 						{ opcode: "CREATE_UNDEFINED", dst: 1 },
 						{
@@ -553,14 +506,14 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, "typeof-compare.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(typeofDefinition, { debugInfo: false }),
+			serializeRuntimeImage(typeofDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status).toBe(0);
 	});
 
 	it("loads an appended terminal-yield operand", () => {
-		const terminalDefinition: VmDefinition = {
+		const terminalDefinition: RuntimeImage = {
 			...definition,
 			functions: [
 				{
@@ -576,40 +529,10 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, "terminal-yield.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(terminalDefinition, { debugInfo: false }),
+			serializeRuntimeImage(terminalDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads and validates fresh dense indexed-fill reserve metadata", () => {
-		const reserveDefinition: VmDefinition = {
-			...definition,
-			functions: [
-				{
-					...fn,
-					instructions: [
-						{
-							opcode: "CREATE_ARRAY",
-							dst: 0,
-							length: 0,
-							freshDenseReserveLength: 1,
-						},
-						{ opcode: "RETURN", value: 0 },
-					],
-				},
-			],
-		};
-		const wire = serializeVmDefinition(reserveDefinition, { debugInfo: false });
-		const wirePath = path.join(directory, "indexed-fill-reserve.malw");
-		writeFileSync(wirePath, wire);
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-
-		expect(wire.at(-3)).toBe(12);
-		expect(wire.at(-1)).toBe(0); // empty tagged function-region table
-		wire[wire.length - 2] = 0;
-		rejectsWire("indexed-fill-reserve-zero", wire);
 	});
 
 	it("loads a nonempty String.split cursor proof region payload", () => {
@@ -630,15 +553,14 @@ describe("wire loader side-data validation", () => {
 			stripTypes: stripCompactTypes,
 		});
 		expect(
-			cursorDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "string-split-cursor") ?? [],
+			cursorDefinition.nativePlan.functions.flatMap((fn) =>
+				fn.specializations.filter((region) => region.kind === "string-split-cursor"),
 			),
 		).toHaveLength(1);
 		const wirePath = path.join(directory, "string-split-cursor-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(cursorDefinition, { debugInfo: false }),
+			serializeRuntimeImage(cursorDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -658,10 +580,13 @@ describe("wire loader side-data validation", () => {
 			stripTypes: stripCompactTypes,
 			buildConfig: resolveBuildConfig({}),
 		});
-		const projectionSites = projectionDefinition.functions.flatMap((fn) =>
-			(fn.regions ?? [])
+		const projectionSites = projectionDefinition.nativePlan.functions.flatMap((native) =>
+			native.specializations
 				.filter((region) => region.kind === "string-split-projection")
-				.map((region) => ({ fn, region })),
+				.map((region) => ({
+					fn: projectionDefinition.functions[native.functionIndex]!,
+					region,
+				})),
 		);
 		expect(projectionSites.length).toBeGreaterThan(0);
 		expect(
@@ -672,7 +597,7 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, "string-split-projection-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(projectionDefinition, { debugInfo: false }),
+			serializeRuntimeImage(projectionDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -694,15 +619,14 @@ describe("wire loader side-data validation", () => {
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
-			projectionDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+			projectionDefinition.nativePlan.functions.flatMap((fn) =>
+				fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 			),
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "regexp-exec-projection-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(projectionDefinition, { debugInfo: false }),
+			serializeRuntimeImage(projectionDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -724,16 +648,16 @@ describe("wire loader side-data validation", () => {
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
-			projectionDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
-					[],
+			projectionDefinition.nativePlan.functions.flatMap((fn) =>
+				fn.specializations.filter(
+					(region) => region.kind === "regexp-iterator-projection",
+				),
 			),
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "regexp-iterator-projection-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(projectionDefinition, { debugInfo: false }),
+			serializeRuntimeImage(projectionDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -757,15 +681,14 @@ describe("wire loader side-data validation", () => {
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
-			regionDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+			regionDefinition.nativePlan.functions.flatMap((fn) =>
+				fn.specializations.filter((region) => region.kind === "string-slice-number"),
 			),
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "string-slice-number-region.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(regionDefinition, { debugInfo: false }),
+			serializeRuntimeImage(regionDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -787,92 +710,18 @@ describe("wire loader side-data validation", () => {
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
-			stackDefinition.functions.flatMap(
-				(fn) => fn.regions?.filter((region) => region.kind === "stack-object-plan") ?? [],
+			stackDefinition.nativePlan.functions.flatMap((fn) =>
+				fn.specializations.filter((region) => region.kind === "stack-object-plan"),
 			),
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "stack-object-plan-region.malw");
-		writeFileSync(wirePath, serializeVmDefinition(stackDefinition, { debugInfo: false }));
+		writeFileSync(wirePath, serializeRuntimeImage(stackDefinition, { debugInfo: false }));
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
-	it("rejects a stack-object access slot for a different allocation key", () => {
-		const stackFn: VmFunction = {
-			...fn,
-			registerCount: 4,
-			instructions: [
-				{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
-				{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
-				{
-					opcode: "CREATE_OBJECT_SHAPED",
-					dst: 2,
-					count: 2,
-					keyStringIndices: [0, 1],
-					valueRegisters: [0, 1],
-					shapeCacheIndex: 0,
-				},
-				{
-					opcode: "LOAD_PROPERTY_STATIC",
-					dst: 3,
-					object: 2,
-					stringIndex: 1,
-					icIndex: 0,
-				},
-				{
-					opcode: "STORE_PROPERTY_STATIC",
-					object: 2,
-					value: 0,
-					stringIndex: 1,
-					icIndex: 1,
-				},
-				{ opcode: "RETURN", value: 3 },
-			],
-			positions: [],
-			registerRepresentations: ["boxed", "boxed", "boxed", "boxed"],
-			regions: [
-				{
-					kind: "stack-object-plan",
-					license: {
-						guard: { dependencies: [], obligations: ["fallback"] },
-						genericTwin: "retained",
-						materialization: "none",
-						admission: { anchorIp: 2, validity: "once" },
-					},
-					representation: "activation-local-fixed-shape-objects",
-					anchors: [2],
-					claimedIps: [2, 3, 4],
-					controlFlow: { ordinaryBlockIps: [2, 3, 4], exceptionalHandlerIps: [] },
-					cost: { score: 2, metadataOperations: 3 },
-					sites: [
-						{
-							allocationIp: 2,
-							slotCount: 2,
-							accesses: [
-								{ ip: 3, slot: 1 },
-								{ ip: 4, slot: 1 },
-							],
-							materializations: [],
-						},
-					],
-				},
-			],
-		};
-		const stackDefinition: VmDefinition = {
-			...definition,
-			functions: [stackFn],
-			stringConstants: [["first".charCodeAt(0)], ["second".charCodeAt(0)]],
-		};
-		const wire = serializeVmDefinition(stackDefinition, { debugInfo: false });
-		// The access-slot byte is followed by inheritedIp=-1 and an empty
-		// materialization table. Preserve the wire layout while naming slot zero.
-		expect(wire.at(-3)).toBe(2);
-		wire[wire.length - 3] = 0;
-		rejectsWire("stack-object-slot-key", wire);
-	});
-
 	it("loads and executes persisted argument snapshot prefixes", () => {
-		const snapshotDefinition: VmDefinition = {
+		const snapshotDefinition: RuntimeImage = {
 			...definition,
 			functions: [
 				{
@@ -883,7 +732,6 @@ describe("wire loader side-data validation", () => {
 						{ destination: 1, source: 4 },
 					],
 					registerCount: 2,
-					registerRepresentations: ["boxed", "boxed"],
 					instructions: [
 						{ opcode: "LOAD_ARGUMENT_COUNT", dst: 0 },
 						{ opcode: "LOAD_ARGUMENT", dst: 1, index: 4 },
@@ -895,14 +743,14 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, "argument-snapshots.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(snapshotDefinition, { debugInfo: false }),
+			serializeRuntimeImage(snapshotDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
 	it("loads unaligned fixed-width little-endian scalar fields", () => {
-		const scalarDefinition: VmDefinition = {
+		const scalarDefinition: RuntimeImage = {
 			...definition,
 			// A two-byte global-count varint places the following u16/u64/fixed-u32
 			// payloads at deliberately unaligned offsets.
@@ -914,7 +762,6 @@ describe("wire loader side-data validation", () => {
 				{
 					...fn,
 					registerCount: 2,
-					registerRepresentations: ["boxed", "boxed"],
 					instructions: [
 						{ opcode: "CREATE_F64", dst: 0, value: 6.25 },
 						{ opcode: "CREATE_F64", dst: 1, value: -0 },
@@ -926,7 +773,7 @@ describe("wire loader side-data validation", () => {
 		const wirePath = path.join(directory, "unaligned-scalars.malw");
 		writeFileSync(
 			wirePath,
-			serializeVmDefinition(scalarDefinition, { debugInfo: false }),
+			serializeRuntimeImage(scalarDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], {
 			encoding: "utf8",

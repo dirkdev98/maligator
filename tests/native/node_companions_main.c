@@ -4,7 +4,7 @@
 
 #include "intrinsics.h"
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 static const MalIntrinsic companion_slots[] = {
     MAL_INTRINSIC_NODE_URL_CONSTRUCTOR,

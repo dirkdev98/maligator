@@ -22,9 +22,9 @@ import type {
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
-import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
-import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-vm.ts";
 
 function coreProgram(
 	functions: ReadonlyArray<CoreFunction>,
@@ -746,18 +746,18 @@ describe("summary consumers and proof boundary", () => {
 		);
 		let productCore: CoreProgram | undefined;
 		let productContext: CoreCompilationContext | undefined;
-		const vm = compileSemanticProgramToVmDefinition(semantic, {
+		const vm = compileSemanticProgramToProgramImage(semantic, {
 			optimizationAblations: new Set(["inlining"]),
 			afterCoreOptimization(program, context) {
 				productCore = program;
 				productContext = context;
 			},
 		});
-		const target = lowerCoreProgramToTarget({
+		const target = lowerCoreCompilationToExecution({
 			program: productCore!,
 			context: productContext!,
 		});
-		const emitted = emitVmDefinition(vm, { compiled: true });
+		const emitted = emitProgramImage(vm, { compiled: true });
 		expect(emitted).toMatch(/mal_ops_number_as_f64\(call_result_\d+\.value\)/);
 		expect(emitted).toMatch(/mal_value_to_boolean\(call_result_\d+\.value\)/);
 		const functionIndex = (name: string): number =>
@@ -1103,7 +1103,7 @@ describe("summary consumers and proof boundary", () => {
 		);
 		let optimized: CoreProgram | undefined;
 		let optimizedContext: CoreCompilationContext | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			optimizationAblations: new Set(["inlining"]),
 			afterCoreOptimization(program, context) {
 				optimized = program;

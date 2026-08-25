@@ -12,7 +12,7 @@
 // Batch driver for generated test262 translation units: every test runs in a
 // forked child for crash and timeout isolation, while the process image
 // (code signature, dyld work) is paid for only once per batch.
-extern const MalVmDefinition *const mal_test262_artifact_definitions[];
+extern const MalProgramImage *const mal_test262_artifact_definitions[];
 extern const int mal_test262_plan_definition_indices[];
 extern const int mal_test262_plan_entry_indices[];
 extern const int mal_test262_plan_helper_offsets[];

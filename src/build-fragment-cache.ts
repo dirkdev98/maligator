@@ -39,14 +39,15 @@ import type {
 	SemanticProgram,
 } from "./compiler/frontend/semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "./compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
-	WIRE_VERSION,
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+	serializeRuntimeImage,
+	COMPILER_ARTIFACT_VERSION,
 } from "./compiler/target/serialize-vm.ts";
 import {
 	compileDependencyFragments,
@@ -75,7 +76,7 @@ interface PlannedImport {
 
 interface CompiledArtifact {
 	wire: Uint8Array;
-	definition: ReturnType<typeof compileSemanticProgramToVmDefinition>;
+	definition: ReturnType<typeof compileSemanticProgramToProgramImage>;
 	artifact: BuildFragmentArtifact;
 	cache: "hit" | "miss";
 }
@@ -109,7 +110,7 @@ export interface BuildFragmentArtifact {
 export interface CompiledBuildFragments {
 	wires: Array<Uint8Array>;
 	artifacts: Array<BuildFragmentArtifact>;
-	definition: ReturnType<typeof compileSemanticProgramToVmDefinition>;
+	definition: ReturnType<typeof compileSemanticProgramToProgramImage>;
 	artifactHits: number;
 	artifactMisses: number;
 }
@@ -306,7 +307,7 @@ function environmentIdentity(options: CompileBuildFragmentsOptions): string {
 		JSON.stringify({
 			schema: FRAGMENT_SCHEMA,
 			producer: compilerProducerIdentity("build-fragment", FRAGMENT_SCHEMA),
-			wireVersion: WIRE_VERSION,
+			compilerArtifactVersion: COMPILER_ARTIFACT_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: "development",
 			configuration: compilerConfigurationIdentity(options.config),
@@ -401,22 +402,24 @@ function compileArtifact(
 		) {
 			throw new Error("invalid fragment artifact reference");
 		}
-		let wire: Uint8Array | undefined;
-		let definition: ReturnType<typeof deserializeVmDefinition> | undefined;
-		const loadWire = () => {
-			if (wire !== undefined) return wire;
-			wire = new Uint8Array(readFileSync(reference.artifact!.path));
-			if (digest(wire) !== reference.artifact!.digest) {
+		let artifactWire: Uint8Array | undefined;
+		let definition: ReturnType<typeof deserializeCompilerArtifact> | undefined;
+		const loadArtifact = () => {
+			if (artifactWire !== undefined) return artifactWire;
+			artifactWire = new Uint8Array(readFileSync(reference.artifact!.path));
+			if (digest(artifactWire) !== reference.artifact!.digest) {
 				throw new Error("corrupt fragment artifact");
 			}
-			return wire;
+			return artifactWire;
 		};
+		const loadDefinition = () =>
+			(definition ??= deserializeCompilerArtifact(loadArtifact()));
 		return {
 			get wire() {
-				return loadWire();
+				return serializeRuntimeImage(loadDefinition());
 			},
 			get definition() {
-				return (definition ??= deserializeVmDefinition(loadWire()));
+				return loadDefinition();
 			},
 			artifact: reference.artifact,
 			cache: "hit",
@@ -429,7 +432,7 @@ function compileArtifact(
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	options.phases.semanticMs += Date.now() - semanticStartedAt;
-	const definition = compileSemanticProgramToVmDefinition(semantic, {
+	const definition = compileSemanticProgramToProgramImage(semantic, {
 		facts: options.facts,
 		optimization: "development",
 		runPhase(phase, run) {
@@ -444,10 +447,11 @@ function compileArtifact(
 		},
 	});
 	const serializeStartedAt = Date.now();
-	const wire = serializeVmDefinition(definition);
+	const artifactWire = serializeCompilerArtifact(definition);
+	const wire = serializeRuntimeImage(definition);
 	options.phases.serializeMs += Date.now() - serializeStartedAt;
-	const wireDigest = digest(wire);
-	cacheFrontendWire(wire, artifactRoot);
+	const wireDigest = digest(artifactWire);
+	cacheFrontendWire(artifactWire, artifactRoot);
 	const artifact = artifactIdentity(wireDigest, artifactRoot);
 	if (artifact === undefined) {
 		throw new Error(`fragment artifact is missing after publication: ${wireDigest}`);

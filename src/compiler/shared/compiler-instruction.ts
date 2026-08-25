@@ -41,7 +41,7 @@ export type CompilerInstruction =
 			/**
 			 * Source-position marker — carries no runtime opcode. Records the
 			 * interned source position (an index into program.sourcePositions) of
-			 * the statement that follows. lowerFunctionToVmFunction consumes these
+			 * the statement that follows. lowerFunctionToBytecodeFunction consumes these
 			 * into the per-function position table (which drives VM stack traces and
 			 * the native backend's `pos` writes) and strips them from the bytecode,
 			 * so the VM never dispatches one. Core construction strips it into source

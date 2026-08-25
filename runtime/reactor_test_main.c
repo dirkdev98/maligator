@@ -32,7 +32,7 @@
  * Uses a real isolate (mal_vm_definition) only to stand up heap + intrinsics.
  */
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 #define SLEEPER_COUNT 4
 #define SLEEP_STEP_MS 3

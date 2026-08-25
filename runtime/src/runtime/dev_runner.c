@@ -77,7 +77,7 @@ int mal_dev_run_wires(
         return 2;
     }
     MalDevelopmentAssets *development_assets = nullptr;
-    MalVmDefinition root_definition = *mal_loaded_definition_get(loaded);
+    MalProgramImage root_definition = *mal_loaded_definition_get(loaded);
     if (asset_manifest_path != nullptr) {
         const char *asset_error = "unknown error";
         development_assets = mal_development_assets_load(asset_manifest_path, &asset_error);
@@ -141,7 +141,7 @@ int mal_dev_run_wires(
     }
     for (int index = 0; index < wire_count; index++) {
         i32 entry = 0;
-        const MalVmDefinition *definition = vm.definition;
+        const MalProgramImage *definition = vm.definition;
         if (index > 0) {
             MalLoadedDefinition *fragment = load_definition(wire_paths[index]);
             if (fragment == nullptr) {

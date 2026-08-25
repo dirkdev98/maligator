@@ -14,9 +14,9 @@ import {
 	compilerProgramFactsFromConfig,
 	withProgramClosure,
 } from "../shared/compiler-facts.ts";
-import type { VmDefinition } from "../target/lower-vm.ts";
-import { serializeVmDefinition } from "../target/serialize-vm.ts";
-import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
+import type { ProgramImage } from "../target/lower-vm.ts";
+import { serializeRuntimeImage } from "../target/serialize-vm.ts";
+import { compileSemanticProgramToProgramImage } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
 
 export type CompileEntrypointPhase = "graph" | "semantic" | CompileCorePhase;
@@ -40,7 +40,7 @@ export interface CompileEntrypointToBufferOptions extends Omit<
 export function compileEntrypoint(
 	entrypointPath: string,
 	options: CompileEntrypointOptions = {},
-): VmDefinition {
+): ProgramImage {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileEntrypointPhase, run: () => T): T => run());
 	const graph = runPhase("graph", () => buildModuleGraph(entrypointPath, options));
@@ -74,7 +74,7 @@ export function compileEntrypoint(
 		}
 		return result;
 	});
-	return compileSemanticProgramToVmDefinition(semantic, {
+	return compileSemanticProgramToProgramImage(semantic, {
 		facts,
 		runPhase,
 	});
@@ -89,5 +89,5 @@ export function compileEntrypointToBuffer(
 	const runPhase =
 		options.runPhase ??
 		(<T>(_phase: CompileEntrypointToBufferPhase, run: () => T): T => run());
-	return runPhase("serialize", () => serializeVmDefinition(definition));
+	return runPhase("serialize", () => serializeRuntimeImage(definition));
 }

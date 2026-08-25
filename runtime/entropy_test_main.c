@@ -16,7 +16,7 @@
  * distribution of the bytes.
  */
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 #define CANARY 0x5a
 #define GUARD 64

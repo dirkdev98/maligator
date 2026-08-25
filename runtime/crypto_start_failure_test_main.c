@@ -24,7 +24,7 @@
  * reports through the usual RESULT protocol.
  */
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 /* Long enough that a burst of synchronous calls cannot drain through it, short
  * enough that the two jobs the pool does accept cost half a second. */

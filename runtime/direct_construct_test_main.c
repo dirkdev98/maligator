@@ -3,7 +3,7 @@
 #include "gc.h"
 #include "vm_ops.h"
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 static bool result_is_object(MalCompletion completion) {
     return completion.kind == MAL_COMPLETION_NORMAL &&

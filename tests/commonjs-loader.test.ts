@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 
 const nodeOn = resolveBuildConfig({ surface: { node: true } });
 const roots: Array<string> = [];
@@ -48,7 +48,7 @@ describe("CommonJS loader lowering", () => {
 			[...program.graph!.modules.keys()].filter((id) => id === "node:path"),
 		).toHaveLength(1);
 
-		const definition = compileSemanticProgramToVmDefinition(program);
+		const definition = compileSemanticProgramToProgramImage(program);
 		expect(definition.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_path",
@@ -65,7 +65,7 @@ describe("CommonJS loader lowering", () => {
 			"data.json": `{"answer":42}\n`,
 		});
 		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
-		const definition = compileSemanticProgramToVmDefinition(program);
+		const definition = compileSemanticProgramToProgramImage(program);
 
 		expect(definition.cjsModuleFunctionIndices).toHaveLength(4);
 		expect(new Set(definition.cjsModuleFunctionIndices).size).toBe(4);
@@ -84,7 +84,7 @@ describe("CommonJS loader lowering", () => {
 			"child.cjs": `module.exports = [__filename, __dirname];\n`,
 		});
 		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
-		const definition = compileSemanticProgramToVmDefinition(program);
+		const definition = compileSemanticProgramToProgramImage(program);
 		const constants = strings(definition.stringConstants);
 
 		expect(constants).toContain(path.join(root, "main.cjs"));
@@ -98,7 +98,7 @@ describe("CommonJS loader lowering", () => {
 			"dep.mjs": `export const named = 1;\nexport default 2;\n`,
 		});
 		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
-		const definition = compileSemanticProgramToVmDefinition(program);
+		const definition = compileSemanticProgramToProgramImage(program);
 
 		expect(
 			definition.functions
@@ -115,7 +115,7 @@ describe("CommonJS loader lowering", () => {
 		});
 		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
 
-		expect(() => compileSemanticProgramToVmDefinition(program)).toThrow(
+		expect(() => compileSemanticProgramToProgramImage(program)).toThrow(
 			/CommonJS cannot synchronously require an ES module graph with top-level await/,
 		);
 	});
@@ -127,7 +127,7 @@ describe("CommonJS loader lowering", () => {
 		});
 		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
 
-		expect(() => compileSemanticProgramToVmDefinition(program)).toThrow(
+		expect(() => compileSemanticProgramToProgramImage(program)).toThrow(
 			/CommonJS cannot synchronously require a cyclic ES module graph/,
 		);
 	});

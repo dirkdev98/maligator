@@ -4,14 +4,14 @@ import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreProgram, CoreRegion } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
-import { lowerCoreProgramToVmDefinition } from "../src/compiler/target/lower-vm.ts";
-import type { VmDefinition, VmRegion } from "../src/compiler/target/lower-vm.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-vm.ts";
+import type { ProgramImage, VmRegion } from "../src/compiler/target/lower-vm.ts";
 import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
 } from "../src/compiler/target/serialize-vm.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
@@ -47,7 +47,7 @@ const FORWARDED_SPLIT_AND_SLICE = {
 
 function lockedCore(source: string, path: string): CoreProgram {
 	let optimized: CoreProgram | undefined;
-	compileSemanticProgramToVmDefinition(
+	compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(source, path),
 		{
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
@@ -59,8 +59,8 @@ function lockedCore(source: string, path: string): CoreProgram {
 	return optimized!;
 }
 
-function lockedDefinition(source: string, path: string): VmDefinition {
-	return compileSemanticProgramToVmDefinition(
+function lockedDefinition(source: string, path: string): ProgramImage {
+	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(source, path),
 		{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
 	);
@@ -100,31 +100,38 @@ function emptyForwardingBlocks(program: CoreProgram): ReadonlyArray<string> {
 	);
 }
 
-function vmRegions(definition: VmDefinition): ReadonlyArray<VmRegion> {
-	return definition.functions.flatMap(({ regions }) => regions ?? []);
+function vmRegions(definition: ProgramImage): ReadonlyArray<VmRegion> {
+	return definition.nativePlan.functions.flatMap(
+		({ specializations }) => specializations,
+	);
 }
 
 /** Region kind, placement, and opcode selection, with every register identity dropped. */
 function semanticRegionShape(
-	definition: VmDefinition,
+	definition: ProgramImage,
 ): ReadonlyArray<Record<string, unknown>> {
-	return definition.functions
-		.flatMap((fn) =>
-			(fn.regions ?? []).map((region) => ({
-				kind: region.kind,
-				representation: region.representation,
-				materialization: region.license.materialization,
-				dependencies: region.license.guard.dependencies,
-				placement: (region as { propertyPlacement?: string }).propertyPlacement,
-				anchorOpcodes: region.anchors.map((ip) => fn.instructions[ip]?.opcode),
-				claimedOpcodes: region.claimedIps.map((ip) => fn.instructions[ip]?.opcode).sort(),
-			})),
+	return definition.nativePlan.functions
+		.flatMap((native) =>
+			native.specializations.map((region) => {
+				const fn = definition.functions[native.functionIndex]!;
+				return {
+					kind: region.kind,
+					representation: region.representation,
+					materialization: region.license.materialization,
+					dependencies: region.license.guard.dependencies,
+					placement: (region as { propertyPlacement?: string }).propertyPlacement,
+					anchorOpcodes: region.anchors.map((ip) => fn.instructions[ip]?.opcode),
+					claimedOpcodes: region.claimedIps
+						.map((ip) => fn.instructions[ip]?.opcode)
+						.sort(),
+				};
+			}),
 		)
 		.sort((left, right) => left.kind.localeCompare(right.kind));
 }
 
 function regexpProjections(
-	definition: VmDefinition,
+	definition: ProgramImage,
 ): ReadonlyArray<Extract<VmRegion, { kind: "regexp-exec-projection" }>> {
 	return vmRegions(definition).filter(
 		(region): region is Extract<VmRegion, { kind: "regexp-exec-projection" }> =>
@@ -153,9 +160,10 @@ describe("Core region property placement", () => {
 		const projections = regexpProjections(definition);
 		expect(projections).toHaveLength(2);
 		for (const projection of projections) {
-			const fn = definition.functions.find((candidate) =>
-				(candidate.regions ?? []).includes(projection),
-			)!;
+			const functionIndex = definition.nativePlan.functions.findIndex((candidate) =>
+				candidate.specializations.includes(projection),
+			);
+			const fn = definition.functions[functionIndex]!;
 			// Both sites emit the load immediately before its call, so adjacency cannot
 			// be what separates them.
 			expect(projection.propertyIp + 1).toBe(projection.callIp);
@@ -202,13 +210,13 @@ describe("Core region property placement", () => {
 	it("selects the same regions and placements with and without register reuse", () => {
 		for (const source of [OPPOSITE_PLACEMENTS, SPLIT_AND_SLICE]) {
 			const core = lockedCore(source, "placement-register-reuse.js");
-			const reused = lowerCoreProgramToVmDefinition(
-				lowerCoreProgramToTarget(coreCompilationForTest(core), {
+			const reused = lowerExecutionToProgramImage(
+				lowerCoreCompilationToExecution(coreCompilationForTest(core), {
 					reuseRegisters: true,
 				}),
 			);
-			const distinct = lowerCoreProgramToVmDefinition(
-				lowerCoreProgramToTarget(coreCompilationForTest(core), {
+			const distinct = lowerExecutionToProgramImage(
+				lowerCoreCompilationToExecution(coreCompilationForTest(core), {
 					reuseRegisters: false,
 				}),
 			);
@@ -313,8 +321,8 @@ describe("Core region property placement", () => {
 		// receiver's missing locked identity is caught where the license is consumed.
 		expect(() => verifyCoreProgram(tampered, coreOpcodeRegistry)).not.toThrow();
 		expect(() =>
-			lowerCoreProgramToVmDefinition(
-				lowerCoreProgramToTarget(coreCompilationForTest(tampered)),
+			lowerExecutionToProgramImage(
+				lowerCoreCompilationToExecution(coreCompilationForTest(tampered)),
 			),
 		).toThrow(/regexp-exec-projection/);
 	});
@@ -325,8 +333,8 @@ describe("Core region property placement", () => {
 			(region) => (region as { propertyPlacement?: string }).propertyPlacement,
 		);
 		expect(placements).toContain("call-fallback");
-		const bytes = serializeVmDefinition(definition, { debugInfo: false });
-		const cached = deserializeVmDefinition(bytes);
+		const bytes = serializeCompilerArtifact(definition, { debugInfo: false });
+		const cached = deserializeCompilerArtifact(bytes);
 		expect(
 			vmRegions(cached).map(
 				(region) => (region as { propertyPlacement?: string }).propertyPlacement,
@@ -334,11 +342,11 @@ describe("Core region property placement", () => {
 		).toEqual(placements);
 		expect(vmRegions(cached)).toEqual(vmRegions(definition));
 
-		const { functions, functionIndex, regionIndex } = findVmSliceRegion(definition);
-		const owner = functions[functionIndex]!;
-		const region = owner.regions![regionIndex]!;
+		const { functionIndex, regionIndex } = findVmSliceRegion(definition);
+		const region =
+			definition.nativePlan.functions[functionIndex]!.specializations[regionIndex]!;
 		if (region.kind !== "string-slice-number") throw new Error("missing fusion region");
-		const asInPlace = serializeVmDefinition(
+		const asInPlace = serializeCompilerArtifact(
 			withVmRegion(definition, functionIndex, regionIndex, {
 				...region,
 				propertyPlacement: "in-place",
@@ -353,12 +361,12 @@ describe("Core region property placement", () => {
 		expect(differing).toHaveLength(1);
 		const corrupted = Uint8Array.from(bytes);
 		corrupted[differing[0]!] = 2;
-		expect(() => deserializeVmDefinition(corrupted)).toThrow(
+		expect(() => deserializeCompilerArtifact(corrupted)).toThrow(
 			/invalid region property placement/,
 		);
 
 		expect(() =>
-			serializeVmDefinition(
+			serializeCompilerArtifact(
 				withVmRegion(definition, functionIndex, regionIndex, {
 					...region,
 					propertyPlacement: "everywhere" as unknown as typeof region.propertyPlacement,
@@ -399,36 +407,36 @@ function withRegion(
 	};
 }
 
-function findVmSliceRegion(definition: VmDefinition): {
-	functions: VmDefinition["functions"];
+function findVmSliceRegion(definition: ProgramImage): {
 	functionIndex: number;
 	regionIndex: number;
 } {
-	const functionIndex = definition.functions.findIndex((fn) =>
-		(fn.regions ?? []).some((region) => region.kind === "string-slice-number"),
+	const functionIndex = definition.nativePlan.functions.findIndex((fn) =>
+		fn.specializations.some((region) => region.kind === "string-slice-number"),
 	);
 	if (functionIndex < 0) throw new Error("no string-slice-number region");
 	return {
-		functions: definition.functions,
 		functionIndex,
-		regionIndex: definition.functions[functionIndex]!.regions!.findIndex(
-			(region) => region.kind === "string-slice-number",
-		),
+		regionIndex: definition.nativePlan.functions[
+			functionIndex
+		]!.specializations.findIndex((region) => region.kind === "string-slice-number"),
 	};
 }
 
 function withVmRegion(
-	definition: VmDefinition,
+	definition: ProgramImage,
 	functionIndex: number,
 	regionIndex: number,
 	region: VmRegion,
-): VmDefinition {
-	const owner = definition.functions[functionIndex]!;
+): ProgramImage {
+	const owner = definition.nativePlan.functions[functionIndex]!;
 	return {
 		...definition,
-		functions: definition.functions.with(functionIndex, {
-			...owner,
-			regions: owner.regions!.with(regionIndex, region),
-		}),
+		nativePlan: {
+			functions: definition.nativePlan.functions.with(functionIndex, {
+				...owner,
+				specializations: owner.specializations.with(regionIndex, region),
+			}),
+		},
 	};
 }

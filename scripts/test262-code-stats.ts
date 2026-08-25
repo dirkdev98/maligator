@@ -73,12 +73,12 @@ function inspectorSource(definitionsSymbol: string, countSymbol: string): string
 #include <stdio.h>
 #include "vm.h"
 
-extern const MalVmDefinition *const ${definitionsSymbol}[];
+extern const MalProgramImage *const ${definitionsSymbol}[];
 extern const int ${countSymbol};
 
 int main(void) {
     for (int i = 0; i < ${countSymbol}; i++) {
-        const MalVmDefinition *definition = ${definitionsSymbol}[i];
+        const MalProgramImage *definition = ${definitionsSymbol}[i];
         long long instructions = 0;
         for (int f = 0; f < definition->function_count; f++) {
             instructions += definition->functions[f].instruction_count;

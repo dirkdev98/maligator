@@ -4,12 +4,12 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
-import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
-import type { VmDefinition } from "../src/compiler/target/lower-vm.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-vm.ts";
+import type { ProgramImage } from "../src/compiler/target/lower-vm.ts";
 import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
 	WIRE_OPCODES,
 } from "../src/compiler/target/serialize-vm.ts";
 
@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 /** Run the full compile pipeline for one entry module and return its definition. */
-function compile(source: string, options: { node?: boolean } = {}): VmDefinition {
+function compile(source: string, options: { node?: boolean } = {}): ProgramImage {
 	const root = mkdtempSync(path.join(tmpdir(), "maligator-host-"));
 	roots.push(root);
 	const entry = path.join(root, "main.mjs");
@@ -40,11 +40,11 @@ function compile(source: string, options: { node?: boolean } = {}): VmDefinition
 		entry,
 		options.node ? { buildConfig: nodeOn } : {},
 	);
-	return compileSemanticProgramToVmDefinition(program);
+	return compileSemanticProgramToProgramImage(program);
 }
 
 /** Every LOAD_GLOBAL slot index read anywhere in the program. */
-function loadGlobalSlots(def: VmDefinition): Set<number> {
+function loadGlobalSlots(def: ProgramImage): Set<number> {
 	const slots = new Set<number>();
 	for (const fn of def.functions) {
 		for (const instruction of fn.instructions) {
@@ -446,7 +446,7 @@ describe("host-install manifest", () => {
 			`import { join } from "node:path";\nglobalThis.sink = join("a");\n`,
 			{ node: true },
 		);
-		const c = emitVmDefinition(def, { compiled: false });
+		const c = emitProgramImage(def, { compiled: false });
 		expect(c).toContain(
 			"extern void mal_host_install_node_path(MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);",
 		);
@@ -457,7 +457,7 @@ describe("host-install manifest", () => {
 
 	it("emits no host symbol for an ordinary program", () => {
 		const def = compile(`globalThis.sink = 1 + 1;\n`, { node: false });
-		const c = emitVmDefinition(def, { compiled: false });
+		const c = emitProgramImage(def, { compiled: false });
 		expect(c).not.toContain("mal_host_install_");
 		expect(c).toContain(".host_install_count = 0,");
 		expect(c).toContain(".host_installs = nullptr,");
@@ -469,7 +469,7 @@ describe("host-install manifest", () => {
 			{ node: true },
 		);
 		expect(def.hostInstalls.length).toBeGreaterThan(0);
-		const restored = deserializeVmDefinition(serializeVmDefinition(def));
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(def));
 		expect(restored.hostInstalls).toEqual(def.hostInstalls);
 	});
 });

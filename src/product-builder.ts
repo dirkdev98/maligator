@@ -7,10 +7,10 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { selectNativeBuildPlan } from "./build-flags.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "./compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
-import { emitVmTranslationUnits } from "./compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "./compiler/target/emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { requireToolchain } from "./toolchain.ts";
@@ -91,7 +91,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		path.join(repositoryRoot, "src/product-cli-entry.mts"),
 		{ buildConfig: config, stripTypes: stripCompactTypes },
 	);
-	const definition = compileSemanticProgramToVmDefinition(semanticProgram, {
+	const definition = compileSemanticProgramToProgramImage(semanticProgram, {
 		facts: compilerProgramFactsFromConfig(config),
 		runPhase: (phase, run) => {
 			progress(`product CLI ${phase}`);
@@ -108,7 +108,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	}
 	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
 	progress("emitting the product CLI translation units");
-	const cSource = emitVmTranslationUnits(definition, {
+	const cSource = emitProgramTranslationUnits(definition, {
 		compiled: true,
 		assets,
 		maligatorSurface: config.surface.maligator,

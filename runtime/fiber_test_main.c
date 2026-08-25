@@ -30,7 +30,7 @@
  * stand up a real VM with intrinsics + heap; its program body is never run.
  */
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 #define FIBER_COUNT 4
 #define ITER_PER_FIBER 12

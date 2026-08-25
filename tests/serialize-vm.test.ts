@@ -5,18 +5,22 @@ import {
 	VM_GUARDED_BUILTIN_OPERATIONS,
 } from "../src/compiler/target/lower-vm.ts";
 import type {
-	VmDefinition,
-	VmFunction,
-	VmInstruction,
+	ProgramImage,
+	BytecodeFunction,
+	BytecodeInstruction,
+	NativeInstructionPlan,
+	VmRegion,
 } from "../src/compiler/target/lower-vm.ts";
+import { createConservativeNativePlan } from "../src/compiler/target/lower-vm.ts";
 import {
-	deserializeVmDefinition,
+	deserializeCompilerArtifact,
 	MAX_STRING_CODE_UNITS,
-	serializeVmDefinition,
+	serializeCompilerArtifact,
 	WIRE_GUARDED_BUILTIN_TAG_COUNT,
 	WIRE_OPCODES,
 	WIRE_VERSION,
 } from "../src/compiler/target/serialize-vm.ts";
+import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
 // A definition exercising the tricky encodings: variable-length operand arrays
 // (CALL / CREATE_OBJECT_SHAPED / CREATE_MODULE_NAMESPACE / CREATE_TEMPLATE_OBJECT /
@@ -25,7 +29,7 @@ import {
 // u16-intrinsic operands,
 // strings (incl. astral code units), bigints (incl. > 64 bits), handlers, the
 // vestigial TRY_BEGIN (handlerIp dropped → 0), and debug tables.
-const instructions: Array<VmInstruction> = [
+const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CREATE_NUMBER", dst: 0, value: 42 },
 	{ opcode: "CREATE_F64", dst: 1, value: 3.5 },
 	{ opcode: "CREATE_BOOLEAN", dst: 2, value: true },
@@ -186,7 +190,7 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "RETURN", value: 11 },
 ];
 
-const mainFn: VmFunction = {
+const mainFn: BytecodeFunction = {
 	nameStringIndex: 0,
 	isGenerator: false,
 	isAsync: false,
@@ -209,10 +213,9 @@ const mainFn: VmFunction = {
 	fileIndex: 0,
 	// Canonical (compress→expand fixed-point) per-instruction positions.
 	positions: instructions.map((_, ip) => (ip < 11 ? 0 : ip < 20 ? 1 : 2)),
-	registerRepresentations: Array.from({ length: 15 }, () => "boxed"),
 };
 
-const genFn: VmFunction = {
+const genFn: BytecodeFunction = {
 	nameStringIndex: 2,
 	isGenerator: true,
 	isAsync: true,
@@ -240,10 +243,9 @@ const genFn: VmFunction = {
 	handlers: [],
 	fileIndex: 1,
 	positions: [0, 0, 0, 0, 0],
-	registerRepresentations: Array.from({ length: 3 }, () => "boxed"),
 };
 
-const definition: VmDefinition = {
+const definition: ProgramImage = testProgramImage({
 	entrypointPath: "/fixture/entry.mjs",
 	functionCount: 2,
 	functions: [mainFn, genFn],
@@ -264,9 +266,9 @@ const definition: VmDefinition = {
 	],
 	cjsModuleFunctionIndices: [1],
 	hostInstalls: [],
-};
+});
 
-const hostDefinition: VmDefinition = {
+const hostDefinition: ProgramImage = {
 	...definition,
 	hostInstalls: [
 		{
@@ -283,8 +285,23 @@ const hostDefinition: VmDefinition = {
 	],
 };
 
-function stackObjectDefinition(): VmDefinition {
-	const stackFn: VmFunction = {
+function withBytecodeFunctions(
+	image: ProgramImage,
+	functions: Array<BytecodeFunction>,
+): ProgramImage {
+	return {
+		...image,
+		functionCount: functions.length,
+		functions,
+		nativePlan: createConservativeNativePlan(functions),
+	};
+}
+
+function stackObjectDefinition(): ProgramImage {
+	const stackFixture: BytecodeFunction & {
+		registerRepresentations: Array<"boxed">;
+		regions: Array<VmRegion>;
+	} = {
 		...mainFn,
 		nameStringIndex: -1,
 		parameterCount: 0,
@@ -343,24 +360,34 @@ function stackObjectDefinition(): VmDefinition {
 			},
 		],
 	};
-	return {
-		...definition,
-		functionCount: 1,
-		functions: [stackFn],
-		stringConstants: [["first".charCodeAt(0)], ["second".charCodeAt(0)]],
-		bigintConstants: [],
-		literalTemplateData: [],
-		globalCount: 0,
-		files: [],
-		sourcePositions: [],
-		cjsModuleFunctionIndices: [],
-	};
+	const { registerRepresentations, regions, ...stackFn } = stackFixture;
+	return withNativeFunctionPlan(
+		{
+			...definition,
+			functionCount: 1,
+			functions: [stackFn],
+			stringConstants: [["first".charCodeAt(0)], ["second".charCodeAt(0)]],
+			bigintConstants: [],
+			literalTemplateData: [],
+			globalCount: 0,
+			files: [],
+			sourcePositions: [],
+			cjsModuleFunctionIndices: [],
+			nativePlan: createConservativeNativePlan([stackFn]),
+		},
+		0,
+		(plan) => ({
+			...plan,
+			registerRepresentations,
+			specializations: regions,
+		}),
+	);
 }
 
-function knownOwnSlotDefinition(): VmDefinition {
+function knownOwnSlotDefinition(): ProgramImage {
 	const base = stackObjectDefinition();
 	const fn = base.functions[0]!;
-	const instructions: Array<VmInstruction> = [
+	const instructions: Array<BytecodeInstruction> = [
 		{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
 		{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
 		{
@@ -415,16 +442,18 @@ function knownOwnSlotDefinition(): VmDefinition {
 				literalShapeCount: 2,
 				instructions,
 				positions: instructions.map(() => 0),
-				regions: undefined,
 			},
 		],
+		nativePlan: createConservativeNativePlan([
+			{ ...fn, literalShapeCount: 2, instructions, positions: instructions.map(() => 0) },
+		]),
 	};
 }
 
-function shapeCaseDefinition(): VmDefinition {
+function shapeCaseDefinition(): ProgramImage {
 	const base = knownOwnSlotDefinition();
 	const fn = base.functions[0]!;
-	const instructions: Array<VmInstruction> = [
+	const instructions: Array<BytecodeInstruction> = [
 		{ opcode: "CREATE_NUMBER", dst: 0, value: 41 },
 		{ opcode: "CREATE_NUMBER", dst: 1, value: 42 },
 		{
@@ -461,24 +490,31 @@ function shapeCaseDefinition(): VmDefinition {
 		},
 		{ opcode: "RETURN", value: 5 },
 	];
-	return {
-		...base,
-		stringConstants: [[120], [121]],
-		precompiledLiteralShapes: [
-			{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1] },
-		],
-		functions: [
-			{
-				...fn,
-				registerCount: 6,
-				literalShapeCount: 1,
-				instructions,
-				positions: instructions.map(() => 0),
-				registerRepresentations: ["boxed", "boxed", "boxed", "number", "boxed", "boxed"],
-				regions: undefined,
-			},
-		],
-	};
+	const functions: Array<BytecodeFunction> = [
+		{
+			...fn,
+			registerCount: 6,
+			literalShapeCount: 1,
+			instructions,
+			positions: instructions.map(() => 0),
+		},
+	];
+	return withNativeFunctionPlan(
+		{
+			...base,
+			stringConstants: [[120], [121]],
+			precompiledLiteralShapes: [
+				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0, 1] },
+			],
+			functions,
+			nativePlan: createConservativeNativePlan(functions),
+		},
+		0,
+		(plan) => ({
+			...plan,
+			registerRepresentations: ["boxed", "boxed", "boxed", "number", "boxed", "boxed"],
+		}),
+	);
 }
 
 describe("serialize-vm", () => {
@@ -507,8 +543,8 @@ describe("serialize-vm", () => {
 
 	it("round-trips and rejects tampered known-own-slot access metadata", () => {
 		const valid = knownOwnSlotDefinition();
-		const wire = serializeVmDefinition(valid, { debugInfo: false });
-		const restored = deserializeVmDefinition(wire);
+		const wire = serializeCompilerArtifact(valid, { debugInfo: false });
+		const restored = deserializeCompilerArtifact(wire);
 		expect(restored.precompiledLiteralShapes).toEqual(valid.precompiledLiteralShapes);
 		expect(restored.functions[0]!.literalShapeCount).toBe(2);
 		expect(
@@ -549,7 +585,7 @@ describe("serialize-vm", () => {
 				),
 			})),
 		};
-		expect(() => serializeVmDefinition(malformed)).toThrow(
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(
 			/invalid known-own-slot access/,
 		);
 		const duplicate = {
@@ -567,7 +603,7 @@ describe("serialize-vm", () => {
 				),
 			})),
 		};
-		expect(() => serializeVmDefinition(duplicate)).toThrow(
+		expect(() => serializeCompilerArtifact(duplicate)).toThrow(
 			/invalid known-own-slot access/,
 		);
 		const extraField = {
@@ -585,7 +621,7 @@ describe("serialize-vm", () => {
 				),
 			})),
 		};
-		expect(() => serializeVmDefinition(extraField)).toThrow(
+		expect(() => serializeCompilerArtifact(extraField)).toThrow(
 			/invalid known-own-slot access/,
 		);
 		const negativeZero = {
@@ -603,7 +639,7 @@ describe("serialize-vm", () => {
 				),
 			})),
 		};
-		expect(() => serializeVmDefinition(negativeZero)).toThrow(
+		expect(() => serializeCompilerArtifact(negativeZero)).toThrow(
 			/invalid known-own-slot access/,
 		);
 
@@ -616,15 +652,15 @@ describe("serialize-vm", () => {
 		const tampered = wire.slice();
 		// Change the second candidate's slot ZigZag(0) to ZigZag(1), outside its shape.
 		tampered[instructionOffset + encodedInstruction.length - 1] = 2;
-		expect(() => deserializeVmDefinition(tampered)).toThrow(
+		expect(() => deserializeCompilerArtifact(tampered)).toThrow(
 			/invalid known-own-slot access/,
 		);
 	});
 
 	it("round-trips and validates shared shape-case loads", () => {
 		const valid = shapeCaseDefinition();
-		const restored = deserializeVmDefinition(
-			serializeVmDefinition(valid, { debugInfo: false }),
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(valid, { debugInfo: false }),
 		);
 		expect(restored.functions[0]!.instructions).toEqual(valid.functions[0]!.instructions);
 
@@ -643,7 +679,9 @@ describe("serialize-vm", () => {
 					),
 			})),
 		};
-		expect(() => serializeVmDefinition(oneLoad)).toThrow(/shape-case selector use count/);
+		expect(() => serializeCompilerArtifact(oneLoad)).toThrow(
+			/shape-case selector use count/,
+		);
 
 		const wrongSlot = {
 			...valid,
@@ -657,7 +695,7 @@ describe("serialize-vm", () => {
 				),
 			})),
 		};
-		expect(() => serializeVmDefinition(wrongSlot)).toThrow(/invalid shape-case load/);
+		expect(() => serializeCompilerArtifact(wrongSlot)).toThrow(/invalid shape-case load/);
 
 		const orphan = {
 			...valid,
@@ -670,23 +708,22 @@ describe("serialize-vm", () => {
 				),
 			})),
 		};
-		expect(() => serializeVmDefinition(orphan)).toThrow(/shape-case selector use count/);
+		expect(() => serializeCompilerArtifact(orphan)).toThrow(
+			/shape-case selector use count/,
+		);
 
-		const barrierInstruction: VmInstruction = { opcode: "CREATE_OBJECT", dst: 7 };
-		const barrier = {
-			...valid,
-			functions: valid.functions.map((fn) => ({
-				...fn,
-				registerCount: 8,
-				registerRepresentations: [...fn.registerRepresentations, "boxed" as const],
-				instructions: [
-					...fn.instructions.slice(0, 4),
-					barrierInstruction,
-					...fn.instructions.slice(4),
-				],
-			})),
-		};
-		expect(() => serializeVmDefinition(barrier)).toThrow(
+		const barrierInstruction: BytecodeInstruction = { opcode: "CREATE_OBJECT", dst: 7 };
+		const barrierFunctions = valid.functions.map((fn) => ({
+			...fn,
+			registerCount: 8,
+			instructions: [
+				...fn.instructions.slice(0, 4),
+				barrierInstruction,
+				...fn.instructions.slice(4),
+			],
+		}));
+		const barrier = withBytecodeFunctions(valid, barrierFunctions);
+		expect(() => serializeCompilerArtifact(barrier)).toThrow(
 			/shape-case selector crosses an invalid instruction/,
 		);
 
@@ -701,11 +738,11 @@ describe("serialize-vm", () => {
 				],
 			})),
 		};
-		expect(() => serializeVmDefinition(receiverRedefinition)).toThrow(
+		expect(() => serializeCompilerArtifact(receiverRedefinition)).toThrow(
 			/shape-case selector receiver is redefined/,
 		);
 
-		const encoded = serializeVmDefinition(valid, { debugInfo: false });
+		const encoded = serializeCompilerArtifact(valid, { debugInfo: false });
 		const loadTag = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_SHAPE_CASE");
 		const encodedFirstLoad = [loadTag, 8, 4, 6, 0, 1, 0];
 		const firstLoadOffset = encoded.findIndex((_, offset) =>
@@ -715,7 +752,7 @@ describe("serialize-vm", () => {
 		const receiverClobberWire = encoded.slice();
 		// Make the first of two loads overwrite r2, the selector's receiver.
 		receiverClobberWire[firstLoadOffset + 1] = 4;
-		expect(() => deserializeVmDefinition(receiverClobberWire)).toThrow(
+		expect(() => deserializeCompilerArtifact(receiverClobberWire)).toThrow(
 			/shape-case selector receiver is redefined/,
 		);
 	});
@@ -723,10 +760,10 @@ describe("serialize-vm", () => {
 	it("validates portable precompiled shape descriptors independently of bytecode", () => {
 		const valid = knownOwnSlotDefinition();
 		expect(() =>
-			serializeVmDefinition({ ...valid, precompiledLiteralShapes: [] }),
+			serializeCompilerArtifact({ ...valid, precompiledLiteralShapes: [] }),
 		).toThrow(/invalid known-own-slot access/);
 		expect(() =>
-			serializeVmDefinition({
+			serializeCompilerArtifact({
 				...valid,
 				precompiledLiteralShapes: [
 					valid.precompiledLiteralShapes[0]!,
@@ -737,7 +774,7 @@ describe("serialize-vm", () => {
 
 		for (const units of [[0x30], [..."__proto__"].map((unit) => unit.charCodeAt(0))]) {
 			expect(() =>
-				serializeVmDefinition({
+				serializeCompilerArtifact({
 					...valid,
 					stringConstants: [...valid.stringConstants, units],
 					precompiledLiteralShapes: [
@@ -752,7 +789,7 @@ describe("serialize-vm", () => {
 		}
 
 		expect(() =>
-			serializeVmDefinition({
+			serializeCompilerArtifact({
 				...valid,
 				stringConstants: [...valid.stringConstants, [...valid.stringConstants[0]!]],
 				precompiledLiteralShapes: [
@@ -767,44 +804,39 @@ describe("serialize-vm", () => {
 	});
 
 	it("round-trips a definition with debug info", () => {
-		const restored = deserializeVmDefinition(
-			serializeVmDefinition(definition, { debugInfo: true }),
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(definition, { debugInfo: true }),
 		);
 		expect(restored).toEqual(definition);
 	});
 
 	it("validates stack-object access keys at both wire boundaries", () => {
 		const valid = stackObjectDefinition();
-		const wire = serializeVmDefinition(valid, { debugInfo: false });
-		expect(deserializeVmDefinition(wire).functions[0]!.regions).toEqual(
-			valid.functions[0]!.regions,
-		);
+		const wire = serializeCompilerArtifact(valid, { debugInfo: false });
+		expect(
+			deserializeCompilerArtifact(wire).nativePlan.functions[0]!.specializations,
+		).toEqual(valid.nativePlan.functions[0]!.specializations);
 
-		const region = valid.functions[0]!.regions![0]!;
+		const region = valid.nativePlan.functions[0]!.specializations[0]!;
 		if (region.kind !== "stack-object-plan") throw new Error("expected stack region");
-		const malformed: VmDefinition = {
-			...valid,
-			functions: [
+		const malformed = withNativeFunctionPlan(valid, 0, (plan) => ({
+			...plan,
+			specializations: [
 				{
-					...valid.functions[0]!,
-					regions: [
+					...region,
+					sites: [
 						{
-							...region,
-							sites: [
-								{
-									...region.sites[0]!,
-									accesses: [
-										{ ip: 3, slot: 1 },
-										{ ip: 4, slot: 0 },
-									],
-								},
+							...region.sites[0]!,
+							accesses: [
+								{ ip: 3, slot: 1 },
+								{ ip: 4, slot: 0 },
 							],
 						},
 					],
 				},
 			],
-		};
-		expect(() => serializeVmDefinition(malformed, { debugInfo: false })).toThrow(
+		}));
+		expect(() => serializeCompilerArtifact(malformed, { debugInfo: false })).toThrow(
 			/invalid stack-object plan region/,
 		);
 
@@ -813,35 +845,27 @@ describe("serialize-vm", () => {
 		// materialization table. Change ZigZag(1) to ZigZag(0) without changing size.
 		expect(tampered.at(-3)).toBe(2);
 		tampered[tampered.length - 3] = 0;
-		expect(() => deserializeVmDefinition(tampered)).toThrow(
+		expect(() => deserializeCompilerArtifact(tampered)).toThrow(
 			/invalid stack-object plan region/,
 		);
 	});
 
 	it("requires one Core-selected physical representation per register", () => {
 		expect(() =>
-			serializeVmDefinition({
-				...definition,
-				functions: [
-					{
-						...mainFn,
-						registerRepresentations: mainFn.registerRepresentations.slice(1),
-					},
-					genFn,
-				],
-			}),
+			serializeCompilerArtifact(
+				withNativeFunctionPlan(definition, 0, (plan) => ({
+					...plan,
+					registerRepresentations: plan.registerRepresentations.slice(1),
+				})),
+			),
 		).toThrow(/invalid register representations/);
 		expect(() =>
-			serializeVmDefinition({
-				...definition,
-				functions: [
-					{
-						...mainFn,
-						registerRepresentations: mainFn.registerRepresentations.with(0, "number"),
-					},
-					genFn,
-				],
-			}),
+			serializeCompilerArtifact(
+				withNativeFunctionPlan(definition, 0, (plan) => ({
+					...plan,
+					registerRepresentations: plan.registerRepresentations.with(0, "number"),
+				})),
+			),
 		).toThrow(/invalid register representations/);
 	});
 
@@ -854,36 +878,33 @@ describe("serialize-vm", () => {
 		for (const operation of operations) {
 			for (const dependency of dependencies) {
 				let replaced = false;
-				const guardedDefinition: VmDefinition = {
-					...definition,
-					functions: definition.functions.map((fn) => ({
-						...fn,
-						instructions: fn.instructions.map((instruction) => {
-							if (replaced || instruction.opcode !== "CALL") return instruction;
-							replaced = true;
-							return {
-								...instruction,
-								guardedBuiltinCall: {
-									operation,
-									guard: {
-										dependencies: [dependency],
-										obligations: ["fallback"],
-									},
+				const guardedDefinition = withNativeFunctionPlan(definition, 0, (plan, fn) => ({
+					...plan,
+					instructions: fn.instructions.map((instruction) => {
+						if (replaced || instruction.opcode !== "CALL") return undefined;
+						replaced = true;
+						return {
+							kind: "call",
+							guardedBuiltinCall: {
+								operation,
+								guard: {
+									dependencies: [dependency],
+									obligations: ["fallback"],
 								},
-							};
-						}),
-					})),
-				};
+							},
+						};
+					}),
+				}));
 				expect(replaced).toBe(true);
-				expect(deserializeVmDefinition(serializeVmDefinition(guardedDefinition))).toEqual(
-					guardedDefinition,
-				);
+				expect(
+					deserializeCompilerArtifact(serializeCompilerArtifact(guardedDefinition)),
+				).toEqual(guardedDefinition);
 			}
 		}
 	});
 
 	it("round-trips program-level semantic protector facts", () => {
-		const semanticDefinition: VmDefinition = {
+		const semanticDefinition: ProgramImage = {
 			...definition,
 			semanticProtectors: [
 				{
@@ -909,19 +930,34 @@ describe("serialize-vm", () => {
 				},
 			],
 		};
-		expect(deserializeVmDefinition(serializeVmDefinition(semanticDefinition))).toEqual(
-			semanticDefinition,
-		);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(semanticDefinition)),
+		).toEqual(semanticDefinition);
 	});
 	it("retains native-code generation metadata for frontend cache hits", () => {
-		const metadataInstructions: Array<VmInstruction> = mainFn.instructions.map(
+		const metadataInstructions: Array<BytecodeInstruction> = mainFn.instructions.map(
 			(instruction) => {
 				if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
-					return { ...instruction, stringIndex: 3, primitiveStringLength: true };
+					return { ...instruction, stringIndex: 3 };
+				}
+				return instruction;
+			},
+		);
+		metadataInstructions.push({
+			opcode: "CONSTRUCT",
+			dst: 1,
+			callee: 2,
+			argumentCount: 1,
+			arguments: [3],
+		});
+		const nativeInstructions: Array<NativeInstructionPlan | undefined> =
+			metadataInstructions.map((instruction) => {
+				if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
+					return { kind: "primitive-string-length" };
 				}
 				if (instruction.opcode === "CALL") {
 					return {
-						...instruction,
+						kind: "call",
 						directFunctionIndex: 0,
 						directFunctionCall: true,
 						directCallTargetFunctionIndex: 0,
@@ -935,137 +971,151 @@ describe("serialize-vm", () => {
 						directStringCharCodeAtPosition: "inBounds",
 					};
 				}
-				return instruction;
+				if (instruction.opcode === "CONSTRUCT") {
+					return { kind: "construct", directFunctionIndex: 0 };
+				}
+				return undefined;
+			});
+		const cachedFunctions: Array<BytecodeFunction> = [
+			{
+				...mainFn,
+				instructions: metadataInstructions,
+				positions: [
+					...mainFn.positions,
+					...Array.from(
+						{ length: metadataInstructions.length - mainFn.instructions.length },
+						() => 2,
+					),
+				],
 			},
+		];
+		const cachedDefinition = withNativeFunctionPlan(
+			{
+				...definition,
+				stringConstants: [
+					...definition.stringConstants,
+					[..."length"].map((character) => character.charCodeAt(0)),
+				],
+				functionCount: 1,
+				functions: cachedFunctions,
+				nativePlan: createConservativeNativePlan(cachedFunctions),
+			},
+			0,
+			(plan) => ({
+				...plan,
+				gc: { ...plan.gc, rootRegisters: [0, 3, 7] },
+				instructions: nativeInstructions,
+			}),
 		);
-		metadataInstructions.push({
-			opcode: "CONSTRUCT",
-			dst: 1,
-			callee: 2,
-			argumentCount: 1,
-			arguments: [3],
-			directFunctionIndex: 0,
-		});
-		const cachedDefinition: VmDefinition = {
-			...definition,
-			stringConstants: [
-				...definition.stringConstants,
-				[..."length"].map((character) => character.charCodeAt(0)),
-			],
-			functionCount: 1,
-			functions: [
-				{
-					...mainFn,
-					instructions: metadataInstructions,
-					positions: [
-						...mainFn.positions,
-						...Array.from(
-							{ length: metadataInstructions.length - mainFn.instructions.length },
-							() => 2,
-						),
-					],
-					gcRootRegisters: [0, 3, 7],
-				},
-			],
-		};
 
-		expect(deserializeVmDefinition(serializeVmDefinition(cachedDefinition))).toEqual(
-			cachedDefinition,
-		);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(cachedDefinition)),
+		).toEqual(cachedDefinition);
 	});
 
 	it("validates fresh dense indexed-fill reserve metadata", () => {
-		const reserveDefinition = (reserveLength: number): VmDefinition => ({
-			...definition,
-			functionCount: 1,
-			functions: [
-				{
-					...mainFn,
-					registerCount: 1,
-					registerRepresentations: ["boxed"],
-					instructions: [
-						{
-							opcode: "CREATE_ARRAY",
-							dst: 0,
-							length: 0,
-							freshDenseReserveLength: reserveLength,
-						},
-					],
-					positions: [0],
-					handlers: [],
-				},
-			],
-		});
+		const reserveDefinition = (reserveLength: number): ProgramImage =>
+			withNativeFunctionPlan(
+				withBytecodeFunctions(definition, [
+					{
+						...mainFn,
+						registerCount: 1,
+						instructions: [
+							{
+								opcode: "CREATE_ARRAY",
+								dst: 0,
+								length: 0,
+							},
+						],
+						positions: [0],
+						handlers: [],
+					},
+				]),
+				0,
+				(plan) => ({
+					...plan,
+					instructions: [{ kind: "fresh-dense-reserve", length: reserveLength }],
+				}),
+			);
 
 		for (const invalid of [0, 65_537]) {
-			expect(() => serializeVmDefinition(reserveDefinition(invalid))).toThrow(
+			expect(() => serializeCompilerArtifact(reserveDefinition(invalid))).toThrow(
 				/invalid indexed-fill reserve metadata/,
 			);
 		}
 
-		const malformed = serializeVmDefinition(reserveDefinition(1), {
+		const malformed = serializeCompilerArtifact(reserveDefinition(1), {
 			debugInfo: false,
 		});
 		// The instruction metadata ends in tag 12 + ZigZag i32(1), followed by
 		// the empty tagged function-region table.
 		expect(malformed.at(-3)).toBe(12);
 		malformed[malformed.length - 2] = 0;
-		expect(() => deserializeVmDefinition(malformed)).toThrow(
+		expect(() => deserializeCompilerArtifact(malformed)).toThrow(
 			/invalid indexed-fill reserve metadata/,
 		);
 	});
 
 	it("rejects malformed operation-local specialization facts", () => {
-		const withInstruction = (instruction: VmInstruction): VmDefinition => ({
-			...definition,
-			functionCount: 1,
-			functions: [
-				{
-					...mainFn,
-					registerCount: 4,
-					registerRepresentations: Array.from({ length: 4 }, () => "boxed"),
-					instructions: [instruction],
-					positions: [0],
-					handlers: [],
-				},
-			],
-		});
+		const withInstruction = (
+			instruction: BytecodeInstruction,
+			nativeInstruction: NativeInstructionPlan,
+		): ProgramImage =>
+			withNativeFunctionPlan(
+				withBytecodeFunctions(definition, [
+					{
+						...mainFn,
+						registerCount: 4,
+						instructions: [instruction],
+						positions: [0],
+						handlers: [],
+					},
+				]),
+				0,
+				(plan) => ({ ...plan, instructions: [nativeInstruction] }),
+			);
 
 		expect(() =>
-			serializeVmDefinition(
-				withInstruction({
-					opcode: "LOAD_PROPERTY_STATIC",
-					dst: 0,
-					object: 1,
-					stringIndex: 1,
-					icIndex: 0,
-					primitiveStringLength: true,
-				}),
+			serializeCompilerArtifact(
+				withInstruction(
+					{
+						opcode: "LOAD_PROPERTY_STATIC",
+						dst: 0,
+						object: 1,
+						stringIndex: 1,
+						icIndex: 0,
+					},
+					{ kind: "primitive-string-length" },
+				),
 			),
 		).toThrow(/invalid primitive-String length hint/);
 		expect(() =>
-			serializeVmDefinition(
-				withInstruction({
-					opcode: "CALL",
-					dst: 0,
-					callee: 1,
-					thisValue: 2,
-					argumentCount: 0,
-					arguments: [],
-					directCallTargetFunctionIndex: 0,
-				}),
+			serializeCompilerArtifact(
+				withInstruction(
+					{
+						opcode: "CALL",
+						dst: 0,
+						callee: 1,
+						thisValue: 2,
+						argumentCount: 0,
+						arguments: [],
+					},
+					{ kind: "call", directCallTargetFunctionIndex: 0 },
+				),
 			),
 		).toThrow(/invalid CALL specialization metadata/);
 		expect(() =>
-			serializeVmDefinition(
-				withInstruction({
-					opcode: "CONSTRUCT",
-					dst: 0,
-					callee: 1,
-					argumentCount: 0,
-					arguments: [],
-					directFunctionIndex: 1,
-				}),
+			serializeCompilerArtifact(
+				withInstruction(
+					{
+						opcode: "CONSTRUCT",
+						dst: 0,
+						callee: 1,
+						argumentCount: 0,
+						arguments: [],
+					},
+					{ kind: "construct", directFunctionIndex: 1 },
+				),
 			),
 		).toThrow(/invalid direct CONSTRUCT target/);
 	});
@@ -1077,7 +1127,7 @@ describe("serialize-vm", () => {
 				: instruction,
 		);
 		expect(() =>
-			serializeVmDefinition({
+			serializeCompilerArtifact({
 				...definition,
 				functions: [{ ...mainFn, instructions: invalidInstructions }],
 			}),
@@ -1091,7 +1141,7 @@ describe("serialize-vm", () => {
 				: instruction,
 		);
 		expect(() =>
-			serializeVmDefinition({
+			serializeCompilerArtifact({
 				...definition,
 				functions: [{ ...mainFn, instructions: invalidInstructions }],
 			}),
@@ -1099,36 +1149,33 @@ describe("serialize-vm", () => {
 	});
 
 	it("round-trips and validates persisted argument snapshot prefixes", () => {
-		const snapshotInstructions: Array<VmInstruction> = [
+		const snapshotInstructions: Array<BytecodeInstruction> = [
 			{ opcode: "LOAD_ARGUMENT_COUNT", dst: 1 },
 			{ opcode: "LOAD_ARGUMENT", dst: 2, index: 4 },
 			{ opcode: "RETURN", value: 2 },
 		];
-		const snapshotDefinition: VmDefinition = {
-			...definition,
-			functionCount: 1,
-			functions: [
-				{
-					...mainFn,
-					argumentSnapshotCount: 2,
-					argumentSnapshotPlan: [
-						{ destination: 1, source: -1 },
-						{ destination: 2, source: 4 },
-					],
-					registerCount: 3,
-					registerRepresentations: Array.from({ length: 3 }, () => "boxed"),
-					instructions: snapshotInstructions,
-					handlers: [],
-					positions: snapshotInstructions.map(() => 0),
-				},
-			],
-		};
-		const restored = deserializeVmDefinition(serializeVmDefinition(snapshotDefinition));
+		const snapshotDefinition = withBytecodeFunctions(definition, [
+			{
+				...mainFn,
+				argumentSnapshotCount: 2,
+				argumentSnapshotPlan: [
+					{ destination: 1, source: -1 },
+					{ destination: 2, source: 4 },
+				],
+				registerCount: 3,
+				instructions: snapshotInstructions,
+				handlers: [],
+				positions: snapshotInstructions.map(() => 0),
+			},
+		]);
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(snapshotDefinition),
+		);
 		expect(restored.functions[0]!.argumentSnapshotCount).toBe(2);
 		expect(restored.functions[0]!.instructions).toEqual(snapshotInstructions);
 
 		expect(() =>
-			serializeVmDefinition({
+			serializeCompilerArtifact({
 				...snapshotDefinition,
 				functions: [{ ...snapshotDefinition.functions[0]!, argumentSnapshotCount: 1 }],
 			}),
@@ -1136,7 +1183,10 @@ describe("serialize-vm", () => {
 	});
 
 	it("precomputes cycle-safe argument snapshot move plans", () => {
-		const plan = (snapshotInstructions: Array<VmInstruction>, registerCount: number) =>
+		const plan = (
+			snapshotInstructions: Array<BytecodeInstruction>,
+			registerCount: number,
+		) =>
 			buildArgumentSnapshotPlan({
 				argumentSnapshotCount: snapshotInstructions.length,
 				instructions: snapshotInstructions,
@@ -1187,21 +1237,21 @@ describe("serialize-vm", () => {
 	});
 
 	it("is a fixed point (re-serializing yields identical bytes)", () => {
-		const buf1 = serializeVmDefinition(definition, { debugInfo: true });
-		const buf2 = serializeVmDefinition(deserializeVmDefinition(buf1), {
+		const buf1 = serializeCompilerArtifact(definition, { debugInfo: true });
+		const buf2 = serializeCompilerArtifact(deserializeCompilerArtifact(buf1), {
 			debugInfo: true,
 		});
 		expect(Array.from(buf2)).toEqual(Array.from(buf1));
 	});
 
 	it("rejects stale wire versions", () => {
-		const buffer = serializeVmDefinition(definition);
+		const buffer = serializeCompilerArtifact(definition);
 		new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(
 			4,
 			WIRE_VERSION - 1,
 			true,
 		);
-		expect(() => deserializeVmDefinition(buffer)).toThrow(
+		expect(() => deserializeCompilerArtifact(buffer)).toThrow(
 			`version ${WIRE_VERSION - 1}, expected ${WIRE_VERSION}`,
 		);
 	});
@@ -1218,8 +1268,8 @@ describe("serialize-vm", () => {
 	});
 
 	it("drops debug tables when debugInfo is false", () => {
-		const restored = deserializeVmDefinition(
-			serializeVmDefinition(definition, { debugInfo: false }),
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(definition, { debugInfo: false }),
 		);
 		expect(restored.files).toEqual([]);
 		expect(restored.sourcePositions).toEqual([]);
@@ -1234,7 +1284,7 @@ describe("serialize-vm", () => {
 	});
 
 	it("preserves astral code units and signed >64-bit bigints", () => {
-		const restored = deserializeVmDefinition(serializeVmDefinition(definition));
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
 		expect(restored.stringConstants[2]).toEqual([0xd83d, 0xde00]);
 		expect(restored.bigintConstants[1]).toBe(-((1n << 100n) + 7n));
 	});
@@ -1247,7 +1297,7 @@ describe("serialize-vm", () => {
 			[16_383, [0xff, 0x7f]],
 			[16_384, [0x80, 0x80, 1]],
 		] as const) {
-			const probe: VmDefinition = {
+			const probe: ProgramImage = {
 				...definition,
 				functions: [],
 				functionCount: 0,
@@ -1258,7 +1308,7 @@ describe("serialize-vm", () => {
 				sourcePositions: [],
 				cjsModuleFunctionIndices: [],
 			};
-			const wire = serializeVmDefinition(probe, { debugInfo: false });
+			const wire = serializeCompilerArtifact(probe, { debugInfo: false });
 			// Fixed magic/version, one-byte flags/global/entry length, the entry bytes,
 			// then one-byte string and bigint counts.
 			const literalCountOffset =
@@ -1268,48 +1318,44 @@ describe("serialize-vm", () => {
 					wire.subarray(literalCountOffset, literalCountOffset + encoding.length),
 				),
 			).toEqual(encoding);
-			expect(deserializeVmDefinition(wire).literalTemplateData).toEqual(
+			expect(deserializeCompilerArtifact(wire).literalTemplateData).toEqual(
 				probe.literalTemplateData,
 			);
 		}
 	});
 
 	it("rejects truncated, overflowing, and non-canonical varints", () => {
-		const wire = serializeVmDefinition(definition, { debugInfo: false });
+		const wire = serializeCompilerArtifact(definition, { debugInfo: false });
 		const replaceFlags = (bytes: Array<number>): Uint8Array =>
 			Uint8Array.from([...wire.subarray(0, 8), ...bytes, ...wire.subarray(9)]);
 
 		expect(() =>
-			deserializeVmDefinition(Uint8Array.from([...wire.subarray(0, 8), 0x80])),
+			deserializeCompilerArtifact(Uint8Array.from([...wire.subarray(0, 8), 0x80])),
 		).toThrow();
 		expect(() =>
-			deserializeVmDefinition(replaceFlags([0x80, 0x80, 0x80, 0x80, 0x10])),
+			deserializeCompilerArtifact(replaceFlags([0x80, 0x80, 0x80, 0x80, 0x10])),
 		).toThrow(/invalid u32 varint/);
-		expect(() => deserializeVmDefinition(replaceFlags([0x80, 0]))).toThrow(
+		expect(() => deserializeCompilerArtifact(replaceFlags([0x80, 0]))).toThrow(
 			/non-canonical u32 varint/,
 		);
 	});
 
 	it("rejects trailing data", () => {
-		const wire = serializeVmDefinition(definition);
-		expect(() => deserializeVmDefinition(Uint8Array.from([...wire, 0]))).toThrow(
+		const wire = serializeCompilerArtifact(definition);
+		expect(() => deserializeCompilerArtifact(Uint8Array.from([...wire, 0]))).toThrow(
 			/trailing data/,
 		);
 	});
 
 	it("rejects negative direct argument indices", () => {
-		const probe: VmDefinition = {
-			...definition,
-			functions: [
-				{
-					...mainFn,
-					argumentSnapshotCount: 1,
-					instructions: [{ opcode: "LOAD_ARGUMENT", dst: 1, index: -1 }],
-				},
-			],
-			functionCount: 1,
-		};
-		expect(() => serializeVmDefinition(probe)).toThrow(/negative argument index/);
+		const probe = withBytecodeFunctions(definition, [
+			{
+				...mainFn,
+				argumentSnapshotCount: 1,
+				instructions: [{ opcode: "LOAD_ARGUMENT", dst: 1, index: -1 }],
+			},
+		]);
+		expect(() => serializeCompilerArtifact(probe)).toThrow(/negative argument index/);
 	});
 
 	it.each([
@@ -1320,7 +1366,7 @@ describe("serialize-vm", () => {
 	])(
 		"rejects invalid shaped object operands",
 		(count, keyStringIndices, valueRegisters) => {
-			const probe: VmDefinition = {
+			const probe: ProgramImage = {
 				...definition,
 				functions: [
 					{
@@ -1339,14 +1385,14 @@ describe("serialize-vm", () => {
 				],
 				functionCount: 1,
 			};
-			expect(() => serializeVmDefinition(probe)).toThrow(
+			expect(() => serializeCompilerArtifact(probe)).toThrow(
 				/invalid shaped object operands/,
 			);
 		},
 	);
 
 	it("drops the vestigial TRY_BEGIN.handlerIp (restored as 0)", () => {
-		const probe: VmDefinition = {
+		const probe: ProgramImage = testProgramImage({
 			entrypointPath: "/fixture/entry.mjs",
 			functionCount: 1,
 			functions: [
@@ -1366,8 +1412,8 @@ describe("serialize-vm", () => {
 			sourcePositions: [],
 			cjsModuleFunctionIndices: [],
 			hostInstalls: [],
-		};
-		const restored = deserializeVmDefinition(serializeVmDefinition(probe));
+		});
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(probe));
 		expect(restored.functions[0]!.instructions[0]).toEqual({
 			opcode: "TRY_BEGIN",
 			handlerIp: 0,
@@ -1375,41 +1421,43 @@ describe("serialize-vm", () => {
 	});
 
 	it("rejects a buffer with a bad magic", () => {
-		const buf = serializeVmDefinition(definition);
+		const buf = serializeCompilerArtifact(definition);
 		buf[0] = 0;
-		expect(() => deserializeVmDefinition(buf)).toThrow(/bad magic/);
+		expect(() => deserializeCompilerArtifact(buf)).toThrow(/bad magic/);
 	});
 
 	it("round-trips portable host install manifests", () => {
-		const restored = deserializeVmDefinition(serializeVmDefinition(hostDefinition));
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(hostDefinition),
+		);
 		expect(restored.hostInstalls).toEqual(hostDefinition.hostInstalls);
 	});
 
 	it("rejects string constants above the runtime UTF-16 limit", () => {
-		const oversized: VmDefinition = {
+		const oversized: ProgramImage = {
 			...definition,
 			stringConstants: [new Array<number>(MAX_STRING_CODE_UNITS + 1)],
 		};
-		expect(() => serializeVmDefinition(oversized)).toThrow(
+		expect(() => serializeCompilerArtifact(oversized)).toThrow(
 			/string constant has .* UTF-16 code units/,
 		);
 	});
 
 	it("retains host installs in a stripped wire definition", () => {
-		const restored = deserializeVmDefinition(
-			serializeVmDefinition(hostDefinition, { debugInfo: false }),
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(hostDefinition, { debugInfo: false }),
 		);
 		expect(restored.hostInstalls).toEqual(hostDefinition.hostInstalls);
 	});
 
 	it("rejects a truncated host-install manifest", () => {
-		const buffer = serializeVmDefinition(definition);
+		const buffer = serializeCompilerArtifact(definition);
 		buffer[buffer.byteLength - 1] = 1;
-		expect(() => deserializeVmDefinition(buffer)).toThrow(/truncated|corrupt|read/);
+		expect(() => deserializeCompilerArtifact(buffer)).toThrow(/truncated|corrupt|read/);
 	});
 
 	it("round-trips an ordinary wire definition with an empty manifest", () => {
-		const restored = deserializeVmDefinition(serializeVmDefinition(definition));
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
 		expect(restored.hostInstalls).toEqual([]);
 	});
 });

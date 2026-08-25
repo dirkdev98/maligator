@@ -5,8 +5,8 @@
 
 /**
  * Runtime loader for the binary definition wire format produced by
- * `serializeVmDefinition` (src/compiler/target/serialize-vm.ts). It materializes
- * the same `MalVmDefinition` that src/compiler/target/emit-vm.ts bakes into C
+ * `serializeProgramImage` (src/compiler/target/serialize-vm.ts). It materializes
+ * the same `MalProgramImage` that src/compiler/target/emit-vm.ts bakes into C
  * literals — functions,
  * instructions, immortal string/bigint constant cells, handlers, and debug
  * tables — but from a buffer the running VM can ingest without a C compile. This
@@ -41,7 +41,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
     MalHostInstallerResolver resolver);
 
 /** The public definition a loaded buffer exposes (for mal_vm_init / splice). */
-const MalVmDefinition *mal_loaded_definition_get(const MalLoadedDefinition *loaded);
+const MalProgramImage *mal_loaded_definition_get(const MalLoadedDefinition *loaded);
 
 /** Free a loaded definition and every allocation it owns. */
 void mal_vm_loaded_definition_free(MalLoadedDefinition *loaded);

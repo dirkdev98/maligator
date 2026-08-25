@@ -4,12 +4,12 @@ import type { CoreFunction } from "../core/core-ir.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import type {
-	CoreTargetFunction,
-	CoreTargetParallelCopy,
-	CoreTargetProgram,
-} from "./core-target-lowering.ts";
+	ExecutionFunction,
+	ExecutionParallelCopy,
+	ExecutionProgram,
+} from "./execution-ir.ts";
 
-export interface CoreTargetVerificationContext {
+export interface ExecutionVerificationContext {
 	readonly functionIndex?: number;
 	readonly block?: number;
 	/** Position of the instruction inside its own block. */
@@ -18,7 +18,7 @@ export interface CoreTargetVerificationContext {
 	readonly register?: number;
 }
 
-function formatContext(context: CoreTargetVerificationContext): string {
+function formatContext(context: ExecutionVerificationContext): string {
 	const parts: Array<string> = [];
 	if (context.functionIndex !== undefined)
 		parts.push(`function=${context.functionIndex}`);
@@ -29,21 +29,21 @@ function formatContext(context: CoreTargetVerificationContext): string {
 	return parts.length === 0 ? "" : ` [${parts.join(" ")}]`;
 }
 
-export class CoreTargetVerificationError extends Error {
+export class ExecutionVerificationError extends Error {
 	/** Invariant text without the context prefix, so callers can match it directly. */
 	readonly detail: string;
-	readonly context: CoreTargetVerificationContext;
+	readonly context: ExecutionVerificationContext;
 
-	constructor(detail: string, context: CoreTargetVerificationContext = {}) {
+	constructor(detail: string, context: ExecutionVerificationContext = {}) {
 		super(`Core target verification failed${formatContext(context)}: ${detail}`);
-		this.name = "CoreTargetVerificationError";
+		this.name = "ExecutionVerificationError";
 		this.detail = detail;
 		this.context = context;
 	}
 }
 
-function fail(detail: string, context: CoreTargetVerificationContext = {}): never {
-	throw new CoreTargetVerificationError(detail, context);
+function fail(detail: string, context: ExecutionVerificationContext = {}): never {
+	throw new ExecutionVerificationError(detail, context);
 }
 
 interface OperandShape {
@@ -92,10 +92,7 @@ function fallsThrough(instructions: ReadonlyArray<CompilerInstruction>): boolean
 	return last === undefined || !BLOCK_TERMINATORS.has(last.type);
 }
 
-function operandShape(
-	type: string,
-	context: CoreTargetVerificationContext,
-): OperandShape {
+function operandShape(type: string, context: ExecutionVerificationContext): OperandShape {
 	const structural = STRUCTURAL_SHAPES[type];
 	if (structural !== undefined) return structural;
 	if (!isCoreOpcode(type)) {
@@ -139,14 +136,14 @@ interface InstructionSite {
 }
 
 interface FunctionModel {
-	readonly fn: CoreTargetFunction;
+	readonly fn: ExecutionFunction;
 	readonly functionIndex: number;
 	readonly sites: ReadonlyMap<CompilerInstruction, InstructionSite>;
 	readonly shapes: ReadonlyMap<CompilerInstruction, OperandShape>;
 	readonly handlerTargets: ReadonlySet<number>;
 }
 
-function isBoxed(fn: CoreTargetFunction, register: number): boolean {
+function isBoxed(fn: ExecutionFunction, register: number): boolean {
 	return fn.registerRepresentations[register] === "boxed";
 }
 
@@ -166,7 +163,7 @@ function writes(
 	return registers.slice(0, shape.writes).filter((register) => register >= 0);
 }
 
-function verifyProgramCardinality(program: CoreTargetProgram): void {
+function verifyProgramCardinality(program: ExecutionProgram): void {
 	const core = program.core;
 	if (program.functions.length !== core.functions.length) {
 		fail(
@@ -179,7 +176,7 @@ function verifyProgramCardinality(program: CoreTargetProgram): void {
 		);
 	}
 	for (const [index, fn] of program.functions.entries()) {
-		const context: CoreTargetVerificationContext = { functionIndex: index };
+		const context: ExecutionVerificationContext = { functionIndex: index };
 		const coreFunction = core.functions[index]!;
 		if (fn.functionIndex !== index || coreFunction.functionIndex !== index) {
 			fail(
@@ -239,17 +236,14 @@ function verifyProgramCardinality(program: CoreTargetProgram): void {
 	}
 }
 
-function buildFunctionModel(
-	fn: CoreTargetFunction,
-	functionIndex: number,
-): FunctionModel {
+function buildFunctionModel(fn: ExecutionFunction, functionIndex: number): FunctionModel {
 	const sites = new Map<CompilerInstruction, InstructionSite>();
 	const shapes = new Map<CompilerInstruction, OperandShape>();
 	const handlerTargets = new Set<number>();
 	if (fn.blocks.length === 0) fail("target function has no blocks", { functionIndex });
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		for (const [index, instruction] of instructions.entries()) {
-			const context: CoreTargetVerificationContext = {
+			const context: ExecutionVerificationContext = {
 				functionIndex,
 				block,
 				instruction: index,
@@ -268,7 +262,7 @@ function buildFunctionModel(
 
 function verifyRegisterPlan(model: FunctionModel): void {
 	const { fn, functionIndex } = model;
-	const context: CoreTargetVerificationContext = { functionIndex };
+	const context: ExecutionVerificationContext = { functionIndex };
 	if (!Number.isSafeInteger(fn.registerCount) || fn.registerCount < 0) {
 		fail(`invalid register count ${fn.registerCount}`, context);
 	}
@@ -318,7 +312,7 @@ function verifyInstructionOperands(model: FunctionModel): void {
 	const { fn, functionIndex } = model;
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		for (const [index, instruction] of instructions.entries()) {
-			const context: CoreTargetVerificationContext = {
+			const context: ExecutionVerificationContext = {
 				functionIndex,
 				block,
 				instruction: index,
@@ -420,7 +414,7 @@ function verifyBlockStructure(model: FunctionModel): void {
 		});
 	}
 	for (const [block, { instructions }] of fn.blocks.entries()) {
-		const context: CoreTargetVerificationContext = { functionIndex, block };
+		const context: ExecutionVerificationContext = { functionIndex, block };
 		let begins = 0;
 		let ends = 0;
 		let catches = 0;
@@ -488,8 +482,8 @@ function verifyBlockStructure(model: FunctionModel): void {
 /** Symbolic parallel-copy state: which register's entry value each register holds. */
 function simulateParallelCopy(
 	model: FunctionModel,
-	copy: CoreTargetParallelCopy,
-	context: CoreTargetVerificationContext,
+	copy: ExecutionParallelCopy,
+	context: ExecutionVerificationContext,
 ): void {
 	const { fn } = model;
 	const declaredTemporaries = new Set(fn.temporaryRegisters);
@@ -578,7 +572,7 @@ function verifyParallelCopies(model: FunctionModel): void {
 				functionIndex,
 			});
 		}
-		const context: CoreTargetVerificationContext = {
+		const context: ExecutionVerificationContext = {
 			functionIndex,
 			block: firstSite.block,
 			instruction: firstSite.index,
@@ -619,7 +613,7 @@ function verifyParallelCopies(model: FunctionModel): void {
  */
 function verifyExceptionEntries(model: FunctionModel): void {
 	const { fn, functionIndex } = model;
-	const handlerInputCopies = new Map<number, CoreTargetParallelCopy>();
+	const handlerInputCopies = new Map<number, ExecutionParallelCopy>();
 	for (const copy of fn.parallelCopies) {
 		if (copy.kind !== "handler-input") continue;
 		const site = model.sites.get(copy.moves[0]!);
@@ -649,7 +643,7 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 	const { fn, functionIndex } = model;
 	const seen = new Set<number>();
 	for (const temporary of fn.temporaryRegisters) {
-		const context: CoreTargetVerificationContext = {
+		const context: ExecutionVerificationContext = {
 			functionIndex,
 			register: temporary,
 		};
@@ -692,7 +686,7 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 		const defined = new Set<number>();
 		for (const [index, instruction] of instructions.entries()) {
 			const shape = model.shapes.get(instruction)!;
-			const context: CoreTargetVerificationContext = {
+			const context: ExecutionVerificationContext = {
 				functionIndex,
 				block,
 				instruction: index,
@@ -928,7 +922,7 @@ function verifyGcRoots(
 	if (roots === undefined) return;
 	const unique = new Set<number>();
 	for (const register of roots) {
-		const context: CoreTargetVerificationContext = { functionIndex, register };
+		const context: ExecutionVerificationContext = { functionIndex, register };
 		if (!Number.isSafeInteger(register) || register < 0 || register >= fn.registerCount) {
 			fail(
 				`GC root register is out of bounds for a ${fn.registerCount}-register function`,
@@ -952,8 +946,8 @@ function regionBlocks(region: CoreAllocatedRegion): ReadonlyArray<number> {
 
 function verifyRegions(model: FunctionModel): void {
 	const { fn, functionIndex } = model;
-	for (const region of fn.regions ?? []) {
-		const context: CoreTargetVerificationContext = {
+	for (const region of fn.specializations) {
+		const context: ExecutionVerificationContext = {
 			functionIndex,
 			opcode: region.kind,
 		};
@@ -1020,11 +1014,11 @@ function verifyRegions(model: FunctionModel): void {
 }
 
 /**
- * Throws CoreTargetVerificationError when a constructed target program breaks a
+ * Throws ExecutionVerificationError when a constructed target program breaks a
  * Core-to-target contract. The verifier proves properties of the program it is
  * given and never repairs one.
  */
-export function verifyCoreTargetProgram(program: CoreTargetProgram): void {
+export function verifyExecutionProgram(program: ExecutionProgram): void {
 	verifyProgramCardinality(program);
 	for (const [index, fn] of program.functions.entries()) {
 		const model = buildFunctionModel(fn, index);

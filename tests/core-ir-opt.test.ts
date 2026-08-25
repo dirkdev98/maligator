@@ -15,15 +15,15 @@ import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import { CORE_NO_EFFECTS, CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	coreRegisterClasses,
-	lowerCoreProgramToTarget,
+	lowerCoreCompilationToExecution,
 } from "../src/compiler/target/core-target-lowering.ts";
 import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
 } from "../src/compiler/target/serialize-vm.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
@@ -792,7 +792,7 @@ describe("Core IR optimizer", () => {
 			"core-array-element-aliases.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -821,7 +821,7 @@ describe("Core IR optimizer", () => {
 			"core-array-hole-reads.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -845,7 +845,7 @@ describe("Core IR optimizer", () => {
 			"core-array-dead-stores.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -2020,7 +2020,7 @@ describe("Core IR optimizer", () => {
 			"core-loop-array-length.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -2056,7 +2056,7 @@ describe("Core IR optimizer", () => {
 			"core-loop-string-bounds.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 			afterCoreOptimization(program) {
 				optimized = program;
@@ -2680,7 +2680,7 @@ describe("Core IR optimizer", () => {
 			"core-static-property.js",
 		);
 		let opcodes: Array<string> = [];
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			optimization: "development",
 			afterCoreOptimization(program) {
 				opcodes = program.functions.flatMap((fn) =>
@@ -2699,7 +2699,7 @@ describe("Core IR optimizer", () => {
 			"core-known-builtin.js",
 		);
 		let call: CoreFunction["blocks"][number]["instructions"][number] | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 			afterCoreOptimization(program) {
 				call = program.functions
@@ -2739,7 +2739,7 @@ describe("Core IR optimizer", () => {
 			"core-dense-fill-consecutive-loops.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -2758,7 +2758,7 @@ describe("Core IR optimizer", () => {
 			"core-exact-builtin.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 			afterCoreOptimization(program) {
 				optimized = program;
@@ -2795,7 +2795,7 @@ describe("Core IR optimizer", () => {
 			"core-exact-date-builtins.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 			afterCoreOptimization(program) {
 				optimized = program;
@@ -2826,7 +2826,7 @@ describe("Core IR optimizer", () => {
 		);
 		let optimized: CoreProgram | undefined;
 		let optimizedContext: CoreCompilationContext | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			profile: true,
 			afterCoreOptimization(program, context) {
 				optimized = program;
@@ -2867,7 +2867,7 @@ describe("Core IR optimizer", () => {
 			"core-guarded-inline.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -2963,7 +2963,7 @@ describe("Core IR optimizer", () => {
 			"core-class-constructor-inline.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -2998,7 +2998,7 @@ describe("Core IR optimizer", () => {
 		);
 		let optimized: CoreProgram | undefined;
 		let optimizedContext: CoreCompilationContext | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			profile: true,
 			afterCoreOptimization(program, context) {
 				optimized = program;
@@ -3032,7 +3032,7 @@ describe("Core IR optimizer", () => {
 			"core-inline-callee-environment.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -3060,7 +3060,7 @@ describe("Core IR optimizer", () => {
 		let optimized: CoreProgram | undefined;
 		// Lowering rejects a region whose claimed call no longer names its receiver in
 		// a register, so embedding the constant receiver would fail this compile.
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 			afterCoreOptimization(program) {
 				optimized = program;
@@ -3070,9 +3070,12 @@ describe("Core IR optimizer", () => {
 			optimized!.functions.flatMap(({ regions }) => regions.map(({ kind }) => kind)),
 		).toContain("string-slice-number");
 		const claimed = new Set(
-			lowerCoreProgramToTarget(coreCompilationForTest(optimized!)).functions.flatMap(
+			lowerCoreCompilationToExecution(
+				coreCompilationForTest(optimized!),
+			).functions.flatMap(
 				(fn) =>
-					fn.regions?.flatMap(({ claimedInstructions }) => claimedInstructions) ?? [],
+					fn.specializations?.flatMap(({ claimedInstructions }) => claimedInstructions) ??
+					[],
 			),
 		);
 		expect(claimed.size).toBeGreaterThan(0);
@@ -3093,7 +3096,7 @@ describe("Core IR optimizer", () => {
 				"core-inline-nested-setter.js",
 			);
 			let optimized: CoreProgram | undefined;
-			compileSemanticProgramToVmDefinition(semantic, {
+			compileSemanticProgramToProgramImage(semantic, {
 				afterCoreOptimization(program) {
 					optimized = program;
 				},
@@ -3212,7 +3215,7 @@ describe("Core IR optimizer", () => {
 			"core-inline-relocated-target.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -3238,7 +3241,7 @@ describe("Core IR optimizer", () => {
 			"core-inline-tiny-chain.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -3264,7 +3267,7 @@ describe("Core IR optimizer", () => {
 			"core-inline-arguments.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -3299,7 +3302,7 @@ describe("Core IR optimizer", () => {
 			"core-stack-object.js",
 		);
 		let optimized: CoreProgram | undefined;
-		const definition = compileSemanticProgramToVmDefinition(semantic, {
+		const definition = compileSemanticProgramToProgramImage(semantic, {
 			profile: true,
 			afterCoreOptimization(program) {
 				optimized = program;
@@ -3309,7 +3312,7 @@ describe("Core IR optimizer", () => {
 		expect(optimized!.functions[1]!.regions).toContainEqual(
 			expect.objectContaining({ kind: "stack-object-plan" }),
 		);
-		expect(definition.functions[1]!.regions).toContainEqual(
+		expect(definition.nativePlan.functions[1]!.specializations).toContainEqual(
 			expect.objectContaining({
 				kind: "stack-object-plan",
 				sites: [expect.objectContaining({ materializations: [expect.any(Object)] })],
@@ -3332,7 +3335,7 @@ describe("Core IR optimizer", () => {
 			"core-stack-object-mixed-join.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -3353,7 +3356,7 @@ describe("Core IR optimizer", () => {
 			"core-stack-object-inherited.js",
 		);
 		let optimized: CoreProgram | undefined;
-		const definition = compileSemanticProgramToVmDefinition(semantic, {
+		const definition = compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -3373,7 +3376,7 @@ describe("Core IR optimizer", () => {
 		expect(JSON.stringify(coreRegion?.data)).toMatch(
 			/"inheritedAccess":\{"\$coreInstruction":\d+\}/,
 		);
-		const vmRegion = definition.functions[1]!.regions?.find(
+		const vmRegion = definition.nativePlan.functions[1]!.specializations.find(
 			({ kind }) => kind === "stack-object-plan",
 		);
 		expect(vmRegion?.license.materialization).toBe("on-demand");
@@ -3392,7 +3395,7 @@ describe("Core IR optimizer", () => {
 			"core-local-stack-object.js",
 		);
 		let optimized: CoreProgram | undefined;
-		const definition = compileSemanticProgramToVmDefinition(semantic, {
+		const definition = compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -3409,8 +3412,8 @@ describe("Core IR optimizer", () => {
 			sites: [{ materializations: [] }],
 		});
 
-		const restored = deserializeVmDefinition(serializeVmDefinition(definition));
-		const vmRegion = restored.functions[1]!.regions?.find(
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
+		const vmRegion = restored.nativePlan.functions[1]!.specializations.find(
 			({ kind }) => kind === "stack-object-plan",
 		);
 		expect(vmRegion?.kind).toBe("stack-object-plan");
@@ -3436,13 +3439,14 @@ describe("Core IR optimizer", () => {
 			}`,
 			"core-many-regions.js",
 		);
-		const definition = compileSemanticProgramToVmDefinition(semantic);
-		const regions = definition.functions[1]!.regions!;
+		const definition = compileSemanticProgramToProgramImage(semantic);
+		const regions = definition.nativePlan.functions[1]!.specializations;
 
 		expect(regions.length).toBeGreaterThan(40);
 		expect(regions.filter(({ kind }) => kind === "stack-object-plan")).toHaveLength(41);
 		expect(
-			deserializeVmDefinition(serializeVmDefinition(definition)).functions[1]!.regions,
+			deserializeCompilerArtifact(serializeCompilerArtifact(definition)).nativePlan
+				.functions[1]!.specializations,
 		).toEqual(regions);
 	});
 
@@ -3453,7 +3457,7 @@ describe("Core IR optimizer", () => {
 				"core-string-split.js",
 			);
 			let optimized: CoreProgram | undefined;
-			compileSemanticProgramToVmDefinition(semantic, {
+			compileSemanticProgramToProgramImage(semantic, {
 				afterCoreOptimization(program) {
 					optimized = program;
 				},
@@ -3511,7 +3515,7 @@ describe("Core IR optimizer", () => {
 			"core-stack-object-observations.js",
 		);
 		let optimized: CoreProgram | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			afterCoreOptimization(program) {
 				optimized = program;
 			},
@@ -3538,7 +3542,7 @@ describe("Core IR optimizer", () => {
 		const optimizedOpcodes = (source: string): Array<string> => {
 			const semantic = analyzeSourceAndRunSemanticAnalysis(source, "core-tdz.js");
 			let opcodes: Array<string> = [];
-			compileSemanticProgramToVmDefinition(semantic, {
+			compileSemanticProgramToProgramImage(semantic, {
 				afterCoreOptimization(program) {
 					opcodes = program.functions.flatMap((fn) =>
 						fn.blocks.flatMap((block) => block.instructions.map(({ opcode }) => opcode)),

@@ -1,7 +1,7 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import type { CoreProgram } from "../core/core-ir.ts";
 import type { CompilerSiteFacts, FactDependency } from "../shared/compiler-facts.ts";
-import type { VmDefinition, VmInstruction } from "./lower-vm.ts";
+import type { ProgramImage, BytecodeInstruction } from "./lower-vm.ts";
 
 export interface ProfileSite {
 	id: number;
@@ -135,7 +135,7 @@ function logicalId(value: string): string {
 	return `site-v1-${stableHash(value, 0x811c9dc5)}${stableHash(value, 0x9e3779b9)}`;
 }
 
-const PROFILE_ALLOCATION_OPCODES = new Set<VmInstruction["opcode"]>([
+const PROFILE_ALLOCATION_OPCODES = new Set<BytecodeInstruction["opcode"]>([
 	"CREATE_ARGUMENTS_OBJECT",
 	"CREATE_ARRAY",
 	"CREATE_FUNCTION",
@@ -148,7 +148,7 @@ const PROFILE_ALLOCATION_OPCODES = new Set<VmInstruction["opcode"]>([
 	"CREATE_TEMPLATE_OBJECT",
 ]);
 
-export function profileOperationForInstruction(instruction: VmInstruction): string {
+export function profileOperationForInstruction(instruction: BytecodeInstruction): string {
 	const opcode = instruction.opcode;
 	if (opcode.startsWith("CALL") || opcode === "GUARD_FUNCTION_INDEX") return "call";
 	if (opcode.startsWith("CONSTRUCT")) return "call";
@@ -187,7 +187,7 @@ function remarkableOperation(operation: string): boolean {
 }
 
 function remarkForInstruction(
-	instruction: VmInstruction,
+	instruction: BytecodeInstruction,
 ): Omit<CompilerRemark, "siteId"> | undefined {
 	const operation = profileOperationForInstruction(instruction);
 	switch (instruction.opcode) {
@@ -427,7 +427,7 @@ interface FinalCompiledFunction {
 
 /** Publish remarks only after the backend has selected its final emitted variant. */
 export function finalizeCompilerRemarks(
-	definition: VmDefinition,
+	definition: ProgramImage,
 	compiled: ReadonlyArray<FinalCompiledFunction | null>,
 ): void {
 	if (definition.profileSites === undefined) return;
@@ -473,7 +473,7 @@ export function finalizeCompilerRemarks(
 export function buildProfileMetadata(
 	program: CoreProgram,
 	context: CoreCompilationContext,
-	definition: VmDefinition,
+	definition: ProgramImage,
 ): void {
 	const sourcePaths = context.data.sourceFiles.map((file) => normalizedPath(file.path));
 	const root = commonDirectory(sourcePaths);
@@ -645,7 +645,10 @@ export function buildProfileMetadata(
 			if (!decisionSiteByKey.has(decisionKey)) {
 				decisionSiteByKey.set(decisionKey, siteId);
 			}
-			const compilerSiteId = fn.compilerSiteIds?.[instructionIndex];
+			const compilerSiteId =
+				definition.nativePlan.functions[functionIndex]?.compilerSiteIds?.[
+					instructionIndex
+				];
 			const compilerSite =
 				compilerSiteId === undefined
 					? undefined

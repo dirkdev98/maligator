@@ -5,16 +5,16 @@ import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
-import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
 import type {
-	CoreTargetFunction,
-	CoreTargetProgram,
+	ExecutionFunction,
+	ExecutionProgram,
 } from "../src/compiler/target/core-target-lowering.ts";
 import {
-	CoreTargetVerificationError,
-	verifyCoreTargetProgram,
+	ExecutionVerificationError,
+	verifyExecutionProgram,
 } from "../src/compiler/target/core-target-verifier.ts";
-import { lowerCoreProgramToVmDefinition } from "../src/compiler/target/lower-vm.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-vm.ts";
 
 const BRANCH_SOURCE = `
 	function choose(flag, extra) {
@@ -115,15 +115,15 @@ function optimizedCore(source: string, path: string): CoreCompilation {
 	return { program: optimized.program, context: optimized.context };
 }
 
-function optimizedTarget(source: string, path: string): CoreTargetProgram {
-	return lowerCoreProgramToTarget(optimizedCore(source, path));
+function optimizedTarget(source: string, path: string): ExecutionProgram {
+	return lowerCoreCompilationToExecution(optimizedCore(source, path));
 }
 
 function withFunction(
-	program: CoreTargetProgram,
+	program: ExecutionProgram,
 	index: number,
-	patch: Partial<CoreTargetFunction>,
-): CoreTargetProgram {
+	patch: Partial<ExecutionFunction>,
+): ExecutionProgram {
 	return {
 		...program,
 		functions: program.functions.with(index, {
@@ -134,10 +134,10 @@ function withFunction(
 }
 
 function withBlock(
-	fn: CoreTargetFunction,
+	fn: ExecutionFunction,
 	block: number,
 	instructions: Array<CompilerInstruction>,
-): Partial<CoreTargetFunction> {
+): Partial<ExecutionFunction> {
 	return { blocks: fn.blocks.with(block, { instructions }) };
 }
 
@@ -148,11 +148,11 @@ function withRegisters(
 	return { ...instruction, registers } as CompilerInstruction;
 }
 
-function verificationError(program: CoreTargetProgram): CoreTargetVerificationError {
+function verificationError(program: ExecutionProgram): ExecutionVerificationError {
 	try {
-		verifyCoreTargetProgram(program);
+		verifyExecutionProgram(program);
 	} catch (error) {
-		if (error instanceof CoreTargetVerificationError) return error;
+		if (error instanceof ExecutionVerificationError) return error;
 		throw error;
 	}
 	throw new Error("expected Core target verification to reject the program");
@@ -160,15 +160,15 @@ function verificationError(program: CoreTargetProgram): CoreTargetVerificationEr
 
 interface InstructionMatch {
 	readonly functionIndex: number;
-	readonly fn: CoreTargetFunction;
+	readonly fn: ExecutionFunction;
 	readonly block: number;
 	readonly index: number;
 	readonly instruction: CompilerInstruction;
 }
 
 function findInstruction(
-	program: CoreTargetProgram,
-	predicate: (instruction: CompilerInstruction, fn: CoreTargetFunction) => boolean,
+	program: ExecutionProgram,
+	predicate: (instruction: CompilerInstruction, fn: ExecutionFunction) => boolean,
 ): InstructionMatch {
 	for (const [functionIndex, fn] of program.functions.entries()) {
 		for (const [block, { instructions }] of fn.blocks.entries()) {
@@ -203,8 +203,8 @@ describe("Core target construction", () => {
 			["arguments", ARGUMENTS_SOURCE],
 		] as const) {
 			const program = optimizedTarget(source, `${name}.js`);
-			expect(() => verifyCoreTargetProgram(program)).not.toThrow();
-			expect(() => lowerCoreProgramToVmDefinition(program)).not.toThrow();
+			expect(() => verifyExecutionProgram(program)).not.toThrow();
+			expect(() => lowerExecutionToProgramImage(program)).not.toThrow();
 		}
 	});
 
@@ -285,8 +285,8 @@ describe("Core target construction", () => {
 				...match!.instructions.slice(catchIndex),
 			]),
 		);
-		expect(() => verifyCoreTargetProgram(marked)).not.toThrow();
-		expect(() => lowerCoreProgramToVmDefinition(marked)).not.toThrow();
+		expect(() => verifyExecutionProgram(marked)).not.toThrow();
+		expect(() => lowerExecutionToProgramImage(marked)).not.toThrow();
 	});
 
 	it("records safepoints and boxed GC roots for allocating source", () => {
@@ -326,13 +326,13 @@ describe("Core target construction", () => {
 	it("verifies region-selected source with translated instructions and blocks", () => {
 		for (const source of [REGION_SOURCE, PROJECTION_SOURCE]) {
 			const program = optimizedTarget(source, "verified-regions.js");
-			const owner = program.functions.find((fn) => (fn.regions ?? []).length > 0)!;
+			const owner = program.functions.find((fn) => fn.specializations.length > 0)!;
 			const instructions = new Set(
 				owner.blocks.flatMap(({ instructions: block }) => block),
 			);
 
-			expect(owner.regions!.length).toBeGreaterThan(0);
-			for (const region of owner.regions!) {
+			expect(owner.specializations.length).toBeGreaterThan(0);
+			for (const region of owner.specializations) {
 				expect(region.anchors.length).toBeGreaterThan(0);
 				for (const anchor of region.anchors) expect(instructions.has(anchor)).toBe(true);
 				for (const claimed of region.claimedInstructions) {
@@ -403,9 +403,9 @@ describe("Core target construction", () => {
 			}),
 		};
 
-		expect(() => lowerCoreProgramToTarget({ ...compilation, program: retyped })).toThrow(
-			CoreTargetVerificationError,
-		);
+		expect(() =>
+			lowerCoreCompilationToExecution({ ...compilation, program: retyped }),
+		).toThrow(ExecutionVerificationError);
 	});
 });
 
@@ -728,8 +728,8 @@ describe("Core target verification", () => {
 			instruction: transfer.index,
 			opcode: transfer.instruction.type,
 		});
-		expect(() => lowerCoreProgramToVmDefinition(malformed)).toThrow(
-			CoreTargetVerificationError,
+		expect(() => lowerExecutionToProgramImage(malformed)).toThrow(
+			ExecutionVerificationError,
 		);
 
 		const precedingBlock = handler - 1;
@@ -804,8 +804,8 @@ describe("Core target verification", () => {
 				...instructions.slice(transfer.index + 1),
 			]),
 		);
-		expect(() => verifyCoreTargetProgram(marked)).not.toThrow();
-		expect(() => lowerCoreProgramToVmDefinition(marked)).not.toThrow();
+		expect(() => verifyExecutionProgram(marked)).not.toThrow();
+		expect(() => lowerExecutionToProgramImage(marked)).not.toThrow();
 
 		const malformed = withFunction(
 			program,
@@ -840,7 +840,7 @@ describe("Core target verification", () => {
 		);
 		const fn = program.functions[functionIndex]!;
 		const roots = program.gcRootRegisters[functionIndex]!;
-		const withRoots = (replacement: ReadonlyArray<number>): CoreTargetProgram => ({
+		const withRoots = (replacement: ReadonlyArray<number>): ExecutionProgram => ({
 			...program,
 			gcRootRegisters: program.gcRootRegisters.with(functionIndex, replacement),
 		});
@@ -972,14 +972,16 @@ describe("Core target verification", () => {
 		const program = optimizedTarget(PROJECTION_SOURCE, "regions.js");
 		// A projection region carries translated registers as well as blocks.
 		const functionIndex = program.functions.findIndex((candidate) =>
-			(candidate.regions ?? []).some((region) => "resultRegisters" in region),
+			candidate.specializations.some((region) => "resultRegisters" in region),
 		);
 		const fn = program.functions[functionIndex]!;
-		const regionIndex = fn.regions!.findIndex((region) => "resultRegisters" in region);
-		const region = fn.regions![regionIndex]!;
-		const withRegion = (patch: object): CoreTargetProgram =>
+		const regionIndex = fn.specializations.findIndex(
+			(region) => "resultRegisters" in region,
+		);
+		const region = fn.specializations[regionIndex]!;
+		const withRegion = (patch: object): ExecutionProgram =>
 			withFunction(program, functionIndex, {
-				regions: fn.regions!.with(regionIndex, { ...region, ...patch }),
+				specializations: fn.specializations.with(regionIndex, { ...region, ...patch }),
 			});
 
 		const foreignAnchor = verificationError(
@@ -1041,15 +1043,15 @@ describe("Core target verification", () => {
 			read(3, false);`,
 			"stack-object-slot-key.js",
 		);
-		expect(() => lowerCoreProgramToVmDefinition(program)).not.toThrow();
+		expect(() => lowerExecutionToProgramImage(program)).not.toThrow();
 		const functionIndex = program.functions.findIndex((fn) =>
-			(fn.regions ?? []).some((region) => region.kind === "stack-object-plan"),
+			fn.specializations.some((region) => region.kind === "stack-object-plan"),
 		);
 		const fn = program.functions[functionIndex]!;
-		const regionIndex = fn.regions!.findIndex(
+		const regionIndex = fn.specializations.findIndex(
 			(region) => region.kind === "stack-object-plan",
 		);
-		const region = fn.regions![regionIndex]!;
+		const region = fn.specializations[regionIndex]!;
 		if (region.kind !== "stack-object-plan") throw new Error("expected stack region");
 		const site = region.sites[0]!;
 		expect(site.slotCount).toBeGreaterThan(1);
@@ -1058,7 +1060,7 @@ describe("Core target verification", () => {
 		);
 		for (const [accessIndex, access] of site.accesses.entries()) {
 			const malformed = withFunction(program, functionIndex, {
-				regions: fn.regions!.with(regionIndex, {
+				specializations: fn.specializations.with(regionIndex, {
 					...region,
 					sites: region.sites.with(0, {
 						...site,
@@ -1070,8 +1072,8 @@ describe("Core target verification", () => {
 				}),
 			});
 
-			expect(() => verifyCoreTargetProgram(malformed)).not.toThrow();
-			expect(() => lowerCoreProgramToVmDefinition(malformed)).toThrow(
+			expect(() => verifyExecutionProgram(malformed)).not.toThrow();
+			expect(() => lowerExecutionToProgramImage(malformed)).toThrow(
 				/Invalid Core stack-object-plan region during VM lowering: site instruction metadata/,
 			);
 		}

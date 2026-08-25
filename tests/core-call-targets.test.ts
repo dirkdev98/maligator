@@ -36,9 +36,9 @@ import { constructSemanticProgramCore } from "../src/compiler/core/semantic-lowe
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
-import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
 
 function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 	return {
@@ -77,7 +77,7 @@ function optimizedCore(source: string, path: string, profile = false): CoreProgr
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, path, parseModule(source));
 	const conservative = conservativeCompilerProgramFacts();
 	let optimized: CoreProgram | undefined;
-	compileSemanticProgramToVmDefinition(semantic, {
+	compileSemanticProgramToProgramImage(semantic, {
 		profile,
 		facts: { ...conservative, world: { ...conservative.world, realms: false } },
 		// Inlining runs before annotation and would consume the call sites this
@@ -880,7 +880,7 @@ describe("callee-target annotation", () => {
 			const semantic = loadEntrypointAndRunSemanticAnalysis(entry);
 			const conservative = conservativeCompilerProgramFacts();
 			let optimized: CoreProgram | undefined;
-			compileSemanticProgramToVmDefinition(semantic, {
+			compileSemanticProgramToProgramImage(semantic, {
 				facts: {
 					...conservative,
 					world: { ...conservative.world, realms: false },
@@ -1189,7 +1189,7 @@ describe("callee-target annotation", () => {
 		);
 		let optimized: CoreProgram | undefined;
 		let optimizedContext: CoreCompilationContext | undefined;
-		compileSemanticProgramToVmDefinition(semantic, {
+		compileSemanticProgramToProgramImage(semantic, {
 			optimizationAblations: new Set(["inlining"] as const),
 			afterCoreOptimization(program, context) {
 				optimized = program;
@@ -1203,7 +1203,7 @@ describe("callee-target annotation", () => {
 		);
 		expect(annotated.length).toBeGreaterThan(0);
 
-		const lowered = lowerCoreProgramToTarget({
+		const lowered = lowerCoreCompilationToExecution({
 			program: optimized!,
 			context: optimizedContext!,
 		});

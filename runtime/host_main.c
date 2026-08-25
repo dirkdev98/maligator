@@ -25,7 +25,7 @@
 // loop (setTimeout callbacks + pending I/O, interleaved with microtasks) until the
 // isolate is idle. This is the entry a real host program / the Lambda bootstrap
 // uses, as opposed to test262_main which only runs the synchronous body.
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 #if MAL_DEVELOPMENT_API
 static const char development_wire_command[] = "--maligator-internal-run-wire";

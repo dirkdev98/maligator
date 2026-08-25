@@ -28,11 +28,11 @@ import {
 } from "./compiler/frontend/compact-type-strip.ts";
 import type { ModuleGoal } from "./compiler/frontend/module-graph.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "./compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
-import { emitVmDefinition } from "./compiler/target/emit-vm.ts";
-import type { VmDefinition } from "./compiler/target/lower-vm.ts";
+import { emitProgramImage } from "./compiler/target/emit-vm.ts";
+import type { ProgramImage } from "./compiler/target/lower-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
@@ -178,7 +178,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
  * introducing a source-only compiler hook for advisory target metadata.
  */
 export function buildNativeDefinition(
-	definition: VmDefinition,
+	definition: ProgramImage,
 	options: Omit<BuildOptions, "fixture">,
 ): string {
 	const harnessOptions: BuildOptions = {
@@ -223,7 +223,7 @@ function resolveHarnessBuildConfig(options: BuildOptions): ResolvedBuildConfig {
 function compileFixtureDefinition(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
-): VmDefinition {
+): ProgramImage {
 	const entrypoint = path.resolve(options.fixture);
 	const canReuseFrontend =
 		options.entryGoal === undefined && options.profileEnabled !== true;
@@ -245,7 +245,7 @@ function compileFixtureDefinition(
 	});
 	// Tests intentionally bypass build policy so disabled-feature fixtures can
 	// compile and assert the runtime behavior of the reduced engine.
-	return compileSemanticProgramToVmDefinition(semanticProgram, {
+	return compileSemanticProgramToProgramImage(semanticProgram, {
 		facts: compilerProgramFactsFromConfig(config),
 		profile: options.profileEnabled,
 	});
@@ -254,11 +254,11 @@ function compileFixtureDefinition(
 function linkDefinition(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
-	definition: VmDefinition,
+	definition: ProgramImage,
 	compiled: boolean,
 	name: string,
 ): BuildNativeBinaryResult {
-	const cSource = emitVmDefinition(definition, {
+	const cSource = emitProgramImage(definition, {
 		compiled,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,

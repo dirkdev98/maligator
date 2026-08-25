@@ -2,7 +2,7 @@
 
 #include "gc.h"
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 static bool run_once(void) {
     MalVm vm;

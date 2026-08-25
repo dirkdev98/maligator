@@ -59,7 +59,7 @@ static MalLoadedDefinition *load(const char *path) {
     return loaded;
 }
 
-static void dump_loaded_scalars(const MalVmDefinition *definition) {
+static void dump_loaded_scalars(const MalProgramImage *definition) {
     for (i32 i = 0; i < definition->string_constant_count; i++) {
         const MalString *string = &definition->string_constants[i];
         const c16 *units = mal_string_code_units(string);
@@ -93,7 +93,7 @@ static void dump_loaded_scalars(const MalVmDefinition *definition) {
 
 static bool precompiled_literal_shapes_ready(
     const MalVm *vm,
-    const MalVmDefinition *definition,
+    const MalProgramImage *definition,
     i32 function_base,
     i32 string_base
 ) {

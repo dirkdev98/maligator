@@ -6,8 +6,8 @@ import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { CoreFunctionBuilder, coreValueId } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
-import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/core-target-lowering.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 /** Source that reaches region selection, so certificates take part in every contract. */
@@ -166,8 +166,8 @@ describe("Core verification boundaries", () => {
 			}),
 		};
 
-		expect(() => compileSemanticProgramToVmDefinition(semantic)).not.toThrow();
-		expect(() => lowerCoreProgramToTarget(coreCompilationForTest(broken))).toThrow(
+		expect(() => compileSemanticProgramToProgramImage(semantic)).not.toThrow();
+		expect(() => lowerCoreCompilationToExecution(coreCompilationForTest(broken))).toThrow(
 			/Core IR verification failed \[stage=pre-target\]: function 0 has unknown name string/,
 		);
 	});
@@ -193,7 +193,7 @@ describe("Core verification boundaries", () => {
 		);
 
 		expect(() =>
-			compileSemanticProgramToVmDefinition(semantic, {
+			compileSemanticProgramToProgramImage(semantic, {
 				optimization: "development",
 				coreVerification: "per-pass",
 			}),
@@ -231,7 +231,7 @@ describe("Core verification boundaries", () => {
 		);
 
 		expect(() =>
-			compileSemanticProgramToVmDefinition(semantic, { coreVerification: "per-pass" }),
+			compileSemanticProgramToProgramImage(semantic, { coreVerification: "per-pass" }),
 		).not.toThrow();
 	});
 

@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import { ASSET_FORMAT_VERSION, includeConfiguredAssets } from "../src/assets.ts";
 import { BuildConfigError } from "../src/build-config.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
-import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-vm.ts";
 import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 
 function fixture(): string {
@@ -155,7 +155,7 @@ describe("configured asset inclusion", () => {
 			{ empty: { type: "file", path: "empty.bin" } },
 			root,
 		);
-		const output = emitVmDefinition(compileEntrypoint(entry), {
+		const output = emitProgramImage(compileEntrypoint(entry), {
 			assets,
 			compiled: false,
 			maligatorSurface: true,

@@ -19,7 +19,7 @@
  * so running it on fibers is fine.
  */
 
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 #define MSG "ping-pong-42"
 

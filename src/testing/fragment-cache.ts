@@ -16,9 +16,9 @@ import {
 	collectDisallowedRegexpUsage,
 } from "../compiler/frontend/semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "../compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../compiler/shared/compiler-facts.ts";
-import { serializeVmDefinition, WIRE_VERSION } from "../compiler/target/serialize-vm.ts";
+import { serializeRuntimeImage, WIRE_VERSION } from "../compiler/target/serialize-vm.ts";
 import {
 	compileDependencyFragments,
 	DEVELOPMENT_LINKED_MODULES_GLOBAL,
@@ -396,12 +396,12 @@ function compileArtifact(
 	const compileStartedAt = Date.now();
 	assertEvalPolicy(config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(config, collectDisallowedRegexpUsage(semantic));
-	const definition = compileSemanticProgramToVmDefinition(semantic, {
+	const definition = compileSemanticProgramToProgramImage(semantic, {
 		optimization: "development",
 	});
 	phases.compileMs += Date.now() - compileStartedAt;
 	const serializeStartedAt = Date.now();
-	const wire = serializeVmDefinition(definition);
+	const wire = serializeRuntimeImage(definition);
 	phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = digest(wire);
 	cacheFrontendWire(wire, artifactRoot);

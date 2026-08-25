@@ -7,7 +7,7 @@
 
 // Harness entry for generated test262 translation units: run the compiled
 // program and report uncaught throws through the exit code.
-extern const MalVmDefinition mal_vm_definition;
+extern const MalProgramImage mal_vm_definition;
 
 int main(int argc, char **argv) {
     MalVm vm;

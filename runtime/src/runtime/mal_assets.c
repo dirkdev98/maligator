@@ -105,7 +105,7 @@ static MalValue mal_test_run_wire_bytes(MalVm *vm, const u8 *bytes, usize length
     }
 
     mal_vm_retain_loaded_definition(vm, loaded);
-    const MalVmDefinition *definition = mal_loaded_definition_get(loaded);
+    const MalProgramImage *definition = mal_loaded_definition_get(loaded);
     i32 entry = mal_vm_splice_definition(vm, definition);
     if (entry < 0) return mal_value_new_undefined();
     mal_vm_run_definition_host_installs(vm, definition, &vm->launch);

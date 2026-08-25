@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
-import { emitVmTranslationUnits } from "./compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "./compiler/target/emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 
@@ -52,7 +52,7 @@ const result = buildLocalBinary({
 	context,
 	name: outputName,
 	outDir: path.resolve(outputDirectory),
-	cSource: emitVmTranslationUnits(definition, { maligatorSurface: true }),
+	cSource: emitProgramTranslationUnits(definition, { maligatorSurface: true }),
 	verbose: true,
 	cacheSuffix: derivation.cacheSuffix,
 });

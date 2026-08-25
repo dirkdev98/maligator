@@ -28,13 +28,13 @@ import { stripCompactTypes } from "../compiler/frontend/compact-type-strip.ts";
 import { parseModule, parseScript } from "../compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "../compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "../compiler/pipeline/compile-program.ts";
-import { emitBatch, emitVmDefinition } from "../compiler/target/emit-vm.ts";
-import type { VmDefinition } from "../compiler/target/lower-vm.ts";
+import { emitBatch, emitProgramImage } from "../compiler/target/emit-vm.ts";
+import type { ProgramImage } from "../compiler/target/lower-vm.ts";
 import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
 } from "../compiler/target/serialize-vm.ts";
 import { buildLocalBinary } from "../local-build.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";
@@ -68,7 +68,7 @@ import {
 } from "./shared-helper-plan.ts";
 import type { Test262SharedHelper, Test262SourcePlan } from "./shared-helper-plan.ts";
 import type { Test262File, Test262Result } from "./types.ts";
-import { mergeVmDefinitions } from "./vm-definition-merge.ts";
+import { mergeProgramImages } from "./vm-definition-merge.ts";
 
 const execFileAsync = promisify(execFile);
 let selectedToolchain: Toolchain | undefined;
@@ -559,7 +559,7 @@ function firstLine(text: string) {
  * batch emission.
  */
 interface CompileOutcome {
-	definition: VmDefinition | undefined;
+	definition: ProgramImage | undefined;
 	/** Verdict resolved at compile time; "UNKNOWN" means the run decides. */
 	result: Test262Result;
 	failure: string | undefined;
@@ -570,7 +570,7 @@ interface CompileOutcome {
 
 type DefinitionStats = NonNullable<CompileOutcome["stats"]>;
 
-function definitionStats(definition: VmDefinition): DefinitionStats {
+function definitionStats(definition: ProgramImage): DefinitionStats {
 	const opcodes: Record<string, number> = {};
 	let instructionCount = 0;
 	for (const fn of definition.functions) {
@@ -686,7 +686,7 @@ function test262CompileToC(
 					)
 				: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
 
-		const vmDefinition = compileSemanticProgramToVmDefinition(semanticProgram);
+		const vmDefinition = compileSemanticProgramToProgramImage(semanticProgram);
 
 		if (negativeAtCompile) {
 			// The source compiled cleanly, but a parse/early/resolution negative
@@ -743,7 +743,7 @@ interface BatchEntry {
 }
 
 interface RunnableBatchEntry extends BatchEntry {
-	definition: VmDefinition;
+	definition: ProgramImage;
 	mode: "shared" | "legacy";
 	helperIds: Array<string>;
 	logicalStats: DefinitionStats;
@@ -837,10 +837,10 @@ async function test262RunWireBatch(files: Array<Test262File>, workerId: number) 
 	for (const file of files) {
 		const source = composeSource(file);
 		const wirePath = test262WirePath(source);
-		let definition: VmDefinition | undefined;
+		let definition: ProgramImage | undefined;
 		if (existsSync(wirePath)) {
 			try {
-				definition = deserializeVmDefinition(readFileSync(wirePath));
+				definition = deserializeCompilerArtifact(readFileSync(wirePath));
 				touchCacheEntry(wirePath);
 			} catch {
 				rmSync(wirePath, { force: true });
@@ -852,7 +852,7 @@ async function test262RunWireBatch(files: Array<Test262File>, workerId: number) 
 			applyOutcome(file, outcome);
 			definition = outcome.definition;
 			if (definition === undefined) continue;
-			writeFileSync(wirePath, serializeVmDefinition(definition));
+			writeFileSync(wirePath, serializeCompilerArtifact(definition));
 		} else {
 			applyOutcome(file, {
 				definition,
@@ -1158,7 +1158,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		});
 	}
 
-	const physicalDefinitions: Array<VmDefinition> = [];
+	const physicalDefinitions: Array<ProgramImage> = [];
 	const sharedEntries = entries.filter((entry) => entry.mode === "shared");
 	const usedHelperIds = new Set(sharedEntries.flatMap((entry) => entry.helperIds));
 	const usedHelpers = [...helpers.values()].filter((helper) =>
@@ -1169,7 +1169,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 			...usedHelpers.map((helper) => helperOutcomes.get(helper.id)!.definition!),
 			...sharedEntries.map((entry) => entry.definition),
 		];
-		const merged = mergeVmDefinitions(sharedComponents);
+		const merged = mergeProgramImages(sharedComponents);
 		physicalDefinitions.push(merged.definition);
 		const helperBases = new Map(
 			usedHelpers.map(
@@ -1250,7 +1250,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		"",
 		body,
 		"",
-		"const MalVmDefinition *const mal_test262_artifact_definitions[] = {",
+		"const MalProgramImage *const mal_test262_artifact_definitions[] = {",
 		...physicalDefinitions.map((_, index) => `    &mal_vm_definition_${index},`),
 		"};",
 		`const int mal_test262_artifact_definition_count = ${physicalDefinitions.length};`,
@@ -1416,7 +1416,7 @@ export async function test262RunSingle(
 	if (outcome.definition === undefined) {
 		return;
 	}
-	const cSource = emitVmDefinition(outcome.definition, { includeHeader: false });
+	const cSource = emitProgramImage(outcome.definition, { includeHeader: false });
 
 	const baseName = path.join(BUILD_PATH, `t${workerId}`);
 

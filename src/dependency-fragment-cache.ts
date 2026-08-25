@@ -17,11 +17,11 @@ import {
 	collectDisallowedRegexpUsage,
 } from "./compiler/frontend/semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/semantic-program.ts";
-import { compileSemanticProgramToVmDefinition } from "./compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
-import { serializeVmDefinition, WIRE_VERSION } from "./compiler/target/serialize-vm.ts";
+import { serializeRuntimeImage, WIRE_VERSION } from "./compiler/target/serialize-vm.ts";
 import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
@@ -305,7 +305,7 @@ function compileIsland(
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	options.phases.semanticMs += Date.now() - semanticStartedAt;
-	const definition = compileSemanticProgramToVmDefinition(semantic, {
+	const definition = compileSemanticProgramToProgramImage(semantic, {
 		facts: options.facts,
 		optimization: "development",
 		runPhase(phase, run) {
@@ -320,7 +320,7 @@ function compileIsland(
 		},
 	});
 	const serializeStartedAt = Date.now();
-	const wire = serializeVmDefinition(definition);
+	const wire = serializeRuntimeImage(definition);
 	options.phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = frontendDigest(wire);
 	cacheFrontendWire(wire, artifactRoot);

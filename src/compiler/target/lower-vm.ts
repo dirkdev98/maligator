@@ -22,8 +22,8 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
-import type { CoreTargetFunction, CoreTargetProgram } from "./core-target-lowering.ts";
-import { verifyCoreTargetProgram } from "./core-target-verifier.ts";
+import { verifyExecutionProgram } from "./core-target-verifier.ts";
+import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 
@@ -386,8 +386,8 @@ function vmPropertyPlacementHolds(
 	placement: CorePropertyPlacement,
 	propertyIp: number,
 	callIp: number,
-	instructions: ReadonlyArray<VmInstruction>,
-	handlers: ReadonlyArray<VmExceptionHandler>,
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	handlers: ReadonlyArray<BytecodeExceptionHandler>,
 ): boolean {
 	if (placement === "in-place") return true;
 	if (placement !== "call-fallback") return false;
@@ -626,7 +626,7 @@ export interface VmGuardedBuiltinCall {
 }
 
 export function vmCallProvesBuiltin(
-	instruction: Extract<VmInstruction, { opcode: "CALL" }>,
+	plan: Extract<NativeInstructionPlan, { kind: "call" }> | undefined,
 	operation: VmGuardedBuiltinOperation,
 	requirements?: {
 		readonly lowering: string;
@@ -634,7 +634,7 @@ export function vmCallProvesBuiltin(
 		readonly effects: ReadonlyArray<EffectKind>;
 	},
 ): boolean {
-	if (instruction.guardedBuiltinCall?.operation !== operation) return false;
+	if (plan?.guardedBuiltinCall?.operation !== operation) return false;
 	if (requirements === undefined) return true;
 	const descriptor = builtinOperationDescriptor(operation);
 	return (
@@ -648,11 +648,11 @@ export function vmCallProvesBuiltin(
 /**
  * Keep inline with the C struct
  */
-export interface VmDefinition {
+export interface ProgramImage {
 	/** Absolute source entry used for Node-compatible process.argv[1]. */
 	entrypointPath: string;
 	functionCount: number;
-	functions: Array<VmFunction>;
+	functions: Array<BytecodeFunction>;
 	stringConstants: Array<Array<number>>;
 	bigintConstants: Array<bigint>;
 	literalTemplateData: Array<number>;
@@ -706,6 +706,89 @@ export interface VmDefinition {
 		installer: string;
 		exports: Array<{ name: string; slot: number }>;
 	}>;
+
+	/** Native-only lowering plan. It is never part of the runtime bytecode wire. */
+	nativePlan: NativePlan;
+}
+
+/** The complete runtime payload. It contains no optimizer trace or native plan. */
+export type RuntimeImage = Omit<
+	ProgramImage,
+	"nativePlan" | "profileSites" | "profileRemarks" | "optimizationTrace"
+>;
+
+export interface NativePlan {
+	readonly functions: ReadonlyArray<NativeFunctionPlan>;
+}
+
+export interface NativeFunctionPlan {
+	readonly functionIndex: number;
+	readonly mode: "direct" | "resumable";
+	readonly registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
+	readonly gc: {
+		readonly rootRegisters: ReadonlyArray<number>;
+		readonly safepoints: ReadonlyArray<{
+			readonly instructionIp: number;
+			readonly rootRegisters: ReadonlyArray<number>;
+		}>;
+	};
+	readonly abi: {
+		readonly parameters: ReadonlyArray<"boxed">;
+		readonly result: "boxed";
+		readonly argumentsRootedByCaller: true;
+	};
+	/** One native-only decision per bytecode IP; absent entries mean generic lowering. */
+	readonly instructions: ReadonlyArray<NativeInstructionPlan | undefined>;
+	readonly specializations: ReadonlyArray<VmRegion>;
+	readonly compilerSiteIds?: ReadonlyArray<string | undefined>;
+}
+
+export type NativeInstructionPlan =
+	| {
+			readonly kind: "call";
+			readonly directFunctionIndex?: number;
+			readonly directFunctionCall?: true;
+			readonly directCallTargetFunctionIndex?: number;
+			readonly guardedBuiltinCall?: VmGuardedBuiltinCall;
+			readonly directStringCharCodeAtPosition?: "inBounds";
+	  }
+	| { readonly kind: "construct"; readonly directFunctionIndex: number }
+	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
+	| { readonly kind: "primitive-string-length" };
+
+/**
+ * Construct the explicit, fully boxed native contract for a hand-authored or
+ * runtime-decoded bytecode image. This is a real conservative lowering plan,
+ * not a compatibility overlay: native emission may consume it without
+ * rediscovering representation or GC policy from bytecode.
+ */
+export function createConservativeNativePlan(
+	functions: ReadonlyArray<BytecodeFunction>,
+): NativePlan {
+	return {
+		functions: functions.map((fn, functionIndex) => ({
+			functionIndex,
+			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
+			registerRepresentations: Array.from(
+				{ length: fn.registerCount },
+				() => "boxed" as const,
+			),
+			gc: {
+				rootRegisters: Array.from(
+					{ length: fn.registerCount },
+					(_, register) => register,
+				),
+				safepoints: [],
+			},
+			abi: {
+				parameters: Array.from({ length: fn.parameterCount }, () => "boxed" as const),
+				result: "boxed",
+				argumentsRootedByCaller: true,
+			},
+			instructions: Array.from({ length: fn.instructions.length }),
+			specializations: [],
+		})),
+	};
 }
 
 export interface VmPrecompiledLiteralShape {
@@ -717,7 +800,7 @@ export interface VmPrecompiledLiteralShape {
 /**
  * Keep inline with the C struct
  */
-export interface VmExceptionHandler {
+export interface BytecodeExceptionHandler {
 	startIp: number;
 	endIp: number;
 	handlerIp: number;
@@ -726,12 +809,12 @@ export interface VmExceptionHandler {
 /** Resolve the innermost active handler for every VM instruction. */
 export function vmExceptionHandlerTargets(
 	instructionCount: number,
-	handlers: ReadonlyArray<VmExceptionHandler>,
+	handlers: ReadonlyArray<BytecodeExceptionHandler>,
 ): Array<number | undefined> {
 	const ordered = [...handlers].sort(
 		(left, right) => left.startIp - right.startIp || right.endIp - left.endIp,
 	);
-	const active: Array<VmExceptionHandler> = [];
+	const active: Array<BytecodeExceptionHandler> = [];
 	const targets = new Array<number | undefined>(instructionCount);
 	let next = 0;
 	for (let ip = 0; ip < instructionCount; ip++) {
@@ -763,7 +846,7 @@ export interface VmArgumentSnapshotMove {
 /**
  * Keep inline with the C struct
  */
-export interface VmFunction {
+export interface BytecodeFunction {
 	nameStringIndex: number;
 	isGenerator: boolean;
 	isAsync: boolean;
@@ -812,19 +895,17 @@ export interface VmFunction {
 	/** Number of VM-local entries in this function's literal-shape cache. */
 	literalShapeCount: number;
 
-	instructions: Array<VmInstruction>;
-	handlers: Array<VmExceptionHandler>;
-	/** Serialized tagged region certificates; ordinary instructions remain the twin. */
-	regions?: ReadonlyArray<VmRegion>;
+	instructions: Array<BytecodeInstruction>;
+	handlers: Array<BytecodeExceptionHandler>;
 
 	/**
-	 * Debug-info: index into VmDefinition.files for this function's source file.
+	 * Debug-info: index into ProgramImage.files for this function's source file.
 	 */
 	fileIndex: number;
 
 	/**
 	 * Debug-info: parallel to `instructions` — positions[i] is the source-position
-	 * id (index into VmDefinition.sourcePositions) of instruction i, or -1 when
+	 * id (index into ProgramImage.sourcePositions) of instruction i, or -1 when
 	 * unknown (e.g. prologue code before the first statement marker). Built from
 	 * the stripped `sourcePos` markers. The VM resolves a frame's position by its
 	 * instruction pointer; the native backend emits coalesced `pos` writes from it.
@@ -832,29 +913,12 @@ export interface VmFunction {
 	positions: Array<number>;
 	/** Dense profile site for each instruction, or -1 when no source is known. */
 	profileSiteIds?: Array<number>;
-	/** Compile-only bridge from VM instructions to final shared compiler facts. */
-	compilerSiteIds?: Array<string | undefined>;
-
-	/**
-	 * COMPILE-ONLY (not part of the C `MalFunction` struct): the registers the
-	 * native backend must spill into this function's GC root frame — those live at
-	 * or used by a GC safepoint (`computeSafepointRoots`), already
-	 * in this function's post-allocation register numbering. emit-c roots exactly
-	 * the boxed registers in this set; a register absent from it never holds a live
-	 * value at a collection point. Undefined for generator/async functions (the
-	 * native backend bails on those) — emit-c then falls back to rooting every
-	 * boxed register.
-	 */
-	gcRootRegisters?: ReadonlyArray<number>;
-
-	/** Physical register storage selected by Core allocation. */
-	registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 }
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
  * largest static index whose absence requires the supplied argument slice. */
 export function computeArgumentRetentionLimit(
-	fn: Pick<VmFunction, "argumentSnapshotCount" | "instructions">,
+	fn: Pick<BytecodeFunction, "argumentSnapshotCount" | "instructions">,
 ): number {
 	const argumentInstructions = fn.instructions.slice(fn.argumentSnapshotCount);
 	if (
@@ -883,7 +947,7 @@ export function computeArgumentRetentionLimit(
  */
 export function buildArgumentSnapshotPlan(
 	fn: Pick<
-		VmFunction,
+		BytecodeFunction,
 		"argumentSnapshotCount" | "instructions" | "parameterCount" | "registerCount"
 	>,
 ): Array<VmArgumentSnapshotMove> {
@@ -990,7 +1054,7 @@ export function buildArgumentSnapshotPlan(
 /**
  * Keep inline with the C struct
  */
-export type VmInstruction =
+export type BytecodeInstruction =
 	| {
 			opcode: "MOVE";
 			dst: number;
@@ -1050,8 +1114,6 @@ export type VmInstruction =
 			opcode: "CREATE_ARRAY";
 			dst: number;
 			length: number;
-			/** COMPILE-ONLY: exact capacity for a proven pristine indexed fill. */
-			freshDenseReserveLength?: number;
 	  }
 	| {
 			opcode: "INSTANTIATE_LITERAL_TEMPLATE";
@@ -1127,16 +1189,6 @@ export type VmInstruction =
 			thisValue: number;
 			argumentCount: number;
 			arguments: Array<number>;
-			/** COMPILE-ONLY: guarded direct script-function target for native emission. */
-			directFunctionIndex?: number;
-			/** COMPILE-ONLY: guarded intrinsic Function.prototype.call flattening. */
-			directFunctionCall?: true;
-			/** COMPILE-ONLY: exact script receiver of directFunctionCall, when known. */
-			directCallTargetFunctionIndex?: number;
-			/** COMPILE-ONLY: canonical guarded intrinsic identity and fallback plan. */
-			guardedBuiltinCall?: VmGuardedBuiltinCall;
-			/** COMPILE-ONLY: statically proven Number-position strength. */
-			directStringCharCodeAtPosition?: "inBounds";
 	  }
 	| {
 			opcode: "MATH_UNARY_NUMBER";
@@ -1165,8 +1217,6 @@ export type VmInstruction =
 			callee: number;
 			argumentCount: number;
 			arguments: Array<number>;
-			/** COMPILE-ONLY: guarded direct script-constructor target for native emission. */
-			directFunctionIndex?: number;
 	  }
 	| {
 			opcode: "THROW";
@@ -1261,8 +1311,6 @@ export type VmInstruction =
 			object: number;
 			stringIndex: number;
 			icIndex: number;
-			/** COMPILE-ONLY: guarded primitive-String `length` fast read. */
-			primitiveStringLength?: true;
 	  }
 	| {
 			opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT";
@@ -1593,7 +1641,7 @@ export type VmInstruction =
 
 /** Every physical register defined by an instruction, including multi-result ops. */
 export function vmInstructionWriteRegisters(
-	instruction: VmInstruction,
+	instruction: BytecodeInstruction,
 ): ReadonlyArray<number> {
 	switch (instruction.opcode) {
 		case "YIELD":
@@ -1617,7 +1665,7 @@ export function vmInstructionWriteRegisters(
 
 /** Whether native execution of an instruction can synchronously capture/re-enter JS. */
 export function vmNativeInstructionMayCaptureStack(
-	instruction: VmInstruction,
+	instruction: BytecodeInstruction,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 ): boolean {
 	switch (instruction.opcode) {
@@ -1706,7 +1754,7 @@ const VM_REGISTER_USE_ARRAY_FIELDS = [
  * instructions are excluded so equal numeric payloads cannot masquerade as a
  * register use. */
 export function vmInstructionUsesRegister(
-	instruction: VmInstruction,
+	instruction: BytecodeInstruction,
 	register: number,
 ): boolean {
 	if (
@@ -1725,13 +1773,15 @@ export function vmInstructionUsesRegister(
 
 /** Whether an instruction defines a physical register, including multi-result opcodes. */
 export function vmInstructionDefinesRegister(
-	instruction: VmInstruction,
+	instruction: BytecodeInstruction,
 	register: number,
 ): boolean {
 	return vmInstructionWriteRegisters(instruction).includes(register);
 }
 
-export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>): number {
+export function countPropertyIcSites(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+): number {
 	let count = 0;
 	for (const instruction of instructions) {
 		switch (instruction.opcode) {
@@ -1749,7 +1799,7 @@ export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>)
 	return count;
 }
 
-export interface VmDefinitionStats {
+export interface ProgramImageStats {
 	functionCount: number;
 	instructionCount: number;
 }
@@ -1790,7 +1840,7 @@ function vmNamedShapeKeyIdentity(units: ReadonlyArray<number>): string | undefin
 }
 
 /** Reject malformed VM-level guarded slot references at every output boundary. */
-export function validateVmKnownOwnSlots(definition: VmDefinition): void {
+export function validateVmKnownOwnSlots(definition: RuntimeImage): void {
 	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
 	for (const descriptor of definition.precompiledLiteralShapes) {
 		const { functionIndex, shapeCacheIndex, keyStringIndices } = descriptor;
@@ -1901,7 +1951,7 @@ const VM_SHAPE_CASE_MIN_LOADS = 2;
 const VM_SHAPE_CASE_MAX_LOADS = 16;
 const VM_SHAPE_CASE_MAX_SPAN = 64;
 
-function vmShapeCaseTransparent(instruction: VmInstruction): boolean {
+function vmShapeCaseTransparent(instruction: BytecodeInstruction): boolean {
 	switch (instruction.opcode) {
 		case "MOVE":
 		case "CREATE_NUMBER":
@@ -1932,7 +1982,7 @@ function vmShapeCaseTransparent(instruction: VmInstruction): boolean {
 }
 
 /** Reject forged or stale shared shape-case certificates in a VM definition. */
-export function validateVmShapeCases(definition: VmDefinition): void {
+export function validateVmShapeCases(definition: RuntimeImage): void {
 	// Also validates the shared precompiled-shape table and physical cache layout.
 	validateVmKnownOwnSlots(definition);
 	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
@@ -1949,10 +1999,8 @@ export function validateVmShapeCases(definition: VmDefinition): void {
 			if (
 				!isNonnegativeSafeInteger(rawSelector.dst) ||
 				rawSelector.dst >= fn.registerCount ||
-				fn.registerRepresentations[rawSelector.dst] !== "number" ||
 				!isNonnegativeSafeInteger(rawSelector.object) ||
 				rawSelector.object >= fn.registerCount ||
-				fn.registerRepresentations[rawSelector.object] !== "boxed" ||
 				!Array.isArray(rawCandidates) ||
 				rawCandidates.length < 1 ||
 				rawCandidates.length > 4
@@ -1990,7 +2038,7 @@ export function validateVmShapeCases(definition: VmDefinition): void {
 			const uses: Array<{
 				readonly ip: number;
 				readonly instruction: Extract<
-					VmInstruction,
+					BytecodeInstruction,
 					{ opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE" }
 				>;
 			}> = [];
@@ -2038,13 +2086,10 @@ export function validateVmShapeCases(definition: VmDefinition): void {
 				if (
 					!isNonnegativeSafeInteger(instruction.dst) ||
 					instruction.dst >= fn.registerCount ||
-					fn.registerRepresentations[instruction.dst] !== "boxed" ||
 					!isNonnegativeSafeInteger(instruction.object) ||
 					instruction.object >= fn.registerCount ||
-					fn.registerRepresentations[instruction.object] !== "boxed" ||
 					!isNonnegativeSafeInteger(instruction.shapeCase) ||
 					instruction.shapeCase >= fn.registerCount ||
-					fn.registerRepresentations[instruction.shapeCase] !== "number" ||
 					!isNonnegativeSafeInteger(instruction.stringIndex) ||
 					instruction.stringIndex >= definition.stringConstants.length ||
 					!Array.isArray(rawSlots) ||
@@ -2066,7 +2111,7 @@ export function validateVmShapeCases(definition: VmDefinition): void {
 		}
 		for (const [ip, instruction] of fn.instructions.entries()) {
 			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_SHAPE_CASE") continue;
-			let producer: VmInstruction | undefined;
+			let producer: BytecodeInstruction | undefined;
 			for (let before = ip - 1; before >= 0; before--) {
 				const candidate = fn.instructions[before]!;
 				if (!vmInstructionDefinesRegister(candidate, instruction.shapeCase)) continue;
@@ -2100,7 +2145,7 @@ interface VmKnownShapeLayout {
  */
 function buildKnownShapeLayout(
 	core: CoreProgram,
-	functions: ReadonlyArray<CoreTargetFunction>,
+	functions: ReadonlyArray<ExecutionFunction>,
 ): VmKnownShapeLayout {
 	const origins: Array<Map<number, VmKnownShapeOrigin>> = [];
 	const layoutRows: Array<Map<string, number>> = [];
@@ -2267,7 +2312,7 @@ export function compressPositions(
  * Aggregate code-size metrics for a compiled definition: how many functions
  * were emitted and the total instruction count across all of them.
  */
-export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
+export function programImageStats(definition: ProgramImage): ProgramImageStats {
 	let instructionCount = 0;
 	for (const fn of definition.functions) {
 		instructionCount += fn.instructions.length;
@@ -2279,13 +2324,13 @@ export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
 /**
  * Lower the allocated Core target form to a VM definition that can be emitted as C.
  */
-export function lowerCoreProgramToVmDefinition(
-	program: CoreTargetProgram,
+export function lowerExecutionToProgramImage(
+	program: ExecutionProgram,
 	profile = false,
-): VmDefinition {
-	// Consumer boundary: CoreTargetProgram is structurally constructible and mutable,
+): ProgramImage {
+	// Consumer boundary: ExecutionProgram is structurally constructible and mutable,
 	// so construction-time verification cannot license a later lower-vm call.
-	verifyCoreTargetProgram(program);
+	verifyExecutionProgram(program);
 	const core = program.core;
 	const context = program.context;
 	// Build the debug-info file table: distinct source paths in first-seen order.
@@ -2301,8 +2346,8 @@ export function lowerCoreProgramToVmDefinition(
 		return index;
 	};
 	const knownShapeLayout = buildKnownShapeLayout(core, program.functions);
-	const functions = program.functions.map((fn, index) =>
-		lowerFunctionToVmFunction(
+	const functionPlans = program.functions.map((fn, index) =>
+		lowerExecutionFunctionPlans(
 			fn,
 			fileIndexFor(fn.sourcePath),
 			core.stringConstants,
@@ -2312,8 +2357,9 @@ export function lowerCoreProgramToVmDefinition(
 			program.gcRootRegisters[index],
 		),
 	);
+	const functions = functionPlans.map(({ bytecode }) => bytecode);
 
-	const definition: VmDefinition = {
+	const definition: ProgramImage = {
 		entrypointPath: context.data.entrypointPath,
 		functionCount: program.functions.length,
 		functions,
@@ -2346,6 +2392,7 @@ export function lowerCoreProgramToVmDefinition(
 		}),
 		cjsModuleFunctionIndices: [...context.data.cjsModuleFunctionIndices],
 		hostInstalls: buildHostInstalls(context, functions),
+		nativePlan: { functions: functionPlans.map(({ native }) => native) },
 		files,
 		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),
 		...(profile && context.optimizationTrace !== undefined
@@ -2365,8 +2412,8 @@ export function lowerCoreProgramToVmDefinition(
  */
 function buildHostInstalls(
 	context: CoreCompilationContext,
-	functions: Array<VmFunction>,
-): VmDefinition["hostInstalls"] {
+	functions: Array<BytecodeFunction>,
+): ProgramImage["hostInstalls"] {
 	const readGlobalSlots = new Set<number>();
 	for (const fn of functions) {
 		for (const instruction of fn.instructions) {
@@ -2382,7 +2429,7 @@ function buildHostInstalls(
 		}
 	}
 
-	const manifest: VmDefinition["hostInstalls"] = [];
+	const manifest: ProgramImage["hostInstalls"] = [];
 	const installFor = (installer: string) => {
 		let install = manifest.find((entry) => entry.installer === installer);
 		if (!install) {
@@ -2408,19 +2455,103 @@ function buildHostInstalls(
 	return manifest;
 }
 
-/**
- * Lower a function to a VM function. Note that we drop blocks and instead move to jumps to
- * absolute instructions.
- */
-function lowerFunctionToVmFunction(
-	fn: CoreTargetFunction,
+interface LoweredFunctionPlans {
+	readonly bytecode: BytecodeFunction;
+	readonly native: NativeFunctionPlan;
+}
+
+type AnnotatedBytecodeInstruction = BytecodeInstruction & {
+	readonly directFunctionIndex?: number;
+	readonly directFunctionCall?: true;
+	readonly directCallTargetFunctionIndex?: number;
+	readonly guardedBuiltinCall?: VmGuardedBuiltinCall;
+	readonly directStringCharCodeAtPosition?: "inBounds";
+	readonly freshDenseReserveLength?: number;
+	readonly primitiveStringLength?: true;
+};
+
+function nativeInstructionPlan(
+	instruction: AnnotatedBytecodeInstruction,
+): NativeInstructionPlan | undefined {
+	switch (instruction.opcode) {
+		case "CALL":
+			return instruction.directFunctionIndex === undefined &&
+				instruction.directFunctionCall !== true &&
+				instruction.directCallTargetFunctionIndex === undefined &&
+				instruction.guardedBuiltinCall === undefined &&
+				instruction.directStringCharCodeAtPosition === undefined
+				? undefined
+				: {
+						kind: "call",
+						directFunctionIndex: instruction.directFunctionIndex,
+						directFunctionCall: instruction.directFunctionCall,
+						directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
+						guardedBuiltinCall: instruction.guardedBuiltinCall,
+						directStringCharCodeAtPosition: instruction.directStringCharCodeAtPosition,
+					};
+		case "CONSTRUCT":
+			return instruction.directFunctionIndex === undefined
+				? undefined
+				: { kind: "construct", directFunctionIndex: instruction.directFunctionIndex };
+		case "CREATE_ARRAY":
+			return instruction.freshDenseReserveLength === undefined
+				? undefined
+				: { kind: "fresh-dense-reserve", length: instruction.freshDenseReserveLength };
+		case "LOAD_PROPERTY_STATIC":
+			return instruction.primitiveStringLength === true
+				? { kind: "primitive-string-length" }
+				: undefined;
+		default:
+			return undefined;
+	}
+}
+
+function runtimeInstruction(
+	instruction: AnnotatedBytecodeInstruction,
+): BytecodeInstruction {
+	switch (instruction.opcode) {
+		case "CALL":
+			return {
+				opcode: "CALL",
+				dst: instruction.dst,
+				callee: instruction.callee,
+				thisValue: instruction.thisValue,
+				argumentCount: instruction.argumentCount,
+				arguments: instruction.arguments,
+			};
+		case "CONSTRUCT":
+			return {
+				opcode: "CONSTRUCT",
+				dst: instruction.dst,
+				callee: instruction.callee,
+				argumentCount: instruction.argumentCount,
+				arguments: instruction.arguments,
+			};
+		case "CREATE_ARRAY":
+			return { opcode: "CREATE_ARRAY", dst: instruction.dst, length: instruction.length };
+		case "LOAD_PROPERTY_STATIC":
+			return {
+				opcode: "LOAD_PROPERTY_STATIC",
+				dst: instruction.dst,
+				object: instruction.object,
+				stringIndex: instruction.stringIndex,
+				icIndex: instruction.icIndex,
+			};
+		default:
+			return instruction;
+	}
+}
+
+/** Independently materialize bytecode and native contracts from one execution function. */
+function lowerExecutionFunctionPlans(
+	fn: ExecutionFunction,
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
 	literalShapeCount: number,
 	instructionSites?: WeakMap<object, { id: string }>,
 	gcRootRegisters?: ReadonlyArray<number>,
-): VmFunction {
+): LoweredFunctionPlans {
 	// Source-position and exception-range markers carry no executable opcode, so
 	// block start IPs count only instructions that survive flattening.
 	const blockStartIps = new Map<number, number>();
@@ -2439,7 +2570,7 @@ function lowerFunctionToVmFunction(
 		}
 	}
 
-	const instructions: Array<VmInstruction> = [];
+	const instructions: Array<AnnotatedBytecodeInstruction> = [];
 	const compilerSiteIds: Array<string | undefined> = [];
 	let propertyIcCount = 0;
 	const propertyIcIndexByInstruction = new Map<CompilerInstruction, number>();
@@ -2457,7 +2588,7 @@ function lowerFunctionToVmFunction(
 		}
 	}
 	let physicalLiteralShapeCount = 0;
-	const handlers: Array<VmExceptionHandler> = [];
+	const handlers: Array<BytecodeExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
 	const instructionIndexByTargetInstruction = new Map<CompilerInstruction, number>();
@@ -2486,7 +2617,7 @@ function lowerFunctionToVmFunction(
 			}
 			const instructionIndex = instructions.length;
 			instructionIndexByTargetInstruction.set(instruction, instructionIndex);
-			let vmInstruction: VmInstruction;
+			let vmInstruction: AnnotatedBytecodeInstruction;
 			if (instruction.type === "selectShapeCase") {
 				const candidates = instruction.shapeCaseCandidates.map((candidate) => {
 					const origin = knownShapeOrigins[candidate.shapeFunctionIndex]?.get(
@@ -2509,7 +2640,7 @@ function lowerFunctionToVmFunction(
 					candidates,
 				};
 			} else {
-				vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
+				vmInstruction = lowerInstructionToBytecodeInstruction(blockStartIps, instruction);
 			}
 			if (
 				(instruction.type === "loadPropertyStatic" ||
@@ -2596,7 +2727,7 @@ function lowerFunctionToVmFunction(
 			throw coreRegionError(kind, "admission outside the claim set");
 		}
 	};
-	for (const region of fn.regions ?? []) {
+	for (const region of fn.specializations) {
 		// Envelope metadata: resolved once for every kind so no kind-specific branch
 		// can hand a backend a different answer.
 		const admissionAnchorIp = instructionIndexByTargetInstruction.get(
@@ -3143,10 +3274,13 @@ function lowerFunctionToVmFunction(
 				const loweredProperty = instructions[resolvedPropertyIp];
 				const aliases = new Set(resultRegisters);
 				const staticPropertyMatches = (
-					instruction: VmInstruction | undefined,
+					instruction: BytecodeInstruction | undefined,
 					object: number,
 					name: string,
-				): instruction is Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }> =>
+				): instruction is Extract<
+					BytecodeInstruction,
+					{ opcode: "LOAD_PROPERTY_STATIC" }
+				> =>
 					instruction?.opcode === "LOAD_PROPERTY_STATIC" &&
 					instruction.object === object &&
 					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) ===
@@ -3551,11 +3685,18 @@ function lowerFunctionToVmFunction(
 					String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
 						"slice" ||
 					sliceCall?.opcode !== "CALL" ||
-					!vmCallProvesBuiltin(sliceCall, "String.prototype.slice", {
-						lowering: "number-consumer-fusion",
-						result: "string",
-						effects: ["coerce", "allocate", "throw", "safepoint"],
-					}) ||
+					!vmCallProvesBuiltin(
+						(() => {
+							const plan = nativeInstructionPlan(sliceCall);
+							return plan?.kind === "call" ? plan : undefined;
+						})(),
+						"String.prototype.slice",
+						{
+							lowering: "number-consumer-fusion",
+							result: "string",
+							effects: ["coerce", "allocate", "throw", "safepoint"],
+						},
+					) ||
 					sliceCall.arguments.length !== 1 ||
 					property.dst !== sliceCall.callee ||
 					property.object !== sliceCall.thisValue ||
@@ -3660,7 +3801,7 @@ function lowerFunctionToVmFunction(
 				const latestDefinition = (
 					register: number,
 					beforeIp: number,
-				): VmInstruction | undefined => {
+				): BytecodeInstruction | undefined => {
 					for (let ip = beforeIp - 1; ip >= 0; ip--) {
 						const candidate = instructions[ip]!;
 						if (vmInstructionWriteRegisters(candidate).includes(register))
@@ -3927,6 +4068,13 @@ function lowerFunctionToVmFunction(
 				}
 				const resolvedPrimitiveStringLengthIps =
 					primitiveStringLengthIps as Array<number>;
+				for (const ip of resolvedPrimitiveStringLengthIps) {
+					const load = instructions[ip];
+					if (load?.opcode !== "LOAD_PROPERTY_STATIC") {
+						throw coreRegionError(region.kind, "primitive String length operation");
+					}
+					instructions[ip] = { ...load, primitiveStringLength: true };
+				}
 				const payloadIps = [
 					...(propertyIp < 0 ? [] : [propertyIp]),
 					callIp!,
@@ -4020,13 +4168,15 @@ function lowerFunctionToVmFunction(
 		registerCount: fn.registerCount,
 	});
 
-	const lowered: VmFunction = {
+	const nativeInstructions = instructions.map(nativeInstructionPlan);
+	const bytecodeInstructions = instructions.map(runtimeInstruction);
+	const bytecode: BytecodeFunction = {
 		nameStringIndex: fn.nameStringIndex,
 		isGenerator: fn.isGenerator,
 		isAsync: fn.isAsync,
 		parameterCount: fn.parameterCount,
 		mappedArguments: fn.mappedArguments,
-		mappedArgumentSlots: fn.mappedArgumentSlots,
+		mappedArgumentSlots: [...fn.mappedArgumentSlots],
 		length: fn.length,
 		registerCount: fn.registerCount,
 		capturedCount: fn.capturedCount,
@@ -4038,18 +4188,40 @@ function lowerFunctionToVmFunction(
 		isClassConstructor: fn.isClassConstructor,
 		hasPrototype: fn.hasPrototype,
 		literalShapeCount,
-		instructions,
+		instructions: bytecodeInstructions,
 		handlers,
 		fileIndex,
 		positions,
-		compilerSiteIds: compilerSiteIds.some((site) => site !== undefined)
-			? compilerSiteIds
-			: undefined,
-		gcRootRegisters,
-		regions: regions.length > 0 ? regions : undefined,
-		registerRepresentations: [...fn.registerRepresentations],
 	};
-	return lowered;
+	const rootRegisters = [
+		...(gcRootRegisters ??
+			fn.registerRepresentations.flatMap((representation, register) =>
+				representation === "boxed" ? [register] : [],
+			)),
+	];
+	const safepoints = fn.safepoints.flatMap(({ instruction }) => {
+		const instructionIp = instructionIndexByTargetInstruction.get(instruction);
+		return instructionIp === undefined
+			? []
+			: [{ instructionIp, rootRegisters: [...rootRegisters] }];
+	});
+	return {
+		bytecode,
+		native: {
+			functionIndex: fn.functionIndex,
+			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
+			registerRepresentations: [...fn.registerRepresentations],
+			gc: { rootRegisters, safepoints },
+			abi: {
+				parameters: Array.from({ length: fn.parameterCount }, () => "boxed" as const),
+				result: "boxed",
+				argumentsRootedByCaller: true,
+			},
+			instructions: nativeInstructions,
+			specializations: regions,
+			...(compilerSiteIds.some((site) => site !== undefined) ? { compilerSiteIds } : {}),
+		},
+	};
 }
 
 /**
@@ -4102,10 +4274,10 @@ function lowerGuardedBuiltinCall(
 	};
 }
 
-function lowerInstructionToVmInstruction(
+function lowerInstructionToBytecodeInstruction(
 	blockStartIps: Map<number, number>,
 	instruction: CompilerInstruction,
-): VmInstruction {
+): AnnotatedBytecodeInstruction {
 	switch (instruction.type) {
 		case "sourcePos":
 			// Markers are consumed into `positions` and stripped before this point.

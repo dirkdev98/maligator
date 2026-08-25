@@ -16,7 +16,7 @@ import {
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import { emitVmTranslationUnits } from "../src/compiler/target/emit-vm.ts";
+import { emitProgramTranslationUnits } from "../src/compiler/target/emit-vm.ts";
 
 function temporaryDirectory(): string {
 	return mkdtempSync(path.join(tmpdir(), "mal-build-frontend-cache-"));
@@ -57,8 +57,8 @@ describe("normal build frontend cache", () => {
 		expect(warm.cache).toBe("hit");
 		expect(warm.definition).toEqual(cold.definition);
 		expect(warm.wire).toEqual(cold.wire);
-		expect(emitVmTranslationUnits(warm.definition)).toEqual(
-			emitVmTranslationUnits(cold.definition),
+		expect(emitProgramTranslationUnits(warm.definition)).toEqual(
+			emitProgramTranslationUnits(cold.definition),
 		);
 		expect(warm.phases.graphMs).toBe(0);
 		expect(warm.phases.semanticMs).toBe(0);
@@ -141,8 +141,8 @@ describe("normal build frontend cache", () => {
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
-		expect(emitVmTranslationUnits(warm.definition)).toEqual(
-			emitVmTranslationUnits(cold.definition),
+		expect(emitProgramTranslationUnits(warm.definition)).toEqual(
+			emitProgramTranslationUnits(cold.definition),
 		);
 	});
 
@@ -162,16 +162,14 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "string-split-projection") ?? [],
+		const coldRegions = cold.definition.nativePlan.functions.flatMap((fn) =>
+			fn.specializations.filter((region) => region.kind === "string-split-projection"),
 		);
-		const warmRegions = warm.definition.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "string-split-projection") ?? [],
+		const warmRegions = warm.definition.nativePlan.functions.flatMap((fn) =>
+			fn.specializations.filter((region) => region.kind === "string-split-projection"),
 		);
-		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
-		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -198,16 +196,14 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+		const coldRegions = cold.definition.nativePlan.functions.flatMap((fn) =>
+			fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 		);
-		const warmRegions = warm.definition.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+		const warmRegions = warm.definition.nativePlan.functions.flatMap((fn) =>
+			fn.specializations.filter((region) => region.kind === "regexp-exec-projection"),
 		);
-		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
-		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -230,14 +226,14 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.functions.flatMap(
-			(fn) => fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+		const coldRegions = cold.definition.nativePlan.functions.flatMap((fn) =>
+			fn.specializations.filter((region) => region.kind === "string-slice-number"),
 		);
-		const warmRegions = warm.definition.functions.flatMap(
-			(fn) => fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+		const warmRegions = warm.definition.nativePlan.functions.flatMap((fn) =>
+			fn.specializations.filter((region) => region.kind === "string-slice-number"),
 		);
-		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
-		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -264,18 +260,14 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldRegions = cold.definition.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
-				[],
+		const coldRegions = cold.definition.nativePlan.functions.flatMap((fn) =>
+			fn.specializations.filter((region) => region.kind === "regexp-iterator-projection"),
 		);
-		const warmRegions = warm.definition.functions.flatMap(
-			(fn) =>
-				fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
-				[],
+		const warmRegions = warm.definition.nativePlan.functions.flatMap((fn) =>
+			fn.specializations.filter((region) => region.kind === "regexp-iterator-projection"),
 		);
-		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
-		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -298,8 +290,8 @@ describe("normal build frontend cache", () => {
 
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
-		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
-		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+		const coldC = emitProgramTranslationUnits(cold.definition).join("\n");
+		const warmC = emitProgramTranslationUnits(warm.definition).join("\n");
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");

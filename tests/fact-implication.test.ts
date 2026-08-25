@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
 	compilerGuardPlan,
 	compilerProgramFactsFromConfig,
@@ -246,7 +246,7 @@ interface ProbedCall {
 function optimize(source: string, primordials: "locked" | "mutable"): CoreProgram {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "fact-implication.js");
 	let optimized: CoreProgram | undefined;
-	compileSemanticProgramToVmDefinition(semantic, {
+	compileSemanticProgramToProgramImage(semantic, {
 		facts: compilerProgramFactsFromConfig(
 			resolveBuildConfig({ engine: { primordials } }),
 		),

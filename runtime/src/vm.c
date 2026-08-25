@@ -153,7 +153,7 @@ void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
 }
 
 static void mal_vm_materialize_precompiled_literal_shapes(
-    MalVm *vm, const MalVmDefinition *definition, i32 function_base, i32 string_base);
+    MalVm *vm, const MalProgramImage *definition, i32 function_base, i32 string_base);
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
 #define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
@@ -495,7 +495,7 @@ void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
     };
 }
 
-void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
+void mal_vm_init(MalVm *vm, const MalProgramImage *definition) {
 #if MAL_REALMS
     vm->error_stack_marker = mal_value_new_undefined();
 #endif
@@ -1279,8 +1279,8 @@ static bool mal_vm_rebase_literal_templates(
     return true;
 }
 
-i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
-    MalVmDefinition *live = &vm->live_definition;
+i32 mal_vm_splice_definition(MalVm *vm, const MalProgramImage *loaded) {
+    MalProgramImage *live = &vm->live_definition;
     i32 fn_base = live->function_count;
     i32 global_base = live->global_count;
     i32 string_base = live->string_constant_count;
@@ -4560,7 +4560,7 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
  * it does not perturb that code's layout.
  */
 static void mal_vm_materialize_precompiled_literal_shapes(
-    MalVm *vm, const MalVmDefinition *definition, i32 function_base, i32 string_base
+    MalVm *vm, const MalProgramImage *definition, i32 function_base, i32 string_base
 ) {
     for (i32 index = 0; index < definition->precompiled_literal_shape_count; index++) {
         const MalPrecompiledLiteralShape *descriptor =

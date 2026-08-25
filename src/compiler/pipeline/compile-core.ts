@@ -9,9 +9,9 @@ import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { OptimizationAblation } from "../shared/compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
-import { lowerCoreProgramToTarget } from "../target/core-target-lowering.ts";
-import { lowerCoreProgramToVmDefinition } from "../target/lower-vm.ts";
-import type { VmDefinition } from "../target/lower-vm.ts";
+import { lowerCoreCompilationToExecution } from "../target/core-target-lowering.ts";
+import { lowerExecutionToProgramImage } from "../target/lower-vm.ts";
+import type { ProgramImage } from "../target/lower-vm.ts";
 
 export type CompileCorePhase =
 	| "construct core ir"
@@ -41,10 +41,10 @@ export interface CompileCoreOptions {
 }
 
 /** Pure semantic-program pipeline shared by eval, CLI, and host tooling. */
-export function compileSemanticProgramToVmDefinition(
+export function compileSemanticProgramToProgramImage(
 	semantic: SemanticProgram,
 	options: CompileCoreOptions = {},
-): VmDefinition {
+): ProgramImage {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
 	const core = lowerSemanticProgramToCore(semantic, {
@@ -74,11 +74,11 @@ export function compileSemanticProgramToVmDefinition(
 	});
 	options.afterCoreOptimization?.(optimized.program, optimized.context);
 	const lowered = runPhase("lower core ir", () =>
-		lowerCoreProgramToTarget(optimized, {
+		lowerCoreCompilationToExecution(optimized, {
 			reuseRegisters: options.optimization !== "development",
 		}),
 	);
 	return runPhase("lower to vm", () =>
-		lowerCoreProgramToVmDefinition(lowered, options.profile === true),
+		lowerExecutionToProgramImage(lowered, options.profile === true),
 	);
 }
