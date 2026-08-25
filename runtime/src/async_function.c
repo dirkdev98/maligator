@@ -3,6 +3,8 @@
 #include "builtin_promise.h"
 #include "gc.h"
 #include "generator_object.h"
+#include "microtask.h"
+#include "perf_stats.h"
 #include "promise_object.h"
 #include "vm.h"
 
@@ -48,6 +50,19 @@ void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
 }
 
 void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awaited) {
+    // PromiseResolve(%Promise%, primitive) creates a fulfilled Promise whose
+    // identity cannot escape Await. Preserve the mandatory asynchronous turn
+    // by queueing the already-typed continuation directly.
+    if (!mal_value_is_object(awaited)) {
+        MAL_PERF_COUNT(promise_await_typed_continuations);
+        mal_vm_enqueue_await_job(
+            vm,
+            mal_value_from_object((MalObject *) state),
+            false,
+            awaited);
+        return;
+    }
+
     MalValue promise;
     if (!mal_promise_resolve_value(vm, awaited, &promise)) {
         // PromiseResolve threw; deliver it to the body as a throw resumption.
