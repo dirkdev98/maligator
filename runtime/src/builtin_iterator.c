@@ -589,18 +589,28 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
         return false;
     }
 
+    // Getting `done` can re-enter user code and collect. Keep the iterator result
+    // alive until the subsequent `value` read has finished as well.
+    MalValue result = completion.value;
+    MalRootSpan result_span;
+    mal_gc_root(&result_span, &result, 1);
+
     MalValue done;
-    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done)) {
+    if (!mal_vm_get_property(vm, result, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done)) {
+        mal_gc_unroot(&result_span);
         return false;
     }
 
     if (mal_value_is_truthy(done)) {
+        mal_gc_unroot(&result_span);
         *done_out = true;
         return true;
     }
 
-    return mal_vm_get_property(
-        vm, completion.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), value_out);
+    bool ok = mal_vm_get_property(
+        vm, result, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), value_out);
+    mal_gc_unroot(&result_span);
+    return ok;
 }
 
 static bool mal_vm_iterator_close_normal_impl(MalVm *vm, const MalIteratorRecord *record);

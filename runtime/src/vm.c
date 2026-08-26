@@ -4315,6 +4315,10 @@ MalCompletion mal_vm_construct_direct(
                 vm, this_value, args, arg_count, callee, env, callee, nullptr);
             mal_gc_callee_roots_end(&ncr);
             mal_vm_leave_compiled(vm);
+            // Direct eval may splice a program and reallocate the function table
+            // while the compiled constructor runs. The stable index survives; the
+            // pre-call pointer does not.
+            function = &vm->runtime_image->functions[function_index];
 #if MAL_REALMS
             mal_vm_realm_switch_to(vm, saved_realm);
 #endif
