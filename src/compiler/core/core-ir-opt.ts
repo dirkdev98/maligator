@@ -98,11 +98,9 @@ import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
 	analyzeCoreShapeProvenance,
-	rebaseCoreShapeProvenance,
 	retractCoreKnownOwnSlots,
 	selectCoreKnownOwnSlots,
 } from "./core-ir-shape-provenance.ts";
-import type { CoreShapeProvenanceAnalysis } from "./core-ir-shape-provenance.ts";
 import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
 	CORE_CALL_SUMMARY_ATTRIBUTE,
@@ -11478,7 +11476,6 @@ export function executeCoreOptimizations(
 	let workingProgram = directResult.program;
 	let changed = shapeRetraction.changed || inlineResult.changed || directResult.changed;
 	let functions = [...workingProgram.functions];
-	let shapeProvenance: CoreShapeProvenanceAnalysis | undefined;
 	for (const fn of inlineResult.program.functions) {
 		traces.push({
 			name: "inline-small-functions",
@@ -11698,26 +11695,12 @@ export function executeCoreOptimizations(
 			targetAnalysis,
 			compilationContext,
 		);
-		// Shape provenance shares the final callee-target solve and scans only bodies
-		// that can execute. It stays analysis-only: compaction remaps its function
-		// coordinate before the last selector publishes any target-facing hint.
-		shapeProvenance = analyzeCoreShapeProvenance(beforeCompaction, {
-			registry: coreOpcodeRegistry,
-			calleeTargets: targetAnalysis,
-			controlFlow: (fn) => analyses.controlFlow(fn),
-			executableFunctions: reachability.executable,
-		});
 		const compaction = compactCoreProgramFunctions(
 			beforeCompaction,
 			reachability,
 			compilationContext,
 		);
 		compilationContext = compaction.context;
-		shapeProvenance = rebaseCoreShapeProvenance(
-			shapeProvenance,
-			compaction.oldToNew,
-			compaction.program,
-		);
 		if (compaction.changed) {
 			const compactionBefore = tracedMetrics;
 			const refreshed = compaction.program;
@@ -12030,18 +12013,21 @@ export function executeCoreOptimizations(
 			),
 		);
 	}
-	// Publish summaries before the final shape hint. The hint is summary-transparent,
-	// but attaching it changes immutable function identities; solving first lets the
-	// selector remain the absolute last mutating phase without forcing another
-	// whole-program target/summary analysis.
+	// Publish summaries before the final shape hint. Shape provenance consumes the
+	// same closed entry/call topology and scans the already-compacted graph, so it
+	// neither re-solves callee targets nor carries pre-compaction coordinates.
+	// The hint is summary-transparent, which keeps the selector the absolute last
+	// mutating phase without forcing another whole-program analysis.
 	const summaryProgram = { ...workingProgram, functions };
 	const summaries =
 		options.ablations?.has("interprocedural") === true
 			? undefined
 			: analyses.summaries(summaryProgram);
-	if (shapeProvenance === undefined) {
-		throw new Error("Final Core shape provenance was not initialized");
-	}
+	const shapeProvenance = analyzeCoreShapeProvenance(summaryProgram, {
+		registry: coreOpcodeRegistry,
+		...(summaries === undefined ? {} : { calleeTargets: summaries.targets, summaries }),
+		controlFlow: (fn) => analyses.controlFlow(fn),
+	});
 	const shapeSelectionBefore = tracedMetrics;
 	const shapeSelection = selectCoreKnownOwnSlots(summaryProgram, shapeProvenance);
 	for (const [index, fn] of shapeSelection.program.functions.entries()) {

@@ -12,7 +12,7 @@ import {
 	coreMemoryLocationFamily,
 	coreMemoryLocationIsExact,
 } from "./core-ir-memory.ts";
-import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
@@ -33,12 +33,15 @@ import {
 } from "./core-ir-region-validity.ts";
 import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import {
+	analyzeCoreShapeProvenance,
+	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE,
 	CORE_SHAPE_CASE_MAX_LOADS,
 	CORE_SHAPE_CASE_MAX_SPAN,
 	CORE_SHAPE_CASE_MIN_LOADS,
 	CORE_SHAPE_CASE_SLOTS_ATTRIBUTE,
+	coreExactShapeOwnSlotFromAttribute,
 	coreKnownOwnSlotFromAttribute,
 	coreShapeCaseCandidatesFromAttribute,
 	coreShapeCaseSlotsFromAttribute,
@@ -56,6 +59,7 @@ import {
 	coreCallValueSummaryDigest,
 	deriveCoreCallEffectRefinement,
 } from "./core-ir-summaries.ts";
+import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
 	analyzeCoreValueClasses,
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
@@ -64,6 +68,7 @@ import {
 	coreExactCollectionBrand,
 	coreNumericTypedArrayKind,
 } from "./core-ir-value-classes.ts";
+import type { CoreValueClassAnalysis } from "./core-ir-value-classes.ts";
 import {
 	analyzeCoreValueKinds,
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
@@ -72,6 +77,7 @@ import {
 	coreExactBinaryInputKindMasks,
 	coreExactCallArgumentRepresentations,
 } from "./core-ir-value-kinds.ts";
+import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlock,
 	CoreBlockId,
@@ -1177,7 +1183,7 @@ function verifyCoreFunctionGraph(
 function verifySummaryClaims(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
-	compilationContext: CoreCompilationContext | undefined,
+	summaries: () => CoreProgramSummaries,
 ): void {
 	const refined: Array<{
 		readonly functionIndex: number;
@@ -1231,7 +1237,7 @@ function verifySummaryClaims(
 		}
 	}
 	if (refined.length === 0 && valueClaims.length === 0) return;
-	const summaries = analyzeCoreProgramSummaries(program, registry, compilationContext);
+	const currentSummaries = summaries();
 	for (const { functionIndex, instruction, fact } of refined) {
 		const where = `instruction @${instruction.id} in function ${functionIndex}`;
 		if (instruction.opcode !== "call") {
@@ -1247,7 +1253,7 @@ function verifySummaryClaims(
 		if (fact.validity.digest !== coreCallSummaryDigest(claim)) {
 			fail(`${where} names a callee-summary fact whose digest does not match its claim`);
 		}
-		const current = summaries.callSite(functionIndex, instruction.id);
+		const current = currentSummaries.callSite(functionIndex, instruction.id);
 		if (current === undefined) {
 			fail(
 				`${where} claims callee targets [${claim.targets.join(", ")}] the current graph does not prove closed`,
@@ -1277,7 +1283,7 @@ function verifySummaryClaims(
 		if (claim.digest !== coreCallValueSummaryDigest(claim)) {
 			fail(`${where} carries callee value facts whose digest does not match`);
 		}
-		const current = summaries.callSite(functionIndex, instruction.id);
+		const current = currentSummaries.callSite(functionIndex, instruction.id);
 		if (current === undefined) {
 			fail(`${where} carries callee value facts for a call that is no longer closed`);
 		}
@@ -1308,6 +1314,8 @@ export function verifyCoreProgram(
 function verifyKnownOwnSlotClaims(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
+	verifyExact: boolean,
+	summaries: () => CoreProgramSummaries,
 ): void {
 	const cellForString = coreOwnCellResolver(program.stringConstants);
 	const instructionsByFunction = program.functions.map(
@@ -1319,10 +1327,65 @@ function verifyKnownOwnSlotClaims(
 			),
 	);
 	const keysByOrigin = new Map<string, ReadonlyArray<number>>();
+	let shapeProvenance: ReturnType<typeof analyzeCoreShapeProvenance> | undefined;
+	const exactShapeProvenance = (): ReturnType<typeof analyzeCoreShapeProvenance> => {
+		if (shapeProvenance !== undefined) return shapeProvenance;
+		const currentSummaries = summaries();
+		shapeProvenance = analyzeCoreShapeProvenance(program, {
+			registry,
+			calleeTargets: currentSummaries.targets,
+			summaries: currentSummaries,
+		});
+		return shapeProvenance;
+	};
 	for (const fn of program.functions) {
 		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
+				const hasExact = CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in instruction.attributes;
+				if (hasExact) {
+					if (
+						claimed.has(instruction.id) ||
+						(instruction.opcode !== "loadPropertyStatic" &&
+							instruction.opcode !== "storePropertyStatic") ||
+						CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes
+					) {
+						fail(`instruction @${instruction.id} carries an invalid exact shape slot`);
+					}
+					const claim = coreExactShapeOwnSlotFromAttribute(
+						instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE],
+					);
+					if (claim === undefined) {
+						fail(`instruction @${instruction.id} carries an invalid exact shape slot`);
+					}
+					if (verifyExact) {
+						const receiver = instruction.inputs[0];
+						const stringIndex = instruction.attributes.stringIndex;
+						const current =
+							receiver === undefined || typeof stringIndex !== "number"
+								? undefined
+								: exactShapeProvenance().exactOwnSlot(
+										fn.functionIndex,
+										receiver,
+										stringIndex,
+									);
+						if (
+							current === undefined ||
+							current.slot !== claim.slot ||
+							current.origins.length !== claim.origins.length ||
+							current.origins.some(
+								(origin, index) =>
+									origin.shapeFunctionIndex !==
+										claim.origins[index]?.shapeFunctionIndex ||
+									origin.shapeInstruction !== claim.origins[index]?.shapeInstruction,
+							)
+						) {
+							fail(
+								`instruction @${instruction.id} carries an exact shape slot the current graph no longer proves`,
+							);
+						}
+					}
+				}
 				if (!(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)) continue;
 				if (claimed.has(instruction.id)) {
 					fail(
@@ -1699,7 +1762,7 @@ function verifyContainedDenseArrayElementClaims(
 
 function verifyExactTypedArrayClaims(
 	program: CoreProgram,
-	compilationContext: CoreCompilationContext | undefined,
+	valueClasses: () => CoreValueClassAnalysis,
 ): void {
 	const claims = program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) =>
@@ -1712,7 +1775,7 @@ function verifyExactTypedArrayClaims(
 		),
 	);
 	if (claims.length === 0) return;
-	const analysis = analyzeCoreValueClasses(program, compilationContext);
+	const analysis = valueClasses();
 	for (const { fn, instruction } of claims) {
 		const receiver = instruction.inputs[0];
 		const claimed = coreNumericTypedArrayKind(
@@ -1734,7 +1797,7 @@ function verifyExactTypedArrayClaims(
 
 function verifyExactCollectionReceiverClaims(
 	program: CoreProgram,
-	compilationContext: CoreCompilationContext | undefined,
+	valueClasses: () => CoreValueClassAnalysis,
 ): void {
 	const claims = program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) =>
@@ -1747,7 +1810,7 @@ function verifyExactCollectionReceiverClaims(
 		),
 	);
 	if (claims.length === 0) return;
-	const analysis = analyzeCoreValueClasses(program, compilationContext);
+	const analysis = valueClasses();
 	for (const { fn, instruction } of claims) {
 		const receiver = instruction.inputs[1];
 		const call = instruction.attributes.knownBuiltinCall;
@@ -1778,7 +1841,7 @@ function verifyExactCollectionReceiverClaims(
 
 function verifyExactCallArgumentClaims(
 	program: CoreProgram,
-	compilationContext: CoreCompilationContext | undefined,
+	valueKinds: () => CoreValueKindAnalysis,
 ): void {
 	const claims = program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) =>
@@ -1791,12 +1854,7 @@ function verifyExactCallArgumentClaims(
 		),
 	);
 	if (claims.length === 0) return;
-	const summaries = analyzeCoreProgramSummaries(
-		program,
-		coreOpcodeRegistry,
-		compilationContext,
-	);
-	const analysis = analyzeCoreValueKinds(program, compilationContext, summaries);
+	const analysis = valueKinds();
 	for (const { fn, instruction } of claims) {
 		const targetIndex = instruction.attributes.directFunctionIndex;
 		const target =
@@ -1825,7 +1883,7 @@ function verifyExactCallArgumentClaims(
 
 function verifyExactBinaryInputKindClaims(
 	program: CoreProgram,
-	compilationContext: CoreCompilationContext | undefined,
+	valueKinds: () => CoreValueKindAnalysis,
 ): void {
 	const claims = program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) =>
@@ -1838,12 +1896,7 @@ function verifyExactBinaryInputKindClaims(
 		),
 	);
 	if (claims.length === 0) return;
-	const summaries = analyzeCoreProgramSummaries(
-		program,
-		coreOpcodeRegistry,
-		compilationContext,
-	);
-	const analysis = analyzeCoreValueKinds(program, compilationContext, summaries);
+	const analysis = valueKinds();
 	for (const { fn, instruction } of claims) {
 		const claim = coreExactBinaryInputKindMasks(
 			instruction.attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE],
@@ -1957,12 +2010,34 @@ function verifyCoreProgramGraph(
 			fail(`source position ${index} has invalid caller position`);
 		}
 	}
-	verifyKnownOwnSlotClaims(program, registry);
+	let summariesAnalysis: CoreProgramSummaries | undefined;
+	const summaries = (): CoreProgramSummaries =>
+		(summariesAnalysis ??= analyzeCoreProgramSummaries(
+			program,
+			registry,
+			compilationContext,
+		));
+	let valueClassAnalysis: CoreValueClassAnalysis | undefined;
+	const valueClasses = (): CoreValueClassAnalysis =>
+		(valueClassAnalysis ??= analyzeCoreValueClasses(
+			program,
+			compilationContext,
+			undefined,
+			summaries(),
+		));
+	let valueKindAnalysis: CoreValueKindAnalysis | undefined;
+	const valueKinds = (): CoreValueKindAnalysis =>
+		(valueKindAnalysis ??= analyzeCoreValueKinds(
+			program,
+			compilationContext,
+			summaries(),
+		));
+	verifyKnownOwnSlotClaims(program, registry, context?.stage === "pre-target", summaries);
 	if (context?.stage === "pre-target") {
-		verifyExactTypedArrayClaims(program, compilationContext);
-		verifyExactCollectionReceiverClaims(program, compilationContext);
-		verifyExactCallArgumentClaims(program, compilationContext);
-		verifyExactBinaryInputKindClaims(program, compilationContext);
+		verifyExactTypedArrayClaims(program, valueClasses);
+		verifyExactCollectionReceiverClaims(program, valueClasses);
+		verifyExactCallArgumentClaims(program, valueKinds);
+		verifyExactBinaryInputKindClaims(program, valueKinds);
 	}
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {
@@ -2004,5 +2079,5 @@ function verifyCoreProgramGraph(
 			},
 		);
 	}
-	verifySummaryClaims(program, registry, compilationContext);
+	verifySummaryClaims(program, registry, summaries);
 }

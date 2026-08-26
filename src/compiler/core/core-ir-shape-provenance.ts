@@ -23,8 +23,10 @@ import { analyzeCoreCalleeTargets } from "./core-ir-call-targets.ts";
 import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { analyzeCoreInterproceduralValueFlow } from "./core-ir-interprocedural-flow.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { coreOwnCellResolver, coreProvenance } from "./core-ir-provenance.ts";
+import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { coreInstructionId, coreValueId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
@@ -43,6 +45,7 @@ export const CORE_SHAPE_ORIGIN_CAP = 4;
 
 /** Target-visible advisory slot candidate owned by the Core shape selector. */
 export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
+export const CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE = "exactShapeOwnSlot";
 export const CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE = "shapeCaseCandidates";
 export const CORE_SHAPE_CASE_SLOTS_ATTRIBUTE = "shapeCaseSlots";
 
@@ -54,6 +57,11 @@ export interface CoreKnownOwnSlotCandidate {
 
 export interface CoreKnownOwnSlot {
 	readonly candidates: ReadonlyArray<CoreKnownOwnSlotCandidate>;
+}
+
+export interface CoreExactShapeOwnSlot {
+	readonly slot: number;
+	readonly origins: ReadonlyArray<CoreShapeCaseCandidate>;
 }
 
 export interface CoreShapeCaseCandidate {
@@ -113,6 +121,27 @@ export function coreKnownOwnSlotFromAttribute(
 	return Object.freeze({
 		candidates: Object.freeze(candidates),
 	});
+}
+
+/** Parse a direct-slot certificate without trusting target-facing metadata. */
+export function coreExactShapeOwnSlotFromAttribute(
+	value: unknown,
+): CoreExactShapeOwnSlot | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		Object.keys(record).length !== 2 ||
+		!isNonnegativeSafeInteger(record.slot) ||
+		record.slot >= 64
+	) {
+		return undefined;
+	}
+	const origins = coreShapeCaseCandidatesFromAttribute(record.origins);
+	return origins === undefined
+		? undefined
+		: Object.freeze({ slot: record.slot, origins });
 }
 
 /** Parse a shared shape selector's bounded candidate list. */
@@ -184,6 +213,23 @@ function knownOwnSlotsEqual(
 	);
 }
 
+function exactShapeOwnSlotsEqual(
+	left: CoreExactShapeOwnSlot | undefined,
+	right: CoreExactShapeOwnSlot | undefined,
+): boolean {
+	return (
+		left !== undefined &&
+		right !== undefined &&
+		left.slot === right.slot &&
+		left.origins.length === right.origins.length &&
+		left.origins.every(
+			(origin, index) =>
+				origin.shapeFunctionIndex === right.origins[index]?.shapeFunctionIndex &&
+				origin.shapeInstruction === right.origins[index]?.shapeInstruction,
+		)
+	);
+}
+
 const PROTO_LITERAL_KEY: ReadonlyArray<number> = Object.freeze([
 	0x5f, 0x5f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x5f, 0x5f,
 ]);
@@ -237,10 +283,19 @@ export interface CoreShapeProvenanceStatistics {
 	readonly propagations: number;
 	/** Values that observed more origins than the finite candidate bound. */
 	readonly saturatedValues: number;
+	/** Origins whose complete value-flow cone never reaches a shape-invalidating use. */
+	readonly stableOrigins: number;
+	readonly unstableOrigins: number;
 }
 
 export interface CoreShapeProvenanceAnalysis {
 	candidates(functionIndex: number, value: CoreValueId): CoreShapeCandidates;
+	/** A no-guard own data slot proved from the complete, uncapped escape cone. */
+	exactOwnSlot(
+		functionIndex: number,
+		value: CoreValueId,
+		stringIndex: number,
+	): CoreExactShapeOwnSlot | undefined;
 	isLoopBlock(functionIndex: number, block: CoreBlockId): boolean;
 	readonly origins: ReadonlyArray<CoreShapeOrigin>;
 	readonly statistics: CoreShapeProvenanceStatistics;
@@ -249,6 +304,8 @@ export interface CoreShapeProvenanceAnalysis {
 export interface CoreShapeProvenanceOptions {
 	readonly registry?: CoreOpcodeRegistry;
 	readonly calleeTargets?: CoreCalleeTargetAnalysis;
+	/** Closed-world entry and positional-call authority shared with other lattices. */
+	readonly summaries?: CoreProgramSummaries;
 	readonly controlFlow?: (fn: CoreFunction) => CoreControlFlow;
 	/** Function bodies that reach execution in the current closed image. */
 	readonly executableFunctions?: ReadonlySet<number>;
@@ -494,6 +551,10 @@ export function analyzeCoreShapeProvenance(
 	const registry = options.registry ?? coreOpcodeRegistry;
 	const calleeTargets =
 		options.calleeTargets ?? analyzeCoreCalleeTargets(program, registry);
+	const interprocedural =
+		options.summaries === undefined
+			? undefined
+			: analyzeCoreInterproceduralValueFlow(program, options.summaries, registry);
 	const executableFunctions =
 		options.executableFunctions ??
 		new Set(program.functions.map(({ functionIndex }) => functionIndex));
@@ -559,6 +620,8 @@ export function analyzeCoreShapeProvenance(
 	const originByInstruction = new Map<string, number>();
 	const constructorOriginByFunction = new Map<number, number>();
 	const aggregateFunctions = new Set<number>();
+	const modelledAggregateAllocations = new Set<string>();
+	const modelledAggregateStores = new Set<string>();
 	const thisNodes = new Map<number, Array<number>>();
 	const controlFlowByFunction = new Map<number, CoreControlFlow>();
 	const loopBlocksByFunction = new Map<number, ReadonlySet<CoreBlockId>>();
@@ -624,6 +687,10 @@ export function analyzeCoreShapeProvenance(
 	}
 
 	const dependents = new Map<number, Array<number>>();
+	// Shape stability is a may-escape question over the complete value-flow graph.
+	// Keep its reverse graph independent of the bounded candidate lattice: losing a
+	// fifth advisory guard candidate must never make an allocation appear stable.
+	const stabilityPredecessors = new Map<number, Array<number>>();
 	const originSeeds: Array<readonly [number, number]> = [];
 	const opaqueSeeds: Array<number> = [];
 	let edges = 0;
@@ -632,6 +699,14 @@ export function analyzeCoreShapeProvenance(
 		if (existing === undefined) dependents.set(source, [destination]);
 		else existing.push(destination);
 		edges++;
+		const predecessors = stabilityPredecessors.get(destination);
+		if (predecessors === undefined) stabilityPredecessors.set(destination, [source]);
+		else predecessors.push(source);
+	};
+	const addStabilityEdge = (source: number, destination: number): void => {
+		const predecessors = stabilityPredecessors.get(destination);
+		if (predecessors === undefined) stabilityPredecessors.set(destination, [source]);
+		else predecessors.push(source);
 	};
 	const openOutputs = (fn: CoreFunction, instruction: CoreInstruction): void => {
 		for (const output of instruction.outputs) {
@@ -642,6 +717,7 @@ export function analyzeCoreShapeProvenance(
 	for (const fn of activeFunctions) {
 		const base = valueBase.get(fn.functionIndex)!;
 		const node = (value: CoreValueId): number => base + value;
+		const functionParameters = new Set(fn.parameters);
 		const cfg = controlFlowByFunction.get(fn.functionIndex)!;
 		const provenance = aggregateFunctions.has(fn.functionIndex)
 			? coreProvenance(fn, cfg, program.stringConstants)
@@ -649,6 +725,7 @@ export function analyzeCoreShapeProvenance(
 		const aggregateCells = new Map<CoreInstructionId, Map<number, number>>();
 		for (const layout of provenance?.layouts ?? []) {
 			if (layout.kind !== "named-slots") continue;
+			modelledAggregateAllocations.add(`${fn.functionIndex}\0${layout.instruction}`);
 			const cells = new Map<number, number>();
 			aggregateCells.set(layout.instruction, cells);
 			for (const [index, keyStringIndex] of layout.keys.entries()) {
@@ -658,6 +735,10 @@ export function analyzeCoreShapeProvenance(
 				const cell = aggregateNode(fn.functionIndex, layout.instruction, key.key);
 				cells.set(key.key, cell);
 				addEdge(node(initial), cell);
+				// If the carrier escapes, each value stored in one of its fields escapes
+				// with it. This edge is stability-only: field contents are not possible
+				// allocation origins of the carrier itself.
+				addStabilityEdge(cell, node(layout.result));
 				// Once the carrier escapes, unknown code can delete the field, replace
 				// its descriptor, or write any value. Keep every in-image candidate but
 				// never present the aggregate cell as closed.
@@ -676,10 +757,18 @@ export function analyzeCoreShapeProvenance(
 				? aggregateCells.get(layout.instruction)?.get(key.key)
 				: undefined;
 		};
-		// A function can always be entered by code this candidate graph does not name.
-		// Known calls add useful origins below, but never turn a formal into a closed
-		// current-shape proof.
-		for (const parameter of fn.parameters) opaqueSeeds.push(node(parameter));
+		// Without a whole-program closure certificate, every formal remains externally
+		// enterable. In a closed image, use the shared positional-call authority: a
+		// formal is open only when an actual external, aggregate, or unresolved entry
+		// can supply it. Named call edges below carry every in-image origin.
+		for (const [index, parameter] of fn.parameters.entries()) {
+			if (
+				interprocedural === undefined ||
+				interprocedural.parameterOpen(fn.functionIndex, index)
+			) {
+				opaqueSeeds.push(node(parameter));
+			}
+		}
 		for (const block of fn.blocks) {
 			if (!cfg.reachable.has(block.id)) continue;
 			const incoming = (cfg.predecessors[block.id] ?? []).filter(({ from }) =>
@@ -687,6 +776,9 @@ export function analyzeCoreShapeProvenance(
 			);
 			for (const [index, parameter] of block.parameters.entries()) {
 				const destination = node(parameter.value);
+				if (block.id === fn.entry && functionParameters.has(parameter.value)) {
+					continue;
+				}
 				if (block.id === fn.entry || parameter.role === "exception") {
 					opaqueSeeds.push(destination);
 					continue;
@@ -752,6 +844,7 @@ export function analyzeCoreShapeProvenance(
 							: undefined;
 					if (cell !== undefined && source !== undefined) {
 						addEdge(node(source), cell);
+						modelledAggregateStores.add(`${fn.functionIndex}\0${instruction.id}`);
 						continue;
 					}
 				}
@@ -792,7 +885,12 @@ export function analyzeCoreShapeProvenance(
 					}
 				}
 				if (instruction.opcode === "loadThis") {
-					openOutputs(fn, instruction);
+					if (
+						interprocedural === undefined ||
+						interprocedural.receiverOpen(fn.functionIndex)
+					) {
+						openOutputs(fn, instruction);
+					}
 					continue;
 				}
 				if (
@@ -945,6 +1043,151 @@ export function analyzeCoreShapeProvenance(
 		}
 	}
 
+	const callSites = new Map<
+		string,
+		NonNullable<typeof interprocedural>["calls"][number]
+	>();
+	for (const call of interprocedural?.calls ?? []) {
+		callSites.set(`${call.caller}\0${call.instruction.id}`, call);
+	}
+	const externallyReachable = new Set(
+		options.summaries?.functions
+			.filter(({ externallyReachable }) => externallyReachable)
+			.map(({ functionIndex }) => functionIndex) ?? [],
+	);
+	const unsafeSeeds: Array<number> = [];
+	const markInputsUnsafe = (fn: CoreFunction, instruction: CoreInstruction): void => {
+		for (const input of instruction.inputs) {
+			unsafeSeeds.push(valueNode(fn.functionIndex, input));
+		}
+	};
+	const staticAccessKeepsShape = (
+		fn: CoreFunction,
+		instruction: CoreInstruction,
+	): boolean => {
+		const receiver = instruction.inputs[0];
+		const stringIndex = instruction.attributes.stringIndex;
+		if (receiver === undefined || typeof stringIndex !== "number") return false;
+		const receiverNode = valueNode(fn.functionIndex, receiver);
+		const candidateIds = candidatesByNode[receiverNode] ?? [];
+		return (
+			opaqueByNode[receiverNode] === 0 &&
+			candidateIds.length > 0 &&
+			candidateIds.every((origin) =>
+				origins[origin]!.keyStringIndices.includes(stringIndex),
+			)
+		);
+	};
+	for (const fn of activeFunctions) {
+		const cfg = controlFlowByFunction.get(fn.functionIndex)!;
+		for (const block of fn.blocks) {
+			if (!cfg.reachable.has(block.id)) continue;
+			for (const instruction of block.instructions) {
+				const identity = `${fn.functionIndex}\0${instruction.id}`;
+				switch (instruction.opcode) {
+					case "move":
+					case "loadLocal":
+					case "loadCaptured":
+					case "loadGlobal":
+					case "loadArgument":
+					case "loadStaticArgument":
+					case "loadThis":
+					case "loadCallee":
+					case "loadNewTarget":
+					case "loadIntrinsic":
+					case "loadArgumentCount":
+					case "storeLocal":
+					case "loadPrototype":
+					case "isEmpty":
+					case "typeofCompare":
+					case "requireCoercible":
+					case "throwIfTdz":
+					case "guardFunctionIndex":
+					case "selectShapeCase":
+						break;
+					case "createObjectShaped":
+						if (!modelledAggregateAllocations.has(identity))
+							markInputsUnsafe(fn, instruction);
+						break;
+					case "loadPropertyStatic":
+					case "loadPropertyStaticShapeCase":
+						if (!staticAccessKeepsShape(fn, instruction)) {
+							const receiver = instruction.inputs[0];
+							if (receiver !== undefined)
+								unsafeSeeds.push(valueNode(fn.functionIndex, receiver));
+						}
+						break;
+					case "storePropertyStatic": {
+						if (!staticAccessKeepsShape(fn, instruction)) {
+							const receiver = instruction.inputs[0];
+							if (receiver !== undefined)
+								unsafeSeeds.push(valueNode(fn.functionIndex, receiver));
+						}
+						if (!modelledAggregateStores.has(identity)) {
+							const source = instruction.inputs[1];
+							if (source !== undefined)
+								unsafeSeeds.push(valueNode(fn.functionIndex, source));
+						}
+						break;
+					}
+					case "call": {
+						const call = callSites.get(identity);
+						const exactClosedCall =
+							call !== undefined &&
+							!call.open &&
+							call.transfer.invocation === "call" &&
+							call.transfer.arguments.kind === "positional" &&
+							instruction.attributes.directFunctionCall !== true;
+						if (!exactClosedCall) markInputsUnsafe(fn, instruction);
+						break;
+					}
+					case "storeCaptured":
+					case "storeGlobal":
+					case "storeGlobalProperty":
+						markInputsUnsafe(fn, instruction);
+						break;
+					default:
+						// Any unmodelled observation may invoke coercion, an accessor, Proxy
+						// machinery, or publish the reference. Exact lowering deliberately
+						// declines rather than inferring safety from a target implementation.
+						markInputsUnsafe(fn, instruction);
+						break;
+				}
+			}
+			if (block.terminator.kind === "throw") {
+				unsafeSeeds.push(valueNode(fn.functionIndex, block.terminator.value));
+			} else if (
+				block.terminator.kind === "return" &&
+				(externallyReachable.has(fn.functionIndex) || options.summaries === undefined)
+			) {
+				unsafeSeeds.push(valueNode(fn.functionIndex, block.terminator.value));
+			}
+		}
+	}
+
+	const unstableNodes = new Uint8Array(nodeCount);
+	const unstableQueue: Array<number> = [];
+	for (const seed of unsafeSeeds) {
+		if (unstableNodes[seed] !== 0) continue;
+		unstableNodes[seed] = 1;
+		unstableQueue.push(seed);
+	}
+	for (let index = 0; index < unstableQueue.length; index++) {
+		const destination = unstableQueue[index]!;
+		for (const source of stabilityPredecessors.get(destination) ?? []) {
+			if (unstableNodes[source] !== 0) continue;
+			unstableNodes[source] = 1;
+			unstableQueue.push(source);
+		}
+	}
+	const unstableOrigins = new Uint8Array(origins.length);
+	for (const [node, origin] of originSeeds) {
+		if (unstableNodes[node] !== 0) unstableOrigins[origin] = 1;
+	}
+	const unstableOriginCount = unstableOrigins.reduce(
+		(count, unstable) => count + (unstable === 0 ? 0 : 1),
+		0,
+	);
 	const queryCache = new Map<number, CoreShapeCandidates>();
 	return {
 		candidates(functionIndex: number, value: CoreValueId): CoreShapeCandidates {
@@ -974,6 +1217,49 @@ export function analyzeCoreShapeProvenance(
 			queryCache.set(valueNodeIndex, result);
 			return result;
 		},
+		exactOwnSlot(
+			functionIndex: number,
+			value: CoreValueId,
+			stringIndex: number,
+		): CoreExactShapeOwnSlot | undefined {
+			if (options.summaries === undefined) return undefined;
+			const base = valueBase.get(functionIndex);
+			const limit = valueLimits.get(functionIndex);
+			if (base === undefined || limit === undefined || value < 0 || value >= limit) {
+				return undefined;
+			}
+			const node = base + value;
+			const candidateIds = candidatesByNode[node] ?? [];
+			if (
+				opaqueByNode[node] !== 0 ||
+				candidateIds.length === 0 ||
+				candidateIds.some((origin) => unstableOrigins[origin] !== 0)
+			) {
+				return undefined;
+			}
+			const slots = candidateIds.map((origin) =>
+				origins[origin]!.keyStringIndices.indexOf(stringIndex),
+			);
+			const slot = slots[0];
+			if (
+				slot === undefined ||
+				slot < 0 ||
+				slots.some((candidate) => candidate !== slot)
+			) {
+				return undefined;
+			}
+			return Object.freeze({
+				slot,
+				origins: Object.freeze(
+					candidateIds.map((origin) =>
+						Object.freeze({
+							shapeFunctionIndex: origins[origin]!.functionIndex,
+							shapeInstruction: origins[origin]!.instruction,
+						}),
+					),
+				),
+			});
+		},
 		isLoopBlock(functionIndex: number, block: CoreBlockId): boolean {
 			return loopBlocksByFunction.get(functionIndex)?.has(block) === true;
 		},
@@ -985,6 +1271,8 @@ export function analyzeCoreShapeProvenance(
 			aggregateCellNodes: aggregateNodes.size,
 			propagations,
 			saturatedValues,
+			stableOrigins: origins.length - unstableOriginCount,
+			unstableOrigins: unstableOriginCount,
 		}),
 	};
 }
@@ -1046,6 +1334,26 @@ export function rebaseCoreShapeProvenance(
 			});
 			queryCache.set(key, result);
 			return result;
+		},
+		exactOwnSlot(
+			functionIndex: number,
+			value: CoreValueId,
+			stringIndex: number,
+		): CoreExactShapeOwnSlot | undefined {
+			const oldIndex = newToOld.get(functionIndex);
+			if (oldIndex === undefined) return undefined;
+			const exact = analysis.exactOwnSlot(oldIndex, value, stringIndex);
+			if (exact === undefined) return undefined;
+			const origins = exact.origins.map((origin) => {
+				const remapped = oldToNew.get(origin.shapeFunctionIndex);
+				if (remapped === undefined) {
+					throw new Error(
+						`Core compaction removed exact shaped origin ${origin.shapeFunctionIndex}:${origin.shapeInstruction}`,
+					);
+				}
+				return Object.freeze({ ...origin, shapeFunctionIndex: remapped });
+			});
+			return Object.freeze({ slot: exact.slot, origins: Object.freeze(origins) });
 		},
 		isLoopBlock(functionIndex: number, block: CoreBlockId): boolean {
 			const oldIndex = newToOld.get(functionIndex);
@@ -1325,13 +1633,18 @@ export function retractCoreKnownOwnSlots(
 						return [];
 					}
 					const clustered = instruction.opcode === "loadPropertyStaticShapeCase";
-					if (!clustered && !(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes)) {
+					if (
+						!clustered &&
+						!(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes) &&
+						!(CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in instruction.attributes)
+					) {
 						return [instruction];
 					}
 					const attributes: Record<string, CoreAttributeValue> = {
 						...instruction.attributes,
 					};
 					delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+					delete attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE];
 					delete attributes[CORE_SHAPE_CASE_SLOTS_ATTRIBUTE];
 					changed = true;
 					functionChanged = true;
@@ -1390,6 +1703,7 @@ export function selectCoreKnownOwnSlots(
 			let blockChanged = false;
 			const instructions = block.instructions.map((instruction): CoreInstruction => {
 				let selected: CoreKnownOwnSlot | undefined;
+				let exact: CoreExactShapeOwnSlot | undefined;
 				if (
 					(instruction.opcode === "loadPropertyStatic" ||
 						instruction.opcode === "storePropertyStatic") &&
@@ -1401,6 +1715,7 @@ export function selectCoreKnownOwnSlots(
 					const receiver = instruction.inputs[0]!;
 					const candidates = provenance.candidates(fn.functionIndex, receiver);
 					if (typeof stringIndex === "number") {
+						exact = provenance.exactOwnSlot(fn.functionIndex, receiver, stringIndex);
 						const selectedCandidates: Array<CoreKnownOwnSlotCandidate> = [];
 						const seenLayouts = new Set<string>();
 						for (const origin of candidates.origins) {
@@ -1419,7 +1734,7 @@ export function selectCoreKnownOwnSlots(
 								slot,
 							});
 						}
-						if (selectedCandidates.length > 0) {
+						if (exact === undefined && selectedCandidates.length > 0) {
 							const candidate: CoreKnownOwnSlot = {
 								candidates: Object.freeze(selectedCandidates),
 							};
@@ -1446,10 +1761,18 @@ export function selectCoreKnownOwnSlots(
 				const existing = coreKnownOwnSlotFromAttribute(
 					instruction.attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
 				);
+				const hasExistingExact =
+					CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in instruction.attributes;
+				const existingExact = coreExactShapeOwnSlotFromAttribute(
+					instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE],
+				);
 				if (
-					selected === undefined
+					(selected === undefined
 						? !hasExisting
-						: hasExisting && knownOwnSlotsEqual(existing, selected)
+						: hasExisting && knownOwnSlotsEqual(existing, selected)) &&
+					(exact === undefined
+						? !hasExistingExact
+						: hasExistingExact && exactShapeOwnSlotsEqual(existingExact, exact))
 				) {
 					return instruction;
 				}
@@ -1457,12 +1780,22 @@ export function selectCoreKnownOwnSlots(
 					...instruction.attributes,
 				};
 				delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+				delete attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE];
 				if (selected !== undefined) {
 					attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] = {
 						candidates: selected.candidates.map((candidate) => ({
 							shapeFunctionIndex: candidate.shapeFunctionIndex,
 							shapeInstruction: candidate.shapeInstruction,
 							slot: candidate.slot,
+						})),
+					};
+				}
+				if (exact !== undefined) {
+					attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE] = {
+						slot: exact.slot,
+						origins: exact.origins.map((origin) => ({
+							shapeFunctionIndex: origin.shapeFunctionIndex,
+							shapeInstruction: origin.shapeInstruction,
 						})),
 					};
 				}

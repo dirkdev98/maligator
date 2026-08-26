@@ -7,6 +7,10 @@ import {
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 } from "../src/compiler/core/core-ir-provenance.ts";
+import {
+	analyzeCoreShapeProvenance,
+	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
+} from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { analyzeCoreProgramSummaries } from "../src/compiler/core/core-ir-summaries.ts";
 import {
 	analyzeCoreValueClasses,
@@ -18,7 +22,11 @@ import {
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
 } from "../src/compiler/core/core-ir-value-kinds.ts";
-import type { CoreInstruction, CoreProgram } from "../src/compiler/core/core-ir.ts";
+import type {
+	CoreInstruction,
+	CoreProgram,
+	CoreValueId,
+} from "../src/compiler/core/core-ir.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
@@ -43,7 +51,7 @@ interface CoreInstructionSite {
 	readonly block: number;
 	readonly instruction: number;
 	readonly opcode: string;
-	readonly inputs: ReadonlyArray<number>;
+	readonly inputs: ReadonlyArray<CoreValueId>;
 	readonly outputs: ReadonlyArray<number>;
 	readonly attributes: CoreInstruction["attributes"];
 	readonly effectProofKind?: string;
@@ -125,6 +133,10 @@ try {
 	const summaries = analyzeCoreProgramSummaries(optimized, undefined, optimizedContext);
 	const valueFlow = analyzeCoreInterproceduralValueFlow(optimized, summaries);
 	const valueKinds = analyzeCoreValueKinds(optimized, optimizedContext, summaries);
+	const shapeProvenance = analyzeCoreShapeProvenance(optimized, {
+		calleeTargets: summaries.targets,
+		summaries,
+	});
 	const native = process.argv.includes("--native")
 		? runPhase("lowerNativeMs", () =>
 				lowerCoreCompilationToExecution(optimizedCompilation),
@@ -374,6 +386,7 @@ try {
 						: `entry:${entry}`,
 				phases,
 				counts: {
+					shapeProvenance: shapeProvenance.statistics,
 					externallyReachableFunctions: summaries.functions.filter(
 						({ externallyReachable }) => externallyReachable,
 					).length,
@@ -399,6 +412,28 @@ try {
 					exactAggregateSlots: instructionSites.filter(
 						({ effectProofKind }) =>
 							effectProofKind === CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
+					).length,
+					exactShapeSlots: instructionSites.filter(
+						({ attributes }) => CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in attributes,
+					).length,
+					guardedOwnSlotSites: instructionSites.filter(
+						({ opcode, attributes }) =>
+							opcode === "loadPropertyStaticShapeCase" || "knownOwnSlot" in attributes,
+					).length,
+					closedShapeOriginSites: instructionSites.filter(
+						({ functionIndex, opcode, inputs }) => {
+							if (
+								opcode !== "loadPropertyStatic" &&
+								opcode !== "loadPropertyStaticShapeCase" &&
+								opcode !== "storePropertyStatic"
+							) {
+								return false;
+							}
+							const receiver = inputs[0];
+							if (receiver === undefined) return false;
+							const candidates = shapeProvenance.candidates(functionIndex, receiver);
+							return candidates.origins.length > 0 && !candidates.opaque;
+						},
 					).length,
 					exactTypedArrayAccesses: instructionSites.filter(
 						({ attributes }) => CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE in attributes,

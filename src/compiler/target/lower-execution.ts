@@ -13,6 +13,10 @@ import {
 	CORE_OWN_DATA_CELL_FACT,
 } from "../core/core-ir-provenance.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
+import {
+	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
+	coreExactShapeOwnSlotFromAttribute,
+} from "../core/core-ir-shape-provenance.ts";
 import { CORE_INTERNAL_SUMMARY_ATTRIBUTES } from "../core/core-ir-summaries.ts";
 import {
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
@@ -86,6 +90,7 @@ const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
 ]);
 
 interface LoweredParallelCopy {
@@ -226,7 +231,11 @@ function rebuildInstruction(
 	regionNamed: boolean,
 ): CompilerInstruction {
 	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
-	const exactOwnSlot = exactContainedOwnSlot(core, instruction);
+	const exactShapeOwnSlot = coreExactShapeOwnSlotFromAttribute(
+		instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE],
+	);
+	const exactOwnSlot =
+		exactContainedOwnSlot(core, instruction) ?? exactShapeOwnSlot?.slot;
 	const exactArrayLength =
 		instruction.opcode === "loadPropertyStatic" &&
 		instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] === true;

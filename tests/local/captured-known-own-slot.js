@@ -432,4 +432,30 @@ ok(
 	}) === 10,
 );
 
+const readClosedPoint = function (point) {
+	return point.x + point.y;
+};
+const writeClosedPoint = function (point, x) {
+	point.x = x;
+	return readClosedPoint(point);
+};
+const exerciseClosedPoint = function () {
+	const point = { x: 4, y: 6 };
+	return writeClosedPoint(point, 8);
+};
+ok("closed cross-call shaped slots", exerciseClosedPoint() === 14);
+
+const readAfterObservableMutation = function (point) {
+	Object.defineProperty(point, "x", {
+		get() {
+			return 11;
+		},
+	});
+	return readClosedPoint(point);
+};
+ok(
+	"observable mutation retains generic semantics",
+	readAfterObservableMutation({ x: 4, y: 6 }) === 17,
+);
+
 console.log("captured-known-own-slot PASS");

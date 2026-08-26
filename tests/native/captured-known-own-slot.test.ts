@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertExactLines,
 	buildNativeBinary,
@@ -12,6 +13,7 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-captured-known-own-slot-"));
 const fixture = "tests/local/captured-known-own-slot.js";
 const expected = ["captured-known-own-slot PASS"];
+const config = resolveBuildConfig({ engine: { primordials: "locked" } });
 
 describe("captured, aggregate, call, construct, spread, and method shape accesses", () => {
 	let compiled: string;
@@ -23,12 +25,14 @@ describe("captured, aggregate, call, construct, spread, and method shape accesse
 			name: "captured-known-own-slot-compiled",
 			compiled: true,
 			outDir,
+			config,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "captured-known-own-slot-interpreted",
 			compiled: false,
 			outDir,
+			config,
 		});
 	}, 600_000);
 
