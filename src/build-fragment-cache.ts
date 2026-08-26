@@ -29,6 +29,7 @@ import type {
 	ModuleParseCache,
 } from "./compiler/frontend/module-graph.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
+import { collectPrimordialMutationDiagnostics } from "./compiler/frontend/primordial-diagnostics.ts";
 import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
@@ -41,6 +42,8 @@ import type {
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
+import { compareCompilerDiagnostics } from "./compiler/shared/compiler-diagnostics.ts";
+import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 import {
@@ -66,7 +69,7 @@ import {
 	FrontendCompilationSession,
 } from "./frontend-cache.ts";
 
-const FRAGMENT_SCHEMA = 1;
+const FRAGMENT_SCHEMA = 2;
 const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "build-fragments");
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 
@@ -82,6 +85,7 @@ interface CompiledArtifact {
 	programImage: ReturnType<typeof compileSemanticProgramToProgramImage>;
 	runtimeArtifact: BuildFragmentArtifact;
 	compilerArtifact: BuildFragmentArtifact;
+	diagnostics: Array<CompilerDiagnostic>;
 	cache: "hit" | "miss";
 }
 
@@ -116,6 +120,7 @@ export interface CompiledBuildFragments {
 	runtimeArtifacts: Array<BuildFragmentArtifact>;
 	compilerArtifact: BuildFragmentArtifact;
 	programImage: ReturnType<typeof compileSemanticProgramToProgramImage>;
+	diagnostics: Array<CompilerDiagnostic>;
 	artifactHits: number;
 	artifactMisses: number;
 }
@@ -303,8 +308,67 @@ function applicationGraph(
 		buildConfig: options.config,
 		parseCache,
 		virtualModules,
-		entryPrelude: options.entryPrelude,
 	});
+}
+
+/**
+ * Keep a stable toolchain prelude out of the edited application fragment. The
+ * development runner evaluates runtime wires in order, so a separately cached
+ * prelude preserves its before-application contract without re-running semantic
+ * analysis and Core optimization after every project edit.
+ */
+function preludeGraph(options: CompileBuildFragmentsOptions): ModuleGraph | undefined {
+	const specifier = options.entryPrelude?.specifier;
+	if (specifier === undefined) return undefined;
+	const reachable = new Set<string>();
+	const pending = [specifier];
+	while (pending.length > 0) {
+		const current = pending.pop()!;
+		if (reachable.has(current)) continue;
+		const record = options.graph.modules.get(current);
+		if (record === undefined) {
+			throw new UnsupportedBuildFragmentsError(
+				`toolchain prelude module '${current}' is missing from the graph`,
+			);
+		}
+		if (current !== specifier && record.host === undefined) {
+			throw new UnsupportedBuildFragmentsError(
+				"a toolchain prelude with source dependencies requires the whole-image fallback",
+			);
+		}
+		reachable.add(current);
+		for (const dependency of record.dependencies) {
+			if (dependency.resolvedPath === null) {
+				throw new UnsupportedBuildFragmentsError(
+					"a toolchain prelude with a computed dependency requires the whole-image fallback",
+				);
+			}
+			pending.push(dependency.resolvedPath);
+		}
+	}
+	for (const cycle of options.graph.cycles) {
+		if (
+			cycle.some((module) => reachable.has(module)) &&
+			cycle.some((module) => !reachable.has(module))
+		) {
+			throw new UnsupportedBuildFragmentsError(
+				"a toolchain prelude cycle requires the whole-image fallback",
+			);
+		}
+	}
+	return {
+		entry: specifier,
+		nodeEnabled: options.graph.nodeEnabled,
+		modules: new Map(
+			[...options.graph.modules].filter(([module]) => reachable.has(module)),
+		),
+		evaluationOrder: options.graph.evaluationOrder.filter((module) =>
+			reachable.has(module),
+		),
+		cycles: options.graph.cycles.filter((cycle) =>
+			cycle.every((module) => reachable.has(module)),
+		),
+	};
 }
 
 function environmentIdentity(options: CompileBuildFragmentsOptions): string {
@@ -400,11 +464,13 @@ function compileArtifact(
 			schema?: number;
 			runtimeArtifact?: BuildFragmentArtifact;
 			compilerArtifact?: BuildFragmentArtifact;
+			diagnostics?: Array<CompilerDiagnostic>;
 		};
 		if (
-			reference.schema !== 2 ||
+			reference.schema !== 3 ||
 			reference.runtimeArtifact === undefined ||
 			reference.compilerArtifact === undefined ||
+			!Array.isArray(reference.diagnostics) ||
 			!validArtifact(reference.runtimeArtifact, artifactRoot) ||
 			!frontendCompilerArtifactUnchanged(reference.compilerArtifact, artifactRoot)
 		) {
@@ -437,6 +503,7 @@ function compileArtifact(
 			},
 			runtimeArtifact: reference.runtimeArtifact,
 			compilerArtifact: reference.compilerArtifact,
+			diagnostics: reference.diagnostics,
 			cache: "hit",
 		};
 	} catch {
@@ -446,6 +513,12 @@ function compileArtifact(
 	const semantic = runSemanticAnalysisForGraph(graph);
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	const diagnostics =
+		options.facts.world.primordialPolicy === "locked"
+			? collectPrimordialMutationDiagnostics(semantic, options.facts.world, {
+					nodeEnabled: options.config.surface.node,
+				})
+			: [];
 	options.phases.semanticMs += Date.now() - semanticStartedAt;
 	const programImage = compileSemanticProgramToProgramImage(semantic, {
 		facts: options.facts,
@@ -476,9 +549,16 @@ function compileArtifact(
 	}
 	publish(
 		mappingPath,
-		`${JSON.stringify({ schema: 2, runtimeArtifact, compilerArtifact })}\n`,
+		`${JSON.stringify({ schema: 3, runtimeArtifact, compilerArtifact, diagnostics })}\n`,
 	);
-	return { wire, programImage, runtimeArtifact, compilerArtifact, cache: "miss" };
+	return {
+		wire,
+		programImage,
+		runtimeArtifact,
+		compilerArtifact,
+		diagnostics,
+		cache: "miss",
+	};
 }
 
 function linkageKey(
@@ -775,6 +855,18 @@ export function compileBuildFragments(
 	if (parallelValidation !== undefined) {
 		finishParallelLinkageValidation(parallelValidation.resultPath);
 	}
+	const prelude = preludeGraph(options);
+	const preludeArtifact =
+		prelude === undefined
+			? undefined
+			: compileArtifact(
+					root,
+					artifactRoot,
+					identity,
+					"toolchain-prelude",
+					prelude,
+					options,
+				);
 	const graphStartedAt = Date.now();
 	const application = applicationGraph(plans, options, options.session.moduleParses);
 	options.phases.graphMs += Date.now() - graphStartedAt;
@@ -787,19 +879,27 @@ export function compileBuildFragments(
 		options,
 	);
 	const hits =
+		(preludeArtifact?.cache === "hit" ? 1 : 0) +
 		dependencyArtifacts.filter((artifact) => artifact.cache === "hit").length +
 		(applicationArtifact.cache === "hit" ? 1 : 0);
+	const compiledArtifacts = [
+		...(preludeArtifact === undefined ? [] : [preludeArtifact]),
+		...dependencyArtifacts,
+		applicationArtifact,
+	];
 	return {
 		get wires() {
-			return [
-				...dependencyArtifacts.map((artifact) => artifact.wire),
-				applicationArtifact.wire,
-			];
+			return compiledArtifacts.map((artifact) => artifact.wire);
 		},
-		runtimeArtifacts: [...dependencyArtifacts, applicationArtifact.runtimeArtifact],
+		runtimeArtifacts: compiledArtifacts.map((artifact) =>
+			"runtimeArtifact" in artifact ? artifact.runtimeArtifact : artifact,
+		),
 		compilerArtifact: applicationArtifact.compilerArtifact,
 		programImage: applicationArtifact.programImage,
+		diagnostics: compiledArtifacts
+			.flatMap((artifact) => artifact.diagnostics)
+			.sort(compareCompilerDiagnostics),
 		artifactHits: hits,
-		artifactMisses: dependencyArtifacts.length + 1 - hits,
+		artifactMisses: compiledArtifacts.length - hits,
 	};
 }

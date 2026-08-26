@@ -14,8 +14,6 @@ import type {
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 
-const PASS = "fold-empty-forwarding-blocks";
-
 function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 	return {
 		functions,
@@ -29,13 +27,11 @@ function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 
 function optimize(fn: CoreFunction): {
 	readonly result: CoreFunction;
-	readonly folded: boolean;
 	readonly program: CoreProgram;
 } {
 	const outcome = executeCoreOptimizations(coreProgram([fn]));
 	return {
 		result: outcome.program.functions[0]!,
-		folded: outcome.passes.some(({ name, changed }) => name === PASS && changed),
 		program: outcome.program,
 	};
 }
@@ -90,8 +86,7 @@ function functionWithForwardedArguments(): CoreFunction {
 
 describe("Core empty forwarding blocks", () => {
 	it("substitutes edge arguments through a forwarding block", () => {
-		const { result, folded } = optimize(functionWithForwardedArguments());
-		expect(folded).toBe(true);
+		const { result } = optimize(functionWithForwardedArguments());
 		const entryTerminator = result.blocks[result.entry]!.terminator;
 		expect(entryTerminator.kind).toBe("branch");
 		if (entryTerminator.kind !== "branch") throw new Error("expected a branch");
@@ -138,8 +133,7 @@ describe("Core empty forwarding blocks", () => {
 			value: blockParameters(builder, exit)[0]!,
 		});
 
-		const { result, folded } = optimize(builder.finish(entry));
-		expect(folded).toBe(true);
+		const { result } = optimize(builder.finish(entry));
 		// The whole chain is gone; the return sees the entry's own value.
 		expect(result.blocks.length).toBeLessThan(4);
 		expect(() =>
@@ -164,8 +158,7 @@ describe("Core empty forwarding blocks", () => {
 		builder.setTerminator(other, { kind: "jump", edge: { block: spin, arguments: [] } });
 		builder.setTerminator(exit, { kind: "return", value: flag! });
 
-		const { result, folded } = optimize(builder.finish(entry));
-		expect(folded).toBe(false);
+		const { result } = optimize(builder.finish(entry));
 		const cfg = buildCoreControlFlow(result, coreOpcodeRegistry);
 		// CFG normalization may change the number of forwarding blocks, but it must
 		// preserve a reachable cycle instead of chasing it forever.
@@ -197,8 +190,7 @@ describe("Core empty forwarding blocks", () => {
 			value: blockParameters(builder, rethrow)[0]!,
 		});
 
-		const { result, folded } = optimize(builder.finish(entry));
-		expect(folded).toBe(false);
+		const { result } = optimize(builder.finish(entry));
 		const protectedBlock = result.blocks.find(({ handler: edge }) => edge !== undefined)!;
 		const handlerEntry = result.blocks[protectedBlock.handler!.block]!;
 		expect(handlerEntry.parameters[0]?.role).toBe("exception");
@@ -369,9 +361,6 @@ describe("Core empty forwarding blocks", () => {
 	it("reaches a stable fixpoint on a second optimization run", () => {
 		const first = optimize(functionWithForwardedArguments());
 		const second = executeCoreOptimizations(first.program);
-		expect(second.passes.some(({ name, changed }) => name === PASS && changed)).toBe(
-			false,
-		);
 		expect(second.program.functions[0]!.blocks).toEqual(first.result.blocks);
 	});
 });
@@ -408,11 +397,6 @@ describe("Core SSA and CFG cleanup", () => {
 
 		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]));
 		const result = outcome.program.functions[0]!;
-		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "eliminate-trivial-block-arguments" && changed,
-			),
-		).toBe(true);
 		expect(
 			result.values.some(
 				({ definition }) =>

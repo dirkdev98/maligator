@@ -57,13 +57,16 @@ export function optimizeSemanticProgramToCore(
 		},
 		runPhase,
 	});
+	// Development images keep one semantics-preserving pass over the fixpoint;
+	// production retains full convergence for runtime and size optimization.
+	const optimizationRounds =
+		options.optimizationRounds ??
+		(options.optimization === "development" ? 1 : undefined);
 	const optimized = runPhase("core ir optimizations", () => {
 		const result = executeCoreOptimizations(core.program, {
 			context: core.context,
 			ablations: options.optimizationAblations,
-			...(options.optimizationRounds === undefined
-				? {}
-				: { maxRounds: options.optimizationRounds }),
+			...(optimizationRounds === undefined ? {} : { maxRounds: optimizationRounds }),
 			...(options.coreVerification === undefined
 				? {}
 				: { verification: options.coreVerification }),

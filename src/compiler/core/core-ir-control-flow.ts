@@ -77,6 +77,12 @@ export interface CoreControlFlow {
  * dependencies to users. This collapses mutually recursive phis when their only
  * external producer is one value, in O(values + phi inputs) time.
  */
+class SparseCanonicalValueRoots extends Map<CoreValueId, CoreValueId> {
+	override get(value: CoreValueId): CoreValueId {
+		return super.get(value) ?? value;
+	}
+}
+
 export function coreCanonicalValueRoots(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
@@ -111,7 +117,7 @@ export function coreCanonicalValueRoots(
 		.map(({ id }) => id)
 		.filter((value) => dependencies[value] !== undefined);
 	if (nodes.length === 0) {
-		return new Map(fn.values.map(({ id }) => [id, id] as const));
+		return new SparseCanonicalValueRoots();
 	}
 	const reverse = new Array<Array<CoreValueId> | undefined>(valueCount);
 	for (const value of nodes) {
@@ -214,7 +220,12 @@ export function coreCanonicalValueRoots(
 			if (remainingDependencies[user] === 0) ready.push(user);
 		}
 	}
-	return new Map(fn.values.map(({ id }) => [id, coreValueId(canonical[id]!)] as const));
+	const roots = new SparseCanonicalValueRoots();
+	for (const { id } of fn.values) {
+		const root = coreValueId(canonical[id]!);
+		if (root !== id) roots.set(id, root);
+	}
+	return roots;
 }
 
 export function coreTerminatorEdges(

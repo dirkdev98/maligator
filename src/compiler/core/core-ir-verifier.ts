@@ -247,9 +247,9 @@ interface GuardLocation {
 function verifyEdge(
 	edge: CoreEdge,
 	from: CoreBlock,
-	blocks: ReadonlyMap<CoreBlockId, CoreBlock>,
+	blocks: ReadonlyArray<CoreBlock>,
 ): void {
-	const target = blocks.get(edge.block);
+	const target = blocks[edge.block];
 	if (target === undefined)
 		fail(`block b${from.id} targets unknown block b${edge.block}`);
 	if (target.parameters[0]?.role === "exception") {
@@ -280,14 +280,11 @@ function requireStableIds<T extends { readonly id: number }>(
 	kind: string,
 ): void {
 	let previous = -1;
-	const seen = new Set<number>();
 	for (const value of values) {
 		if (!Number.isSafeInteger(value.id) || value.id < 0)
 			fail(`invalid ${kind} id ${value.id}`);
-		if (seen.has(value.id)) fail(`duplicate ${kind} id ${value.id}`);
 		if (value.id <= previous)
 			fail(`${kind} ids must stay in monotonically allocated order`);
-		seen.add(value.id);
 		previous = value.id;
 	}
 }
@@ -295,7 +292,7 @@ function requireStableIds<T extends { readonly id: number }>(
 function verifyAttributeValue(
 	value: unknown,
 	path: string,
-	ancestors: ReadonlySet<object> = new Set(),
+	ancestors: Set<object> = new Set(),
 ): void {
 	if (
 		value === undefined ||
@@ -309,12 +306,13 @@ function verifyAttributeValue(
 	if (typeof value !== "object") fail(`${path} has unsupported attribute data`);
 	const objectValue = value;
 	if (ancestors.has(objectValue)) fail(`${path} contains cyclic attribute data`);
-	const nextAncestors = new Set(ancestors).add(objectValue);
+	ancestors.add(objectValue);
 	if (Array.isArray(value)) {
 		const arrayValue: ReadonlyArray<unknown> = value;
 		for (const [index, entry] of arrayValue.entries()) {
-			verifyAttributeValue(entry, `${path}[${index}]`, nextAncestors);
+			verifyAttributeValue(entry, `${path}[${index}]`, ancestors);
 		}
+		ancestors.delete(objectValue);
 		return;
 	}
 	const prototype = Object.getPrototypeOf(value) as unknown;
@@ -322,8 +320,9 @@ function verifyAttributeValue(
 		fail(`${path} has a non-data attribute object`);
 	}
 	for (const [key, entry] of Object.entries(value as Readonly<Record<string, unknown>>)) {
-		verifyAttributeValue(entry, `${path}.${key}`, nextAncestors);
+		verifyAttributeValue(entry, `${path}.${key}`, ancestors);
 	}
+	ancestors.delete(objectValue);
 }
 
 /**
@@ -338,14 +337,14 @@ function verifyAttributeValue(
  */
 function verifyRegionPropertyPlacement(
 	region: CoreRegion,
-	instructionBlocks: ReadonlyMap<CoreInstructionId, CoreBlockId>,
-	instructionOutputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreValueId>>,
-	valueUses: ReadonlyMap<
-		CoreValueId,
-		ReadonlyArray<{
-			readonly instruction: CoreInstructionId;
-			readonly position: number;
-		}>
+	instructionBlocks: ReadonlyArray<CoreBlockId | undefined>,
+	instructionOutputs: ReadonlyArray<ReadonlyArray<CoreValueId> | undefined>,
+	valueUses: ReadonlyArray<
+		| ReadonlyArray<{
+				readonly instruction: CoreInstructionId;
+				readonly position: number;
+		  }>
+		| undefined
 	>,
 ): void {
 	const data = region.data as Readonly<Record<string, unknown>>;
@@ -365,16 +364,16 @@ function verifyRegionPropertyPlacement(
 	}
 	const property = named as CoreInstructionId;
 	const call = region.anchors[0]!;
-	if (instructionBlocks.get(property) !== instructionBlocks.get(call)) {
+	if (instructionBlocks[property] !== instructionBlocks[call]) {
 		fail(
 			`region ${region.kind} defers @${property} across the block of its call @${call}`,
 		);
 	}
-	const outputs = instructionOutputs.get(property) ?? [];
+	const outputs = instructionOutputs[property] ?? [];
 	if (outputs.length !== 1) {
 		fail(`region ${region.kind} defers @${property}, which is not a single producer`);
 	}
-	const uses = valueUses.get(outputs[0]!) ?? [];
+	const uses = valueUses[outputs[0]!] ?? [];
 	if (
 		uses.length !== 1 ||
 		uses[0]?.instruction !== call ||
@@ -468,7 +467,7 @@ function verifyRegionReferences(
 	path: string,
 	instructions: ReadonlySet<CoreInstructionId>,
 	claimedInstructions: ReadonlySet<CoreInstructionId>,
-	blocks: ReadonlyMap<CoreBlockId, CoreBlock>,
+	blocks: ReadonlyArray<CoreBlock>,
 ): void {
 	if (value === null || typeof value !== "object") return;
 	if (Array.isArray(value)) {
@@ -496,7 +495,7 @@ function verifyRegionReferences(
 		return;
 	}
 	if (Object.keys(object).length === 1 && typeof object.$coreBlock === "number") {
-		if (!blocks.has(object.$coreBlock as CoreBlockId)) {
+		if (blocks[object.$coreBlock as CoreBlockId] === undefined) {
 			fail(`${path} references unknown block b${object.$coreBlock}`);
 		}
 		return;
@@ -531,7 +530,7 @@ function verifyRegionReferences(
 function verifyOwnDataCellRefinements(
 	fn: CoreFunction,
 	cfg: ReturnType<typeof buildCoreControlFlow>,
-	facts: ReadonlyMap<CoreFact["id"], CoreFact>,
+	facts: ReadonlyArray<CoreFact | undefined>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 ): void {
 	const refined = fn.blocks.flatMap(({ instructions }) =>
@@ -539,7 +538,7 @@ function verifyOwnDataCellRefinements(
 			const refinement = instruction.effectRefinement;
 			return (
 				refinement !== undefined &&
-				facts.get(refinement.proof)?.kind === CORE_OWN_DATA_CELL_FACT
+				facts[refinement.proof]?.kind === CORE_OWN_DATA_CELL_FACT
 			);
 		}),
 	);
@@ -558,7 +557,7 @@ function verifyOwnDataCellRefinements(
 		},
 	};
 	for (const instruction of refined) {
-		const fact = facts.get(instruction.effectRefinement!.proof)!;
+		const fact = facts[instruction.effectRefinement!.proof]!;
 		const factValue =
 			typeof fact.value === "object" && fact.value !== null
 				? (fact.value as Record<string, unknown>)
@@ -627,7 +626,7 @@ function verifyOwnDataCellRefinements(
 function verifyContainedAggregateOwnSlotRefinements(
 	fn: CoreFunction,
 	cfg: ReturnType<typeof buildCoreControlFlow>,
-	facts: ReadonlyMap<CoreFact["id"], CoreFact>,
+	facts: ReadonlyArray<CoreFact | undefined>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 ): void {
 	const refined = fn.blocks.flatMap(({ instructions }) =>
@@ -635,14 +634,14 @@ function verifyContainedAggregateOwnSlotRefinements(
 			const refinement = instruction.effectRefinement;
 			return (
 				refinement !== undefined &&
-				facts.get(refinement.proof)?.kind === CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT
+				facts[refinement.proof]?.kind === CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT
 			);
 		}),
 	);
 	if (refined.length === 0) return;
 	const analysis = coreContainedAggregateProvenance(fn, cfg, stringConstants);
 	for (const instruction of refined) {
-		const fact = facts.get(instruction.effectRefinement!.proof)!;
+		const fact = facts[instruction.effectRefinement!.proof]!;
 		const value =
 			typeof fact.value === "object" && fact.value !== null
 				? (fact.value as Record<string, unknown>)
@@ -719,12 +718,12 @@ function verifyCoreFunctionGraph(
 	requireDenseIds(fn.blocks, "block");
 	requireStableIds(fn.values, "value");
 	requireStableIds(fn.facts, "fact");
-	const blocks = new Map(fn.blocks.map((block) => [block.id, block]));
-	if (!blocks.has(fn.entry)) fail(`unknown entry block b${fn.entry}`);
-	if (fn.bodyEntry !== undefined && !blocks.has(fn.bodyEntry)) {
+	const blocks = fn.blocks;
+	if (blocks[fn.entry] === undefined) fail(`unknown entry block b${fn.entry}`);
+	if (fn.bodyEntry !== undefined && blocks[fn.bodyEntry] === undefined) {
 		fail(`unknown body entry block b${fn.bodyEntry}`);
 	}
-	const entryBlock = blocks.get(fn.entry)!;
+	const entryBlock = blocks[fn.entry]!;
 	if (entryBlock.parameters.length !== fn.parameters.length) {
 		fail(
 			`entry block has ${entryBlock.parameters.length} parameters for a ${fn.parameters.length}-parameter ABI`,
@@ -742,30 +741,31 @@ function verifyCoreFunctionGraph(
 	}
 
 	const instructionIds = new Set<CoreInstructionId>();
-	const definitions = new Map<CoreValueId, ValueDefinitionLocation>();
-	const values = new Map<CoreValueId, CoreValue>(
-		fn.values.map((value) => [value.id, value]),
-	);
-	const facts = new Map(fn.facts.map((fact) => [fact.id, fact]));
-	const guards = new Map<CoreInstructionId, GuardLocation>();
-	const instructionBlocks = new Map<CoreInstructionId, CoreBlockId>();
-	const instructions = new Map<CoreInstructionId, CoreInstruction>();
-	const instructionOutputs = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
-	const valueUses = new Map<
-		CoreValueId,
-		Array<{
-			readonly instruction: CoreInstructionId;
-			readonly position: number;
-		}>
-	>();
+	const definitions: Array<ValueDefinitionLocation | undefined> = [];
+	const values: Array<CoreValue | undefined> = [];
+	for (const value of fn.values) values[value.id] = value;
+	const facts: Array<CoreFact | undefined> = [];
+	for (const fact of fn.facts) facts[fact.id] = fact;
+	const guards: Array<GuardLocation | undefined> = [];
+	const instructionBlocks: Array<CoreBlockId | undefined> = [];
+	const instructions: Array<CoreInstruction | undefined> = [];
+	const instructionOutputs: Array<ReadonlyArray<CoreValueId> | undefined> = [];
+	const valueUses: Array<
+		| Array<{
+				readonly instruction: CoreInstructionId;
+				readonly position: number;
+		  }>
+		| undefined
+	> = [];
+	const attributeAncestors = new Set<object>();
 	const recordUse = (
 		value: CoreValueId,
 		instruction: CoreInstructionId,
 		position: number,
 	): void => {
-		const entries = valueUses.get(value) ?? [];
+		const entries = valueUses[value] ?? [];
 		entries.push({ instruction, position });
-		valueUses.set(value, entries);
+		valueUses[value] = entries;
 	};
 
 	for (const block of fn.blocks) {
@@ -775,7 +775,7 @@ function verifyCoreFunctionGraph(
 			if (parameter.role === "exception" && index !== 0) {
 				fail(`exception parameter in b${block.id} must be first`);
 			}
-			const value = values.get(parameter.value);
+			const value = values[parameter.value];
 			if (
 				value === undefined ||
 				value.definition.kind !== "block-parameter" ||
@@ -789,10 +789,10 @@ function verifyCoreFunctionGraph(
 					`parameter ${parameter.value} in b${block.id} has a mismatched representation`,
 				);
 			}
-			definitions.set(parameter.value, {
+			definitions[parameter.value] = {
 				block: block.id,
 				instructionIndex: -1,
-			});
+			};
 		}
 		if (exceptionParameters > 1)
 			fail(`block b${block.id} has multiple exception parameters`);
@@ -801,14 +801,18 @@ function verifyCoreFunctionGraph(
 			if (instructionIds.has(instruction.id))
 				fail(`duplicate instruction id @${instruction.id}`);
 			instructionIds.add(instruction.id);
-			instructions.set(instruction.id, instruction);
-			instructionBlocks.set(instruction.id, block.id);
-			instructionOutputs.set(instruction.id, instruction.outputs);
+			instructions[instruction.id] = instruction;
+			instructionBlocks[instruction.id] = block.id;
+			instructionOutputs[instruction.id] = instruction.outputs;
 			for (const [position, input] of instruction.inputs.entries()) {
 				recordUse(input, instruction.id, position);
 			}
 			for (const [key, value] of Object.entries(instruction.attributes)) {
-				verifyAttributeValue(value, `instruction @${instruction.id}.${key}`);
+				verifyAttributeValue(
+					value,
+					`instruction @${instruction.id}.${key}`,
+					attributeAncestors,
+				);
 			}
 			const descriptor = registry.get(instruction.opcode);
 			if (descriptor === undefined)
@@ -826,7 +830,7 @@ function verifyCoreFunctionGraph(
 				descriptor.outputs.maximum,
 			);
 			for (const [outputIndex, output] of instruction.outputs.entries()) {
-				const value = values.get(output);
+				const value = values[output];
 				if (
 					value === undefined ||
 					value.definition.kind !== "instruction" ||
@@ -835,11 +839,12 @@ function verifyCoreFunctionGraph(
 				) {
 					fail(`output ${output} of @${instruction.id} has a mismatched definition`);
 				}
-				if (definitions.has(output)) fail(`value ${output} has multiple definitions`);
-				definitions.set(output, { block: block.id, instructionIndex });
+				if (definitions[output] !== undefined)
+					fail(`value ${output} has multiple definitions`);
+				definitions[output] = { block: block.id, instructionIndex };
 			}
 			if (instruction.effectRefinement !== undefined) {
-				const proof = facts.get(instruction.effectRefinement.proof);
+				const proof = facts[instruction.effectRefinement.proof];
 				if (proof === undefined) {
 					fail(
 						`instruction @${instruction.id} references unknown fact ${instruction.effectRefinement.proof}`,
@@ -862,7 +867,7 @@ function verifyCoreFunctionGraph(
 			fail(`duplicate instruction id @${block.terminator.id}`);
 		}
 		instructionIds.add(block.terminator.id);
-		instructionBlocks.set(block.terminator.id, block.id);
+		instructionBlocks[block.terminator.id] = block.id;
 		for (const value of terminatorUses(block.terminator)) {
 			recordUse(value, block.terminator.id, CORE_CONTROL_FLOW_POSITION);
 		}
@@ -870,23 +875,23 @@ function verifyCoreFunctionGraph(
 			recordUse(value, block.terminator.id, CORE_CONTROL_FLOW_POSITION);
 		}
 		if (block.terminator.kind === "guard") {
-			if (!facts.has(block.terminator.fact)) {
+			if (facts[block.terminator.fact] === undefined) {
 				fail(
 					`guard @${block.terminator.id} references unknown fact ${block.terminator.fact}`,
 				);
 			}
-			guards.set(block.terminator.id, {
+			guards[block.terminator.id] = {
 				instruction: block.terminator.id,
 				fact: block.terminator.fact,
 				block: block.id,
 				success: block.terminator.success.block,
-			});
+			};
 		}
 		for (const edge of coreTerminatorEdges(block.terminator))
 			verifyEdge(edge, block, blocks);
 
 		if (block.handler !== undefined) {
-			const handler = blocks.get(block.handler.block);
+			const handler = blocks[block.handler.block];
 			if (handler === undefined)
 				fail(`block b${block.id} has unknown handler b${block.handler.block}`);
 			if (handler.parameters[0]?.role !== "exception") {
@@ -900,9 +905,9 @@ function verifyCoreFunctionGraph(
 		}
 	}
 
-	if (definitions.size !== fn.values.length) {
-		const missing = fn.values.find(({ id }) => !definitions.has(id));
-		fail(`value ${missing?.id} has no definition`);
+	const missingDefinition = fn.values.find(({ id }) => definitions[id] === undefined);
+	if (missingDefinition !== undefined) {
+		fail(`value ${missingDefinition.id} has no definition`);
 	}
 
 	const cfg = buildCoreControlFlow(fn, registry);
@@ -936,11 +941,11 @@ function verifyCoreFunctionGraph(
 				fail(`region ${region.kind} repeats an ${kind} block`);
 			}
 			for (const block of regionBlocks) {
-				if (!blocks.has(block))
+				if (blocks[block] === undefined)
 					fail(`region ${region.kind} has unknown ${kind} block b${block}`);
 			}
 		}
-		verifyAttributeValue(region.data, `region ${region.kind}.data`);
+		verifyAttributeValue(region.data, `region ${region.kind}.data`, attributeAncestors);
 		verifyRegionReferences(
 			region.data,
 			`region ${region.kind}.data`,
@@ -1025,14 +1030,14 @@ function verifyCoreFunctionGraph(
 			fail(`epoch fact ${fact.id} has neither a guard nor a fallback`);
 		}
 		if (fact.validity.kind === "guard") {
-			const guard = guards.get(fact.validity.instruction);
+			const guard = guards[fact.validity.instruction];
 			if (guard === undefined || guard.fact !== fact.id) {
 				fail(`fact ${fact.id} names a guard that does not establish it`);
 			}
 		}
 		for (const obligation of fact.obligations) {
 			if (obligation.kind === "guard") {
-				const guard = guards.get(obligation.instruction);
+				const guard = guards[obligation.instruction];
 				if (guard === undefined || guard.fact !== fact.id) {
 					fail(`fact ${fact.id} has an invalid guard obligation`);
 				}
@@ -1045,10 +1050,11 @@ function verifyCoreFunctionGraph(
 	// A fact that states anything at all must state the effects of every refinement
 	// it licenses. Claims naming a deleted instruction stay inert rather than
 	// invalid, so only live consumers have to be covered.
-	for (const instruction of instructions.values()) {
+	for (const instruction of instructions) {
+		if (instruction === undefined) continue;
 		const refinement = instruction.effectRefinement;
 		if (refinement === undefined) continue;
-		const fact = facts.get(refinement.proof)!;
+		const fact = facts[refinement.proof]!;
 		if (
 			fact.claims.length > 0 &&
 			!fact.claims.some(
@@ -1082,7 +1088,7 @@ function verifyCoreFunctionGraph(
 			fail(`fact ${fact.id} cannot refine @${instructionId} without a guard`);
 		}
 		for (const obligation of guardObligations) {
-			const guard = guards.get(obligation.instruction)!;
+			const guard = guards[obligation.instruction]!;
 			// The guard establishes its fact on the success edge, not in the success
 			// block: a block the guard's target also reaches from elsewhere is entered
 			// on paths that never ran the check.
@@ -1100,7 +1106,7 @@ function verifyCoreFunctionGraph(
 		instructionIndex: number,
 		context: string,
 	): void => {
-		const definition = definitions.get(valueId);
+		const definition = definitions[valueId];
 		if (definition === undefined) fail(`${context} uses unknown value ${valueId}`);
 		if (definition.block === block.id) {
 			if (definition.instructionIndex >= instructionIndex) {
@@ -1128,7 +1134,7 @@ function verifyCoreFunctionGraph(
 			}
 			if (instruction.effectRefinement !== undefined) {
 				verifyFactAvailable(
-					facts.get(instruction.effectRefinement.proof)!,
+					facts[instruction.effectRefinement.proof]!,
 					block,
 					instruction.id,
 				);
@@ -1144,7 +1150,7 @@ function verifyCoreFunctionGraph(
 		}
 		if (block.handler !== undefined) {
 			for (const argument of block.handler.arguments) {
-				const definition = definitions.get(argument);
+				const definition = definitions[argument];
 				if (definition === undefined)
 					fail(`handler edge from b${block.id} uses unknown value ${argument}`);
 				if (
@@ -1317,6 +1323,27 @@ function verifyKnownOwnSlotClaims(
 	verifyExact: boolean,
 	summaries: () => CoreProgramSummaries,
 ): void {
+	let hasShapeClaims = false;
+	for (const fn of program.functions) {
+		if (hasShapeClaims) break;
+		for (const block of fn.blocks) {
+			if (hasShapeClaims) break;
+			for (const instruction of block.instructions) {
+				if (
+					CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in instruction.attributes ||
+					CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes ||
+					CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE in instruction.attributes ||
+					CORE_SHAPE_CASE_SLOTS_ATTRIBUTE in instruction.attributes ||
+					instruction.opcode === "selectShapeCase" ||
+					instruction.opcode === "loadPropertyStaticShapeCase"
+				) {
+					hasShapeClaims = true;
+					break;
+				}
+			}
+		}
+	}
+	if (!hasShapeClaims) return;
 	const cellForString = coreOwnCellResolver(program.stringConstants);
 	const instructionsByFunction = program.functions.map(
 		(fn) =>
@@ -1325,6 +1352,9 @@ function verifyKnownOwnSlotClaims(
 					block.instructions.map((instruction) => [instruction.id, instruction] as const),
 				),
 			),
+	);
+	const claimedByFunction = program.functions.map(
+		(fn) => new Set(fn.regions.flatMap((region) => region.claimedInstructions)),
 	);
 	const keysByOrigin = new Map<string, ReadonlyArray<number>>();
 	let shapeProvenance: ReturnType<typeof analyzeCoreShapeProvenance> | undefined;
@@ -1339,7 +1369,7 @@ function verifyKnownOwnSlotClaims(
 		return shapeProvenance;
 	};
 	for (const fn of program.functions) {
-		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
+		const claimed = claimedByFunction[fn.functionIndex] ?? new Set<CoreInstructionId>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				const hasExact = CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in instruction.attributes;
@@ -1448,7 +1478,7 @@ function verifyKnownOwnSlotClaims(
 	}
 
 	for (const fn of program.functions) {
-		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
+		const claimed = claimedByFunction[fn.functionIndex] ?? new Set<CoreInstructionId>();
 		const blocksById = new Map(fn.blocks.map((block) => [block.id, block] as const));
 		const selectors = new Map<
 			CoreValueId,

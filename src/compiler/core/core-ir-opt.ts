@@ -5624,16 +5624,13 @@ export interface CoreOptimizationResult {
 	readonly program: CoreProgram;
 	readonly context?: CoreCompilationContext;
 	readonly changed: boolean;
-	readonly passes: ReadonlyArray<{
-		readonly name: string;
-		readonly round: number;
-		readonly changed: boolean;
-	}>;
 }
 
 interface CoreFunctionPass {
 	readonly name: string;
 	readonly ablation?: OptimizationAblation;
+	/** The result may change when another function changes. */
+	readonly dependsOnProgram?: boolean;
 	/** Block identity is part of a region certificate until CFG regions migrate. */
 	readonly changesControlFlow?: boolean;
 	run(
@@ -5713,6 +5710,34 @@ export class CoreAnalysisManager {
 			this.#controlFlow.set(fn, analysis);
 		}
 		return analysis;
+	}
+
+	/**
+	 * Carry a CFG across an immutable instruction-only rewrite. Terminator and
+	 * handler identity retain every ordinary/exceptional edge and its arguments;
+	 * parameter value/role identity retains the destination side of those edges.
+	 */
+	inheritControlFlow(before: CoreFunction, after: CoreFunction): void {
+		const analysis = this.#controlFlow.get(before);
+		if (analysis === undefined || before.blocks.length !== after.blocks.length) return;
+		for (let index = 0; index < before.blocks.length; index++) {
+			const left = before.blocks[index]!;
+			const right = after.blocks[index]!;
+			if (
+				left.id !== right.id ||
+				left.terminator !== right.terminator ||
+				left.handler !== right.handler ||
+				left.parameters.length !== right.parameters.length ||
+				left.parameters.some(
+					(parameter, parameterIndex) =>
+						parameter.value !== right.parameters[parameterIndex]?.value ||
+						parameter.role !== right.parameters[parameterIndex]?.role,
+				)
+			) {
+				return;
+			}
+		}
+		this.#controlFlow.set(after, analysis);
 	}
 
 	/** Shared epoch-transparency bits every region-selection pass reuses. */
@@ -8421,6 +8446,7 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 const refineDirectCallEffects: CoreFunctionPass = {
 	name: "refine-direct-call-effects",
 	ablation: "interprocedural",
+	dependsOnProgram: true,
 	run(fn, analyses, program) {
 		const summaries = analyses.summaries(program);
 		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
@@ -11217,7 +11243,7 @@ const combineLinearBlocks: CoreFunctionPass = {
 	},
 };
 
-const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
+const CORE_LOCAL_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	annotateKnownBuiltinCalls,
 	foldTypeofComparisons,
@@ -11235,7 +11261,6 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	canonicalizeLoops,
 	foldStaticPropertyKeys,
 	refineOwnDataCellAccesses,
-	refineDirectCallEffects,
 	forwardFreshAllocationPrefixLoads,
 	forwardMemoryAccesses,
 	eliminateDeadStores,
@@ -11247,6 +11272,8 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	partialRedundancyElimination,
 	deadInstructionElimination,
 ];
+
+const CORE_PROGRAM_PASSES: ReadonlyArray<CoreFunctionPass> = [refineDirectCallEffects];
 
 /**
  * Complete every certificate in `fn` with its admission record: where the
@@ -11412,7 +11439,6 @@ export function executeCoreOptimizations(
 		}
 	};
 	let analyses = new CoreAnalysisManager(program.stringConstants, compilationContext);
-	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
 	const optimizationTrace: Array<OptimizationPassDelta> = [];
 	const collectOptimizationTrace = compilationContext?.optimizationTrace !== undefined;
 	let tracedMetrics = collectOptimizationTrace
@@ -11426,13 +11452,6 @@ export function executeCoreOptimizations(
 		verifyMutatedProgram(shapeRetraction.program, {
 			stage: "normalization",
 			pass: "retract-known-own-slots",
-		});
-	}
-	for (const [index, fn] of shapeRetraction.program.functions.entries()) {
-		traces.push({
-			name: "retract-known-own-slots",
-			round: 0,
-			changed: fn !== program.functions[index],
 		});
 	}
 	const optimizationInput = shapeRetraction.program;
@@ -11476,20 +11495,7 @@ export function executeCoreOptimizations(
 	let workingProgram = directResult.program;
 	let changed = shapeRetraction.changed || inlineResult.changed || directResult.changed;
 	let functions = [...workingProgram.functions];
-	for (const fn of inlineResult.program.functions) {
-		traces.push({
-			name: "inline-small-functions",
-			round: 0,
-			changed: fn !== optimizationInput.functions[fn.functionIndex],
-		});
-	}
-	for (const fn of functions) {
-		traces.push({
-			name: "annotate-direct-call-targets",
-			round: 0,
-			changed: fn !== inlineResult.program.functions[fn.functionIndex],
-		});
-	}
+	let activeFunctions = new Set(functions.map(({ functionIndex }) => functionIndex));
 	if (inlineBefore !== undefined) {
 		optimizationTrace.push(
 			optimizationPassDelta(
@@ -11521,9 +11527,13 @@ export function executeCoreOptimizations(
 			),
 		);
 	}
-	for (let round = 0; round < maxRounds; round++) {
+	const runFixpointPasses = (
+		passes: ReadonlyArray<CoreFunctionPass>,
+		round: number,
+	): boolean => {
 		let roundChanged = false;
-		for (const pass of CORE_PASSES) {
+		const nextActiveFunctions = new Set<number>();
+		for (const pass of passes) {
 			const featureGated =
 				options.simplifyValues === false &&
 				(pass === copyAndValueNumber || pass === deadInstructionElimination);
@@ -11532,9 +11542,6 @@ export function executeCoreOptimizations(
 			const beforeProgram = { ...workingProgram, functions };
 			const before = tracedMetrics;
 			if (featureGated) {
-				for (const _fn of functions) {
-					traces.push({ name: pass.name, round, changed: false });
-				}
 				if (before !== undefined) {
 					optimizationTrace.push(
 						optimizationPassDelta(
@@ -11553,9 +11560,6 @@ export function executeCoreOptimizations(
 				continue;
 			}
 			if (ablated) {
-				for (const _fn of functions) {
-					traces.push({ name: pass.name, round, changed: false });
-				}
 				if (before !== undefined) {
 					optimizationTrace.push(
 						optimizationPassDelta(
@@ -11577,9 +11581,11 @@ export function executeCoreOptimizations(
 			let passChanged = false;
 			let regionBlockedFunctions = 0;
 			functions = functions.map((fn) => {
+				if (pass.dependsOnProgram !== true && !activeFunctions.has(fn.functionIndex)) {
+					return fn;
+				}
 				if (fn.regions.length > 0 && pass.changesControlFlow === true) {
 					regionBlockedFunctions++;
-					traces.push({ name: pass.name, round, changed: false });
 					return fn;
 				}
 				const next = acceptPassResult(
@@ -11594,11 +11600,13 @@ export function executeCoreOptimizations(
 					},
 				);
 				const functionChanged = next !== fn;
-				traces.push({ name: pass.name, round, changed: functionChanged });
 				if (functionChanged) {
+					analyses.inheritControlFlow(fn, next);
 					passChanged = true;
 					roundChanged = true;
 					changed = true;
+					activeFunctions.add(fn.functionIndex);
+					nextActiveFunctions.add(fn.functionIndex);
 				}
 				return next;
 			});
@@ -11633,7 +11641,17 @@ export function executeCoreOptimizations(
 				);
 			}
 		}
-		if (!roundChanged) break;
+		activeFunctions = nextActiveFunctions;
+		return roundChanged;
+	};
+	let traceRound = 0;
+	for (let epoch = 0; epoch < maxRounds; epoch++) {
+		for (let localRound = 0; localRound < maxRounds; localRound++) {
+			const localChanged = runFixpointPasses(CORE_LOCAL_PASSES, traceRound++);
+			if (!localChanged) break;
+		}
+		const programChanged = runFixpointPasses(CORE_PROGRAM_PASSES, traceRound++);
+		if (!programChanged) break;
 	}
 	// Local passes can expose a stable callee after the normalization-time solve.
 	// Solve the final graph once, then share that exact analysis between advisory
@@ -11655,11 +11673,8 @@ export function executeCoreOptimizations(
 		);
 		compilationContext = targetRefresh.context;
 		for (const [index, fn] of targetRefresh.program.functions.entries()) {
-			traces.push({
-				name: "refresh-direct-call-targets",
-				round: maxRounds,
-				changed: fn !== functions[index],
-			});
+			const before = functions[index];
+			if (before !== undefined && before !== fn) analyses.inheritControlFlow(before, fn);
 		}
 		if (targetRefresh.changed) {
 			changed = true;
@@ -11714,11 +11729,6 @@ export function executeCoreOptimizations(
 				},
 				compilationContext,
 			);
-			traces.push({
-				name: "eliminate-unreachable-functions",
-				round: maxRounds,
-				changed: true,
-			});
 			workingProgram = refreshed;
 			functions = [...refreshed.functions];
 			analyses = new CoreAnalysisManager(refreshed.stringConstants, compilationContext);
@@ -11764,11 +11774,7 @@ export function executeCoreOptimizations(
 				},
 			);
 			const functionChanged = candidate !== fn;
-			traces.push({
-				name: "refresh-direct-call-effects",
-				round: maxRounds,
-				changed: functionChanged,
-			});
+			if (functionChanged) analyses.inheritControlFlow(fn, candidate);
 			if (functionChanged) refreshChanged = true;
 			return candidate;
 		});
@@ -11821,11 +11827,7 @@ export function executeCoreOptimizations(
 				},
 			);
 			const functionChanged = candidate !== fn;
-			traces.push({
-				name: refineDirectCallResultRepresentations.name,
-				round: maxRounds,
-				changed: functionChanged,
-			});
+			if (functionChanged) analyses.inheritControlFlow(fn, candidate);
 			if (functionChanged) representationChanged = true;
 			return candidate;
 		});
@@ -11881,11 +11883,7 @@ export function executeCoreOptimizations(
 					},
 				);
 				const functionChanged = candidate !== fn;
-				traces.push({
-					name: pass.name,
-					round: maxRounds,
-					changed: functionChanged,
-				});
+				if (functionChanged) analyses.inheritControlFlow(fn, candidate);
 				if (functionChanged) {
 					passChanged = true;
 					changed = true;
@@ -11897,10 +11895,6 @@ export function executeCoreOptimizations(
 					{ ...workingProgram, functions },
 					{ stage: "finalization", pass: pass.name },
 				);
-			}
-		} else {
-			for (const _fn of functions) {
-				traces.push({ name: pass.name, round: maxRounds, changed: false });
 			}
 		}
 		if (before !== undefined) {
@@ -11938,11 +11932,8 @@ export function executeCoreOptimizations(
 		valueClassSummaries,
 	);
 	for (const [index, fn] of valueClassSelection.program.functions.entries()) {
-		traces.push({
-			name: "select-exact-heap-accesses",
-			round: maxRounds,
-			changed: fn !== functions[index],
-		});
+		const before = functions[index];
+		if (before !== undefined && before !== fn) analyses.inheritControlFlow(before, fn);
 	}
 	if (valueClassSelection.changed) {
 		changed = true;
@@ -11981,11 +11972,8 @@ export function executeCoreOptimizations(
 		scalarArgumentSummaries,
 	);
 	for (const [index, fn] of scalarArgumentSelection.program.functions.entries()) {
-		traces.push({
-			name: "select-exact-value-facts",
-			round: maxRounds,
-			changed: fn !== functions[index],
-		});
+		const before = functions[index];
+		if (before !== undefined && before !== fn) analyses.inheritControlFlow(before, fn);
 	}
 	if (scalarArgumentSelection.changed) {
 		changed = true;
@@ -12030,13 +12018,6 @@ export function executeCoreOptimizations(
 	});
 	const shapeSelectionBefore = tracedMetrics;
 	const shapeSelection = selectCoreKnownOwnSlots(summaryProgram, shapeProvenance);
-	for (const [index, fn] of shapeSelection.program.functions.entries()) {
-		traces.push({
-			name: "select-known-own-slots",
-			round: maxRounds,
-			changed: fn !== functions[index],
-		});
-	}
 	if (shapeSelection.changed) {
 		changed = true;
 		verifyMutatedProgram(shapeSelection.program, {
@@ -12098,6 +12079,5 @@ export function executeCoreOptimizations(
 		program: optimized,
 		...(optimizedContext === undefined ? {} : { context: optimizedContext }),
 		changed,
-		passes: traces,
 	};
 }

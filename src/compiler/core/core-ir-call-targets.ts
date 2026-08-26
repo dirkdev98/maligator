@@ -450,10 +450,10 @@ function censusSlotAccesses(
 		capturedWriters: new Map(),
 	};
 	for (const fn of program.functions) {
-		const producers = new Map<CoreValueId, CoreInstruction>();
+		const producers: Array<CoreInstruction | undefined> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				for (const output of instruction.outputs) producers.set(output, instruction);
+				for (const output of instruction.outputs) producers[output] = instruction;
 			}
 		}
 		/**
@@ -467,7 +467,7 @@ function censusSlotAccesses(
 			let current = value;
 			while (!seen.has(current)) {
 				seen.add(current);
-				const producer = producers.get(current);
+				const producer = producers[current];
 				if (producer === undefined) return false;
 				if (producer.opcode === "createEmpty") return true;
 				if (producer.opcode !== "move" || producer.inputs.length !== 1) return false;
@@ -884,27 +884,26 @@ export function analyzeCoreCalleeTargets(
 	const census = censusSlotAccesses(program, registry);
 	const stableCells = singleAssignmentCellsFromCensus(program, census, context);
 	const cellForString = coreOwnCellResolver(program.stringConstants);
-	const valueBase = new Map<number, number>();
-	const valueLimit = new Map<number, number>();
+	const valueBase: Array<number | undefined> = [];
+	const valueLimit: Array<number | undefined> = [];
 	const globalNodes = new Map<number, number>();
 	const capturedNodes = new Map<string, number>();
-	const returnNodes = new Map<number, number>();
+	const returnNodes: Array<number | undefined> = [];
 	const ownCellNodes = new Map<string, number>();
-	const functionsByIndex = new Map(
-		program.functions.map((fn) => [fn.functionIndex, fn] as const),
-	);
+	const functionsByIndex: Array<CoreProgram["functions"][number] | undefined> = [];
+	for (const fn of program.functions) functionsByIndex[fn.functionIndex] = fn;
 	let nodeCount = 0;
 	for (const fn of program.functions) {
 		// Take the maximum rather than the last entry: a value id outside this
 		// function's node range would silently alias another function's values.
 		let limit = 0;
 		for (const { id } of fn.values) limit = Math.max(limit, id + 1);
-		valueBase.set(fn.functionIndex, nodeCount);
-		valueLimit.set(fn.functionIndex, limit);
+		valueBase[fn.functionIndex] = nodeCount;
+		valueLimit[fn.functionIndex] = limit;
 		nodeCount += limit;
 		// Allocated for every function up front: a call site discovered mid-solve
 		// must find its target's cell without growing the node universe.
-		returnNodes.set(fn.functionIndex, nodeCount++);
+		returnNodes[fn.functionIndex] = nodeCount++;
 	}
 	const globalNode = (slot: number): number => {
 		let node = globalNodes.get(slot);
@@ -930,35 +929,31 @@ export function analyzeCoreCalleeTargets(
 			? stableCells.globalSlot(cell.slot)
 			: stableCells.capturedSlot(cell.owner, cell.index);
 
-	const dependents = new Map<number, Array<number>>();
-	const seeds = new Map<number, CoreCalleeTargets>();
-	const originSeeds = new Map<number, number>();
-	const callSites = new Map<number, Array<CallResultSite>>();
-	const constructorMethodSites = new Map<number, Array<ConstructorMethodSite>>();
+	const dependents: Array<Array<number> | undefined> = [];
+	const seeds: Array<CoreCalleeTargets | undefined> = [];
+	const originSeeds: Array<number | undefined> = [];
+	const callSites: Array<Array<CallResultSite> | undefined> = [];
+	const constructorMethodSites: Array<Array<ConstructorMethodSite> | undefined> = [];
 	const allocations: Array<TrackedAllocation> = [];
 	const deferredReads: Array<DeferredOwnSlotRead> = [];
-	const controlFlow = new Map<number, ReturnType<typeof buildCoreControlFlow>>();
+	const controlFlow: Array<ReturnType<typeof buildCoreControlFlow> | undefined> = [];
 	let edges = 0;
 	let callActivations = 0;
 	const addEdge = (from: number, to: number): void => {
-		const existing = dependents.get(from);
-		if (existing === undefined) dependents.set(from, [to]);
+		const existing = dependents[from];
+		if (existing === undefined) dependents[from] = [to];
 		else existing.push(to);
 		edges++;
 	};
 	const addSeed = (node: number, targets: CoreCalleeTargets): void => {
-		const existing = seeds.get(node);
-		seeds.set(
-			node,
-			existing === undefined ? targets : joinCoreCalleeTargets(existing, targets),
-		);
+		const existing = seeds[node];
+		seeds[node] =
+			existing === undefined ? targets : joinCoreCalleeTargets(existing, targets);
 	};
 	const addOriginSeed = (node: number, origin: number): void => {
-		const existing = originSeeds.get(node);
-		originSeeds.set(
-			node,
-			existing === undefined || existing === origin ? origin : ORIGIN_TOP,
-		);
+		const existing = originSeeds[node];
+		originSeeds[node] =
+			existing === undefined || existing === origin ? origin : ORIGIN_TOP;
 	};
 	const addCallSite = (callee: number, result: number, construct: boolean): void => {
 		const site: CallResultSite = {
@@ -968,8 +963,8 @@ export function analyzeCoreCalleeTargets(
 			activated: new Set(),
 			openRaised: "none",
 		};
-		const existing = callSites.get(callee);
-		if (existing === undefined) callSites.set(callee, [site]);
+		const existing = callSites[callee];
+		if (existing === undefined) callSites[callee] = [site];
 		else existing.push(site);
 	};
 	const addConstructorMethodSite = (
@@ -983,20 +978,26 @@ export function analyzeCoreCalleeTargets(
 			key,
 			activated: new Set(),
 		};
-		const existing = constructorMethodSites.get(callee);
-		if (existing === undefined) constructorMethodSites.set(callee, [site]);
+		const existing = constructorMethodSites[callee];
+		if (existing === undefined) constructorMethodSites[callee] = [site];
 		else existing.push(site);
 	};
 
+	const definitionsByFunction: Array<
+		ReadonlyArray<CoreInstruction | undefined> | undefined
+	> = [];
 	const functionDefinitions = (
 		fn: (typeof program.functions)[number],
-	): Map<CoreValueId, CoreInstruction> => {
-		const definitions = new Map<CoreValueId, CoreInstruction>();
+	): ReadonlyArray<CoreInstruction | undefined> => {
+		const cached = definitionsByFunction[fn.functionIndex];
+		if (cached !== undefined) return cached;
+		const definitions: Array<CoreInstruction | undefined> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				for (const output of instruction.outputs) definitions.set(output, instruction);
+				for (const output of instruction.outputs) definitions[output] = instruction;
 			}
 		}
+		definitionsByFunction[fn.functionIndex] = definitions;
 		return definitions;
 	};
 	/**
@@ -1004,9 +1005,17 @@ export function analyzeCoreCalleeTargets(
 	 * this operand through moves alone stays unresolved, which makes its base
 	 * escape rather than name a cell.
 	 */
-	const operandKeyResolver = (definitions: ReadonlyMap<CoreValueId, CoreInstruction>) => {
+	const keyResolvers = new WeakMap<
+		ReadonlyArray<CoreInstruction | undefined>,
+		(value: CoreValueId) => CoreOwnCell | undefined
+	>();
+	const operandKeyResolver = (
+		definitions: ReadonlyArray<CoreInstruction | undefined>,
+	) => {
+		const cached = keyResolvers.get(definitions);
+		if (cached !== undefined) return cached;
 		const resolved = new Map<CoreValueId, CoreOwnCell | null>();
-		return (value: CoreValueId): CoreOwnCell | undefined => {
+		const resolver = (value: CoreValueId): CoreOwnCell | undefined => {
 			const cached = resolved.get(value);
 			if (cached !== undefined) return cached ?? undefined;
 			const seen = new Set<CoreValueId>();
@@ -1014,7 +1023,7 @@ export function analyzeCoreCalleeTargets(
 			let cell: CoreOwnCell | undefined;
 			while (!seen.has(current)) {
 				seen.add(current);
-				const definition = definitions.get(current);
+				const definition = definitions[current];
 				if (definition === undefined) break;
 				if (definition.opcode === "move" && definition.inputs.length === 1) {
 					current = definition.inputs[0]!;
@@ -1029,16 +1038,18 @@ export function analyzeCoreCalleeTargets(
 			resolved.set(value, cell ?? null);
 			return cell;
 		};
+		keyResolvers.set(definitions, resolver);
+		return resolver;
 	};
 	const moveRoot = (
-		definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
+		definitions: ReadonlyArray<CoreInstruction | undefined>,
 		initial: CoreValueId,
 	): CoreValueId => {
 		const seen = new Set<CoreValueId>();
 		let value = initial;
 		while (!seen.has(value)) {
 			seen.add(value);
-			const definition = definitions.get(value);
+			const definition = definitions[value];
 			if (definition?.opcode !== "move" || definition.inputs.length !== 1) break;
 			value = definition.inputs[0]!;
 		}
@@ -1127,7 +1138,7 @@ export function analyzeCoreCalleeTargets(
 		for (const block of target.blocks) {
 			if (block.terminator.kind !== "return") continue;
 			returns++;
-			const returned = definitions.get(moveRoot(definitions, block.terminator.value));
+			const returned = definitions[moveRoot(definitions, block.terminator.value)];
 			if (returned?.opcode !== "createUndefined") {
 				implicitOnly = false;
 				break;
@@ -1137,7 +1148,7 @@ export function analyzeCoreCalleeTargets(
 	}
 	if (prototypeCell?.kind === "object-slot") {
 		for (const setup of program.functions) {
-			const base = valueBase.get(setup.functionIndex)!;
+			const base = valueBase[setup.functionIndex]!;
 			const definitions = functionDefinitions(setup);
 			const cellForOperand = operandKeyResolver(definitions);
 			const prototypeOwners = new Map<CoreValueId, number>();
@@ -1161,9 +1172,7 @@ export function analyzeCoreCalleeTargets(
 								? undefined
 								: cellForOperand(instruction.inputs[1]);
 					if (key === undefined || !coreOwnCellsEqual(key, prototypeCell)) continue;
-					const constructor = definitions.get(
-						moveRoot(definitions, instruction.inputs[0]),
-					);
+					const constructor = definitions[moveRoot(definitions, instruction.inputs[0])];
 					const constructorIndex =
 						constructor?.opcode === "createFunction"
 							? attributeNumber(constructor, "functionIndex")
@@ -1191,12 +1200,14 @@ export function analyzeCoreCalleeTargets(
 					const key = cellForOperand(instruction.inputs[1]!);
 					if (constructorIndex === undefined || key?.kind !== "object-slot") continue;
 					const methodRoot = moveRoot(definitions, instruction.inputs[2]!);
-					const method = definitions.get(methodRoot);
+					const method = definitions[methodRoot];
 					const methodIndex =
 						method?.opcode === "createFunction"
 							? attributeNumber(method, "functionIndex")
 							: undefined;
-					if (methodIndex === undefined || !functionsByIndex.has(methodIndex)) continue;
+					if (methodIndex === undefined || functionsByIndex[methodIndex] === undefined) {
+						continue;
+					}
 					let byKey = constructorMethods.get(constructorIndex);
 					if (byKey === undefined) {
 						byKey = new Map();
@@ -1217,7 +1228,7 @@ export function analyzeCoreCalleeTargets(
 	}
 
 	for (const fn of program.functions) {
-		const base = valueBase.get(fn.functionIndex)!;
+		const base = valueBase[fn.functionIndex]!;
 		const valueNode = (value: CoreValueId): number => base + value;
 		const definitions = functionDefinitions(fn);
 		const cellForOperand = operandKeyResolver(definitions);
@@ -1233,7 +1244,7 @@ export function analyzeCoreCalleeTargets(
 			}
 			const callee = instruction.inputs[0]!;
 			const thisValue = instruction.inputs[1]!;
-			const definition = definitions.get(moveRoot(definitions, callee));
+			const definition = definitions[moveRoot(definitions, callee)];
 			if (
 				definition?.opcode !== "loadPropertyStatic" &&
 				definition?.opcode !== "loadProperty"
@@ -1253,9 +1264,8 @@ export function analyzeCoreCalleeTargets(
 					: definition.inputs[1] === undefined
 						? undefined
 						: (() => {
-								const keyDefinition = definitions.get(
-									moveRoot(definitions, definition.inputs[1]),
-								);
+								const keyDefinition =
+									definitions[moveRoot(definitions, definition.inputs[1])];
 								return keyDefinition?.opcode === "createString"
 									? attributeNumber(keyDefinition, "stringIndex")
 									: undefined;
@@ -1275,7 +1285,7 @@ export function analyzeCoreCalleeTargets(
 			addOriginSeed(valueNode(parameter), ORIGIN_TOP);
 		}
 		const cfg = buildCoreControlFlow(fn, registry);
-		controlFlow.set(fn.functionIndex, cfg);
+		controlFlow[fn.functionIndex] = cfg;
 		for (const block of fn.blocks) {
 			const incoming = cfg.predecessors[block.id] ?? [];
 			for (const [index, parameter] of block.parameters.entries()) {
@@ -1471,7 +1481,7 @@ export function analyzeCoreCalleeTargets(
 						const readBase = ownSlotReadBase(instruction, roles);
 						if (readBase !== undefined && result !== undefined) {
 							const namespaceSlot = namespaceExportSlot(
-								definitions.get(moveRoot(definitions, readBase.base)),
+								definitions[moveRoot(definitions, readBase.base)],
 								readBase.key,
 							);
 							if (namespaceSlot !== undefined) {
@@ -1479,9 +1489,7 @@ export function analyzeCoreCalleeTargets(
 								addOriginSeed(valueNode(result), ORIGIN_TOP);
 								continue;
 							}
-							const baseDefinition = definitions.get(
-								moveRoot(definitions, readBase.base),
-							);
+							const baseDefinition = definitions[moveRoot(definitions, readBase.base)];
 							if (
 								baseDefinition?.opcode === "construct" &&
 								baseDefinition.inputs[0] !== undefined
@@ -1519,7 +1527,7 @@ export function analyzeCoreCalleeTargets(
 			// caller from reading them is the coroutine rule in `activateCallSite`,
 			// not a missing edge.
 			if (block.terminator.kind === "return") {
-				addEdge(valueNode(block.terminator.value), returnNodes.get(fn.functionIndex)!);
+				addEdge(valueNode(block.terminator.value), returnNodes[fn.functionIndex]!);
 			}
 		}
 	}
@@ -1681,7 +1689,7 @@ export function analyzeCoreCalleeTargets(
 			if (site.activated.has(target)) continue;
 			site.activated.add(target);
 			callActivations++;
-			const targetFunction = functionsByIndex.get(target);
+			const targetFunction = functionsByIndex[target];
 			if (targetFunction === undefined) {
 				raise(site.result, CORE_CALLEE_TARGETS_OPAQUE);
 				continue;
@@ -1690,7 +1698,7 @@ export function analyzeCoreCalleeTargets(
 			if (site.construct && targetFunction.metadata.isDerivedConstructor) {
 				raise(site.result, CORE_CALLEE_TARGETS_OPAQUE);
 			}
-			const returnNode = returnNodes.get(target)!;
+			const returnNode = returnNodes[target]!;
 			addEdge(returnNode, site.result);
 			raise(site.result, state[returnNode]!);
 		}
@@ -1711,22 +1719,25 @@ export function analyzeCoreCalleeTargets(
 		}
 	};
 
-	for (const [node, targets] of seeds) raise(node, targets);
+	for (let node = 0; node < seeds.length; node++) {
+		const targets = seeds[node];
+		if (targets !== undefined) raise(node, targets);
+	}
 	while (queue.length > 0) {
 		const node = queue.pop()!;
 		queued[node] = 0;
 		const targets = state[node]!;
-		for (const dependent of dependents.get(node) ?? []) raise(dependent, targets);
-		for (const site of callSites.get(node) ?? []) activateCallSite(site);
-		for (const site of constructorMethodSites.get(node) ?? []) {
+		for (const dependent of dependents[node] ?? []) raise(dependent, targets);
+		for (const site of callSites[node] ?? []) activateCallSite(site);
+		for (const site of constructorMethodSites[node] ?? []) {
 			activateConstructorMethodSite(site);
 		}
 	}
 
 	return {
 		targets(functionIndex: number, value: CoreValueId): CoreCalleeTargets {
-			const base = valueBase.get(functionIndex);
-			if (base === undefined || value >= valueLimit.get(functionIndex)!) {
+			const base = valueBase[functionIndex];
+			if (base === undefined || value >= valueLimit[functionIndex]!) {
 				return CORE_CALLEE_TARGETS_BOTTOM;
 			}
 			return state[base + value] ?? CORE_CALLEE_TARGETS_BOTTOM;
@@ -1740,7 +1751,7 @@ export function analyzeCoreCalleeTargets(
 			return node === undefined ? CORE_CALLEE_TARGETS_BOTTOM : state[node]!;
 		},
 		returnTargets(functionIndex: number): CoreCalleeTargets {
-			const node = returnNodes.get(functionIndex);
+			const node = returnNodes[functionIndex];
 			return node === undefined ? CORE_CALLEE_TARGETS_BOTTOM : state[node]!;
 		},
 		statistics: {
@@ -1789,8 +1800,8 @@ function ownSlotReadBase(
  */
 function solveAllocationOrigins(
 	nodeCount: number,
-	originSeeds: ReadonlyMap<number, number>,
-	dependents: ReadonlyMap<number, ReadonlyArray<number>>,
+	originSeeds: ReadonlyArray<number | undefined>,
+	dependents: ReadonlyArray<ReadonlyArray<number> | undefined>,
 ): Int32Array {
 	const origins = new Int32Array(nodeCount);
 	const queued = new Uint8Array(nodeCount);
@@ -1807,12 +1818,15 @@ function solveAllocationOrigins(
 			queue.push(node);
 		}
 	};
-	for (const [node, origin] of originSeeds) raise(node, origin);
+	for (let node = 0; node < originSeeds.length; node++) {
+		const origin = originSeeds[node];
+		if (origin !== undefined) raise(node, origin);
+	}
 	while (queue.length > 0) {
 		const node = queue.pop()!;
 		queued[node] = 0;
 		const origin = origins[node]!;
-		for (const dependent of dependents.get(node) ?? []) raise(dependent, origin);
+		for (const dependent of dependents[node] ?? []) raise(dependent, origin);
 	}
 	return origins;
 }
@@ -1828,14 +1842,16 @@ interface ContainmentInput {
 	readonly registry: CoreOpcodeRegistry;
 	readonly allocations: ReadonlyArray<TrackedAllocation>;
 	readonly origins: Int32Array;
-	readonly valueBase: ReadonlyMap<number, number>;
-	readonly controlFlow: ReadonlyMap<number, ReturnType<typeof buildCoreControlFlow>>;
+	readonly valueBase: ReadonlyArray<number | undefined>;
+	readonly controlFlow: ReadonlyArray<
+		ReturnType<typeof buildCoreControlFlow> | undefined
+	>;
 	readonly cellForString: (index: number) => CoreOwnCell | undefined;
 	readonly functionDefinitions: (
 		fn: CoreProgram["functions"][number],
-	) => Map<CoreValueId, CoreInstruction>;
+	) => ReadonlyArray<CoreInstruction | undefined>;
 	readonly operandKeyResolver: (
-		definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
+		definitions: ReadonlyArray<CoreInstruction | undefined>,
 	) => (value: CoreValueId) => CoreOwnCell | undefined;
 	readonly slotCellNode: (cell: SlotCell) => number;
 	readonly stableSlotCell: (cell: SlotCell) => boolean;
@@ -1873,11 +1889,11 @@ function containAllocations(input: ContainmentInput): {
 		}
 	};
 	for (const fn of input.program.functions) {
-		const base = input.valueBase.get(fn.functionIndex)!;
+		const base = input.valueBase[fn.functionIndex]!;
 		const valueNode = (value: CoreValueId): number => base + value;
 		const definitions = input.functionDefinitions(fn);
 		const cellForOperand = input.operandKeyResolver(definitions);
-		const cfg = input.controlFlow.get(fn.functionIndex)!;
+		const cfg = input.controlFlow[fn.functionIndex]!;
 		for (const block of fn.blocks) {
 			// A handler argument is live on a path this sweep does not model, so it
 			// leaves the allocation reachable from a frame the graph does not follow.

@@ -17,6 +17,7 @@ import {
 } from "../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
+import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 
 function temporaryDirectory(): string {
 	return mkdtempSync(path.join(tmpdir(), "mal-build-frontend-cache-"));
@@ -420,6 +421,65 @@ describe("normal build frontend cache", () => {
 		expect(changedDependency.fragmentArtifacts).toEqual({ hits: 1, misses: 1 });
 		expect(changedDependency.wires![0]).not.toEqual(changed.wires![0]);
 		expect(changedDependency.wires![1]).toEqual(changed.wires![1]);
+	});
+
+	it("reuses the Node prelude and fragment diagnostics across application edits", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.mjs");
+		const dependencyDirectory = path.join(root, "node_modules/example-dependency");
+		const dependency = path.join(dependencyDirectory, "index.mjs");
+		const session = new BuildCompilationSession();
+		mkdirSync(dependencyDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(dependencyDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(
+			dependency,
+			`Math.fragmentDependencyMutation = 1;\nexport const answer = "dependency-marker";\n`,
+		);
+		write(
+			entrypoint,
+			`import { answer } from "example-dependency";\nconsole.log("application-marker-0", answer);\n`,
+		);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({ surface: { node: true } }),
+			nodeGlobalsSource: `globalThis.__preludeMarker = "prelude-marker";\n`,
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "build-fragment-node-prelude-test",
+			cacheDirectory,
+			session,
+			optimization: "development" as const,
+			relocatable: true,
+		};
+		const strings = (wire: Uint8Array) =>
+			deserializeRuntimeImage(wire).stringConstants.map((units) =>
+				String.fromCharCode(...units),
+			);
+
+		const cold = compileBuildFrontend(options);
+		expect(cold.wires).toHaveLength(3);
+		expect(cold.fragmentArtifacts).toEqual({ hits: 0, misses: 3 });
+		expect(strings(cold.wires![0]!)).toContain("prelude-marker");
+		expect(strings(cold.wires![1]!)).toContain("dependency-marker");
+		expect(strings(cold.wires![2]!)).toContain("application-marker-0");
+		expect(cold.diagnostics.map(({ code }) => code)).toContain("primordial.mutation");
+
+		write(
+			entrypoint,
+			`import { answer } from "example-dependency";\nconsole.log("application-marker-1", answer);\n`,
+		);
+		session.invalidate(entrypoint);
+		const changed = compileBuildFrontend(options);
+		expect(changed.fragmentArtifacts).toEqual({ hits: 2, misses: 1 });
+		expect(changed.wires![0]).toEqual(cold.wires![0]);
+		expect(changed.wires![1]).toEqual(cold.wires![1]);
+		expect(changed.wires![2]).not.toEqual(cold.wires![2]);
+		expect(strings(changed.wires![2]!)).toContain("application-marker-1");
+		expect(changed.diagnostics).toEqual(cold.diagnostics);
 	});
 
 	it("shares independent dependency islands across entrypoints and invalidates only one island", () => {

@@ -174,12 +174,6 @@ describe("Core IR optimizer", () => {
 
 		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]));
 		const fn = outcome.program.functions[0]!;
-		expect(
-			outcome.passes.some(
-				({ name, changed }) =>
-					name === "sparse-conditional-constant-propagation" && changed,
-			),
-		).toBe(true);
 		expect(fn.blocks.flatMap(({ terminator }) => terminator.kind)).not.toContain(
 			"branch",
 		);
@@ -434,7 +428,6 @@ describe("Core IR optimizer", () => {
 			value: fn.blocks[0]!.instructions[0]!.outputs[0],
 		});
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
-		expect(result.passes.some(({ changed }) => changed)).toBe(true);
 	});
 
 	it("numbers pure values through the dominator tree", () => {
@@ -461,11 +454,6 @@ describe("Core IR optimizer", () => {
 
 		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]));
 		const fn = outcome.program.functions[0]!;
-		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "copy-and-value-number" && changed,
-			),
-		).toBe(true);
 		expect(
 			fn.blocks
 				.flatMap(({ instructions }) => instructions)
@@ -1914,11 +1902,6 @@ describe("Core IR optimizer", () => {
 			{ verification: "per-pass" },
 		);
 		const fn = outcome.program.functions[0]!;
-		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "loop-invariant-code-motion" && changed,
-			),
-		).toBe(true);
 		expect(fn.blocks[entry]!.instructions.map(({ opcode }) => opcode)).toEqual([
 			"createF64",
 			"mathUnaryNumber",
@@ -1989,11 +1972,6 @@ describe("Core IR optimizer", () => {
 		);
 		const fn = outcome.program.functions[0]!;
 		const optimizedLoop = buildCoreControlFlow(fn, coreOpcodeRegistry).loops;
-		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "loop-invariant-code-motion" && changed,
-			),
-		).toBe(true);
 		expect(fn.blocks[entry]!.instructions.map(({ opcode }) => opcode)).toEqual([
 			"createF64",
 			"mathUnaryNumber",
@@ -2358,11 +2336,6 @@ describe("Core IR optimizer", () => {
 		expect(binaries).not.toContainEqual(
 			expect.objectContaining({ attributes: { operator: ">=" } }),
 		);
-		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "optimize-loop-ranges" && changed,
-			),
-		).toBe(true);
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 	});
 
@@ -2423,11 +2396,6 @@ describe("Core IR optimizer", () => {
 		);
 		const fn = outcome.program.functions[0]!;
 		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "partial-redundancy-elimination" && changed,
-			),
-		).toBe(true);
-		expect(
 			fn.blocks.flatMap(({ instructions }) =>
 				instructions.filter(({ opcode }) => opcode === "mathUnaryNumber"),
 			),
@@ -2477,11 +2445,6 @@ describe("Core IR optimizer", () => {
 		);
 		const fn = outcome.program.functions[0]!;
 		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "partial-redundancy-elimination" && changed,
-			),
-		).toBe(true);
-		expect(
 			fn.blocks.flatMap(({ instructions }) =>
 				instructions.filter(({ opcode }) => opcode === "mathUnaryNumber"),
 			),
@@ -2527,11 +2490,6 @@ describe("Core IR optimizer", () => {
 		);
 		const fn = outcome.program.functions[0]!;
 		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "partial-redundancy-elimination" && changed,
-			),
-		).toBe(false);
-		expect(
 			fn.blocks.flatMap(({ instructions }) =>
 				instructions.filter(({ opcode }) => opcode === "mathUnaryNumber"),
 			),
@@ -2558,11 +2516,6 @@ describe("Core IR optimizer", () => {
 			maxRounds: 1,
 		});
 		const fn = outcome.program.functions[0]!;
-		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "dead-instruction-elimination" && changed,
-			),
-		).toBe(true);
 		expect(fn.blocks[0]!.instructions).toEqual([
 			expect.objectContaining({ opcode: "createUndefined", outputs: [returned] }),
 		]);
@@ -2611,11 +2564,6 @@ describe("Core IR optimizer", () => {
 			verification: "per-pass",
 		});
 		const fn = outcome.program.functions[0]!;
-		expect(
-			outcome.passes.some(
-				({ name, changed }) => name === "dead-instruction-elimination" && changed,
-			),
-		).toBe(true);
 		expect(fn.blocks.flatMap(({ instructions }) => instructions)).toEqual([
 			expect.objectContaining({ opcode: "createUndefined", outputs: [returned] }),
 		]);

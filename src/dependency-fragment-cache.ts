@@ -12,6 +12,7 @@ import type {
 	ModuleGraph,
 } from "./compiler/frontend/module-graph.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
+import { collectPrimordialMutationDiagnostics } from "./compiler/frontend/primordial-diagnostics.ts";
 import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
@@ -19,6 +20,7 @@ import {
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
+import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 import {
@@ -36,7 +38,7 @@ import type { FrontendArtifactIdentity } from "./frontend-cache.ts";
 import { FrontendCompilationSession } from "./frontend-cache.ts";
 import { nativeBuildJobs, runIndependentCommands } from "./native-command.ts";
 
-const DEPENDENCY_FRAGMENT_SCHEMA = 1;
+const DEPENDENCY_FRAGMENT_SCHEMA = 2;
 const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "dependency-fragments");
 
 /** Stable runtime registry populated before application and test fragments execute. */
@@ -64,6 +66,7 @@ export interface DependencyFragmentArtifact extends FrontendArtifactIdentity {
 	key: string;
 	targets: Array<string>;
 	wire: Uint8Array;
+	diagnostics: Array<CompilerDiagnostic>;
 	cache: "hit" | "miss";
 }
 
@@ -263,10 +266,12 @@ function loadIsland(
 		const reference = JSON.parse(readFileSync(mappingPath, "utf-8")) as {
 			schema?: number;
 			artifact?: FrontendArtifactIdentity;
+			diagnostics?: Array<CompilerDiagnostic>;
 		};
 		if (
-			reference.schema !== 1 ||
+			reference.schema !== 2 ||
 			reference.artifact === undefined ||
+			!Array.isArray(reference.diagnostics) ||
 			!frontendArtifactUnchanged(reference.artifact, artifactRoot)
 		) {
 			throw new Error("invalid dependency artifact reference");
@@ -276,6 +281,7 @@ function loadIsland(
 			key,
 			targets,
 			...reference.artifact,
+			diagnostics: reference.diagnostics,
 			get wire() {
 				if (wire !== undefined) return wire;
 				wire = new Uint8Array(readFileSync(reference.artifact!.path));
@@ -307,6 +313,12 @@ function compileIsland(
 	const semantic = runSemanticAnalysisForGraph(graph);
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	const diagnostics =
+		options.facts.world.primordialPolicy === "locked"
+			? collectPrimordialMutationDiagnostics(semantic, options.facts.world, {
+					nodeEnabled: options.config.surface.node,
+				})
+			: [];
 	options.phases.semanticMs += Date.now() - semanticStartedAt;
 	const definition = compileSemanticProgramToProgramImage(semantic, {
 		facts: options.facts,
@@ -331,8 +343,8 @@ function compileIsland(
 	if (artifact === undefined) {
 		throw new Error(`dependency artifact is missing after publication: ${wireDigest}`);
 	}
-	publish(mappingPath, `${JSON.stringify({ schema: 1, artifact })}\n`);
-	return { key, targets, ...artifact, wire, cache: "miss" };
+	publish(mappingPath, `${JSON.stringify({ schema: 2, artifact, diagnostics })}\n`);
+	return { key, targets, ...artifact, wire, diagnostics, cache: "miss" };
 }
 
 function requestPath(root: string, request: DependencyFragmentRequest): string {

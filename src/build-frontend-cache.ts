@@ -579,12 +579,15 @@ export function compileBuildFrontend(
 		return sharedSemantic;
 	};
 	const world = facts.world;
-	const diagnostics =
+	const diagnosticsForSemantic = (
+		semantic: ReturnType<typeof runSemanticAnalysisForGraph>,
+	): Array<CompilerDiagnostic> =>
 		world.primordialPolicy === "locked"
-			? collectPrimordialMutationDiagnostics(semanticForGraph(), world, {
+			? collectPrimordialMutationDiagnostics(semantic, world, {
 					nodeEnabled: options.config.surface.node,
 				})
 			: [];
+	let diagnostics: Array<CompilerDiagnostic> = [];
 	let programImage: ProgramImage;
 	let wires: Array<Uint8Array> | undefined;
 	let compilerWire: Uint8Array | undefined;
@@ -615,6 +618,7 @@ export function compileBuildFrontend(
 				entryPrelude,
 			});
 			programImage = fragments.programImage;
+			diagnostics = fragments.diagnostics;
 			runtimeArtifactIdentities = fragments.runtimeArtifacts.map(
 				({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
 					digest: artifactDigest,
@@ -652,6 +656,7 @@ export function compileBuildFrontend(
 			const semantic = semanticForGraph();
 			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+			diagnostics = diagnosticsForSemantic(semantic);
 			programImage = compileProgramImage(semantic, facts, options, phases);
 			const serializeStartedAt = Date.now();
 			compilerWire = serializeCompilerArtifact(programImage);
@@ -664,6 +669,7 @@ export function compileBuildFrontend(
 			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 		}
+		diagnostics = diagnosticsForSemantic(semantic);
 		programImage = compileProgramImage(semantic, facts, options, phases);
 		const serializeStartedAt = Date.now();
 		compilerWire = serializeCompilerArtifact(programImage);
