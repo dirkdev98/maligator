@@ -572,17 +572,23 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 		) {
 			return fn;
 		}
-		const definitions = new Map<CoreValueId, CoreInstruction>();
+		const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
+		const definitions: Array<CoreInstruction | undefined> = new Array(valueCount);
 		const canonical = analyses.canonicalValues(fn);
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation]),
-		);
-		const useCounts = new Map<CoreValueId, number>();
+		const canonicalRoots: Array<CoreValueId | undefined> = new Array(valueCount);
+		const representations: Array<
+			CoreFunction["values"][number]["representation"] | undefined
+		> = new Array(valueCount);
+		for (const { id, representation } of fn.values) {
+			canonicalRoots[id] = canonical.get(id) ?? id;
+			representations[id] = representation;
+		}
+		const useCounts = new Uint32Array(valueCount);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				for (const output of instruction.outputs) definitions.set(output, instruction);
+				for (const output of instruction.outputs) definitions[output] = instruction;
 				for (const input of instruction.inputs) {
-					useCounts.set(input, (useCounts.get(input) ?? 0) + 1);
+					useCounts[input] = useCounts[input]! + 1;
 				}
 			}
 		}
@@ -602,24 +608,25 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 					) {
 						return instruction;
 					}
-					const property = definitions.get(
-						canonical.get(instruction.inputs[0]!) ?? instruction.inputs[0]!,
-					);
+					const property =
+						definitions[
+							canonicalRoots[instruction.inputs[0]!] ?? instruction.inputs[0]!
+						];
 					const stringIndex = property?.attributes.stringIndex;
 					if (
 						property?.opcode !== "loadPropertyStatic" ||
 						property.inputs.length !== 1 ||
-						(canonical.get(property.inputs[0]!) ?? property.inputs[0]) !==
-							(canonical.get(instruction.inputs[1]!) ?? instruction.inputs[1]) ||
+						(canonicalRoots[property.inputs[0]!] ?? property.inputs[0]) !==
+							(canonicalRoots[instruction.inputs[1]!] ?? instruction.inputs[1]) ||
 						typeof stringIndex !== "number"
 					) {
 						return instruction;
 					}
 					const key = decodeString(program, stringIndex);
 					const receiverValue =
-						canonical.get(instruction.inputs[1]!) ?? instruction.inputs[1]!;
-					const receiver = definitions.get(receiverValue);
-					const receiverRepresentation = representations.get(receiverValue);
+						canonicalRoots[instruction.inputs[1]!] ?? instruction.inputs[1]!;
+					const receiver = definitions[receiverValue];
+					const receiverRepresentation = representations[receiverValue];
 					const candidates =
 						key === undefined ? undefined : BUILTIN_OPERATIONS_BY_KEY.get(key);
 					const exactReceiverFor = (
@@ -653,9 +660,10 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 						if (receiver?.opcode !== "construct" || receiver.inputs.length < 1) {
 							return false;
 						}
-						const constructor = definitions.get(
-							canonical.get(receiver.inputs[0]!) ?? receiver.inputs[0]!,
-						);
+						const constructor =
+							definitions[
+								canonicalRoots[receiver.inputs[0]!] ?? receiver.inputs[0]!
+							];
 						return (
 							constructor?.opcode === "loadIntrinsic" &&
 							constructor.attributes.intrinsic ===
@@ -701,12 +709,12 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 							? "mathBinaryNumber"
 							: undefined;
 					const calleeIsSoleUse =
-						property.outputs.length === 1 && useCounts.get(property.outputs[0]!) === 1;
+						property.outputs.length === 1 && useCounts[property.outputs[0]!] === 1;
 					const numericRewrite =
 						mathOpcode !== undefined &&
 						worldInvariantIdentity &&
 						descriptor.nativeNumberArity === arguments_.length &&
-						arguments_.every((argument) => representations.get(argument) === "f64") &&
+						arguments_.every((argument) => representations[argument] === "f64") &&
 						instruction.outputs.length === 1
 							? mathOpcode
 							: undefined;
