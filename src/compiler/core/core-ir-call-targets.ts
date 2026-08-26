@@ -450,7 +450,9 @@ function censusSlotAccesses(
 		capturedWriters: new Map(),
 	};
 	for (const fn of program.functions) {
-		const producers: Array<CoreInstruction | undefined> = [];
+		const producers: Array<CoreInstruction | undefined> = new Array(
+			(fn.values.at(-1)?.id ?? -1) + 1,
+		).fill(undefined);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				for (const output of instruction.outputs) producers[output] = instruction;
@@ -1012,7 +1014,9 @@ export function analyzeCoreCalleeTargets(
 	): ReadonlyArray<CoreInstruction | undefined> => {
 		const cached = definitionsByFunction[fn.functionIndex];
 		if (cached !== undefined) return cached;
-		const definitions: Array<CoreInstruction | undefined> = [];
+		const definitions: Array<CoreInstruction | undefined> = new Array(
+			(fn.values.at(-1)?.id ?? -1) + 1,
+		).fill(undefined);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				for (const output of instruction.outputs) definitions[output] = instruction;
