@@ -58,8 +58,11 @@ const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
 	"Array.prototype.flatMap",
 ]);
 
+const verifiedNativeExecutionPrograms = new WeakSet<ExecutionProgram>();
+
 /** Verify the canonical target plus every native-only direct-entry ABI variant. */
 export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
+	if (verifiedNativeExecutionPrograms.has(program)) return;
 	verifyExecutionProgram(program);
 	for (const [functionIndex, fn] of program.functions.entries()) {
 		const core = program.core.functions[functionIndex]!;
@@ -195,4 +198,5 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 			}
 		}
 	}
+	verifiedNativeExecutionPrograms.add(program);
 }
