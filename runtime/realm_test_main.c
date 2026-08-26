@@ -354,15 +354,15 @@ int main(void) {
 
     MalInlineCache primitive_method_cache = {0};
     mal_realm_switch(&vm, realm_one);
-    MalValue primitive_method_one = mal_vm_array_fast_load(
+    MalValue primitive_method_one = mal_vm_indexed_fast_load(
         &vm, mal_value_from_i32(1), to_string_key, &primitive_method_cache);
-    MalValue primitive_method_one_hit = mal_vm_array_fast_load(
+    MalValue primitive_method_one_hit = mal_vm_indexed_fast_load(
         &vm, mal_value_from_i32(2), to_string_key, &primitive_method_cache);
     mal_realm_switch(&vm, realm_two);
-    MalValue primitive_method_two = mal_vm_array_fast_load(
+    MalValue primitive_method_two = mal_vm_indexed_fast_load(
         &vm, mal_value_from_i32(3), to_string_key, &primitive_method_cache);
     mal_realm_switch(&vm, realm_one);
-    MalValue primitive_method_one_again = mal_vm_array_fast_load(
+    MalValue primitive_method_one_again = mal_vm_indexed_fast_load(
         &vm, mal_value_from_i32(4), to_string_key, &primitive_method_cache);
     bool cross_realm_primitive_cache =
         primitive_method_cache.mode == MAL_IC_MODE_PRIMITIVE_VALUE &&

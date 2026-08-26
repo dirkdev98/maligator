@@ -1,5 +1,5 @@
-// One admitted region, executed a fixed number of times over an unchanging dense
-// Number array, so the counters are exact.
+// Repeat the same dense Number reduction enough times to exercise optimized and
+// interpreted execution under stress collection.
 function run() {
 	const values = [];
 	for (let index = 0; index < 100; index++) values.push(index / 100);

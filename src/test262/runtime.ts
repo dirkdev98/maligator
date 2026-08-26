@@ -787,10 +787,10 @@ async function executeWireBatch(
 	if (runner === undefined) throw new Error("Test262 wire runner was not prepared");
 	// Collecting and verifying at every gated safepoint makes tests which invoke
 	// the embedded compiler repeatedly much slower than ordinary conformance
-	// tests. Keep a finite five-minute fuse while allowing those verified runs to
-	// complete (the ShadowRealm global-properties test takes about 3.5 minutes on
+	// tests. Keep a finite ten-minute fuse while allowing those verified runs to
+	// complete (the ShadowRealm global-properties test takes about 7.5 minutes on
 	// the development machine).
-	const timeoutScale = gmallocEnabled() ? 12 : process.env.MAL_GC_STRESS ? 30 : 1;
+	const timeoutScale = gmallocEnabled() ? 12 : process.env.MAL_GC_STRESS ? 40 : 1;
 	const runTimeoutMs = TEST262_METADATA.runTimeoutMs * timeoutScale;
 	let stdout = "";
 	try {
@@ -916,7 +916,7 @@ async function runBatchBinary(
 	let stdout = "";
 	// Stress collection at every poll and Guard Malloc are deliberately slower,
 	// so scale both the per-test and overall budgets to avoid spurious TIMEOUTs.
-	const timeoutScale = gmallocEnabled() ? 12 : process.env.MAL_GC_STRESS ? 30 : 1;
+	const timeoutScale = gmallocEnabled() ? 12 : process.env.MAL_GC_STRESS ? 40 : 1;
 	const runTimeoutMs = TEST262_METADATA.runTimeoutMs * timeoutScale;
 	try {
 		const result = await execFileAsync(binPath, ["--all", String(runTimeoutMs)], {

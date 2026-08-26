@@ -7,6 +7,7 @@ import {
 	buildNativeBinary,
 	HOST_MAIN,
 	runToStdout,
+	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
@@ -40,11 +41,19 @@ describe("compiled RegExp pattern cache", () => {
 		assertResultPass(runToStdout(interpreted));
 	});
 
-	it("preserves compiled behavior under GC stress", () => {
-		assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60_000 }));
-	});
+	it(
+		"preserves compiled behavior under GC stress",
+		() => {
+			assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 120_000 }));
+		},
+		scaledNativeRunTimeoutMs(120_000),
+	);
 
-	it("preserves interpreted behavior under GC stress", () => {
-		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 60_000 }));
-	});
+	it(
+		"preserves interpreted behavior under GC stress",
+		() => {
+			assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 120_000 }));
+		},
+		scaledNativeRunTimeoutMs(120_000),
+	);
 });

@@ -6,6 +6,7 @@ import {
 	assertPassLine,
 	buildNativeBinary,
 	runToStdout,
+	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
@@ -81,12 +82,19 @@ describe("generic realm runtime API", () => {
 	it.each([
 		["compiled", () => arrayOfCompiled],
 		["interpreted", () => arrayOfInterpreted],
-	] as const)("roots %s Array.of results under GC stress", (_name, binary) => {
-		assertPassLine(
-			runToStdout(binary(), { env: { ...STRESS_ENV, MAL_TEST262: "1" } }),
-			"array-of-cross-realm",
-		);
-	});
+	] as const)(
+		"roots %s Array.of results under GC stress",
+		(_name, binary) => {
+			assertPassLine(
+				runToStdout(binary(), {
+					env: { ...STRESS_ENV, MAL_TEST262: "1" },
+					timeoutMs: 60_000,
+				}),
+				"array-of-cross-realm",
+			);
+		},
+		scaledNativeRunTimeoutMs(60_000),
+	);
 
 	it.each([
 		["compiled", () => dynamicCompiled],

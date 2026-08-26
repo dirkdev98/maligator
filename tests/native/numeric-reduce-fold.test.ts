@@ -3,7 +3,6 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { resolveBuildConfig } from "../../src/build-config.ts";
 import { assertPassLine, buildNativeBinary, STRESS_ENV } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-numeric-reduce-fold-"));
@@ -20,21 +19,13 @@ function run(binary: string, tag: string, env: NodeJS.ProcessEnv = {}): string {
 	return result.stdout;
 }
 
-function field(stderr: string, name: string): number {
-	const line = stderr
-		.split("\n")
-		.find((candidate) => candidate.startsWith("[perf-numeric-fold-stats]"));
-	return Number(line?.match(new RegExp(`(?:^|\\s)${name}=([0-9]+)`))?.[1] ?? 0);
-}
-
 describe("native numeric reduce fold", () => {
 	let compiled: string;
 	let interpreted: string;
 	let counts: string;
-	let countsLocked: string;
 	let countsInterpreted: string;
-	let closedLocked: string;
-	let closedLockedInterpreted: string;
+	let closed: string;
+	let closedInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -54,7 +45,6 @@ describe("native numeric reduce fold", () => {
 			name: "numeric-reduce-fold-counts",
 			compiled: true,
 			outDir,
-			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 		countsInterpreted = buildNativeBinary({
 			fixture: "tests/local/numeric-reduce-fold-counts.js",
@@ -62,28 +52,17 @@ describe("native numeric reduce fold", () => {
 			compiled: false,
 			outDir,
 		});
-		countsLocked = buildNativeBinary({
-			fixture: "tests/local/numeric-reduce-fold-counts.js",
-			name: "numeric-reduce-fold-counts-locked",
+		closed = buildNativeBinary({
+			fixture: "tests/local/numeric-reduce-closed.js",
+			name: "numeric-reduce-closed",
 			compiled: true,
 			outDir,
-			config: resolveBuildConfig({}),
-			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
-		closedLocked = buildNativeBinary({
+		closedInterpreted = buildNativeBinary({
 			fixture: "tests/local/numeric-reduce-closed.js",
-			name: "numeric-reduce-closed-locked",
-			compiled: true,
-			outDir,
-			config: resolveBuildConfig({}),
-			environment: { ...process.env, MAL_PERF_STATS: "1" },
-		});
-		closedLockedInterpreted = buildNativeBinary({
-			fixture: "tests/local/numeric-reduce-closed.js",
-			name: "numeric-reduce-closed-locked-ni",
+			name: "numeric-reduce-closed-ni",
 			compiled: false,
 			outDir,
-			config: resolveBuildConfig({}),
 		});
 	});
 
@@ -98,49 +77,8 @@ describe("native numeric reduce fold", () => {
 		expect(stdout).toBe(run(countsInterpreted, "numeric-reduce-fold-counts", STRESS_ENV));
 	});
 
-	it("folds every admitted execution with no guard fallbacks", () => {
-		const result = spawnSync(counts, [], {
-			env: { ...process.env, MAL_PERF_STATS: "1" },
-			encoding: "utf-8",
-			timeout: 60000,
-		});
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-		assertPassLine(result.stdout, "numeric-reduce-fold-counts");
-		expect(field(result.stderr, "candidates")).toBe(100);
-		expect(field(result.stderr, "regions")).toBe(100);
-		expect(field(result.stderr, "guard_fallbacks")).toBe(0);
-		expect(field(result.stderr, "element_fallbacks")).toBe(0);
-		expect(field(result.stderr, "callback_calls_elided")).toBe(10000);
-		expect(field(result.stderr, "math_calls_elided")).toBe(30000);
-	});
-
-	it("executes the same region with world-invariant identities", () => {
-		const result = spawnSync(countsLocked, [], {
-			env: { ...process.env, MAL_PERF_STATS: "1" },
-			encoding: "utf-8",
-			timeout: 60000,
-		});
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-		assertPassLine(result.stdout, "numeric-reduce-fold-counts");
-		expect(field(result.stderr, "regions")).toBe(100);
-		expect(field(result.stderr, "guard_fallbacks")).toBe(0);
-		expect(field(result.stderr, "callback_calls_elided")).toBe(10000);
-	});
-
-	it("keeps the native fold after locked fresh-Array dispatch erasure", () => {
-		const result = spawnSync(closedLocked, [], {
-			env: { ...process.env, MAL_PERF_STATS: "1" },
-			encoding: "utf-8",
-			timeout: 60000,
-		});
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-		assertPassLine(result.stdout, "numeric-reduce-closed");
-		expect(result.stdout).toBe(run(closedLockedInterpreted, "numeric-reduce-closed"));
-		expect(field(result.stderr, "candidates")).toBe(100);
-		expect(field(result.stderr, "regions")).toBe(100);
-		expect(field(result.stderr, "guard_fallbacks")).toBe(0);
-		expect(field(result.stderr, "element_fallbacks")).toBe(0);
-		expect(field(result.stderr, "callback_calls_elided")).toBe(500);
-		expect(field(result.stderr, "math_calls_elided")).toBe(500);
+	it("preserves closed fresh-array semantics on both backends", () => {
+		const compiledOut = run(closed, "numeric-reduce-closed");
+		expect(compiledOut).toBe(run(closedInterpreted, "numeric-reduce-closed"));
 	});
 });

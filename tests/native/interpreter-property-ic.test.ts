@@ -78,7 +78,6 @@ describe("localized interpreter property inline caches", () => {
 		expect(line).toBeDefined();
 		const stats = line ?? "";
 		expect(field(stats, "local_load_ic_hits")).toBeGreaterThan(7000);
-		expect(field(stats, "local_store_ic_hits")).toBeGreaterThan(4000);
 		expect(field(stats, "load_ic_sync_fallbacks")).toBeGreaterThan(0);
 		expect(field(stats, "store_ic_sync_fallbacks")).toBeGreaterThan(0);
 		expect(field(stats, "normal_helper_continuations")).toBeGreaterThan(0);
@@ -93,5 +92,11 @@ describe("localized interpreter property inline caches", () => {
 		expect(field(icStats, "load_missing_fills")).toBeGreaterThan(0);
 		expect(field(icStats, "prototype_epoch_invalidations")).toBeGreaterThan(0);
 		expect(field(icStats, "prototype_epoch_finalize")).toBeGreaterThan(0);
+
+		const slotLine = result.stderr
+			.split("\n")
+			.find((candidate) => candidate.startsWith("[perf-known-own-slot-stats]"));
+		expect(slotLine).toBeDefined();
+		expect(field(slotLine ?? "", "store_hits")).toBeGreaterThan(4000);
 	});
 });

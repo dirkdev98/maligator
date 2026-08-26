@@ -3,16 +3,20 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildNativeBinary, STRESS_ENV } from "../../src/test-harness.ts";
+import {
+	buildNativeBinary,
+	scaledNativeRunTimeoutMs,
+	STRESS_ENV,
+} from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-promise-direct-capability-"));
 const expected = "promise-direct-capability PASS";
 
-function run(binary: string, env: NodeJS.ProcessEnv = {}) {
+function run(binary: string, env: NodeJS.ProcessEnv = {}, timeoutMs = 60_000) {
 	const result = spawnSync(binary, [], {
 		env: { ...process.env, ...env },
 		encoding: "utf8",
-		timeout: 60000,
+		timeout: scaledNativeRunTimeoutMs(timeoutMs),
 	});
 	if (result.error !== undefined) throw result.error;
 	if (result.status !== 0) {
@@ -77,37 +81,61 @@ describe("direct Promise.prototype.then capabilities", () => {
 		run(compiled);
 	});
 
-	it("preserves active jobs and fallback pairs under compiled GC stress", () => {
-		run(compiled, {
-			...STRESS_ENV,
-			// This broad fixture traverses hundreds of promise safepoints. Keep
-			// repeated verified collections while avoiding a redundant
-			// collect-at-every-poll timeout.
-			MAL_GC_STRESS: "10",
-			MAL_HOST_GC: "1",
-		});
-	});
+	it(
+		"preserves active jobs and fallback pairs under compiled GC stress",
+		() => {
+			run(
+				compiled,
+				{
+					...STRESS_ENV,
+					// This broad fixture traverses hundreds of promise safepoints. Keep
+					// repeated verified collections while avoiding a redundant
+					// collect-at-every-poll timeout.
+					MAL_GC_STRESS: "10",
+					MAL_HOST_GC: "1",
+				},
+				120_000,
+			);
+		},
+		scaledNativeRunTimeoutMs(120_000),
+	);
 
 	it("preserves capability semantics in interpreted code", () => {
 		run(interpreted);
 	});
 
-	it("preserves interpreted jobs and reactions under GC stress", () => {
-		run(interpreted, {
-			...STRESS_ENV,
-			MAL_GC_STRESS: "10",
-			MAL_HOST_GC: "1",
-		});
-	});
+	it(
+		"preserves interpreted jobs and reactions under GC stress",
+		() => {
+			run(
+				interpreted,
+				{
+					...STRESS_ENV,
+					MAL_GC_STRESS: "10",
+					MAL_HOST_GC: "1",
+				},
+				120_000,
+			);
+		},
+		scaledNativeRunTimeoutMs(120_000),
+	);
 
-	it("preserves direct targets under concurrent GC", () => {
-		run(concurrent, {
-			...STRESS_ENV,
-			MAL_HOST_GC: "1",
-			MAL_GC_THRESHOLD: "262144",
-			MAL_GC_MAJOR_EVERY: "1",
-		});
-	});
+	it(
+		"preserves direct targets under concurrent GC",
+		() => {
+			run(
+				concurrent,
+				{
+					...STRESS_ENV,
+					MAL_HOST_GC: "1",
+					MAL_GC_THRESHOLD: "262144",
+					MAL_GC_MAJOR_EVERY: "1",
+				},
+				120_000,
+			);
+		},
+		scaledNativeRunTimeoutMs(120_000),
+	);
 
 	it("reports direct capabilities and lazy fallback materialization", () => {
 		const stderr = run(compiled, {

@@ -291,15 +291,15 @@ describe("inherited built-in method and native call caches", () => {
 			assertExactLines(
 				runToStdout(binary(), {
 					env: { MAL_HOST_GC: "1", ...STRESS_ENV },
-					// MAL_GC_VERIFY scans the heap at every stress collection. Keep a
-					// bounded fuse while allowing this deliberately broad fixture to finish
-					// on slower individual cores.
-					timeoutMs: 90_000,
+					// MAL_GC_VERIFY scans the heap at every stress collection. This broad
+					// cross-realm fixture takes close to the old 90-second fuse on an idle
+					// core, so retain a bounded fuse with enough parallel-suite headroom.
+					timeoutMs: 180_000,
 				}),
 				["inherited-ordinary-cache PASS"],
 			);
 		},
-		scaledNativeRunTimeoutMs(90_000),
+		scaledNativeRunTimeoutMs(180_000),
 	);
 
 	it.each([
