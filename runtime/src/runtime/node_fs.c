@@ -280,6 +280,40 @@ static MalValue node_fs_read_file_sync(
     return mal_node_buffer_from_owned_bytes(vm, data, len);
 }
 
+static bool node_fs_open_flags(
+    MalVm *vm, MalValue value, u32 *flags, bool *native_flags);
+static bool node_fs_open_mode(MalVm *vm, MalValue value, u32 *mode);
+
+static bool node_fs_write_file_options(
+    MalVm *vm, MalValue options, u32 *flags, bool *native_flags, u32 *mode) {
+    *flags = MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_TRUNCATE;
+    *native_flags = false;
+    *mode = 0666;
+    if (mal_value_is_undefined(options) || mal_value_is_null(options) ||
+        mal_value_is_string(options)) {
+        return true;
+    }
+    if (!mal_value_is_object(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "writeFileSync options must be a string or object");
+        return false;
+    }
+    MalValue option;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) "flag"), &option)) {
+        return false;
+    }
+    if (!mal_value_is_undefined(option) &&
+        !node_fs_open_flags(vm, option, flags, native_flags)) {
+        return false;
+    }
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) "mode"), &option)) {
+        return false;
+    }
+    return mal_value_is_undefined(option) || node_fs_open_mode(vm, option, mode);
+}
+
 static MalValue node_fs_write_file_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -319,10 +353,35 @@ static MalValue node_fs_write_file_sync(
             (const byte *) "writeFileSync data must be a string or Uint8Array");
         return mal_value_new_undefined();
     }
-    int err = mal_posix_fs_write_file(path, bytes, len);
+    u32 flags;
+    bool native_flags;
+    u32 mode;
+    if (!node_fs_write_file_options(
+            vm, argc >= 3 ? args[2] : mal_value_new_undefined(),
+            &flags, &native_flags, &mode)) {
+        free(owned);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    int fd;
+    int err = mal_posix_fs_open(path, flags, native_flags, mode, &fd);
+    if (err != 0) {
+        free(owned);
+        node_fs_throw_errno(vm, err, "open", path);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    usize written;
+    err = mal_posix_fs_write_fd(fd, bytes, len, &written);
+    int close_err = mal_posix_fs_close_fd(fd);
     free(owned);
     if (err != 0) {
-        node_fs_throw_errno(vm, err, "open", path);
+        node_fs_throw_errno(vm, err, "write", path);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    if (close_err != 0) {
+        node_fs_throw_errno_with_dest(vm, close_err, "close", nullptr, nullptr);
         free(path);
         return mal_value_new_undefined();
     }

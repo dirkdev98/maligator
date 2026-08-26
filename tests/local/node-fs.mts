@@ -72,6 +72,7 @@ const copiedFile = `${nested}/copied.txt`;
 const renameSource = `${nested}/rename-source.txt`;
 const renameDestination = `${nested}/rename-destination.txt`;
 const openedFile = `${nested}/opened.txt`;
+const persistedDatabase = `${nested}/persisted.sqlite`;
 
 eq("missing does not exist", existsSync(textFile), false);
 mkdirSync(nested, { recursive: true });
@@ -91,6 +92,13 @@ eq(
 writeFileSync(textFile, "héllo 😀");
 chmodSync(textFile, 0o640);
 eq("chmodSync updates mode bits", statSync(textFile).mode & 0o777, 0o640);
+writeFileSync(persistedDatabase, "persisted credential");
+writeFileSync(persistedDatabase, "", { flag: "a", mode: 0o600 });
+eq(
+	"writeFileSync append-create options preserve an existing database",
+	readFileSync(persistedDatabase, "utf8"),
+	"persisted credential",
+);
 const touchedAt = new Date(1_600_000_000_123);
 utimesSync(textFile, touchedAt, touchedAt);
 check(
