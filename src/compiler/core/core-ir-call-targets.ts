@@ -905,10 +905,36 @@ export function analyzeCoreCalleeTargets(
 		// must find its target's cell without growing the node universe.
 		returnNodes[fn.functionIndex] = nodeCount++;
 	}
+	// Keep every node-indexed table dense. Growing an empty JavaScript array by
+	// first assigning a high SSA node turns these hot tables into sparse/dictionary
+	// storage; the closed compiler graph starts with hundreds of thousands of value
+	// nodes before the first seed or edge is recorded. Append one slot whenever the
+	// analysis adds a non-value node so all later indexed reads stay fast as well.
+	const dependents: Array<Array<number> | undefined> = new Array(nodeCount).fill(
+		undefined,
+	);
+	const seeds: Array<CoreCalleeTargets | undefined> = new Array(nodeCount).fill(
+		undefined,
+	);
+	const originSeeds: Array<number | undefined> = new Array(nodeCount).fill(undefined);
+	const callSites: Array<Array<CallResultSite> | undefined> = new Array(nodeCount).fill(
+		undefined,
+	);
+	const constructorMethodSites: Array<Array<ConstructorMethodSite> | undefined> =
+		new Array(nodeCount).fill(undefined);
+	const allocateNode = (): number => {
+		const node = nodeCount++;
+		dependents.push(undefined);
+		seeds.push(undefined);
+		originSeeds.push(undefined);
+		callSites.push(undefined);
+		constructorMethodSites.push(undefined);
+		return node;
+	};
 	const globalNode = (slot: number): number => {
 		let node = globalNodes.get(slot);
 		if (node === undefined) {
-			node = nodeCount++;
+			node = allocateNode();
 			globalNodes.set(slot, node);
 		}
 		return node;
@@ -917,7 +943,7 @@ export function analyzeCoreCalleeTargets(
 		const key = capturedSlotKey(owner, index);
 		let node = capturedNodes.get(key);
 		if (node === undefined) {
-			node = nodeCount++;
+			node = allocateNode();
 			capturedNodes.set(key, node);
 		}
 		return node;
@@ -929,11 +955,6 @@ export function analyzeCoreCalleeTargets(
 			? stableCells.globalSlot(cell.slot)
 			: stableCells.capturedSlot(cell.owner, cell.index);
 
-	const dependents: Array<Array<number> | undefined> = [];
-	const seeds: Array<CoreCalleeTargets | undefined> = [];
-	const originSeeds: Array<number | undefined> = [];
-	const callSites: Array<Array<CallResultSite> | undefined> = [];
-	const constructorMethodSites: Array<Array<ConstructorMethodSite> | undefined> = [];
 	const allocations: Array<TrackedAllocation> = [];
 	const deferredReads: Array<DeferredOwnSlotRead> = [];
 	const predecessors: Array<ReturnType<typeof corePredecessorEdges> | undefined> = [];
@@ -1600,7 +1621,7 @@ export function analyzeCoreCalleeTargets(
 		const cacheKey = `${allocation}\0${key}`;
 		let node = ownCellNodes.get(cacheKey);
 		if (node === undefined) {
-			node = nodeCount++;
+			node = allocateNode();
 			ownCellNodes.set(cacheKey, node);
 		}
 		return node;
