@@ -105,6 +105,7 @@ const FS: HostModuleSpec = {
 		"lstatSync",
 		"mkdirSync",
 		"mkdtempSync",
+		"openSync",
 		"readFile",
 		"readFileSync",
 		"readdir",

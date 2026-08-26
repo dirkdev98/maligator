@@ -481,6 +481,125 @@ static MalValue node_fs_close_sync(
     return mal_value_new_undefined();
 }
 
+static bool node_fs_string_open_flags(MalString *value, u32 *flags) {
+    if (mal_string_equals_ascii(value, "r")) {
+        *flags = MAL_POSIX_OPEN_READ;
+    } else if (mal_string_equals_ascii(value, "rs") ||
+               mal_string_equals_ascii(value, "sr")) {
+        *flags = MAL_POSIX_OPEN_READ | MAL_POSIX_OPEN_SYNC;
+    } else if (mal_string_equals_ascii(value, "r+")) {
+        *flags = MAL_POSIX_OPEN_READ | MAL_POSIX_OPEN_WRITE;
+    } else if (mal_string_equals_ascii(value, "rs+") ||
+               mal_string_equals_ascii(value, "sr+")) {
+        *flags = MAL_POSIX_OPEN_READ | MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_SYNC;
+    } else if (mal_string_equals_ascii(value, "w")) {
+        *flags = MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_TRUNCATE;
+    } else if (mal_string_equals_ascii(value, "wx") ||
+               mal_string_equals_ascii(value, "xw")) {
+        *flags = MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE |
+            MAL_POSIX_OPEN_TRUNCATE | MAL_POSIX_OPEN_EXCLUSIVE;
+    } else if (mal_string_equals_ascii(value, "w+")) {
+        *flags = MAL_POSIX_OPEN_READ | MAL_POSIX_OPEN_WRITE |
+            MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_TRUNCATE;
+    } else if (mal_string_equals_ascii(value, "wx+") ||
+               mal_string_equals_ascii(value, "xw+")) {
+        *flags = MAL_POSIX_OPEN_READ | MAL_POSIX_OPEN_WRITE |
+            MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_TRUNCATE |
+            MAL_POSIX_OPEN_EXCLUSIVE;
+    } else if (mal_string_equals_ascii(value, "a")) {
+        *flags = MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_APPEND;
+    } else if (mal_string_equals_ascii(value, "ax") ||
+               mal_string_equals_ascii(value, "xa")) {
+        *flags = MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE |
+            MAL_POSIX_OPEN_APPEND | MAL_POSIX_OPEN_EXCLUSIVE;
+    } else if (mal_string_equals_ascii(value, "a+")) {
+        *flags = MAL_POSIX_OPEN_READ | MAL_POSIX_OPEN_WRITE |
+            MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_APPEND;
+    } else if (mal_string_equals_ascii(value, "ax+") ||
+               mal_string_equals_ascii(value, "xa+")) {
+        *flags = MAL_POSIX_OPEN_READ | MAL_POSIX_OPEN_WRITE |
+            MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_APPEND |
+            MAL_POSIX_OPEN_EXCLUSIVE;
+    } else if (mal_string_equals_ascii(value, "as") ||
+               mal_string_equals_ascii(value, "sa")) {
+        *flags = MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE |
+            MAL_POSIX_OPEN_APPEND | MAL_POSIX_OPEN_SYNC;
+    } else if (mal_string_equals_ascii(value, "as+") ||
+               mal_string_equals_ascii(value, "sa+")) {
+        *flags = MAL_POSIX_OPEN_READ | MAL_POSIX_OPEN_WRITE |
+            MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_APPEND | MAL_POSIX_OPEN_SYNC;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static bool node_fs_open_flags(
+    MalVm *vm, MalValue value, u32 *flags, bool *native_flags) {
+    if (mal_value_is_string(value)) {
+        *native_flags = false;
+        if (node_fs_string_open_flags(mal_value_to_string(value), flags)) return true;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "open flags must be a supported string or integer");
+        return false;
+    }
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || number < 0 || number > INT_MAX || trunc(number) != number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "open flags must be a non-negative integer");
+        return false;
+    }
+    *flags = (u32) number;
+    *native_flags = true;
+    return true;
+}
+
+static bool node_fs_open_mode(MalVm *vm, MalValue value, u32 *mode) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || number < 0 || number > 4294967295.0 || trunc(number) != number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "open mode must be a non-negative 32-bit integer");
+        return false;
+    }
+    *mode = (u32) number;
+    return true;
+}
+
+static MalValue node_fs_open_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    u32 flags;
+    bool native_flags;
+    if (!node_fs_open_flags(
+            vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
+            &flags, &native_flags)) {
+        free(path);
+        return mal_value_new_undefined();
+    }
+    u32 mode = 0666;
+    if (argc >= 3 && !mal_value_is_undefined(args[2]) &&
+        !node_fs_open_mode(vm, args[2], &mode)) {
+        free(path);
+        return mal_value_new_undefined();
+    }
+    int fd;
+    int err = mal_posix_fs_open(path, flags, native_flags, mode, &fd);
+    if (err != 0) {
+        node_fs_throw_errno(vm, err, "open", path);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    free(path);
+    return mal_value_from_f64((f64) fd);
+}
+
 static MalValue node_fs_stat_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -1410,6 +1529,9 @@ static MalValue node_fs_export(
     if (strcmp(name, "closeSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "closeSync", 1, node_fs_close_sync);
     }
+    if (strcmp(name, "openSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "openSync", 3, node_fs_open_sync);
+    }
     if (strcmp(name, "unlinkSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "unlinkSync", 1, node_fs_unlink_sync);
     }
@@ -1509,7 +1631,7 @@ void mal_host_install_node_fs(
 
     static const char *names[] = {
 		"Stats", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
-		"mkdtempSync", "readFile", "readFileSync", "readdir", "readdirSync", "realpathSync", "renameSync",
+		"mkdtempSync", "openSync", "readFile", "readFileSync", "readdir", "readdirSync", "realpathSync", "renameSync",
         "rmSync", "statSync", "stat", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));

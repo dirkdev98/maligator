@@ -84,6 +84,35 @@ bool mal_posix_fs_exists(const char *path) {
     return stat(path, &st) == 0;
 }
 
+int mal_posix_fs_open(
+    const char *path, u32 flags, bool native_flags, u32 mode, int *out_fd) {
+    int native = 0;
+    if (native_flags) {
+        native = (int) flags;
+    } else {
+        bool read = (flags & MAL_POSIX_OPEN_READ) != 0;
+        bool write = (flags & MAL_POSIX_OPEN_WRITE) != 0;
+        if (read && write) native |= O_RDWR;
+        else if (write) native |= O_WRONLY;
+        else native |= O_RDONLY;
+        if (flags & MAL_POSIX_OPEN_APPEND) native |= O_APPEND;
+        if (flags & MAL_POSIX_OPEN_CREATE) native |= O_CREAT;
+        if (flags & MAL_POSIX_OPEN_EXCLUSIVE) native |= O_EXCL;
+        if (flags & MAL_POSIX_OPEN_TRUNCATE) native |= O_TRUNC;
+        if (flags & MAL_POSIX_OPEN_SYNC) native |= O_SYNC;
+    }
+#ifdef O_CLOEXEC
+    native |= O_CLOEXEC;
+#endif
+    int fd;
+    do {
+        fd = open(path, native, (mode_t) mode);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) return errno;
+    *out_fd = fd;
+    return 0;
+}
+
 int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {

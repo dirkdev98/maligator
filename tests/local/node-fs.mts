@@ -8,6 +8,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	openSync,
 	readFile,
 	readFileSync,
 	readdirSync,
@@ -70,12 +71,22 @@ const byteFile = `${nested}/bytes.bin`;
 const copiedFile = `${nested}/copied.txt`;
 const renameSource = `${nested}/rename-source.txt`;
 const renameDestination = `${nested}/rename-destination.txt`;
+const openedFile = `${nested}/opened.txt`;
 
 eq("missing does not exist", existsSync(textFile), false);
 mkdirSync(nested, { recursive: true });
 eq("recursive mkdir creates parents", existsSync(nested), true);
 mkdirSync(nested, { recursive: true });
 check("recursive mkdir accepts an existing directory", statSync(nested).isDirectory());
+
+const openedDescriptor = openSync(openedFile, "w", 0o640);
+check("openSync returns a file descriptor", Number.isInteger(openedDescriptor));
+closeSync(openedDescriptor);
+eq(
+	"openSync creates a file with the requested mode",
+	statSync(openedFile).mode & 0o777,
+	0o640,
+);
 
 writeFileSync(textFile, "héllo 😀");
 chmodSync(textFile, 0o640);

@@ -39,10 +39,28 @@ typedef struct MalPosixDirent {
     u32 type;   // MalPosixFileType of the entry itself (does NOT follow symlinks)
 } MalPosixDirent;
 
+/* Host-independent flags accepted by mal_posix_fs_open. The runtime maps Node's
+ * string spellings onto these bits; the host layer owns the platform O_* values. */
+typedef enum MalPosixOpenFlags {
+    MAL_POSIX_OPEN_READ = 1u << 0,
+    MAL_POSIX_OPEN_WRITE = 1u << 1,
+    MAL_POSIX_OPEN_APPEND = 1u << 2,
+    MAL_POSIX_OPEN_CREATE = 1u << 3,
+    MAL_POSIX_OPEN_EXCLUSIVE = 1u << 4,
+    MAL_POSIX_OPEN_TRUNCATE = 1u << 5,
+    MAL_POSIX_OPEN_SYNC = 1u << 6,
+} MalPosixOpenFlags;
+
 /* True iff `path` resolves (following symlinks). Never reports an error: any stat
  * failure (missing, permission, dangling symlink) is a plain false, matching
  * fs.existsSync. */
 bool mal_posix_fs_exists(const char *path);
+
+/* Open `path` and return its descriptor through `out_fd`. `flags` contains
+ * MalPosixOpenFlags unless `native_flags` is true, in which case it is the
+ * caller-supplied platform O_* mask used by Node's numeric-flags form. */
+int mal_posix_fs_open(
+    const char *path, u32 flags, bool native_flags, u32 mode, int *out_fd);
 
 /* Read the whole file at `path` into a fresh malloc'd buffer (*out_data, *out_len).
  * Grows past the stat size hint so streams/proc files still read fully. The caller
