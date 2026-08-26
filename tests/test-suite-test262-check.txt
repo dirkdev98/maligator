@@ -2,7 +2,7 @@
 # from baseline or report changes. Keep representative siblings only and keep
 # this selection disjoint from Test262 smoke.
 
-# Core built-in and runtime boundaries (74)
+# Core built-in and runtime boundaries (75)
 test/annexB/built-ins/Date/prototype/getYear/return-value.js
 test/annexB/built-ins/Date/prototype/setYear/date-value-read-before-tonumber-when-date-is-valid.js
 test/annexB/built-ins/Date/prototype/setYear/this-time-nan.js
@@ -56,6 +56,7 @@ test/built-ins/Promise/any/resolve-ignores-late-rejection-deferred.js
 test/built-ins/Promise/race/iter-assigned-symbol-reject.js
 test/built-ins/Reflect/getPrototypeOf/target-is-not-object-throws.js
 test/built-ins/RegExp/match-indices/indices-array-non-unicode-match.js
+test/built-ins/RegExp/prototype/Symbol.replace/coerce-lastindex.js
 test/built-ins/RegExp/prototype/Symbol.replace/get-exec-err.js
 test/built-ins/RegExp/prototype/exec/S15.10.6.2_A12.js
 test/built-ins/RegExp/regexp-modifiers/add-dotAll-does-not-affect-dotAll-property.js
