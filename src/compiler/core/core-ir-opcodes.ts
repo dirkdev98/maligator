@@ -312,7 +312,10 @@ const OPCODE_ACCESSES = {
 	storeLocal: [write("local-slot", { attributes: ["index"], valueOperand: 0 })],
 	loadCaptured: [read("captured-slot", { attributes: ["functionIndex", "index"] })],
 	storeCaptured: [
-		write("captured-slot", { attributes: ["functionIndex", "index"], valueOperand: 0 }),
+		write("captured-slot", {
+			attributes: ["functionIndex", "index"],
+			valueOperand: 0,
+		}),
 	],
 	// A scope-chain edit rebinds every captured cell reachable from this activation.
 	envPush: [write("captured-slot")],
@@ -342,7 +345,10 @@ const OPCODE_ACCESSES = {
 	],
 	loadGlobalProperty: [read("global-property", { keyAttribute: "nameStringIndex" })],
 	storeGlobalProperty: [
-		write("global-property", { keyAttribute: "nameStringIndex", valueOperand: 0 }),
+		write("global-property", {
+			keyAttribute: "nameStringIndex",
+			valueOperand: 0,
+		}),
 	],
 	loadProperty: [read("object-slot", { baseOperand: 0, keyOperand: 1 })],
 	loadPropertyStatic: [
@@ -427,19 +433,57 @@ const OPCODE_ALLOCATIONS = {
  * function's return value is involved.
  */
 const OPCODE_CALL_TRANSFERS = {
-	call: { calleeOperand: 0, result: "call-completion" },
-	callSpread: { calleeOperand: 0, result: "call-completion" },
-	callSpreadIterable: { calleeOperand: 0, result: "call-completion" },
-	construct: { calleeOperand: 0, result: "construct-completion" },
-	constructSpread: { calleeOperand: 0, result: "construct-completion" },
+	call: {
+		calleeOperand: 0,
+		result: "call-completion",
+		invocation: "call",
+		receiverOperand: 1,
+		arguments: { kind: "positional", firstOperand: 2 },
+	},
+	callSpread: {
+		calleeOperand: 0,
+		result: "call-completion",
+		invocation: "call",
+		receiverOperand: 1,
+		arguments: { kind: "aggregate", operand: 2 },
+	},
+	callSpreadIterable: {
+		calleeOperand: 0,
+		result: "call-completion",
+		invocation: "call",
+		receiverOperand: 1,
+		arguments: { kind: "aggregate", operand: 2 },
+	},
+	construct: {
+		calleeOperand: 0,
+		result: "construct-completion",
+		invocation: "construct",
+		arguments: { kind: "positional", firstOperand: 1 },
+	},
+	constructSpread: {
+		calleeOperand: 0,
+		result: "construct-completion",
+		invocation: "construct",
+		arguments: { kind: "aggregate", operand: 1 },
+	},
 	// Super construction enters the parent and binds the object it produces as
 	// `this`, so its result is a [[Construct]] completion like any other. It stays
 	// unmodeled because the interesting half of the chain is elsewhere: a derived
 	// constructor's own completion substitutes this object without any Core value
 	// naming it, and modeling one end while the other is conservative buys
 	// nothing.
-	constructSuper: { calleeOperand: 0, result: "unmodeled" },
-	constructSuperExplicit: { calleeOperand: 0, result: "unmodeled" },
+	constructSuper: {
+		calleeOperand: 0,
+		result: "unmodeled",
+		invocation: "construct",
+		arguments: { kind: "aggregate", operand: 1 },
+	},
+	constructSuperExplicit: {
+		calleeOperand: 0,
+		result: "unmodeled",
+		invocation: "construct",
+		arguments: { kind: "aggregate", operand: 1 },
+	},
 } as const satisfies Partial<Record<CoreOpcode, CoreOpcodeCallTransfer>>;
 
 function opcodeCallTransfer(opcode: CoreOpcode): CoreOpcodeCallTransfer | undefined {

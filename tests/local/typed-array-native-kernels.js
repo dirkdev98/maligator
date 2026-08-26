@@ -95,6 +95,28 @@ check(
 		exactCapturedLoads("label")[5] === "exact-brand-fallback",
 );
 
+function exactPassedLoad(view, index) {
+	return view[index];
+}
+check(
+	"exact numeric TypedArray brand crosses a named call",
+	exactPassedLoad(exactInt32, 0) === -1234567 &&
+		exactPassedLoad(exactFloat64, 0) === -3.25,
+);
+
+function publishedIndexedLoad(receiver, index) {
+	return receiver[index];
+}
+globalThis.__mal_published_indexed_load = publishedIndexedLoad;
+check(
+	"published indexed receiver accepts a TypedArray",
+	globalThis.__mal_published_indexed_load(exactInt32, 0) === -1234567,
+);
+check(
+	"published indexed receiver remains open",
+	globalThis.__mal_published_indexed_load({ 0: "ordinary" }, 0) === "ordinary",
+);
+
 const exactExternalBuffer = new ArrayBuffer(8, { maxByteLength: 8 });
 const exactExternalView = new Uint8Array(exactExternalBuffer, 4, 4);
 function exactExternalLoad(key) {

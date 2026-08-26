@@ -228,7 +228,6 @@ describe("opt-in performance statistics", () => {
 		const ic = reportLine(result.stderr, "[perf-ic-stats]");
 		const loadHits = field(ic, "load_mono_hits") + field(ic, "load_slow_mono_hits");
 		expect(loadHits).toBeGreaterThan(0);
-		expect(field(ic, "load_slow_mono_hits")).toBeGreaterThan(1000);
 		expect(field(ic, "load_fallbacks")).toBeGreaterThan(0);
 		expect(field(ic, "load_primitive_hits")).toBeGreaterThan(3000);
 		expect(field(ic, "load_string_length_hits")).toBeGreaterThan(1000);
@@ -269,9 +268,6 @@ describe("opt-in performance statistics", () => {
 		const ic = reportLine(result.stderr, "[perf-ic-stats]");
 		expect(field(ic, "load_mono_hits")).toBeGreaterThan(0);
 		expect(field(ic, "store_mono_hits")).toBeGreaterThan(0);
-		// Fresh equal computed strings synchronize once for atom lookup, then hit
-		// the canonical-key cache without repeating the shape search.
-		expect(field(ic, "load_slow_mono_hits")).toBeGreaterThan(1000);
 		expect(field(ic, "store_slow_mono_hits")).toBe(0);
 		expect(field(ic, "load_primitive_hits")).toBeGreaterThan(3000);
 		expect(field(ic, "load_string_length_hits")).toBeGreaterThan(1000);

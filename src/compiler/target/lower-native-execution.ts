@@ -1,5 +1,9 @@
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import { coreOpcodeRegistry } from "../core/core-ir-opcodes.ts";
+import {
+	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	coreExactCallArgumentRepresentations,
+} from "../core/core-ir-value-kinds.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
 import type {
 	CoreFunction,
@@ -74,8 +78,30 @@ function planDirectEntries(core: CoreProgram): DirectEntryPlan {
 		readonly parameters: ReadonlyArray<"boxed" | "number" | "boolean">;
 		readonly result: "boxed" | "number" | "boolean";
 		readonly calls: Array<CoreInstruction>;
+		uses: number;
 	}
 	const candidates = core.functions.map(() => new Map<string, Candidate>());
+	const addCandidate = (
+		targetIndex: number,
+		parameters: ReadonlyArray<"boxed" | "number" | "boolean">,
+		result: "boxed" | "number" | "boolean",
+		call?: CoreInstruction,
+	): void => {
+		const key = `${parameters.join(",")}->${result}`;
+		const existing = candidates[targetIndex]!.get(key);
+		if (existing === undefined) {
+			candidates[targetIndex]!.set(key, {
+				key,
+				parameters,
+				result,
+				calls: call === undefined ? [] : [call],
+				uses: 1,
+			});
+		} else {
+			existing.uses++;
+			if (call !== undefined) existing.calls.push(call);
+		}
+	};
 	for (const caller of core.functions) {
 		const callerRepresentations = new Map(
 			caller.values.map(({ id, representation }) => [id, representation] as const),
@@ -88,8 +114,14 @@ function planDirectEntries(core: CoreProgram): DirectEntryPlan {
 				if (typeof targetIndex !== "number") continue;
 				const target = core.functions[targetIndex];
 				if (target === undefined || !supportsDirectEntry(target)) continue;
+				const exactArguments = coreExactCallArgumentRepresentations(
+					instruction.attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE],
+					target.parameters.length,
+				);
 				const parameters = target.parameters.map((_, index) => {
 					const argument = instruction.inputs[index + 2];
+					const exact = exactArguments?.[index];
+					if (exact === "number" || exact === "boolean") return exact;
 					return argument === undefined
 						? ("boxed" as const)
 						: corePhysicalRepresentation(callerRepresentations.get(argument)!);
@@ -98,28 +130,14 @@ function planDirectEntries(core: CoreProgram): DirectEntryPlan {
 				if (result === "boxed" && parameters.every((entry) => entry === "boxed")) {
 					continue;
 				}
-				const key = `${parameters.join(",")}->${result}`;
-				const existing = candidates[targetIndex]!.get(key);
-				if (existing === undefined) {
-					candidates[targetIndex]!.set(key, {
-						key,
-						parameters,
-						result,
-						calls: [instruction],
-					});
-				} else {
-					existing.calls.push(instruction);
-				}
+				addCandidate(targetIndex, parameters, result, instruction);
 			}
 		}
 	}
 	const entryByCall = new Map<CoreInstruction, number>();
 	const entriesByFunction = candidates.map((bySignature) =>
 		[...bySignature.values()]
-			.sort(
-				(left, right) =>
-					right.calls.length - left.calls.length || left.key.localeCompare(right.key),
-			)
+			.sort((left, right) => right.uses - left.uses || left.key.localeCompare(right.key))
 			.slice(0, MAX_DIRECT_ENTRIES_PER_FUNCTION)
 			.map((candidate, id): PlannedDirectEntry => {
 				for (const call of candidate.calls) entryByCall.set(call, id);

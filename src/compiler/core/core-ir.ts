@@ -16,7 +16,9 @@ declare const coreValueIdBrand: unique symbol;
 declare const coreFactIdBrand: unique symbol;
 
 export type CoreBlockId = number & { readonly [coreBlockIdBrand]: true };
-export type CoreInstructionId = number & { readonly [coreInstructionIdBrand]: true };
+export type CoreInstructionId = number & {
+	readonly [coreInstructionIdBrand]: true;
+};
 export type CoreValueId = number & { readonly [coreValueIdBrand]: true };
 export type CoreFactId = number & { readonly [coreFactIdBrand]: true };
 
@@ -160,10 +162,28 @@ export type CoreOpcodeAllocation =
  *   [[Construct]] bound as `this`.
  * - `unmodeled` — control reaches the callable, but nothing here relates the
  *   result to what the callable returned.
+ *
+ * `invocation` and `arguments` describe how values enter the target frame. They
+ * live beside the callee declaration so whole-program analyses cannot agree on
+ * the call graph while silently disagreeing about parameter flow. A positional
+ * list maps one-to-one onto source formals from `firstOperand`; an aggregate
+ * list is dynamically expanded and therefore opens every formal. `receiverOperand`
+ * is present only for [[Call]]. [[Construct]] creates its receiver internally.
  */
 export interface CoreOpcodeCallTransfer {
 	readonly calleeOperand: number;
 	readonly result: "call-completion" | "construct-completion" | "unmodeled";
+	readonly invocation: "call" | "construct";
+	readonly receiverOperand?: number;
+	readonly arguments:
+		| {
+				readonly kind: "positional";
+				readonly firstOperand: number;
+		  }
+		| {
+				readonly kind: "aggregate";
+				readonly operand: number;
+		  };
 }
 
 export interface CoreArity {
@@ -328,6 +348,31 @@ function validateCallTransfer(descriptor: CoreOpcodeDescriptor): void {
 	}
 	if (transfer.result !== "unmodeled" && descriptor.outputs.minimum < 1) {
 		throw new Error(`${opcode} declares a ${transfer.result} without producing a result`);
+	}
+	if (transfer.invocation === "call") {
+		if (
+			transfer.receiverOperand === undefined ||
+			!Number.isSafeInteger(transfer.receiverOperand) ||
+			transfer.receiverOperand < 0 ||
+			transfer.receiverOperand >= descriptor.inputs.minimum
+		) {
+			throw new Error(`${opcode} declares [[Call]] without a required receiver operand`);
+		}
+	} else if (transfer.receiverOperand !== undefined) {
+		throw new Error(`${opcode} declares a receiver operand for [[Construct]]`);
+	}
+	const argumentOperand =
+		transfer.arguments.kind === "positional"
+			? transfer.arguments.firstOperand
+			: transfer.arguments.operand;
+	if (
+		!Number.isSafeInteger(argumentOperand) ||
+		argumentOperand < 0 ||
+		argumentOperand > descriptor.inputs.minimum ||
+		(transfer.arguments.kind === "aggregate" &&
+			argumentOperand >= descriptor.inputs.minimum)
+	) {
+		throw new Error(`${opcode} declares an invalid argument operand ${argumentOperand}`);
 	}
 }
 
@@ -606,8 +651,14 @@ export type CoreTerminator =
 			}>;
 			readonly default: CoreEdge;
 	  })
-	| (CoreTerminatorBase & { readonly kind: "return"; readonly value: CoreValueId })
-	| (CoreTerminatorBase & { readonly kind: "throw"; readonly value: CoreValueId })
+	| (CoreTerminatorBase & {
+			readonly kind: "return";
+			readonly value: CoreValueId;
+	  })
+	| (CoreTerminatorBase & {
+			readonly kind: "throw";
+			readonly value: CoreValueId;
+	  })
 	| (CoreTerminatorBase & { readonly kind: "unreachable" });
 
 export type CoreTerminatorInput = CoreTerminator extends infer Terminator
@@ -829,7 +880,11 @@ export class CoreFunctionBuilder {
 			const existing = this.#values[parameter.value]!;
 			this.#values[parameter.value] = {
 				...existing,
-				definition: { kind: "block-parameter", block: blockId, index: index + 1 },
+				definition: {
+					kind: "block-parameter",
+					block: blockId,
+					index: index + 1,
+				},
 			};
 		}
 		const representation = spec.representation ?? "boxed";
@@ -1078,7 +1133,10 @@ export class CoreFunctionBuilder {
 			entry,
 			blocks,
 			values: this.#values.map((value) => ({ ...value })),
-			facts: this.#facts.map((fact) => ({ ...fact, obligations: [...fact.obligations] })),
+			facts: this.#facts.map((fact) => ({
+				...fact,
+				obligations: [...fact.obligations],
+			})),
 			regions: [],
 			mutationEpoch: this.#mutationEpoch,
 		};

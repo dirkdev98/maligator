@@ -64,7 +64,9 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 	for (const [functionIndex, fn] of program.functions.entries()) {
 		const core = program.core.functions[functionIndex]!;
 		if (fn.directEntries.length > 4) {
-			fail("function has more than four native direct entries", { functionIndex });
+			fail("function has more than four native direct entries", {
+				functionIndex,
+			});
 		}
 		const signatures = new Set<string>();
 		for (const [entryIndex, entry] of fn.directEntries.entries()) {
@@ -102,7 +104,10 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 					representation === "number" ||
 					representation === "boolean";
 				if (!valid)
-					fail("direct-entry register class is invalid", { ...context, register });
+					fail("direct-entry register class is invalid", {
+						...context,
+						register,
+					});
 				const expected =
 					register < fn.parameterCount
 						? entry.parameterRepresentations[register]
@@ -174,9 +179,15 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 							: register < 0
 								? immediateRepresentation(instruction.immediateValues?.[operand])
 								: fn.registerRepresentations[register];
-					if (actual !== expected) {
+					const variantTransports =
+						register !== undefined &&
+						register >= 0 &&
+						fn.directEntries.some(
+							(callerEntry) => callerEntry.registerRepresentations[register] === expected,
+						);
+					if (actual !== expected && actual !== "boxed" && !variantTransports) {
 						fail(
-							"direct-entry call argument does not satisfy its transport class",
+							`no caller ABI can transport ${String(actual)} as ${expected} for parameter ${parameter}`,
 							context,
 						);
 					}

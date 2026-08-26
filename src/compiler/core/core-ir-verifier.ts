@@ -12,7 +12,7 @@ import {
 	coreMemoryLocationFamily,
 	coreMemoryLocationIsExact,
 } from "./core-ir-memory.ts";
-import { coreInstructionEffects } from "./core-ir-opcodes.ts";
+import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import {
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
@@ -64,6 +64,11 @@ import {
 	coreExactCollectionBrand,
 	coreNumericTypedArrayKind,
 } from "./core-ir-value-classes.ts";
+import {
+	analyzeCoreValueKinds,
+	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	coreExactCallArgumentRepresentations,
+} from "./core-ir-value-kinds.ts";
 import type {
 	CoreBlock,
 	CoreBlockId,
@@ -1768,6 +1773,53 @@ function verifyExactCollectionReceiverClaims(
 	}
 }
 
+function verifyExactCallArgumentClaims(
+	program: CoreProgram,
+	compilationContext: CoreCompilationContext | undefined,
+): void {
+	const claims = program.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions
+				.filter(
+					(instruction) =>
+						CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE in instruction.attributes,
+				)
+				.map((instruction) => ({ fn, instruction })),
+		),
+	);
+	if (claims.length === 0) return;
+	const summaries = analyzeCoreProgramSummaries(
+		program,
+		coreOpcodeRegistry,
+		compilationContext,
+	);
+	const analysis = analyzeCoreValueKinds(program, compilationContext, summaries);
+	for (const { fn, instruction } of claims) {
+		const targetIndex = instruction.attributes.directFunctionIndex;
+		const target =
+			typeof targetIndex === "number" ? program.functions[targetIndex] : undefined;
+		const claim = coreExactCallArgumentRepresentations(
+			instruction.attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE],
+			target?.parameters.length,
+		);
+		if (instruction.opcode !== "call" || target === undefined || claim === undefined) {
+			fail(`instruction @${instruction.id} carries an invalid exact call-argument claim`);
+		}
+		for (const [index, representation] of claim.entries()) {
+			if (representation === "boxed") continue;
+			const argument = instruction.inputs[index + 2];
+			if (
+				argument === undefined ||
+				analysis.exactScalar(fn.functionIndex, argument) !== representation
+			) {
+				fail(
+					`instruction @${instruction.id} no longer proves ${representation} argument ${index}`,
+				);
+			}
+		}
+	}
+}
+
 function verifyCoreProgramGraph(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
@@ -1860,6 +1912,7 @@ function verifyCoreProgramGraph(
 	if (context?.stage === "pre-target") {
 		verifyExactTypedArrayClaims(program, compilationContext);
 		verifyExactCollectionReceiverClaims(program, compilationContext);
+		verifyExactCallArgumentClaims(program, compilationContext);
 	}
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {

@@ -20,6 +20,7 @@ import {
 	coreExactCollectionBrand,
 	coreNumericTypedArrayKind,
 } from "../core/core-ir-value-classes.ts";
+import { CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE } from "../core/core-ir-value-kinds.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
 import type {
 	CoreBlockId,
@@ -79,6 +80,7 @@ const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
 ]);
 
 interface LoweredParallelCopy {
@@ -87,7 +89,10 @@ interface LoweredParallelCopy {
 }
 
 function parallelMoves(
-	assignments: ReadonlyArray<{ readonly destination: number; readonly source: number }>,
+	assignments: ReadonlyArray<{
+		readonly destination: number;
+		readonly source: number;
+	}>,
 	nextRegister: { value: number },
 	registerRepresentations: Map<number, CoreRepresentation>,
 ): LoweredParallelCopy {
@@ -527,7 +532,11 @@ export function coreRegisterClasses(
 	const intervals = new Map<CoreValueId, LiveInterval>(
 		core.values.map(({ id }) => [
 			id,
-			{ value: id, start: Number.POSITIVE_INFINITY, end: Number.NEGATIVE_INFINITY },
+			{
+				value: id,
+				start: Number.POSITIVE_INFINITY,
+				end: Number.NEGATIVE_INFINITY,
+			},
 		]),
 	);
 	const touch = (value: CoreValueId, position: number): void => {
@@ -962,7 +971,11 @@ function coreBlockLayout(core: CoreFunction): Array<CoreBlockId> {
 			const next = frame.successors[frame.index++]!;
 			if (visited.has(next)) continue;
 			visited.add(next);
-			stack.push({ block: next, successors: successors(core.blocks[next]!), index: 0 });
+			stack.push({
+				block: next,
+				successors: successors(core.blocks[next]!),
+				index: 0,
+			});
 		}
 		order.push(...postorder.toReversed());
 	};

@@ -2,15 +2,21 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
+import { analyzeCoreInterproceduralValueFlow } from "../src/compiler/core/core-ir-interprocedural-flow.ts";
 import {
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 } from "../src/compiler/core/core-ir-provenance.ts";
+import { analyzeCoreProgramSummaries } from "../src/compiler/core/core-ir-summaries.ts";
 import {
 	analyzeCoreValueClasses,
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 } from "../src/compiler/core/core-ir-value-classes.ts";
+import {
+	analyzeCoreValueKinds,
+	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+} from "../src/compiler/core/core-ir-value-kinds.ts";
 import type { CoreInstruction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
@@ -115,6 +121,9 @@ try {
 	const optimized: CoreProgram = optimizedCompilation.program;
 	const optimizedContext: CoreCompilationContext = optimizedCompilation.context;
 	const valueClasses = analyzeCoreValueClasses(optimized, optimizedContext);
+	const summaries = analyzeCoreProgramSummaries(optimized, undefined, optimizedContext);
+	const valueFlow = analyzeCoreInterproceduralValueFlow(optimized, summaries);
+	const valueKinds = analyzeCoreValueKinds(optimized, optimizedContext, summaries);
 	const native = process.argv.includes("--native")
 		? runPhase("lowerNativeMs", () =>
 				lowerCoreCompilationToExecution(optimizedCompilation),
@@ -301,6 +310,28 @@ try {
 			})}\n`,
 		);
 	}
+	const functionIndex = process.argv.indexOf("--function");
+	const selectedFunctionIndex =
+		functionIndex < 0 ? undefined : Number(process.argv[functionIndex + 1]);
+	if (
+		functionIndex >= 0 &&
+		(!Number.isSafeInteger(selectedFunctionIndex) || selectedFunctionIndex! < 0)
+	) {
+		throw new Error("--function requires a non-negative function index");
+	}
+	const selectedFunction =
+		selectedFunctionIndex === undefined
+			? undefined
+			: optimized.functions.find(
+					({ functionIndex }) => functionIndex === selectedFunctionIndex,
+				);
+	if (selectedFunctionIndex !== undefined && selectedFunction === undefined) {
+		throw new Error(`unknown function index ${selectedFunctionIndex}`);
+	}
+	const selectedFunctionSummary =
+		selectedFunctionIndex === undefined
+			? undefined
+			: summaries.summary(selectedFunctionIndex);
 	console.log(
 		JSON.stringify(
 			{
@@ -311,6 +342,13 @@ try {
 						: `entry:${entry}`,
 				phases,
 				counts: {
+					externallyReachableFunctions: summaries.functions.filter(
+						({ externallyReachable }) => externallyReachable,
+					).length,
+					openCallSites: valueFlow.statistics.openSites,
+					openParameterEntries: valueFlow.statistics.openParameterEntries,
+					openParameterPositions: valueFlow.statistics.openParameterPositions,
+					openReceiverEntries: valueFlow.statistics.openReceiverEntries,
 					exactCallbackTargets: instructionSites.filter(
 						({ attributes }) =>
 							typeof attributes.directCallbackFunctionIndex === "number",
@@ -336,6 +374,32 @@ try {
 					exactCollectionReceivers: instructionSites.filter(
 						({ attributes }) => CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE in attributes,
 					).length,
+					exactScalarCallSites: instructionSites.filter(
+						({ attributes }) =>
+							CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE in attributes,
+					).length,
+					exactScalarCallArguments: instructionSites.reduce((count, { attributes }) => {
+						const representations =
+							attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE];
+						return (
+							count +
+							(Array.isArray(representations)
+								? representations.filter(
+										(representation) =>
+											representation === "number" || representation === "boolean",
+									).length
+								: 0)
+						);
+					}, 0),
+					exactScalarParameters: optimized.functions.reduce(
+						(count, fn) =>
+							count +
+							fn.parameters.filter(
+								(parameter) =>
+									valueKinds.exactScalar(fn.functionIndex, parameter) !== undefined,
+							).length,
+						0,
+					),
 					containedCollectionReceivers: instructionSites.filter(
 						({ containedCollection }) => containedCollection !== undefined,
 					).length,
@@ -344,6 +408,31 @@ try {
 				...(native === undefined
 					? {}
 					: {
+							typedDirectEntries: native.functions.reduce(
+								(count, fn) =>
+									count +
+									fn.directEntries.filter(({ parameterRepresentations }) =>
+										parameterRepresentations.some(
+											(representation) => representation !== "boxed",
+										),
+									).length,
+								0,
+							),
+							typedDirectCallSites: native.functions.reduce(
+								(count, fn) =>
+									count +
+									fn.blocks.reduce(
+										(blockCount, block) =>
+											blockCount +
+											block.instructions.filter(
+												(instruction) =>
+													instruction.type === "call" &&
+													instruction.directEntryId !== undefined,
+											).length,
+										0,
+									),
+								0,
+							),
 							callbackCallsByOperation: Object.fromEntries(
 								[...new Set(callbackCalls.map(({ operation }) => operation))]
 									.sort()
@@ -377,6 +466,8 @@ try {
 								? { exactSites: selectedSites }
 								: { sites: selectedSites, instructions: selectedInstructions }),
 						}),
+				...(selectedFunction === undefined ? {} : { selectedFunction }),
+				...(selectedFunctionSummary === undefined ? {} : { selectedFunctionSummary }),
 			},
 			undefined,
 			2,

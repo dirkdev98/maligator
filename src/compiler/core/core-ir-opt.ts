@@ -117,6 +117,7 @@ import {
 } from "./core-ir-summaries.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { selectCoreExactHeapAccesses } from "./core-ir-value-classes.ts";
+import { selectCoreExactCallArguments } from "./core-ir-value-kinds.ts";
 import {
 	CoreIrVerificationError,
 	verifyCoreFunction,
@@ -1111,7 +1112,9 @@ const materializeContainedAggregateOwnSlots: CoreFunctionPass = {
 						kind: CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 						value: {
 							slot: slot.slot,
-							origins: slot.origins.map((origin) => ({ $coreInstruction: origin })),
+							origins: slot.origins.map((origin) => ({
+								$coreInstruction: origin,
+							})),
 						},
 						claims: [{ kind: "effect", instruction: instruction.id, effects: refined }],
 						validity: {
@@ -9383,10 +9386,16 @@ const sinkFreshAllocations: CoreFunctionPass = {
 			switch (block.terminator.kind) {
 				case "branch":
 				case "guard":
-					noteUse(block.terminator.condition, { kind: "control", block: block.id });
+					noteUse(block.terminator.condition, {
+						kind: "control",
+						block: block.id,
+					});
 					break;
 				case "switch":
-					noteUse(block.terminator.discriminant, { kind: "control", block: block.id });
+					noteUse(block.terminator.discriminant, {
+						kind: "control",
+						block: block.id,
+					});
 					break;
 				case "return":
 				case "throw":
@@ -11432,7 +11441,11 @@ export function executeCoreOptimizations(
 	const inlineBefore = tracedMetrics;
 	const inlineAblated = options.ablations?.has("inlining") === true;
 	const inlineResult = inlineAblated
-		? { program: optimizationInput, context: compilationContext, changed: false }
+		? {
+				program: optimizationInput,
+				context: compilationContext,
+				changed: false,
+			}
 		: inlineSimpleCoreFunctions(optimizationInput, verification, compilationContext);
 	compilationContext = inlineResult.context;
 	if (inlineResult.changed) {
@@ -11931,9 +11944,15 @@ export function executeCoreOptimizations(
 	// and publish only exact brands whose complete use graph remains closed.
 	const valueClassBefore = tracedMetrics;
 	const valueClassInput = { ...workingProgram, functions };
+	const valueClassSummaries =
+		options.ablations?.has("interprocedural") === true
+			? undefined
+			: analyses.summaries(valueClassInput);
 	const valueClassSelection = selectCoreExactHeapAccesses(
 		valueClassInput,
 		compilationContext,
+		undefined,
+		valueClassSummaries,
 	);
 	for (const [index, fn] of valueClassSelection.program.functions.entries()) {
 		traces.push({
@@ -11964,6 +11983,50 @@ export function executeCoreOptimizations(
 				},
 				valueClassBefore,
 				valueClassAfter,
+			),
+		);
+	}
+	const scalarArgumentBefore = tracedMetrics;
+	const scalarArgumentInput = { ...workingProgram, functions };
+	const scalarArgumentSummaries =
+		options.ablations?.has("interprocedural") === true
+			? undefined
+			: analyses.summaries(scalarArgumentInput);
+	const scalarArgumentSelection = selectCoreExactCallArguments(
+		scalarArgumentInput,
+		compilationContext,
+		scalarArgumentSummaries,
+	);
+	for (const [index, fn] of scalarArgumentSelection.program.functions.entries()) {
+		traces.push({
+			name: "select-exact-call-arguments",
+			round: maxRounds,
+			changed: fn !== functions[index],
+		});
+	}
+	if (scalarArgumentSelection.changed) {
+		changed = true;
+		verifyMutatedProgram(scalarArgumentSelection.program, {
+			stage: "finalization",
+			pass: "select-exact-call-arguments",
+		});
+	}
+	workingProgram = scalarArgumentSelection.program;
+	functions = [...scalarArgumentSelection.program.functions];
+	if (scalarArgumentBefore !== undefined) {
+		const scalarArgumentAfter = coreOptimizationMetrics(scalarArgumentSelection.program);
+		tracedMetrics = scalarArgumentAfter;
+		optimizationTrace.push(
+			optimizationPassDelta(
+				{
+					pass: "select-exact-call-arguments",
+					stage: "finalization",
+					status: "executed",
+					changed: scalarArgumentSelection.changed,
+					ablation: "interprocedural",
+				},
+				scalarArgumentBefore,
+				scalarArgumentAfter,
 			),
 		);
 	}

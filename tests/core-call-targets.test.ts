@@ -1228,15 +1228,53 @@ describe("bounded call-result targets", () => {
 			(opcode) => [opcode, coreOpcodeRegistry.require(opcode).callTransfer] as const,
 		).filter(([, transfer]) => transfer !== undefined);
 		// The registry is the single declaration a call has: an opcode missing here is
-		// a call for neither the target lattice nor the interprocedural call graph.
+		// a call for neither the target lattice nor interprocedural value flow.
 		expect(Object.fromEntries(declared)).toEqual({
-			call: { calleeOperand: 0, result: "call-completion" },
-			callSpread: { calleeOperand: 0, result: "call-completion" },
-			callSpreadIterable: { calleeOperand: 0, result: "call-completion" },
-			construct: { calleeOperand: 0, result: "construct-completion" },
-			constructSpread: { calleeOperand: 0, result: "construct-completion" },
-			constructSuper: { calleeOperand: 0, result: "unmodeled" },
-			constructSuperExplicit: { calleeOperand: 0, result: "unmodeled" },
+			call: {
+				calleeOperand: 0,
+				result: "call-completion",
+				invocation: "call",
+				receiverOperand: 1,
+				arguments: { kind: "positional", firstOperand: 2 },
+			},
+			callSpread: {
+				calleeOperand: 0,
+				result: "call-completion",
+				invocation: "call",
+				receiverOperand: 1,
+				arguments: { kind: "aggregate", operand: 2 },
+			},
+			callSpreadIterable: {
+				calleeOperand: 0,
+				result: "call-completion",
+				invocation: "call",
+				receiverOperand: 1,
+				arguments: { kind: "aggregate", operand: 2 },
+			},
+			construct: {
+				calleeOperand: 0,
+				result: "construct-completion",
+				invocation: "construct",
+				arguments: { kind: "positional", firstOperand: 1 },
+			},
+			constructSpread: {
+				calleeOperand: 0,
+				result: "construct-completion",
+				invocation: "construct",
+				arguments: { kind: "aggregate", operand: 1 },
+			},
+			constructSuper: {
+				calleeOperand: 0,
+				result: "unmodeled",
+				invocation: "construct",
+				arguments: { kind: "aggregate", operand: 1 },
+			},
+			constructSuperExplicit: {
+				calleeOperand: 0,
+				result: "unmodeled",
+				invocation: "construct",
+				arguments: { kind: "aggregate", operand: 1 },
+			},
 		});
 	});
 

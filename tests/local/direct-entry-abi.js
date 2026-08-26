@@ -14,6 +14,18 @@ function scalarResult(flag) {
 	return 42;
 }
 
+function scalarLeaf(value, flag) {
+	return flag ? value * 2 : value - 3;
+}
+
+function scalarMiddle(value, flag) {
+	return scalarLeaf(value + 1, !flag);
+}
+
+function scalarRoot(value) {
+	return scalarMiddle(value, true) + scalarMiddle(value + 2, false);
+}
+
 function makeCaptured(base) {
 	return function captured(value) {
 		let total = base;
@@ -44,6 +56,7 @@ console.log(
 	JSON.stringify({
 		scalarArgument: scalarArgument(3),
 		scalarResults: [scalarResult(true), scalarResult(false)],
+		scalarChain: scalarRoot(5),
 		captured: captured(5),
 		arguments: observesArguments(1, 2, 3, 4),
 		thrown,

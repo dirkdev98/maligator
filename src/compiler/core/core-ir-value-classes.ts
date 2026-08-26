@@ -17,7 +17,14 @@ import {
 	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import {
+	analyzeCoreInterproceduralValueFlow,
+	coreCallReceiver,
+	corePositionalCallArguments,
+} from "./core-ir-interprocedural-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { analyzeCoreProgramSummaries } from "./core-ir-summaries.ts";
+import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type {
 	CoreAttributeValue,
 	CoreAttributeObject,
@@ -106,6 +113,7 @@ export function analyzeCoreValueClasses(
 	context: CoreCompilationContext | undefined,
 	controlFlow: (fn: CoreFunction) => CoreControlFlow = (fn) =>
 		buildCoreControlFlow(fn, coreOpcodeRegistry),
+	summaries?: CoreProgramSummaries,
 ): CoreValueClassAnalysis {
 	if (context?.facts.world.primordialPolicy !== "locked") {
 		return {
@@ -120,13 +128,24 @@ export function analyzeCoreValueClasses(
 	);
 	const valueBases = new Map<number, number>();
 	const valueLimits = new Map<number, number>();
+	const receiverNodes = new Map<number, number>();
+	const returnNodes = new Map<number, number>();
 	let nodeCount = 0;
 	for (const fn of functions) {
 		const limit = valueLimit(fn);
 		valueBases.set(fn.functionIndex, nodeCount);
 		valueLimits.set(fn.functionIndex, limit);
 		nodeCount += limit;
+		receiverNodes.set(fn.functionIndex, nodeCount++);
+		returnNodes.set(fn.functionIndex, nodeCount++);
 	}
+	const wholeProgram =
+		summaries ?? analyzeCoreProgramSummaries(program, coreOpcodeRegistry, context);
+	const interprocedural = analyzeCoreInterproceduralValueFlow(
+		program,
+		wholeProgram,
+		coreOpcodeRegistry,
+	);
 	const stableGlobals = new Set(context.data.singleAssignmentGlobalSlots);
 	const stableCaptured = new Set(
 		context.data.singleAssignmentCapturedSlots.map(({ owner, index }) =>
@@ -222,8 +241,14 @@ export function analyzeCoreValueClasses(
 			}
 			return capturedKey(owner, index);
 		};
-		for (const parameter of fn.parameters)
-			opaqueSeeds.push(valueNode(fn.functionIndex, parameter));
+		for (const [index, parameter] of fn.parameters.entries()) {
+			if (interprocedural.parameterOpen(fn.functionIndex, index)) {
+				opaqueSeeds.push(valueNode(fn.functionIndex, parameter));
+			}
+		}
+		if (interprocedural.receiverOpen(fn.functionIndex)) {
+			opaqueSeeds.push(receiverNodes.get(fn.functionIndex)!);
+		}
 		for (const block of fn.blocks) {
 			const incoming = cfg.predecessors[block.id] ?? [];
 			for (const [index, parameter] of block.parameters.entries()) {
@@ -242,6 +267,16 @@ export function analyzeCoreValueClasses(
 			}
 			for (const instruction of block.instructions) {
 				const output = instruction.outputs[0];
+				if (instruction.opcode === "loadThis" && output !== undefined) {
+					addEdge(
+						receiverNodes.get(fn.functionIndex)!,
+						valueNode(fn.functionIndex, output),
+					);
+					for (const extra of instruction.outputs.slice(1)) {
+						opaqueSeeds.push(valueNode(fn.functionIndex, extra));
+					}
+					continue;
+				}
 				if (instruction.opcode === "construct" && output !== undefined) {
 					const callee = instruction.inputs[0];
 					const calleeDefinition =
@@ -260,6 +295,13 @@ export function analyzeCoreValueClasses(
 						}
 						continue;
 					}
+				}
+				const transfer = coreOpcodeRegistry.get(instruction.opcode)?.callTransfer;
+				if (transfer?.result === "call-completion" && output !== undefined) {
+					for (const extra of instruction.outputs.slice(1)) {
+						opaqueSeeds.push(valueNode(fn.functionIndex, extra));
+					}
+					continue;
 				}
 				if (instruction.opcode === "loadPrivate" && output !== undefined) {
 					const key = instruction.inputs[1];
@@ -367,6 +409,47 @@ export function analyzeCoreValueClasses(
 					opaqueSeeds.push(valueNode(fn.functionIndex, value));
 				}
 			}
+			if (block.terminator.kind === "return") {
+				addEdge(
+					valueNode(fn.functionIndex, block.terminator.value),
+					returnNodes.get(fn.functionIndex)!,
+				);
+			}
+		}
+	}
+
+	for (const call of interprocedural.calls) {
+		const arguments_ = corePositionalCallArguments(call);
+		const receiver = coreCallReceiver(call);
+		for (const target of call.targets) {
+			if (arguments_ !== undefined) {
+				for (const [index, parameter] of target.parameters.entries()) {
+					const argument = arguments_[index];
+					if (argument !== undefined) {
+						addEdge(
+							valueNode(call.caller, argument),
+							valueNode(target.functionIndex, parameter),
+						);
+					}
+				}
+			}
+			if (receiver !== undefined) {
+				addEdge(
+					valueNode(call.caller, receiver),
+					receiverNodes.get(target.functionIndex)!,
+				);
+			}
+		}
+		const result = call.instruction.outputs[0];
+		if (call.transfer.result !== "call-completion" || result === undefined) continue;
+		const resultNode = valueNode(call.caller, result);
+		if (call.open) opaqueSeeds.push(resultNode);
+		for (const target of call.targets) {
+			if (target.isAsync || target.isGenerator) {
+				opaqueSeeds.push(resultNode);
+				continue;
+			}
+			addEdge(returnNodes.get(target.functionIndex)!, resultNode);
 		}
 	}
 
@@ -755,8 +838,9 @@ export function selectCoreExactHeapAccesses(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
 	controlFlow?: (fn: CoreFunction) => CoreControlFlow,
+	summaries?: CoreProgramSummaries,
 ): CoreExactHeapSelection {
-	const analysis = analyzeCoreValueClasses(program, context, controlFlow);
+	const analysis = analyzeCoreValueClasses(program, context, controlFlow, summaries);
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
 		let functionChanged = false;

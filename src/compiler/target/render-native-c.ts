@@ -248,7 +248,12 @@ const THROWING_UNARY_OPERATORS = new Set(["+", "tonumeric"]);
  * Binary operators emitted as native C on two `number`-rep operands. Arithmetic
  * produces a `number`; comparison produces a boxed boolean.
  */
-const NATIVE_ARITH: Record<string, string> = { "+": "+", "-": "-", "*": "*", "/": "/" };
+const NATIVE_ARITH: Record<string, string> = {
+	"+": "+",
+	"-": "-",
+	"*": "*",
+	"/": "/",
+};
 const NATIVE_COMPARE: Record<string, string> = {
 	"<": "<",
 	"<=": "<=",
@@ -711,9 +716,12 @@ function emitCompiledVariant(
 			: `mal_direct_${index}_${directEntry.id}${suffix}`;
 	const lines: Array<string> = [];
 
-	const directParameters = directEntry?.parameterRepresentations.map(
-		(representation, parameter) => `${cTypeOf(representation)} p${parameter}`,
-	);
+	const directParameters =
+		directEntry === undefined
+			? undefined
+			: directEntry.parameterRepresentations.map(
+					(representation, parameter) => `${cTypeOf(representation)} p${parameter}`,
+				);
 	lines.push(
 		directEntry === undefined
 			? `${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
@@ -1175,7 +1183,10 @@ interface NativeStringSplitProjectionSite {
 	slotsOffset: number;
 	lockedIdentity: boolean;
 	elementLoads: Array<
-		NativeStringSplitProjection["loads"][number] & { kind: "element"; index: number }
+		NativeStringSplitProjection["loads"][number] & {
+			kind: "element";
+			index: number;
+		}
 	>;
 }
 
@@ -1510,8 +1521,14 @@ function emitBody(
 				propertyLoad,
 			});
 		}
-		nativeStringSplitCursorActionByIp.set(site.lengthIp, { site, role: "length" });
-		nativeStringSplitCursorActionByIp.set(cursor.elementIp, { site, role: "element" });
+		nativeStringSplitCursorActionByIp.set(site.lengthIp, {
+			site,
+			role: "length",
+		});
+		nativeStringSplitCursorActionByIp.set(cursor.elementIp, {
+			site,
+			role: "element",
+		});
 		nativeStringSplitCursorActionByIp.set(cursor.trimPropertyIp, {
 			site,
 			role: "trimProperty",
@@ -4046,52 +4063,52 @@ function emitInstruction(
 					const directFunction = `__direct_function_${ip}`;
 					const directValue = `__direct_value_${ip}`;
 					const parameters = directEntry.parameterRepresentations.map(
-						(representation, parameter) => {
+						(representation, parameter): string | null => {
 							const operand = args[parameter];
 							if (operand === undefined) {
-								if (representation !== "boxed") {
-									throw new Error("Missing direct scalar argument");
-								}
-								return "MAL_VALUE_UNDEFINED";
+								return representation === "boxed" ? "MAL_VALUE_UNDEFINED" : null;
 							}
+							const decoded = decodeVmValueOperand(operand);
+							const boxedScalar =
+								decoded?.kind === "register" && reps[decoded.register] === "boxed";
 							if (representation === "number") {
-								const value = nativeNumberOperand(operand);
-								if (value === null)
-									throw new Error("Direct number argument lost its representation proof");
-								return value;
+								return (
+									nativeNumberOperand(operand) ??
+									(boxedScalar ? `mal_ops_number_as_f64(${boxedOperand(operand)})` : null)
+								);
 							}
 							if (representation === "boolean") {
-								const value = nativeBooleanOperand(operand);
-								if (value === null)
-									throw new Error(
-										"Direct boolean argument lost its representation proof",
-									);
-								return value;
+								return (
+									nativeBooleanOperand(operand) ??
+									(boxedScalar ? `mal_value_to_boolean(${boxedOperand(operand)})` : null)
+								);
 							}
 							return boxedOperand(operand);
 						},
 					);
-					const directResult =
-						directEntry.resultRepresentation === "number"
-							? reps[instruction.dst] === "number"
-								? directValue
-								: `mal_ops_number_value(${directValue})`
-							: directEntry.resultRepresentation === "boolean"
-								? reps[instruction.dst] === "boolean"
+					if (parameters.every((parameter) => parameter !== null)) {
+						const directResult =
+							directEntry.resultRepresentation === "number"
+								? reps[instruction.dst] === "number"
 									? directValue
-									: `mal_value_new_boolean(${directValue})`
-								: callResult(directValue);
-					return [
-						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
-						`MAL_PERF_COUNT(direct_entry_hits);`,
-						`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
-						`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
-						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)})${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
-						`mal_vm_leave_compiled(vm);`,
-						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-						`r${instruction.dst} = ${directResult};`,
-						poll,
-					];
+									: `mal_ops_number_value(${directValue})`
+								: directEntry.resultRepresentation === "boolean"
+									? reps[instruction.dst] === "boolean"
+										? directValue
+										: `mal_value_new_boolean(${directValue})`
+									: callResult(directValue);
+						return [
+							`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
+							`MAL_PERF_COUNT(direct_entry_hits);`,
+							`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
+							`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
+							`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)})${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
+							`mal_vm_leave_compiled(vm);`,
+							`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+							`r${instruction.dst} = ${directResult};`,
+							poll,
+						];
+					}
 				}
 				if (directCompiledTargets.has(target)) {
 					const directCallee = `__direct_callee_${ip}`;

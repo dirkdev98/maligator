@@ -62,6 +62,43 @@ function readGlobals(key) {
 }
 assert(readGlobals("global") === 10, "single-assignment global brands");
 
+function readPassedMap(map, key) {
+	return map.get(key);
+}
+function updatePassedCollections(map, set, key, value) {
+	map.set(key, value);
+	set.add(key);
+	return map.has(key) && set.has(key) ? map.get(key) : -1;
+}
+assert(readPassedMap(globalMap, "global") === 9, "Map brand crosses a named call");
+assert(
+	updatePassedCollections(globalMap, globalSet, "passed", 17) === 17,
+	"Map and Set brands cross positional parameters",
+);
+
+// Publishing a function opens its parameter. Calling it with a
+// non-collection after an exact receiver makes a wrong closed-world parameter
+// proof observable as a TypeError or stale builtin dispatch.
+function readPublishedCollection(receiver, key) {
+	return receiver.get(key);
+}
+globalThis.__mal_read_published_collection = readPublishedCollection;
+assert(
+	globalThis.__mal_read_published_collection(globalMap, "global") === 9,
+	"published function accepts a collection",
+);
+assert(
+	globalThis.__mal_read_published_collection(
+		{
+			get(key) {
+				return `published:${key}`;
+			},
+		},
+		"fallback",
+	) === "published:fallback",
+	"published parameter remains open",
+);
+
 const collect = globalThis.__mal_collect_garbage;
 if (typeof collect === "function") {
 	collect();
