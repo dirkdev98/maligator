@@ -1010,58 +1010,105 @@ export class DirectCoreFunctionConstruction {
 	}
 
 	#solveRepresentations(): void {
-		const values = new Map<CoreValueId, ValueRepresentation | null>();
-		for (const rule of this.#representationRules) values.set(rule.output, null);
+		const rules = this.#representationRules;
+		const ruleInputs = (rule: RepresentationRule): ReadonlyArray<CoreValueId> => {
+			switch (rule.kind) {
+				case "fixed":
+					return [];
+				case "copy":
+					return [rule.input];
+				case "join":
+				case "number-inputs":
+					return rule.inputs;
+			}
+		};
+		let valueCount = 0;
+		for (const rule of rules) {
+			valueCount = Math.max(valueCount, rule.output + 1);
+			for (const input of ruleInputs(rule)) valueCount = Math.max(valueCount, input + 1);
+		}
+		const values = new Array<ValueRepresentation | null | undefined>(valueCount);
+		const outputs: Array<CoreValueId> = [];
+		for (const rule of rules) {
+			if (values[rule.output] === undefined) outputs.push(rule.output);
+			values[rule.output] = null;
+		}
+		const dependents: Array<Array<number> | undefined> = new Array(valueCount).fill(
+			undefined,
+		);
+		for (const [ruleIndex, rule] of rules.entries()) {
+			for (const input of ruleInputs(rule)) {
+				const users = dependents[input];
+				if (users === undefined) dependents[input] = [ruleIndex];
+				else users.push(ruleIndex);
+			}
+		}
 		const candidate = (rule: RepresentationRule): ValueRepresentation | null => {
 			switch (rule.kind) {
 				case "fixed":
 					return rule.value;
 				case "copy":
-					return values.get(rule.input) ?? null;
+					return values[rule.input] ?? null;
 				case "number-inputs": {
-					const inputs = rule.inputs.map((input) => values.get(input) ?? null);
-					if (inputs.length === 0) return "f64";
-					if (inputs.some((value) => value === "boxed" || value === "boolean")) {
-						return "boxed";
+					if (rule.inputs.length === 0) return "f64";
+					let number = false;
+					for (const input of rule.inputs) {
+						const value = values[input] ?? null;
+						if (value === "boxed" || value === "boolean") return "boxed";
+						if (value === "f64") number = true;
 					}
-					return inputs.some((value) => value === "f64") ? "f64" : null;
+					return number ? "f64" : null;
 				}
 				case "join": {
-					const known = rule.inputs
-						.map((input) => values.get(input) ?? null)
-						.filter((value): value is ValueRepresentation => value !== null);
-					if (known.includes("boxed")) return "boxed";
-					const typed = new Set(known);
-					return typed.size > 1 ? "boxed" : (known[0] ?? null);
+					let known: ValueRepresentation | null = null;
+					for (const input of rule.inputs) {
+						const value = values[input] ?? null;
+						if (value === "boxed") return "boxed";
+						if (value === null) continue;
+						if (known === null) known = value;
+						else if (known !== value) return "boxed";
+					}
+					return known;
 				}
 			}
 		};
-		const converge = (): boolean => {
-			let changed = false;
-			for (const rule of this.#representationRules) {
-				const next = candidate(rule);
-				if (next === null) continue;
-				const current = values.get(rule.output) ?? null;
+		const queue: Array<number> = [];
+		const queued = new Uint8Array(rules.length);
+		const enqueue = (rule: number): void => {
+			if (queued[rule] !== 0) return;
+			queued[rule] = 1;
+			queue.push(rule);
+		};
+		const converge = (): void => {
+			for (let next = 0; next < queue.length; next++) {
+				const ruleIndex = queue[next]!;
+				queued[ruleIndex] = 0;
+				const rule = rules[ruleIndex]!;
+				const candidateValue = candidate(rule);
+				if (candidateValue === null) continue;
+				const current = values[rule.output] ?? null;
 				const joined =
-					current === null ? next : current === next ? current : ("boxed" as const);
-				if (joined !== current) {
-					values.set(rule.output, joined);
-					changed = true;
-				}
+					current === null
+						? candidateValue
+						: current === candidateValue
+							? current
+							: ("boxed" as const);
+				if (joined === current) continue;
+				values[rule.output] = joined;
+				for (const dependent of dependents[rule.output] ?? []) enqueue(dependent);
 			}
-			return changed;
+			queue.length = 0;
 		};
-		while (converge()) {
-			// Fixed point over cyclic block parameters and number constraints.
+		for (let rule = 0; rule < rules.length; rule++) enqueue(rule);
+		converge();
+		for (const output of outputs) {
+			if (values[output] !== null) continue;
+			values[output] = "boxed";
+			for (const dependent of dependents[output] ?? []) enqueue(dependent);
 		}
-		for (const [value, representation] of values) {
-			if (representation === null) values.set(value, "boxed");
-		}
-		while (converge()) {
-			// Unknown cycles collapse to boxed and may force their dependents boxed.
-		}
-		for (const [value, representation] of values) {
-			this.#builder.setValueRepresentation(value, representation ?? "boxed");
+		converge();
+		for (const output of outputs) {
+			this.#builder.setValueRepresentation(output, values[output] ?? "boxed");
 		}
 	}
 }
