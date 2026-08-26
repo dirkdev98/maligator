@@ -74,7 +74,13 @@ export function optimizeSemanticProgramToCore(
 		if (result.context === undefined) {
 			throw new Error("Core optimization lost compilation context");
 		}
-		const compilation = { program: result.program, context: result.context };
+		const compilation: CoreCompilation = {
+			program: result.program,
+			context: result.context,
+			...(result.targetAnalyses === undefined
+				? {}
+				: { targetAnalyses: result.targetAnalyses }),
+		};
 		return options.profile === true
 			? attachCoreCompilerSiteFacts(compilation)
 			: compilation;

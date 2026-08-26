@@ -36,7 +36,7 @@
  */
 
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import { corePredecessorEdges } from "./core-ir-control-flow.ts";
 import { coreMemoryAccesses } from "./core-ir-memory.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { coreOwnCellResolver, coreOwnCellsEqual } from "./core-ir-provenance.ts";
@@ -936,7 +936,7 @@ export function analyzeCoreCalleeTargets(
 	const constructorMethodSites: Array<Array<ConstructorMethodSite> | undefined> = [];
 	const allocations: Array<TrackedAllocation> = [];
 	const deferredReads: Array<DeferredOwnSlotRead> = [];
-	const controlFlow: Array<ReturnType<typeof buildCoreControlFlow> | undefined> = [];
+	const predecessors: Array<ReturnType<typeof corePredecessorEdges> | undefined> = [];
 	let edges = 0;
 	let callActivations = 0;
 	const addEdge = (from: number, to: number): void => {
@@ -1284,10 +1284,10 @@ export function analyzeCoreCalleeTargets(
 			addSeed(valueNode(parameter), CORE_CALLEE_TARGETS_OPAQUE);
 			addOriginSeed(valueNode(parameter), ORIGIN_TOP);
 		}
-		const cfg = buildCoreControlFlow(fn, registry);
-		controlFlow[fn.functionIndex] = cfg;
+		const incomingEdges = corePredecessorEdges(fn, registry);
+		predecessors[fn.functionIndex] = incomingEdges;
 		for (const block of fn.blocks) {
-			const incoming = cfg.predecessors[block.id] ?? [];
+			const incoming = incomingEdges[block.id] ?? [];
 			for (const [index, parameter] of block.parameters.entries()) {
 				if (parameter.role === "exception" || block.id === fn.entry) {
 					addSeed(valueNode(parameter.value), CORE_CALLEE_TARGETS_OPAQUE);
@@ -1589,7 +1589,7 @@ export function analyzeCoreCalleeTargets(
 					allocations,
 					origins,
 					valueBase,
-					controlFlow,
+					predecessors,
 					cellForString,
 					functionDefinitions,
 					operandKeyResolver,
@@ -1843,8 +1843,8 @@ interface ContainmentInput {
 	readonly allocations: ReadonlyArray<TrackedAllocation>;
 	readonly origins: Int32Array;
 	readonly valueBase: ReadonlyArray<number | undefined>;
-	readonly controlFlow: ReadonlyArray<
-		ReturnType<typeof buildCoreControlFlow> | undefined
+	readonly predecessors: ReadonlyArray<
+		ReturnType<typeof corePredecessorEdges> | undefined
 	>;
 	readonly cellForString: (index: number) => CoreOwnCell | undefined;
 	readonly functionDefinitions: (
@@ -1893,14 +1893,14 @@ function containAllocations(input: ContainmentInput): {
 		const valueNode = (value: CoreValueId): number => base + value;
 		const definitions = input.functionDefinitions(fn);
 		const cellForOperand = input.operandKeyResolver(definitions);
-		const cfg = input.controlFlow[fn.functionIndex]!;
+		const predecessors = input.predecessors[fn.functionIndex]!;
 		for (const block of fn.blocks) {
 			// A handler argument is live on a path this sweep does not model, so it
 			// leaves the allocation reachable from a frame the graph does not follow.
 			for (const argument of block.handler?.arguments ?? []) {
 				escapeNode(valueNode(argument));
 			}
-			for (const edge of cfg.predecessors[block.id] ?? []) {
+			for (const edge of predecessors[block.id] ?? []) {
 				if (edge.kind === "exceptional") continue;
 				for (const [position, argument] of edge.arguments.entries()) {
 					const node = valueNode(argument);

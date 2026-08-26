@@ -1306,15 +1306,51 @@ function verifySummaryClaims(
 }
 
 /** Verify function graphs together with the immutable metadata they index. */
+interface CoreProgramVerificationCache {
+	readonly registry: CoreOpcodeRegistry;
+	readonly compilationContext: CoreCompilationContext | undefined;
+	common: boolean;
+	preTarget: boolean;
+}
+
+const coreProgramVerificationCache = new WeakMap<
+	CoreProgram,
+	CoreProgramVerificationCache
+>();
+
 export function verifyCoreProgram(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
 	context?: CoreVerificationContext,
 	compilationContext?: CoreCompilationContext,
+	analyses?: { readonly summaries?: CoreProgramSummaries },
 ): void {
+	const existing = coreProgramVerificationCache.get(program);
+	const cached =
+		existing?.registry === registry && existing.compilationContext === compilationContext
+			? existing
+			: undefined;
+	const preTarget = context?.stage === "pre-target";
+	if (cached?.common === true && (!preTarget || cached.preTarget)) return;
+	const cache: CoreProgramVerificationCache = cached ?? {
+		registry,
+		compilationContext,
+		common: false,
+		preTarget: false,
+	};
 	withVerificationContext(context, () =>
-		verifyCoreProgramGraph(program, registry, context, compilationContext),
+		verifyCoreProgramGraph(
+			program,
+			registry,
+			context,
+			compilationContext,
+			cache.common,
+			analyses?.summaries,
+		),
 	);
+	cache.common = true;
+	if (preTarget) cache.preTarget = true;
+	coreProgramVerificationCache.set(program, cache);
 }
 
 function verifyKnownOwnSlotClaims(
@@ -1952,12 +1988,72 @@ function verifyExactBinaryInputKindClaims(
 	}
 }
 
+function verifyPreTargetClaims(
+	program: CoreProgram,
+	registry: CoreOpcodeRegistry,
+	compilationContext: CoreCompilationContext | undefined,
+	summaries: () => CoreProgramSummaries,
+	valueClasses: () => CoreValueClassAnalysis,
+	valueKinds: () => CoreValueKindAnalysis,
+): void {
+	verifyKnownOwnSlotClaims(program, registry, true, summaries);
+	verifyExactTypedArrayClaims(program, valueClasses);
+	verifyExactCollectionReceiverClaims(program, valueClasses);
+	verifyExactCallArgumentClaims(program, valueKinds);
+	verifyExactBinaryInputKindClaims(program, valueKinds);
+	for (const fn of program.functions) {
+		verifyContainedDenseArrayElementClaims(
+			fn,
+			registry,
+			program.stringConstants,
+			compilationContext,
+		);
+	}
+}
+
 function verifyCoreProgramGraph(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
 	context: CoreVerificationContext | undefined,
 	compilationContext: CoreCompilationContext | undefined,
+	commonAlreadyVerified: boolean,
+	initialSummaries?: CoreProgramSummaries,
 ): void {
+	let summariesAnalysis = initialSummaries;
+	const summaries = (): CoreProgramSummaries =>
+		(summariesAnalysis ??= analyzeCoreProgramSummaries(
+			program,
+			registry,
+			compilationContext,
+		));
+	let valueClassAnalysis: CoreValueClassAnalysis | undefined;
+	const valueClasses = (): CoreValueClassAnalysis =>
+		(valueClassAnalysis ??= analyzeCoreValueClasses(
+			program,
+			compilationContext,
+			undefined,
+			summaries(),
+		));
+	let valueKindAnalysis: CoreValueKindAnalysis | undefined;
+	const valueKinds = (): CoreValueKindAnalysis =>
+		(valueKindAnalysis ??= analyzeCoreValueKinds(
+			program,
+			compilationContext,
+			summaries(),
+		));
+	if (commonAlreadyVerified) {
+		if (context?.stage === "pre-target") {
+			verifyPreTargetClaims(
+				program,
+				registry,
+				compilationContext,
+				summaries,
+				valueClasses,
+				valueKinds,
+			);
+		}
+		return;
+	}
 	if (!Number.isSafeInteger(program.globalCount) || program.globalCount < 0) {
 		fail(`invalid global count ${program.globalCount}`);
 	}
@@ -2040,34 +2136,17 @@ function verifyCoreProgramGraph(
 			fail(`source position ${index} has invalid caller position`);
 		}
 	}
-	let summariesAnalysis: CoreProgramSummaries | undefined;
-	const summaries = (): CoreProgramSummaries =>
-		(summariesAnalysis ??= analyzeCoreProgramSummaries(
+	if (context?.stage === "pre-target") {
+		verifyPreTargetClaims(
 			program,
 			registry,
 			compilationContext,
-		));
-	let valueClassAnalysis: CoreValueClassAnalysis | undefined;
-	const valueClasses = (): CoreValueClassAnalysis =>
-		(valueClassAnalysis ??= analyzeCoreValueClasses(
-			program,
-			compilationContext,
-			undefined,
-			summaries(),
-		));
-	let valueKindAnalysis: CoreValueKindAnalysis | undefined;
-	const valueKinds = (): CoreValueKindAnalysis =>
-		(valueKindAnalysis ??= analyzeCoreValueKinds(
-			program,
-			compilationContext,
-			summaries(),
-		));
-	verifyKnownOwnSlotClaims(program, registry, context?.stage === "pre-target", summaries);
-	if (context?.stage === "pre-target") {
-		verifyExactTypedArrayClaims(program, valueClasses);
-		verifyExactCollectionReceiverClaims(program, valueClasses);
-		verifyExactCallArgumentClaims(program, valueKinds);
-		verifyExactBinaryInputKindClaims(program, valueKinds);
+			summaries,
+			valueClasses,
+			valueKinds,
+		);
+	} else {
+		verifyKnownOwnSlotClaims(program, registry, false, summaries);
 	}
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {
@@ -2078,19 +2157,6 @@ function verifyCoreProgramGraph(
 		}
 		verifyCoreFunction(fn, registry, context, program.stringConstants);
 		verifyFreshArrayLengthClaims(fn, registry, program.stringConstants);
-		// This claim becomes native authority only at lowering. Reconstructing its
-		// whole-lifetime proof is deliberately confined to that pre-target boundary:
-		// final-region verification already protects graph/certificate structure,
-		// while repeating two provenance solves there would charge every compiled
-		// program twice for the same immutable final graph.
-		if (context?.stage === "pre-target") {
-			verifyContainedDenseArrayElementClaims(
-				fn,
-				registry,
-				program.stringConstants,
-				compilationContext,
-			);
-		}
 		withVerificationContext(
 			context === undefined ? undefined : { ...context, functionIndex: index },
 			() => {

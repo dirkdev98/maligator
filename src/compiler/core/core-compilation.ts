@@ -4,6 +4,7 @@ import type {
 	OptimizationPassDelta,
 } from "../shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type { CoreProgram } from "./core-ir.ts";
 
 /** A captured cell: its function index or negative per-iteration scope id, plus slot. */
@@ -51,6 +52,11 @@ export interface CoreCompilationContext {
 export interface CoreCompilation {
 	readonly program: CoreProgram;
 	readonly context: CoreCompilationContext;
+	/** Ephemeral final-graph analyses consumed by the immediately following target
+	 * boundary. Target lowering does not retain them in the Program Image. */
+	readonly targetAnalyses?: {
+		readonly summaries: CoreProgramSummaries;
+	};
 }
 
 /** Normalize the only semantic-program fields retained after frontend lowering. */

@@ -530,11 +530,16 @@ export interface BuildCoreControlFlowOptions {
 	readonly exceptions?: boolean;
 }
 
-export function buildCoreControlFlow(
+interface CoreControlEdges {
+	readonly successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
+	readonly predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
+}
+
+function buildCoreControlEdges(
 	fn: CoreFunction,
 	registry: CoreOpcodeRegistry,
-	options: BuildCoreControlFlowOptions = {},
-): CoreControlFlow {
+	options: BuildCoreControlFlowOptions,
+): CoreControlEdges {
 	const includeExceptions = options.exceptions !== false;
 	const successors = fn.blocks.map((block): Array<CoreControlEdge> => {
 		const outgoing: Array<CoreControlEdge> = coreTerminatorEdges(block.terminator).map(
@@ -566,6 +571,24 @@ export function buildCoreControlFlow(
 	for (const outgoing of successors) {
 		for (const edge of outgoing) predecessors[edge.to]?.push(edge);
 	}
+	return { successors, predecessors };
+}
+
+/** Incoming Core edges without dominators, loops, or other CFG products. */
+export function corePredecessorEdges(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+	options: BuildCoreControlFlowOptions = {},
+): ReadonlyArray<ReadonlyArray<CoreControlEdge>> {
+	return buildCoreControlEdges(fn, registry, options).predecessors;
+}
+
+export function buildCoreControlFlow(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+	options: BuildCoreControlFlowOptions = {},
+): CoreControlFlow {
+	const { successors, predecessors } = buildCoreControlEdges(fn, registry, options);
 	const { parents, reachable, reversePostorder } = buildImmediateDominators(
 		fn.entry,
 		successors,

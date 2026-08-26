@@ -33,6 +33,7 @@ import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
+	CoreFact,
 	CoreFunction,
 	CoreImmediate,
 	CoreInstructionAttributes,
@@ -174,7 +175,7 @@ function targetAttributes(
  * allowed to become native authority on its own.
  */
 function exactContainedOwnSlot(
-	core: CoreFunction,
+	index: CoreLoweringIndex,
 	instruction: CoreInstruction,
 ): number | undefined {
 	if (
@@ -184,9 +185,7 @@ function exactContainedOwnSlot(
 	) {
 		return undefined;
 	}
-	const fact = core.facts.find(
-		(candidate) => candidate.id === instruction.effectRefinement!.proof,
-	);
+	const fact = index.facts[instruction.effectRefinement.proof];
 	if (fact?.kind === CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT) {
 		const value =
 			typeof fact.value === "object" && fact.value !== null
@@ -214,9 +213,7 @@ function exactContainedOwnSlot(
 	) {
 		return undefined;
 	}
-	const allocation = core.blocks
-		.flatMap(({ instructions }) => instructions)
-		.find(({ id }) => id === value.allocation);
+	const allocation = index.instructions[value.allocation];
 	if (allocation?.opcode !== "createObjectShaped") return undefined;
 	const keys = allocation.attributes.keyStringIndices;
 	if (!Array.isArray(keys)) return undefined;
@@ -225,7 +222,7 @@ function exactContainedOwnSlot(
 }
 
 function rebuildInstruction(
-	core: CoreFunction,
+	loweringIndex: CoreLoweringIndex,
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
 	registerForValue: (value: CoreValueId) => number,
 	regionNamed: boolean,
@@ -235,7 +232,7 @@ function rebuildInstruction(
 		instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE],
 	);
 	const exactOwnSlot =
-		exactContainedOwnSlot(core, instruction) ?? exactShapeOwnSlot?.slot;
+		exactContainedOwnSlot(loweringIndex, instruction) ?? exactShapeOwnSlot?.slot;
 	const exactArrayLength =
 		instruction.opcode === "loadPropertyStatic" &&
 		instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] === true;
@@ -269,7 +266,7 @@ function rebuildInstruction(
 		(instruction.opcode === "call" || instruction.opcode === "construct")
 	) {
 		for (const [index, input] of instruction.inputs.entries()) {
-			const value = coreImmediateValue(core, input);
+			const value = coreImmediateValue(loweringIndex, input);
 			if (value === undefined) continue;
 			const position = instruction.outputs.length + index;
 			registers[position] = -1;
@@ -292,15 +289,33 @@ function rebuildInstruction(
 	} as CompilerInstruction;
 }
 
+interface CoreLoweringIndex {
+	readonly values: ReadonlyArray<CoreFunction["values"][number] | undefined>;
+	readonly facts: ReadonlyArray<CoreFact | undefined>;
+	readonly instructions: ReadonlyArray<CoreInstruction | undefined>;
+}
+
+function coreLoweringIndex(core: CoreFunction): CoreLoweringIndex {
+	const values: Array<CoreFunction["values"][number] | undefined> = [];
+	for (const value of core.values) values[value.id] = value;
+	const facts: Array<CoreFact | undefined> = [];
+	for (const fact of core.facts) facts[fact.id] = fact;
+	const instructions: Array<CoreInstruction | undefined> = [];
+	for (const block of core.blocks) {
+		for (const instruction of block.instructions) {
+			instructions[instruction.id] = instruction;
+		}
+	}
+	return { values, facts, instructions };
+}
+
 function coreImmediateValue(
-	core: CoreFunction,
+	index: CoreLoweringIndex,
 	value: CoreValueId,
 ): CompilerImmediateValue | undefined {
-	const definition = core.values.find(({ id }) => id === value)?.definition;
+	const definition = index.values[value]?.definition;
 	if (definition?.kind !== "instruction") return undefined;
-	const instruction = core.blocks
-		.flatMap(({ instructions }) => instructions)
-		.find(({ id }) => id === definition.instruction);
+	const instruction = index.instructions[definition.instruction];
 	if (instruction === undefined || definition.index !== 0) return undefined;
 	switch (instruction.opcode) {
 		case "createUndefined":
@@ -877,6 +892,7 @@ function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructi
  */
 function immediateOnlyInstructions(
 	core: CoreFunction,
+	index: CoreLoweringIndex,
 	protectedInstructions: ReadonlySet<CoreInstructionId>,
 ): ReadonlySet<CoreInstructionId> {
 	const embedded = new Set<CoreValueId>();
@@ -887,7 +903,7 @@ function immediateOnlyInstructions(
 				if (
 					(instruction.opcode === "call" || instruction.opcode === "construct") &&
 					!protectedInstructions.has(instruction.id) &&
-					coreImmediateValue(core, input) !== undefined
+					coreImmediateValue(index, input) !== undefined
 				) {
 					embedded.add(input);
 				} else {
@@ -1016,9 +1032,14 @@ function lowerFunctionToTarget(
 	instructionSites?: WeakMap<object, CompilerSiteFacts>,
 	reuseRegisters = true,
 ): LoweredCoreFunction {
+	const index = coreLoweringIndex(core);
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
 	const protectedInstructions = coreRegionInstructionIds(core);
-	const omittedInstructions = immediateOnlyInstructions(core, protectedInstructions);
+	const omittedInstructions = immediateOnlyInstructions(
+		core,
+		index,
+		protectedInstructions,
+	);
 	const blockOrder = coreBlockLayout(core);
 	const loweredBlockForCore = new Map<CoreBlockId, number>(
 		blockOrder.map((block, index) => [block, index]),
@@ -1131,7 +1152,7 @@ function lowerFunctionToTarget(
 			if (omittedInstructions.has(instruction.id)) continue;
 			instructions.push(...sourcePositionMarker(instruction.sourcePosition));
 			const lowered = rebuildInstruction(
-				core,
+				index,
 				instruction,
 				registerForValue,
 				protectedInstructions.has(instruction.id),
@@ -1395,23 +1416,19 @@ function lowerFunctionToTarget(
 		for (const [parameter, representation] of entry.parameterRepresentations.entries()) {
 			registerRepresentations[parameter] = representation;
 		}
-		const variantFunction: ExecutionFunction = {
-			...fnWithoutGc,
-			registerRepresentations,
-			directEntries: [],
-			gc: { safepoints: [] },
-		};
-		const variantRoots = executionSafepointRootRegisters(
-			variantFunction,
-			new Set(pendingSafepoints.map(({ instruction }) => instruction)),
-		);
 		return {
 			...entry,
 			registerRepresentations,
 			gc: {
 				safepoints: safepoints.map((safepoint) => ({
 					...safepoint,
-					rootRegisters: variantRoots.get(safepoint.instruction) ?? [],
+					// Direct entries only specialize boxed ABI parameters. Register
+					// liveness is independent per physical register, so the exact roots
+					// are the ordinary roots with newly-unboxed parameters removed; a
+					// second whole-function dataflow solve cannot discover another root.
+					rootRegisters: safepoint.rootRegisters.filter(
+						(register) => registerRepresentations[register] === "boxed",
+					),
 				})),
 			},
 		};
@@ -1463,7 +1480,13 @@ export function lowerCoreCompilationToRuntimeExecution(
 	options: LowerCoreToExecutionOptions = {},
 ): ExecutionProgram {
 	const { program: core, context } = compilation;
-	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "pre-target" }, context);
+	verifyCoreProgram(
+		core,
+		coreOpcodeRegistry,
+		{ stage: "pre-target" },
+		context,
+		compilation.targetAnalyses,
+	);
 	const program = lowerCoreCompilationWithDirectEntries(
 		compilation,
 		{

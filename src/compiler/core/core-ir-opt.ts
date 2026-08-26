@@ -5624,6 +5624,9 @@ export interface CoreOptimizationResult {
 	readonly program: CoreProgram;
 	readonly context?: CoreCompilationContext;
 	readonly changed: boolean;
+	readonly targetAnalyses?: {
+		readonly summaries: CoreProgramSummaries;
+	};
 }
 
 interface CoreFunctionPass {
@@ -12074,10 +12077,12 @@ export function executeCoreOptimizations(
 		coreOpcodeRegistry,
 		{ stage: "final-region-selection" },
 		optimizedContext,
+		summaries === undefined ? undefined : { summaries },
 	);
 	return {
 		program: optimized,
 		...(optimizedContext === undefined ? {} : { context: optimizedContext }),
+		...(summaries === undefined ? {} : { targetAnalyses: { summaries } }),
 		changed,
 	};
 }

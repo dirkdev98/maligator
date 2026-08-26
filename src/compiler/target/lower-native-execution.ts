@@ -158,7 +158,13 @@ export function lowerCoreCompilationToExecution(
 ): ExecutionProgram {
 	const { program: core, context } = compilation;
 	// Owned boundary: lowering may consume Core decisions but never repairs them.
-	verifyCoreProgram(core, coreOpcodeRegistry, { stage: "pre-target" }, context);
+	verifyCoreProgram(
+		core,
+		coreOpcodeRegistry,
+		{ stage: "pre-target" },
+		context,
+		compilation.targetAnalyses,
+	);
 	const program = lowerCoreCompilationWithDirectEntries(
 		compilation,
 		planDirectEntries(core),

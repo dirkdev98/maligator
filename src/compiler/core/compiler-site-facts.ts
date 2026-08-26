@@ -270,6 +270,7 @@ export function attachCoreCompilerSiteFacts(
 	}
 
 	return {
+		...compilation,
 		program,
 		context: {
 			...context,
