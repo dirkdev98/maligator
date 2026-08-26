@@ -1033,9 +1033,7 @@ export class DirectCoreFunctionConstruction {
 			if (values[rule.output] === undefined) outputs.push(rule.output);
 			values[rule.output] = null;
 		}
-		const dependents: Array<Array<number> | undefined> = new Array(valueCount).fill(
-			undefined,
-		);
+		const dependents = new Array<Array<number> | undefined>(valueCount).fill(undefined);
 		for (const [ruleIndex, rule] of rules.entries()) {
 			for (const input of ruleInputs(rule)) {
 				const users = dependents[input];

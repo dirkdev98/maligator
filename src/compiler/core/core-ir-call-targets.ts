@@ -450,7 +450,7 @@ function censusSlotAccesses(
 		capturedWriters: new Map(),
 	};
 	for (const fn of program.functions) {
-		const producers: Array<CoreInstruction | undefined> = new Array(
+		const producers = new Array<CoreInstruction | undefined>(
 			(fn.values.at(-1)?.id ?? -1) + 1,
 		).fill(undefined);
 		for (const block of fn.blocks) {
@@ -912,18 +912,15 @@ export function analyzeCoreCalleeTargets(
 	// storage; the closed compiler graph starts with hundreds of thousands of value
 	// nodes before the first seed or edge is recorded. Append one slot whenever the
 	// analysis adds a non-value node so all later indexed reads stay fast as well.
-	const dependents: Array<Array<number> | undefined> = new Array(nodeCount).fill(
+	const dependents = new Array<Array<number> | undefined>(nodeCount).fill(undefined);
+	const seeds = new Array<CoreCalleeTargets | undefined>(nodeCount).fill(undefined);
+	const originSeeds = new Array<number | undefined>(nodeCount).fill(undefined);
+	const callSites = new Array<Array<CallResultSite> | undefined>(nodeCount).fill(
 		undefined,
 	);
-	const seeds: Array<CoreCalleeTargets | undefined> = new Array(nodeCount).fill(
-		undefined,
-	);
-	const originSeeds: Array<number | undefined> = new Array(nodeCount).fill(undefined);
-	const callSites: Array<Array<CallResultSite> | undefined> = new Array(nodeCount).fill(
-		undefined,
-	);
-	const constructorMethodSites: Array<Array<ConstructorMethodSite> | undefined> =
-		new Array(nodeCount).fill(undefined);
+	const constructorMethodSites = new Array<Array<ConstructorMethodSite> | undefined>(
+		nodeCount,
+	).fill(undefined);
 	const allocateNode = (): number => {
 		const node = nodeCount++;
 		dependents.push(undefined);
@@ -1014,7 +1011,7 @@ export function analyzeCoreCalleeTargets(
 	): ReadonlyArray<CoreInstruction | undefined> => {
 		const cached = definitionsByFunction[fn.functionIndex];
 		if (cached !== undefined) return cached;
-		const definitions: Array<CoreInstruction | undefined> = new Array(
+		const definitions = new Array<CoreInstruction | undefined>(
 			(fn.values.at(-1)?.id ?? -1) + 1,
 		).fill(undefined);
 		for (const block of fn.blocks) {

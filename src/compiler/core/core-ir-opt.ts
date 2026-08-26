@@ -573,12 +573,14 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 			return fn;
 		}
 		const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
-		const definitions: Array<CoreInstruction | undefined> = new Array(valueCount);
+		const definitions = new Array<CoreInstruction | undefined>(valueCount).fill(
+			undefined,
+		);
 		const canonical = analyses.canonicalValues(fn);
-		const canonicalRoots: Array<CoreValueId | undefined> = new Array(valueCount);
-		const representations: Array<
+		const canonicalRoots = new Array<CoreValueId | undefined>(valueCount).fill(undefined);
+		const representations = new Array<
 			CoreFunction["values"][number]["representation"] | undefined
-		> = new Array(valueCount);
+		>(valueCount).fill(undefined);
 		for (const { id, representation } of fn.values) {
 			canonicalRoots[id] = canonical.get(id) ?? id;
 			representations[id] = representation;
@@ -609,9 +611,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 						return instruction;
 					}
 					const property =
-						definitions[
-							canonicalRoots[instruction.inputs[0]!] ?? instruction.inputs[0]!
-						];
+						definitions[canonicalRoots[instruction.inputs[0]!] ?? instruction.inputs[0]!];
 					const stringIndex = property?.attributes.stringIndex;
 					if (
 						property?.opcode !== "loadPropertyStatic" ||
@@ -661,9 +661,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 							return false;
 						}
 						const constructor =
-							definitions[
-								canonicalRoots[receiver.inputs[0]!] ?? receiver.inputs[0]!
-							];
+							definitions[canonicalRoots[receiver.inputs[0]!] ?? receiver.inputs[0]!];
 						return (
 							constructor?.opcode === "loadIntrinsic" &&
 							constructor.attributes.intrinsic ===
