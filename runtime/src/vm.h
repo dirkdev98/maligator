@@ -2106,6 +2106,22 @@ MalCompletion mal_vm_call_cached(
 );
 
 /**
+ * Invoke a compiler-proven native builtin target without repeating callable,
+ * bound-function, callback-pointer, or call-cache dispatch. The proof erases
+ * dispatch only: this seam retains the generic native call contract for Realm
+ * switching, profiling, callee/argument roots, and the unrooted-native frame
+ * count that builtins balance with mal_gc_native_rooted_begin/end.
+ */
+MalCompletion mal_vm_call_exact_native(
+    MalVm *vm,
+    MalNativeFunctionCallback callback,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
+/**
  * Guarded direct script-function call for native sites with an exact static target.
  * A matching live plain closure bypasses MalCallCache and generic dispatch while
  * retaining its own environment, realm, identity, and this binding. Guard misses

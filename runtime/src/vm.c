@@ -4145,6 +4145,54 @@ MalCompletion mal_vm_call_exact_script(
     return completion;
 }
 
+MalCompletion mal_vm_call_exact_native(
+    MalVm *vm,
+    MalNativeFunctionCallback callback,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+#if MAL_PROFILE && MAL_PERF_STATS
+    i32 saved_profile_site = vm->profile_current_site_id;
+#endif
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+
+    MalNativeFunctionObject *native_function =
+        mal_value_to_native_function_object(callee);
+    MAL_PROFILE_NATIVE_CALL(vm, native_function);
+    MalString *native_name = mal_native_function_object_name(native_function);
+    if (native_name != nullptr) {
+        mal_perf_native_call_name(
+            mal_string_code_units(native_name), mal_string_length(native_name));
+    }
+    MalCalleeRoots roots;
+    mal_gc_callee_roots_begin(
+        &roots, this_value, mal_value_new_undefined(), callee, args, arg_count);
+    vm->gc_native_frames++;
+    MalValue value = callback(
+        vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
+    vm->gc_native_frames--;
+    mal_gc_callee_roots_end(&roots);
+
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->profile_current_site_id = saved_profile_site;
+#endif
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? vm->completion
+        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+}
+
 MalCompletion mal_vm_call_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,

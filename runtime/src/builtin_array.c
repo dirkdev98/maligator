@@ -4470,20 +4470,12 @@ MalCompletion mal_builtin_array_iteration_direct(
         if (callback_function_index >= 0) {
             vm->exact_script_call = &callback_call;
         }
-        MalValue value = expected(
-            vm,
-            this_value,
-            args,
-            arg_count,
-            MAL_VALUE_UNDEFINED,
-            callee
-        );
+        MalCompletion completion = mal_vm_call_exact_native(
+            vm, expected, callee, this_value, args, arg_count);
         if (callback_function_index >= 0) {
             vm->exact_script_call = callback_call.previous;
         }
-        return vm->completion.kind == MAL_COMPLETION_THROW
-            ? vm->completion
-            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+        return completion;
     }
 
     MAL_PERF_COUNT(array_iteration_direct_fallbacks);
