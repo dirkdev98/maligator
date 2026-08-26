@@ -3,6 +3,7 @@ import type {
 	CompilerExactCollectionBrand,
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
+import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
 import type { Reader } from "./program-image-codec.ts";
 import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
 import {
@@ -32,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 35;
+export const COMPILER_ARTIFACT_VERSION = 36;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -664,6 +665,19 @@ function writeCompilerArtifact(
 				}
 				w.u8(13);
 				w.u32(plan.slot);
+			} else if (
+				plan.kind === "exact-binary-input-kinds" &&
+				instruction.opcode === "BINARY"
+			) {
+				if (
+					!compilerValueKindMaskIsValid(plan.inputKindMasks[0]) ||
+					!compilerValueKindMaskIsValid(plan.inputKindMasks[1])
+				) {
+					throw new RangeError("program-image-codec: invalid exact binary kind masks");
+				}
+				w.u8(17);
+				w.u8(plan.inputKindMasks[0]);
+				w.u8(plan.inputKindMasks[1]);
 			} else {
 				throw new RangeError(
 					"program-image-codec: native instruction plan opcode mismatch",
@@ -2214,6 +2228,16 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-own-slot",
 					slot: r.u32(),
+				};
+			} else if (tag === 17 && instruction.opcode === "BINARY") {
+				const left = r.u8();
+				const right = r.u8();
+				if (!compilerValueKindMaskIsValid(left) || !compilerValueKindMaskIsValid(right)) {
+					throw new RangeError("program-image-codec: invalid exact binary kind masks");
+				}
+				nativeInstructions[instructionIndex] = {
+					kind: "exact-binary-input-kinds",
+					inputKindMasks: [left, right],
 				};
 			} else {
 				throw new RangeError(

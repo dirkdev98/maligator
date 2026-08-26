@@ -1,5 +1,6 @@
 import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { KnownBuiltinCall } from "./compiler-facts.ts";
+import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 
 /** Numeric TypedArray brands whose element access produces a Number. */
 export type CompilerNumericTypedArrayKind =
@@ -923,6 +924,9 @@ export type CompilerInstruction =
 
 			// [destination, left, right]
 			registers: [number, number, number];
+
+			/** Verified semantic kind sets for exact native lowering. */
+			exactInputKindMasks?: readonly [CompilerValueKindMask, CompilerValueKindMask];
 
 			operator:
 				| "+"

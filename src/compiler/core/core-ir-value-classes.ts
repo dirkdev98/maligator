@@ -209,6 +209,7 @@ export function analyzeCoreValueClasses(
 		instruction: CoreInstructionId,
 	): string => `${functionIndex}:${instruction}`;
 	for (const fn of functions) {
+		const functionParameters = new Set(fn.parameters);
 		const cfg = controlFlow(fn);
 		cfgByFunction.set(fn.functionIndex, cfg);
 		const roots = coreCanonicalValueRoots(fn, cfg);
@@ -253,6 +254,11 @@ export function analyzeCoreValueClasses(
 			const incoming = cfg.predecessors[block.id] ?? [];
 			for (const [index, parameter] of block.parameters.entries()) {
 				const destination = valueNode(fn.functionIndex, parameter.value);
+				if (block.id === fn.entry && functionParameters.has(parameter.value)) {
+					// Open formals were seeded above; closed formals receive only named
+					// call-edge inputs later. Do not overwrite those inputs with opacity.
+					continue;
+				}
 				let ordinary = false;
 				let excluded = block.id === fn.entry || parameter.role === "exception";
 				for (const edge of incoming) {

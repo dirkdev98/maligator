@@ -117,7 +117,7 @@ import {
 } from "./core-ir-summaries.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { selectCoreExactHeapAccesses } from "./core-ir-value-classes.ts";
-import { selectCoreExactCallArguments } from "./core-ir-value-kinds.ts";
+import { selectCoreExactValueFacts } from "./core-ir-value-kinds.ts";
 import {
 	CoreIrVerificationError,
 	verifyCoreFunction,
@@ -11992,14 +11992,14 @@ export function executeCoreOptimizations(
 		options.ablations?.has("interprocedural") === true
 			? undefined
 			: analyses.summaries(scalarArgumentInput);
-	const scalarArgumentSelection = selectCoreExactCallArguments(
+	const scalarArgumentSelection = selectCoreExactValueFacts(
 		scalarArgumentInput,
 		compilationContext,
 		scalarArgumentSummaries,
 	);
 	for (const [index, fn] of scalarArgumentSelection.program.functions.entries()) {
 		traces.push({
-			name: "select-exact-call-arguments",
+			name: "select-exact-value-facts",
 			round: maxRounds,
 			changed: fn !== functions[index],
 		});
@@ -12008,7 +12008,7 @@ export function executeCoreOptimizations(
 		changed = true;
 		verifyMutatedProgram(scalarArgumentSelection.program, {
 			stage: "finalization",
-			pass: "select-exact-call-arguments",
+			pass: "select-exact-value-facts",
 		});
 	}
 	workingProgram = scalarArgumentSelection.program;
@@ -12019,7 +12019,7 @@ export function executeCoreOptimizations(
 		optimizationTrace.push(
 			optimizationPassDelta(
 				{
-					pass: "select-exact-call-arguments",
+					pass: "select-exact-value-facts",
 					stage: "finalization",
 					status: "executed",
 					changed: scalarArgumentSelection.changed,

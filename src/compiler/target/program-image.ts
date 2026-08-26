@@ -11,6 +11,7 @@ import type {
 	CompilerInstruction,
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
+import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
@@ -558,6 +559,10 @@ export type NativeInstructionPlan =
 			readonly kind: "exact-typed-array-element";
 			readonly elementKind: CompilerNumericTypedArrayKind;
 	  }
+	| {
+			readonly kind: "exact-binary-input-kinds";
+			readonly inputKindMasks: readonly [CompilerValueKindMask, CompilerValueKindMask];
+	  }
 	| { readonly kind: "primitive-string-length" };
 
 /**
@@ -856,6 +861,13 @@ function nativeInstructionPlanFromExecution(
 			return instruction.exactOwnSlot === undefined
 				? undefined
 				: { kind: "exact-own-slot", slot: instruction.exactOwnSlot };
+		case "binary":
+			return instruction.exactInputKindMasks === undefined
+				? undefined
+				: {
+						kind: "exact-binary-input-kinds",
+						inputKindMasks: instruction.exactInputKindMasks,
+					};
 		default:
 			return undefined;
 	}

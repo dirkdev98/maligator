@@ -82,6 +82,7 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	analyzeCoreCalleeTargets,
 	coreCalleeTargetsAreOpen,
+	coreCalleeTargetsClosedFunction,
 } from "./core-ir-call-targets.ts";
 import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
@@ -1328,8 +1329,26 @@ function collectPublishedFunctions(
 					descriptor.callTransfer.result !== "unmodeled"
 						? descriptor.callTransfer.calleeOperand
 						: undefined;
+				const exactCallback = instruction.attributes.directCallbackFunctionIndex;
+				const callbackOperand =
+					instruction.opcode === "call" && typeof exactCallback === "number"
+						? instruction.inputs[2]
+						: undefined;
 				for (const [position, input] of instruction.inputs.entries()) {
 					if (position === invoked) continue;
+					// A locked builtin callback with a certified singleton target is not
+					// published merely because the call ABI carries its identity. The known
+					// Array operation invokes it synchronously through the modeled callback
+					// edge; no unknown sink receives it. Keeping this edge closed is what lets
+					// value flow retain exact callback-index and later element-cell facts.
+					if (
+						position === 2 &&
+						input === callbackOperand &&
+						coreCalleeTargetsClosedFunction(targets.targets(fn.functionIndex, input)) ===
+							exactCallback
+					) {
+						continue;
+					}
 					if (
 						instruction.opcode === "storeGlobal" ||
 						instruction.opcode === "storeCaptured"

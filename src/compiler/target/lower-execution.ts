@@ -20,7 +20,11 @@ import {
 	coreExactCollectionBrand,
 	coreNumericTypedArrayKind,
 } from "../core/core-ir-value-classes.ts";
-import { CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE } from "../core/core-ir-value-kinds.ts";
+import {
+	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
+	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	coreExactBinaryInputKindMasks,
+} from "../core/core-ir-value-kinds.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
 import type {
 	CoreBlockId,
@@ -80,6 +84,7 @@ const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
 ]);
 
@@ -240,6 +245,12 @@ function rebuildInstruction(
 					instruction.attributes[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE],
 				)
 			: undefined;
+	const exactInputKindMasks =
+		instruction.opcode === "binary"
+			? coreExactBinaryInputKindMasks(
+					instruction.attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE],
+				)
+			: undefined;
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	// A region certificate's contract is stated over the instruction's operands, so
 	// embedding one of them as a constant would change the shape the certificate
@@ -264,6 +275,7 @@ function rebuildInstruction(
 		...(exactContainedArrayElement ? { exactContainedArrayElement: true } : {}),
 		...(exactTypedArrayKind === undefined ? {} : { exactTypedArrayKind }),
 		...(exactCollectionReceiver === undefined ? {} : { exactCollectionReceiver }),
+		...(exactInputKindMasks === undefined ? {} : { exactInputKindMasks }),
 		...(immediateValues.length === 0 ? {} : { immediateValues }),
 		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}

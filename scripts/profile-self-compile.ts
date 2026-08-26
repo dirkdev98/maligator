@@ -25,7 +25,7 @@ interface SelfCompileSummary {
 	phases: Record<string, number>;
 }
 
-const HELP = `Usage: node scripts/profile-self-compile.ts [--quick] [--json-out PATH] [--sample-out PATH]
+const HELP = `Usage: node scripts/profile-self-compile.ts [--quick] [--timing-only] [--json-out PATH] [--sample-out PATH] [--sample-only]
 
 Build and run the fully closed self-compile workload with exact runtime counters.
 This is a single-current-tree profile, not a base/head comparison.
@@ -33,7 +33,12 @@ This is a single-current-tree profile, not a base/head comparison.
 compiler and Core optimizer, providing a calibrated sub-minute inner loop.
 --compiler-profile additionally records exact source-site execution, fallback,
 allocation, boxing, safepoint, GC, and runtime-dispatch counters.
+--timing-only builds production native code without performance counters. It
+retains the identical closed workload, phase report, output digest, and timeout,
+and is the fast iteration clock for emitted-code changes.
 On macOS, --sample-out captures ten seconds of stacks during Core optimization.
+--sample-only requires --sample-out and stops the temporary workload immediately
+after capture, avoiding a complete self-compile when only native stacks are needed.
 `;
 
 interface ProfileOptions {
@@ -41,6 +46,8 @@ interface ProfileOptions {
 	sampleOut?: string;
 	quick: boolean;
 	compilerProfile: boolean;
+	timingOnly: boolean;
+	sampleOnly: boolean;
 }
 
 function profileOptions(args: Array<string>): ProfileOptions | undefined {
@@ -50,13 +57,24 @@ function profileOptions(args: Array<string>): ProfileOptions | undefined {
 	}
 	const quick = args.includes("--quick");
 	const compilerProfile = args.includes("--compiler-profile");
+	const timingOnly = args.includes("--timing-only");
+	const sampleOnly = args.includes("--sample-only");
+	if (timingOnly && compilerProfile) {
+		throw new Error("--timing-only and --compiler-profile are mutually exclusive");
+	}
 	let jsonOut = quick
 		? ".cache/self-compile-quick-profile.json"
 		: ".cache/self-compile-profile.json";
 	let sampleOut: string | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index];
-		if (option === "--quick" || option === "--compiler-profile") continue;
+		if (
+			option === "--quick" ||
+			option === "--compiler-profile" ||
+			option === "--timing-only" ||
+			option === "--sample-only"
+		)
+			continue;
 		const value = args[index + 1];
 		if (value === undefined || value.startsWith("-")) throw new Error(HELP.trim());
 		if (option === "--json-out") jsonOut = value;
@@ -64,10 +82,15 @@ function profileOptions(args: Array<string>): ProfileOptions | undefined {
 		else throw new Error(HELP.trim());
 		index++;
 	}
+	if (sampleOnly && sampleOut === undefined) {
+		throw new Error("--sample-only requires --sample-out");
+	}
 	return {
 		jsonOut,
 		quick,
 		compilerProfile,
+		timingOnly,
+		sampleOnly,
 		...(sampleOut === undefined ? {} : { sampleOut }),
 	};
 }
@@ -105,6 +128,7 @@ async function runWithSample(
 	sampleOut: string,
 	sampleDelayMs: number,
 	sampleSeconds: number,
+	stopAfterSample: boolean,
 ): Promise<ProfileProcessResult> {
 	const absoluteSample = path.resolve(sampleOut);
 	mkdirSync(path.dirname(absoluteSample), { recursive: true });
@@ -151,7 +175,10 @@ async function runWithSample(
 			if (result.error !== undefined) reject(result.error);
 			else if (result.status !== 0)
 				reject(new Error(`sample failed (${String(result.status)}):\n${result.stderr}`));
-			else resolve();
+			else {
+				if (stopAfterSample) child.kill("SIGTERM");
+				resolve();
+			}
 		}, sampleDelayMs);
 	});
 	try {
@@ -176,7 +203,9 @@ if (options !== undefined) {
 	}
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-profile-"));
 	try {
-		const buildEnvironment = { ...process.env, MAL_PERF_STATS: "1" };
+		const buildEnvironment = { ...process.env };
+		if (options.timingOnly) delete buildEnvironment.MAL_PERF_STATS;
+		else buildEnvironment.MAL_PERF_STATS = "1";
 		const buildStartedAt = process.hrtime.bigint();
 		const built = buildNativeBinaryResult({
 			fixture: "bench/self-compile.mts",
@@ -234,63 +263,71 @@ if (options !== undefined) {
 				options.sampleOut,
 				options.quick ? 3_000 : 30_000,
 				options.quick ? 5 : 10,
+				options.sampleOnly,
 			);
 		}
-		if (result.status !== 0) {
+		if (options.sampleOnly) {
+			console.log(
+				`self-compile ${options.quick ? "quick " : ""}sample captured in ${(result.wallMs / 1000).toFixed(1)}s`,
+			);
+			console.log(`Core optimization sample: ${path.resolve(options.sampleOut!)}`);
+		} else if (result.status !== 0) {
 			throw new Error(
 				`profile self-compile failed (${String(result.status)}):\n${result.stderr}`,
 			);
-		}
-		const summary = JSON.parse(result.stdout.trim()) as SelfCompileSummary;
-		const records = perfRecords(result.stderr);
-		if (records.length === 0 && !options.compilerProfile) {
-			throw new Error("self-compile emitted no perf counters");
-		}
-		const finalizedCompilerProfile =
-			compilerProfile === undefined
-				? undefined
-				: finalizeProfileCapture(
-						compilerProfile.capture.directory,
-						compilerProfile.prepared,
-						"self-compile",
-					);
-		const report = {
-			schema: 2,
-			world: "closed",
-			workload: options.quick ? "shape-analysis-cone" : "full-self-compile",
-			buildMs,
-			prepareMs,
-			wallMs: result.wallMs,
-			totalMs: buildMs + prepareMs + result.wallMs,
-			...summary,
-			digest: digestSelfCompileOutput(output, [
-				path.resolve(sourceRoot),
-				path.relative(process.cwd(), sourceRoot),
-			]),
-			perfRecords: records,
-			...(finalizedCompilerProfile === undefined
-				? {}
-				: {
-						compilerProfile: {
-							directory: compilerProfile!.capture.directory,
-							findings: finalizedCompilerProfile.findings,
-						},
-					}),
-		};
-		const absoluteOutput = path.resolve(options.jsonOut);
-		mkdirSync(path.dirname(absoluteOutput), { recursive: true });
-		writeFileSync(absoluteOutput, `${JSON.stringify(report, undefined, 2)}\n`);
-		console.log(
-			`self-compile ${options.quick ? "quick " : ""}profile: ${summary.units} units, ${summary.codeUnits} code units, ${(result.wallMs / 1000).toFixed(1)}s run / ${((buildMs + prepareMs + result.wallMs) / 1000).toFixed(1)}s total`,
-		);
-		console.log(`digest: ${report.digest}`);
-		console.log(`runtime perf counter records: ${records.length}`);
-		console.log(`raw profile: ${absoluteOutput}`);
-		if (compilerProfile !== undefined) {
-			console.log(`compiler profile: ${compilerProfile.capture.directory}`);
-		}
-		if (options.sampleOut !== undefined) {
-			console.log(`Core optimization sample: ${path.resolve(options.sampleOut)}`);
+		} else {
+			const summary = JSON.parse(result.stdout.trim()) as SelfCompileSummary;
+			const records = perfRecords(result.stderr);
+			if (records.length === 0 && !options.compilerProfile && !options.timingOnly) {
+				throw new Error("self-compile emitted no perf counters");
+			}
+			const finalizedCompilerProfile =
+				compilerProfile === undefined
+					? undefined
+					: finalizeProfileCapture(
+							compilerProfile.capture.directory,
+							compilerProfile.prepared,
+							"self-compile",
+						);
+			const report = {
+				schema: 2,
+				world: "closed",
+				workload: options.quick ? "shape-analysis-cone" : "full-self-compile",
+				instrumentation: options.timingOnly ? "production" : "performance-counters",
+				buildMs,
+				prepareMs,
+				wallMs: result.wallMs,
+				totalMs: buildMs + prepareMs + result.wallMs,
+				...summary,
+				digest: digestSelfCompileOutput(output, [
+					path.resolve(sourceRoot),
+					path.relative(process.cwd(), sourceRoot),
+				]),
+				perfRecords: records,
+				...(finalizedCompilerProfile === undefined
+					? {}
+					: {
+							compilerProfile: {
+								directory: compilerProfile!.capture.directory,
+								findings: finalizedCompilerProfile.findings,
+							},
+						}),
+			};
+			const absoluteOutput = path.resolve(options.jsonOut);
+			mkdirSync(path.dirname(absoluteOutput), { recursive: true });
+			writeFileSync(absoluteOutput, `${JSON.stringify(report, undefined, 2)}\n`);
+			console.log(
+				`self-compile ${options.quick ? "quick " : ""}profile: ${summary.units} units, ${summary.codeUnits} code units, ${(result.wallMs / 1000).toFixed(1)}s run / ${((buildMs + prepareMs + result.wallMs) / 1000).toFixed(1)}s total`,
+			);
+			console.log(`digest: ${report.digest}`);
+			console.log(`runtime perf counter records: ${records.length}`);
+			console.log(`raw profile: ${absoluteOutput}`);
+			if (compilerProfile !== undefined) {
+				console.log(`compiler profile: ${compilerProfile.capture.directory}`);
+			}
+			if (options.sampleOut !== undefined) {
+				console.log(`Core optimization sample: ${path.resolve(options.sampleOut)}`);
+			}
 		}
 	} finally {
 		rmSync(root, { recursive: true, force: true });

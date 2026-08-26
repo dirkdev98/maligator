@@ -1793,9 +1793,8 @@ describe("Core IR optimizer", () => {
 		expect(binaries(2)).toHaveLength(0);
 		expect(binaries(3)).toHaveLength(0);
 		expect(binaries(4)).toHaveLength(0);
-		expect(binaries(5)).toContainEqual(
-			expect.objectContaining({ attributes: { operator: ">" } }),
-		);
+		expect(binaries(5)).toHaveLength(1);
+		expect(binaries(5)[0]).toMatchObject({ attributes: { operator: ">" } });
 		const returnConstant = (functionIndex: number) => {
 			const fn = outcome.program.functions[functionIndex]!;
 			const terminator = fn.blocks.find(

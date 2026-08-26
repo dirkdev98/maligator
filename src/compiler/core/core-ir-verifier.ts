@@ -66,7 +66,10 @@ import {
 } from "./core-ir-value-classes.ts";
 import {
 	analyzeCoreValueKinds,
+	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	coreBinaryInputKindMasksHaveExactNativeSemantics,
+	coreExactBinaryInputKindMasks,
 	coreExactCallArgumentRepresentations,
 } from "./core-ir-value-kinds.ts";
 import type {
@@ -1820,6 +1823,52 @@ function verifyExactCallArgumentClaims(
 	}
 }
 
+function verifyExactBinaryInputKindClaims(
+	program: CoreProgram,
+	compilationContext: CoreCompilationContext | undefined,
+): void {
+	const claims = program.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions
+				.filter(
+					(instruction) =>
+						CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE in instruction.attributes,
+				)
+				.map((instruction) => ({ fn, instruction })),
+		),
+	);
+	if (claims.length === 0) return;
+	const summaries = analyzeCoreProgramSummaries(
+		program,
+		coreOpcodeRegistry,
+		compilationContext,
+	);
+	const analysis = analyzeCoreValueKinds(program, compilationContext, summaries);
+	for (const { fn, instruction } of claims) {
+		const claim = coreExactBinaryInputKindMasks(
+			instruction.attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE],
+		);
+		if (
+			instruction.opcode !== "binary" ||
+			claim === undefined ||
+			!coreBinaryInputKindMasksHaveExactNativeSemantics(
+				instruction.attributes.operator,
+				claim,
+			)
+		) {
+			fail(`instruction @${instruction.id} carries an invalid exact binary-input claim`);
+		}
+		for (const [index, mask] of claim.entries()) {
+			const input = instruction.inputs[index];
+			if (input === undefined || analysis.kindMask(fn.functionIndex, input) !== mask) {
+				fail(
+					`instruction @${instruction.id} no longer proves binary input kind mask ${mask}`,
+				);
+			}
+		}
+	}
+}
+
 function verifyCoreProgramGraph(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
@@ -1913,6 +1962,7 @@ function verifyCoreProgramGraph(
 		verifyExactTypedArrayClaims(program, compilationContext);
 		verifyExactCollectionReceiverClaims(program, compilationContext);
 		verifyExactCallArgumentClaims(program, compilationContext);
+		verifyExactBinaryInputKindClaims(program, compilationContext);
 	}
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {

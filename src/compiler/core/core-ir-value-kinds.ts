@@ -7,6 +7,21 @@
  * can then emit a typed variant without changing the generic ECMAScript call ABI.
  */
 
+import {
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
+	compilerValueKindMaskIsSubset,
+	compilerValueKindMaskIsValid,
+} from "../shared/compiler-value-kinds.ts";
+import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import {
@@ -29,27 +44,10 @@ import type {
 
 export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
 	"exactCallArgumentRepresentations";
+export const CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE = "exactBinaryInputKindMasks";
 
 export type CoreExactScalarKind = "number" | "boolean";
 export type CoreExactCallArgumentRepresentation = "boxed" | CoreExactScalarKind;
-
-const KIND_UNDEFINED = 1 << 0;
-const KIND_NULL = 1 << 1;
-const KIND_BOOLEAN = 1 << 2;
-const KIND_NUMBER = 1 << 3;
-const KIND_STRING = 1 << 4;
-const KIND_BIGINT = 1 << 5;
-const KIND_SYMBOL = 1 << 6;
-const KIND_OBJECT = 1 << 7;
-const KIND_TOP =
-	KIND_UNDEFINED |
-	KIND_NULL |
-	KIND_BOOLEAN |
-	KIND_NUMBER |
-	KIND_STRING |
-	KIND_BIGINT |
-	KIND_SYMBOL |
-	KIND_OBJECT;
 
 interface KindTransfer {
 	readonly inputs: ReadonlyArray<number>;
@@ -59,6 +57,7 @@ interface KindTransfer {
 
 export interface CoreValueKindAnalysis {
 	exactScalar(functionIndex: number, value: CoreValueId): CoreExactScalarKind | undefined;
+	kindMask(functionIndex: number, value: CoreValueId): CompilerValueKindMask;
 }
 
 function valueLimit(fn: CoreFunction): number {
@@ -98,26 +97,27 @@ function staticOutputKind(
 	instruction: CoreInstruction,
 	representation: CoreFunction["values"][number]["representation"] | undefined,
 ): number | undefined {
-	if (representation === "f64" || representation === "i32") return KIND_NUMBER;
-	if (representation === "boolean") return KIND_BOOLEAN;
+	if (representation === "f64" || representation === "i32")
+		return COMPILER_VALUE_KIND_NUMBER;
+	if (representation === "boolean") return COMPILER_VALUE_KIND_BOOLEAN;
 	switch (instruction.opcode) {
 		case "createEmpty":
 			// The sentinel has no ordinary ECMAScript kind. A path that observes it
 			// throws at its TDZ check before entering a script call.
 			return 0;
 		case "createUndefined":
-			return KIND_UNDEFINED;
+			return COMPILER_VALUE_KIND_UNDEFINED;
 		case "createNull":
-			return KIND_NULL;
+			return COMPILER_VALUE_KIND_NULL;
 		case "createBoolean":
-			return KIND_BOOLEAN;
+			return COMPILER_VALUE_KIND_BOOLEAN;
 		case "createF64":
 		case "createNumber":
-			return KIND_NUMBER;
+			return COMPILER_VALUE_KIND_NUMBER;
 		case "createString":
-			return KIND_STRING;
+			return COMPILER_VALUE_KIND_STRING;
 		case "createBigint":
-			return KIND_BIGINT;
+			return COMPILER_VALUE_KIND_BIGINT;
 		case "createFunction":
 		case "createArray":
 		case "createObject":
@@ -125,16 +125,16 @@ function staticOutputKind(
 		case "createModuleNamespace":
 		case "createTemplateObject":
 		case "instantiateLiteralTemplate":
-			return KIND_OBJECT;
+			return COMPILER_VALUE_KIND_OBJECT;
 		case "createPrivateName":
 		case "createPrivateNames":
-			return KIND_SYMBOL;
+			return COMPILER_VALUE_KIND_SYMBOL;
 		case "loadProperty":
 			return coreNumericTypedArrayKind(
 				instruction.attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE],
 			) === undefined
 				? undefined
-				: KIND_NUMBER | KIND_UNDEFINED;
+				: COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED;
 		default:
 			return undefined;
 	}
@@ -212,17 +212,18 @@ export function analyzeCoreValueKinds(
 	};
 
 	for (const fn of program.functions) {
+		const functionParameters = new Set(fn.parameters);
 		const representations = new Map(
 			fn.values.map(({ id, representation }) => [id, representation] as const),
 		);
 		for (const [index, parameter] of fn.parameters.entries()) {
 			const seed = flow.parameterSeed(fn.functionIndex, index);
 			if (flow.parameterOpen(fn.functionIndex, index)) {
-				addSeed(valueNode(fn.functionIndex, parameter), KIND_TOP);
+				addSeed(valueNode(fn.functionIndex, parameter), COMPILER_VALUE_KIND_TOP);
 			} else if (seed === "number") {
-				addSeed(valueNode(fn.functionIndex, parameter), KIND_NUMBER);
+				addSeed(valueNode(fn.functionIndex, parameter), COMPILER_VALUE_KIND_NUMBER);
 			} else if (seed === "undefined") {
-				addSeed(valueNode(fn.functionIndex, parameter), KIND_UNDEFINED);
+				addSeed(valueNode(fn.functionIndex, parameter), COMPILER_VALUE_KIND_UNDEFINED);
 			}
 		}
 		const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
@@ -230,8 +231,13 @@ export function analyzeCoreValueKinds(
 			const incoming = cfg.predecessors[block.id] ?? [];
 			for (const [index, parameter] of block.parameters.entries()) {
 				const destination = valueNode(fn.functionIndex, parameter.value);
+				if (block.id === fn.entry && functionParameters.has(parameter.value)) {
+					// Function formals were seeded from the complete call topology above.
+					// Re-seeding them as open entry values would erase that proof.
+					continue;
+				}
 				if (block.id === fn.entry || parameter.role === "exception") {
-					addSeed(destination, KIND_TOP);
+					addSeed(destination, COMPILER_VALUE_KIND_TOP);
 					continue;
 				}
 				for (const edge of incoming) {
@@ -239,7 +245,7 @@ export function analyzeCoreValueKinds(
 						edge.kind === "exceptional"
 							? edge.arguments[index - 1]
 							: edge.arguments[index];
-					if (argument === undefined) addSeed(destination, KIND_TOP);
+					if (argument === undefined) addSeed(destination, COMPILER_VALUE_KIND_TOP);
 					else addEdge(valueNode(fn.functionIndex, argument), destination);
 				}
 			}
@@ -248,7 +254,7 @@ export function analyzeCoreValueKinds(
 				if (instruction.opcode === "move" && output !== undefined) {
 					const source = instruction.inputs[0];
 					if (source === undefined)
-						addSeed(valueNode(fn.functionIndex, output), KIND_TOP);
+						addSeed(valueNode(fn.functionIndex, output), COMPILER_VALUE_KIND_TOP);
 					else
 						addEdge(
 							valueNode(fn.functionIndex, source),
@@ -260,7 +266,7 @@ export function analyzeCoreValueKinds(
 					const slot = instruction.attributes.index;
 					if (typeof slot === "number" && stableGlobals.has(slot)) {
 						addEdge(globalNode(slot), valueNode(fn.functionIndex, output));
-					} else addSeed(valueNode(fn.functionIndex, output), KIND_TOP);
+					} else addSeed(valueNode(fn.functionIndex, output), COMPILER_VALUE_KIND_TOP);
 					continue;
 				}
 				if (instruction.opcode === "storeGlobal") {
@@ -284,7 +290,7 @@ export function analyzeCoreValueKinds(
 						stableCaptured.has(capturedKey(owner, index))
 					) {
 						addEdge(capturedNode(owner, index), valueNode(fn.functionIndex, output));
-					} else addSeed(valueNode(fn.functionIndex, output), KIND_TOP);
+					} else addSeed(valueNode(fn.functionIndex, output), COMPILER_VALUE_KIND_TOP);
 					continue;
 				}
 				if (instruction.opcode === "storeCaptured") {
@@ -304,7 +310,7 @@ export function analyzeCoreValueKinds(
 				const callTransfer = coreOpcodeRegistry.get(instruction.opcode)?.callTransfer;
 				if (callTransfer?.result === "call-completion" && output !== undefined) {
 					for (const extra of instruction.outputs.slice(1)) {
-						addSeed(valueNode(fn.functionIndex, extra), KIND_TOP);
+						addSeed(valueNode(fn.functionIndex, extra), COMPILER_VALUE_KIND_TOP);
 					}
 					continue;
 				}
@@ -326,7 +332,11 @@ export function analyzeCoreValueKinds(
 							inputs: [valueNode(fn.functionIndex, instruction.inputs[0]!)],
 							output: node,
 							evaluate: ([input]) =>
-								input === 0 ? 0 : input === KIND_NUMBER ? KIND_NUMBER : KIND_TOP,
+								input === 0
+									? 0
+									: input === COMPILER_VALUE_KIND_NUMBER
+										? COMPILER_VALUE_KIND_NUMBER
+										: COMPILER_VALUE_KIND_TOP,
 						});
 						continue;
 					}
@@ -344,13 +354,14 @@ export function analyzeCoreValueKinds(
 							evaluate: ([left, right]) =>
 								left === 0 || right === 0
 									? 0
-									: left === KIND_NUMBER && right === KIND_NUMBER
-										? KIND_NUMBER
-										: KIND_TOP,
+									: left === COMPILER_VALUE_KIND_NUMBER &&
+										  right === COMPILER_VALUE_KIND_NUMBER
+										? COMPILER_VALUE_KIND_NUMBER
+										: COMPILER_VALUE_KIND_TOP,
 						});
 						continue;
 					}
-					addSeed(node, KIND_TOP);
+					addSeed(node, COMPILER_VALUE_KIND_TOP);
 				}
 			}
 			if (block.terminator.kind === "return") {
@@ -369,7 +380,10 @@ export function analyzeCoreValueKinds(
 				for (const [index, parameter] of target.parameters.entries()) {
 					const argument = arguments_[index];
 					if (argument === undefined)
-						addSeed(valueNode(target.functionIndex, parameter), KIND_UNDEFINED);
+						addSeed(
+							valueNode(target.functionIndex, parameter),
+							COMPILER_VALUE_KIND_UNDEFINED,
+						);
 					else
 						addEdge(
 							valueNode(call.caller, argument),
@@ -381,9 +395,10 @@ export function analyzeCoreValueKinds(
 		const output = call.instruction.outputs[0];
 		if (call.transfer.result !== "call-completion" || output === undefined) continue;
 		const result = valueNode(call.caller, output);
-		if (call.open) addSeed(result, KIND_TOP);
+		if (call.open) addSeed(result, COMPILER_VALUE_KIND_TOP);
 		for (const target of call.targets) {
-			if (target.isAsync || target.isGenerator) addSeed(result, KIND_OBJECT);
+			if (target.isAsync || target.isGenerator)
+				addSeed(result, COMPILER_VALUE_KIND_OBJECT);
 			else addEdge(returnNodes.get(target.functionIndex)!, result);
 		}
 	}
@@ -420,13 +435,48 @@ export function analyzeCoreValueKinds(
 			const limit = valueLimits.get(functionIndex);
 			if (base === undefined || limit === undefined || value >= limit) return undefined;
 			const kind = state[base + value];
-			return kind === KIND_NUMBER
+			return kind === COMPILER_VALUE_KIND_NUMBER
 				? "number"
-				: kind === KIND_BOOLEAN
+				: kind === COMPILER_VALUE_KIND_BOOLEAN
 					? "boolean"
 					: undefined;
 		},
+		kindMask(functionIndex, value) {
+			const base = valueBases.get(functionIndex);
+			const limit = valueLimits.get(functionIndex);
+			if (base === undefined || limit === undefined || value >= limit) {
+				return COMPILER_VALUE_KIND_TOP;
+			}
+			return state[base + value] || COMPILER_VALUE_KIND_TOP;
+		},
 	};
+}
+
+export function coreExactBinaryInputKindMasks(
+	value: unknown,
+): readonly [CompilerValueKindMask, CompilerValueKindMask] | undefined {
+	if (
+		!Array.isArray(value) ||
+		value.length !== 2 ||
+		!compilerValueKindMaskIsValid(value[0]) ||
+		!compilerValueKindMaskIsValid(value[1])
+	) {
+		return undefined;
+	}
+	return value as unknown as readonly [CompilerValueKindMask, CompilerValueKindMask];
+}
+
+export function coreBinaryInputKindMasksHaveExactNativeSemantics(
+	operator: unknown,
+	masks: readonly [CompilerValueKindMask, CompilerValueKindMask],
+): boolean {
+	const [left, right] = masks;
+	return (
+		typeof operator === "string" &&
+		["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(operator) &&
+		compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED) &&
+		compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED)
+	);
 }
 
 export function coreExactCallArgumentRepresentations(
@@ -443,17 +493,17 @@ export function coreExactCallArgumentRepresentations(
 	return value as ReadonlyArray<CoreExactCallArgumentRepresentation>;
 }
 
-export interface CoreExactCallArgumentSelection {
+export interface CoreExactValueFactSelection {
 	readonly program: CoreProgram;
 	readonly changed: boolean;
 }
 
 /** Attach exact scalar argument facts to closed direct script calls. */
-export function selectCoreExactCallArguments(
+export function selectCoreExactValueFacts(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
 	summaries?: CoreProgramSummaries,
-): CoreExactCallArgumentSelection {
+): CoreExactValueFactSelection {
 	const analysis = analyzeCoreValueKinds(program, context, summaries);
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
@@ -461,13 +511,13 @@ export function selectCoreExactCallArguments(
 		const blocks = fn.blocks.map((block) => ({
 			...block,
 			instructions: block.instructions.map((instruction): CoreInstruction => {
-				if (instruction.opcode !== "call") return instruction;
 				const targetIndex = instruction.attributes.directFunctionIndex;
 				const target =
 					typeof targetIndex === "number" ? program.functions[targetIndex] : undefined;
 				const attributes = { ...instruction.attributes };
 				delete attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE];
-				if (target !== undefined) {
+				delete attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE];
+				if (instruction.opcode === "call" && target !== undefined) {
 					const representations = target.parameters.map((_, index) => {
 						const argument = instruction.inputs[index + 2];
 						return argument === undefined
@@ -479,10 +529,30 @@ export function selectCoreExactCallArguments(
 							representations;
 					}
 				}
+				if (instruction.opcode === "binary" && instruction.inputs.length === 2) {
+					const masks = instruction.inputs.map((input) =>
+						analysis.kindMask(fn.functionIndex, input),
+					) as [CompilerValueKindMask, CompilerValueKindMask];
+					if (
+						coreBinaryInputKindMasksHaveExactNativeSemantics(
+							instruction.attributes.operator,
+							masks,
+						)
+					) {
+						attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE] = masks;
+					}
+				}
 				const before =
-					instruction.attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE];
-				const after = attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE];
-				if (JSON.stringify(before) === JSON.stringify(after)) return instruction;
+					JSON.stringify(
+						instruction.attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE],
+					) +
+					JSON.stringify(
+						instruction.attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE],
+					);
+				const after =
+					JSON.stringify(attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE]) +
+					JSON.stringify(attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE]);
+				if (before === after) return instruction;
 				functionChanged = true;
 				return { ...instruction, attributes };
 			}),

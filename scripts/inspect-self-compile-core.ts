@@ -15,6 +15,7 @@ import {
 } from "../src/compiler/core/core-ir-value-classes.ts";
 import {
 	analyzeCoreValueKinds,
+	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
 } from "../src/compiler/core/core-ir-value-kinds.ts";
 import type { CoreInstruction, CoreProgram } from "../src/compiler/core/core-ir.ts";
@@ -332,6 +333,37 @@ try {
 		selectedFunctionIndex === undefined
 			? undefined
 			: summaries.summary(selectedFunctionIndex);
+	const functionsIndex = process.argv.indexOf("--functions");
+	const requestedFunctions =
+		functionsIndex < 0
+			? []
+			: (process.argv[functionsIndex + 1] ?? "").split(",").map(Number);
+	if (
+		functionsIndex >= 0 &&
+		(requestedFunctions.length === 0 ||
+			requestedFunctions.some(
+				(index) =>
+					!Number.isSafeInteger(index) || optimized.functions[index] === undefined,
+			))
+	) {
+		throw new Error("--functions requires comma-separated function indices");
+	}
+	const functionDescriptors = requestedFunctions.map((index) => {
+		const fn = optimized.functions[index]!;
+		return {
+			functionIndex: index,
+			name: String.fromCharCode(
+				...optimized.stringConstants[fn.metadata.nameStringIndex]!,
+			),
+			sourcePath: path.relative(sourceRoot, fn.metadata.sourcePath),
+			parameters: fn.parameters.length,
+			blocks: fn.blocks.length,
+			instructions: fn.blocks.reduce(
+				(count, block) => count + block.instructions.length,
+				0,
+			),
+		};
+	});
 	console.log(
 		JSON.stringify(
 			{
@@ -377,6 +409,10 @@ try {
 					exactScalarCallSites: instructionSites.filter(
 						({ attributes }) =>
 							CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE in attributes,
+					).length,
+					exactBinaryOperations: instructionSites.filter(
+						({ attributes }) =>
+							CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE in attributes,
 					).length,
 					exactScalarCallArguments: instructionSites.reduce((count, { attributes }) => {
 						const representations =
@@ -468,6 +504,7 @@ try {
 						}),
 				...(selectedFunction === undefined ? {} : { selectedFunction }),
 				...(selectedFunctionSummary === undefined ? {} : { selectedFunctionSummary }),
+				...(functionDescriptors.length === 0 ? {} : { functionDescriptors }),
 			},
 			undefined,
 			2,

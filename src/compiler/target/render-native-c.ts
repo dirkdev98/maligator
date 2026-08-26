@@ -1,5 +1,11 @@
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "../shared/compiler-value-kinds.ts";
+import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import {
 	emitBinaryOperator,
 	emitIntrinsic,
 	emitTypeofResult,
@@ -3130,6 +3136,10 @@ function emitInstruction(
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			const fusion = numericFusionAction;
+			const exactInputKinds =
+				nativePlan?.kind === "exact-binary-input-kinds"
+					? nativePlan.inputKindMasks
+					: undefined;
 			if (operator === "in") {
 				const numberGuard = leftIsNum ? "" : `mal_ops_is_number(${boxed(left)}) && `;
 				return [
@@ -3266,6 +3276,65 @@ function emitInstruction(
 			// feed a C bool to a MalValue helper).
 			const numericOf = (r: number): string =>
 				reps[r] === "number" ? `r${r}` : `mal_ops_number_as_f64(${boxed(r)})`;
+			const exactUndefined = (r: number, mask: CompilerValueKindMask): string =>
+				mask === COMPILER_VALUE_KIND_UNDEFINED
+					? "true"
+					: mask === COMPILER_VALUE_KIND_NUMBER
+						? "false"
+						: `mal_value_is_undefined(${boxed(r)})`;
+			const exactNumberOrUndefined = (r: number, mask: CompilerValueKindMask): string =>
+				mask === COMPILER_VALUE_KIND_UNDEFINED
+					? '__builtin_nan("")'
+					: mask === COMPILER_VALUE_KIND_NUMBER
+						? numericOf(r)
+						: `(${exactUndefined(r, mask)} ? __builtin_nan("") : ${numericOf(r)})`;
+			const exactNumberOrUndefinedEquality = (
+				leftMask: CompilerValueKindMask,
+				rightMask: CompilerValueKindMask,
+			): string => {
+				if (leftMask === COMPILER_VALUE_KIND_UNDEFINED) {
+					return exactUndefined(right, rightMask);
+				}
+				if (rightMask === COMPILER_VALUE_KIND_UNDEFINED) {
+					return exactUndefined(left, leftMask);
+				}
+				if (
+					leftMask === COMPILER_VALUE_KIND_NUMBER &&
+					rightMask === COMPILER_VALUE_KIND_NUMBER
+				) {
+					return `${numericOf(left)} == ${numericOf(right)}`;
+				}
+				const leftUndefined = exactUndefined(left, leftMask);
+				const rightUndefined = exactUndefined(right, rightMask);
+				if (leftMask === COMPILER_VALUE_KIND_NUMBER) {
+					return `!(${rightUndefined}) && ${numericOf(left)} == ${numericOf(right)}`;
+				}
+				if (rightMask === COMPILER_VALUE_KIND_NUMBER) {
+					return `!(${leftUndefined}) && ${numericOf(left)} == ${numericOf(right)}`;
+				}
+				return `((${leftUndefined}) && (${rightUndefined})) || (!(${leftUndefined}) && !(${rightUndefined}) && ${numericOf(left)} == ${numericOf(right)})`;
+			};
+
+			// Core has proved that each operand is either Number or undefined. This
+			// closes the complete semantic domain: equality needs no coercion, while
+			// relational comparison converts undefined to NaN and cannot call user
+			// code or throw. Consume the proof directly instead of retaining a generic
+			// fallback behind speculative number guards.
+			if (
+				exactInputKinds !== undefined &&
+				exactInputKinds.every(
+					(mask) => (mask & ~COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED) === 0,
+				) &&
+				compare !== undefined
+			) {
+				const equality = ["==", "!=", "===", "!=="].includes(operator);
+				const positive = equality
+					? exactNumberOrUndefinedEquality(exactInputKinds[0], exactInputKinds[1])
+					: `${exactNumberOrUndefined(left, exactInputKinds[0])} ${compare} ${exactNumberOrUndefined(right, exactInputKinds[1])}`;
+				const result =
+					operator === "!=" || operator === "!==" ? `!(${positive})` : positive;
+				return [storeBool(result)];
+			}
 			const guardIsNumber = (r: number): string => `mal_ops_is_number(${boxed(r)})`;
 			// The speculative guard for a native numeric path: the AND of an
 			// is-number test over each operand not already proven number-rep (0, 1,
