@@ -73,8 +73,11 @@ import type {
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import {
+	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
+	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_OWN_DATA_CELL_FACT,
+	coreContainedAggregateProvenance,
 	coreOwnCellsEqual,
 	coreOwnCellResolver,
 	coreProvenance,
@@ -113,6 +116,7 @@ import {
 	deriveCoreCallEffectRefinement,
 } from "./core-ir-summaries.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
+import { selectCoreExactHeapAccesses } from "./core-ir-value-classes.ts";
 import {
 	CoreIrVerificationError,
 	verifyCoreFunction,
@@ -871,7 +875,7 @@ const CONTAINED_FRESH_ARRAY_OPERATIONS = new Set([
  */
 const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 	name: "rewrite-contained-fresh-array-builtins",
-	run(fn, analyses, program) {
+	run(fn, analyses, _program) {
 		if (analyses.context?.facts.world.primordialPolicy !== "locked") return fn;
 
 		const canonical = analyses.canonicalValues(fn);
@@ -971,8 +975,8 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		// A numeric computed read cannot coerce user code, and a locked primordial
 		// chain contains no indexed accessor that could retain the receiver. It does
 		// not change the Array's dense representation even when the number is outside
-		// the current length. Keep the ordinary read for now, but let the lifetime
-		// proof use this independently established non-escape fact.
+		// the current length. Let the lifetime proof use this independently
+		// established non-escape fact; retained reads become exact below.
 		const candidateAllocations = new Set(candidates.map(({ allocation }) => allocation));
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -991,11 +995,8 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 			}
 		}
 
-		const conditionalProvenance = coreProvenance(
-			fn,
-			analyses.controlFlow(fn),
-			program.stringConstants,
-			{ assumedNonEscapingOperands },
+		const conditionalProvenance = ordinaryProvenance.withAssumedNonEscapingOperands(
+			assumedNonEscapingOperands,
 		);
 		const retained = candidates.filter(
 			(candidate) => conditionalProvenance.escape(candidate.allocation) === "contained",
@@ -1009,6 +1010,24 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		const removedValues = new Set(
 			retained.flatMap((candidate) => candidate.property.outputs),
 		);
+		const retainedAllocations = new Set(retained.map(({ allocation }) => allocation));
+		const exactElementLoads = new Set<CoreInstructionId>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.opcode !== "loadProperty" || instruction.inputs.length < 2) {
+					continue;
+				}
+				const layout = ordinaryProvenance.allocationOf(instruction.inputs[0]!);
+				const keyRepresentation = representations.get(root(instruction.inputs[1]!));
+				if (
+					layout?.kind === "indexed" &&
+					retainedAllocations.has(layout.instruction) &&
+					(keyRepresentation === "f64" || keyRepresentation === "i32")
+				) {
+					exactElementLoads.add(instruction.id);
+				}
+			}
+		}
 		return {
 			...fn,
 			blocks: fn.blocks.map((block) => ({
@@ -1017,22 +1036,100 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 					.filter((instruction) => !removedInstructions.has(instruction.id))
 					.map((instruction): CoreInstruction => {
 						const candidate = byCall.get(instruction.id);
-						return candidate === undefined
-							? instruction
-							: {
+						if (candidate !== undefined) {
+							return {
+								...instruction,
+								opcode: "callBuiltin",
+								inputs: [instruction.inputs[1]!, ...candidate.forwardedArguments],
+								attributes: {
+									operation: candidate.operation,
+									knownBuiltinCall: instruction.attributes.knownBuiltinCall!,
+								},
+							};
+						}
+						return exactElementLoads.has(instruction.id)
+							? {
 									...instruction,
-									opcode: "callBuiltin",
-									inputs: [instruction.inputs[1]!, ...candidate.forwardedArguments],
 									attributes: {
-										operation: candidate.operation,
-										knownBuiltinCall: instruction.attributes.knownBuiltinCall!,
+										...instruction.attributes,
+										[CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE]: true,
 									},
-								};
+								}
+							: instruction;
 					}),
 			})),
 			values: fn.values.filter(({ id }) => !removedValues.has(id)),
 			mutationEpoch: fn.mutationEpoch + 1,
 		};
+	},
+};
+
+/**
+ * Materialize transitive private-aggregate ownership as exact object slots.
+ *
+ * This runs after region selection has finished. It therefore never competes
+ * with a larger projection certificate: residual property accesses either get
+ * this exact slot or keep their original generic semantics. The proof records
+ * only diagnostic coordinates; both the verifier and lowering reconstruct the
+ * physical slot from the final Core graph.
+ */
+const materializeContainedAggregateOwnSlots: CoreFunctionPass = {
+	name: "materialize-contained-aggregate-own-slots",
+	run(fn, analyses, program) {
+		const claimed = new Set(
+			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const analysis = coreContainedAggregateProvenance(
+			fn,
+			analyses.controlFlow(fn),
+			program.stringConstants,
+		);
+		const facts = [...fn.facts];
+		let nextFact = nextFactId(fn);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (instruction.effectRefinement !== undefined || claimed.has(instruction.id)) {
+						return instruction;
+					}
+					const slot = analysis.ownSlot(instruction);
+					if (slot === undefined) return instruction;
+					const effects = coreInstructionEffects(instruction);
+					const refined = {
+						reads: effects.reads.filter((domain) => domain !== "host"),
+						writes: effects.writes.filter((domain) => domain !== "host"),
+						mayThrow: false,
+						maySuspend: false,
+						mayGc: false,
+						callsUserCode: false,
+					};
+					const proof = coreFactId(nextFact++);
+					facts.push({
+						id: proof,
+						kind: CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
+						value: {
+							slot: slot.slot,
+							origins: slot.origins.map((origin) => ({ $coreInstruction: origin })),
+						},
+						claims: [{ kind: "effect", instruction: instruction.id, effects: refined }],
+						validity: {
+							kind: "summary",
+							digest: `contained-aggregate-slot:${slot.slot}:${slot.origins.join(",")}`,
+						},
+						obligations: [],
+						origin: "core-contained-aggregate-provenance",
+					});
+					changed = true;
+					return {
+						...instruction,
+						effectRefinement: { effects: refined, proof },
+					};
+				}),
+			}),
+		);
+		return changed ? { ...fn, blocks, facts, mutationEpoch: fn.mutationEpoch + 1 } : fn;
 	},
 };
 
@@ -7348,6 +7445,7 @@ const simplifyAlgebraicValues: CoreFunctionPass = {
  * rewired.
  */
 const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
+	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_OWN_DATA_CELL_FACT,
 	CORE_CALL_EFFECT_SUMMARY_FACT,
 ]);
@@ -11210,6 +11308,7 @@ const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	withRegionAdmission(selectStringSplitProjectionRegions),
 	withRegionAdmission(selectStringSliceNumberRegions),
 	withRegionAdmission(selectNumericFusionRegions),
+	materializeContainedAggregateOwnSlots,
 ];
 
 function claimedInstructionSnapshots(
@@ -11825,6 +11924,48 @@ export function executeCoreOptimizations(
 				),
 			);
 		}
+	}
+	// Value classes are whole-program ownership facts: an exact allocation may be
+	// stored in a compiler-certified cell and consumed by a different closure. Run
+	// this after local finalization so it sees the graph the target will consume,
+	// and publish only exact brands whose complete use graph remains closed.
+	const valueClassBefore = tracedMetrics;
+	const valueClassInput = { ...workingProgram, functions };
+	const valueClassSelection = selectCoreExactHeapAccesses(
+		valueClassInput,
+		compilationContext,
+	);
+	for (const [index, fn] of valueClassSelection.program.functions.entries()) {
+		traces.push({
+			name: "select-exact-heap-accesses",
+			round: maxRounds,
+			changed: fn !== functions[index],
+		});
+	}
+	if (valueClassSelection.changed) {
+		changed = true;
+		verifyMutatedProgram(valueClassSelection.program, {
+			stage: "finalization",
+			pass: "select-exact-heap-accesses",
+		});
+	}
+	workingProgram = valueClassSelection.program;
+	functions = [...valueClassSelection.program.functions];
+	if (valueClassBefore !== undefined) {
+		const valueClassAfter = coreOptimizationMetrics(valueClassSelection.program);
+		tracedMetrics = valueClassAfter;
+		optimizationTrace.push(
+			optimizationPassDelta(
+				{
+					pass: "select-exact-heap-accesses",
+					stage: "finalization",
+					status: "executed",
+					changed: valueClassSelection.changed,
+				},
+				valueClassBefore,
+				valueClassAfter,
+			),
+		);
 	}
 	// Publish summaries before the final shape hint. The hint is summary-transparent,
 	// but attaching it changes immutable function identities; solving first lets the

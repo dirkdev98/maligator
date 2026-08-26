@@ -723,7 +723,9 @@ function emitCompiledVariant(
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
-	if (directEntry === undefined) lines.push(`    (void) entry_state;`);
+	if (directEntry === undefined) {
+		lines.push(`    (void) entry_state;`);
+	}
 	if (directEntry !== undefined && body.some((line) => line.includes("new_target"))) {
 		lines.push(`    const MalValue new_target = MAL_VALUE_UNDEFINED;`);
 	}
@@ -2119,6 +2121,57 @@ interface NativeInstructionContext {
 	readonly numericFusionAction?: NativeNumericFusionAction;
 }
 
+function nativeTypedArrayKind(
+	kind: Extract<
+		NativeInstructionPlan,
+		{ kind: "exact-typed-array-element" }
+	>["elementKind"],
+): string {
+	switch (kind) {
+		case "Int8Array":
+			return "MAL_TA_INT8";
+		case "Uint8Array":
+			return "MAL_TA_UINT8";
+		case "Uint8ClampedArray":
+			return "MAL_TA_UINT8_CLAMPED";
+		case "Int16Array":
+			return "MAL_TA_INT16";
+		case "Uint16Array":
+			return "MAL_TA_UINT16";
+		case "Int32Array":
+			return "MAL_TA_INT32";
+		case "Uint32Array":
+			return "MAL_TA_UINT32";
+		case "Float32Array":
+			return "MAL_TA_FLOAT32";
+		case "Float64Array":
+			return "MAL_TA_FLOAT64";
+	}
+}
+
+function nativeTypedArrayElementSize(
+	kind: Extract<
+		NativeInstructionPlan,
+		{ kind: "exact-typed-array-element" }
+	>["elementKind"],
+): number {
+	switch (kind) {
+		case "Int8Array":
+		case "Uint8Array":
+		case "Uint8ClampedArray":
+			return 1;
+		case "Int16Array":
+		case "Uint16Array":
+			return 2;
+		case "Int32Array":
+		case "Uint32Array":
+		case "Float32Array":
+			return 4;
+		case "Float64Array":
+			return 8;
+	}
+}
+
 function emitInstruction(
 	instruction: BytecodeInstruction,
 	ip: number,
@@ -2276,8 +2329,43 @@ function emitInstruction(
 		instruction.opcode === "LOAD_PROPERTY_STATIC"
 	) {
 		return [
-			`r${instruction.dst} = (f64) mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)}));`,
+			reps[instruction.dst] === "number"
+				? `r${instruction.dst} = (f64) mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)}));`
+				: `r${instruction.dst} = mal_value_from_u32(mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)})));`,
 		];
+	}
+	if (
+		nativePlan?.kind === "exact-contained-array-element" &&
+		instruction.opcode === "LOAD_PROPERTY"
+	) {
+		return [
+			"MAL_PERF_COUNT(array_contained_element_reads);",
+			reps[instruction.dst] === "number"
+				? `r${instruction.dst} = mal_ops_number_as_f64(mal_array_object_contained_dense_get(mal_value_to_array_object(${boxed(instruction.object)}), ${num(instruction.key)}));`
+				: `r${instruction.dst} = mal_array_object_contained_dense_get(mal_value_to_array_object(${boxed(instruction.object)}), ${num(instruction.key)});`,
+		];
+	}
+	if (nativePlan?.kind === "exact-typed-array-element") {
+		const kind = nativeTypedArrayKind(nativePlan.elementKind);
+		const elementSize = nativeTypedArrayElementSize(nativePlan.elementKind);
+		if (instruction.opcode === "LOAD_PROPERTY") {
+			const exactLoad = `mal_vm_exact_numeric_typed_array_load(mal_value_to_typed_array_object(${boxed(instruction.object)}), mal_vm_typed_array_numeric_index(${reps[instruction.key] === "number" ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}), ${kind}, ${elementSize})`;
+			if (reps[instruction.key] === "number") {
+				return [
+					"MAL_PERF_COUNT(exact_typed_array_loads);",
+					`r${instruction.dst} = ${exactLoad};`,
+				];
+			}
+			return [
+				`if (mal_ops_is_number(${boxed(instruction.key)})) {`,
+				"  MAL_PERF_COUNT(exact_typed_array_loads);",
+				`  r${instruction.dst} = ${exactLoad};`,
+				"} else {",
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+				`  ${throwCheck}`,
+				"}",
+			];
+		}
 	}
 
 	switch (instruction.opcode) {
@@ -3428,6 +3516,41 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (instruction.operation === "Map.prototype.has") {
+				return [
+					`r${instruction.dst} = mal_builtin_map_has_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
+			if (instruction.operation === "Map.prototype.delete") {
+				return [
+					`r${instruction.dst} = mal_builtin_map_delete_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
+			if (instruction.operation === "Set.prototype.add") {
+				return [
+					`r${instruction.dst} = mal_builtin_set_add_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
+			if (instruction.operation === "Set.prototype.has") {
+				return [
+					`r${instruction.dst} = mal_builtin_set_has_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
+			if (instruction.operation === "Set.prototype.delete") {
+				return [
+					`r${instruction.dst} = mal_builtin_set_delete_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
 			if (instruction.operation === "Number.isNaN") {
 				return [
 					`r${instruction.dst} = mal_builtin_number_is_nan_known(${argsExpr}, ${instruction.arguments.length});`,
@@ -3821,9 +3944,14 @@ function emitInstruction(
 								| "Array.prototype.flatMap"
 						];
 			if (arrayIterationOperation !== undefined) {
+				const callbackTarget = callPlan?.directCallbackFunctionIndex;
+				const callbackSymbol =
+					callbackTarget !== undefined && directCompiledTargets.has(callbackTarget)
+						? `mal_compiled_${callbackTarget}${suffix}`
+						: "nullptr";
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex ?? -1}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex ?? -1}, ${callbackSymbol}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
@@ -3847,9 +3975,15 @@ function emitInstruction(
 					"Set.prototype.has": "MAL_BUILTIN_COLLECTION_SET_HAS",
 					"Set.prototype.delete": "MAL_BUILTIN_COLLECTION_SET_DELETE",
 				}[guardedBuiltinOperation];
+				const receiverFact =
+					callPlan?.exactCollectionReceiver === "Map"
+						? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP"
+						: callPlan?.exactCollectionReceiver === "Set"
+							? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_SET"
+							: "MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN";
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${receiverFact}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 					poll,

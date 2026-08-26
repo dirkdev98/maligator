@@ -57,6 +57,21 @@ bool mal_array_object_is_dense(const MalArrayObject *array);
  */
 bool mal_array_object_dense_get(const MalArrayObject *array, u32 index, MalValue *out);
 
+/** Exact numeric [[Get]] for a compiler-proven private dense Array. Its complete
+ * lifetime permits only dense push/pop, length, and numeric reads, while locked
+ * primordials prove an invalid or out-of-bounds Number key resolves to undefined. */
+static inline MalValue mal_array_object_contained_dense_get(
+    const MalArrayObject *array, f64 index
+) {
+    if (index >= 0 && index < (f64) array->length) {
+        u32 integer = (u32) index;
+        if ((f64) integer == index) {
+            return array->elements[integer];
+        }
+    }
+    return MAL_VALUE_UNDEFINED;
+}
+
 /** Read the two own data elements of a dense entry pair atomically. */
 bool mal_array_object_dense_pair(
     const MalArrayObject *array, MalValue *first_out, MalValue *second_out);

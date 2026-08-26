@@ -121,6 +121,7 @@ const C_HEADER_LINES = [
 	'#include "builtin_object.h"',
 	'#include "builtin_json.h"',
 	'#include "builtin_map.h"',
+	'#include "builtin_set.h"',
 	'#include "builtin_number.h"',
 	'#include "builtin_string.h"',
 	'#include "builtin_regexp.h"',
@@ -431,13 +432,17 @@ function nativeCompilationAvailability(
 		if (!compiledTargets.has(callerIndex)) continue;
 		for (const instruction of native.instructions) {
 			if (instruction?.kind !== "call") continue;
-			const target = instruction.directFunctionIndex;
-			if (
-				target !== undefined &&
-				compiledTargets.has(target) &&
-				!image.runtime.functions[target]!.isClassConstructor
-			) {
-				directCompiledTargets.add(target);
+			for (const target of [
+				instruction.directFunctionIndex,
+				instruction.directCallbackFunctionIndex,
+			]) {
+				if (
+					target !== undefined &&
+					compiledTargets.has(target) &&
+					!image.runtime.functions[target]!.isClassConstructor
+				) {
+					directCompiledTargets.add(target);
+				}
 			}
 		}
 	}

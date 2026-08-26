@@ -19,6 +19,7 @@
 #include "builtin_number.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
+#include "builtin_set.h"
 #include "builtin_string.h"
 #include "function_object.h"
 #include "gc.h"
@@ -2302,6 +2303,26 @@ void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instructio
             break;
         case MAL_DIRECT_BUILTIN_MAP_SET:
             result = mal_builtin_map_set_known(
+                vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_MAP_HAS:
+            result = mal_builtin_map_has_known(
+                vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_MAP_DELETE:
+            result = mal_builtin_map_delete_known(
+                vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_SET_ADD:
+            result = mal_builtin_set_add_known(
+                vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_SET_HAS:
+            result = mal_builtin_set_has_known(
+                vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_SET_DELETE:
+            result = mal_builtin_set_delete_known(
                 vm, receiver, &vm->value_stack[base], argument_count);
             break;
         case MAL_DIRECT_BUILTIN_OBJECT_KEYS:

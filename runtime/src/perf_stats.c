@@ -287,7 +287,8 @@ static void mal_perf_stats_print(void) {
         stderr,
         "[perf-known-own-slot-stats] probes=%llu hits=%llu fallbacks=%llu "
         "store_probes=%llu store_hits=%llu store_fallbacks=%llu "
-        "exact_loads=%llu exact_stores=%llu\n",
+        "exact_loads=%llu exact_stores=%llu "
+        "exact_typed_array_loads=%llu\n",
         (unsigned long long) mal_perf_stats.known_own_slot_load_probes,
         (unsigned long long) mal_perf_stats.known_own_slot_load_hits,
         (unsigned long long) mal_perf_stats.known_own_slot_load_fallbacks,
@@ -295,7 +296,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.known_own_slot_store_hits,
         (unsigned long long) mal_perf_stats.known_own_slot_store_fallbacks,
         (unsigned long long) mal_perf_stats.exact_own_slot_loads,
-        (unsigned long long) mal_perf_stats.exact_own_slot_stores
+        (unsigned long long) mal_perf_stats.exact_own_slot_stores,
+        (unsigned long long) mal_perf_stats.exact_typed_array_loads
     );
     fprintf(
         stderr,
@@ -311,13 +313,15 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-map-stats] get_set_cache_checks=%llu get_set_cache_hits=%llu "
-        "get_set_cache_misses=%llu direct_get_hits=%llu direct_set_hits=%llu "
+        "get_set_cache_misses=%llu exact_receiver_hits=%llu "
+        "direct_get_hits=%llu direct_set_hits=%llu "
         "direct_map_has_hits=%llu direct_map_delete_hits=%llu "
         "direct_add_hits=%llu direct_set_has_hits=%llu "
         "direct_set_delete_hits=%llu direct_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.map_get_set_cache_checks,
         (unsigned long long) mal_perf_stats.map_get_set_cache_hits,
         (unsigned long long) mal_perf_stats.map_get_set_cache_misses,
+        (unsigned long long) mal_perf_stats.collection_exact_receiver_hits,
         (unsigned long long) mal_perf_stats.collection_direct_map_get_hits,
         (unsigned long long) mal_perf_stats.collection_direct_map_set_hits,
         (unsigned long long) mal_perf_stats.collection_direct_map_has_hits,
@@ -448,9 +452,10 @@ static void mal_perf_stats_print(void) {
 		"indexed_fill_guard_fallbacks=%llu "
 		"push_direct_hits=%llu push_direct_fallbacks=%llu "
 		"contained_pushes=%llu contained_push_overflows=%llu "
-		"contained_pops=%llu contained_empty_pops=%llu "
+		"contained_pops=%llu contained_empty_pops=%llu contained_element_reads=%llu "
         "iteration_direct_hits=%llu iteration_direct_fallbacks=%llu "
-        "iteration_exact_callback_calls=%llu\n",
+        "iteration_exact_callback_calls=%llu "
+        "iteration_exact_compiled_callback_calls=%llu\n",
         (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
         (unsigned long long) mal_perf_stats.array_fresh_dense_fallbacks,
@@ -468,9 +473,11 @@ static void mal_perf_stats_print(void) {
 		(unsigned long long) mal_perf_stats.array_contained_push_overflows,
 		(unsigned long long) mal_perf_stats.array_contained_pops,
 		(unsigned long long) mal_perf_stats.array_contained_empty_pops,
+		(unsigned long long) mal_perf_stats.array_contained_element_reads,
         (unsigned long long) mal_perf_stats.array_iteration_direct_hits,
         (unsigned long long) mal_perf_stats.array_iteration_direct_fallbacks,
-        (unsigned long long) mal_perf_stats.array_iteration_exact_callback_calls
+        (unsigned long long) mal_perf_stats.array_iteration_exact_callback_calls,
+        (unsigned long long) mal_perf_stats.array_iteration_exact_compiled_callback_calls
     );
     fprintf(
         stderr,

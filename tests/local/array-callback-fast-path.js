@@ -188,6 +188,21 @@ check(
 	})(),
 );
 
+check(
+	"non-throwing exact callback preserves result",
+	[0, 1, 2].every(() => true),
+);
+
+function captureCallbackStack() {
+	return new Error("callback").stack;
+}
+const callbackStack = [0].map(captureCallbackStack)[0];
+check(
+	"stack-observing callback retains its native frame",
+	typeof callbackStack === "string" &&
+		callbackStack.indexOf("captureCallbackStack (") !== -1,
+);
+
 for (const [name, passed] of results) {
 	if (!passed) console.log("FAIL: " + name);
 }

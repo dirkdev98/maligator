@@ -1,6 +1,20 @@
 import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { KnownBuiltinCall } from "./compiler-facts.ts";
 
+/** Numeric TypedArray brands whose element access produces a Number. */
+export type CompilerNumericTypedArrayKind =
+	| "Int8Array"
+	| "Uint8Array"
+	| "Uint8ClampedArray"
+	| "Int16Array"
+	| "Uint16Array"
+	| "Int32Array"
+	| "Uint32Array"
+	| "Float32Array"
+	| "Float64Array";
+
+export type CompilerExactCollectionBrand = "Map" | "Set";
+
 export type CompilerImmediateValue =
 	| { kind: "undefined" }
 	| { kind: "null" }
@@ -285,6 +299,12 @@ export type CompilerInstruction =
 			 */
 			knownBuiltinCall?: KnownBuiltinCall;
 			/**
+			 * COMPILE-ONLY: the receiver has this immutable collection brand on every
+			 * reaching path. Native lowering may omit receiver/weak-kind guards while
+			 * retaining the loaded-callee identity fallback.
+			 */
+			exactCollectionReceiver?: CompilerExactCollectionBrand;
+			/**
 			 * COMPILE-ONLY: the exact ordinary script-function index held by the callee.
 			 * Closed callee-target analysis has ruled out every mismatch, so native
 			 * lowering enters this target without an identity guard or dispatch fallback.
@@ -435,6 +455,14 @@ export type CompilerInstruction =
 
 			// [destination, object, key]
 			registers: [number, number, number];
+			/** COMPILE-ONLY: the receiver is an exact private dense Array and the key
+			 * is already a primitive Number. Native code may return its element or
+			 * undefined directly, with no brand, prototype, IC, or fallback edge. */
+			exactContainedArrayElement?: true;
+			/** COMPILE-ONLY: closed ownership proves this exact fixed-buffer numeric
+			 * TypedArray brand. Native code may skip receiver branding, the property
+			 * cache, prototype lookup, and the generic element-kind dispatch. */
+			exactTypedArrayKind?: CompilerNumericTypedArrayKind;
 	  }
 	| {
 			type: "loadPropertyStatic";

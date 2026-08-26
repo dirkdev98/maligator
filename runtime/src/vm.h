@@ -1211,6 +1211,9 @@ typedef struct MalExactScriptCall {
     struct MalExactScriptCall *previous;
     MalValue callee;
     i32 function_index;
+    MalCompiledFunction compiled_callback;
+    const MalFunction *function;
+    MalEnv *env;
 } MalExactScriptCall;
 
 typedef struct MalVm {
@@ -1779,6 +1782,7 @@ static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
  * depth and returns true. Each successful enter must be paired with a leave.
  */
 bool mal_vm_enter_compiled(MalVm *vm, i32 function_index);
+/** Enter a statically stack-unobservable compiled body without a trace row. */
 
 /** Leave a compiled-function invocation, balancing a prior enter. */
 void mal_vm_leave_compiled(MalVm *vm);
@@ -2244,6 +2248,53 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id);
  * compiled-backend call paths apply it explicitly.
  */
 MalValue mal_vm_callee_this(MalVm *vm, const MalFunction *function, MalValue this_value);
+
+/**
+ * Exact script call through a generated typed callback bridge. Keep this in the
+ * header: the hot Array loop then folds the proved target setup into its callback
+ * seam instead of adding a runtime helper frame between the loop and adapter.
+ */
+static inline __attribute__((always_inline)) MalCompletion
+mal_vm_call_exact_script_compiled_callback(
+    MalVm *vm,
+    const MalExactScriptCall *exact,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, exact->callee));
+#endif
+
+    MalCompletion completion;
+    bool entered = mal_vm_enter_compiled(vm, exact->function_index);
+    if (!entered) {
+        completion = vm->completion;
+    } else {
+        MalValue value = exact->compiled_callback(
+            vm,
+            mal_vm_callee_this(vm, exact->function, this_value),
+            args,
+            arg_count,
+            MAL_VALUE_UNDEFINED,
+            exact->env,
+            exact->callee,
+            nullptr);
+        mal_vm_leave_compiled(vm);
+        completion = vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    }
+
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    return completion;
+}
 
 /**
  * mal_vm_construct_value with an explicit new.target (whose `.prototype`

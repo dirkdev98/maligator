@@ -1,4 +1,8 @@
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
+import type {
+	CompilerExactCollectionBrand,
+	CompilerNumericTypedArrayKind,
+} from "../shared/compiler-instruction.ts";
 import type { Reader } from "./program-image-codec.ts";
 import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
 import {
@@ -28,7 +32,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 32;
+export const COMPILER_ARTIFACT_VERSION = 35;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -67,6 +71,32 @@ const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
 	"Array.prototype.flatMap",
 ]);
 
+const TAGGED_NUMERIC_TYPED_ARRAY_KINDS = [
+	"Int8Array",
+	"Uint8Array",
+	"Uint8ClampedArray",
+	"Int16Array",
+	"Uint16Array",
+	"Int32Array",
+	"Uint32Array",
+	"Float32Array",
+	"Float64Array",
+] as const satisfies ReadonlyArray<CompilerNumericTypedArrayKind>;
+
+function taggedNumericTypedArrayKind(kind: CompilerNumericTypedArrayKind): number {
+	const tag = (TAGGED_NUMERIC_TYPED_ARRAY_KINDS as ReadonlyArray<string>).indexOf(kind);
+	if (tag < 0) throw new RangeError("program-image-codec: invalid TypedArray kind");
+	return tag;
+}
+
+function numericTypedArrayKindFromTag(tag: number): CompilerNumericTypedArrayKind {
+	const kind = TAGGED_NUMERIC_TYPED_ARRAY_KINDS[tag];
+	if (kind === undefined) {
+		throw new RangeError("program-image-codec: invalid TypedArray kind tag");
+	}
+	return kind;
+}
+
 function taggedGuardedBuiltinOperation(operation: string | undefined): number {
 	if (
 		operation === undefined ||
@@ -81,6 +111,15 @@ function taggedGuardedBuiltinOperation(operation: string | undefined): number {
 	if (index < 0)
 		throw new RangeError(`program-image-codec: unsupported builtin ${operation}`);
 	return index + 1;
+}
+
+function guardedBuiltinCallBrandTag(
+	tag: number,
+): CompilerExactCollectionBrand | undefined {
+	const operation = TAGGED_GUARDED_BUILTIN_OPERATIONS[tag - 1];
+	if (operation?.startsWith("Map.prototype.")) return "Map";
+	if (operation?.startsWith("Set.prototype.")) return "Set";
+	return undefined;
 }
 
 function stringSplitCursorGuardMasks(
@@ -483,7 +522,19 @@ function writeCompilerArtifact(
 				const guardedBuiltin = plan.guardedBuiltinCall;
 				const guardedOperation = guardedBuiltin?.operation;
 				const guardedDependency = guardedBuiltin?.guard.dependencies[0];
+				const exactCollectionOperation =
+					plan.exactCollectionReceiver === "Map"
+						? guardedOperation === "Map.prototype.get" ||
+							guardedOperation === "Map.prototype.set" ||
+							guardedOperation === "Map.prototype.has" ||
+							guardedOperation === "Map.prototype.delete"
+						: plan.exactCollectionReceiver === "Set"
+							? guardedOperation === "Set.prototype.add" ||
+								guardedOperation === "Set.prototype.has" ||
+								guardedOperation === "Set.prototype.delete"
+							: true;
 				if (
+					!exactCollectionOperation ||
 					(plan.directFunctionIndex !== undefined &&
 						(!Number.isInteger(plan.directFunctionIndex) ||
 							plan.directFunctionIndex < 0 ||
@@ -537,7 +588,8 @@ function writeCompilerArtifact(
 						(guardedOperation === "Array.prototype.push" ? 2 : 0) |
 						(guardedOperation === "String.prototype.charCodeAt" ? 4 : 0) |
 						(plan.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
-						(guardedDependency?.kind === "world" ? 64 : 0),
+						(guardedDependency?.kind === "world" ? 64 : 0) |
+						(plan.exactCollectionReceiver === undefined ? 0 : 128),
 				);
 				w.u8(taggedGuardedBuiltinOperation(guardedOperation));
 			} else if (plan.kind === "construct" && instruction.opcode === "CONSTRUCT") {
@@ -572,6 +624,17 @@ function writeCompilerArtifact(
 					throw new RangeError("program-image-codec: invalid exact Array length hint");
 				}
 				w.u8(14);
+			} else if (
+				plan.kind === "exact-contained-array-element" &&
+				instruction.opcode === "LOAD_PROPERTY"
+			) {
+				w.u8(15);
+			} else if (
+				plan.kind === "exact-typed-array-element" &&
+				instruction.opcode === "LOAD_PROPERTY"
+			) {
+				w.u8(16);
+				w.u8(taggedNumericTypedArrayKind(plan.elementKind));
 			} else if (
 				plan.kind === "primitive-string-length" &&
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
@@ -2040,13 +2103,15 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					directCallbackFunctionIndex >= functions.length ||
 					directEntryId < -1 ||
 					(directEntryId >= 0 && (directFunctionIndex < 0 || directEntryId >= 4)) ||
-					flags > 127 ||
 					(flags & 24) !== 0 ||
 					((flags & 32) !== 0 && (flags & 4) === 0) ||
 					(directCallTargetFunctionIndex >= 0 && (flags & 1) === 0) ||
 					collectionTag > TAGGED_GUARDED_BUILTIN_OPERATIONS.length ||
 					guardedBuiltinCount > 1 ||
-					((flags & 64) !== 0 && guardedBuiltinCount !== 1)
+					((flags & 64) !== 0 && guardedBuiltinCount !== 1) ||
+					((flags & 128) !== 0 &&
+						(guardedBuiltinCount !== 1 ||
+							guardedBuiltinCallBrandTag(collectionTag) === undefined))
 				) {
 					throw new RangeError("program-image-codec: invalid CALL compiler metadata");
 				}
@@ -2085,6 +2150,9 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					...(directEntryId < 0 ? {} : { directEntryId }),
 					...((flags & 1) === 0 ? {} : { directFunctionCall: true }),
 					...((flags & 32) === 0 ? {} : { directStringCharCodeAtPosition: "inBounds" }),
+					...((flags & 128) === 0
+						? {}
+						: { exactCollectionReceiver: guardedBuiltinCallBrandTag(collectionTag)! }),
 					...(guardedBuiltinCall === undefined ? {} : { guardedBuiltinCall }),
 				};
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
@@ -2117,6 +2185,15 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					throw new RangeError("program-image-codec: invalid exact Array length hint");
 				}
 				nativeInstructions[instructionIndex] = { kind: "exact-array-length" };
+			} else if (tag === 15 && instruction.opcode === "LOAD_PROPERTY") {
+				nativeInstructions[instructionIndex] = {
+					kind: "exact-contained-array-element",
+				};
+			} else if (tag === 16 && instruction.opcode === "LOAD_PROPERTY") {
+				nativeInstructions[instructionIndex] = {
+					kind: "exact-typed-array-element",
+					elementKind: numericTypedArrayKindFromTag(r.u8()),
+				};
 			} else if (tag === 11 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
 				if (
 					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==
@@ -2756,15 +2833,17 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 	}
 	for (const native of nativeFunctions) {
 		for (const plan of native.instructions) {
-			if (plan?.kind !== "call" || plan.directEntryId === undefined) continue;
-			if (
-				plan.directFunctionIndex === undefined ||
-				nativeFunctions[plan.directFunctionIndex]?.directEntries[plan.directEntryId]
-					?.id !== plan.directEntryId
-			) {
-				throw new RangeError(
-					"program-image-codec: direct-entry call names an unknown ABI",
-				);
+			if (plan?.kind !== "call") continue;
+			if (plan.directEntryId !== undefined) {
+				if (
+					plan.directFunctionIndex === undefined ||
+					nativeFunctions[plan.directFunctionIndex]?.directEntries[plan.directEntryId]
+						?.id !== plan.directEntryId
+				) {
+					throw new RangeError(
+						"program-image-codec: direct-entry call names an unknown ABI",
+					);
+				}
 			}
 		}
 	}

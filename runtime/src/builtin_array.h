@@ -75,6 +75,7 @@ MalCompletion mal_builtin_array_iteration_direct(
     MalCallCache *fallback_cache,
     MalBuiltinArrayIterationOp operation,
     i32 callback_function_index,
+    MalCompiledFunction compiled_callback,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,

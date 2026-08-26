@@ -325,6 +325,11 @@ static MalCompletion mal_builtin_array_call_callback(
     MalExactScriptCall *exact = vm->exact_script_call;
     if (exact != nullptr && exact->callee == callback) {
         MAL_PERF_COUNT(array_iteration_exact_callback_calls);
+        if (exact->compiled_callback != nullptr) {
+            MAL_PERF_COUNT(array_iteration_exact_compiled_callback_calls);
+            return mal_vm_call_exact_script_compiled_callback(
+                vm, exact, this_arg, args, arg_count);
+        }
         return mal_vm_call_exact_script(
             vm, exact->function_index, callback, this_arg, args, arg_count);
     }
@@ -4407,6 +4412,7 @@ MalCompletion mal_builtin_array_iteration_direct(
     MalCallCache *fallback_cache,
     MalBuiltinArrayIterationOp operation,
     i32 callback_function_index,
+    MalCompiledFunction compiled_callback,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -4466,7 +4472,16 @@ MalCompletion mal_builtin_array_iteration_direct(
             .previous = vm->exact_script_call,
             .callee = arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED,
             .function_index = callback_function_index,
+            .compiled_callback = compiled_callback,
+            .function = nullptr,
+            .env = nullptr,
         };
+        if (callback_function_index >= 0 && compiled_callback != nullptr) {
+            callback_call.function =
+                &vm->runtime_image->functions[callback_function_index];
+            callback_call.env =
+                mal_value_to_function_object(callback_call.callee)->creation_env;
+        }
         if (callback_function_index >= 0) {
             vm->exact_script_call = &callback_call;
         }

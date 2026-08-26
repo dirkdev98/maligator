@@ -7,11 +7,19 @@ import {
 } from "../core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../core/core-ir-opcodes.ts";
 import {
+	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
+	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_OWN_DATA_CELL_FACT,
 } from "../core/core-ir-provenance.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
 import { CORE_INTERNAL_SUMMARY_ATTRIBUTES } from "../core/core-ir-summaries.ts";
+import {
+	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
+	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+	coreExactCollectionBrand,
+	coreNumericTypedArrayKind,
+} from "../core/core-ir-value-classes.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
 import type {
 	CoreBlockId,
@@ -67,7 +75,10 @@ export interface DirectEntryPlan {
 const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	...CORE_INTERNAL_TARGET_ATTRIBUTES,
 	...CORE_INTERNAL_SUMMARY_ATTRIBUTES,
+	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
+	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
+	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 ]);
 
 interface LoweredParallelCopy {
@@ -161,6 +172,17 @@ function exactContainedOwnSlot(
 	const fact = core.facts.find(
 		(candidate) => candidate.id === instruction.effectRefinement!.proof,
 	);
+	if (fact?.kind === CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT) {
+		const value =
+			typeof fact.value === "object" && fact.value !== null
+				? (fact.value as Record<string, unknown>)
+				: undefined;
+		return typeof value?.slot === "number" &&
+			Number.isSafeInteger(value.slot) &&
+			value.slot >= 0
+			? value.slot
+			: undefined;
+	}
 	if (fact?.kind !== CORE_OWN_DATA_CELL_FACT) return undefined;
 	const value =
 		typeof fact.value === "object" && fact.value !== null
@@ -198,6 +220,21 @@ function rebuildInstruction(
 	const exactArrayLength =
 		instruction.opcode === "loadPropertyStatic" &&
 		instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] === true;
+	const exactContainedArrayElement =
+		instruction.opcode === "loadProperty" &&
+		instruction.attributes[CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE] === true;
+	const exactTypedArrayKind =
+		instruction.opcode === "loadProperty"
+			? coreNumericTypedArrayKind(
+					instruction.attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE],
+				)
+			: undefined;
+	const exactCollectionReceiver =
+		instruction.opcode === "call"
+			? coreExactCollectionBrand(
+					instruction.attributes[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE],
+				)
+			: undefined;
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	// A region certificate's contract is stated over the instruction's operands, so
 	// embedding one of them as a constant would change the shape the certificate
@@ -219,6 +256,9 @@ function rebuildInstruction(
 		...targetAttributes(instruction.attributes),
 		...(exactOwnSlot === undefined ? {} : { exactOwnSlot }),
 		...(exactArrayLength ? { exactArrayLength: true } : {}),
+		...(exactContainedArrayElement ? { exactContainedArrayElement: true } : {}),
+		...(exactTypedArrayKind === undefined ? {} : { exactTypedArrayKind }),
+		...(exactCollectionReceiver === undefined ? {} : { exactCollectionReceiver }),
 		...(immediateValues.length === 0 ? {} : { immediateValues }),
 		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}

@@ -193,6 +193,42 @@ static MalValue mal_builtin_set_prototype_delete(MalVm *vm, MalValue this_value,
     return mal_value_new_boolean(mal_map_object_delete(set, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
+MalValue mal_builtin_set_add_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+	(void) vm;
+    MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    mal_map_object_set(mal_value_to_map_object(this_value), value, value);
+    return this_value;
+}
+
+MalValue mal_builtin_set_has_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+	(void) vm;
+    return mal_value_new_boolean(mal_map_object_has(
+        mal_value_to_map_object(this_value),
+        arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+}
+
+MalValue mal_builtin_set_delete_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    (void) vm;
+    return mal_value_new_boolean(mal_map_object_delete(
+        mal_value_to_map_object(this_value),
+        arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+}
+
 static MalValue mal_builtin_set_prototype_clear(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;

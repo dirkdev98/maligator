@@ -6,6 +6,7 @@
 #include "function_object.h" // mal_function_object_function_index, for the call guard
 #include "object_ops.h"
 #include "perf_stats.h"
+#include "scalar_bits.h"
 #include "table.h"
 #include "typed_array_object.h"
 #include "value_ops.h" // mal_ops_number_value, for the numeric-index fast paths
@@ -1542,6 +1543,69 @@ static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
         if ((f64) integer == index) return integer;
     }
     return UINT32_MAX;
+}
+
+/**
+ * Exact numeric TypedArray access licensed by immutable brand provenance. The
+ * compiler proves the receiver came from the named locked intrinsic constructor.
+ * Its backing buffer may still be external, detached, or resized, so acquire the
+ * current spec-visible extent exactly as the generic operation does. `kind` is a
+ * C constant at every generated call, allowing the optimizer to erase result-kind
+ * dispatch as well as the receiver brand/property-cache path.
+ */
+static inline MalValue mal_vm_exact_numeric_typed_array_load(
+    const MalTypedArrayObject *array, u32 index, MalTypedArrayKind kind,
+    u32 element_size
+) {
+    const MalArrayBufferObject *buffer = array->buffer;
+    if (buffer == nullptr || buffer->detached) {
+        return MAL_VALUE_UNDEFINED;
+    }
+    u32 length;
+    if (array->length_tracking) {
+        if (array->byte_offset > buffer->byte_length) {
+            return MAL_VALUE_UNDEFINED;
+        }
+        length = (buffer->byte_length - array->byte_offset) / element_size;
+    } else {
+        u64 end = (u64) array->byte_offset +
+            (u64) array->length * element_size;
+        if (end > buffer->byte_length) return MAL_VALUE_UNDEFINED;
+        length = array->length;
+    }
+    if (index >= length) return MAL_VALUE_UNDEFINED;
+    const byte *at = buffer->data + array->byte_offset +
+        (usize) index * element_size;
+    switch (kind) {
+        case MAL_TA_INT8:
+            return mal_value_from_i32(mal_scalar_i8_from_bits(
+                mal_scalar_load_native_u8(at)));
+        case MAL_TA_UINT8:
+        case MAL_TA_UINT8_CLAMPED:
+            return mal_value_from_i32(mal_scalar_load_native_u8(at));
+        case MAL_TA_INT16:
+            return mal_value_from_i32(mal_scalar_i16_from_bits(
+                mal_scalar_load_native_u16(at)));
+        case MAL_TA_UINT16:
+            return mal_value_from_i32(mal_scalar_load_native_u16(at));
+        case MAL_TA_INT32:
+            return mal_value_from_i32(mal_scalar_i32_from_bits(
+                mal_scalar_load_native_u32(at)));
+        case MAL_TA_UINT32: {
+            u32 value = mal_scalar_load_native_u32(at);
+            return value <= INT32_MAX
+                ? mal_value_from_i32((i32) value)
+                : mal_ops_number_value((f64) value);
+        }
+        case MAL_TA_FLOAT32:
+            return mal_value_from_f64_convert_nan((f64) mal_scalar_f32_from_bits(
+                mal_scalar_load_native_u32(at)));
+        case MAL_TA_FLOAT64:
+            return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(
+                mal_scalar_load_native_u64(at)));
+        default:
+            return MAL_VALUE_UNDEFINED;
+    }
 }
 
 static inline MalValue mal_vm_indexed_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {

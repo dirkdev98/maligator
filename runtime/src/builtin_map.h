@@ -13,6 +13,12 @@ typedef enum MalBuiltinCollectionDirectOp {
     MAL_BUILTIN_COLLECTION_SET_DELETE,
 } MalBuiltinCollectionDirectOp;
 
+typedef enum MalBuiltinCollectionReceiverFact {
+    MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN,
+    MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP,
+    MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_SET,
+} MalBuiltinCollectionReceiverFact;
+
 /**
  * Install the Map and WeakMap constructors and prototypes. Requires the
  * well-known symbols and iterator prototypes.
@@ -35,6 +41,20 @@ MalValue mal_builtin_map_set_known(
     i32 arg_count
 );
 
+MalValue mal_builtin_map_has_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
+MalValue mal_builtin_map_delete_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
 /**
  * Guarded native-backend dispatch for direct Map/Set scalar-operation sites.
  * Exact intrinsic-callee and receiver-brand hits execute the collection body
@@ -44,6 +64,7 @@ MalCompletion mal_builtin_collection_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,
     MalBuiltinCollectionDirectOp operation,
+    MalBuiltinCollectionReceiverFact receiver_fact,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,

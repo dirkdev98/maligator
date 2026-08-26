@@ -26,6 +26,9 @@ export interface CompileCoreOptions {
 	profile?: boolean;
 	/** Bounded pass groups disabled only for controlled attribution builds. */
 	optimizationAblations?: ReadonlySet<OptimizationAblation>;
+	/** Tooling-only bound for fast analysis/attribution loops. Product builds use
+	 * the optimizer's normal convergence limit when omitted. */
+	optimizationRounds?: number;
 	/**
 	 * Core verification depth. Boundary verification is unconditional; `per-pass`
 	 * additionally attributes an invalid graph to the pass that produced it.
@@ -58,6 +61,9 @@ export function optimizeSemanticProgramToCore(
 		const result = executeCoreOptimizations(core.program, {
 			context: core.context,
 			ablations: options.optimizationAblations,
+			...(options.optimizationRounds === undefined
+				? {}
+				: { maxRounds: options.optimizationRounds }),
 			...(options.coreVerification === undefined
 				? {}
 				: { verification: options.coreVerification }),

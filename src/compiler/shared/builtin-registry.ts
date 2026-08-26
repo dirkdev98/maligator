@@ -42,6 +42,7 @@ export interface BuiltinOperationDescriptor {
 export type ExactBuiltinReceiverProof =
 	| "fresh-array"
 	| "fresh-map"
+	| "fresh-set"
 	| "intrinsic-object"
 	| "primitive-boolean"
 	| "primitive-number"
@@ -100,6 +101,31 @@ export const exactBuiltinCallDescriptors = {
 		receiverProof: "fresh-map",
 		forwardedArgumentLimit: 2,
 		cOperation: "MAL_DIRECT_BUILTIN_MAP_SET",
+	},
+	"Map.prototype.has": {
+		receiverProof: "fresh-map",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_MAP_HAS",
+	},
+	"Map.prototype.delete": {
+		receiverProof: "fresh-map",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_MAP_DELETE",
+	},
+	"Set.prototype.add": {
+		receiverProof: "fresh-set",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_SET_ADD",
+	},
+	"Set.prototype.has": {
+		receiverProof: "fresh-set",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_SET_HAS",
+	},
+	"Set.prototype.delete": {
+		receiverProof: "fresh-set",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_SET_DELETE",
 	},
 	"Object.keys": {
 		receiverProof: "intrinsic-object",
@@ -572,10 +598,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 			effects: ["throw", "safepoint"],
 			result: key === "get" ? "any" : key === "set" ? "receiver" : "boolean",
 			realm: "semantic-identity",
-			lowerings:
-				key === "get" || key === "set"
-					? ["generic", "guarded-native-collection", "exact-builtin-call"]
-					: ["generic", "guarded-native-collection"],
+			lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 		}),
 	),
 	...(["add", "has", "delete"] as const).map(
@@ -590,7 +613,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 			effects: ["throw", "safepoint"],
 			result: key === "add" ? "receiver" : "boolean",
 			realm: "semantic-identity",
-			lowerings: ["generic", "guarded-native-collection"],
+			lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 		}),
 	),
 	{

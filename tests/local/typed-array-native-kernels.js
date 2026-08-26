@@ -61,6 +61,61 @@ function dynamicStore(view, key, value) {
 	view[key] = value;
 }
 
+// These receivers originate at locked intrinsic constructors and cross a
+// closure/global-cell boundary. Compiled mode may consume their exact immutable
+// brands, but observable element values still have to honor each scalar kind,
+// boxed non-numeric property keys, detachment, and resize.
+const exactInt8 = new Int8Array([-1]);
+const exactUint8 = new Uint8Array([255]);
+const exactClamped = new Uint8ClampedArray([254.6]);
+const exactInt16 = new Int16Array([-1234]);
+const exactUint16 = new Uint16Array([60000]);
+const exactInt32 = new Int32Array([-1234567]);
+const exactUint32 = new Uint32Array([4000000000]);
+const exactFloat32 = new Float32Array([1.5]);
+const exactFloat64 = new Float64Array([-3.25]);
+exactInt32.label = "exact-brand-fallback";
+function exactCapturedLoads(key) {
+	return [
+		exactInt8[key],
+		exactUint8[key],
+		exactClamped[key],
+		exactInt16[key],
+		exactUint16[key],
+		exactInt32[key],
+		exactUint32[key],
+		exactFloat32[key],
+		exactFloat64[key],
+	];
+}
+check(
+	"exact captured numeric TypedArray brands preserve scalar loads",
+	exactCapturedLoads(0).join() ===
+		"-1,255,255,-1234,60000,-1234567,4000000000,1.5,-3.25" &&
+		exactCapturedLoads("label")[5] === "exact-brand-fallback",
+);
+
+const exactExternalBuffer = new ArrayBuffer(8, { maxByteLength: 8 });
+const exactExternalView = new Uint8Array(exactExternalBuffer, 4, 4);
+function exactExternalLoad(key) {
+	return exactExternalView[key];
+}
+exactExternalBuffer.resize(2);
+check(
+	"exact captured brand retains current resized extent",
+	exactExternalLoad(0) === undefined,
+);
+
+const exactDetachedView = new Uint8Array([8]);
+function exactDetachedLoad(key) {
+	return exactDetachedView[key];
+}
+exactDetachedView.buffer.transfer();
+check(
+	"exact captured brand retains current detached extent",
+	exactDetachedLoad(0) === undefined,
+);
+
 const dynamic = new Uint32Array(16);
 let dynamicChecksum = 0;
 for (let index = 0; index < 5000; index++) {

@@ -165,6 +165,7 @@ typedef struct MalPerfStats {
     u64 known_own_slot_store_fallbacks;
     u64 exact_own_slot_loads;
     u64 exact_own_slot_stores;
+    u64 exact_typed_array_loads;
     u64 shape_case_probes;
     u64 shape_case_hits;
     u64 shape_case_fallbacks;
@@ -178,6 +179,7 @@ typedef struct MalPerfStats {
     u64 map_get_set_cache_checks;
     u64 map_get_set_cache_hits;
     u64 map_get_set_cache_misses;
+    u64 collection_exact_receiver_hits;
     u64 collection_direct_map_get_hits;
     u64 collection_direct_map_set_hits;
     u64 collection_direct_map_has_hits;
@@ -281,9 +283,11 @@ typedef struct MalPerfStats {
 	u64 array_contained_push_overflows;
 	u64 array_contained_pops;
 	u64 array_contained_empty_pops;
+	u64 array_contained_element_reads;
     u64 array_iteration_direct_hits;
     u64 array_iteration_direct_fallbacks;
     u64 array_iteration_exact_callback_calls;
+    u64 array_iteration_exact_compiled_callback_calls;
 
     u64 node_event_singleton_inserts;
     u64 node_event_listener_array_allocations;

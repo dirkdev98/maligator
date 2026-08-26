@@ -1260,6 +1260,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		'#include "builtin_number.h"',
 		'#include "builtin_async_iterator.h"',
 		'#include "builtin_map.h"',
+		'#include "builtin_set.h"',
 		// Compiled coroutines dereference MalGeneratorObject (resume_state->frame).
 		'#include "generator_object.h"',
 		"",
@@ -1440,7 +1441,7 @@ export async function test262RunSingle(
 		const artifacts = test262NativeArtifacts();
 		writeFileSync(
 			`${baseName}.c`,
-			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_array.h"\n#include "builtin_boolean.h"\n#include "builtin_date.h"\n#include "builtin_object.h"\n#include "builtin_string.h"\n#include "builtin_math.h"\n#include "builtin_iterator.h"\n#include "builtin_async_iterator.h"\n#include "builtin_map.h"\n#include "builtin_number.h"\n#include "generator_object.h"\n\n${cSource}`,
+			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_array.h"\n#include "builtin_boolean.h"\n#include "builtin_date.h"\n#include "builtin_object.h"\n#include "builtin_string.h"\n#include "builtin_math.h"\n#include "builtin_iterator.h"\n#include "builtin_async_iterator.h"\n#include "builtin_map.h"\n#include "builtin_set.h"\n#include "builtin_number.h"\n#include "generator_object.h"\n\n${cSource}`,
 		);
 		await execFileAsync(
 			test262Toolchain().tools.cc.path,

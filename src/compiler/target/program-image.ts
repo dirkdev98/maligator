@@ -6,7 +6,11 @@ import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import type { OptimizationPassDelta } from "../shared/compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "../shared/compiler-facts.ts";
-import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import type {
+	CompilerExactCollectionBrand,
+	CompilerInstruction,
+	CompilerNumericTypedArrayKind,
+} from "../shared/compiler-instruction.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
@@ -542,12 +546,18 @@ export type NativeInstructionPlan =
 			readonly directCallTargetFunctionIndex?: number;
 			readonly directCallbackFunctionIndex?: number;
 			readonly guardedBuiltinCall?: VmGuardedBuiltinCall;
+			readonly exactCollectionReceiver?: CompilerExactCollectionBrand;
 			readonly directStringCharCodeAtPosition?: "inBounds";
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
 	| { readonly kind: "exact-own-slot"; readonly slot: number }
 	| { readonly kind: "exact-array-length" }
+	| { readonly kind: "exact-contained-array-element" }
+	| {
+			readonly kind: "exact-typed-array-element";
+			readonly elementKind: CompilerNumericTypedArrayKind;
+	  }
 	| { readonly kind: "primitive-string-length" };
 
 /**
@@ -782,6 +792,10 @@ function nativeInstructionPlanFromExecution(
 	switch (instruction.type) {
 		case "call": {
 			const guardedBuiltinCall = lowerGuardedBuiltinCall(instruction);
+			const exactCollectionReceiver =
+				guardedBuiltinCall === undefined
+					? undefined
+					: instruction.exactCollectionReceiver;
 			if (
 				instruction.directFunctionIndex === undefined &&
 				instruction.directEntryId === undefined &&
@@ -800,6 +814,7 @@ function nativeInstructionPlanFromExecution(
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
 				directCallbackFunctionIndex: instruction.directCallbackFunctionIndex,
 				guardedBuiltinCall,
+				exactCollectionReceiver,
 				directStringCharCodeAtPosition:
 					guardedBuiltinCall === undefined
 						? undefined
@@ -828,6 +843,15 @@ function nativeInstructionPlanFromExecution(
 					: instruction.primitiveStringLength === true
 						? { kind: "primitive-string-length" }
 						: undefined;
+		case "loadProperty":
+			return instruction.exactContainedArrayElement === true
+				? { kind: "exact-contained-array-element" }
+				: instruction.exactTypedArrayKind === undefined
+					? undefined
+					: {
+							kind: "exact-typed-array-element",
+							elementKind: instruction.exactTypedArrayKind,
+						};
 		case "storePropertyStatic":
 			return instruction.exactOwnSlot === undefined
 				? undefined

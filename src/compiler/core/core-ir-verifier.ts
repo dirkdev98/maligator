@@ -14,8 +14,11 @@ import {
 } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
+	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
+	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_OWN_DATA_CELL_FACT,
+	coreContainedAggregateProvenance,
 	coreOwnCellResolver,
 	coreOwnCellsEqual,
 	coreProvenance,
@@ -53,6 +56,14 @@ import {
 	coreCallValueSummaryDigest,
 	deriveCoreCallEffectRefinement,
 } from "./core-ir-summaries.ts";
+import {
+	analyzeCoreValueClasses,
+	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
+	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+	coreCollectionReceiverBrandForOperation,
+	coreExactCollectionBrand,
+	coreNumericTypedArrayKind,
+} from "./core-ir-value-classes.ts";
 import type {
 	CoreBlock,
 	CoreBlockId,
@@ -596,6 +607,58 @@ function verifyOwnDataCellRefinements(
 	}
 }
 
+/** Reconstruct transitive private-aggregate ownership before accepting a direct
+ * physical slot. Unlike an advisory shape guard, an incorrect slot has no safe
+ * fallback, so neither the fact payload nor the pass that produced it is trusted. */
+function verifyContainedAggregateOwnSlotRefinements(
+	fn: CoreFunction,
+	cfg: ReturnType<typeof buildCoreControlFlow>,
+	facts: ReadonlyMap<CoreFact["id"], CoreFact>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	const refined = fn.blocks.flatMap(({ instructions }) =>
+		instructions.filter((instruction) => {
+			const refinement = instruction.effectRefinement;
+			return (
+				refinement !== undefined &&
+				facts.get(refinement.proof)?.kind === CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT
+			);
+		}),
+	);
+	if (refined.length === 0) return;
+	const analysis = coreContainedAggregateProvenance(fn, cfg, stringConstants);
+	for (const instruction of refined) {
+		const fact = facts.get(instruction.effectRefinement!.proof)!;
+		const value =
+			typeof fact.value === "object" && fact.value !== null
+				? (fact.value as Record<string, unknown>)
+				: undefined;
+		const rawOrigins = Array.isArray(value?.origins) ? value.origins : undefined;
+		const origins = rawOrigins?.map((entry) => {
+			if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+				return undefined;
+			}
+			const reference = entry as Record<string, unknown>;
+			return typeof reference.$coreInstruction === "number"
+				? reference.$coreInstruction
+				: undefined;
+		});
+		const proven = analysis.ownSlot(instruction);
+		if (
+			proven === undefined ||
+			value?.slot !== proven.slot ||
+			origins === undefined ||
+			origins.some((origin) => origin === undefined) ||
+			origins.length !== proven.origins.length ||
+			origins.some((origin, index) => origin !== proven.origins[index])
+		) {
+			fail(
+				`instruction @${instruction.id} carries an invalid contained-aggregate own-slot proof`,
+			);
+		}
+	}
+}
+
 /** Throws CoreIrVerificationError when any canonical middle-end invariant is broken. */
 export function verifyCoreFunction(
 	fn: CoreFunction,
@@ -881,6 +944,7 @@ function verifyCoreFunctionGraph(
 	}
 
 	verifyOwnDataCellRefinements(fn, cfg, facts, stringConstants);
+	verifyContainedAggregateOwnSlotRefinements(fn, cfg, facts, stringConstants);
 	if (cfg.predecessors[fn.entry]!.length !== 0) {
 		fail(`entry block b${fn.entry} has predecessors`);
 	}
@@ -1536,6 +1600,174 @@ function verifyFreshArrayLengthClaims(
 	}
 }
 
+function verifyContainedDenseArrayElementClaims(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	compilationContext: CoreCompilationContext | undefined,
+): void {
+	const claims = fn.blocks.flatMap((block) =>
+		block.instructions.filter(
+			(instruction) =>
+				CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE in instruction.attributes,
+		),
+	);
+	if (claims.length === 0) return;
+	if (compilationContext?.facts.world.primordialPolicy !== "locked") {
+		fail("contained dense Array element claim requires locked primordials");
+	}
+
+	const cfg = buildCoreControlFlow(fn, registry);
+	const ordinary = coreProvenance(fn, cfg, stringConstants);
+	const representations = new Map(
+		fn.values.map(({ id, representation }) => [id, representation] as const),
+	);
+	const candidateAllocations = new Set<CoreInstructionId>();
+	const assumedNonEscapingOperands = new Map<CoreInstructionId, Set<number>>();
+	const assumeNonEscaping = (instruction: CoreInstructionId, operand: number): void => {
+		const operands = assumedNonEscapingOperands.get(instruction);
+		if (operands === undefined) {
+			assumedNonEscapingOperands.set(instruction, new Set([operand]));
+		} else {
+			operands.add(operand);
+		}
+	};
+
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			const operation = instruction.attributes.operation;
+			if (
+				instruction.opcode !== "callBuiltin" ||
+				(operation !== "Array.prototype.push" && operation !== "Array.prototype.pop") ||
+				instruction.inputs.length < 1
+			) {
+				continue;
+			}
+			const layout = ordinary.allocationOf(instruction.inputs[0]!);
+			if (layout?.kind !== "indexed" || layout.elements.size !== layout.length) continue;
+			candidateAllocations.add(layout.instruction);
+			assumeNonEscaping(instruction.id, 0);
+		}
+	}
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.opcode !== "loadProperty" || instruction.inputs.length !== 2) {
+				continue;
+			}
+			const layout = ordinary.allocationOf(instruction.inputs[0]!);
+			const keyRepresentation = representations.get(instruction.inputs[1]!);
+			if (
+				layout?.kind === "indexed" &&
+				candidateAllocations.has(layout.instruction) &&
+				(keyRepresentation === "f64" || keyRepresentation === "i32")
+			) {
+				assumeNonEscaping(instruction.id, 0);
+			}
+		}
+	}
+	const conditional = ordinary.withAssumedNonEscapingOperands(assumedNonEscapingOperands);
+	for (const instruction of claims) {
+		const receiver = instruction.inputs[0];
+		const key = instruction.inputs[1];
+		const layout = receiver === undefined ? undefined : ordinary.allocationOf(receiver);
+		const keyRepresentation = key === undefined ? undefined : representations.get(key);
+		if (
+			instruction.attributes[CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE] !== true ||
+			instruction.opcode !== "loadProperty" ||
+			instruction.inputs.length !== 2 ||
+			instruction.outputs.length !== 1 ||
+			layout?.kind !== "indexed" ||
+			layout.elements.size !== layout.length ||
+			!candidateAllocations.has(layout.instruction) ||
+			conditional.escape(layout.instruction) !== "contained" ||
+			(keyRepresentation !== "f64" && keyRepresentation !== "i32")
+		) {
+			fail(
+				`instruction @${instruction.id} carries an invalid contained dense Array read`,
+			);
+		}
+	}
+}
+
+function verifyExactTypedArrayClaims(
+	program: CoreProgram,
+	compilationContext: CoreCompilationContext | undefined,
+): void {
+	const claims = program.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions
+				.filter(
+					(instruction) =>
+						CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE in instruction.attributes,
+				)
+				.map((instruction) => ({ fn, instruction })),
+		),
+	);
+	if (claims.length === 0) return;
+	const analysis = analyzeCoreValueClasses(program, compilationContext);
+	for (const { fn, instruction } of claims) {
+		const receiver = instruction.inputs[0];
+		const claimed = coreNumericTypedArrayKind(
+			instruction.attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE],
+		);
+		const actual =
+			receiver === undefined
+				? undefined
+				: analysis.exactNumericTypedArray(fn.functionIndex, receiver, instruction.id);
+		if (
+			instruction.opcode !== "loadProperty" ||
+			claimed === undefined ||
+			actual !== claimed
+		) {
+			fail(`instruction @${instruction.id} carries an invalid exact TypedArray claim`);
+		}
+	}
+}
+
+function verifyExactCollectionReceiverClaims(
+	program: CoreProgram,
+	compilationContext: CoreCompilationContext | undefined,
+): void {
+	const claims = program.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions
+				.filter(
+					(instruction) =>
+						CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE in instruction.attributes,
+				)
+				.map((instruction) => ({ fn, instruction })),
+		),
+	);
+	if (claims.length === 0) return;
+	const analysis = analyzeCoreValueClasses(program, compilationContext);
+	for (const { fn, instruction } of claims) {
+		const receiver = instruction.inputs[1];
+		const call = instruction.attributes.knownBuiltinCall;
+		const operation =
+			call !== null && typeof call === "object" && !Array.isArray(call)
+				? (call as Readonly<Record<string, unknown>>).operation
+				: undefined;
+		const expected = coreCollectionReceiverBrandForOperation(operation);
+		const claimed = coreExactCollectionBrand(
+			instruction.attributes[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE],
+		);
+		const actual =
+			receiver === undefined
+				? undefined
+				: analysis.exactHeapBrand(fn.functionIndex, receiver, instruction.id);
+		if (
+			instruction.opcode !== "call" ||
+			claimed === undefined ||
+			claimed !== expected ||
+			claimed !== actual
+		) {
+			fail(
+				`instruction @${instruction.id} carries an invalid exact collection receiver claim`,
+			);
+		}
+	}
+}
+
 function verifyCoreProgramGraph(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
@@ -1625,6 +1857,10 @@ function verifyCoreProgramGraph(
 		}
 	}
 	verifyKnownOwnSlotClaims(program, registry);
+	if (context?.stage === "pre-target") {
+		verifyExactTypedArrayClaims(program, compilationContext);
+		verifyExactCollectionReceiverClaims(program, compilationContext);
+	}
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {
 			fail(`function index ${fn.functionIndex} is stored at program index ${index}`);
@@ -1634,6 +1870,19 @@ function verifyCoreProgramGraph(
 		}
 		verifyCoreFunction(fn, registry, context, program.stringConstants);
 		verifyFreshArrayLengthClaims(fn, registry, program.stringConstants);
+		// This claim becomes native authority only at lowering. Reconstructing its
+		// whole-lifetime proof is deliberately confined to that pre-target boundary:
+		// final-region verification already protects graph/certificate structure,
+		// while repeating two provenance solves there would charge every compiled
+		// program twice for the same immutable final graph.
+		if (context?.stage === "pre-target") {
+			verifyContainedDenseArrayElementClaims(
+				fn,
+				registry,
+				program.stringConstants,
+				compilationContext,
+			);
+		}
 		withVerificationContext(
 			context === undefined ? undefined : { ...context, functionIndex: index },
 			() => {

@@ -382,13 +382,11 @@ MalValue mal_builtin_map_get_known(
     const MalValue *args,
     i32 arg_count
 ) {
-    return mal_builtin_map_prototype_get(
+    return mal_builtin_map_get_value(
         vm,
         this_value,
-        args,
-        arg_count,
-        mal_value_new_undefined(),
-        mal_value_new_undefined());
+        mal_value_to_map_object(this_value),
+        arg_count >= 1 ? args[0] : mal_value_new_undefined());
 }
 
 static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -409,19 +407,19 @@ MalValue mal_builtin_map_set_known(
     const MalValue *args,
     i32 arg_count
 ) {
-    return mal_builtin_map_prototype_set(
+    return mal_builtin_map_set_value(
         vm,
         this_value,
-        args,
-        arg_count,
-        mal_value_new_undefined(),
-        mal_value_new_undefined());
+        mal_value_to_map_object(this_value),
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        arg_count >= 2 ? args[1] : mal_value_new_undefined());
 }
 
 MalCompletion mal_builtin_collection_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,
     MalBuiltinCollectionDirectOp operation,
+    MalBuiltinCollectionReceiverFact receiver_fact,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -460,6 +458,12 @@ MalCompletion mal_builtin_collection_direct(
     const bool delete_operation =
         operation == MAL_BUILTIN_COLLECTION_MAP_DELETE ||
         operation == MAL_BUILTIN_COLLECTION_SET_DELETE;
+    const bool exact_map =
+        receiver_fact == MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP;
+    const bool exact_set =
+        receiver_fact == MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_SET;
+    const bool unknown_receiver =
+        receiver_fact == MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN;
     const bool callee_matches =
         callee == vm->intrinsics[expected] ||
         (has_operation &&
@@ -472,9 +476,10 @@ MalCompletion mal_builtin_collection_direct(
     if (arg_count >= 0 && callee_matches &&
         mal_value_is_native_function_object(callee)) {
         if (operation == MAL_BUILTIN_COLLECTION_MAP_GET &&
-            mal_value_is_map_object(this_value)) {
+            (exact_map || (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            if (!map->weak) {
+            if (exact_map || !map->weak) {
+                if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MAL_PERF_COUNT(collection_direct_map_get_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
@@ -484,9 +489,11 @@ MalCompletion mal_builtin_collection_direct(
                 };
             }
         } else if (operation == MAL_BUILTIN_COLLECTION_MAP_SET &&
-                   mal_value_is_map_object(this_value)) {
+                   (exact_map ||
+                    (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            if (!map->weak) {
+            if (exact_map || !map->weak) {
+                if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MAL_PERF_COUNT(collection_direct_map_set_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
@@ -498,9 +505,11 @@ MalCompletion mal_builtin_collection_direct(
             }
         } else if (has_operation &&
                    callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_HAS] &&
-                   mal_value_is_map_object(this_value)) {
+                   (exact_map ||
+                    (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            if (!map->weak) {
+            if (exact_map || !map->weak) {
+                if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MAL_PERF_COUNT(collection_direct_map_has_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
@@ -511,9 +520,11 @@ MalCompletion mal_builtin_collection_direct(
             }
         } else if (delete_operation &&
                    callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_DELETE] &&
-                   mal_value_is_map_object(this_value)) {
+                   (exact_map ||
+                    (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            if (!map->weak) {
+            if (exact_map || !map->weak) {
+                if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 if (vm->map_get_set_cache.collection == this_value) {
                     mal_vm_invalidate_map_get_set_cache(vm);
                 }
@@ -525,9 +536,11 @@ MalCompletion mal_builtin_collection_direct(
                 };
             }
         } else if (operation == MAL_BUILTIN_COLLECTION_SET_ADD &&
-                   mal_value_is_set_object(this_value)) {
+                   (exact_set ||
+                    (unknown_receiver && mal_value_is_set_object(this_value)))) {
             MalMapObject *set = mal_value_to_map_object(this_value);
-            if (!set->weak) {
+            if (exact_set || !set->weak) {
+                if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MalValue value =
                     arg_count >= 1 ? args[0] : mal_value_new_undefined();
                 mal_map_object_set(set, value, value);
@@ -539,9 +552,11 @@ MalCompletion mal_builtin_collection_direct(
             }
         } else if (has_operation &&
                    callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS] &&
-                   mal_value_is_set_object(this_value)) {
+                   (exact_set ||
+                    (unknown_receiver && mal_value_is_set_object(this_value)))) {
             MalMapObject *set = mal_value_to_map_object(this_value);
-            if (!set->weak) {
+            if (exact_set || !set->weak) {
+                if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MAL_PERF_COUNT(collection_direct_set_has_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
@@ -551,9 +566,11 @@ MalCompletion mal_builtin_collection_direct(
             }
         } else if (delete_operation &&
                    callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_DELETE] &&
-                   mal_value_is_set_object(this_value)) {
+                   (exact_set ||
+                    (unknown_receiver && mal_value_is_set_object(this_value)))) {
             MalMapObject *set = mal_value_to_map_object(this_value);
-            if (!set->weak) {
+            if (exact_set || !set->weak) {
+                if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MAL_PERF_COUNT(collection_direct_set_delete_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
@@ -590,6 +607,33 @@ static MalValue mal_builtin_map_prototype_delete(MalVm *vm, MalValue this_value,
         mal_vm_invalidate_map_get_set_cache(vm);
     }
     return mal_value_new_boolean(mal_map_object_delete(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+}
+
+MalValue mal_builtin_map_has_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    return mal_value_new_boolean(mal_builtin_map_has_value(
+        vm,
+        this_value,
+        mal_value_to_map_object(this_value),
+        arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+}
+
+MalValue mal_builtin_map_delete_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->map_get_set_cache.collection == this_value) {
+        mal_vm_invalidate_map_get_set_cache(vm);
+    }
+    return mal_value_new_boolean(mal_map_object_delete(
+        mal_value_to_map_object(this_value),
+        arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
 static MalValue mal_builtin_map_prototype_clear(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
