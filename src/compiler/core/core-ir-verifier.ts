@@ -1190,68 +1190,77 @@ function verifyCoreFunctionGraph(
  * a callee more precise must not invalidate a sound refinement derived from the
  * older, wider claim.
  */
+interface SummaryEffectRefinement {
+	readonly functionIndex: number;
+	readonly instruction: CoreInstruction;
+	readonly fact: CoreFact;
+}
+
+interface SummaryValueClaim {
+	readonly functionIndex: number;
+	readonly instruction: CoreInstruction;
+	readonly representation: CoreValue["representation"];
+	readonly attribute: unknown;
+}
+
+function collectFunctionSummaryClaims(
+	fn: CoreFunction,
+	refined: Array<SummaryEffectRefinement>,
+	valueClaims: Array<SummaryValueClaim>,
+): void {
+	let facts: Map<CoreFact["id"], CoreFact> | undefined;
+	let representations: Map<CoreValueId, CoreValue["representation"]> | undefined;
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			const attribute = instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE];
+			const output = instruction.outputs[0];
+			const representation =
+				output === undefined || (attribute === undefined && instruction.opcode !== "call")
+					? undefined
+					: (representations ??= new Map(
+							fn.values.map(({ id, representation: current }) => [id, current] as const),
+						)).get(output);
+			if (attribute !== undefined) {
+				if (representation === undefined) {
+					fail(
+						`instruction @${instruction.id} in function ${fn.functionIndex} carries a callee summary without a result`,
+					);
+				}
+				valueClaims.push({
+					functionIndex: fn.functionIndex,
+					instruction,
+					representation,
+					attribute,
+				});
+			} else if (
+				instruction.opcode === "call" &&
+				representation !== undefined &&
+				representation !== "boxed"
+			) {
+				fail(
+					`instruction @${instruction.id} in function ${fn.functionIndex} has an unproved ${representation} call result`,
+				);
+			}
+			const refinement = instruction.effectRefinement;
+			if (refinement === undefined) continue;
+			const fact = (facts ??= new Map(
+				fn.facts.map((current) => [current.id, current] as const),
+			)).get(refinement.proof);
+			if (fact?.kind !== CORE_CALL_EFFECT_SUMMARY_FACT) continue;
+			refined.push({ functionIndex: fn.functionIndex, instruction, fact });
+		}
+	}
+}
+
 function verifySummaryClaims(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
 	summaries: () => CoreProgramSummaries,
 ): void {
-	const refined: Array<{
-		readonly functionIndex: number;
-		readonly instruction: CoreInstruction;
-		readonly fact: CoreFact;
-	}> = [];
-	const valueClaims: Array<{
-		readonly functionIndex: number;
-		readonly instruction: CoreInstruction;
-		readonly representation: CoreValue["representation"];
-		readonly attribute: unknown;
-	}> = [];
+	const refined: Array<SummaryEffectRefinement> = [];
+	const valueClaims: Array<SummaryValueClaim> = [];
 	for (const fn of program.functions) {
-		let facts: Map<CoreFact["id"], CoreFact> | undefined;
-		let representations: Map<CoreValueId, CoreValue["representation"]> | undefined;
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				const attribute = instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE];
-				const output = instruction.outputs[0];
-				const representation =
-					output === undefined ||
-					(attribute === undefined && instruction.opcode !== "call")
-						? undefined
-						: (representations ??= new Map(
-								fn.values.map(
-									({ id, representation: current }) => [id, current] as const,
-								),
-							)).get(output);
-				if (attribute !== undefined) {
-					if (representation === undefined) {
-						fail(
-							`instruction @${instruction.id} in function ${fn.functionIndex} carries a callee summary without a result`,
-						);
-					}
-					valueClaims.push({
-						functionIndex: fn.functionIndex,
-						instruction,
-						representation,
-						attribute,
-					});
-				} else if (
-					instruction.opcode === "call" &&
-					representation !== undefined &&
-					representation !== "boxed"
-				) {
-					fail(
-						`instruction @${instruction.id} in function ${fn.functionIndex} has an unproved ${representation} call result`,
-					);
-				}
-				const refinement = instruction.effectRefinement;
-				if (refinement === undefined) continue;
-				const fact = (facts ??= new Map(
-					fn.facts.map((current) => [current.id, current] as const),
-				)).get(refinement.proof);
-				if (fact?.kind !== CORE_CALL_EFFECT_SUMMARY_FACT) continue;
-				refined.push({ functionIndex: fn.functionIndex, instruction, fact });
-			}
-		}
+		collectFunctionSummaryClaims(fn, refined, valueClaims);
 	}
 	if (refined.length === 0 && valueClaims.length === 0) return;
 	const currentSummaries = summaries();
