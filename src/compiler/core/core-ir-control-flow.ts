@@ -89,6 +89,7 @@ export function coreCanonicalValueRoots(
 ): ReadonlyMap<CoreValueId, CoreValueId> {
 	const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
 	const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(valueCount);
+	const nodes: Array<CoreValueId> = [];
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (
@@ -99,6 +100,7 @@ export function coreCanonicalValueRoots(
 				continue;
 			}
 			dependencies[instruction.outputs[0]!] = instruction.inputs;
+			nodes.push(instruction.outputs[0]!);
 		}
 	}
 	for (const block of fn.blocks) {
@@ -107,15 +109,22 @@ export function coreCanonicalValueRoots(
 			continue;
 		}
 		for (const [index, parameter] of block.parameters.entries()) {
-			const sources = incoming.map(({ arguments: arguments_ }) => arguments_[index]);
-			if (sources.some((source) => source === undefined)) continue;
-			dependencies[parameter.value] = sources as ReadonlyArray<CoreValueId>;
+			const sources = new Array<CoreValueId>(incoming.length);
+			let complete = true;
+			for (let predecessor = 0; predecessor < incoming.length; predecessor += 1) {
+				const source = incoming[predecessor]!.arguments[index];
+				if (source === undefined) {
+					complete = false;
+					break;
+				}
+				sources[predecessor] = source;
+			}
+			if (!complete) continue;
+			dependencies[parameter.value] = sources;
+			nodes.push(parameter.value);
 		}
 	}
 
-	const nodes = fn.values
-		.map(({ id }) => id)
-		.filter((value) => dependencies[value] !== undefined);
 	if (nodes.length === 0) {
 		return new SparseCanonicalValueRoots();
 	}
@@ -131,25 +140,32 @@ export function coreCanonicalValueRoots(
 
 	const visited = new Uint8Array(valueCount);
 	const postorder: Array<CoreValueId> = [];
+	const stackValues = new Int32Array(nodes.length);
+	const stackNext = new Int32Array(nodes.length);
 	for (const start of nodes) {
 		if (visited[start] !== 0) continue;
 		visited[start] = 1;
-		const stack: Array<{ readonly value: CoreValueId; next: number }> = [
-			{ value: start, next: 0 },
-		];
-		while (stack.length > 0) {
-			const frame = stack[stack.length - 1]!;
-			const outgoing = dependencies[frame.value]!;
-			if (frame.next < outgoing.length) {
-				const dependency = outgoing[frame.next++]!;
+		let stackSize = 1;
+		stackValues[0] = start;
+		stackNext[0] = 0;
+		while (stackSize > 0) {
+			const stackIndex = stackSize - 1;
+			const value = stackValues[stackIndex]! as CoreValueId;
+			const outgoing = dependencies[value]!;
+			const next = stackNext[stackIndex]!;
+			if (next < outgoing.length) {
+				stackNext[stackIndex] = next + 1;
+				const dependency = outgoing[next]!;
 				if (dependencies[dependency] !== undefined && visited[dependency] === 0) {
 					visited[dependency] = 1;
-					stack.push({ value: dependency, next: 0 });
+					stackValues[stackSize] = dependency;
+					stackNext[stackSize] = 0;
+					stackSize += 1;
 				}
 				continue;
 			}
-			postorder.push(frame.value);
-			stack.pop();
+			postorder.push(value);
+			stackSize -= 1;
 		}
 	}
 
@@ -175,14 +191,21 @@ export function coreCanonicalValueRoots(
 		}
 	}
 
-	const componentDependencies = components.map(() => new Set<number>());
+	const componentDependencies = components.map(() => new Array<number>());
 	const componentUsers = components.map(() => new Array<number>());
+	const dependencySeenBy = new Int32Array(components.length);
+	dependencySeenBy.fill(-1);
 	for (const value of nodes) {
 		const component = componentOf[value]!;
 		for (const dependency of dependencies[value]!) {
 			const dependencyComponent = componentOf[dependency] ?? -1;
-			if (dependencyComponent >= 0 && dependencyComponent !== component) {
-				componentDependencies[component]!.add(dependencyComponent);
+			if (
+				dependencyComponent >= 0 &&
+				dependencyComponent !== component &&
+				dependencySeenBy[dependencyComponent] !== component
+			) {
+				dependencySeenBy[dependencyComponent] = component;
+				componentDependencies[component]!.push(dependencyComponent);
 			}
 		}
 	}
@@ -195,7 +218,7 @@ export function coreCanonicalValueRoots(
 	const canonical = new Int32Array(valueCount);
 	for (const { id } of fn.values) canonical[id] = id;
 	const remainingDependencies = new Uint32Array(
-		componentDependencies.map(({ size }) => size),
+		componentDependencies.map(({ length }) => length),
 	);
 	const ready = components
 		.map((_, component) => component)
