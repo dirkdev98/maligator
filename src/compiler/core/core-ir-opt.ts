@@ -5412,54 +5412,51 @@ const eliminateRedundantTdzChecks: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const maybeEmpty = new Set<CoreValueId>();
+		const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
+		const maybeEmpty = new Uint8Array(valueCount);
+		const dependencies = new Array<Array<CoreValueId> | undefined>(valueCount);
+		const pending: Array<CoreValueId> = [];
+		const markMaybeEmpty = (value: CoreValueId): void => {
+			if (maybeEmpty[value] !== 0) return;
+			maybeEmpty[value] = 1;
+			pending.push(value);
+		};
+		const addDependency = (source: CoreValueId, destination: CoreValueId): void => {
+			const targets = dependencies[source] ?? (dependencies[source] = []);
+			targets.push(destination);
+		};
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (
 					MAY_PRODUCE_EMPTY_OPCODES.has(instruction.opcode) ||
 					(instruction.opcode === "loadThis" && fn.metadata.isDerivedConstructor)
 				) {
-					for (const output of instruction.outputs) maybeEmpty.add(output);
+					for (const output of instruction.outputs) markMaybeEmpty(output);
+				}
+				if (instruction.opcode === "move" || instruction.opcode === "setThis") {
+					for (const input of instruction.inputs) {
+						for (const output of instruction.outputs) addDependency(input, output);
+					}
+				}
+			}
+			const incoming = cfg.predecessors[block.id]!;
+			for (const [index, parameter] of block.parameters.entries()) {
+				if (parameter.role === "exception") continue;
+				for (const edge of incoming) {
+					const argumentIndex =
+						edge.kind === "exceptional" && block.parameters[0]?.role === "exception"
+							? index - 1
+							: index;
+					const argument = argumentIndex < 0 ? undefined : edge.arguments[argumentIndex];
+					if (argument === undefined) markMaybeEmpty(parameter.value);
+					else addDependency(argument, parameter.value);
 				}
 			}
 		}
-
-		let changed = true;
-		while (changed) {
-			changed = false;
-			for (const block of fn.blocks) {
-				for (const instruction of block.instructions) {
-					if (
-						(instruction.opcode === "move" || instruction.opcode === "setThis") &&
-						instruction.inputs.some((input) => maybeEmpty.has(input))
-					) {
-						for (const output of instruction.outputs) {
-							if (!maybeEmpty.has(output)) {
-								maybeEmpty.add(output);
-								changed = true;
-							}
-						}
-					}
-				}
-				const incoming = cfg.predecessors[block.id]!;
-				for (const [index, parameter] of block.parameters.entries()) {
-					if (parameter.role === "exception" || maybeEmpty.has(parameter.value)) {
-						continue;
-					}
-					const canBeEmpty = incoming.some((edge) => {
-						const argumentIndex =
-							edge.kind === "exceptional" && block.parameters[0]?.role === "exception"
-								? index - 1
-								: index;
-						const argument =
-							argumentIndex < 0 ? undefined : edge.arguments[argumentIndex];
-						return argument === undefined || maybeEmpty.has(argument);
-					});
-					if (canBeEmpty) {
-						maybeEmpty.add(parameter.value);
-						changed = true;
-					}
-				}
+		while (pending.length > 0) {
+			const source = pending.pop()!;
+			for (const destination of dependencies[source] ?? []) {
+				markMaybeEmpty(destination);
 			}
 		}
 
@@ -5471,7 +5468,7 @@ const eliminateRedundantTdzChecks: CoreFunctionPass = {
 					if (
 						instruction.opcode === "throwIfTdz" &&
 						instruction.inputs.length === 1 &&
-						!maybeEmpty.has(instruction.inputs[0]!)
+						maybeEmpty[instruction.inputs[0]!] === 0
 					) {
 						removed = true;
 						return false;
