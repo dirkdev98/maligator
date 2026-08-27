@@ -83,6 +83,41 @@ class SparseCanonicalValueRoots extends Map<CoreValueId, CoreValueId> {
 	}
 }
 
+/** Resolve the acyclic move-only case without constructing an SCC graph. */
+function acyclicMoveRoots(
+	nodes: ReadonlyArray<CoreValueId>,
+	dependencies: ReadonlyArray<ReadonlyArray<CoreValueId> | undefined>,
+): SparseCanonicalValueRoots | undefined {
+	const resolved = new Uint8Array(dependencies.length);
+	const visiting = new Uint8Array(dependencies.length);
+	const canonical = new Int32Array(dependencies.length);
+	const stack = new Int32Array(nodes.length);
+	for (const start of nodes) {
+		if (resolved[start] !== 0) continue;
+		let current = start;
+		let stackSize = 0;
+		while (dependencies[current] !== undefined && resolved[current] === 0) {
+			if (visiting[current] !== 0) return undefined;
+			visiting[current] = 1;
+			stack[stackSize++] = current;
+			current = dependencies[current]![0]!;
+		}
+		const root = resolved[current] === 0 ? current : (canonical[current]! as CoreValueId);
+		while (stackSize > 0) {
+			const value = stack[--stackSize]! as CoreValueId;
+			canonical[value] = root;
+			visiting[value] = 0;
+			resolved[value] = 1;
+		}
+	}
+	const roots = new SparseCanonicalValueRoots();
+	for (const value of nodes) {
+		const root = coreValueId(canonical[value]!);
+		if (root !== value) roots.set(value, root);
+	}
+	return roots;
+}
+
 export function coreCanonicalValueRoots(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
@@ -90,6 +125,7 @@ export function coreCanonicalValueRoots(
 	const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
 	const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(valueCount);
 	const nodes: Array<CoreValueId> = [];
+	let hasPhiDependencies = false;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (
@@ -122,11 +158,16 @@ export function coreCanonicalValueRoots(
 			if (!complete) continue;
 			dependencies[parameter.value] = sources;
 			nodes.push(parameter.value);
+			hasPhiDependencies = true;
 		}
 	}
 
 	if (nodes.length === 0) {
 		return new SparseCanonicalValueRoots();
+	}
+	if (!hasPhiDependencies) {
+		const roots = acyclicMoveRoots(nodes, dependencies);
+		if (roots !== undefined) return roots;
 	}
 	const reverse = new Array<Array<CoreValueId> | undefined>(valueCount);
 	for (const value of nodes) {
