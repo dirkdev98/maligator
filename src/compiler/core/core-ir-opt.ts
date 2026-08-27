@@ -5778,10 +5778,27 @@ export class CoreAnalysisManager {
 	provenance(fn: CoreFunction): CoreProvenance {
 		let analysis = this.#provenance.get(fn);
 		if (analysis === undefined) {
-			analysis = coreProvenance(fn, this.controlFlow(fn), this.#stringConstants);
+			analysis = coreProvenance(fn, this.controlFlow(fn), this.#stringConstants, {
+				canonicalRoots: this.canonicalValues(fn),
+			});
 			this.#provenance.set(fn, analysis);
 		}
 		return analysis;
+	}
+
+	/**
+	 * Carry summaries across an advisory target hint rewrite. The scalar selector
+	 * changes only backend-owned attributes: function/value identity, control flow,
+	 * effects, representations, callee flow, and every call-site id stay identical.
+	 */
+	inheritSummaries(before: CoreProgram, after: CoreProgram): void {
+		const cached = this.#summaries;
+		if (cached?.program !== before || cached.context !== this.context) return;
+		this.#summaries = {
+			...cached,
+			program: after,
+			functions: after.functions,
+		};
 	}
 
 	memory(fn: CoreFunction): CoreMemoryVersions {
@@ -11954,8 +11971,9 @@ export function executeCoreOptimizations(
 	const valueClassSelection = selectCoreExactHeapAccesses(
 		valueClassInput,
 		compilationContext,
-		undefined,
+		(fn) => analyses.controlFlow(fn),
 		valueClassSummaries,
+		(fn) => analyses.canonicalValues(fn),
 	);
 	for (const [index, fn] of valueClassSelection.program.functions.entries()) {
 		const before = functions[index];
@@ -11997,6 +12015,7 @@ export function executeCoreOptimizations(
 		compilationContext,
 		scalarArgumentSummaries,
 	);
+	analyses.inheritSummaries(scalarArgumentInput, scalarArgumentSelection.program);
 	for (const [index, fn] of scalarArgumentSelection.program.functions.entries()) {
 		const before = functions[index];
 		if (before !== undefined && before !== fn) analyses.inheritControlFlow(before, fn);
@@ -12041,6 +12060,7 @@ export function executeCoreOptimizations(
 		registry: coreOpcodeRegistry,
 		...(summaries === undefined ? {} : { calleeTargets: summaries.targets, summaries }),
 		controlFlow: (fn) => analyses.controlFlow(fn),
+		canonicalValues: (fn) => analyses.canonicalValues(fn),
 	});
 	const shapeSelectionBefore = tracedMetrics;
 	const shapeSelection = selectCoreKnownOwnSlots(summaryProgram, shapeProvenance);

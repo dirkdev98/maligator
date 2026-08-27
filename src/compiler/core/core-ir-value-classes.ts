@@ -114,6 +114,7 @@ export function analyzeCoreValueClasses(
 	controlFlow: (fn: CoreFunction) => CoreControlFlow = (fn) =>
 		buildCoreControlFlow(fn, coreOpcodeRegistry),
 	summaries?: CoreProgramSummaries,
+	canonicalValues?: (fn: CoreFunction) => ReadonlyMap<CoreValueId, CoreValueId>,
 ): CoreValueClassAnalysis {
 	if (context?.facts.world.primordialPolicy !== "locked") {
 		return {
@@ -212,7 +213,7 @@ export function analyzeCoreValueClasses(
 		const functionParameters = new Set(fn.parameters);
 		const cfg = controlFlow(fn);
 		cfgByFunction.set(fn.functionIndex, cfg);
-		const roots = coreCanonicalValueRoots(fn, cfg);
+		const roots = canonicalValues?.(fn) ?? coreCanonicalValueRoots(fn, cfg);
 		rootsByFunction.set(fn.functionIndex, roots);
 		const definitions = new Map<CoreValueId, CoreInstruction>();
 		const locations = new Map<
@@ -845,8 +846,15 @@ export function selectCoreExactHeapAccesses(
 	context: CoreCompilationContext | undefined,
 	controlFlow?: (fn: CoreFunction) => CoreControlFlow,
 	summaries?: CoreProgramSummaries,
+	canonicalValues?: (fn: CoreFunction) => ReadonlyMap<CoreValueId, CoreValueId>,
 ): CoreExactHeapSelection {
-	const analysis = analyzeCoreValueClasses(program, context, controlFlow, summaries);
+	const analysis = analyzeCoreValueClasses(
+		program,
+		context,
+		controlFlow,
+		summaries,
+		canonicalValues,
+	);
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
 		let functionChanged = false;
@@ -854,7 +862,7 @@ export function selectCoreExactHeapAccesses(
 			controlFlow === undefined
 				? buildCoreControlFlow(fn, coreOpcodeRegistry)
 				: controlFlow(fn);
-		const roots = coreCanonicalValueRoots(fn, cfg);
+		const roots = canonicalValues?.(fn) ?? coreCanonicalValueRoots(fn, cfg);
 		const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 		const definitions = new Map<CoreValueId, CoreInstruction>();
 		const useCounts = new Map<CoreValueId, number>();

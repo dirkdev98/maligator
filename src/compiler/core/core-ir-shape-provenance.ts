@@ -307,6 +307,7 @@ export interface CoreShapeProvenanceOptions {
 	/** Closed-world entry and positional-call authority shared with other lattices. */
 	readonly summaries?: CoreProgramSummaries;
 	readonly controlFlow?: (fn: CoreFunction) => CoreControlFlow;
+	readonly canonicalValues?: (fn: CoreFunction) => ReadonlyMap<CoreValueId, CoreValueId>;
 	/** Function bodies that reach execution in the current closed image. */
 	readonly executableFunctions?: ReadonlySet<number>;
 }
@@ -720,7 +721,11 @@ export function analyzeCoreShapeProvenance(
 		const functionParameters = new Set(fn.parameters);
 		const cfg = controlFlowByFunction.get(fn.functionIndex)!;
 		const provenance = aggregateFunctions.has(fn.functionIndex)
-			? coreProvenance(fn, cfg, program.stringConstants)
+			? coreProvenance(fn, cfg, program.stringConstants, {
+					...(options.canonicalValues === undefined
+						? {}
+						: { canonicalRoots: options.canonicalValues(fn) }),
+				})
 			: undefined;
 		const aggregateCells = new Map<CoreInstructionId, Map<number, number>>();
 		for (const layout of provenance?.layouts ?? []) {

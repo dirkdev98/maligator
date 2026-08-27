@@ -170,6 +170,8 @@ export interface CoreProvenanceOptions {
 		CoreInstructionId,
 		ReadonlySet<number>
 	>;
+	/** Canonical roots already owned by a shared analysis manager. */
+	readonly canonicalRoots?: ReadonlyMap<CoreValueId, CoreValueId>;
 }
 
 function numberArray(value: unknown): ReadonlyArray<number> | undefined {
@@ -438,7 +440,7 @@ export function coreProvenance(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	options: CoreProvenanceOptions = {},
 ): CoreProvenance {
-	const roots = coreCanonicalValueRoots(fn, cfg);
+	const roots = options.canonicalRoots ?? coreCanonicalValueRoots(fn, cfg);
 	const canonical = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const definitions = new Map<CoreValueId, CoreInstruction>();
 	const callClaims = new Map<CoreInstructionId, CoreCallValueSummaryClaim>();
