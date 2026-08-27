@@ -117,6 +117,9 @@ int mal_posix_fs_chmod(const char *path, u32 mode);
 
 /* Write all bytes to an open descriptor. Returns 0 or an errno. */
 int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written);
+int mal_posix_fs_write_at_fd(
+    int fd, const byte *data, usize len, bool has_position, i64 position,
+    usize *written);
 
 /* Read up to `len` bytes into `data`. With `has_position`, use pread(2) so the
  * descriptor's current offset is unchanged; otherwise consume from that offset.
@@ -129,6 +132,7 @@ int mal_posix_fs_close_fd(int fd);
 
 /* Flush and resize open descriptors. */
 int mal_posix_fs_sync_fd(int fd);
+int mal_posix_fs_datasync_fd(int fd);
 int mal_posix_fs_truncate_fd(int fd, i64 length);
 
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */

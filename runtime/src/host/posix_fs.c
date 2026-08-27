@@ -375,9 +375,17 @@ int mal_posix_fs_chmod(const char *path, u32 mode) {
 }
 
 int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written) {
+    return mal_posix_fs_write_at_fd(fd, data, len, false, 0, written);
+}
+
+int mal_posix_fs_write_at_fd(
+    int fd, const byte *data, usize len, bool has_position, i64 position,
+    usize *written) {
     usize off = 0;
     while (off < len) {
-        ssize_t count = write(fd, data + off, len - off);
+        ssize_t count = has_position
+            ? pwrite(fd, data + off, len - off, (off_t) (position + (i64) off))
+            : write(fd, data + off, len - off);
         if (count < 0) {
             if (errno == EINTR) continue;
             *written = off;
@@ -419,6 +427,20 @@ int mal_posix_fs_sync_fd(int fd) {
         result = fsync(fd);
     } while (result != 0 && errno == EINTR);
     return result == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_datasync_fd(int fd) {
+#if defined(__APPLE__)
+    // Darwin does not expose fdatasync under every supported feature profile.
+    // fsync provides the required data durability with a stronger metadata flush.
+    return mal_posix_fs_sync_fd(fd);
+#else
+    int result;
+    do {
+        result = fdatasync(fd);
+    } while (result != 0 && errno == EINTR);
+    return result == 0 ? 0 : errno;
+#endif
 }
 
 int mal_posix_fs_truncate_fd(int fd, i64 length) {

@@ -676,6 +676,7 @@ test("canonicalizes the promise-based filesystem submodule", () => {
 			"link",
 			"lstat",
 			"mkdir",
+			"open",
 			"readFile",
 			"readlink",
 			"readdir",

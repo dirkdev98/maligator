@@ -38,6 +38,7 @@ import fsPromises, {
 	link,
 	lstat,
 	mkdir,
+	open,
 	readFile as readFilePromise,
 	readlink,
 	readdir,
@@ -568,7 +569,9 @@ check("readdirSync returns byte-file Dirent", sawBytes);
 
 check(
 	"node:fs/promises default exposes methods",
-	fsPromises.lstat === lstat && fsPromises.readdir === readdir,
+	fsPromises.lstat === lstat &&
+		fsPromises.open === open &&
+		fsPromises.readdir === readdir,
 );
 check("promise lstat returns Stats", (await lstat(textFile)).isFile());
 eq(
@@ -615,6 +618,77 @@ try {
 	promisedMissingCode = (error as NodeJS.ErrnoException).code ?? "";
 }
 eq("promise readdir rejects with errno", promisedMissingCode, "ENOENT");
+
+const fileHandlePath = `${root}/file-handle.txt`;
+const fileHandle = await open(fileHandlePath, "w+");
+check("FileHandle exposes an open descriptor", fileHandle.fd >= 0);
+check(
+	"FileHandle close is an enumerable own method",
+	Object.keys(fileHandle).includes("close"),
+);
+const fileHandleBytes = Buffer.from("ABC");
+const fileHandleBufferWrite = await fileHandle.write(fileHandleBytes, 1, 2, 0);
+check(
+	"FileHandle buffer write returns a null-prototype result",
+	Object.getPrototypeOf(fileHandleBufferWrite) === null &&
+		fileHandleBufferWrite.bytesWritten === 2 &&
+		fileHandleBufferWrite.buffer === fileHandleBytes,
+);
+const fileHandleStringWrite = await fileHandle.write("!", 2, "utf8");
+check(
+	"FileHandle string write preserves the supplied value",
+	Object.getPrototypeOf(fileHandleStringWrite) === null &&
+		fileHandleStringWrite.bytesWritten === 1 &&
+		fileHandleStringWrite.buffer === "!",
+);
+const fileHandleReadBuffer = Buffer.alloc(3);
+const fileHandleRead = await fileHandle.read(fileHandleReadBuffer, 0, 3, 0);
+check(
+	"FileHandle positional read returns its buffer without moving the offset",
+	Object.getPrototypeOf(fileHandleRead) === null &&
+		fileHandleRead.bytesRead === 3 &&
+		fileHandleRead.buffer === fileHandleReadBuffer &&
+		fileHandleReadBuffer.toString() === "BC!",
+);
+eq(
+	"FileHandle readFile consumes from the current descriptor offset",
+	await fileHandle.readFile("utf8"),
+	"BC!",
+);
+await fileHandle.writeFile("?");
+await fileHandle.appendFile("+");
+eq(
+	"FileHandle whole-file writes preserve the descriptor position",
+	readFileSync(fileHandlePath, "utf8"),
+	"BC!?+",
+);
+check("FileHandle stat returns Stats", (await fileHandle.stat()).isFile());
+await fileHandle.truncate(4);
+eq("FileHandle truncate resizes the file", (await fileHandle.stat()).size, 4);
+await fileHandle.sync();
+await fileHandle.datasync();
+const detachedClose = fileHandle.close;
+await detachedClose();
+eq("FileHandle close invalidates fd", fileHandle.fd, -1);
+eq("FileHandle close is idempotent", await detachedClose(), undefined);
+let closedHandleCode = "";
+let closedHandleSyscall = "";
+try {
+	await fileHandle.stat();
+} catch (error) {
+	closedHandleCode = (error as NodeJS.ErrnoException).code ?? "";
+	closedHandleSyscall = (error as NodeJS.ErrnoException).syscall ?? "";
+}
+eq("closed FileHandle rejects with EBADF", closedHandleCode, "EBADF");
+eq("closed FileHandle preserves the syscall", closedHandleSyscall, "fstat");
+
+const defaultReadHandle = await open(fileHandlePath);
+eq(
+	"fs.promises.open defaults flags to read-only",
+	await defaultReadHandle.readFile("utf8"),
+	"BC!?",
+);
+await defaultReadHandle.close();
 
 copyFileSync(textFile, copiedFile);
 eq(

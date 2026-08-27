@@ -148,6 +148,7 @@ const FS_PROMISES: HostModuleSpec = {
 		"link",
 		"lstat",
 		"mkdir",
+		"open",
 		"readFile",
 		"readlink",
 		"readdir",

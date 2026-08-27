@@ -517,6 +517,7 @@ static MalProfileAllocationFamily mal_profile_family_for_heap_type(MalHeapType t
         case MAL_HEAP_NODE_ZLIB_OBJECT:
         case MAL_HEAP_NODE_SQLITE_DATABASE_OBJECT:
         case MAL_HEAP_NODE_SQLITE_STATEMENT_OBJECT:
+        case MAL_HEAP_NODE_FS_FILE_HANDLE_OBJECT:
         case MAL_HEAP_ASYNC_CONTEXT:
         case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
         case MAL_HEAP_ASYNC_RESOURCE_STATE:
