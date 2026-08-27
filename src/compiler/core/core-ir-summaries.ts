@@ -643,16 +643,14 @@ function collectLocalFacts(
 					);
 				}
 			} else {
-				effects = joinEffectSummaries(
-					effects,
-					coreInstructionEffects(instruction, registry),
-				);
+				const instructionEffects = coreInstructionEffects(instruction, registry);
+				effects = joinEffectSummaries(effects, instructionEffects);
 				// Any other instruction that enters user code is a call edge this
 				// analysis cannot name: a getter, a setter, a coercion hook, a builtin
 				// that takes a callback. The edge set is only closed once no such
 				// instruction is left, so the flag is derived from declared effects
 				// rather than from a list of opcodes that could fall behind them.
-				if (coreInstructionEffects(instruction, registry).callsUserCode) {
+				if (instructionEffects.callsUserCode) {
 					openCallEdge = true;
 				}
 			}
