@@ -658,12 +658,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 						binding.name === name && binding.undeclared && binding.usageNodes.length > 0,
 				),
 			);
-		if (
-			freeGlobalUsed("process") ||
-			freeGlobalUsed("global") ||
-			freeGlobalUsed("TextEncoder") ||
-			freeGlobalUsed("TextDecoder")
-		) {
+		if (freeGlobalUsed("process") || freeGlobalUsed("global")) {
 			linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
 		}
 		if (freeGlobalUsed("Buffer")) {

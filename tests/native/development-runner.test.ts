@@ -76,4 +76,47 @@ describe("development wire runner", () => {
 		expect(result.stderr).toContain("Prepare development runtime completed");
 		expect(result.stderr).not.toContain("Generate native code");
 	}, 300_000);
+
+	it("installs Node text encoding globals when the web surface is disabled", () => {
+		const projectDirectory = path.join(directory, "node-text-encoding");
+		mkdirSync(projectDirectory, { recursive: true });
+		writeFileSync(
+			path.join(projectDirectory, "entry.mjs"),
+			'const Encoder = globalThis["TextEncoder"];\n' +
+				'const Decoder = globalThis["TextDecoder"];\n' +
+				"console.log(JSON.stringify({\n" +
+				"\ttypes: [typeof Encoder, typeof Decoder],\n" +
+				'\tdecoded: new Decoder().decode(new Encoder().encode("Vonk")),\n' +
+				"}));\n",
+		);
+		writeFileSync(
+			path.join(projectDirectory, "maligator.build.mjs"),
+			"export default { surface: { node: true, webPlatform: false } };\n",
+		);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				path.join(repositoryRoot, "src/index.ts"),
+				"run",
+				"entry.mjs",
+				"--config",
+				"maligator.build.mjs",
+				"--verbose",
+			],
+			{
+				cwd: projectDirectory,
+				env: process.env,
+				encoding: "utf-8",
+				timeout: 300_000,
+			},
+		);
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			types: ["function", "function"],
+			decoded: "Vonk",
+		});
+		expect(result.stderr).toContain("Execution backend: interpreted development image");
+	}, 300_000);
 });

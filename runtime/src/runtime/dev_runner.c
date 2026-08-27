@@ -103,6 +103,12 @@ int mal_dev_run_wires(
 #if MAL_NODE
     if (node) {
         mal_node_immediates_install(&vm, global_this);
+        // A universal development runtime may have web support compiled in while
+        // executing a Node-only image. Install the globals according to the
+        // requested runtime personality, not the binary's compile-time surface.
+        if (!web_platform) {
+            mal_text_encoding_globals_install(&vm, global_this);
+        }
     }
 #else
     (void) node;

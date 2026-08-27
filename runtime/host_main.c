@@ -92,6 +92,11 @@ int main(int argc, char **argv) {
 #endif
 #if MAL_NODE
     mal_node_immediates_install(&vm, global_this);
+#if !MAL_WEB_PLATFORM
+    // Node owns the text encoding globals too. The broader web installer below
+    // supplies them when that surface is present; otherwise install them here.
+    mal_text_encoding_globals_install(&vm, global_this);
+#endif
 #endif
 #if MAL_URL
     mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)

@@ -32,7 +32,6 @@
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
-#include "web_globals.h"
 #include "web_host_timer.h"
 
 // The process environment. On Darwin the real environ of an executable is reached
@@ -575,10 +574,6 @@ void mal_host_install_process(
         mal_host_register_idle_notify(mal_process_emit_before_exit);
         mal_process_hooks_registered = true;
     }
-
-#if !MAL_WEB_PLATFORM
-    mal_text_encoding_globals_install(vm, global_this);
-#endif
 
     const MalPropertyFlags data_flags =
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;

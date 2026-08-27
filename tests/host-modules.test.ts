@@ -462,12 +462,12 @@ describe("host-install manifest", () => {
 		);
 	});
 
-	it("installs Node text encoding globals without the web surface", () => {
+	it("leaves Node text encoding globals to host surface initialization", () => {
 		const def = compile(`globalThis.sink = new TextDecoder();\n`, { node: true });
-		expect(def.runtime.hostInstalls).toContainEqual({
-			installer: "mal_host_install_process",
-			exports: [],
-		});
+		expect(def.runtime.hostInstalls).toEqual([]);
+		expect(def.runtime.functions.flatMap((fn) => fn.instructions)).toContainEqual(
+			expect.objectContaining({ opcode: "LOAD_GLOBAL_PROPERTY" }),
+		);
 	});
 
 	it("leaves an ordinary program's manifest empty", () => {
