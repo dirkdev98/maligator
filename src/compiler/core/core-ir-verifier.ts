@@ -1207,16 +1207,21 @@ function verifySummaryClaims(
 		readonly attribute: unknown;
 	}> = [];
 	for (const fn of program.functions) {
-		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+		let facts: Map<CoreFact["id"], CoreFact> | undefined;
+		let representations: Map<CoreValueId, CoreValue["representation"]> | undefined;
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				const attribute = instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE];
 				const output = instruction.outputs[0];
 				const representation =
-					output === undefined ? undefined : representations.get(output);
+					output === undefined ||
+					(attribute === undefined && instruction.opcode !== "call")
+						? undefined
+						: (representations ??= new Map(
+								fn.values.map(
+									({ id, representation: current }) => [id, current] as const,
+								),
+							)).get(output);
 				if (attribute !== undefined) {
 					if (representation === undefined) {
 						fail(
@@ -1240,7 +1245,9 @@ function verifySummaryClaims(
 				}
 				const refinement = instruction.effectRefinement;
 				if (refinement === undefined) continue;
-				const fact = facts.get(refinement.proof);
+				const fact = (facts ??= new Map(
+					fn.facts.map((current) => [current.id, current] as const),
+				)).get(refinement.proof);
 				if (fact?.kind !== CORE_CALL_EFFECT_SUMMARY_FACT) continue;
 				refined.push({ functionIndex: fn.functionIndex, instruction, fact });
 			}
