@@ -251,6 +251,22 @@ int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written) {
     return 0;
 }
 
+int mal_posix_fs_read_fd(
+    int fd, byte *data, usize len, bool has_position, i64 position, usize *read_count) {
+    ssize_t count;
+    do {
+        count = has_position
+            ? pread(fd, data, len, (off_t) position)
+            : read(fd, data, len);
+    } while (count < 0 && errno == EINTR);
+    if (count < 0) {
+        *read_count = 0;
+        return errno;
+    }
+    *read_count = (usize) count;
+    return 0;
+}
+
 int mal_posix_fs_close_fd(int fd) {
     return close(fd) == 0 ? 0 : errno;
 }
@@ -273,6 +289,13 @@ static void mal_posix_fs_copy_stat(const struct stat *st, MalPosixStat *out) {
 int mal_posix_fs_stat(const char *path, MalPosixStat *out) {
     struct stat st;
     if (stat(path, &st) != 0) return errno;
+    mal_posix_fs_copy_stat(&st, out);
+    return 0;
+}
+
+int mal_posix_fs_fstat(int fd, MalPosixStat *out) {
+    struct stat st;
+    if (fstat(fd, &st) != 0) return errno;
     mal_posix_fs_copy_stat(&st, out);
     return 0;
 }

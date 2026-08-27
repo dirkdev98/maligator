@@ -13,22 +13,33 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-fs-"));
 
 describe("node:fs POSIX surface", () => {
-	let bin: string;
+	let compiled: string;
+	let interpreted: string;
 	beforeAll(() => {
-		bin = buildNativeBinary({
+		compiled = buildNativeBinary({
 			fixture: "tests/local/node-fs.mts",
-			name: "node-fs",
+			name: "node-fs-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
 		});
+		interpreted = buildNativeBinary({
+			fixture: "tests/local/node-fs.mts",
+			name: "node-fs-interpreted",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+			compiled: false,
+		});
 	});
 
-	it("supports files, Date-backed stats, directory entries, path validation, and errno errors", () => {
-		assertResultPass(runToStdout(bin));
+	it("supports files, stats, descriptors, directory entries, path validation, and errno errors", () => {
+		assertResultPass(runToStdout(compiled));
+		assertResultPass(runToStdout(interpreted));
 	});
 
 	it("keeps filesystem results alive under GC stress", () => {
-		assertResultPass(runToStdout(bin, { env: STRESS_ENV }));
+		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
+		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV }));
 	});
 });

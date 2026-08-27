@@ -10,6 +10,7 @@
 
 #include "ascii.h"
 #include "array_object.h"
+#include "builtin_data_view.h"
 #include "builtin_promise.h"
 #include "date_object.h"
 #include "function_object.h"
@@ -390,8 +391,12 @@ static MalValue node_fs_write_file_sync(
 }
 
 static bool node_fs_fd(MalVm *vm, MalValue value, int *fd) {
-    f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!mal_ops_is_number(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "file descriptor must be a number");
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
     if (!isfinite(number) || number < 0 || number > INT_MAX || trunc(number) != number) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
             (const byte *) "file descriptor must be a non-negative integer");
@@ -399,6 +404,144 @@ static bool node_fs_fd(MalVm *vm, MalValue value, int *fd) {
     }
     *fd = (int) number;
     return true;
+}
+
+static bool node_fs_non_negative_integer(
+    MalVm *vm, MalValue value, const char *message, usize maximum, usize *result) {
+    if (!mal_ops_is_number(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) message);
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || number < 0 || trunc(number) != number || number > (f64) maximum) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) message);
+        return false;
+    }
+    *result = (usize) number;
+    return true;
+}
+
+static bool node_fs_read_position(
+    MalVm *vm, MalValue value, bool *has_position, i64 *position) {
+    if (mal_value_is_undefined(value) || mal_value_is_null(value)) {
+        *has_position = false;
+        *position = 0;
+        return true;
+    }
+    if (!mal_ops_is_number(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "read position must be an integer or null");
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || number < -1 || trunc(number) != number
+        || number > 9007199254740991.0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "read position must be an integer from -1 through 2^53 - 1");
+        return false;
+    }
+    *has_position = number >= 0;
+    *position = number >= 0 ? (i64) number : 0;
+    return true;
+}
+
+static bool node_fs_read_options(
+    MalVm *vm, MalValue options, usize capacity,
+    usize *offset, usize *length, bool *has_position, i64 *position) {
+    *offset = 0;
+    *length = capacity;
+    *has_position = false;
+    *position = 0;
+    if (mal_value_is_undefined(options)) return true;
+    if (!mal_value_is_object(options) || mal_value_is_null(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "read options must be an object");
+        return false;
+    }
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) "offset"), &value)) {
+        return false;
+    }
+    if (!mal_value_is_undefined(value)
+        && !node_fs_non_negative_integer(
+            vm, value, "read offset is out of range", capacity, offset)) {
+        return false;
+    }
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) "length"), &value)) {
+        return false;
+    }
+    *length = capacity - *offset;
+    if (!mal_value_is_undefined(value)
+        && !node_fs_non_negative_integer(
+            vm, value, "read length is out of range", capacity - *offset, length)) {
+        return false;
+    }
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) "position"), &value)) {
+        return false;
+    }
+    return node_fs_read_position(vm, value, has_position, position);
+}
+
+static MalValue node_fs_read_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    int fd;
+    if (!node_fs_fd(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &fd)) {
+        return mal_value_new_undefined();
+    }
+    MalValue buffer = argc > 1 ? args[1] : mal_value_new_undefined();
+    if (!mal_value_is_typed_array_object(buffer) && !mal_value_is_data_view_object(buffer)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "read buffer must be a Buffer, TypedArray, or DataView");
+        return mal_value_new_undefined();
+    }
+    MalBufferSourceSpan span;
+    if (mal_buffer_source_span(buffer, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "read buffer is detached or out of bounds");
+        return mal_value_new_undefined();
+    }
+    usize offset;
+    usize length;
+    bool has_position;
+    i64 position;
+    if (argc <= 2 || (argc == 3 && (mal_value_is_object(args[2])
+            || mal_value_is_undefined(args[2])))) {
+        if (!node_fs_read_options(vm,
+                argc == 3 ? args[2] : mal_value_new_undefined(), span.length,
+                &offset, &length, &has_position, &position)) {
+            return mal_value_new_undefined();
+        }
+    } else {
+        if (!node_fs_non_negative_integer(vm,
+                argc > 2 ? args[2] : mal_value_new_undefined(),
+                "read offset is out of range", span.length, &offset)
+            || !node_fs_non_negative_integer(vm,
+                argc > 3 ? args[3] : mal_value_new_undefined(),
+                "read length is out of range", span.length - offset, &length)
+            || !node_fs_read_position(vm,
+                argc > 4 ? args[4] : mal_value_new_undefined(),
+                &has_position, &position)) {
+            return mal_value_new_undefined();
+        }
+    }
+    usize read_count;
+    int err = mal_posix_fs_read_fd(fd,
+        span.data == nullptr ? nullptr : span.data + offset,
+        length, has_position, position, &read_count);
+    if (err != 0) {
+        node_fs_throw_errno_with_dest(vm, err, "read", nullptr, nullptr);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_f64((f64) read_count);
 }
 
 static bool node_fs_write_bytes(
@@ -675,6 +818,24 @@ static MalValue node_fs_stat_sync(
         return mal_value_new_undefined();
     }
     free(path);
+    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
+}
+
+static MalValue node_fs_fstat_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    int fd;
+    if (!node_fs_fd(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &fd)) {
+        return mal_value_new_undefined();
+    }
+    MalPosixStat st;
+    int err = mal_posix_fs_fstat(fd, &st);
+    if (err != 0) {
+        node_fs_throw_errno_with_dest(vm, err, "fstat", nullptr, nullptr);
+        return mal_value_new_undefined();
+    }
     return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
 }
 
@@ -1591,6 +1752,9 @@ static MalValue node_fs_export(
     if (strcmp(name, "openSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "openSync", 3, node_fs_open_sync);
     }
+    if (strcmp(name, "readSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "readSync", 5, node_fs_read_sync);
+    }
     if (strcmp(name, "unlinkSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "unlinkSync", 1, node_fs_unlink_sync);
     }
@@ -1606,6 +1770,10 @@ static MalValue node_fs_export(
     if (strcmp(name, "statSync") == 0) {
         return node_fs_make_fn_slot(
             vm, fn_proto, "statSync", 1, node_fs_stat_sync, protos[0]);
+    }
+    if (strcmp(name, "fstatSync") == 0) {
+        return node_fs_make_fn_slot(
+            vm, fn_proto, "fstatSync", 1, node_fs_fstat_sync, protos[0]);
     }
     if (strcmp(name, "lstatSync") == 0) {
         return node_fs_make_fn_slot(
@@ -1689,8 +1857,8 @@ void mal_host_install_node_fs(
         node_fs_is_symbolic_link);
 
     static const char *names[] = {
-		"Stats", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
-		"mkdtempSync", "openSync", "readFile", "readFileSync", "readdir", "readdirSync", "realpathSync", "renameSync",
+		"Stats", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "fstatSync", "lstatSync", "mkdirSync",
+		"mkdtempSync", "openSync", "readFile", "readFileSync", "readSync", "readdir", "readdirSync", "realpathSync", "renameSync",
         "rmSync", "statSync", "stat", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));

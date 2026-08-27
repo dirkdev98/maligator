@@ -176,9 +176,10 @@ describe("host-install manifest", () => {
 		]);
 	});
 
-	it("binds openSync and closeSync through the node:fs installer", () => {
+	it("binds descriptor operations through the node:fs installer", () => {
 		const def = compile(
-			`import { closeSync, openSync } from "node:fs";\nglobalThis.sink = [openSync, closeSync];\n`,
+			`import { closeSync, fstatSync, openSync, readSync } from "node:fs";\n` +
+				`globalThis.sink = [openSync, readSync, fstatSync, closeSync];\n`,
 			{ node: true },
 		);
 		expect(def.runtime.hostInstalls).toEqual([
@@ -186,7 +187,9 @@ describe("host-install manifest", () => {
 				installer: "mal_host_install_node_fs",
 				exports: [
 					expect.objectContaining({ name: "closeSync" }),
+					expect.objectContaining({ name: "fstatSync" }),
 					expect.objectContaining({ name: "openSync" }),
+					expect.objectContaining({ name: "readSync" }),
 				],
 			}),
 		]);

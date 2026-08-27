@@ -84,11 +84,20 @@ int mal_posix_fs_chmod(const char *path, u32 mode);
 /* Write all bytes to an open descriptor. Returns 0 or an errno. */
 int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written);
 
+/* Read up to `len` bytes into `data`. With `has_position`, use pread(2) so the
+ * descriptor's current offset is unchanged; otherwise consume from that offset.
+ * The exact number of bytes read (including zero at EOF) is returned in `read`. */
+int mal_posix_fs_read_fd(
+    int fd, byte *data, usize len, bool has_position, i64 position, usize *read);
+
 /* Close an open descriptor. Returns 0 or an errno. */
 int mal_posix_fs_close_fd(int fd);
 
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */
 int mal_posix_fs_stat(const char *path, MalPosixStat *out);
+
+/* fstat(2) an open descriptor into `*out`. */
+int mal_posix_fs_fstat(int fd, MalPosixStat *out);
 
 /* Set access and modification timestamps with nanosecond precision. */
 int mal_posix_fs_utimes(const char *path,

@@ -5,12 +5,14 @@ import {
 	closeSync,
 	copyFileSync,
 	existsSync,
+	fstatSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	openSync,
 	readFile,
 	readFileSync,
+	readSync,
 	readdirSync,
 	realpathSync,
 	renameSync,
@@ -88,6 +90,65 @@ eq(
 	statSync(openedFile).mode & 0o777,
 	0o640,
 );
+writeFileSync(openedFile, "abcdef");
+const readDescriptor = openSync(openedFile, "r");
+const positionedRead = Buffer.alloc(6);
+eq(
+	"readSync positional overload returns bytes read",
+	readSync(readDescriptor, positionedRead, 1, 3, 1),
+	3,
+);
+eq(
+	"readSync positional overload writes at the byte offset",
+	positionedRead.toString(),
+	"\0bcd\0\0",
+);
+const sequentialRead = Buffer.alloc(4);
+eq(
+	"readSync options overload defaults to the descriptor position",
+	readSync(readDescriptor, sequentialRead, { offset: 1, length: 2, position: null }),
+	2,
+);
+eq(
+	"positioned read leaves the descriptor offset unchanged",
+	sequentialRead.toString(),
+	"\0ab\0",
+);
+const dataViewBytes = new Uint8Array(4);
+eq(
+	"readSync accepts DataView destinations",
+	readSync(readDescriptor, new DataView(dataViewBytes.buffer), 1, 2, null),
+	2,
+);
+eq(
+	"readSync advances sequential descriptor reads",
+	dataViewBytes.join(","),
+	"0,99,100,0",
+);
+const descriptorStat = fstatSync(readDescriptor);
+check("fstatSync returns a Stats instance", descriptorStat instanceof Stats);
+eq("fstatSync observes descriptor size", descriptorStat.size, 6);
+closeSync(readDescriptor);
+
+let readDescriptorCode = "";
+let readDescriptorPath = false;
+try {
+	readSync(readDescriptor, Buffer.alloc(1), 0, 1, null);
+} catch (error) {
+	const fsError = error as NodeJS.ErrnoException;
+	readDescriptorCode = fsError.code ?? "";
+	readDescriptorPath = "path" in fsError;
+}
+eq("readSync exposes descriptor errno", readDescriptorCode, "EBADF");
+eq("readSync descriptor errors omit path", readDescriptorPath, false);
+
+let stringDescriptorRejected = false;
+try {
+	fstatSync(String(readDescriptor) as unknown as number);
+} catch (error) {
+	stringDescriptorRejected = error instanceof TypeError;
+}
+check("descriptor APIs reject numeric strings", stringDescriptorRejected);
 
 writeFileSync(textFile, "héllo 😀");
 chmodSync(textFile, 0o640);
