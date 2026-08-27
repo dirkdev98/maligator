@@ -50,6 +50,7 @@ import type {
 	CoreOpcodeAccess,
 	CoreOpcodeAllocation,
 	CoreOpcodeRegistry,
+	CoreFunction,
 	CoreProgram,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -433,6 +434,88 @@ interface SlotCensus {
  * decoder here, so the answer cannot drift from the opcode's declared memory and
  * a verified effect refinement that removed the write removes it here too.
  */
+function censusFunctionSlotAccesses(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+	census: SlotCensus,
+): void {
+	const producers = new Array<CoreInstruction | undefined>(
+		(fn.values.at(-1)?.id ?? -1) + 1,
+	).fill(undefined);
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			for (const output of instruction.outputs) producers[output] = instruction;
+		}
+	}
+	/**
+	 * A store of the uninitialized sentinel is the frontend's TDZ setup, not an
+	 * assignment: a read that observes it throws before it can observe anything,
+	 * so it cannot be the value a later read sees and it does not make a
+	 * single-assignment binding multiply assigned.
+	 */
+	const storesSentinel = (value: CoreValueId): boolean => {
+		let current = value;
+		for (;;) {
+			const producer = producers[current];
+			if (producer === undefined) return false;
+			if (producer.opcode === "createEmpty") return true;
+			if (producer.opcode !== "move" || producer.inputs.length !== 1) return false;
+			// A move's input dominates its output definition in verified SSA, so this
+			// producer walk is acyclic without a per-query visited set.
+			current = producer.inputs[0]!;
+		}
+	};
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			const introducesCallable = !SLOT_WRITERS_WITHOUT_NEW_CALLABLES.has(
+				instruction.opcode,
+			);
+			const preservesValues = SLOT_FAMILY_WRITERS_PRESERVING_CELL_VALUES.has(
+				instruction.opcode,
+			);
+			for (const access of coreMemoryAccesses(instruction, undefined, registry)) {
+				const location = access.location;
+				if (location.kind === "family") {
+					const global = location.family === "global-slot";
+					if (!global && location.family !== "captured-slot") continue;
+					if (access.mode === "read") {
+						if (global) census.globalPublished = true;
+						else census.capturedPublished = true;
+						continue;
+					}
+					if (global) {
+						if (introducesCallable) census.global = true;
+						if (!preservesValues) census.globalOverwrite = true;
+					} else {
+						if (introducesCallable) census.captured = true;
+						if (!preservesValues) census.capturedOverwrite = true;
+					}
+					continue;
+				}
+				if (access.mode !== "write") continue;
+				const assigns = access.value === undefined || !storesSentinel(access.value);
+				if (location.kind === "global-slot") {
+					if (assigns) {
+						census.globalWriters.set(
+							location.slot,
+							(census.globalWriters.get(location.slot) ?? 0) + 1,
+						);
+					}
+					if (access.value === undefined) census.opaqueGlobalSlots.add(location.slot);
+				} else if (location.kind === "captured-slot") {
+					const key = capturedSlotKey(location.owner, location.index);
+					if (assigns) {
+						census.capturedWriters.set(key, (census.capturedWriters.get(key) ?? 0) + 1);
+					}
+					if (access.value === undefined) {
+						census.opaqueCapturedSlots.set(key, [location.owner, location.index]);
+					}
+				}
+			}
+		}
+	}
+}
+
 function censusSlotAccesses(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry,
@@ -450,81 +533,7 @@ function censusSlotAccesses(
 		capturedWriters: new Map(),
 	};
 	for (const fn of program.functions) {
-		const producers = new Array<CoreInstruction | undefined>(
-			(fn.values.at(-1)?.id ?? -1) + 1,
-		).fill(undefined);
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				for (const output of instruction.outputs) producers[output] = instruction;
-			}
-		}
-		/**
-		 * A store of the uninitialized sentinel is the frontend's TDZ setup, not an
-		 * assignment: a read that observes it throws before it can observe anything,
-		 * so it cannot be the value a later read sees and it does not make a
-		 * single-assignment binding multiply assigned.
-		 */
-		const storesSentinel = (value: CoreValueId): boolean => {
-			let current = value;
-			for (;;) {
-				const producer = producers[current];
-				if (producer === undefined) return false;
-				if (producer.opcode === "createEmpty") return true;
-				if (producer.opcode !== "move" || producer.inputs.length !== 1) return false;
-				// A move's input dominates its output definition in verified SSA, so this
-				// producer walk is acyclic without a per-query visited set.
-				current = producer.inputs[0]!;
-			}
-		};
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				const introducesCallable = !SLOT_WRITERS_WITHOUT_NEW_CALLABLES.has(
-					instruction.opcode,
-				);
-				const preservesValues = SLOT_FAMILY_WRITERS_PRESERVING_CELL_VALUES.has(
-					instruction.opcode,
-				);
-				for (const access of coreMemoryAccesses(instruction, undefined, registry)) {
-					const location = access.location;
-					if (location.kind === "family") {
-						const global = location.family === "global-slot";
-						if (!global && location.family !== "captured-slot") continue;
-						if (access.mode === "read") {
-							if (global) census.globalPublished = true;
-							else census.capturedPublished = true;
-							continue;
-						}
-						if (global) {
-							if (introducesCallable) census.global = true;
-							if (!preservesValues) census.globalOverwrite = true;
-						} else {
-							if (introducesCallable) census.captured = true;
-							if (!preservesValues) census.capturedOverwrite = true;
-						}
-						continue;
-					}
-					if (access.mode !== "write") continue;
-					const assigns = access.value === undefined || !storesSentinel(access.value);
-					if (location.kind === "global-slot") {
-						if (assigns) {
-							census.globalWriters.set(
-								location.slot,
-								(census.globalWriters.get(location.slot) ?? 0) + 1,
-							);
-						}
-						if (access.value === undefined) census.opaqueGlobalSlots.add(location.slot);
-					} else if (location.kind === "captured-slot") {
-						const key = capturedSlotKey(location.owner, location.index);
-						if (assigns) {
-							census.capturedWriters.set(key, (census.capturedWriters.get(key) ?? 0) + 1);
-						}
-						if (access.value === undefined) {
-							census.opaqueCapturedSlots.set(key, [location.owner, location.index]);
-						}
-					}
-				}
-			}
-		}
+		censusFunctionSlotAccesses(fn, registry, census);
 	}
 	return census;
 }
