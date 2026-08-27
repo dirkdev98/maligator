@@ -10,18 +10,24 @@ import fsDefault, {
 	fstatSync,
 	fsyncSync,
 	ftruncateSync,
+	link as linkCallback,
+	linkSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	openSync,
 	readFile,
 	readFileSync,
+	readlink as readlinkCallback,
+	readlinkSync,
 	readSync,
 	readdirSync,
 	realpathSync,
 	renameSync,
 	rmSync,
 	statSync,
+	symlink as symlinkCallback,
+	symlinkSync,
 	unlinkSync,
 	utimesSync,
 	writeFileSync,
@@ -29,13 +35,16 @@ import fsDefault, {
 import fsPromises, {
 	appendFile,
 	copyFile,
+	link,
 	lstat,
 	mkdir,
 	readFile as readFilePromise,
+	readlink,
 	readdir,
 	rename,
 	rm,
 	stat,
+	symlink,
 	unlink,
 	writeFile,
 } from "node:fs/promises";
@@ -451,6 +460,90 @@ check(
 	"Stats constructor timestamps are invalid Dates",
 	Number.isNaN(emptyStats.mtime.getTime()),
 );
+
+const hardLink = `${nested}/hard-link.txt`;
+linkSync(pathToFileURL(textFile), pathToFileURL(hardLink));
+eq("linkSync creates the same inode", statSync(hardLink).ino, statSync(textFile).ino);
+eq(
+	"linkSync preserves file contents",
+	readFileSync(hardLink, "utf8"),
+	readFileSync(textFile, "utf8"),
+);
+const callbackHardLink = `${nested}/callback-hard-link.txt`;
+await new Promise<void>((resolve, reject) => {
+	linkCallback(textFile, callbackHardLink, (error) => {
+		if (error) reject(error);
+		else resolve();
+	});
+});
+eq(
+	"link callback creates a hard link",
+	statSync(callbackHardLink).ino,
+	statSync(textFile).ino,
+);
+const promiseHardLink = `${nested}/promise-hard-link.txt`;
+await link(textFile, promiseHardLink);
+eq(
+	"promise link creates a hard link",
+	statSync(promiseHardLink).ino,
+	statSync(textFile).ino,
+);
+
+const symbolicLink = `${nested}/symbolic-link.txt`;
+symlinkSync("utf8.txt", pathToFileURL(symbolicLink), "file");
+check("symlinkSync creates a symbolic link", lstatSync(symbolicLink).isSymbolicLink());
+check("statSync follows a symbolic link", statSync(symbolicLink).isFile());
+eq("readlinkSync defaults to UTF-8", readlinkSync(symbolicLink), "utf8.txt");
+const symbolicTargetBuffer = readlinkSync(pathToFileURL(symbolicLink), "buffer");
+check("readlinkSync supports Buffer results", Buffer.isBuffer(symbolicTargetBuffer));
+eq(
+	"readlinkSync Buffer preserves target bytes",
+	symbolicTargetBuffer.toString(),
+	"utf8.txt",
+);
+eq(
+	"readlinkSync supports arbitrary encodings",
+	readlinkSync(symbolicLink, "hex"),
+	"757466382e747874",
+);
+
+const callbackSymbolicLink = `${nested}/callback-symbolic-link.txt`;
+await new Promise<void>((resolve, reject) => {
+	symlinkCallback("bytes.bin", callbackSymbolicLink, "file", (error) => {
+		if (error) reject(error);
+		else resolve();
+	});
+});
+const callbackSymbolicTarget = await new Promise<Buffer>((resolve, reject) => {
+	readlinkCallback(callbackSymbolicLink, { encoding: "buffer" }, (error, target) => {
+		if (error) reject(error);
+		else resolve(target);
+	});
+});
+eq(
+	"readlink callback supports Buffer results",
+	callbackSymbolicTarget.toString(),
+	"bytes.bin",
+);
+const promiseSymbolicLink = `${nested}/promise-symbolic-link.txt`;
+await symlink("opened.txt", promiseSymbolicLink);
+eq(
+	"promise readlink supports encodings",
+	await readlink(promiseSymbolicLink, "hex"),
+	"6f70656e65642e747874",
+);
+
+let invalidSymlinkTypeRejected = false;
+try {
+	symlinkSync(
+		"utf8.txt",
+		`${nested}/invalid-symbolic-link`,
+		"invalid" as Parameters<typeof symlinkSync>[2],
+	);
+} catch (error) {
+	invalidSymlinkTypeRejected = error instanceof TypeError;
+}
+check("symlinkSync validates the link type", invalidSymlinkTypeRejected);
 
 const entries = readdirSync(nested, { withFileTypes: true });
 let sawText = false;

@@ -327,6 +327,43 @@ int mal_posix_fs_append_file(const char *path, const byte *data, usize len) {
     return mal_posix_fs_write_file_flags(path, data, len, O_APPEND);
 }
 
+int mal_posix_fs_link(const char *existing_path, const char *new_path) {
+    return link(existing_path, new_path) == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_symlink(const char *target, const char *path) {
+    return symlink(target, path) == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_readlink(const char *path, byte **out_data, usize *out_len) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return errno;
+    usize capacity = st.st_size > 0 && (uintmax_t) st.st_size < (uintmax_t) SIZE_MAX
+        ? (usize) st.st_size + 1
+        : 256;
+    for (;;) {
+        byte *data = malloc(capacity);
+        if (data == nullptr) return ENOMEM;
+        ssize_t length;
+        do {
+            length = readlink(path, data, capacity);
+        } while (length < 0 && errno == EINTR);
+        if (length < 0) {
+            int err = errno;
+            free(data);
+            return err;
+        }
+        if ((usize) length < capacity) {
+            *out_data = data;
+            *out_len = (usize) length;
+            return 0;
+        }
+        free(data);
+        if (capacity > SIZE_MAX / 2) return EFBIG;
+        capacity *= 2;
+    }
+}
+
 int mal_posix_fs_unlink(const char *path) {
     if (unlink(path) != 0) return errno;
     return 0;

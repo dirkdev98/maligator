@@ -103,6 +103,12 @@ int mal_posix_fs_write_file(const char *path, const byte *data, usize len);
 /* Create-or-append `path` (mode 0666 & umask) and write all `len` bytes. */
 int mal_posix_fs_append_file(const char *path, const byte *data, usize len);
 
+/* Create hard and symbolic links, and read a symbolic link's uninterpreted byte
+ * payload into a fresh malloc-owned buffer. */
+int mal_posix_fs_link(const char *existing_path, const char *new_path);
+int mal_posix_fs_symlink(const char *target, const char *path);
+int mal_posix_fs_readlink(const char *path, byte **out_data, usize *out_len);
+
 /* Remove one non-directory filesystem entry. */
 int mal_posix_fs_unlink(const char *path);
 

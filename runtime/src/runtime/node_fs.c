@@ -917,6 +917,134 @@ static bool node_fs_write_bytes(
     return false;
 }
 
+static MalValue node_fs_link_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *existing = node_fs_path_cstr(
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (existing == nullptr) return mal_value_new_undefined();
+    char *created = node_fs_path_cstr(
+        vm, argc >= 2 ? args[1] : mal_value_new_undefined());
+    if (created == nullptr) {
+        free(existing);
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_link(existing, created);
+    if (err != 0) node_fs_throw_errno_with_dest(vm, err, "link", existing, created);
+    free(existing);
+    free(created);
+    return mal_value_new_undefined();
+}
+
+static bool node_fs_symlink_type(MalVm *vm, MalValue value) {
+    if (mal_value_is_undefined(value) || mal_value_is_null(value)) return true;
+    if (mal_value_is_string(value)) {
+        MalString *type = mal_value_to_string(value);
+        if (mal_string_equals_ascii(type, "file")
+            || mal_string_equals_ascii(type, "dir")
+            || mal_string_equals_ascii(type, "junction")) {
+            return true;
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        (const byte *) "symlink type must be file, dir, junction, null, or undefined");
+    return false;
+}
+
+static MalValue node_fs_symlink_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *target = node_fs_path_cstr(
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (target == nullptr) return mal_value_new_undefined();
+    char *path = node_fs_path_cstr(
+        vm, argc >= 2 ? args[1] : mal_value_new_undefined());
+    if (path == nullptr) {
+        free(target);
+        return mal_value_new_undefined();
+    }
+    if (!node_fs_symlink_type(
+            vm, argc >= 3 ? args[2] : mal_value_new_undefined())) {
+        free(target);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_symlink(target, path);
+    if (err != 0) node_fs_throw_errno_with_dest(vm, err, "symlink", target, path);
+    free(target);
+    free(path);
+    return mal_value_new_undefined();
+}
+
+static bool node_fs_readlink_options(
+    MalVm *vm, MalValue options, MalValue *encoding, bool *buffer) {
+    *encoding = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "utf8"));
+    *buffer = false;
+    if (mal_value_is_undefined(options) || mal_value_is_null(options)) return true;
+    MalValue option = options;
+    if (mal_value_is_object(options)) {
+        if (!mal_vm_get_property(vm, options,
+                mal_intrinsic_string_key(vm, (const byte *) "encoding"), &option)) {
+            return false;
+        }
+        if (mal_value_is_undefined(option) || mal_value_is_null(option)) return true;
+    } else if (!mal_value_is_string(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "readlink options must be a string or object");
+        return false;
+    }
+    if (mal_value_is_string(option)
+        && mal_string_equals_ascii_ci(mal_value_to_string(option), "buffer")) {
+        *encoding = mal_value_new_undefined();
+        *buffer = true;
+        return true;
+    }
+    return node_fs_encoding_option(vm, option, "readlink", encoding);
+}
+
+static MalValue node_fs_readlink_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    MalValue encoding = mal_value_new_undefined();
+    MalRootSpan encoding_root;
+    mal_gc_root(&encoding_root, &encoding, 1);
+    bool buffer;
+    if (!node_fs_readlink_options(vm,
+            argc >= 2 ? args[1] : mal_value_new_undefined(), &encoding, &buffer)) {
+        mal_gc_unroot(&encoding_root);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    byte *data;
+    usize length;
+    int err = mal_posix_fs_readlink(path, &data, &length);
+    if (err != 0) {
+        node_fs_throw_errno(vm, err, "readlink", path);
+        mal_gc_unroot(&encoding_root);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    free(path);
+    MalValue result = buffer
+        ? mal_node_buffer_from_owned_bytes(vm, data, length)
+        : mal_node_buffer_encode_bytes(vm, data, length, encoding, true);
+    if (!buffer) free(data);
+    mal_gc_unroot(&encoding_root);
+    return result;
+}
+
 static MalValue node_fs_unlink_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue nt, MalValue callee) {
@@ -1507,8 +1635,10 @@ static void node_fs_clear_completion(MalVm *vm) {
 enum {
     NODE_FS_PROMISE_TASK_PROMISE,
     NODE_FS_PROMISE_TASK_OPERATION,
-    NODE_FS_PROMISE_TASK_PATH,
-    NODE_FS_PROMISE_TASK_OPTIONS,
+    NODE_FS_PROMISE_TASK_ARG0,
+    NODE_FS_PROMISE_TASK_ARG1,
+    NODE_FS_PROMISE_TASK_ARG2,
+    NODE_FS_PROMISE_TASK_ARGC,
     NODE_FS_PROMISE_TASK_SLOT_COUNT,
 };
 
@@ -1525,18 +1655,20 @@ static MalValue node_fs_promise_task(
     }
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    i32 operation_argc = (i32) mal_ops_number_as_f64(
+        roots[NODE_FS_PROMISE_TASK_ARGC]);
     MalCompletion completion = mal_vm_call_value(
         vm, roots[NODE_FS_PROMISE_TASK_OPERATION], mal_value_new_undefined(),
-        roots + NODE_FS_PROMISE_TASK_PATH, 2);
+        roots + NODE_FS_PROMISE_TASK_ARG0, operation_argc);
     MalPromiseObject *promise = mal_value_to_promise_object(
         roots[NODE_FS_PROMISE_TASK_PROMISE]);
     if (completion.kind == MAL_COMPLETION_THROW) {
-        roots[NODE_FS_PROMISE_TASK_PATH] = completion.value;
+        roots[NODE_FS_PROMISE_TASK_ARG0] = completion.value;
         node_fs_clear_completion(vm);
-        mal_promise_reject(vm, promise, roots[NODE_FS_PROMISE_TASK_PATH]);
+        mal_promise_reject(vm, promise, roots[NODE_FS_PROMISE_TASK_ARG0]);
     } else {
-        roots[NODE_FS_PROMISE_TASK_PATH] = completion.value;
-        mal_promise_fulfill(vm, promise, roots[NODE_FS_PROMISE_TASK_PATH]);
+        roots[NODE_FS_PROMISE_TASK_ARG0] = completion.value;
+        mal_promise_fulfill(vm, promise, roots[NODE_FS_PROMISE_TASK_ARG0]);
     }
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
@@ -1554,6 +1686,8 @@ static MalValue node_fs_promises_operation(
             mal_value_to_native_function_object(callee), 0),
         argc >= 1 ? args[0] : mal_value_new_undefined(),
         argc >= 2 ? args[1] : mal_value_new_undefined(),
+        argc >= 3 ? args[2] : mal_value_new_undefined(),
+        mal_value_from_i32(argc < 3 ? argc : 3),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -1584,19 +1718,22 @@ static MalValue node_fs_callback_task(
     }
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    i32 operation_argc = (i32) mal_ops_number_as_f64(
+        roots[NODE_FS_PROMISE_TASK_ARGC]);
     MalCompletion completion = mal_vm_call_value(
         vm, roots[NODE_FS_PROMISE_TASK_OPERATION], mal_value_new_undefined(),
-        roots + NODE_FS_PROMISE_TASK_PATH, 2);
+        roots + NODE_FS_PROMISE_TASK_ARG0, operation_argc);
     if (completion.kind == MAL_COMPLETION_THROW) {
-        roots[NODE_FS_PROMISE_TASK_PATH] = completion.value;
+        roots[NODE_FS_PROMISE_TASK_ARG0] = completion.value;
         node_fs_clear_completion(vm);
         mal_vm_call_value(vm, roots[NODE_FS_PROMISE_TASK_PROMISE],
-            mal_value_new_undefined(), roots + NODE_FS_PROMISE_TASK_PATH, 1);
+            mal_value_new_undefined(), roots + NODE_FS_PROMISE_TASK_ARG0, 1);
     } else {
-        roots[NODE_FS_PROMISE_TASK_PATH] = mal_value_new_null();
-        roots[NODE_FS_PROMISE_TASK_OPTIONS] = completion.value;
+        roots[NODE_FS_PROMISE_TASK_ARG0] = mal_value_new_null();
+        roots[NODE_FS_PROMISE_TASK_ARG1] = completion.value;
         mal_vm_call_value(vm, roots[NODE_FS_PROMISE_TASK_PROMISE],
-            mal_value_new_undefined(), roots + NODE_FS_PROMISE_TASK_PATH, 2);
+            mal_value_new_undefined(), roots + NODE_FS_PROMISE_TASK_ARG0,
+            mal_value_is_undefined(completion.value) ? 1 : 2);
     }
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
@@ -1610,7 +1747,7 @@ static MalValue node_fs_callback_operation(
     i32 callback_index = argc - 1;
     if (callback_index < 1 || !mal_value_is_callable(args[callback_index])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "readdir callback must be a function");
+            (const byte *) "filesystem callback must be a function");
         return mal_value_new_undefined();
     }
     MalValue roots[NODE_FS_PROMISE_TASK_SLOT_COUNT] = {
@@ -1619,6 +1756,8 @@ static MalValue node_fs_callback_operation(
             mal_value_to_native_function_object(callee), 0),
         args[0],
         callback_index > 1 ? args[1] : mal_value_new_undefined(),
+        callback_index > 2 ? args[2] : mal_value_new_undefined(),
+        mal_value_from_i32(callback_index < 3 ? callback_index : 3),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -2169,6 +2308,15 @@ static MalValue node_fs_export(
     if (strcmp(name, "appendFileSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "appendFileSync", 2, node_fs_append_file_sync);
     }
+    if (strcmp(name, "linkSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "linkSync", 2, node_fs_link_sync);
+    }
+    if (strcmp(name, "readlinkSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "readlinkSync", 1, node_fs_readlink_sync);
+    }
+    if (strcmp(name, "symlinkSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "symlinkSync", 2, node_fs_symlink_sync);
+    }
     if (strcmp(name, "chmodSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "chmodSync", 2, node_fs_chmod_sync);
     }
@@ -2228,6 +2376,20 @@ static MalValue node_fs_export(
 		mal_gc_unroot(&root);
 		return result;
 	}
+    if (strcmp(name, "link") == 0 || strcmp(name, "readlink") == 0
+        || strcmp(name, "symlink") == 0) {
+        const char *sync_name = strcmp(name, "link") == 0
+            ? "linkSync"
+            : strcmp(name, "readlink") == 0 ? "readlinkSync" : "symlinkSync";
+        i32 arity = strcmp(name, "symlink") == 0 ? 4 : 3;
+        MalValue operation = node_fs_export(vm, fn_proto, sync_name, protos);
+        MalRootSpan root;
+        mal_gc_root(&root, &operation, 1);
+        MalValue result = node_fs_make_fn_slot(
+            vm, fn_proto, name, arity, node_fs_callback_operation, operation);
+        mal_gc_unroot(&root);
+        return result;
+    }
     if (strcmp(name, "mkdirSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "mkdirSync", 1, node_fs_mkdir_sync);
     }
@@ -2325,9 +2487,9 @@ void mal_host_install_node_fs(
         node_fs_is_symbolic_link);
 
     static const char *names[] = {
-		"Stats", "accessSync", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "fstatSync", "fsyncSync", "ftruncateSync", "lstatSync", "mkdirSync",
-		"mkdtempSync", "openSync", "readFile", "readFileSync", "readSync", "readdir", "readdirSync", "realpathSync", "renameSync",
-        "rmSync", "statSync", "stat", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
+		"Stats", "accessSync", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "fstatSync", "fsyncSync", "ftruncateSync", "link", "linkSync", "lstatSync", "mkdirSync",
+		"mkdtempSync", "openSync", "readFile", "readFileSync", "readlink", "readlinkSync", "readSync", "readdir", "readdirSync", "realpathSync", "renameSync",
+        "rmSync", "statSync", "stat", "symlink", "symlinkSync", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan module_root;
@@ -2386,13 +2548,16 @@ void mal_host_install_node_fs_promises(
     } operations[] = {
         {"appendFile", "appendFileSync", 2},
         {"copyFile", "copyFileSync", 2},
+        {"link", "linkSync", 2},
         {"lstat", "lstatSync", 1},
         {"mkdir", "mkdirSync", 1},
         {"readFile", "readFileSync", 1},
+        {"readlink", "readlinkSync", 1},
         {"readdir", "readdirSync", 1},
         {"rename", "renameSync", 2},
         {"rm", "rmSync", 1},
         {"stat", "statSync", 1},
+        {"symlink", "symlinkSync", 2},
         {"unlink", "unlinkSync", 1},
         {"writeFile", "writeFileSync", 2},
     };
