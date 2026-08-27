@@ -231,12 +231,6 @@ const CORE_CALLEE_POSITION = 0;
 /** Control-flow uses carry no input position and must never satisfy a placement. */
 const CORE_CONTROL_FLOW_POSITION = -1;
 
-interface ValueDefinitionLocation {
-	readonly block: CoreBlockId;
-	/** -1 for a block parameter, otherwise the instruction's in-block index. */
-	readonly instructionIndex: number;
-}
-
 interface GuardLocation {
 	readonly instruction: CoreInstructionId;
 	readonly fact: CoreFact["id"];
@@ -741,8 +735,12 @@ function verifyCoreFunctionGraph(
 	}
 
 	const instructionIds = new Set<CoreInstructionId>();
-	const definitions: Array<ValueDefinitionLocation | undefined> = [];
-	const values: Array<CoreValue | undefined> = [];
+	const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
+	const definitionBlocks = new Int32Array(valueCount);
+	definitionBlocks.fill(-1);
+	/** -1 for a block parameter, otherwise the instruction's in-block index. */
+	const definitionInstructionIndices = new Int32Array(valueCount);
+	const values = new Array<CoreValue | undefined>(valueCount);
 	for (const value of fn.values) values[value.id] = value;
 	const facts: Array<CoreFact | undefined> = [];
 	for (const fact of fn.facts) facts[fact.id] = fact;
@@ -789,10 +787,8 @@ function verifyCoreFunctionGraph(
 					`parameter ${parameter.value} in b${block.id} has a mismatched representation`,
 				);
 			}
-			definitions[parameter.value] = {
-				block: block.id,
-				instructionIndex: -1,
-			};
+			definitionBlocks[parameter.value] = block.id;
+			definitionInstructionIndices[parameter.value] = -1;
 		}
 		if (exceptionParameters > 1)
 			fail(`block b${block.id} has multiple exception parameters`);
@@ -839,9 +835,10 @@ function verifyCoreFunctionGraph(
 				) {
 					fail(`output ${output} of @${instruction.id} has a mismatched definition`);
 				}
-				if (definitions[output] !== undefined)
+				if (definitionBlocks[output] !== -1)
 					fail(`value ${output} has multiple definitions`);
-				definitions[output] = { block: block.id, instructionIndex };
+				definitionBlocks[output] = block.id;
+				definitionInstructionIndices[output] = instructionIndex;
 			}
 			if (instruction.effectRefinement !== undefined) {
 				const proof = facts[instruction.effectRefinement.proof];
@@ -905,7 +902,7 @@ function verifyCoreFunctionGraph(
 		}
 	}
 
-	const missingDefinition = fn.values.find(({ id }) => definitions[id] === undefined);
+	const missingDefinition = fn.values.find(({ id }) => definitionBlocks[id] === -1);
 	if (missingDefinition !== undefined) {
 		fail(`value ${missingDefinition.id} has no definition`);
 	}
@@ -1106,23 +1103,27 @@ function verifyCoreFunctionGraph(
 		instructionIndex: number,
 		context: string,
 	): void => {
-		const definition = definitions[valueId];
-		if (definition === undefined) fail(`${context} uses unknown value ${valueId}`);
-		if (definition.block === block.id) {
-			if (definition.instructionIndex >= instructionIndex) {
+		const rawDefinitionBlock = definitionBlocks[valueId];
+		if (rawDefinitionBlock === undefined || rawDefinitionBlock === -1) {
+			fail(`${context} uses unknown value ${valueId}`);
+		}
+		const definitionBlock = rawDefinitionBlock as CoreBlockId;
+		const definitionInstructionIndex = definitionInstructionIndices[valueId]!;
+		if (definitionBlock === block.id) {
+			if (definitionInstructionIndex >= instructionIndex) {
 				fail(`${context} uses ${valueId} before its definition in b${block.id}`);
 			}
 			return;
 		}
-		if (!cfg.dominates(definition.block, block.id)) {
+		if (!cfg.dominates(definitionBlock, block.id)) {
 			fail(`${context} uses ${valueId}, which does not dominate b${block.id}`);
 		}
 		if (
-			definition.instructionIndex !== -1 &&
-			!cfg.instructionDominatesBlock(definition.block, block.id)
+			definitionInstructionIndex !== -1 &&
+			!cfg.instructionDominatesBlock(definitionBlock, block.id)
 		) {
 			fail(
-				`${context} uses ${valueId}, which is not available on exceptional flow from b${definition.block}`,
+				`${context} uses ${valueId}, which is not available on exceptional flow from b${definitionBlock}`,
 			);
 		}
 	};
@@ -1150,15 +1151,18 @@ function verifyCoreFunctionGraph(
 		}
 		if (block.handler !== undefined) {
 			for (const argument of block.handler.arguments) {
-				const definition = definitions[argument];
-				if (definition === undefined)
+				const rawDefinitionBlock = definitionBlocks[argument];
+				if (rawDefinitionBlock === undefined || rawDefinitionBlock === -1) {
 					fail(`handler edge from b${block.id} uses unknown value ${argument}`);
+				}
+				const definitionBlock = rawDefinitionBlock as CoreBlockId;
+				const definitionInstructionIndex = definitionInstructionIndices[argument]!;
 				if (
-					definition.block === block.id
-						? definition.instructionIndex !== -1
-						: definition.instructionIndex === -1
-							? !cfg.dominates(definition.block, block.id)
-							: !cfg.instructionDominatesBlock(definition.block, block.id)
+					definitionBlock === block.id
+						? definitionInstructionIndex !== -1
+						: definitionInstructionIndex === -1
+							? !cfg.dominates(definitionBlock, block.id)
+							: !cfg.instructionDominatesBlock(definitionBlock, block.id)
 				) {
 					fail(
 						`handler edge from b${block.id} uses ${argument}, which is not available at block entry`,
