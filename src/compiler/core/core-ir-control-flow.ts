@@ -191,40 +191,12 @@ export function coreCanonicalValueRoots(
 		}
 	}
 
-	const componentDependencies = components.map(() => new Array<number>());
-	const componentUsers = components.map(() => new Array<number>());
-	const dependencySeenBy = new Int32Array(components.length);
-	dependencySeenBy.fill(-1);
-	for (const value of nodes) {
-		const component = componentOf[value]!;
-		for (const dependency of dependencies[value]!) {
-			const dependencyComponent = componentOf[dependency] ?? -1;
-			if (
-				dependencyComponent >= 0 &&
-				dependencyComponent !== component &&
-				dependencySeenBy[dependencyComponent] !== component
-			) {
-				dependencySeenBy[dependencyComponent] = component;
-				componentDependencies[component]!.push(dependencyComponent);
-			}
-		}
-	}
-	for (const [component, dependencyComponents] of componentDependencies.entries()) {
-		for (const dependency of dependencyComponents) {
-			componentUsers[dependency]!.push(component);
-		}
-	}
-
 	const canonical = new Int32Array(valueCount);
 	for (const { id } of fn.values) canonical[id] = id;
-	const remainingDependencies = new Uint32Array(
-		componentDependencies.map(({ length }) => length),
-	);
-	const ready = components
-		.map((_, component) => component)
-		.filter((component) => remainingDependencies[component] === 0);
-	while (ready.length > 0) {
-		const component = ready.pop()!;
+	// Kosaraju's second traversal discovers source components before the
+	// dependencies they point to. Walk that order backwards so every external
+	// canonical root is already solved, without rebuilding the component DAG.
+	for (let component = components.length - 1; component >= 0; component -= 1) {
 		let externalRoot: number | undefined;
 		let singleRoot = true;
 		for (const value of components[component]!) {
@@ -237,10 +209,6 @@ export function coreCanonicalValueRoots(
 		}
 		if (singleRoot && externalRoot !== undefined) {
 			for (const value of components[component]!) canonical[value] = externalRoot;
-		}
-		for (const user of componentUsers[component]!) {
-			remainingDependencies[user]!--;
-			if (remainingDependencies[user] === 0) ready.push(user);
 		}
 	}
 	const roots = new SparseCanonicalValueRoots();
