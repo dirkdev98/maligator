@@ -137,13 +137,13 @@ function instructionImmediates(
 interface InstructionSite {
 	readonly block: number;
 	readonly index: number;
+	readonly shape: OperandShape;
 }
 
 interface FunctionModel {
 	readonly fn: ExecutionFunction;
 	readonly functionIndex: number;
 	readonly sites: ReadonlyMap<CompilerInstruction, InstructionSite>;
-	readonly shapes: ReadonlyMap<CompilerInstruction, OperandShape>;
 	readonly handlerTargets: ReadonlySet<number>;
 }
 
@@ -229,7 +229,6 @@ function verifyProgramCardinality(program: ExecutionProgram): void {
 
 function buildFunctionModel(fn: ExecutionFunction, functionIndex: number): FunctionModel {
 	const sites = new Map<CompilerInstruction, InstructionSite>();
-	const shapes = new Map<CompilerInstruction, OperandShape>();
 	const handlerTargets = new Set<number>();
 	if (fn.blocks.length === 0) fail("target function has no blocks", { functionIndex });
 	for (const [block, { instructions }] of fn.blocks.entries()) {
@@ -243,12 +242,15 @@ function buildFunctionModel(fn: ExecutionFunction, functionIndex: number): Funct
 			if (sites.has(instruction)) {
 				fail("instruction appears at more than one position", context);
 			}
-			sites.set(instruction, { block, index });
-			shapes.set(instruction, operandShape(instruction.type, context));
+			sites.set(instruction, {
+				block,
+				index,
+				shape: operandShape(instruction.type, context),
+			});
 			if (instruction.type === "tryBegin") handlerTargets.add(instruction.blocks[0]);
 		}
 	}
-	return { fn, functionIndex, sites, shapes, handlerTargets };
+	return { fn, functionIndex, sites, handlerTargets };
 }
 
 function verifyRegisterPlan(model: FunctionModel): void {
@@ -309,7 +311,7 @@ function verifyInstructionOperands(model: FunctionModel): void {
 				instruction: index,
 				opcode: instruction.type,
 			};
-			const shape = model.shapes.get(instruction)!;
+			const shape = model.sites.get(instruction)!.shape;
 			const registers = instructionRegisters(instruction);
 			const count = registers?.length ?? 0;
 			if (count < shape.minimumRegisters || count > shape.maximumRegisters) {
@@ -676,7 +678,7 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const defined = new Set<number>();
 		for (const [index, instruction] of instructions.entries()) {
-			const shape = model.shapes.get(instruction)!;
+			const shape = model.sites.get(instruction)!.shape;
 			const context: ExecutionVerificationContext = {
 				functionIndex,
 				block,
