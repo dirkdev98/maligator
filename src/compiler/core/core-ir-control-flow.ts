@@ -296,23 +296,36 @@ function buildImmediateDominators(
 	readonly reachable: Set<CoreBlockId>;
 	readonly reversePostorder: ReadonlyArray<CoreBlockId>;
 } {
+	if (successors[entry]?.length === 0) {
+		const parents = new Array<CoreBlockId | null>(successors.length).fill(null);
+		parents[entry] = entry;
+		return { parents, reachable: new Set([entry]), reversePostorder: [entry] };
+	}
 	const visited = new Uint8Array(successors.length);
 	const postorder: Array<CoreBlockId> = [];
-	const stack: Array<{ block: CoreBlockId; next: number }> = [{ block: entry, next: 0 }];
+	const stackBlocks = new Int32Array(successors.length);
+	const stackNext = new Int32Array(successors.length);
+	stackBlocks[0] = entry;
+	let stackSize = 1;
 	visited[entry] = 1;
-	while (stack.length > 0) {
-		const frame = stack[stack.length - 1]!;
-		const outgoing = successors[frame.block]!;
-		if (frame.next < outgoing.length) {
-			const target = outgoing[frame.next++]!.to;
+	while (stackSize > 0) {
+		const stackIndex = stackSize - 1;
+		const block = stackBlocks[stackIndex]! as CoreBlockId;
+		const outgoing = successors[block]!;
+		const next = stackNext[stackIndex]!;
+		if (next < outgoing.length) {
+			stackNext[stackIndex] = next + 1;
+			const target = outgoing[next]!.to;
 			if (visited[target] === 0) {
 				visited[target] = 1;
-				stack.push({ block: target, next: 0 });
+				stackBlocks[stackSize] = target;
+				stackNext[stackSize] = 0;
+				stackSize += 1;
 			}
 			continue;
 		}
-		postorder.push(frame.block);
-		stack.pop();
+		postorder.push(block);
+		stackSize -= 1;
 	}
 
 	const reversePostorder = postorder.reverse();
@@ -320,8 +333,12 @@ function buildImmediateDominators(
 	const rank = new Int32Array(successors.length);
 	rank.fill(-1);
 	for (const [index, block] of reversePostorder.entries()) rank[block] = index;
-	const parents = new Array<CoreBlockId | null>(successors.length).fill(null);
-	parents[entry] = entry;
+	// Dominator iteration is an integer kernel. Keep its hot parent table unboxed;
+	// convert unreachable -1 entries to the public nullable form only once after
+	// convergence.
+	const denseParents = new Int32Array(successors.length);
+	denseParents.fill(-1);
+	denseParents[entry] = entry;
 
 	const intersect = (
 		leftInitial: CoreBlockId,
@@ -330,8 +347,8 @@ function buildImmediateDominators(
 		let left = leftInitial;
 		let right = rightInitial;
 		while (left !== right) {
-			while (rank[left]! > rank[right]!) left = parents[left]!;
-			while (rank[right]! > rank[left]!) right = parents[right]!;
+			while (rank[left]! > rank[right]!) left = denseParents[left]! as CoreBlockId;
+			while (rank[right]! > rank[left]!) right = denseParents[right]! as CoreBlockId;
 		}
 		return left;
 	};
@@ -343,16 +360,19 @@ function buildImmediateDominators(
 			const block = reversePostorder[index]!;
 			let parent: CoreBlockId | undefined;
 			for (const { from } of predecessors[block]!) {
-				if (parents[from] === null) continue;
+				if (denseParents[from]! < 0) continue;
 				parent = parent === undefined ? from : intersect(parent, from);
 			}
 			if (parent === undefined) continue;
-			if (parents[block] !== parent) {
-				parents[block] = parent;
+			if (denseParents[block] !== parent) {
+				denseParents[block] = parent;
 				changed = true;
 			}
 		}
 	}
+	const parents = Array.from(denseParents, (parent): CoreBlockId | null =>
+		parent < 0 ? null : (parent as CoreBlockId),
+	);
 	return { parents, reachable, reversePostorder };
 }
 
@@ -361,6 +381,9 @@ function buildDominatorPredicate(
 	parents: ReadonlyArray<CoreBlockId | null>,
 	reachable: ReadonlySet<CoreBlockId>,
 ): (dominator: CoreBlockId, block: CoreBlockId) => boolean {
+	if (reachable.size === 1) {
+		return (dominator, block) => dominator === entryBlock && block === entryBlock;
+	}
 	const children = parents.map(() => new Array<CoreBlockId>());
 	for (const block of reachable) {
 		const parent = parents[block];
@@ -373,21 +396,27 @@ function buildDominatorPredicate(
 	entries.fill(-1);
 	exits.fill(-1);
 	let clock = 0;
-	const stack: Array<{ readonly block: CoreBlockId; next: number }> = [
-		{ block: entryBlock, next: 0 },
-	];
+	const stackBlocks = new Int32Array(parents.length);
+	const stackNext = new Int32Array(parents.length);
+	stackBlocks[0] = entryBlock;
+	let stackSize = 1;
 	entries[entryBlock] = clock++;
-	while (stack.length > 0) {
-		const frame = stack[stack.length - 1]!;
-		const descendants = children[frame.block]!;
-		if (frame.next < descendants.length) {
-			const child = descendants[frame.next++]!;
+	while (stackSize > 0) {
+		const stackIndex = stackSize - 1;
+		const block = stackBlocks[stackIndex]! as CoreBlockId;
+		const descendants = children[block]!;
+		const next = stackNext[stackIndex]!;
+		if (next < descendants.length) {
+			stackNext[stackIndex] = next + 1;
+			const child = descendants[next]!;
 			entries[child] = clock++;
-			stack.push({ block: child, next: 0 });
+			stackBlocks[stackSize] = child;
+			stackNext[stackSize] = 0;
+			stackSize += 1;
 			continue;
 		}
-		exits[frame.block] = clock++;
-		stack.pop();
+		exits[block] = clock++;
+		stackSize -= 1;
 	}
 	return (dominator, block) => {
 		const entry = entries[dominator] ?? -1;
