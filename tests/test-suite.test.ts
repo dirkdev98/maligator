@@ -20,7 +20,8 @@ describe("test suite planner", () => {
 		const full = runSuite("full", "--list");
 
 		expect(smoke).toContain("smoke: Test262 cross-section");
-		expect(smoke).not.toContain("check: native complement");
+		expect(smoke).not.toContain("check: native normal");
+		expect(smoke).not.toContain("check: native sanitizer-primary");
 		expect(smoke).toContain("tests/native/development-runner.test.ts");
 		expect(smoke).not.toContain("tests/native/drivers.test.ts");
 		expect(smoke).not.toContain("tests/assets.test.ts");
@@ -28,10 +29,18 @@ describe("test suite planner", () => {
 		expect(check).toContain("check: unit complement");
 		expect(check).toContain("tests/assets.test.ts");
 		expect(check).toContain("tests/native/drivers.test.ts");
-		expect(check).toContain("check: native complement");
+		expect(check).toContain("check: native normal");
+		expect(check).toContain("check: native sanitizer-primary");
+		expect(check).toMatch(
+			/check: native normal:[\s\S]*npm run test:native[\s\S]*tests\/native\/allocation-sinking\.test\.ts/,
+		);
+		expect(check).toMatch(
+			/check: native sanitizer-primary:[\s\S]*npm run test:sanitize[\s\S]*tests\/native\/runtime-mechanics\.test\.ts/,
+		);
 		expect(check).not.toContain("full: self-hosted frontend");
 		expect(full).toContain("smoke: Test262 cross-section");
-		expect(full).toContain("check: native complement");
+		expect(full).toContain("check: native normal");
+		expect(full).toContain("check: native sanitizer-primary");
 		expect(full).toContain("full: self-hosted frontend");
 		expect(full).toContain("npm run test:unit:full-only");
 		expect(full).toContain("tests/toolchain.test.ts");
@@ -39,6 +48,9 @@ describe("test suite planner", () => {
 		expect(full).toContain("full: Test262 curated GC verification");
 		expect(full).toContain("full: WPT compiled normal");
 		expect(full).toContain("full: WPT focused GC verification");
+		expect(full).toContain("full: remaining: native normal");
+		expect(full).toContain("full: remaining: native sanitizer-primary");
+		expect(full).not.toContain("full: sanitizer suite");
 		expect(full).not.toContain("full: Test262 interpreted");
 		expect(full).not.toContain("full: WPT interpreted");
 		expect(full).not.toContain("full: WPT backend and GC matrix");

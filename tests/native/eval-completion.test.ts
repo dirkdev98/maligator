@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 } from "../../src/test-harness.ts";
 
@@ -15,17 +15,11 @@ describe("eval statement completion values", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/eval-completion.js",
 			name: "eval-completion",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/eval-completion.js",
-			name: "eval-completion-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("passes compiled", () => {

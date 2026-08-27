@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -15,17 +15,11 @@ describe("generic Array.prototype ToObject", () => {
 	let compiled: string;
 	let interpreted: string;
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/array-to-object.js",
 			name: "array-to-object",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/array-to-object.js",
-			name: "array-to-object-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("passes compiled", () => {

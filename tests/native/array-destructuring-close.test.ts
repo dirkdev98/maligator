@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -15,17 +15,11 @@ describe("array destructuring assignment IteratorClose", () => {
 	let compiled: string;
 	let interpreted: string;
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/array-destructuring-close.js",
 			name: "array-destructuring-close",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/array-destructuring-close.js",
-			name: "array-destructuring-close-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("passes compiled", () => {

@@ -35,8 +35,10 @@ import {
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "./compiler/target/emit-program-image.ts";
+import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
-import { buildLocalBinary } from "./local-build.ts";
+import { cacheFrontendWire } from "./frontend-cache.ts";
+import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
@@ -283,6 +285,22 @@ function linkProgramImage(
 	const cSource = options.translationUnits
 		? emitProgramTranslationUnits(image, emitOptions)
 		: emitProgramImage(image, emitOptions);
+	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config);
+	return buildLocalBinary({
+		context,
+		name,
+		cSource,
+		verbose: false,
+		mainFile: options.mainFile,
+		outDir: options.outDir,
+		cacheSuffix,
+	});
+}
+
+function resolveHarnessNativeContext(
+	options: BuildOptions,
+	config: ResolvedBuildConfig,
+): { context: NativeBuildContext; cacheSuffix: string } {
 	const baseDerivation = buildDerivationFromConfig(config);
 	const derivation = options.profileEnabled
 		? {
@@ -296,34 +314,65 @@ function linkProgramImage(
 						: `${baseDerivation.cacheSuffix}-profile`,
 			}
 		: baseDerivation;
-	const context = resolveNativeBuildContext({
-		features: derivation.features,
-		environment: options.environment,
-		compilerBake: options.compilerBake ?? defaultCompilerBake(),
-		production: options.production,
-	});
-	return buildLocalBinary({
-		context,
-		name,
-		cSource,
-		verbose: false,
-		mainFile: options.mainFile,
-		outDir: options.outDir,
+	return {
+		context: resolveNativeBuildContext({
+			features: derivation.features,
+			environment: options.environment,
+			compilerBake: options.compilerBake ?? defaultCompilerBake(),
+			production: options.production,
+		}),
 		cacheSuffix: derivation.cacheSuffix,
+	};
+}
+
+interface RegisteredWireExecution {
+	executable: string;
+	args: Array<string>;
+}
+
+const registeredWireExecutions = new Map<string, RegisteredWireExecution>();
+
+function registerWireExecution(
+	options: BuildOptions,
+	config: ResolvedBuildConfig,
+	image: ProgramImage,
+	name: string,
+): { target: string; context: NativeBuildContext } {
+	if (
+		options.mainFile !== undefined &&
+		path.resolve(options.mainFile) !== path.resolve(HOST_MAIN)
+	) {
+		throw new Error(
+			"serialized interpreter pairs require the standard or ordinary host driver",
+		);
+	}
+	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config);
+	const runner = buildDevelopmentRunner(context, false, cacheSuffix);
+	const wirePath = cacheFrontendWire(serializeRuntimeImage(image.runtime));
+	const target = `maligator-wire:${name}:${registeredWireExecutions.size}`;
+	registeredWireExecutions.set(target, {
+		executable: runner.binaryPath,
+		args: [wirePath],
 	});
+	return { target, context: runner.context };
+}
+
+function executionInvocation(target: string): RegisteredWireExecution {
+	return registeredWireExecutions.get(target) ?? { executable: target, args: [] };
 }
 
 export interface BackendPairResult {
 	compiled: string;
 	interpreted: string;
-	/** Exact native build context shared by both backend links. */
+	/** Exact native build context shared by native emission and the MALW runner. */
 	context: NativeBuildContext;
 }
 
 /**
- * Emit and link both backends from one in-memory optimized program image, so a
- * compiled/interpreted difference can only come from emission — never from two
- * independent frontend, optimizer, or cache-restore runs producing different IR.
+ * Compile one optimized program image, link the native backend, and execute the
+ * interpreted backend through the reusable MALW development runner. A difference
+ * can therefore only come after the shared frontend/optimizer boundary, while the
+ * interpreted half avoids a per-fixture generated object and native link.
  */
 export function buildBackendPairFromOneProgramImage(
 	options: Omit<BuildOptions, "compiled">,
@@ -337,11 +386,10 @@ export function buildBackendPairFromOneProgramImage(
 		true,
 		`${options.name}-compiled`,
 	);
-	const interpreted = linkProgramImage(
+	const interpreted = registerWireExecution(
 		options,
 		config,
 		image,
-		false,
 		`${options.name}-interpreted`,
 	);
 	if (
@@ -352,7 +400,7 @@ export function buildBackendPairFromOneProgramImage(
 	}
 	return {
 		compiled: compiled.binaryPath,
-		interpreted: interpreted.binaryPath,
+		interpreted: interpreted.target,
 		context: compiled.context,
 	};
 }
@@ -392,8 +440,9 @@ export class RunError extends Error {
  */
 export function runToStdout(binary: string, options: RunOptions = {}): string {
 	const env = { ...process.env, ...options.env };
+	const invocation = executionInvocation(binary);
 	try {
-		return execFileSync(binary, {
+		return execFileSync(invocation.executable, invocation.args, {
 			env,
 			encoding: "utf-8",
 			timeout: scaledNativeRunTimeoutMs(options.timeoutMs, env),
@@ -518,7 +567,8 @@ export async function withServer<T>(
 	env: NodeJS.ProcessEnv,
 	body: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
-	const child = spawn(binary, [], {
+	const invocation = executionInvocation(binary);
+	const child = spawn(invocation.executable, invocation.args, {
 		stdio: ["ignore", "pipe", "pipe"],
 		env: { ...process.env, ...env },
 	});

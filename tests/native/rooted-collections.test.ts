@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -18,18 +18,11 @@ describe("rooted collection snapshots and string parts", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/rooted-collections.js",
 			name: "rooted-collections",
-			compiled: true,
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/rooted-collections.js",
-			name: "rooted-collections-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("preserves caller semantics in compiled code", () => {

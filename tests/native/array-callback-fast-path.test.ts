@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertResultPass,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -15,17 +15,11 @@ describe("guarded Array callback fast paths", () => {
 	let compiled: string;
 	let interpreted: string;
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/array-callback-fast-path.js",
 			name: "array-callback-fast-path",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/array-callback-fast-path.js",
-			name: "array-callback-fast-path-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("preserves compiled fast and fallback semantics", () => {

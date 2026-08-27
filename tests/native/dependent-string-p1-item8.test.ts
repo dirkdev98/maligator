@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -18,18 +18,11 @@ describe("GC-traced dependent strings", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/dependent-string-p1-item8.js",
 			name: "dependent-string-p1-item8",
-			compiled: true,
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/dependent-string-p1-item8.js",
-			name: "dependent-string-p1-item8-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("retains indexed, iterated, extracted, and spread slices in compiled code", () => {

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 } from "../../src/test-harness.ts";
 
@@ -15,19 +15,12 @@ describe("duplicate function declarations", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/duplicate-function-declarations.js",
 			name: "duplicate-function-declarations",
 			entryGoal: "script",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/duplicate-function-declarations.js",
-			name: "duplicate-function-declarations-ni",
-			compiled: false,
-			entryGoal: "script",
-			outDir,
-		});
+		}));
 	});
 
 	it("uses the final body when compiled", () => {

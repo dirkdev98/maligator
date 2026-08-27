@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -16,18 +16,11 @@ describe("AsyncIteratorClose", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/async-iterator-close.js",
 			name: "async-iterator-close",
-			compiled: true,
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/async-iterator-close.js",
-			name: "async-iterator-close-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it.each([

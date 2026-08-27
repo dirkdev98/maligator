@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -18,18 +18,11 @@ describe("JSON.stringify traversal scratch buffers", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/json-stringify-scratch.js",
-			name: "json-stringify-scratch-compiled",
-			compiled: true,
+			name: "json-stringify-scratch",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/json-stringify-scratch.js",
-			name: "json-stringify-scratch-interpreted",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("passes compiled and interpreted", () => {

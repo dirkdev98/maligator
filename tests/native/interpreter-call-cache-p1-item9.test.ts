@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 } from "../../src/test-harness.ts";
 
@@ -19,18 +19,13 @@ describe("bounded interpreter call-site cache", () => {
 	let mixed: string;
 
 	beforeAll(() => {
-		interpreted = buildNativeBinary({
+		const pair = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/interpreter-call-cache-p1-item9.js",
-			name: "interpreter-call-cache-p1-item9-ni",
-			compiled: false,
+			name: "interpreter-call-cache-p1-item9",
 			outDir,
 		});
-		mixed = buildNativeBinary({
-			fixture: "tests/local/interpreter-call-cache-p1-item9.js",
-			name: "interpreter-call-cache-p1-item9-mixed",
-			compiled: true,
-			outDir,
-		});
+		interpreted = pair.interpreted;
+		mixed = pair.compiled;
 	});
 
 	it("preserves direct interpreted calls, eval splices, and fallback semantics", () => {

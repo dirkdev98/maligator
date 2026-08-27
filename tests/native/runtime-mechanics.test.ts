@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertResultPass,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -15,16 +15,14 @@ describe("shared runtime mechanics", () => {
 	let binaries: Array<string>;
 
 	beforeAll(() => {
-		binaries = [true, false].map((compiled) =>
-			buildNativeBinary({
-				fixture: "tests/local/runtime-mechanics.mjs",
-				name: `runtime-mechanics-${compiled ? "compiled" : "interpreted"}`,
-				outDir,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
-				compiled,
-			}),
-		);
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture: "tests/local/runtime-mechanics.mjs",
+			name: "runtime-mechanics",
+			outDir,
+			nodeEnabled: true,
+			webPlatformEnabled: false,
+		});
+		binaries = [pair.compiled, pair.interpreted];
 	}, 600_000);
 
 	it("preserves key, accessor, and Node export behavior", () => {

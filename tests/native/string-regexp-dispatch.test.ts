@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertResultPass,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -16,17 +16,11 @@ describe("String RegExp symbol dispatch", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/string-regexp-dispatch.js",
 			name: "string-regexp-dispatch",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/string-regexp-dispatch.js",
-			name: "string-regexp-dispatch-interpreted",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("uses current-spec dispatch in compiled code", () => {

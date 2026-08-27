@@ -3,7 +3,7 @@
 ## Commands
 
 - `npm run test:smoke` - Optional 20-second warm / four-minute cold fuse; runs first inside larger gates
-- `npm run test:check` - Default approximately two-minute developer gate; excludes slow toolchain integration
+- `npm run test:check` - Default approximately two-minute developer gate; partitions native tests between normal-sensitive and sanitizer-primary dimensions and excludes slow toolchain integration
 - `npm run test:full` - Exhaustive fail-fast gate; includes full Test262, so ask before running
 - `npm run test:full:report` - Exhaustive completion policy; ask before running
 - `npm run test:help` - Show tier policy; add `-- --list` to a tier command to print exact stages
@@ -16,7 +16,7 @@
 - `npm test run` - Run both Vitest projects once, not standards/self-host/sanitizer lanes
 - `npm run test:unit` - Fast lane: pure-TS compiler tests only (no C build; the watch loop)
 - `npm run test:unit:full-only -- <filename>` - Run a slow unit/integration test from the full-only manifest
-- `npm run test:native` - Native lane: build each fixture into an isolate binary/server and drive it
+- `npm run test:native` - Explicit normal native lane: build each fixture into an isolate binary/server and drive it
 - `npm run test:rust` - Full-only Rust runtime unit lane, including `node-zlib`
 - `npm run test:sanitize -- <filename>` - Platform-safe native sanitizer lane (UBSan on macOS, ASan+UBSan elsewhere)
 - `npm test -- <filename>` - Run a single test file

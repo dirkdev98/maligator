@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -17,18 +17,11 @@ describe("Core loop optimization semantics", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "core-loop-optimizations",
-			compiled: true,
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture,
-			name: "core-loop-optimizations-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	}, 600_000);
 
 	it("preserves loop behavior in compiled and interpreted modes", () => {

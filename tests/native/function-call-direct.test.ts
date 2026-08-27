@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -17,17 +17,11 @@ describe("guarded Function.prototype.call flattening", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/function-call-direct.js",
-			name: "function-call-direct-compiled",
+			name: "function-call-direct",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/function-call-direct.js",
-			name: "function-call-direct-interpreted",
-			compiled: false,
-			outDir,
-		});
+		}));
 	}, 600_000);
 
 	it("preserves direct and generic target semantics", () => {

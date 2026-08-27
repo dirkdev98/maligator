@@ -238,6 +238,7 @@ const fullOnlyUnit = readManifest("tests/test-suite-unit-full-only.txt");
 const unitSmoke = readManifest("tests/test-suite-unit-smoke.txt");
 const nativeSmoke = readManifest("tests/test-suite-native-smoke.txt");
 const nativeCheck = readManifest("tests/test-suite-native-check.txt");
+const nativeNormal = readManifest("tests/test-suite-native-normal.txt");
 const test262Smoke = readManifest("tests/test-suite-test262-smoke.txt");
 const test262Check = readManifest("tests/test-suite-test262-check.txt");
 const wptSmoke = readManifest("tests/test-suite-wpt-smoke.txt");
@@ -274,17 +275,44 @@ assertCompleteSelection("unit smoke/check", regularUnit, [...unitSmoke, ...unitC
 const allNative = listFilesRecursively("tests/native", (file) =>
 	file.endsWith(".test.ts"),
 ).sort();
-const reservedNative = new Set([
-	...nativeSmoke,
-	...nativeCheck,
-	"tests/native/leak.test.ts",
-]);
+const leakNative = "tests/native/leak.test.ts";
+const reservedNative = new Set([...nativeSmoke, ...nativeCheck, leakNative]);
 for (const entry of reservedNative) {
 	if (!allNative.includes(entry)) throw new Error(`unknown native selection: ${entry}`);
 }
 const nativeFull = allNative.filter((entry) => !reservedNative.has(entry));
+const runnableNative = allNative.filter((entry) => entry !== leakNative);
+for (const entry of nativeNormal) {
+	if (!runnableNative.includes(entry)) {
+		throw new Error(`unknown normal native test: ${entry}`);
+	}
+}
+const nativeNormalSet = new Set(nativeNormal);
+const nativeSanitizer = runnableNative.filter((entry) => !nativeNormalSet.has(entry));
+assertCompleteSelection("native normal/sanitizer dimensions", runnableNative, [
+	...nativeNormal,
+	...nativeSanitizer,
+]);
 const runnerPolicy = ["--policy", policy];
 const vitestPolicy = policy === "bail" ? ["--bail=1"] : [];
+
+function nativeDimensionCommands(label: string, entries: Array<string>): Array<Command> {
+	const normal = entries.filter((entry) => nativeNormalSet.has(entry));
+	const sanitizer = entries.filter((entry) => !nativeNormalSet.has(entry));
+	return [
+		...(normal.length === 0
+			? []
+			: [npm(`${label}: native normal`, "test:native", [...vitestPolicy, ...normal])]),
+		...(sanitizer.length === 0
+			? []
+			: [
+					npm(`${label}: native sanitizer-primary`, "test:sanitize", [
+						...vitestPolicy,
+						...sanitizer,
+					]),
+				]),
+	];
+}
 
 const smokeCommands: Array<Command> = [
 	npm("smoke: TypeScript", "type-check"),
@@ -294,7 +322,7 @@ const smokeCommands: Array<Command> = [
 		"--sequence.seed=1",
 		...unitSmoke,
 	]),
-	npm("smoke: native runtime", "test:native", [...vitestPolicy, ...nativeSmoke]),
+	...nativeDimensionCommands("smoke", nativeSmoke),
 	node("smoke: Test262 cross-section", "scripts/test262.ts", [
 		"--canonical",
 		"--backend",
@@ -324,7 +352,7 @@ const checkMatrixCommands: Array<Command> = [
 		"--sequence.seed=1",
 		...unitCheck,
 	]),
-	npm("check: native complement", "test:native", [...vitestPolicy, ...nativeCheck]),
+	...nativeDimensionCommands("check", nativeCheck),
 	node("check: Test262 regression complement", "scripts/test262.ts", [
 		"--canonical",
 		"--backend",
@@ -404,15 +432,7 @@ const test262FullMatrix: Array<Command> = [
 	]),
 ];
 
-const remainingNativeCommands: Array<Command> =
-	nativeFull.length === 0
-		? []
-		: [
-				npm("full: remaining native suite", "test:native", [
-					...vitestPolicy,
-					...nativeFull,
-				]),
-			];
+const remainingNativeCommands = nativeDimensionCommands("full: remaining", nativeFull);
 
 const fullCommands: Array<Command> = [
 	...selfHostedCommands,
@@ -437,7 +457,6 @@ const fullCommands: Array<Command> = [
 		]),
 		env: { MAL_GC_CONCURRENT: "1" },
 	},
-	npm("full: sanitizer suite", "test:sanitize", vitestPolicy),
 	npm("full: WPT compiled normal", "test:wpt", [
 		"--canonical",
 		"--mode",

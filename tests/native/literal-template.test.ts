@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -29,17 +29,11 @@ describe("static data literal templates", () => {
 				largeTemplate,
 			),
 		);
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "literal-template",
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture,
-			name: "literal-template-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("passes compiled", () => {

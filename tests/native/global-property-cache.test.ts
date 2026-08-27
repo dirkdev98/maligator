@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 } from "../../src/test-harness.ts";
 
@@ -15,22 +15,13 @@ describe("script global property cache", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/global-property-cache.js",
 			name: "global-property-cache",
-			compiled: true,
 			entryGoal: "script",
 			outDir,
 			realmsEnabled: true,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/global-property-cache.js",
-			name: "global-property-cache-ni",
-			compiled: false,
-			entryGoal: "script",
-			outDir,
-			realmsEnabled: true,
-		});
+		}));
 	});
 
 	it("preserves global property semantics in compiled code", () => {

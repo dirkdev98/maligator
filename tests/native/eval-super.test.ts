@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 } from "../../src/test-harness.ts";
 
@@ -15,18 +15,11 @@ describe("derived constructor eval and arrow super", () => {
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/eval-super.js",
 			name: "eval-super",
-			compiled: true,
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/eval-super.js",
-			name: "eval-super-ni",
-			compiled: false,
-			outDir,
-		});
+		}));
 	});
 
 	it("passes compiled", () => {

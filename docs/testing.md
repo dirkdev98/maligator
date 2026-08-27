@@ -78,9 +78,9 @@ WPT removes its per-run native scratch tree on exit; pass
 
 | Tier  | Command              | Policy                   | Intended use                                                                                     |
 | ----- | -------------------- | ------------------------ | ------------------------------------------------------------------------------------------------ |
-| Smoke | `npm run test:smoke` | Bail, 20s warm / 2m cold | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
-| Check | `npm run test:check` | Bail, about two minutes  | All regular unit tests, curated wire/normal standards, and native regression complement          |
-| Full  | `npm run test:full`  | Bail, unbounded          | Self-hosting, remaining native coverage, standards dimensions, sanitizers, collectors, and leaks |
+| Smoke | `npm run test:smoke` | Bail, 20s warm / 4m cold | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
+| Check | `npm run test:check` | Bail, about two minutes  | All regular unit tests, curated wire/normal standards, and disjoint normal/UBSan native coverage |
+| Full  | `npm run test:full`  | Bail, unbounded          | Self-hosting, remaining partitioned native coverage, standards, collectors, and leaks            |
 
 Smoke and check own disjoint unit selections: the small
 `tests/test-suite-unit-smoke.txt` manifest is the capability proof and check derives
@@ -108,6 +108,16 @@ curated WPT set through the authoritative compiled/normal path, then applies GC
 stress only to representative curated selections. Manifest validation rejects
 overlap, unknown paths, omissions from the curated WPT set, and duplicate stage
 invocations.
+
+Native coverage is also deliberately non-Cartesian. Tests whose acceptance boundary
+depends on ordinary `-O2 -g0` code generation, optimization, linking, profiling, or
+an exact build configuration are registered in
+`tests/test-suite-native-normal.txt`. Every other authored native test is
+sanitizer-primary by default: UBSan on macOS and ASan+UBSan elsewhere. Smoke, check,
+and full partition their selections between those dimensions, so the full gate does
+not first run every native test normally and then repeat the same files under a
+sanitizer. A test belongs in both dimensions only through an explicit focused command
+for a mode-sensitive regression.
 
 ## Policies
 
@@ -160,16 +170,16 @@ The full gate uses these deliberately non-Cartesian standards dimensions:
 
 Wire executions cache compiler artifacts but always execute every selected test
 in a fork-isolated standard runtime. The full gate additionally runs the targeted
-GC suite under non-generational and
-concurrent collector builds, the platform sanitizer lane, and the macOS leak
-audit. "Full WPT" means every test in the pinned server-runtime curated corpus,
+GC suite under non-generational and concurrent collector builds and the macOS leak
+audit. Native sanitizer coverage is already part of the disjoint smoke/check/full
+partition. "Full WPT" means every test in the pinned server-runtime curated corpus,
 not the complete browser WPT repository.
 
-"Complete native coverage" means every authored `tests/native/**/*.test.ts`
-file, the Rust runtime unit suite with `node-zlib` enabled, and the explicitly
-targeted collector, sanitizer, and leak lanes. It does not mean a Cartesian
-product of every native file with every backend and GC build configuration;
-tests declare or drive their relevant dimensions.
+"Complete native coverage" means every authored `tests/native/**/*.test.ts` file
+in its owning normal or sanitizer-primary dimension, the Rust runtime unit suite
+with `node-zlib` enabled, and the explicitly targeted collector and leak lanes. It
+does not mean a Cartesian product of every native file with every backend and GC
+build configuration; tests declare or drive their relevant dimensions.
 
 ## Direct Lanes
 
@@ -198,9 +208,13 @@ this recovery command when it is absent or stale. The full Test262 corpus
 requires explicit approval; targeted filters and manifests do not.
 
 The native harness shares persistent frontend, generated-object, runtime, and
-linked-binary caches. Compiled/interpreted variants of the same ordinary fixture
-therefore reuse the module graph through lowering; script-goal, profiled, and
-custom-type-stripper fixtures keep their explicit uncached frontend path.
+linked-binary caches. `buildBackendPairFromOneProgramImage` goes further: one
+in-memory optimized image feeds native emission while its interpreted half runs as
+MALW through a reusable development runner, avoiding a second generated object and
+link. Use that helper for ordinary compiled/interpreted parity. Custom C drivers,
+the `$262` test host, exact embedded-interpreter/link behavior, and other native
+boundary tests keep explicit binaries. Script-goal, profiled, and custom-type-stripper
+fixtures retain their explicit frontend behavior.
 
 Native tests in `tests/test-suite-native-loopback.txt` require permission to bind
 an ephemeral loopback port. The Vitest wrapper probes `127.0.0.1:0` before those

@@ -5,7 +5,7 @@ import { beforeAll, describe, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertExactLines,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -20,20 +20,12 @@ describe("captured, aggregate, call, construct, spread, and method shape accesse
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture,
-			name: "captured-known-own-slot-compiled",
-			compiled: true,
+			name: "captured-known-own-slot",
 			outDir,
 			config,
-		});
-		interpreted = buildNativeBinary({
-			fixture,
-			name: "captured-known-own-slot-interpreted",
-			compiled: false,
-			outDir,
-			config,
-		});
+		}));
 	}, 600_000);
 
 	it("preserves relays, object methods, Proxy traps, and shape misses", () => {
