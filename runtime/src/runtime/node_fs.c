@@ -60,26 +60,66 @@ static MalValue node_fs_string_from_cstr(MalVm *vm, const char *cstr) {
     return node_fs_string_from_utf8(vm, (const byte *) cstr, strlen(cstr));
 }
 
-/* Coerce a value to a NUL-terminated UTF-8 path (malloc'd; caller frees). Returns
- * null when conversion or validation threw; the pending throw is left set. */
+typedef enum NodeFsPathResult {
+    NODE_FS_PATH_OK,
+    NODE_FS_PATH_INVALID_TYPE,
+    NODE_FS_PATH_EMBEDDED_NUL,
+    NODE_FS_PATH_ALLOCATION_FAILED,
+} NodeFsPathResult;
+
+/* Convert Node's string / Uint8Array PathLike subset to a malloc-owned C path.
+ * Uint8Array bytes cross unchanged so non-UTF-8 POSIX paths remain representable. */
+static NodeFsPathResult node_fs_path_bytes(MalValue value, char **out) {
+    if (mal_value_is_string(value)) {
+        usize length;
+        MalUtf8CStringResult result = mal_string_to_utf8_c_string(
+            mal_value_to_string(value), out, &length);
+        if (result == MAL_UTF8_C_STRING_EMBEDDED_NUL) {
+            return NODE_FS_PATH_EMBEDDED_NUL;
+        }
+        if (result == MAL_UTF8_C_STRING_ALLOCATION_FAILED) {
+            return NODE_FS_PATH_ALLOCATION_FAILED;
+        }
+        return NODE_FS_PATH_OK;
+    }
+    if (!mal_value_is_typed_array_object(value)
+        || mal_value_to_typed_array_object(value)->kind != MAL_TA_UINT8) {
+        return NODE_FS_PATH_INVALID_TYPE;
+    }
+    MalBufferSourceSpan span;
+    if (mal_buffer_source_span(value, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        return NODE_FS_PATH_INVALID_TYPE;
+    }
+    if (span.length > 0 && memchr(span.data, 0, span.length) != nullptr) {
+        return NODE_FS_PATH_EMBEDDED_NUL;
+    }
+    char *path = malloc(span.length + 1);
+    if (path == nullptr) return NODE_FS_PATH_ALLOCATION_FAILED;
+    if (span.length > 0) memcpy(path, span.data, span.length);
+    path[span.length] = '\0';
+    *out = path;
+    return NODE_FS_PATH_OK;
+}
+
+/* Validate a PathLike and return its malloc-owned C path. */
 static char *node_fs_path_cstr(MalVm *vm, MalValue value) {
-    MalString *str;
-    if (!mal_vm_to_string(vm, value, &str)) {
+    char *path;
+    NodeFsPathResult result = node_fs_path_bytes(value, &path);
+    if (result == NODE_FS_PATH_INVALID_TYPE) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "filesystem path must be a string or Uint8Array");
         return nullptr;
     }
-    usize len;
-    char *bytes;
-    MalUtf8CStringResult result = mal_string_to_utf8_c_string(str, &bytes, &len);
-    if (result == MAL_UTF8_C_STRING_EMBEDDED_NUL) {
+    if (result == NODE_FS_PATH_EMBEDDED_NUL) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             (const byte *) "filesystem path must not contain null bytes");
         return nullptr;
     }
-    if (result == MAL_UTF8_C_STRING_ALLOCATION_FAILED) {
+    if (result == NODE_FS_PATH_ALLOCATION_FAILED) {
         mal_vm_throw_allocation_error(vm);
         return nullptr;
     }
-    return bytes;
+    return path;
 }
 
 /* Build a string value, root it across the define, and set it as an enumerable own
@@ -258,7 +298,7 @@ static MalValue node_fs_date_getter(MalVm *vm, MalValue self, const char *name) 
         : NAN;
     MalValue date = mal_value_from_date_object(mal_date_object_new(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATE_PROTOTYPE]),
-        trunc(value)));
+        round(value)));
     MalRootSpan root;
     mal_gc_root(&root, &date, 1);
     mal_intrinsic_define_data(vm, mal_value_to_object(self),
@@ -354,9 +394,15 @@ static MalValue node_fs_exists_sync(
     (void) self;
     (void) nt;
     (void) callee;
-    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
-    if (path == nullptr) {
-        return mal_value_new_undefined(); // ToString threw; propagate
+    char *path;
+    NodeFsPathResult result = node_fs_path_bytes(
+        argc >= 1 ? args[0] : mal_value_new_undefined(), &path);
+    if (result == NODE_FS_PATH_INVALID_TYPE || result == NODE_FS_PATH_EMBEDDED_NUL) {
+        return mal_value_new_boolean(false);
+    }
+    if (result == NODE_FS_PATH_ALLOCATION_FAILED) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
     }
     bool exists = mal_posix_fs_exists(path);
     free(path);
@@ -424,6 +470,8 @@ static MalValue node_fs_read_file_sync(
 static bool node_fs_open_flags(
     MalVm *vm, MalValue value, u32 *flags, bool *native_flags);
 static bool node_fs_open_mode(MalVm *vm, MalValue value, u32 *mode);
+static bool node_fs_write_bytes(
+    MalVm *vm, MalValue data, const byte **bytes, usize *length, byte **owned);
 
 static bool node_fs_write_file_options(
     MalVm *vm, MalValue options, u32 *flags, bool *native_flags, u32 *mode) {
@@ -464,34 +512,13 @@ static MalValue node_fs_write_file_sync(
     if (path == nullptr) {
         return mal_value_new_undefined();
     }
-    MalValue data = argc >= 2 ? args[1] : mal_value_new_undefined();
-    const byte *bytes = (const byte *) "";
-    usize len = 0;
-    byte *owned = nullptr; // set when we UTF-8-encode a string argument
-    if (mal_value_is_typed_array_object(data)
-        && mal_value_to_typed_array_object(data)->kind == MAL_TA_UINT8) {
-        MalTypedArrayObject *ta = mal_value_to_typed_array_object(data);
-        len = mal_typed_array_object_byte_length(ta);
-        if (len > 0) {
-            bytes = (const byte *) ta->buffer->data + ta->byte_offset;
-        }
-    } else if (mal_value_is_string(data)) {
-        MalString *str;
-        if (!mal_vm_to_string(vm, data, &str)) {
-            free(path);
-            return mal_value_new_undefined();
-        }
-        owned = mal_string_to_utf8(str, &len);
-        if (owned == nullptr) {
-            free(path);
-            mal_vm_throw_allocation_error(vm);
-            return mal_value_new_undefined();
-        }
-        bytes = owned;
-    } else {
+    const byte *bytes;
+    usize len;
+    byte *owned;
+    if (!node_fs_write_bytes(
+            vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
+            &bytes, &len, &owned)) {
         free(path);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "writeFileSync data must be a string or Uint8Array");
         return mal_value_new_undefined();
     }
     u32 flags;
@@ -689,13 +716,15 @@ static bool node_fs_write_bytes(
     *bytes = (const byte *) "";
     *length = 0;
     *owned = nullptr;
-    if (mal_value_is_typed_array_object(data)
-        && mal_value_to_typed_array_object(data)->kind == MAL_TA_UINT8) {
-        MalTypedArrayObject *view = mal_value_to_typed_array_object(data);
-        *length = mal_typed_array_object_byte_length(view);
-        if (*length > 0) {
-            *bytes = (const byte *) view->buffer->data + view->byte_offset;
+    if (mal_value_is_typed_array_object(data) || mal_value_is_data_view_object(data)) {
+        MalBufferSourceSpan span;
+        if (mal_buffer_source_span(data, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                (const byte *) "write data view is detached or out of bounds");
+            return false;
         }
+        *length = span.length;
+        *bytes = span.data == nullptr ? (const byte *) "" : span.data;
         return true;
     }
     if (mal_value_is_string(data)) {
@@ -708,7 +737,7 @@ static bool node_fs_write_bytes(
         return true;
     }
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-        (const byte *) "write data must be a string or Uint8Array");
+        (const byte *) "write data must be a string, TypedArray, or DataView");
     return false;
 }
 

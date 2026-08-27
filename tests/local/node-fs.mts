@@ -328,9 +328,9 @@ check(
 check("Stats date getter caches identity", fileStat.mtime === materializedMtime);
 check("Stats date getter materializes an own property", Object.hasOwn(fileStat, "mtime"));
 eq(
-	"stat mtime Date uses integral milliseconds",
+	"stat mtime Date rounds sub-millisecond timestamps",
 	fileStat.mtime.getTime(),
-	Math.trunc(fileStat.mtimeMs),
+	Math.round(fileStat.mtimeMs),
 );
 check("stat exposes mode", fileStat.mode > 0);
 check("stat exposes size", fileStat.size > 0);
@@ -510,16 +510,44 @@ eq("errno error code", missingCode, "ENOENT");
 eq("errno error syscall", missingSyscall, "stat");
 eq("errno error path", missingPath, `${root}/missing`);
 
-let rejectedData = false;
+const typedArrayData = new Uint16Array([0x1234, 0xabcd]);
+writeFileSync(`${root}/typed-array`, typedArrayData);
+const typedArrayBytes = new Uint8Array(typedArrayData.buffer);
+check(
+	"writeFileSync accepts every TypedArray byte view",
+	readFileSync(`${root}/typed-array`).every(
+		(byte, index) => byte === typedArrayBytes[index],
+	),
+);
+const dataViewSource = new Uint8Array([9, 8, 7, 6]);
+writeFileSync(`${root}/data-view`, new DataView(dataViewSource.buffer, 1, 2));
+eq(
+	"writeFileSync honors DataView bounds",
+	readFileSync(`${root}/data-view`).join(","),
+	"8,7",
+);
+
+const bufferedTextPath = Buffer.from(textFile);
+check(
+	"filesystem PathLike accepts Uint8Array paths",
+	statSync(bufferedTextPath).isFile(),
+);
+eq("existsSync accepts Uint8Array paths", existsSync(bufferedTextPath), true);
+eq(
+	"existsSync returns false for invalid types",
+	existsSync(42 as unknown as string),
+	false,
+);
+let numericPathRejected = false;
 try {
-	writeFileSync(`${root}/bad`, new Uint16Array([1]) as unknown as Uint8Array);
+	statSync(42 as unknown as string);
 } catch (error) {
-	rejectedData = error instanceof TypeError;
+	numericPathRejected = error instanceof TypeError;
 }
-check("writeFileSync rejects non-Uint8 typed arrays", rejectedData);
+check("filesystem operations reject coerced numeric paths", numericPathRejected);
 
 const nulPath = `${root}/nul-prefix\0suffix`;
-rejectsNul("existsSync rejects NUL in path", () => existsSync(nulPath));
+eq("existsSync returns false for NUL paths", existsSync(nulPath), false);
 rejectsNul("readFileSync rejects NUL in path", () => readFileSync(nulPath, "utf8"));
 rejectsNul("writeFileSync rejects NUL in path", () => writeFileSync(nulPath, "bad"));
 rejectsNul("chmodSync rejects NUL in path", () => chmodSync(nulPath, 0o600));
