@@ -342,6 +342,11 @@ const SLOT_FAMILY_WRITERS_PRESERVING_CELL_VALUES: ReadonlySet<string> = new Set(
 	"envPop",
 ]);
 
+const FUNCTION_DEFINITIONS = new WeakMap<
+	CoreFunction,
+	ReadonlyArray<CoreInstruction | undefined>
+>();
+
 function attributeNumber(instruction: CoreInstruction, key: string): number | undefined {
 	const value = instruction.attributes[key];
 	return typeof value === "number" ? value : undefined;
@@ -1011,13 +1016,10 @@ export function analyzeCoreCalleeTargets(
 		else existing.push(site);
 	};
 
-	const definitionsByFunction: Array<
-		ReadonlyArray<CoreInstruction | undefined> | undefined
-	> = [];
 	const functionDefinitions = (
 		fn: (typeof program.functions)[number],
 	): ReadonlyArray<CoreInstruction | undefined> => {
-		const cached = definitionsByFunction[fn.functionIndex];
+		const cached = FUNCTION_DEFINITIONS.get(fn);
 		if (cached !== undefined) return cached;
 		const definitions = new Array<CoreInstruction | undefined>(
 			(fn.values.at(-1)?.id ?? -1) + 1,
@@ -1027,7 +1029,7 @@ export function analyzeCoreCalleeTargets(
 				for (const output of instruction.outputs) definitions[output] = instruction;
 			}
 		}
-		definitionsByFunction[fn.functionIndex] = definitions;
+		FUNCTION_DEFINITIONS.set(fn, definitions);
 		return definitions;
 	};
 	/**
