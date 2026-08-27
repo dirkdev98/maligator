@@ -49,14 +49,6 @@ function fallsThrough(instructions: ReadonlyArray<CompilerInstruction>): boolean
 	return last === undefined || !BLOCK_TERMINATORS.has(last.type);
 }
 
-function sameRegisters(left: ReadonlySet<number>, right: ReadonlySet<number>): boolean {
-	if (left.size !== right.size) return false;
-	for (const register of left) {
-		if (!right.has(register)) return false;
-	}
-	return true;
-}
-
 function blockSuccessors(fn: ExecutionFunction): ReadonlyArray<ReadonlyArray<number>> {
 	return fn.blocks.map(({ instructions }, block) => {
 		const successors = new Set<number>();
@@ -90,6 +82,34 @@ export function executionSafepointRootRegisters(
 	fn: ExecutionFunction,
 	safepoints: ReadonlySet<CompilerInstruction>,
 ): ReadonlyMap<CompilerInstruction, ReadonlyArray<number>> {
+	const wordCount = Math.ceil(fn.registerCount / 32);
+	const add = (registers: Uint32Array, register: number): void => {
+		registers[register >>> 5]! |= 1 << (register & 31);
+	};
+	const remove = (registers: Uint32Array, register: number): void => {
+		registers[register >>> 5]! &= ~(1 << (register & 31));
+	};
+	const unionInto = (target: Uint32Array, source: Uint32Array): void => {
+		for (let word = 0; word < wordCount; word++) target[word]! |= source[word]!;
+	};
+	const sameRegisters = (left: Uint32Array, right: Uint32Array): boolean => {
+		for (let word = 0; word < wordCount; word++) {
+			if (left[word] !== right[word]) return false;
+		}
+		return true;
+	};
+	const rootRegisters = (registers: Uint32Array): Array<number> => {
+		const roots: Array<number> = [];
+		for (let word = 0; word < wordCount; word++) {
+			let bits = registers[word]!;
+			while (bits !== 0) {
+				const bit = 31 - Math.clz32(bits & -bits);
+				roots.push(word * 32 + bit);
+				bits &= bits - 1;
+			}
+		}
+		return roots;
+	};
 	const operands: Array<Array<BoxedOperands>> = fn.blocks.map(({ instructions }) =>
 		instructions.map((instruction) => {
 			const registers = instructionRegisters(instruction);
@@ -111,22 +131,22 @@ export function executionSafepointRootRegisters(
 		}),
 	);
 	const successors = blockSuccessors(fn);
-	const transfer = (block: number, out: ReadonlySet<number>): Set<number> => {
-		const live = new Set(out);
+	const transfer = (block: number, out: Uint32Array): Uint32Array => {
+		const live = out.slice();
 		for (let index = operands[block]!.length - 1; index >= 0; index--) {
-			for (const register of operands[block]![index]!.writes) live.delete(register);
-			for (const register of operands[block]![index]!.reads) live.add(register);
+			for (const register of operands[block]![index]!.writes) remove(live, register);
+			for (const register of operands[block]![index]!.reads) add(live, register);
 		}
 		return live;
 	};
-	const liveIn: Array<Set<number>> = fn.blocks.map(() => new Set<number>());
+	const liveIn: Array<Uint32Array> = fn.blocks.map(() => new Uint32Array(wordCount));
 	let changed = true;
 	while (changed) {
 		changed = false;
 		for (let block = fn.blocks.length - 1; block >= 0; block--) {
-			const out = new Set<number>();
+			const out = new Uint32Array(wordCount);
 			for (const successor of successors[block]!) {
-				for (const register of liveIn[successor]!) out.add(register);
+				unionInto(out, liveIn[successor]!);
 			}
 			const live = transfer(block, out);
 			if (!sameRegisters(live, liveIn[block]!)) {
@@ -138,23 +158,20 @@ export function executionSafepointRootRegisters(
 
 	const roots = new Map<CompilerInstruction, ReadonlyArray<number>>();
 	for (const [block, { instructions }] of fn.blocks.entries()) {
-		const live = new Set<number>();
+		const live = new Uint32Array(wordCount);
 		for (const successor of successors[block]!) {
-			for (const register of liveIn[successor]!) live.add(register);
+			unionInto(live, liveIn[successor]!);
 		}
 		for (let index = instructions.length - 1; index >= 0; index--) {
 			const instruction = instructions[index]!;
 			const instructionOperands = operands[block]![index]!;
 			if (safepoints.has(instruction)) {
-				roots.set(
-					instruction,
-					[...new Set([...live, ...instructionOperands.reads])].sort(
-						(left, right) => left - right,
-					),
-				);
+				const atSafepoint = live.slice();
+				for (const register of instructionOperands.reads) add(atSafepoint, register);
+				roots.set(instruction, rootRegisters(atSafepoint));
 			}
-			for (const register of instructionOperands.writes) live.delete(register);
-			for (const register of instructionOperands.reads) live.add(register);
+			for (const register of instructionOperands.writes) remove(live, register);
+			for (const register of instructionOperands.reads) add(live, register);
 		}
 	}
 	return roots;
