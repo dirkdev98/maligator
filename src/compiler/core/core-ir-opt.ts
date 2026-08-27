@@ -5830,13 +5830,16 @@ function resolveValue(
 	replacements: ReadonlyMap<CoreValueId, CoreValueId>,
 ): CoreValueId {
 	let current = value;
-	const seen = new Set<CoreValueId>();
-	while (replacements.has(current)) {
-		if (seen.has(current)) throw new Error(`Cyclic Core value replacement at ${current}`);
-		seen.add(current);
-		current = replacements.get(current)!;
+	let remaining = replacements.size;
+	for (;;) {
+		const next = replacements.get(current);
+		if (next === undefined) return current;
+		if (remaining === 0) {
+			throw new Error(`Cyclic Core value replacement at ${current}`);
+		}
+		remaining -= 1;
+		current = next;
 	}
-	return current;
 }
 
 function rewriteEdge(
