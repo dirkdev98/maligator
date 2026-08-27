@@ -75,6 +75,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_readline);
     MATCH_INSTALLER(mal_host_install_node_sqlite);
     MATCH_INSTALLER(mal_host_install_node_stream);
+    MATCH_INSTALLER(mal_host_install_node_stream_promises);
     MATCH_INSTALLER(mal_host_install_node_string_decoder);
     MATCH_INSTALLER(mal_host_install_node_tls);
     MATCH_INSTALLER(mal_host_install_node_timers_promises);

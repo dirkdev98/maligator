@@ -176,6 +176,33 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds callback and promise stream lifecycle exports", () => {
+		const def = compile(
+			`import stream, { finished, pipeline, promises } from "node:stream";\n` +
+				`import streamPromises, { finished as finishedPromise } from "node:stream/promises";\n` +
+				`globalThis.sink = [stream, finished, pipeline, promises, streamPromises, finishedPromise];\n`,
+			{ node: true },
+		);
+		expect(def.runtime.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_stream",
+				exports: [
+					expect.objectContaining({ name: "finished" }),
+					expect.objectContaining({ name: "pipeline" }),
+					expect.objectContaining({ name: "promises" }),
+					expect.objectContaining({ name: "default" }),
+				],
+			}),
+			expect.objectContaining({
+				installer: "mal_host_install_node_stream_promises",
+				exports: [
+					expect.objectContaining({ name: "finished" }),
+					expect.objectContaining({ name: "default" }),
+				],
+			}),
+		]);
+	});
+
 	it("binds descriptor operations through the node:fs installer", () => {
 		const def = compile(
 			`import { accessSync, closeSync, constants, fstatSync, fsyncSync, ftruncateSync, openSync, readSync } from "node:fs";\n` +

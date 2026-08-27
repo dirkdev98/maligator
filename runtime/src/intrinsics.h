@@ -437,6 +437,8 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_NODE_DUPLEX_PROTOTYPE,
     MAL_INTRINSIC_NODE_TRANSFORM_CONSTRUCTOR,
     MAL_INTRINSIC_NODE_TRANSFORM_PROTOTYPE,
+    /* Shared node:stream/promises module, also exposed as Stream.promises. */
+    MAL_INTRINSIC_NODE_STREAM_PROMISES_MODULE,
     /* Per-realm Node filesystem/crypto modules with default + named identity. */
     MAL_INTRINSIC_NODE_FS_MODULE,
     MAL_INTRINSIC_NODE_FS_PROMISES_MODULE,

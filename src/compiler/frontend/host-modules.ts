@@ -449,10 +449,19 @@ const STREAM: HostModuleSpec = {
 		"Duplex",
 		"Transform",
 		"PassThrough",
+		"finished",
 		"pipeline",
+		"promises",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:stream"),
+};
+
+const STREAM_PROMISES: HostModuleSpec = {
+	id: "node:stream/promises",
+	named: ["finished", "pipeline"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:stream/promises"),
 };
 
 const HTTP: HostModuleSpec = {
@@ -630,6 +639,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		ASSERT_STRICT,
 		ASYNC_HOOKS,
 		STREAM,
+		STREAM_PROMISES,
 		HTTP,
 		HTTPS,
 		HTTP2,

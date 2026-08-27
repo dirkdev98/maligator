@@ -692,6 +692,25 @@ test("canonicalizes the promise-based filesystem submodule", () => {
 	});
 });
 
+test("canonicalizes the promise-based stream submodule", () => {
+	write(
+		"stream-promises.mjs",
+		`import streamPromises, { pipeline } from "stream/promises";\n` +
+			`globalThis.sink = [streamPromises, pipeline];\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "stream-promises.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:stream/promises",
+	);
+	expect(graph.modules.get("node:stream/promises")?.host).toMatchObject({
+		named: ["finished", "pipeline"],
+		hasDefault: true,
+		installer: "mal_host_install_node_stream_promises",
+	});
+});
+
 test("resolves curated V8 and VM context helpers", () => {
 	write(
 		"node-vm.mjs",

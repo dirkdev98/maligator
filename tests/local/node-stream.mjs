@@ -1,11 +1,19 @@
 import { EventEmitter } from "node:events";
 import Stream, {
 	Duplex,
+	PassThrough,
 	Readable,
 	Stream as NamedStream,
 	Transform,
 	Writable,
+	finished,
+	pipeline,
+	promises as streamPromises,
 } from "node:stream";
+import streamPromisesDefault, {
+	finished as finishedPromise,
+	pipeline as pipelinePromise,
+} from "node:stream/promises";
 import { inherits } from "node:util";
 
 let passed = 0;
@@ -551,6 +559,208 @@ async function main() {
 			!transactionalEnd.writableEnded &&
 			!transactionalEnd._writableState.ended,
 		"invalid end chunk does not mark ended",
+	);
+
+	check(
+		Stream.promises === streamPromises &&
+			streamPromises === streamPromisesDefault &&
+			streamPromises.finished === finishedPromise &&
+			streamPromises.pipeline === pipelinePromise &&
+			finished.length === 3 &&
+			pipeline.length === 0,
+		"callback and promise stream module identity",
+	);
+	let invalidFinishedOptions;
+	try {
+		finished(new Writable(), false, () => {});
+	} catch (error) {
+		invalidFinishedOptions = error;
+	}
+	let missingPipelineCallback;
+	try {
+		pipeline(new Readable(), new Writable());
+	} catch (error) {
+		missingPipelineCallback = error;
+	}
+	let promiseValidationThrew = false;
+	let invalidPipelinePromise;
+	try {
+		invalidPipelinePromise = pipelinePromise();
+	} catch {
+		promiseValidationThrew = true;
+	}
+	let invalidPipelineRejection;
+	try {
+		await invalidPipelinePromise;
+	} catch (error) {
+		invalidPipelineRejection = error;
+	}
+	check(
+		invalidFinishedOptions instanceof TypeError &&
+			missingPipelineCallback instanceof TypeError &&
+			!promiseValidationThrew &&
+			invalidPipelineRejection instanceof TypeError,
+		"stream lifecycle APIs validate arguments at the Node boundary",
+	);
+
+	const watchedWritable = new Writable({
+		write(chunk, encoding, done) {
+			done();
+		},
+	});
+	let finishedSync = true;
+	let finishedCalled = 0;
+	let finishedArgumentCount = -1;
+	const cleanupFinished = finished(watchedWritable, function () {
+		finishedCalled++;
+		finishedArgumentCount = arguments.length;
+		check(!finishedSync, "finished callback is deferred");
+	});
+	check(
+		typeof cleanupFinished === "function" &&
+			watchedWritable.listenerCount("finish") === 1 &&
+			watchedWritable.listenerCount("error") === 1 &&
+			watchedWritable.listenerCount("close") === 1,
+		"finished registers lifecycle listeners and returns cleanup",
+	);
+	watchedWritable.end("watched");
+	finishedSync = false;
+	await settle();
+	check(
+		finishedCalled === 1 && finishedArgumentCount === 0,
+		"finished reports successful writable completion once",
+	);
+	cleanupFinished();
+	check(
+		watchedWritable.listenerCount("finish") === 0 &&
+			watchedWritable.listenerCount("error") === 0 &&
+			watchedWritable.listenerCount("close") === 0,
+		"finished cleanup removes retained listeners",
+	);
+	let alreadyFinishedSync = true;
+	let alreadyFinishedDeferred = false;
+	const cleanupAlreadyFinished = finished(watchedWritable, () => {
+		alreadyFinishedDeferred = !alreadyFinishedSync;
+	});
+	alreadyFinishedSync = false;
+	check(!alreadyFinishedDeferred, "already-finished callback starts deferred");
+	await settle();
+	check(alreadyFinishedDeferred, "already-finished callback remains asynchronous");
+	cleanupAlreadyFinished();
+
+	const prematurelyClosed = new PassThrough();
+	let prematureError;
+	finished(prematurelyClosed, (error) => {
+		prematureError = error;
+	});
+	prematurelyClosed.destroy();
+	await settle();
+	check(
+		prematureError instanceof Error &&
+			prematureError.code === "ERR_STREAM_PREMATURE_CLOSE",
+		"finished detects premature close",
+	);
+
+	const pipelineSource = new Readable();
+	const pipelineTransform = new Transform({
+		transform(chunk, encoding, done) {
+			done(null, chunk.toString().toUpperCase());
+		},
+	});
+	const pipelineChunks = [];
+	const pipelineDestination = new Writable({
+		write(chunk, encoding, done) {
+			pipelineChunks.push(chunk.toString());
+			done();
+		},
+	});
+	let pipelineSync = true;
+	let pipelineCallbackCount = 0;
+	let pipelineArgumentCount = -1;
+	const pipelineReturn = pipeline(
+		pipelineSource,
+		pipelineTransform,
+		pipelineDestination,
+		function (error, value) {
+			pipelineCallbackCount++;
+			pipelineArgumentCount = arguments.length;
+			check(
+				!pipelineSync && error === undefined && value === undefined,
+				"pipeline callback success values and timing",
+			);
+		},
+	);
+	check(pipelineReturn === pipelineDestination, "pipeline returns destination");
+	pipelineSource.push("hello");
+	pipelineSource.push(null);
+	pipelineSync = false;
+	await settle();
+	check(
+		pipelineChunks.join(",") === "HELLO" &&
+			pipelineCallbackCount === 1 &&
+			pipelineArgumentCount === 2,
+		"pipeline composes streams and completes once",
+	);
+
+	const promiseSource = new Readable();
+	const promiseChunks = [];
+	const promiseDestination = new Writable({
+		write(chunk, encoding, done) {
+			promiseChunks.push(chunk.toString());
+			done();
+		},
+	});
+	const pipelineCompletion = pipelinePromise([promiseSource, promiseDestination]);
+	promiseSource.push("promise");
+	promiseSource.push(null);
+	check(
+		(await pipelineCompletion) === undefined && promiseChunks.join(",") === "promise",
+		"promise pipeline supports array form",
+	);
+
+	const promiseFinishedWritable = new Writable({
+		write(chunk, encoding, done) {
+			done();
+		},
+	});
+	const finishedCompletion = finishedPromise(promiseFinishedWritable);
+	promiseFinishedWritable.end();
+	check(
+		(await finishedCompletion) === undefined,
+		"promise finished resolves on completion",
+	);
+
+	const failureSource = new Readable();
+	const failureTransform = new Transform({
+		transform(chunk, encoding, done) {
+			done(pipelineFailure);
+		},
+	});
+	const failureDestination = new Writable({
+		write(chunk, encoding, done) {
+			done();
+		},
+	});
+	const pipelineFailure = new Error("pipeline failure");
+	let pipelineRejection;
+	const failedPipeline = pipelinePromise(
+		failureSource,
+		failureTransform,
+		failureDestination,
+	);
+	failureSource.push("fail");
+	failureSource.push(null);
+	try {
+		await failedPipeline;
+	} catch (error) {
+		pipelineRejection = error;
+	}
+	check(
+		pipelineRejection === pipelineFailure &&
+			failureSource.destroyed &&
+			failureTransform.destroyed &&
+			failureDestination.destroyed,
+		"promise pipeline forwards errors and destroys unfinished stages",
 	);
 
 	console.log("RESULT " + passed + "/" + total);

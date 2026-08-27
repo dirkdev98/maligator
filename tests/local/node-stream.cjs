@@ -10,7 +10,16 @@ function check(condition, name) {
 async function main() {
 	const Stream = require("stream");
 	const CanonicalStream = require("node:stream");
+	const StreamPromises = require("stream/promises");
+	const CanonicalStreamPromises = require("node:stream/promises");
 	check(Stream === CanonicalStream, "bare/canonical identity");
+	check(
+		StreamPromises === CanonicalStreamPromises &&
+			Stream.promises === StreamPromises &&
+			typeof Stream.finished === "function" &&
+			typeof Stream.pipeline === "function",
+		"callback/promise CommonJS identity",
+	);
 	check(
 		typeof Stream === "function" && Stream === Stream.Stream,
 		"callable CommonJS export",
