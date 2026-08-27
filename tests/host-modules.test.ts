@@ -338,7 +338,7 @@ describe("host-install manifest", () => {
 
 	it("binds node:util default and named exports through one installer", () => {
 		const def = compile(
-			`import util, { format } from "node:util";\nglobalThis.sink = [util, format];\n`,
+			`import util, { format, parseArgs } from "node:util";\nglobalThis.sink = [util, format, parseArgs];\n`,
 			{ node: true },
 		);
 		expect(def.runtime.hostInstalls).toEqual([
@@ -346,6 +346,7 @@ describe("host-install manifest", () => {
 				installer: "mal_host_install_node_util",
 				exports: [
 					expect.objectContaining({ name: "format" }),
+					expect.objectContaining({ name: "parseArgs" }),
 					expect.objectContaining({ name: "default" }),
 				],
 			}),

@@ -316,6 +316,7 @@ const UTIL: HostModuleSpec = {
 		"isString",
 		"isSymbol",
 		"isUndefined",
+		"parseArgs",
 		"parseEnv",
 		"promisify",
 		"types",

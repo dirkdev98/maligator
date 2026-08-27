@@ -23,6 +23,7 @@
 #include "proxy_object.h"
 #include "typed_array_object.h"
 #include "u16_buffer.h"
+#include "utf8.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm_ops.h"
@@ -910,6 +911,960 @@ static MalValue util_parse_env(
     return result;
 }
 
+/* --------------------------------------------------------------------------
+ * util.parseArgs.
+ *
+ * This follows Node's three observable phases: validate the configuration,
+ * classify argv into tokens, then store values/positionals and apply defaults.
+ * The returned values object intentionally has a null prototype.
+ * -------------------------------------------------------------------------- */
+
+typedef enum MalUtilParseOptionType {
+    UTIL_PARSE_STRING,
+    UTIL_PARSE_BOOLEAN,
+} MalUtilParseOptionType;
+
+typedef struct MalUtilParseOption {
+    usize roots_index;
+    MalUtilParseOptionType type;
+    bool has_short;
+    c16 short_name;
+    bool multiple;
+    bool has_default;
+} MalUtilParseOption;
+
+enum MalUtilParseRoot {
+    UTIL_PARSE_CONFIG,
+    UTIL_PARSE_ARGS,
+    UTIL_PARSE_OPTIONS,
+    UTIL_PARSE_RESULT,
+    UTIL_PARSE_VALUES,
+    UTIL_PARSE_POSITIONALS,
+    UTIL_PARSE_TOKENS,
+    UTIL_PARSE_KEYS,
+    UTIL_PARSE_CURRENT,
+    UTIL_PARSE_NEXT,
+    UTIL_PARSE_NAME,
+    UTIL_PARSE_RAW_NAME,
+    UTIL_PARSE_VALUE,
+    UTIL_PARSE_TEMP,
+    UTIL_PARSE_TEMP_2,
+    UTIL_PARSE_ROOT_COUNT,
+};
+
+typedef struct MalUtilParseState {
+    MalVm *vm;
+    MalValue *roots;
+    MalUtilParseOption *options;
+    MalValue *option_roots;
+    usize option_count;
+    bool strict;
+    bool allow_positionals;
+    bool return_tokens;
+    bool allow_negative;
+} MalUtilParseState;
+
+static bool util_parse_string_equals_ascii(MalValue value, const char *ascii) {
+    if (!mal_value_is_string(value)) return false;
+    MalString *string = mal_value_to_string(value);
+    usize length = strlen(ascii);
+    if (mal_string_length(string) != length) return false;
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] != (byte) ascii[i]) return false;
+    }
+    return true;
+}
+
+static bool util_parse_string_starts_ascii(
+    MalValue value, const char *ascii) {
+    if (!mal_value_is_string(value)) return false;
+    MalString *string = mal_value_to_string(value);
+    usize prefix_length = strlen(ascii);
+    if (mal_string_length(string) < prefix_length) return false;
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < prefix_length; i++) {
+        if (units[i] != (byte) ascii[i]) return false;
+    }
+    return true;
+}
+
+static MalValue util_parse_slice(
+    MalVm *vm, MalValue value, usize start, usize length) {
+    return mal_value_from_string(mal_string_new_slice(
+        &vm->heap, mal_value_to_string(value), start, length));
+}
+
+static MalValue util_parse_short_string(MalVm *vm, c16 short_name) {
+    return mal_value_from_string(
+        mal_string_new_copy(&vm->heap, &short_name, 1));
+}
+
+static MalValue util_parse_raw_short(MalVm *vm, c16 short_name) {
+    c16 units[] = {'-', short_name};
+    return mal_value_from_string(
+        mal_string_new_copy(&vm->heap, units, countof(units)));
+}
+
+static bool util_parse_get_own(
+    MalVm *vm, MalValue object, MalKey key, bool *present, MalValue *out) {
+    *present = false;
+    *out = mal_value_new_undefined();
+    if (!mal_value_is_object(object)) return true;
+    MalPropertyDesc desc;
+    if (!mal_vm_get_own_property(vm, object, key, present, &desc)) return false;
+    if (!*present) return true;
+    return mal_vm_get_property(vm, object, key, out);
+}
+
+static bool util_parse_get_own_ascii(
+    MalVm *vm, MalValue object, const char *name, bool *present,
+    MalValue *out) {
+    return util_parse_get_own(vm, object,
+        mal_intrinsic_string_key(vm, (const byte *) name), present, out);
+}
+
+static bool util_parse_is_record(MalVm *vm, MalValue value, bool *result) {
+    *result = false;
+    if (!mal_value_is_object(value) || mal_value_is_callable(value)) return true;
+    bool is_array;
+    if (!mal_vm_is_array(vm, value, &is_array)) return false;
+    *result = !is_array;
+    return true;
+}
+
+static bool util_parse_array_length(
+    MalVm *vm, MalValue value, u32 *length, MalValue *temp) {
+    if (mal_value_is_array_object(value)) {
+        *length = mal_array_object_length(mal_value_to_array_object(value));
+        return true;
+    }
+    if (!mal_vm_get_property(vm, value,
+            mal_intrinsic_string_key(vm, (const byte *) "length"), temp)) {
+        return false;
+    }
+    f64 number;
+    if (!mal_vm_to_number(vm, *temp, &number)) return false;
+    number = mal_ops_number_to_length(number);
+    *length = number > UINT32_MAX ? UINT32_MAX : (u32) number;
+    return true;
+}
+
+static bool util_parse_array_append(MalValue array_value, MalValue value) {
+    MalArrayObject *array = mal_value_to_array_object(array_value);
+    return mal_array_object_store(
+        array, mal_key_index(mal_array_object_length(array)), value);
+}
+
+static bool util_parse_throw(MalVm *vm, const char *message) {
+    mal_vm_throw_error(
+        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const byte *) message);
+    return false;
+}
+
+static bool util_parse_throw_code(
+    MalVm *vm, const char *message, const char *code) {
+    mal_vm_throw_error(
+        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const byte *) message);
+    if (vm->completion.kind == MAL_COMPLETION_THROW
+        && mal_value_is_object(vm->completion.value)) {
+        MalValue roots[] = {
+            vm->completion.value,
+            mal_value_from_string(
+                mal_intrinsic_ascii(vm, (const byte *) code)),
+        };
+        MalRootSpan root;
+        mal_gc_root(&root, roots, countof(roots));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
+            (const byte *) "code", roots[1], UTIL_VISIBLE);
+        mal_gc_unroot(&root);
+    }
+    return false;
+}
+
+static bool util_parse_build_main_args(
+    MalVm *vm, MalValue *out, MalValue *temp) {
+    i32 os_argc = vm->launch.argc;
+    char **os_argv = vm->launch.argv;
+    u32 length = os_argc > 1 ? (u32) (os_argc - 1) : 0;
+    *out = mal_value_from_array_object(mal_intrinsic_new_array(vm, length));
+    for (u32 i = 0; i < length; i++) {
+        const char *arg = os_argv != nullptr && os_argv[i + 1] != nullptr
+            ? os_argv[i + 1]
+            : "";
+        MalString *string = mal_string_from_utf8(
+            &vm->heap, (const byte *) arg, strlen(arg));
+        if (string == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        *temp = mal_value_from_string(string);
+        if (!mal_array_object_store(
+                mal_value_to_array_object(*out), mal_key_index(i), *temp)) {
+            return util_parse_throw(vm, "Unable to store command line argument");
+        }
+    }
+    return true;
+}
+
+static bool util_parse_validate_default_array(
+    MalVm *vm, MalValue value, MalUtilParseOptionType type, MalValue *temp) {
+    bool is_array;
+    if (!mal_vm_is_array(vm, value, &is_array)) return false;
+    if (!is_array) {
+        return util_parse_throw_code(vm,
+            "Option default must be an array when multiple is true",
+            "ERR_INVALID_ARG_TYPE");
+    }
+    u32 length;
+    if (!util_parse_array_length(vm, value, &length, temp)) return false;
+    for (u32 i = 0; i < length; i++) {
+        if (!mal_vm_get_property(vm, value, mal_key_index(i), temp)) return false;
+        bool valid = type == UTIL_PARSE_STRING
+            ? mal_value_is_string(*temp)
+            : mal_value_is_boolean(*temp);
+        if (!valid) {
+            return util_parse_throw_code(vm,
+                "Option default array contains a value of the wrong type",
+                "ERR_INVALID_ARG_TYPE");
+        }
+    }
+    return true;
+}
+
+static i32 util_parse_find_long(
+    const MalUtilParseState *state, MalValue name) {
+    if (!mal_value_is_string(name)) return -1;
+    MalString *needle = mal_value_to_string(name);
+    for (usize i = 0; i < state->option_count; i++) {
+        MalValue candidate =
+            state->option_roots[state->options[i].roots_index];
+        if (mal_string_equals(needle, mal_value_to_string(candidate))) {
+            return (i32) i;
+        }
+    }
+    return -1;
+}
+
+static i32 util_parse_find_short(
+    const MalUtilParseState *state, c16 short_name) {
+    for (usize i = 0; i < state->option_count; i++) {
+        if (state->options[i].has_short
+            && state->options[i].short_name == short_name) {
+            return (i32) i;
+        }
+    }
+    return -1;
+}
+
+static MalValue util_parse_option_name(
+    const MalUtilParseState *state, i32 option_index) {
+    return state->option_roots[state->options[option_index].roots_index];
+}
+
+static bool util_parse_define_token_property(
+    MalUtilParseState *state, MalObject *token, const char *name,
+    MalValue value) {
+    mal_intrinsic_define_data(state->vm, token, (const byte *) name,
+        value, UTIL_VISIBLE);
+    return state->vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
+static bool util_parse_append_option_token(
+    MalUtilParseState *state, MalValue name, MalValue raw_name, u32 index,
+    MalValue value, bool inline_value) {
+    if (!state->return_tokens) return true;
+    state->roots[UTIL_PARSE_TEMP] =
+        mal_value_from_object(mal_intrinsic_new_object(state->vm));
+    MalObject *token = mal_value_to_object(state->roots[UTIL_PARSE_TEMP]);
+    if (!util_parse_define_token_property(state, token, "kind",
+            mal_value_from_string(mal_intrinsic_ascii(state->vm, "option")))
+        || !util_parse_define_token_property(state, token, "name", name)
+        || !util_parse_define_token_property(
+            state, token, "rawName", raw_name)
+        || !util_parse_define_token_property(state, token, "index",
+            mal_ops_number_value((f64) index))
+        || !util_parse_define_token_property(state, token, "value", value)
+        || !util_parse_define_token_property(state, token, "inlineValue",
+            mal_value_is_undefined(value)
+                ? mal_value_new_undefined()
+                : mal_value_new_boolean(inline_value))) {
+        return false;
+    }
+    return util_parse_array_append(
+        state->roots[UTIL_PARSE_TOKENS], state->roots[UTIL_PARSE_TEMP]);
+}
+
+static bool util_parse_append_positional_token(
+    MalUtilParseState *state, MalValue value, u32 index) {
+    if (state->return_tokens) {
+        state->roots[UTIL_PARSE_TEMP] =
+            mal_value_from_object(mal_intrinsic_new_object(state->vm));
+        MalObject *token = mal_value_to_object(state->roots[UTIL_PARSE_TEMP]);
+        if (!util_parse_define_token_property(state, token, "kind",
+                mal_value_from_string(
+                    mal_intrinsic_ascii(state->vm, "positional")))
+            || !util_parse_define_token_property(state, token, "index",
+                mal_ops_number_value((f64) index))
+            || !util_parse_define_token_property(state, token, "value", value)
+            || !util_parse_array_append(state->roots[UTIL_PARSE_TOKENS],
+                state->roots[UTIL_PARSE_TEMP])) {
+            return false;
+        }
+    }
+    if (!state->allow_positionals) {
+        return util_parse_throw_code(state->vm,
+            "Unexpected positional argument",
+            "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL");
+    }
+    return util_parse_array_append(
+        state->roots[UTIL_PARSE_POSITIONALS], value);
+}
+
+static bool util_parse_append_terminator_token(
+    MalUtilParseState *state, u32 index) {
+    if (!state->return_tokens) return true;
+    state->roots[UTIL_PARSE_TEMP] =
+        mal_value_from_object(mal_intrinsic_new_object(state->vm));
+    MalObject *token = mal_value_to_object(state->roots[UTIL_PARSE_TEMP]);
+    if (!util_parse_define_token_property(state, token, "kind",
+            mal_value_from_string(
+                mal_intrinsic_ascii(state->vm, "option-terminator")))
+        || !util_parse_define_token_property(state, token, "index",
+            mal_ops_number_value((f64) index))) {
+        return false;
+    }
+    return util_parse_array_append(
+        state->roots[UTIL_PARSE_TOKENS], state->roots[UTIL_PARSE_TEMP]);
+}
+
+static bool util_parse_store_option(
+    MalUtilParseState *state, MalValue name, MalValue value,
+    i32 option_index) {
+    if (util_parse_string_equals_ascii(name, "__proto__")) return true;
+    MalKey key = mal_key_from_value(name);
+    MalObject *values = mal_value_to_object(state->roots[UTIL_PARSE_VALUES]);
+    bool multiple = option_index >= 0
+        && state->options[option_index].multiple;
+    if (!multiple) return mal_object_set(values, key, value);
+
+    MalPropertyLookup current = mal_object_get_own(values, key);
+    if (current.present && mal_value_is_array_object(current.desc.value)) {
+        return util_parse_array_append(current.desc.value, value);
+    }
+    state->roots[UTIL_PARSE_TEMP_2] = mal_value_from_array_object(
+        mal_intrinsic_new_array(state->vm, 0));
+    if (!util_parse_array_append(state->roots[UTIL_PARSE_TEMP_2], value)) {
+        return false;
+    }
+    return mal_object_set(values, key, state->roots[UTIL_PARSE_TEMP_2]);
+}
+
+static bool util_parse_process_option(
+    MalUtilParseState *state, MalValue name, MalValue raw_name, u32 index,
+    MalValue value, bool inline_value) {
+    bool has_value = !mal_value_is_undefined(value);
+    i32 validation_index = util_parse_find_long(state, name);
+    if (state->strict && validation_index < 0 && state->allow_negative
+        && util_parse_string_starts_ascii(name, "no-")) {
+        MalString *string = mal_value_to_string(name);
+        state->roots[UTIL_PARSE_TEMP_2] = util_parse_slice(state->vm, name, 3,
+            mal_string_length(string) - 3);
+        i32 negative_index = util_parse_find_long(
+            state, state->roots[UTIL_PARSE_TEMP_2]);
+        if (negative_index >= 0
+            && state->options[negative_index].type == UTIL_PARSE_BOOLEAN) {
+            validation_index = negative_index;
+        }
+    }
+    if (state->strict && validation_index < 0) {
+        return util_parse_throw_code(
+            state->vm, "Unknown option", "ERR_PARSE_ARGS_UNKNOWN_OPTION");
+    }
+    if (state->strict && validation_index >= 0) {
+        MalUtilParseOption *option = &state->options[validation_index];
+        if (option->type == UTIL_PARSE_STRING
+            && (!has_value || !mal_value_is_string(value))) {
+            return util_parse_throw_code(state->vm,
+                "String option argument is missing",
+                "ERR_PARSE_ARGS_INVALID_OPTION_VALUE");
+        }
+        if (option->type == UTIL_PARSE_BOOLEAN && has_value) {
+            return util_parse_throw_code(state->vm,
+                "Boolean option does not take an argument",
+                "ERR_PARSE_ARGS_INVALID_OPTION_VALUE");
+        }
+        if (option->type == UTIL_PARSE_STRING && !inline_value
+            && mal_value_is_string(value)) {
+            MalString *string = mal_value_to_string(value);
+            const c16 *units = mal_string_code_units(string);
+            if (mal_string_length(string) > 1 && units[0] == '-') {
+                return util_parse_throw_code(state->vm,
+                    "Option argument is ambiguous",
+                    "ERR_PARSE_ARGS_INVALID_OPTION_VALUE");
+            }
+        }
+    }
+
+    MalValue stored_name = name;
+    MalValue stored_value = has_value ? value : mal_value_new_boolean(true);
+    if (state->allow_negative && !has_value
+        && util_parse_string_starts_ascii(name, "no-")) {
+        MalString *string = mal_value_to_string(name);
+        state->roots[UTIL_PARSE_TEMP_2] = util_parse_slice(state->vm, name, 3,
+            mal_string_length(string) - 3);
+        stored_name = state->roots[UTIL_PARSE_TEMP_2];
+        stored_value = mal_value_new_boolean(false);
+    }
+    i32 stored_index = util_parse_find_long(state, stored_name);
+    if (!util_parse_append_option_token(state, stored_name, raw_name,
+            index, value, inline_value)) {
+        return false;
+    }
+    return util_parse_store_option(
+        state, stored_name, stored_value, stored_index);
+}
+
+static bool util_parse_validate_options(
+    MalUtilParseState *state, MalRootSpan *option_root,
+    bool *option_rooted) {
+    MalVm *vm = state->vm;
+    if (!mal_vm_own_property_keys(
+            vm, state->roots[UTIL_PARSE_OPTIONS],
+            &state->roots[UTIL_PARSE_KEYS])) {
+        return false;
+    }
+    u32 key_count = mal_array_object_length(
+        mal_value_to_array_object(state->roots[UTIL_PARSE_KEYS]));
+    if (key_count > INT32_MAX / 2) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    if (key_count == 0) return true;
+    state->options = calloc(key_count, sizeof(MalUtilParseOption));
+    state->option_roots = malloc(
+        sizeof(MalValue) * (usize) key_count * 2);
+    if (state->options == nullptr || state->option_roots == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    for (usize i = 0; i < (usize) key_count * 2; i++) {
+        state->option_roots[i] = mal_value_new_undefined();
+    }
+    mal_gc_root(option_root, state->option_roots, (i32) key_count * 2);
+    *option_rooted = true;
+
+    for (u32 key_index = 0; key_index < key_count; key_index++) {
+        MalValue key_value;
+        if (!mal_array_object_dense_get(
+                mal_value_to_array_object(state->roots[UTIL_PARSE_KEYS]),
+                key_index, &key_value)) {
+            continue;
+        }
+        if (!mal_value_is_string(key_value)) continue;
+        MalKey key = mal_key_from_value(key_value);
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(vm, state->roots[UTIL_PARSE_OPTIONS],
+                key, &present, &desc)) {
+            return false;
+        }
+        if (!present || (desc.flags & MAL_PROPERTY_ENUMERABLE) == 0) continue;
+        if (!mal_vm_get_property(vm, state->roots[UTIL_PARSE_OPTIONS], key,
+                &state->roots[UTIL_PARSE_CURRENT])) {
+            return false;
+        }
+        bool is_record;
+        if (!util_parse_is_record(
+                vm, state->roots[UTIL_PARSE_CURRENT], &is_record)) {
+            return false;
+        }
+        if (!is_record) {
+            return util_parse_throw_code(vm,
+                "Option configuration must be an object",
+                "ERR_INVALID_ARG_TYPE");
+        }
+
+        MalUtilParseOption *option = &state->options[state->option_count];
+        option->roots_index = state->option_count * 2;
+        state->option_roots[option->roots_index] = key_value;
+        bool type_present;
+        if (!util_parse_get_own_ascii(vm, state->roots[UTIL_PARSE_CURRENT],
+                "type", &type_present, &state->roots[UTIL_PARSE_TEMP])) {
+            return false;
+        }
+        if (!type_present) {
+            return util_parse_throw_code(vm,
+                "Option type must be 'string' or 'boolean'",
+                "ERR_INVALID_ARG_TYPE");
+        }
+        if (util_parse_string_equals_ascii(
+                state->roots[UTIL_PARSE_TEMP], "string")) {
+            option->type = UTIL_PARSE_STRING;
+        } else if (util_parse_string_equals_ascii(
+                       state->roots[UTIL_PARSE_TEMP], "boolean")) {
+            option->type = UTIL_PARSE_BOOLEAN;
+        } else {
+            return util_parse_throw_code(vm,
+                "Option type must be 'string' or 'boolean'",
+                "ERR_INVALID_ARG_TYPE");
+        }
+
+        bool property_present;
+        if (!util_parse_get_own_ascii(vm, state->roots[UTIL_PARSE_CURRENT],
+                "short", &property_present, &state->roots[UTIL_PARSE_TEMP])) {
+            return false;
+        }
+        if (property_present) {
+            if (!mal_value_is_string(state->roots[UTIL_PARSE_TEMP])
+                || mal_string_length(mal_value_to_string(
+                       state->roots[UTIL_PARSE_TEMP])) != 1) {
+                return util_parse_throw_code(vm,
+                    "Option short name must be a single character",
+                    "ERR_INVALID_ARG_VALUE");
+            }
+            option->has_short = true;
+            option->short_name = mal_string_code_units(mal_value_to_string(
+                state->roots[UTIL_PARSE_TEMP]))[0];
+        }
+
+        if (!util_parse_get_own_ascii(vm, state->roots[UTIL_PARSE_CURRENT],
+                "multiple", &property_present, &state->roots[UTIL_PARSE_TEMP])) {
+            return false;
+        }
+        if (property_present) {
+            if (!mal_value_is_boolean(state->roots[UTIL_PARSE_TEMP])) {
+                return util_parse_throw_code(vm,
+                    "Option multiple flag must be a boolean",
+                    "ERR_INVALID_ARG_TYPE");
+            }
+            option->multiple = mal_value_to_boolean(
+                state->roots[UTIL_PARSE_TEMP]);
+        }
+
+        if (!util_parse_get_own_ascii(vm, state->roots[UTIL_PARSE_CURRENT],
+                "default", &property_present, &state->roots[UTIL_PARSE_TEMP])) {
+            return false;
+        }
+        if (property_present
+            && !mal_value_is_undefined(state->roots[UTIL_PARSE_TEMP])) {
+            bool valid;
+            if (option->multiple) {
+                valid = util_parse_validate_default_array(vm,
+                    state->roots[UTIL_PARSE_TEMP], option->type,
+                    &state->roots[UTIL_PARSE_TEMP_2]);
+            } else {
+                valid = option->type == UTIL_PARSE_STRING
+                    ? mal_value_is_string(state->roots[UTIL_PARSE_TEMP])
+                    : mal_value_is_boolean(state->roots[UTIL_PARSE_TEMP]);
+                if (!valid) {
+                    util_parse_throw_code(vm,
+                        "Option default has the wrong type",
+                        "ERR_INVALID_ARG_TYPE");
+                }
+            }
+            if (!valid) return false;
+            option->has_default = true;
+            state->option_roots[option->roots_index + 1] =
+                state->roots[UTIL_PARSE_TEMP];
+        }
+        state->option_count++;
+    }
+    return true;
+}
+
+static bool util_parse_read_arg(
+    MalUtilParseState *state, u32 index, MalValue *out) {
+    return mal_vm_get_property(
+        state->vm, state->roots[UTIL_PARSE_ARGS], mal_key_index(index), out);
+}
+
+static bool util_parse_tokens(MalUtilParseState *state, u32 arg_count) {
+    for (u32 index = 0; index < arg_count; index++) {
+        if (!util_parse_read_arg(
+                state, index, &state->roots[UTIL_PARSE_CURRENT])) {
+            return false;
+        }
+        MalValue arg = state->roots[UTIL_PARSE_CURRENT];
+        if (!mal_value_is_string(arg)) {
+            if (mal_value_is_nil(arg)) {
+                return util_parse_throw(
+                    state->vm, "Argument array contains null or undefined");
+            }
+            if (!util_parse_append_positional_token(state, arg, index)) {
+                return false;
+            }
+            continue;
+        }
+        MalString *string = mal_value_to_string(arg);
+        const c16 *units = mal_string_code_units(string);
+        usize length = mal_string_length(string);
+
+        if (length == 2 && units[0] == '-' && units[1] == '-') {
+            if (!util_parse_append_terminator_token(state, index)) return false;
+            for (u32 positional = index + 1; positional < arg_count;
+                 positional++) {
+                if (!util_parse_read_arg(state, positional,
+                        &state->roots[UTIL_PARSE_CURRENT])
+                    || !util_parse_append_positional_token(state,
+                        state->roots[UTIL_PARSE_CURRENT], positional)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        if (length == 2 && units[0] == '-' && units[1] != '-') {
+            i32 option_index = util_parse_find_short(state, units[1]);
+            state->roots[UTIL_PARSE_NAME] = option_index >= 0
+                ? util_parse_option_name(state, option_index)
+                : util_parse_short_string(state->vm, units[1]);
+            state->roots[UTIL_PARSE_RAW_NAME] = arg;
+            state->roots[UTIL_PARSE_VALUE] = mal_value_new_undefined();
+            bool inline_value = false;
+            if (option_index >= 0
+                && state->options[option_index].type == UTIL_PARSE_STRING
+                && index + 1 < arg_count) {
+                if (!util_parse_read_arg(
+                        state, index + 1, &state->roots[UTIL_PARSE_NEXT])) {
+                    return false;
+                }
+                if (!mal_value_is_nil(state->roots[UTIL_PARSE_NEXT])) {
+                    state->roots[UTIL_PARSE_VALUE] =
+                        state->roots[UTIL_PARSE_NEXT];
+                    index++;
+                }
+            }
+            if (!util_parse_process_option(state,
+                    state->roots[UTIL_PARSE_NAME],
+                    state->roots[UTIL_PARSE_RAW_NAME], index -
+                        (!mal_value_is_undefined(state->roots[UTIL_PARSE_VALUE]) ? 1 : 0),
+                    state->roots[UTIL_PARSE_VALUE], inline_value)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (length > 2 && units[0] == '-' && units[1] != '-') {
+            i32 first_option = util_parse_find_short(state, units[1]);
+            bool first_is_string = first_option >= 0
+                && state->options[first_option].type == UTIL_PARSE_STRING;
+            if (first_is_string) {
+                state->roots[UTIL_PARSE_NAME] =
+                    util_parse_option_name(state, first_option);
+                state->roots[UTIL_PARSE_RAW_NAME] =
+                    util_parse_raw_short(state->vm, units[1]);
+                state->roots[UTIL_PARSE_VALUE] =
+                    util_parse_slice(state->vm, arg, 2, length - 2);
+                if (!util_parse_process_option(state,
+                        state->roots[UTIL_PARSE_NAME],
+                        state->roots[UTIL_PARSE_RAW_NAME], index,
+                        state->roots[UTIL_PARSE_VALUE], true)) {
+                    return false;
+                }
+                continue;
+            }
+
+            u32 group_index = index;
+            for (usize group = 1; group < length; group++) {
+                i32 option_index = util_parse_find_short(state, units[group]);
+                state->roots[UTIL_PARSE_NAME] = option_index >= 0
+                    ? util_parse_option_name(state, option_index)
+                    : util_parse_short_string(state->vm, units[group]);
+                state->roots[UTIL_PARSE_RAW_NAME] =
+                    util_parse_raw_short(state->vm, units[group]);
+                state->roots[UTIL_PARSE_VALUE] = mal_value_new_undefined();
+                bool inline_value = false;
+                if (option_index >= 0
+                    && state->options[option_index].type == UTIL_PARSE_STRING) {
+                    if (group + 1 < length) {
+                        state->roots[UTIL_PARSE_VALUE] = util_parse_slice(
+                            state->vm, arg, group + 1, length - group - 1);
+                        inline_value = true;
+                    } else if (index + 1 < arg_count) {
+                        if (!util_parse_read_arg(state, index + 1,
+                                &state->roots[UTIL_PARSE_NEXT])) {
+                            return false;
+                        }
+                        if (!mal_value_is_nil(state->roots[UTIL_PARSE_NEXT])) {
+                            state->roots[UTIL_PARSE_VALUE] =
+                                state->roots[UTIL_PARSE_NEXT];
+                            index++;
+                        }
+                    }
+                }
+                if (!util_parse_process_option(state,
+                        state->roots[UTIL_PARSE_NAME],
+                        state->roots[UTIL_PARSE_RAW_NAME], group_index,
+                        state->roots[UTIL_PARSE_VALUE], inline_value)) {
+                    return false;
+                }
+                if (!mal_value_is_undefined(state->roots[UTIL_PARSE_VALUE])) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (length > 2 && units[0] == '-' && units[1] == '-') {
+            usize equals = length;
+            for (usize i = 3; i < length; i++) {
+                if (units[i] == '=') {
+                    equals = i;
+                    break;
+                }
+            }
+            if (equals < length) {
+                state->roots[UTIL_PARSE_NAME] =
+                    util_parse_slice(state->vm, arg, 2, equals - 2);
+                state->roots[UTIL_PARSE_RAW_NAME] =
+                    util_parse_slice(state->vm, arg, 0, equals);
+                state->roots[UTIL_PARSE_VALUE] = util_parse_slice(
+                    state->vm, arg, equals + 1, length - equals - 1);
+                if (!util_parse_process_option(state,
+                        state->roots[UTIL_PARSE_NAME],
+                        state->roots[UTIL_PARSE_RAW_NAME], index,
+                        state->roots[UTIL_PARSE_VALUE], true)) {
+                    return false;
+                }
+                continue;
+            }
+
+            state->roots[UTIL_PARSE_NAME] =
+                util_parse_slice(state->vm, arg, 2, length - 2);
+            state->roots[UTIL_PARSE_RAW_NAME] = arg;
+            state->roots[UTIL_PARSE_VALUE] = mal_value_new_undefined();
+            i32 option_index = util_parse_find_long(
+                state, state->roots[UTIL_PARSE_NAME]);
+            u32 option_arg_index = index;
+            if (option_index >= 0
+                && state->options[option_index].type == UTIL_PARSE_STRING
+                && index + 1 < arg_count) {
+                if (!util_parse_read_arg(
+                        state, index + 1, &state->roots[UTIL_PARSE_NEXT])) {
+                    return false;
+                }
+                if (!mal_value_is_nil(state->roots[UTIL_PARSE_NEXT])) {
+                    state->roots[UTIL_PARSE_VALUE] =
+                        state->roots[UTIL_PARSE_NEXT];
+                    index++;
+                }
+            }
+            if (!util_parse_process_option(state,
+                    state->roots[UTIL_PARSE_NAME],
+                    state->roots[UTIL_PARSE_RAW_NAME], option_arg_index,
+                    state->roots[UTIL_PARSE_VALUE], false)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (!util_parse_append_positional_token(state, arg, index)) return false;
+    }
+    return true;
+}
+
+static bool util_parse_apply_defaults(MalUtilParseState *state) {
+    MalObject *values = mal_value_to_object(state->roots[UTIL_PARSE_VALUES]);
+    for (usize i = 0; i < state->option_count; i++) {
+        MalUtilParseOption *option = &state->options[i];
+        if (!option->has_default) continue;
+        MalValue name = state->option_roots[option->roots_index];
+        if (util_parse_string_equals_ascii(name, "__proto__")) continue;
+        MalKey key = mal_key_from_value(name);
+        MalPropertyLookup current = mal_object_get_own(values, key);
+        if (!current.present || mal_value_is_undefined(current.desc.value)) {
+            if (!mal_object_set(values, key,
+                    state->option_roots[option->roots_index + 1])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static MalValue util_parse_args(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalValue roots[UTIL_PARSE_ROOT_COUNT];
+    for (usize i = 0; i < countof(roots); i++) {
+        roots[i] = mal_value_new_undefined();
+    }
+    roots[UTIL_PARSE_CONFIG] =
+        argc > 0 ? args[0] : mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalUtilParseState state = {.vm = vm, .roots = roots};
+    MalRootSpan option_root;
+    bool option_rooted = false;
+    bool ok = true;
+
+    if (mal_value_is_null(roots[UTIL_PARSE_CONFIG])) {
+        util_parse_throw(vm, "Cannot convert undefined or null to object");
+        ok = false;
+        goto done;
+    }
+
+    bool present;
+    if (!util_parse_get_own_ascii(vm, roots[UTIL_PARSE_CONFIG], "args",
+            &present, &roots[UTIL_PARSE_ARGS])) {
+        ok = false;
+        goto done;
+    }
+    if (!present || mal_value_is_nil(roots[UTIL_PARSE_ARGS])) {
+        if (!util_parse_build_main_args(
+                vm, &roots[UTIL_PARSE_ARGS], &roots[UTIL_PARSE_TEMP])) {
+            ok = false;
+            goto done;
+        }
+    }
+
+    if (!util_parse_get_own_ascii(vm, roots[UTIL_PARSE_CONFIG], "strict",
+            &present, &roots[UTIL_PARSE_TEMP])) {
+        ok = false;
+        goto done;
+    }
+    if (!present || mal_value_is_nil(roots[UTIL_PARSE_TEMP])) {
+        state.strict = true;
+    } else if (!mal_value_is_boolean(roots[UTIL_PARSE_TEMP])) {
+        util_parse_throw_code(vm, "The strict argument must be a boolean",
+            "ERR_INVALID_ARG_TYPE");
+        ok = false;
+        goto done;
+    } else {
+        state.strict = mal_value_to_boolean(roots[UTIL_PARSE_TEMP]);
+    }
+
+    if (!util_parse_get_own_ascii(vm, roots[UTIL_PARSE_CONFIG],
+            "allowPositionals", &present, &roots[UTIL_PARSE_TEMP])) {
+        ok = false;
+        goto done;
+    }
+    if (!present || mal_value_is_nil(roots[UTIL_PARSE_TEMP])) {
+        state.allow_positionals = !state.strict;
+    } else if (!mal_value_is_boolean(roots[UTIL_PARSE_TEMP])) {
+        util_parse_throw_code(vm,
+            "The allowPositionals argument must be a boolean",
+            "ERR_INVALID_ARG_TYPE");
+        ok = false;
+        goto done;
+    } else {
+        state.allow_positionals =
+            mal_value_to_boolean(roots[UTIL_PARSE_TEMP]);
+    }
+
+    if (!util_parse_get_own_ascii(vm, roots[UTIL_PARSE_CONFIG], "tokens",
+            &present, &roots[UTIL_PARSE_TEMP])) {
+        ok = false;
+        goto done;
+    }
+    if (!present || mal_value_is_nil(roots[UTIL_PARSE_TEMP])) {
+        state.return_tokens = false;
+    } else if (!mal_value_is_boolean(roots[UTIL_PARSE_TEMP])) {
+        util_parse_throw_code(vm, "The tokens argument must be a boolean",
+            "ERR_INVALID_ARG_TYPE");
+        ok = false;
+        goto done;
+    } else {
+        state.return_tokens = mal_value_to_boolean(roots[UTIL_PARSE_TEMP]);
+    }
+
+    if (!util_parse_get_own_ascii(vm, roots[UTIL_PARSE_CONFIG],
+            "allowNegative", &present, &roots[UTIL_PARSE_TEMP])) {
+        ok = false;
+        goto done;
+    }
+    if (!present || mal_value_is_nil(roots[UTIL_PARSE_TEMP])) {
+        state.allow_negative = false;
+    } else if (!mal_value_is_boolean(roots[UTIL_PARSE_TEMP])) {
+        util_parse_throw_code(vm,
+            "The allowNegative argument must be a boolean",
+            "ERR_INVALID_ARG_TYPE");
+        ok = false;
+        goto done;
+    } else {
+        state.allow_negative = mal_value_to_boolean(roots[UTIL_PARSE_TEMP]);
+    }
+
+    if (!util_parse_get_own_ascii(vm, roots[UTIL_PARSE_CONFIG], "options",
+            &present, &roots[UTIL_PARSE_OPTIONS])) {
+        ok = false;
+        goto done;
+    }
+    if (!present || mal_value_is_nil(roots[UTIL_PARSE_OPTIONS])) {
+        roots[UTIL_PARSE_OPTIONS] =
+            mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    }
+
+    bool is_args_array;
+    if (!mal_vm_is_array(vm, roots[UTIL_PARSE_ARGS], &is_args_array)) {
+        ok = false;
+        goto done;
+    }
+    if (!is_args_array) {
+        util_parse_throw_code(vm, "The args argument must be an Array",
+            "ERR_INVALID_ARG_TYPE");
+        ok = false;
+        goto done;
+    }
+    bool options_record;
+    if (!util_parse_is_record(
+            vm, roots[UTIL_PARSE_OPTIONS], &options_record)) {
+        ok = false;
+        goto done;
+    }
+    if (!options_record) {
+        util_parse_throw_code(vm, "The options argument must be an object",
+            "ERR_INVALID_ARG_TYPE");
+        ok = false;
+        goto done;
+    }
+    if (!util_parse_validate_options(&state, &option_root, &option_rooted)) {
+        ok = false;
+        goto done;
+    }
+
+    roots[UTIL_PARSE_VALUES] =
+        mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    roots[UTIL_PARSE_POSITIONALS] =
+        mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    roots[UTIL_PARSE_TOKENS] =
+        mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    roots[UTIL_PARSE_RESULT] =
+        mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalObject *result = mal_value_to_object(roots[UTIL_PARSE_RESULT]);
+    mal_intrinsic_define_data(vm, result, (const byte *) "values",
+        roots[UTIL_PARSE_VALUES], UTIL_VISIBLE);
+    mal_intrinsic_define_data(vm, result, (const byte *) "positionals",
+        roots[UTIL_PARSE_POSITIONALS], UTIL_VISIBLE);
+    if (state.return_tokens) {
+        mal_intrinsic_define_data(vm, result, (const byte *) "tokens",
+            roots[UTIL_PARSE_TOKENS], UTIL_VISIBLE);
+    }
+
+    u32 arg_count;
+    if (!util_parse_array_length(
+            vm, roots[UTIL_PARSE_ARGS], &arg_count,
+            &roots[UTIL_PARSE_TEMP])
+        || !util_parse_tokens(&state, arg_count)
+        || !util_parse_apply_defaults(&state)) {
+        ok = false;
+    }
+
+done:
+    if (option_rooted) mal_gc_unroot(&option_root);
+    free(state.option_roots);
+    free(state.options);
+    MalValue value = ok
+        ? roots[UTIL_PARSE_RESULT]
+        : mal_value_new_undefined();
+    mal_gc_unroot(&root);
+    return value;
+}
+
 typedef struct MalNodeUtilExport {
     const char *name;
     i32 length;
@@ -934,6 +1889,7 @@ static const MalNodeUtilExport util_exports[] = {
     {"isString", 1, util_is_string},
     {"isSymbol", 1, util_is_symbol},
     {"isUndefined", 1, util_is_undefined},
+    {"parseArgs", 0, util_parse_args},
     {"parseEnv", 1, util_parse_env},
     {"promisify", 1, util_promisify},
 };

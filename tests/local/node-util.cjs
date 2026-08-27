@@ -12,6 +12,13 @@ const canonical = require("node:util");
 check(util === canonical, "bare/canonical identity");
 check(util.format("%s:%i", "port", 42.8) === "port:42", "CommonJS format");
 check(util.inspect({ ok: true }) === "{ ok: true }", "CommonJS inspect");
+check(
+	util.parseArgs({
+		args: ["-v"],
+		options: { verbose: { type: "boolean", short: "v" } },
+	}).values.verbose === true,
+	"CommonJS parseArgs",
+);
 
 function Base() {}
 function Derived() {}

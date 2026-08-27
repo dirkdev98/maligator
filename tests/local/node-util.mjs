@@ -15,6 +15,7 @@ import util, {
 	isString,
 	isSymbol,
 	isUndefined,
+	parseArgs,
 	promisify,
 } from "node:util";
 
@@ -32,6 +33,8 @@ function check(condition, name) {
 check(util.inspect === inspect, "default/named inspect identity");
 check(util.inherits === inherits, "default/named inherits identity");
 check(util.promisify === promisify, "default/named promisify identity");
+check(util.parseArgs === parseArgs, "default/named parseArgs identity");
+check(parseArgs.name === "parseArgs" && parseArgs.length === 0, "parseArgs metadata");
 function callbackValue(value, callback) {
 	callback(null, value * 2);
 }
@@ -121,6 +124,165 @@ check(!types.isCryptoKey({}), "types.isCryptoKey rejects ordinary objects");
 const circular = {};
 circular.self = circular;
 check(inspect(circular) === "{ self: [Circular] }", "cycle inspection");
+
+const parsed = parseArgs({
+	args: ["--verbose", "--name=maligator", "input", "--", "--literal"],
+	options: {
+		verbose: { type: "boolean" },
+		name: { type: "string" },
+	},
+	allowPositionals: true,
+	tokens: true,
+});
+check(Object.getPrototypeOf(parsed.values) === null, "parseArgs null-prototype values");
+check(
+	JSON.stringify(parsed.values) === '{"verbose":true,"name":"maligator"}',
+	"parseArgs long values",
+);
+check(
+	JSON.stringify(parsed.positionals) === '["input","--literal"]',
+	"parseArgs positionals and terminator",
+);
+check(
+	JSON.stringify(parsed.tokens) ===
+		'[{"kind":"option","name":"verbose","rawName":"--verbose","index":0},{"kind":"option","name":"name","rawName":"--name","index":1,"value":"maligator","inlineValue":true},{"kind":"positional","index":2,"value":"input"},{"kind":"option-terminator","index":3},{"kind":"positional","index":4,"value":"--literal"}]',
+	"parseArgs token details",
+);
+
+const grouped = parseArgs({
+	args: ["-abfconfig.json", "-t", "one", "--tag=two"],
+	options: {
+		alpha: { type: "boolean", short: "a" },
+		beta: { type: "boolean", short: "b" },
+		file: { type: "string", short: "f" },
+		tag: { type: "string", short: "t", multiple: true },
+	},
+	tokens: true,
+});
+check(
+	JSON.stringify(grouped.values) ===
+		'{"alpha":true,"beta":true,"file":"config.json","tag":["one","two"]}',
+	"parseArgs short groups and repeated strings",
+);
+check(
+	JSON.stringify(grouped.tokens) ===
+		'[{"kind":"option","name":"alpha","rawName":"-a","index":0},{"kind":"option","name":"beta","rawName":"-b","index":0},{"kind":"option","name":"file","rawName":"-f","index":0,"value":"config.json","inlineValue":true},{"kind":"option","name":"tag","rawName":"-t","index":1,"value":"one","inlineValue":false},{"kind":"option","name":"tag","rawName":"--tag","index":3,"value":"two","inlineValue":true}]',
+	"parseArgs grouped token indices",
+);
+
+const defaults = parseArgs({
+	args: [],
+	options: {
+		name: { type: "string", default: "default-name" },
+		color: { type: "boolean", default: true },
+		tags: { type: "string", multiple: true, default: ["one", "two"] },
+		flags: { type: "boolean", multiple: true, default: [true, false] },
+	},
+});
+check(
+	JSON.stringify(defaults.values) ===
+		'{"name":"default-name","color":true,"tags":["one","two"],"flags":[true,false]}',
+	"parseArgs typed defaults",
+);
+const negative = parseArgs({
+	args: ["--feature", "--no-feature"],
+	options: { feature: { type: "boolean" } },
+	allowNegative: true,
+	tokens: true,
+});
+check(negative.values.feature === false, "parseArgs negative boolean");
+check(negative.tokens[1].name === "feature", "parseArgs normalizes negative token name");
+const loose = parseArgs({ args: ["--unknown=value", "pos"], strict: false });
+check(
+	loose.values.unknown === "value" && loose.positionals[0] === "pos",
+	"parseArgs loose unknown options and implied positionals",
+);
+check(parseArgs().positionals.length === 0, "parseArgs defaults to process argv slice");
+
+const protoOptions = Object.create(null);
+protoOptions.__proto__ = { type: "boolean", default: true };
+const protoResult = parseArgs({ args: ["--__proto__"], options: protoOptions });
+check(
+	Object.getPrototypeOf(protoResult.values) === null &&
+		!Object.hasOwn(protoResult.values, "__proto__"),
+	"parseArgs blocks __proto__ storage",
+);
+
+function parseThrows(config) {
+	try {
+		parseArgs(config);
+		return false;
+	} catch (error) {
+		return error instanceof TypeError;
+	}
+}
+function parseErrorCode(config) {
+	try {
+		parseArgs(config);
+		return "";
+	} catch (error) {
+		return error.code;
+	}
+}
+check(parseThrows({ args: "--bad" }), "parseArgs rejects non-array args");
+check(
+	parseErrorCode({ args: "--bad" }) === "ERR_INVALID_ARG_TYPE",
+	"parseArgs invalid configuration error code",
+);
+check(parseThrows({ strict: 1 }), "parseArgs rejects non-boolean strict");
+check(parseThrows({ options: [] }), "parseArgs rejects array options");
+check(parseThrows({ options: { bad: {} } }), "parseArgs requires option type");
+check(
+	parseThrows({ options: { bad: { type: "number" } } }),
+	"parseArgs rejects unknown option type",
+);
+check(
+	parseThrows({ options: { bad: { type: "boolean", short: "bb" } } }),
+	"parseArgs validates short names",
+);
+check(
+	parseThrows({ options: { bad: { type: "boolean", multiple: 1 } } }),
+	"parseArgs validates multiple",
+);
+check(
+	parseThrows({ options: { bad: { type: "string", default: true } } }),
+	"parseArgs validates defaults",
+);
+check(parseThrows({ args: ["--unknown"] }), "parseArgs rejects unknown options");
+check(
+	parseErrorCode({ args: ["--unknown"] }) === "ERR_PARSE_ARGS_UNKNOWN_OPTION",
+	"parseArgs unknown option error code",
+);
+check(
+	parseThrows({ args: ["--name"], options: { name: { type: "string" } } }),
+	"parseArgs requires string option values",
+);
+check(
+	parseErrorCode({
+		args: ["--name"],
+		options: { name: { type: "string" } },
+	}) === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+	"parseArgs invalid option value error code",
+);
+check(
+	parseThrows({
+		args: ["--flag=yes"],
+		options: { flag: { type: "boolean" } },
+	}),
+	"parseArgs rejects boolean option values",
+);
+check(parseThrows({ args: ["positional"] }), "parseArgs rejects strict positionals");
+check(
+	parseErrorCode({ args: ["positional"] }) === "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL",
+	"parseArgs unexpected positional error code",
+);
+check(
+	parseThrows({
+		args: ["--name", "--other"],
+		options: { name: { type: "string" }, other: { type: "boolean" } },
+	}),
+	"parseArgs rejects ambiguous option-like values",
+);
 
 function Parent() {}
 Parent.prototype.value = function () {
