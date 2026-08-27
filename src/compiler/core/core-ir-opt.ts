@@ -139,6 +139,7 @@ import type {
 	CoreInstruction,
 	CoreInstructionId,
 	CoreProgram,
+	CoreRepresentation,
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -887,9 +888,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = new Map<CoreValueId, CoreInstruction>();
 		const useCounts = new Map<CoreValueId, number>();
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+		const representations = analyses.representations(fn);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				for (const output of instruction.outputs) definitions.set(output, instruction);
@@ -2516,7 +2515,7 @@ const annotateFreshDenseIndexedReserves: CoreFunctionPass = {
 		if (fn.isGenerator || fn.isAsync) return fn;
 		const cfg = analyses.controlFlow(fn);
 		const canonicalValues = coreCanonicalValueRoots(fn, cfg);
-		const definitions = functionDefinitions(fn);
+		const definitions = analyses.definitions(fn);
 		const exactInteger = (value: CoreValueId): number | undefined =>
 			exactIntegerValue(canonicalValues.get(value) ?? value, definitions);
 		const parameters = coreBlockParameters(fn);
@@ -3243,7 +3242,7 @@ const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
-		const definitions = functionDefinitions(fn);
+		const definitions = analyses.definitions(fn);
 		const locations = new Map<
 			CoreInstructionId,
 			{ readonly block: CoreBlock; readonly index: number }
@@ -3367,7 +3366,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
-		const definitions = functionDefinitions(fn);
+		const definitions = analyses.definitions(fn);
 		const locations = new Map<
 			CoreInstructionId,
 			{ readonly block: CoreBlock; readonly index: number }
@@ -3938,7 +3937,7 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
-		const definitions = functionDefinitions(fn);
+		const definitions = analyses.definitions(fn);
 		const locations = new Map<
 			CoreInstructionId,
 			{ readonly block: CoreBlock; readonly index: number }
@@ -4170,7 +4169,7 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
-		const definitions = functionDefinitions(fn);
+		const definitions = analyses.definitions(fn);
 		const locations = new Map<
 			CoreInstructionId,
 			{ readonly block: CoreBlock; readonly index: number }
@@ -4605,7 +4604,7 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
-		const definitions = functionDefinitions(fn);
+		const definitions = analyses.definitions(fn);
 		const locations = new Map<
 			CoreInstructionId,
 			{ readonly block: CoreBlock; readonly index: number }
@@ -4887,7 +4886,7 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 		if (fn.regions.filter(({ kind }) => kind === "string-slice-number").length >= 8) {
 			return fn;
 		}
-		const definitions = functionDefinitions(fn);
+		const definitions = analyses.definitions(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const uses = new Map<
@@ -5656,6 +5655,11 @@ interface CoreFunctionPass {
 	): CoreFunction;
 }
 
+interface CoreRegionProtection {
+	readonly instructions: ReadonlySet<CoreInstructionId>;
+	readonly inputs: ReadonlySet<CoreValueId>;
+}
+
 function instructionAttribute(instruction: CoreInstruction, name: string): unknown {
 	return instruction.attributes[name];
 }
@@ -5686,6 +5690,15 @@ export class CoreAnalysisManager {
 	readonly context: CoreCompilationContext | undefined;
 	readonly #stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly #controlFlow = new WeakMap<CoreFunction, CoreControlFlow>();
+	readonly #definitions = new WeakMap<
+		CoreFunction,
+		ReadonlyMap<CoreValueId, CoreInstruction>
+	>();
+	readonly #representations = new WeakMap<
+		CoreFunction,
+		ReadonlyMap<CoreValueId, CoreRepresentation>
+	>();
+	readonly #regionProtection = new WeakMap<CoreFunction, CoreRegionProtection>();
 	readonly #canonicalValues = new WeakMap<
 		CoreFunction,
 		ReadonlyMap<CoreValueId, CoreValueId>
@@ -5726,6 +5739,35 @@ export class CoreAnalysisManager {
 			this.#controlFlow.set(fn, analysis);
 		}
 		return analysis;
+	}
+
+	definitions(fn: CoreFunction): ReadonlyMap<CoreValueId, CoreInstruction> {
+		let definitions = this.#definitions.get(fn);
+		if (definitions === undefined) {
+			definitions = functionDefinitions(fn);
+			this.#definitions.set(fn, definitions);
+		}
+		return definitions;
+	}
+
+	representations(fn: CoreFunction): ReadonlyMap<CoreValueId, CoreRepresentation> {
+		let representations = this.#representations.get(fn);
+		if (representations === undefined) {
+			representations = new Map(
+				fn.values.map(({ id, representation }) => [id, representation] as const),
+			);
+			this.#representations.set(fn, representations);
+		}
+		return representations;
+	}
+
+	regionProtection(fn: CoreFunction): CoreRegionProtection {
+		let protection = this.#regionProtection.get(fn);
+		if (protection === undefined) {
+			protection = regionProtectedValues(fn);
+			this.#regionProtection.set(fn, protection);
+		}
+		return protection;
 	}
 
 	/**
@@ -7289,10 +7331,8 @@ const refineValueRepresentations: CoreFunctionPass = {
 const simplifyAlgebraicValues: CoreFunctionPass = {
 	name: "simplify-algebraic-values",
 	ablation: "constant-folding",
-	run(fn) {
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+	run(fn, analyses) {
+		const representations = analyses.representations(fn);
 		if (
 			!fn.blocks.some((block) =>
 				block.instructions.some(
@@ -7730,7 +7770,7 @@ const subsumeCoreFactProofs: CoreFunctionPass = {
 		);
 		// A region certificate is proven against exact instructions, and the proof a
 		// refinement names is part of one.
-		const { instructions: claimed } = regionProtectedValues(fn);
+		const { instructions: claimed } = analyses.regionProtection(fn);
 		let changed = false;
 		const blocks = fn.blocks.map((block): CoreBlock => {
 			let blockChanged = false;
@@ -8107,10 +8147,7 @@ function isValueNumberingCandidate(instruction: CoreInstruction): boolean {
  * neither rewrite a pinned instruction nor replace one of its operands, because
  * the certificate is a proof about those exact identities.
  */
-function regionProtectedValues(fn: CoreFunction): {
-	readonly instructions: ReadonlySet<CoreInstructionId>;
-	readonly inputs: ReadonlySet<CoreValueId>;
-} {
+function regionProtectedValues(fn: CoreFunction): CoreRegionProtection {
 	const instructions = new Set(
 		fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
 	);
@@ -8367,7 +8404,7 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 		const provenance = analyses.provenance(fn);
 		if (provenance.layouts.length === 0) return fn;
 		const resolution = memoryResolution(analyses, fn);
-		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const { instructions: protectedInstructions } = analyses.regionProtection(fn);
 		const facts = [...fn.facts];
 		let nextFact = nextFactId(fn);
 		let changed = false;
@@ -8486,7 +8523,7 @@ const refineDirectCallEffects: CoreFunctionPass = {
 	run(fn, analyses, program) {
 		const summaries = analyses.summaries(program);
 		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
-		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const { instructions: protectedInstructions } = analyses.regionProtection(fn);
 		const retained = new Set<CoreFactId>();
 		const added: Array<CoreFact> = [];
 		let nextFact = nextFactId(fn);
@@ -8598,7 +8635,7 @@ const refineDirectCallResultRepresentations: CoreFunctionPass = {
 	ablation: "interprocedural",
 	run(fn, analyses, program) {
 		const summaries = analyses.summaries(program);
-		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const { instructions: protectedInstructions } = analyses.regionProtection(fn);
 		const representations = new Map(
 			fn.values.map(({ id, representation }) => [id, representation] as const),
 		);
@@ -8804,9 +8841,7 @@ const forwardFreshAllocationPrefixLoads: CoreFunctionPass = {
 		if (layouts.size === 0) return fn;
 		const canonical = analyses.canonicalValues(fn);
 		const cellForString = coreOwnCellResolver(program.stringConstants);
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+		const representations = analyses.representations(fn);
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removedInstructions = new Set<CoreInstructionId>();
 		const replacementInstructions = new Map<CoreInstructionId, CoreInstruction>();
@@ -8956,10 +8991,8 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 				.map((layout) => [layout.instruction, layout] as const),
 		);
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
-			regionProtectedValues(fn);
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+			analyses.regionProtection(fn);
+		const representations = analyses.representations(fn);
 		const children = fn.blocks.map(() => new Array<CoreBlockId>());
 		for (const block of fn.blocks) {
 			const parent = cfg.immediateDominators[block.id];
@@ -9185,7 +9218,7 @@ const eliminateDeadStores: CoreFunctionPass = {
 		);
 		if (contained.length === 0) return fn;
 		const resolution = memoryResolution(analyses, fn);
-		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const { instructions: protectedInstructions } = analyses.regionProtection(fn);
 
 		// Values that can occupy each partition, starting with what the literal put
 		// there. A partition is only a candidate while every one of them is proven
@@ -9324,7 +9357,7 @@ const eliminateDeadAllocations: CoreFunctionPass = {
 		const provenance = analyses.provenance(fn);
 		if (provenance.layouts.length === 0) return fn;
 		const liveness = coreLiveness(fn);
-		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const { instructions: protectedInstructions } = analyses.regionProtection(fn);
 		const dead = new Set<CoreInstructionId>();
 		const deadValues = new Set<CoreValueId>();
 		for (const layout of provenance.layouts) {
@@ -9395,7 +9428,7 @@ const sinkFreshAllocations: CoreFunctionPass = {
 	run(fn, analyses) {
 		const cfg = analyses.controlFlow(fn);
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
-			regionProtectedValues(fn);
+			analyses.regionProtection(fn);
 		const instructionLocations = new Map<
 			CoreInstructionId,
 			{
@@ -9782,11 +9815,9 @@ const loopInvariantCodeMotion: CoreFunctionPass = {
 		const cfg = analyses.controlFlow(fn);
 		if (cfg.loops.length === 0) return fn;
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
-			regionProtectedValues(fn);
+			analyses.regionProtection(fn);
 		const definitionBlocks = new Map<CoreValueId, CoreBlockId>();
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+		const representations = analyses.representations(fn);
 		const provenance = analyses.provenance(fn);
 		const resolution = memoryResolution(analyses, fn);
 		for (const block of fn.blocks) {
@@ -10091,12 +10122,10 @@ const optimizeLoopRanges: CoreFunctionPass = {
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
-		const definitions = functionDefinitions(fn);
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+		const definitions = analyses.definitions(fn);
+		const representations = analyses.representations(fn);
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
-			regionProtectedValues(fn);
+			analyses.regionProtection(fn);
 		const inductionsByBlock = new Map<CoreBlockId, Array<CoreInductionVariable>>();
 		for (const induction of analysis.inductions) {
 			for (const block of induction.loop.blocks) {
@@ -10179,7 +10208,10 @@ const optimizeLoopRanges: CoreFunctionPass = {
 };
 
 /** Use the local form when every candidate shares one block and reads no memory. */
-function localCopyAndValueNumber(fn: CoreFunction): CoreFunction | undefined {
+function localCopyAndValueNumber(
+	fn: CoreFunction,
+	representations: ReadonlyMap<CoreValueId, CoreRepresentation>,
+): CoreFunction | undefined {
 	if (fn.regions.length > 0) return undefined;
 	const candidateBlocks = fn.blocks.filter((block) =>
 		block.instructions.some(
@@ -10204,9 +10236,6 @@ function localCopyAndValueNumber(fn: CoreFunction): CoreFunction | undefined {
 	const replacements = new Map<CoreValueId, CoreValueId>();
 	const removedInstructions = new Set<CoreInstructionId>();
 	const available = new Map<string, ReadonlyArray<CoreValueId>>();
-	const representations = new Map(
-		fn.values.map(({ id, representation }) => [id, representation] as const),
-	);
 	const instructions: Array<CoreInstruction> = [];
 	for (const original of candidateBlock.instructions) {
 		const instruction: CoreInstruction = {
@@ -10257,7 +10286,7 @@ const copyAndValueNumber: CoreFunctionPass = {
 	ablation: "constant-folding",
 	run(fn, analyses) {
 		if (!mayCopyOrValueNumber(fn)) return fn;
-		const local = localCopyAndValueNumber(fn);
+		const local = localCopyAndValueNumber(fn, analyses.representations(fn));
 		if (local !== undefined) return local;
 		const cfg = analyses.controlFlow(fn);
 		const needsMemoryVersions = fn.blocks.some((block) =>
@@ -10271,10 +10300,8 @@ const copyAndValueNumber: CoreFunctionPass = {
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removedInstructions = new Set<number>();
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
-			regionProtectedValues(fn);
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+			analyses.regionProtection(fn);
+		const representations = analyses.representations(fn);
 		const blocks = [...fn.blocks];
 		const children = fn.blocks.map(() => new Array<CoreBlockId>());
 		for (const block of fn.blocks) {
@@ -10536,9 +10563,7 @@ function eliminateOnePartialRedundancy(
 	if (fn.blocks.length < 3) return undefined;
 	const cfg = analyses.controlFlow(fn);
 	const loopHeaders = new Set(cfg.loops.map(({ header }) => header));
-	const representations = new Map(
-		fn.values.map(({ id, representation }) => [id, representation] as const),
-	);
+	const representations = analyses.representations(fn);
 	const definitionBlocks = new Map<CoreValueId, CoreBlockId>();
 	for (const current of fn.blocks) {
 		for (const parameter of current.parameters) {
@@ -10551,7 +10576,7 @@ function eliminateOnePartialRedundancy(
 		}
 	}
 	const { instructions: protectedInstructions, inputs: protectedInputs } =
-		regionProtectedValues(fn);
+		analyses.regionProtection(fn);
 	let liveBeforeDce: ReadonlySet<CoreInstructionId> | undefined;
 	const availableByKey = new Map<string, Array<PreAvailableExpression>>();
 	for (const block of fn.blocks) {
