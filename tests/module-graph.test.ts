@@ -192,7 +192,15 @@ test("traverses the complete pinned Express initialization graph", () => {
 		"pathToFileURL",
 		"urlToHttpOptions",
 	]);
-	expect(graph.modules.get("node:querystring")?.host?.named).toEqual(["parse"]);
+	expect(graph.modules.get("node:querystring")?.host?.named).toEqual([
+		"decode",
+		"encode",
+		"escape",
+		"parse",
+		"stringify",
+		"unescape",
+		"unescapeBuffer",
+	]);
 	expect(graph.modules.get("node:net")?.host?.named).toEqual([
 		"Socket",
 		"connect",

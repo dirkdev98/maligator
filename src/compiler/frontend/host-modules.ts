@@ -501,7 +501,15 @@ const URL: HostModuleSpec = {
 
 const QUERYSTRING: HostModuleSpec = {
 	id: "node:querystring",
-	named: ["parse"],
+	named: [
+		"decode",
+		"encode",
+		"escape",
+		"parse",
+		"stringify",
+		"unescape",
+		"unescapeBuffer",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:querystring"),
 };
