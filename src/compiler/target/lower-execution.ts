@@ -529,28 +529,40 @@ export function coreRegisterClasses(
 	}
 	const liveIn = core.blocks.map((_, index) => new Set(uses[index]));
 	const liveOut = core.blocks.map(() => new Set<CoreValueId>());
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (let index = core.blocks.length - 1; index >= 0; index--) {
-			const nextOut = new Set<CoreValueId>();
-			for (const successor of successors[index]!) {
-				for (const value of liveIn[successor]!) nextOut.add(value);
+	const predecessors = core.blocks.map(() => new Array<CoreBlockId>());
+	for (const block of core.blocks) {
+		for (const successor of successors[block.id]!) {
+			predecessors[successor]!.push(block.id);
+		}
+	}
+	const pending = core.blocks.map(({ id }) => id);
+	const queued = new Uint8Array(core.blocks.length);
+	queued.fill(1);
+	const liveInOrder = liveIn.map((values) => [...values]);
+	const propagated = new Uint32Array(core.blocks.length);
+	while (pending.length > 0) {
+		const index = pending.pop()!;
+		queued[index] = 0;
+		const order = liveInOrder[index]!;
+		const start = propagated[index]!;
+		const end = order.length;
+		propagated[index] = end;
+		for (const predecessor of predecessors[index]!) {
+			const predecessorOut = liveOut[predecessor]!;
+			const predecessorIn = liveIn[predecessor]!;
+			const predecessorDefinitions = definitions[predecessor]!;
+			let inputChanged = false;
+			for (let valueIndex = start; valueIndex < end; valueIndex++) {
+				const value = order[valueIndex]!;
+				predecessorOut.add(value);
+				if (predecessorDefinitions.has(value) || predecessorIn.has(value)) continue;
+				predecessorIn.add(value);
+				liveInOrder[predecessor]!.push(value);
+				inputChanged = true;
 			}
-			const nextIn = new Set(uses[index]);
-			for (const value of nextOut) {
-				if (!definitions[index]!.has(value)) nextIn.add(value);
-			}
-			if (
-				nextOut.size !== liveOut[index]!.size ||
-				[...nextOut].some((value) => !liveOut[index]!.has(value)) ||
-				nextIn.size !== liveIn[index]!.size ||
-				[...nextIn].some((value) => !liveIn[index]!.has(value))
-			) {
-				liveOut[index] = nextOut;
-				liveIn[index] = nextIn;
-				changed = true;
-			}
+			if (!inputChanged || queued[predecessor] !== 0) continue;
+			queued[predecessor] = 1;
+			pending.push(predecessor);
 		}
 	}
 	// Target edge lowering emits parallel copies for distinct block arguments. Moves
@@ -609,14 +621,27 @@ export function coreRegisterClasses(
 	}
 	const controlFlow = buildCoreControlFlow(core, coreOpcodeRegistry);
 	const semanticRoots = coreCanonicalValueRoots(core, controlFlow);
-	const classRootByKey = new Map<string, CoreValueId>();
+	const classRootsByRepresentation: Record<
+		CoreRepresentation,
+		Map<CoreValueId, CoreValueId>
+	> = {
+		boxed: new Map(),
+		f64: new Map(),
+		i32: new Map(),
+		boolean: new Map(),
+		"string-span": new Map(),
+		"projected-elements": new Map(),
+		"dense-elements": new Map(),
+		"scalarized-object": new Map(),
+	};
 	const roots = new Map<CoreValueId, CoreValueId>();
 	for (const { id, representation } of core.values) {
-		const key = `${semanticRoots.get(id)!}:${representation}`;
-		let root = classRootByKey.get(key);
+		const semanticRoot = semanticRoots.get(id)!;
+		const classRoots = classRootsByRepresentation[representation];
+		let root = classRoots.get(semanticRoot);
 		if (root === undefined) {
 			root = id;
-			classRootByKey.set(key, root);
+			classRoots.set(semanticRoot, root);
 		}
 		roots.set(id, root);
 	}
@@ -768,9 +793,26 @@ export function coreRegisterClasses(
 	for (const [root, color] of abiRoots)
 		abiIntervals.set(color, classIntervals.get(root)!);
 	for (const [root, color] of abiRoots) abiRootByColor.set(color, root);
-	let active: Array<LiveInterval> = [];
+	const active: Array<LiveInterval> = [];
+	const activeColorCounts = new Map<number, number>();
+	const addActive = (interval: LiveInterval): void => {
+		active.push(interval);
+		const color = registers.get(interval.value)!;
+		activeColorCounts.set(color, (activeColorCounts.get(color) ?? 0) + 1);
+	};
 	for (const interval of orderedIntervals) {
-		active = active.filter((candidate) => candidate.end >= interval.start);
+		let remaining = 0;
+		for (const candidate of active) {
+			if (candidate.end >= interval.start) {
+				active[remaining++] = candidate;
+				continue;
+			}
+			const color = registers.get(candidate.value)!;
+			const count = activeColorCounts.get(color)! - 1;
+			if (count === 0) activeColorCounts.delete(color);
+			else activeColorCounts.set(color, count);
+		}
+		active.length = remaining;
 		const fixedColor = abiRoots.get(interval.value);
 		if (fixedColor !== undefined) {
 			if (
@@ -782,7 +824,7 @@ export function coreRegisterClasses(
 			) {
 				throw new Error(`Core ABI register r${fixedColor} overlaps another live value`);
 			}
-			active.push(interval);
+			addActive(interval);
 			continue;
 		}
 		const representation = representations.get(interval.value)!;
@@ -790,12 +832,9 @@ export function coreRegisterClasses(
 			registers.set(interval.value, nextUniqueColor);
 			colorRepresentations.set(nextUniqueColor, representation);
 			nextUniqueColor++;
-			active.push(interval);
+			addActive(interval);
 			continue;
 		}
-		const unavailable = new Set(
-			active.map((candidate) => registers.get(candidate.value)!),
-		);
 		const preferredColor = [...(copyPartners.get(interval.value) ?? [])]
 			.map((partner) => registers.get(partner))
 			.find((candidate): candidate is number => {
@@ -823,7 +862,7 @@ export function coreRegisterClasses(
 		let color = preferredColor ?? 0;
 		if (preferredColor === undefined) {
 			while (
-				unavailable.has(color) ||
+				activeColorCounts.has(color) ||
 				reservedAbiColors.has(color) ||
 				(colorRepresentations.has(color) &&
 					colorRepresentations.get(color) !== representation) ||
@@ -837,7 +876,7 @@ export function coreRegisterClasses(
 		registers.set(interval.value, color);
 		colorRepresentations.set(color, representation);
 		nextUniqueColor = Math.max(nextUniqueColor, color + 1);
-		active.push(interval);
+		addActive(interval);
 	}
 	const safepoints = new Set<CoreInstructionId>(
 		core.blocks.flatMap(({ instructions }) =>
