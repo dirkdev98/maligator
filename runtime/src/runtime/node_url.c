@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "ascii.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -364,81 +365,83 @@ static i32 url_hex_value(byte unit) {
     return -1;
 }
 
-static MalValue url_file_url_to_path(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) receiver;
-    (void) new_target;
-    (void) callee;
-    if (argc < 1 || (!mal_value_is_string(args[0]) &&
-            !mal_value_is_object(args[0]))) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+static bool url_file_path_error(
+    MalVm *vm, bool silent, MalIntrinsic intrinsic, const char *message) {
+    if (!silent) mal_vm_throw_error(vm, intrinsic, message);
+    return false;
+}
+
+bool mal_node_file_url_to_path_bytes(
+    MalVm *vm, MalValue value, bool silent, char **out, usize *out_length) {
+    *out = nullptr;
+    *out_length = 0;
+    if (!mal_value_is_url_object(value)) {
+        return url_file_path_error(vm, silent, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "The path argument must be a string or URL");
-        return mal_value_new_undefined();
     }
-    MalValue source = args[0];
+
+    MalValue roots[] = {
+        value,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
     MalRootSpan root;
-    mal_gc_root(&root, &source, 1);
-    if (mal_value_is_object(source) &&
-        !mal_vm_get_property(vm, source,
-            mal_intrinsic_string_key(vm, (const byte *) "href"), &source)) {
-        mal_gc_unroot(&root);
-        return mal_value_new_undefined();
+    mal_gc_root(&root, roots, countof(roots));
+    static const char *names[] = {"protocol", "hostname", "pathname"};
+    for (usize i = 0; i < countof(names); i++) {
+        if (!mal_vm_get_property(vm, roots[0],
+                mal_intrinsic_string_key(vm, (const byte *) names[i]), &roots[i + 1])) {
+            mal_gc_unroot(&root);
+            return false;
+        }
     }
-    MalString *string;
-    if (!mal_vm_to_string(vm, source, &string)) {
+    if (!mal_value_is_string(roots[1]) ||
+        !mal_string_equals_ascii_ci(mal_value_to_string(roots[1]), "file:")) {
         mal_gc_unroot(&root);
-        return mal_value_new_undefined();
+        return url_file_path_error(vm, silent, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The URL must use the file: scheme");
     }
-    usize length;
-    byte *encoded = mal_string_to_utf8(string, &length);
+    if (!mal_value_is_string(roots[2]) ||
+        (mal_string_length(mal_value_to_string(roots[2])) != 0 &&
+            !mal_string_equals_ascii_ci(mal_value_to_string(roots[2]), "localhost"))) {
+        mal_gc_unroot(&root);
+        return url_file_path_error(vm, silent, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "File URL host must be empty or localhost");
+    }
+    if (!mal_value_is_string(roots[3])) {
+        mal_gc_unroot(&root);
+        return url_file_path_error(vm, silent, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "File URL pathname must be a string");
+    }
+
+    usize encoded_length;
+    byte *encoded = mal_string_to_utf8(
+        mal_value_to_string(roots[3]), &encoded_length);
     if (encoded == nullptr) {
         mal_gc_unroot(&root);
         mal_vm_throw_allocation_error(vm);
-        return mal_value_new_undefined();
+        return false;
     }
-    static const byte prefix[] = "file://";
-    if (length < sizeof(prefix) - 1 ||
-        memcmp(encoded, prefix, sizeof(prefix) - 1) != 0) {
-        free(encoded);
-        mal_gc_unroot(&root);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "The URL must use the file: scheme");
-        return mal_value_new_undefined();
-    }
-    usize start = sizeof(prefix) - 1;
-    if (start >= length || encoded[start] != '/') {
-        static const byte localhost[] = "localhost/";
-        if (length - start < sizeof(localhost) - 1 ||
-            memcmp(encoded + start, localhost, sizeof(localhost) - 1) != 0) {
-            free(encoded);
-            mal_gc_unroot(&root);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "File URL host must be empty or localhost");
-            return mal_value_new_undefined();
-        }
-        start += sizeof(localhost) - 2;
-    }
-    byte *decoded = malloc(length - start + 1);
+    byte *decoded = malloc(encoded_length + 1);
     if (decoded == nullptr) {
         free(encoded);
         mal_gc_unroot(&root);
         mal_vm_throw_allocation_error(vm);
-        return mal_value_new_undefined();
+        return false;
     }
-    usize out = 0;
-    for (usize i = start; i < length; i++) {
+    usize decoded_length = 0;
+    for (usize i = 0; i < encoded_length; i++) {
         if (encoded[i] != '%') {
-            decoded[out++] = encoded[i];
+            decoded[decoded_length++] = encoded[i];
             continue;
         }
-        if (i + 2 >= length) {
+        if (i + 2 >= encoded_length) {
             free(decoded);
             free(encoded);
             mal_gc_unroot(&root);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE,
-                "URI malformed");
-            return mal_value_new_undefined();
+            return url_file_path_error(
+                vm, silent, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
         }
         i32 high = url_hex_value(encoded[i + 1]);
         i32 low = url_hex_value(encoded[i + 2]);
@@ -446,16 +449,75 @@ static MalValue url_file_url_to_path(
             free(decoded);
             free(encoded);
             mal_gc_unroot(&root);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE,
-                "URI malformed");
-            return mal_value_new_undefined();
+            return url_file_path_error(vm, silent,
+                (high < 0 || low < 0) ? MAL_INTRINSIC_URI_ERROR_PROTOTYPE
+                                      : MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                (high < 0 || low < 0) ? "URI malformed"
+                                      : "File URL path must not include encoded / characters");
         }
-        decoded[out++] = (byte) (high * 16 + low);
+        decoded[decoded_length++] = (byte) (high * 16 + low);
         i += 2;
     }
-    MalString *result_string = mal_string_from_utf8(&vm->heap, decoded, out);
-    free(decoded);
     free(encoded);
+
+    usize code_unit_count;
+    bool malformed;
+    c16 *code_units = mal_utf8_decode_report(
+        decoded, decoded_length, &code_unit_count, &malformed);
+    if (code_units == nullptr) {
+        free(decoded);
+        mal_gc_unroot(&root);
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    free(code_units);
+    if (malformed) {
+        free(decoded);
+        mal_gc_unroot(&root);
+        return url_file_path_error(
+            vm, silent, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
+    }
+    decoded[decoded_length] = '\0';
+    *out = (char *) decoded;
+    *out_length = decoded_length;
+    mal_gc_unroot(&root);
+    return true;
+}
+
+static MalValue url_file_url_to_path(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    if (argc < 1 || (!mal_value_is_string(args[0]) &&
+            !mal_value_is_url_object(args[0]))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The path argument must be a string or URL");
+        return mal_value_new_undefined();
+    }
+    MalValue source = args[0];
+    MalRootSpan root;
+    mal_gc_root(&root, &source, 1);
+    if (mal_value_is_string(source)) {
+        MalCompletion completion = mal_vm_construct_value(
+            vm, vm->intrinsics[MAL_INTRINSIC_URL_CONSTRUCTOR], &source, 1);
+        if (completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
+        source = completion.value;
+    }
+    char *decoded;
+    usize decoded_length;
+    if (!mal_node_file_url_to_path_bytes(
+            vm, source, false, &decoded, &decoded_length)) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    MalString *result_string = mal_string_from_utf8(
+        &vm->heap, (const byte *) decoded, decoded_length);
+    free(decoded);
     mal_gc_unroot(&root);
     if (result_string == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE,

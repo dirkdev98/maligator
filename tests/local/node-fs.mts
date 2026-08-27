@@ -39,6 +39,7 @@ import fsPromises, {
 	unlink,
 	writeFile,
 } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 const results: Array<[string, boolean]> = [];
 function check(name: string, ok: boolean): void {
@@ -533,6 +534,40 @@ check(
 	statSync(bufferedTextPath).isFile(),
 );
 eq("existsSync accepts Uint8Array paths", existsSync(bufferedTextPath), true);
+const textFileUrl = pathToFileURL(textFile);
+check("filesystem PathLike accepts file URL objects", statSync(textFileUrl).isFile());
+eq(
+	"readFileSync accepts file URL objects",
+	readFileSync(textFileUrl, "utf8"),
+	"héllo 😀 + sync + promise",
+);
+const escapedUrlPath = `${nested}/url encoded-😀.txt`;
+writeFileSync(escapedUrlPath, "escaped URL path");
+eq(
+	"file URL PathLike decodes percent-escaped UTF-8",
+	readFileSync(pathToFileURL(escapedUrlPath), "utf8"),
+	"escaped URL path",
+);
+const queriedTextFileUrl = new URL(`${textFileUrl.href}?ignored=yes#fragment`);
+eq(
+	"file URL PathLike ignores query and fragment",
+	readFileSync(queriedTextFileUrl, "utf8"),
+	"héllo 😀 + sync + promise",
+);
+eq(
+	"existsSync returns false for non-file URL objects",
+	existsSync(new URL("https://example.com/not-a-path")),
+	false,
+);
+const encodedSlashUrl = new URL(`${pathToFileURL(nested).href}/encoded%2Fslash`);
+eq("existsSync quietly rejects encoded URL slashes", existsSync(encodedSlashUrl), false);
+let encodedSlashRejected = false;
+try {
+	statSync(encodedSlashUrl);
+} catch (error) {
+	encodedSlashRejected = error instanceof TypeError;
+}
+check("filesystem operations reject encoded URL slashes", encodedSlashRejected);
 eq(
 	"existsSync returns false for invalid types",
 	existsSync(42 as unknown as string),

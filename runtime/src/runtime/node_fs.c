@@ -22,6 +22,7 @@
 #include "node_buffer.h"
 #include "node_module.h"
 #include "node_stream.h"
+#include "node_url.h"
 #include "object.h"
 #include "object_ops.h"
 #include "posix_fs.h" // host layer: the POSIX syscalls + errno results
@@ -67,9 +68,11 @@ typedef enum NodeFsPathResult {
     NODE_FS_PATH_ALLOCATION_FAILED,
 } NodeFsPathResult;
 
-/* Convert Node's string / Uint8Array PathLike subset to a malloc-owned C path.
- * Uint8Array bytes cross unchanged so non-UTF-8 POSIX paths remain representable. */
-static NodeFsPathResult node_fs_path_bytes(MalValue value, char **out) {
+/* Convert Node's string / Uint8Array / WHATWG URL PathLike subset to a
+ * malloc-owned C path. Uint8Array bytes cross unchanged so non-UTF-8 POSIX
+ * paths remain representable. */
+static NodeFsPathResult node_fs_path_bytes(
+    MalVm *vm, MalValue value, bool silent, char **out) {
     if (mal_value_is_string(value)) {
         usize length;
         MalUtf8CStringResult result = mal_string_to_utf8_c_string(
@@ -79,6 +82,18 @@ static NodeFsPathResult node_fs_path_bytes(MalValue value, char **out) {
         }
         if (result == MAL_UTF8_C_STRING_ALLOCATION_FAILED) {
             return NODE_FS_PATH_ALLOCATION_FAILED;
+        }
+        return NODE_FS_PATH_OK;
+    }
+    if (mal_value_is_url_object(value)) {
+        usize length;
+        if (!mal_node_file_url_to_path_bytes(vm, value, silent, out, &length)) {
+            return NODE_FS_PATH_INVALID_TYPE;
+        }
+        if (length > 0 && memchr(*out, 0, length) != nullptr) {
+            free(*out);
+            *out = nullptr;
+            return NODE_FS_PATH_EMBEDDED_NUL;
         }
         return NODE_FS_PATH_OK;
     }
@@ -104,10 +119,10 @@ static NodeFsPathResult node_fs_path_bytes(MalValue value, char **out) {
 /* Validate a PathLike and return its malloc-owned C path. */
 static char *node_fs_path_cstr(MalVm *vm, MalValue value) {
     char *path;
-    NodeFsPathResult result = node_fs_path_bytes(value, &path);
+    NodeFsPathResult result = node_fs_path_bytes(vm, value, false, &path);
     if (result == NODE_FS_PATH_INVALID_TYPE) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "filesystem path must be a string or Uint8Array");
+            (const byte *) "filesystem path must be a string, Uint8Array, or file URL");
         return nullptr;
     }
     if (result == NODE_FS_PATH_EMBEDDED_NUL) {
@@ -396,7 +411,7 @@ static MalValue node_fs_exists_sync(
     (void) callee;
     char *path;
     NodeFsPathResult result = node_fs_path_bytes(
-        argc >= 1 ? args[0] : mal_value_new_undefined(), &path);
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined(), true, &path);
     if (result == NODE_FS_PATH_INVALID_TYPE || result == NODE_FS_PATH_EMBEDDED_NUL) {
         return mal_value_new_boolean(false);
     }
