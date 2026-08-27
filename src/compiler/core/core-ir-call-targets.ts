@@ -465,17 +465,16 @@ function censusSlotAccesses(
 		 * single-assignment binding multiply assigned.
 		 */
 		const storesSentinel = (value: CoreValueId): boolean => {
-			const seen = new Set<CoreValueId>();
 			let current = value;
-			while (!seen.has(current)) {
-				seen.add(current);
+			for (;;) {
 				const producer = producers[current];
 				if (producer === undefined) return false;
 				if (producer.opcode === "createEmpty") return true;
 				if (producer.opcode !== "move" || producer.inputs.length !== 1) return false;
+				// A move's input dominates its output definition in verified SSA, so this
+				// producer walk is acyclic without a per-query visited set.
 				current = producer.inputs[0]!;
 			}
-			return false;
 		};
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
