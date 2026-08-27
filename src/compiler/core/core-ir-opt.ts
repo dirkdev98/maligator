@@ -6422,17 +6422,17 @@ function mergeConstantLattice(
 
 function evaluateConstantInstruction(
 	instruction: CoreInstruction,
-	states: ReadonlyMap<CoreValueId, ConstantLattice>,
+	states: ReadonlyArray<ConstantLattice | undefined>,
 	program?: CoreProgram,
 ): ConstantLattice {
 	if (instruction.outputs.length !== 1) return OVERDEFINED_CONSTANT;
 	const immediate = constantImmediate(instruction);
 	if (immediate !== undefined) return { kind: "constant", value: immediate };
 	if (instruction.opcode === "move" && instruction.inputs.length === 1) {
-		return states.get(instruction.inputs[0]!) ?? UNKNOWN_CONSTANT;
+		return states[instruction.inputs[0]!] ?? UNKNOWN_CONSTANT;
 	}
 	if (instruction.opcode === "unary" && instruction.inputs.length === 1) {
-		const operand = states.get(instruction.inputs[0]!) ?? UNKNOWN_CONSTANT;
+		const operand = states[instruction.inputs[0]!] ?? UNKNOWN_CONSTANT;
 		if (operand.kind !== "constant") return operand;
 		const value = foldUnaryPrimitive(
 			instructionAttribute(instruction, "operator"),
@@ -6442,8 +6442,8 @@ function evaluateConstantInstruction(
 		return value === undefined ? OVERDEFINED_CONSTANT : { kind: "constant", value };
 	}
 	if (instruction.opcode === "binary" && instruction.inputs.length === 2) {
-		const left = states.get(instruction.inputs[0]!) ?? UNKNOWN_CONSTANT;
-		const right = states.get(instruction.inputs[1]!) ?? UNKNOWN_CONSTANT;
+		const left = states[instruction.inputs[0]!] ?? UNKNOWN_CONSTANT;
+		const right = states[instruction.inputs[1]!] ?? UNKNOWN_CONSTANT;
 		if (left.kind === "overdefined" || right.kind === "overdefined") {
 			return OVERDEFINED_CONSTANT;
 		}
@@ -6533,9 +6533,9 @@ function foldLinearPrimitiveConstants(
 	}
 	if (order.length !== fn.blocks.length || next !== undefined) return undefined;
 
-	const states = new Map<CoreValueId, ConstantLattice>();
+	const states = new Array<ConstantLattice | undefined>((fn.values.at(-1)?.id ?? -1) + 1);
 	for (const parameter of fn.blocks[fn.entry]!.parameters) {
-		states.set(parameter.value, OVERDEFINED_CONSTANT);
+		states[parameter.value] = OVERDEFINED_CONSTANT;
 	}
 	const representations = new Map<
 		CoreValueId,
@@ -6547,7 +6547,7 @@ function foldLinearPrimitiveConstants(
 		const block = fn.blocks[blockId]!;
 		const instructions = block.instructions.map((instruction): CoreInstruction => {
 			const state = evaluateConstantInstruction(instruction, states, program);
-			for (const output of instruction.outputs) states.set(output, state);
+			for (const output of instruction.outputs) states[output] = state;
 			if (
 				protectedInstructions.has(instruction.id) ||
 				instruction.outputs.length !== 1 ||
@@ -6568,10 +6568,10 @@ function foldLinearPrimitiveConstants(
 		for (const [index, argument] of block.terminator.edge.arguments.entries()) {
 			const parameter = target.parameters[index];
 			if (parameter === undefined) continue;
-			const state = states.get(argument) ?? UNKNOWN_CONSTANT;
+			const state = states[argument] ?? UNKNOWN_CONSTANT;
 			// Generic SCCP materializes constant phis. Keep that path authoritative.
 			if (state.kind === "constant") return undefined;
-			states.set(parameter.value, state);
+			states[parameter.value] = state;
 		}
 	}
 	if (!changed) return fn;
@@ -6597,14 +6597,15 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 		const linear = foldLinearPrimitiveConstants(fn, protectedInstructions, program);
 		if (linear !== undefined) return linear;
 		const cfg = analyses.controlFlow(fn);
-		const states = new Map<CoreValueId, ConstantLattice>(
-			fn.values.map(({ id }) => [id, UNKNOWN_CONSTANT] as const),
-		);
-		const executableBlocks = new Set<CoreBlockId>([fn.entry]);
+		const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
+		const instructionCount = nextInstructionId(fn);
+		const states = new Array<ConstantLattice>(valueCount).fill(UNKNOWN_CONSTANT);
+		const executableBlocks = new Uint8Array(fn.blocks.length);
+		executableBlocks[fn.entry] = 1;
 		const executableEdges = new Set<CoreEdge>();
-		const executableExceptionalSources = new Set<CoreBlockId>();
+		const executableExceptionalSources = new Uint8Array(fn.blocks.length);
 		for (const parameter of fn.blocks[fn.entry]!.parameters) {
-			states.set(parameter.value, OVERDEFINED_CONSTANT);
+			states[parameter.value] = OVERDEFINED_CONSTANT;
 		}
 
 		type OrdinaryParameterBinding = {
@@ -6615,12 +6616,8 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 			readonly source: CoreBlockId;
 			readonly parameter: CoreValueId;
 		};
-		type InstructionUser = {
-			readonly instruction: CoreInstruction;
-			readonly block: CoreBlockId;
-		};
-		const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
-		const instructionUsers = new Array<Array<InstructionUser> | undefined>(valueCount);
+		const instructionUsers = new Array<Array<CoreInstruction> | undefined>(valueCount);
+		const instructionBlocks = new Uint32Array(instructionCount);
 		const terminatorUsers = new Array<Array<CoreBlockId> | undefined>(valueCount);
 		const ordinaryParameterBindings = new Array<
 			Array<OrdinaryParameterBinding> | undefined
@@ -6631,10 +6628,9 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 		const addInstructionUser = (
 			value: CoreValueId,
 			instruction: CoreInstruction,
-			block: CoreBlockId,
 		): void => {
 			const users = instructionUsers[value] ?? (instructionUsers[value] = []);
-			users.push({ instruction, block });
+			users.push(instruction);
 		};
 		const addTerminatorUser = (value: CoreValueId, block: CoreBlockId): void => {
 			const users = terminatorUsers[value] ?? (terminatorUsers[value] = []);
@@ -6658,8 +6654,9 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 		};
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
+				instructionBlocks[instruction.id] = block.id;
 				for (const input of instruction.inputs) {
-					addInstructionUser(input, instruction, block.id);
+					addInstructionUser(input, instruction);
 				}
 			}
 			for (const edge of coreTerminatorEdges(block.terminator)) {
@@ -6707,40 +6704,43 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 		const pendingValues: Array<CoreValueId> = [];
 		const pendingInstructions: Array<CoreInstruction> = [];
 		const pendingTerminators: Array<CoreBlockId> = [];
-		const scheduledInstructions = new Set<CoreInstructionId>();
-		const scheduledTerminators = new Set<CoreBlockId>();
-		const enqueueInstruction = ({ instruction, block }: InstructionUser): void => {
-			if (!executableBlocks.has(block) || scheduledInstructions.has(instruction.id)) {
+		const scheduledInstructions = new Uint8Array(instructionCount);
+		const scheduledTerminators = new Uint8Array(fn.blocks.length);
+		const enqueueInstruction = (instruction: CoreInstruction): void => {
+			if (
+				executableBlocks[instructionBlocks[instruction.id]!] === 0 ||
+				scheduledInstructions[instruction.id] !== 0
+			) {
 				return;
 			}
-			scheduledInstructions.add(instruction.id);
+			scheduledInstructions[instruction.id] = 1;
 			pendingInstructions.push(instruction);
 		};
 		const enqueueTerminator = (block: CoreBlockId): void => {
-			if (!executableBlocks.has(block) || scheduledTerminators.has(block)) return;
-			scheduledTerminators.add(block);
+			if (executableBlocks[block] === 0 || scheduledTerminators[block] !== 0) return;
+			scheduledTerminators[block] = 1;
 			pendingTerminators.push(block);
 		};
 		const mergeValue = (value: CoreValueId, state: ConstantLattice): boolean => {
-			const current = states.get(value) ?? UNKNOWN_CONSTANT;
+			const current = states[value] ?? UNKNOWN_CONSTANT;
 			const merged = mergeConstantLattice(current, state);
 			if (merged === current) return false;
-			states.set(value, merged);
+			states[value] = merged;
 			pendingValues.push(value);
 			return true;
 		};
 		const markOrdinary = (edge: CoreEdge): boolean => {
 			if (executableEdges.has(edge)) return false;
 			executableEdges.add(edge);
-			if (!executableBlocks.has(edge.block)) {
-				executableBlocks.add(edge.block);
+			if (executableBlocks[edge.block] === 0) {
+				executableBlocks[edge.block] = 1;
 				pendingBlocks.push(edge.block);
 			}
 			const target = fn.blocks[edge.block]!;
 			for (const [index, argument] of edge.arguments.entries()) {
 				const parameter = target.parameters[index];
 				if (parameter !== undefined) {
-					mergeValue(parameter.value, states.get(argument) ?? UNKNOWN_CONSTANT);
+					mergeValue(parameter.value, states[argument] ?? UNKNOWN_CONSTANT);
 				}
 			}
 			return true;
@@ -6750,10 +6750,10 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 			to: CoreBlockId,
 			arguments_: ReadonlyArray<CoreValueId>,
 		): boolean => {
-			if (executableExceptionalSources.has(from)) return false;
-			executableExceptionalSources.add(from);
-			if (!executableBlocks.has(to)) {
-				executableBlocks.add(to);
+			if (executableExceptionalSources[from] !== 0) return false;
+			executableExceptionalSources[from] = 1;
+			if (executableBlocks[to] === 0) {
+				executableBlocks[to] = 1;
 				pendingBlocks.push(to);
 			}
 			const target = fn.blocks[to]!;
@@ -6762,7 +6762,7 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 			for (const [index, argument] of arguments_.entries()) {
 				const parameter = target.parameters[index + offset];
 				if (parameter !== undefined) {
-					mergeValue(parameter.value, states.get(argument) ?? UNKNOWN_CONSTANT);
+					mergeValue(parameter.value, states[argument] ?? UNKNOWN_CONSTANT);
 				}
 			}
 			return true;
@@ -6779,7 +6779,7 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 					markOrdinary(terminator.edge);
 					break;
 				case "branch": {
-					const condition = states.get(terminator.condition) ?? UNKNOWN_CONSTANT;
+					const condition = states[terminator.condition] ?? UNKNOWN_CONSTANT;
 					if (condition.kind === "constant") {
 						const truthy = immediateTruthiness(condition.value, program);
 						if (truthy === undefined) {
@@ -6800,7 +6800,7 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 					markOrdinary(terminator.fallback);
 					break;
 				case "switch": {
-					const discriminant = states.get(terminator.discriminant) ?? UNKNOWN_CONSTANT;
+					const discriminant = states[terminator.discriminant] ?? UNKNOWN_CONSTANT;
 					if (discriminant.kind === "constant") {
 						const matched = terminator.cases.find(({ value }) =>
 							immediateStrictEquals(discriminant.value, value),
@@ -6841,7 +6841,7 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 			}
 			while (pendingValues.length > 0) {
 				const value = pendingValues.pop()!;
-				const state = states.get(value)!;
+				const state = states[value]!;
 				for (const user of instructionUsers[value] ?? []) {
 					enqueueInstruction(user);
 				}
@@ -6850,19 +6850,19 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 					if (executableEdges.has(binding.edge)) mergeValue(binding.parameter, state);
 				}
 				for (const binding of exceptionalParameterBindings[value] ?? []) {
-					if (executableExceptionalSources.has(binding.source)) {
+					if (executableExceptionalSources[binding.source] !== 0) {
 						mergeValue(binding.parameter, state);
 					}
 				}
 			}
 			while (pendingInstructions.length > 0) {
 				const instruction = pendingInstructions.pop()!;
-				scheduledInstructions.delete(instruction.id);
+				scheduledInstructions[instruction.id] = 0;
 				visitInstruction(instruction);
 			}
 			while (pendingTerminators.length > 0) {
 				const block = pendingTerminators.pop()!;
-				scheduledTerminators.delete(block);
+				scheduledTerminators[block] = 0;
 				visitTerminator(block);
 			}
 		}
@@ -6881,7 +6881,7 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 				) {
 					return instruction;
 				}
-				const state = states.get(instruction.outputs[0]!);
+				const state = states[instruction.outputs[0]!];
 				if (state?.kind !== "constant") return instruction;
 				const replacement = foldedInstruction(instruction, state.value);
 				if (replacement === undefined) return instruction;
@@ -6892,7 +6892,7 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 			const terminator = block.terminator;
 			let selected: CoreEdge | undefined;
 			if (fn.regions.length === 0 && terminator.kind === "branch") {
-				const condition = states.get(terminator.condition);
+				const condition = states[terminator.condition];
 				const truthy =
 					condition?.kind === "constant"
 						? immediateTruthiness(condition.value, program)
@@ -6901,7 +6901,7 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 					selected = truthy ? terminator.consequent : terminator.alternate;
 				}
 			} else if (fn.regions.length === 0 && terminator.kind === "switch") {
-				const discriminant = states.get(terminator.discriminant);
+				const discriminant = states[terminator.discriminant];
 				if (discriminant?.kind === "constant") {
 					selected =
 						terminator.cases.find(({ value }) =>
@@ -6953,7 +6953,7 @@ const sparseConditionalConstantPropagation: CoreFunctionPass = {
 			const constants: Array<CoreInstruction> = [];
 			for (const [index, parameter] of block.parameters.entries()) {
 				if (parameter.role === "exception") continue;
-				const state = states.get(parameter.value);
+				const state = states[parameter.value];
 				if (state?.kind !== "constant") continue;
 				const replacement = constantInstruction(
 					coreInstructionId(instructionNumber++),
