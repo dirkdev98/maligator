@@ -222,19 +222,12 @@ int mal_posix_fs_open(
     return 0;
 }
 
-int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        return errno;
-    }
+int mal_posix_fs_read_all_fd(int fd, byte **out_data, usize *out_len) {
     struct stat st;
     if (fstat(fd, &st) != 0) {
-        int err = errno;
-        close(fd);
-        return err;
+        return errno;
     }
     if (S_ISDIR(st.st_mode)) {
-        close(fd);
         return EISDIR;
     }
     // Size is a hint only (a growing file / proc entry may exceed it), so the read
@@ -242,14 +235,12 @@ int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
     usize cap = 4096;
     if (st.st_size > 0) {
         if ((uintmax_t) st.st_size >= (uintmax_t) SIZE_MAX) {
-            close(fd);
             return EFBIG;
         }
         cap = (usize) st.st_size + 1;
     }
     byte *buf = malloc(cap);
     if (buf == nullptr) {
-        close(fd);
         return ENOMEM;
     }
     usize len = 0;
@@ -257,14 +248,12 @@ int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
         if (len == cap) {
             if (cap > SIZE_MAX / 2) {
                 free(buf);
-                close(fd);
                 return EFBIG;
             }
             cap *= 2;
             byte *grown = realloc(buf, cap);
             if (grown == nullptr) {
                 free(buf);
-                close(fd);
                 return ENOMEM;
             }
             buf = grown;
@@ -276,7 +265,6 @@ int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
             }
             int err = errno;
             free(buf);
-            close(fd);
             return err;
         }
         if (n == 0) {
@@ -284,13 +272,21 @@ int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
         }
         len += (usize) n;
     }
-    if (close(fd) != 0) {
-        int err = errno;
-        free(buf);
-        return err;
-    }
     *out_data = buf;
     *out_len = len;
+    return 0;
+}
+
+int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return errno;
+    int err = mal_posix_fs_read_all_fd(fd, out_data, out_len);
+    int close_err = close(fd) == 0 ? 0 : errno;
+    if (err != 0) return err;
+    if (close_err != 0) {
+        free(*out_data);
+        return close_err;
+    }
     return 0;
 }
 

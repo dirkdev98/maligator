@@ -92,6 +92,10 @@ int mal_posix_fs_open(
  * directory, mirroring Node). */
 int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len);
 
+/* Read from an open descriptor's current offset through EOF without closing it.
+ * Directory descriptors fail with EISDIR, matching Node's whole-file helpers. */
+int mal_posix_fs_read_all_fd(int fd, byte **out_data, usize *out_len);
+
 /* Truncate-or-create `path` (mode 0666 & umask) and write all `len` bytes. Returns
  * 0 or an errno. */
 int mal_posix_fs_write_file(const char *path, const byte *data, usize len);

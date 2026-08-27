@@ -188,6 +188,12 @@ eq(
 const descriptorStat = fstatSync(readDescriptor);
 check("fstatSync returns a Stats instance", descriptorStat instanceof Stats);
 eq("fstatSync observes descriptor size", descriptorStat.size, 6);
+eq(
+	"readFileSync starts at the descriptor's current offset",
+	readFileSync(readDescriptor, "utf8"),
+	"ef",
+);
+eq("readFileSync leaves a supplied descriptor open", fstatSync(readDescriptor).size, 6);
 closeSync(readDescriptor);
 
 let readDescriptorCode = "";
@@ -209,6 +215,36 @@ try {
 	stringDescriptorRejected = error instanceof TypeError;
 }
 check("descriptor APIs reject numeric strings", stringDescriptorRejected);
+
+const wholeFileWriteDescriptor = openSync(openedFile, "r+");
+readSync(wholeFileWriteDescriptor, Buffer.alloc(2), 0, 2, null);
+writeFileSync(wholeFileWriteDescriptor, "5a5a", {
+	encoding: "hex",
+	flag: "wx",
+	flush: true,
+});
+eq(
+	"writeFileSync writes encoded strings at a descriptor's current offset",
+	readFileSync(openedFile, "utf8"),
+	"abZZef",
+);
+eq(
+	"writeFileSync leaves a supplied descriptor open",
+	fstatSync(wholeFileWriteDescriptor).size,
+	6,
+);
+closeSync(wholeFileWriteDescriptor);
+
+writeFileSync(openedFile, "abcdef");
+const wholeFileAppendDescriptor = openSync(openedFile, "r+");
+readSync(wholeFileAppendDescriptor, Buffer.alloc(2), 0, 2, null);
+appendFileSync(wholeFileAppendDescriptor, "5959", { encoding: "hex", flag: "ax" });
+eq(
+	"appendFileSync honors the supplied descriptor mode and offset",
+	readFileSync(openedFile, "utf8"),
+	"abYYef",
+);
+closeSync(wholeFileAppendDescriptor);
 
 writeFileSync(textFile, "héllo 😀");
 chmodSync(textFile, 0o640);
@@ -265,6 +301,29 @@ check(
 	"readFileSync preserves arbitrary bytes",
 	binaryRead.every((byte, index) => byte === binary[index]),
 );
+eq("readFileSync supports hex encoding", readFileSync(byteFile, "hex"), "00ffc32841");
+eq(
+	"readFileSync supports base64 encoding",
+	readFileSync(byteFile, { encoding: "base64" }),
+	binaryRead.toString("base64"),
+);
+writeFileSync(byteFile, "41004200", "hex");
+eq("writeFileSync decodes hex input", readFileSync(byteFile, "utf16le"), "AB");
+let invalidReadEncodingRejected = false;
+try {
+	readFileSync(byteFile, "not-an-encoding" as BufferEncoding);
+} catch (error) {
+	invalidReadEncodingRejected = error instanceof TypeError;
+}
+check("readFileSync rejects unknown encodings", invalidReadEncodingRejected);
+let invalidWriteEncodingRejected = false;
+try {
+	writeFileSync(byteFile, "data", { encoding: "not-an-encoding" as BufferEncoding });
+} catch (error) {
+	invalidWriteEncodingRejected = error instanceof TypeError;
+}
+check("writeFileSync rejects unknown encodings", invalidWriteEncodingRejected);
+writeFileSync(byteFile, binary);
 
 const callbackOrder = ["before"];
 const asyncText = await new Promise<string>((resolve, reject) => {
@@ -288,6 +347,35 @@ check(
 	"readFile Buffer preserves arbitrary bytes",
 	asyncBuffer.every((byte, index) => byte === binary[index]),
 );
+const asyncHex = await new Promise<string>((resolve, reject) => {
+	readFile(byteFile, "hex", (error, value) => {
+		if (error) reject(error);
+		else resolve(value);
+	});
+});
+eq("readFile supports non-UTF-8 encodings", asyncHex, "00ffc32841");
+const asyncReadDescriptor = openSync(openedFile, "r");
+readSync(asyncReadDescriptor, Buffer.alloc(2), 0, 2, null);
+const asyncDescriptorText = await new Promise<string>((resolve, reject) => {
+	readFile(asyncReadDescriptor, "utf8", (error, value) => {
+		if (error) reject(error);
+		else resolve(value);
+	});
+});
+eq(
+	"readFile starts at a supplied descriptor's current offset",
+	asyncDescriptorText,
+	"YYef",
+);
+eq("readFile leaves a supplied descriptor open", fstatSync(asyncReadDescriptor).size, 6);
+closeSync(asyncReadDescriptor);
+let invalidAsyncEncodingRejected = false;
+try {
+	readFile(byteFile, "not-an-encoding" as BufferEncoding, () => undefined);
+} catch (error) {
+	invalidAsyncEncodingRejected = error instanceof TypeError;
+}
+check("readFile rejects unknown encodings synchronously", invalidAsyncEncodingRejected);
 const asyncMissingCode = await new Promise<string>((resolve) => {
 	readFile(`${root}/async-missing`, "utf8", (error) => {
 		resolve((error as NodeJS.ErrnoException).code ?? "");

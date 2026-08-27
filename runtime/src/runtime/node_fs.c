@@ -456,46 +456,143 @@ static MalValue node_fs_access_sync(
     return mal_value_new_undefined();
 }
 
+static bool node_fs_fd(MalVm *vm, MalValue value, int *fd);
+static bool node_fs_open_flags(
+    MalVm *vm, MalValue value, u32 *flags, bool *native_flags);
+static bool node_fs_open_mode(MalVm *vm, MalValue value, u32 *mode);
+static bool node_fs_write_bytes(
+    MalVm *vm, MalValue data, MalValue encoding,
+    const byte **bytes, usize *length, byte **owned);
+
+static bool node_fs_encoding_option(
+    MalVm *vm, MalValue value, const char *operation, MalValue *encoding) {
+    if (mal_value_is_undefined(value) || mal_value_is_null(value)) {
+        *encoding = mal_value_new_undefined();
+        return true;
+    }
+    if (!mal_node_buffer_encoding_is_known(value)) {
+        char message[96];
+        snprintf(message, sizeof(message), "%s encoding must name a supported Buffer encoding",
+            operation);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+        return false;
+    }
+    *encoding = value;
+    return true;
+}
+
+static bool node_fs_read_file_options(
+    MalVm *vm, MalValue options, bool descriptor, MalValue *encoding,
+    u32 *flags, bool *native_flags) {
+    *encoding = mal_value_new_undefined();
+    *flags = MAL_POSIX_OPEN_READ;
+    *native_flags = false;
+    if (mal_value_is_undefined(options) || mal_value_is_null(options)) return true;
+    if (mal_value_is_string(options)) {
+        return node_fs_encoding_option(vm, options, "readFile", encoding);
+    }
+    if (!mal_value_is_object(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "readFile options must be a string or object");
+        return false;
+    }
+    MalValue option;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) "encoding"), &option)
+        || !node_fs_encoding_option(vm, option, "readFile", encoding)) {
+        return false;
+    }
+    if (descriptor) return true;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) "flag"), &option)) {
+        return false;
+    }
+    return mal_value_is_undefined(option)
+        || node_fs_open_flags(vm, option, flags, native_flags);
+}
+
+static MalValue node_fs_read_file_result(
+    MalVm *vm, byte *data, usize length, MalValue encoding) {
+    if (mal_value_is_undefined(encoding)) {
+        return mal_node_buffer_from_owned_bytes(vm, data, length);
+    }
+    MalValue result = mal_node_buffer_encode_bytes(
+        vm, data, length, encoding, true);
+    free(data);
+    return result;
+}
+
 static MalValue node_fs_read_file_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
     (void) nt;
     (void) callee;
-    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
-    if (path == nullptr) {
+    MalValue file = argc >= 1 ? args[0] : mal_value_new_undefined();
+    bool descriptor = mal_ops_is_number(file);
+    int fd;
+    char *path = nullptr;
+    if (descriptor) {
+        if (!node_fs_fd(vm, file, &fd)) return mal_value_new_undefined();
+    } else {
+        path = node_fs_path_cstr(vm, file);
+        if (path == nullptr) return mal_value_new_undefined();
+    }
+    MalValue encoding = mal_value_new_undefined();
+    MalRootSpan encoding_root;
+    mal_gc_root(&encoding_root, &encoding, 1);
+    u32 flags;
+    bool native_flags;
+    if (!node_fs_read_file_options(vm,
+            argc >= 2 ? args[1] : mal_value_new_undefined(), descriptor,
+            &encoding, &flags, &native_flags)) {
+        mal_gc_unroot(&encoding_root);
+        free(path);
         return mal_value_new_undefined();
     }
+    bool close_fd = !descriptor;
+    if (close_fd) {
+        int open_err = mal_posix_fs_open(path, flags, native_flags, 0666, &fd);
+        if (open_err != 0) {
+            node_fs_throw_errno(vm, open_err, "open", path);
+            mal_gc_unroot(&encoding_root);
+            free(path);
+            return mal_value_new_undefined();
+        }
+    }
     byte *data;
-    usize len;
-    int err = mal_posix_fs_read_file(path, &data, &len);
+    usize length;
+    int err = mal_posix_fs_read_all_fd(fd, &data, &length);
+    int close_err = close_fd ? mal_posix_fs_close_fd(fd) : 0;
     if (err != 0) {
-        node_fs_throw_errno(vm, err, "open", path);
+        node_fs_throw_errno(vm, err, "read", path);
+        mal_gc_unroot(&encoding_root);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    if (close_err != 0) {
+        free(data);
+        node_fs_throw_errno_with_dest(vm, close_err, "close", nullptr, nullptr);
+        mal_gc_unroot(&encoding_root);
         free(path);
         return mal_value_new_undefined();
     }
     free(path);
-    if (argc >= 2 && !mal_value_is_undefined(args[1])) {
-        MalValue result = node_fs_string_from_utf8(vm, data, len);
-        free(data);
-        return result;
-    }
-    return mal_node_buffer_from_owned_bytes(vm, data, len);
+    MalValue result = node_fs_read_file_result(vm, data, length, encoding);
+    mal_gc_unroot(&encoding_root);
+    return result;
 }
 
-static bool node_fs_open_flags(
-    MalVm *vm, MalValue value, u32 *flags, bool *native_flags);
-static bool node_fs_open_mode(MalVm *vm, MalValue value, u32 *mode);
-static bool node_fs_write_bytes(
-    MalVm *vm, MalValue data, const byte **bytes, usize *length, byte **owned);
-
 static bool node_fs_write_file_options(
-    MalVm *vm, MalValue options, u32 *flags, bool *native_flags, u32 *mode) {
-    *flags = MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_TRUNCATE;
+    MalVm *vm, MalValue options, bool descriptor, u32 default_flags,
+    u32 *flags, bool *native_flags, u32 *mode, MalValue *encoding, bool *flush) {
+    *flags = default_flags;
     *native_flags = false;
     *mode = 0666;
-    if (mal_value_is_undefined(options) || mal_value_is_null(options) ||
-        mal_value_is_string(options)) {
-        return true;
+    *encoding = mal_value_new_undefined();
+    *flush = false;
+    if (mal_value_is_undefined(options) || mal_value_is_null(options)) return true;
+    if (mal_value_is_string(options)) {
+        return node_fs_encoding_option(vm, options, "writeFile", encoding);
     }
     if (!mal_value_is_object(options)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -503,11 +600,16 @@ static bool node_fs_write_file_options(
         return false;
     }
     MalValue option;
-    if (!mal_vm_get_property(
+    if (!mal_vm_get_property(vm, options,
+            mal_intrinsic_string_key(vm, (const byte *) "encoding"), &option)
+        || !node_fs_encoding_option(vm, option, "writeFile", encoding)) {
+        return false;
+    }
+    if (!descriptor && !mal_vm_get_property(
             vm, options, mal_intrinsic_string_key(vm, (const byte *) "flag"), &option)) {
         return false;
     }
-    if (!mal_value_is_undefined(option) &&
+    if (!descriptor && !mal_value_is_undefined(option) &&
         !node_fs_open_flags(vm, option, flags, native_flags)) {
         return false;
     }
@@ -515,7 +617,93 @@ static bool node_fs_write_file_options(
             vm, options, mal_intrinsic_string_key(vm, (const byte *) "mode"), &option)) {
         return false;
     }
-    return mal_value_is_undefined(option) || node_fs_open_mode(vm, option, mode);
+    if (!mal_value_is_undefined(option) && !node_fs_open_mode(vm, option, mode)) {
+        return false;
+    }
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) "flush"), &option)) {
+        return false;
+    }
+    if (!mal_value_is_undefined(option) && !mal_value_is_boolean(option)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "writeFile flush option must be a boolean");
+        return false;
+    }
+    *flush = mal_value_is_boolean(option) && mal_value_to_boolean(option);
+    return true;
+}
+
+static MalValue node_fs_write_file_impl(
+    MalVm *vm, const MalValue *args, i32 argc, u32 default_flags) {
+    MalValue file = argc >= 1 ? args[0] : mal_value_new_undefined();
+    bool descriptor = mal_ops_is_number(file);
+    int fd;
+    char *path = nullptr;
+    if (descriptor) {
+        if (!node_fs_fd(vm, file, &fd)) return mal_value_new_undefined();
+    } else {
+        path = node_fs_path_cstr(vm, file);
+        if (path == nullptr) return mal_value_new_undefined();
+    }
+    u32 flags;
+    bool native_flags;
+    u32 mode;
+    MalValue encoding = mal_value_new_undefined();
+    MalRootSpan encoding_root;
+    mal_gc_root(&encoding_root, &encoding, 1);
+    bool flush;
+    if (!node_fs_write_file_options(
+            vm, argc >= 3 ? args[2] : mal_value_new_undefined(), descriptor,
+            default_flags, &flags, &native_flags, &mode, &encoding, &flush)) {
+        mal_gc_unroot(&encoding_root);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    const byte *bytes;
+    usize length;
+    byte *owned;
+    if (!node_fs_write_bytes(vm,
+            argc >= 2 ? args[1] : mal_value_new_undefined(), encoding,
+            &bytes, &length, &owned)) {
+        mal_gc_unroot(&encoding_root);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    bool close_fd = !descriptor;
+    if (close_fd) {
+        int open_err = mal_posix_fs_open(path, flags, native_flags, mode, &fd);
+        if (open_err != 0) {
+            free(owned);
+            node_fs_throw_errno(vm, open_err, "open", path);
+            mal_gc_unroot(&encoding_root);
+            free(path);
+            return mal_value_new_undefined();
+        }
+    }
+    usize written;
+    const char *syscall = "write";
+    int err = mal_posix_fs_write_fd(fd, bytes, length, &written);
+    if (err == 0 && flush) {
+        syscall = "fsync";
+        err = mal_posix_fs_sync_fd(fd);
+    }
+    int close_err = close_fd ? mal_posix_fs_close_fd(fd) : 0;
+    free(owned);
+    if (err != 0) {
+        node_fs_throw_errno(vm, err, syscall, path);
+        mal_gc_unroot(&encoding_root);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    if (close_err != 0) {
+        node_fs_throw_errno_with_dest(vm, close_err, "close", nullptr, nullptr);
+        mal_gc_unroot(&encoding_root);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    mal_gc_unroot(&encoding_root);
+    free(path);
+    return mal_value_new_undefined();
 }
 
 static MalValue node_fs_write_file_sync(
@@ -523,53 +711,18 @@ static MalValue node_fs_write_file_sync(
     (void) self;
     (void) nt;
     (void) callee;
-    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
-    if (path == nullptr) {
-        return mal_value_new_undefined();
-    }
-    const byte *bytes;
-    usize len;
-    byte *owned;
-    if (!node_fs_write_bytes(
-            vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
-            &bytes, &len, &owned)) {
-        free(path);
-        return mal_value_new_undefined();
-    }
-    u32 flags;
-    bool native_flags;
-    u32 mode;
-    if (!node_fs_write_file_options(
-            vm, argc >= 3 ? args[2] : mal_value_new_undefined(),
-            &flags, &native_flags, &mode)) {
-        free(owned);
-        free(path);
-        return mal_value_new_undefined();
-    }
-    int fd;
-    int err = mal_posix_fs_open(path, flags, native_flags, mode, &fd);
-    if (err != 0) {
-        free(owned);
-        node_fs_throw_errno(vm, err, "open", path);
-        free(path);
-        return mal_value_new_undefined();
-    }
-    usize written;
-    err = mal_posix_fs_write_fd(fd, bytes, len, &written);
-    int close_err = mal_posix_fs_close_fd(fd);
-    free(owned);
-    if (err != 0) {
-        node_fs_throw_errno(vm, err, "write", path);
-        free(path);
-        return mal_value_new_undefined();
-    }
-    if (close_err != 0) {
-        node_fs_throw_errno_with_dest(vm, close_err, "close", nullptr, nullptr);
-        free(path);
-        return mal_value_new_undefined();
-    }
-    free(path);
-    return mal_value_new_undefined();
+    return node_fs_write_file_impl(vm, args, argc,
+        MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_TRUNCATE);
+}
+
+static MalValue node_fs_append_file_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    return node_fs_write_file_impl(vm, args, argc,
+        MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_APPEND);
 }
 
 static bool node_fs_fd(MalVm *vm, MalValue value, int *fd) {
@@ -727,7 +880,8 @@ static MalValue node_fs_read_sync(
 }
 
 static bool node_fs_write_bytes(
-    MalVm *vm, MalValue data, const byte **bytes, usize *length, byte **owned) {
+    MalVm *vm, MalValue data, MalValue encoding,
+    const byte **bytes, usize *length, byte **owned) {
     *bytes = (const byte *) "";
     *length = 0;
     *owned = nullptr;
@@ -743,7 +897,14 @@ static bool node_fs_write_bytes(
         return true;
     }
     if (mal_value_is_string(data)) {
-        *owned = mal_string_to_utf8(mal_value_to_string(data), length);
+        if (mal_value_is_null(encoding)) encoding = mal_value_new_undefined();
+        if (!mal_value_is_undefined(encoding)
+            && !mal_node_buffer_encoding_is_known(encoding)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                (const byte *) "write encoding must name a supported Buffer encoding");
+            return false;
+        }
+        *owned = mal_node_buffer_decode_string(vm, data, encoding, length);
         if (*owned == nullptr) {
             mal_vm_throw_allocation_error(vm);
             return false;
@@ -754,29 +915,6 @@ static bool node_fs_write_bytes(
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
         (const byte *) "write data must be a string, TypedArray, or DataView");
     return false;
-}
-
-static MalValue node_fs_append_file_sync(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
-    MalValue nt, MalValue callee) {
-    (void) self;
-    (void) nt;
-    (void) callee;
-    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
-    if (path == nullptr) return mal_value_new_undefined();
-    const byte *bytes;
-    usize length;
-    byte *owned;
-    if (!node_fs_write_bytes(vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
-            &bytes, &length, &owned)) {
-        free(path);
-        return mal_value_new_undefined();
-    }
-    int err = mal_posix_fs_append_file(path, bytes, length);
-    free(owned);
-    if (err != 0) node_fs_throw_errno(vm, err, "open", path);
-    free(path);
-    return mal_value_new_undefined();
 }
 
 static MalValue node_fs_unlink_sync(
@@ -837,8 +975,13 @@ static MalValue node_fs_write_sync(
     const byte *bytes;
     usize length;
     byte *owned;
+    MalValue encoding = mal_value_is_string(
+            argc > 1 ? args[1] : mal_value_new_undefined()) && argc > 3
+        ? args[3]
+        : mal_value_new_undefined();
     if (!node_fs_write_bytes(
             vm, argc > 1 ? args[1] : mal_value_new_undefined(),
+            encoding,
             &bytes, &length, &owned)) {
         return mal_value_new_undefined();
     }
@@ -1522,7 +1665,8 @@ static MalValue node_fs_write_task(
     usize written = 0;
     int err = 0;
     if (!node_fs_fd(vm, roots[1], &fd)
-        || !node_fs_write_bytes(vm, roots[2], &bytes, &length, &owned)) {
+        || !node_fs_write_bytes(vm, roots[2], mal_value_new_undefined(),
+            &bytes, &length, &owned)) {
         roots[3] = vm->completion.value;
         node_fs_clear_completion(vm);
         err = -1;
@@ -1663,67 +1807,64 @@ static MalValue node_fs_read_file_task(
     MalValue roots[] = {
         mal_native_function_object_get_slot(task, 0),
         mal_native_function_object_get_slot(task, 1),
+        mal_native_function_object_get_slot(task, 2),
+        mal_native_function_object_get_slot(task, 3),
+        mal_native_function_object_get_slot(task, 4),
         mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    char *path = node_fs_path_cstr(vm, roots[1]);
-    if (path == nullptr) {
-        mal_gc_unroot(&root);
-        return mal_value_new_undefined();
+    bool descriptor = mal_ops_is_number(roots[1]);
+    int fd;
+    char *path = nullptr;
+    int err = 0;
+    if (descriptor) {
+        if (!node_fs_fd(vm, roots[1], &fd)) {
+            roots[5] = vm->completion.value;
+            node_fs_clear_completion(vm);
+            err = -1;
+        }
+    } else {
+        path = node_fs_path_cstr(vm, roots[1]);
+        if (path == nullptr) {
+            roots[5] = vm->completion.value;
+            node_fs_clear_completion(vm);
+            err = -1;
+        } else {
+            u32 flags = (u32) mal_ops_number_as_f64(roots[3]);
+            bool native_flags = mal_value_to_boolean(roots[4]);
+            err = mal_posix_fs_open(path, flags, native_flags, 0666, &fd);
+            if (err != 0) roots[5] = node_fs_errno_value(vm, err, "open", path);
+        }
     }
     byte *data;
     usize length;
-    int err = mal_posix_fs_read_file(path, &data, &length);
     if (err == 0) {
-        bool encoded = mal_value_to_boolean(
-            mal_native_function_object_get_slot(task, 2));
-        if (encoded) {
-            roots[2] = node_fs_string_from_utf8(vm, data, length);
+        err = mal_posix_fs_read_all_fd(fd, &data, &length);
+        int close_err = descriptor ? 0 : mal_posix_fs_close_fd(fd);
+        if (err != 0) roots[5] = node_fs_errno_value(vm, err, "read", path);
+        else if (close_err != 0) {
+            roots[5] = node_fs_errno_value(vm, close_err, "close", nullptr);
             free(data);
-        } else {
-            roots[2] = mal_node_buffer_from_owned_bytes(vm, data, length);
+            err = close_err;
         }
+    }
+    if (err == 0) {
+        roots[5] = node_fs_read_file_result(vm, data, length, roots[2]);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
-            MalValue callback_args[] = {mal_value_new_null(), roots[2]};
+            MalValue callback_args[] = {mal_value_new_null(), roots[5]};
             mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), callback_args, 2);
+        } else {
+            roots[5] = vm->completion.value;
+            node_fs_clear_completion(vm);
+            mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), roots + 5, 1);
         }
     } else {
-        roots[2] = node_fs_errno_value(vm, err, "open", path);
-        MalValue callback_args[] = {roots[2]};
-        mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), callback_args, 1);
+        mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), roots + 5, 1);
     }
     free(path);
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
-}
-
-static bool node_fs_read_file_encoding(
-    MalVm *vm, MalValue options, bool *encoded) {
-    *encoded = false;
-    if (mal_value_is_undefined(options) || mal_value_is_null(options)) return true;
-    if (mal_value_is_object(options)) {
-        MalValue encoding;
-        if (!mal_vm_get_property(vm, options,
-                mal_intrinsic_string_key(vm, (const byte *) "encoding"), &encoding)) {
-            return false;
-        }
-        return node_fs_read_file_encoding(vm, encoding, encoded);
-    }
-    if (!mal_value_is_string(options)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "readFile encoding must be a string or null");
-        return false;
-    }
-    MalString *encoding = mal_value_to_string(options);
-    if (!mal_string_equals_ascii_ci(encoding, "utf8")
-        && !mal_string_equals_ascii_ci(encoding, "utf-8")) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "readFile only supports utf8 encoding");
-        return false;
-    }
-    *encoded = true;
-    return true;
 }
 
 static MalValue node_fs_read_file(
@@ -1737,21 +1878,50 @@ static MalValue node_fs_read_file(
             (const byte *) "readFile callback must be a function");
         return mal_value_new_undefined();
     }
-    char *path = node_fs_path_cstr(vm, args[0]);
-    if (path == nullptr) return mal_value_new_undefined();
-    bool encoded;
-    MalValue options = callback_index > 1 ? args[1] : mal_value_new_undefined();
-    if (!node_fs_read_file_encoding(vm, options, &encoded)) {
-        free(path);
-        return mal_value_new_undefined();
+    bool descriptor = mal_ops_is_number(args[0]);
+    int fd;
+    char *path = nullptr;
+    if (descriptor) {
+        if (!node_fs_fd(vm, args[0], &fd)) return mal_value_new_undefined();
+    } else {
+        path = node_fs_path_cstr(vm, args[0]);
+        if (path == nullptr) return mal_value_new_undefined();
     }
+    MalValue options = callback_index > 1 ? args[1] : mal_value_new_undefined();
     MalValue slots[] = {
-        args[callback_index], node_fs_string_from_cstr(vm, path),
-        mal_value_new_boolean(encoded),
+        args[callback_index], args[0], mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
-    free(path);
     MalRootSpan root;
     mal_gc_root(&root, slots, countof(slots));
+    if (!descriptor) {
+        usize path_length = strlen(path);
+        byte *path_bytes = path_length == 0 ? nullptr : malloc(path_length);
+        if (path_length > 0 && path_bytes == nullptr) {
+            free(path);
+            mal_gc_unroot(&root);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        if (path_length > 0) memcpy(path_bytes, path, path_length);
+        slots[1] = mal_node_buffer_from_owned_bytes(vm, path_bytes, path_length);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            free(path);
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
+    }
+    u32 flags;
+    bool native_flags;
+    if (!node_fs_read_file_options(
+            vm, options, descriptor, &slots[2], &flags, &native_flags)) {
+        free(path);
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    slots[3] = mal_value_from_f64((f64) flags);
+    slots[4] = mal_value_new_boolean(native_flags);
+    free(path);
     MalValue task = mal_value_from_native_function_object(
         mal_native_function_object_new_with_slots(
             &vm->heap,
