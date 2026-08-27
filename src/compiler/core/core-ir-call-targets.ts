@@ -1905,109 +1905,113 @@ interface ContainmentInput {
  * prototype lookup cannot happen because every declared key of a named-slot
  * literal is an own data property, and reflection needs a call.
  */
-function containAllocations(input: ContainmentInput): {
-	readonly escaped: Uint8Array;
-	readonly writes: ReadonlyArray<OwnCellWrite>;
-} {
+function containFunctionAllocations(
+	fn: CoreFunction,
+	input: ContainmentInput,
+	escaped: Uint8Array,
+	writes: Array<OwnCellWrite>,
+): void {
 	const { allocations, origins, registry } = input;
-	const escaped = new Uint8Array(allocations.length);
-	const writes: Array<OwnCellWrite> = [];
 	const escapeNode = (node: number): void => {
 		const origin = origins[node]!;
 		if (origin > 0 && allocations[origin - 1]?.immutable !== true) {
 			escaped[origin - 1] = 1;
 		}
 	};
-	for (const fn of input.program.functions) {
-		const base = input.valueBase[fn.functionIndex]!;
-		const valueNode = (value: CoreValueId): number => base + value;
-		const definitions = input.functionDefinitions(fn);
-		const cellForOperand = input.operandKeyResolver(definitions);
-		const predecessors = input.predecessors[fn.functionIndex]!;
-		for (const block of fn.blocks) {
-			// A handler argument is live on a path this sweep does not model, so it
-			// leaves the allocation reachable from a frame the graph does not follow.
-			for (const argument of block.handler?.arguments ?? []) {
-				escapeNode(valueNode(argument));
-			}
-			for (const edge of predecessors[block.id] ?? []) {
-				if (edge.kind === "exceptional") continue;
-				for (const [position, argument] of edge.arguments.entries()) {
-					const node = valueNode(argument);
-					const parameter = block.parameters[position];
-					// A join that does not collapse to this allocation loses its identity:
-					// later uses of the parameter are no longer attributable.
-					if (
-						parameter === undefined ||
-						origins[valueNode(parameter.value)] !== origins[node]
-					) {
-						escapeNode(node);
-					}
+	const base = input.valueBase[fn.functionIndex]!;
+	const valueNode = (value: CoreValueId): number => base + value;
+	const definitions = input.functionDefinitions(fn);
+	const cellForOperand = input.operandKeyResolver(definitions);
+	const predecessors = input.predecessors[fn.functionIndex]!;
+	for (const block of fn.blocks) {
+		// A handler argument is live on a path this sweep does not model, so it
+		// leaves the allocation reachable from a frame the graph does not follow.
+		for (const argument of block.handler?.arguments ?? []) {
+			escapeNode(valueNode(argument));
+		}
+		for (const edge of predecessors[block.id] ?? []) {
+			if (edge.kind === "exceptional") continue;
+			for (const [position, argument] of edge.arguments.entries()) {
+				const node = valueNode(argument);
+				const parameter = block.parameters[position];
+				// A join that does not collapse to this allocation loses its identity:
+				// later uses of the parameter are no longer attributable.
+				if (
+					parameter === undefined ||
+					origins[valueNode(parameter.value)] !== origins[node]
+				) {
+					escapeNode(node);
 				}
-			}
-			for (const instruction of block.instructions) {
-				const roles = operandRoles(
-					instruction,
-					registry,
-					(access: CoreOpcodeAccess): CoreOwnCell | undefined =>
-						declaredAccessKeyCell(
-							instruction,
-							access,
-							input.cellForString,
-							cellForOperand,
-						),
-				);
-				for (const [operand, value] of instruction.inputs.entries()) {
-					const node = valueNode(value);
-					const origin = origins[node]!;
-					if (origin <= 0) continue;
-					const allocation = allocations[origin - 1]!;
-					if (allocation.immutable) continue;
-					const role = roles.get(operand) ?? OPERAND_ESCAPE;
-					switch (role.kind) {
-						case "observed":
-							break;
-						case "own-slot": {
-							if (!allocation.owned.has(role.key)) {
-								escaped[origin - 1] = 1;
-								break;
-							}
-							if (role.mode !== "write") break;
-							const stored =
-								role.valueOperand === undefined
-									? undefined
-									: instruction.inputs[role.valueOperand];
-							if (stored === undefined) escaped[origin - 1] = 1;
-							else {
-								writes.push({
-									allocation: origin - 1,
-									key: role.key,
-									value: valueNode(stored),
-								});
-							}
-							break;
-						}
-						case "cell-store":
-							if (
-								!input.stableSlotCell(role.cell) ||
-								origins[input.slotCellNode(role.cell)] !== origin
-							) {
-								escaped[origin - 1] = 1;
-							}
-							break;
-						case "escape":
-							escaped[origin - 1] = 1;
-							break;
-					}
-				}
-			}
-			const terminator = block.terminator;
-			// A branch, switch, or guard condition tests the reference without
-			// retaining it, so only a completion value leaves here.
-			if (terminator.kind === "return" || terminator.kind === "throw") {
-				escapeNode(valueNode(terminator.value));
 			}
 		}
+		for (const instruction of block.instructions) {
+			const roles = operandRoles(
+				instruction,
+				registry,
+				(access: CoreOpcodeAccess): CoreOwnCell | undefined =>
+					declaredAccessKeyCell(instruction, access, input.cellForString, cellForOperand),
+			);
+			for (const [operand, value] of instruction.inputs.entries()) {
+				const node = valueNode(value);
+				const origin = origins[node]!;
+				if (origin <= 0) continue;
+				const allocation = allocations[origin - 1]!;
+				if (allocation.immutable) continue;
+				const role = roles.get(operand) ?? OPERAND_ESCAPE;
+				switch (role.kind) {
+					case "observed":
+						break;
+					case "own-slot": {
+						if (!allocation.owned.has(role.key)) {
+							escaped[origin - 1] = 1;
+							break;
+						}
+						if (role.mode !== "write") break;
+						const stored =
+							role.valueOperand === undefined
+								? undefined
+								: instruction.inputs[role.valueOperand];
+						if (stored === undefined) escaped[origin - 1] = 1;
+						else {
+							writes.push({
+								allocation: origin - 1,
+								key: role.key,
+								value: valueNode(stored),
+							});
+						}
+						break;
+					}
+					case "cell-store":
+						if (
+							!input.stableSlotCell(role.cell) ||
+							origins[input.slotCellNode(role.cell)] !== origin
+						) {
+							escaped[origin - 1] = 1;
+						}
+						break;
+					case "escape":
+						escaped[origin - 1] = 1;
+						break;
+				}
+			}
+		}
+		const terminator = block.terminator;
+		// A branch, switch, or guard condition tests the reference without
+		// retaining it, so only a completion value leaves here.
+		if (terminator.kind === "return" || terminator.kind === "throw") {
+			escapeNode(valueNode(terminator.value));
+		}
+	}
+}
+
+function containAllocations(input: ContainmentInput): {
+	readonly escaped: Uint8Array;
+	readonly writes: ReadonlyArray<OwnCellWrite>;
+} {
+	const escaped = new Uint8Array(input.allocations.length);
+	const writes: Array<OwnCellWrite> = [];
+	for (const fn of input.program.functions) {
+		containFunctionAllocations(fn, input, escaped, writes);
 	}
 	return { escaped, writes };
 }
