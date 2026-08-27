@@ -10794,40 +10794,40 @@ const partialRedundancyElimination: CoreFunctionPass = {
 	},
 };
 
-function collectUses(fn: CoreFunction): Set<CoreValueId> {
-	const uses = new Set<CoreValueId>();
+function collectUses(fn: CoreFunction): Uint8Array {
+	const uses = new Uint8Array((fn.values.at(-1)?.id ?? -1) + 1);
 	const addEdge = (edge: CoreEdge) => {
-		for (const value of edge.arguments) uses.add(value);
+		for (const value of edge.arguments) uses[value] = 1;
 	};
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			for (const input of instruction.inputs) uses.add(input);
+			for (const input of instruction.inputs) uses[input] = 1;
 		}
 		if (block.handler !== undefined) {
-			for (const value of block.handler.arguments) uses.add(value);
+			for (const value of block.handler.arguments) uses[value] = 1;
 		}
 		switch (block.terminator.kind) {
 			case "jump":
 				addEdge(block.terminator.edge);
 				break;
 			case "branch":
-				uses.add(block.terminator.condition);
+				uses[block.terminator.condition] = 1;
 				addEdge(block.terminator.consequent);
 				addEdge(block.terminator.alternate);
 				break;
 			case "guard":
-				uses.add(block.terminator.condition);
+				uses[block.terminator.condition] = 1;
 				addEdge(block.terminator.success);
 				addEdge(block.terminator.fallback);
 				break;
 			case "switch":
-				uses.add(block.terminator.discriminant);
+				uses[block.terminator.discriminant] = 1;
 				for (const { edge } of block.terminator.cases) addEdge(edge);
 				addEdge(block.terminator.default);
 				break;
 			case "return":
 			case "throw":
-				uses.add(block.terminator.value);
+				uses[block.terminator.value] = 1;
 				break;
 			case "unreachable":
 				break;
@@ -10857,11 +10857,11 @@ const eliminateTrivialBlockArguments: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = analyses.canonicalValues(fn);
 		const uses = collectUses(fn);
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
+		let canonical: ReadonlyMap<CoreValueId, CoreValueId> | undefined;
+		let representations:
+			| Array<CoreFunction["values"][number]["representation"] | undefined>
+			| undefined;
 		const removedIndices = new Map<CoreBlockId, Set<number>>();
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		for (const block of fn.blocks) {
@@ -10879,16 +10879,23 @@ const eliminateTrivialBlockArguments: CoreFunctionPass = {
 				continue;
 			}
 			for (const [index, parameter] of block.parameters.entries()) {
-				if (!uses.has(parameter.value)) {
+				if (uses[parameter.value] === 0) {
 					let indices = removedIndices.get(block.id);
 					if (indices === undefined) removedIndices.set(block.id, (indices = new Set()));
 					indices.add(index);
 					continue;
 				}
+				canonical ??= analyses.canonicalValues(fn);
+				if (representations === undefined) {
+					representations = new Array(uses.length);
+					for (const value of fn.values) {
+						representations[value.id] = value.representation;
+					}
+				}
 				const root = canonical.get(parameter.value) ?? parameter.value;
 				if (
 					root === parameter.value ||
-					representations.get(root) !== parameter.representation
+					representations[root] !== parameter.representation
 				) {
 					continue;
 				}
