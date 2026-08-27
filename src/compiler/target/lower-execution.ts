@@ -577,18 +577,18 @@ export function coreRegisterClasses(
 		start: number;
 		end: number;
 	}
-	const intervals = new Map<CoreValueId, LiveInterval>(
-		core.values.map(({ id }) => [
-			id,
-			{
-				value: id,
-				start: Number.POSITIVE_INFINITY,
-				end: Number.NEGATIVE_INFINITY,
-			},
-		]),
+	const intervals = new Array<LiveInterval | undefined>(
+		(core.values.at(-1)?.id ?? -1) + 1,
 	);
+	for (const { id } of core.values) {
+		intervals[id] = {
+			value: id,
+			start: Number.POSITIVE_INFINITY,
+			end: Number.NEGATIVE_INFINITY,
+		};
+	}
 	const touch = (value: CoreValueId, position: number): void => {
-		const interval = intervals.get(value);
+		const interval = intervals[value];
 		if (interval === undefined) throw new Error(`Core allocation lost value %${value}`);
 		interval.start = Math.min(interval.start, position);
 		interval.end = Math.max(interval.end, position);
@@ -614,7 +614,8 @@ export function coreRegisterClasses(
 			touch(parameter, blockEnd);
 		}
 	}
-	for (const interval of intervals.values()) {
+	for (const interval of intervals) {
+		if (interval === undefined) continue;
 		if (!Number.isFinite(interval.start)) {
 			throw new Error(`Core allocation found unused value %${interval.value}`);
 		}
@@ -646,7 +647,8 @@ export function coreRegisterClasses(
 		roots.set(id, root);
 	}
 	const classIntervals = new Map<CoreValueId, LiveInterval>();
-	for (const interval of intervals.values()) {
+	for (const interval of intervals) {
+		if (interval === undefined) continue;
 		const root = roots.get(interval.value)!;
 		const existing = classIntervals.get(root);
 		if (existing === undefined) {
