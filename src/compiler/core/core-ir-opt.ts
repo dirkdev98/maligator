@@ -1262,7 +1262,18 @@ function annotateCoreDirectCallTargets(
 	);
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
-		const definitions = functionDefinitions(fn);
+		if (
+			!fn.blocks.some((block) =>
+				block.instructions.some(
+					({ opcode }) => opcode === "call" || opcode === "construct",
+				),
+			)
+		) {
+			return fn;
+		}
+		let definitions: Map<CoreValueId, CoreInstruction> | undefined;
+		const definition = (value: CoreValueId): CoreInstruction | undefined =>
+			(definitions ??= functionDefinitions(fn)).get(value);
 		const closedTarget = (value: CoreValueId): number | undefined =>
 			coreCalleeTargetsClosedFunction(analysis.targets(fn.functionIndex, value));
 		const moveRoot = (initial: CoreValueId): CoreValueId => {
@@ -1270,126 +1281,125 @@ function annotateCoreDirectCallTargets(
 			const seen = new Set<CoreValueId>();
 			while (!seen.has(value)) {
 				seen.add(value);
-				const definition = definitions.get(value);
-				if (definition?.opcode !== "move" || definition.inputs.length !== 1) break;
-				value = definition.inputs[0]!;
+				const producer = definition(value);
+				if (producer?.opcode !== "move" || producer.inputs.length !== 1) break;
+				value = producer.inputs[0]!;
 			}
 			return value;
 		};
 		let functionChanged = false;
-		const blocks = fn.blocks.map(
-			(block): CoreBlock => ({
-				...block,
-				instructions: block.instructions.map((instruction): CoreInstruction => {
-					if (instruction.opcode !== "call" && instruction.opcode !== "construct") {
-						return instruction;
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			let blockChanged = false;
+			const instructions = block.instructions.map((instruction): CoreInstruction => {
+				if (instruction.opcode !== "call" && instruction.opcode !== "construct") {
+					return instruction;
+				}
+				const callee = instruction.inputs[0];
+				if (callee === undefined) return instruction;
+				const targets = analysis.targets(fn.functionIndex, callee);
+				const singletonTarget = coreCalleeTargetsSingleFunction(targets);
+				const target =
+					instruction.opcode === "call"
+						? coreCalleeTargetsClosedFunction(targets)
+						: singletonTarget;
+				const targetFunction =
+					target === undefined ? undefined : functionsByIndex.get(target);
+				const attributes: Record<string, CoreAttributeValue> = {
+					...instruction.attributes,
+				};
+				// This pass owns these advisory attributes. Re-running it on a later
+				// graph must be able to retract a target that is no longer justified,
+				// not merely add a more precise one.
+				delete attributes.directFunctionIndex;
+				delete attributes.directFunctionCall;
+				delete attributes.directCallTargetFunctionIndex;
+				delete attributes.directCallbackFunctionIndex;
+				delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
+				if (
+					instruction.opcode === "call" &&
+					target === undefined &&
+					singletonTarget !== undefined &&
+					functionsByIndex.has(singletonTarget)
+				) {
+					recordCallOptimizationDecision(
+						decisions,
+						fn,
+						instruction,
+						"declined",
+						"generated-code-cost",
+					);
+				}
+				if (
+					targetFunction !== undefined &&
+					(instruction.opcode === "call" ||
+						(!targetFunction.isGenerator &&
+							!targetFunction.isAsync &&
+							targetFunction.metadata.hasPrototype))
+				) {
+					attributes.directFunctionIndex = targetFunction.functionIndex;
+				}
+				if (targets.functions.length > 0) {
+					attributes[CORE_CALLEE_TARGETS_ATTRIBUTE] = coreCalleeTargetsAttribute(targets);
+				}
+				const knownBuiltin = attributeObject(instruction.attributes.knownBuiltinCall);
+				const callback = instruction.inputs[2];
+				if (
+					instruction.opcode === "call" &&
+					callback !== undefined &&
+					knownBuiltinIdentity(instruction) &&
+					typeof knownBuiltin?.operation === "string" &&
+					ARRAY_ITERATION_CALLBACK_OPERATIONS.has(knownBuiltin.operation)
+				) {
+					const callbackTarget = closedTarget(callback);
+					if (callbackTarget !== undefined && functionsByIndex.has(callbackTarget)) {
+						attributes.directCallbackFunctionIndex = callbackTarget;
 					}
-					const callee = instruction.inputs[0];
-					if (callee === undefined) return instruction;
-					const targets = analysis.targets(fn.functionIndex, callee);
-					const singletonTarget = coreCalleeTargetsSingleFunction(targets);
-					const target =
-						instruction.opcode === "call"
-							? coreCalleeTargetsClosedFunction(targets)
-							: singletonTarget;
-					const targetFunction =
-						target === undefined ? undefined : functionsByIndex.get(target);
-					const attributes: Record<string, CoreAttributeValue> = {
-						...instruction.attributes,
-					};
-					// This pass owns these advisory attributes. Re-running it on a later
-					// graph must be able to retract a target that is no longer justified,
-					// not merely add a more precise one.
-					delete attributes.directFunctionIndex;
-					delete attributes.directFunctionCall;
-					delete attributes.directCallTargetFunctionIndex;
-					delete attributes.directCallbackFunctionIndex;
-					delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
+				}
+				if (instruction.opcode === "call" && instruction.inputs.length >= 2) {
+					const calleeDefinition = definition(moveRoot(callee));
+					const receiver = calleeDefinition?.inputs[0];
+					const thisValue = instruction.inputs[1]!;
+					const staticKey =
+						calleeDefinition?.opcode === "loadPropertyStatic" &&
+						typeof calleeDefinition.attributes.stringIndex === "number"
+							? decodeString(program, calleeDefinition.attributes.stringIndex)
+							: calleeDefinition?.opcode === "loadProperty" &&
+								  calleeDefinition.inputs[1] !== undefined
+								? (() => {
+										const key = definition(moveRoot(calleeDefinition.inputs[1]));
+										return key?.opcode === "createString" &&
+											typeof key.attributes.stringIndex === "number"
+											? decodeString(program, key.attributes.stringIndex)
+											: undefined;
+									})()
+								: undefined;
 					if (
-						instruction.opcode === "call" &&
-						target === undefined &&
-						singletonTarget !== undefined &&
-						functionsByIndex.has(singletonTarget)
+						(calleeDefinition?.opcode === "loadPropertyStatic" ||
+							calleeDefinition?.opcode === "loadProperty") &&
+						staticKey === "call" &&
+						receiver !== undefined &&
+						moveRoot(receiver) === moveRoot(thisValue)
 					) {
-						recordCallOptimizationDecision(
-							decisions,
-							fn,
-							instruction,
-							"declined",
-							"generated-code-cost",
-						);
-					}
-					if (
-						targetFunction !== undefined &&
-						(instruction.opcode === "call" ||
-							(!targetFunction.isGenerator &&
-								!targetFunction.isAsync &&
-								targetFunction.metadata.hasPrototype))
-					) {
-						attributes.directFunctionIndex = targetFunction.functionIndex;
-					}
-					if (targets.functions.length > 0) {
-						attributes[CORE_CALLEE_TARGETS_ATTRIBUTE] =
-							coreCalleeTargetsAttribute(targets);
-					}
-					const knownBuiltin = attributeObject(instruction.attributes.knownBuiltinCall);
-					const callback = instruction.inputs[2];
-					if (
-						instruction.opcode === "call" &&
-						callback !== undefined &&
-						knownBuiltinIdentity(instruction) &&
-						typeof knownBuiltin?.operation === "string" &&
-						ARRAY_ITERATION_CALLBACK_OPERATIONS.has(knownBuiltin.operation)
-					) {
-						const callbackTarget = closedTarget(callback);
-						if (callbackTarget !== undefined && functionsByIndex.has(callbackTarget)) {
-							attributes.directCallbackFunctionIndex = callbackTarget;
+						const receiverTarget = closedTarget(thisValue) ?? closedTarget(receiver);
+						// The runtime validates the loaded method against the realm's exact
+						// %Function.prototype.call% object. A miss invokes the original
+						// method with the original receiver and arguments, so no static
+						// callable/provenance assumption is required for flattening.
+						attributes.directFunctionCall = true;
+						if (receiverTarget !== undefined && functionsByIndex.has(receiverTarget)) {
+							attributes.directCallTargetFunctionIndex = receiverTarget;
 						}
 					}
-					if (instruction.opcode === "call" && instruction.inputs.length >= 2) {
-						const calleeDefinition = definitions.get(moveRoot(callee));
-						const receiver = calleeDefinition?.inputs[0];
-						const thisValue = instruction.inputs[1]!;
-						const staticKey =
-							calleeDefinition?.opcode === "loadPropertyStatic" &&
-							typeof calleeDefinition.attributes.stringIndex === "number"
-								? decodeString(program, calleeDefinition.attributes.stringIndex)
-								: calleeDefinition?.opcode === "loadProperty" &&
-									  calleeDefinition.inputs[1] !== undefined
-									? (() => {
-											const key = definitions.get(moveRoot(calleeDefinition.inputs[1]));
-											return key?.opcode === "createString" &&
-												typeof key.attributes.stringIndex === "number"
-												? decodeString(program, key.attributes.stringIndex)
-												: undefined;
-										})()
-									: undefined;
-						if (
-							(calleeDefinition?.opcode === "loadPropertyStatic" ||
-								calleeDefinition?.opcode === "loadProperty") &&
-							staticKey === "call" &&
-							receiver !== undefined &&
-							moveRoot(receiver) === moveRoot(thisValue)
-						) {
-							const receiverTarget = closedTarget(thisValue) ?? closedTarget(receiver);
-							// The runtime validates the loaded method against the realm's exact
-							// %Function.prototype.call% object. A miss invokes the original
-							// method with the original receiver and arguments, so no static
-							// callable/provenance assumption is required for flattening.
-							attributes.directFunctionCall = true;
-							if (receiverTarget !== undefined && functionsByIndex.has(receiverTarget)) {
-								attributes.directCallTargetFunctionIndex = receiverTarget;
-							}
-						}
-					}
-					if (stableAttributeValue(attributes) === stableAttributes(instruction)) {
-						return instruction;
-					}
-					functionChanged = true;
-					return { ...instruction, attributes };
-				}),
-			}),
-		);
+				}
+				if (stableAttributeValue(attributes) === stableAttributes(instruction)) {
+					return instruction;
+				}
+				blockChanged = true;
+				functionChanged = true;
+				return { ...instruction, attributes };
+			});
+			return blockChanged ? { ...block, instructions } : block;
+		});
 		if (!functionChanged) return fn;
 		changed = true;
 		return { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 };
