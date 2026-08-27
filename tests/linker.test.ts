@@ -308,13 +308,16 @@ test("resolves a namespace import of a host built-in to its (sorted) exports", (
 		"delimiter",
 		"dirname",
 		"extname",
+		"format",
 		"isAbsolute",
 		"join",
 		"normalize",
+		"parse",
 		"posix",
 		"relative",
 		"resolve",
 		"sep",
+		"toNamespacedPath",
 	]);
 });
 
