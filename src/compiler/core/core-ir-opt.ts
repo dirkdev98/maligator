@@ -11884,6 +11884,10 @@ export function executeCoreOptimizations(
 
 		const representationBefore = tracedMetrics;
 		const representationProgram = { ...workingProgram, functions };
+		// The refresh rewrites only summary-owned call metadata. That metadata is not
+		// an input to the summary solver, so the result-representation consumer can
+		// reuse the exact solve that licensed the refresh.
+		analyses.inheritSummaries(refreshProgram, representationProgram);
 		let representationChanged = false;
 		functions = functions.map((fn) => {
 			const candidate = acceptPassResult(
