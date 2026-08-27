@@ -9364,7 +9364,7 @@ const eliminateDeadAllocations: CoreFunctionPass = {
 			if (
 				provenance.escape(layout.instruction) !== "contained" ||
 				protectedInstructions.has(layout.instruction) ||
-				liveness.values.has(layout.result)
+				liveness.values[layout.result] !== 0
 			) {
 				continue;
 			}
@@ -10429,19 +10429,20 @@ const copyAndValueNumber: CoreFunctionPass = {
 
 interface CoreLiveness {
 	readonly instructions: ReadonlySet<CoreInstructionId>;
-	readonly values: ReadonlySet<CoreValueId>;
+	readonly values: Uint8Array;
 	readonly hasNonEntryParameters: boolean;
 }
 
 /** Backward SSA liveness shared by profitability decisions and final DCE. */
 function coreLiveness(fn: CoreFunction): CoreLiveness {
-	const definitions = new Map<CoreValueId, CoreInstruction>();
+	const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
+	const definitions = new Array<CoreInstruction | undefined>(valueCount);
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			for (const output of instruction.outputs) definitions.set(output, instruction);
+			for (const output of instruction.outputs) definitions[output] = instruction;
 		}
 	}
-	const parameterSources = new Map<CoreValueId, Array<CoreValueId>>();
+	const parameterSources = new Array<Array<CoreValueId> | undefined>(valueCount);
 	const hasNonEntryParameters = fn.blocks.some(
 		(block) =>
 			block.id !== fn.entry && block.parameters.some(({ role }) => role !== "exception"),
@@ -10454,9 +10455,9 @@ function coreLiveness(fn: CoreFunction): CoreLiveness {
 		): void => {
 			const parameter = fn.blocks[block]?.parameters[index];
 			if (parameter === undefined) return;
-			const sources = parameterSources.get(parameter.value) ?? [];
-			sources.push(source);
-			parameterSources.set(parameter.value, sources);
+			const sources = parameterSources[parameter.value];
+			if (sources === undefined) parameterSources[parameter.value] = [source];
+			else sources.push(source);
 		};
 		for (const block of fn.blocks) {
 			for (const edge of coreTerminatorEdges(block.terminator)) {
@@ -10473,12 +10474,13 @@ function coreLiveness(fn: CoreFunction): CoreLiveness {
 		}
 	}
 	const instructions = new Set<CoreInstructionId>();
-	const values = new Set<CoreValueId>();
-	const pending: Array<CoreValueId> = [];
+	const values = new Uint8Array(valueCount);
+	const pending = new Int32Array(valueCount);
+	let pendingSize = 0;
 	const markValue = (value: CoreValueId): void => {
-		if (values.has(value)) return;
-		values.add(value);
-		pending.push(value);
+		if (values[value] !== 0) return;
+		values[value] = 1;
+		pending[pendingSize++] = value;
 	};
 	const markInstruction = (instruction: CoreInstruction): void => {
 		if (instructions.has(instruction.id)) return;
@@ -10518,11 +10520,11 @@ function coreLiveness(fn: CoreFunction): CoreLiveness {
 			markValue(parameter.value);
 		}
 	}
-	while (pending.length > 0) {
-		const value = pending.pop()!;
-		const producer = definitions.get(value);
+	while (pendingSize > 0) {
+		const value = pending[--pendingSize]! as CoreValueId;
+		const producer = definitions[value];
 		if (producer !== undefined) markInstruction(producer);
-		for (const source of parameterSources.get(value) ?? []) markValue(source);
+		for (const source of parameterSources[value] ?? []) markValue(source);
 	}
 	return { instructions, values, hasNonEntryParameters };
 }
@@ -11025,7 +11027,8 @@ const deadInstructionElimination: CoreFunctionPass = {
 			for (const block of fn.blocks) {
 				if (block.id === fn.entry || block.id === fn.bodyEntry) continue;
 				for (const [index, parameter] of block.parameters.entries()) {
-					if (parameter.role === "exception" || liveValues.has(parameter.value)) continue;
+					if (parameter.role === "exception" || liveValues[parameter.value] !== 0)
+						continue;
 					const indices = removedIndices.get(block.id) ?? new Set<number>();
 					indices.add(index);
 					removedIndices.set(block.id, indices);
