@@ -199,38 +199,146 @@ static MalValue node_fs_is_symbolic_link(
         node_fs_this_type(vm, self) == MAL_POSIX_FT_SYMLINK);
 }
 
-/* A Stats object over `proto` carrying Node's Date-backed timestamps plus the
- * hidden type marker the predicates read. */
+static MalValue node_fs_is_block_device(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_new_boolean(node_fs_this_type(vm, self) == MAL_POSIX_FT_BLOCK);
+}
+
+static MalValue node_fs_is_character_device(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_new_boolean(node_fs_this_type(vm, self) == MAL_POSIX_FT_CHARACTER);
+}
+
+static MalValue node_fs_is_fifo(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_new_boolean(node_fs_this_type(vm, self) == MAL_POSIX_FT_FIFO);
+}
+
+static MalValue node_fs_is_socket(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_new_boolean(node_fs_this_type(vm, self) == MAL_POSIX_FT_SOCKET);
+}
+
+static MalValue node_fs_date_getter(MalVm *vm, MalValue self, const char *name) {
+    if (!mal_value_is_object(self)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "Stats date getter requires an object receiver");
+        return mal_value_new_undefined();
+    }
+    char milliseconds_name[16];
+    snprintf(milliseconds_name, sizeof(milliseconds_name), "%sMs", name);
+    MalValue milliseconds;
+    if (!mal_vm_get_property(vm, self,
+            mal_intrinsic_string_key(vm, (const byte *) milliseconds_name),
+            &milliseconds)) {
+        return mal_value_new_undefined();
+    }
+    f64 value = mal_ops_is_number(milliseconds)
+        ? mal_ops_number_as_f64(milliseconds)
+        : NAN;
+    MalValue date = mal_value_from_date_object(mal_date_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATE_PROTOTYPE]),
+        trunc(value)));
+    MalRootSpan root;
+    mal_gc_root(&root, &date, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(self),
+        (const byte *) name, date, NODE_FS_VISIBLE);
+    mal_gc_unroot(&root);
+    return date;
+}
+
+static MalValue node_fs_date_setter(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, const char *name) {
+    if (!mal_value_is_object(self)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "Stats date setter requires an object receiver");
+        return mal_value_new_undefined();
+    }
+    mal_intrinsic_define_data(vm, mal_value_to_object(self), (const byte *) name,
+        argc > 0 ? args[0] : mal_value_new_undefined(), NODE_FS_VISIBLE);
+    return mal_value_new_undefined();
+}
+
+#define NODE_FS_DATE_ACCESSORS(field) \
+    static MalValue node_fs_get_##field( \
+        MalVm *vm, MalValue self, const MalValue *args, i32 argc, \
+        MalValue nt, MalValue callee) { \
+        (void) args; \
+        (void) argc; \
+        (void) nt; \
+        (void) callee; \
+        return node_fs_date_getter(vm, self, #field); \
+    } \
+    static MalValue node_fs_set_##field( \
+        MalVm *vm, MalValue self, const MalValue *args, i32 argc, \
+        MalValue nt, MalValue callee) { \
+        (void) nt; \
+        (void) callee; \
+        return node_fs_date_setter(vm, self, args, argc, #field); \
+    }
+
+NODE_FS_DATE_ACCESSORS(atime)
+NODE_FS_DATE_ACCESSORS(mtime)
+NODE_FS_DATE_ACCESSORS(ctime)
+NODE_FS_DATE_ACCESSORS(birthtime)
+
+#undef NODE_FS_DATE_ACCESSORS
+
+/* A Stats object over `proto` carrying Node's numeric metadata. Date properties
+ * are lazily materialized by the prototype accessors from their *Ms fields. */
 static MalValue node_fs_make_stats(MalVm *vm, MalObject *proto, const MalPosixStat *st) {
     MalObject *stats = mal_object_new(&vm->heap, proto);
     MalValue v = mal_value_from_object(stats);
     MalRootSpan rs;
     mal_gc_root(&rs, &v, 1);
-    MalValue date = mal_value_from_date_object(mal_date_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATE_PROTOTYPE]),
-        trunc(st->ctime_ms)));
-    MalRootSpan date_rs;
-    mal_gc_root(&date_rs, &date, 1);
-    mal_intrinsic_define_data(vm, stats, (const byte *) "ctime", date, NODE_FS_VISIBLE);
-    mal_gc_unroot(&date_rs);
-    date = mal_value_from_date_object(mal_date_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATE_PROTOTYPE]),
-        trunc(st->mtime_ms)));
-    mal_gc_root(&date_rs, &date, 1);
-    mal_intrinsic_define_data(vm, stats, (const byte *) "mtime", date, NODE_FS_VISIBLE);
-    mal_gc_unroot(&date_rs);
-    mal_intrinsic_define_data(
-        vm, stats, (const byte *) "ctimeMs", mal_value_from_f64(st->ctime_ms), NODE_FS_VISIBLE);
-    mal_intrinsic_define_data(
-        vm, stats, (const byte *) "mtimeMs", mal_value_from_f64(st->mtime_ms), NODE_FS_VISIBLE);
     mal_intrinsic_define_data(
         vm, stats, (const byte *) "dev", mal_value_from_f64(st->dev), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "mode", mal_value_from_f64((f64) st->mode), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "nlink", mal_value_from_f64(st->nlink), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "uid", mal_value_from_f64(st->uid), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "gid", mal_value_from_f64(st->gid), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "rdev", mal_value_from_f64(st->rdev), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "blksize", mal_value_from_f64(st->blksize), NODE_FS_VISIBLE);
     mal_intrinsic_define_data(
         vm, stats, (const byte *) "ino", mal_value_from_f64(st->ino), NODE_FS_VISIBLE);
     mal_intrinsic_define_data(
         vm, stats, (const byte *) "size", mal_value_from_f64(st->size), NODE_FS_VISIBLE);
     mal_intrinsic_define_data(
-        vm, stats, (const byte *) "mode", mal_value_from_f64((f64) st->mode), NODE_FS_VISIBLE);
+        vm, stats, (const byte *) "blocks", mal_value_from_f64(st->blocks), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "atimeMs", mal_value_from_f64(st->atime_ms), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "mtimeMs", mal_value_from_f64(st->mtime_ms), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "ctimeMs", mal_value_from_f64(st->ctime_ms), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(vm, stats, (const byte *) "birthtimeMs",
+        mal_value_from_f64(st->birthtime_ms), NODE_FS_VISIBLE);
     mal_intrinsic_define_data(vm, stats, (const byte *) NODE_FS_TYPE_KEY,
         mal_value_from_i32((i32) st->type), MAL_PROPERTY_NONE);
     mal_gc_unroot(&rs);
@@ -1447,8 +1555,22 @@ static MalValue node_fs_stats_constructor(
     (void) args;
     (void) argc;
     (void) nt;
-    MalPosixStat empty = {0};
-    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &empty);
+    MalPosixStat empty = {
+        .atime_ms = NAN,
+        .mtime_ms = NAN,
+        .ctime_ms = NAN,
+        .birthtime_ms = NAN,
+    };
+    MalValue result = node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &empty);
+    if (!mal_value_is_object(result)) return result;
+    static const char *undefined_fields[] = {
+        "dev", "mode", "nlink", "uid", "gid", "rdev", "blksize", "ino", "size", "blocks",
+    };
+    for (usize i = 0; i < countof(undefined_fields); i++) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(result),
+            (const byte *) undefined_fields[i], mal_value_new_undefined(), NODE_FS_VISIBLE);
+    }
+    return result;
 }
 
 static MalValue node_fs_stat_task(
@@ -1940,14 +2062,50 @@ void mal_host_install_node_fs(
     mal_intrinsic_define_method_n(
         vm, stats_proto, (const byte *) "isDirectory", 0, node_fs_is_directory);
     mal_intrinsic_define_method_n(
+        vm, stats_proto, (const byte *) "isBlockDevice", 0, node_fs_is_block_device);
+    mal_intrinsic_define_method_n(vm, stats_proto,
+        (const byte *) "isCharacterDevice", 0, node_fs_is_character_device);
+    mal_intrinsic_define_method_n(
+        vm, stats_proto, (const byte *) "isFIFO", 0, node_fs_is_fifo);
+    mal_intrinsic_define_method_n(
+        vm, stats_proto, (const byte *) "isSocket", 0, node_fs_is_socket);
+    mal_intrinsic_define_method_n(
         vm, stats_proto, (const byte *) "isSymbolicLink", 0,
         node_fs_is_symbolic_link);
+    mal_intrinsic_define_accessor_n(vm, stats_proto,
+        mal_intrinsic_string_key(vm, (const byte *) "atime"),
+        (const byte *) "get", 0, node_fs_get_atime,
+        (const byte *) "set", 1, node_fs_set_atime,
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_accessor_n(vm, stats_proto,
+        mal_intrinsic_string_key(vm, (const byte *) "mtime"),
+        (const byte *) "get", 0, node_fs_get_mtime,
+        (const byte *) "set", 1, node_fs_set_mtime,
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_accessor_n(vm, stats_proto,
+        mal_intrinsic_string_key(vm, (const byte *) "ctime"),
+        (const byte *) "get", 0, node_fs_get_ctime,
+        (const byte *) "set", 1, node_fs_set_ctime,
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_accessor_n(vm, stats_proto,
+        mal_intrinsic_string_key(vm, (const byte *) "birthtime"),
+        (const byte *) "get", 0, node_fs_get_birthtime,
+        (const byte *) "set", 1, node_fs_set_birthtime,
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
     MalObject *dirent_proto = mal_object_new(&vm->heap, obj_proto);
     protos[1] = mal_value_from_object(dirent_proto);
     mal_intrinsic_define_method_n(vm, dirent_proto, (const byte *) "isFile", 0, node_fs_is_file);
     mal_intrinsic_define_method_n(
         vm, dirent_proto, (const byte *) "isDirectory", 0, node_fs_is_directory);
+    mal_intrinsic_define_method_n(
+        vm, dirent_proto, (const byte *) "isBlockDevice", 0, node_fs_is_block_device);
+    mal_intrinsic_define_method_n(vm, dirent_proto,
+        (const byte *) "isCharacterDevice", 0, node_fs_is_character_device);
+    mal_intrinsic_define_method_n(
+        vm, dirent_proto, (const byte *) "isFIFO", 0, node_fs_is_fifo);
+    mal_intrinsic_define_method_n(
+        vm, dirent_proto, (const byte *) "isSocket", 0, node_fs_is_socket);
     mal_intrinsic_define_method_n(
         vm, dirent_proto, (const byte *) "isSymbolicLink", 0,
         node_fs_is_symbolic_link);

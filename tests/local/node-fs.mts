@@ -297,13 +297,36 @@ eq("readFile reports asynchronous errno", asyncMissingCode, "ENOENT");
 const fileStat = statSync(textFile);
 check("lstatSync returns a Stats instance", lstatSync(textFile) instanceof Stats);
 check("stat returns a Stats instance", fileStat instanceof Stats);
+eq(
+	"Stats exposes Node numeric fields in property order",
+	Object.keys(fileStat).join(","),
+	"dev,mode,nlink,uid,gid,rdev,blksize,ino,size,blocks,atimeMs,mtimeMs,ctimeMs,birthtimeMs",
+);
 check("stat file isFile", fileStat.isFile());
 eq("stat file isDirectory", fileStat.isDirectory(), false);
+eq("stat file isBlockDevice", fileStat.isBlockDevice(), false);
+eq("stat file isCharacterDevice", fileStat.isCharacterDevice(), false);
+eq("stat file isFIFO", fileStat.isFIFO(), false);
+eq("stat file isSocket", fileStat.isSocket(), false);
+eq("stat file isSymbolicLink", fileStat.isSymbolicLink(), false);
 check("stat exposes finite mtimeMs", fileStat.mtimeMs > 0 && fileStat.mtimeMs < Infinity);
 check(
-	"stat exposes Date timestamps",
-	fileStat.ctime instanceof Date && fileStat.mtime instanceof Date,
+	"stat exposes four finite millisecond timestamps",
+	[fileStat.atimeMs, fileStat.mtimeMs, fileStat.ctimeMs, fileStat.birthtimeMs].every(
+		(value) => Number.isFinite(value),
+	),
 );
+eq("Stats dates are lazy", Object.hasOwn(fileStat, "mtime"), false);
+const materializedMtime = fileStat.mtime;
+check(
+	"stat exposes lazy Date timestamps",
+	fileStat.atime instanceof Date &&
+		materializedMtime instanceof Date &&
+		fileStat.ctime instanceof Date &&
+		fileStat.birthtime instanceof Date,
+);
+check("Stats date getter caches identity", fileStat.mtime === materializedMtime);
+check("Stats date getter materializes an own property", Object.hasOwn(fileStat, "mtime"));
 eq(
 	"stat mtime Date uses integral milliseconds",
 	fileStat.mtime.getTime(),
@@ -312,16 +335,47 @@ eq(
 check("stat exposes mode", fileStat.mode > 0);
 check("stat exposes size", fileStat.size > 0);
 check("stat exposes identity", fileStat.dev >= 0 && fileStat.ino > 0);
+check(
+	"stat exposes ownership and allocation metadata",
+	[
+		fileStat.nlink,
+		fileStat.uid,
+		fileStat.gid,
+		fileStat.rdev,
+		fileStat.blksize,
+		fileStat.blocks,
+	].every((value) => Number.isFinite(value) && value >= 0),
+);
+eq(
+	"stat mode agrees with fs constants",
+	fileStat.mode & constants.S_IFMT,
+	constants.S_IFREG,
+);
 const dirStat = statSync(nested);
 check("stat directory isDirectory", dirStat.isDirectory());
 eq("stat directory isFile", dirStat.isFile(), false);
+check("stat character device classification", statSync("/dev/null").isCharacterDevice());
+
+const emptyStats = new Stats();
+eq("Stats constructor leaves numeric metadata undefined", emptyStats.size, undefined);
+check(
+	"Stats constructor timestamps are invalid Dates",
+	Number.isNaN(emptyStats.mtime.getTime()),
+);
 
 const entries = readdirSync(nested, { withFileTypes: true });
 let sawText = false;
 let sawBytes = false;
 for (const entry of entries) {
 	if (entry.name === "utf8.txt") {
-		sawText = entry.isFile() && !entry.isDirectory();
+		sawText =
+			entry.isFile() &&
+			!entry.isDirectory() &&
+			!entry.isBlockDevice() &&
+			!entry.isCharacterDevice() &&
+			!entry.isFIFO() &&
+			!entry.isSocket() &&
+			!entry.isSymbolicLink();
 	}
 	if (entry.name === "bytes.bin") {
 		sawBytes = entry.isFile() && !entry.isDirectory();

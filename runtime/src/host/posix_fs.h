@@ -16,20 +16,32 @@
 
 /* Coarse file classification the Stats / Dirent predicates need. The
  * runtime layer stores this on Stats / Dirent and compares against it, so it never
- * needs the POSIX `S_IF*` bits itself. Devices, fifos, and sockets are OTHER. */
+ * needs the POSIX `S_IF*` bits itself. */
 typedef enum MalPosixFileType {
     MAL_POSIX_FT_OTHER = 0,
     MAL_POSIX_FT_FILE = 1,
     MAL_POSIX_FT_DIR = 2,
     MAL_POSIX_FT_SYMLINK = 3,
+    MAL_POSIX_FT_BLOCK = 4,
+    MAL_POSIX_FT_CHARACTER = 5,
+    MAL_POSIX_FT_FIFO = 6,
+    MAL_POSIX_FT_SOCKET = 7,
 } MalPosixFileType;
 
 typedef struct MalPosixStat {
+    f64 atime_ms; // last-access time in milliseconds since the epoch
     f64 ctime_ms; // metadata-change time in milliseconds since the epoch
     f64 mtime_ms; // modification time in milliseconds since the epoch
+    f64 birthtime_ms; // creation time, or ctime where unavailable
     f64 dev;
     f64 ino;
     f64 size;
+    f64 nlink;
+    f64 uid;
+    f64 gid;
+    f64 rdev;
+    f64 blksize;
+    f64 blocks;
     u32 mode;
     u32 type;     // MalPosixFileType (follows symlinks, like stat(2))
 } MalPosixStat;

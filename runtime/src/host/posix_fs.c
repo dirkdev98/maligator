@@ -29,6 +29,18 @@ static u32 mal_posix_ft_from_mode(mode_t m) {
     if (S_ISLNK(m)) {
         return MAL_POSIX_FT_SYMLINK;
     }
+    if (S_ISBLK(m)) {
+        return MAL_POSIX_FT_BLOCK;
+    }
+    if (S_ISCHR(m)) {
+        return MAL_POSIX_FT_CHARACTER;
+    }
+    if (S_ISFIFO(m)) {
+        return MAL_POSIX_FT_FIFO;
+    }
+    if (S_ISSOCK(m)) {
+        return MAL_POSIX_FT_SOCKET;
+    }
     return MAL_POSIX_FT_OTHER;
 }
 
@@ -146,6 +158,22 @@ static u32 mal_posix_dirent_type(const char *dir, const struct dirent *de) {
 #ifdef DT_LNK
         case DT_LNK:
             return MAL_POSIX_FT_SYMLINK;
+#endif
+#ifdef DT_BLK
+        case DT_BLK:
+            return MAL_POSIX_FT_BLOCK;
+#endif
+#ifdef DT_CHR
+        case DT_CHR:
+            return MAL_POSIX_FT_CHARACTER;
+#endif
+#ifdef DT_FIFO
+        case DT_FIFO:
+            return MAL_POSIX_FT_FIFO;
+#endif
+#ifdef DT_SOCK
+        case DT_SOCK:
+            return MAL_POSIX_FT_SOCKET;
 #endif
         case DT_UNKNOWN:
             break; // some filesystems don't fill d_type — fall back to lstat
@@ -374,12 +402,22 @@ static void mal_posix_fs_copy_stat(const struct stat *st, MalPosixStat *out) {
     out->ino = (f64) st->st_ino;
     out->size = (f64) st->st_size;
     out->mode = (u32) st->st_mode;
+    out->nlink = (f64) st->st_nlink;
+    out->uid = (f64) st->st_uid;
+    out->gid = (f64) st->st_gid;
+    out->rdev = (f64) st->st_rdev;
+    out->blksize = (f64) st->st_blksize;
+    out->blocks = (f64) st->st_blocks;
 #if defined(__APPLE__)
+    out->atime_ms = (f64) st->st_atimespec.tv_sec * 1000.0 + (f64) st->st_atimespec.tv_nsec / 1.0e6;
     out->ctime_ms = (f64) st->st_ctimespec.tv_sec * 1000.0 + (f64) st->st_ctimespec.tv_nsec / 1.0e6;
     out->mtime_ms = (f64) st->st_mtimespec.tv_sec * 1000.0 + (f64) st->st_mtimespec.tv_nsec / 1.0e6;
+    out->birthtime_ms = (f64) st->st_birthtimespec.tv_sec * 1000.0 + (f64) st->st_birthtimespec.tv_nsec / 1.0e6;
 #else
+    out->atime_ms = (f64) st->st_atim.tv_sec * 1000.0 + (f64) st->st_atim.tv_nsec / 1.0e6;
     out->ctime_ms = (f64) st->st_ctim.tv_sec * 1000.0 + (f64) st->st_ctim.tv_nsec / 1.0e6;
     out->mtime_ms = (f64) st->st_mtim.tv_sec * 1000.0 + (f64) st->st_mtim.tv_nsec / 1.0e6;
+    out->birthtime_ms = out->ctime_ms;
 #endif
 }
 
