@@ -119,13 +119,16 @@ describe("host-install manifest", () => {
 			"delimiter",
 			"dirname",
 			"extname",
+			"format",
 			"isAbsolute",
 			"join",
 			"normalize",
+			"parse",
 			"posix",
 			"relative",
 			"resolve",
 			"sep",
+			"toNamespacedPath",
 			"default",
 		]);
 		expect(

@@ -11,13 +11,16 @@ import path, {
 	delimiter,
 	dirname,
 	extname,
+	format,
 	isAbsolute,
 	join,
 	normalize,
+	parse,
 	posix,
 	relative,
 	resolve,
 	sep,
+	toNamespacedPath,
 } from "node:path";
 
 const results: Array<[string, boolean]> = [];
@@ -53,6 +56,11 @@ function throwsRangeError(name: string, fn: () => unknown): void {
 eq("basename-nested", basename("/foo/bar.txt"), "bar.txt");
 eq("basename-trailing", basename("/foo/bar/"), "bar");
 eq("basename-root", basename("/"), "");
+eq("basename-suffix", basename("/foo/bar.txt", ".txt"), "bar");
+eq("basename-suffix-mismatch", basename("/foo/bar.txt", ".md"), "bar.txt");
+eq("basename-whole-relative-suffix", basename("bar.txt", "bar.txt"), "");
+eq("basename-whole-absolute-component", basename("/bar.txt", "bar.txt"), "bar.txt");
+eq("basename-empty-suffix", basename("bar.txt", ""), "bar.txt");
 eq("delimiter-posix", delimiter, ":");
 eq("sep-posix", sep, "/");
 eq("default-basename-identity", path.basename === basename, true);
@@ -85,6 +93,82 @@ eq("extname-dotdot", extname(".."), "");
 eq("extname-root", extname("/"), "");
 eq("extname-empty", extname(""), "");
 eq("extname-embedded-nul", extname("a\0b.txt"), ".txt");
+
+// --- parse ---
+eq(
+	"parse-nested",
+	JSON.stringify(parse("/home/user/dir/file.txt")),
+	JSON.stringify({
+		root: "/",
+		dir: "/home/user/dir",
+		base: "file.txt",
+		ext: ".txt",
+		name: "file",
+	}),
+);
+eq(
+	"parse-empty",
+	JSON.stringify(parse("")),
+	JSON.stringify({ root: "", dir: "", base: "", ext: "", name: "" }),
+);
+eq(
+	"parse-root",
+	JSON.stringify(parse("///")),
+	JSON.stringify({ root: "/", dir: "/", base: "", ext: "", name: "" }),
+);
+eq(
+	"parse-dotfile",
+	JSON.stringify(parse(".bashrc")),
+	JSON.stringify({ root: "", dir: "", base: ".bashrc", ext: "", name: ".bashrc" }),
+);
+eq(
+	"parse-dotdot",
+	JSON.stringify(parse("../a..")),
+	JSON.stringify({ root: "", dir: "..", base: "a..", ext: ".", name: "a." }),
+);
+eq(
+	"parse-trailing-slash",
+	JSON.stringify(parse("a/b/")),
+	JSON.stringify({ root: "", dir: "a", base: "b", ext: "", name: "b" }),
+);
+eq(
+	"parse-embedded-nul",
+	JSON.stringify(parse("/a\0b/c.txt")),
+	JSON.stringify({ root: "/", dir: "/a\0b", base: "c.txt", ext: ".txt", name: "c" }),
+);
+
+// --- format ---
+eq("format-root", format({ root: "/", name: "file", ext: "txt" }), "/file.txt");
+eq(
+	"format-dir",
+	format({ root: "/", dir: "/a", name: "file", ext: "txt" }),
+	"/a/file.txt",
+);
+eq("format-base-priority", format({ root: "/", dir: "/a", base: "b" }), "/a/b");
+eq(
+	"format-coerces-joined-parts",
+	format({ dir: 1, base: 2 } as unknown as Parameters<typeof format>[0]),
+	"1/2",
+);
+eq(
+	"format-preserves-raw-base-without-dir",
+	format({ base: 2 } as unknown as Parameters<typeof format>[0]),
+	2,
+);
+
+// POSIX has no namespace transformation and intentionally performs no validation.
+eq("toNamespacedPath-string", toNamespacedPath("a/b"), "a/b");
+const namespacedObject = { value: 1 };
+eq(
+	"toNamespacedPath-object-identity",
+	toNamespacedPath(namespacedObject as unknown as string),
+	namespacedObject,
+);
+eq(
+	"toNamespacedPath-missing",
+	(toNamespacedPath as (value?: unknown) => unknown)(),
+	undefined,
+);
 
 // --- isAbsolute ---
 eq("isAbsolute-abs", isAbsolute("/foo/bar"), true);
@@ -184,26 +268,47 @@ eq("default-isAbsolute", path.isAbsolute("/x"), true);
 eq("default-extname-identity", path.extname === extname, true);
 eq("default-isAbsolute-identity", path.isAbsolute === isAbsolute, true);
 eq("default-relative-identity", path.relative === relative, true);
+eq("default-format-identity", path.format === format, true);
+eq("default-parse-identity", path.parse === parse, true);
+eq("default-toNamespacedPath-identity", path.toNamespacedPath === toNamespacedPath, true);
 
 // --- built-in function metadata ---
 eq("dirname-name", dirname.name, "dirname");
 eq("dirname-length", dirname.length, 1);
+eq("basename-length", basename.length, 2);
 eq("extname-length", extname.length, 1);
+eq("format-name", format.name, "bound _format");
+eq("format-length", format.length, 1);
 eq("isAbsolute-length", isAbsolute.length, 1);
 eq("join-length", join.length, 0);
 eq("normalize-name", normalize.name, "normalize");
 eq("normalize-length", normalize.length, 1);
+eq("parse-name", parse.name, "parse");
+eq("parse-length", parse.length, 1);
 eq("relative-length", relative.length, 2);
 eq("resolve-length", resolve.length, 0);
+eq("toNamespacedPath-name", toNamespacedPath.name, "toNamespacedPath");
+eq("toNamespacedPath-length", toNamespacedPath.length, 1);
 
 // --- argument validation (Node validateString: non-string => TypeError) ---
 throwsTypeError("dirname-nonstring", () => dirname(123 as unknown as string));
+throwsTypeError("basename-suffix-nonstring", () =>
+	basename("path", null as unknown as string),
+);
 throwsTypeError("dirname-missing", () => (dirname as (p?: string) => string)());
 throwsTypeError("extname-null", () => extname(null as unknown as string));
 throwsTypeError("isAbsolute-undefined", () => isAbsolute(undefined as unknown as string));
 throwsTypeError("join-nonstring", () => join("ok", 5 as unknown as string));
 throwsTypeError("normalize-nonstring", () => normalize(5 as unknown as string));
 throwsTypeError("normalize-missing", () => (normalize as (p?: string) => string)());
+throwsTypeError("parse-nonstring", () => parse({} as unknown as string));
+throwsTypeError("format-array", () => format([]));
+throwsTypeError("format-function", () =>
+	format((() => undefined) as unknown as Parameters<typeof format>[0]),
+);
+throwsTypeError("format-null", () =>
+	format(null as unknown as Parameters<typeof format>[0]),
+);
 throwsTypeError("relative-from-nonstring", () => relative(1 as unknown as string, "/x"));
 throwsTypeError("relative-to-nonstring", () => relative("/x", {} as unknown as string));
 throwsTypeError("resolve-visited-nonstring", () =>

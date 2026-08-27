@@ -18,7 +18,9 @@
 #include "u16_buffer.h"
 #include "utf8.h"
 #include "value.h"
+#include "value_ops.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 /*
  * Native `node:path`, POSIX flavor. A direct port of Node's lib/path.js `posix`
@@ -461,15 +463,68 @@ static MalValue mal_node_path_basename(
     (void) this_value;
     (void) nt;
     (void) callee;
+    MalString *suffix = nullptr;
+    if (argc >= 2 && !mal_value_is_undefined(args[1])
+        && !path_require_string(vm, args[1], "suffix", &suffix)) {
+        return mal_value_new_undefined();
+    }
     MalString *s;
-    if (!path_require_string(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), "path", &s)) {
+    if (!path_require_string(vm,
+            argc >= 1 ? args[0] : mal_value_new_undefined(), "path", &s)) {
         return mal_value_new_undefined();
     }
     const c16 *p = mal_string_code_units(s);
-    i64 end = (i64) mal_string_length(s);
-    while (end > 0 && p[end - 1] == PATH_SEP) end--;
-    i64 start = end;
-    while (start > 0 && p[start - 1] != PATH_SEP) start--;
+    i64 length = (i64) mal_string_length(s);
+    i64 start = 0;
+    i64 end = -1;
+    bool matched_slash = true;
+    if (suffix != nullptr && mal_string_length(suffix) > 0
+        && mal_string_length(suffix) <= (usize) length) {
+        if (mal_string_equals(suffix, s)) return path_ascii(vm, "");
+        const c16 *suffix_units = mal_string_code_units(suffix);
+        i64 suffix_index = (i64) mal_string_length(suffix) - 1;
+        i64 first_non_slash_end = -1;
+        for (i64 i = length - 1; i >= 0; i--) {
+            c16 code = p[i];
+            if (code == PATH_SEP) {
+                if (!matched_slash) {
+                    start = i + 1;
+                    break;
+                }
+            } else {
+                if (first_non_slash_end == -1) {
+                    matched_slash = false;
+                    first_non_slash_end = i + 1;
+                }
+                if (suffix_index >= 0) {
+                    if (code == suffix_units[suffix_index]) {
+                        if (--suffix_index == -1) end = i;
+                    } else {
+                        suffix_index = -1;
+                        end = first_non_slash_end;
+                    }
+                }
+            }
+        }
+        if (start == end) {
+            end = first_non_slash_end;
+        } else if (end == -1) {
+            end = length;
+        }
+        return path_units(vm, p + start, (usize) (end - start));
+    }
+    for (i64 i = length - 1; i >= 0; i--) {
+        if (p[i] == PATH_SEP) {
+            if (!matched_slash) {
+                start = i + 1;
+                break;
+            }
+        } else if (end == -1) {
+            matched_slash = false;
+            end = i + 1;
+        }
+    }
+    if (end == -1) return path_ascii(vm, "");
     return path_units(vm, p + start, (usize) (end - start));
 }
 
@@ -520,6 +575,226 @@ static MalValue mal_node_path_extname(
         return path_ascii(vm, "");
     }
     return path_units(vm, &p[start_dot], (usize) (end - start_dot));
+}
+
+static bool path_get_named(
+    MalVm *vm, MalValue object, const char *name, MalValue *out
+) {
+    return mal_vm_get_property(
+        vm, object, mal_intrinsic_string_key(vm, (const byte *) name), out);
+}
+
+static bool path_append_value(
+    MalVm *vm, MalPathBuf *buffer, MalValue value, MalValue *string_root
+) {
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    *string_root = mal_value_from_string(string);
+    path_buf_push_units(
+        buffer, mal_string_code_units(string), mal_string_length(string));
+    return path_buf_check(vm, buffer);
+}
+
+static MalValue mal_node_path_format(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee
+) {
+    (void) this_value;
+    (void) nt;
+    (void) callee;
+    MalValue roots[] = {
+        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_object(roots[0])
+        || mal_value_is_array_object(roots[0])
+        || mal_value_is_callable(roots[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"pathObject\" argument must be of type object");
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+
+    if (!path_get_named(vm, roots[0], "dir", &roots[1])) goto fail;
+    if (!mal_value_is_truthy(roots[1])
+        && !path_get_named(vm, roots[0], "root", &roots[1])) goto fail;
+
+    if (!path_get_named(vm, roots[0], "base", &roots[3])) goto fail;
+    if (!mal_value_is_truthy(roots[3])) {
+        MalPathBuf base;
+        path_buf_init(&base);
+        if (!path_get_named(vm, roots[0], "name", &roots[4])) {
+            path_buf_free(&base);
+            goto fail;
+        }
+        if (mal_value_is_truthy(roots[4])
+            && !path_append_value(vm, &base, roots[4], &roots[6])) {
+            path_buf_free(&base);
+            goto fail;
+        }
+        if (!path_get_named(vm, roots[0], "ext", &roots[5])) {
+            path_buf_free(&base);
+            goto fail;
+        }
+        if (mal_value_is_truthy(roots[5])) {
+            MalValue first;
+            if (!mal_vm_get_property(vm, roots[5], mal_key_index(0), &first)) {
+                path_buf_free(&base);
+                goto fail;
+            }
+            MalValue dot = path_ascii(vm, ".");
+            if (!mal_ops_strict_equal_bool(first, dot)) {
+                path_buf_push_char(&base, PATH_DOT);
+            }
+            if (!path_append_value(vm, &base, roots[5], &roots[6])) {
+                path_buf_free(&base);
+                goto fail;
+            }
+        }
+        roots[3] = path_buf_to_value(vm, &base);
+        path_buf_free(&base);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
+    }
+
+    if (!mal_value_is_truthy(roots[1])) {
+        MalValue result = roots[3];
+        mal_gc_unroot(&root);
+        return result;
+    }
+    if (!path_get_named(vm, roots[0], "root", &roots[2])) goto fail;
+    MalPathBuf output;
+    path_buf_init(&output);
+    if (!path_append_value(vm, &output, roots[1], &roots[6])) {
+        path_buf_free(&output);
+        goto fail;
+    }
+    if (!mal_ops_strict_equal_bool(roots[1], roots[2])) {
+        path_buf_push_char(&output, PATH_SEP);
+    }
+    if (!path_append_value(vm, &output, roots[3], &roots[6])) {
+        path_buf_free(&output);
+        goto fail;
+    }
+    roots[6] = path_buf_to_value(vm, &output);
+    path_buf_free(&output);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
+    MalValue result = roots[6];
+    mal_gc_unroot(&root);
+    return result;
+
+fail:
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static void path_parse_define(
+    MalVm *vm, MalObject *object, const char *name, MalValue value
+) {
+    mal_intrinsic_define_data(vm, object, (const byte *) name, value,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE
+            | MAL_PROPERTY_CONFIGURABLE);
+}
+
+static MalValue mal_node_path_parse(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee
+) {
+    (void) this_value;
+    (void) nt;
+    (void) callee;
+    MalString *string;
+    if (!path_require_string(vm,
+            argc >= 1 ? args[0] : mal_value_new_undefined(), "path", &string)) {
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    for (usize i = 1; i < countof(roots); ++i) {
+        roots[i] = path_ascii(vm, "");
+    }
+    const c16 *units = mal_string_code_units(string);
+    i64 length = (i64) mal_string_length(string);
+    bool absolute = length > 0 && units[0] == PATH_SEP;
+    if (absolute) roots[1] = path_ascii(vm, "/");
+    i64 start = absolute ? 1 : 0;
+    i64 start_dot = -1;
+    i64 start_part = 0;
+    i64 end = -1;
+    bool matched_slash = true;
+    i64 pre_dot_state = 0;
+    for (i64 i = length - 1; i >= start; i--) {
+        c16 code = units[i];
+        if (code == PATH_SEP) {
+            if (!matched_slash) {
+                start_part = i + 1;
+                break;
+            }
+            continue;
+        }
+        if (end == -1) {
+            matched_slash = false;
+            end = i + 1;
+        }
+        if (code == PATH_DOT) {
+            if (start_dot == -1) {
+                start_dot = i;
+            } else if (pre_dot_state != 1) {
+                pre_dot_state = 1;
+            }
+        } else if (start_dot != -1) {
+            pre_dot_state = -1;
+        }
+    }
+    if (end != -1) {
+        i64 part_start = start_part == 0 && absolute ? 1 : start_part;
+        roots[3] = path_units(
+            vm, units + part_start, (usize) (end - part_start));
+        if (start_dot == -1 || pre_dot_state == 0
+            || (pre_dot_state == 1 && start_dot == end - 1
+                && start_dot == start_part + 1)) {
+            roots[5] = roots[3];
+        } else {
+            roots[4] = path_units(
+                vm, units + start_dot, (usize) (end - start_dot));
+            roots[5] = path_units(
+                vm, units + part_start, (usize) (start_dot - part_start));
+        }
+    }
+    if (start_part > 0) {
+        roots[2] = path_units(vm, units, (usize) (start_part - 1));
+    } else if (absolute) {
+        roots[2] = path_ascii(vm, "/");
+    }
+    MalObject *result = mal_value_to_object(roots[0]);
+    path_parse_define(vm, result, "root", roots[1]);
+    path_parse_define(vm, result, "dir", roots[2]);
+    path_parse_define(vm, result, "base", roots[3]);
+    path_parse_define(vm, result, "ext", roots[4]);
+    path_parse_define(vm, result, "name", roots[5]);
+    MalValue value = roots[0];
+    mal_gc_unroot(&root);
+    return value;
+}
+
+static MalValue mal_node_path_to_namespaced_path(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee
+) {
+    (void) vm;
+    (void) this_value;
+    (void) nt;
+    (void) callee;
+    return argc >= 1 ? args[0] : mal_value_new_undefined();
 }
 
 static MalValue mal_node_path_relative(
@@ -649,17 +924,20 @@ typedef struct {
     MalNativeFunctionCallback callback;
 } MalNodePathExport;
 
-#define MAL_NODE_PATH_FUNCTION_COUNT 8
+#define MAL_NODE_PATH_FUNCTION_COUNT 11
 
 static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_FUNCTION_COUNT] = {
-    {"basename", 1, mal_node_path_basename},
+    {"basename", 2, mal_node_path_basename},
     {"dirname", 1, mal_node_path_dirname},
     {"extname", 1, mal_node_path_extname},
+    {"format", 1, mal_node_path_format},
     {"isAbsolute", 1, mal_node_path_is_absolute},
     {"join", 0, mal_node_path_join},
     {"normalize", 1, mal_node_path_normalize},
+    {"parse", 1, mal_node_path_parse},
     {"relative", 2, mal_node_path_relative},
     {"resolve", 0, mal_node_path_resolve},
+    {"toNamespacedPath", 1, mal_node_path_to_namespaced_path},
 };
 
 void mal_host_install_node_path(
@@ -677,8 +955,11 @@ void mal_host_install_node_path(
 
     for (usize i = 0; i < MAL_NODE_PATH_FUNCTION_COUNT; ++i) {
         const MalNodePathExport *e = &mal_node_path_exports[i];
+        const char *function_name = strcmp(e->name, "format") == 0
+            ? "bound _format"
+            : e->name;
         MalNativeFunctionObject *fn = mal_native_function_object_new_arity(
-            &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) e->name), e->length,
+            &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) function_name), e->length,
             e->callback);
         vals[i] = mal_value_from_native_function_object(fn);
     }
