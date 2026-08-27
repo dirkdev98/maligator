@@ -1,6 +1,9 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
+#if !defined(__APPLE__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE
+#endif
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE
 #endif
@@ -27,6 +30,80 @@ static u32 mal_posix_ft_from_mode(mode_t m) {
         return MAL_POSIX_FT_SYMLINK;
     }
     return MAL_POSIX_FT_OTHER;
+}
+
+const MalPosixFsConstant *mal_posix_fs_constants(usize *out_count) {
+    static const MalPosixFsConstant constants[] = {
+        {"UV_FS_SYMLINK_DIR", 1},
+        {"UV_FS_SYMLINK_JUNCTION", 2},
+        {"O_RDONLY", O_RDONLY},
+        {"O_WRONLY", O_WRONLY},
+        {"O_RDWR", O_RDWR},
+        {"UV_DIRENT_UNKNOWN", 0},
+        {"UV_DIRENT_FILE", 1},
+        {"UV_DIRENT_DIR", 2},
+        {"UV_DIRENT_LINK", 3},
+        {"UV_DIRENT_FIFO", 4},
+        {"UV_DIRENT_SOCKET", 5},
+        {"UV_DIRENT_CHAR", 6},
+        {"UV_DIRENT_BLOCK", 7},
+        {"S_IFMT", S_IFMT},
+        {"S_IFREG", S_IFREG},
+        {"S_IFDIR", S_IFDIR},
+        {"S_IFCHR", S_IFCHR},
+        {"S_IFBLK", S_IFBLK},
+        {"S_IFIFO", S_IFIFO},
+        {"S_IFLNK", S_IFLNK},
+        {"S_IFSOCK", S_IFSOCK},
+        {"O_CREAT", O_CREAT},
+        {"O_EXCL", O_EXCL},
+        {"UV_FS_O_FILEMAP", 0},
+#ifdef O_NOCTTY
+        {"O_NOCTTY", O_NOCTTY},
+#endif
+        {"O_TRUNC", O_TRUNC},
+        {"O_APPEND", O_APPEND},
+#ifdef O_DIRECTORY
+        {"O_DIRECTORY", O_DIRECTORY},
+#endif
+#ifdef O_NOFOLLOW
+        {"O_NOFOLLOW", O_NOFOLLOW},
+#endif
+        {"O_SYNC", O_SYNC},
+#ifdef O_DSYNC
+        {"O_DSYNC", O_DSYNC},
+#endif
+#ifdef O_SYMLINK
+        {"O_SYMLINK", O_SYMLINK},
+#endif
+#ifdef O_NONBLOCK
+        {"O_NONBLOCK", O_NONBLOCK},
+#endif
+        {"S_IRWXU", S_IRWXU},
+        {"S_IRUSR", S_IRUSR},
+        {"S_IWUSR", S_IWUSR},
+        {"S_IXUSR", S_IXUSR},
+        {"S_IRWXG", S_IRWXG},
+        {"S_IRGRP", S_IRGRP},
+        {"S_IWGRP", S_IWGRP},
+        {"S_IXGRP", S_IXGRP},
+        {"S_IRWXO", S_IRWXO},
+        {"S_IROTH", S_IROTH},
+        {"S_IWOTH", S_IWOTH},
+        {"S_IXOTH", S_IXOTH},
+        {"F_OK", F_OK},
+        {"R_OK", R_OK},
+        {"W_OK", W_OK},
+        {"X_OK", X_OK},
+        {"UV_FS_COPYFILE_EXCL", 1},
+        {"COPYFILE_EXCL", 1},
+        {"UV_FS_COPYFILE_FICLONE", 2},
+        {"COPYFILE_FICLONE", 2},
+        {"UV_FS_COPYFILE_FICLONE_FORCE", 4},
+        {"COPYFILE_FICLONE_FORCE", 4},
+    };
+    *out_count = sizeof(constants) / sizeof(constants[0]);
+    return constants;
 }
 
 /* Classify a directory entry by lstat on the joined "dir/name" path (the entry's
@@ -82,6 +159,10 @@ static u32 mal_posix_dirent_type(const char *dir, const struct dirent *de) {
 bool mal_posix_fs_exists(const char *path) {
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+int mal_posix_fs_access(const char *path, u32 mode) {
+    return access(path, (int) mode) == 0 ? 0 : errno;
 }
 
 int mal_posix_fs_open(
@@ -269,6 +350,22 @@ int mal_posix_fs_read_fd(
 
 int mal_posix_fs_close_fd(int fd) {
     return close(fd) == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_sync_fd(int fd) {
+    int result;
+    do {
+        result = fsync(fd);
+    } while (result != 0 && errno == EINTR);
+    return result == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_truncate_fd(int fd, i64 length) {
+    int result;
+    do {
+        result = ftruncate(fd, (off_t) length);
+    } while (result != 0 && errno == EINTR);
+    return result == 0 ? 0 : errno;
 }
 
 static void mal_posix_fs_copy_stat(const struct stat *st, MalPosixStat *out) {

@@ -178,16 +178,20 @@ describe("host-install manifest", () => {
 
 	it("binds descriptor operations through the node:fs installer", () => {
 		const def = compile(
-			`import { closeSync, fstatSync, openSync, readSync } from "node:fs";\n` +
-				`globalThis.sink = [openSync, readSync, fstatSync, closeSync];\n`,
+			`import { accessSync, closeSync, constants, fstatSync, fsyncSync, ftruncateSync, openSync, readSync } from "node:fs";\n` +
+				`globalThis.sink = [accessSync, constants, openSync, readSync, fstatSync, fsyncSync, ftruncateSync, closeSync];\n`,
 			{ node: true },
 		);
 		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_fs",
 				exports: [
+					expect.objectContaining({ name: "accessSync" }),
 					expect.objectContaining({ name: "closeSync" }),
+					expect.objectContaining({ name: "constants" }),
 					expect.objectContaining({ name: "fstatSync" }),
+					expect.objectContaining({ name: "fsyncSync" }),
+					expect.objectContaining({ name: "ftruncateSync" }),
 					expect.objectContaining({ name: "openSync" }),
 					expect.objectContaining({ name: "readSync" }),
 				],

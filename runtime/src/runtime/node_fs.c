@@ -255,6 +255,38 @@ static MalValue node_fs_exists_sync(
     return mal_value_new_boolean(exists);
 }
 
+static MalValue node_fs_access_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(vm, argc > 0 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    u32 mode = 0;
+    if (argc > 1 && !mal_value_is_undefined(args[1]) && !mal_value_is_null(args[1])) {
+        if (!mal_ops_is_number(args[1])) {
+            free(path);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                (const byte *) "access mode must be an integer or null");
+            return mal_value_new_undefined();
+        }
+        f64 number = mal_ops_number_as_f64(args[1]);
+        number = trunc(number);
+        if (!isfinite(number) || number < 0 || number > 7) {
+            free(path);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                (const byte *) "access mode must truncate to an integer from 0 through 7");
+            return mal_value_new_undefined();
+        }
+        mode = (u32) number;
+    }
+    int err = mal_posix_fs_access(path, mode);
+    if (err != 0) node_fs_throw_errno(vm, err, "access", path);
+    free(path);
+    return mal_value_new_undefined();
+}
+
 static MalValue node_fs_read_file_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -680,6 +712,61 @@ static MalValue node_fs_close_sync(
     }
     int err = mal_posix_fs_close_fd(fd);
     if (err != 0) node_fs_throw_errno_with_dest(vm, err, "close", nullptr, nullptr);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_fsync_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    int fd;
+    if (!node_fs_fd(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &fd)) {
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_sync_fd(fd);
+    if (err != 0) node_fs_throw_errno_with_dest(vm, err, "fsync", nullptr, nullptr);
+    return mal_value_new_undefined();
+}
+
+static bool node_fs_truncate_length(MalVm *vm, MalValue value, i64 *length) {
+    if (mal_value_is_undefined(value)) {
+        *length = 0;
+        return true;
+    }
+    if (!mal_ops_is_number(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "ftruncate length must be a number");
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || trunc(number) != number || number > 9007199254740991.0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "ftruncate length must be an integer no greater than 2^53 - 1");
+        return false;
+    }
+    *length = number < 0 ? 0 : (i64) number;
+    return true;
+}
+
+static MalValue node_fs_ftruncate_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    int fd;
+    if (!node_fs_fd(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &fd)) {
+        return mal_value_new_undefined();
+    }
+    i64 length;
+    if (!node_fs_truncate_length(
+            vm, argc > 1 ? args[1] : mal_value_new_undefined(), &length)) {
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_truncate_fd(fd, length);
+    if (err != 0) node_fs_throw_errno_with_dest(vm, err, "ftruncate", nullptr, nullptr);
     return mal_value_new_undefined();
 }
 
@@ -1725,6 +1812,9 @@ static MalValue node_fs_export(
         return node_fs_make_constructor_slot(
             vm, fn_proto, "Stats", node_fs_stats_constructor, protos[0]);
     }
+    if (strcmp(name, "accessSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "accessSync", 2, node_fs_access_sync);
+    }
     if (strcmp(name, "createReadStream") == 0) {
         return node_fs_make_fn(vm, fn_proto, "createReadStream", 2, node_fs_create_read_stream);
     }
@@ -1774,6 +1864,12 @@ static MalValue node_fs_export(
     if (strcmp(name, "fstatSync") == 0) {
         return node_fs_make_fn_slot(
             vm, fn_proto, "fstatSync", 1, node_fs_fstat_sync, protos[0]);
+    }
+    if (strcmp(name, "fsyncSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "fsyncSync", 1, node_fs_fsync_sync);
+    }
+    if (strcmp(name, "ftruncateSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "ftruncateSync", 1, node_fs_ftruncate_sync);
     }
     if (strcmp(name, "lstatSync") == 0) {
         return node_fs_make_fn_slot(
@@ -1857,7 +1953,7 @@ void mal_host_install_node_fs(
         node_fs_is_symbolic_link);
 
     static const char *names[] = {
-		"Stats", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "fstatSync", "lstatSync", "mkdirSync",
+		"Stats", "accessSync", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "fstatSync", "fsyncSync", "ftruncateSync", "lstatSync", "mkdirSync",
 		"mkdtempSync", "openSync", "readFile", "readFileSync", "readSync", "readdir", "readdirSync", "realpathSync", "renameSync",
         "rmSync", "statSync", "stat", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
     };
@@ -1872,6 +1968,19 @@ void mal_host_install_node_fs(
             (const byte *) names[i], value, NODE_FS_VISIBLE);
         mal_gc_unroot(&value_root);
     }
+    MalValue constants = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    MalRootSpan constants_root;
+    mal_gc_root(&constants_root, &constants, 1);
+    usize constant_count;
+    const MalPosixFsConstant *constant_table = mal_posix_fs_constants(&constant_count);
+    for (usize i = 0; i < constant_count; i++) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(constants),
+            (const byte *) constant_table[i].name,
+            mal_value_from_f64((f64) constant_table[i].value), MAL_PROPERTY_ENUMERABLE);
+    }
+    mal_intrinsic_define_data(vm, mal_value_to_object(module),
+        (const byte *) "constants", constants, MAL_PROPERTY_ENUMERABLE);
+    mal_gc_unroot(&constants_root);
     vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE] = module;
     mal_node_module_publish(vm, slots, count, module);
     mal_gc_unroot(&module_root);

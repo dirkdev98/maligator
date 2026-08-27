@@ -1,11 +1,15 @@
-import {
+import fsDefault, {
 	Stats,
+	accessSync,
 	appendFileSync,
 	chmodSync,
 	closeSync,
 	copyFileSync,
+	constants,
 	existsSync,
 	fstatSync,
+	fsyncSync,
+	ftruncateSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
@@ -81,6 +85,16 @@ mkdirSync(nested, { recursive: true });
 eq("recursive mkdir creates parents", existsSync(nested), true);
 mkdirSync(nested, { recursive: true });
 check("recursive mkdir accepts an existing directory", statSync(nested).isDirectory());
+check("node:fs default shares constants", fsDefault.constants === constants);
+eq("fs constants expose F_OK", constants.F_OK, 0);
+eq("fs constants expose R_OK", constants.R_OK, 4);
+check("fs constants expose native open flags", constants.O_CREAT > 0);
+eq(
+	"fs constants use null-prototype immutable entries",
+	Object.getPrototypeOf(constants) === null &&
+		Object.getOwnPropertyDescriptor(constants, "F_OK")?.writable,
+	false,
+);
 
 const openedDescriptor = openSync(openedFile, "w", 0o640);
 check("openSync returns a file descriptor", Number.isInteger(openedDescriptor));
@@ -90,6 +104,51 @@ eq(
 	statSync(openedFile).mode & 0o777,
 	0o640,
 );
+writeFileSync(openedFile, "abcdef");
+accessSync(openedFile);
+accessSync(openedFile, constants.R_OK | constants.W_OK);
+accessSync(openedFile, 0.9);
+let accessCode = "";
+let accessSyscall = "";
+let accessPath = "";
+try {
+	accessSync(`${root}/access-missing`, constants.F_OK);
+} catch (error) {
+	const fsError = error as NodeJS.ErrnoException;
+	accessCode = fsError.code ?? "";
+	accessSyscall = fsError.syscall ?? "";
+	accessPath = fsError.path ?? "";
+}
+eq("accessSync missing path code", accessCode, "ENOENT");
+eq("accessSync missing path syscall", accessSyscall, "access");
+eq("accessSync missing path", accessPath, `${root}/access-missing`);
+
+const truncateDescriptor = openSync(openedFile, "r+");
+ftruncateSync(truncateDescriptor, 3);
+eq("ftruncateSync shrinks an open file", fstatSync(truncateDescriptor).size, 3);
+ftruncateSync(truncateDescriptor, 8);
+eq("ftruncateSync grows an open file", fstatSync(truncateDescriptor).size, 8);
+fsyncSync(truncateDescriptor);
+ftruncateSync(truncateDescriptor, -1);
+eq(
+	"ftruncateSync clamps negative lengths to zero",
+	fstatSync(truncateDescriptor).size,
+	0,
+);
+closeSync(truncateDescriptor);
+
+let fsyncDescriptorCode = "";
+let fsyncDescriptorPath = false;
+try {
+	fsyncSync(truncateDescriptor);
+} catch (error) {
+	const fsError = error as NodeJS.ErrnoException;
+	fsyncDescriptorCode = fsError.code ?? "";
+	fsyncDescriptorPath = "path" in fsError;
+}
+eq("fsyncSync exposes descriptor errno", fsyncDescriptorCode, "EBADF");
+eq("fsyncSync descriptor errors omit path", fsyncDescriptorPath, false);
+
 writeFileSync(openedFile, "abcdef");
 const readDescriptor = openSync(openedFile, "r");
 const positionedRead = Buffer.alloc(6);

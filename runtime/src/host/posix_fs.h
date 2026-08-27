@@ -51,10 +51,22 @@ typedef enum MalPosixOpenFlags {
     MAL_POSIX_OPEN_SYNC = 1u << 6,
 } MalPosixOpenFlags;
 
+/* Platform values published by `node:fs.constants`. Keeping the table in the
+ * host layer prevents the JS runtime from depending on POSIX O_* / S_* macros. */
+typedef struct MalPosixFsConstant {
+    const char *name;
+    i64 value;
+} MalPosixFsConstant;
+
+const MalPosixFsConstant *mal_posix_fs_constants(usize *out_count);
+
 /* True iff `path` resolves (following symlinks). Never reports an error: any stat
  * failure (missing, permission, dangling symlink) is a plain false, matching
  * fs.existsSync. */
 bool mal_posix_fs_exists(const char *path);
+
+/* Check `path` with POSIX F_OK/R_OK/W_OK/X_OK bits. */
+int mal_posix_fs_access(const char *path, u32 mode);
 
 /* Open `path` and return its descriptor through `out_fd`. `flags` contains
  * MalPosixOpenFlags unless `native_flags` is true, in which case it is the
@@ -92,6 +104,10 @@ int mal_posix_fs_read_fd(
 
 /* Close an open descriptor. Returns 0 or an errno. */
 int mal_posix_fs_close_fd(int fd);
+
+/* Flush and resize open descriptors. */
+int mal_posix_fs_sync_fd(int fd);
+int mal_posix_fs_truncate_fd(int fd, i64 length);
 
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */
 int mal_posix_fs_stat(const char *path, MalPosixStat *out);
