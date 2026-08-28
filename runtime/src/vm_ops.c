@@ -3426,6 +3426,11 @@ static bool mal_vm_ordinary_get(MalVm *vm, MalObject *start, MalKey key, MalValu
             if (!mal_vm_get_own_property(vm, mal_value_from_object(cursor), key, &present, &desc)) {
                 return false;
             }
+        } else if (
+            cursor->shape->inline_count == 0 && cursor->overflow == nullptr &&
+            !(key.kind == MAL_KEY_INDEX && cursor->header.type == MAL_HEAP_ARRAY_OBJECT)
+        ) {
+            present = false;
         } else {
             MalPropertyLookup lookup = mal_object_get_own(cursor, key);
             present = lookup.present;

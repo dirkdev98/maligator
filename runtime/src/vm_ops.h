@@ -888,10 +888,13 @@ typedef struct MalPropertyCachePool {
 static inline MalInlineCache *mal_vm_property_ic_at(
     MalCallable *callable, i32 ic_index
 ) {
-    mal_vm_ensure_function_caches(
-        callable->vm, callable->function_index);
-    MalInlineCache *caches =
-        callable->vm->property_cache[callable->function_index].sites;
+    MalPropertyCachePool *pool =
+        &callable->vm->property_cache[callable->function_index];
+    MalInlineCache *caches = pool->sites;
+    if (__builtin_expect(caches == nullptr, 0)) {
+        mal_vm_ensure_function_caches(callable->vm, callable->function_index);
+        caches = pool->sites;
+    }
     return &caches[ic_index];
 }
 
