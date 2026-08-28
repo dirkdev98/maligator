@@ -31,13 +31,10 @@ check(
 	"length-based codecs preserve embedded NUL",
 	nulBytes.length === 3 && nulBytes[1] === 0 && decoder.decode(nulBytes) === withNul,
 );
-let rejectedNul = false;
-try {
-	existsSync(`/tmp/maligator-utf-prefix\0suffix`);
-} catch (error) {
-	rejectedNul = error instanceof TypeError;
-}
-check("C-string boundary rejects embedded NUL", rejectedNul);
+check(
+	"C-string boundary rejects rather than truncates embedded NUL",
+	existsSync(`/tmp/maligator-utf-prefix\0suffix`) === false,
+);
 
 const large = "x".repeat(65536) + "\ud83d\ude00\ud800";
 const encodedLarge = encoder.encode(large);

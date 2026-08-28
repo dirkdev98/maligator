@@ -93,7 +93,7 @@ coverage but costs roughly 25 seconds and belongs in the full gate.
 
 The full gate runs the self-hosted frontend, native-build, and CLI checks before
 the broad native and standards matrices. The much slower whole-compiler
-differential follows the two-minute matrix, before the remaining exhaustive
+differential follows the regular check matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 
 The smoke fuse measures its cumulative stages and fails if they exceed 20
