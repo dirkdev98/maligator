@@ -35,6 +35,20 @@ function rejectEvalReturn(body: Array<ESTree.Statement>): void {
 	}
 }
 
+function rejectEvalUsing(body: Array<ESTree.Statement>): void {
+	if (
+		body.some(
+			(statement) =>
+				statement.type === "VariableDeclaration" &&
+				(statement.kind === "using" || statement.kind === "await using"),
+		)
+	) {
+		throw new SyntaxError(
+			"Using declarations are not allowed at the top level of eval code",
+		);
+	}
+}
+
 function containsInheritedContextSyntax(
 	body: Array<ESTree.Statement>,
 	kind: "super" | "new.target",
@@ -140,6 +154,7 @@ function contextualEvalProgram(
 	});
 	const body = extractBody(wrapped);
 	rejectEvalReturn(body);
+	rejectEvalUsing(body);
 	if (!context.allowSuperProperty && containsInheritedContextSyntax(body, "super")) {
 		throw new SyntaxError("Member access on super must be in a method");
 	}

@@ -968,8 +968,10 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	}
 
 	if (node.type === "VariableDeclaration") {
+		const kind =
+			node.kind === "using" || node.kind === "await using" ? "const" : node.kind;
 		for (const decl of node.declarations) {
-			extractBindingsAndRegister(file, scope, decl.id, node.kind);
+			extractBindingsAndRegister(file, scope, decl.id, kind);
 		}
 	}
 

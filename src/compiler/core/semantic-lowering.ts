@@ -2306,6 +2306,9 @@ function hasTopLevelAwait(ast: ESTree.Program): boolean {
 	return (
 		traverseEstree(ast.body, (node) => {
 			if (node.type === "AwaitExpression") return ESTREE_STOP;
+			if (node.type === "VariableDeclaration" && node.kind === "await using") {
+				return ESTREE_STOP;
+			}
 			if (
 				node.type === "FunctionDeclaration" ||
 				node.type === "FunctionExpression" ||

@@ -68,7 +68,7 @@
 		"version:alpha": "node ./scripts/release.ts version-alpha"
 	},
 	"dependencies": {
-		"meriyah": "7.1.0"
+		"meriyah": "7.3.2"
 	},
 	"devDependencies": {
 		"@lightbase/eslint-config": "4.3.2",
