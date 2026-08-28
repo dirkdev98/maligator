@@ -57,7 +57,11 @@ import {
 	storeTest262ProgramImage,
 } from "./program-image-cache.ts";
 import { mergeProgramImages } from "./program-image-merge.ts";
-import { createTest262BatchReport } from "./report.ts";
+import {
+	createTest262BatchReport,
+	test262BatchId,
+	test262SelectionId,
+} from "./report.ts";
 import type {
 	Test262BatchCacheState,
 	Test262BatchPhaseTimings,
@@ -124,6 +128,7 @@ export type Test262NativeBuildInputs = {
 
 let nativeBuildInputs: Test262NativeBuildInputs | undefined;
 const BUILD_PATH = `${TEST262_METADATA.buildPath}${buildSuffix()}`;
+let reportSelectionId: string | undefined;
 
 export function test262NativeBuildInputs(): Test262NativeBuildInputs {
 	if (nativeBuildInputs === undefined) {
@@ -154,7 +159,12 @@ export function test262ReportPath(variant: "strict" | "sloppy" | "combined"): st
 			? "interpreted"
 			: "compiled";
 	const mode = process.env.MAL_GC_STRESS ? "gc-stress" : "normal";
-	return `${BUILD_PATH}/report-${backend}-${mode}-${variant}.json`;
+	const selection = reportSelectionId === undefined ? "" : `-${reportSelectionId}`;
+	return `${BUILD_PATH}/report-${backend}-${mode}-${variant}${selection}.json`;
+}
+
+export function test262SetReportSelection(paths?: Array<string>): void {
+	reportSelectionId = paths === undefined ? undefined : test262SelectionId(paths);
 }
 
 function wireBackend(): boolean {
@@ -824,6 +834,58 @@ interface WireBatchEntry extends BatchEntry {
 	wirePath: string;
 }
 
+function compilerOutput(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (Buffer.isBuffer(value)) return value.toString("utf-8");
+	return "";
+}
+
+function retainBatchCcFailure(input: {
+	generatedC: string;
+	manifest: BatchManifest;
+	paths: Array<string>;
+	workerId: number;
+	command: string;
+	args: Array<string>;
+	error: unknown;
+}): string {
+	const id = test262BatchId(input.paths).slice("batch-".length);
+	const artifactPath = path.join(BUILD_PATH, `report-cc-failure-${id}`);
+	const error = input.error as Error & {
+		code?: unknown;
+		signal?: unknown;
+		killed?: unknown;
+		stdout?: unknown;
+		stderr?: unknown;
+	};
+	mkdirSync(artifactPath, { recursive: true });
+	writeFileSync(path.join(artifactPath, "batch.c"), input.generatedC);
+	writeFileSync(
+		path.join(artifactPath, "failure.json"),
+		JSON.stringify(
+			{
+				schemaVersion: 1,
+				worker: input.workerId,
+				paths: input.paths,
+				manifest: input.manifest,
+				command: input.command,
+				args: input.args,
+				error: {
+					message: error instanceof Error ? error.message : String(input.error),
+					code: error.code ?? null,
+					signal: error.signal ?? null,
+					killed: error.killed ?? null,
+					stdout: compilerOutput(error.stdout),
+					stderr: compilerOutput(error.stderr),
+				},
+			},
+			null,
+			2,
+		),
+	);
+	return artifactPath;
+}
+
 async function executeWireBatch(
 	entries: Array<WireBatchEntry>,
 	workerId: number,
@@ -1035,6 +1097,7 @@ async function runBatchBinary(
 function applyManifest(
 	files: Array<Test262File>,
 	manifest: BatchManifest,
+	includeStats = true,
 ): Array<BatchEntry> {
 	const byPath = new Map(files.map((file) => [file.path, file]));
 
@@ -1043,20 +1106,26 @@ function applyManifest(
 		if (!file) {
 			continue;
 		}
-		applyOutcome(file, {
-			image: undefined,
-			result: entry.result as Test262Result,
-			failure: entry.failure,
-			stats: undefined,
-		});
+		applyOutcome(
+			file,
+			{
+				image: undefined,
+				result: entry.result as Test262Result,
+				failure: entry.failure,
+				stats: undefined,
+			},
+			includeStats,
+		);
 	}
 
 	// The compiled tests' aggregate code stats were summed in the manifest.
-	CODE_STATS.compiledFiles += manifest.stats.compiledFiles;
-	CODE_STATS.functionCount += manifest.stats.functionCount;
-	CODE_STATS.instructionCount += manifest.stats.instructionCount;
-	for (const [opcode, count] of Object.entries(manifest.stats.opcodes)) {
-		OPCODE_COUNTS[opcode] = (OPCODE_COUNTS[opcode] ?? 0) + count;
+	if (includeStats) {
+		CODE_STATS.compiledFiles += manifest.stats.compiledFiles;
+		CODE_STATS.functionCount += manifest.stats.functionCount;
+		CODE_STATS.instructionCount += manifest.stats.instructionCount;
+		for (const [opcode, count] of Object.entries(manifest.stats.opcodes)) {
+			OPCODE_COUNTS[opcode] = (OPCODE_COUNTS[opcode] ?? 0) + count;
+		}
 	}
 
 	const entries: Array<BatchEntry> = [];
@@ -1079,7 +1148,11 @@ function applyManifest(
  * source) and reuse the compiled `.o` across runs - only re-linking and
  * re-running. The binary is always executed, so results are never cached.
  */
-export async function test262RunBatch(files: Array<Test262File>, workerId: number) {
+export async function test262RunBatch(
+	files: Array<Test262File>,
+	workerId: number,
+	includeStats = true,
+) {
 	if (wireBackend()) {
 		await test262RunWireBatch(files, workerId);
 		return;
@@ -1097,6 +1170,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		manifest: BatchManifest,
 		cache: Test262BatchCacheState,
 		objectBytes: number | null,
+		ccFailureArtifact: string | null = null,
 	) => {
 		BATCH_REPORTS.push(
 			createTest262BatchReport({
@@ -1104,6 +1178,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 				manifest,
 				objectBytes,
 				cache,
+				ccFailureArtifact,
 				worker: workerId,
 				timings,
 			}),
@@ -1139,7 +1214,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 
 		const cached = loadArtifact(cacheKey);
 		if (cached) {
-			const entries = applyManifest(files, cached.manifest);
+			const entries = applyManifest(files, cached.manifest, includeStats);
 			if (cached.objectPath !== undefined && entries.length > 0) {
 				timings.linkMs = await linkBatch(cached.objectPath, `${baseName}.bin`);
 				const runStartedAt = performance.now();
@@ -1217,7 +1292,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 						outcome.stats,
 					]);
 		const logicalOutcome = { ...outcome, stats: logicalStats };
-		applyOutcome(file, logicalOutcome);
+		applyOutcome(file, logicalOutcome, includeStats);
 
 		if (outcome.image === undefined) {
 			resolved.push({
@@ -1357,50 +1432,57 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 
 	const generatedC = sources.join("\n");
 	manifest.generatedCBytes = Buffer.byteLength(generatedC);
+	const artifacts = test262NativeArtifacts();
+	const ccArgs = useCache
+		? [...CC_COMPILE_FLAGS, "-c", `${baseName}.c`, "-o", objectCachePath(cacheKey)]
+		: [
+				...CC_COMPILE_FLAGS,
+				`${baseName}.c`,
+				`${BUILD_PATH}/test262_batch.o`,
+				artifacts.c.engine,
+				...artifacts.rust.linkArgs,
+				"-o",
+				`${baseName}.bin`,
+			];
 	const ccStartedAt = performance.now();
 	try {
-		const artifacts = test262NativeArtifacts();
 		writeFileSync(`${baseName}.c`, generatedC);
-		if (useCache) {
-			// Compile straight into the cache so a hit needs only a re-link.
-			ensureCacheDir();
-			await execFileAsync(
-				test262Toolchain().tools.cc.path,
-				[...CC_COMPILE_FLAGS, "-c", `${baseName}.c`, "-o", objectCachePath(cacheKey)],
-				{ timeout: TEST262_METADATA.compileTimeoutMs },
-			);
-		} else {
-			// Baseline path: compile + link in one shot, no cache.
-			await execFileAsync(
-				test262Toolchain().tools.cc.path,
-				[
-					...CC_COMPILE_FLAGS,
-					`${baseName}.c`,
-					`${BUILD_PATH}/test262_batch.o`,
-					artifacts.c.engine,
-					...artifacts.rust.linkArgs,
-					"-o",
-					`${baseName}.bin`,
-				],
-				{ timeout: TEST262_METADATA.compileTimeoutMs },
-			);
-		}
+		if (useCache) ensureCacheDir();
+		await execFileAsync(test262Toolchain().tools.cc.path, ccArgs, {
+			timeout: TEST262_METADATA.compileTimeoutMs,
+		});
 	} catch (e) {
-		// A cc failure cannot be attributed to a single test; retry every test
-		// through the single-test path instead.
 		timings.ccMs = performance.now() - ccStartedAt;
 		recordTiming("cc", `batch(${entries.length}) FAILED`, timings.ccMs);
+		const failureArtifact = retainBatchCcFailure({
+			generatedC,
+			manifest,
+			paths,
+			workerId,
+			command: test262Toolchain().tools.cc.path,
+			args: ccArgs,
+			error: e,
+		});
+		recordBatch(manifest, useCache ? "miss" : "disabled", null, failureArtifact);
 		test262Log(
-			`Batch cc failed on worker ${workerId}, retrying single tests: ${firstLine(
+			`Batch cc failed on worker ${workerId}; retained ${failureArtifact}: ${firstLine(
 				e instanceof Error ? e.message : String(e),
 			)}`,
 		);
-		for (const entry of entries) {
-			entry.file.result = "UNKNOWN";
-			// Compilation above already attributed this logical test's code.
-			await test262RunSingle(entry.file, workerId, false);
+		const retryFiles = entries.map((entry) => entry.file);
+		for (const file of retryFiles) {
+			file.result = "UNKNOWN";
 		}
-		recordBatch(manifest, useCache ? "miss" : "disabled", null);
+		if (retryFiles.length === 1) {
+			await test262RunSingle(retryFiles[0]!, workerId, false);
+		} else {
+			const midpoint = Math.ceil(retryFiles.length / 2);
+			test262Log(
+				`Isolating batch cc failure as ${midpoint}+${retryFiles.length - midpoint} tests.`,
+			);
+			await test262RunBatch(retryFiles.slice(0, midpoint), workerId, false);
+			await test262RunBatch(retryFiles.slice(midpoint), workerId, false);
+		}
 		return;
 	}
 	timings.ccMs = performance.now() - ccStartedAt;

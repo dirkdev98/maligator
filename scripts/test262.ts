@@ -32,6 +32,7 @@ import {
 	test262PruneArtifactCache,
 	test262ReportPath,
 	test262ResetStats,
+	test262SetReportSelection,
 } from "../src/test262/runtime.ts";
 import type { StatsSnapshot } from "../src/test262/runtime.ts";
 import {
@@ -141,10 +142,10 @@ if (
 		...(requestedBackend === "wire" ? { T262_WIRE: "1" } : {}),
 		...(requestedMode === "gc-stress"
 			? {
-				MAL_EVAL_GC_STRESS_INTERVAL: "1000",
-				MAL_GC_STRESS: "1",
-				MAL_GC_VERIFY: "1",
-			}
+					MAL_EVAL_GC_STRESS_INTERVAL: "1000",
+					MAL_GC_STRESS: "1",
+					MAL_GC_VERIFY: "1",
+				}
 			: {}),
 	});
 }
@@ -254,6 +255,7 @@ const isPartialRun =
 	manifestPaths.length > 0 ||
 	excludeManifestPaths.length > 0 ||
 	random;
+test262SetReportSelection(isPartialRun ? selection.map((file) => file.path) : undefined);
 const explicitObjectCache = process.env.T262_OBJCACHE;
 process.env.T262_OBJCACHE = resolveTest262ObjectCache(explicitObjectCache, isPartialRun);
 if (!isPartialRun && explicitObjectCache === undefined) {
@@ -488,11 +490,12 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 
 	// The console output is easy to lose; keep the full granular report (all raw
 	// categories, timings, failure buckets) next to the cache. Not committed.
+	const reportPath = test262ReportPath(variant);
 	writeFileSync(
-		test262ReportPath(variant),
+		reportPath,
 		JSON.stringify(
 			{
-				schemaVersion: 2,
+				schemaVersion: 3,
 				variant,
 				complete: !run.aborted,
 				aborted: run.aborted,
@@ -505,11 +508,13 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 				programImageCache,
 				...getFailuresWithSamples(),
 				batches: getBatchReports(),
+				results: Object.fromEntries(selection.map((file) => [file.path, file.result])),
 			},
 			null,
 			2,
 		),
 	);
+	test262Log(`Report: ${reportPath}`);
 
 	return {
 		results: new Map(selection.map((file) => [file.path, foldResult(file)])),
@@ -591,11 +596,12 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 		}
 	}
 
+	const reportPath = test262ReportPath("combined");
 	writeFileSync(
-		test262ReportPath("combined"),
+		reportPath,
 		JSON.stringify(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				backend: requestedBackend,
 				mode: process.env.MAL_GC_STRESS ? "gc-stress" : "normal",
 				policy,
@@ -605,11 +611,13 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 				code,
 				regressions,
 				improvements,
+				results: Object.fromEntries(combined),
 			},
 			null,
 			2,
 		),
 	);
+	test262Log(`Report: ${reportPath}`);
 
 	if (checkMode) {
 		test262Log("Check mode: not updating the committed results.");
