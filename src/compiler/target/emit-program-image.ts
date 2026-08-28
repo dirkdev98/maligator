@@ -108,7 +108,7 @@ function displayFilePath(filePath: string): string {
 	return `compiled://${relative}`;
 }
 
-const C_HEADER_LINES = [
+export const NATIVE_C_HEADER_LINES = [
 	"#include <string.h>",
 	'#include "vm.h"',
 	'#include "vm_ops.h"',
@@ -486,7 +486,7 @@ function emitNativeFunctions(
 	compiled: Array<CompiledFunction | null>;
 	availability: NativeCompilationAvailability;
 } {
-	const headerCodeUnits = C_HEADER_LINES.join("\n").length + 1;
+	const headerCodeUnits = NATIVE_C_HEADER_LINES.join("\n").length + 1;
 	const fits = (source: string): boolean =>
 		options.maxCodeUnits === undefined ||
 		source.length + headerCodeUnits <= options.maxCodeUnits;
@@ -655,7 +655,7 @@ function emitProgramImageSource(
 	const useCompiled = options.compiled !== false;
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
 	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.
-	const lines = options.includeHeader === false ? [] : [...C_HEADER_LINES];
+	const lines = options.includeHeader === false ? [] : [...NATIVE_C_HEADER_LINES];
 
 	for (let i = 0; i < runtime.stringConstants.length; ++i) {
 		const constant = runtime.stringConstants[i]!;
@@ -963,7 +963,7 @@ export function emitProgramTranslationUnits(
 			.filter((declaration) => referenced.has(declaration.symbol))
 			.map((declaration) => declaration.source);
 		return [
-			...C_HEADER_LINES,
+			...NATIVE_C_HEADER_LINES,
 			...declarations,
 			"",
 			...parts.map((part) => part.source),
@@ -974,7 +974,7 @@ export function emitProgramTranslationUnits(
 	let referenced = new Set<string>();
 	let declarationCodeUnits = 0;
 	let bodyCodeUnits = 0;
-	const baseHeaderCodeUnits = C_HEADER_LINES.reduce(
+	const baseHeaderCodeUnits = NATIVE_C_HEADER_LINES.reduce(
 		(total, line) => total + line.length + 1,
 		0,
 	);

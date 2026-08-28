@@ -27,7 +27,11 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semant
 import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "../compiler/pipeline/compile-program.ts";
-import { emitBatch, emitProgramImage } from "../compiler/target/emit-program-image.ts";
+import {
+	emitBatch,
+	emitProgramImage,
+	NATIVE_C_HEADER_LINES,
+} from "../compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "../compiler/target/program-image.ts";
 import { cacheFrontendWire } from "../frontend-cache.ts";
@@ -1399,23 +1403,7 @@ export async function test262RunBatch(
 	}
 
 	const sources: Array<string> = [
-		'#include "vm.h"',
-		'#include "vm_ops.h"',
-		'#include "value_ops.h"',
-		'#include "builtin_array.h"',
-		'#include "builtin_boolean.h"',
-		'#include "builtin_date.h"',
-		'#include "builtin_object.h"',
-		'#include "builtin_string.h"',
-		'#include "builtin_math.h"',
-		'#include "builtin_iterator.h"',
-		'#include "builtin_number.h"',
-		'#include "builtin_async_iterator.h"',
-		'#include "builtin_map.h"',
-		'#include "builtin_set.h"',
-		// Compiled coroutines dereference MalGeneratorObject (resume_state->frame).
-		'#include "generator_object.h"',
-		"",
+		...NATIVE_C_HEADER_LINES,
 		body,
 		"",
 		"const MalRuntimeImage *const mal_test262_artifact_images[] = {",
@@ -1598,10 +1586,7 @@ export async function test262RunSingle(
 	const ccStartedAt = performance.now();
 	try {
 		const artifacts = test262NativeArtifacts();
-		writeFileSync(
-			`${baseName}.c`,
-			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_array.h"\n#include "builtin_boolean.h"\n#include "builtin_date.h"\n#include "builtin_object.h"\n#include "builtin_string.h"\n#include "builtin_math.h"\n#include "builtin_iterator.h"\n#include "builtin_async_iterator.h"\n#include "builtin_map.h"\n#include "builtin_set.h"\n#include "builtin_number.h"\n#include "generator_object.h"\n\n${cSource}`,
-		);
+		writeFileSync(`${baseName}.c`, `${NATIVE_C_HEADER_LINES.join("\n")}\n${cSource}`);
 		await execFileAsync(
 			test262Toolchain().tools.cc.path,
 			[
