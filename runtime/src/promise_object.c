@@ -45,6 +45,10 @@ static bool mal_promise_is_async_from_sync_reaction_tag(
     return true;
 }
 
+static inline MalValue mal_promise_dispose_resources_reaction_tag(void) {
+    return mal_value_from_i32(INT32_MIN + 6);
+}
+
 struct MalPromiseReactionBlock {
     MalPromiseReactionBlock *next;
     MalPromiseReaction *free_list;
@@ -234,6 +238,22 @@ void mal_promise_append_async_from_sync_reaction(
         sync_iterator);
 }
 
+void mal_promise_append_dispose_resources_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor
+) {
+    mal_promise_append_reaction_internal(
+        vm,
+        promise,
+        result_promise,
+        realm_anchor,
+        mal_promise_dispose_resources_reaction_tag(),
+        stack);
+}
+
 /** Free a pending reaction list without scheduling it. */
 void mal_promise_free_reactions(MalVm *vm, MalPromiseReaction *list) {
     while (list != nullptr) {
@@ -330,6 +350,27 @@ static void mal_promise_trigger_reactions(MalVm *vm, MalPromiseReaction *list, b
                 vm,
                 list->cap_reject,
                 list->on_fulfilled,
+                is_reject,
+                argument);
+#endif
+        } else if (
+            list->cap_resolve == mal_promise_dispose_resources_reaction_tag()
+        ) {
+#if MAL_NODE
+            mal_vm_enqueue_dispose_resources_job_in_context(
+                vm,
+                list->cap_reject,
+                list->on_fulfilled,
+                list->on_rejected,
+                is_reject,
+                argument,
+                list->async_context);
+#else
+            mal_vm_enqueue_dispose_resources_job(
+                vm,
+                list->cap_reject,
+                list->on_fulfilled,
+                list->on_rejected,
                 is_reject,
                 argument);
 #endif

@@ -3,9 +3,11 @@
 #include <stdlib.h>
 
 #include "builtin_error.h"
+#include "builtin_promise.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "microtask.h"
 #include "object_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -28,6 +30,12 @@ static MalDisposableStackObject *mal_disposable_stack_new(
     stack->resource_capacity = 0;
     stack->disposed = false;
     stack->async = async;
+    stack->async_has_error = false;
+    stack->async_needs_await = false;
+    stack->async_has_awaited = false;
+    stack->async_error = mal_value_new_undefined();
+    stack->async_result_promise = mal_value_new_undefined();
+    stack->async_realm_anchor = mal_value_new_undefined();
     return stack;
 }
 
@@ -58,6 +66,9 @@ static void mal_disposable_stack_trace(MalHeapHeader *cell) {
         mal_gc_mark_value(stack->resources[i].resource_value);
         mal_gc_mark_value(stack->resources[i].dispose_method);
     }
+    mal_gc_mark_value(stack->async_error);
+    mal_gc_mark_value(stack->async_result_promise);
+    mal_gc_mark_value(stack->async_realm_anchor);
 }
 
 static void mal_disposable_stack_finalize(MalHeapHeader *cell) {
@@ -102,13 +113,42 @@ static void mal_disposable_stack_append(
     mal_gc_card(&stack->object.header, dispose_method);
 }
 
+static bool mal_disposable_stack_get_method(
+    MalVm *vm,
+    MalValue value,
+    MalKey key,
+    MalValue *method
+) {
+    if (!mal_vm_get_property(vm, value, key, method)) return false;
+    if (mal_value_is_nil(*method)) {
+        *method = mal_value_new_undefined();
+        return true;
+    }
+    if (mal_value_is_callable(*method)) return true;
+    mal_vm_throw_error(
+        vm,
+        MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Dispose method is not callable");
+    return false;
+}
+
 static bool mal_disposable_stack_add_value(
     MalVm *vm,
     MalDisposableStackObject *stack,
     MalValue value,
     MalDisposeKind kind
 ) {
-    if (mal_value_is_nil(value)) return true;
+    if (mal_value_is_nil(value)) {
+        if (kind != MAL_DISPOSE_SYNC) {
+            mal_disposable_stack_append(
+                vm,
+                stack,
+                mal_value_new_undefined(),
+                MAL_DISPOSE_ASYNC,
+                mal_value_new_undefined());
+        }
+        return true;
+    }
     if (!mal_value_is_object(value)) {
         mal_vm_throw_error(
             vm,
@@ -117,28 +157,41 @@ static bool mal_disposable_stack_add_value(
         );
         return false;
     }
-    if (kind != MAL_DISPOSE_SYNC) {
-        mal_vm_throw_error(
-            vm,
-            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Async disposal is not available in this context"
-        );
-        return false;
-    }
-
     MalValue method;
-    if (!mal_vm_get_property(
-            vm,
-            value,
-            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_DISPOSE),
-            &method)) {
-        return false;
+    if (kind == MAL_DISPOSE_SYNC) {
+        if (!mal_disposable_stack_get_method(
+                vm,
+                value,
+                mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_DISPOSE),
+                &method)) {
+            return false;
+        }
+    } else {
+        if (!mal_disposable_stack_get_method(
+                vm,
+                value,
+                mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_DISPOSE),
+                &method)) {
+            return false;
+        }
+        if (mal_value_is_undefined(method)) {
+            if (!mal_disposable_stack_get_method(
+                    vm,
+                    value,
+                    mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_DISPOSE),
+                    &method)) {
+                return false;
+            }
+            if (!mal_value_is_undefined(method)) {
+                kind = MAL_DISPOSE_ASYNC_FROM_SYNC;
+            }
+        }
     }
-    if (!mal_value_is_callable(method)) {
+    if (mal_value_is_undefined(method)) {
         mal_vm_throw_error(
             vm,
             MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Symbol.dispose method is not callable"
+            "Object is not disposable"
         );
         return false;
     }
@@ -172,6 +225,36 @@ static MalValue mal_disposable_stack_adopt_closure(
         : completion.value;
 }
 
+static MalValue mal_disposable_stack_construct(
+    MalVm *vm,
+    MalValue new_target,
+    bool async
+) {
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            async
+                ? "Constructor AsyncDisposableStack requires 'new'"
+                : "Constructor DisposableStack requires 'new'"
+        );
+        return mal_value_new_undefined();
+    }
+
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm,
+            new_target,
+            async
+                ? MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_PROTOTYPE
+                : MAL_INTRINSIC_DISPOSABLE_STACK_PROTOTYPE,
+            &prototype)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_object(
+        &mal_disposable_stack_new(vm, prototype, async)->object);
+}
+
 static MalValue mal_builtin_disposable_stack_constructor(
     MalVm *vm,
     MalValue this_value,
@@ -184,25 +267,22 @@ static MalValue mal_builtin_disposable_stack_constructor(
     (void) args;
     (void) arg_count;
     (void) callee;
-    if (mal_value_is_undefined(new_target)) {
-        mal_vm_throw_error(
-            vm,
-            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Constructor DisposableStack requires 'new'"
-        );
-        return mal_value_new_undefined();
-    }
+    return mal_disposable_stack_construct(vm, new_target, false);
+}
 
-    MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(
-            vm,
-            new_target,
-            MAL_INTRINSIC_DISPOSABLE_STACK_PROTOTYPE,
-            &prototype)) {
-        return mal_value_new_undefined();
-    }
-    return mal_value_from_object(
-        &mal_disposable_stack_new(vm, prototype, false)->object);
+static MalValue mal_builtin_async_disposable_stack_constructor(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) callee;
+    return mal_disposable_stack_construct(vm, new_target, true);
 }
 
 static MalValue mal_builtin_disposable_stack_disposed(
@@ -219,6 +299,25 @@ static MalValue mal_builtin_disposable_stack_disposed(
     (void) callee;
     MalDisposableStackObject *stack =
         mal_disposable_stack_require(vm, this_value, false);
+    return stack == nullptr
+        ? mal_value_new_undefined()
+        : mal_value_new_boolean(stack->disposed);
+}
+
+static MalValue mal_builtin_async_disposable_stack_disposed(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, this_value, true);
     return stack == nullptr
         ? mal_value_new_undefined()
         : mal_value_new_boolean(stack->disposed);
@@ -251,6 +350,28 @@ static MalValue mal_builtin_disposable_stack_use(
 
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     return mal_disposable_stack_add_value(vm, stack, value, MAL_DISPOSE_SYNC)
+        ? value
+        : mal_value_new_undefined();
+}
+
+static MalValue mal_builtin_async_disposable_stack_use(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) new_target;
+    (void) callee;
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, this_value, true);
+    if (stack == nullptr || !mal_disposable_stack_require_pending(vm, stack)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    return mal_disposable_stack_add_value(vm, stack, value, MAL_DISPOSE_ASYNC)
         ? value
         : mal_value_new_undefined();
 }
@@ -302,6 +423,53 @@ static MalValue mal_builtin_disposable_stack_adopt(
     return value;
 }
 
+static MalValue mal_builtin_async_disposable_stack_adopt(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) new_target;
+    (void) callee;
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, this_value, true);
+    if (stack == nullptr || !mal_disposable_stack_require_pending(vm, stack)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue callback = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    if (!mal_value_is_callable(callback)) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "onDisposeAsync is not callable"
+        );
+        return mal_value_new_undefined();
+    }
+
+    MalValue slots[2] = {value, callback};
+    MalNativeFunctionObject *closure =
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, ""),
+            mal_disposable_stack_adopt_closure,
+            slots,
+            2
+        );
+    mal_disposable_stack_append(
+        vm,
+        stack,
+        mal_value_new_undefined(),
+        MAL_DISPOSE_ASYNC,
+        mal_value_from_native_function_object(closure)
+    );
+    return value;
+}
+
 static MalValue mal_builtin_disposable_stack_defer(
     MalVm *vm,
     MalValue this_value,
@@ -337,6 +505,41 @@ static MalValue mal_builtin_disposable_stack_defer(
     return mal_value_new_undefined();
 }
 
+static MalValue mal_builtin_async_disposable_stack_defer(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) new_target;
+    (void) callee;
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, this_value, true);
+    if (stack == nullptr || !mal_disposable_stack_require_pending(vm, stack)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue callback = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_callable(callback)) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "onDisposeAsync is not callable"
+        );
+        return mal_value_new_undefined();
+    }
+    mal_disposable_stack_append(
+        vm,
+        stack,
+        mal_value_new_undefined(),
+        MAL_DISPOSE_ASYNC,
+        callback
+    );
+    return mal_value_new_undefined();
+}
+
 static MalValue mal_builtin_disposable_stack_move(
     MalVm *vm,
     MalValue this_value,
@@ -359,6 +562,46 @@ static MalValue mal_builtin_disposable_stack_move(
         vm,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DISPOSABLE_STACK_PROTOTYPE]),
         false
+    );
+    moved->resources = stack->resources;
+    moved->resource_count = stack->resource_count;
+    moved->resource_capacity = stack->resource_capacity;
+    if (mal_gc_marking_active) {
+        for (usize i = 0; i < stack->resource_count; i++) {
+            mal_gc_write_barrier(stack->resources[i].resource_value);
+            mal_gc_write_barrier(stack->resources[i].dispose_method);
+        }
+    }
+    stack->resources = nullptr;
+    stack->resource_count = 0;
+    stack->resource_capacity = 0;
+    stack->disposed = true;
+    return mal_value_from_object(&moved->object);
+}
+
+static MalValue mal_builtin_async_disposable_stack_move(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, this_value, true);
+    if (stack == nullptr || !mal_disposable_stack_require_pending(vm, stack)) {
+        return mal_value_new_undefined();
+    }
+
+    MalDisposableStackObject *moved = mal_disposable_stack_new(
+        vm,
+        mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_PROTOTYPE]),
+        true
     );
     moved->resources = stack->resources;
     moved->resource_count = stack->resource_count;
@@ -440,6 +683,234 @@ static MalValue mal_disposable_stack_dispose_resources(
     return mal_value_new_undefined();
 }
 
+static void mal_disposable_stack_record_async_error(
+    MalVm *vm,
+    MalDisposableStackObject *stack,
+    MalValue error
+) {
+    MalValue roots[2] = {error, stack->async_error};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
+    if (stack->async_has_error) {
+        error = mal_builtin_new_suppressed_error(
+            vm, roots[0], roots[1]);
+    }
+    stack->async_error = error;
+    stack->async_has_error = true;
+    mal_gc_card(&stack->object.header, error);
+    mal_gc_unroot(&root_span);
+}
+
+static void mal_disposable_stack_finish_async(
+    MalVm *vm,
+    MalDisposableStackObject *stack
+) {
+    MalValue roots[3] = {
+        stack->async_result_promise,
+        stack->async_realm_anchor,
+        stack->async_error,
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
+
+    if (stack->resources != nullptr) {
+        gc_free_raw(&vm->heap, stack->resources);
+        stack->resources = nullptr;
+        stack->resource_capacity = 0;
+    }
+    mal_gc_write_barrier(stack->async_error);
+    mal_gc_write_barrier(stack->async_result_promise);
+    mal_gc_write_barrier(stack->async_realm_anchor);
+    stack->async_error = mal_value_new_undefined();
+    stack->async_result_promise = mal_value_new_undefined();
+    stack->async_realm_anchor = mal_value_new_undefined();
+
+    mal_promise_settle_direct(
+        vm,
+        roots[0],
+        roots[1],
+        stack->async_has_error,
+        stack->async_has_error ? roots[2] : mal_value_new_undefined());
+    mal_gc_unroot(&root_span);
+}
+
+static void mal_disposable_stack_schedule_async_resume(
+    MalVm *vm,
+    MalValue stack_value,
+    MalDisposableStackObject *stack,
+    bool is_reject,
+    MalValue argument
+) {
+    mal_vm_enqueue_dispose_resources_job(
+        vm,
+        stack_value,
+        stack->async_result_promise,
+        stack->async_realm_anchor,
+        is_reject,
+        argument);
+}
+
+static void mal_disposable_stack_advance_async(
+    MalVm *vm,
+    MalValue stack_value,
+    MalDisposableStackObject *stack
+) {
+    while (stack->resource_count > 0) {
+        MalDisposableResource *next =
+            &stack->resources[stack->resource_count - 1];
+        if (next->kind == MAL_DISPOSE_SYNC &&
+            stack->async_needs_await &&
+            !stack->async_has_awaited) {
+            stack->async_needs_await = false;
+            mal_disposable_stack_schedule_async_resume(
+                vm,
+                stack_value,
+                stack,
+                false,
+                mal_value_new_undefined());
+            return;
+        }
+
+        MalDisposableResource resource = *next;
+        stack->resource_count--;
+        mal_gc_write_barrier(resource.resource_value);
+        mal_gc_write_barrier(resource.dispose_method);
+
+        if (mal_value_is_undefined(resource.dispose_method)) {
+            stack->async_needs_await = true;
+            continue;
+        }
+
+        MalValue roots[3] = {
+            stack_value,
+            resource.resource_value,
+            resource.dispose_method,
+        };
+        MalRootSpan root_span;
+        mal_gc_root(&root_span, roots, countof(roots));
+        vm->completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
+        mal_gc_native_rooted_begin(vm);
+        MalCompletion completion = mal_vm_call_value(
+            vm, roots[2], roots[1], nullptr, 0);
+        mal_gc_native_rooted_end(vm);
+
+        if (completion.kind == MAL_COMPLETION_THROW) {
+            vm->completion = (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_undefined(),
+            };
+            if (resource.kind == MAL_DISPOSE_ASYNC_FROM_SYNC) {
+                roots[1] = completion.value;
+                mal_disposable_stack_schedule_async_resume(
+                    vm, stack_value, stack, true, roots[1]);
+                mal_gc_unroot(&root_span);
+                return;
+            }
+            mal_disposable_stack_record_async_error(
+                vm, stack, completion.value);
+            mal_gc_unroot(&root_span);
+            continue;
+        }
+
+        if (resource.kind == MAL_DISPOSE_SYNC) {
+            mal_gc_unroot(&root_span);
+            continue;
+        }
+        if (resource.kind == MAL_DISPOSE_ASYNC_FROM_SYNC) {
+            mal_disposable_stack_schedule_async_resume(
+                vm,
+                stack_value,
+                stack,
+                false,
+                mal_value_new_undefined());
+            mal_gc_unroot(&root_span);
+            return;
+        }
+
+        MalValue promise;
+        if (!mal_promise_resolve_value(vm, completion.value, &promise)) {
+            MalValue error = vm->completion.value;
+            vm->completion = (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_undefined(),
+            };
+            mal_disposable_stack_record_async_error(vm, stack, error);
+            mal_gc_unroot(&root_span);
+            continue;
+        }
+        roots[1] = promise;
+        mal_promise_perform_dispose_resources(
+            vm,
+            roots[1],
+            stack_value,
+            stack->async_result_promise,
+            stack->async_realm_anchor);
+        mal_gc_unroot(&root_span);
+        return;
+    }
+
+    if (stack->async_needs_await && !stack->async_has_awaited) {
+        stack->async_needs_await = false;
+        mal_disposable_stack_schedule_async_resume(
+            vm,
+            stack_value,
+            stack,
+            false,
+            mal_value_new_undefined());
+        return;
+    }
+    mal_disposable_stack_finish_async(vm, stack);
+}
+
+static MalValue mal_disposable_stack_dispose_resources_async(
+    MalVm *vm,
+    MalValue stack_value,
+    MalDisposableStackObject *stack,
+    bool has_error,
+    MalValue error,
+    MalValue result_promise,
+    MalValue realm_anchor
+) {
+    stack->disposed = true;
+    stack->async_has_error = has_error;
+    stack->async_needs_await = false;
+    stack->async_has_awaited = false;
+    stack->async_error = error;
+    stack->async_result_promise = result_promise;
+    stack->async_realm_anchor = realm_anchor;
+    mal_gc_card(&stack->object.header, error);
+    mal_gc_card(&stack->object.header, result_promise);
+    mal_gc_card(&stack->object.header, realm_anchor);
+    mal_disposable_stack_advance_async(vm, stack_value, stack);
+    return result_promise;
+}
+
+void mal_disposable_stack_async_resume(
+    MalVm *vm,
+    MalValue stack_value,
+    MalValue result_promise,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument
+) {
+    (void) result_promise;
+    (void) realm_anchor;
+    if (!mal_value_is_heap_type(
+            stack_value, MAL_HEAP_DISPOSABLE_STACK_OBJECT)) {
+        return;
+    }
+    MalDisposableStackObject *stack =
+        (MalDisposableStackObject *) mal_value_to_heap(stack_value);
+    stack->async_has_awaited = true;
+    if (is_reject) {
+        mal_disposable_stack_record_async_error(vm, stack, argument);
+    }
+    mal_disposable_stack_advance_async(vm, stack_value, stack);
+}
+
 static MalValue mal_builtin_disposable_stack_dispose(
     MalVm *vm,
     MalValue this_value,
@@ -457,6 +928,62 @@ static MalValue mal_builtin_disposable_stack_dispose(
     if (stack == nullptr || stack->disposed) return mal_value_new_undefined();
     return mal_disposable_stack_dispose_resources(
         vm, this_value, stack, false, mal_value_new_undefined());
+}
+
+static MalValue mal_builtin_async_disposable_stack_dispose_async(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+
+    MalValue result_promise;
+    MalValue direct_resolve;
+    MalValue realm_anchor;
+    mal_promise_new_direct_capability(
+        vm, &result_promise, &direct_resolve, &realm_anchor);
+    (void) direct_resolve;
+    MalValue roots[3] = {result_promise, this_value, realm_anchor};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, countof(roots));
+
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, roots[1], true);
+    if (stack == nullptr) {
+        roots[1] = vm->completion.value;
+        vm->completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
+        mal_promise_settle_direct(
+            vm, roots[0], roots[2], true, roots[1]);
+    } else if (stack->disposed) {
+        mal_promise_settle_direct(
+            vm,
+            roots[0],
+            roots[2],
+            false,
+            mal_value_new_undefined());
+    } else {
+        mal_disposable_stack_dispose_resources_async(
+            vm,
+            roots[1],
+            stack,
+            false,
+            mal_value_new_undefined(),
+            roots[0],
+            roots[2]);
+    }
+
+    result_promise = roots[0];
+    mal_gc_unroot(&root_span);
+    return result_promise;
 }
 
 static MalValue mal_builtin_new_dispose_capability(
@@ -636,5 +1163,91 @@ void mal_builtin_disposable_stack_install(MalVm *vm) {
         prototype,
         mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
         &tag
+    );
+
+    MalObject *async_prototype = mal_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
+    );
+    MalNativeFunctionObject *async_constructor =
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            function_prototype,
+            mal_intrinsic_ascii(vm, "AsyncDisposableStack"),
+            0,
+            mal_builtin_async_disposable_stack_constructor
+        );
+    mal_native_function_object_set_handles_new_target_prototype(async_constructor);
+    vm->intrinsics[MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_CONSTRUCTOR] =
+        mal_value_from_native_function_object(async_constructor);
+    vm->intrinsics[MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_PROTOTYPE] =
+        mal_value_from_object(async_prototype);
+
+    mal_intrinsic_define_data(
+        vm,
+        (MalObject *) async_constructor,
+        "prototype",
+        vm->intrinsics[MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_PROTOTYPE],
+        MAL_PROPERTY_NONE
+    );
+    mal_intrinsic_define_data(
+        vm,
+        async_prototype,
+        "constructor",
+        vm->intrinsics[MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
+    );
+    mal_intrinsic_define_getter(
+        vm,
+        async_prototype,
+        "disposed",
+        "get disposed",
+        mal_builtin_async_disposable_stack_disposed,
+        MAL_PROPERTY_CONFIGURABLE
+    );
+    MalValue dispose_async = mal_intrinsic_define_method(
+        vm,
+        async_prototype,
+        "disposeAsync",
+        mal_builtin_async_disposable_stack_dispose_async);
+    MalPropertyDesc async_dispose_symbol = mal_intrinsic_data_desc(
+        dispose_async, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(
+        async_prototype,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_DISPOSE),
+        &async_dispose_symbol
+    );
+    mal_intrinsic_define_method_n(
+        vm,
+        async_prototype,
+        "use",
+        1,
+        mal_builtin_async_disposable_stack_use);
+    mal_intrinsic_define_method_n(
+        vm,
+        async_prototype,
+        "adopt",
+        2,
+        mal_builtin_async_disposable_stack_adopt);
+    mal_intrinsic_define_method_n(
+        vm,
+        async_prototype,
+        "defer",
+        1,
+        mal_builtin_async_disposable_stack_defer);
+    mal_intrinsic_define_method(
+        vm,
+        async_prototype,
+        "move",
+        mal_builtin_async_disposable_stack_move);
+
+    MalPropertyDesc async_tag = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, "AsyncDisposableStack")),
+        MAL_PROPERTY_CONFIGURABLE
+    );
+    mal_object_define_own(
+        async_prototype,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
+        &async_tag
     );
 }

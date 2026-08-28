@@ -15,6 +15,7 @@ typedef enum MalJobKind {
     MAL_JOB_ASYNC_AWAIT,
     MAL_JOB_ASYNC_GENERATOR_RETURN,
     MAL_JOB_ASYNC_FROM_SYNC,
+    MAL_JOB_DISPOSE_RESOURCES,
 } MalJobKind;
 
 /**
@@ -144,6 +145,27 @@ void mal_vm_enqueue_async_from_sync_job_in_context(
     MalValue realm_anchor,
     bool done,
     bool close_on_rejection,
+    bool is_reject,
+    MalValue argument,
+    MalAsyncContext *context
+);
+#endif
+
+/** Append a typed DisposeResources continuation. */
+void mal_vm_enqueue_dispose_resources_job(
+    MalVm *vm,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument
+);
+#if MAL_NODE
+void mal_vm_enqueue_dispose_resources_job_in_context(
+    MalVm *vm,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor,
     bool is_reject,
     MalValue argument,
     MalAsyncContext *context

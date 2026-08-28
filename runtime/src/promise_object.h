@@ -116,6 +116,15 @@ void mal_promise_append_async_from_sync_reaction(
     bool close_on_rejection
 );
 
+/** Append a typed DisposeResources continuation. */
+void mal_promise_append_dispose_resources_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor
+);
+
 /**
  * FulfillPromise: settle to fulfilled with `value` and enqueue reaction jobs
  * for the fulfill list. A no-op when already settled.

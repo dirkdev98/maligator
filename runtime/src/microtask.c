@@ -5,6 +5,7 @@
 
 #include "async_context.h"
 #include "builtin_async_generator.h"
+#include "builtin_disposable_stack.h"
 #include "builtin_iterator.h"
 #include "builtin_promise.h"
 #include "gc.h"
@@ -158,7 +159,8 @@ static void mal_job_recycle(MalVm *vm, MalJob *job) {
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
         job->kind == MAL_JOB_ASYNC_AWAIT ||
         job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN ||
-        job->kind == MAL_JOB_ASYNC_FROM_SYNC) {
+        job->kind == MAL_JOB_ASYNC_FROM_SYNC ||
+        job->kind == MAL_JOB_DISPOSE_RESOURCES) {
         mal_gc_write_barrier(job->as.reaction.handler);
         mal_gc_write_barrier(job->as.reaction.cap_resolve);
         mal_gc_write_barrier(job->as.reaction.cap_reject);
@@ -257,6 +259,66 @@ void mal_vm_enqueue_async_from_sync_job(
 #endif
     );
 }
+
+static void mal_vm_enqueue_dispose_resources_job_with_context(
+    MalVm *vm,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument
+#if MAL_NODE
+    , MalAsyncContext *context
+#endif
+) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_DISPOSE_RESOURCES);
+#if MAL_NODE
+    job->async_context = context;
+#endif
+    job->as.reaction.handler = stack;
+    job->as.reaction.cap_resolve = result_promise;
+    job->as.reaction.cap_reject = realm_anchor;
+    job->as.reaction.argument = argument;
+    job->is_reject = is_reject;
+    mal_vm_enqueue(vm, job);
+}
+
+void mal_vm_enqueue_dispose_resources_job(
+    MalVm *vm,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument
+) {
+    mal_vm_enqueue_dispose_resources_job_with_context(
+        vm, stack, result_promise, realm_anchor, is_reject, argument
+#if MAL_NODE
+        , mal_async_context_capture(vm)
+#endif
+    );
+}
+
+#if MAL_NODE
+void mal_vm_enqueue_dispose_resources_job_in_context(
+    MalVm *vm,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument,
+    MalAsyncContext *context
+) {
+    mal_vm_enqueue_dispose_resources_job_with_context(
+        vm,
+        stack,
+        result_promise,
+        realm_anchor,
+        is_reject,
+        argument,
+        context);
+}
+#endif
 
 #if MAL_NODE
 void mal_vm_enqueue_async_from_sync_job_in_context(
@@ -615,6 +677,24 @@ static void mal_vm_run_async_from_sync_job(MalVm *vm, MalJob *job) {
 #endif
 }
 
+static void mal_vm_run_dispose_resources_job(MalVm *vm, MalJob *job) {
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(
+        vm, mal_vm_callee_realm(vm, job->as.reaction.cap_reject));
+#endif
+    mal_disposable_stack_async_resume(
+        vm,
+        job->as.reaction.handler,
+        job->as.reaction.cap_resolve,
+        job->as.reaction.cap_reject,
+        job->is_reject,
+        job->as.reaction.argument);
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+}
+
 /** PromiseResolveThenableJob: call then(thenable, resolve, reject), routing a throw to reject. */
 static void mal_vm_run_thenable_job(MalVm *vm, MalJob *job) {
     // Exact native adoption uses the otherwise-impossible non-callable resolve
@@ -709,6 +789,9 @@ void mal_vm_drain_microtasks(MalVm *vm) {
                 break;
             case MAL_JOB_ASYNC_FROM_SYNC:
                 mal_vm_run_async_from_sync_job(vm, job);
+                break;
+            case MAL_JOB_DISPOSE_RESOURCES:
+                mal_vm_run_dispose_resources_job(vm, job);
                 break;
         }
         mal_job_recycle(vm, job);

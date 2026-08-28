@@ -122,6 +122,15 @@ void mal_promise_perform_async_dispose(
     MalValue realm_anchor
 );
 
+/** Register the typed continuation used by DisposeResources. */
+void mal_promise_perform_dispose_resources(
+    MalVm *vm,
+    MalValue promise,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor
+);
+
 /**
  * PerformPromiseThen on a Promise value: register on_fulfilled / on_rejected
  * (callables, or undefined for the default pass-through/rethrow) against an

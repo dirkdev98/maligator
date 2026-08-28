@@ -643,6 +643,42 @@ void mal_promise_perform_async_dispose(
     }
 }
 
+void mal_promise_perform_dispose_resources(
+    MalVm *vm,
+    MalValue promise_value,
+    MalValue stack,
+    MalValue result_promise,
+    MalValue realm_anchor
+) {
+    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
+    promise->is_handled = true;
+
+    switch (promise->state) {
+        case MAL_PROMISE_PENDING:
+            mal_promise_append_dispose_resources_reaction(
+                vm, promise, stack, result_promise, realm_anchor);
+            break;
+        case MAL_PROMISE_FULFILLED:
+            mal_vm_enqueue_dispose_resources_job(
+                vm,
+                stack,
+                result_promise,
+                realm_anchor,
+                false,
+                promise->result);
+            break;
+        case MAL_PROMISE_REJECTED:
+            mal_vm_enqueue_dispose_resources_job(
+                vm,
+                stack,
+                result_promise,
+                realm_anchor,
+                true,
+                promise->result);
+            break;
+    }
+}
+
 /** SpeciesConstructor(O, %Promise%) for the result capability of then. */
 static MalValue mal_promise_species_constructor(MalVm *vm, MalValue object) {
     MalValue constructor;
