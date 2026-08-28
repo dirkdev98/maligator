@@ -15,6 +15,10 @@ void mal_builtin_error_install(MalVm *vm);
  */
 MalValue mal_builtin_new_aggregate_error(MalVm *vm, MalValue errors);
 
+/** Create the intrinsic SuppressedError used while folding disposal failures. */
+MalValue mal_builtin_new_suppressed_error(
+    MalVm *vm, MalValue error, MalValue suppressed);
+
 /**
  * True if `value` is an object carrying the [[ErrorData]] marker. Backs
  * Error.isError and Object.prototype.toString's "[object Error]" tag.

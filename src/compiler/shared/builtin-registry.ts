@@ -221,6 +221,7 @@ export const primordialGlobalBindings: ReadonlyArray<PrimordialGlobalBinding> = 
 	["EvalError", "MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR", "always"],
 	["AggregateError", "MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR", "always"],
 	["SuppressedError", "MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR", "always"],
+	["DisposableStack", "MAL_INTRINSIC_DISPOSABLE_STACK_CONSTRUCTOR", "always"],
 	["String", "MAL_INTRINSIC_STRING_CONSTRUCTOR", "always"],
 	["Number", "MAL_INTRINSIC_NUMBER_CONSTRUCTOR", "always"],
 	["Boolean", "MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR", "always"],

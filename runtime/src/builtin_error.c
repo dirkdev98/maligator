@@ -327,6 +327,20 @@ static MalValue mal_builtin_suppressed_error_constructor(
     return mal_value_from_object(error);
 }
 
+MalValue mal_builtin_new_suppressed_error(
+    MalVm *vm, MalValue error, MalValue suppressed
+) {
+    MalValue args[3] = {error, suppressed, mal_value_new_undefined()};
+    return mal_builtin_suppressed_error_constructor(
+        vm,
+        mal_value_new_undefined(),
+        args,
+        3,
+        mal_value_new_undefined(),
+        vm->intrinsics[MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR]
+    );
+}
+
 MalValue mal_builtin_new_aggregate_error(MalVm *vm, MalValue errors) {
     return mal_builtin_aggregate_error_make(vm, errors, mal_value_new_undefined(), mal_value_new_undefined());
 }

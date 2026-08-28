@@ -206,6 +206,12 @@ typedef enum MalHeapType : u8 {
      */
     MAL_HEAP_PROMISE_OBJECT,
     /**
+     * DisposableStack / AsyncDisposableStack instances and compiler-owned
+     * lexical disposal capabilities. Their resource records live in one traced
+     * LIFO vector. See builtin_disposable_stack.h.
+     */
+    MAL_HEAP_DISPOSABLE_STACK_OBJECT,
+    /**
      * Iterator Helper instances (map/filter/take/drop/flatMap results +
      * Iterator.from wrappers): MalIteratorHelperObject, carrying the lazy
      * transform state so next/return live on %IteratorHelperPrototype%.

@@ -13,6 +13,7 @@
 #include "builtin_console.h"
 #include "builtin_data_view.h"
 #include "builtin_date.h"
+#include "builtin_disposable_stack.h"
 #if MAL_TEMPORAL
 #include "builtin_temporal.h"
 #endif
@@ -667,6 +668,7 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_typed_array_install(vm);
     mal_builtin_data_view_install(vm);
     mal_builtin_error_install(vm);
+    mal_builtin_disposable_stack_install(vm);
 #if MAL_PROFILE && MAL_PERF_STATS
     vm->heap.profile_native_category = MAL_PROFILE_SITE_RUNTIME_STRING;
 #endif
@@ -713,6 +715,7 @@ void mal_intrinsics_init(MalVm *vm) {
         MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR,
         MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR,
         MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_DISPOSABLE_STACK_CONSTRUCTOR,
         MAL_INTRINSIC_STRING_CONSTRUCTOR,
         MAL_INTRINSIC_NUMBER_CONSTRUCTOR,
         MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR,
@@ -808,6 +811,7 @@ void mal_intrinsics_init(MalVm *vm) {
         MAL_INTRINSIC_SYMBOL_PROTOTYPE,
         MAL_INTRINSIC_BIGINT_PROTOTYPE,
         MAL_INTRINSIC_ARRAY_PROTOTYPE,
+        MAL_INTRINSIC_DISPOSABLE_STACK_PROTOTYPE,
         MAL_INTRINSIC_ITERATOR_PROTOTYPE,
         MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE,
         MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE,
@@ -1009,6 +1013,7 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "Intl", vm->intrinsics[MAL_INTRINSIC_INTL], flags);
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "SuppressedError", vm->intrinsics[MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "DisposableStack", vm->intrinsics[MAL_INTRINSIC_DISPOSABLE_STACK_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Iterator", vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "AsyncIterator", vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR], flags);
 #if MAL_REALMS
