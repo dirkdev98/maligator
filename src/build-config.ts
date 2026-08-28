@@ -2,18 +2,20 @@ import { hash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
+import { BuildConfigError } from "./build-config-error.ts";
 import { INTL_SERVICE_FEATURES, normalizeNativeFeatures } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
 import { defineBuild as defineBuildIdentity } from "./build.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { parseModule } from "./compiler/frontend/parser.ts";
-import type {
-	DisallowedEvalUsage,
-	DisallowedRegexpUsage,
-} from "./compiler/frontend/semantic-analysis.ts";
 import type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
 
 export type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
+export { BuildConfigError } from "./build-config-error.ts";
+export {
+	assertEvalPolicy,
+	assertRegexpPolicy,
+} from "./compiler/frontend/build-policy.ts";
 
 /**
  * The `maligator.build.ts` build configuration (GitHub issue #2). The file is
@@ -45,17 +47,6 @@ export interface ResolvedBuildConfig {
 	};
 	host: { scheduler: "single" | "multiprocessing" };
 	surface: { webPlatform: boolean; node: boolean; maligator: boolean };
-}
-
-/** Thrown for a malformed / mistyped `maligator.build.ts`, with a clear reason. */
-export class BuildConfigError extends Error {
-	constructor(message: string) {
-		super(message);
-		Object.defineProperty(this, "name", {
-			value: "BuildConfigError",
-			configurable: true,
-		});
-	}
 }
 
 /**
@@ -310,57 +301,6 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 			maligator: config.surface?.maligator ?? true,
 		},
 	};
-}
-
-/**
- * Enforce the opt-in `engine.eval: "compile-check"` source audit. Runtime-disabled
- * `false` builds deliberately compile dynamic-code call sites and let the runtime
- * gate throw when execution reaches one.
- */
-export function assertEvalPolicy(
-	config: ResolvedBuildConfig,
-	usages: Array<DisallowedEvalUsage>,
-): void {
-	if (config.engine.eval !== "compile-check" || usages.length === 0) {
-		return;
-	}
-	const sites = usages
-		.map((u) => {
-			const call = u.kind === "eval" ? "eval(...)" : "new Function(...)";
-			return `  ${call} at ${u.path}:${u.line}:${u.column}`;
-		})
-		.join("\n");
-	throw new BuildConfigError(
-		`dynamic code is rejected by your build config (engine.eval is "compile-check"):\n${sites}\n` +
-			`Use { engine: { eval: false } } to defer these sites to the runtime EvalError gate, ` +
-			`or { engine: { eval: true } } to enable eval / new Function.`,
-	);
-}
-
-/**
- * The compile-time half of `engine.regexp: false` enforcement (the runtime gate —
- * the RegExp intrinsic simply not being installed — is the other). Given the
- * statically-detected RegExp uses (from `collectDisallowedRegexpUsage`), throw a
- * {@link BuildConfigError} pointing at each site and the config knob. A no-op when
- * regexp is enabled (the default) or nothing was found.
- */
-export function assertRegexpPolicy(
-	config: ResolvedBuildConfig,
-	usages: Array<DisallowedRegexpUsage>,
-): void {
-	if (config.engine.regexp || usages.length === 0) {
-		return;
-	}
-	const sites = usages
-		.map((u) => {
-			const what = u.kind === "literal" ? "regex literal /…/" : "new RegExp(...)";
-			return `  ${what} at ${u.path}:${u.line}:${u.column}`;
-		})
-		.join("\n");
-	throw new BuildConfigError(
-		`RegExp is disabled by your build config (engine.regexp is false):\n${sites}\n` +
-			`Remove { engine: { regexp: false } } from maligator.build.ts to use RegExp (it is on by default).`,
-	);
 }
 
 const DEFAULT_CONFIG_NAME = "maligator.build.ts";

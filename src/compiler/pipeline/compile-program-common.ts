@@ -1,4 +1,4 @@
-import { assertEvalPolicy, assertRegexpPolicy } from "../../build-config.ts";
+import { assertEvalPolicy, assertRegexpPolicy } from "../frontend/build-policy.ts";
 import { certifyProgramClosure } from "../frontend/certify-closure.ts";
 import type { BuildModuleGraphOptions } from "../frontend/module-graph.ts";
 import { buildModuleGraph } from "../frontend/module-graph.ts";
