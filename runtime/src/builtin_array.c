@@ -2427,53 +2427,51 @@ static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const 
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
-    if (dense != nullptr && dense->dense_count == length &&
+    if (dense != nullptr && length <= (f64) UINT32_MAX &&
+        dense->dense_count == (u32) length &&
         mal_builtin_array_dense_reverse_compatible(dense)) {
         mal_array_object_dense_reverse(dense);
         return this_value;
     }
 
-    for (u32 lower = 0; length > 1 && lower < length - 1 - lower; lower++) {
-        u32 upper = length - 1 - lower;
+    for (f64 lower = 0; length > 1 && lower < length - 1 - lower; lower++) {
+        f64 upper = length - 1 - lower;
 
         MalValue lower_value;
-        bool lower_exists = mal_builtin_array_try_get(vm, this_value, lower, &lower_value);
+        bool lower_exists = mal_builtin_array_try_get_wide(vm, this_value, lower, &lower_value);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_value_new_undefined();
         }
         MalValue upper_value;
-        bool upper_exists = mal_builtin_array_try_get(vm, this_value, upper, &upper_value);
+        bool upper_exists = mal_builtin_array_try_get_wide(vm, this_value, upper, &upper_value);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_value_new_undefined();
         }
 
-        MalKey lower_key = mal_key_index(lower);
-        MalKey upper_key = mal_key_index(upper);
-
         // Lower slot receives the upper value (or is deleted when upper is a hole).
         if (upper_exists) {
-            if (!mal_builtin_array_set_or_throw(vm, this_value, lower_key, upper_value)) {
+            if (!mal_builtin_array_set_index_or_throw(vm, this_value, lower, upper_value)) {
                 return mal_value_new_undefined();
             }
         } else if (lower_exists) {
-            if (!mal_builtin_array_delete_or_throw(vm, this_value, lower_key)) {
+            if (!mal_builtin_array_delete_index_or_throw(vm, this_value, lower)) {
                 return mal_value_new_undefined();
             }
         }
 
         // Upper slot receives the lower value (or is deleted when lower is a hole).
         if (lower_exists) {
-            if (!mal_builtin_array_set_or_throw(vm, this_value, upper_key, lower_value)) {
+            if (!mal_builtin_array_set_index_or_throw(vm, this_value, upper, lower_value)) {
                 return mal_value_new_undefined();
             }
         } else if (upper_exists) {
-            if (!mal_builtin_array_delete_or_throw(vm, this_value, upper_key)) {
+            if (!mal_builtin_array_delete_index_or_throw(vm, this_value, upper)) {
                 return mal_value_new_undefined();
             }
         }

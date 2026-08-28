@@ -226,6 +226,20 @@ async function main() {
 		"reverse preserves holes",
 		reversed.length === 4 && reversed[0] === 4 && !(2 in reversed) && reversed[3] === 1,
 	);
+	class StopWideReverse extends Error {}
+	let wideReverseGets = 0;
+	const wideReverse = {
+		get 9007199254740990() {
+			wideReverseGets++;
+			throw new StopWideReverse();
+		},
+		length: 2 ** 53 + 2,
+	};
+	check(
+		"reverse observes ToLength indices above uint32",
+		throws(StopWideReverse, () => Array.prototype.reverse.call(wideReverse)) &&
+			wideReverseGets === 1,
+	);
 	const filled = [1, , 3, 4];
 	filled.fill(7, 1, 3);
 	check("fill", filled.join() === "1,7,7,4");
