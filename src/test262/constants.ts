@@ -6,15 +6,8 @@ export const TEST262_METADATA = {
 	cacheFile: ".cache/test262-cache.json",
 	outputFile: "scripts/test262.json",
 
-	/**
-	 * Per-test binary run timeout. Loops are compilable now, so runaway tests
-	 * are a real possibility. Keep enough scheduler headroom for Unicode-scale
-	 * string construction and large dynamic-function stress tests while retaining
-	 * a bounded cost for a hung worker. The unique-source object-literal Function
-	 * stress takes about 11.3 seconds on the calibrated 11-core host, so keep real
-	 * scheduler headroom above that measured pass.
-	 */
-	runTimeoutMs: 15_000,
+	// Four full-suite workers can double the wall time of valid native stress tests.
+	runTimeoutMs: 30_000,
 	// Full-suite batches can exceed one minute on the largest generated C units;
 	// timing those out is counterproductive because the single-test fallback then
 	// recompiles hundreds of files while competing with the remaining workers.
