@@ -8,7 +8,13 @@ import { defineConfig } from "vitest/config";
 // Instrumented binaries are much heavier and can otherwise starve each other's
 // fixed-startup tests and child-process deadlines under the full sanitizer lane.
 const sanitizerBuild = process.env.MAL_ASAN === "1" || process.env.MAL_UBSAN === "1";
-const nativeForks = sanitizerBuild ? 1 : Math.max(2, Math.floor(os.cpus().length / 2));
+const configuredSanitizerWorkers = Number(process.env.MAL_SANITIZER_WORKERS ?? "1");
+if (!Number.isInteger(configuredSanitizerWorkers) || configuredSanitizerWorkers < 1) {
+	throw new Error("MAL_SANITIZER_WORKERS must be a positive integer");
+}
+const nativeForks = sanitizerBuild
+	? Math.min(configuredSanitizerWorkers, os.availableParallelism())
+	: Math.max(2, Math.floor(os.cpus().length / 2));
 const fullOnlyUnitTests = readFileSync(
 	new URL("./tests/test-suite-unit-full-only.txt", import.meta.url),
 	"utf8",

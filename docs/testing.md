@@ -117,15 +117,19 @@ stress only to representative curated selections. Manifest validation rejects
 overlap, unknown paths, omissions from the curated WPT set, and duplicate stage
 invocations.
 
-Native coverage is also deliberately non-Cartesian. Tests whose acceptance boundary
-depends on ordinary `-O2 -g0` code generation, optimization, linking, profiling, or
-an exact build configuration are registered in
-`tests/test-suite-native-normal.txt`. Every other authored native test is
-sanitizer-primary by default: UBSan on macOS and ASan+UBSan elsewhere. Smoke, check,
-and full partition their selections between those dimensions, so the full gate does
-not first run every native test normally and then repeat the same files under a
-sanitizer. A test belongs in both dimensions only through an explicit focused command
-for a mode-sensitive regression.
+Native coverage is also deliberately non-Cartesian. The explicit
+`tests/test-suite-native-sanitizer.txt` manifest owns files with elevated C/Rust UB
+risk: allocator and GC lifetime, suspended or re-entrant work, untrusted byte and
+buffer boundaries, interpreter memory access, and native FFI services. Those files
+run under UBSan on macOS and ASan+UBSan elsewhere; every other authored native test
+runs once in the ordinary native dimension. The sanitizer runner uses two Vitest
+workers by default while bounding nested native compilation to half the available
+CPUs. Files whose dominant check already applies maximal GC stress and verification
+remain in the normal dimension instead of multiplying both expensive instruments.
+Smoke, check, and full retain a complete disjoint partition, so semantic API
+breadth is not recompiled under a sanitizer without an ownership-risk reason. A test
+belongs in both dimensions only through an explicit focused command for a
+mode-sensitive regression.
 
 ## Policies
 

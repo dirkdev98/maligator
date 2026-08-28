@@ -1,0 +1,69 @@
+# Native files whose exercised ownership boundary has elevated C/Rust UB risk.
+# Every other authored native file runs once in the ordinary native dimension.
+# Keep this list risk-based: sanitizer cost is justified for allocator/GC lifetime,
+# untrusted byte/buffer boundaries, async native-resource lifetime, interpreter
+# memory access, and C/Rust FFI surfaces. Semantic API breadth belongs in normal.
+# Do not combine sanitizer instrumentation with maximal collect-every-safepoint
+# workloads when the owning test already forces collection at the vulnerable edge.
+
+# Allocator, GC roots, suspended work, and re-entrant lifetime.
+tests/native/allocation-failure.test.ts
+tests/native/array-destructuring-close.test.ts
+tests/native/async-generator-direct-promise.test.ts
+tests/native/async-iterator-close.test.ts
+tests/native/coroutine-pool.test.ts
+tests/native/eval-gc-runtime-compilation-p0.test.ts
+tests/native/function-reflect-builtins.test.ts
+tests/native/gc.test.ts
+tests/native/node-async-hooks.test.ts
+tests/native/node-scheduling.test.ts
+tests/native/promise-pool.test.ts
+tests/native/readable-stream.test.ts
+tests/native/rooted-collections.test.ts
+tests/native/runtime-mechanics.test.ts
+tests/native/writable-stream.test.ts
+
+# Untrusted wire, parser, bulk-allocation, numeric, and buffer boundaries.
+tests/native/bigint128-safety.test.ts
+tests/native/fetch-body.test.ts
+tests/native/fetch-hardening.test.ts
+tests/native/float16.test.ts
+tests/native/global-var-batch.test.ts
+tests/native/json-parse-source.test.ts
+tests/native/json-stringify-scratch.test.ts
+tests/native/literal-template.test.ts
+tests/native/node-buffer.test.ts
+tests/native/node-http-limits.test.ts
+tests/native/node-http-request.test.ts
+tests/native/node-string-decoder.test.ts
+tests/native/numeric-abstract-ops.test.ts
+tests/native/private-batch.test.ts
+tests/native/string-limit-p0.test.ts
+tests/native/test-runner-regressions.test.ts
+tests/native/text-decoder-streaming.test.ts
+tests/native/text-decoder-utf16.test.ts
+tests/native/utf-codec.test.ts
+tests/native/webidl-sequence-init.test.ts
+tests/native/wire-loader.test.ts
+
+# Interpreter tables/caches and native or Rust-backed service boundaries.
+tests/native/crypto-drivers.test.ts
+tests/native/crypto-fail-closed.test.ts
+tests/native/interpreter-dense-array.test.ts
+tests/native/interpreter-dispatch-state.test.ts
+tests/native/interpreter-property-ic.test.ts
+tests/native/node-crypto-async.test.ts
+tests/native/node-crypto-differential.test.ts
+tests/native/node-crypto-start-failure.test.ts
+tests/native/node-crypto.test.ts
+tests/native/node-fs.test.ts
+tests/native/node-net.test.ts
+tests/native/node-sqlite.test.ts
+tests/native/node-stream.test.ts
+tests/native/node-tls.test.ts
+tests/native/node-zlib.test.ts
+tests/native/postgres-auth.test.ts
+tests/native/postgres-load.test.ts
+tests/native/postgres-types-large-live.test.ts
+tests/native/temporal.test.ts
+tests/native/url.test.ts

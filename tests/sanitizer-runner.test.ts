@@ -18,18 +18,32 @@ describe("sanitizer runner", () => {
 	});
 
 	it("uses UBSan on Darwin where ASan deadlocks during loader initialization", () => {
-		expect(sanitizerEnvironment("darwin")).toEqual({
+		expect(sanitizerEnvironment("darwin", {}, 8)).toEqual({
+			MAL_BUILD_JOBS: "4",
+			MAL_SANITIZER_WORKERS: "2",
 			MAL_UBSAN: "1",
 			UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1",
 		});
 	});
 
 	it("uses the combined ASan and UBSan compiler mode elsewhere", () => {
-		expect(sanitizerEnvironment("linux")).toEqual({
+		expect(sanitizerEnvironment("linux", {}, 8)).toEqual({
 			MAL_ASAN: "1",
+			MAL_BUILD_JOBS: "4",
+			MAL_SANITIZER_WORKERS: "2",
 			ASAN_OPTIONS: "abort_on_error=1:detect_leaks=1:halt_on_error=1",
 			UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1",
 		});
+	});
+
+	it("keeps explicit sanitizer and nested build worker bounds", () => {
+		expect(
+			sanitizerEnvironment(
+				"darwin",
+				{ MAL_BUILD_JOBS: "3", MAL_SANITIZER_WORKERS: "4" },
+				8,
+			),
+		).toMatchObject({ MAL_BUILD_JOBS: "3", MAL_SANITIZER_WORKERS: "4" });
 	});
 
 	it("passes an explicitly requested gate telemetry directory to Vitest", () => {

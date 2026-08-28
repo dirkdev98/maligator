@@ -13,6 +13,13 @@ function runSuite(...args: Array<string>): string {
 	});
 }
 
+function stageInvocation(output: string, stage: string): string {
+	const lines = output.split("\n");
+	const index = lines.findIndex((line) => line === `${stage}:`);
+	if (index < 0) throw new Error(`missing stage ${stage}`);
+	return lines[index + 1] ?? "";
+}
+
 describe("test suite planner", () => {
 	it("validates and lists every cumulative tier without executing it", () => {
 		const smoke = runSuite("smoke", "--list");
@@ -56,6 +63,21 @@ describe("test suite planner", () => {
 		expect(full).toContain("full: WPT focused GC verification");
 		expect(full).toContain("full: remaining: native normal");
 		expect(full).toContain("full: remaining: native sanitizer-primary");
+		expect(stageInvocation(full, "full: remaining: native normal")).toContain(
+			"tests/native/shadow-realm.test.ts",
+		);
+		expect(stageInvocation(full, "full: remaining: native normal")).toContain(
+			"tests/native/intl-features.test.ts",
+		);
+		expect(
+			stageInvocation(full, "full: remaining: native sanitizer-primary"),
+		).not.toContain("tests/native/shadow-realm.test.ts");
+		expect(stageInvocation(full, "full: remaining: native sanitizer-primary")).toContain(
+			"tests/native/allocation-failure.test.ts",
+		);
+		expect(stageInvocation(full, "full: remaining: native sanitizer-primary")).toContain(
+			"tests/native/async-generator-direct-promise.test.ts",
+		);
 		expect(full).not.toContain("full: sanitizer suite");
 		expect(full).not.toContain("full: Test262 interpreted");
 		expect(full).not.toContain("full: WPT interpreted");

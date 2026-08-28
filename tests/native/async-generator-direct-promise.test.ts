@@ -7,6 +7,13 @@ import { buildNativeBinary, STRESS_ENV } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-async-generator-direct-promise-"));
 const expected = "async-generator-direct-promise PASS";
+// The fixture explicitly collects twice while all 65 requests are pending.
+// Periodic stress still moves collections across surrounding safepoints without
+// multiplying the same root proof by every Promise/ShadowRealm safepoint.
+const PENDING_REQUEST_STRESS_ENV = {
+	...STRESS_ENV,
+	MAL_GC_STRESS: "16",
+};
 
 function run(binary: string, env: NodeJS.ProcessEnv = {}, timeout = 120_000): string {
 	const result = spawnSync(binary, [], {
@@ -87,10 +94,9 @@ describe("direct async-generator request Promises", () => {
 	] as const)(
 		"retains pending %s requests under GC stress",
 		(_name, binary) => {
-			// The interpreted verifier takes about 160s on current arm64 hosts.
-			run(binary(), STRESS_ENV, 240_000);
+			run(binary(), PENDING_REQUEST_STRESS_ENV, 120_000);
 		},
-		250_000,
+		130_000,
 	);
 
 	it("retains pending requests under concurrent GC", () => {

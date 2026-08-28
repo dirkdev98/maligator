@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { CommandProgress } from "../src/command-progress.ts";
 import { TEST_TELEMETRY_ENV } from "../src/test-telemetry.ts";
@@ -11,11 +12,19 @@ import { cleanTestEnvironment } from "./test-environment.ts";
 export function sanitizerEnvironment(
 	platform: NodeJS.Platform,
 	environment: NodeJS.ProcessEnv = process.env,
+	availableParallelism = os.availableParallelism(),
 ): NodeJS.ProcessEnv {
 	const undefinedBehavior = "halt_on_error=1:print_stacktrace=1";
 	const telemetry = environment[TEST_TELEMETRY_ENV];
+	const workers =
+		environment.MAL_SANITIZER_WORKERS ?? String(Math.min(2, availableParallelism));
+	const buildJobs =
+		environment.MAL_BUILD_JOBS ??
+		String(Math.max(1, Math.floor(availableParallelism / 2)));
 	const shared = {
 		...(telemetry === undefined ? {} : { [TEST_TELEMETRY_ENV]: telemetry }),
+		MAL_BUILD_JOBS: buildJobs,
+		MAL_SANITIZER_WORKERS: workers,
 	};
 	return platform === "darwin"
 		? { ...shared, MAL_UBSAN: "1", UBSAN_OPTIONS: undefinedBehavior }

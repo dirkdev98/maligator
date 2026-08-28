@@ -278,7 +278,7 @@ const fullOnlyUnit = readManifest("tests/test-suite-unit-full-only.txt");
 const unitSmoke = readManifest("tests/test-suite-unit-smoke.txt");
 const nativeSmoke = readManifest("tests/test-suite-native-smoke.txt");
 const nativeCheck = readManifest("tests/test-suite-native-check.txt");
-const nativeNormal = readManifest("tests/test-suite-native-normal.txt");
+const nativeSanitizer = readManifest("tests/test-suite-native-sanitizer.txt");
 const test262Smoke = readManifest("tests/test-suite-test262-smoke.txt");
 const test262Check = readManifest("tests/test-suite-test262-check.txt");
 const test262Gc = readManifest("tests/test-suite-test262-gc.txt");
@@ -325,13 +325,13 @@ for (const entry of reservedNative) {
 }
 const nativeFull = allNative.filter((entry) => !reservedNative.has(entry));
 const runnableNative = allNative.filter((entry) => entry !== leakNative);
-for (const entry of nativeNormal) {
+for (const entry of nativeSanitizer) {
 	if (!runnableNative.includes(entry)) {
-		throw new Error(`unknown normal native test: ${entry}`);
+		throw new Error(`unknown sanitizer native test: ${entry}`);
 	}
 }
-const nativeNormalSet = new Set(nativeNormal);
-const nativeSanitizer = runnableNative.filter((entry) => !nativeNormalSet.has(entry));
+const nativeSanitizerSet = new Set(nativeSanitizer);
+const nativeNormal = runnableNative.filter((entry) => !nativeSanitizerSet.has(entry));
 assertCompleteSelection("native normal/sanitizer dimensions", runnableNative, [
 	...nativeNormal,
 	...nativeSanitizer,
@@ -340,8 +340,8 @@ const runnerPolicy = ["--policy", policy];
 const vitestPolicy = policy === "bail" ? ["--bail=1"] : [];
 
 function nativeDimensionCommands(label: string, entries: Array<string>): Array<Command> {
-	const normal = entries.filter((entry) => nativeNormalSet.has(entry));
-	const sanitizer = entries.filter((entry) => !nativeNormalSet.has(entry));
+	const normal = entries.filter((entry) => !nativeSanitizerSet.has(entry));
+	const sanitizer = entries.filter((entry) => nativeSanitizerSet.has(entry));
 	return [
 		...(normal.length === 0
 			? []
