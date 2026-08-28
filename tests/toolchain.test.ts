@@ -762,6 +762,10 @@ exit 7
 		};
 		const key = runtimeArtifactKey(base);
 		expect(runtimeArtifactKey({ ...base, sourceHash: "source-b" })).not.toBe(key);
+		expect(runtimeArtifactKey({ ...base, compilerWireDigest: "wire-a" })).not.toBe(key);
+		expect(runtimeArtifactKey({ ...base, compilerNativeDigest: "native-a" })).not.toBe(
+			key,
+		);
 		expect(
 			runtimeArtifactKey({
 				...base,

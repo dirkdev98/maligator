@@ -144,6 +144,7 @@ globalThis.__compile = function __compile(
 		// conflicts are encoded in directEvalContext.
 		const options = {
 			completionValue: true,
+			optimization: "development" as const,
 			direct,
 			callerStrict,
 			inParamExpr,

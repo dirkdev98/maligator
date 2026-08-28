@@ -6,10 +6,11 @@ import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
 /**
  * Self-host validation (eval Phase 3). maligator compiles its own trimmed
  * compiler cone (compileSourceToBuffer + meriyah, type-stripped + bundled) to a
- * native binary; that binary, given a source string, must produce a
- * byte-identical wire buffer to the Node-hosted compiler. Compared via length +
- * Adler-32 + endpoint bytes (content-sensitive). Slow: it AOT-compiles the whole
- * compiler (~600+ functions), so this is a milestone gate, not a unit test.
+ * native binary; that binary, given a source string and the runtime-eval
+ * optimization profile, must produce the Node-hosted compiler's byte-identical
+ * wire buffer. Compared via length + Adler-32 + endpoint bytes
+ * (content-sensitive). Slow: it AOT-compiles the whole compiler (~600+
+ * functions), so this is a milestone gate, not a unit test.
  */
 
 const SRC =
@@ -26,7 +27,7 @@ function digest(buf: Uint8Array | Array<number>): string {
 }
 
 // Reference: the Node-hosted compiler.
-const reference = digest(compileSourceToBuffer(SRC));
+const reference = digest(compileSourceToBuffer(SRC, { optimization: "development" }));
 
 // Self-hosted: an entry that compiles SRC and prints the same digest, built by
 // maligator (which strips + bundles the compiler cone) and run as a binary.
@@ -39,7 +40,7 @@ try {
 	writeFileSync(
 		entry,
 		`import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
-const buf = compileSourceToBuffer(${JSON.stringify(SRC)});
+const buf = compileSourceToBuffer(${JSON.stringify(SRC)}, { optimization: "development" });
 let a = 1, b = 0;
 for (let i = 0; i < buf.length; i++) { a = (a + buf[i]) % 65521; b = (b + a) % 65521; }
 console.log(buf.length + " " + a + " " + b + " " + buf[0] + " " + buf[buf.length - 1]);

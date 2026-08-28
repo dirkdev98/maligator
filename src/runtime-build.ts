@@ -34,7 +34,7 @@ import type { RustArtifacts } from "./rust-build.ts";
 import { toolArguments } from "./toolchain.ts";
 
 const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 2, "cc");
-const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 1, "ar");
+const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 3, "ar");
 
 function runtimeSourceHash(
 	runtimeDirectory: string,
@@ -169,6 +169,9 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 			compilerNativeDigest = compiler.nativeDigest;
 			compilerNativeSources = compiler.nativeSourcePaths;
 		}
+		if ((compilerNativeDigest === undefined) !== (compilerNativeSources.length === 0)) {
+			throw new Error("native compiler manifest is missing its source set or digest");
+		}
 	}
 	const flags = [
 		...runtimeCcFlags(
@@ -297,7 +300,7 @@ function runtimeSources(
 		sources.push({
 			name: `compiler-native-${String(index).padStart(4, "0")}.c`,
 			path: compilerSource,
-			layer: "runtime",
+			layer: "engine",
 			layerDirectory: sourceRoot,
 			logicalPath: path.posix.join(
 				"<eval-compiler>",

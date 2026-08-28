@@ -43,6 +43,14 @@ describe("compileSourceToBuffer", () => {
 		);
 	});
 
+	it("forwards the bounded development optimization profile", () => {
+		const source = "function add(a, b) { return a + b; } add(20, 22);";
+		const bounded = compileSourceToBuffer(source, { optimization: "development" });
+		const full = compileSourceToBuffer(source, { optimization: "full" });
+		expect(Array.from(bounded)).not.toEqual(Array.from(full));
+		expect(deserializeRuntimeImage(bounded).functions.length).toBeGreaterThan(1);
+	});
+
 	it("canonicalizes parsed empty statements before semantic lowering", () => {
 		const empty = compileSourceToBuffer("", { completionValue: true });
 		expect(

@@ -12,9 +12,13 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	compilerEntrypointSourceFiles,
+	ensureCompilerArtifacts,
 	ensureCompilerWire,
 } from "../src/compiler-bake.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 
 /**
  * The stripper module is keyed by name, not by import: it erases every compiler
@@ -200,6 +204,55 @@ describe("compiler wire provisioning", () => {
 
 		expect(fromFirstPath).toBe(fromBytes);
 		expect(fromSecondPath).toBe(fromBytes);
+	});
+
+	it("publishes and repairs a native companion without rebaking the wire separately", () => {
+		const fixture = compilerFixture();
+		const cacheRoot = path.join(fixture.root, "wire-cache");
+		const nativeHostSource = path.join(
+			fixture.sourceDirectory,
+			"compiler",
+			"native-host.ts",
+		);
+		writeFileSync(nativeHostSource, "export const nativeHost = 1;\n");
+		const source = "function add(a, b) { return a + b; } add(20, 22);";
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"native-compiler-fixture.js",
+			parseScript(source, { strict: false }),
+		);
+		const program = compileSemanticProgramToProgramImage(semantic);
+		let programBakes = 0;
+		const input = () => ({
+			kind: "source" as const,
+			sourceDirectory: fixture.sourceDirectory,
+			entrypoint: fixture.entrypoint,
+			sourceFiles: [fixture.entrypoint, fixture.stripper],
+			cacheRoot,
+			bake: () => {
+				throw new Error("wire-only bake should not run");
+			},
+			bakeProgram: () => {
+				programBakes++;
+				return program;
+			},
+		});
+
+		const first = ensureCompilerArtifacts(input());
+		expect(first.nativeSourcePaths.length).toBeGreaterThan(1);
+		expect(programBakes).toBe(1);
+		expect(ensureCompilerArtifacts(input())).toEqual(first);
+		expect(programBakes).toBe(1);
+
+		writeFileSync(first.nativeSourcePaths[1]!, "corrupt\n");
+		const repaired = ensureCompilerArtifacts(input());
+		expect(repaired.wirePath).toBe(first.wirePath);
+		expect(readFileSync(repaired.nativeSourcePaths[1]!, "utf-8")).not.toBe("corrupt\n");
+		expect(programBakes).toBe(2);
+
+		writeFileSync(nativeHostSource, "export const nativeHost = 2;\n");
+		expect(ensureCompilerArtifacts(input()).wirePath).toBe(first.wirePath);
+		expect(programBakes).toBe(3);
 	});
 
 	it("replaces empty hits atomically and rejects empty wires", () => {

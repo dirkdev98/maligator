@@ -111,6 +111,7 @@ function isLexicallyEmptyScript(source: string): boolean {
 export interface CompileSourceOptions {
 	virtualPath?: string;
 	debugInfo?: boolean;
+	optimization?: "development" | "full";
 	completionValue?: boolean;
 	direct?: boolean;
 	/** Direct eval inherits strictness from its containing caller. */
@@ -190,6 +191,7 @@ export function compilePreparedSourceToBuffer(
 	options: CompileSourceOptions = {},
 ): Uint8Array {
 	const runtime = compileSemanticProgramToRuntimeImage(prepared.semantic, {
+		optimization: options.optimization,
 		semanticLowering: {
 			evalCompletion: options.completionValue,
 			evalDirect: options.direct,
