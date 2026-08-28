@@ -6,6 +6,7 @@
 #include "array_buffer_object.h"
 #include "builtin_promise.h"
 #include "builtin_eval.h"
+#include "builtin_regexp.h"
 #include "compiler_wire.h"
 #include "function_object.h"
 #include "heap_string.h"
@@ -21,6 +22,51 @@
 // lift only their own suppression once those roots are installed. The baked
 // compiler's `__compile` closure and eval'd functions that outlive a call remain
 // owned by vm->compiler_fn (a traced root) and vm->loaded_images.
+
+// Exact no-flags literals avoid one permanent runtime image per dynamic pattern;
+// comments, embedded delimiters, flags, and surrounding syntax fall back.
+static bool eval_try_regexp_literal(MalVm *vm, MalValue source, MalValue *result) {
+#if !MAL_REGEXP
+    (void) vm;
+    (void) source;
+    (void) result;
+    return false;
+#else
+    MalString *text = mal_value_to_string(source);
+    usize length = mal_string_length(text);
+    if (length < 3) {
+        return false;
+    }
+    const c16 *units = mal_string_code_units(text);
+    if (units[0] != '/' || units[length - 1] != '/' ||
+        units[1] == '/' || units[1] == '*') {
+        return false;
+    }
+    bool escaped = false;
+    for (usize index = 1; index + 1 < length; index++) {
+        c16 unit = units[index];
+        if (unit == '\n' || unit == '\r' || unit == 0x2028 || unit == 0x2029 ||
+            (unit == '/' && !escaped)) {
+            return false;
+        }
+        escaped = unit == '\\' && !escaped;
+        if (unit != '\\') {
+            escaped = false;
+        }
+    }
+
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
+    roots[0] = mal_value_from_string(
+        mal_string_new_slice(&vm->heap, text, 1, length - 2));
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
+    *result = mal_regexp_create(
+        vm, mal_value_to_string(roots[0]), mal_value_to_string(roots[1]));
+    mal_gc_unroot(&root_span);
+    return true;
+#endif
+}
 
 // Install the baked compiler on first use: splice it, run its top level (which
 // assigns globalThis.__compile), capture that into the rooted vm->compiler_fn,
@@ -182,6 +228,9 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 1);
     MalValue result = mal_value_new_undefined();
+    if (eval_try_regexp_literal(vm, roots[0], &result)) {
+        goto done;
+    }
 
     // Indirect eval: always sloppy (no containing strict context), never a
     // parameter-expression or field-initializer context.
@@ -290,6 +339,9 @@ MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, b
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 7);
     MalValue result = mal_value_new_undefined();
+    if (eval_try_regexp_literal(vm, roots[0], &result)) {
+        goto done;
+    }
 
     i32 entry = compile_source(vm, roots[0], true, caller_strict, in_param_expr,
                                in_field_initializer, roots[4], nullptr);

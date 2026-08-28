@@ -78,4 +78,15 @@ for (let i = 0; i < 65536; i++) {
 }
 passed++;
 
+const firstLiteralRegExp = eval("/a/");
+const secondLiteralRegExp = eval("/a/");
+if (
+	firstLiteralRegExp === secondLiteralRegExp ||
+	firstLiteralRegExp.source !== "a" ||
+	Object.getPrototypeOf(firstLiteralRegExp) !== RegExp.prototype
+) {
+	throw new Error("FAIL eval regexp literal must create a fresh realm object");
+}
+passed++;
+
 console.log("eval-completion PASS " + passed + "/" + passed);
