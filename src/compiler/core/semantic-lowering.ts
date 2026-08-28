@@ -5636,6 +5636,32 @@ function compileDisposableStatementScope(
 	statements: Array<ESTree.Statement>,
 	hoistFunctions: boolean,
 ): number {
+	const { entryIdx } = compileDisposableRegion(
+		fn,
+		statements.some(
+			(statement) =>
+				statement.type === "VariableDeclaration" && statement.kind === "await using",
+		),
+		(entry) => {
+			const bodyEntry = compileStatementsToBlock(
+				program,
+				fn,
+				statements,
+				hoistFunctions,
+				false,
+			);
+			entry.emitter.emit({ type: "jump", blocks: [bodyEntry] });
+			return fn.blocks.at(-1)!;
+		},
+	);
+	return entryIdx;
+}
+
+function compileDisposableRegion(
+	fn: CoreFrontendFunction,
+	disposeAsync: boolean,
+	compileProtected: (entry: CoreFrontendBlock) => CoreFrontendBlock,
+): { entryIdx: number; tail: CoreFrontendBlock } {
 	const entry: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const entryIdx = fn.blocks.push(entry) - 1;
 	const cursor: CoreFrontendCursor = { block: entry };
@@ -5668,10 +5694,7 @@ function compileDisposableStatementScope(
 		completionValueReg: valueReg,
 		finalizerArms: new Map(),
 		disposeCapabilityLocation: capabilityLocation,
-		disposeAsync: statements.some(
-			(statement) =>
-				statement.type === "VariableDeclaration" && statement.kind === "await using",
-		),
+		disposeAsync,
 	};
 	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
@@ -5681,15 +5704,7 @@ function compileDisposableStatementScope(
 
 	fn.loops ??= [];
 	fn.loops.push(finallyCtx);
-	const bodyEntry = compileStatementsToBlock(
-		program,
-		fn,
-		statements,
-		hoistFunctions,
-		false,
-	);
-	entry.emitter.emit({ type: "jump", blocks: [bodyEntry] });
-	const bodyLast = fn.blocks.at(-1)!;
+	const bodyLast = compileProtected(entry);
 	fn.loops.pop();
 
 	const normalExit: CoreFrontendBlock = { emitter: unboundCoreEmitter };
@@ -5768,7 +5783,7 @@ function compileDisposableStatementScope(
 			{ type: "jumpIf", registers: [matches], blocks: [idx] },
 		);
 	}
-	return entryIdx;
+	return { entryIdx, tail: epilogue };
 }
 
 function compileClassDeclaration(
@@ -6215,6 +6230,31 @@ function compileForStatement(
 	block: CoreFrontendBlock,
 	statement: ESTree.ForStatement,
 ) {
+	if (
+		statement.init?.type === "VariableDeclaration" &&
+		(statement.init.kind === "using" || statement.init.kind === "await using")
+	) {
+		const { entryIdx } = compileDisposableRegion(
+			fn,
+			statement.init.kind === "await using",
+			(entry) => {
+				compileForStatementBody(program, fn, entry, statement);
+				return fn.blocks.at(-1)!;
+			},
+		);
+		block.emitter.emit({ type: "jump", blocks: [entryIdx] });
+		return;
+	}
+
+	compileForStatementBody(program, fn, block, statement);
+}
+
+function compileForStatementBody(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
+	statement: ESTree.ForStatement,
+) {
 	// Per-iteration env, if head or direct body bindings are captured. ENV_PUSH enters scope
 	// L0 (so the init stores into it), ENV_COPY before the first test copies L0→L1,
 	// each update copies Li→Li+1 (the increment runs in the new env), and ENV_POP
@@ -6446,6 +6486,71 @@ function compileForInStatement(
 	);
 }
 
+function compileForInOfIteration(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	bindBlock: CoreFrontendBlock,
+	left: ESTree.ForOfStatement["left"],
+	valueRegister: number,
+	body: ESTree.Statement,
+): CoreFrontendBlock {
+	const resourceDeclaration =
+		left.type === "VariableDeclaration" &&
+		(left.kind === "using" || left.kind === "await using");
+	if (resourceDeclaration) {
+		const { entryIdx, tail } = compileDisposableRegion(
+			fn,
+			left.kind === "await using",
+			(entry) =>
+				compileForInOfBindingAndBody(program, fn, entry, left, valueRegister, body, true),
+		);
+		bindBlock.emitter.emit({ type: "jump", blocks: [entryIdx] });
+		return tail;
+	}
+
+	return compileForInOfBindingAndBody(
+		program,
+		fn,
+		bindBlock,
+		left,
+		valueRegister,
+		body,
+		false,
+	);
+}
+
+function compileForInOfBindingAndBody(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	bindBlock: CoreFrontendBlock,
+	left: ESTree.ForOfStatement["left"],
+	valueRegister: number,
+	body: ESTree.Statement,
+	resourceDeclaration: boolean,
+): CoreFrontendBlock {
+	const bindCursor: CoreFrontendCursor = { block: bindBlock };
+	const boundValue = resourceDeclaration
+		? compileAddDisposableResource(
+				fn,
+				bindCursor,
+				valueRegister,
+				left.type === "VariableDeclaration" && left.kind === "await using",
+			)
+		: valueRegister;
+	if (left.type === "VariableDeclaration") {
+		const declaration = left.declarations[0];
+		if (declaration) {
+			compilePatternTarget(program, fn, bindCursor, declaration.id, boundValue);
+		}
+	} else {
+		compilePatternTarget(program, fn, bindCursor, left, boundValue, true);
+	}
+
+	const bodyIdx = compileStatementsToBlock(program, fn, [body]);
+	bindCursor.block.emitter.emit({ type: "jump", blocks: [bodyIdx] });
+	return fn.blocks.at(-1)!;
+}
+
 /**
  * The shared body of for-of and for-in: drive an iterable through the iterator
  * protocol, binding each value to the loop target and running the body inside a
@@ -6537,24 +6642,15 @@ function compileForInOfLoop(
 	};
 	bindBlock.emitter.emit(tryBegin);
 
-	const bindCursor: CoreFrontendCursor = { block: bindBlock };
-	if (left.type === "VariableDeclaration") {
-		const declaration = left.declarations[0];
-		if (declaration) {
-			compilePatternTarget(program, fn, bindCursor, declaration.id, valueRegister);
-		}
-	} else {
-		compilePatternTarget(program, fn, bindCursor, left, valueRegister, true);
-	}
-
-	const bodyIdx = compileStatementsToBlock(program, fn, [body]);
-	bindCursor.block.emitter.emit({
-		type: "jump",
-		blocks: [bodyIdx],
-	});
-
 	// The protected range ends before the back edge.
-	const bodyLastBlock = fn.blocks.at(-1)!;
+	const bodyLastBlock = compileForInOfIteration(
+		program,
+		fn,
+		bindBlock,
+		left,
+		valueRegister,
+		body,
+	);
 	const back: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const backIdx = fn.blocks.push(back) - 1;
 	back.emitter.emit({ type: "tryEnd" }, { type: "jump", blocks: [headerIdx] });
@@ -6717,20 +6813,14 @@ function compileForAwaitOfLoop(
 	};
 	bindBlock.emitter.emit(tryBegin);
 
-	const bindCursor: CoreFrontendCursor = { block: bindBlock };
-	if (left.type === "VariableDeclaration") {
-		const declaration = left.declarations[0];
-		if (declaration) {
-			compilePatternTarget(program, fn, bindCursor, declaration.id, valueRegister);
-		}
-	} else {
-		compilePatternTarget(program, fn, bindCursor, left, valueRegister, true);
-	}
-
-	const bodyIdx = compileStatementsToBlock(program, fn, [body]);
-	bindCursor.block.emitter.emit({ type: "jump", blocks: [bodyIdx] });
-
-	const bodyLastBlock = fn.blocks.at(-1)!;
+	const bodyLastBlock = compileForInOfIteration(
+		program,
+		fn,
+		bindBlock,
+		left,
+		valueRegister,
+		body,
+	);
 	const back: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const backIdx = fn.blocks.push(back) - 1;
 	back.emitter.emit({ type: "tryEnd" }, { type: "jump", blocks: [headerIdx] });
@@ -7923,9 +8013,44 @@ function compileReturnStatement(
 	emitReturn(program, fn, cursor.block, returnRegister);
 }
 
-/**
- * Naively compile variable declarations.
- */
+function compileAddDisposableResource(
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	resource: number,
+	asyncHint: boolean,
+): number {
+	const disposal = fn.loops?.findLast(
+		(scope) => scope.disposeCapabilityLocation !== undefined,
+	);
+	if (disposal?.disposeCapabilityLocation === undefined) {
+		throw new Error("resource declaration has no disposal scope");
+	}
+	const capability = loadRegisterFromLocation(
+		fn,
+		cursor.block,
+		disposal.disposeCapabilityLocation,
+	);
+	const addResource = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "loadIntrinsic",
+		registers: [addResource],
+		intrinsic: "__addDisposableResource",
+	});
+	const thisValue = compileUndefined(fn, cursor);
+	const asyncHintRegister = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "createBoolean",
+		registers: [asyncHintRegister],
+		value: asyncHint,
+	});
+	const added = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "call",
+		registers: [added, addResource, thisValue, capability, resource, asyncHintRegister],
+	});
+	return added;
+}
+
 function compileVariableDeclaration(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -7966,36 +8091,12 @@ function compileVariableDeclaration(
 			decl.id.type === "Identifier" ? decl.id.name : undefined,
 		);
 		if (statement.kind === "using" || statement.kind === "await using") {
-			const disposal = fn.loops?.findLast(
-				(scope) => scope.disposeCapabilityLocation !== undefined,
-			);
-			if (disposal?.disposeCapabilityLocation === undefined) {
-				throw new Error("resource declaration has no disposal scope");
-			}
-			const capability = loadRegisterFromLocation(
+			source = compileAddDisposableResource(
 				fn,
-				cursor.block,
-				disposal.disposeCapabilityLocation,
+				cursor,
+				source,
+				statement.kind === "await using",
 			);
-			const addResource = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "loadIntrinsic",
-				registers: [addResource],
-				intrinsic: "__addDisposableResource",
-			});
-			const thisValue = compileUndefined(fn, cursor);
-			const asyncHint = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "createBoolean",
-				registers: [asyncHint],
-				value: statement.kind === "await using",
-			});
-			const added = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "call",
-				registers: [added, addResource, thisValue, capability, source, asyncHint],
-			});
-			source = added;
 		}
 
 		if (decl.id.type === "ObjectPattern" || decl.id.type === "ArrayPattern") {
