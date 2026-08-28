@@ -212,23 +212,35 @@ interface PhaseTimings {
 	totalMs: number;
 	count: number;
 	slowest: Array<{ path: string; ms: number }>;
+	overThreshold: Array<{ path: string; ms: number }>;
 }
 
 const TIMINGS: Record<"compile" | "cc" | "link" | "run", PhaseTimings> = {
-	compile: { totalMs: 0, count: 0, slowest: [] },
-	cc: { totalMs: 0, count: 0, slowest: [] },
-	link: { totalMs: 0, count: 0, slowest: [] },
-	run: { totalMs: 0, count: 0, slowest: [] },
+	compile: { totalMs: 0, count: 0, slowest: [], overThreshold: [] },
+	cc: { totalMs: 0, count: 0, slowest: [], overThreshold: [] },
+	link: { totalMs: 0, count: 0, slowest: [], overThreshold: [] },
+	run: { totalMs: 0, count: 0, slowest: [], overThreshold: [] },
 };
+
+function compareTimingSamples(
+	left: { path: string; ms: number },
+	right: { path: string; ms: number },
+) {
+	return right.ms - left.ms || left.path.localeCompare(right.path);
+}
 
 function recordTiming(phase: keyof typeof TIMINGS, label: string, ms: number) {
 	const timing = TIMINGS[phase];
+	const sample = { path: label, ms: Math.round(ms * 10) / 10 };
 
 	timing.totalMs += ms;
 	timing.count++;
-	timing.slowest.push({ path: label, ms: Math.round(ms * 10) / 10 });
-	timing.slowest.sort((a, b) => b.ms - a.ms);
+	timing.slowest.push(sample);
+	timing.slowest.sort(compareTimingSamples);
 	timing.slowest.length = Math.min(timing.slowest.length, 10);
+	if (phase === "run" && ms > TEST262_METADATA.runtimeOutlierThresholdMs) {
+		timing.overThreshold.push(sample);
+	}
 }
 
 /**
@@ -267,6 +279,12 @@ export function getTimings() {
 				averageMs:
 					timing.count > 0 ? Math.round((timing.totalMs / timing.count) * 10) / 10 : 0,
 				slowest: timing.slowest,
+				...(phase === "run"
+					? {
+							overThresholdMs: TEST262_METADATA.runtimeOutlierThresholdMs,
+							overThreshold: [...timing.overThreshold].sort(compareTimingSamples),
+						}
+					: {}),
 			},
 		]),
 	);
@@ -290,6 +308,7 @@ export function test262ResetStats() {
 		timing.totalMs = 0;
 		timing.count = 0;
 		timing.slowest.length = 0;
+		timing.overThreshold.length = 0;
 	}
 	CODE_STATS.compiledFiles = 0;
 	CODE_STATS.functionCount = 0;
@@ -1638,8 +1657,9 @@ export function test262MergeStats(snapshot: StatsSnapshot) {
 		target.totalMs += source.totalMs;
 		target.count += source.count;
 		target.slowest.push(...source.slowest);
-		target.slowest.sort((a, b) => b.ms - a.ms);
+		target.slowest.sort(compareTimingSamples);
 		target.slowest.length = Math.min(target.slowest.length, 10);
+		target.overThreshold.push(...source.overThreshold);
 	}
 
 	CODE_STATS.compiledFiles += snapshot.codeStats.compiledFiles;

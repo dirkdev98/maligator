@@ -12,6 +12,8 @@ export const TEST262_METADATA = {
 	// timing those out is counterproductive because the single-test fallback then
 	// recompiles hundreds of files while competing with the remaining workers.
 	compileTimeoutMs: 180_000,
+	/** Persist every per-test runtime above this threshold in local reports. */
+	runtimeOutlierThresholdMs: 5_000,
 
 	/**
 	 * Full-suite throughput tuning, measured on an 11-core Apple M3 Pro:
