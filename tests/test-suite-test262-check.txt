@@ -191,6 +191,13 @@ test/language/statements/for-await-of/iterator-close-non-throw-get-method-non-ca
 test/language/statements/for-of/dstr/array-elem-target-yield-expr.js
 test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-err.js
 
+# Explicit resource management (5)
+test/built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js
+test/language/statements/await-using/await-using-does-not-imply-await-if-not-evaluated.js
+test/language/statements/await-using/initializer-Symbol.dispose-called-at-end-of-each-iteration-of-forofstatement.js
+test/language/statements/using/initializer-disposed-at-end-of-forstatement.js
+test/language/statements/using/throws-suppressederror-if-multiple-errors-during-disposal.js
+
 # Binding, coercion, and eval environments (47)
 test/built-ins/JSON/stringify/replacer-function-object-deleted-property.js
 test/built-ins/Object/create/properties-arg-to-object-bigint.js

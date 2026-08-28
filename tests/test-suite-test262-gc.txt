@@ -5,6 +5,7 @@
 test/harness/asyncHelpers-asyncTest-then-resolves.js
 test/built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js
 test/built-ins/Iterator/prototype/drop/argument-validation-failure-closes-underlying.js
+test/built-ins/AsyncDisposableStack/prototype/disposeAsync/disposes-resources-in-reverse-order.js
 
 # Direct eval, private/super environments, and cross-realm wrappers.
 test/language/statements/class/elements/private-field-visible-to-direct-eval.js
