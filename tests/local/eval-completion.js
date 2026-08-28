@@ -68,11 +68,7 @@ function createEvalState() {
 }
 const firstEvalState = createEvalState();
 const secondEvalState = createEvalState();
-if (
-	firstEvalState() !== 1 ||
-	firstEvalState() !== 2 ||
-	secondEvalState() !== 1
-) {
+if (firstEvalState() !== 1 || firstEvalState() !== 2 || secondEvalState() !== 1) {
 	throw new Error("FAIL cached eval must create fresh lexical bindings");
 }
 passed++;

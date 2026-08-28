@@ -93,7 +93,10 @@ function isLexicallyEmptyScript(source: string): boolean {
 		index += 2;
 		let closed = false;
 		while (index + 1 < source.length) {
-			if (source.charCodeAt(index) === 0x002a && source.charCodeAt(index + 1) === 0x002f) {
+			if (
+				source.charCodeAt(index) === 0x002a &&
+				source.charCodeAt(index + 1) === 0x002f
+			) {
 				index++;
 				closed = true;
 				break;
@@ -212,5 +215,8 @@ export function compileSourceToBuffer(
 	source: string,
 	options: CompileSourceOptions = {},
 ): Uint8Array {
-	return compilePreparedSourceToBuffer(prepareSourceForCompilation(source, options), options);
+	return compilePreparedSourceToBuffer(
+		prepareSourceForCompilation(source, options),
+		options,
+	);
 }

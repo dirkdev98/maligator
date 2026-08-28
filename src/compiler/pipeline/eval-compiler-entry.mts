@@ -13,10 +13,7 @@
 // the runtime loads + splices + runs it. debugInfo defaults on so eval'd frames
 // carry source positions for stack traces.
 
-import {
-	compilePreparedSourceToBuffer,
-	prepareSourceForCompilation,
-} from "./compile.ts";
+import { compilePreparedSourceToBuffer, prepareSourceForCompilation } from "./compile.ts";
 
 declare const globalThis: {
 	__compile: (

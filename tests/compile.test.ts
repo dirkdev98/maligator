@@ -45,12 +45,12 @@ describe("compileSourceToBuffer", () => {
 
 	it("canonicalizes parsed empty statements before semantic lowering", () => {
 		const empty = compileSourceToBuffer("", { completionValue: true });
-		expect(Array.from(compileSourceToBuffer("/* comment */", { completionValue: true }))).toEqual(
-			Array.from(empty),
-		);
-		expect(Array.from(compileSourceToBuffer("{};{{}}", { completionValue: true }))).toEqual(
-			Array.from(empty),
-		);
+		expect(
+			Array.from(compileSourceToBuffer("/* comment */", { completionValue: true })),
+		).toEqual(Array.from(empty));
+		expect(
+			Array.from(compileSourceToBuffer("{};{{}}", { completionValue: true })),
+		).toEqual(Array.from(empty));
 	});
 
 	it("recognizes only a proven empty lexical grammar", () => {
