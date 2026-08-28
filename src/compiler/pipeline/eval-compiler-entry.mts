@@ -27,13 +27,85 @@ declare const globalThis: {
 };
 declare const SyntaxError: new (message?: string) => Error;
 
-let cachedSource: string | undefined;
-let cachedDirect: boolean | undefined;
-let cachedCallerStrict: boolean | undefined;
-let cachedInParamExpr: boolean | undefined;
-let cachedInFieldInitializer: boolean | undefined;
-let cachedDirectEvalContext: string | undefined;
-let cachedBuffer: Uint8Array | undefined;
+interface EvalCompilerCacheEntry {
+	source: string;
+	direct: boolean | undefined;
+	callerStrict: boolean | undefined;
+	inParamExpr: boolean | undefined;
+	inFieldInitializer: boolean | undefined;
+	directEvalContext: string | undefined;
+	buffer: Uint8Array;
+	retainedBytes: number;
+}
+
+const CACHE_MAX_ENTRIES = 16;
+const CACHE_MAX_BYTES = 8 * 1024 * 1024;
+const cache: Array<EvalCompilerCacheEntry> = [];
+let cacheBytes = 0;
+
+function cachedCompilation(
+	source: string,
+	direct: boolean | undefined,
+	callerStrict: boolean | undefined,
+	inParamExpr: boolean | undefined,
+	inFieldInitializer: boolean | undefined,
+	directEvalContext: string | undefined,
+): Uint8Array | undefined {
+	for (let index = 0; index < cache.length; index++) {
+		const entry = cache[index]!;
+		if (
+			entry.source !== source ||
+			entry.direct !== direct ||
+			entry.callerStrict !== callerStrict ||
+			entry.inParamExpr !== inParamExpr ||
+			entry.inFieldInitializer !== inFieldInitializer ||
+			entry.directEvalContext !== directEvalContext
+		) {
+			continue;
+		}
+		for (let move = index; move > 0; move--) cache[move] = cache[move - 1]!;
+		cache[0] = entry;
+		return entry.buffer;
+	}
+	return undefined;
+}
+
+function retainCompilation(
+	source: string,
+	direct: boolean | undefined,
+	callerStrict: boolean | undefined,
+	inParamExpr: boolean | undefined,
+	inFieldInitializer: boolean | undefined,
+	directEvalContext: string | undefined,
+	buffer: Uint8Array,
+) {
+	// Count retained source/context strings as UTF-16 so a small wire image cannot
+	// pin an arbitrarily large eval input outside the byte budget.
+	const retainedBytes =
+		source.length * 2 + (directEvalContext?.length ?? 0) * 2 + buffer.byteLength;
+	if (retainedBytes > CACHE_MAX_BYTES) return;
+	while (
+		cache.length > 0 &&
+		(cache.length >= CACHE_MAX_ENTRIES || cacheBytes + retainedBytes > CACHE_MAX_BYTES)
+	) {
+		cacheBytes -= cache[cache.length - 1]!.retainedBytes;
+		cache.length--;
+	}
+	cacheBytes += retainedBytes;
+	const entry = {
+		source,
+		direct,
+		callerStrict,
+		inParamExpr,
+		inFieldInitializer,
+		directEvalContext,
+		buffer,
+		retainedBytes,
+	};
+	cache.push(entry);
+	for (let index = cache.length - 1; index > 0; index--) cache[index] = cache[index - 1]!;
+	cache[0] = entry;
+}
 
 globalThis.__compile = function __compile(
 	source: string,
@@ -44,21 +116,17 @@ globalThis.__compile = function __compile(
 	directEvalContext?: string,
 ): Uint8Array {
 	try {
-		// Runtime eval frequently recompiles the same literal source at one call
-		// site. The wire buffer is immutable after it crosses the native boundary,
-		// so a one-entry exact-context cache avoids rerunning the self-hosted compiler
-		// without sharing any function object, environment, or execution state.
-		if (
-			cachedBuffer !== undefined &&
-			cachedSource === source &&
-			cachedDirect === direct &&
-			cachedCallerStrict === callerStrict &&
-			cachedInParamExpr === inParamExpr &&
-			cachedInFieldInitializer === inFieldInitializer &&
-			cachedDirectEvalContext === directEvalContext
-		) {
-			return cachedBuffer;
-		}
+		// Wire images are immutable compiler output; execution still creates fresh
+		// functions, bindings, environments, and completion state after every hit.
+		const cached = cachedCompilation(
+			source,
+			direct,
+			callerStrict,
+			inParamExpr,
+			inFieldInitializer,
+			directEvalContext,
+		);
+		if (cached !== undefined) return cached;
 		// completionValue: eval evaluates to its last expression's value.
 		// direct: free identifiers resolve against the caller scope (a with-scope
 		// the direct-eval intrinsic pushes) before the global.
@@ -74,13 +142,15 @@ globalThis.__compile = function __compile(
 			inFieldInitializer,
 			directEvalContext,
 		});
-		cachedSource = source;
-		cachedDirect = direct;
-		cachedCallerStrict = callerStrict;
-		cachedInParamExpr = inParamExpr;
-		cachedInFieldInitializer = inFieldInitializer;
-		cachedDirectEvalContext = directEvalContext;
-		cachedBuffer = buffer;
+		retainCompilation(
+			source,
+			direct,
+			callerStrict,
+			inParamExpr,
+			inFieldInitializer,
+			directEvalContext,
+			buffer,
+		);
 		return buffer;
 	} catch (e) {
 		// A parse / early error compiling eval source is a SyntaxError in the

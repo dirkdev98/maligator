@@ -50,6 +50,19 @@ if (readDirect(31) !== 31 || readDirect(32) !== 32) {
 }
 passed++;
 
+function readCycled(value, selector) {
+	if (selector === 0) return eval("value + 1");
+	if (selector === 1) return eval("value + 2");
+	if (selector === 2) return eval("value + 3");
+	return eval("value + 4");
+}
+let cycledTotal = 0;
+for (let i = 0; i < 32; i++) cycledTotal += readCycled(i, i % 4);
+if (cycledTotal !== 576) {
+	throw new Error("FAIL cycled cached eval must use the current scope");
+}
+passed++;
+
 if (
 	(0, eval)("let cachedLexical = 41; cachedLexical") !== 41 ||
 	(0, eval)("let cachedLexical = 41; cachedLexical") !== 41
