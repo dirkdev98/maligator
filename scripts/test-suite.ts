@@ -281,10 +281,13 @@ const nativeCheck = readManifest("tests/test-suite-native-check.txt");
 const nativeNormal = readManifest("tests/test-suite-native-normal.txt");
 const test262Smoke = readManifest("tests/test-suite-test262-smoke.txt");
 const test262Check = readManifest("tests/test-suite-test262-check.txt");
+const test262Gc = readManifest("tests/test-suite-test262-gc.txt");
+const test262GcSloppy = readManifest("tests/test-suite-test262-gc-sloppy.txt");
 const wptSmoke = readManifest("tests/test-suite-wpt-smoke.txt");
 const wptCheck = readManifest("tests/test-suite-wpt-check.txt");
 assertDisjoint("native smoke/check", nativeSmoke, nativeCheck);
 assertDisjoint("Test262 smoke/check", test262Smoke, test262Check);
+assertDisjoint("Test262 GC strict/sloppy", test262Gc, test262GcSloppy);
 assertDisjoint("WPT smoke/check", wptSmoke, wptCheck);
 
 const curatedWpt = JSON.parse(
@@ -457,16 +460,29 @@ const test262FullMatrix: Array<Command> = [
 		"--check",
 		...runnerPolicy,
 	]),
-	node("full: Test262 curated GC verification", "scripts/test262.ts", [
+	node("full: Test262 GC high-risk spine", "scripts/test262.ts", [
 		"--canonical",
 		"--backend",
 		"wire",
 		"--mode",
 		"gc-stress",
 		"--manifest",
-		"tests/test-suite-test262-smoke.txt",
+		"tests/test-suite-test262-gc.txt",
+		"--variant",
+		"strict",
+		"--check",
+		...runnerPolicy,
+	]),
+	node("full: Test262 GC sloppy-risk spine", "scripts/test262.ts", [
+		"--canonical",
+		"--backend",
+		"wire",
+		"--mode",
+		"gc-stress",
 		"--manifest",
-		"tests/test-suite-test262-check.txt",
+		"tests/test-suite-test262-gc-sloppy.txt",
+		"--variant",
+		"sloppy",
 		"--check",
 		...runnerPolicy,
 	]),

@@ -1,0 +1,5 @@
+# Sloppy-only lifetime boundaries. The main GC spine runs once in strict mode;
+# these cases justify the second frontend through sloppy eval/environment rules.
+test/language/eval-code/direct/var-env-func-init-multi.js
+test/language/statementList/eval-block-with-statment-array-literal-with-item.js
+test/language/function-code/10.4.3-1-54gs.js

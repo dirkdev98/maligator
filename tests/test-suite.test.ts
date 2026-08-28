@@ -45,7 +45,13 @@ describe("test suite planner", () => {
 		expect(full).toContain("npm run test:unit:full-only");
 		expect(full).toContain("tests/toolchain.test.ts");
 		expect(full).toContain("full: Test262 compiled normal corpus");
-		expect(full).toContain("full: Test262 curated GC verification");
+		expect(full).toContain("full: Test262 GC high-risk spine");
+		expect(full).toContain("tests/test-suite-test262-gc.txt --variant strict");
+		expect(full).toContain("full: Test262 GC sloppy-risk spine");
+		expect(full).toContain("tests/test-suite-test262-gc-sloppy.txt --variant sloppy");
+		expect(full).not.toMatch(
+			/full: Test262 GC high-risk spine:[\s\S]*tests\/test-suite-test262-check\.txt/,
+		);
 		expect(full).toContain("full: WPT compiled normal");
 		expect(full).toContain("full: WPT focused GC verification");
 		expect(full).toContain("full: remaining: native normal");

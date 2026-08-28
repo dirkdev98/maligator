@@ -45,6 +45,7 @@
 		"site:update": "node ./scripts/site-data.ts",
 		"test": "node ./scripts/vitest.ts",
 		"test262": "node ./scripts/test262.ts --canonical",
+		"test262:gc:broad": "node ./scripts/test262.ts --canonical --backend wire --mode gc-stress --manifest tests/test-suite-test262-smoke.txt --manifest tests/test-suite-test262-check.txt --check --policy complete",
 		"test262:prepare": "node ./scripts/test262-prepare.ts",
 		"test262:regressions": "node ./scripts/test262.ts --canonical --backend wire --manifest tests/test-suite-test262-smoke.txt --manifest tests/test-suite-test262-check.txt --check --policy complete",
 		"test262:report": "node ./scripts/test262.ts --canonical --check --policy complete",

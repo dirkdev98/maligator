@@ -176,7 +176,8 @@ The full gate uses these deliberately non-Cartesian standards dimensions:
 | Selection                   | Backend  | Runtime mode                      |
 | --------------------------- | -------- | --------------------------------- |
 | Complete Test262 corpus     | Compiled | Normal                            |
-| Curated Test262 regressions | Wire     | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
+| GC high-risk strict/default | Wire     | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
+| GC sloppy eval/environment  | Wire     | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
 | Complete curated WPT set    | Compiled | Normal                            |
 | WPT smoke cross-section     | Wire     | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
 
@@ -186,6 +187,16 @@ GC suite under non-generational and concurrent collector builds and the macOS le
 audit. Native sanitizer coverage is already part of the disjoint smoke/check/full
 partition. "Full WPT" means every test in the pinned server-runtime curated corpus,
 not the complete browser WPT repository.
+
+The Test262 GC spine is risk-based rather than a second semantic regression pass.
+Its manifest names async/suspended frames, iterator cleanup, eval/private/super
+environments, realm wrappers, detachable/resizable backing stores, weak and
+finalization edges, re-entrant callbacks, and Rust-backed RegExp/Intl/Temporal
+handles. Default cases run once under strict parsing; a separate three-case sloppy
+manifest pays for the second frontend only where eval/environment semantics differ.
+The former 254-case smoke+check stress matrix remains available on demand as
+`npm run test262:gc:broad`; run it after changing the collector or root contracts
+and before deliberately revising the spine.
 
 "Complete native coverage" means every authored `tests/native/**/*.test.ts` file
 in its owning normal or sanitizer-primary dimension, the Rust runtime unit suite

@@ -1,0 +1,25 @@
+# High-risk GC spine. Each entry protects a distinct lifetime/root boundary;
+# keep ordinary semantic breadth in smoke/check and the full compiled corpus.
+
+# Async completion, suspended frames, and iterator cleanup.
+test/harness/asyncHelpers-asyncTest-then-resolves.js
+test/built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js
+test/built-ins/Iterator/prototype/drop/argument-validation-failure-closes-underlying.js
+
+# Direct eval, private/super environments, and cross-realm wrappers.
+test/language/statements/class/elements/private-field-visible-to-direct-eval.js
+test/language/eval-code/direct/super-prop-method.js
+test/built-ins/ShadowRealm/prototype/evaluate/returns-proxy-callable-object.js
+test/built-ins/Array/proto-from-ctor-realm-zero.js
+
+# Backing stores, weak edges/finalization, and re-entrant callbacks.
+test/harness/detachArrayBuffer-host-detachArrayBuffer.js
+test/built-ins/Array/prototype/every/callbackfn-resize-arraybuffer.js
+test/built-ins/WeakRef/prototype/deref/return-object-target.js
+test/built-ins/FinalizationRegistry/prototype/register/unregisterToken-same-as-holdings-and-target.js
+test/built-ins/Map/prototype/getOrInsertComputed/overwrites-mutation-from-callbackfn.js
+
+# Rust-backed handles and native-call roots (RegExp, Intl, and Temporal).
+test/built-ins/RegExp/named-groups/string-replace-escaped.js
+test/intl402/NumberFormat/prototype/format/no-instanceof.js
+test/built-ins/Date/prototype/toTemporalInstant/this-value-valid-date.js
