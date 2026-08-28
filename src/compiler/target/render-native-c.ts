@@ -147,6 +147,43 @@ export interface CompiledFunction {
 
 export type DirectCompiledEntries = ReadonlyMap<string, NativeDirectEntryPlan>;
 
+interface NativeRelocationExpressions {
+	readonly enabled: boolean;
+	functionIndex(index: number): string;
+	ownerFunctionIndex(index: number): string;
+	globalIndex(index: number): string;
+	stringIndex(index: number): string;
+	bigintIndex(index: number): string;
+	templateOffset(index: number): string;
+	sourcePosition(index: number): string;
+	stringValue(index: number, suffix: string): string;
+	bigintValue(index: number, suffix: string): string;
+}
+
+function nativeRelocationExpressions(enabled: boolean): NativeRelocationExpressions {
+	const indexed = (base: string, index: number): string =>
+		enabled ? `(__mal_relocation->${base} + ${index})` : String(index);
+	return {
+		enabled,
+		functionIndex: (index) => indexed("function_base", index),
+		ownerFunctionIndex: (index) =>
+			index < 0 ? String(index) : indexed("function_base", index),
+		globalIndex: (index) => indexed("global_base", index),
+		stringIndex: (index) => indexed("string_base", index),
+		bigintIndex: (index) => indexed("bigint_base", index),
+		templateOffset: (index) => indexed("literal_template_base", index),
+		sourcePosition: (index) => indexed("source_position_base", index),
+		stringValue: (index, suffix) =>
+			enabled
+				? `mal_value_from_string(&vm->runtime_image->string_constants[${indexed("string_base", index)}])`
+				: `mal_value_from_string(&mal_strings${suffix}[${index}])`,
+		bigintValue: (index, suffix) =>
+			enabled
+				? `mal_value_from_bigint(&vm->runtime_image->bigint_constants[${indexed("bigint_base", index)}])`
+				: `mal_value_from_bigint(&mal_bigints${suffix}[${index}])`,
+	};
+}
+
 export function directCompiledEntryKey(functionIndex: number, entryId: number): string {
 	return `${functionIndex}:${entryId}`;
 }
@@ -381,13 +418,14 @@ function emitCompiledVariant(
 	directCompiledTargets: ReadonlySet<number> = new Set(),
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 	directCompiledEntries: DirectCompiledEntries = new Map(),
+	relocatable = false,
 	directEntry?: NativeDirectEntryPlan,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
 	// rather than the straight-line shape below (see emitResumableFunction).
 	if (fn.isGenerator || fn.isAsync) {
-		if (directEntry !== undefined) return null;
+		if (directEntry !== undefined || relocatable) return null;
 		return emitResumableFunction(
 			fn,
 			native,
@@ -430,6 +468,7 @@ function emitCompiledVariant(
 		throw new Error(`Invalid register representations for function ${index}`);
 	}
 	const reps = [...nativeContract.registerRepresentations];
+	const relocation = nativeRelocationExpressions(relocatable);
 
 	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
 	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
@@ -704,6 +743,7 @@ function emitCompiledVariant(
 		directEntry?.resultRepresentation,
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
+		relocation,
 	);
 	if (body === null) {
 		return null;
@@ -738,7 +778,14 @@ function emitCompiledVariant(
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
 	if (directEntry === undefined) {
-		lines.push(`    (void) entry_state;`);
+		if (relocatable) {
+			lines.push(
+				`    const MalNativeProgramRelocation *__mal_relocation = &vm->compiler_native_relocation;`,
+				`    (void) entry_state;`,
+			);
+		} else {
+			lines.push(`    (void) entry_state;`);
+		}
 	}
 	if (directEntry !== undefined && body.some((line) => line.includes("new_target"))) {
 		lines.push(`    const MalValue new_target = MAL_VALUE_UNDEFINED;`);
@@ -751,16 +798,24 @@ function emitCompiledVariant(
 				line.includes("__literal_shapes"),
 		)
 	) {
-		lines.push(`    mal_vm_ensure_function_caches(vm, ${index});`);
+		lines.push(
+			`    mal_vm_ensure_function_caches(vm, ${relocation.functionIndex(index)});`,
+		);
 	}
 	if (body.some((line) => line.includes("__property_ic"))) {
-		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${index}].sites;`);
+		lines.push(
+			`    MalInlineCache *__property_ic = vm->property_cache[${relocation.functionIndex(index)}].sites;`,
+		);
 	}
 	if (body.some((line) => line.includes("__property_function_index"))) {
-		lines.push(`    const i32 __property_function_index = ${index};`);
+		lines.push(
+			`    const i32 __property_function_index = ${relocation.functionIndex(index)};`,
+		);
 	}
 	if (body.some((line) => line.includes("__literal_shapes"))) {
-		lines.push(`    MalShape **__literal_shapes = vm->literal_shape_cache[${index}];`);
+		lines.push(
+			`    MalShape **__literal_shapes = vm->literal_shape_cache[${relocation.functionIndex(index)}];`,
+		);
 	}
 
 	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
@@ -823,7 +878,7 @@ function emitCompiledVariant(
 	// already-published frame afterwards — never held unrooted across a safepoint.
 	if (needsRootFrame) {
 		lines.push(
-			`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${totalSlots} };`,
+			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
 			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .env = nullptr };`,
 			`    mal_root_frame_head = &__gc_frame;`,
 		);
@@ -834,7 +889,7 @@ function emitCompiledVariant(
 	// it, then root it in the published frame. capturesEnv implies needsRootFrame.
 	if (capturesEnv) {
 		lines.push(
-			`    env = mal_env_new(vm, env, ${index}, ${fn.capturedCount});`,
+			`    env = mal_env_new(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount});`,
 			`    __gc_frame.env = env;`,
 		);
 	}
@@ -889,6 +944,7 @@ export function emitCompiledFunction(
 	directCompiledTargets: ReadonlySet<number> = new Set(),
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 	directCompiledEntries: DirectCompiledEntries = new Map(),
+	relocatable = false,
 ): CompiledFunction | null {
 	const canonical = emitCompiledVariant(
 		fn,
@@ -900,7 +956,9 @@ export function emitCompiledFunction(
 		directCompiledTargets,
 		semanticProtectors,
 		directCompiledEntries,
+		relocatable,
 	);
+	if (relocatable) return canonical;
 	if (canonical === null) return null;
 	const variants = native.directEntries.flatMap((entry) => {
 		const emitted = emitCompiledVariant(
@@ -913,6 +971,7 @@ export function emitCompiledFunction(
 			directCompiledTargets,
 			semanticProtectors,
 			directCompiledEntries,
+			false,
 			entry,
 		);
 		return emitted === null ? [] : [{ entry, emitted }];
@@ -1405,6 +1464,7 @@ function emitBody(
 	directResultRepresentation: VmRegisterRepresentation | undefined,
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
+	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
 ): Array<string> | null {
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
 	for (const region of specializations.filter(
@@ -1804,6 +1864,7 @@ function emitBody(
 				nativeStringSliceNumberFusionAction:
 					nativeStringSliceNumberFusionActionByIp.get(ip),
 				numericFusionAction: numericFusionActionByIp.get(ip),
+				relocation,
 			},
 		);
 		if (emitted === null) {
@@ -1812,7 +1873,9 @@ function emitBody(
 		if (debug && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
 			const pos = fn.positions[ip] ?? -1;
 			if (pos !== -1 && pos !== lastPublishedPos) {
-				lines.push(`    vm->native_frames[vm->native_frame_count - 1].pos_id = ${pos};`);
+				lines.push(
+					`    vm->native_frames[vm->native_frame_count - 1].pos_id = ${relocation.sourcePosition(pos)};`,
+				);
 				lastPublishedPos = pos;
 			}
 		}
@@ -2142,6 +2205,7 @@ interface NativeInstructionContext {
 	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
 	readonly nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
+	readonly relocation: NativeRelocationExpressions;
 }
 
 function nativeTypedArrayKind(
@@ -2227,6 +2291,7 @@ function emitInstruction(
 		nativeRegExpIteratorProjectionAction,
 		nativeStringSliceNumberFusionAction,
 		numericFusionAction,
+		relocation,
 	} = context;
 	const genericContext: NativeInstructionContext = {
 		nativePlan,
@@ -2238,6 +2303,7 @@ function emitInstruction(
 		mappedArguments,
 		mappedArgumentSlots,
 		hasPrototype,
+		relocation,
 	};
 	const emitGenericInstruction = (): Array<string> | null =>
 		emitInstruction(
@@ -2274,7 +2340,7 @@ function emitInstruction(
 			case "number":
 				return `mal_value_from_i32(${decoded.value})`;
 			case "string":
-				return `mal_value_from_string(&mal_strings${suffix}[${decoded.index}])`;
+				return relocation.stringValue(decoded.index, suffix);
 		}
 	};
 	const nativeNumberOperand = (operand: number): string | null => {
@@ -2418,7 +2484,7 @@ function emitInstruction(
 			// throw propagates out, exactly like the interpreter op.
 			return [
 				`if (mal_value_is_empty(${boxed(instruction.src)})) {`,
-				`  mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${instruction.nameStringIndex});`,
+				`  mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${relocation.stringIndex(instruction.nameStringIndex)});`,
 				`  ${throwCheck}`,
 				`}`,
 			];
@@ -2449,11 +2515,11 @@ function emitInstruction(
 			];
 		case "CREATE_STRING":
 			return [
-				`r${instruction.dst} = mal_value_from_string(&mal_strings${suffix}[${instruction.stringIndex}]);`,
+				`r${instruction.dst} = ${relocation.stringValue(instruction.stringIndex, suffix)};`,
 			];
 		case "CREATE_BIGINT":
 			return [
-				`r${instruction.dst} = mal_value_from_bigint(&mal_bigints${suffix}[${instruction.bigintIndex}]);`,
+				`r${instruction.dst} = ${relocation.bigintValue(instruction.bigintIndex, suffix)};`,
 			];
 		case "CREATE_OBJECT":
 			if (stackObjectSite === undefined) {
@@ -2468,7 +2534,7 @@ function emitInstruction(
 			// Build the literal's shape once in the VM-owned dense site row and
 			// create the object directly in it — no per-property defines.
 			const keys = instruction.keyStringIndices
-				.map((ki) => `vm->string_constant_atoms[${ki}]`)
+				.map((ki) => `vm->string_constant_atoms[${relocation.stringIndex(ki)}]`)
 				.join(", ");
 			const values = instruction.valueRegisters.map((r) => boxed(r)).join(", ");
 			const shape = [
@@ -2530,7 +2596,7 @@ function emitInstruction(
 			return [`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`];
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return [
-				`r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${instruction.templateOffset});`,
+				`r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${relocation.templateOffset(instruction.templateOffset)});`,
 				throwCheck,
 			];
 		case "CREATE_FUNCTION":
@@ -2540,7 +2606,7 @@ function emitInstruction(
 			// enclosing function's creation_env — is exactly what its interpreted
 			// frame's env would be, making the closure's creation_env correct.
 			return [
-				`r${instruction.dst} = mal_vm_op_create_function(vm, ${instruction.functionIndex}, env);`,
+				`r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env);`,
 			];
 		case "DEFINE_PROPERTY":
 			// Object-literal define semantics; cannot run user code, so no
@@ -2582,7 +2648,7 @@ function emitInstruction(
 		case "GUARD_FUNCTION_INDEX":
 			// Speculative-inline guard → boolean-rep dst (a raw C bool feeding the jumpIf).
 			return [
-				`r${instruction.dst} = mal_vm_callee_has_index(vm, ${boxed(instruction.callee)}, ${instruction.functionIndex});`,
+				`r${instruction.dst} = mal_vm_callee_has_index(vm, ${boxed(instruction.callee)}, ${relocation.functionIndex(instruction.functionIndex)});`,
 			];
 		case "LOAD_CALLEE":
 			// The invoked closure — used to initialize a named function expression's
@@ -2591,11 +2657,11 @@ function emitInstruction(
 			return [`r${instruction.dst} = callee;`];
 		case "LOAD_CAPTURED":
 			return [
-				`r${instruction.dst} = mal_vm_load_captured(env, ${instruction.ownerFunctionIndex}, ${instruction.index});`,
+				`r${instruction.dst} = mal_vm_load_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index});`,
 			];
 		case "STORE_CAPTURED":
 			return [
-				`mal_vm_store_captured(env, ${instruction.ownerFunctionIndex}, ${instruction.index}, ${boxed(instruction.src)});`,
+				`mal_vm_store_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)});`,
 			];
 		case "ENV_PUSH":
 		case "ENV_COPY":
@@ -2621,29 +2687,29 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
 			const candidates = instruction.candidates.flatMap((candidate) => [
-				candidate.shapeFunctionIndex,
+				relocation.functionIndex(candidate.shapeFunctionIndex),
 				candidate.shapeCacheIndex,
 				candidate.slot,
 			]);
 			return [
 				`MalValue __known_own_slot_${ip};`,
-				`static const i32 __known_own_slot_candidates_${ip}[] = { ${candidates.join(", ")} };`,
+				`${relocation.enabled ? "" : "static "}const i32 __known_own_slot_candidates_${ip}[] = { ${candidates.join(", ")} };`,
 				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
 				`  r${instruction.dst} = __known_own_slot_${ip};`,
 				`} else {`,
-				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
 			];
 		}
 		case "SELECT_SHAPE_CASE": {
 			const candidates = instruction.candidates.flatMap((candidate) => [
-				candidate.shapeFunctionIndex,
+				relocation.functionIndex(candidate.shapeFunctionIndex),
 				candidate.shapeCacheIndex,
 			]);
 			const selected = `mal_vm_select_shape_case(vm, ${boxed(instruction.object)}, ${instruction.candidates.length}, __shape_case_candidates_${ip})`;
 			return [
-				`static const i32 __shape_case_candidates_${ip}[] = { ${candidates.join(", ")} };`,
+				`${relocation.enabled ? "" : "static "}const i32 __shape_case_candidates_${ip}[] = { ${candidates.join(", ")} };`,
 				reps[instruction.dst] === "number"
 					? `r${instruction.dst} = (f64) ${selected};`
 					: `r${instruction.dst} = mal_value_from_i32(${selected});`,
@@ -2660,21 +2726,21 @@ function emitInstruction(
 				`if (mal_vm_try_load_shape_case(${boxed(instruction.object)}, ${selected}, ${instruction.slots.length}, __shape_case_slots_${ip}, &__shape_case_value_${ip})) {`,
 				`  r${instruction.dst} = __shape_case_value_${ip};`,
 				`} else {`,
-				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
 			];
 		}
 		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
 			const candidates = instruction.candidates.flatMap((candidate) => [
-				candidate.shapeFunctionIndex,
+				relocation.functionIndex(candidate.shapeFunctionIndex),
 				candidate.shapeCacheIndex,
 				candidate.slot,
 			]);
 			return [
-				`static const i32 __known_own_slot_store_candidates_${ip}[] = { ${candidates.join(", ")} };`,
+				`${relocation.enabled ? "" : "static "}const i32 __known_own_slot_store_candidates_${ip}[] = { ${candidates.join(", ")} };`,
 				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
-				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
 			];
@@ -2715,7 +2781,7 @@ function emitInstruction(
 						`    __gc_slots[${site.slotsOffset + slot}] = mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, ${end});`,
 						`    r${instruction.object} = __gc_slots[${site.slotsOffset + slot}];`,
 						`  }`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 						`  ${throwCheck}`,
 						`}`,
 					];
@@ -2732,7 +2798,7 @@ function emitInstruction(
 						`if (${fast}) {`,
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 						`  ${throwCheck}`,
 						`}`,
 					];
@@ -2754,7 +2820,7 @@ function emitInstruction(
 						`if (${fast}) {`,
 						`  r${instruction.dst} = ${direct};`,
 						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 						`  ${throwCheck}`,
 						`}`,
 					];
@@ -2794,7 +2860,7 @@ function emitInstruction(
 						`if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0) {`,
 						`  r${instruction.dst} = ${direct};`,
 						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 						`  ${throwCheck}`,
 						`}`,
 					];
@@ -2822,7 +2888,7 @@ function emitInstruction(
 						`    __gc_slots[${site.slotsOffset + slot}] = mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, __regexp_exec_${site.projection.callIp}_ends[${slot}]);`,
 						`    r${instruction.object} = __gc_slots[${site.slotsOffset + slot}];`,
 						`  }`,
-						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 						`  ${throwCheck}`,
 						`}`,
 					];
@@ -2875,7 +2941,7 @@ function emitInstruction(
 			}
 			const key =
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
-					? `mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}])`
+					? `mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}])`
 					: boxed(instruction.key);
 			// Per-site monomorphic inline cache (a static, zero-initialized → starts empty).
 			// A hit is a direct slot/element read with no shape search or key conversion, and
@@ -3030,7 +3096,7 @@ function emitInstruction(
 			}
 			const key =
 				instruction.opcode === "STORE_PROPERTY_STATIC"
-					? `mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}])`
+					? `mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}])`
 					: boxed(instruction.key);
 			// See LOAD_PROPERTY: a monomorphic data-slot/dense-element hit runs no user code;
 			// the general [[Set]] fallback keeps the throw check.
@@ -3064,18 +3130,22 @@ function emitInstruction(
 				throwCheck,
 			];
 		case "LOAD_GLOBAL":
-			return [`r${instruction.dst} = vm->globals[${instruction.index}];`];
+			return [
+				`r${instruction.dst} = vm->globals[${relocation.globalIndex(instruction.index)}];`,
+			];
 		case "STORE_GLOBAL":
-			return [`vm->globals[${instruction.index}] = ${boxed(instruction.src)};`];
+			return [
+				`vm->globals[${relocation.globalIndex(instruction.index)}] = ${boxed(instruction.src)};`,
+			];
 		case "STORE_GLOBAL_PROPERTY":
 			// A var/function declaration that becomes a property of globalThis.
 			return [
-				`mal_vm_op_store_global_property(vm, ${instruction.nameStringIndex}, ${boxed(instruction.src)}, ${strict}, ${instruction.declaration}, ${instruction.declarationConfigurable});`,
+				`mal_vm_op_store_global_property(vm, ${relocation.stringIndex(instruction.nameStringIndex)}, ${boxed(instruction.src)}, ${strict}, ${instruction.declaration}, ${instruction.declarationConfigurable});`,
 				throwCheck,
 			];
 		case "INIT_GLOBAL_VARS":
 			return [
-				`mal_vm_op_init_global_vars(vm, ${instruction.nameStringIndices.length}, (const i32[]){ ${instruction.nameStringIndices.join(", ")} }, ${instruction.declarationConfigurable});`,
+				`mal_vm_op_init_global_vars(vm, ${instruction.nameStringIndices.length}, (const i32[]){ ${instruction.nameStringIndices.map((index) => relocation.stringIndex(index)).join(", ")} }, ${instruction.declarationConfigurable});`,
 				throwCheck,
 			];
 		case "CREATE_ARGUMENTS_OBJECT":
@@ -3765,7 +3835,7 @@ function emitInstruction(
 					...(propertyLoad === undefined
 						? []
 						: [
-								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${propertyLoad.stringIndex}]), &__property_ic[${propertyLoad.icIndex}]);`,
+								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &__property_ic[${propertyLoad.icIndex}]);`,
 								`  ${throwCheck}`,
 							]),
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
@@ -3942,7 +4012,7 @@ function emitInstruction(
 						...(propertyLoad === undefined
 							? []
 							: [
-									`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${propertyLoad.stringIndex}]), &__property_ic[${propertyLoad.icIndex}]);`,
+									`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &__property_ic[${propertyLoad.icIndex}]);`,
 									`  ${throwCheck}`,
 								]),
 						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
@@ -3986,7 +4056,7 @@ function emitInstruction(
 					...(propertyLoad === undefined
 						? []
 						: [
-								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${propertyLoad.stringIndex}]), &__property_ic[${propertyLoad.icIndex}]);`,
+								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &__property_ic[${propertyLoad.icIndex}]);`,
 								`  ${throwCheck}`,
 							]),
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
@@ -4037,7 +4107,7 @@ function emitInstruction(
 						: "nullptr";
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex ?? -1}, ${callbackSymbol}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
@@ -4113,7 +4183,7 @@ function emitInstruction(
 			if (callPlan?.directFunctionCall) {
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_vm_call_function_call_direct(vm, &__cc_${ip}, ${callPlan.directCallTargetFunctionIndex ?? -1}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_vm_call_function_call_direct(vm, &__cc_${ip}, ${callPlan.directCallTargetFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallTargetFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
@@ -4196,7 +4266,7 @@ function emitInstruction(
 				}
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${callPlan.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${relocation.functionIndex(callPlan.directFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
@@ -4290,7 +4360,7 @@ function emitInstruction(
 			const construct =
 				constructPlan === undefined
 					? `mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`
-					: `mal_vm_construct_direct(vm, ${constructPlan.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
+					: `mal_vm_construct_direct(vm, ${relocation.functionIndex(constructPlan.directFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
 			return [
 				`MalCompletion ${tmp} = ${construct};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
@@ -4309,7 +4379,10 @@ function emitInstruction(
 		case "LOAD_UNDECLARED":
 			// An undeclared reference always throws ReferenceError; the helper sets
 			// the throw completion, so route it to the handler / out of the frame.
-			return [`mal_vm_op_load_undeclared(vm, ${instruction.nameStringIndex});`, onThrow];
+			return [
+				`mal_vm_op_load_undeclared(vm, ${relocation.stringIndex(instruction.nameStringIndex)});`,
+				onThrow,
+			];
 		case "TRY_BEGIN":
 		case "TRY_END":
 			// Markers only: the protected range becomes the per-instruction handler
@@ -4477,7 +4550,7 @@ function emitInstruction(
 			// Sloppy-mode read of an unresolved name off globalThis; a missing name
 			// throws ReferenceError and a global getter can throw, so propagate.
 			return [
-				`r${instruction.dst} = mal_vm_op_load_global_property(vm, ${instruction.nameStringIndex});`,
+				`r${instruction.dst} = mal_vm_op_load_global_property(vm, ${relocation.stringIndex(instruction.nameStringIndex)});`,
 				throwCheck,
 			];
 		case "LOAD_PROTOTYPE":
@@ -4510,20 +4583,26 @@ function emitInstruction(
 			const count = instruction.cookedIndices.length;
 			const cooked =
 				count > 0
-					? `(const i32[]){ ${instruction.cookedIndices.join(", ")} }`
+					? `(const i32[]){ ${instruction.cookedIndices.map((index) => (index < 0 ? String(index) : relocation.stringIndex(index))).join(", ")} }`
 					: "nullptr";
 			const raw =
-				count > 0 ? `(const i32[]){ ${instruction.rawIndices.join(", ")} }` : "nullptr";
+				count > 0
+					? `(const i32[]){ ${instruction.rawIndices.map((index) => relocation.stringIndex(index)).join(", ")} }`
+					: "nullptr";
 			return [
-				`r${instruction.dst} = mal_vm_op_create_template_object(vm, ${instruction.cacheSlot}, ${count}, ${cooked}, ${raw});`,
+				`r${instruction.dst} = mal_vm_op_create_template_object(vm, ${relocation.globalIndex(instruction.cacheSlot)}, ${count}, ${cooked}, ${raw});`,
 			];
 		}
 		case "CREATE_MODULE_NAMESPACE": {
 			const count = instruction.nameIndices.length;
 			const names =
-				count > 0 ? `(const i32[]){ ${instruction.nameIndices.join(", ")} }` : "nullptr";
+				count > 0
+					? `(const i32[]){ ${instruction.nameIndices.map((index) => relocation.stringIndex(index)).join(", ")} }`
+					: "nullptr";
 			const slots =
-				count > 0 ? `(const i32[]){ ${instruction.slots.join(", ")} }` : "nullptr";
+				count > 0
+					? `(const i32[]){ ${instruction.slots.map((index) => relocation.globalIndex(index)).join(", ")} }`
+					: "nullptr";
 			return [
 				`r${instruction.dst} = mal_vm_op_create_module_namespace(vm, ${count}, ${names}, ${slots});`,
 			];
@@ -4546,7 +4625,7 @@ function emitInstruction(
 			return [`r${instruction.dst} = mal_vm_op_create_private_name(vm);`];
 		case "CREATE_PRIVATE_NAMES":
 			return [
-				`mal_vm_op_create_private_names(vm, env, ${instruction.ownerFunctionIndex}, ${instruction.capturedIndices.length}, (const i32[]){ ${instruction.capturedIndices.join(", ")} });`,
+				`mal_vm_op_create_private_names(vm, env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.capturedIndices.length}, (const i32[]){ ${instruction.capturedIndices.join(", ")} });`,
 			];
 		case "DEFINE_PRIVATE":
 			// AddPrivateName on a fresh instance/class object; a duplicate install throws.
@@ -4633,20 +4712,20 @@ function emitInstruction(
 			// (the IR then falls back to the static binding). A getter / @@unscopables
 			// can throw.
 			return [
-				`r${instruction.dst} = mal_vm_op_with_get(vm, env, ${instruction.nameStringIndex});`,
+				`r${instruction.dst} = mal_vm_op_with_get(vm, env, ${relocation.stringIndex(instruction.nameStringIndex)});`,
 				throwCheck,
 			];
 		case "WITH_RESOLVE_BASE":
 			// The reference base (the with-object itself) for a read/write through it.
 			return [
-				`r${instruction.dst} = mal_vm_op_with_resolve_base(vm, env, ${instruction.nameStringIndex});`,
+				`r${instruction.dst} = mal_vm_op_with_resolve_base(vm, env, ${relocation.stringIndex(instruction.nameStringIndex)});`,
 				throwCheck,
 			];
 		case "WITH_SET":
 			// Assign through the with-envs; `found` (always boxed-rep) reports whether a
 			// binding matched so the IR can fall back to the static binding on a miss.
 			return [
-				`r${instruction.found} = mal_value_new_boolean(mal_vm_op_with_set(vm, env, ${instruction.nameStringIndex}, ${boxed(instruction.value)}));`,
+				`r${instruction.found} = mal_value_new_boolean(mal_vm_op_with_set(vm, env, ${relocation.stringIndex(instruction.nameStringIndex)}, ${boxed(instruction.value)}));`,
 				throwCheck,
 			];
 		case "CHECK_SUPER_CLASS":

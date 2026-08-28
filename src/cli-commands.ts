@@ -44,7 +44,10 @@ import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { formatCoreFunction } from "./compiler/core/core-ir.ts";
 import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
+import {
+	compileEntrypoint,
+	compileEntrypointToBuffer,
+} from "./compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
@@ -590,6 +593,10 @@ function compileAndBuild(
 					),
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
+							stripTypes: context.stripTypes,
+						}),
+					bakeProgram: () =>
+						compileEntrypoint(evalCompiler.entrypoint, {
 							stripTypes: context.stripTypes,
 						}),
 				}
@@ -1140,6 +1147,10 @@ function executeIsolatedTests(
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
 							stripTypes: context.stripTypes,
 						}),
+					bakeProgram: () =>
+						compileEntrypoint(evalCompiler.entrypoint, {
+							stripTypes: context.stripTypes,
+						}),
 				}
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 	const nativeContext = resolveNativeBuildContext({
@@ -1253,6 +1264,10 @@ function executeProfiledTests(
 					),
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
+							stripTypes: context.stripTypes,
+						}),
+					bakeProgram: () =>
+						compileEntrypoint(evalCompiler.entrypoint, {
 							stripTypes: context.stripTypes,
 						}),
 				}

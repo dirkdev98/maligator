@@ -29,7 +29,10 @@ import {
 import type { ModuleGoal } from "./compiler/frontend/module-graph.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
-import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
+import {
+	compileEntrypoint,
+	compileEntrypointToBuffer,
+} from "./compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import {
 	emitProgramImage,
@@ -76,6 +79,10 @@ function defaultCompilerBake(): CompilerBakeInput {
 		sourceFiles: compilerSourceFiles,
 		bake: () =>
 			compileEntrypointToBuffer(compilerEntrypoint, {
+				stripTypes: stripCompactTypes,
+			}),
+		bakeProgram: () =>
+			compileEntrypoint(compilerEntrypoint, {
 				stripTypes: stripCompactTypes,
 			}),
 	};

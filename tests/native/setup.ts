@@ -7,7 +7,10 @@ import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "../../src/compiler/pipeline/compile-program.ts";
+import {
+	compileEntrypoint,
+	compileEntrypointToBuffer,
+} from "../../src/compiler/pipeline/compile-program.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
 
@@ -24,6 +27,10 @@ const compilerBake = {
 	),
 	bake: () =>
 		compileEntrypointToBuffer(compilerEntrypoint, {
+			stripTypes: stripCompactTypes,
+		}),
+	bakeProgram: () =>
+		compileEntrypoint(compilerEntrypoint, {
 			stripTypes: stripCompactTypes,
 		}),
 };

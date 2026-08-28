@@ -747,6 +747,16 @@ typedef MalValue (*MalCompiledFunction)(
     void *entry_state
 );
 
+/** Program-local table bases used by a native overlay attached after a splice. */
+typedef struct MalNativeProgramRelocation {
+    i32 function_base;
+    i32 global_base;
+    i32 string_base;
+    i32 bigint_base;
+    i32 literal_template_base;
+    i32 source_position_base;
+} MalNativeProgramRelocation;
+
 enum {
     MAL_ARGUMENT_SNAPSHOT_SOURCE_COUNT = -1,
     MAL_ARGUMENT_SNAPSHOT_SOURCE_SCRATCH = -2,
@@ -1455,6 +1465,7 @@ typedef struct MalVm {
      */
     MalValue compiler_fn;
     bool compiler_installed;
+    MalNativeProgramRelocation compiler_native_relocation;
     MalLoadedRuntimeImage **loaded_images;
     i32 loaded_image_count;
     i32 loaded_image_capacity;

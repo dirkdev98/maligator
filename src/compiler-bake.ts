@@ -12,6 +12,9 @@ import * as path from "node:path";
 import type { BuildConfigTypeStripper } from "./build-config.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
+import { emitRelocatableNativeOverlayTranslationUnits } from "./compiler/target/emit-program-image.ts";
+import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
+import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
 
 const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
@@ -42,6 +45,8 @@ export type CompilerBakeInput =
 			sourceFiles?: ReadonlyArray<string>;
 			/** Called only when this source identity has no valid cached wire. */
 			bake: () => Uint8Array;
+			/** Produces the wire and its reusable relocation-aware native companion together. */
+			bakeProgram?: () => ProgramImage;
 	  })
 	| (CompilerBakeCacheInput & {
 			kind: "bytes";
@@ -54,9 +59,21 @@ export type CompilerBakeInput =
 	  });
 
 interface SourceManifest {
-	schema: 1;
+	schema: 2;
 	sourceKey: string;
 	outputDigest: string;
+	native?: {
+		key: string;
+		digest: string;
+		files: Array<string>;
+	};
+}
+
+export interface CompilerArtifacts {
+	wirePath: string;
+	wireDigest: string;
+	nativeSourcePaths: Array<string>;
+	nativeDigest?: string;
 }
 
 function compareNames(a: string, b: string): number {
@@ -183,6 +200,16 @@ function compilerSourceHash(
 	});
 }
 
+function compilerNativeSourceKey(sourceDirectory: string, sourceKey: string): string {
+	return hashDirectoryTrees({
+		root: sourceDirectory,
+		directories: [path.join(sourceDirectory, "compiler")],
+		include: (entry) => isCompilerSource(entry.name),
+		prefix: ["compiler-native-overlay-v1\0", sourceKey, "\0"],
+		compareNames,
+	});
+}
+
 function cacheRoot(input: CompilerBakeInput): string {
 	if (input.cacheRoot !== undefined) {
 		return requireAbsolute("compiler-wire cache root", input.cacheRoot);
@@ -215,17 +242,44 @@ function validContentWire(root: string, digest: string): boolean {
 	return fileDigest(cachedWire(root, digest)) === digest;
 }
 
-function validSourceWire(root: string, sourceKey: string): boolean {
+function sourceManifest(root: string, sourceKey: string): SourceManifest | undefined {
 	try {
 		const manifest = JSON.parse(
 			readFileSync(path.join(cacheDirectory(root, sourceKey), SOURCE_MANIFEST), "utf-8"),
 		) as Partial<SourceManifest>;
-		return (
-			manifest.schema === 1 &&
+		if (
+			manifest.schema === 2 &&
 			manifest.sourceKey === sourceKey &&
 			typeof manifest.outputDigest === "string" &&
 			fileDigest(cachedWire(root, sourceKey)) === manifest.outputDigest
+		) {
+			return manifest as SourceManifest;
+		}
+		return undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function nativeArtifactDigest(sources: ReadonlyArray<string>): string {
+	return hash(
+		"sha256",
+		sources.flatMap((source) => [String(source.length), "\0", source, "\0"]).join(""),
+		"hex",
+	);
+}
+
+function validNativeSources(
+	directory: string,
+	native: NonNullable<SourceManifest["native"]>,
+	key: string,
+): boolean {
+	if (native.key !== key || native.files.length === 0) return false;
+	try {
+		const sources = native.files.map((name) =>
+			readFileSync(path.join(directory, name), "utf-8"),
 		);
+		return nativeArtifactDigest(sources) === native.digest;
 	} catch {
 		return false;
 	}
@@ -260,45 +314,114 @@ function ensureContentWire(root: string, bytes: Uint8Array): string {
 	return wirePath;
 }
 
-function ensureSourceWire(
+function ensureSourceArtifacts(
 	root: string,
 	sourceKey: string,
 	bake: () => Uint8Array,
-): string {
+	bakeProgram: (() => ProgramImage) | undefined,
+	nativeKey: string,
+): CompilerArtifacts {
 	const wirePath = cachedWire(root, sourceKey);
-	if (validSourceWire(root, sourceKey)) return wirePath;
-	const bytes = bake();
+	const directory = cacheDirectory(root, sourceKey);
+	const current = sourceManifest(root, sourceKey);
+	if (
+		current !== undefined &&
+		(bakeProgram === undefined ||
+			(current.native !== undefined &&
+				validNativeSources(directory, current.native, nativeKey)))
+	) {
+		return {
+			wirePath,
+			wireDigest: current.outputDigest,
+			nativeSourcePaths:
+				current.native?.files.map((name) => path.join(directory, name)) ?? [],
+			...(current.native === undefined ? {} : { nativeDigest: current.native.digest }),
+		};
+	}
+
+	let bytes: Uint8Array;
+	let native: SourceManifest["native"];
+	if (bakeProgram === undefined) {
+		bytes = bake();
+	} else {
+		const image = bakeProgram();
+		bytes = serializeRuntimeImage(image.runtime);
+		requireNonemptyWire(bytes);
+		const outputDigest = hash("sha256", bytes, "hex");
+		if (current !== undefined && current.outputDigest !== outputDigest) {
+			throw new Error(
+				`cached compiler wire disagrees with native compiler program: ${wirePath}`,
+			);
+		}
+		const sources = emitRelocatableNativeOverlayTranslationUnits(image, outputDigest);
+		const files = sources.map(
+			(_source, index) => `compiler-native-${String(index).padStart(4, "0")}.c`,
+		);
+		for (const [index, source] of sources.entries()) {
+			publishFile(directory, files[index]!, source);
+		}
+		native = { key: nativeKey, digest: nativeArtifactDigest(sources), files };
+	}
 	requireNonemptyWire(bytes);
 	const outputDigest = hash("sha256", bytes, "hex");
-	const directory = cacheDirectory(root, sourceKey);
 	publishFile(directory, path.basename(wirePath), bytes);
-	const manifest: SourceManifest = { schema: 1, sourceKey, outputDigest };
+	const manifest: SourceManifest = { schema: 2, sourceKey, outputDigest, ...{ native } };
+	if (native === undefined) delete manifest.native;
 	publishFile(directory, SOURCE_MANIFEST, `${JSON.stringify(manifest)}\n`);
-	if (!validSourceWire(root, sourceKey)) {
+	const published = sourceManifest(root, sourceKey);
+	if (
+		published === undefined ||
+		(native !== undefined && !validNativeSources(directory, native, nativeKey))
+	) {
 		throw new Error(`failed to publish compiler wire: ${wirePath}`);
 	}
-	return wirePath;
+	return {
+		wirePath,
+		wireDigest: outputDigest,
+		nativeSourcePaths: native?.files.map((name) => path.join(directory, name)) ?? [],
+		...(native === undefined ? {} : { nativeDigest: native.digest }),
+	};
 }
 
 /** Ensure the requested eval compiler wire is present in the reusable cache. */
 export function ensureCompilerWire(input: CompilerBakeInput): string {
+	return ensureCompilerArtifacts(input).wirePath;
+}
+
+/** Ensure the eval compiler wire and its optional native companion are reusable. */
+export function ensureCompilerArtifacts(input: CompilerBakeInput): CompilerArtifacts {
 	const root = cacheRoot(input);
 	if (input.kind === "prebuilt") {
-		return ensureContentWire(
+		const wirePath = ensureContentWire(
 			root,
 			readFileSync(requireAbsolute("prebuilt compiler wire path", input.path)),
 		);
+		return {
+			wirePath,
+			wireDigest: fileDigest(wirePath)!,
+			nativeSourcePaths: [],
+		};
 	}
-	if (input.kind === "bytes") return ensureContentWire(root, input.bytes);
+	if (input.kind === "bytes") {
+		const wirePath = ensureContentWire(root, input.bytes);
+		return {
+			wirePath,
+			wireDigest: fileDigest(wirePath)!,
+			nativeSourcePaths: [],
+		};
+	}
 
 	const sourceDirectory = requireAbsolute(
 		"compiler source directory",
 		input.sourceDirectory,
 	);
 	const entrypoint = requireAbsolute("compiler source entrypoint", input.entrypoint);
-	return ensureSourceWire(
+	const sourceKey = compilerSourceHash(sourceDirectory, entrypoint, input.sourceFiles);
+	return ensureSourceArtifacts(
 		root,
-		compilerSourceHash(sourceDirectory, entrypoint, input.sourceFiles),
+		sourceKey,
 		input.bake,
+		input.bakeProgram,
+		compilerNativeSourceKey(sourceDirectory, sourceKey),
 	);
 }

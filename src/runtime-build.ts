@@ -20,7 +20,7 @@ import {
 	withArtifactActionLock,
 } from "./artifact-store.ts";
 import { runtimeCcFlags } from "./build-flags.ts";
-import { ensureCompilerWire } from "./compiler-bake.ts";
+import { ensureCompilerArtifacts } from "./compiler-bake.ts";
 import {
 	hashDirectoryTrees,
 	hashDirectoryTreesCached,
@@ -101,6 +101,7 @@ export function runtimeHeaderHash(
 
 export function runtimeArtifactKey(inputs: {
 	compilerWireDigest?: string;
+	compilerNativeDigest?: string;
 	compileArguments: Array<string>;
 	environmentFingerprint: string;
 	sourceHash: string;
@@ -109,6 +110,7 @@ export function runtimeArtifactKey(inputs: {
 }): string {
 	return artifactActionKey(RUNTIME_ARCHIVE_PRODUCER, {
 		compilerWireDigest: inputs.compilerWireDigest,
+		compilerNativeDigest: inputs.compilerNativeDigest,
 		compileArguments: inputs.compileArguments,
 		environmentFingerprint: inputs.environmentFingerprint,
 		sourceHash: inputs.sourceHash,
@@ -138,6 +140,8 @@ interface RuntimeLayout {
 	sqliteIncludeArguments: Array<string>;
 	cacheKey: string;
 	compilerWireDigest?: string;
+	compilerNativeDigest?: string;
+	compilerNativeSources: Array<string>;
 }
 
 interface RuntimeSource {
@@ -145,21 +149,27 @@ interface RuntimeSource {
 	path: string;
 	layer: "engine" | "host" | "runtime";
 	layerDirectory: string;
+	logicalPath: string;
 	includeArguments?: Array<string>;
 }
 
 function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 	let compilerWire: string | undefined;
+	let compilerWireDigest: string | undefined;
+	let compilerNativeDigest: string | undefined;
+	let compilerNativeSources: Array<string> = [];
 	if (context.features.evalEnabled) {
 		if (context.compilerBake === undefined) {
 			throw new Error("eval-enabled build requires an explicit compiler wire input");
 		}
-		compilerWire = ensureCompilerWire(context.compilerBake);
+		const compiler = ensureCompilerArtifacts(context.compilerBake);
+		compilerWire = compiler.wirePath;
+		compilerWireDigest = compiler.wireDigest;
+		if (!context.features.profileEnabled) {
+			compilerNativeDigest = compiler.nativeDigest;
+			compilerNativeSources = compiler.nativeSourcePaths;
+		}
 	}
-	const compilerWireDigest =
-		compilerWire === undefined
-			? undefined
-			: artifactDigest(new Uint8Array(readFileSync(compilerWire)));
 	const flags = [
 		...runtimeCcFlags(
 			{},
@@ -169,6 +179,12 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		),
 		...context.features.cDefines,
 		...(compilerWire === undefined ? [] : [`-DMAL_COMPILER_WIRE="${compilerWire}"`]),
+		...(compilerNativeDigest === undefined
+			? []
+			: [
+					"-DMAL_COMPILER_NATIVE=1",
+					`-DMAL_COMPILER_WIRE_DIGEST="${compilerWireDigest}"`,
+				]),
 		`-ffile-prefix-map=${context.runtimeDirectory}=<runtime>`,
 	];
 	const sourceRoot = path.join(context.runtimeDirectory, "src");
@@ -195,6 +211,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 	);
 	const cacheKey = runtimeArtifactKey({
 		compilerWireDigest,
+		compilerNativeDigest,
 		compileArguments: [
 			"-std=c2x",
 			...identityFlags,
@@ -221,6 +238,8 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		sqliteIncludeArguments,
 		cacheKey,
 		compilerWireDigest,
+		compilerNativeDigest,
+		compilerNativeSources,
 	};
 }
 
@@ -240,6 +259,12 @@ function runtimeSources(
 				path: path.join(layerDirectory, name),
 				layer,
 				layerDirectory,
+				logicalPath: path.posix.join(
+					"<runtime>",
+					"src",
+					layer === "engine" ? "" : layer,
+					name,
+				),
 			});
 		}
 	}
@@ -253,6 +278,7 @@ function runtimeSources(
 				path: path.join(llhttpSource, name),
 				layer: "host",
 				layerDirectory: path.join(sourceRoot, "host"),
+				logicalPath: path.posix.join("<runtime>", "vendor", "llhttp", "src", name),
 			});
 		}
 	}
@@ -264,6 +290,19 @@ function runtimeSources(
 			layer: "host",
 			layerDirectory: path.join(sourceRoot, "host"),
 			includeArguments: layout.sqliteIncludeArguments,
+			logicalPath: path.posix.join("<runtime>", "vendor", "sqlite", "sqlite3.c"),
+		});
+	}
+	for (const [index, compilerSource] of layout.compilerNativeSources.entries()) {
+		sources.push({
+			name: `compiler-native-${String(index).padStart(4, "0")}.c`,
+			path: compilerSource,
+			layer: "runtime",
+			layerDirectory: sourceRoot,
+			logicalPath: path.posix.join(
+				"<eval-compiler>",
+				`compiler-native-${String(index).padStart(4, "0")}.c`,
+			),
 		});
 	}
 	return sources;
@@ -276,10 +315,7 @@ function objectActionKey(
 	preprocessedDigest: string,
 ): string {
 	return artifactActionKey(RUNTIME_OBJECT_PRODUCER, {
-		source: path.posix.join(
-			"<runtime>",
-			...path.relative(context.runtimeDirectory, source.path).split(path.sep),
-		),
+		source: source.logicalPath,
 		preprocessedDigest,
 		arguments: runtimeObjectCodegenArguments(context, layout),
 		environment: context.environmentFingerprint,

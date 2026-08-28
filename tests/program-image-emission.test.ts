@@ -16,6 +16,7 @@ import {
 	emitBatch,
 	emitProgramImage,
 	emitProgramTranslationUnits,
+	emitRelocatableNativeOverlayTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
 import {
 	vmRegionLicense,
@@ -777,6 +778,43 @@ describe("emit-program-image instruction packing", () => {
 		expect(() => emitProgramTranslationUnits(definition, {}, 100)).toThrow(
 			/generated runtime-image translation unit/,
 		);
+	});
+
+	it("emits a wire-matched native overlay with relocated program coordinates", () => {
+		const relocatableInstructions: Array<BytecodeInstruction> = [
+			{ opcode: "CREATE_STRING", dst: 0, stringIndex: 1 },
+			{ opcode: "LOAD_GLOBAL", dst: 1, index: 2 },
+			{ opcode: "CREATE_FUNCTION", dst: 2, functionIndex: 0 },
+			{ opcode: "RETURN", value: 1 },
+		];
+		const relocatableFunction: BytecodeFunction = {
+			...fn,
+			registerCount: 3,
+			capturedCount: 1,
+			instructions: relocatableInstructions,
+			positions: [],
+		};
+		const relocatable: ProgramImage = {
+			...definition,
+			runtime: {
+				...definition.runtime,
+				functions: [relocatableFunction],
+			},
+			native: createConservativeNativePlan([relocatableFunction]),
+		};
+		const digest = "a".repeat(64);
+		const output = emitRelocatableNativeOverlayTranslationUnits(relocatable, digest).join(
+			"\n",
+		);
+
+		expect(output).toContain(`.wire_digest = "${digest}"`);
+		expect(output).toContain("mal_eval_compiler_native_entries");
+		expect(output).toContain("const MalNativeProgramRelocation *__mal_relocation");
+		expect(output).toContain("__mal_relocation->function_base + 0");
+		expect(output).toContain("__mal_relocation->global_base + 2");
+		expect(output).toContain("__mal_relocation->string_base + 1");
+		expect(output).not.toContain("mal_strings_eval_compiler");
+		expect(output).not.toContain("mal_direct_");
 	});
 
 	it("uses a null side table when a function has no variable operands", () => {

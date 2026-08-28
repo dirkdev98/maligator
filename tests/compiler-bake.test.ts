@@ -260,7 +260,7 @@ describe("compiler wire provisioning", () => {
 				readFileSync(path.join(path.dirname(sourcePath), "artifact.json"), "utf-8"),
 			),
 		).toMatchObject({
-			schema: 1,
+			schema: 2,
 		});
 	});
 });

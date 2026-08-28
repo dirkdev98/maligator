@@ -26,7 +26,10 @@ import { parseModule, parseScript } from "../compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
-import { compileEntrypointToBuffer } from "../compiler/pipeline/compile-program.ts";
+import {
+	compileEntrypoint,
+	compileEntrypointToBuffer,
+} from "../compiler/pipeline/compile-program.ts";
 import {
 	emitBatch,
 	emitProgramImage,
@@ -385,6 +388,10 @@ export function test262PrepareBuild() {
 			),
 			bake: () =>
 				compileEntrypointToBuffer(compilerEntrypoint, {
+					stripTypes: stripCompactTypes,
+				}),
+			bakeProgram: () =>
+				compileEntrypoint(compilerEntrypoint, {
 					stripTypes: stripCompactTypes,
 				}),
 		},

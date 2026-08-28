@@ -8,6 +8,7 @@
 #include "builtin_eval.h"
 #include "builtin_regexp.h"
 #include "compiler_wire.h"
+#include "compiler_native.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -112,9 +113,22 @@ static bool ensure_compiler(MalVm *vm) {
         goto done;
     }
     mal_vm_retain_loaded_runtime_image(vm, loaded);
-    i32 entry = mal_vm_splice_runtime_image(vm, mal_loaded_runtime_image_get(loaded));
+    const MalRuntimeImage *compiler_image = mal_loaded_runtime_image_get(loaded);
+    MalNativeProgramRelocation relocation = {
+        .function_base = vm->runtime_image->function_count,
+        .global_base = vm->runtime_image->global_count,
+        .string_base = vm->runtime_image->string_constant_count,
+        .bigint_base = vm->runtime_image->bigint_constant_count,
+        .literal_template_base = vm->runtime_image->literal_template_data_count,
+        .source_position_base = vm->runtime_image->source_position_count,
+    };
+    i32 entry = mal_vm_splice_runtime_image(vm, compiler_image);
     if (entry < 0) {
         goto done; // splice set a pending RangeError (constant-table overflow)
+    }
+    if (!mal_compiler_native_attach(
+            vm, entry, compiler_image->function_count, &relocation)) {
+        goto done;
     }
     roots[0] = mal_vm_op_create_function(vm, entry, nullptr);
     MalCompletion run = mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), nullptr, 0);

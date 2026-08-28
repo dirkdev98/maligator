@@ -481,6 +481,7 @@ function emitNativeFunctions(
 		debug: boolean;
 		linkage: "static" | "external";
 		maxCodeUnits?: number;
+		relocatable?: boolean;
 	},
 ): {
 	compiled: Array<CompiledFunction | null>;
@@ -505,6 +506,7 @@ function emitNativeFunctions(
 			availability.directCompiledTargets,
 			image.native.semanticProtectors,
 			availability.directCompiledEntries,
+			options.relocatable === true,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
 		return {
@@ -520,6 +522,9 @@ function emitNativeFunctions(
 		directCompiledEntries: new Map(),
 	};
 	let compiled = image.runtime.functions.map((_fn, index) => emit(index, unavailable));
+	if (options.relocatable === true) {
+		return { compiled, availability: unavailable };
+	}
 	for (let iteration = 0; iteration <= image.runtime.functions.length + 1; iteration++) {
 		const availability = nativeCompilationAvailability(image, compiled);
 		const next = image.runtime.functions.map((_fn, index) =>
@@ -1036,6 +1041,78 @@ export function emitProgramTranslationUnits(
 				source: entry.source,
 			});
 		}
+	}
+	flush();
+	return units;
+}
+
+/** Emit only relocation-aware native entries for a runtime image loaded from wire. */
+export function emitRelocatableNativeOverlayTranslationUnits(
+	image: ProgramImage,
+	wireDigest: string,
+	maxCodeUnits = DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
+): Array<string> {
+	if (!/^[0-9a-f]{64}$/.test(wireDigest)) {
+		throw new Error(
+			`native overlay wire digest must be lowercase SHA-256: ${wireDigest}`,
+		);
+	}
+	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
+		throw new RangeError("translation-unit code-unit budget must be a positive integer");
+	}
+	const suffix = "_eval_compiler";
+	const { compiled } = emitNativeFunctions(image, {
+		useCompiled: true,
+		suffix,
+		debug: true,
+		linkage: "external",
+		maxCodeUnits,
+		relocatable: true,
+	});
+	const declarations = compiled.flatMap((fn) =>
+		fn === null ? [] : [`MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`],
+	);
+	const table = [
+		...NATIVE_C_HEADER_LINES,
+		'#include "compiler_native.h"',
+		...declarations,
+		"",
+		"static const MalCompiledFunction mal_eval_compiler_native_entries[] = {",
+		...compiled.map((fn) => `    ${fn?.symbol ?? "nullptr"},`),
+		"};",
+		"",
+		"const MalCompilerNativeOverlay mal_eval_compiler_native_overlay = {",
+		`    .wire_digest = "${wireDigest}",`,
+		`    .function_count = ${compiled.length},`,
+		"    .entries = mal_eval_compiler_native_entries,",
+		"};",
+	].join("\n");
+	if (table.length > maxCodeUnits) {
+		throw new RangeError(
+			`native overlay table has ${table.length} code units; maximum is ${maxCodeUnits}`,
+		);
+	}
+
+	const units = [table];
+	const header = NATIVE_C_HEADER_LINES.join("\n");
+	let bodies: Array<string> = [];
+	let codeUnits = header.length + 1;
+	const flush = (): void => {
+		if (bodies.length === 0) return;
+		units.push([header, ...bodies].join("\n"));
+		bodies = [];
+		codeUnits = header.length + 1;
+	};
+	for (const fn of compiled) {
+		if (fn === null) continue;
+		if (codeUnits + fn.source.length + 1 > maxCodeUnits) flush();
+		if (codeUnits + fn.source.length + 1 > maxCodeUnits) {
+			throw new RangeError(
+				`generated compiled function '${fn.symbol}' requires ${codeUnits + fn.source.length + 1} code units; translation-unit maximum is ${maxCodeUnits}`,
+			);
+		}
+		bodies.push(fn.source);
+		codeUnits += fn.source.length + 1;
 	}
 	flush();
 	return units;
