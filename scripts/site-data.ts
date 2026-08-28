@@ -34,6 +34,35 @@ export interface Test262Point extends DatedPoint {
 	percent: number;
 }
 
+const JAVASCRIPT_MODES = [
+	"closed-compiled",
+	"open-compiled",
+	"closed-interpreted",
+	"open-interpreted",
+] as const;
+type JavascriptMode = (typeof JAVASCRIPT_MODES)[number];
+
+export interface JavascriptSiteMetrics {
+	workload: "javascript-v1";
+	runs: number;
+	nativeBuild: {
+		optimizationFlags: Array<string>;
+		lto: boolean;
+		strip: boolean;
+		compilerVersion: string;
+		target: string;
+	};
+	closedCompiledMs: number;
+	openCompiledMs: number;
+	closedInterpretedMs: number;
+	openInterpretedMs: number;
+}
+
+export interface JavascriptPoint extends DatedPoint, JavascriptSiteMetrics {
+	commit: string;
+	preview?: boolean;
+}
+
 export interface SelfCompileMetrics {
 	world: "closed";
 	maligatorMs: number;
@@ -83,6 +112,8 @@ function selfCompileMetrics(point: SelfCompilePoint): SelfCompileMetrics {
 }
 
 interface BenchmarkFile {
+	schema?: number;
+	javascript?: unknown;
 	selfCompile?: SelfCompileMetrics;
 }
 
@@ -92,7 +123,7 @@ interface SiteMeta {
 	binaryProfile: string;
 }
 
-interface GitRevision<T> {
+export interface GitRevision<T> {
 	commit: string;
 	date: string;
 	value: T;
@@ -205,6 +236,117 @@ export function test262History(): Array<Test262Point> {
 
 function currentCommit(): string {
 	return git(["rev-parse", "--short=8", "HEAD"]).trim();
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+export function javascriptMetricsForSite(
+	value: unknown,
+): JavascriptSiteMetrics | undefined {
+	const baseline = record(value);
+	const javascript = record(baseline?.javascript);
+	const nativeBuild = record(javascript?.nativeBuild);
+	const modes = record(javascript?.modes);
+	if (
+		baseline?.schema !== 3 ||
+		javascript?.workload !== "javascript-v1" ||
+		typeof javascript.runs !== "number" ||
+		!Number.isInteger(javascript.runs) ||
+		javascript.runs <= 0 ||
+		nativeBuild?.mode !== "production" ||
+		!Array.isArray(nativeBuild.optimizationFlags) ||
+		!nativeBuild.optimizationFlags.every((flag) => typeof flag === "string") ||
+		typeof nativeBuild.lto !== "boolean" ||
+		typeof nativeBuild.strip !== "boolean" ||
+		typeof nativeBuild.compilerVersion !== "string" ||
+		typeof nativeBuild.target !== "string" ||
+		modes === undefined
+	) {
+		return undefined;
+	}
+	const wallMs = new Map<JavascriptMode, number>();
+	for (const mode of JAVASCRIPT_MODES) {
+		const metrics = record(modes[mode]);
+		const [world, backend] = mode.split("-");
+		if (
+			typeof metrics?.wallMs !== "number" ||
+			!Number.isFinite(metrics.wallMs) ||
+			metrics.wallMs <= 0 ||
+			metrics.world !== world ||
+			metrics.backend !== backend
+		) {
+			return undefined;
+		}
+		wallMs.set(mode, metrics.wallMs);
+	}
+	return {
+		workload: "javascript-v1",
+		runs: javascript.runs,
+		nativeBuild: {
+			optimizationFlags: [...nativeBuild.optimizationFlags],
+			lto: nativeBuild.lto,
+			strip: nativeBuild.strip,
+			compilerVersion: nativeBuild.compilerVersion,
+			target: nativeBuild.target,
+		},
+		closedCompiledMs: wallMs.get("closed-compiled")!,
+		openCompiledMs: wallMs.get("open-compiled")!,
+		closedInterpretedMs: wallMs.get("closed-interpreted")!,
+		openInterpretedMs: wallMs.get("open-interpreted")!,
+	};
+}
+
+function javascriptSiteMetrics(point: JavascriptPoint): JavascriptSiteMetrics {
+	const { commit: _commit, date: _date, preview: _preview, ...metrics } = point;
+	return metrics;
+}
+
+export function collectJavascriptHistory(
+	revisions: ReadonlyArray<GitRevision<unknown>>,
+	current: unknown,
+	previewCommit: string,
+	previewDate: Date,
+): Array<JavascriptPoint> {
+	const committed: Array<JavascriptPoint> = changesOnly<JavascriptPoint>(
+		revisions.flatMap(({ commit, date, value }) => {
+			const metrics = javascriptMetricsForSite(value);
+			return metrics === undefined
+				? []
+				: [{ commit: commit.slice(0, 8), date, ...metrics }];
+		}),
+		javascriptSiteMetrics,
+	);
+	const currentMetrics = javascriptMetricsForSite(current);
+	const latest = committed.at(-1);
+	if (
+		currentMetrics !== undefined &&
+		JSON.stringify(latest === undefined ? undefined : javascriptSiteMetrics(latest)) !==
+			JSON.stringify(currentMetrics)
+	) {
+		committed.push({
+			commit: previewCommit,
+			date: previewDate.toISOString(),
+			preview: true,
+			...currentMetrics,
+		});
+	}
+	return committed;
+}
+
+export function javascriptHistory(
+	previewDate = statSync(BENCH_FILE).mtime,
+): Array<JavascriptPoint> {
+	const current = JSON.parse(readFileSync(BENCH_FILE, "utf8")) as unknown;
+	return collectJavascriptHistory(
+		history<unknown>(BENCH_FILE),
+		current,
+		currentCommit(),
+		previewDate,
+	);
 }
 
 export function selfCompileHistory(
@@ -724,10 +866,12 @@ export function updateSite(): void {
 	};
 	const meta = JSON.parse(readFileSync(SITE_META_FILE, "utf8")) as SiteMeta;
 	const test262 = test262History();
+	const javascript = javascriptHistory();
 	const selfCompile = selfCompileHistory();
 	const data = {
 		version: packageJson.version,
 		test262,
+		javascript,
 		selfCompile,
 		binary: meta,
 	};

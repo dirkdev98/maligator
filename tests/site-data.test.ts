@@ -1,11 +1,63 @@
 import { expect, test } from "vitest";
 import {
+	collectJavascriptHistory,
 	changesOnly,
 	isoWeekKey,
+	javascriptMetricsForSite,
 	latestPerWeek,
 	since,
 	summarizeTest262,
 } from "../scripts/site-data.ts";
+
+function javascriptBaseline(
+	closedCompiledMs: number,
+	overrides: Record<string, unknown> = {},
+) {
+	return {
+		schema: 3,
+		javascript: {
+			workload: "javascript-v1",
+			runs: 7,
+			nativeBuild: {
+				mode: "production",
+				optimizationFlags: ["-O2", "-g0", "-flto=thin"],
+				lto: true,
+				strip: true,
+				compiler: "/usr/bin/cc",
+				compilerVersion: "Apple clang 17",
+				target: "aarch64-apple-darwin",
+			},
+			node: { wallMs: 400 },
+			modes: {
+				"closed-compiled": {
+					wallMs: closedCompiledMs,
+					world: "closed",
+					backend: "compiled",
+					ratio: 3,
+				},
+				"open-compiled": {
+					wallMs: 2_000,
+					world: "open",
+					backend: "compiled",
+					ratio: 5,
+				},
+				"closed-interpreted": {
+					wallMs: 4_000,
+					world: "closed",
+					backend: "interpreted",
+					ratio: 10,
+				},
+				"open-interpreted": {
+					wallMs: 6_000,
+					world: "open",
+					backend: "interpreted",
+					ratio: 15,
+				},
+			},
+		},
+		...overrides,
+	};
+}
 
 test("benchmark history retains each changed commit and skips unrelated snapshots", () => {
 	const points = changesOnly(
@@ -19,6 +71,57 @@ test("benchmark history retains each changed commit and skips unrelated snapshot
 		(point) => point.value,
 	);
 	expect(points.map((point) => point.commit)).toEqual(["a", "c", "e"]);
+});
+
+test("JavaScript site metrics accept only the complete production benchmark contract", () => {
+	const metrics = javascriptMetricsForSite(javascriptBaseline(1_300));
+	expect(metrics).toMatchObject({
+		workload: "javascript-v1",
+		runs: 7,
+		closedCompiledMs: 1_300,
+		openCompiledMs: 2_000,
+		closedInterpretedMs: 4_000,
+		openInterpretedMs: 6_000,
+	});
+	expect(JSON.stringify(metrics)).not.toMatch(/node|ratio/i);
+	expect(
+		javascriptMetricsForSite(javascriptBaseline(1_300, { schema: 2 })),
+	).toBeUndefined();
+	expect(
+		javascriptMetricsForSite({
+			...javascriptBaseline(1_300),
+			javascript: {
+				...javascriptBaseline(1_300).javascript,
+				modes: {},
+			},
+		}),
+	).toBeUndefined();
+});
+
+test("JavaScript history skips unchanged snapshots and appends a changed preview", () => {
+	const first = javascriptBaseline(1_300);
+	const faster = javascriptBaseline(1_100);
+	const preview = javascriptBaseline(1_050);
+	const points = collectJavascriptHistory(
+		[
+			{ commit: "aaaaaaaa1111", date: "2026-08-25T10:00:00Z", value: first },
+			{ commit: "bbbbbbbb2222", date: "2026-08-26T10:00:00Z", value: first },
+			{ commit: "cccccccc3333", date: "2026-08-27T10:00:00Z", value: faster },
+		],
+		preview,
+		"dddddddd",
+		new Date("2026-08-28T10:00:00Z"),
+	);
+	expect(points.map(({ commit }) => commit)).toEqual([
+		"aaaaaaaa",
+		"cccccccc",
+		"dddddddd",
+	]);
+	expect(points.at(-1)).toMatchObject({
+		closedCompiledMs: 1_050,
+		date: "2026-08-28T10:00:00.000Z",
+		preview: true,
+	});
 });
 
 test("Test262 site summary keeps skips separate and folds all failure modes", () => {

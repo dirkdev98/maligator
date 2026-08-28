@@ -452,8 +452,7 @@
 				fill: var(--muted);
 				font: 12px var(--mono);
 			}
-			.chart .line-primary,
-			.chart .line-secondary {
+			.chart .series-line {
 				fill: none;
 				stroke-linecap: round;
 				stroke-linejoin: round;
@@ -467,6 +466,20 @@
 				stroke: var(--tan);
 				stroke-width: 4;
 			}
+			.chart .line-closed-compiled,
+			.chart .line-closed-interpreted {
+				stroke: var(--cyan);
+				stroke-width: 4;
+			}
+			.chart .line-open-compiled,
+			.chart .line-open-interpreted {
+				stroke: var(--coral);
+				stroke-width: 4;
+			}
+			.chart .line-closed-interpreted,
+			.chart .line-open-interpreted {
+				stroke-dasharray: 10 7;
+			}
 			.chart .point {
 				cursor: crosshair;
 				stroke: var(--panel);
@@ -478,6 +491,14 @@
 			}
 			.chart .point-secondary {
 				fill: var(--tan);
+			}
+			.chart .point-closed-compiled,
+			.chart .point-closed-interpreted {
+				fill: var(--cyan);
+			}
+			.chart .point-open-compiled,
+			.chart .point-open-interpreted {
+				fill: var(--coral);
 			}
 			.chart .point:hover,
 			.chart .point:focus {
@@ -513,15 +534,28 @@
 			.legend span::before {
 				content: "";
 				display: inline-block;
-				width: 0.75rem;
-				height: 0.75rem;
+				width: 1.1rem;
+				height: 0.22rem;
 				margin-right: 0.4rem;
-				border-radius: 50%;
-				vertical-align: -0.08rem;
-				background: var(--cyan);
+				border-radius: 999px;
+				vertical-align: 0.12rem;
+				background: var(--legend-color, var(--cyan));
 			}
 			.legend .node::before {
-				background: var(--tan);
+				--legend-color: var(--tan);
+			}
+			.legend .closed {
+				--legend-color: var(--cyan);
+			}
+			.legend .open {
+				--legend-color: var(--coral);
+			}
+			.legend .interpreted::before {
+				background: repeating-linear-gradient(
+					to right,
+					var(--legend-color) 0 0.35rem,
+					transparent 0.35rem 0.55rem
+				);
 			}
 			details {
 				margin-top: 1rem;
@@ -955,6 +989,54 @@
 						<article class="chart-shell">
 							<div class="chart-heading">
 								<div>
+									<h3>JavaScript workload</h3>
+									<p>
+										Balanced core JavaScript across Maligator’s four production-native
+										modes. Median fresh-process wall time; lower is better.
+									</p>
+								</div>
+								<div class="stat">
+									<strong id="javascript-latest">Starting now</strong
+									><span>closed + compiled</span>
+								</div>
+							</div>
+							<div
+								class="chart"
+								id="javascript-chart"
+								aria-label="Maligator JavaScript benchmark wall time across closed, open, compiled, and interpreted modes"
+							></div>
+							<div class="tooltip" id="javascript-tooltip" role="status" hidden></div>
+							<div class="legend" aria-label="JavaScript benchmark series">
+								<span class="closed">Closed · compiled</span>
+								<span class="open">Open · compiled</span>
+								<span class="closed interpreted">Closed · interpreted</span>
+								<span class="open interpreted">Open · interpreted</span>
+							</div>
+							<details>
+								<summary>Exact JavaScript benchmark results and environment</summary>
+								<div class="table-wrap">
+									<table>
+										<thead>
+											<tr>
+												<th>Date</th>
+												<th>Closed compiled</th>
+												<th>Open compiled</th>
+												<th>Closed interpreted</th>
+												<th>Open interpreted</th>
+												<th>Runs</th>
+												<th>Target</th>
+												<th>Commit</th>
+											</tr>
+										</thead>
+										<tbody id="javascript-table"></tbody>
+									</table>
+								</div>
+							</details>
+						</article>
+
+						<article class="chart-shell">
+							<div class="chart-heading">
+								<div>
 									<h3>Compiling the compiler</h3>
 									<p>
 										Fresh-process median through C emission. Node.js runs the same
@@ -1280,6 +1362,85 @@ Mal.serve({
 						"failed": 3125,
 						"skipped": 0,
 						"percent": 94.16738213445818
+					},
+					{
+						"commit": "ec1c04d6",
+						"date": "2026-08-28T15:46:47+02:00",
+						"corpus": "3655e746",
+						"passed": 50465,
+						"failed": 3113,
+						"skipped": 0,
+						"percent": 94.18977938706186
+					}
+				],
+				"javascript": [
+					{
+						"commit": "1a2a8060",
+						"date": "2026-08-25T13:23:11+02:00",
+						"workload": "javascript-v1",
+						"runs": 5,
+						"nativeBuild": {
+							"optimizationFlags": ["-O2", "-g0", "-flto=thin"],
+							"lto": true,
+							"strip": true,
+							"compilerVersion": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+							"target": "aarch64-apple-darwin"
+						},
+						"closedCompiledMs": 1864.752667,
+						"openCompiledMs": 2461.450625,
+						"closedInterpretedMs": 4845.794166,
+						"openInterpretedMs": 6234.873708
+					},
+					{
+						"commit": "d7f9f8dd",
+						"date": "2026-08-25T18:27:23+02:00",
+						"workload": "javascript-v1",
+						"runs": 5,
+						"nativeBuild": {
+							"optimizationFlags": ["-O2", "-g0", "-flto=thin"],
+							"lto": true,
+							"strip": true,
+							"compilerVersion": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+							"target": "aarch64-apple-darwin"
+						},
+						"closedCompiledMs": 1595.0305,
+						"openCompiledMs": 2307.351542,
+						"closedInterpretedMs": 4389.235792,
+						"openInterpretedMs": 5885.442167
+					},
+					{
+						"commit": "b6719e66",
+						"date": "2026-08-26T20:23:07+02:00",
+						"workload": "javascript-v1",
+						"runs": 7,
+						"nativeBuild": {
+							"optimizationFlags": ["-O2", "-g0", "-flto=thin"],
+							"lto": true,
+							"strip": true,
+							"compilerVersion": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+							"target": "aarch64-apple-darwin"
+						},
+						"closedCompiledMs": 1296.101417,
+						"openCompiledMs": 2037.070833,
+						"closedInterpretedMs": 4175.245291,
+						"openInterpretedMs": 5743.128125
+					},
+					{
+						"commit": "ee167d53",
+						"date": "2026-08-28T05:19:26+02:00",
+						"workload": "javascript-v1",
+						"runs": 7,
+						"nativeBuild": {
+							"optimizationFlags": ["-O2", "-g0", "-flto=thin"],
+							"lto": true,
+							"strip": true,
+							"compilerVersion": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+							"target": "aarch64-apple-darwin"
+						},
+						"closedCompiledMs": 1319.714916,
+						"openCompiledMs": 2075.237792,
+						"closedInterpretedMs": 4282.227208,
+						"openInterpretedMs": 5774.347709
 					}
 				],
 				"selfCompile": [
@@ -2103,8 +2264,8 @@ Mal.serve({
 					const y = (value) => top + (1 - (value - yMin) / (yMax - yMin)) * plotHeight;
 					const svg = el("svg", {
 						viewBox: `0 0 ${width} ${height}`,
-						role: "img",
-						"aria-hidden": "true",
+						role: "group",
+						"aria-label": container.getAttribute("aria-label") ?? "Chart",
 					});
 					for (const tick of ticks) {
 						const py = y(tick);
@@ -2124,7 +2285,12 @@ Mal.serve({
 						points[0],
 						points[Math.floor((points.length - 1) / 2)],
 						points.at(-1),
-					].filter((point, index, all) => all.indexOf(point) === index);
+					].filter(
+						(point, index, all) =>
+							all.findIndex(
+								(candidate) => axisDate(candidate.date) === axisDate(point.date),
+							) === index,
+					);
 					for (const point of labelPoints) {
 						const label = el("text", {
 							class: "axis-label",
@@ -2141,6 +2307,8 @@ Mal.serve({
 						svg.append(label);
 					}
 					for (const [seriesIndex, item] of series.entries()) {
+						const seriesClass =
+							item.className ?? (seriesIndex === 0 ? "primary" : "secondary");
 						const plotted = points.map((point) => ({
 							x: x(point.date),
 							y: y(point[item.key]),
@@ -2149,19 +2317,19 @@ Mal.serve({
 						if (plotted.length > 1)
 							svg.append(
 								el("path", {
-									class: seriesIndex === 0 ? "line-primary" : "line-secondary",
+									class: `series-line line-${seriesClass}`,
 									d: pathFor(plotted),
 								}),
 							);
 						for (const plottedPoint of plotted) {
 							const circle = el("circle", {
-								class: `point ${seriesIndex === 0 ? "point-primary" : "point-secondary"}`,
+								class: `point point-${seriesClass}`,
 								cx: plottedPoint.x,
 								cy: plottedPoint.y,
 								r: compact ? 5 : 6,
 								tabindex: 0,
 							});
-							const content = tooltip(plottedPoint.source);
+							const content = tooltip(plottedPoint.source, item);
 							circle.setAttribute(
 								"aria-label",
 								content
@@ -2210,6 +2378,64 @@ Mal.serve({
 					.map(
 						(point) =>
 							`<tr><td>${html(shortDate(point.date))}</td><td>${point.percent.toFixed(2)}%</td><td>${fmt.format(point.passed)}</td><td>${fmt.format(point.failed)}</td><td>${fmt.format(point.skipped)}</td><td>${html(point.commit)}</td></tr>`,
+					)
+					.join("");
+
+				const javascript = data.javascript;
+				if (javascript.length > 0)
+					document.getElementById("javascript-latest").textContent = duration(
+						javascript.at(-1).closedCompiledMs,
+					);
+				const javascriptMax = niceMax(
+					Math.max(
+						0,
+						...javascript.flatMap((point) => [
+							point.closedCompiledMs,
+							point.openCompiledMs,
+							point.closedInterpretedMs,
+							point.openInterpretedMs,
+						]),
+					),
+				);
+				renderChart({
+					containerId: "javascript-chart",
+					tooltipId: "javascript-tooltip",
+					points: javascript,
+					yMin: 0,
+					yMax: javascriptMax,
+					ticks: Array.from({ length: 5 }, (_, index) =>
+						Math.round((javascriptMax / 4) * index),
+					),
+					series: [
+						{
+							key: "closedCompiledMs",
+							label: "Closed · compiled",
+							className: "closed-compiled",
+						},
+						{
+							key: "openCompiledMs",
+							label: "Open · compiled",
+							className: "open-compiled",
+						},
+						{
+							key: "closedInterpretedMs",
+							label: "Closed · interpreted",
+							className: "closed-interpreted",
+						},
+						{
+							key: "openInterpretedMs",
+							label: "Open · interpreted",
+							className: "open-interpreted",
+						},
+					],
+					tickFormat: duration,
+					tooltip: (point, item) =>
+						`<strong>${html(item.label)} · ${duration(point[item.key])}</strong><br>${html(shortDate(point.date))}<br>median of ${point.runs} fresh-process runs · production native<br>${html(point.nativeBuild.target)} · ${html(point.nativeBuild.compilerVersion)}<br>commit ${html(point.commit)}${point.preview ? " · local preview" : ""}`,
+				});
+				document.getElementById("javascript-table").innerHTML = javascript
+					.map(
+						(point) =>
+							`<tr><td>${html(shortDate(point.date))}</td><td>${duration(point.closedCompiledMs)}</td><td>${duration(point.openCompiledMs)}</td><td>${duration(point.closedInterpretedMs)}</td><td>${duration(point.openInterpretedMs)}</td><td>${point.runs}</td><td>${html(point.nativeBuild.target)}</td><td>${html(point.commit)}${point.preview ? " (preview)" : ""}</td></tr>`,
 					)
 					.join("");
 
