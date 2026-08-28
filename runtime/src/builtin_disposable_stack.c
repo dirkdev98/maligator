@@ -30,6 +30,7 @@ static MalDisposableStackObject *mal_disposable_stack_new(
     stack->resource_capacity = 0;
     stack->disposed = false;
     stack->async = async;
+    stack->has_async_resource = false;
     stack->async_has_error = false;
     stack->async_needs_await = false;
     stack->async_has_awaited = false;
@@ -109,6 +110,7 @@ static void mal_disposable_stack_append(
         .dispose_method = dispose_method,
         .kind = kind,
     };
+    if (kind != MAL_DISPOSE_SYNC) stack->has_async_resource = true;
     mal_gc_card(&stack->object.header, resource_value);
     mal_gc_card(&stack->object.header, dispose_method);
 }
@@ -566,6 +568,7 @@ static MalValue mal_builtin_disposable_stack_move(
     moved->resources = stack->resources;
     moved->resource_count = stack->resource_count;
     moved->resource_capacity = stack->resource_capacity;
+    moved->has_async_resource = stack->has_async_resource;
     if (mal_gc_marking_active) {
         for (usize i = 0; i < stack->resource_count; i++) {
             mal_gc_write_barrier(stack->resources[i].resource_value);
@@ -575,6 +578,7 @@ static MalValue mal_builtin_disposable_stack_move(
     stack->resources = nullptr;
     stack->resource_count = 0;
     stack->resource_capacity = 0;
+    stack->has_async_resource = false;
     stack->disposed = true;
     return mal_value_from_object(&moved->object);
 }
@@ -606,6 +610,7 @@ static MalValue mal_builtin_async_disposable_stack_move(
     moved->resources = stack->resources;
     moved->resource_count = stack->resource_count;
     moved->resource_capacity = stack->resource_capacity;
+    moved->has_async_resource = stack->has_async_resource;
     if (mal_gc_marking_active) {
         for (usize i = 0; i < stack->resource_count; i++) {
             mal_gc_write_barrier(stack->resources[i].resource_value);
@@ -615,6 +620,7 @@ static MalValue mal_builtin_async_disposable_stack_move(
     stack->resources = nullptr;
     stack->resource_count = 0;
     stack->resource_capacity = 0;
+    stack->has_async_resource = false;
     stack->disposed = true;
     return mal_value_from_object(&moved->object);
 }
@@ -1058,6 +1064,22 @@ static MalValue mal_builtin_dispose_resources(
     bool has_error = arg_count >= 2 && mal_value_is_boolean(args[1]) &&
         mal_value_to_boolean(args[1]);
     MalValue error = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+    if (stack->has_async_resource) {
+        MalValue result_promise;
+        MalValue direct_resolve;
+        MalValue realm_anchor;
+        mal_promise_new_direct_capability(
+            vm, &result_promise, &direct_resolve, &realm_anchor);
+        (void) direct_resolve;
+        return mal_disposable_stack_dispose_resources_async(
+            vm,
+            stack_value,
+            stack,
+            has_error,
+            error,
+            result_promise,
+            realm_anchor);
+    }
     return mal_disposable_stack_dispose_resources(
         vm, stack_value, stack, has_error, error);
 }

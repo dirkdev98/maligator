@@ -21,6 +21,7 @@ typedef struct MalDisposableStackObject {
     usize resource_capacity;
     bool disposed;
     bool async;
+    bool has_async_resource;
     bool async_has_error;
     bool async_needs_await;
     bool async_has_awaited;

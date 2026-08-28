@@ -5637,6 +5637,7 @@ function compileDisposableStatementScope(
 	hoistFunctions: boolean,
 ): number {
 	const { entryIdx } = compileDisposableRegion(
+		program,
 		fn,
 		statements.some(
 			(statement) =>
@@ -5658,6 +5659,7 @@ function compileDisposableStatementScope(
 }
 
 function compileDisposableRegion(
+	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	disposeAsync: boolean,
 	compileProtected: (entry: CoreFrontendBlock) => CoreFrontendBlock,
@@ -5754,11 +5756,46 @@ function compileDisposableRegion(
 			operator: "===",
 		},
 	);
-	const ignored = nextCoreVariable(fn);
+	const disposeResult = nextCoreVariable(fn);
 	finalizer.emitter.emit({
 		type: "call",
-		registers: [ignored, dispose, finalizerThis, finalizerCapability, hasError, valueReg],
+		registers: [
+			disposeResult,
+			dispose,
+			finalizerThis,
+			finalizerCapability,
+			hasError,
+			valueReg,
+		],
 	});
+	let synchronousDisposeJump:
+		| Extract<CompilerInstruction, { type: "jumpIf" }>
+		| undefined;
+	let asyncDisposeTail: CoreFrontendBlock | undefined;
+	if (finallyCtx.disposeAsync) {
+		const undefinedValue = nextCoreVariable(fn);
+		const disposedSynchronously = nextCoreVariable(fn);
+		finalizer.emitter.emit(
+			{ type: "createUndefined", registers: [undefinedValue] },
+			{
+				type: "binary",
+				registers: [disposedSynchronously, disposeResult, undefinedValue],
+				operator: "===",
+			},
+		);
+		synchronousDisposeJump = {
+			type: "jumpIf",
+			registers: [disposedSynchronously],
+			blocks: [-1],
+		};
+		finalizer.emitter.emit(synchronousDisposeJump);
+		const asyncDispose: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		const asyncDisposeIdx = fn.blocks.push(asyncDispose) - 1;
+		finalizer.emitter.emit({ type: "jump", blocks: [asyncDisposeIdx] });
+		const asyncDisposeCursor: CoreFrontendCursor = { block: asyncDispose };
+		compileAwaitRegister(program, fn, asyncDisposeCursor, disposeResult);
+		asyncDisposeTail = asyncDisposeCursor.block;
+	}
 
 	const dispatchBlocks: Array<{ kind: number; idx: number }> = [];
 	for (const { kind, fill } of finallyCtx.finalizerArms!.values()) {
@@ -5769,7 +5806,12 @@ function compileDisposableRegion(
 	}
 	const epilogue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const epilogueIdx = fn.blocks.push(epilogue) - 1;
-	finalizer.emitter.emit({ type: "jump", blocks: [epilogueIdx] });
+	if (synchronousDisposeJump) {
+		synchronousDisposeJump.blocks[0] = epilogueIdx;
+		asyncDisposeTail!.emitter.emit({ type: "jump", blocks: [epilogueIdx] });
+	} else {
+		finalizer.emitter.emit({ type: "jump", blocks: [epilogueIdx] });
+	}
 	for (const { kind, idx } of dispatchBlocks) {
 		const constant = nextCoreVariable(fn);
 		const matches = nextCoreVariable(fn);
@@ -6235,6 +6277,7 @@ function compileForStatement(
 		(statement.init.kind === "using" || statement.init.kind === "await using")
 	) {
 		const { entryIdx } = compileDisposableRegion(
+			program,
 			fn,
 			statement.init.kind === "await using",
 			(entry) => {
@@ -6499,6 +6542,7 @@ function compileForInOfIteration(
 		(left.kind === "using" || left.kind === "await using");
 	if (resourceDeclaration) {
 		const { entryIdx, tail } = compileDisposableRegion(
+			program,
 			fn,
 			left.kind === "await using",
 			(entry) =>
