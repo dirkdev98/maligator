@@ -59,11 +59,19 @@ ${thinLto ? "" : 'case " $* " in *" -flto=thin "*) exit 1;; esac'}
 ${lto ? "" : 'case " $* " in *" -flto"*) exit 1;; esac'}
 invocation="$*"
 out=''
+preprocess=''
+source=''
 while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-E" ]; then preprocess=1; fi
+	case "$1" in *.c) source="$1";; esac
 	if [ "$1" = "-o" ]; then shift; out="$1"; fi
 	shift
 done
-if [ -n "$out" ]; then printf '%s' "$invocation" > "$out"; /bin/chmod +x "$out"; fi
+if [ -n "$out" ]; then
+	if [ -n "$preprocess" ] && [ -n "$source" ]; then /bin/cat "$source" > "$out"
+	else printf '%s' "$invocation" > "$out"; /bin/chmod +x "$out"
+	fi
+fi
 exit 0
 `;
 }
@@ -201,7 +209,7 @@ function createMinimalRuntime(fake: FakeToolchain): string {
 function compileInvocationCount(logPath: string): number {
 	return readFileSync(logPath, "utf-8")
 		.split("\n")
-		.filter((line) => line.includes(" -o ") || line.startsWith("-std=c2x")).length;
+		.filter((line) => line.includes(" -c ")).length;
 }
 
 describe("native toolchain discovery", () => {
@@ -514,6 +522,8 @@ exit 7
 		expect(invocations).toContain(`-o ${binary}`);
 		expect(existsSync(`${binary}.c`)).toBe(true);
 		expect(phases.map((phase) => phase.phase)).toEqual([
+			"runtime C projection",
+			"runtime C object compile",
 			"runtime C · engine",
 			"runtime C · host",
 			"runtime C · runtime",
@@ -949,8 +959,10 @@ exit 7
 			}),
 		);
 
-		expect(first.library).toBe(reordered.library);
-		expect(first.library).not.toBe(different.library);
+		expect(first.cacheKey).toBe(reordered.cacheKey);
+		expect(first.cacheKey).not.toBe(different.cacheKey);
+		expect(first.targetDirectory).toBe(reordered.targetDirectory);
+		expect(first.targetDirectory).toBe(different.targetDirectory);
 		expect(first.library).toContain(cacheDirectory);
 		expect(first.cargoFeatures).toEqual([
 			"intl-collator",
@@ -970,21 +982,21 @@ exit 7
 			path.join(runtimeDirectory, "rust/src/lib.rs"),
 			"pub fn value() -> i32 { 2 }\n",
 		);
-		expect(
-			resolveRustArtifacts(
-				resolveNativeBuildContext({
-					runtimeDirectory,
-					cacheDirectory,
-					toolchain,
-					plan,
-					features: {
-						intlFeatures: ["intl-collator", "intl-segmenter"],
-						webPlatformEnabled: false,
-						regexpEnabled: true,
-					},
-				}),
-			).library,
-		).not.toBe(first.library);
+		const changedSource = resolveRustArtifacts(
+			resolveNativeBuildContext({
+				runtimeDirectory,
+				cacheDirectory,
+				toolchain,
+				plan,
+				features: {
+					intlFeatures: ["intl-collator", "intl-segmenter"],
+					webPlatformEnabled: false,
+					regexpEnabled: true,
+				},
+			}),
+		);
+		expect(changedSource.cacheKey).not.toBe(first.cacheKey);
+		expect(changedSource.targetDirectory).not.toBe(first.targetDirectory);
 	});
 
 	it("derives coherent C defines and Cargo features from one feature spec", () => {
@@ -1099,6 +1111,50 @@ exit 7
 		ensureNativeArtifacts(context);
 		expect(compileInvocationCount(fake.logPath)).toBe(afterFirst + 1);
 		expect(events).toEqual([false, true, false, false]);
+	});
+
+	it("reuses runtime objects whose preprocessed inputs survive a feature flip", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		const cacheDirectory = path.join(fake.root, "projected-runtime-cache");
+		const phases: Array<{ phase: string; durationMs: number; units?: number }> = [];
+		const build = (realmsEnabled: boolean) =>
+			ensureNativeArtifacts(
+				resolveNativeBuildContext({
+					toolchain,
+					runtimeDirectory,
+					cacheDirectory,
+					features: {
+						evalEnabled: false,
+						realmsEnabled,
+						webPlatformEnabled: false,
+					},
+					onBuildPhase: (event) => phases.push(event),
+				}),
+			);
+
+		build(true);
+		phases.length = 0;
+		writeFileSync(fake.logPath, "");
+		build(false);
+
+		const projection = phases.find(({ phase }) => phase === "runtime C projection");
+		expect(projection).toMatchObject({ units: 3 });
+		expect(projection!.durationMs).toBeGreaterThanOrEqual(0);
+		expect(phases).toContainEqual({
+			phase: "runtime C object reuse",
+			units: 3,
+			durationMs: 0,
+		});
+		expect(phases.some(({ phase }) => phase === "runtime C object compile")).toBe(false);
+		expect(compileInvocationCount(fake.logPath)).toBe(0);
 	});
 
 	it("runs Cargo when the cached Rust library is missing or corrupt", () => {

@@ -33,7 +33,7 @@ import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
 import { toolArguments } from "./toolchain.ts";
 
-const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 1, "cc");
+const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 2, "cc");
 const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 1, "ar");
 
 function runtimeSourceHash(
@@ -273,30 +273,15 @@ function objectActionKey(
 	context: NativeBuildContext,
 	layout: RuntimeLayout,
 	source: RuntimeSource,
-	headerDigest: string,
+	preprocessedDigest: string,
 ): string {
-	const includeArguments = source.includeArguments ?? [
-		...layout.includeArguments,
-		"-I",
-		source.layerDirectory,
-	];
 	return artifactActionKey(RUNTIME_OBJECT_PRODUCER, {
 		source: path.posix.join(
 			"<runtime>",
 			...path.relative(context.runtimeDirectory, source.path).split(path.sep),
 		),
-		sourceDigest: artifactDigest(new Uint8Array(readFileSync(source.path))),
-		headerDigest,
-		compilerWireDigest: layout.compilerWireDigest,
-		arguments: [
-			"-std=c2x",
-			...layout.flags.map((argument) =>
-				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
-			),
-			...includeArguments.map((argument) =>
-				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
-			),
-		],
+		preprocessedDigest,
+		arguments: runtimeObjectCodegenArguments(context, layout),
 		environment: context.environmentFingerprint,
 		toolchain: context.toolchain.fingerprint,
 		target: context.toolchain.target,
@@ -309,6 +294,84 @@ interface RuntimeObject {
 	digest: string;
 }
 
+interface ProjectedRuntimeSource {
+	source: RuntimeSource;
+	digest: string;
+}
+
+function sourceIncludeArguments(
+	layout: RuntimeLayout,
+	source: RuntimeSource,
+): Array<string> {
+	return (
+		source.includeArguments ?? [...layout.includeArguments, "-I", source.layerDirectory]
+	);
+}
+
+function runtimeObjectCodegenArguments(
+	context: NativeBuildContext,
+	layout: RuntimeLayout,
+): Array<string> {
+	return [
+		"-std=c2x",
+		...layout.flags
+			// Feature and GC macros, the compiler-wire include, and header search paths
+			// have already been projected into the preprocessed source digest. Keep
+			// every code-generation-affecting flag so optimization, sanitizer, LTO,
+			// target, and debug variants can never share incompatible objects.
+			.filter((argument) => !argument.startsWith("-DMAL_"))
+			.map((argument) =>
+				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
+			),
+	];
+}
+
+function projectRuntimeSources(
+	context: NativeBuildContext,
+	layout: RuntimeLayout,
+	sources: Array<RuntimeSource>,
+	directory: string,
+	verbose: boolean,
+): Array<ProjectedRuntimeSource> {
+	const startedAt = performance.now();
+	const preprocessedDirectory = path.join(directory, "preprocessed");
+	mkdirSync(preprocessedDirectory, { recursive: true });
+	const outputs = sources.map((source) => ({
+		source,
+		path: path.join(
+			preprocessedDirectory,
+			`${artifactDigest(source.path).slice(0, 12)}.i`,
+		),
+	}));
+	runNativeCommands(
+		context,
+		outputs.map(({ source, path: output }) => ({
+			tool: context.toolchain.tools.cc.path,
+			args: toolArguments(context.toolchain.tools.cc, [
+				"-std=c2x",
+				...layout.flags,
+				...sourceIncludeArguments(layout, source),
+				"-E",
+				"-P",
+				source.path,
+				"-o",
+				output,
+			]),
+		})),
+		{ verbose },
+	);
+	const projected = outputs.map(({ source, path: output }) => ({
+		source,
+		digest: artifactDigest(new Uint8Array(readFileSync(output))),
+	}));
+	context.onBuildPhase?.({
+		phase: "runtime C projection",
+		durationMs: performance.now() - startedAt,
+		units: sources.length,
+	});
+	return projected;
+}
+
 function ensureRuntimeObjects(
 	context: NativeBuildContext,
 	layout: RuntimeLayout,
@@ -316,15 +379,11 @@ function ensureRuntimeObjects(
 	verbose: boolean,
 ): Array<RuntimeObject> {
 	mkdirSync(directory, { recursive: true });
-	const headerDigest = runtimeHeaderHash(
-		context.runtimeDirectory,
-		context.features.nodeEnabled,
-		context.cacheDirectory,
-	);
 	const sources = runtimeSources(context, layout);
+	const projected = projectRuntimeSources(context, layout, sources, directory, verbose);
 	const results = new Map<string, RuntimeObject>();
-	const pending = sources.flatMap((source) => {
-		const action = objectActionKey(context, layout, source, headerDigest);
+	const pending = projected.flatMap(({ source, digest }) => {
+		const action = objectActionKey(context, layout, source, digest);
 		const cached = readArtifactAction(
 			context.cacheDirectory,
 			"runtime-object",
@@ -339,6 +398,15 @@ function ensureRuntimeObjects(
 		const output = path.join(directory, `${artifactDigest(source.path).slice(0, 12)}.o`);
 		return [{ source, action, output }];
 	});
+	const hits = sources.length - pending.length;
+	if (hits > 0) {
+		context.onBuildPhase?.({
+			phase: "runtime C object reuse",
+			durationMs: 0,
+			units: hits,
+		});
+	}
+	const compileStartedAt = performance.now();
 	runNativeCommands(
 		context,
 		[...pending]
@@ -351,11 +419,7 @@ function ensureRuntimeObjects(
 				args: toolArguments(context.toolchain.tools.cc, [
 					"-std=c2x",
 					...layout.flags,
-					...(source.includeArguments ?? [
-						...layout.includeArguments,
-						"-I",
-						source.layerDirectory,
-					]),
+					...sourceIncludeArguments(layout, source),
 					"-c",
 					source.path,
 					"-o",
@@ -364,6 +428,13 @@ function ensureRuntimeObjects(
 			})),
 		{ verbose },
 	);
+	if (pending.length > 0) {
+		context.onBuildPhase?.({
+			phase: "runtime C object compile",
+			durationMs: performance.now() - compileStartedAt,
+			units: pending.length,
+		});
+	}
 	for (const { source, action, output } of pending) {
 		const published = publishArtifactAction(
 			context.cacheDirectory,

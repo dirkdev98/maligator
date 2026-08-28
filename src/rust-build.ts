@@ -66,9 +66,11 @@ export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
 }
 
 const RUST_PRODUCER = artifactProducer("rust-library", 1, "cargo-build");
+const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
 
 export interface RustArtifacts {
 	cacheKey: string;
+	targetKey: string;
 	targetDirectory: string;
 	library: string;
 	linkArgs: Array<string>;
@@ -109,21 +111,32 @@ function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string,
 export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts {
 	const rustDirectory = path.join(context.runtimeDirectory, "rust");
 	const cargoFeatures = [...context.features.cargoFeatures];
-	const cargoArguments = ["build", "--release", "--no-default-features"];
+	const cargoBaseArguments = ["build", "--release", "--no-default-features"];
 	if (context.toolchain.cross === true) {
-		cargoArguments.push("--target", context.toolchain.rustTarget);
+		cargoBaseArguments.push("--target", context.toolchain.rustTarget);
 	}
+	const cargoArguments = [...cargoBaseArguments];
 	if (cargoFeatures.length > 0) {
 		cargoArguments.push("--features", cargoFeatures.join(","));
 	}
 	const nativeToolEnvironment = cargoNativeToolEnvironment(context);
+	const nativeToolEntries = Object.entries(nativeToolEnvironment).sort(([a], [b]) =>
+		a < b ? -1 : a > b ? 1 : 0,
+	);
+	const sourceDigest = cachedRustSourceDigest(rustDirectory, context.cacheDirectory);
 	const cacheKey = rustArtifactKey({
 		cargoArguments,
 		environmentFingerprint: context.environmentFingerprint,
-		nativeToolEnvironment: Object.entries(nativeToolEnvironment).sort(([a], [b]) =>
-			a < b ? -1 : a > b ? 1 : 0,
-		),
-		sourceDigest: cachedRustSourceDigest(rustDirectory, context.cacheDirectory),
+		nativeToolEnvironment: nativeToolEntries,
+		sourceDigest,
+		toolchainFingerprint: context.toolchain.fingerprint,
+		rustTarget: context.toolchain.rustTarget,
+	});
+	const targetKey = artifactActionKey(RUST_TARGET_PRODUCER, {
+		cargoArguments: cargoBaseArguments,
+		environmentFingerprint: context.environmentFingerprint,
+		nativeToolEnvironment: nativeToolEntries,
+		sourceDigest,
 		toolchainFingerprint: context.toolchain.fingerprint,
 		rustTarget: context.toolchain.rustTarget,
 	});
@@ -131,7 +144,7 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 		context.cacheDirectory,
 		"work",
 		"rust",
-		cacheKey,
+		targetKey,
 		"target",
 	);
 	const library = path.join(
@@ -142,6 +155,7 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 	);
 	return {
 		cacheKey,
+		targetKey,
 		targetDirectory,
 		library,
 		linkArgs: [
@@ -169,7 +183,7 @@ function cachedRustArtifacts(artifacts: RustArtifacts, library: string): RustArt
 	};
 }
 
-/** Build the Rust FFI static library, relying on Cargo's target-directory locking. */
+/** Build the Rust FFI static library with reusable, serialized Cargo work products. */
 export function ensureRustArtifacts(
 	context: NativeBuildContext,
 	verbose = false,
@@ -207,42 +221,50 @@ export function ensureRustArtifacts(
 				artifacts.cacheKey,
 			);
 			if (raced !== undefined) return raced;
-			const currentPath = context.environment.PATH ?? "";
-			const cargoPath = context.toolchain.tools.cargo.path;
-			const toolchainBin = path.dirname(cargoPath);
-			runNativeCommand(
-				context,
-				cargoPath,
-				toolArguments(context.toolchain.tools.cargo, artifacts.cargoArguments),
-				{
-					cwd: path.join(context.runtimeDirectory, "rust"),
-					env: {
-						...context.environment,
-						...artifacts.nativeToolEnvironment,
-						PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
-						CARGO_HOME: cargoCacheDirectory(context.environment),
-						CARGO_TARGET_DIR: artifacts.targetDirectory,
-						RUSTC: context.toolchain.tools.rustc.path,
-					},
-					verbose,
-				},
-			);
-			let librarySize = 0;
-			try {
-				const stats = statSync(artifacts.library);
-				if (stats.isFile()) librarySize = stats.size;
-			} catch {
-				// Report the common failure below.
-			}
-			if (librarySize === 0) {
-				throw new Error(`cargo completed without producing ${artifacts.library}`);
-			}
-			return publishArtifactAction(
+			return withArtifactActionLock(
 				context.cacheDirectory,
-				"rust-library",
-				RUST_PRODUCER,
-				artifacts.cacheKey,
-				[{ name: "libmal_rust.a", file: artifacts.library }],
+				"rust-target",
+				RUST_TARGET_PRODUCER,
+				artifacts.targetKey,
+				() => {
+					const currentPath = context.environment.PATH ?? "";
+					const cargoPath = context.toolchain.tools.cargo.path;
+					const toolchainBin = path.dirname(cargoPath);
+					runNativeCommand(
+						context,
+						cargoPath,
+						toolArguments(context.toolchain.tools.cargo, artifacts.cargoArguments),
+						{
+							cwd: path.join(context.runtimeDirectory, "rust"),
+							env: {
+								...context.environment,
+								...artifacts.nativeToolEnvironment,
+								PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
+								CARGO_HOME: cargoCacheDirectory(context.environment),
+								CARGO_TARGET_DIR: artifacts.targetDirectory,
+								RUSTC: context.toolchain.tools.rustc.path,
+							},
+							verbose,
+						},
+					);
+					let librarySize = 0;
+					try {
+						const stats = statSync(artifacts.library);
+						if (stats.isFile()) librarySize = stats.size;
+					} catch {
+						// Report the common failure below.
+					}
+					if (librarySize === 0) {
+						throw new Error(`cargo completed without producing ${artifacts.library}`);
+					}
+					return publishArtifactAction(
+						context.cacheDirectory,
+						"rust-library",
+						RUST_PRODUCER,
+						artifacts.cacheKey,
+						[{ name: "libmal_rust.a", file: artifacts.library }],
+					);
+				},
 			);
 		},
 	);

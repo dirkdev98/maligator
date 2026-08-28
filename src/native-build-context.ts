@@ -20,6 +20,9 @@ export interface BuildCacheEvent {
 export interface NativeBuildPhaseEvent {
 	phase:
 		| "runtime"
+		| "runtime C projection"
+		| "runtime C object reuse"
+		| "runtime C object compile"
 		| "runtime C · engine"
 		| "runtime C · host"
 		| "runtime C · runtime"
