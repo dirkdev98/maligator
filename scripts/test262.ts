@@ -139,7 +139,13 @@ if (
 		...tuning,
 		...(requestedBackend === "interpreted" ? { MAL_INTERP: "1" } : {}),
 		...(requestedBackend === "wire" ? { T262_WIRE: "1" } : {}),
-		...(requestedMode === "gc-stress" ? { MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" } : {}),
+		...(requestedMode === "gc-stress"
+			? {
+				MAL_EVAL_GC_STRESS_INTERVAL: "1000",
+				MAL_GC_STRESS: "1",
+				MAL_GC_VERIFY: "1",
+			}
+			: {}),
 	});
 }
 

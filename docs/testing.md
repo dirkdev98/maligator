@@ -196,6 +196,12 @@ audit. Native sanitizer coverage is already part of the disjoint smoke/check/ful
 partition. "Full WPT" means every test in the pinned server-runtime curated corpus,
 not the complete browser WPT repository.
 
+The Test262 GC dimensions preserve collection at every gated safepoint in the
+selected program. While that program invokes runtime compilation, the self-hosted
+compiler uses `MAL_EVAL_GC_STRESS_INTERVAL=1000`; its dedicated native root-safety
+test uses the same cadence. This avoids thousands of full heap verifications per
+eval without weakening stress once the generated entry starts executing.
+
 Test262 stores one integrity-checked, backend-neutral ProgramImage for each
 source, corpus revision, strictness, semantic configuration, and compiler identity.
 Compiled batches emit native C from that artifact; wire runs derive MALW from the

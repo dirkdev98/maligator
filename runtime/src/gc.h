@@ -111,6 +111,11 @@ void mal_gc_register_tracer(MalHeapType type, MalGcTracer fn);
  * array dense-element vector's grow/free/deopt paths). */
 MalHeap *mal_gc_current_heap(void);
 
+/* Temporarily changes an already-enabled stress cadence and returns the previous
+ * interval. A zero current interval is left disabled, so a scoped diagnostic can
+ * relax stress but cannot accidentally enable it in a normal execution. */
+i32 mal_gc_swap_stress_interval(i32 interval);
+
 /* Run a full stop-the-world mark/sweep collection now: shade roots, drain the
  * grey worklist tracing reachable cells, then finalize and reclaim the rest.
  * Invoked explicitly (the gc() host hook); never from the allocator. */

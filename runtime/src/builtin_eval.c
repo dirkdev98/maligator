@@ -23,6 +23,15 @@
 // compiler's `__compile` closure and eval'd functions that outlive a call remain
 // owned by vm->compiler_fn (a traced root) and vm->loaded_images.
 
+static i32 eval_compiler_stress_interval(void) {
+    const char *configured = getenv("MAL_EVAL_GC_STRESS_INTERVAL");
+    if (configured == nullptr || configured[0] == '\0') {
+        return 0;
+    }
+    long interval = strtol(configured, nullptr, 10);
+    return interval > 1 && interval <= INT32_MAX ? (i32) interval : 0;
+}
+
 // Exact no-flags literals avoid one permanent runtime image per dynamic pattern;
 // comments, embedded delimiters, flags, and surrounding syntax fall back.
 static bool eval_try_regexp_literal(MalVm *vm, MalValue source, MalValue *result) {
@@ -150,11 +159,21 @@ static i32 compile_source(MalVm *vm, MalValue source, bool direct, bool caller_s
         *splice_failed = false;
     }
 
+    i32 compiler_stress_interval = eval_compiler_stress_interval();
+    i32 previous_stress_interval = compiler_stress_interval == 0
+        ? 0
+        : mal_gc_swap_stress_interval(compiler_stress_interval);
     if (!ensure_compiler(vm)) {
+        if (previous_stress_interval != 0) {
+            mal_gc_swap_stress_interval(previous_stress_interval);
+        }
         goto done;
     }
     MalCompletion compiled =
         mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), roots, 6);
+    if (previous_stress_interval != 0) {
+        mal_gc_swap_stress_interval(previous_stress_interval);
+    }
     roots[6] = compiled.value;
     if (compiled.kind == MAL_COMPLETION_THROW) {
         vm->completion = compiled;

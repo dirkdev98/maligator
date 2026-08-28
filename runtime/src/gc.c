@@ -255,6 +255,15 @@ MalHeap *mal_gc_current_heap(void) {
     return &g_gc_vm->heap;
 }
 
+i32 mal_gc_swap_stress_interval(i32 interval) {
+    if (g_gc == nullptr || g_gc->stress_interval == 0) {
+        return 0;
+    }
+    i32 previous = g_gc->stress_interval;
+    g_gc->stress_interval = interval < 1 ? 1 : interval;
+    return previous;
+}
+
 static void mal_gc_grey_push(MalHeapHeader *cell) {
     if (g_gc->grey_count == g_gc->grey_capacity) {
         g_gc->grey_capacity = g_gc->grey_capacity == 0 ? 4096 : g_gc->grey_capacity * 2;
