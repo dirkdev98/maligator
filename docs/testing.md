@@ -17,6 +17,14 @@ The exercise records measurements rather than enforcing machine-specific timing
 thresholds. Performance changes should compare the same binary, host, and cache
 scenario before and after the change.
 
+Every tier also writes its latest machine-readable gate report to
+`.cache/mal-build/test-suite/report-<tier>.json`. It records exact stage wall times,
+exit status, and native fixture spans for frontend work, C/Rust artifacts, generated
+objects, linking, and execution, including cache hit/miss counts and the 20 slowest
+spans. Vitest forks write process-local JSONL while running, so telemetry does not
+serialize the native suite; reports count the contributing processes explicitly.
+Test verdicts and program output are still always recomputed.
+
 ## Paired performance comparisons
 
 Use a paired comparison for Maligator changes instead of reading a single delta

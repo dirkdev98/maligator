@@ -43,6 +43,7 @@ import type { LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
+import { recordTestTelemetry } from "./test-telemetry.ts";
 
 /** Entry-point C drivers linked with the emitted runtime image. */
 export const HOST_MAIN = "runtime/host_main.c";
@@ -244,30 +245,45 @@ function compileFixtureProgramImage(
 	config: ResolvedBuildConfig,
 ): ProgramImage {
 	const entrypoint = path.resolve(options.fixture);
-	const canReuseFrontend =
-		options.entryGoal === undefined && options.profileEnabled !== true;
-	if (canReuseFrontend) {
-		const frontend = compileBuildFrontend({
-			entrypoint,
-			config,
+	const startedAtMs = Date.now();
+	const startedAt = performance.now();
+	let cache: "hit" | "miss" = "miss";
+	try {
+		const canReuseFrontend =
+			options.entryGoal === undefined && options.profileEnabled !== true;
+		if (canReuseFrontend) {
+			const frontend = compileBuildFrontend({
+				entrypoint,
+				config,
+				stripTypes: stripCompactTypes,
+				stripperIdentity: TYPE_STRIPPER_IDENTITY,
+				enforcePolicies: false,
+			});
+			cache = frontend.cache;
+			options.onFrontendCacheEvent?.({ cache: frontend.cache, entrypoint });
+			return frontend.programImage;
+		}
+		const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypoint, {
+			buildConfig: config,
 			stripTypes: stripCompactTypes,
-			stripperIdentity: TYPE_STRIPPER_IDENTITY,
-			enforcePolicies: false,
+			entryGoal: options.entryGoal,
 		});
-		options.onFrontendCacheEvent?.({ cache: frontend.cache, entrypoint });
-		return frontend.programImage;
+		// Tests intentionally bypass build policy so disabled-feature fixtures can
+		// compile and assert the runtime behavior of the reduced engine.
+		return compileSemanticProgramToProgramImage(semanticProgram, {
+			facts: compilerProgramFactsFromConfig(config),
+			profile: options.profileEnabled,
+		});
+	} finally {
+		recordTestTelemetry({
+			phase: "frontend",
+			label: entrypoint,
+			startedAtMs,
+			durationMs: performance.now() - startedAt,
+			cache,
+			config: buildDerivationFromConfig(config).cacheSuffix || "default",
+		});
 	}
-	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypoint, {
-		buildConfig: config,
-		stripTypes: stripCompactTypes,
-		entryGoal: options.entryGoal,
-	});
-	// Tests intentionally bypass build policy so disabled-feature fixtures can
-	// compile and assert the runtime behavior of the reduced engine.
-	return compileSemanticProgramToProgramImage(semanticProgram, {
-		facts: compilerProgramFactsFromConfig(config),
-		profile: options.profileEnabled,
-	});
 }
 
 function linkProgramImage(
@@ -294,6 +310,15 @@ function linkProgramImage(
 		mainFile: options.mainFile,
 		outDir: options.outDir,
 		cacheSuffix,
+		onGeneratedObjectCacheEvent: (event) =>
+			recordTestTelemetry({
+				phase: "generated object cache",
+				label: options.fixture,
+				startedAtMs: Date.now(),
+				durationMs: 0,
+				cache: event.hit ? "hit" : "miss",
+				config: cacheSuffix || "default",
+			}),
 	});
 }
 
@@ -320,6 +345,25 @@ function resolveHarnessNativeContext(
 			environment: options.environment,
 			compilerBake: options.compilerBake ?? defaultCompilerBake(),
 			production: options.production,
+			onCacheEvent: (event) =>
+				recordTestTelemetry({
+					phase: `${event.artifact} cache`,
+					label: options.fixture,
+					startedAtMs: Date.now(),
+					durationMs: 0,
+					cache: event.hit ? "hit" : "miss",
+					config: derivation.cacheSuffix || "default",
+				}),
+			onBuildPhase: (event) =>
+				recordTestTelemetry({
+					phase: event.phase,
+					label: options.fixture,
+					startedAtMs: Date.now() - event.durationMs,
+					durationMs: event.durationMs,
+					cache: event.cache,
+					units: event.units,
+					config: derivation.cacheSuffix || "default",
+				}),
 		}),
 		cacheSuffix: derivation.cacheSuffix,
 	};
@@ -444,6 +488,8 @@ export class RunError extends Error {
 export function runToStdout(binary: string, options: RunOptions = {}): string {
 	const env = { ...process.env, ...options.env };
 	const invocation = resolveHarnessExecutionInvocation(binary);
+	const startedAtMs = Date.now();
+	const startedAt = performance.now();
 	try {
 		return execFileSync(invocation.executable, invocation.args, {
 			env,
@@ -457,6 +503,13 @@ export function runToStdout(binary: string, options: RunOptions = {}): string {
 			e.stdout ?? "",
 			e.stderr ?? "",
 		);
+	} finally {
+		recordTestTelemetry({
+			phase: "execute",
+			label: binary,
+			startedAtMs,
+			durationMs: performance.now() - startedAt,
+		});
 	}
 }
 

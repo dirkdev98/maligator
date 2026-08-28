@@ -110,4 +110,9 @@ describe("test suite planner", () => {
 			rmSync(parent, { recursive: true, force: true });
 		}
 	});
+
+	it("keeps telemetry out of the printed invocation identity", () => {
+		const smoke = runSuite("smoke", "--list");
+		expect(smoke).not.toContain("MAL_TEST_TELEMETRY_DIR");
+	});
 });

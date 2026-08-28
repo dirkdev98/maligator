@@ -1,17 +1,26 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { CommandProgress } from "../src/command-progress.ts";
+import { TEST_TELEMETRY_ENV } from "../src/test-telemetry.ts";
 import {
 	commandEnvironmentPlan,
 	requirementsForCommand,
 } from "./command-requirements.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
-export function sanitizerEnvironment(platform: NodeJS.Platform): NodeJS.ProcessEnv {
+export function sanitizerEnvironment(
+	platform: NodeJS.Platform,
+	environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
 	const undefinedBehavior = "halt_on_error=1:print_stacktrace=1";
+	const telemetry = environment[TEST_TELEMETRY_ENV];
+	const shared = {
+		...(telemetry === undefined ? {} : { [TEST_TELEMETRY_ENV]: telemetry }),
+	};
 	return platform === "darwin"
-		? { MAL_UBSAN: "1", UBSAN_OPTIONS: undefinedBehavior }
+		? { ...shared, MAL_UBSAN: "1", UBSAN_OPTIONS: undefinedBehavior }
 		: {
+				...shared,
 				MAL_ASAN: "1",
 				ASAN_OPTIONS: "abort_on_error=1:detect_leaks=1:halt_on_error=1",
 				UBSAN_OPTIONS: undefinedBehavior,

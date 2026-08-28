@@ -6,6 +6,7 @@ import {
 } from "../scripts/test-environment.ts";
 import { sanitizerEnvironment } from "../scripts/test-sanitize.ts";
 import { scaledNativeRunTimeoutMs } from "../src/test-harness.ts";
+import { TEST_TELEMETRY_ENV } from "../src/test-telemetry.ts";
 
 describe("sanitizer runner", () => {
 	it("scales native child deadlines only for instrumented builds", () => {
@@ -29,6 +30,12 @@ describe("sanitizer runner", () => {
 			ASAN_OPTIONS: "abort_on_error=1:detect_leaks=1:halt_on_error=1",
 			UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1",
 		});
+	});
+
+	it("passes an explicitly requested gate telemetry directory to Vitest", () => {
+		expect(
+			sanitizerEnvironment("darwin", { [TEST_TELEMETRY_ENV]: "/tmp/telemetry" }),
+		).toMatchObject({ [TEST_TELEMETRY_ENV]: "/tmp/telemetry" });
 	});
 
 	it("scrubs ambient runtime dimensions but preserves explicit throughput controls", () => {
