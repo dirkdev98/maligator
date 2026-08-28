@@ -160,7 +160,10 @@ toolchain. Normal and production `build` commands emit
 native translation units from the same restored definition. Those units and the native driver are
 compiled into independently content-addressed objects, so unchanged objects can
 be relinked without repeating C compilation. The final link still runs, and
-native runtime and Rust archives remain separately content-addressed.
+native runtime and Rust archives remain separately content-addressed. Runtime C
+objects use their preprocessed input as the feature projection, while distinct
+Rust feature archives share Cargo dependency work. Output executables remain
+statically linked and self-contained.
 
 Build cache invalidation includes source and transitive dependency content,
 package-resolution metadata, relevant configuration, the TypeScript erasure

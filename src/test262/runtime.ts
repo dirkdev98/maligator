@@ -44,6 +44,7 @@ import {
 	ensureCacheDir,
 	loadArtifact,
 	objectCachePath,
+	pruneArtifactCacheToSize,
 	pruneUnused,
 	storeManifest,
 } from "./artifact-cache.ts";
@@ -187,6 +188,10 @@ export function test262PruneArtifactCache() {
 	if (cacheEnabled()) {
 		pruneUnused(USED_CACHE_KEYS);
 	}
+}
+
+export function test262BoundArtifactCache(maxBytes: number) {
+	return cacheEnabled() ? pruneArtifactCacheToSize(maxBytes) : undefined;
 }
 
 const HARNESS_CACHE: Record<string, string> = {};

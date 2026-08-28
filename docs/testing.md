@@ -165,6 +165,10 @@ settings. Partial selections cache their compiled batch objects by default. A
 complete corpus defaults to bounded per-worker scratch because retaining both
 strict and sloppy object sets can consume tens of GiB while the command is active;
 set `T262_OBJCACHE=1` explicitly to retain them when sufficient disk is available.
+After each partial pass, Maligator trims that strictness/backend object-cache
+dimension to 1 GiB by least-recent use, removing an object's manifest and bytes
+as one entry. ProgramImages remain in their independently bounded compiler-generation
+cache.
 Explicit toolchain overrides such as `CC`, `CFLAGS`, and `RUSTFLAGS` remain
 supported and are part of native cache identity. Use explicit `--backend` and
 `--mode` arguments when requesting non-default Test262 dimensions.

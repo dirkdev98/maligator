@@ -25,6 +25,7 @@ import {
 	getFailuresWithSamples,
 	getProgramImageCacheStats,
 	getTimings,
+	test262BoundArtifactCache,
 	test262MergeStats,
 	test262NativeBuildInputs,
 	test262PrepareBuild,
@@ -444,6 +445,15 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 	// would wrongly delete entries for the batches they never visited.
 	if (!isPartialRun && !run.aborted) {
 		test262PruneArtifactCache();
+	} else if (isPartialRun && !run.aborted) {
+		const bounded = test262BoundArtifactCache(
+			TEST262_METADATA.partialObjectCacheMaxBytes,
+		);
+		if (bounded !== undefined && bounded.removedEntries > 0) {
+			test262Log(
+				`Object cache cap: removed ${bounded.removedEntries} least-recent batch entries (${(bounded.removedBytes / 1024 ** 2).toFixed(1)} MiB).`,
+			);
+		}
 	}
 
 	const summary = selection.reduce<Record<string, number>>((acc, file) => {

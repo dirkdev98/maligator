@@ -1,5 +1,11 @@
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildFingerprint } from "../src/test262/artifact-cache.ts";
+import {
+	buildFingerprint,
+	pruneArtifactDirectoryToSize,
+} from "../src/test262/artifact-cache.ts";
 import {
 	test262NativeBuildInputs,
 	test262SetNativeBuildInputs,
@@ -56,5 +62,37 @@ describe("Test262 native build inputs", () => {
 		expect(test262NativeBuildInputs().toolchain.fingerprint).toBe("selected-toolchain");
 		expect(test262NativeBuildInputs().artifacts).toEqual(inputs.artifacts);
 		expect(test262NativeBuildInputs().wireRunner).toBe("/artifacts/Test262Wire");
+	});
+
+	it("bounds stale batch objects as atomic object/manifest entries", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-test262-artifacts-"));
+		try {
+			for (const [index, key] of ["oldest", "middle", "newest"].entries()) {
+				const used = new Date(1_000 + index * 1_000);
+				for (const [extension, contents] of [
+					["o", "12345678"],
+					["json", "{}"],
+				] as const) {
+					const target = path.join(directory, `${key}.${extension}`);
+					writeFileSync(target, contents);
+					utimesSync(target, used, used);
+				}
+			}
+
+			const result = pruneArtifactDirectoryToSize(directory, 12);
+
+			expect(result).toEqual({
+				beforeBytes: 30,
+				afterBytes: 10,
+				removedBytes: 20,
+				removedEntries: 2,
+			});
+			expect(existsSync(path.join(directory, "oldest.o"))).toBe(false);
+			expect(existsSync(path.join(directory, "middle.json"))).toBe(false);
+			expect(existsSync(path.join(directory, "newest.o"))).toBe(true);
+			expect(existsSync(path.join(directory, "newest.json"))).toBe(true);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });

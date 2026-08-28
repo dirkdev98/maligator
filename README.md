@@ -465,8 +465,12 @@ C and Rust outputs are published as immutable blobs only after compilation succe
 an atomic action manifest makes the result visible. Runtime GC stress/verification
 flags are execution inputs and reuse the same binary. Build-affecting sanitizer, GC,
 feature, backend, optimization, target, and toolchain dimensions get distinct action
-keys. Test/program verdicts and benchmark measurements are always executed and are
-never cache entries.
+keys. Within those dimensions, each runtime C object is keyed by its actual
+preprocessed input, so a feature change recompiles only translation units whose
+code changed. Feature-specific Rust archives share a serialized Cargo target tree
+and therefore reuse unaffected dependency work. Final products stay statically
+linked and self-contained. Test/program verdicts and benchmark measurements are
+always executed and are never cache entries.
 
 ## Troubleshooting
 

@@ -5,6 +5,8 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
@@ -220,6 +222,13 @@ export function loadArtifact(key: string): CachedArtifact | undefined {
 	if (manifest.hasBinary && !existsSync(objectCachePath(key))) {
 		return undefined;
 	}
+	const now = new Date();
+	try {
+		utimesSync(manifestFile, now, now);
+		if (manifest.hasBinary) utimesSync(objectCachePath(key), now, now);
+	} catch {
+		// Cache recency is best-effort; a valid artifact remains usable read-only.
+	}
 
 	return {
 		objectPath: manifest.hasBinary ? objectCachePath(key) : undefined,
@@ -254,4 +263,60 @@ export function pruneUnused(usedKeys: Set<string>) {
 			rmSync(path.join(cacheDir(), name), { force: true });
 		}
 	}
+}
+
+export interface Test262ArtifactPruneResult {
+	beforeBytes: number;
+	afterBytes: number;
+	removedBytes: number;
+	removedEntries: number;
+}
+
+/** Bound one strictness/backend cache directory after all workers have stopped. */
+export function pruneArtifactDirectoryToSize(
+	directory: string,
+	maxBytes: number,
+): Test262ArtifactPruneResult {
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+		throw new Error("Test262 artifact cache limit must be a non-negative integer");
+	}
+	if (!existsSync(directory)) {
+		return { beforeBytes: 0, afterBytes: 0, removedBytes: 0, removedEntries: 0 };
+	}
+	const groups = new Map<
+		string,
+		{ paths: Array<string>; bytes: number; lastUsedMs: number }
+	>();
+	for (const name of readdirSync(directory)) {
+		if (!name.endsWith(".o") && !name.endsWith(".json")) continue;
+		const target = path.join(directory, name);
+		const stats = statSync(target);
+		const key = name.replace(/\.(?:o|json)$/, "");
+		const group = groups.get(key) ?? { paths: [], bytes: 0, lastUsedMs: 0 };
+		group.paths.push(target);
+		group.bytes += stats.size;
+		group.lastUsedMs = Math.max(group.lastUsedMs, stats.atimeMs, stats.mtimeMs);
+		groups.set(key, group);
+	}
+	const beforeBytes = [...groups.values()].reduce((sum, group) => sum + group.bytes, 0);
+	let afterBytes = beforeBytes;
+	let removedEntries = 0;
+	for (const group of [...groups.values()].sort(
+		(left, right) => left.lastUsedMs - right.lastUsedMs,
+	)) {
+		if (afterBytes <= maxBytes) break;
+		for (const target of group.paths) rmSync(target, { force: true });
+		afterBytes -= group.bytes;
+		removedEntries++;
+	}
+	return {
+		beforeBytes,
+		afterBytes,
+		removedBytes: beforeBytes - afterBytes,
+		removedEntries,
+	};
+}
+
+export function pruneArtifactCacheToSize(maxBytes: number): Test262ArtifactPruneResult {
+	return pruneArtifactDirectoryToSize(cacheDir(), maxBytes);
 }

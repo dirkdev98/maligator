@@ -46,4 +46,6 @@ export const TEST262_METADATA = {
 	minimumBatchSize: 25,
 	targetBatchesPerWorker: 2,
 	compileWorkers: 4,
+	/** Hard post-run cap for each partial strictness/backend object-cache dimension. */
+	partialObjectCacheMaxBytes: 1024 ** 3,
 };
