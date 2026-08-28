@@ -93,6 +93,27 @@ assert(
 	"zip terminal values",
 );
 
+const keyedZipped = Iterator.zipKeyed(
+	{
+		prop_0: [1, 2],
+		prop_1: [3],
+	},
+	{
+		mode: "longest",
+		padding: new Proxy({}, {
+			get(_target, key) {
+				return `pad:${key}`;
+			},
+		}),
+	},
+).toArray();
+assert(
+	Object.keys(keyedZipped[1]).join(",") === "prop_0,prop_1" &&
+		keyedZipped[1].prop_0 === 2 &&
+		keyedZipped[1].prop_1 === "pad:prop_1",
+	"zipKeyed keeps keys and padding alive",
+);
+
 const arrayEntries = [7, 8].entries().toArray();
 assert(
 	arrayEntries.length === 2 &&

@@ -818,6 +818,8 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             mal_gc_mark_value(ih->inner_next);
             mal_gc_mark_value(ih->sources);
             mal_gc_mark_value(ih->source_methods);
+            mal_gc_mark_value(ih->zip_padding);
+            mal_gc_mark_value(ih->zip_keys);
             break;
         }
         case MAL_HEAP_WEAK_REF_OBJECT:
