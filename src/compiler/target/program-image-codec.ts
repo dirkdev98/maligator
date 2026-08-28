@@ -1782,6 +1782,8 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), nameStringIndex: r.i32() };
 		case "WITH_GET":
 			return { opcode, dst: r.i32(), nameStringIndex: r.i32() };
+		case "WITH_RESOLVE_BASE":
+			return { opcode, dst: r.i32(), nameStringIndex: r.i32() };
 		case "STORE_GLOBAL_PROPERTY":
 			return {
 				opcode,

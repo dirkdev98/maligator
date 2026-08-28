@@ -188,6 +188,13 @@ audit. Native sanitizer coverage is already part of the disjoint smoke/check/ful
 partition. "Full WPT" means every test in the pinned server-runtime curated corpus,
 not the complete browser WPT repository.
 
+Test262 stores one integrity-checked, backend-neutral ProgramImage for each
+source, corpus revision, strictness, semantic configuration, and compiler identity.
+Compiled batches emit native C from that artifact; wire runs derive MALW from the
+same artifact and use the shared runtime-image store. A warm run therefore skips
+parsing, semantic analysis, optimization, and lowering without caching a test
+verdict or execution output. Corrupt or stale artifacts are removed and rebuilt.
+
 The Test262 GC spine is risk-based rather than a second semantic regression pass.
 Its manifest names async/suspended frames, iterator cleanup, eval/private/super
 environments, realm wrappers, detachable/resizable backing stores, weak and

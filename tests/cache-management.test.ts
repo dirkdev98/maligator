@@ -85,6 +85,24 @@ describe("Maligator cache management", () => {
 		expect(inspectMaligatorCache(root).activeLeases).toBe(0);
 	});
 
+	it("retains a complete Test262 ProgramImage compiler generation", () => {
+		const root = cacheRoot();
+		const old = artifact(root, "test262-program-images", "old-compiler", 100, 10);
+		const current = artifact(root, "test262-program-images", "current-compiler", 100, 0);
+		mkdirSync(path.join(current, "aa", "image-a"), { recursive: true });
+		writeFileSync(path.join(current, "aa", "image-a", "program.malc"), "image");
+
+		const result = pruneMaligatorCache({
+			cacheRoot: root,
+			maxBytes: 1,
+			minAgeMs: 0,
+		});
+
+		expect(result.removed.map((entry) => entry.path)).toContain(old);
+		expect(existsSync(old)).toBe(false);
+		expect(existsSync(path.join(current, "aa", "image-a", "program.malc"))).toBe(true);
+	});
+
 	it("warns and continues when the cache lease cannot be written", () => {
 		const root = cacheRoot();
 		writeFileSync(path.join(root, ".leases"), "not a directory\n");

@@ -23,6 +23,7 @@ import {
 	getCodeStats,
 	getBatchReports,
 	getFailuresWithSamples,
+	getProgramImageCacheStats,
 	getTimings,
 	test262MergeStats,
 	test262NativeBuildInputs,
@@ -451,6 +452,7 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 	}, {});
 
 	const codeStats = getCodeStats();
+	const programImageCache = getProgramImageCacheStats();
 
 	test262Log(
 		`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${workerCount} compile workers.`,
@@ -465,6 +467,7 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 		`Code: ${codeStats.functionCount} functions, ${codeStats.instructionCount} instructions across ${codeStats.compiledFiles} compiled files.`,
 	);
 	test262Log(`Timings:`, JSON.stringify(getTimings(), null, 2));
+	test262Log(`ProgramImage cache:`, programImageCache);
 	test262Log(JSON.stringify(getFailuresWithSamples(), null, 2));
 
 	// The console output is easy to lose; keep the full granular report (all raw
@@ -483,6 +486,7 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 				summary,
 				code: codeStats,
 				timings: getTimings(),
+				programImageCache,
 				...getFailuresWithSamples(),
 				batches: getBatchReports(),
 			},

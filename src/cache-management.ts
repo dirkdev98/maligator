@@ -42,6 +42,9 @@ const CACHE_FAMILIES: Array<CacheFamilyPolicy> = [
 	{ path: "frontend", keep: 512, entryKind: "grandchildren" },
 	{ path: "compiler-wire", keep: 2 },
 	{ path: "test262-artifacts", keep: 2 },
+	// ProgramImages are grouped by compiler generation; retain one complete
+	// generation rather than a few hundred arbitrary corpus entries.
+	{ path: "test262-program-images", keep: 1 },
 	{ path: "test262-wires", keep: 512, entryKind: "grandchildren" },
 	{ path: "development-assets", keep: 64 },
 	{ path: "toolchains", keep: 8 },

@@ -1,6 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
 import {
-	existsSync,
 	mkdirSync,
 	readFileSync,
 	readdirSync,
@@ -21,8 +20,6 @@ import {
 	runEnv,
 	sanitizerCcFlags,
 } from "../build-flags.ts";
-import { touchCacheEntry } from "../cache-management.ts";
-import { maligatorCacheDirectory } from "../cache-root.ts";
 import { compilerEntrypointSourceFiles } from "../compiler-bake.ts";
 import { stripCompactTypes } from "../compiler/frontend/compact-type-strip.ts";
 import { parseModule, parseScript } from "../compiler/frontend/parser.ts";
@@ -30,13 +27,10 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semant
 import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "../compiler/pipeline/compile-program.ts";
-import {
-	deserializeCompilerArtifact,
-	serializeCompilerArtifact,
-} from "../compiler/target/compiler-artifact-codec.ts";
 import { emitBatch, emitProgramImage } from "../compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "../compiler/target/program-image.ts";
+import { cacheFrontendWire } from "../frontend-cache.ts";
 import { buildLocalBinary } from "../local-build.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";
 import { ensureNativeArtifacts } from "../runtime-build.ts";
@@ -57,6 +51,10 @@ import type { BatchManifest } from "./artifact-cache.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
 import { test262RuntimeNegativeVerdict } from "./policy.ts";
+import {
+	loadTest262ProgramImage,
+	storeTest262ProgramImage,
+} from "./program-image-cache.ts";
 import { mergeProgramImages } from "./program-image-merge.ts";
 import { createTest262BatchReport } from "./report.ts";
 import type {
@@ -237,6 +235,14 @@ function recordTiming(phase: keyof typeof TIMINGS, label: string, ms: number) {
 const CODE_STATS = { compiledFiles: 0, functionCount: 0, instructionCount: 0 };
 const OPCODE_COUNTS: Record<string, number> = {};
 const BATCH_REPORTS: Array<Test262BatchReport> = [];
+const PROGRAM_IMAGE_CACHE_STATS = {
+	hits: 0,
+	misses: 0,
+	corruptions: 0,
+	writeFailures: 0,
+	readBytes: 0,
+	writtenBytes: 0,
+};
 
 export function getCodeStats() {
 	const opcodes = Object.entries(OPCODE_COUNTS)
@@ -265,6 +271,10 @@ export function getBatchReports(): Array<Test262BatchReport> {
 	return [...BATCH_REPORTS].sort((left, right) => left.id.localeCompare(right.id));
 }
 
+export function getProgramImageCacheStats() {
+	return { ...PROGRAM_IMAGE_CACHE_STATS };
+}
+
 /**
  * Clear all run-level accumulators. Used between the strict and sloppy passes so
  * each pass reports its own timings, code stats, failure buckets, and pruned
@@ -286,6 +296,11 @@ export function test262ResetStats() {
 	}
 	USED_CACHE_KEYS.clear();
 	BATCH_REPORTS.length = 0;
+	for (const key of Object.keys(PROGRAM_IMAGE_CACHE_STATS) as Array<
+		keyof typeof PROGRAM_IMAGE_CACHE_STATS
+	>) {
+		PROGRAM_IMAGE_CACHE_STATS[key] = 0;
+	}
 }
 
 export function test262PrepareBuild() {
@@ -633,6 +648,25 @@ function test262CompileToC(
 		outcome.result = "SKIPPED";
 		return outcome;
 	}
+	const cacheInput = {
+		path: file.path,
+		source,
+		variant:
+			process.env.T262_VARIANT === "sloppy" ? ("sloppy" as const) : ("strict" as const),
+	};
+	const cached = loadTest262ProgramImage(cacheInput);
+	if (cached.state === "hit") {
+		PROGRAM_IMAGE_CACHE_STATS.hits++;
+		PROGRAM_IMAGE_CACHE_STATS.readBytes += cached.bytes;
+		outcome.image = cached.image;
+		outcome.stats = imageStats(cached.image);
+		return outcome;
+	}
+	PROGRAM_IMAGE_CACHE_STATS.misses++;
+	if (cached.state === "corrupt") {
+		PROGRAM_IMAGE_CACHE_STATS.corruptions++;
+		test262Log(`ProgramImage cache rejected ${file.path}: ${cached.reason}`);
+	}
 
 	const isModule = file.frontmatter.flags?.includes("module") ?? false;
 	// Strictness of the script parse. T262_VARIANT forces every script one way
@@ -700,6 +734,15 @@ function test262CompileToC(
 		outcome.stats = imageStats(programImage);
 
 		outcome.image = programImage;
+		try {
+			PROGRAM_IMAGE_CACHE_STATS.writtenBytes += storeTest262ProgramImage(
+				cacheInput,
+				programImage,
+			);
+		} catch {
+			// Cache publication must never turn a valid compilation into a test failure.
+			PROGRAM_IMAGE_CACHE_STATS.writeFailures++;
+		}
 		return outcome;
 	} catch (e) {
 		if (negativeAtCompile && e instanceof SyntaxError) {
@@ -755,28 +798,6 @@ interface RunnableBatchEntry extends BatchEntry {
 
 interface WireBatchEntry extends BatchEntry {
 	wirePath: string;
-}
-
-interface Test262WireArtifactPaths {
-	directory: string;
-	runtime: string;
-	compiler: string;
-}
-
-function test262WireArtifactPaths(source: string): Test262WireArtifactPaths {
-	const variant = process.env.T262_VARIANT ?? "unknown";
-	const key = batchCacheKey(
-		buildFingerprint([], test262Toolchain().fingerprint),
-		`runtime-and-compiler-images-v3-${variant}`,
-		[source],
-	);
-	const directory = path.join(maligatorCacheDirectory(), "test262-wires", variant, key);
-	mkdirSync(directory, { recursive: true });
-	return {
-		directory,
-		runtime: path.join(directory, "runtime.malw"),
-		compiler: path.join(directory, "compiler.malc"),
-	};
 }
 
 async function executeWireBatch(
@@ -846,40 +867,72 @@ async function executeWireBatch(
 async function test262RunWireBatch(files: Array<Test262File>, workerId: number) {
 	const entries: Array<WireBatchEntry> = [];
 	for (const file of files) {
-		const source = composeSource(file);
-		const artifactPaths = test262WireArtifactPaths(source);
-		let image: ProgramImage | undefined;
-		if (existsSync(artifactPaths.runtime) && existsSync(artifactPaths.compiler)) {
-			try {
-				image = deserializeCompilerArtifact(readFileSync(artifactPaths.compiler));
-				const expectedRuntime = serializeRuntimeImage(image.runtime);
-				if (!readFileSync(artifactPaths.runtime).equals(expectedRuntime)) {
-					throw new Error("mismatched Test262 runtime and compiler artifacts");
+		const content = file.content;
+		const composed = composeSource(file, content);
+		const plan = test262ShouldSkip(file)
+			? ({ kind: "legacy", reason: "skipped" } satisfies Test262SourcePlan)
+			: planTest262SharedHelpers(
+					file,
+					strictForTest262File(file),
+					(name) => loadHarnessFile(`harness/${name}`),
+					content,
+				);
+		let outcome: CompileOutcome;
+		let images: Array<ProgramImage>;
+		if (plan.kind === "shared") {
+			const helperOutcomes = plan.helpers.map((helper) =>
+				test262CompileToC(
+					{
+						path: helper.path,
+						frontmatter: {},
+						content: helper.source,
+						result: "UNKNOWN",
+					},
+					helper.source,
+					helper.parsed,
+				),
+			);
+			const canShare = helperOutcomes.every(
+				(helperOutcome) => helperOutcome.image !== undefined,
+			);
+			outcome = canShare
+				? test262CompileToC(file, plan.testSource, plan.parsedTest)
+				: test262CompileToC(file, composed);
+			if (canShare && outcome.image !== undefined) {
+				const testImage = outcome.image;
+				const helperImages = helperOutcomes.map((helperOutcome) => {
+					if (helperOutcome.image === undefined) {
+						throw new Error("shared Test262 helper image missing after validation");
+					}
+					return helperOutcome.image;
+				});
+				const helperStats = helperOutcomes.map((helperOutcome) => helperOutcome.stats!);
+				outcome = {
+					...outcome,
+					stats:
+						outcome.stats === undefined
+							? undefined
+							: combineImageStats([...helperStats, outcome.stats]),
+				};
+				images = [...helperImages, testImage];
+			} else {
+				if (canShare && outcome.result === "COMPILE_FAILED") {
+					outcome = test262CompileToC(file, composed);
 				}
-				touchCacheEntry(artifactPaths.directory);
-			} catch {
-				rmSync(artifactPaths.directory, { force: true, recursive: true });
+				images = outcome.image === undefined ? [] : [outcome.image];
 			}
-		}
-
-		if (image === undefined) {
-			const outcome = test262CompileToC(file, source);
-			applyOutcome(file, outcome);
-			image = outcome.image;
-			if (image === undefined) continue;
-			mkdirSync(artifactPaths.directory, { recursive: true });
-			writeFileSync(artifactPaths.compiler, serializeCompilerArtifact(image));
-			writeFileSync(artifactPaths.runtime, serializeRuntimeImage(image.runtime));
 		} else {
-			applyOutcome(file, {
-				image,
-				result: "UNKNOWN",
-				failure: undefined,
-				stats: imageStats(image),
-			});
+			outcome = test262CompileToC(file, composed);
+			images = outcome.image === undefined ? [] : [outcome.image];
 		}
-
-		entries.push({ file, index: entries.length, wirePath: artifactPaths.runtime });
+		applyOutcome(file, outcome);
+		if (images.length === 0) continue;
+		const wirePaths = images.map((image) =>
+			cacheFrontendWire(serializeRuntimeImage(image.runtime)),
+		);
+		const wirePath = path.join(BUILD_PATH, `wire${workerId}-${entries.length}.plan`);
+		writeFileSync(wirePath, `${wirePaths.join("\n")}\n`);
+		entries.push({ file, index: entries.length, wirePath });
 	}
 
 	if (entries.length > 0) await executeWireBatch(entries, workerId);
@@ -1538,6 +1591,7 @@ export interface StatsSnapshot {
 	failureCache: Record<string, Array<string>>;
 	usedCacheKeys: Array<string>;
 	batches: Array<Test262BatchReport>;
+	programImageCache: typeof PROGRAM_IMAGE_CACHE_STATS;
 }
 
 /** Snapshot this thread's accumulators (used by a compile worker before it exits). */
@@ -1550,6 +1604,7 @@ export function test262DrainStats(): StatsSnapshot {
 		failureCache: FAILURE_CACHE,
 		usedCacheKeys: [...USED_CACHE_KEYS],
 		batches: [...BATCH_REPORTS],
+		programImageCache: { ...PROGRAM_IMAGE_CACHE_STATS },
 	};
 }
 
@@ -1598,6 +1653,11 @@ export function test262MergeStats(snapshot: StatsSnapshot) {
 		USED_CACHE_KEYS.add(key);
 	}
 	BATCH_REPORTS.push(...snapshot.batches);
+	for (const key of Object.keys(PROGRAM_IMAGE_CACHE_STATS) as Array<
+		keyof typeof PROGRAM_IMAGE_CACHE_STATS
+	>) {
+		PROGRAM_IMAGE_CACHE_STATS[key] += snapshot.programImageCache[key];
+	}
 }
 
 function sortedWithSamples(
