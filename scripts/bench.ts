@@ -21,6 +21,7 @@ import {
 	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
 	HOST_MAIN,
+	resolveHarnessExecutionInvocation,
 } from "../src/test-harness.ts";
 import { persistBenchmarkBaseline, readBenchmarkBaseline } from "./bench-baseline.ts";
 import { runBenchmarkComparison, selectChangedBenchmarkLanes } from "./bench-compare.ts";
@@ -257,7 +258,8 @@ function runJavascriptSample(
 	label: string,
 ): JavascriptSample {
 	const startedAt = process.hrtime.bigint();
-	const result = spawnSync(command, args, {
+	const invocation = resolveHarnessExecutionInvocation(command);
+	const result = spawnSync(invocation.executable, [...invocation.args, ...args], {
 		encoding: "utf8",
 		maxBuffer: 4 * 1024 * 1024,
 	});
@@ -315,7 +317,8 @@ function javascriptGcMetrics(
 	JavascriptModeMetrics,
 	"collections" | "allocatedMb" | "peakLiveKb" | "maxPauseMs"
 > {
-	const result = spawnSync(binary, [], {
+	const invocation = resolveHarnessExecutionInvocation(binary);
+	const result = spawnSync(invocation.executable, invocation.args, {
 		env: { ...process.env, MAL_GC_STATS: "1" },
 		encoding: "utf8",
 		maxBuffer: 4 * 1024 * 1024,
@@ -335,10 +338,15 @@ function javascriptGcMetrics(
 
 function javascriptRssMb(binary: string): number | undefined {
 	if (process.platform !== "darwin") return undefined;
-	const result = spawnSync("/usr/bin/time", ["-l", binary], {
-		encoding: "utf8",
-		stdio: ["ignore", "ignore", "pipe"],
-	});
+	const invocation = resolveHarnessExecutionInvocation(binary);
+	const result = spawnSync(
+		"/usr/bin/time",
+		["-l", invocation.executable, ...invocation.args],
+		{
+			encoding: "utf8",
+			stdio: ["ignore", "ignore", "pipe"],
+		},
+	);
 	if (result.status !== 0)
 		throw new Error(`RSS probe failed for ${binary}: ${result.stderr}`);
 	const bytes = parseMaxRss(result.stderr);
@@ -431,6 +439,7 @@ function benchJavascript(
 		const config = world === "closed" ? CLOSED_CONFIG : OPEN_CONFIG;
 		const phaseNames = Object.keys(node.phaseMs);
 		const binary = binaryFor(mode);
+		const executable = resolveHarnessExecutionInvocation(binary).executable;
 		const rssMb = javascriptRssMb(binary);
 		modes[mode] = {
 			...summary,
@@ -441,7 +450,7 @@ function benchJavascript(
 			balancedRatio: geometricMean(
 				phaseNames.map((name) => summary.phaseMs[name]! / node.phaseMs[name]!),
 			),
-			binaryBytes: fileBytes(binary),
+			binaryBytes: fileBytes(executable),
 			...javascriptGcMetrics(binary, mode),
 			...(rssMb === undefined ? {} : { rssMb }),
 		};

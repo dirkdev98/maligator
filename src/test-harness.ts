@@ -325,12 +325,12 @@ function resolveHarnessNativeContext(
 	};
 }
 
-interface RegisteredWireExecution {
+export interface HarnessExecutionInvocation {
 	executable: string;
-	args: Array<string>;
+	args: ReadonlyArray<string>;
 }
 
-const registeredWireExecutions = new Map<string, RegisteredWireExecution>();
+const registeredWireExecutions = new Map<string, HarnessExecutionInvocation>();
 
 function registerWireExecution(
 	options: BuildOptions,
@@ -357,7 +357,10 @@ function registerWireExecution(
 	return { target, context: runner.context };
 }
 
-function executionInvocation(target: string): RegisteredWireExecution {
+/** Resolve either an ordinary binary or a registered reusable MALW target. */
+export function resolveHarnessExecutionInvocation(
+	target: string,
+): HarnessExecutionInvocation {
 	return registeredWireExecutions.get(target) ?? { executable: target, args: [] };
 }
 
@@ -440,7 +443,7 @@ export class RunError extends Error {
  */
 export function runToStdout(binary: string, options: RunOptions = {}): string {
 	const env = { ...process.env, ...options.env };
-	const invocation = executionInvocation(binary);
+	const invocation = resolveHarnessExecutionInvocation(binary);
 	try {
 		return execFileSync(invocation.executable, invocation.args, {
 			env,
@@ -567,7 +570,7 @@ export async function withServer<T>(
 	env: NodeJS.ProcessEnv,
 	body: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
-	const invocation = executionInvocation(binary);
+	const invocation = resolveHarnessExecutionInvocation(binary);
 	const child = spawn(invocation.executable, invocation.args, {
 		stdio: ["ignore", "pipe", "pipe"],
 		env: { ...process.env, ...env },
