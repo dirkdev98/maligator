@@ -13,7 +13,10 @@
 // the runtime loads + splices + runs it. debugInfo defaults on so eval'd frames
 // carry source positions for stack traces.
 
-import { compileSourceToBuffer } from "./compile.ts";
+import {
+	compilePreparedSourceToBuffer,
+	prepareSourceForCompilation,
+} from "./compile.ts";
 
 declare const globalThis: {
 	__compile: (
@@ -36,6 +39,7 @@ interface EvalCompilerCacheEntry {
 	directEvalContext: string | undefined;
 	buffer: Uint8Array;
 	retainedBytes: number;
+	semanticallyEmpty: boolean;
 }
 
 const CACHE_MAX_ENTRIES = 16;
@@ -50,11 +54,13 @@ function cachedCompilation(
 	inParamExpr: boolean | undefined,
 	inFieldInitializer: boolean | undefined,
 	directEvalContext: string | undefined,
+	semanticallyEmpty: boolean,
 ): Uint8Array | undefined {
 	for (let index = 0; index < cache.length; index++) {
 		const entry = cache[index]!;
 		if (
-			entry.source !== source ||
+			entry.semanticallyEmpty !== semanticallyEmpty ||
+			(!semanticallyEmpty && entry.source !== source) ||
 			entry.direct !== direct ||
 			entry.callerStrict !== callerStrict ||
 			entry.inParamExpr !== inParamExpr ||
@@ -78,11 +84,14 @@ function retainCompilation(
 	inFieldInitializer: boolean | undefined,
 	directEvalContext: string | undefined,
 	buffer: Uint8Array,
+	semanticallyEmpty: boolean,
 ) {
 	// Count retained source/context strings as UTF-16 so a small wire image cannot
 	// pin an arbitrarily large eval input outside the byte budget.
 	const retainedBytes =
-		source.length * 2 + (directEvalContext?.length ?? 0) * 2 + buffer.byteLength;
+		(semanticallyEmpty ? 0 : source.length * 2) +
+		(directEvalContext?.length ?? 0) * 2 +
+		buffer.byteLength;
 	if (retainedBytes > CACHE_MAX_BYTES) return;
 	while (
 		cache.length > 0 &&
@@ -101,6 +110,7 @@ function retainCompilation(
 		directEvalContext,
 		buffer,
 		retainedBytes,
+		semanticallyEmpty,
 	};
 	cache.push(entry);
 	for (let index = cache.length - 1; index > 0; index--) cache[index] = cache[index - 1]!;
@@ -125,6 +135,7 @@ globalThis.__compile = function __compile(
 			inParamExpr,
 			inFieldInitializer,
 			directEvalContext,
+			false,
 		);
 		if (cached !== undefined) return cached;
 		// completionValue: eval evaluates to its last expression's value.
@@ -134,22 +145,37 @@ globalThis.__compile = function __compile(
 		// prologue still promotes); indirect passes false (sloppy unless directive).
 		// inParamExpr: retained as a positional ABI slot; parameter-environment
 		// conflicts are encoded in directEvalContext.
-		const buffer = compileSourceToBuffer(source, {
+		const options = {
 			completionValue: true,
 			direct,
 			callerStrict,
 			inParamExpr,
 			inFieldInitializer,
 			directEvalContext,
-		});
+		};
+		const prepared = prepareSourceForCompilation(source, options);
+		if (prepared.semanticallyEmpty) {
+			const empty = cachedCompilation(
+				"",
+				direct,
+				callerStrict,
+				inParamExpr,
+				inFieldInitializer,
+				directEvalContext,
+				true,
+			);
+			if (empty !== undefined) return empty;
+		}
+		const buffer = compilePreparedSourceToBuffer(prepared, options);
 		retainCompilation(
-			source,
+			prepared.semanticallyEmpty ? "" : source,
 			direct,
 			callerStrict,
 			inParamExpr,
 			inFieldInitializer,
 			directEvalContext,
 			buffer,
+			prepared.semanticallyEmpty,
 		);
 		return buffer;
 	} catch (e) {

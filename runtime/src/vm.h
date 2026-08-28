@@ -1449,9 +1449,9 @@ typedef struct MalVm {
      * compiler's published `__compile(source) -> Uint8Array`, captured into this
      * rooted slot on first eval (then deleted off globalThis). It closes over the
      * whole baked compiler environment, so tracing it as a root keeps that alive.
-     * `loaded_images` retains every program spliced at runtime (the baked
-     * compiler plus each eval'd snippet): the spliced functions reference their
-     * instruction data in-place in these arenas, freed as a unit at teardown.
+     * `loaded_images` retains each distinct program spliced at runtime (the baked
+     * compiler plus compiler-cache misses): the spliced functions reference
+     * their instruction data in-place in these arenas, freed as a unit at teardown.
      */
     MalValue compiler_fn;
     bool compiler_installed;

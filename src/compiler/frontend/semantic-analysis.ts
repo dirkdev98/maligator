@@ -180,6 +180,20 @@ function hasUseStrictDirective(ast: ESTree.Program): boolean {
 	return false;
 }
 
+export function parseEvalSource(
+	contents: string,
+	callerStrict: boolean,
+	directEvalContext?: DirectEvalContext,
+): Pick<SemanticFile, "type" | "strict" | "ast"> {
+	const result = parseScript(contents, {
+		strict: callerStrict,
+		directEvalContext,
+	});
+	return !callerStrict && hasUseStrictDirective(result.ast)
+		? { ...result, strict: true }
+		: result;
+}
+
 /**
  * Run semantic analysis over in-memory source, optionally reusing an
  * existing parse. Used by tooling that composes sources without disk files.
@@ -212,13 +226,11 @@ export function analyzeSourceAndRunSemanticAnalysis(
 	if (parsed) {
 		parseResult = parsed;
 	} else if (options.eval) {
-		const strict = options.eval.callerStrict;
-		const result = parseScript(contents, {
-			strict,
-			directEvalContext: options.eval.directEvalContext,
-		});
-		parseResult =
-			!strict && hasUseStrictDirective(result.ast) ? { ...result, strict: true } : result;
+		parseResult = parseEvalSource(
+			contents,
+			options.eval.callerStrict,
+			options.eval.directEvalContext,
+		);
 	} else {
 		parseResult = parseScript(contents, { strict: true });
 	}

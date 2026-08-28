@@ -71,4 +71,11 @@ if (
 }
 passed++;
 
+for (let i = 0; i < 65536; i++) {
+	if ((0, eval)("/* empty " + i + " */") !== undefined) {
+		throw new Error("FAIL distinct empty eval completion");
+	}
+}
+passed++;
+
 console.log("eval-completion PASS " + passed + "/" + passed);

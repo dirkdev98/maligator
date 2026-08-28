@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
+import {
+	compileSourceToBuffer,
+	prepareSourceForCompilation,
+} from "../src/compiler/pipeline/compile.ts";
 import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 
 // The trimmed compiler entry composes parse → sema → ir → opt → regalloc →
@@ -38,5 +41,24 @@ describe("compileSourceToBuffer", () => {
 		expect(Array.from(compileSourceToBuffer(src))).toEqual(
 			Array.from(compileSourceToBuffer(src)),
 		);
+	});
+
+	it("canonicalizes parsed empty statements before semantic lowering", () => {
+		const empty = compileSourceToBuffer("", { completionValue: true });
+		expect(Array.from(compileSourceToBuffer("/* comment */", { completionValue: true }))).toEqual(
+			Array.from(empty),
+		);
+		expect(Array.from(compileSourceToBuffer("{};{{}}", { completionValue: true }))).toEqual(
+			Array.from(empty),
+		);
+	});
+
+	it("recognizes only a proven empty lexical grammar", () => {
+		expect(prepareSourceForCompilation("{}".repeat(10_000)).semanticallyEmpty).toBe(true);
+		expect(prepareSourceForCompilation("// comment\u2028 1").semanticallyEmpty).toBe(
+			false,
+		);
+		expect(() => prepareSourceForCompilation("{")).toThrow(SyntaxError);
+		expect(() => prepareSourceForCompilation("/* unterminated")).toThrow(SyntaxError);
 	});
 });

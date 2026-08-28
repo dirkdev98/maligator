@@ -67,6 +67,7 @@ MalTypedArrayObject *mal_typed_array_object_new(
     array->length = length;
     array->length_tracking = length_tracking;
     array->is_buffer = false;
+    array->runtime_image_entry = -1;
 
     return array;
 }
