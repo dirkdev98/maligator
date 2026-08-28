@@ -108,6 +108,7 @@ int mal_dev_run_wires(
         // requested runtime personality, not the binary's compile-time surface.
         if (!web_platform) {
             mal_text_encoding_globals_install(&vm, global_this);
+            mal_structured_clone_global_install(&vm, global_this);
         }
     }
 #else

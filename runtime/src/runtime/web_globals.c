@@ -1262,6 +1262,11 @@ static MalValue mal_web_structured_clone(
  * Installation.
  * --------------------------------------------------------------------------- */
 
+void mal_structured_clone_global_install(MalVm *vm, MalObject *global_this) {
+    mal_intrinsic_define_method_n(vm, global_this, (const byte *) "structuredClone", 1,
+        mal_web_structured_clone);
+}
+
 void mal_text_encoding_globals_install(MalVm *vm, MalObject *global_this) {
     MalObject *enc_proto =
         mal_web_install_class(vm, global_this, (const byte *) "TextEncoder", 0,
@@ -1316,9 +1321,7 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_method_n(vm, global_this, (const byte *) "queueMicrotask", 1,
         mal_web_queue_microtask);
 
-    // structuredClone.
-    mal_intrinsic_define_method_n(vm, global_this, (const byte *) "structuredClone", 1,
-        mal_web_structured_clone);
+    mal_structured_clone_global_install(vm, global_this);
 
     // performance (now / timeOrigin).
     MalObject *event_target_proto =

@@ -29,7 +29,7 @@ describe("Node shared globals without the broader web surface", () => {
 		);
 	}, 600_000);
 
-	it("provides URL, URLSearchParams, TextEncoder, and TextDecoder", () => {
+	it("provides the Node-owned URL, encoding, and structured-clone globals", () => {
 		for (const binary of binaries) assertResultPass(runToStdout(binary));
 	});
 

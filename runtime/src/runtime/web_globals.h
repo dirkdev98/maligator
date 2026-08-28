@@ -7,6 +7,9 @@ typedef struct MalVm MalVm;
 /* Install the UTF-8 TextEncoder/TextDecoder globals shared by web and Node hosts. */
 void mal_text_encoding_globals_install(MalVm *vm, MalObject *global_this);
 
+/* Install structuredClone, which is global in both web and Node hosts. */
+void mal_structured_clone_global_install(MalVm *vm, MalObject *global_this);
+
 /*
  * Install the self-contained WinterTC "Minimum Common API" globals that need no
  * external library: TextEncoder / TextDecoder, btoa / atob, queueMicrotask,
