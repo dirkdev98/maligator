@@ -149,9 +149,13 @@ dimension-specific strict, sloppy, and combined reports under
 Canonical report commands remove ambient `MAL_*`, `T262_*`, `WPT_ROOT`, Node
 injection, sanitizer, allocator, and dynamic-loader dimensions before starting.
 Test262 preserves the throughput-only `T262_COMPILE_WORKERS` and `T262_OBJCACHE`
-settings. Explicit toolchain overrides such as `CC`, `CFLAGS`, and `RUSTFLAGS`
-remain supported and are part of native cache identity. Use explicit `--backend`
-and `--mode` arguments when requesting non-default Test262 dimensions.
+settings. Partial selections cache their compiled batch objects by default. A
+complete corpus defaults to bounded per-worker scratch because retaining both
+strict and sloppy object sets can consume tens of GiB while the command is active;
+set `T262_OBJCACHE=1` explicitly to retain them when sufficient disk is available.
+Explicit toolchain overrides such as `CC`, `CFLAGS`, and `RUSTFLAGS` remain
+supported and are part of native cache identity. Use explicit `--backend` and
+`--mode` arguments when requesting non-default Test262 dimensions.
 
 Plain `npm run test262` is the explicit baseline-update command and may rewrite
 `scripts/test262.json`. Both it and `npm run test262:report` traverse the full

@@ -13,6 +13,7 @@ import {
 import { test262Log } from "../src/test262/log.ts";
 import {
 	parseTest262Policy,
+	resolveTest262ObjectCache,
 	test262BatchRegressions,
 	test262FoldedRegressions,
 	test262WorkerCount,
@@ -245,6 +246,13 @@ const isPartialRun =
 	manifestPaths.length > 0 ||
 	excludeManifestPaths.length > 0 ||
 	random;
+const explicitObjectCache = process.env.T262_OBJCACHE;
+process.env.T262_OBJCACHE = resolveTest262ObjectCache(explicitObjectCache, isPartialRun);
+if (!isPartialRun && explicitObjectCache === undefined) {
+	test262Log(
+		"Full corpus: compiled-object cache disabled by default to bound disk use; set T262_OBJCACHE=1 to retain it.",
+	);
+}
 const batchSize = isPartialRun
 	? Math.min(
 			TEST262_METADATA.batchSize,

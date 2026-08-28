@@ -3,6 +3,20 @@ import type { Test262File, Test262Output, Test262Result } from "./types.ts";
 export type Test262Policy = "bail" | "complete";
 export type Test262Variant = "strict" | "sloppy";
 
+/**
+ * Partial selections benefit from retaining their small compiled-object set.
+ * A complete strict/sloppy corpus can require tens of GiB per compiler
+ * fingerprint, so default it to bounded per-worker scratch unless the caller
+ * explicitly opts into the cache.
+ */
+export function resolveTest262ObjectCache(
+	explicit: string | undefined,
+	isPartialRun: boolean,
+): "0" | "1" {
+	if (explicit !== undefined) return explicit === "0" ? "0" : "1";
+	return isPartialRun ? "1" : "0";
+}
+
 export function test262WorkerCount(
 	configuredWorkers: number,
 	batchCount: number,

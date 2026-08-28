@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	parseTest262Policy,
+	resolveTest262ObjectCache,
 	test262BatchRegressions,
 	test262FoldedRegressions,
 	test262RuntimeNegativeVerdict,
@@ -19,6 +20,13 @@ function file(path: string, flags: Array<string> = []): Test262File {
 }
 
 describe("Test262 runner policy", () => {
+	it("bounds full-corpus scratch while retaining partial object caches", () => {
+		expect(resolveTest262ObjectCache(undefined, false)).toBe("0");
+		expect(resolveTest262ObjectCache(undefined, true)).toBe("1");
+		expect(resolveTest262ObjectCache("1", false)).toBe("1");
+		expect(resolveTest262ObjectCache("0", true)).toBe("0");
+	});
+
 	it("defaults to complete and validates explicit policies", () => {
 		expect(parseTest262Policy(undefined)).toBe("complete");
 		expect(parseTest262Policy("complete")).toBe("complete");
