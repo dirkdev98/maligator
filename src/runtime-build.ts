@@ -19,7 +19,7 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
-import { runtimeCcFlags } from "./build-flags.ts";
+import { runtimeCcFlags, sanitizerMode } from "./build-flags.ts";
 import { ensureCompilerArtifacts } from "./compiler-bake.ts";
 import {
 	hashDirectoryTrees,
@@ -153,6 +153,14 @@ interface RuntimeSource {
 	includeArguments?: Array<string>;
 }
 
+export function compilerNativeOverlayEnabled(
+	profileEnabled: boolean,
+	environment: NodeJS.ProcessEnv,
+): boolean {
+	// Sanitizers cover the compiler wire through the VM; normal lanes cover its 40 MiB C companion.
+	return !profileEnabled && sanitizerMode(environment) === "none";
+}
+
 function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 	let compilerWire: string | undefined;
 	let compilerWireDigest: string | undefined;
@@ -162,10 +170,18 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		if (context.compilerBake === undefined) {
 			throw new Error("eval-enabled build requires an explicit compiler wire input");
 		}
-		const compiler = ensureCompilerArtifacts(context.compilerBake);
+		const useNativeOverlay = compilerNativeOverlayEnabled(
+			context.features.profileEnabled,
+			context.environment,
+		);
+		const compiler = ensureCompilerArtifacts(
+			useNativeOverlay || context.compilerBake.kind !== "source"
+				? context.compilerBake
+				: { ...context.compilerBake, bakeProgram: undefined },
+		);
 		compilerWire = compiler.wirePath;
 		compilerWireDigest = compiler.wireDigest;
-		if (!context.features.profileEnabled) {
+		if (useNativeOverlay) {
 			compilerNativeDigest = compiler.nativeDigest;
 			compilerNativeSources = compiler.nativeSourcePaths;
 		}

@@ -19,6 +19,7 @@ import { hashDirectoryTrees } from "./file-tree.ts";
 
 const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
 const SOURCE_MANIFEST = "artifact.json";
+const COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS = 1024 * 1024;
 
 /**
  * Type erasure runs over every compiler source before a bake, so the stripper is
@@ -205,7 +206,13 @@ function compilerNativeSourceKey(sourceDirectory: string, sourceKey: string): st
 		root: sourceDirectory,
 		directories: [path.join(sourceDirectory, "compiler")],
 		include: (entry) => isCompilerSource(entry.name),
-		prefix: ["compiler-native-overlay-v1\0", sourceKey, "\0"],
+		prefix: [
+			"compiler-native-overlay-v2\0",
+			String(COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS),
+			"\0",
+			sourceKey,
+			"\0",
+		],
 		compareNames,
 	});
 }
@@ -353,7 +360,11 @@ function ensureSourceArtifacts(
 				`cached compiler wire disagrees with native compiler program: ${wirePath}`,
 			);
 		}
-		const sources = emitRelocatableNativeOverlayTranslationUnits(image, outputDigest);
+		const sources = emitRelocatableNativeOverlayTranslationUnits(
+			image,
+			outputDigest,
+			COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS,
+		);
 		const files = sources.map(
 			(_source, index) => `compiler-native-${String(index).padStart(4, "0")}.c`,
 		);

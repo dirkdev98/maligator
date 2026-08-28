@@ -23,6 +23,7 @@ import {
 import type { NativeBuildContext } from "../src/native-build-context.ts";
 import { nativeBuildJobs, runNativeCommands } from "../src/native-command.ts";
 import {
+	compilerNativeOverlayEnabled,
 	ensureNativeArtifacts,
 	runtimeArtifactKey,
 	runtimeHeaderHash,
@@ -38,6 +39,15 @@ interface FakeToolchain {
 	logPath: string;
 	env: NodeJS.ProcessEnv;
 }
+
+describe("native compiler overlay policy", () => {
+	it("keeps sanitizer and profiling builds on the compiler wire", () => {
+		expect(compilerNativeOverlayEnabled(false, {})).toBe(true);
+		expect(compilerNativeOverlayEnabled(true, {})).toBe(false);
+		expect(compilerNativeOverlayEnabled(false, { MAL_UBSAN: "1" })).toBe(false);
+		expect(compilerNativeOverlayEnabled(false, { MAL_ASAN: "1" })).toBe(false);
+	});
+});
 
 function executable(filePath: string, body: string): void {
 	writeFileSync(filePath, `#!/bin/sh\n${body}`);
