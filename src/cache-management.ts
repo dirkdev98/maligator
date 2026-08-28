@@ -50,7 +50,7 @@ const CACHE_FAMILIES: Array<CacheFamilyPolicy> = [
 	{ path: "toolchains", keep: 8 },
 	{ path: "source-digests", keep: 8 },
 	{ path: "zig", keep: 2 },
-	{ path: "work", keep: 2 },
+	{ path: "work", keep: 2, entryKind: "grandchildren" },
 ];
 
 export interface CacheEntry {

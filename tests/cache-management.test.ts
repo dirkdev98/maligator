@@ -103,6 +103,25 @@ describe("Maligator cache management", () => {
 		expect(existsSync(path.join(current, "aa", "image-a", "program.malc"))).toBe(true);
 	});
 
+	it("prunes Rust target families independently", () => {
+		const root = cacheRoot();
+		const old = artifact(root, "work/rust", "old-target", 100, 10);
+		const recent = [
+			artifact(root, "work/rust", "recent-a", 100, 1),
+			artifact(root, "work/rust", "recent-b", 100, 0),
+		];
+
+		const result = pruneMaligatorCache({
+			cacheRoot: root,
+			maxBytes: 1,
+			minAgeMs: 0,
+		});
+
+		expect(result.removed.map((entry) => entry.path)).toContain(old);
+		expect(existsSync(old)).toBe(false);
+		for (const directory of recent) expect(existsSync(directory)).toBe(true);
+	});
+
 	it("warns and continues when the cache lease cannot be written", () => {
 		const root = cacheRoot();
 		writeFileSync(path.join(root, ".leases"), "not a directory\n");
