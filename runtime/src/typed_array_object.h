@@ -38,7 +38,7 @@ typedef struct MalTypedArrayObject {
     // Node Buffer branding. Buffers otherwise use the ordinary Uint8Array layout
     // and the same ArrayBuffer backing store.
     bool is_buffer;
-    // Internal compiler buffers memoize their already-spliced runtime entry.
+    // Stateless internal compiler buffers memoize their already-spliced runtime entry.
     i32 runtime_image_entry;
 } MalTypedArrayObject;
 

@@ -63,6 +63,39 @@ if (cycledTotal !== 576) {
 }
 passed++;
 
+function createEvalState() {
+	return eval("let state = 0; () => ++state");
+}
+const firstEvalState = createEvalState();
+const secondEvalState = createEvalState();
+if (
+	firstEvalState() !== 1 ||
+	firstEvalState() !== 2 ||
+	secondEvalState() !== 1
+) {
+	throw new Error("FAIL cached eval must create fresh lexical bindings");
+}
+passed++;
+
+const templateObjects = [];
+function collectTemplateObject(templateObject) {
+	templateObjects.push(templateObject);
+}
+for (let outer = 0; outer < 2; outer++) {
+	eval(
+		"(function () { for (let inner = 0; inner < 2; inner++) { " +
+			"collectTemplateObject`${outer}${inner}`; } })();",
+	);
+}
+if (
+	templateObjects[0] !== templateObjects[1] ||
+	templateObjects[1] === templateObjects[2] ||
+	templateObjects[2] !== templateObjects[3]
+) {
+	throw new Error("FAIL separate eval calls must create fresh template sites");
+}
+passed++;
+
 if (
 	(0, eval)("let cachedLexical = 41; cachedLexical") !== 41 ||
 	(0, eval)("let cachedLexical = 41; cachedLexical") !== 41

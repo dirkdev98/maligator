@@ -200,11 +200,17 @@ static i32 compile_source(MalVm *vm, MalValue source, bool direct, bool caller_s
         goto done;
     }
     mal_vm_retain_loaded_runtime_image(vm, loaded);
-    entry = mal_vm_splice_runtime_image(vm, mal_loaded_runtime_image_get(loaded));
+    const MalRuntimeImage *image = mal_loaded_runtime_image_get(loaded);
+    entry = mal_vm_splice_runtime_image(vm, image);
     if (entry < 0 && splice_failed != nullptr) {
         *splice_failed = true;
     }
-    buffer->runtime_image_entry = entry;
+    // Global slots carry per-compilation identity and state, including tagged
+    // template registries and eval lexical bindings. Only stateless images can
+    // safely reuse the already-relocated entry across separate eval calls.
+    if (entry >= 0 && image->global_count == 0) {
+        buffer->runtime_image_entry = entry;
+    }
 
 done:
     mal_gc_unroot(&root_span);
