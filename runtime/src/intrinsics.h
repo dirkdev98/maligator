@@ -298,6 +298,10 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_DECODE_URI_COMPONENT,
     MAL_INTRINSIC_ENCODE_URI,
     MAL_INTRINSIC_ENCODE_URI_COMPONENT,
+    /** Compiler-only explicit-resource-management operations. */
+    MAL_INTRINSIC_NEW_DISPOSE_CAPABILITY,
+    MAL_INTRINSIC_ADD_DISPOSABLE_RESOURCE,
+    MAL_INTRINSIC_DISPOSE_RESOURCES,
     /**
      * The CommonJS `require` native handed to module wrappers. Called with a
      * numeric module id (the compiler resolves `require("lit")` to its id) and

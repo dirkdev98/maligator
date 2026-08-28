@@ -1885,6 +1885,12 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_DIRECT_EVAL";
 		case "__dynamicImport":
 			return "MAL_INTRINSIC_DYNAMIC_IMPORT";
+		case "__newDisposeCapability":
+			return "MAL_INTRINSIC_NEW_DISPOSE_CAPABILITY";
+		case "__addDisposableResource":
+			return "MAL_INTRINSIC_ADD_DISPOSABLE_RESOURCE";
+		case "__disposeResources":
+			return "MAL_INTRINSIC_DISPOSE_RESOURCES";
 		case "NaN":
 			return "MAL_INTRINSIC_NAN_VALUE";
 		case "Infinity":

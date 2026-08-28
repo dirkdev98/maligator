@@ -183,6 +183,9 @@ export const WIRE_INTRINSICS = [
 	"__directEval",
 	"Atomics",
 	"__dynamicImport",
+	"__newDisposeCapability",
+	"__addDisposableResource",
+	"__disposeResources",
 ] as const;
 const INTRINSIC_TAG = new Map<string, number>(
 	WIRE_INTRINSICS.map((name, i) => [name, i]),

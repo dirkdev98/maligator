@@ -1090,4 +1090,7 @@ export type CompilerIntrinsic =
 	| "__directEval"
 	// HostImportModuleDynamically entry point. Not a user-visible global; emitted
 	// for the syntactic ImportCall form `import(specifier)`.
-	| "__dynamicImport";
+	| "__dynamicImport"
+	| "__newDisposeCapability"
+	| "__addDisposableResource"
+	| "__disposeResources";

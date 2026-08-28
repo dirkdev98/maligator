@@ -102,6 +102,51 @@ static void mal_disposable_stack_append(
     mal_gc_card(&stack->object.header, dispose_method);
 }
 
+static bool mal_disposable_stack_add_value(
+    MalVm *vm,
+    MalDisposableStackObject *stack,
+    MalValue value,
+    MalDisposeKind kind
+) {
+    if (mal_value_is_nil(value)) return true;
+    if (!mal_value_is_object(value)) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Disposable resource is not an object"
+        );
+        return false;
+    }
+    if (kind != MAL_DISPOSE_SYNC) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Async disposal is not available in this context"
+        );
+        return false;
+    }
+
+    MalValue method;
+    if (!mal_vm_get_property(
+            vm,
+            value,
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_DISPOSE),
+            &method)) {
+        return false;
+    }
+    if (!mal_value_is_callable(method)) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Symbol.dispose method is not callable"
+        );
+        return false;
+    }
+
+    mal_disposable_stack_append(vm, stack, value, kind, method);
+    return true;
+}
+
 static MalValue mal_disposable_stack_adopt_closure(
     MalVm *vm,
     MalValue this_value,
@@ -205,35 +250,9 @@ static MalValue mal_builtin_disposable_stack_use(
     }
 
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    if (mal_value_is_nil(value)) return value;
-    if (!mal_value_is_object(value)) {
-        mal_vm_throw_error(
-            vm,
-            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Disposable resource is not an object"
-        );
-        return mal_value_new_undefined();
-    }
-
-    MalValue method;
-    if (!mal_vm_get_property(
-            vm,
-            value,
-            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_DISPOSE),
-            &method)) {
-        return mal_value_new_undefined();
-    }
-    if (!mal_value_is_callable(method)) {
-        mal_vm_throw_error(
-            vm,
-            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Symbol.dispose method is not callable"
-        );
-        return mal_value_new_undefined();
-    }
-
-    mal_disposable_stack_append(vm, stack, value, MAL_DISPOSE_SYNC, method);
-    return value;
+    return mal_disposable_stack_add_value(vm, stack, value, MAL_DISPOSE_SYNC)
+        ? value
+        : mal_value_new_undefined();
 }
 
 static MalValue mal_builtin_disposable_stack_adopt(
@@ -357,32 +376,23 @@ static MalValue mal_builtin_disposable_stack_move(
     return mal_value_from_object(&moved->object);
 }
 
-static MalValue mal_builtin_disposable_stack_dispose(
+static MalValue mal_disposable_stack_dispose_resources(
     MalVm *vm,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalValue new_target,
-    MalValue callee
+    MalValue stack_value,
+    MalDisposableStackObject *stack,
+    bool has_error,
+    MalValue error
 ) {
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    (void) callee;
-    MalDisposableStackObject *stack =
-        mal_disposable_stack_require(vm, this_value, false);
-    if (stack == nullptr || stack->disposed) return mal_value_new_undefined();
     stack->disposed = true;
 
     MalValue roots[4] = {
-        this_value,
+        stack_value,
         mal_value_new_undefined(),
         mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        error,
     };
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, countof(roots));
-    bool has_error = false;
     while (stack->resource_count > 0) {
         MalDisposableResource resource =
             stack->resources[--stack->resource_count];
@@ -430,11 +440,135 @@ static MalValue mal_builtin_disposable_stack_dispose(
     return mal_value_new_undefined();
 }
 
+static MalValue mal_builtin_disposable_stack_dispose(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, this_value, false);
+    if (stack == nullptr || stack->disposed) return mal_value_new_undefined();
+    return mal_disposable_stack_dispose_resources(
+        vm, this_value, stack, false, mal_value_new_undefined());
+}
+
+static MalValue mal_builtin_new_dispose_capability(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    return mal_value_from_object(
+        &mal_disposable_stack_new(
+            vm,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+            false
+        )->object);
+}
+
+static MalValue mal_builtin_add_disposable_resource(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    MalValue stack_value = arg_count >= 1
+        ? args[0]
+        : mal_value_new_undefined();
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, stack_value, false);
+    if (stack == nullptr || !mal_disposable_stack_require_pending(vm, stack)) {
+        return mal_value_new_undefined();
+    }
+    MalValue value = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    bool async = arg_count >= 3 && mal_value_is_boolean(args[2]) &&
+        mal_value_to_boolean(args[2]);
+    return mal_disposable_stack_add_value(
+               vm,
+               stack,
+               value,
+               async ? MAL_DISPOSE_ASYNC : MAL_DISPOSE_SYNC)
+        ? value
+        : mal_value_new_undefined();
+}
+
+static MalValue mal_builtin_dispose_resources(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    MalValue stack_value = arg_count >= 1
+        ? args[0]
+        : mal_value_new_undefined();
+    MalDisposableStackObject *stack =
+        mal_disposable_stack_require(vm, stack_value, false);
+    if (stack == nullptr) return mal_value_new_undefined();
+    bool has_error = arg_count >= 2 && mal_value_is_boolean(args[1]) &&
+        mal_value_to_boolean(args[1]);
+    MalValue error = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+    return mal_disposable_stack_dispose_resources(
+        vm, stack_value, stack, has_error, error);
+}
+
 void mal_builtin_disposable_stack_install(MalVm *vm) {
     mal_gc_register_tracer(
         MAL_HEAP_DISPOSABLE_STACK_OBJECT, mal_disposable_stack_trace);
     mal_gc_register_finalizer(
         MAL_HEAP_DISPOSABLE_STACK_OBJECT, mal_disposable_stack_finalize);
+
+    MalObject *function_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    vm->intrinsics[MAL_INTRINSIC_NEW_DISPOSE_CAPABILITY] =
+        mal_value_from_native_function_object(
+            mal_native_function_object_new(
+                &vm->heap,
+                function_prototype,
+                mal_intrinsic_ascii(vm, "__newDisposeCapability"),
+                mal_builtin_new_dispose_capability
+            ));
+    vm->intrinsics[MAL_INTRINSIC_ADD_DISPOSABLE_RESOURCE] =
+        mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(
+                &vm->heap,
+                function_prototype,
+                mal_intrinsic_ascii(vm, "__addDisposableResource"),
+                3,
+                mal_builtin_add_disposable_resource
+            ));
+    vm->intrinsics[MAL_INTRINSIC_DISPOSE_RESOURCES] =
+        mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(
+                &vm->heap,
+                function_prototype,
+                mal_intrinsic_ascii(vm, "__disposeResources"),
+                3,
+                mal_builtin_dispose_resources
+            ));
 
     MalObject *prototype = mal_object_new(
         &vm->heap,
@@ -443,7 +577,7 @@ void mal_builtin_disposable_stack_install(MalVm *vm) {
     MalNativeFunctionObject *constructor =
         mal_native_function_object_new_arity(
             &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            function_prototype,
             mal_intrinsic_ascii(vm, "DisposableStack"),
             0,
             mal_builtin_disposable_stack_constructor

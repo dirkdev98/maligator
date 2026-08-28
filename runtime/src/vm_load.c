@@ -162,6 +162,9 @@ static const i32 wire_intrinsics[] = {
     MAL_INTRINSIC_DIRECT_EVAL,
     MAL_INTRINSIC_ATOMICS,
     MAL_INTRINSIC_DYNAMIC_IMPORT,
+    MAL_INTRINSIC_NEW_DISPOSE_CAPABILITY,
+    MAL_INTRINSIC_ADD_DISPOSABLE_RESOURCE,
+    MAL_INTRINSIC_DISPOSE_RESOURCES,
 };
 
 // ---- owned arena (chained calloc'd blocks; pointers stay stable, one free) ----

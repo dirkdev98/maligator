@@ -601,6 +601,8 @@ interface SemanticControlContext {
 	finallyEntryJumps?: Array<Extract<CompilerInstruction, { type: "jump" }>>;
 	completionKindReg?: number;
 	completionValueReg?: number;
+	disposeCapabilityLocation?: BindingLocation;
+	disposeAsync?: boolean;
 
 	/**
 	 * For kind === "finally": the abrupt-completion dispatch arms that actually
@@ -699,6 +701,9 @@ const compilerIntrinsics = new Set<string>([
 	"__cjs_require",
 	"__directEval",
 	"__dynamicImport",
+	"__newDisposeCapability",
+	"__addDisposableResource",
+	"__disposeResources",
 ]);
 
 function isCompilerIntrinsic(name: string): name is CompilerIntrinsic {
@@ -5317,7 +5322,19 @@ function compileStatementsToBlock(
 	 * must not be assigned at block entry.
 	 */
 	hoistFunctions = false,
+	resourceScope = true,
 ): number {
+	if (
+		resourceScope &&
+		statements.some(
+			(statement) =>
+				statement.type === "VariableDeclaration" &&
+				(statement.kind === "using" || statement.kind === "await using"),
+		)
+	) {
+		return compileDisposableStatementScope(program, fn, statements, hoistFunctions);
+	}
+
 	let block: CoreFrontendBlock = {
 		emitter: unboundCoreEmitter,
 	};
@@ -5611,6 +5628,147 @@ function compileStatementsToBlock(
 	}
 
 	return blockIdx;
+}
+
+function compileDisposableStatementScope(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	statements: Array<ESTree.Statement>,
+	hoistFunctions: boolean,
+): number {
+	const entry: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const entryIdx = fn.blocks.push(entry) - 1;
+	const cursor: CoreFrontendCursor = { block: entry };
+	const createCapability = nextCoreVariable(fn);
+	entry.emitter.emit({
+		type: "loadIntrinsic",
+		registers: [createCapability],
+		intrinsic: "__newDisposeCapability",
+	});
+	const undefinedValue = compileUndefined(fn, cursor);
+	const capability = nextCoreVariable(fn);
+	entry.emitter.emit({
+		type: "call",
+		registers: [capability, createCapability, undefinedValue],
+	});
+	const capabilityLocation: BindingLocation = {
+		type: "local",
+		index: fn.nextLocalIndex++,
+	};
+	storeRegisterAtLocation(entry, capabilityLocation, capability);
+
+	const kindReg = nextCoreVariable(fn);
+	const valueReg = nextCoreVariable(fn);
+	const finallyCtx: SemanticControlContext = {
+		kind: "finally",
+		breakJumps: [],
+		continueJumps: [],
+		finallyEntryJumps: [],
+		completionKindReg: kindReg,
+		completionValueReg: valueReg,
+		finalizerArms: new Map(),
+		disposeCapabilityLocation: capabilityLocation,
+		disposeAsync: statements.some(
+			(statement) =>
+				statement.type === "VariableDeclaration" && statement.kind === "await using",
+		),
+	};
+	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
+		type: "tryBegin",
+		blocks: [-1, -1],
+	};
+	entry.emitter.emit(tryBegin);
+
+	fn.loops ??= [];
+	fn.loops.push(finallyCtx);
+	const bodyEntry = compileStatementsToBlock(
+		program,
+		fn,
+		statements,
+		hoistFunctions,
+		false,
+	);
+	entry.emitter.emit({ type: "jump", blocks: [bodyEntry] });
+	const bodyLast = fn.blocks.at(-1)!;
+	fn.loops.pop();
+
+	const normalExit: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const normalExitIdx = fn.blocks.push(normalExit) - 1;
+	normalExit.emitter.emit({ type: "tryEnd" });
+	tryBegin.blocks[1] = normalExitIdx;
+	bodyLast.emitter.emit({ type: "jump", blocks: [normalExitIdx] });
+	routeThroughFinalizer(normalExit, finallyCtx, "normal", null);
+
+	const handler: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	tryBegin.blocks[0] = fn.blocks.push(handler) - 1;
+	const caught = nextCoreVariable(fn);
+	handler.emitter.emit({ type: "catch", registers: [caught] });
+	routeThroughFinalizer(
+		handler,
+		finallyCtx,
+		"throw",
+		(block) => block.emitter.emit({ type: "throw", registers: [valueReg] }),
+		caught,
+	);
+
+	const finalizer: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const finalizerIdx = fn.blocks.push(finalizer) - 1;
+	for (const jump of finallyCtx.finallyEntryJumps!) {
+		jump.blocks[0] = finalizerIdx;
+	}
+
+	const dispose = nextCoreVariable(fn);
+	const finalizerThis = compileUndefined(fn, { block: finalizer });
+	const finalizerCapability = loadRegisterFromLocation(fn, finalizer, capabilityLocation);
+	const throwKind = nextCoreVariable(fn);
+	const hasError = nextCoreVariable(fn);
+	finalizer.emitter.emit(
+		{
+			type: "loadIntrinsic",
+			registers: [dispose],
+			intrinsic: "__disposeResources",
+		},
+		{
+			type: "createNumber",
+			registers: [throwKind],
+			value: finallyCtx.finalizerArms!.get("throw")!.kind,
+		},
+		{
+			type: "binary",
+			registers: [hasError, kindReg, throwKind],
+			operator: "===",
+		},
+	);
+	const ignored = nextCoreVariable(fn);
+	finalizer.emitter.emit({
+		type: "call",
+		registers: [ignored, dispose, finalizerThis, finalizerCapability, hasError, valueReg],
+	});
+
+	const dispatchBlocks: Array<{ kind: number; idx: number }> = [];
+	for (const { kind, fill } of finallyCtx.finalizerArms!.values()) {
+		const arm: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		const idx = fn.blocks.push(arm) - 1;
+		fill(arm);
+		dispatchBlocks.push({ kind, idx });
+	}
+	const epilogue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const epilogueIdx = fn.blocks.push(epilogue) - 1;
+	finalizer.emitter.emit({ type: "jump", blocks: [epilogueIdx] });
+	for (const { kind, idx } of dispatchBlocks) {
+		const constant = nextCoreVariable(fn);
+		const matches = nextCoreVariable(fn);
+		epilogue.emitter.emit(
+			{ type: "createNumber", registers: [constant], value: kind },
+			{
+				type: "binary",
+				registers: [matches, kindReg, constant],
+				operator: "===",
+			},
+			{ type: "jumpIf", registers: [matches], blocks: [idx] },
+		);
+	}
+	return entryIdx;
 }
 
 function compileClassDeclaration(
@@ -7377,6 +7535,11 @@ function routeThroughFinalizer(
 			type: "move",
 			registers: [scope.completionValueReg!, valueRegister],
 		});
+	} else if (scope.disposeCapabilityLocation !== undefined) {
+		block.emitter.emit({
+			type: "createUndefined",
+			registers: [scope.completionValueReg!],
+		});
 	}
 	const jump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
@@ -7791,7 +7954,7 @@ function compileVariableDeclaration(
 			continue;
 		}
 
-		const source = compileExpression(
+		let source = compileExpression(
 			program,
 			fn,
 			cursor,
@@ -7802,6 +7965,38 @@ function compileVariableDeclaration(
 			// NamedEvaluation: anonymous initializers take the binding name.
 			decl.id.type === "Identifier" ? decl.id.name : undefined,
 		);
+		if (statement.kind === "using" || statement.kind === "await using") {
+			const disposal = fn.loops?.findLast(
+				(scope) => scope.disposeCapabilityLocation !== undefined,
+			);
+			if (disposal?.disposeCapabilityLocation === undefined) {
+				throw new Error("resource declaration has no disposal scope");
+			}
+			const capability = loadRegisterFromLocation(
+				fn,
+				cursor.block,
+				disposal.disposeCapabilityLocation,
+			);
+			const addResource = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
+				type: "loadIntrinsic",
+				registers: [addResource],
+				intrinsic: "__addDisposableResource",
+			});
+			const thisValue = compileUndefined(fn, cursor);
+			const asyncHint = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
+				type: "createBoolean",
+				registers: [asyncHint],
+				value: statement.kind === "await using",
+			});
+			const added = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
+				type: "call",
+				registers: [added, addResource, thisValue, capability, source, asyncHint],
+			});
+			source = added;
+		}
 
 		if (decl.id.type === "ObjectPattern" || decl.id.type === "ArrayPattern") {
 			compilePatternTarget(program, fn, cursor, decl.id, source);
