@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
+import {
+	compileSourceToBuffer,
+	runtimeEvalOptimizationForSource,
+} from "../src/compiler/pipeline/compile.ts";
 
 /**
  * Self-host validation (eval Phase 3). maligator compiles its own trimmed
@@ -27,7 +30,11 @@ function digest(buf: Uint8Array | Array<number>): string {
 }
 
 // Reference: the Node-hosted compiler.
-const reference = digest(compileSourceToBuffer(SRC, { optimization: "development" }));
+const reference = digest(
+	compileSourceToBuffer(SRC, {
+		optimization: runtimeEvalOptimizationForSource(SRC),
+	}),
+);
 
 // Self-hosted: an entry that compiles SRC and prints the same digest, built by
 // maligator (which strips + bundles the compiler cone) and run as a binary.
@@ -39,8 +46,9 @@ let out = "";
 try {
 	writeFileSync(
 		entry,
-		`import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
-const buf = compileSourceToBuffer(${JSON.stringify(SRC)}, { optimization: "development" });
+		`import { compileSourceToBuffer, runtimeEvalOptimizationForSource } from "../src/compiler/pipeline/compile.ts";
+const source = ${JSON.stringify(SRC)};
+const buf = compileSourceToBuffer(source, { optimization: runtimeEvalOptimizationForSource(source) });
 let a = 1, b = 0;
 for (let i = 0; i < buf.length; i++) { a = (a + buf[i]) % 65521; b = (b + a) % 65521; }
 console.log(buf.length + " " + a + " " + b + " " + buf[0] + " " + buf[buf.length - 1]);

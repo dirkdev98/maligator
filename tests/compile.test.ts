@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	compileSourceToBuffer,
 	prepareSourceForCompilation,
+	runtimeEvalOptimizationForSource,
 } from "../src/compiler/pipeline/compile.ts";
 import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 
@@ -49,6 +50,11 @@ describe("compileSourceToBuffer", () => {
 		const full = compileSourceToBuffer(source, { optimization: "full" });
 		expect(Array.from(bounded)).not.toEqual(Array.from(full));
 		expect(deserializeRuntimeImage(bounded).functions.length).toBeGreaterThan(1);
+	});
+
+	it("bounds the compile-latency profile to small eval sources", () => {
+		expect(runtimeEvalOptimizationForSource("x".repeat(1024))).toBe("development");
+		expect(runtimeEvalOptimizationForSource("x".repeat(1025))).toBe("full");
 	});
 
 	it("canonicalizes parsed empty statements before semantic lowering", () => {

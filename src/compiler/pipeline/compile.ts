@@ -124,6 +124,16 @@ export interface CompileSourceOptions {
 	directEvalContext?: string;
 }
 
+// Keep larger sources fully optimized so compile-latency savings cannot create unbounded
+// output/runtime cost.
+const BOUNDED_EVAL_OPTIMIZATION_MAX_SOURCE_LENGTH = 1024;
+
+export function runtimeEvalOptimizationForSource(source: string): "development" | "full" {
+	return source.length <= BOUNDED_EVAL_OPTIMIZATION_MAX_SOURCE_LENGTH
+		? "development"
+		: "full";
+}
+
 export function prepareSourceForCompilation(
 	source: string,
 	options: CompileSourceOptions = {},

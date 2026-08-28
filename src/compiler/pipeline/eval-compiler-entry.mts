@@ -13,7 +13,11 @@
 // the runtime loads + splices + runs it. debugInfo defaults on so eval'd frames
 // carry source positions for stack traces.
 
-import { compilePreparedSourceToBuffer, prepareSourceForCompilation } from "./compile.ts";
+import {
+	compilePreparedSourceToBuffer,
+	prepareSourceForCompilation,
+	runtimeEvalOptimizationForSource,
+} from "./compile.ts";
 
 declare const globalThis: {
 	__compile: (
@@ -144,7 +148,7 @@ globalThis.__compile = function __compile(
 		// conflicts are encoded in directEvalContext.
 		const options = {
 			completionValue: true,
-			optimization: "development" as const,
+			optimization: runtimeEvalOptimizationForSource(source),
 			direct,
 			callerStrict,
 			inParamExpr,
