@@ -40,6 +40,11 @@ const TEST_IMAGE_TRANSFORM = 1;
 
 export type DependencyIdentity = FrontendDependencyIdentity;
 
+export interface TestProcessRunner {
+	runOptions: object;
+	resultPrefix: string;
+}
+
 interface TestCacheManifest {
 	schema: 1;
 	identity: string;
@@ -60,6 +65,8 @@ interface CompileTestOptions {
 	/** Require an artifact with exactly these entries during failure containment. */
 	allowSupersetCache?: boolean;
 	dependencyWorker?: DependencyFragmentWorker;
+	/** Execute and report inside a child runner instead of publishing a global result. */
+	processRunner?: TestProcessRunner;
 }
 
 export interface CompileTestFileOptions extends CompileTestOptions {
@@ -124,6 +131,7 @@ function cacheIdentity(options: CompileTestOptions): string {
 					? digest(options.nodeGlobalsSource ?? "")
 					: undefined,
 			testImageTransform: TEST_IMAGE_TRANSFORM,
+			processRunner: options.processRunner,
 		}),
 	);
 }
@@ -240,11 +248,7 @@ export interface CompiledProfiledTestImage {
 	dependencies: Array<string>;
 }
 
-export interface CompiledIsolatedTestImage {
-	wire: Uint8Array;
-	entries: Array<string>;
-	dependencies: Array<string>;
-}
+export type CompiledIsolatedTestImage = CompiledTestImage;
 
 function testProcessEntrySource(
 	entries: Array<string>,
@@ -297,33 +301,10 @@ export function compileIsolatedTestImage(
 	runOptions: object,
 	resultPrefix: string,
 ): CompiledIsolatedTestImage {
-	const entries = resolvedEntries(options.files);
-	if (entries.length === 0)
-		throw new Error("an isolated test image requires at least one entry");
-	const session = options.session ?? new TestCompilationSession();
-	const graph = buildTestGraph(
-		options,
-		entries,
-		session,
-		testProcessEntrySource(
-			entries,
-			options.config.surface.node,
-			runOptions,
-			resultPrefix,
-		),
-	);
-	const dependencies = dependencyIdentities(graph, session).map((entry) => entry.path);
-	const semantic = runSemanticAnalysisForGraph(graph);
-	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
-	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-	return {
-		wire: serializeRuntimeImage(
-			compileSemanticProgramToProgramImage(semantic, { optimization: "development" })
-				.runtime,
-		),
-		entries,
-		dependencies,
-	};
+	return compileTestImage({
+		...options,
+		processRunner: { runOptions, resultPrefix },
+	});
 }
 
 function dependencyIdentities(
@@ -409,14 +390,23 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	}
 
 	const graphStartedAt = Date.now();
-	const graph = buildTestGraph(options, entries, session);
+	const entrySource =
+		options.processRunner === undefined
+			? syntheticEntry(entries, options.config.surface.node)
+			: testProcessEntrySource(
+					entries,
+					options.config.surface.node,
+					options.processRunner.runOptions,
+					options.processRunner.resultPrefix,
+				);
+	const graph = buildTestGraph(options, entries, session, entrySource);
 	phases.graphMs = Date.now() - graphStartedAt;
 	const dependencies = dependencyIdentities(graph, session);
 	session.flush();
 	const contentKey = digest(
 		JSON.stringify({
 			identity,
-			entrySource: syntheticEntry(entries, options.config.surface.node),
+			entrySource,
 			dependencies: dependencies.map(({ path: file, digest: contentDigest }) => ({
 				file,
 				digest: contentDigest,

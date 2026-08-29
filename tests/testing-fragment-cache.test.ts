@@ -51,6 +51,47 @@ test(${JSON.stringify(name)}, () => expect(answer).toBe(42));
 }
 
 describe("relocatable test fragment cache", () => {
+	test("reuses registration fragments across isolated runner options", () => {
+		const root = temporaryDirectory();
+		const entry = path.join(root, "isolated.test.mts");
+		write(entry, 'import { test } from "maligator:test";\ntest("isolated", () => {});\n');
+		const shared = {
+			files: [entry],
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "isolated-fragment-type-strip",
+			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
+			cacheDirectory: path.join(root, "cache"),
+		};
+		const first = compileRelocatableTestImage({
+			...shared,
+			processRunner: {
+				runOptions: { repeat: 1, bail: false, timeoutMs: 1000 },
+				resultPrefix: "__ISOLATED_RESULT__",
+			},
+		});
+		const changedOptions = compileRelocatableTestImage({
+			...shared,
+			processRunner: {
+				runOptions: { repeat: 2, bail: false, timeoutMs: 1000 },
+				resultPrefix: "__ISOLATED_RESULT__",
+			},
+		});
+		const restored = compileRelocatableTestImage({
+			...shared,
+			processRunner: {
+				runOptions: { repeat: 1, bail: false, timeoutMs: 1000 },
+				resultPrefix: "__ISOLATED_RESULT__",
+			},
+		});
+
+		expect(first.artifactMisses).toBe(3);
+		expect(changedOptions.artifactHits).toBe(2);
+		expect(changedOptions.artifactMisses).toBe(1);
+		expect(restored.cache).toBe("hit");
+		expect(restored.artifactHits).toBe(3);
+	});
+
 	test("installs Node-compatible globals in interpreted test images", () => {
 		const root = temporaryDirectory();
 		const compiled = compileRelocatableTestImage({

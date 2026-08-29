@@ -1162,7 +1162,10 @@ function executeIsolatedTests(
 		false,
 		derivation.cacheSuffix,
 	).binaryPath;
-	const wirePath = cacheFrontendWire(compiled.wire);
+	const wirePaths =
+		"wires" in compiled
+			? compiled.wires.map((wire) => wire.path)
+			: [cacheFrontendWire(compiled.wire)];
 	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
 		cacheDirectory: ".cache/mal-cache",
 		session: new FrontendCompilationSession(),
@@ -1173,10 +1176,10 @@ function executeIsolatedTests(
 		assetManifest === undefined
 			? "--maligator-internal-run-wires"
 			: "--maligator-internal-run-wires-assets",
-		"1",
+		String(wirePaths.length),
 		...(assetManifest === undefined ? [] : [assetManifest]),
 		entrypoint,
-		wirePath,
+		...wirePaths,
 	];
 	const executionStartedAt = Date.now();
 	const outcome = executeBinaryCaptured(runner, args, runEnv());
@@ -1214,6 +1217,10 @@ function executeIsolatedTests(
 		discoveryMs: compiled.discoveryMs,
 		frontendMs: compiled.frontendMs,
 		executionMs,
+		cacheHits: compiled.cache === "hit" ? 1 : 0,
+		cacheMisses: compiled.cache === "miss" ? 1 : 0,
+		artifactHits: "artifactHits" in compiled ? compiled.artifactHits : 0,
+		artifactMisses: "artifactMisses" in compiled ? compiled.artifactMisses : 0,
 	});
 }
 

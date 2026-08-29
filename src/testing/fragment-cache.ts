@@ -179,6 +179,12 @@ function environmentIdentity(options: CompileTestImageOptions): string {
 	);
 }
 
+function requestIdentity(environment: string, options: CompileTestImageOptions): string {
+	return options.processRunner === undefined
+		? environment
+		: digest(JSON.stringify({ environment, processRunner: options.processRunner }));
+}
+
 function dependenciesUnchanged(
 	dependencies: Array<DependencyIdentity>,
 	session: FrontendCompilationSession,
@@ -637,16 +643,24 @@ globalThis.__maligatorTestLinkedModules = __maligatorModules;
 }
 
 function runnerGraph(
-	firstFile: string,
+	entries: Array<string>,
 	options: CompileTestImageOptions,
 	parseCache: ModuleParseCache,
 ): ModuleGraph {
-	const entry = path.join(path.dirname(firstFile), ".maligator-test-runner.mts");
+	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-runner.mts");
+	const source =
+		options.processRunner === undefined
+			? "globalThis.__maligatorTestResult = await " +
+				"globalThis.__maligatorTestApi.__run(globalThis.__maligatorTestOptions);\n"
+			: `const __result = await globalThis.__maligatorTestApi.__run(${JSON.stringify({
+					...options.processRunner.runOptions,
+					files: entries,
+				})});
+console.log(${JSON.stringify(options.processRunner.resultPrefix)} + JSON.stringify(__result));
+`;
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
-		entrySource:
-			"globalThis.__maligatorTestResult = await " +
-			"globalThis.__maligatorTestApi.__run(globalThis.__maligatorTestOptions);\n",
+		entrySource: source,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		parseCache,
@@ -680,7 +694,8 @@ export function compileRelocatableTestImage(
 	if (entries.length === 0) throw new Error("a test image requires at least one entry");
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
-	const identity = environmentIdentity(options);
+	const environment = environmentIdentity(options);
+	const identity = requestIdentity(environment, options);
 	const session = options.session ?? new TestCompilationSession();
 	session.useCacheDirectory(options.cacheDirectory);
 	const phases = emptyPhases();
@@ -717,7 +732,7 @@ export function compileRelocatableTestImage(
 		plan,
 		graph: fragmentGraph(plan, options, session.moduleParses),
 	}));
-	const runner = runnerGraph(entries[0]!, options, session.moduleParses);
+	const runner = runnerGraph(entries, options, session.moduleParses);
 	phases.graphMs += Date.now() - fragmentGraphsStartedAt;
 	const dependencyTargets = [
 		...new Map(
@@ -749,7 +764,7 @@ export function compileRelocatableTestImage(
 	const baseArtifact = compileArtifact(
 		root,
 		artifactRoot,
-		identity,
+		environment,
 		"base",
 		base,
 		options.config,
@@ -760,7 +775,7 @@ export function compileRelocatableTestImage(
 		...compileArtifact(
 			root,
 			artifactRoot,
-			identity,
+			environment,
 			`entry:${plan.file}`,
 			graph,
 			options.config,
@@ -770,7 +785,7 @@ export function compileRelocatableTestImage(
 	const runnerArtifact = compileArtifact(
 		root,
 		artifactRoot,
-		identity,
+		environment,
 		"runner",
 		runner,
 		options.config,

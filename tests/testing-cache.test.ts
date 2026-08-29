@@ -70,14 +70,18 @@ describe("test frontend artifact cache", () => {
 			`import { expect, test } from "maligator:test"; test("ok", () => expect(1).toBe(1));\n`,
 		);
 		const prefix = "__ISOLATED_RESULT__";
-		const compiled = compileIsolatedTestImage(
-			{
-				files: [entry],
-				config: resolveBuildConfig({}),
-				stripTypes: stripCompactTypes,
-				stripperIdentity: "isolated-test-type-strip",
-				testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
-			},
+		const options = {
+			files: [entry],
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "isolated-test-type-strip",
+			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
+			cacheDirectory: path.join(root, "cache"),
+		};
+		const runOptions = { repeat: 1, bail: false, timeoutMs: 1000 };
+		const compiled = compileIsolatedTestImage(options, runOptions, prefix);
+		const restored = compileIsolatedTestImage(
+			options,
 			{ repeat: 1, bail: false, timeoutMs: 1000 },
 			prefix,
 		);
@@ -88,6 +92,8 @@ describe("test frontend artifact cache", () => {
 
 		expect(compiled.entries).toEqual([entry]);
 		expect(compiled.dependencies).toEqual([entry]);
+		expect(compiled.cache).toBe("miss");
+		expect(restored.cache).toBe("hit");
 		expect(strings).toContain(prefix);
 	});
 

@@ -208,18 +208,27 @@ export function prepareIsolatedTestCommand(
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
 	const nodeGlobalsSource = readFileSync(context.installation.nodeGlobalsPath, "utf-8");
 	const frontendStartedAt = Date.now();
-	const compiled = compileIsolatedTestImage(
-		{
-			files,
-			config,
-			stripTypes: context.stripTypes,
-			stripperIdentity: context.installation.frontendIdentity,
-			testModuleSource: moduleSource,
-			nodeGlobalsSource,
-		},
-		testConfig(command),
-		ISOLATED_TEST_RESULT_PREFIX,
-	);
+	const runOptions = testConfig(command);
+	const options = {
+		files,
+		config,
+		stripTypes: context.stripTypes,
+		stripperIdentity: context.installation.frontendIdentity,
+		testModuleSource: moduleSource,
+		nodeGlobalsSource,
+		session: new TestCompilationSession(),
+		dependencyWorker: context.dependencyWorker,
+	};
+	let compiled: CompiledTestImage | CompiledRelocatableTestImage;
+	try {
+		compiled = compileRelocatableTestImage({
+			...options,
+			processRunner: { runOptions, resultPrefix: ISOLATED_TEST_RESULT_PREFIX },
+		});
+	} catch (error) {
+		if (!(error instanceof UnsupportedRelocatableTestImageError)) throw error;
+		compiled = compileIsolatedTestImage(options, runOptions, ISOLATED_TEST_RESULT_PREFIX);
+	}
 	return {
 		...compiled,
 		files,
@@ -235,6 +244,10 @@ function reportTestProcessResult(
 		discoveryMs: number;
 		frontendMs: number;
 		executionMs: number;
+		cacheHits?: number;
+		cacheMisses?: number;
+		artifactHits?: number;
+		artifactMisses?: number;
 	},
 	mode: string,
 ): TestCommandSummary {
@@ -268,10 +281,10 @@ function reportTestProcessResult(
 		discoveryMs: timing.discoveryMs,
 		frontendMs: timing.frontendMs,
 		executionMs: timing.executionMs,
-		cacheHits: 0,
-		cacheMisses: 1,
-		artifactHits: 0,
-		artifactMisses: 0,
+		cacheHits: timing.cacheHits ?? 0,
+		cacheMisses: timing.cacheMisses ?? 1,
+		artifactHits: timing.artifactHits ?? 0,
+		artifactMisses: timing.artifactMisses ?? 0,
 	};
 }
 
