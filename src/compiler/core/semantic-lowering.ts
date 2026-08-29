@@ -1225,6 +1225,7 @@ function moduleSyncEvaluationDependencies(
 		if (
 			(dependency.kind !== "import" && dependency.kind !== "export") ||
 			dependency.resolvedPath === null ||
+			dependency.resolvedPath === file.path ||
 			seen.has(dependency.resolvedPath)
 		) {
 			continue;

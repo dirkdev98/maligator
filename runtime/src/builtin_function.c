@@ -235,6 +235,36 @@ static MalValue mal_builtin_function_prototype_has_instance(MalVm *vm, MalValue 
     ));
 }
 
+static bool mal_builtin_function_native_name_is_safe(MalString *name) {
+    usize length = mal_string_length(name);
+    if (length == 0) return true;
+    const c16 *units = mal_string_code_units(name);
+    usize offset = 0;
+    if (length > 4 &&
+        ((units[0] == 'g' && units[1] == 'e' && units[2] == 't') ||
+         (units[0] == 's' && units[1] == 'e' && units[2] == 't')) &&
+        units[3] == ' ') {
+        offset = 4;
+    }
+    if (units[offset] == '[' && units[length - 1] == ']') return true;
+    c16 first = units[offset];
+    if (!((first >= 'A' && first <= 'Z') ||
+          (first >= 'a' && first <= 'z') ||
+          first == '_' || first == '$' || first >= 0x80)) {
+        return false;
+    }
+    for (usize i = offset + 1; i < length; i++) {
+        c16 unit = units[i];
+        if (!((unit >= 'A' && unit <= 'Z') ||
+              (unit >= 'a' && unit <= 'z') ||
+              (unit >= '0' && unit <= '9') ||
+              unit == '_' || unit == '$' || unit >= 0x80)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
@@ -246,7 +276,10 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
     static const byte prefix[] = "function ";
     static const byte suffix[] = "() { [native code] }";
     MalString *name = mal_vm_callable_name(vm, this_value);
-    usize name_length = name != nullptr ? mal_string_length(name) : 0;
+    // Builtin display names are arbitrary property keys, but this source must parse as NativeFunction.
+    usize name_length = name != nullptr && mal_builtin_function_native_name_is_safe(name)
+        ? mal_string_length(name)
+        : 0;
     usize total_length;
     usize bytes;
     if (!mal_checked_size_add(
