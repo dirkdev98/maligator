@@ -91,20 +91,6 @@ whole-program reachability DCE, guarded shape-origin loads, exact execution safe
 maps, and bounded scalar native direct entries. Runtime-wire compilation and native
 products share optimized Core but now terminate independently.
 
-- [ ] Extend representation constraints through remaining block arguments, clones,
-      joins, captures, indirect target sets, and materialization; immediately consume
-      them for unboxing, additional ABI specialization, box elimination, and reduced
-      rooting.
-
-- [ ] Extend bounded callee discovery through remaining import, lexical,
-      constructor-derived, stable-field, and call-result paths; immediately consume
-      new finite target sets in direct-entry selection, dispatch, inlining, effect
-      analysis, and reachability.
-
-- [ ] Consume existing guarded-region admission and authority-closure facts to admit
-      eligible regions once and remove redundant guards, fallback paths, property
-      loads, and helper calls.
-
 - [ ] Extend escape and containment facts across inlining, joins, exceptions, and
       suspension; immediately consume them for scalar replacement, stack allocation,
       allocation sinking, and dead-store elimination.
