@@ -23,15 +23,29 @@ const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const requestedBinary = process.argv[2];
 if (requestedBinary === undefined) {
 	throw new Error(
-		"usage: node scripts/dx-performance.ts <maligator-binary|--source> [--assets]",
+		"usage: node scripts/dx-performance.ts <maligator-binary|--source> [--only run|test|dev] [--fresh-cache] [--assets]",
 	);
 }
 const sourceMode = requestedBinary === "--source";
 const binary = sourceMode ? process.execPath : path.resolve(requestedBinary);
 const argumentPrefix = sourceMode ? [path.join(repositoryRoot, "src/index.ts")] : [];
-const measureAssets = process.argv.slice(3).includes("--assets");
-const keepFixture = process.argv.slice(3).includes("--keep");
+const options = process.argv.slice(3);
+const onlyIndex = options.indexOf("--only");
+const selectedLane = onlyIndex === -1 ? undefined : options[onlyIndex + 1];
+if (
+	selectedLane !== undefined &&
+	selectedLane !== "run" &&
+	selectedLane !== "test" &&
+	selectedLane !== "dev"
+) {
+	throw new Error("--only requires run, test, or dev");
+}
+const measureAssets = options.includes("--assets");
+const keepFixture = options.includes("--keep");
 const root = mkdtempSync(path.join(os.tmpdir(), "maligator-dx-performance-"));
+const childEnvironment = options.includes("--fresh-cache")
+	? { ...process.env, MALIGATOR_CACHE_DIR: path.join(root, "user-cache") }
+	: process.env;
 const progress = new CommandProgress("bench-dx");
 progress.start("create representative project and measure cold/warm workflows");
 const project = path.join(root, "project");
@@ -61,7 +75,7 @@ function invoke(name: string, args: Array<string>): Sample {
 	const result = spawnSync(binary, [...argumentPrefix, ...args], {
 		cwd: project,
 		encoding: "utf-8",
-		env: process.env,
+		env: childEnvironment,
 		maxBuffer: 32 * 1024 * 1024,
 	});
 	const durationMs = performance.now() - startedAt;
@@ -96,8 +110,11 @@ function waitFor(
 	});
 }
 
-async function developmentSamples(): Promise<Array<Sample>> {
-	progress.detail("development watcher started");
+async function developmentSamples(
+	name: "dev cold ready" | "dev cached ready",
+	measureEdit: boolean,
+): Promise<Array<Sample>> {
+	progress.detail(`${name} started`);
 	let output = "";
 	const child = spawn(
 		binary,
@@ -112,7 +129,7 @@ async function developmentSamples(): Promise<Array<Sample>> {
 		{
 			cwd: project,
 			detached: process.platform !== "win32",
-			env: process.env,
+			env: childEnvironment,
 			stdio: ["ignore", "pipe", "pipe"],
 		},
 	);
@@ -126,7 +143,9 @@ async function developmentSamples(): Promise<Array<Sample>> {
 	});
 	try {
 		const readyMs = await waitFor(() => output, "Ready in");
-		progress.detail(`development watcher ready in ${(readyMs / 1000).toFixed(1)}s`);
+		progress.detail(`${name} completed in ${(readyMs / 1000).toFixed(1)}s`);
+		const ready = { name, durationMs: readyMs, stdout: "", stderr: output };
+		if (!measureEdit) return [ready];
 		const beforeEdit = output;
 		write("local.mts", "export const localRevision = 1;\n");
 		const rebuildMs = await waitFor(() => output.slice(beforeEdit.length), "Compiled in");
@@ -134,7 +153,7 @@ async function developmentSamples(): Promise<Array<Sample>> {
 			`development leaf edit completed in ${(rebuildMs / 1000).toFixed(1)}s`,
 		);
 		return [
-			{ name: "dev cold ready", durationMs: readyMs, stdout: "", stderr: beforeEdit },
+			ready,
 			{
 				name: "dev leaf edit",
 				durationMs: rebuildMs,
@@ -230,20 +249,40 @@ test("representative graph", () => {
 });\n`,
 	);
 
-	const samples = [
-		invoke("run cold", [
-			"run",
-			"app.mts",
-			"--config",
-			"maligator.build.mts",
-			"--verbose",
-		]),
-		invoke("run hot", ["run", "app.mts", "--config", "maligator.build.mts", "--verbose"]),
-		invoke("test cold", ["test", "app.test.mts", "--config", "maligator.build.mts"]),
-		invoke("test hot", ["test", "app.test.mts", "--config", "maligator.build.mts"]),
-	];
-	for (const sample of await developmentSamples()) samples.push(sample);
-	if (measureAssets) {
+	const samples: Array<Sample> = [];
+	if (selectedLane === undefined || selectedLane === "run") {
+		samples.push(
+			invoke("run cold", [
+				"run",
+				"app.mts",
+				"--config",
+				"maligator.build.mts",
+				"--verbose",
+			]),
+			invoke("run hot", [
+				"run",
+				"app.mts",
+				"--config",
+				"maligator.build.mts",
+				"--verbose",
+			]),
+		);
+	}
+	if (selectedLane === undefined || selectedLane === "test") {
+		samples.push(
+			invoke("test cold", ["test", "app.test.mts", "--config", "maligator.build.mts"]),
+			invoke("test hot", ["test", "app.test.mts", "--config", "maligator.build.mts"]),
+		);
+	}
+	if (selectedLane === undefined || selectedLane === "dev") {
+		for (const sample of await developmentSamples("dev cold ready", false)) {
+			samples.push(sample);
+		}
+		for (const sample of await developmentSamples("dev cached ready", true)) {
+			samples.push(sample);
+		}
+	}
+	if (measureAssets && (selectedLane === undefined || selectedLane === "run")) {
 		samples.push(
 			invoke("assets cold", [
 				"run",
