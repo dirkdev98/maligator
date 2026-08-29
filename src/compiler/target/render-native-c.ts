@@ -2459,14 +2459,17 @@ function emitInstruction(
 
 	switch (instruction.opcode) {
 		case "MOVE": {
-			// The dst and src share a rep (a MOVE produces its src's rep, so the
-			// dst's join can only differ by being boxed). Read src in the dst's rep.
+			// A move is also the explicit representation-conversion seam.
 			const dst = instruction.dst;
 			const read =
 				reps[dst] === "number"
-					? num(instruction.src)
+					? reps[instruction.src] === "number"
+						? num(instruction.src)
+						: `mal_ops_number_as_f64(${boxed(instruction.src)})`
 					: reps[dst] === "boolean"
-						? truthy(instruction.src)
+						? reps[instruction.src] === "boolean"
+							? truthy(instruction.src)
+							: `mal_value_to_boolean(${boxed(instruction.src)})`
 						: boxed(instruction.src);
 			return [`r${dst} = ${read};`];
 		}

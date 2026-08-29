@@ -70,6 +70,11 @@ export type CompilerInstruction =
 
 			// [dest, source]
 			registers: [number, number];
+			/** Verified Core claim consumed by the native boxed-to-scalar conversion. */
+			exactScalarAfterTdz?: {
+				readonly kind: "number" | "boolean";
+				readonly coreInstruction: number;
+			};
 	  }
 	| {
 			type: "return";

@@ -73,6 +73,7 @@ import {
 	analyzeCoreValueKinds,
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 	coreBinaryInputKindMasksHaveExactNativeSemantics,
 	coreExactBinaryInputKindMasks,
 	coreExactCallArgumentRepresentations,
@@ -1967,6 +1968,58 @@ function verifyExactCallArgumentClaims(
 	}
 }
 
+function verifyExactScalarAfterTdzClaims(
+	program: CoreProgram,
+	valueKinds: () => CoreValueKindAnalysis,
+): void {
+	const claims = program.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.flatMap((instruction, index) =>
+				CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE in instruction.attributes
+					? [{ fn, block, instruction, index }]
+					: [],
+			),
+		),
+	);
+	if (claims.length === 0) return;
+	const analysis = valueKinds();
+	const representations = new Map(
+		program.functions.map(
+			(fn) =>
+				[
+					fn.functionIndex,
+					new Map(
+						fn.values.map(({ id, representation }) => [id, representation] as const),
+					),
+				] as const,
+		),
+	);
+	for (const { fn, block, instruction, index } of claims) {
+		const input = instruction.inputs[0];
+		const output = instruction.outputs[0];
+		const claim = instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE];
+		const representation =
+			output === undefined
+				? undefined
+				: representations.get(fn.functionIndex)?.get(output);
+		const check = block.instructions[index - 1];
+		if (
+			instruction.opcode !== "move" ||
+			instruction.inputs.length !== 1 ||
+			instruction.outputs.length !== 1 ||
+			(claim !== "number" && claim !== "boolean") ||
+			representation !== (claim === "number" ? "f64" : "boolean") ||
+			check?.opcode !== "throwIfTdz" ||
+			check.inputs[0] !== input ||
+			input === undefined ||
+			output === undefined ||
+			analysis.exactScalar(fn.functionIndex, input) !== claim
+		) {
+			fail(`instruction @${instruction.id} carries an invalid post-TDZ scalar claim`);
+		}
+	}
+}
+
 function verifyExactBinaryInputKindClaims(
 	program: CoreProgram,
 	valueKinds: () => CoreValueKindAnalysis,
@@ -2019,6 +2072,7 @@ function verifyPreTargetClaims(
 	verifyKnownOwnSlotClaims(program, registry, true, summaries);
 	verifyExactTypedArrayClaims(program, valueClasses);
 	verifyExactCollectionReceiverClaims(program, valueClasses);
+	verifyExactScalarAfterTdzClaims(program, valueKinds);
 	verifyExactCallArgumentClaims(program, valueKinds);
 	verifyExactBinaryInputKindClaims(program, valueKinds);
 	for (const fn of program.functions) {

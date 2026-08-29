@@ -12,6 +12,7 @@ import {
 	coreModuleEffectSummaries,
 	deriveCoreCallEffectRefinement,
 } from "../src/compiler/core/core-ir-summaries.ts";
+import { CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type {
@@ -788,6 +789,119 @@ describe("summary consumers and proof boundary", () => {
 				)
 				.some((instruction) => "calleeSummary" in instruction),
 		).toBe(false);
+	});
+
+	it("consumes closed captured scalar kinds through joins and arithmetic", () => {
+		const source = `const globalOffset = 2;
+		function outer() {
+			const fixedScale = 1.25;
+			const fixedEnabled = true;
+			return function inner(value) {
+				const adjusted = value > 0 ? fixedScale : fixedScale;
+				return fixedEnabled ? adjusted + adjusted + globalOffset : adjusted;
+			};
+		}
+		const inner = outer();
+		globalThis.__capturedScalarResult = inner(4);`;
+		let optimized: CoreProgram | undefined;
+		let context: CoreCompilationContext | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, "captured-scalar-representations.js"),
+			{
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program, compilationContext) {
+					optimized = program;
+					context = compilationContext;
+				},
+			},
+		);
+		const nameOf = (fn: CoreFunction): string =>
+			String.fromCodePoint(
+				...(optimized!.stringConstants[fn.metadata.nameStringIndex] ?? []),
+			);
+		const inner = optimized!.functions.find((fn) => nameOf(fn) === "inner")!;
+		const representations = new Map(
+			inner.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		const capturedLoads = inner.blocks
+			.flatMap(({ instructions }) => instructions)
+			.filter(({ opcode }) => opcode === "loadCaptured");
+		expect(capturedLoads).toHaveLength(3);
+		expect(
+			capturedLoads.map((instruction) => representations.get(instruction.outputs[0]!)),
+		).toEqual(["boxed", "boxed", "boxed"]);
+		const globalLoads = inner.blocks
+			.flatMap(({ instructions }) => instructions)
+			.filter(({ opcode }) => opcode === "loadGlobal");
+		expect(globalLoads).toHaveLength(1);
+		expect(representations.get(globalLoads[0]!.outputs[0]!)).toBe("boxed");
+		const scalarMoves = inner.blocks
+			.flatMap(({ instructions }) => instructions)
+			.filter(
+				(instruction) =>
+					instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] !== undefined,
+			);
+		expect(scalarMoves).toHaveLength(4);
+		expect(
+			scalarMoves
+				.map(
+					(instruction) => instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE],
+				)
+				.sort(),
+		).toEqual(["boolean", "number", "number", "number"]);
+		expect(
+			scalarMoves
+				.map((instruction) => representations.get(instruction.outputs[0]!))
+				.sort(),
+		).toEqual(["boolean", "f64", "f64", "f64"]);
+		expect(
+			scalarMoves.some(
+				(instruction) => instruction.inputs[0] === globalLoads[0]!.outputs[0],
+			),
+		).toBe(true);
+		const joined = inner.blocks
+			.flatMap(({ parameters }) => parameters)
+			.find(({ representation }) => representation === "f64");
+		expect(joined).toBeDefined();
+		const addition = inner.blocks
+			.flatMap(({ instructions }) => instructions)
+			.find(
+				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
+			)!;
+		expect(representations.get(addition.outputs[0]!)).toBe("f64");
+		expect(() =>
+			verifyCoreProgram(optimized!, coreOpcodeRegistry, { stage: "pre-target" }, context),
+		).not.toThrow();
+	});
+
+	it("keeps a multiply-assigned captured value boxed", () => {
+		const source = `function outer() {
+			let scale = 1.25;
+			function inner() { return scale + scale; }
+			scale = "changed";
+			return inner;
+		}
+		const inner = outer();
+		globalThis.__mutableCaptureResult = inner();`;
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, "mutable-capture-representation.js"),
+			{
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const scalarMoves = optimized!.functions.flatMap(({ blocks }) =>
+			blocks.flatMap(({ instructions }) =>
+				instructions.filter(
+					(instruction) =>
+						instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] !== undefined,
+				),
+			),
+		);
+		expect(scalarMoves).toEqual([]);
 	});
 
 	it("does not treat a constructor's primitive return as its construct result", () => {

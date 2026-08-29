@@ -27,6 +27,7 @@ import {
 import {
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 	coreExactBinaryInputKindMasks,
 } from "../core/core-ir-value-kinds.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
@@ -91,6 +92,7 @@ const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
 ]);
 
@@ -257,6 +259,15 @@ function rebuildInstruction(
 					instruction.attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE],
 				)
 			: undefined;
+	const exactScalarAfterTdz =
+		instruction.opcode === "move" &&
+		(instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "number" ||
+			instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "boolean")
+			? {
+					kind: instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE],
+					coreInstruction: instruction.id,
+				}
+			: undefined;
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	// A region certificate's contract is stated over the instruction's operands, so
 	// embedding one of them as a constant would change the shape the certificate
@@ -282,6 +293,7 @@ function rebuildInstruction(
 		...(exactTypedArrayKind === undefined ? {} : { exactTypedArrayKind }),
 		...(exactCollectionReceiver === undefined ? {} : { exactCollectionReceiver }),
 		...(exactInputKindMasks === undefined ? {} : { exactInputKindMasks }),
+		...(exactScalarAfterTdz === undefined ? {} : { exactScalarAfterTdz }),
 		...(immediateValues.length === 0 ? {} : { immediateValues }),
 		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}

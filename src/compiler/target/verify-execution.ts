@@ -304,6 +304,7 @@ function verifyRegisterPlan(model: FunctionModel): void {
 function verifyInstructionOperands(model: FunctionModel): void {
 	const { fn, functionIndex } = model;
 	for (const [block, { instructions }] of fn.blocks.entries()) {
+		let previousSemanticInstruction: CompilerInstruction | undefined;
 		for (const [index, instruction] of instructions.entries()) {
 			const context: ExecutionVerificationContext = {
 				functionIndex,
@@ -382,18 +383,31 @@ function verifyInstructionOperands(model: FunctionModel): void {
 			}
 			if (instruction.type === "move") {
 				const [destination, source] = instruction.registers;
-				// A move may box an unboxed source, never narrow a boxed one.
+				const destinationRepresentation = fn.registerRepresentations[destination];
+				const sourceRepresentation = fn.registerRepresentations[source];
+				const provenNarrowing =
+					sourceRepresentation === "boxed" &&
+					instruction.exactScalarAfterTdz?.kind === destinationRepresentation &&
+					previousSemanticInstruction?.type === "throwIfTdz" &&
+					previousSemanticInstruction.registers[0] === source;
 				if (
-					fn.registerRepresentations[destination] !==
-						fn.registerRepresentations[source] &&
-					!isBoxed(fn, destination)
+					destinationRepresentation !== sourceRepresentation &&
+					!isBoxed(fn, destination) &&
+					!provenNarrowing
 				) {
 					fail("move must not narrow its source register class", {
 						...context,
 						register: destination,
 					});
 				}
+				if (instruction.exactScalarAfterTdz !== undefined && !provenNarrowing) {
+					fail("post-TDZ scalar move carries an invalid narrowing proof", {
+						...context,
+						register: destination,
+					});
+				}
 			}
+			if (instruction.type !== "sourcePos") previousSemanticInstruction = instruction;
 		}
 	}
 }

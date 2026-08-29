@@ -1,3 +1,4 @@
+import { CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE } from "../core/core-ir-value-kinds.ts";
 import type { CoreFunction } from "../core/core-ir.ts";
 import type { ExecutionProgram } from "./execution-ir.ts";
 import type { ExecutionVerificationContext } from "./verify-execution.ts";
@@ -64,6 +65,34 @@ const verifiedNativeExecutionPrograms = new WeakSet<ExecutionProgram>();
 export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 	if (verifiedNativeExecutionPrograms.has(program)) return;
 	verifyExecutionProgram(program);
+	for (const [functionIndex, fn] of program.functions.entries()) {
+		const coreClaims = new Map<number, "number" | "boolean">(
+			program.core.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.flatMap((instruction) => {
+					const kind = instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE];
+					return kind === "number" || kind === "boolean"
+						? [[instruction.id, kind] as const]
+						: [];
+				}),
+			),
+		);
+		for (const instruction of fn.blocks.flatMap(({ instructions }) => instructions)) {
+			if (instruction.type !== "move" || instruction.exactScalarAfterTdz === undefined) {
+				continue;
+			}
+			const { coreInstruction, kind } = instruction.exactScalarAfterTdz;
+			if (coreClaims.get(coreInstruction) !== kind) {
+				fail("post-TDZ scalar move lacks its verified Core claim", {
+					functionIndex,
+					opcode: instruction.type,
+				});
+			}
+			coreClaims.delete(coreInstruction);
+		}
+		if (coreClaims.size > 0) {
+			fail("verified Core post-TDZ scalar claim was not lowered", { functionIndex });
+		}
+	}
 	for (const [functionIndex, fn] of program.functions.entries()) {
 		const core = program.core.functions[functionIndex]!;
 		if (fn.directEntries.length > 4) {

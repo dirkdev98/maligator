@@ -36,15 +36,21 @@ import {
 	coreNumericTypedArrayKind,
 } from "./core-ir-value-classes.ts";
 import type {
+	CoreBlock,
+	CoreBlockId,
+	CoreEdge,
 	CoreFunction,
 	CoreInstruction,
 	CoreProgram,
+	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId, coreValueId } from "./core-ir.ts";
 
 export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
 	"exactCallArgumentRepresentations";
 export const CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE = "exactBinaryInputKindMasks";
+export const CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE = "exactScalarAfterTdz";
 
 export type CoreExactScalarKind = "number" | "boolean";
 export type CoreExactCallArgumentRepresentation = "boxed" | CoreExactScalarKind;
@@ -316,11 +322,6 @@ export function analyzeCoreValueKinds(
 				}
 				for (const value of instruction.outputs) {
 					const node = valueNode(fn.functionIndex, value);
-					const kind = staticOutputKind(instruction, representations.get(value));
-					if (kind !== undefined) {
-						addSeed(node, kind);
-						continue;
-					}
 					const operator = instruction.attributes.operator;
 					if (
 						instruction.opcode === "unary" &&
@@ -359,6 +360,11 @@ export function analyzeCoreValueKinds(
 										? COMPILER_VALUE_KIND_NUMBER
 										: COMPILER_VALUE_KIND_TOP,
 						});
+						continue;
+					}
+					const kind = staticOutputKind(instruction, representations.get(value));
+					if (kind !== undefined) {
+						addSeed(node, kind);
 						continue;
 					}
 					addSeed(node, COMPILER_VALUE_KIND_TOP);
@@ -496,6 +502,336 @@ export function coreExactCallArgumentRepresentations(
 export interface CoreExactValueFactSelection {
 	readonly program: CoreProgram;
 	readonly changed: boolean;
+}
+
+function scalarCoreRepresentation(
+	kind: CoreExactScalarKind | undefined,
+): "f64" | "boolean" | undefined {
+	return kind === "number" ? "f64" : kind === "boolean" ? "boolean" : undefined;
+}
+
+const NUMERIC_RESULT_OPERATORS: ReadonlySet<string> = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+function terminatorUsesValue(terminator: CoreTerminator, value: CoreValueId): boolean {
+	const edgeUses = (edge: { readonly arguments: ReadonlyArray<CoreValueId> }): boolean =>
+		edge.arguments.includes(value);
+	switch (terminator.kind) {
+		case "jump":
+			return edgeUses(terminator.edge);
+		case "branch":
+			return (
+				terminator.condition === value ||
+				edgeUses(terminator.consequent) ||
+				edgeUses(terminator.alternate)
+			);
+		case "guard":
+			return (
+				terminator.condition === value ||
+				edgeUses(terminator.success) ||
+				edgeUses(terminator.fallback)
+			);
+		case "switch":
+			return (
+				terminator.discriminant === value ||
+				terminator.cases.some(({ edge }) => edgeUses(edge)) ||
+				edgeUses(terminator.default)
+			);
+		case "return":
+		case "throw":
+			return terminator.value === value;
+		case "unreachable":
+			return false;
+	}
+}
+
+function rewriteTerminatorValue(
+	terminator: CoreTerminator,
+	from: CoreValueId,
+	to: CoreValueId,
+): CoreTerminator {
+	const value = (candidate: CoreValueId): CoreValueId =>
+		candidate === from ? to : candidate;
+	const edge = (candidate: CoreEdge): CoreEdge => ({
+		...candidate,
+		arguments: candidate.arguments.map(value),
+	});
+	switch (terminator.kind) {
+		case "jump":
+			return { ...terminator, edge: edge(terminator.edge) };
+		case "branch":
+			return {
+				...terminator,
+				condition: value(terminator.condition),
+				consequent: edge(terminator.consequent),
+				alternate: edge(terminator.alternate),
+			};
+		case "guard":
+			return {
+				...terminator,
+				condition: value(terminator.condition),
+				success: edge(terminator.success),
+				fallback: edge(terminator.fallback),
+			};
+		case "switch":
+			return {
+				...terminator,
+				discriminant: value(terminator.discriminant),
+				cases: terminator.cases.map((candidate) => ({
+					...candidate,
+					edge: edge(candidate.edge),
+				})),
+				default: edge(terminator.default),
+			};
+		case "return":
+		case "throw":
+			return { ...terminator, value: value(terminator.value) };
+		case "unreachable":
+			return terminator;
+	}
+}
+
+/** Materialize scalar values only after the path-local check has rejected Empty. */
+export function materializeCoreExactScalarRepresentations(
+	program: CoreProgram,
+	context: CoreCompilationContext | undefined,
+	summaries?: CoreProgramSummaries,
+): CoreExactValueFactSelection {
+	const analysis = analyzeCoreValueKinds(program, context, summaries);
+	let programChanged = false;
+	const functions = program.functions.map((fn): CoreFunction => {
+		let blocks: ReadonlyArray<CoreBlock> = fn.blocks;
+		const values = [...fn.values];
+		const representations = new Map(
+			values.map(({ id, representation }) => [id, representation]),
+		);
+		const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
+		let nextInstruction =
+			Math.max(
+				-1,
+				...fn.blocks.flatMap((block) => [
+					block.terminator.id,
+					...block.instructions.map(({ id }) => id),
+				]),
+			) + 1;
+		let changed = false;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (
+					(instruction.opcode !== "loadGlobal" &&
+						instruction.opcode !== "loadCaptured") ||
+					instruction.outputs.length !== 1
+				) {
+					continue;
+				}
+				const output = instruction.outputs[0]!;
+				const kind = analysis.exactScalar(fn.functionIndex, output);
+				const representation = scalarCoreRepresentation(kind);
+				if (representation === undefined) continue;
+				const checks = blocks.flatMap((candidate) =>
+					candidate.instructions
+						.flatMap((candidateInstruction, index) =>
+							candidateInstruction.opcode === "throwIfTdz" &&
+							candidateInstruction.inputs[0] === output
+								? [{ block: candidate.id, index, instruction: candidateInstruction }]
+								: [],
+						)
+						.toReversed(),
+				);
+				for (const check of checks) {
+					const dominatesUse = (useBlock: CoreBlockId, useIndex: number): boolean =>
+						useBlock === check.block
+							? useIndex > check.index
+							: cfg.instructionDominatesBlock(check.block, useBlock);
+					let hasDominatedUse = false;
+					for (const candidate of blocks) {
+						for (const [
+							index,
+							candidateInstruction,
+						] of candidate.instructions.entries()) {
+							if (
+								candidateInstruction.inputs.includes(output) &&
+								candidateInstruction.opcode !== "throwIfTdz" &&
+								candidateInstruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] ===
+									undefined &&
+								dominatesUse(candidate.id, index)
+							) {
+								hasDominatedUse = true;
+							}
+						}
+						if (
+							terminatorUsesValue(candidate.terminator, output) &&
+							dominatesUse(candidate.id, candidate.instructions.length)
+						) {
+							hasDominatedUse = true;
+						}
+					}
+					if (!hasDominatedUse) continue;
+
+					const moveId = coreInstructionId(nextInstruction++);
+					const moved = coreValueId((values.at(-1)?.id ?? -1) + 1);
+					const move: CoreInstruction = {
+						id: moveId,
+						opcode: "move",
+						inputs: [output],
+						outputs: [moved],
+						attributes: { [CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE]: kind! },
+						...(check.instruction.sourcePosition === undefined
+							? {}
+							: { sourcePosition: check.instruction.sourcePosition }),
+					};
+					values.push({
+						id: moved,
+						representation,
+						definition: { kind: "instruction", instruction: moveId, index: 0 },
+					});
+					representations.set(moved, representation);
+					blocks = blocks.map((candidate): CoreBlock => {
+						const instructions: Array<CoreInstruction> = [];
+						for (const [
+							index,
+							candidateInstruction,
+						] of candidate.instructions.entries()) {
+							const rewrite =
+								candidateInstruction.opcode !== "throwIfTdz" &&
+								candidateInstruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] ===
+									undefined &&
+								dominatesUse(candidate.id, index);
+							instructions.push(
+								rewrite
+									? {
+											...candidateInstruction,
+											inputs: candidateInstruction.inputs.map((input) =>
+												input === output ? moved : input,
+											),
+										}
+									: candidateInstruction,
+							);
+							if (candidate.id === check.block && index === check.index) {
+								instructions.push(move);
+							}
+						}
+						const rewriteTerminator = dominatesUse(
+							candidate.id,
+							candidate.instructions.length,
+						);
+						return {
+							...candidate,
+							instructions,
+							terminator: rewriteTerminator
+								? rewriteTerminatorValue(candidate.terminator, output, moved)
+								: candidate.terminator,
+						};
+					});
+					changed = true;
+				}
+			}
+		}
+
+		const representationCfg = buildCoreControlFlow(
+			{ ...fn, blocks, values },
+			coreOpcodeRegistry,
+		);
+		let progress = true;
+		const narrow = (
+			value: CoreValueId,
+			representation: "f64" | "boolean" | undefined,
+		): void => {
+			if (representation === undefined || representations.get(value) !== "boxed") return;
+			representations.set(value, representation);
+			changed = true;
+			progress = true;
+		};
+		while (progress) {
+			progress = false;
+			for (const block of blocks) {
+				if (
+					block.id !== fn.entry &&
+					!block.parameters.some(({ role }) => role === "exception")
+				) {
+					const incoming = representationCfg.predecessors[block.id]!.filter(
+						({ kind }) => kind === "ordinary",
+					);
+					if (incoming.length === representationCfg.predecessors[block.id]!.length) {
+						for (const [index, parameter] of block.parameters.entries()) {
+							const candidates = new Set(
+								incoming.map(({ arguments: arguments_ }) =>
+									representations.get(arguments_[index]!),
+								),
+							);
+							if (candidates.size !== 1) continue;
+							const candidate = [...candidates][0];
+							narrow(
+								parameter.value,
+								candidate === "f64" || candidate === "boolean" ? candidate : undefined,
+							);
+						}
+					}
+				}
+				for (const instruction of block.instructions) {
+					const output = instruction.outputs[0];
+					if (output === undefined || instruction.outputs.length !== 1) continue;
+					if (instruction.opcode === "move" && instruction.inputs.length === 1) {
+						const input = representations.get(instruction.inputs[0]!);
+						narrow(output, input === "f64" || input === "boolean" ? input : undefined);
+						continue;
+					}
+					const operator = instruction.attributes.operator;
+					if (
+						instruction.opcode === "unary" &&
+						instruction.inputs.length === 1 &&
+						typeof operator === "string" &&
+						NUMERIC_UNARY_OPERATORS.has(operator) &&
+						representations.get(instruction.inputs[0]!) === "f64"
+					) {
+						narrow(output, "f64");
+						continue;
+					}
+					if (
+						instruction.opcode === "binary" &&
+						instruction.inputs.length === 2 &&
+						typeof operator === "string" &&
+						NUMERIC_RESULT_OPERATORS.has(operator) &&
+						instruction.inputs.every((input) => representations.get(input) === "f64")
+					) {
+						narrow(output, "f64");
+					}
+				}
+			}
+		}
+		if (!changed) return fn;
+		blocks = blocks.map((block) => ({
+			...block,
+			parameters: block.parameters.map((parameter) => ({
+				...parameter,
+				representation: representations.get(parameter.value)!,
+			})),
+		}));
+		programChanged = true;
+		return {
+			...fn,
+			blocks,
+			values: values.map((value) => ({
+				...value,
+				representation: representations.get(value.id)!,
+			})),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	});
+	const materialized = programChanged ? { ...program, functions } : program;
+	return { program: materialized, changed: materialized !== program };
 }
 
 /** Attach exact scalar argument facts to closed direct script calls. */

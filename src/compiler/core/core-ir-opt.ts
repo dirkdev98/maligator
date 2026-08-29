@@ -115,7 +115,10 @@ import {
 } from "./core-ir-summaries.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { selectCoreExactHeapAccesses } from "./core-ir-value-classes.ts";
-import { selectCoreExactValueFacts } from "./core-ir-value-kinds.ts";
+import {
+	materializeCoreExactScalarRepresentations,
+	selectCoreExactValueFacts,
+} from "./core-ir-value-kinds.ts";
 import {
 	CoreIrVerificationError,
 	verifyCoreFunction,
@@ -11935,6 +11938,47 @@ export function executeCoreOptimizations(
 					},
 					representationBefore,
 					representationAfter,
+				),
+			);
+		}
+	}
+	if (options.ablations?.has("interprocedural") !== true) {
+		const exactScalarBefore = tracedMetrics;
+		const exactScalarInput = { ...workingProgram, functions };
+		const exactScalarSummaries = analyses.summaries(exactScalarInput);
+		const exactScalarSelection = materializeCoreExactScalarRepresentations(
+			exactScalarInput,
+			compilationContext,
+			exactScalarSummaries,
+		);
+		analyses.inheritSummaries(exactScalarInput, exactScalarSelection.program);
+		for (const [index, fn] of exactScalarSelection.program.functions.entries()) {
+			const before = functions[index];
+			if (before !== undefined && before !== fn) analyses.inheritControlFlow(before, fn);
+		}
+		if (exactScalarSelection.changed) {
+			changed = true;
+			verifyMutatedProgram(exactScalarSelection.program, {
+				stage: "finalization",
+				pass: "materialize-exact-scalar-representations",
+			});
+		}
+		workingProgram = exactScalarSelection.program;
+		functions = [...exactScalarSelection.program.functions];
+		if (exactScalarBefore !== undefined) {
+			const exactScalarAfter = coreOptimizationMetrics(exactScalarSelection.program);
+			tracedMetrics = exactScalarAfter;
+			optimizationTrace.push(
+				optimizationPassDelta(
+					{
+						pass: "materialize-exact-scalar-representations",
+						stage: "finalization",
+						status: "executed",
+						changed: exactScalarSelection.changed,
+						ablation: "interprocedural",
+					},
+					exactScalarBefore,
+					exactScalarAfter,
 				),
 			);
 		}

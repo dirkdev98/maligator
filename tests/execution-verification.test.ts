@@ -15,6 +15,7 @@ import {
 	ExecutionVerificationError,
 	verifyExecutionProgram,
 } from "../src/compiler/target/verify-execution.ts";
+import { verifyNativeExecutionProgram } from "../src/compiler/target/verify-native-execution.ts";
 
 const BRANCH_SOURCE = `
 	function choose(flag, extra) {
@@ -103,6 +104,17 @@ const ARGUMENTS_SOURCE = `
 		return arguments.length + arguments[0] + first;
 	}
 	sum(1, 2);
+`;
+
+const EXACT_CAPTURE_SOURCE = `
+	function outer() {
+		const scale = 1.25;
+		return function inner(value) {
+			return value > 0 ? scale + scale : scale;
+		};
+	}
+	const inner = outer();
+	globalThis.__exactCaptureResult = inner(1);
 `;
 
 function optimizedCore(source: string, path: string): CoreCompilation {
@@ -224,6 +236,57 @@ describe("Core target construction", () => {
 			expect(copy.moves.length).toBeGreaterThan(0);
 			expect(copy.assignments.length).toBeGreaterThan(0);
 		}
+	});
+
+	it("retains the checked exact-scalar proof on a narrowing move", () => {
+		const program = optimizedTarget(EXACT_CAPTURE_SOURCE, "exact-capture.js");
+		const match = findInstruction(
+			program,
+			(instruction) =>
+				instruction.type === "move" && instruction.exactScalarAfterTdz?.kind === "number",
+		);
+		const semanticPrefix = match.fn.blocks[match.block]!.instructions.slice(
+			0,
+			match.index,
+		).filter(({ type }) => type !== "sourcePos");
+		expect(semanticPrefix.at(-1)?.type).toBe("throwIfTdz");
+		expect(() => verifyExecutionProgram(program)).not.toThrow();
+
+		const narrowed = match.instruction as Extract<CompilerInstruction, { type: "move" }>;
+		const malformed = withFunction(
+			program,
+			match.functionIndex,
+			withBlock(
+				match.fn,
+				match.block,
+				match.fn.blocks[match.block]!.instructions.with(match.index, {
+					...narrowed,
+					exactScalarAfterTdz: undefined,
+				}),
+			),
+		);
+		expect(verificationError(malformed).detail).toBe(
+			"move must not narrow its source register class",
+		);
+
+		const forgedCoreClaim = withFunction(
+			program,
+			match.functionIndex,
+			withBlock(
+				match.fn,
+				match.block,
+				match.fn.blocks[match.block]!.instructions.with(match.index, {
+					...narrowed,
+					exactScalarAfterTdz: {
+						...narrowed.exactScalarAfterTdz!,
+						coreInstruction: 1_000_000,
+					},
+				}),
+			),
+		);
+		expect(() => verifyNativeExecutionProgram(forgedCoreClaim)).toThrow(
+			/post-TDZ scalar move lacks its verified Core claim/,
+		);
 	});
 
 	it("lowers handlers with a declared handler-input copy contract", () => {
