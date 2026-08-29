@@ -27,13 +27,13 @@ const MAX_DIRECT_ENTRIES_PER_FUNCTION = 4;
 
 function corePhysicalRepresentation(
 	representation: CoreRepresentation,
-): "boxed" | "number" | "boolean" {
+): "boxed" | "int32" | "number" | "boolean" | "string" {
 	return physicalRegisterClass(representation);
 }
 
 function directEntryResultRepresentation(
 	fn: CoreFunction,
-): "boxed" | "number" | "boolean" {
+): "boxed" | "int32" | "number" | "boolean" | "string" {
 	const representationsByValue = new Map(
 		fn.values.map(({ id, representation }) => [id, representation] as const),
 	);
@@ -75,16 +75,18 @@ function supportsDirectEntry(fn: CoreFunction): boolean {
 function planDirectEntries(core: CoreProgram): DirectEntryPlan {
 	interface Candidate {
 		readonly key: string;
-		readonly parameters: ReadonlyArray<"boxed" | "number" | "boolean">;
-		readonly result: "boxed" | "number" | "boolean";
+		readonly parameters: ReadonlyArray<
+			"boxed" | "int32" | "number" | "boolean" | "string"
+		>;
+		readonly result: "boxed" | "int32" | "number" | "boolean" | "string";
 		readonly calls: Array<CoreInstruction>;
 		uses: number;
 	}
 	const candidates = core.functions.map(() => new Map<string, Candidate>());
 	const addCandidate = (
 		targetIndex: number,
-		parameters: ReadonlyArray<"boxed" | "number" | "boolean">,
-		result: "boxed" | "number" | "boolean",
+		parameters: ReadonlyArray<"boxed" | "int32" | "number" | "boolean" | "string">,
+		result: "boxed" | "int32" | "number" | "boolean" | "string",
 		call?: CoreInstruction,
 	): void => {
 		const key = `${parameters.join(",")}->${result}`;
@@ -121,7 +123,14 @@ function planDirectEntries(core: CoreProgram): DirectEntryPlan {
 				const parameters = target.parameters.map((_, index) => {
 					const argument = instruction.inputs[index + 2];
 					const exact = exactArguments?.[index];
-					if (exact === "number" || exact === "boolean") return exact;
+					if (
+						exact === "int32" ||
+						exact === "number" ||
+						exact === "boolean" ||
+						exact === "string"
+					) {
+						return exact;
+					}
 					return argument === undefined
 						? ("boxed" as const)
 						: corePhysicalRepresentation(callerRepresentations.get(argument)!);

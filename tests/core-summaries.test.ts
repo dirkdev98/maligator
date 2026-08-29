@@ -848,12 +848,12 @@ describe("summary consumers and proof boundary", () => {
 					(instruction) => instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE],
 				)
 				.sort(),
-		).toEqual(["boolean", "number", "number", "number"]);
+		).toEqual(["boolean", "int32", "number", "number"]);
 		expect(
 			scalarMoves
 				.map((instruction) => representations.get(instruction.outputs[0]!))
 				.sort(),
-		).toEqual(["boolean", "f64", "f64", "f64"]);
+		).toEqual(["boolean", "f64", "f64", "i32"]);
 		expect(
 			scalarMoves.some(
 				(instruction) => instruction.inputs[0] === globalLoads[0]!.outputs[0],
@@ -872,6 +872,53 @@ describe("summary consumers and proof boundary", () => {
 		expect(() =>
 			verifyCoreProgram(optimized!, coreOpcodeRegistry, { stage: "pre-target" }, context),
 		).not.toThrow();
+	});
+
+	it("keeps Int32, wide Number, signed zero, and String cell facts distinct", () => {
+		const source = `const small = 7;
+		const wide = 2147483648;
+		const signedZero = -0;
+		const label = "ready";
+		function readCells() {
+			globalThis.__small = small;
+			globalThis.__wide = wide;
+			globalThis.__signedZero = signedZero;
+			globalThis.__label = label;
+		}
+		readCells();`;
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, "cell-value-kinds.js"),
+			{
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const readCells = optimized!.functions.find(
+			(fn) =>
+				String.fromCodePoint(
+					...(optimized!.stringConstants[fn.metadata.nameStringIndex] ?? []),
+				) === "readCells",
+		)!;
+		const representations = new Map(
+			readCells.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		const moves = readCells.blocks
+			.flatMap(({ instructions }) => instructions)
+			.filter(
+				(instruction) =>
+					instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] !== undefined,
+			);
+		expect(
+			moves.map(
+				(instruction) => instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE],
+			),
+		).toEqual(["int32", "number", "number", "string"]);
+		expect(
+			moves.map((instruction) => representations.get(instruction.outputs[0]!)),
+		).toEqual(["i32", "f64", "f64", "string"]);
 	});
 
 	it("keeps a multiply-assigned captured value boxed", () => {

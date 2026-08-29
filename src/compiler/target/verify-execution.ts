@@ -151,6 +151,11 @@ function isBoxed(fn: ExecutionFunction, register: number): boolean {
 	return fn.registerRepresentations[register] === "boxed";
 }
 
+function isRooted(fn: ExecutionFunction, register: number): boolean {
+	const representation = fn.registerRepresentations[register];
+	return representation === "boxed" || representation === "string";
+}
+
 function reads(
 	instruction: CompilerInstruction,
 	shape: OperandShape,
@@ -278,10 +283,12 @@ function verifyRegisterPlan(model: FunctionModel): void {
 	for (const [register, representation] of fn.registerRepresentations.entries()) {
 		if (
 			representation !== "boxed" &&
+			representation !== "int32" &&
 			representation !== "number" &&
-			representation !== "boolean"
+			representation !== "boolean" &&
+			representation !== "string"
 		) {
-			fail("register class must be boxed, number, or boolean", {
+			fail("register class must be boxed, int32, number, boolean, or string", {
 				...context,
 				register,
 			});
@@ -390,10 +397,13 @@ function verifyInstructionOperands(model: FunctionModel): void {
 					instruction.exactScalarAfterTdz?.kind === destinationRepresentation &&
 					previousSemanticInstruction?.type === "throwIfTdz" &&
 					previousSemanticInstruction.registers[0] === source;
+				const numericWidening =
+					sourceRepresentation === "int32" && destinationRepresentation === "number";
 				if (
 					destinationRepresentation !== sourceRepresentation &&
 					!isBoxed(fn, destination) &&
-					!provenNarrowing
+					!provenNarrowing &&
+					!numericWidening
 				) {
 					fail("move must not narrow its source register class", {
 						...context,
@@ -524,8 +534,11 @@ function simulateParallelCopy(
 			});
 		}
 		destinations.set(destination, source);
+		const destinationRepresentation = fn.registerRepresentations[destination];
+		const sourceRepresentation = fn.registerRepresentations[source];
 		if (
-			fn.registerRepresentations[destination] !== fn.registerRepresentations[source] &&
+			destinationRepresentation !== sourceRepresentation &&
+			!(sourceRepresentation === "int32" && destinationRepresentation === "number") &&
 			!isBoxed(fn, destination)
 		) {
 			fail("parallel copy must not narrow a source register class", {
@@ -789,7 +802,9 @@ function verifyGcRoots(model: FunctionModel, core: CoreFunction): void {
 					context,
 				);
 			}
-			if (!isBoxed(fn, register)) fail("GC root register must be boxed", context);
+			if (!isRooted(fn, register)) {
+				fail("GC root register must carry a traced value", context);
+			}
 			if (unique.has(register)) fail("GC root register is listed twice", context);
 			unique.add(register);
 		}

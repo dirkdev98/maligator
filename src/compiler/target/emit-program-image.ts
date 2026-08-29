@@ -141,12 +141,16 @@ const COMPILED_FUNCTION_DECLARATION =
 function directEntryDeclaration(
 	entry: CompiledFunction["directEntries"][number],
 ): string {
-	const cType = (representation: "boxed" | "number" | "boolean"): string =>
-		representation === "number"
-			? "double"
-			: representation === "boolean"
-				? "bool"
-				: "MalValue";
+	const cType = (
+		representation: "boxed" | "int32" | "number" | "boolean" | "string",
+	): string =>
+		representation === "int32"
+			? "i32"
+			: representation === "number"
+				? "double"
+				: representation === "boolean"
+					? "bool"
+					: "MalValue";
 	const parameters = entry.parameterRepresentations.map(
 		(representation, index) => `${cType(representation)} p${index}`,
 	);

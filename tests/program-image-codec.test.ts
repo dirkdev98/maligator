@@ -1056,14 +1056,22 @@ describe("program-image-codec", () => {
 			0,
 			(plan) => ({
 				...plan,
+				registerRepresentations: plan.registerRepresentations.map(
+					(representation, register) =>
+						register === 1 ? ("string" as const) : representation,
+				),
 				directEntries: [
 					{
 						id: 0,
-						parameterRepresentations: ["number"],
-						resultRepresentation: "boxed",
+						parameterRepresentations: ["int32"],
+						resultRepresentation: "string",
 						registerRepresentations: plan.registerRepresentations.map(
 							(representation, register) =>
-								register === 0 ? ("number" as const) : representation,
+								register === 0
+									? ("int32" as const)
+									: register === 1
+										? ("string" as const)
+										: representation,
 						),
 						gc: {
 							safepoints: plan.gc.safepoints.map((safepoint) => ({

@@ -33,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 36;
+export const COMPILER_ARTIFACT_VERSION = 37;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -431,11 +431,15 @@ function writeCompilerArtifact(
 		const representationTag = (representation: string): number =>
 			representation === "boxed"
 				? 0
-				: representation === "number"
-					? 1
-					: representation === "boolean"
-						? 2
-						: -1;
+				: representation === "int32"
+					? 3
+					: representation === "number"
+						? 1
+						: representation === "boolean"
+							? 2
+							: representation === "string"
+								? 4
+								: -1;
 		if (
 			native.registerRepresentations.length !== fn.registerCount ||
 			native.registerRepresentations.some(
@@ -1991,6 +1995,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				}
 				if (tag === 1) return "number" as const;
 				if (tag === 2) return "boolean" as const;
+				if (tag === 3) return "int32" as const;
+				if (tag === 4) return "string" as const;
 				throw new Error("program-image-codec: invalid register representation tag");
 			},
 		);
@@ -1999,11 +2005,18 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			throw new RangeError("program-image-codec: too many native direct entries");
 		}
 		const directEntries: Array<NativeFunctionPlan["directEntries"][number]> = [];
-		const readRepresentation = (): "boxed" | "number" | "boolean" => {
+		const readRepresentation = ():
+			| "boxed"
+			| "int32"
+			| "number"
+			| "boolean"
+			| "string" => {
 			const tag = r.u8();
 			if (tag === 0) return "boxed";
 			if (tag === 1) return "number";
 			if (tag === 2) return "boolean";
+			if (tag === 3) return "int32";
+			if (tag === 4) return "string";
 			throw new Error("program-image-codec: invalid direct-entry representation tag");
 		};
 		for (let entryIndex = 0; entryIndex < directEntryCount; entryIndex++) {

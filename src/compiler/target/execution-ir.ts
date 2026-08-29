@@ -19,7 +19,12 @@ export interface ExecutionProgram {
 
 export type ExecutionMove = Extract<CompilerInstruction, { type: "move" }>;
 
-export type ExecutionRegisterRepresentation = "boxed" | "number" | "boolean";
+export type ExecutionRegisterRepresentation =
+	| "boxed"
+	| "int32"
+	| "number"
+	| "boolean"
+	| "string";
 
 /** A simultaneous assignment and its cycle-safe sequential realization. */
 export interface ExecutionParallelCopy {

@@ -389,6 +389,8 @@ function summaryRepresentation(
 			return "i32";
 		case "boolean":
 			return "boolean";
+		case "string":
+			return "string";
 		default:
 			return "boxed";
 	}
@@ -1224,7 +1226,10 @@ export function coreCallSummaryAttribute(
 export function coreCallResultRepresentation(
 	claim: Pick<CoreCallSummaryClaim, "returnRepresentation">,
 ): CoreRepresentation {
-	return claim.returnRepresentation === "f64" || claim.returnRepresentation === "boolean"
+	return claim.returnRepresentation === "f64" ||
+		claim.returnRepresentation === "i32" ||
+		claim.returnRepresentation === "boolean" ||
+		claim.returnRepresentation === "string"
 		? claim.returnRepresentation
 		: "boxed";
 }
@@ -1728,7 +1733,8 @@ function returnRepresentationFact(value: unknown): ReturnRepresentation | undefi
 		value === "boxed" ||
 		value === "f64" ||
 		value === "i32" ||
-		value === "boolean"
+		value === "boolean" ||
+		value === "string"
 		? value
 		: undefined;
 }

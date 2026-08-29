@@ -56,6 +56,7 @@ import type {
 	ExecutionMove,
 	ExecutionParallelCopy,
 	ExecutionProgram,
+	ExecutionRegisterRepresentation,
 	ExecutionSafepoint,
 } from "./execution-ir.ts";
 import {
@@ -74,8 +75,10 @@ export type {
 
 export interface PlannedDirectEntry {
 	readonly id: number;
-	readonly parameterRepresentations: ReadonlyArray<"boxed" | "number" | "boolean">;
-	readonly resultRepresentation: "boxed" | "number" | "boolean";
+	readonly parameterRepresentations: ReadonlyArray<
+		"boxed" | "int32" | "number" | "boolean" | "string"
+	>;
+	readonly resultRepresentation: "boxed" | "int32" | "number" | "boolean" | "string";
 }
 
 export interface DirectEntryPlan {
@@ -145,9 +148,11 @@ function parallelMoves(
 /** Physical register class selected for a canonical Core representation. */
 export function physicalRegisterClass(
 	representation: CoreRepresentation,
-): "boxed" | "number" | "boolean" {
-	if (representation === "f64" || representation === "i32") return "number";
-	return representation === "boolean" ? "boolean" : "boxed";
+): "boxed" | "int32" | "number" | "boolean" | "string" {
+	if (representation === "i32") return "int32";
+	if (representation === "f64") return "number";
+	if (representation === "boolean") return "boolean";
+	return representation === "string" ? "string" : "boxed";
 }
 
 /**
@@ -261,8 +266,10 @@ function rebuildInstruction(
 			: undefined;
 	const exactScalarAfterTdz =
 		instruction.opcode === "move" &&
-		(instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "number" ||
-			instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "boolean")
+		(instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "int32" ||
+			instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "number" ||
+			instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "boolean" ||
+			instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "string")
 			? {
 					kind: instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE],
 					coreInstruction: instruction.id,
@@ -642,6 +649,7 @@ export function coreRegisterClasses(
 		f64: new Map(),
 		i32: new Map(),
 		boolean: new Map(),
+		string: new Map(),
 		"string-span": new Map(),
 		"projected-elements": new Map(),
 		"dense-elements": new Map(),
@@ -658,6 +666,16 @@ export function coreRegisterClasses(
 		}
 		roots.set(id, root);
 	}
+	// Shape-case results are live certificates and cannot use two-address overwrite colors.
+	const shapeCaseRoots = new Set(
+		core.blocks.flatMap(({ instructions }) =>
+			instructions.flatMap((instruction) =>
+				instruction.opcode === "selectShapeCase"
+					? instruction.outputs.map((output) => roots.get(output)!)
+					: [],
+			),
+		),
+	);
 	const classIntervals = new Map<CoreValueId, LiveInterval>();
 	for (const interval of intervals) {
 		if (interval === undefined) continue;
@@ -701,7 +719,12 @@ export function coreRegisterClasses(
 	const addCopyCandidate = (leftValue: CoreValueId, rightValue: CoreValueId): void => {
 		const left = roots.get(leftValue)!;
 		const right = roots.get(rightValue)!;
-		if (left === right || representations.get(left) !== representations.get(right))
+		if (
+			left === right ||
+			shapeCaseRoots.has(left) ||
+			shapeCaseRoots.has(right) ||
+			representations.get(left) !== representations.get(right)
+		)
 			return;
 		const leftPartners = copyPartners.get(left) ?? new Set<CoreValueId>();
 		leftPartners.add(right);
@@ -809,6 +832,7 @@ export function coreRegisterClasses(
 	for (const [root, color] of abiRoots) abiRootByColor.set(color, root);
 	const active: Array<LiveInterval> = [];
 	const activeColorCounts = new Map<number, number>();
+	const certificateColors = new Set<number>();
 	const addActive = (interval: LiveInterval): void => {
 		active.push(interval);
 		const color = registers.get(interval.value)!;
@@ -842,6 +866,14 @@ export function coreRegisterClasses(
 			continue;
 		}
 		const representation = representations.get(interval.value)!;
+		if (shapeCaseRoots.has(interval.value)) {
+			registers.set(interval.value, nextUniqueColor);
+			colorRepresentations.set(nextUniqueColor, representation);
+			certificateColors.add(nextUniqueColor);
+			nextUniqueColor++;
+			addActive(interval);
+			continue;
+		}
 		if (!reuseRegisters) {
 			registers.set(interval.value, nextUniqueColor);
 			colorRepresentations.set(nextUniqueColor, representation);
@@ -854,6 +886,7 @@ export function coreRegisterClasses(
 			.find((candidate): candidate is number => {
 				if (candidate === undefined) return false;
 				if (reservedAbiColors.has(candidate)) return false;
+				if (certificateColors.has(candidate)) return false;
 				if (colorRepresentations.get(candidate) !== representation) return false;
 				if (
 					active.some(
@@ -878,6 +911,7 @@ export function coreRegisterClasses(
 			while (
 				activeColorCounts.has(color) ||
 				reservedAbiColors.has(color) ||
+				certificateColors.has(color) ||
 				(colorRepresentations.has(color) &&
 					colorRepresentations.get(color) !== representation) ||
 				(abiIntervals.has(color) &&
@@ -1391,7 +1425,7 @@ function lowerFunctionToTarget(
 
 	const physicalRepresentations = Array.from(
 		{ length: nextRegister.value },
-		(_, register): "boxed" | "number" | "boolean" => {
+		(_, register): ExecutionRegisterRepresentation => {
 			const representation = registerRepresentations.get(register);
 			if (representation === undefined) {
 				throw new Error(`Core allocation left r${register} without a representation`);
@@ -1479,9 +1513,10 @@ function lowerFunctionToTarget(
 					// liveness is independent per physical register, so the exact roots
 					// are the ordinary roots with newly-unboxed parameters removed; a
 					// second whole-function dataflow solve cannot discover another root.
-					rootRegisters: safepoint.rootRegisters.filter(
-						(register) => registerRepresentations[register] === "boxed",
-					),
+					rootRegisters: safepoint.rootRegisters.filter((register) => {
+						const representation = registerRepresentations[register];
+						return representation === "boxed" || representation === "string";
+					}),
 				})),
 			},
 		};

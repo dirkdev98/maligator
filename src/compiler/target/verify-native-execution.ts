@@ -14,14 +14,16 @@ function fail(detail: string, context: ExecutionVerificationContext = {}): never
 
 function coreRegisterRepresentation(
 	representation: CoreFunction["values"][number]["representation"],
-): "boxed" | "number" | "boolean" {
-	if (representation === "f64" || representation === "i32") return "number";
-	return representation === "boolean" ? "boolean" : "boxed";
+): "boxed" | "int32" | "number" | "boolean" | "string" {
+	if (representation === "i32") return "int32";
+	if (representation === "f64") return "number";
+	if (representation === "boolean") return "boolean";
+	return representation === "string" ? "string" : "boxed";
 }
 
 function coreDirectResultRepresentation(
 	fn: CoreFunction,
-): "boxed" | "number" | "boolean" {
+): "boxed" | "int32" | "number" | "boolean" | "string" {
 	const representationsByValue = new Map(
 		fn.values.map(({ id, representation }) => [id, representation] as const),
 	);
@@ -38,10 +40,18 @@ function coreDirectResultRepresentation(
 		: "boxed";
 }
 
-function immediateRepresentation(value: unknown): "boxed" | "number" | "boolean" {
+function immediateRepresentation(
+	value: unknown,
+): "boxed" | "int32" | "number" | "boolean" | "string" {
 	if (typeof value !== "object" || value === null || !("kind" in value)) return "boxed";
 	const kind = (value as { readonly kind?: string }).kind;
-	return kind === "number" ? "number" : kind === "boolean" ? "boolean" : "boxed";
+	return kind === "number"
+		? "int32"
+		: kind === "boolean"
+			? "boolean"
+			: kind === "string"
+				? "string"
+				: "boxed";
 }
 
 const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
@@ -66,11 +76,14 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 	if (verifiedNativeExecutionPrograms.has(program)) return;
 	verifyExecutionProgram(program);
 	for (const [functionIndex, fn] of program.functions.entries()) {
-		const coreClaims = new Map<number, "number" | "boolean">(
+		const coreClaims = new Map<number, "int32" | "number" | "boolean" | "string">(
 			program.core.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
 				instructions.flatMap((instruction) => {
 					const kind = instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE];
-					return kind === "number" || kind === "boolean"
+					return kind === "int32" ||
+						kind === "number" ||
+						kind === "boolean" ||
+						kind === "string"
 						? [[instruction.id, kind] as const]
 						: [];
 				}),
@@ -133,8 +146,10 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 			for (const [register, representation] of entry.registerRepresentations.entries()) {
 				const valid =
 					representation === "boxed" ||
+					representation === "int32" ||
 					representation === "number" ||
-					representation === "boolean";
+					representation === "boolean" ||
+					representation === "string";
 				if (!valid)
 					fail("direct-entry register class is invalid", {
 						...context,
@@ -217,7 +232,15 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 						fn.directEntries.some(
 							(callerEntry) => callerEntry.registerRepresentations[register] === expected,
 						);
-					if (actual !== expected && actual !== "boxed" && !variantTransports) {
+					const numericConversion =
+						(actual === "int32" && expected === "number") ||
+						(actual === "number" && expected === "int32");
+					if (
+						actual !== expected &&
+						actual !== "boxed" &&
+						!numericConversion &&
+						!variantTransports
+					) {
 						fail(
 							`no caller ABI can transport ${String(actual)} as ${expected} for parameter ${parameter}`,
 							context,

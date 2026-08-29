@@ -3,7 +3,8 @@
  *
  * This lattice deliberately describes JavaScript kinds, not physical registers.
  * A value may remain boxed in canonical Core while a closed call edge proves that
- * one direct native entry always receives a Number or Boolean. Native lowering
+ * one direct native entry always receives an Int32, wider Number, Boolean, or
+ * String. Native lowering
  * can then emit a typed variant without changing the generic ECMAScript call ABI.
  */
 
@@ -52,13 +53,16 @@ export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
 export const CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE = "exactBinaryInputKindMasks";
 export const CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE = "exactScalarAfterTdz";
 
-export type CoreExactScalarKind = "number" | "boolean";
+export type CoreExactScalarKind = "int32" | "number" | "boolean" | "string";
 export type CoreExactCallArgumentRepresentation = "boxed" | CoreExactScalarKind;
 
 interface KindTransfer {
 	readonly inputs: ReadonlyArray<number>;
 	readonly output: number;
-	readonly evaluate: (inputs: ReadonlyArray<number>) => number;
+	readonly evaluate: (
+		inputs: ReadonlyArray<number>,
+		int32Inputs: ReadonlyArray<number>,
+	) => { readonly kind: number; readonly int32: number };
 }
 
 export interface CoreValueKindAnalysis {
@@ -98,6 +102,35 @@ const NUMERIC_BINARY_OPERATORS: ReadonlySet<string> = new Set([
 	">>",
 	">>>",
 ]);
+
+const INT32_RESULT_BINARY_OPERATORS: ReadonlySet<string> = new Set([
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+]);
+
+function numberIsExactInt32(value: unknown): boolean {
+	return (
+		typeof value === "number" &&
+		Number.isInteger(value) &&
+		value >= -0x8000_0000 &&
+		value <= 0x7fff_ffff &&
+		!Object.is(value, -0)
+	);
+}
+
+function staticOutputIsInt32(
+	instruction: CoreInstruction,
+	representation: CoreFunction["values"][number]["representation"] | undefined,
+): boolean {
+	if (representation === "i32") return true;
+	if (instruction.opcode !== "createF64" && instruction.opcode !== "createNumber") {
+		return false;
+	}
+	return numberIsExactInt32(instruction.attributes.value);
+}
 
 function staticOutputKind(
 	instruction: CoreInstruction,
@@ -146,7 +179,7 @@ function staticOutputKind(
 	}
 }
 
-/** Solve exact Number/Boolean kinds through SSA, stable cells, calls, and returns. */
+/** Solve exact primitive kinds through SSA, stable cells, calls, and returns. */
 export function analyzeCoreValueKinds(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
@@ -201,13 +234,17 @@ export function analyzeCoreValueKinds(
 	const edges = new Map<number, Array<number>>();
 	const transfers = new Map<number, Array<KindTransfer>>();
 	const seeds = new Map<number, number>();
+	const int32Seeds = new Map<number, number>();
 	const addEdge = (source: number, destination: number): void => {
 		const existing = edges.get(source);
 		if (existing === undefined) edges.set(source, [destination]);
 		else existing.push(destination);
 	};
-	const addSeed = (node: number, kind: number): void => {
+	const addSeed = (node: number, kind: number, exactInt32 = false): void => {
 		seeds.set(node, (seeds.get(node) ?? 0) | kind);
+		if (kind !== 0) {
+			int32Seeds.set(node, (int32Seeds.get(node) ?? 0) | (exactInt32 ? 1 : 2));
+		}
 	};
 	const addTransfer = (transfer: KindTransfer): void => {
 		for (const input of transfer.inputs) {
@@ -332,12 +369,16 @@ export function analyzeCoreValueKinds(
 						addTransfer({
 							inputs: [valueNode(fn.functionIndex, instruction.inputs[0]!)],
 							output: node,
-							evaluate: ([input]) =>
-								input === 0
-									? 0
-									: input === COMPILER_VALUE_KIND_NUMBER
-										? COMPILER_VALUE_KIND_NUMBER
-										: COMPILER_VALUE_KIND_TOP,
+							evaluate: ([input]) => {
+								if (input === 0) return { kind: 0, int32: 0 };
+								if (input !== COMPILER_VALUE_KIND_NUMBER) {
+									return { kind: COMPILER_VALUE_KIND_TOP, int32: 2 };
+								}
+								return {
+									kind: COMPILER_VALUE_KIND_NUMBER,
+									int32: operator === "~" ? 1 : 2,
+								};
+							},
 						});
 						continue;
 					}
@@ -352,19 +393,36 @@ export function analyzeCoreValueKinds(
 								valueNode(fn.functionIndex, input),
 							),
 							output: node,
-							evaluate: ([left, right]) =>
-								left === 0 || right === 0
-									? 0
-									: left === COMPILER_VALUE_KIND_NUMBER &&
-										  right === COMPILER_VALUE_KIND_NUMBER
-										? COMPILER_VALUE_KIND_NUMBER
-										: COMPILER_VALUE_KIND_TOP,
+							evaluate: ([left, right]) => {
+								if (left === 0 || right === 0) return { kind: 0, int32: 0 };
+								if (
+									operator === "+" &&
+									(left === COMPILER_VALUE_KIND_STRING ||
+										right === COMPILER_VALUE_KIND_STRING)
+								) {
+									return { kind: COMPILER_VALUE_KIND_STRING, int32: 2 };
+								}
+								if (
+									left === COMPILER_VALUE_KIND_NUMBER &&
+									right === COMPILER_VALUE_KIND_NUMBER
+								) {
+									return {
+										kind: COMPILER_VALUE_KIND_NUMBER,
+										int32: INT32_RESULT_BINARY_OPERATORS.has(operator) ? 1 : 2,
+									};
+								}
+								return { kind: COMPILER_VALUE_KIND_TOP, int32: 2 };
+							},
 						});
 						continue;
 					}
 					const kind = staticOutputKind(instruction, representations.get(value));
 					if (kind !== undefined) {
-						addSeed(node, kind);
+						addSeed(
+							node,
+							kind,
+							staticOutputIsInt32(instruction, representations.get(value)),
+						);
 						continue;
 					}
 					addSeed(node, COMPILER_VALUE_KIND_TOP);
@@ -410,28 +468,34 @@ export function analyzeCoreValueKinds(
 	}
 
 	const state = new Uint16Array(nodeCount);
+	const int32State = new Uint8Array(nodeCount);
 	const queued = new Uint8Array(nodeCount);
 	const queue: Array<number> = [];
 	let index = 0;
-	const raise = (node: number, kind: number): void => {
+	const raise = (node: number, kind: number, int32: number): void => {
 		const next = state[node]! | kind;
-		if (next === state[node]) return;
+		const nextInt32 = int32State[node]! | int32;
+		if (next === state[node] && nextInt32 === int32State[node]) return;
 		state[node] = next;
+		int32State[node] = nextInt32;
 		if (queued[node] === 0) {
 			queued[node] = 1;
 			queue.push(node);
 		}
 	};
-	for (const [node, kind] of seeds) raise(node, kind);
+	for (const [node, kind] of seeds) raise(node, kind, int32Seeds.get(node) ?? 0);
 	while (index < queue.length) {
 		const source = queue[index++]!;
 		queued[source] = 0;
-		for (const destination of edges.get(source) ?? []) raise(destination, state[source]!);
+		for (const destination of edges.get(source) ?? []) {
+			raise(destination, state[source]!, int32State[source]!);
+		}
 		for (const transfer of transfers.get(source) ?? []) {
-			raise(
-				transfer.output,
-				transfer.evaluate(transfer.inputs.map((input) => state[input]!)),
+			const result = transfer.evaluate(
+				transfer.inputs.map((input) => state[input]!),
+				transfer.inputs.map((input) => int32State[input]!),
 			);
+			raise(transfer.output, result.kind, result.int32);
 		}
 	}
 
@@ -442,10 +506,14 @@ export function analyzeCoreValueKinds(
 			if (base === undefined || limit === undefined || value >= limit) return undefined;
 			const kind = state[base + value];
 			return kind === COMPILER_VALUE_KIND_NUMBER
-				? "number"
+				? int32State[base + value] === 1
+					? "int32"
+					: "number"
 				: kind === COMPILER_VALUE_KIND_BOOLEAN
 					? "boolean"
-					: undefined;
+					: kind === COMPILER_VALUE_KIND_STRING
+						? "string"
+						: undefined;
 		},
 		kindMask(functionIndex, value) {
 			const base = valueBases.get(functionIndex);
@@ -492,7 +560,14 @@ export function coreExactCallArgumentRepresentations(
 	if (
 		!Array.isArray(value) ||
 		(parameterCount !== undefined && value.length !== parameterCount) ||
-		value.some((entry) => entry !== "boxed" && entry !== "number" && entry !== "boolean")
+		value.some(
+			(entry) =>
+				entry !== "boxed" &&
+				entry !== "int32" &&
+				entry !== "number" &&
+				entry !== "boolean" &&
+				entry !== "string",
+		)
 	) {
 		return undefined;
 	}
@@ -506,8 +581,16 @@ export interface CoreExactValueFactSelection {
 
 function scalarCoreRepresentation(
 	kind: CoreExactScalarKind | undefined,
-): "f64" | "boolean" | undefined {
-	return kind === "number" ? "f64" : kind === "boolean" ? "boolean" : undefined;
+): "i32" | "f64" | "boolean" | "string" | undefined {
+	return kind === "int32"
+		? "i32"
+		: kind === "number"
+			? "f64"
+			: kind === "boolean"
+				? "boolean"
+				: kind === "string"
+					? "string"
+					: undefined;
 }
 
 const NUMERIC_RESULT_OPERATORS: ReadonlySet<string> = new Set([
@@ -747,9 +830,16 @@ export function materializeCoreExactScalarRepresentations(
 		let progress = true;
 		const narrow = (
 			value: CoreValueId,
-			representation: "f64" | "boolean" | undefined,
+			representation: "i32" | "f64" | "boolean" | "string" | undefined,
 		): void => {
-			if (representation === undefined || representations.get(value) !== "boxed") return;
+			const current = representations.get(value);
+			if (
+				representation === undefined ||
+				current === representation ||
+				(current !== "boxed" && !(current === "f64" && representation === "i32"))
+			) {
+				return;
+			}
 			representations.set(value, representation);
 			changed = true;
 			progress = true;
@@ -757,6 +847,19 @@ export function materializeCoreExactScalarRepresentations(
 		while (progress) {
 			progress = false;
 			for (const block of blocks) {
+				if (
+					block.id !== fn.entry &&
+					!block.parameters.some(({ role }) => role === "exception")
+				) {
+					for (const parameter of block.parameters) {
+						narrow(
+							parameter.value,
+							scalarCoreRepresentation(
+								analysis.exactScalar(fn.functionIndex, parameter.value),
+							),
+						);
+					}
+				}
 				if (
 					block.id !== fn.entry &&
 					!block.parameters.some(({ role }) => role === "exception")
@@ -775,7 +878,12 @@ export function materializeCoreExactScalarRepresentations(
 							const candidate = [...candidates][0];
 							narrow(
 								parameter.value,
-								candidate === "f64" || candidate === "boolean" ? candidate : undefined,
+								candidate === "i32" ||
+									candidate === "f64" ||
+									candidate === "boolean" ||
+									candidate === "string"
+									? candidate
+									: undefined,
 							);
 						}
 					}
@@ -785,7 +893,27 @@ export function materializeCoreExactScalarRepresentations(
 					if (output === undefined || instruction.outputs.length !== 1) continue;
 					if (instruction.opcode === "move" && instruction.inputs.length === 1) {
 						const input = representations.get(instruction.inputs[0]!);
-						narrow(output, input === "f64" || input === "boolean" ? input : undefined);
+						narrow(
+							output,
+							input === "i32" ||
+								input === "f64" ||
+								input === "boolean" ||
+								input === "string"
+								? input
+								: undefined,
+						);
+						continue;
+					}
+					if (
+						instruction.opcode === "createF64" ||
+						instruction.opcode === "createNumber" ||
+						instruction.opcode === "createBoolean" ||
+						instruction.opcode === "createString"
+					) {
+						narrow(
+							output,
+							scalarCoreRepresentation(analysis.exactScalar(fn.functionIndex, output)),
+						);
 						continue;
 					}
 					const operator = instruction.attributes.operator;
@@ -794,9 +922,9 @@ export function materializeCoreExactScalarRepresentations(
 						instruction.inputs.length === 1 &&
 						typeof operator === "string" &&
 						NUMERIC_UNARY_OPERATORS.has(operator) &&
-						representations.get(instruction.inputs[0]!) === "f64"
+						["i32", "f64"].includes(representations.get(instruction.inputs[0]!) ?? "")
 					) {
-						narrow(output, "f64");
+						narrow(output, operator === "~" ? "i32" : "f64");
 						continue;
 					}
 					if (
@@ -804,9 +932,19 @@ export function materializeCoreExactScalarRepresentations(
 						instruction.inputs.length === 2 &&
 						typeof operator === "string" &&
 						NUMERIC_RESULT_OPERATORS.has(operator) &&
-						instruction.inputs.every((input) => representations.get(input) === "f64")
+						instruction.inputs.every((input) =>
+							["i32", "f64"].includes(representations.get(input) ?? ""),
+						)
 					) {
-						narrow(output, "f64");
+						narrow(output, INT32_RESULT_BINARY_OPERATORS.has(operator) ? "i32" : "f64");
+						continue;
+					}
+					if (
+						instruction.opcode === "binary" &&
+						instruction.attributes.operator === "+" &&
+						analysis.exactScalar(fn.functionIndex, output) === "string"
+					) {
+						narrow(output, "string");
 					}
 				}
 			}

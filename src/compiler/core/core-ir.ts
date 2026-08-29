@@ -474,6 +474,7 @@ export type CoreRepresentation =
 	| "f64"
 	| "i32"
 	| "boolean"
+	| "string"
 	| "string-span"
 	| "projected-elements"
 	| "dense-elements"

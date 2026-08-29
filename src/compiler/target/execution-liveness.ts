@@ -114,19 +114,17 @@ export function executionSafepointRootRegisters(
 		instructions.map((instruction) => {
 			const registers = instructionRegisters(instruction);
 			const writes = writeCount(instruction);
+			const rooted = (register: number): boolean => {
+				const representation = fn.registerRepresentations[register];
+				return representation === "boxed" || representation === "string";
+			};
 			return {
 				reads: registers
 					.slice(writes)
-					.filter(
-						(register) =>
-							register >= 0 && fn.registerRepresentations[register] === "boxed",
-					),
+					.filter((register) => register >= 0 && rooted(register)),
 				writes: registers
 					.slice(0, writes)
-					.filter(
-						(register) =>
-							register >= 0 && fn.registerRepresentations[register] === "boxed",
-					),
+					.filter((register) => register >= 0 && rooted(register)),
 			};
 		}),
 	);

@@ -2007,8 +2007,18 @@ function verifyExactScalarAfterTdzClaims(
 			instruction.opcode !== "move" ||
 			instruction.inputs.length !== 1 ||
 			instruction.outputs.length !== 1 ||
-			(claim !== "number" && claim !== "boolean") ||
-			representation !== (claim === "number" ? "f64" : "boolean") ||
+			(claim !== "int32" &&
+				claim !== "number" &&
+				claim !== "boolean" &&
+				claim !== "string") ||
+			representation !==
+				(claim === "int32"
+					? "i32"
+					: claim === "number"
+						? "f64"
+						: claim === "boolean"
+							? "boolean"
+							: "string") ||
 			check?.opcode !== "throwIfTdz" ||
 			check.inputs[0] !== input ||
 			input === undefined ||

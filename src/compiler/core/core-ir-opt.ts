@@ -11944,29 +11944,61 @@ export function executeCoreOptimizations(
 	}
 	if (options.ablations?.has("interprocedural") !== true) {
 		const exactScalarBefore = tracedMetrics;
-		const exactScalarInput = { ...workingProgram, functions };
-		const exactScalarSummaries = analyses.summaries(exactScalarInput);
-		const exactScalarSelection = materializeCoreExactScalarRepresentations(
-			exactScalarInput,
-			compilationContext,
-			exactScalarSummaries,
-		);
-		analyses.inheritSummaries(exactScalarInput, exactScalarSelection.program);
-		for (const [index, fn] of exactScalarSelection.program.functions.entries()) {
-			const before = functions[index];
-			if (before !== undefined && before !== fn) analyses.inheritControlFlow(before, fn);
+		let exactScalarChanged = false;
+		let exactScalarConverged = false;
+		const exactScalarRoundLimit = Math.max(4, maxRounds);
+		for (let round = 0; round < exactScalarRoundLimit; round++) {
+			const exactScalarInput = { ...workingProgram, functions };
+			const exactScalarSelection = materializeCoreExactScalarRepresentations(
+				exactScalarInput,
+				compilationContext,
+				analyses.summaries(exactScalarInput),
+			);
+			for (const [index, fn] of exactScalarSelection.program.functions.entries()) {
+				const before = functions[index];
+				if (before !== undefined && before !== fn)
+					analyses.inheritControlFlow(before, fn);
+			}
+			workingProgram = exactScalarSelection.program;
+			functions = [...exactScalarSelection.program.functions];
+			if (!exactScalarSelection.changed) {
+				exactScalarConverged = true;
+				break;
+			}
+			exactScalarChanged = true;
+			const effectInput = { ...workingProgram, functions };
+			functions = functions.map((fn) => {
+				const next = refineDirectCallEffects.run(fn, analyses, effectInput);
+				if (next !== fn) analyses.inheritControlFlow(fn, next);
+				return next;
+			});
+			workingProgram = { ...workingProgram, functions };
+			const representationInput = workingProgram;
+			functions = functions.map((fn) => {
+				const next = refineDirectCallResultRepresentations.run(
+					fn,
+					analyses,
+					representationInput,
+				);
+				if (next !== fn) analyses.inheritControlFlow(fn, next);
+				return next;
+			});
+			workingProgram = { ...workingProgram, functions };
 		}
-		if (exactScalarSelection.changed) {
+		if (!exactScalarConverged) {
+			throw new Error(
+				"Exact scalar representation and summary refinement did not converge",
+			);
+		}
+		if (exactScalarChanged) {
 			changed = true;
-			verifyMutatedProgram(exactScalarSelection.program, {
+			verifyMutatedProgram(workingProgram, {
 				stage: "finalization",
 				pass: "materialize-exact-scalar-representations",
 			});
 		}
-		workingProgram = exactScalarSelection.program;
-		functions = [...exactScalarSelection.program.functions];
 		if (exactScalarBefore !== undefined) {
-			const exactScalarAfter = coreOptimizationMetrics(exactScalarSelection.program);
+			const exactScalarAfter = coreOptimizationMetrics(workingProgram);
 			tracedMetrics = exactScalarAfter;
 			optimizationTrace.push(
 				optimizationPassDelta(
@@ -11974,7 +12006,7 @@ export function executeCoreOptimizations(
 						pass: "materialize-exact-scalar-representations",
 						stage: "finalization",
 						status: "executed",
-						changed: exactScalarSelection.changed,
+						changed: exactScalarChanged,
 						ablation: "interprocedural",
 					},
 					exactScalarBefore,

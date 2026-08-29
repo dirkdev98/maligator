@@ -552,7 +552,9 @@ describe("Core target verification", () => {
 				),
 			}),
 		);
-		expect(classError.detail).toBe("register class must be boxed, number, or boolean");
+		expect(classError.detail).toBe(
+			"register class must be boxed, int32, number, boolean, or string",
+		);
 		expect(classError.context).toMatchObject({
 			functionIndex: 0,
 			register: fn.registerCount - 1,
@@ -948,7 +950,7 @@ describe("Core target verification", () => {
 				unboxed,
 			]),
 		);
-		expect(unboxedRoot.detail).toBe("GC root register must be boxed");
+		expect(unboxedRoot.detail).toBe("GC root register must carry a traced value");
 		expect(unboxedRoot.context).toMatchObject({
 			functionIndex: numericIndex,
 			register: unboxed,

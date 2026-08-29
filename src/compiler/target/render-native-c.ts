@@ -458,8 +458,10 @@ function emitCompiledVariant(
 		nativeContract.registerRepresentations.some(
 			(representation, register) =>
 				(representation !== "boxed" &&
+					representation !== "int32" &&
 					representation !== "number" &&
-					representation !== "boolean") ||
+					representation !== "boolean" &&
+					representation !== "string") ||
 				(register < fn.parameterCount &&
 					representation !==
 						(directEntry?.parameterRepresentations[register] ?? "boxed")),
@@ -1227,12 +1229,24 @@ function bodyUsesThrowExit(body: Array<string>): boolean {
 
 /** The C type a register of the given rep is held in. */
 function cTypeOf(rep: RegisterRep): string {
-	return rep === "number" ? "double" : rep === "boolean" ? "bool" : "MalValue";
+	return rep === "int32"
+		? "i32"
+		: rep === "number"
+			? "double"
+			: rep === "boolean"
+				? "bool"
+				: "MalValue";
 }
 
 /** The zero/default value a register of the given rep is initialized to. */
 function zeroOf(rep: RegisterRep): string {
-	return rep === "number" ? "0.0" : rep === "boolean" ? "false" : "MAL_VALUE_UNDEFINED";
+	return rep === "int32"
+		? "0"
+		: rep === "number"
+			? "0.0"
+			: rep === "boolean"
+				? "false"
+				: "MAL_VALUE_UNDEFINED";
 }
 
 /**
@@ -2321,11 +2335,13 @@ function emitInstruction(
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
 	const boxed = (r: number): string =>
-		reps[r] === "number"
-			? `mal_ops_number_value(r${r})`
-			: reps[r] === "boolean"
-				? `mal_value_new_boolean(r${r})`
-				: `r${r}`;
+		reps[r] === "int32"
+			? `mal_value_from_i32(r${r})`
+			: reps[r] === "number"
+				? `mal_ops_number_value(r${r})`
+				: reps[r] === "boolean"
+					? `mal_value_new_boolean(r${r})`
+					: `r${r}`;
 	const boxedOperand = (operand: number): string => {
 		const decoded = decodeVmValueOperand(operand);
 		switch (decoded.kind) {
@@ -2346,9 +2362,24 @@ function emitInstruction(
 	const nativeNumberOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
-			return reps[decoded.register] === "number" ? `r${decoded.register}` : null;
+			return reps[decoded.register] === "int32"
+				? `(f64) r${decoded.register}`
+				: reps[decoded.register] === "number"
+					? `r${decoded.register}`
+					: null;
 		}
 		return decoded.kind === "number" ? cF64Literal(decoded.value) : null;
+	};
+	const nativeInt32Operand = (operand: number): string | null => {
+		const decoded = decodeVmValueOperand(operand);
+		if (decoded.kind === "register") {
+			return reps[decoded.register] === "int32"
+				? `r${decoded.register}`
+				: reps[decoded.register] === "number"
+					? `mal_ops_number_to_i32(r${decoded.register})`
+					: null;
+		}
+		return decoded.kind === "number" ? String(decoded.value) : null;
 	};
 	const nativeBooleanOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
@@ -2358,16 +2389,18 @@ function emitInstruction(
 		return decoded.kind === "boolean" ? (decoded.value ? "true" : "false") : null;
 	};
 	// Read register r as a raw double (only valid for a number-rep register).
-	const num = (r: number): string => `r${r}`;
+	const num = (r: number): string => (reps[r] === "int32" ? `(f64) r${r}` : `r${r}`);
 	// Read register r as a raw C bool (ToBoolean). A boolean-rep register is the
 	// bool itself; a number-rep one is truthy iff nonzero and not NaN; a boxed
 	// one defers to mal_value_is_truthy.
 	const truthy = (r: number): string =>
 		reps[r] === "boolean"
 			? `r${r}`
-			: reps[r] === "number"
-				? `(r${r} != 0.0 && r${r} == r${r})`
-				: `mal_value_is_truthy(r${r})`;
+			: reps[r] === "int32"
+				? `(r${r} != 0)`
+				: reps[r] === "number"
+					? `(r${r} != 0.0 && r${r} == r${r})`
+					: `mal_value_is_truthy(r${r})`;
 
 	// Where control goes on a pending throw: into the innermost enclosing
 	// try/catch handler when this instruction is inside one (CATCH there reads
@@ -2462,15 +2495,23 @@ function emitInstruction(
 			// A move is also the explicit representation-conversion seam.
 			const dst = instruction.dst;
 			const read =
-				reps[dst] === "number"
-					? reps[instruction.src] === "number"
-						? num(instruction.src)
-						: `mal_ops_number_as_f64(${boxed(instruction.src)})`
-					: reps[dst] === "boolean"
-						? reps[instruction.src] === "boolean"
-							? truthy(instruction.src)
-							: `mal_value_to_boolean(${boxed(instruction.src)})`
-						: boxed(instruction.src);
+				reps[dst] === "int32"
+					? reps[instruction.src] === "int32"
+						? `r${instruction.src}`
+						: reps[instruction.src] === "number"
+							? `mal_ops_number_to_i32(r${instruction.src})`
+							: `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxed(instruction.src)}))`
+					: reps[dst] === "number"
+						? reps[instruction.src] === "number"
+							? num(instruction.src)
+							: reps[instruction.src] === "int32"
+								? num(instruction.src)
+								: `mal_ops_number_as_f64(${boxed(instruction.src)})`
+						: reps[dst] === "boolean"
+							? reps[instruction.src] === "boolean"
+								? truthy(instruction.src)
+								: `mal_value_to_boolean(${boxed(instruction.src)})`
+							: boxed(instruction.src);
 			return [`r${dst} = ${read};`];
 		}
 		case "CREATE_UNDEFINED":
@@ -2506,15 +2547,19 @@ function emitInstruction(
 			];
 		case "CREATE_NUMBER":
 			return [
-				reps[instruction.dst] === "number"
+				reps[instruction.dst] === "int32"
 					? `r${instruction.dst} = ${instruction.value};`
-					: `r${instruction.dst} = mal_value_from_i32(${instruction.value});`,
+					: reps[instruction.dst] === "number"
+						? `r${instruction.dst} = ${instruction.value};`
+						: `r${instruction.dst} = mal_value_from_i32(${instruction.value});`,
 			];
 		case "CREATE_F64":
 			return [
-				reps[instruction.dst] === "number"
-					? `r${instruction.dst} = ${cF64Literal(instruction.value)};`
-					: `r${instruction.dst} = mal_value_from_f64_convert_nan(${cF64Literal(instruction.value)});`,
+				reps[instruction.dst] === "int32"
+					? `r${instruction.dst} = (i32) ${cF64Literal(instruction.value)};`
+					: reps[instruction.dst] === "number"
+						? `r${instruction.dst} = ${cF64Literal(instruction.value)};`
+						: `r${instruction.dst} = mal_value_from_f64_convert_nan(${cF64Literal(instruction.value)});`,
 			];
 		case "CREATE_STRING":
 			return [
@@ -3204,8 +3249,8 @@ function emitInstruction(
 			];
 		case "BINARY": {
 			const { dst, left, right, operator } = instruction;
-			const leftIsNum = reps[left] === "number";
-			const rightIsNum = reps[right] === "number";
+			const leftIsNum = reps[left] === "int32" || reps[left] === "number";
+			const rightIsNum = reps[right] === "int32" || reps[right] === "number";
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			const fusion = numericFusionAction;
@@ -3225,6 +3270,9 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
+			}
+			if (operator === "+" && reps[left] === "string" && reps[right] === "string") {
+				return [`r${dst} = mal_vm_add(vm, r${left}, r${right});`, throwCheck];
 			}
 
 			if (fusion?.role === "start" && reps[dst] !== "number") {
@@ -3321,6 +3369,17 @@ function emitInstruction(
 			// numbers in the target plan (see producesNumberFromNumbers) — emit native
 			// arithmetic or a native ToInt32-based bitwise/shift/remainder, all
 			// holding their integer-valued results as a double.
+			if (reps[dst] === "int32") {
+				if (
+					!leftIsNum ||
+					!rightIsNum ||
+					!["&", "|", "^", "<<", ">>"].includes(operator)
+				) {
+					return null;
+				}
+				const expr = nativeNumberExpr(operator, num(left), num(right));
+				return expr === null ? null : [`r${dst} = (i32) (${expr});`];
+			}
 			if (reps[dst] === "number") {
 				// Bail defensively if the lattice invariant ever breaks.
 				if (!leftIsNum || !rightIsNum) {
@@ -3348,7 +3407,11 @@ function emitInstruction(
 			// recovered from its boxed form (boxing a boolean-rep first, so we never
 			// feed a C bool to a MalValue helper).
 			const numericOf = (r: number): string =>
-				reps[r] === "number" ? `r${r}` : `mal_ops_number_as_f64(${boxed(r)})`;
+				reps[r] === "int32"
+					? `(f64) r${r}`
+					: reps[r] === "number"
+						? `r${r}`
+						: `mal_ops_number_as_f64(${boxed(r)})`;
 			const exactUndefined = (r: number, mask: CompilerValueKindMask): string =>
 				mask === COMPILER_VALUE_KIND_UNDEFINED
 					? "true"
@@ -3527,11 +3590,13 @@ function emitInstruction(
 			// Boxed values retain the generic classifier because their precise
 			// primitive/object/callable kind is not represented by this lattice yet.
 			const proven =
-				reps[src] === "number"
+				reps[src] === "int32" || reps[src] === "number"
 					? "number"
 					: reps[src] === "boolean"
 						? "boolean"
-						: undefined;
+						: reps[src] === "string"
+							? "string"
+							: undefined;
 			if (proven !== undefined) {
 				const value = (proven === expected) !== negated;
 				return [
@@ -3550,8 +3615,14 @@ function emitInstruction(
 		}
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
+			if (reps[dst] === "int32") {
+				if (operator !== "~" || (reps[src] !== "int32" && reps[src] !== "number")) {
+					return null;
+				}
+				return [`r${dst} = ~mal_ops_number_to_i32(${num(src)});`];
+			}
 			if (reps[dst] === "number") {
-				if (reps[src] !== "number") {
+				if (reps[src] !== "int32" && reps[src] !== "number") {
 					return null;
 				}
 				// `~` is over ToInt32 (~to_i32 == bit_xor(., -1), the interpreter's
@@ -3810,11 +3881,13 @@ function emitInstruction(
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
 			const callResult = (value: string): string =>
-				reps[instruction.dst] === "number"
-					? `mal_ops_number_as_f64(${value})`
-					: reps[instruction.dst] === "boolean"
-						? `mal_value_to_boolean(${value})`
-						: value;
+				reps[instruction.dst] === "int32"
+					? `mal_ops_number_to_i32(mal_ops_number_as_f64(${value}))`
+					: reps[instruction.dst] === "number"
+						? `mal_ops_number_as_f64(${value})`
+						: reps[instruction.dst] === "boolean"
+							? `mal_value_to_boolean(${value})`
+							: value;
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitCursorAction;
 				const id = site.callIp;
@@ -4219,6 +4292,14 @@ function emitInstruction(
 									(boxedScalar ? `mal_ops_number_as_f64(${boxedOperand(operand)})` : null)
 								);
 							}
+							if (representation === "int32") {
+								return (
+									nativeInt32Operand(operand) ??
+									(boxedScalar
+										? `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxedOperand(operand)}))`
+										: null)
+								);
+							}
 							if (representation === "boolean") {
 								return (
 									nativeBooleanOperand(operand) ??
@@ -4230,15 +4311,21 @@ function emitInstruction(
 					);
 					if (parameters.every((parameter) => parameter !== null)) {
 						const directResult =
-							directEntry.resultRepresentation === "number"
-								? reps[instruction.dst] === "number"
+							directEntry.resultRepresentation === "int32"
+								? reps[instruction.dst] === "int32"
 									? directValue
-									: `mal_ops_number_value(${directValue})`
-								: directEntry.resultRepresentation === "boolean"
-									? reps[instruction.dst] === "boolean"
+									: reps[instruction.dst] === "number"
+										? `(f64) ${directValue}`
+										: `mal_value_from_i32(${directValue})`
+								: directEntry.resultRepresentation === "number"
+									? reps[instruction.dst] === "number"
 										? directValue
-										: `mal_value_new_boolean(${directValue})`
-									: callResult(directValue);
+										: `mal_ops_number_value(${directValue})`
+									: directEntry.resultRepresentation === "boolean"
+										? reps[instruction.dst] === "boolean"
+											? directValue
+											: `mal_value_new_boolean(${directValue})`
+										: callResult(directValue);
 						return [
 							`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 							`MAL_PERF_COUNT(direct_entry_hits);`,
@@ -4497,15 +4584,19 @@ function emitInstruction(
 					return [`${gcUnlink}return ${zeroOf(directResultRepresentation)};`];
 				}
 				const directValue =
-					directResultRepresentation === "number"
-						? reps[instruction.value] === "number"
+					directResultRepresentation === "int32"
+						? reps[instruction.value] === "int32"
 							? `r${instruction.value}`
-							: `mal_ops_number_as_f64(${boxed(instruction.value)})`
-						: directResultRepresentation === "boolean"
-							? reps[instruction.value] === "boolean"
+							: `mal_ops_number_to_i32(${num(instruction.value)})`
+						: directResultRepresentation === "number"
+							? reps[instruction.value] === "number"
 								? `r${instruction.value}`
-								: `mal_value_to_boolean(${boxed(instruction.value)})`
-							: boxed(instruction.value);
+								: `mal_ops_number_as_f64(${boxed(instruction.value)})`
+							: directResultRepresentation === "boolean"
+								? reps[instruction.value] === "boolean"
+									? `r${instruction.value}`
+									: `mal_value_to_boolean(${boxed(instruction.value)})`
+								: boxed(instruction.value);
 				return [`${gcUnlink}return ${directValue};`];
 			}
 			const materialize: Array<string> = [];

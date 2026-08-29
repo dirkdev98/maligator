@@ -466,7 +466,12 @@ export type VmRegion =
 	| VmStringSplitCursorRegion;
 
 /** Physical storage selected by Core target lowering for native emission. */
-export type VmRegisterRepresentation = "boxed" | "number" | "boolean";
+export type VmRegisterRepresentation =
+	| "boxed"
+	| "int32"
+	| "number"
+	| "boolean"
+	| "string";
 
 export interface VmGuardedBuiltinCall {
 	readonly operation: VmGuardedBuiltinOperation;
@@ -640,15 +645,16 @@ export function nativeFrameRootRegisters(
 		}
 		let previousRegister = -1;
 		for (const register of safepoint.rootRegisters) {
+			const representation = native.registerRepresentations[register];
 			if (
 				!Number.isSafeInteger(register) ||
 				register < 0 ||
 				register >= fn.registerCount ||
 				register <= previousRegister ||
-				native.registerRepresentations[register] !== "boxed"
+				(representation !== "boxed" && representation !== "string")
 			) {
 				throw new RangeError(
-					"native GC roots must be unique ordered boxed function registers",
+					"native GC roots must be unique ordered traced function registers",
 				);
 			}
 			previousRegister = register;

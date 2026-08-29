@@ -290,7 +290,13 @@ export function joinReturnProvenance(
  * Core representations outside this set collapse to `boxed`: they describe a
  * region-local encoding rather than something a call boundary can hand back.
  */
-export type ReturnRepresentation = "none" | "boxed" | "f64" | "i32" | "boolean";
+export type ReturnRepresentation =
+	| "none"
+	| "boxed"
+	| "f64"
+	| "i32"
+	| "boolean"
+	| "string";
 
 export function joinReturnRepresentation(
 	left: ReturnRepresentation,

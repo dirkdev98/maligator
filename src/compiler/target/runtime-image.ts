@@ -1344,7 +1344,7 @@ export function validateVmShapeCases(definition: RuntimeImage): void {
 			descriptor,
 		);
 	}
-	for (const fn of definition.functions) {
+	for (const [functionIndex, fn] of definition.functions.entries()) {
 		for (const [selectorIp, rawSelector] of fn.instructions.entries()) {
 			if (rawSelector.opcode !== "SELECT_SHAPE_CASE") continue;
 			const rawCandidates: unknown = rawSelector.candidates;
@@ -1403,7 +1403,9 @@ export function validateVmShapeCases(definition: RuntimeImage): void {
 					instruction.shapeCase !== rawSelector.dst ||
 					instruction.object !== rawSelector.object
 				) {
-					throw new RangeError("invalid shape-case selector use");
+					throw new RangeError(
+						`invalid shape-case selector use in function ${functionIndex} at ${selectorIp}: ${instruction.opcode}`,
+					);
 				}
 				uses.push({ ip, instruction });
 			}
