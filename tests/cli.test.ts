@@ -328,6 +328,7 @@ describe("command shell", () => {
 		const productConfig = productCliConfig(
 			repoRoot,
 			path.join(repoRoot, "compiler.malw"),
+			path.join(repoRoot, "compiler-producers.json"),
 		);
 		expect(productConfig.engine.realms).toBe(true);
 		expect(productConfig.surface.webPlatform).toBe(true);
@@ -343,6 +344,10 @@ describe("command shell", () => {
 		expect(productConfig.assets.testRuntime).toEqual({
 			type: "file",
 			path: path.join(repoRoot, "src/testing/runtime.mjs"),
+		});
+		expect(productConfig.assets.compilerProducerDigests).toEqual({
+			type: "file",
+			path: path.join(repoRoot, "compiler-producers.json"),
 		});
 		expect(productConfig.assets.nodeGlobals).toEqual({
 			type: "file",

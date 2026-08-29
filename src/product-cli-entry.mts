@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { productCompilerInstallation, runCli } from "./cli-commands.ts";
+import { installCompilerProducerDigests } from "./compiler-cache-identity.ts";
+import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 
 const { assets } = Reflect.get(globalThis, "mal") as {
@@ -11,6 +14,12 @@ const mal = Reflect.get(globalThis, "mal") as unknown as {
 	_developmentProcessStatus(handle: number): number | undefined;
 	_waitDevelopmentChange(directories: Array<string>, timeoutMs: number): void;
 };
+
+installCompilerProducerDigests(
+	JSON.parse(
+		readFileSync(assets.materialize("compilerProducerDigests"), "utf8"),
+	) as Record<CompilerProducerStage, string>,
+);
 
 interface ProductDevelopmentWatcher {
 	directories: Array<string>;

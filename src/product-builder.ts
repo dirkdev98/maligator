@@ -5,6 +5,8 @@ import { createBuildArtifact } from "./build-artifact.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { selectNativeBuildPlan } from "./build-flags.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
+import { compilerProducerDigestsForRoot } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
@@ -34,10 +36,15 @@ export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 export function productCliConfig(
 	repositoryRoot: string,
 	compilerWirePath: string,
+	compilerProducerDigestsPath: string,
 ): ResolvedBuildConfig {
 	return resolveBuildConfig({
 		assets: {
 			compilerWire: { type: "file", path: path.resolve(compilerWirePath) },
+			compilerProducerDigests: {
+				type: "file",
+				path: path.resolve(compilerProducerDigestsPath),
+			},
 			testRuntime: {
 				type: "file",
 				path: path.resolve(repositoryRoot, "src/testing/runtime.mjs"),
@@ -84,8 +91,22 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 			{ stripTypes: stripCompactTypes },
 		),
 	);
+	const compilerProducerDigestsPath = path.join(outDir, "compiler-producers.json");
+	writeFileSync(
+		compilerProducerDigestsPath,
+		`${JSON.stringify(
+			compilerProducerDigestsForRoot(
+				path.join(repositoryRoot, "src"),
+				maligatorCacheDirectory(),
+			),
+		)}\n`,
+	);
 
-	const config = productCliConfig(repositoryRoot, compilerWirePath);
+	const config = productCliConfig(
+		repositoryRoot,
+		compilerWirePath,
+		compilerProducerDigestsPath,
+	);
 	progress("analyzing and compiling the product CLI");
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
 		path.join(repositoryRoot, "src/product-cli-entry.mts"),

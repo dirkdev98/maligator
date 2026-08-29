@@ -2,7 +2,12 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { compilerImplementationDigestForRoot } from "../src/compiler-cache-identity.ts";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import {
+	compilerConfigurationIdentity,
+	compilerImplementationDigestForRoot,
+	compilerProducerImplementationDigestForRoot,
+} from "../src/compiler-cache-identity.ts";
 import { walkDirectoryTree } from "../src/file-tree.ts";
 
 const temporaryDirectories: Array<string> = [];
@@ -13,7 +18,16 @@ function compilerFixture(): { sourceRoot: string; cacheDirectory: string } {
 	const sourceRoot = path.join(root, "src");
 	const cacheDirectory = path.join(root, "cache");
 	mkdirSync(path.join(sourceRoot, "compiler"), { recursive: true });
+	mkdirSync(path.join(sourceRoot, "testing"), { recursive: true });
 	writeFileSync(path.join(sourceRoot, "compiler", "compile.ts"), "export const n = 1;\n");
+	writeFileSync(
+		path.join(sourceRoot, "build-frontend-cache.ts"),
+		'import { n } from "./compiler/compile.ts";\nexport const build = n;\n',
+	);
+	writeFileSync(
+		path.join(sourceRoot, "testing", "cache.ts"),
+		'export const test = "test-only";\n',
+	);
 	writeFileSync(path.join(sourceRoot, "build-config-error.ts"), "export class E {}\n");
 	writeFileSync(path.join(sourceRoot, "utils.ts"), "export const debug = false;\n");
 	writeFileSync(
@@ -75,5 +89,64 @@ describe("compiler cache identity", () => {
 			}
 		});
 		expect([...externalSources].sort()).toEqual(["build-config-error.ts", "utils.ts"]);
+	});
+
+	it("invalidates only a producer's transitive source cone", () => {
+		const fixture = compilerFixture();
+		const initial = compilerProducerImplementationDigestForRoot(
+			"build-frontend",
+			fixture.sourceRoot,
+			fixture.cacheDirectory,
+		);
+		writeFileSync(
+			path.join(fixture.sourceRoot, "testing", "cache.ts"),
+			'export const test = "changed outside the build cone";\n',
+		);
+		expect(
+			compilerProducerImplementationDigestForRoot(
+				"build-frontend",
+				fixture.sourceRoot,
+				fixture.cacheDirectory,
+			),
+		).toBe(initial);
+
+		writeFileSync(
+			path.join(fixture.sourceRoot, "compiler", "compile.ts"),
+			"export const n = 2;\n",
+		);
+		expect(
+			compilerProducerImplementationDigestForRoot(
+				"build-frontend",
+				fixture.sourceRoot,
+				fixture.cacheDirectory,
+			),
+		).not.toBe(initial);
+	});
+
+	it("projects exactly the configuration consumed before native emission", () => {
+		const base = JSON.stringify(compilerConfigurationIdentity(resolveBuildConfig({})));
+		const nativeOnly = resolveBuildConfig({
+			entry: "src/main.ts",
+			outputName: "application",
+			assets: { data: { type: "file", path: "data.json" } },
+			engine: { intl: { features: ["collator"], languages: ["en"] } },
+		});
+		expect(JSON.stringify(compilerConfigurationIdentity(nativeOnly))).toBe(base);
+
+		const frontendDimensions = [
+			resolveBuildConfig({ modules: { aliases: { package: "./replacement.ts" } } }),
+			resolveBuildConfig({ engine: { primordials: "mutable" } }),
+			resolveBuildConfig({ engine: { eval: true } }),
+			resolveBuildConfig({ engine: { realms: true } }),
+			resolveBuildConfig({ engine: { regexp: false } }),
+			resolveBuildConfig({ engine: { temporal: true } }),
+			resolveBuildConfig({ engine: { intl: { enabled: true } } }),
+			resolveBuildConfig({ surface: { webPlatform: true } }),
+			resolveBuildConfig({ surface: { node: true } }),
+			resolveBuildConfig({ surface: { maligator: false } }),
+		];
+		for (const config of frontendDimensions) {
+			expect(JSON.stringify(compilerConfigurationIdentity(config))).not.toBe(base);
+		}
 	});
 });
