@@ -851,6 +851,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
         }
         case MAL_HEAP_MODULE_NAMESPACE_OBJECT: {
             MalModuleNamespaceObject *ns = (MalModuleNamespaceObject *) cell;
+            mal_gc_mark_value(ns->init_fn);
             for (i32 i = 0; i < ns->export_count; ++i) {
                 mal_gc_mark_string(ns->exports[i].name);
             }

@@ -349,6 +349,8 @@ typedef enum MalIntrinsic {
      * Not exposed on globalThis.
      */
     MAL_INTRINSIC_DYNAMIC_IMPORT,
+    MAL_INTRINSIC_CONFIGURE_DEFERRED_NAMESPACE,
+    MAL_INTRINSIC_EVALUATE_MODULE_SYNC,
     /*
      * WinterTC fetch server slots (runtime/web_fetch.c). Installed only by the host
      * entry (mal_fetch_install), so they stay undefined — and harmless — in the bare

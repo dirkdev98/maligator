@@ -186,6 +186,8 @@ export const WIRE_INTRINSICS = [
 	"__newDisposeCapability",
 	"__addDisposableResource",
 	"__disposeResources",
+	"__configureDeferredNamespace",
+	"__evaluateModuleSync",
 ] as const;
 const INTRINSIC_TAG = new Map<string, number>(
 	WIRE_INTRINSICS.map((name, i) => [name, i]),

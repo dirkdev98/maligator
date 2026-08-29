@@ -35,6 +35,8 @@ export type ModuleGoal = "script" | "module" | "cjs";
 export type ModuleDependencyKind =
 	// `import ... from "x"`
 	| "import"
+	// `import defer * as ns from "x"`
+	| "deferred-import"
 	// `export ... from "x"` / `export * from "x"`
 	| "export"
 	// `import("x")`
@@ -601,7 +603,10 @@ function extractDependencies(
 		if (parent) parents.set(node, parent);
 		switch (node.type) {
 			case "ImportDeclaration":
-				dependencies.push({ specifier: literalString(node.source), kind: "import" });
+				dependencies.push({
+					specifier: literalString(node.source),
+					kind: node.phase === "defer" ? "deferred-import" : "import",
+				});
 				break;
 			case "ExportNamedDeclaration":
 				// Only re-exports carry a source (`export { x } from "y"`).
@@ -1036,7 +1041,11 @@ function staticEdges(
 
 	const edges: Array<string> = [];
 	for (const dependency of record.dependencies) {
-		if (dependency.kind !== "dynamic" && dependency.resolvedPath) {
+		if (
+			dependency.kind !== "dynamic" &&
+			dependency.kind !== "deferred-import" &&
+			dependency.resolvedPath
+		) {
 			edges.push(dependency.resolvedPath);
 		}
 	}

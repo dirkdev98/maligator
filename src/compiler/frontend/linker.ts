@@ -41,7 +41,12 @@ export interface ModuleLinkage {
 	 */
 	namespaceImports: Map<
 		string,
-		Array<{ binding: Binding; exports: Array<{ name: string; exporter: Binding }> }>
+		Array<{
+			binding: Binding;
+			module: string;
+			deferred: boolean;
+			exports: Array<{ name: string; exporter: Binding }>;
+		}>
 	>;
 
 	/** Export tables for module namespace objects keyed by exported module path. */
@@ -251,6 +256,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		file: SemanticFile;
 		binding: Binding;
 		module: string;
+		deferred: boolean;
 	}> = [];
 	// ResolveExport compares namespace re-exports by their target module, not by
 	// each importing module's local binding identity. Canonicalize those bindings
@@ -261,8 +267,9 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		file: SemanticFile,
 		binding: Binding,
 		module: string,
+		deferred: boolean,
 	) => {
-		namespaceToResolve.push({ file, binding, module });
+		namespaceToResolve.push({ file, binding, module, deferred });
 		namespaceTarget.set(binding, module);
 		if (!canonicalNamespaceBinding.has(module)) {
 			canonicalNamespaceBinding.set(module, binding);
@@ -336,7 +343,12 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 										names: [...cjsExportInfo(module).names].sort(),
 									});
 								} else {
-									recordNamespaceImport(file, binding, module);
+									recordNamespaceImport(
+										file,
+										binding,
+										module,
+										statement.phase === "defer",
+									);
 								}
 							}
 							continue;
@@ -429,7 +441,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 								names: [...cjsExportInfo(module).names].sort(),
 							});
 						} else {
-							recordNamespaceImport(file, nsBinding, module);
+							recordNamespaceImport(file, nsBinding, module, false);
 						}
 						moduleExports.named.set(nsName, { kind: "local", binding: nsBinding });
 						break;
@@ -627,9 +639,10 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		linkage.moduleNamespaces.set(modulePath, nsExports);
 	}
 
-	for (const { file, binding, module } of namespaceToResolve) {
+	for (const { file, binding, module, deferred } of namespaceToResolve) {
 		const nsExports: Array<{ name: string; exporter: Binding }> = [];
 		for (const name of exportNamesOf(module)) {
+			if (deferred && name === "then") continue;
 			const exporter = resolveExport(module, name);
 			if (exporter && exporter !== "ambiguous") {
 				nsExports.push({ name, exporter });
@@ -643,7 +656,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			}
 		}
 		const list = linkage.namespaceImports.get(file.path) ?? [];
-		list.push({ binding, exports: nsExports });
+		list.push({ binding, module, deferred, exports: nsExports });
 		linkage.namespaceImports.set(file.path, list);
 	}
 

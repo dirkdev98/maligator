@@ -1885,6 +1885,10 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_DIRECT_EVAL";
 		case "__dynamicImport":
 			return "MAL_INTRINSIC_DYNAMIC_IMPORT";
+		case "__configureDeferredNamespace":
+			return "MAL_INTRINSIC_CONFIGURE_DEFERRED_NAMESPACE";
+		case "__evaluateModuleSync":
+			return "MAL_INTRINSIC_EVALUATE_MODULE_SYNC";
 		case "__newDisposeCapability":
 			return "MAL_INTRINSIC_NEW_DISPOSE_CAPABILITY";
 		case "__addDisposableResource":

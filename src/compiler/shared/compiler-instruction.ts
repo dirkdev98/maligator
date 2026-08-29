@@ -1091,6 +1091,8 @@ export type CompilerIntrinsic =
 	// HostImportModuleDynamically entry point. Not a user-visible global; emitted
 	// for the syntactic ImportCall form `import(specifier)`.
 	| "__dynamicImport"
+	| "__configureDeferredNamespace"
+	| "__evaluateModuleSync"
 	| "__newDisposeCapability"
 	| "__addDisposableResource"
 	| "__disposeResources";

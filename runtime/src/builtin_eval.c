@@ -12,6 +12,7 @@
 #include "function_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "module_namespace_object.h"
 #include "promise_object.h"
 #include "typed_array_object.h"
 #include "value.h"
@@ -694,6 +695,71 @@ static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const
     return promise_value;
 }
 
+static MalValue mal_builtin_configure_deferred_namespace(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    if (arg_count < 4 ||
+        !mal_value_is_module_namespace_object(args[0]) ||
+        (!mal_value_is_callable(args[1]) && !mal_value_is_undefined(args[1])) ||
+        !mal_value_is_int32(args[2]) ||
+        !mal_value_is_int32(args[3])) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Invalid deferred module namespace configuration"
+        );
+        return mal_value_new_undefined();
+    }
+    mal_module_namespace_configure_deferred(
+        mal_value_to_module_namespace_object(args[0]),
+        args[1],
+        mal_value_to_i32(args[2]),
+        mal_value_to_i32(args[3])
+    );
+    return args[0];
+}
+
+static MalValue mal_builtin_evaluate_module_sync(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    if (arg_count < 4 ||
+        (!mal_value_is_callable(args[0]) && !mal_value_is_undefined(args[0])) ||
+        !mal_value_is_int32(args[1]) ||
+        !mal_value_is_int32(args[2])) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Invalid synchronous module evaluation request"
+        );
+        return mal_value_new_undefined();
+    }
+    if (!mal_module_evaluate_sync(
+            vm,
+            args[0],
+            mal_value_to_i32(args[1]),
+            mal_value_to_i32(args[2]),
+            mal_value_is_truthy(args[3]))) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_undefined();
+}
+
 void mal_intrinsics_init_eval(MalVm *vm, MalObject *global_this) {
     // Defines `eval` on globalThis with { writable, configurable } — the spec
     // attributes for the global eval function (non-enumerable) — and records it
@@ -714,4 +780,20 @@ void mal_intrinsics_init_eval(MalVm *vm, MalObject *global_this) {
         mal_native_function_object_new_arity(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, "import"), 1, mal_builtin_dynamic_import));
+    vm->intrinsics[MAL_INTRINSIC_CONFIGURE_DEFERRED_NAMESPACE] =
+        mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(
+                &vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, ""),
+                4,
+                mal_builtin_configure_deferred_namespace));
+    vm->intrinsics[MAL_INTRINSIC_EVALUATE_MODULE_SYNC] =
+        mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(
+                &vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, ""),
+                4,
+                mal_builtin_evaluate_module_sync));
 }

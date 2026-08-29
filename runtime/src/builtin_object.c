@@ -358,16 +358,26 @@ MalDefineOwnStatus mal_builtin_object_try_define(
     if (!mal_builtin_object_to_property_descriptor(vm, descriptor_value, &parsed)) {
         return MAL_DEFINE_OWN_REJECTED;
     }
-    MalValue roots[3] = {
+    MalValue roots[5] = {
+        mal_value_from_object(target), key.value,
         parsed.desc.value, parsed.desc.getter, parsed.desc.setter,
     };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 3);
-    parsed.desc.value = roots[0];
-    parsed.desc.getter = roots[1];
-    parsed.desc.setter = roots[2];
-    MalDefineOwnStatus status =
-        mal_builtin_object_try_define_parsed(vm, target, key, &parsed);
+    mal_gc_root(&roots_span, roots, 5);
+    target = mal_value_to_object(roots[0]);
+    key.value = roots[1];
+    parsed.desc.value = roots[2];
+    parsed.desc.getter = roots[3];
+    parsed.desc.setter = roots[4];
+    MalDefineOwnStatus status;
+    if (target->header.type == MAL_HEAP_MODULE_NAMESPACE_OBJECT) {
+        status = mal_builtin_object_define_own_property_parsed(
+                     vm, roots[0], key, &parsed)
+            ? MAL_DEFINE_OWN_APPLIED
+            : MAL_DEFINE_OWN_REJECTED;
+    } else {
+        status = mal_builtin_object_try_define_parsed(vm, target, key, &parsed);
+    }
     mal_gc_unroot(&roots_span);
     return status;
 }

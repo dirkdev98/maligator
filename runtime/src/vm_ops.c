@@ -43,6 +43,27 @@
 MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
+
+static bool mal_module_namespace_key_triggers(
+    MalVm *vm,
+    MalModuleNamespaceObject *ns,
+    MalKey key
+) {
+    if (!ns->deferred || key.kind == MAL_KEY_SYMBOL) return false;
+    return key.kind != MAL_KEY_STRING ||
+        !mal_string_equals(
+            mal_value_to_string(key.value),
+            mal_intrinsic_ascii(vm, "then"));
+}
+
+static bool mal_module_namespace_ensure_for_key(
+    MalVm *vm,
+    MalModuleNamespaceObject *ns,
+    MalKey key
+) {
+    return !mal_module_namespace_key_triggers(vm, ns, key) ||
+        mal_module_namespace_ensure_evaluated(vm, ns);
+}
 static bool mal_vm_key_is_prototype(MalKey key);
 
 static u64 g_stack_object_materializations = 0;
@@ -424,6 +445,7 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
 
     if (mal_value_is_module_namespace_object(object_value)) {
         MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(object_value);
+        if (!mal_module_namespace_ensure_evaluated(vm, ns)) return false;
         mal_array_object_fresh_dense_reserve_exact(
             keys, (u32) ns->export_count + 1);
         for (i32 i = 0; i < ns->export_count; i++) {
@@ -547,11 +569,13 @@ bool mal_vm_get_own_property(
 
     if (mal_value_is_module_namespace_object(object_value)) {
         MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(object_value);
+        if (!mal_module_namespace_ensure_for_key(vm, ns, key)) return false;
         MalKey tag = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG);
         if (key.kind == MAL_KEY_SYMBOL && key.value == tag.value) {
             *desc_out = (MalPropertyDesc) {
                 .flags = MAL_PROPERTY_NONE,
-                .value = mal_value_from_string(mal_intrinsic_ascii(vm, "Module")),
+                .value = mal_value_from_string(
+                    mal_intrinsic_ascii(vm, ns->deferred ? "Deferred Module" : "Module")),
                 .getter = mal_value_new_undefined(),
                 .setter = mal_value_new_undefined(),
             };
@@ -3221,11 +3245,13 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
 
     if (mal_value_is_module_namespace_object(object_value)) {
         MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(object_value);
+        if (!mal_module_namespace_ensure_for_key(vm, ns, key)) return false;
 
-        // @@toStringTag is "Module" (non-enumerable, non-configurable).
+        // The phase-specific tag remains non-enumerable and non-configurable.
         MalKey tag = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG);
         if (key.kind == MAL_KEY_SYMBOL && key.value == tag.value) {
-            *value_out = mal_value_from_string(mal_intrinsic_ascii(vm, "Module"));
+            *value_out = mal_value_from_string(
+                mal_intrinsic_ascii(vm, ns->deferred ? "Deferred Module" : "Module"));
             return true;
         }
 
@@ -3675,6 +3701,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
     if (mal_value_is_proxy_object(target)) {
         return mal_proxy_set(vm, mal_value_to_proxy_object(target), key, value, receiver);
     }
+    if (mal_value_is_module_namespace_object(target)) return false;
 
     if (target == receiver && mal_value_is_object(target) &&
         mal_object_is_locked_primordial(mal_value_to_object(target))) {
@@ -5346,6 +5373,9 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
     // A module namespace enumerates its sorted string exports (all enumerable).
     if (mal_value_is_module_namespace_object(source)) {
         MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(source);
+        if (!mal_module_namespace_ensure_evaluated(vm, ns)) {
+            return mal_value_from_array_object(result);
+        }
         for (i32 i = 0; i < ns->export_count; i++) {
             mal_array_object_store(
                 result,
@@ -6241,6 +6271,16 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
         if (!ok && vm->completion.kind != MAL_COMPLETION_THROW) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot define property on proxy");
         }
+        return;
+    }
+
+    if (mal_value_is_module_namespace_object(object_value)) {
+        MalModuleNamespaceObject *ns =
+            mal_value_to_module_namespace_object(object_value);
+        if (!mal_module_namespace_ensure_for_key(vm, ns, key)) return;
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot create property on module namespace object");
         return;
     }
 
