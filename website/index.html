@@ -1271,7 +1271,7 @@ Mal.serve({
 		<!-- site-data:start -->
 		<script id="site-data" type="application/json">
 			{
-				"version": "0.1.0-alpha.21",
+				"version": "0.1.0-alpha.22",
 				"test262": [
 					{
 						"commit": "b0cffda1",
@@ -1364,13 +1364,13 @@ Mal.serve({
 						"percent": 94.16738213445818
 					},
 					{
-						"commit": "ec1c04d6",
-						"date": "2026-08-28T15:46:47+02:00",
+						"commit": "9265df3b",
+						"date": "2026-08-29T12:59:27+02:00",
 						"corpus": "3655e746",
-						"passed": 50465,
-						"failed": 3113,
+						"passed": 51637,
+						"failed": 1941,
 						"skipped": 0,
-						"percent": 94.18977938706186
+						"percent": 96.37724439135465
 					}
 				],
 				"javascript": [
@@ -1441,6 +1441,23 @@ Mal.serve({
 						"openCompiledMs": 2075.237792,
 						"closedInterpretedMs": 4282.227208,
 						"openInterpretedMs": 5774.347709
+					},
+					{
+						"commit": "86447da8",
+						"date": "2026-08-29T20:59:44+02:00",
+						"workload": "javascript-v1",
+						"runs": 7,
+						"nativeBuild": {
+							"optimizationFlags": ["-O2", "-g0", "-flto=thin"],
+							"lto": true,
+							"strip": true,
+							"compilerVersion": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+							"target": "aarch64-apple-darwin"
+						},
+						"closedCompiledMs": 1439.722125,
+						"openCompiledMs": 2165.996458,
+						"closedInterpretedMs": 4346.317083,
+						"openInterpretedMs": 5530.485667
 					}
 				],
 				"selfCompile": [
@@ -2089,10 +2106,44 @@ Mal.serve({
 						"platform": "darwin",
 						"arch": "arm64",
 						"nodeVersion": "v26.7.0"
+					},
+					{
+						"commit": "86447da8",
+						"date": "2026-08-29T20:59:44+02:00",
+						"world": "closed",
+						"maligatorMs": 145483.090375,
+						"nodeMs": 27744.291875,
+						"maligatorPhases": {
+							"graphMs": 665,
+							"semanticMs": 1593,
+							"lowerSemanticMs": 15344,
+							"optimizeMs": 117715,
+							"regallocMs": 0,
+							"lowerMs": 1088,
+							"emitMs": 8630,
+							"writeMs": 103
+						},
+						"nodePhases": {
+							"graphMs": 168,
+							"semanticMs": 232,
+							"lowerSemanticMs": 3230,
+							"optimizeMs": 22176,
+							"regallocMs": 0,
+							"lowerMs": 362,
+							"emitMs": 1383,
+							"writeMs": 97
+						},
+						"runs": 7,
+						"units": 10,
+						"maligatorCodeUnits": 66039202,
+						"nodeCodeUnits": 66039202,
+						"platform": "darwin",
+						"arch": "arm64",
+						"nodeVersion": "v26.7.0"
 					}
 				],
 				"binary": {
-					"binaryBytes": 3108200,
+					"binaryBytes": 3141768,
 					"binaryPlatform": "aarch64-apple-darwin",
 					"binaryProfile": "production"
 				}
