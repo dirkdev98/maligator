@@ -16,6 +16,5 @@ export default defineBuild({
 		temporal: false,
 		intl: { enabled: false },
 	},
-	host: { scheduler: "single" },
 	surface: { webPlatform: true, node: true, maligator: true },
 });

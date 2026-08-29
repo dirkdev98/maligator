@@ -262,7 +262,7 @@ explicitly:
 
 `maligator test` and supported `maligator run` profiles use the development runtime
 embedded in the platform CLI and do not require a native toolchain. Native `build`
-commands—and development runs using bundled assets, Intl, or multiprocessing—require:
+commands—and development runs using bundled assets or Intl—require:
 
 - A C23 compiler and archive tool: Apple clang, clang 19 or newer, or GCC 15 or
   newer

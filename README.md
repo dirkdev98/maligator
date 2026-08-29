@@ -164,7 +164,6 @@ export default defineBuild({
 			languages: [],
 		},
 	},
-	host: { scheduler: "single" },
 	surface: {
 		webPlatform: false,
 		node: productionNodeSurface,
@@ -182,22 +181,21 @@ configuration remains the runtime authority.
 
 All fields are optional. Product defaults are:
 
-| Field                   | Default    | Meaning                                                                                         |
-| ----------------------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| `entry`                 | none       | Project-relative entry module                                                                   |
-| `outputName`            | inferred   | Safe single-component executable name                                                           |
-| `assets`                | `{}`       | Unconditionally embedded file and directory resources                                           |
-| `engine.eval`           | `false`    | Runtime-disabled by default; `true` embeds the compiler; `"compile-check"` rejects visible uses |
-| `engine.realms`         | `false`    | Include Realm support                                                                           |
-| `engine.regexp`         | `true`     | Include the RegExp engine                                                                       |
-| `engine.temporal`       | `false`    | Include Temporal plus calendar and time-zone data                                               |
-| `engine.intl.enabled`   | `false`    | Include Intl and ICU4X data                                                                     |
-| `engine.intl.features`  | `[]`       | All Intl services when Intl is enabled; a non-empty list selects services                       |
-| `engine.intl.languages` | `[]`       | All locales; locale subsetting is not implemented yet                                           |
-| `host.scheduler`        | `"single"` | Host scheduler selection; multiprocessing is reserved                                           |
-| `surface.webPlatform`   | `false`    | Include the WinterTC/web host surface                                                           |
-| `surface.node`          | `false`    | Include Maligator's curated `node:*` compatibility surface                                      |
-| `surface.maligator`     | `true`     | Include the Maligator host surface                                                              |
+| Field                   | Default  | Meaning                                                                                         |
+| ----------------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `entry`                 | none     | Project-relative entry module                                                                   |
+| `outputName`            | inferred | Safe single-component executable name                                                           |
+| `assets`                | `{}`     | Unconditionally embedded file and directory resources                                           |
+| `engine.eval`           | `false`  | Runtime-disabled by default; `true` embeds the compiler; `"compile-check"` rejects visible uses |
+| `engine.realms`         | `false`  | Include Realm support                                                                           |
+| `engine.regexp`         | `true`   | Include the RegExp engine                                                                       |
+| `engine.temporal`       | `false`  | Include Temporal plus calendar and time-zone data                                               |
+| `engine.intl.enabled`   | `false`  | Include Intl and ICU4X data                                                                     |
+| `engine.intl.features`  | `[]`     | All Intl services when Intl is enabled; a non-empty list selects services                       |
+| `engine.intl.languages` | `[]`     | All locales; locale subsetting is not implemented yet                                           |
+| `surface.webPlatform`   | `false`  | Include the WinterTC/web host surface                                                           |
+| `surface.node`          | `false`  | Include Maligator's curated `node:*` compatibility surface                                      |
+| `surface.maligator`     | `true`   | Include the Maligator host surface                                                              |
 
 Supported Intl feature names are `collator`, `number-format`, `date-time-format`,
 `plural-rules`, `list-format`, `segmenter`, `display-names`,

@@ -136,7 +136,6 @@ export interface CompilerInstallation {
 		realms: boolean;
 		intl: boolean;
 		externalAssets: boolean;
-		scheduler: "single" | "multiprocessing";
 	};
 	evalCompiler:
 		| { kind: "source"; sourceDirectory: string; entrypoint: string }
@@ -188,7 +187,6 @@ export function productCompilerInstallation(
 						realms: true,
 						intl: false,
 						externalAssets: true,
-						scheduler: "single" as const,
 					},
 				}),
 		evalCompiler: { kind: "prebuilt", wirePath: path.resolve(compilerWirePath) },
@@ -320,8 +318,7 @@ function compatibleDevelopmentRunner(
 		(config.surface.webPlatform && !runner.webPlatform) ||
 		(config.surface.node && !runner.node) ||
 		(config.engine.realms && !runner.realms) ||
-		(config.engine.intl.enabled && !runner.intl) ||
-		config.host.scheduler !== runner.scheduler
+		(config.engine.intl.enabled && !runner.intl)
 	) {
 		return undefined;
 	}

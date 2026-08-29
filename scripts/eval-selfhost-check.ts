@@ -64,7 +64,6 @@ export default defineBuild({
 		regexp: true,
 		intl: { enabled: true, features: [], languages: [] },
 	},
-	host: { scheduler: "single" },
 	surface: { webPlatform: true, node: false, maligator: true },
 });
 `,

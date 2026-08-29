@@ -41,7 +41,6 @@ describe("resolveBuildConfig defaults", () => {
 		expect(config.engine.primordials).toBe("locked");
 		expect(config.engine.eval).toBe(false);
 		expect(config.engine.intl.enabled).toBe(false);
-		expect(config.host.scheduler).toBe("single");
 		expect(config.surface).toEqual({ webPlatform: false, node: false, maligator: true });
 		expect(config.assets).toEqual({});
 		expect(config.modules.aliases).toEqual({});
@@ -86,18 +85,23 @@ describe("loadBuildConfig", () => {
 		expect(loadBuildConfig(undefined, dir).engine.eval).toBe(true);
 	});
 
-	it("accepts the full issue #2 shape", () => {
+	it("accepts the complete supported shape", () => {
 		const dir = tmpdir();
 		writeConfig(
 			dir,
 			JSON.stringify({
 				entry: "src/main.ts",
 				engine: { eval: false, intl: { enabled: false, languages: [] } },
-				host: { scheduler: "single" },
 				surface: { webPlatform: false, node: false, maligator: true },
 			}),
 		);
 		expect(loadBuildConfig(undefined, dir).engine.eval).toBe(false);
+	});
+
+	it("rejects the removed host scheduler option", () => {
+		const dir = tmpdir();
+		writeConfig(dir, JSON.stringify({ host: { scheduler: "single" } }));
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(/unknown key 'host'/);
 	});
 
 	it("accepts exact module aliases", () => {

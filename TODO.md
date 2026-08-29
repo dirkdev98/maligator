@@ -209,10 +209,6 @@ authority-closed guards and fallbacks were actually removed.
       end once ownership analysis proves their lifetime. Retain finalization for every
       uncertain path.
 
-- [ ] Implement or explicitly reject host.scheduler: multiprocessing based on its
-      relationship to isolates, actors, process lifetime, and resource limits. Do not
-      leave a selectable configuration with undefined semantics.
-
 - [ ] Add Intl locale subsetting with deterministic configuration and cache identity.
       Missing data must follow an explicit failure or fallback policy.
 

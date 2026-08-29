@@ -19,17 +19,16 @@ export {
 
 /**
  * The `maligator.build.ts` build configuration (GitHub issue #2). The file is
- * the source of truth for engine capabilities, host execution mode, and the API
- * surface exposed to user code. The resolved configuration controls native feature
- * selection and host-module policy; unsupported combinations are rejected before
- * compilation.
+ * the source of truth for engine capabilities and the API surface exposed to user
+ * code. The resolved configuration controls native feature selection and host-module
+ * policy; unsupported combinations are rejected before compilation.
  *
  * Every field is optional in the file — {@link resolveBuildConfig} fills defaults.
  * Defaults are deliberately conservative (the "product" defaults): eval OFF, Intl
- * OFF, web platform OFF, single-threaded scheduler, only the Maligator surface. The
- * one exception is RegExp, which is core ECMAScript and so defaults ON (power users
- * disable it explicitly). Internal tooling (the native test harness, the eval
- * self-host scripts, the test262 runner) opts back in explicitly.
+ * OFF, web platform OFF, only the Maligator surface. The one exception is RegExp,
+ * which is core ECMAScript and so defaults ON (power users disable it explicitly).
+ * Internal tooling (the native test harness, the eval self-host scripts, the test262
+ * runner) opts back in explicitly.
  */
 /** A build config with every default applied — what the compiler consumes. */
 export interface ResolvedBuildConfig {
@@ -45,7 +44,6 @@ export interface ResolvedBuildConfig {
 		temporal: boolean;
 		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
 	};
-	host: { scheduler: "single" | "multiprocessing" };
 	surface: { webPlatform: boolean; node: boolean; maligator: boolean };
 }
 
@@ -153,15 +151,6 @@ const stringRecordLeaf: Leaf = {
 			"a record of non-empty string replacements",
 		),
 };
-const schedulerLeaf: Leaf = {
-	leaf: (value, at) =>
-		expect(
-			value === "single" || value === "multiprocessing",
-			at,
-			`"single" or "multiprocessing"`,
-		),
-};
-
 const assetsLeaf: Leaf = {
 	leaf: (value, at) => {
 		expect(
@@ -234,7 +223,6 @@ const CONFIG_SCHEMA: ObjectSchema = {
 				},
 			},
 		},
-		host: { object: { scheduler: schedulerLeaf } },
 		surface: {
 			object: { webPlatform: booleanLeaf, node: booleanLeaf, maligator: booleanLeaf },
 		},
@@ -294,7 +282,6 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 				languages: config.engine?.intl?.languages ?? [],
 			},
 		},
-		host: { scheduler: config.host?.scheduler ?? "single" },
 		surface: {
 			webPlatform: config.surface?.webPlatform ?? false,
 			node: config.surface?.node ?? false,
@@ -572,8 +559,7 @@ function shortHash(value: unknown): string {
  * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks),
  * `engine.temporal` (flips `-DMAL_TEMPORAL` + calendar/time-zone support),
  * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether web_url.c compiles), and
- * `surface.node` (flips `-DMAL_NODE` + the node host built-in surface). Not-yet-wired
- * fields (host.scheduler) are excluded so unrelated edits do not change the name.
+ * `surface.node` (flips `-DMAL_NODE` + the node host built-in surface).
  * Returns "" for the canonical build (eval on, Temporal on, Intl on, all
  * locales, web on, node OFF) so it keeps the unsuffixed binary name — node defaults
  * off and every internal-tooling build is node-off, so node-off stays canonical.

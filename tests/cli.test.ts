@@ -305,7 +305,6 @@ describe("command shell", () => {
 			node: true,
 			realms: true,
 			intl: false,
-			scheduler: "single",
 		});
 	});
 

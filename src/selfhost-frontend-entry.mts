@@ -45,7 +45,6 @@ const bytes = compileEntrypointToBuffer(inputPath, {
 			temporal: false,
 			intl: { enabled: false, features: [], languages: [] },
 		},
-		host: { scheduler: "single" },
 		surface: { webPlatform: false, node: true, maligator: true },
 	},
 	runPhase: runProfilePhase,

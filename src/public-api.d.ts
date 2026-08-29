@@ -47,9 +47,6 @@ export interface MaligatorBuildConfig {
 			languages?: Array<string>;
 		};
 	};
-	host?: {
-		scheduler?: "single" | "multiprocessing";
-	};
 	surface?: {
 		webPlatform?: boolean;
 		node?: boolean;
