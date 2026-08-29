@@ -43,10 +43,11 @@ explicit entry overrides `config.entry`. Without a config, an explicit entry use
 the conservative product defaults. `build` and `run` fail with an `init` suggestion
 when neither source supplies an entry.
 
-`run` compiles to a portable development image and executes it in a fresh VM using
-the runtime embedded in the distributed platform CLI. The single-process,
-asset-free, Intl-disabled development profile does not require a C or Rust
-toolchain. It forwards every
+`run` compiles to a portable development image and executes it in a fresh VM using a
+matching compile-time-specialized runtime embedded in the distributed platform CLI.
+Locked and mutable primordial profiles with configured assets, the Web and Node
+surfaces, and Realm support do not require a C or Rust toolchain when Intl is
+disabled. It forwards every
 argument after `--` without re-parsing it and propagates the application's exit
 status or terminating signal.
 

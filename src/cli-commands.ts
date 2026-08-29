@@ -127,20 +127,24 @@ export interface CompilerInstallation {
 	nodeGlobalsPath: string;
 	/** Cache identity of the active TypeScript erasure frontend. */
 	frontendIdentity: string;
-	/** Prebuilt multi-call executable capable of running development wire images. */
-	developmentRunner?: {
+	/** Prebuilt executables capable of running compile-time-specialized wire images. */
+	developmentRunners?: Array<{
 		executablePath: string;
+		inProcess: boolean;
+		wireProtocol: "product" | "wire-list";
 		primordials: "locked" | "mutable";
 		webPlatform: boolean;
 		node: boolean;
 		realms: boolean;
 		intl: boolean;
 		externalAssets: boolean;
-	};
+	}>;
 	evalCompiler:
 		| { kind: "source"; sourceDirectory: string; entrypoint: string }
 		| { kind: "prebuilt"; wirePath: string };
 }
+
+type DevelopmentRunner = NonNullable<CompilerInstallation["developmentRunners"]>[number];
 
 export function developmentCompilerInstallation(
 	moduleDirectory: string,
@@ -167,6 +171,7 @@ export function productCompilerInstallation(
 	licensePath?: string,
 	developmentRunnerPath?: string,
 	nodeGlobalsPath?: string,
+	mutableDevelopmentRunnerPath?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
@@ -179,15 +184,34 @@ export function productCompilerInstallation(
 		...(developmentRunnerPath === undefined
 			? {}
 			: {
-					developmentRunner: {
-						executablePath: path.resolve(developmentRunnerPath),
-						primordials: "locked" as const,
-						webPlatform: true,
-						node: true,
-						realms: true,
-						intl: false,
-						externalAssets: true,
-					},
+					developmentRunners: [
+						{
+							executablePath: path.resolve(developmentRunnerPath),
+							inProcess: true,
+							wireProtocol: "product" as const,
+							primordials: "locked" as const,
+							webPlatform: true,
+							node: true,
+							realms: true,
+							intl: false,
+							externalAssets: true,
+						},
+						...(mutableDevelopmentRunnerPath === undefined
+							? []
+							: [
+									{
+										executablePath: path.resolve(mutableDevelopmentRunnerPath),
+										inProcess: false,
+										wireProtocol: "wire-list" as const,
+										primordials: "mutable" as const,
+										webPlatform: true,
+										node: true,
+										realms: true,
+										intl: false,
+										externalAssets: true,
+									},
+								]),
+					],
 				}),
 		evalCompiler: { kind: "prebuilt", wirePath: path.resolve(compilerWirePath) },
 	};
@@ -309,20 +333,16 @@ function selectToolchain(
 function compatibleDevelopmentRunner(
 	config: ResolvedBuildConfig,
 	context: CommandContext,
-): NonNullable<CompilerInstallation["developmentRunner"]> | undefined {
-	const runner = context.installation.developmentRunner;
-	if (
-		runner === undefined ||
-		(Object.keys(config.assets).length > 0 && !runner.externalAssets) ||
-		config.engine.primordials !== runner.primordials ||
-		(config.surface.webPlatform && !runner.webPlatform) ||
-		(config.surface.node && !runner.node) ||
-		(config.engine.realms && !runner.realms) ||
-		(config.engine.intl.enabled && !runner.intl)
-	) {
-		return undefined;
-	}
-	return runner;
+): DevelopmentRunner | undefined {
+	return context.installation.developmentRunners?.find(
+		(runner) =>
+			(Object.keys(config.assets).length === 0 || runner.externalAssets) &&
+			config.engine.primordials === runner.primordials &&
+			(!config.surface.webPlatform || runner.webPlatform) &&
+			(!config.surface.node || runner.node) &&
+			(!config.engine.realms || runner.realms) &&
+			(!config.engine.intl.enabled || runner.intl),
+	);
 }
 
 export function applicationDriverPath(
@@ -556,22 +576,35 @@ function compileAndBuild(
 		);
 		const surfaceMask =
 			(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
+		const runArguments =
+			packagedRunner.wireProtocol === "product"
+				? [
+						assetManifest === undefined
+							? "--maligator-internal-run-wire"
+							: "--maligator-internal-run-wire-assets",
+						String(surfaceMask),
+						String(wirePaths.length),
+						...(assetManifest === undefined ? [] : [assetManifest]),
+						entrypointPath,
+						...wirePaths,
+						...command.programArgs,
+					]
+				: [
+						assetManifest === undefined
+							? "--maligator-internal-run-wires"
+							: "--maligator-internal-run-wires-assets",
+						String(wirePaths.length),
+						...(assetManifest === undefined ? [] : [assetManifest]),
+						entrypointPath,
+						...wirePaths,
+						...command.programArgs,
+					];
 		reporter.detail("Execution backend", "packaged development runtime");
 		reporter.detail("Development images", wirePaths.join(", "));
 		reporter.complete("Ready", packagedRunner.executablePath, false);
 		return {
 			binaryPath: packagedRunner.executablePath,
-			runArguments: [
-				assetManifest === undefined
-					? "--maligator-internal-run-wire"
-					: "--maligator-internal-run-wire-assets",
-				String(surfaceMask),
-				String(wirePaths.length),
-				...(assetManifest === undefined ? [] : [assetManifest]),
-				entrypointPath,
-				...wirePaths,
-				...command.programArgs,
-			],
+			runArguments,
 			dependencies,
 		};
 	}
@@ -1116,12 +1149,10 @@ export async function devCommand(
 
 const PROFILED_TEST_RESULT_PREFIX = "__MALIGATOR_TEST_RESULT__";
 
-function executeIsolatedTests(
-	command: TestCommand,
+function buildIsolatedTestRunner(
 	context: CommandContext,
 	config: ResolvedBuildConfig,
-): TestCommandSummary {
-	const compiled = prepareIsolatedTestCommand(command, context, config);
+): string {
 	const derivation = buildDerivationFromConfig(config);
 	let toolchain: Toolchain;
 	try {
@@ -1157,11 +1188,18 @@ function executeIsolatedTests(
 		features: derivation.features,
 		compilerBake,
 	});
-	const runner = buildDevelopmentRunner(
-		nativeContext,
-		false,
-		derivation.cacheSuffix,
-	).binaryPath;
+	return buildDevelopmentRunner(nativeContext, false, derivation.cacheSuffix).binaryPath;
+}
+
+function executeIsolatedTests(
+	command: TestCommand,
+	context: CommandContext,
+	config: ResolvedBuildConfig,
+	packagedRunner?: DevelopmentRunner,
+): TestCommandSummary {
+	const compiled = prepareIsolatedTestCommand(command, context, config);
+	const runner =
+		packagedRunner?.executablePath ?? buildIsolatedTestRunner(context, config);
 	const wirePaths =
 		"wires" in compiled
 			? compiled.wires.map((wire) => wire.path)
@@ -1448,14 +1486,12 @@ export async function runCli(
 			let result: Awaited<ReturnType<typeof executeTestCommand>>;
 			try {
 				const config = loadCommandConfig(command, context.stripTypes);
-				// In-process interpretation only exists when this CLI is already hosted by a
-				// development runner matching the project policy; every other installation,
-				// including the Node-hosted source CLI, needs an isolated child runner.
+				const developmentRunner = compatibleDevelopmentRunner(config, context);
 				result = command.profile
 					? executeProfiledTests(command, context, config)
-					: compatibleDevelopmentRunner(config, context) === undefined
-						? executeIsolatedTests(command, context, config)
-						: await executeTestCommand(command, context, config);
+					: developmentRunner?.inProcess === true
+						? await executeTestCommand(command, context, config)
+						: executeIsolatedTests(command, context, config, developmentRunner);
 			} catch (error) {
 				commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
 			}

@@ -13,7 +13,7 @@ import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compil
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
-import { buildLocalBinary } from "./local-build.ts";
+import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { requireToolchain } from "./toolchain.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
@@ -33,10 +33,24 @@ export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 	"vendor/sqlite/**",
 ];
 
+function productRuntimeConfig(primordials: "locked" | "mutable") {
+	return {
+		engine: {
+			primordials,
+			eval: true,
+			realms: true,
+			regexp: true,
+			intl: { enabled: false },
+		},
+		surface: { webPlatform: true, node: true, maligator: true },
+	};
+}
+
 export function productCliConfig(
 	repositoryRoot: string,
 	compilerWirePath: string,
 	compilerProducerDigestsPath: string,
+	mutableDevelopmentRunnerPath: string,
 ): ResolvedBuildConfig {
 	return resolveBuildConfig({
 		assets: {
@@ -44,6 +58,10 @@ export function productCliConfig(
 			compilerProducerDigests: {
 				type: "file",
 				path: path.resolve(compilerProducerDigestsPath),
+			},
+			mutableDevelopmentRunner: {
+				type: "file",
+				path: path.resolve(mutableDevelopmentRunnerPath),
 			},
 			testRuntime: {
 				type: "file",
@@ -60,8 +78,7 @@ export function productCliConfig(
 				include: [...PRODUCT_RUNTIME_ASSET_INCLUDE],
 			},
 		},
-		engine: { eval: true, realms: true, regexp: true, intl: { enabled: false } },
-		surface: { webPlatform: true, node: true, maligator: true },
+		...productRuntimeConfig("locked"),
 	});
 }
 
@@ -101,11 +118,42 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 			),
 		)}\n`,
 	);
+	const production = options.production ?? true;
+	const mutableRunnerConfig = resolveBuildConfig(productRuntimeConfig("mutable"));
+	const mutableRunnerDerivation = buildDerivationFromConfig(mutableRunnerConfig);
+	progress("selecting the native toolchain");
+	const toolchain = requireToolchain({
+		needsCxx: mutableRunnerDerivation.features.cargoFeatures.includes("url"),
+		rustDir: path.join(runtimeDirectory, "rust"),
+		target: options.target,
+	});
+	const plan = selectNativeBuildPlan(toolchain, production);
+	const compilerBake = { kind: "prebuilt" as const, path: compilerWirePath };
+	progress("building the mutable development runner");
+	const mutableDevelopmentRunnerPath = buildDevelopmentRunner(
+		resolveNativeBuildContext({
+			toolchain,
+			plan,
+			runtimeDirectory,
+			features: {
+				...mutableRunnerDerivation.features,
+				developmentApiEnabled: true,
+			},
+			compilerBake,
+			onCacheEvent: (event) =>
+				progress(
+					`mutable runner ${event.artifact} cache ${event.hit ? "hit" : "miss"}: ${event.path}`,
+				),
+		}),
+		false,
+		mutableRunnerDerivation.cacheSuffix,
+	).binaryPath;
 
 	const config = productCliConfig(
 		repositoryRoot,
 		compilerWirePath,
 		compilerProducerDigestsPath,
+		mutableDevelopmentRunnerPath,
 	);
 	progress("analyzing and compiling the product CLI");
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
@@ -136,20 +184,12 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	});
 	progress("product CLI translation units ready");
 	const derivation = buildDerivationFromConfig(config);
-	progress("selecting the native toolchain");
-	const toolchain = requireToolchain({
-		needsCxx: derivation.features.cargoFeatures.includes("url"),
-		rustDir: path.join(runtimeDirectory, "rust"),
-		target: options.target,
-	});
-	const production = options.production ?? true;
-	const plan = selectNativeBuildPlan(toolchain, production);
 	const context = resolveNativeBuildContext({
 		toolchain,
 		plan,
 		runtimeDirectory,
 		features: { ...derivation.features, developmentApiEnabled: true },
-		compilerBake: { kind: "prebuilt", path: compilerWirePath },
+		compilerBake,
 		onCacheEvent: (event) =>
 			progress(`${event.artifact} cache ${event.hit ? "hit" : "miss"}: ${event.path}`),
 	});

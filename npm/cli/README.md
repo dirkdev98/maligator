@@ -57,11 +57,12 @@ maligator test [path ...] [--run name] [--shuffle [seed]] [--repeat count] [--ba
 Run commands from the project root. Maligator does not search parent directories
 for configuration.
 
-`run` and `dev` use the runtime embedded in the platform package for the supported
-single-process, asset-free, Intl-disabled development profile, so they do not need
-a local native toolchain. `dev` retains compiler identities between edits and
-restarts a fresh application VM after every successful rebuild. Build failures keep
-the watcher alive for recovery on the next edit.
+`run` and `dev` use compile-time-specialized runtimes embedded in the platform
+package for locked or mutable primordials, configured assets, the Web and Node
+surfaces, and Realm support when Intl is disabled. Those profiles do not need a local
+native toolchain. `dev` retains compiler identities between edits and restarts a fresh
+application VM after every successful rebuild. Build failures keep the watcher alive
+for recovery on the next edit.
 
 ## Testing
 
@@ -153,10 +154,10 @@ package declarations explicitly:
 Normal `maligator build`, `maligator run`, and `maligator test` commands share a
 content-addressed portable VM definition store. On a valid hit, Maligator skips
 parsing, module-graph construction, semantic analysis, optimization, register
-allocation, and VM lowering. For the single-process, asset-free, Intl-disabled
-development profile, `run` executes the restored definition with the isolated
-runtime embedded in the platform CLI; it does not generate C or invoke a native
-toolchain. Normal and production `build` commands emit
+allocation, and VM lowering. For supported Intl-disabled development profiles, `run`
+executes the restored definition with a matching compile-time-specialized runtime
+embedded in the platform CLI; it does not generate C or invoke a native toolchain.
+Normal and production `build` commands emit
 native translation units from the same restored definition. Those units and the native driver are
 compiled into independently content-addressed objects, so unchanged objects can
 be relinked without repeating C compilation. The final link still runs, and
@@ -262,7 +263,7 @@ explicitly:
 
 `maligator test` and supported `maligator run` profiles use the development runtime
 embedded in the platform CLI and do not require a native toolchain. Native `build`
-commands—and development runs using bundled assets or Intl—require:
+commands—and development runs using Intl—require:
 
 - A C23 compiler and archive tool: Apple clang, clang 19 or newer, or GCC 15 or
   newer

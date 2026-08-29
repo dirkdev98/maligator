@@ -284,6 +284,8 @@ describe("command shell", () => {
 			"test-runtime.mjs",
 			undefined,
 			"bin/maligator",
+			undefined,
+			"bin/maligator-mutable",
 		);
 		expect(installation.runtimeDirectory).toBe(path.resolve("relative-runtime"));
 		expect(installation.testModulePath).toBe(path.resolve("test-runtime.mjs"));
@@ -297,15 +299,30 @@ describe("command shell", () => {
 			kind: "prebuilt",
 			wirePath: path.resolve("compiler.malw"),
 		});
-		expect(installation.developmentRunner).toEqual({
-			executablePath: path.resolve("bin/maligator"),
-			externalAssets: true,
-			primordials: "locked",
-			webPlatform: true,
-			node: true,
-			realms: true,
-			intl: false,
-		});
+		expect(installation.developmentRunners).toEqual([
+			{
+				executablePath: path.resolve("bin/maligator"),
+				inProcess: true,
+				wireProtocol: "product",
+				externalAssets: true,
+				primordials: "locked",
+				webPlatform: true,
+				node: true,
+				realms: true,
+				intl: false,
+			},
+			{
+				executablePath: path.resolve("bin/maligator-mutable"),
+				inProcess: false,
+				wireProtocol: "wire-list",
+				externalAssets: true,
+				primordials: "mutable",
+				webPlatform: true,
+				node: true,
+				realms: true,
+				intl: false,
+			},
+		]);
 	});
 
 	it("selects the event-loop driver for web or Node surfaces", () => {
@@ -329,6 +346,7 @@ describe("command shell", () => {
 			repoRoot,
 			path.join(repoRoot, "compiler.malw"),
 			path.join(repoRoot, "compiler-producers.json"),
+			path.join(repoRoot, "maligator-mutable"),
 		);
 		expect(productConfig.engine.realms).toBe(true);
 		expect(productConfig.surface.webPlatform).toBe(true);
@@ -348,6 +366,10 @@ describe("command shell", () => {
 		expect(productConfig.assets.compilerProducerDigests).toEqual({
 			type: "file",
 			path: path.join(repoRoot, "compiler-producers.json"),
+		});
+		expect(productConfig.assets.mutableDevelopmentRunner).toEqual({
+			type: "file",
+			path: path.join(repoRoot, "maligator-mutable"),
 		});
 		expect(productConfig.assets.nodeGlobals).toEqual({
 			type: "file",

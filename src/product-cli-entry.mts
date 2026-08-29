@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { productCompilerInstallation, runCli } from "./cli-commands.ts";
 import { installCompilerProducerDigests } from "./compiler-cache-identity.ts";
@@ -20,6 +20,8 @@ installCompilerProducerDigests(
 		readFileSync(assets.materialize("compilerProducerDigests"), "utf8"),
 	) as Record<CompilerProducerStage, string>,
 );
+const mutableDevelopmentRunner = assets.materialize("mutableDevelopmentRunner");
+chmodSync(mutableDevelopmentRunner, 0o755);
 
 interface ProductDevelopmentWatcher {
 	directories: Array<string>;
@@ -41,6 +43,7 @@ await runCli(process.argv.slice(2), {
 		assets.materialize("license"),
 		process.argv[0],
 		assets.materialize("nodeGlobals"),
+		mutableDevelopmentRunner,
 	),
 	developmentProcesses: {
 		spawn: (executablePath, args) => mal._spawnDevelopmentProcess(executablePath, args),

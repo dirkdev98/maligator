@@ -407,12 +407,10 @@ setTimeout(() => {
 	}
 	console.log("ok   build embedded the Express public tree in a standalone application");
 
-	const expressTestOutput = invoke([
-		"test",
-		expressTestPath,
-		"--config",
-		expressConfigPath,
-	]);
+	const expressTestOutput = invoke(
+		["test", expressTestPath, "--config", expressConfigPath],
+		testOnlyEnv,
+	);
 	if (
 		!expressTestOutput.includes("assets-app.test.mjs") ||
 		!expressTestOutput.includes("2 passed, 0 failed")
