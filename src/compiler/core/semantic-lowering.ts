@@ -11884,64 +11884,53 @@ function compileImportExpression(
 		return emitDynamicImportCall(program, fn, cursor, specifier);
 	}
 
-	const candidatePaths = new Set(
-		[...(program.semantic.graph?.modules.values() ?? [])]
-			.flatMap((module) => module.dependencies)
-			.filter(
-				(dependency) => dependency.kind === "dynamic" && dependency.resolvedPath !== null,
-			)
-			.map((dependency) => dependency.resolvedPath!),
+	return emitDynamicImportCall(
+		program,
+		fn,
+		cursor,
+		specifier,
+		undefined,
+		dynamicImportCandidates(program, fn),
 	);
-	const candidates = program.semantic.files
-		.filter((file) => !file.commonjs && candidatePaths.has(file.path))
-		.map((file) => file.path)
-		.sort();
-	const result = nextCoreVariable(fn);
-	const joinJumps: Array<Extract<CompilerInstruction, { type: "jump" }>> = [];
+}
 
-	for (const candidate of candidates) {
-		const candidateSpecifier = compileStaticString(program, fn, cursor, candidate);
-		const matches = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "binary",
-			registers: [matches, specifier, candidateSpecifier],
-			operator: "===",
-		});
-		const matchJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
-			type: "jumpIf",
-			registers: [matches],
-			blocks: [-1],
-		};
-		const nextJump: Extract<CompilerInstruction, { type: "jump" }> = {
-			type: "jump",
-			blocks: [-1],
-		};
-		cursor.block.emitter.emit(matchJump, nextJump);
+interface DynamicImportCandidate {
+	specifier: string;
+	targetPath: string;
+}
 
-		const matchIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-		matchJump.blocks[0] = matchIndex;
-		cursor.block = fn.blocks[matchIndex]!;
-		const imported = emitDynamicImportCall(program, fn, cursor, specifier, candidate);
-		cursor.block.emitter.emit({ type: "move", registers: [result, imported] });
-		const joinJump: Extract<CompilerInstruction, { type: "jump" }> = {
-			type: "jump",
-			blocks: [-1],
-		};
-		cursor.block.emitter.emit(joinJump);
-		joinJumps.push(joinJump);
-
-		const nextIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-		nextJump.blocks[0] = nextIndex;
-		cursor.block = fn.blocks[nextIndex]!;
+function dynamicImportCandidates(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+): Array<DynamicImportCandidate> {
+	const record = program.semantic.graph?.modules.get(fn.semanticFile.path);
+	const files = new Map(program.semantic.files.map((file) => [file.path, file]));
+	const candidates = new Map<string, DynamicImportCandidate>();
+	for (const dependency of record?.dependencies ?? []) {
+		const targetFile =
+			dependency.resolvedPath === null ? undefined : files.get(dependency.resolvedPath);
+		if (
+			dependency.kind !== "dynamic" ||
+			dependency.resolvedPath === null ||
+			targetFile === undefined ||
+			targetFile.commonjs
+		) {
+			continue;
+		}
+		for (const candidateSpecifier of [dependency.specifier, dependency.resolvedPath]) {
+			if (candidateSpecifier === null) continue;
+			const candidate = {
+				specifier: candidateSpecifier,
+				targetPath: dependency.resolvedPath,
+			};
+			candidates.set(`${candidateSpecifier}\0${dependency.resolvedPath}`, candidate);
+		}
 	}
-
-	const missing = emitDynamicImportCall(program, fn, cursor, specifier);
-	cursor.block.emitter.emit({ type: "move", registers: [result, missing] });
-	const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-	for (const jump of joinJumps) jump.blocks[0] = joinIndex;
-	cursor.block.emitter.emit({ type: "jump", blocks: [joinIndex] });
-	cursor.block = fn.blocks[joinIndex]!;
-	return result;
+	return [...candidates.values()].sort(
+		(left, right) =>
+			left.specifier.localeCompare(right.specifier) ||
+			left.targetPath.localeCompare(right.targetPath),
+	);
 }
 
 function emitDynamicImportCall(
@@ -11950,21 +11939,34 @@ function emitDynamicImportCall(
 	cursor: CoreFrontendCursor,
 	specifier: number,
 	targetPath?: string,
+	candidates: ReadonlyArray<DynamicImportCandidate> = [],
 ): number {
-	const targetFile = targetPath
-		? program.semantic.files.find((file) => file.path === targetPath)
-		: undefined;
-	// The current module is already being evaluated (or has completed) by this
-	// image. Passing its own init function would re-enter it before the status
-	// slot is committed, recursing or chaining an unresolvable async self-import.
-	const targetInitIndex = targetFile?.commonjs
-		? -1
-		: targetFile && targetPath !== fn.semanticFile.path
-			? compileFileInit(program, targetFile)
-			: -1;
-	const namespaceExports = targetPath
-		? program.moduleNamespaces.get(targetPath)
-		: undefined;
+	const emitTarget = (path: string | undefined): Array<number> => {
+		const targetFile = path
+			? program.semantic.files.find((file) => file.path === path)
+			: undefined;
+		// A self-import observes the active module; re-entering its init would recurse.
+		const targetInitIndex = targetFile?.commonjs
+			? -1
+			: targetFile && path !== fn.semanticFile.path
+				? compileFileInit(program, targetFile)
+				: -1;
+		const namespaceExports = path ? program.moduleNamespaces.get(path) : undefined;
+		const initFn =
+			targetInitIndex >= 0 ? nextCoreVariable(fn) : compileUndefined(fn, cursor);
+		if (targetInitIndex >= 0) {
+			cursor.block.emitter.emit({
+				type: "createFunction",
+				registers: [initFn],
+				functionIndex: targetInitIndex,
+			});
+		}
+		const namespace = namespaceExports
+			? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports)
+			: compileUndefined(fn, cursor);
+		const statusSlot = path ? getDynamicModuleStatusSlot(program, path) : -1;
+		return [initFn, namespace, compileNumberLiteral(fn, cursor, statusSlot)];
+	};
 
 	const callee = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
@@ -11973,20 +11975,11 @@ function emitDynamicImportCall(
 		intrinsic: "__dynamicImport",
 	});
 	const thisRegister = compileUndefined(fn, cursor);
-	const initFn =
-		targetInitIndex >= 0 ? nextCoreVariable(fn) : compileUndefined(fn, cursor);
-	if (targetInitIndex >= 0) {
-		cursor.block.emitter.emit({
-			type: "createFunction",
-			registers: [initFn],
-			functionIndex: targetInitIndex,
-		});
-	}
-	const namespace = namespaceExports
-		? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports)
-		: compileUndefined(fn, cursor);
-	const statusSlot = targetPath ? getDynamicModuleStatusSlot(program, targetPath) : -1;
-	const statusSlotRegister = compileNumberLiteral(fn, cursor, statusSlot);
+	const targetArguments = emitTarget(targetPath);
+	const candidateArguments = candidates.flatMap((candidate) => [
+		compileStaticString(program, fn, cursor, candidate.specifier),
+		...emitTarget(candidate.targetPath),
+	]);
 	const destination = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
 		type: "call",
@@ -11995,9 +11988,8 @@ function emitDynamicImportCall(
 			callee,
 			thisRegister,
 			specifier,
-			initFn,
-			namespace,
-			statusSlotRegister,
+			...targetArguments,
+			...candidateArguments,
 		],
 	});
 	return destination;

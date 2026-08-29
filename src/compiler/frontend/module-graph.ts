@@ -200,6 +200,13 @@ export interface BuildModuleGraphOptions {
 	dependencyGoalOverride?: ModuleGoal;
 
 	/**
+	 * Modules the embedding host permits computed import() calls to resolve to.
+	 * AOT builds cannot discover these targets from the expression itself, so the
+	 * host supplies the finite candidate set that is bundled but not eagerly run.
+	 */
+	dynamicImportCandidates?: ReadonlyArray<string>;
+
+	/**
 	 * The resolved build config, which gates surface-dependent resolution: the
 	 * `node` package export condition and `node:*` host built-in imports are active
 	 * only under `surface.node`. Defaults to the product defaults (node OFF).
@@ -433,6 +440,37 @@ export function buildModuleGraph(
 			detectDependencyGoal(entry, packageTypeCache),
 		options.entrySource,
 	);
+	for (const candidate of options.dynamicImportCandidates ?? []) {
+		const candidatePath = path.resolve(candidate);
+		if (!modules.has(candidatePath)) {
+			load(
+				candidatePath,
+				options.goalOverride ??
+					options.dependencyGoalOverride ??
+					detectDependencyGoal(candidatePath, packageTypeCache),
+			);
+		}
+		let specifier = path
+			.relative(path.dirname(entry), candidatePath)
+			.split(path.sep)
+			.join("/");
+		if (!specifier.startsWith(".")) specifier = `./${specifier}`;
+		const entryRecord = modules.get(entry)!;
+		if (
+			!entryRecord.dependencies.some(
+				(dependency) =>
+					dependency.kind === "dynamic" &&
+					dependency.specifier === specifier &&
+					dependency.resolvedPath === candidatePath,
+			)
+		) {
+			entryRecord.dependencies.push({
+				kind: "dynamic",
+				specifier,
+				resolvedPath: candidatePath,
+			});
+		}
+	}
 
 	return {
 		entry,

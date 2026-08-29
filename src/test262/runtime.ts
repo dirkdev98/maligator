@@ -741,6 +741,11 @@ function test262CompileToC(
 
 		const hasDynamicImport =
 			file.frontmatter.features?.includes("dynamic-import") ?? false;
+		const dynamicImportCandidates = hasDynamicImport
+			? readdirSync(path.dirname(path.join(TEST262_METADATA.path, file.path)))
+					.filter((name) => name.endsWith("_FIXTURE.js") && source.includes(name))
+					.map((name) => path.join(TEST262_METADATA.path, path.dirname(file.path), name))
+			: undefined;
 
 		// Module and dynamic-import tests run through the loader/graph pipeline so
 		// sibling `*_FIXTURE.js` imports resolve from the test's real directory. For
@@ -753,6 +758,7 @@ function test262CompileToC(
 					{
 						entrySource: source,
 						goalOverride: "module",
+						dynamicImportCandidates,
 					},
 				)
 			: hasDynamicImport
@@ -762,6 +768,7 @@ function test262CompileToC(
 							entryGoal: "script",
 							entrySource: source,
 							dependencyGoalOverride: "module",
+							dynamicImportCandidates,
 						},
 					)
 				: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);

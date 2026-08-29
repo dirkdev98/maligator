@@ -635,9 +635,6 @@ static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const
     MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
 
     MalValue specifier = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    MalValue init_fn = arg_count >= 2 ? args[1] : mal_value_new_undefined();
-    MalValue namespace = arg_count >= 3 ? args[2] : mal_value_new_undefined();
-    i32 status_slot = arg_count >= 4 && mal_value_is_int32(args[3]) ? mal_value_to_i32(args[3]) : -1;
     MalString *specifier_string = nullptr;
     if (!mal_vm_to_string(vm, specifier, &specifier_string)) {
         MalValue reason = vm->completion.value;
@@ -646,7 +643,18 @@ static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const
         return promise_value;
     }
 
-    (void) specifier_string;
+    MalValue init_fn = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    MalValue namespace = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+    i32 status_slot = arg_count >= 4 && mal_value_is_int32(args[3]) ? mal_value_to_i32(args[3]) : -1;
+    for (i32 i = 4; i + 3 < arg_count; i += 4) {
+        if (mal_value_is_string(args[i]) &&
+            mal_string_equals(specifier_string, mal_value_to_string(args[i]))) {
+            init_fn = args[i + 1];
+            namespace = args[i + 2];
+            status_slot = mal_value_is_int32(args[i + 3]) ? mal_value_to_i32(args[i + 3]) : -1;
+            break;
+        }
+    }
     if (!mal_value_is_callable(init_fn) && mal_value_is_undefined(namespace)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Cannot resolve dynamic import in the compiled module graph");

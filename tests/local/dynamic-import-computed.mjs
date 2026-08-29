@@ -3,6 +3,13 @@ if (false) await import("./dynamic-import-computed-target.mjs");
 const target = import.meta.dirname + "/dynamic-import-computed-target.mjs";
 const first = await import(target);
 const second = await import(target);
+let coercions = 0;
+const relative = await import({
+	toString() {
+		coercions++;
+		return "./dynamic-import-computed-target.mjs";
+	},
+});
 const asyncHooks = await import("node:async_hooks");
 const https = await import("node:https");
 const http2 = await import("node:http2");
@@ -19,6 +26,8 @@ try {
 const passed =
 	first.value === 42 &&
 	second.value === 42 &&
+	relative.value === 42 &&
+	coercions === 1 &&
 	typeof asyncHooks.AsyncLocalStorage === "function" &&
 	agent instanceof https.Agent &&
 	agent.destroy() === agent &&
