@@ -100,11 +100,14 @@ const keyedZipped = Iterator.zipKeyed(
 	},
 	{
 		mode: "longest",
-		padding: new Proxy({}, {
-			get(_target, key) {
-				return `pad:${key}`;
+		padding: new Proxy(
+			{},
+			{
+				get(_target, key) {
+					return `pad:${key}`;
+				},
 			},
-		}),
+		),
 	},
 ).toArray();
 assert(
@@ -112,6 +115,34 @@ assert(
 		keyedZipped[1].prop_0 === 2 &&
 		keyedZipped[1].prop_1 === "pad:prop_1",
 	"zipKeyed keeps keys and padding alive",
+);
+
+assert([1, NaN, 3].values().includes(NaN), "includes SameValueZero");
+assert(![1, 2, 3].values().includes(2, 2), "includes skipped elements");
+assert(
+	["a", null, "b", undefined].values().join("|") === "a||b|",
+	"iterator join values",
+);
+
+const chunks = [1, 2, 3, 4, 5].values().chunks(2).toArray();
+assert(
+	chunks.length === 3 &&
+		chunks[0].join(",") === "1,2" &&
+		chunks[1].join(",") === "3,4" &&
+		chunks[2].join(",") === "5",
+	"iterator chunks values",
+);
+const windows = [1, 2, 3, 4].values().windows(3).toArray();
+assert(
+	windows.length === 2 &&
+		windows[0].join(",") === "1,2,3" &&
+		windows[1].join(",") === "2,3,4",
+	"iterator windows values",
+);
+const partialWindows = [1, 2].values().windows(3, "allow-partial").toArray();
+assert(
+	partialWindows.length === 1 && partialWindows[0].join(",") === "1,2",
+	"iterator partial window",
 );
 
 const arrayEntries = [7, 8].entries().toArray();

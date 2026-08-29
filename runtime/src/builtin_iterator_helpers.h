@@ -19,6 +19,8 @@ typedef enum MalIteratorHelperKind : u8 {
     MAL_ITERATOR_HELPER_WRAP,
     MAL_ITERATOR_HELPER_CONCAT,
     MAL_ITERATOR_HELPER_ZIP,
+    MAL_ITERATOR_HELPER_CHUNKS,
+    MAL_ITERATOR_HELPER_WINDOWS,
 } MalIteratorHelperKind;
 
 /** Iterator.zip / Iterator.zipKeyed iteration mode. */
@@ -41,7 +43,7 @@ typedef struct MalIteratorHelperObject {
 
     // map/filter/flatMap predicate (undefined for take/drop/wrap).
     MalValue callback;
-    // take/drop remaining count.
+    // take/drop remaining count; chunks/windows group size.
     f64 counter;
 
     // flatMap: the inner iterator currently being drained.
@@ -50,7 +52,8 @@ typedef struct MalIteratorHelperObject {
     MalValue inner_next;
 
     // concat: array of source iterables and their captured @@iterator methods.
-    // `index` doubles as the cursor into these arrays.
+    // `index` doubles as the cursor into these arrays, the windows allow-partial
+    // flag, and zip's suspended-start marker.
     // zip: `sources` holds the open iterator objects (a null entry marks an
     // exhausted input in "longest" mode) and `source_methods` their cached next
     // methods; `zip_padding` holds the per-input padding values (longest mode)
@@ -86,7 +89,7 @@ int mal_builtin_iterator_helper_try_step(
  * Install the Iterator Helpers surface: the %Iterator% global (abstract
  * constructor) + Iterator.from, the %IteratorPrototype% accessors (constructor,
  * @@toStringTag) and helper methods (map/filter/take/drop/flatMap +
- * reduce/toArray/forEach/some/every/find), and %IteratorHelperPrototype%
+ * reduce/toArray/forEach/some/every/find/includes/join), chunking helpers, and %IteratorHelperPrototype%
  * (carrying the shared next/return). Requires %IteratorPrototype%.
  */
 void mal_builtin_iterator_helpers_install(MalVm *vm);

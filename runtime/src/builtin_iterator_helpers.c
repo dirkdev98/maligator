@@ -1,15 +1,18 @@
 #include "builtin_iterator_helpers.h"
 
+#include <assert.h>
 #include <math.h>
 
 #include "array_object.h"
+#include "ascii.h"
 #include "builtin_iterator.h"
 #include "function_object.h"
 #include "heap.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
-#include "property_iter.h"
+#include "rooted_collection.h"
+#include "u16_buffer.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -477,6 +480,7 @@ static bool mal_ih_step_zip(
                         MalValue k_value;
                         bool k_done;
                         if (!mal_vm_iterator_step(vm, &k_record, &k_value, &k_done)) {
+                            mal_ih_zip_set(vm, self->sources, k, mal_value_new_null());
                             mal_ih_zip_close_all(vm, self, -1);
                             return false;
                         }
@@ -508,6 +512,88 @@ static bool mal_ih_step_zip(
         mal_ih_zip_finish_results(vm, self, results, count), value_out, done_out);
 }
 
+static void mal_ih_chunk_append(MalArrayObject *array, u32 index, MalValue value) {
+    if (mal_array_object_fresh_dense_append(array, value)) {
+        return;
+    }
+    mal_array_object_store(array, mal_key_index(index), value);
+}
+
+static bool mal_ih_step_chunks(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
+    MalIteratorRecord record = mal_ih_underlying(self);
+    MalArrayObject *chunk = mal_intrinsic_new_array(vm, 0);
+    u32 length = 0;
+    while ((f64) length < self->counter) {
+        MalValue value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
+            self->done = true;
+            return false;
+        }
+        if (done) {
+            if (length == 0) {
+                return mal_ih_finish(self, value_out, done_out);
+            }
+            self->done = true;
+            return mal_ih_yield(
+                mal_value_from_array_object(chunk), value_out, done_out);
+        }
+        mal_ih_chunk_append(chunk, length++, value);
+    }
+    return mal_ih_yield(
+        mal_value_from_array_object(chunk), value_out, done_out);
+}
+
+static MalValue mal_ih_window_snapshot(MalVm *vm, MalArrayObject *buffer) {
+    u32 length = buffer->length;
+    MalValue result = mal_value_from_array_object(
+        mal_intrinsic_new_dense_array(vm, length));
+    for (u32 index = 0; index < length; index++) {
+        MalValue value;
+        bool present = mal_array_object_dense_get(buffer, index, &value);
+        assert(present);
+        mal_array_object_store(
+            mal_value_to_array_object(result), mal_key_index(index), value);
+    }
+    return result;
+}
+
+static bool mal_ih_step_windows(
+    MalVm *vm, MalIteratorHelperObject *self,
+    MalValue *value_out, bool *done_out
+) {
+    MalIteratorRecord record = mal_ih_underlying(self);
+    MalArrayObject *buffer = mal_value_to_array_object(self->sources);
+    while (true) {
+        MalValue value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
+            self->done = true;
+            return false;
+        }
+        if (done) {
+            if (self->index != 0 && buffer->length != 0 &&
+                (f64) buffer->length < self->counter) {
+                self->done = true;
+                return mal_ih_yield(
+                    mal_ih_window_snapshot(vm, buffer), value_out, done_out);
+            }
+            return mal_ih_finish(self, value_out, done_out);
+        }
+        if ((f64) buffer->length == self->counter) {
+            mal_array_object_dense_shift(buffer);
+        }
+        mal_ih_chunk_append(buffer, buffer->length, value);
+        if ((f64) buffer->length == self->counter) {
+            return mal_ih_yield(
+                mal_ih_window_snapshot(vm, buffer), value_out, done_out);
+        }
+    }
+}
+
 // --- Shared %IteratorHelperPrototype% next / return -------------------------
 
 static bool mal_ih_advance(
@@ -533,6 +619,10 @@ static bool mal_ih_advance(
             return mal_ih_step_concat(vm, self, value_out, done_out);
         case MAL_ITERATOR_HELPER_ZIP:
             return mal_ih_step_zip(vm, self, value_out, done_out);
+        case MAL_ITERATOR_HELPER_CHUNKS:
+            return mal_ih_step_chunks(vm, self, value_out, done_out);
+        case MAL_ITERATOR_HELPER_WINDOWS:
+            return mal_ih_step_windows(vm, self, value_out, done_out);
     }
     return mal_ih_finish(self, value_out, done_out);
 }
@@ -555,6 +645,9 @@ static MalValue mal_ih_proto_next(MalVm *vm, MalValue this_value, const MalValue
     }
     if (self->done) {
         return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+    }
+    if (self->kind == MAL_ITERATOR_HELPER_ZIP) {
+        self->index = 1;
     }
     self->running = true;
     MalValue result;
@@ -602,6 +695,9 @@ int mal_builtin_iterator_helper_try_step(
     // helper next method and immediately unwrapping its {value, done} result.
     // Recreate that native frame's GC suppression while helper state and callback
     // scratch live in C locals.
+    if (self->kind == MAL_ITERATOR_HELPER_ZIP) {
+        self->index = 1;
+    }
     self->running = true;
     vm->gc_native_frames++;
     bool ok = mal_ih_advance(vm, self, value_out, done_out);
@@ -648,9 +744,9 @@ static MalValue mal_ih_proto_return(MalVm *vm, MalValue this_value, const MalVal
     }
     self->done = true;
 
-    // Marking the generator "executing" so a return() that re-enters this
-    // helper (e.g. underlying return() calls iterator.return()) is rejected.
-    self->running = true;
+    // A suspended-start generator becomes completed before closing its inputs,
+    // so close hooks may observe completed rather than executing state.
+    self->running = self->kind != MAL_ITERATOR_HELPER_ZIP || self->index != 0;
 
     // zip closes every still-open input iterator.
     if (self->kind == MAL_ITERATOR_HELPER_ZIP) {
@@ -799,7 +895,231 @@ static MalValue mal_ih_method_drop(MalVm *vm, MalValue this_value, const MalValu
     return mal_ih_lazy(vm, this_value, args, arg_count, MAL_ITERATOR_HELPER_DROP, false);
 }
 
+static bool mal_ih_group_size(
+    MalVm *vm, MalValue value, const byte *name, f64 *out
+) {
+    if (!mal_ops_is_number(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, name);
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || trunc(number) != number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, name);
+        return false;
+    }
+    if (number < 1.0 || number > (f64) UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, name);
+        return false;
+    }
+    *out = number;
+    return true;
+}
+
+static MalValue mal_ih_chunking(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalIteratorHelperKind kind
+) {
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator method called on non-object");
+        return mal_value_new_undefined();
+    }
+    f64 size;
+    MalValue size_value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_ih_group_size(vm, size_value, "Iterator chunk size must be an integral Number in range", &size)) {
+        mal_ih_close_on_validation_failure(vm, this_value);
+        return mal_value_new_undefined();
+    }
+    bool allow_partial = false;
+    if (kind == MAL_ITERATOR_HELPER_WINDOWS && arg_count >= 2 &&
+        !mal_value_is_undefined(args[1])) {
+        if (!mal_value_is_string(args[1])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid Iterator windows undersized mode");
+            mal_ih_close_on_validation_failure(vm, this_value);
+            return mal_value_new_undefined();
+        }
+        MalString *mode = mal_value_to_string(args[1]);
+        if (mal_string_equals_ascii(mode, "allow-partial")) {
+            allow_partial = true;
+        } else if (!mal_string_equals_ascii(mode, "only-full")) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid Iterator windows undersized mode");
+            mal_ih_close_on_validation_failure(vm, this_value);
+            return mal_value_new_undefined();
+        }
+    }
+    MalIteratorRecord record;
+    if (!mal_ih_get_direct(vm, this_value, &record)) {
+        return mal_value_new_undefined();
+    }
+    MalValue helper_value = mal_ih_new(
+        vm, kind, &record, mal_value_new_undefined(), size);
+    MalIteratorHelperObject *helper =
+        mal_value_to_iterator_helper_object(helper_value);
+    if (kind == MAL_ITERATOR_HELPER_WINDOWS) {
+        helper->sources = mal_value_from_array_object(
+            mal_intrinsic_new_array(vm, 0));
+        helper->index = allow_partial ? 1 : 0;
+    }
+    return helper_value;
+}
+
+static MalValue mal_ih_method_chunks(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    return mal_ih_chunking(vm, this_value, args, arg_count, MAL_ITERATOR_HELPER_CHUNKS);
+}
+
+static MalValue mal_ih_method_windows(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    return mal_ih_chunking(vm, this_value, args, arg_count, MAL_ITERATOR_HELPER_WINDOWS);
+}
+
 // --- Eager helper methods ----------------------------------------------------
+
+static bool mal_ih_same_value_zero(MalValue left, MalValue right) {
+    return mal_value_to_boolean(mal_ops_strict_equal(left, right)) ||
+        (mal_value_is_nan(left) && mal_value_is_nan(right));
+}
+
+static MalValue mal_ih_method_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator method called on non-object");
+        return mal_value_new_undefined();
+    }
+    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    f64 to_skip = 0.0;
+    if (arg_count >= 2 && !mal_value_is_undefined(args[1])) {
+        if (!mal_ops_is_number(args[1])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator skippedElements must be an integral Number");
+            mal_ih_close_on_validation_failure(vm, this_value);
+            return mal_value_new_undefined();
+        }
+        to_skip = mal_ops_number_as_f64(args[1]);
+        if (isnan(to_skip) || (isfinite(to_skip) && trunc(to_skip) != to_skip)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator skippedElements must be an integral Number");
+            mal_ih_close_on_validation_failure(vm, this_value);
+            return mal_value_new_undefined();
+        }
+        if (to_skip < 0.0 ||
+            (isfinite(to_skip) && to_skip > MAL_NUMBER_MAX_SAFE_INTEGER)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Iterator skippedElements is out of range");
+            mal_ih_close_on_validation_failure(vm, this_value);
+            return mal_value_new_undefined();
+        }
+    }
+    MalIteratorRecord record;
+    if (!mal_ih_get_direct(vm, this_value, &record)) {
+        return mal_value_new_undefined();
+    }
+    MalValue root = search;
+    MalRootSpan record_span, root_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&root_span, &root, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalValue result = mal_value_new_boolean(false);
+    f64 skipped = 0.0;
+    while (true) {
+        MalValue value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
+            result = mal_value_new_undefined();
+            break;
+        }
+        if (done) {
+            break;
+        }
+        if (skipped < to_skip) {
+            skipped += 1.0;
+            continue;
+        }
+        if (mal_ih_same_value_zero(value, root)) {
+            result = mal_vm_iterator_close_normal(vm, &record)
+                ? mal_value_new_boolean(true)
+                : mal_value_new_undefined();
+            break;
+        }
+    }
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root_span);
+    mal_gc_unroot(&record_span);
+    return result;
+}
+
+static bool mal_ih_join_append(MalVm *vm, MalU16Buffer *buffer, MalString *string) {
+    if (mal_u16_buffer_append_string(buffer, string) == MAL_U16_BUFFER_OK) {
+        return true;
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    return false;
+}
+
+static MalValue mal_ih_method_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator method called on non-object");
+        return mal_value_new_undefined();
+    }
+    MalString *separator;
+    if (arg_count < 1 || mal_value_is_undefined(args[0])) {
+        separator = mal_intrinsic_ascii(vm, ",");
+    } else if (!mal_vm_to_string(vm, args[0], &separator)) {
+        mal_ih_close_on_validation_failure(vm, this_value);
+        return mal_value_new_undefined();
+    }
+    MalIteratorRecord record;
+    if (!mal_ih_get_direct(vm, this_value, &record)) {
+        return mal_value_new_undefined();
+    }
+    MalValue separator_root = mal_value_from_string(separator);
+    MalRootSpan record_span, separator_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&separator_span, &separator_root, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalU16Buffer buffer = {.heap = &vm->heap};
+    bool first = true;
+    MalValue result = mal_value_new_undefined();
+    while (true) {
+        MalValue value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
+            goto done;
+        }
+        if (done) {
+            result = buffer.length == 0
+                ? mal_value_from_string(mal_intrinsic_ascii(vm, ""))
+                : mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &buffer));
+            goto done;
+        }
+        if (!first && !mal_ih_join_append(
+                vm, &buffer, mal_value_to_string(separator_root))) {
+            mal_vm_iterator_close(vm, &record);
+            goto done;
+        }
+        first = false;
+        if (mal_value_is_nil(value)) {
+            continue;
+        }
+        MalString *part;
+        if (!mal_vm_to_string(vm, value, &part)) {
+            mal_vm_iterator_close(vm, &record);
+            goto done;
+        }
+        if (!mal_ih_join_append(vm, &buffer, part)) {
+            mal_vm_iterator_close(vm, &record);
+            goto done;
+        }
+    }
+
+done:
+    mal_u16_buffer_dispose(&buffer);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&separator_span);
+    mal_gc_unroot(&record_span);
+    return result;
+}
 
 static MalValue mal_ih_method_to_array(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
@@ -1373,8 +1693,7 @@ static MalValue mal_ih_zip_assemble(MalVm *vm, MalValue sources, MalValue method
                 mal_array_object_store(padding_array, mal_key_index(i), mal_value_new_undefined());
             }
             if (!exhausted) {
-                mal_vm_iterator_close(vm, &pad_iter);
-                if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                if (!mal_vm_iterator_close_normal(vm, &pad_iter)) {
                     mal_ih_zip_close_collected(vm, sources, methods, count);
                     return mal_value_new_undefined();
                 }
@@ -1439,6 +1758,7 @@ static MalValue mal_iterator_zip(MalVm *vm, MalValue this_value, const MalValue 
         MalIteratorRecord record;
         if (!mal_ih_get_flattenable(vm, value, &record)) {
             mal_ih_zip_close_collected(vm, sources, methods, count);
+            mal_vm_iterator_close(vm, &input_iter);
             return mal_value_new_undefined();
         }
         mal_ih_zip_set(vm, sources, count, record.iterator);
@@ -1466,15 +1786,11 @@ static MalValue mal_iterator_zip_keyed(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
 
-    // Snapshot the enumerable own keys (string + symbol) in property order.
-    MalKey collected[256];
-    i32 key_count = 0;
-    MalPropertyIter iter;
-    mal_property_iter_init(&iter, mal_value_to_object(iterables), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-    MalKey iter_key;
-    MalPropertyDesc desc;
-    while (key_count < 256 && mal_property_iter_next(&iter, &iter_key, &desc)) {
-        collected[key_count++] = iter_key;
+    MalRootedKeySnapshot own_keys;
+    mal_rooted_key_snapshot_init(&own_keys);
+    if (!mal_rooted_key_snapshot_own_keys(vm, iterables, &own_keys)) {
+        mal_rooted_key_snapshot_dispose(&own_keys);
+        return mal_value_new_undefined();
     }
 
     MalValue sources = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
@@ -1484,11 +1800,22 @@ static MalValue mal_iterator_zip_keyed(MalVm *vm, MalValue this_value, const Mal
         ? mal_value_from_array_object(mal_intrinsic_new_array(vm, 0))
         : mal_value_new_undefined();
     i32 stored = 0;
-    for (i32 i = 0; i < key_count; i++) {
-        MalKey key = collected[i];
+    for (usize i = 0; i < own_keys.count; i++) {
+        MalKey key = own_keys.keys[i];
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(vm, iterables, key, &present, &desc)) {
+            mal_ih_zip_close_collected(vm, sources, methods, stored);
+            mal_rooted_key_snapshot_dispose(&own_keys);
+            return mal_value_new_undefined();
+        }
+        if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+            continue;
+        }
         MalValue value;
         if (!mal_vm_get_property(vm, iterables, key, &value)) {
             mal_ih_zip_close_collected(vm, sources, methods, stored);
+            mal_rooted_key_snapshot_dispose(&own_keys);
             return mal_value_new_undefined();
         }
         // A key whose value is undefined is omitted from the result entirely.
@@ -1498,6 +1825,7 @@ static MalValue mal_iterator_zip_keyed(MalVm *vm, MalValue this_value, const Mal
         MalIteratorRecord record;
         if (!mal_ih_get_flattenable(vm, value, &record)) {
             mal_ih_zip_close_collected(vm, sources, methods, stored);
+            mal_rooted_key_snapshot_dispose(&own_keys);
             return mal_value_new_undefined();
         }
         mal_ih_zip_set(vm, sources, stored, record.iterator);
@@ -1507,17 +1835,27 @@ static MalValue mal_iterator_zip_keyed(MalVm *vm, MalValue this_value, const Mal
             : key.value;
         mal_ih_zip_set(vm, keys, stored, key_value);
 
-        if (mode == MAL_ITERATOR_ZIP_LONGEST) {
-            MalValue pad = mal_value_new_undefined();
-            if (mal_value_is_object(padding_option) && !mal_vm_get_property(vm, padding_option, key, &pad)) {
-                mal_ih_zip_set(vm, sources, stored, record.iterator);
-                mal_ih_zip_close_collected(vm, sources, methods, stored + 1);
-                return mal_value_new_undefined();
-            }
-            mal_ih_zip_set(vm, padding_values, stored, pad);
-        }
         stored++;
     }
+
+    if (mode == MAL_ITERATOR_ZIP_LONGEST) {
+        for (i32 i = 0; i < stored; i++) {
+            MalValue pad = mal_value_new_undefined();
+            if (mal_value_is_object(padding_option)) {
+                MalValue key_value = mal_ih_zip_get(vm, keys, i);
+                MalKey key;
+                if (!mal_vm_value_to_property_key(vm, key_value, &key) ||
+                    !mal_vm_get_property(vm, padding_option, key, &pad)) {
+                    mal_ih_zip_close_collected(vm, sources, methods, stored);
+                    mal_rooted_key_snapshot_dispose(&own_keys);
+                    return mal_value_new_undefined();
+                }
+            }
+            mal_ih_zip_set(vm, padding_values, i, pad);
+        }
+    }
+
+    mal_rooted_key_snapshot_dispose(&own_keys);
 
     return mal_ih_zip_assemble(vm, sources, methods, stored, mode, padding_option, padding_values, keys);
 }
@@ -1542,6 +1880,10 @@ void mal_builtin_iterator_helpers_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, iterator_prototype, "some", 1, mal_ih_method_some);
     mal_intrinsic_define_method_n(vm, iterator_prototype, "every", 1, mal_ih_method_every);
     mal_intrinsic_define_method_n(vm, iterator_prototype, "find", 1, mal_ih_method_find);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "includes", 1, mal_ih_method_includes);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "join", 1, mal_ih_method_join);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "chunks", 1, mal_ih_method_chunks);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "windows", 1, mal_ih_method_windows);
 
     mal_iterator_define_accessor(vm, iterator_prototype, mal_intrinsic_string_key(vm, "constructor"), mal_iterator_ctor_get, mal_iterator_ctor_set, "get constructor", "set constructor");
     mal_iterator_define_accessor(vm, iterator_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), mal_iterator_tag_get, mal_iterator_tag_set, "get [Symbol.toStringTag]", "set [Symbol.toStringTag]");
