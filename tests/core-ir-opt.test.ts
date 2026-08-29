@@ -2891,6 +2891,41 @@ describe("Core IR optimizer", () => {
 		});
 	});
 
+	it("guards and inlines a class static method candidate", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`class Service { static run(value) { return value + 10; } }
+			function caller(value) { return Service.run(value) * 2; }
+			caller(1);`,
+			"core-guarded-static-inline.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const caller = optimized!.functions[functionIndexOfName(optimized!, "caller")]!;
+		const target = functionIndexOfName(optimized!, "run");
+		const instructions = caller.blocks.flatMap(({ instructions }) => instructions);
+		const guards = instructions.filter(({ opcode }) => opcode === "guardFunctionIndex");
+		const calls = instructions.filter(({ opcode }) => opcode === "call");
+		expect(guards).toHaveLength(1);
+		expect(guards[0]!.attributes.functionIndex).toBe(target);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.attributes.directFunctionIndex).toBeUndefined();
+		expect(calls[0]!.attributes.calleeTargets).toMatchObject({
+			functions: [target],
+			anyScript: false,
+			opaque: true,
+		});
+		expect(
+			instructions.some(
+				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
+			),
+		).toBe(true);
+	});
+
 	it("never inlines class constructors through ordinary calls", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function callClosed(value) {

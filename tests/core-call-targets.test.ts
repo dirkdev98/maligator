@@ -781,6 +781,61 @@ describe("callee-target annotation", () => {
 		});
 	});
 
+	it("keeps a class static method as an open own-cell candidate", () => {
+		const program = optimizedCore(
+			`class Service { static run(value) { return value + 1; } }
+			function caller(value) { const callback = Service.run; return callback(value); }
+			caller(1);`,
+			"call-targets-static-method.mjs",
+		);
+		const methodIndex = functionIndexOfName(program, "run");
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const [site] = callSites(caller);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)).toEqual({
+			functions: [methodIndex],
+			anyScript: false,
+			opaque: true,
+		});
+	});
+
+	it("retains every function own-cell writer reached through a stable binding", () => {
+		const program = optimizedCore(
+			`function service() {}
+			function first(value) { return value + 1; }
+			function second(value) { return value + 2; }
+			service.run = first;
+			service.run = second;
+			function caller(value) { const callback = service.run; return callback(value); }
+			caller(1);`,
+			"call-targets-function-own-cell.mjs",
+		);
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const [site] = callSites(caller);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)?.functions).toEqual(
+			[
+				functionIndexOfName(program, "first"),
+				functionIndexOfName(program, "second"),
+			].sort((left, right) => left - right),
+		);
+		expect(calleeTargetsAttribute(site!)?.opaque).toBe(true);
+	});
+
+	it("does not treat a static accessor body as the live property value", () => {
+		const program = optimizedCore(
+			`function target(value) { return value + 1; }
+			class Service { static get run() { return target; } }
+			function caller(value) { const callback = Service.run; return callback(value); }
+			caller(1);`,
+			"call-targets-static-accessor.mjs",
+		);
+		const caller = program.functions[functionIndexOfName(program, "caller")]!;
+		const [site] = callSites(caller);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
+		expect(calleeTargetsAttribute(site!)).toBeUndefined();
+	});
+
 	it("does not guess a prototype method when a constructor returns an object", () => {
 		const program = optimizedCore(
 			`function alternate(value) { return value + 2; }

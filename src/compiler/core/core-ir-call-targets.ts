@@ -1,6 +1,7 @@
 /**
  * Bounded callee-target analysis: which ordinary script functions an SSA value,
- * a compiler-owned global slot, or a captured closure slot can hold.
+ * a compiler-owned global slot, a captured closure slot, or a named property can
+ * hold.
  *
  * The lattice is a product of a sorted finite script-function set and two
  * independent loss bits, so losing one kind of precision never discards the
@@ -23,6 +24,11 @@
  * raises the result's matching open component at most once. Because a cell's
  * finite set only grows and only up to the cap before it widens away, the
  * whole-program solve stays one worklist with no rescan of calls or functions.
+ * Named properties on function objects use the same reactive scheme. A finite
+ * function-object base opens one advisory cell per function index and static key;
+ * reads remain opaque because user code can mutate the live object, while named
+ * in-program writes contribute guarded candidates. Conflating closure instances
+ * with one function index can only add candidates, never justify direct dispatch.
  *
  * Soundness rests on the registry being the single declaration of which memory
  * an opcode names. Every write to `global-slot` or `captured-slot` either names
@@ -276,6 +282,8 @@ export interface CoreCalleeTargetStatistics {
 	/** Those whose whole operation set this graph contains, so their cells joined it. */
 	readonly containedAllocations: number;
 	readonly ownCellNodes: number;
+	/** Advisory named-property cells on finite script-function bases. */
+	readonly functionOwnCellNodes: number;
 	/** Compiler-owned cells whose whole read and write traffic this graph contains. */
 	readonly singleAssignmentCells: number;
 }
@@ -861,6 +869,20 @@ interface ConstructorMethodSite {
 	readonly activated: Set<number>;
 }
 
+interface FunctionOwnCellReadSite {
+	readonly base: number;
+	readonly result: number;
+	readonly key: number;
+	readonly activated: Set<number>;
+}
+
+interface FunctionOwnCellWriteSite {
+	readonly base: number;
+	readonly value: number;
+	readonly key: number;
+	readonly activated: Set<number>;
+}
+
 /** A property read whose opaque seed an own-cell edge may replace. */
 interface DeferredOwnSlotRead {
 	readonly base: number;
@@ -877,12 +899,13 @@ const ORIGIN_TOP = -1;
  * Solve the program's callee-target lattice.
  *
  * Nodes are SSA values, compiler-owned global slots, captured closure slots, one
- * return cell per function, and one cell per own data slot of a fresh aggregate
- * this graph contains; edges run producer to consumer. Every node's target state
- * can rise at most `CORE_CALLEE_TARGET_CAP + 2` times (the set grows, then widens,
- * then opens), and every call site activates at most `CORE_CALLEE_TARGET_CAP + 2`
- * return-cell edges or open raises, so the whole solve is
- * O(cap * (nodes + edges + calls)) — near-linear in program size for the fixed
+ * return cell per function, one cell per own data slot of a fresh aggregate this
+ * graph contains, and advisory function-property cells discovered from finite
+ * bases; edges run producer to consumer. Every node's target state can rise at
+ * most `CORE_CALLEE_TARGET_CAP + 2` times (the set grows, then widens, then opens),
+ * and every call or function-property site activates at most
+ * `CORE_CALLEE_TARGET_CAP + 2` edges or open raises, so the whole solve is
+ * O(cap * (nodes + edges + sites)) — near-linear in program size for the fixed
  * cap, with no round over calls or functions.
  *
  * Own cells need a second, three-point component on the same graph: which single
@@ -905,6 +928,7 @@ export function analyzeCoreCalleeTargets(
 	const capturedNodes = new Map<string, number>();
 	const returnNodes: Array<number | undefined> = [];
 	const ownCellNodes = new Map<string, number>();
+	const functionOwnCellNodes = new Map<string, number>();
 	const functionsByIndex: Array<CoreProgram["functions"][number] | undefined> = [];
 	for (const fn of program.functions) functionsByIndex[fn.functionIndex] = fn;
 	let nodeCount = 0;
@@ -934,6 +958,13 @@ export function analyzeCoreCalleeTargets(
 	const constructorMethodSites = new Array<Array<ConstructorMethodSite> | undefined>(
 		nodeCount,
 	).fill(undefined);
+	const functionOwnCellReadSites = new Array<Array<FunctionOwnCellReadSite> | undefined>(
+		nodeCount,
+	).fill(undefined);
+	const functionOwnCellWriteSites = new Array<
+		Array<FunctionOwnCellWriteSite> | undefined
+	>(nodeCount).fill(undefined);
+	let targetSolveStarted = false;
 	const allocateNode = (): number => {
 		const node = nodeCount++;
 		dependents.push(undefined);
@@ -941,6 +972,12 @@ export function analyzeCoreCalleeTargets(
 		originSeeds.push(undefined);
 		callSites.push(undefined);
 		constructorMethodSites.push(undefined);
+		functionOwnCellReadSites.push(undefined);
+		functionOwnCellWriteSites.push(undefined);
+		if (targetSolveStarted) {
+			state.push(CORE_CALLEE_TARGETS_BOTTOM);
+			queued.push(0);
+		}
 		return node;
 	};
 	const globalNode = (slot: number): number => {
@@ -1013,6 +1050,36 @@ export function analyzeCoreCalleeTargets(
 		};
 		const existing = constructorMethodSites[callee];
 		if (existing === undefined) constructorMethodSites[callee] = [site];
+		else existing.push(site);
+	};
+	const addFunctionOwnCellReadSite = (
+		base: number,
+		result: number,
+		key: number,
+	): void => {
+		const site: FunctionOwnCellReadSite = {
+			base,
+			result,
+			key,
+			activated: new Set(),
+		};
+		const existing = functionOwnCellReadSites[base];
+		if (existing === undefined) functionOwnCellReadSites[base] = [site];
+		else existing.push(site);
+	};
+	const addFunctionOwnCellWriteSite = (
+		base: number,
+		value: number,
+		key: number,
+	): void => {
+		const site: FunctionOwnCellWriteSite = {
+			base,
+			value,
+			key,
+			activated: new Set(),
+		};
+		const existing = functionOwnCellWriteSites[base];
+		if (existing === undefined) functionOwnCellWriteSites[base] = [site];
 		else existing.push(site);
 	};
 
@@ -1510,6 +1577,14 @@ export function analyzeCoreCalleeTargets(
 						// A read of one named own data slot may become an edge from that cell
 						// once containment is known, so its opaque seed waits for the answer.
 						const roles = operandRoles(instruction, registry, keyCell(instruction));
+						const writeBase = ownSlotWriteBase(instruction, roles);
+						if (writeBase !== undefined) {
+							addFunctionOwnCellWriteSite(
+								valueNode(writeBase.base),
+								valueNode(writeBase.value),
+								writeBase.key,
+							);
+						}
 						const readBase = ownSlotReadBase(instruction, roles);
 						if (readBase !== undefined && result !== undefined) {
 							const namespaceSlot = namespaceExportSlot(
@@ -1521,6 +1596,11 @@ export function analyzeCoreCalleeTargets(
 								addOriginSeed(valueNode(result), ORIGIN_TOP);
 								continue;
 							}
+							addFunctionOwnCellReadSite(
+								valueNode(readBase.base),
+								valueNode(result),
+								readBase.key,
+							);
 							const baseDefinition = definitions[moveRoot(definitions, readBase.base)];
 							if (
 								baseDefinition?.opcode === "construct" &&
@@ -1637,6 +1717,15 @@ export function analyzeCoreCalleeTargets(
 		}
 		return node;
 	};
+	const functionOwnCellNode = (owner: number, key: number): number => {
+		const cacheKey = `${owner}\0${key}`;
+		let node = functionOwnCellNodes.get(cacheKey);
+		if (node === undefined) {
+			node = allocateNode();
+			functionOwnCellNodes.set(cacheKey, node);
+		}
+		return node;
+	};
 	let containedAllocations = 0;
 	if (contained !== undefined && origins !== undefined) {
 		for (const [index, allocation] of allocations.entries()) {
@@ -1666,7 +1755,8 @@ export function analyzeCoreCalleeTargets(
 	}
 
 	const state = new Array<CoreCalleeTargets>(nodeCount).fill(CORE_CALLEE_TARGETS_BOTTOM);
-	const queued = new Uint8Array(nodeCount);
+	const queued = new Array<number>(nodeCount).fill(0);
+	targetSolveStarted = true;
 	const queue: Array<number> = [];
 	let propagations = 0;
 	const raise = (node: number, targets: CoreCalleeTargets): void => {
@@ -1750,6 +1840,28 @@ export function analyzeCoreCalleeTargets(
 			}
 		}
 	};
+	const activateFunctionOwnCellReadSite = (site: FunctionOwnCellReadSite): void => {
+		const base = state[site.base]!;
+		if (base.anyScript) return;
+		for (const target of base.functions) {
+			if (site.activated.has(target)) continue;
+			site.activated.add(target);
+			const source = functionOwnCellNode(target, site.key);
+			addEdge(source, site.result);
+			raise(site.result, state[source]!);
+		}
+	};
+	const activateFunctionOwnCellWriteSite = (site: FunctionOwnCellWriteSite): void => {
+		const base = state[site.base]!;
+		if (base.anyScript) return;
+		for (const target of base.functions) {
+			if (site.activated.has(target)) continue;
+			site.activated.add(target);
+			const destination = functionOwnCellNode(target, site.key);
+			addEdge(site.value, destination);
+			raise(destination, state[site.value]!);
+		}
+	};
 
 	for (let node = 0; node < seeds.length; node++) {
 		const targets = seeds[node];
@@ -1763,6 +1875,12 @@ export function analyzeCoreCalleeTargets(
 		for (const site of callSites[node] ?? []) activateCallSite(site);
 		for (const site of constructorMethodSites[node] ?? []) {
 			activateConstructorMethodSite(site);
+		}
+		for (const site of functionOwnCellReadSites[node] ?? []) {
+			activateFunctionOwnCellReadSite(site);
+		}
+		for (const site of functionOwnCellWriteSites[node] ?? []) {
+			activateFunctionOwnCellWriteSite(site);
 		}
 	}
 
@@ -1794,6 +1912,7 @@ export function analyzeCoreCalleeTargets(
 			trackedAllocations: allocations.length,
 			containedAllocations,
 			ownCellNodes: ownCellNodes.size,
+			functionOwnCellNodes: functionOwnCellNodes.size,
 			singleAssignmentCells: stableCells.count,
 		},
 	};
@@ -1817,6 +1936,28 @@ function ownSlotReadBase(
 		const base = instruction.inputs[operand];
 		if (base === undefined) return undefined;
 		found = { base, key: role.key };
+	}
+	return found;
+}
+
+function ownSlotWriteBase(
+	instruction: CoreInstruction,
+	roles: ReadonlyMap<number, OperandRole>,
+):
+	| { readonly base: CoreValueId; readonly key: number; readonly value: CoreValueId }
+	| undefined {
+	let found:
+		| { readonly base: CoreValueId; readonly key: number; readonly value: CoreValueId }
+		| undefined;
+	for (const [operand, role] of roles) {
+		if (role.kind !== "own-slot") continue;
+		if (role.mode !== "write" || role.valueOperand === undefined || found !== undefined) {
+			return undefined;
+		}
+		const base = instruction.inputs[operand];
+		const value = instruction.inputs[role.valueOperand];
+		if (base === undefined || value === undefined) return undefined;
+		found = { base, key: role.key, value };
 	}
 	return found;
 }
