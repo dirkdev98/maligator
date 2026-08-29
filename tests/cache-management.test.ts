@@ -55,6 +55,17 @@ describe("Maligator cache management", () => {
 		for (const directory of recent) expect(existsSync(directory)).toBe(true);
 	});
 
+	it("counts managed and unmanaged cache roots without double-counting", () => {
+		const root = cacheRoot();
+		artifact(root, "compiler-wire", "managed", 100, 0);
+		artifact(root, "file-digests", "unmanaged", 40, 0);
+
+		const status = inspectMaligatorCache(root);
+
+		expect(status.managedBytes).toBe(100);
+		expect(status.totalBytes).toBe(140);
+	});
+
 	it("previews without deleting and refuses to race an active command", () => {
 		const root = cacheRoot();
 		const smokeStamp = path.join(root, "test-suite-smoke.json");

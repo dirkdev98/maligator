@@ -26,7 +26,6 @@ import {
 	DEFAULT_CACHE_MIN_AGE_MS,
 	formatCacheBytes,
 	inspectMaligatorCache,
-	maybeMaintainMaligatorCache,
 	pruneMaligatorCache,
 } from "./cache-management.ts";
 import { maligatorCacheDirectory, MaligatorCacheRootError } from "./cache-root.ts";
@@ -1428,12 +1427,6 @@ export async function runCli(
 			command.kind !== "version" &&
 			command.kind !== "init"
 		) {
-			try {
-				maybeMaintainMaligatorCache();
-			} catch {
-				// Automatic maintenance is best-effort. Explicit cache prune reports
-				// active leases or other maintenance directly to the user.
-			}
 			cacheLease = createCacheLease(command.kind);
 		}
 		verbose =

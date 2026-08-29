@@ -22,7 +22,6 @@ const GIB = 1024 ** 3;
 const DAY = 24 * 60 * 60 * 1000;
 const LEASE_DIRECTORY = ".leases";
 const PRUNE_LOCK = ".prune-lock";
-const MAINTENANCE_FILE = ".maintenance.json";
 const TEST_SUITE_SMOKE_FILE = "test-suite-smoke.json";
 const GLOBAL_CLEAR_LOCK = ".clear-lock";
 const LEASE_HEARTBEAT_MS = 30_000;
@@ -224,14 +223,28 @@ function managedEntries(root: string): Array<CacheEntry> {
 	];
 }
 
+const MANAGED_ROOTS = new Set([
+	...CACHE_FAMILIES.map((policy) => policy.path.split("/")[0]!),
+	"actions",
+	"blobs",
+]);
+
+function unmanagedBytes(root: string): number {
+	if (!existsSync(root)) return 0;
+	return readdirSync(root)
+		.filter((name) => !MANAGED_ROOTS.has(name))
+		.reduce((total, name) => total + treeSize(path.join(root, name)), 0);
+}
+
 export function inspectMaligatorCache(cacheRootOverride?: string): CacheStatus {
 	const root = cacheRoot(cacheRootOverride);
 	const entries = managedEntries(root);
 	const activeCommands = activeCacheCommands(root, false);
+	const managedBytes = entries.reduce((total, item) => total + item.bytes, 0);
 	return {
 		root,
-		totalBytes: treeSize(root),
-		managedBytes: entries.reduce((total, item) => total + item.bytes, 0),
+		totalBytes: managedBytes + unmanagedBytes(root),
+		managedBytes,
 		entries,
 		activeLeases: activeCommands.length,
 		activeCommands,
@@ -449,9 +462,15 @@ export function pruneMaligatorCache(options: CachePruneOptions = {}): CachePrune
 			// use its cold-start fuse instead of reporting a false warm timeout.
 			rmSync(path.join(root, TEST_SUITE_SMOKE_FILE), { force: true });
 		}
-		const after = dryRun
-			? { ...before, totalBytes: Math.max(0, projectedBytes) }
-			: inspectMaligatorCache(root);
+		const after = {
+			...before,
+			totalBytes: Math.max(0, projectedBytes),
+			managedBytes: Math.max(
+				0,
+				before.managedBytes - removed.reduce((total, item) => total + item.bytes, 0),
+			),
+			entries: before.entries.filter((item) => !removedPaths.has(item.path)),
+		};
 		return {
 			...after,
 			removedBytes: removed.reduce((total, item) => total + item.bytes, 0),
@@ -511,29 +530,6 @@ export function clearAllMaligatorCaches(cacheBaseOverride?: string): CacheClearR
 	}
 }
 
-export function maybeMaintainMaligatorCache(
-	cacheRootOverride?: string,
-): CachePruneResult | undefined {
-	const root = cacheRoot(cacheRootOverride);
-	const statePath = path.join(root, MAINTENANCE_FILE);
-	try {
-		const state = JSON.parse(readFileSync(statePath, "utf8")) as { checkedAt?: unknown };
-		if (typeof state.checkedAt === "number" && Date.now() - state.checkedAt < DAY) {
-			return undefined;
-		}
-	} catch {
-		// A missing state performs the first conservative maintenance pass.
-	}
-	const result = pruneMaligatorCache({
-		cacheRoot: root,
-		maxBytes: AUTOMATIC_CACHE_MAX_BYTES,
-		minAgeMs: 7 * DAY,
-	});
-	mkdirSync(path.dirname(statePath), { recursive: true });
-	writeFileSync(statePath, `${JSON.stringify({ checkedAt: Date.now() })}\n`);
-	return result;
-}
-
 export function touchCacheEntry(target: string): void {
 	try {
 		const now = new Date();
@@ -545,7 +541,6 @@ export function touchCacheEntry(target: string): void {
 
 export const DEFAULT_CACHE_MAX_BYTES = 5 * GIB;
 export const DEFAULT_CACHE_MIN_AGE_MS = DAY;
-export const AUTOMATIC_CACHE_MAX_BYTES = 16 * GIB;
 
 export function formatCacheBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;

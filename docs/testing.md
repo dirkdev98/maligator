@@ -74,10 +74,10 @@ Build, test, standards, benchmark, and quality commands hold process leases.
 Pruning refuses to run while any live lease exists, removes stale lease files
 only after confirming their process is gone, and never caches test verdicts.
 Cache hits touch their artifact directory so retention follows actual reuse.
-Normal commands perform at most one conservative automatic maintenance check per
-day, with a 16 GiB target, a seven-day age threshold, and the same emergency cap.
-Use `--max-gb`, `--min-age-days`, and `--verbose` to tune or audit an explicit
-prune. `maligator cache clear --all` removes every Maligator cache-layout generation
+Normal commands never inventory or evict the shared cache: a first build, run, dev,
+or test therefore cannot inherit the cost of a recursive maintenance scan. Use
+`--max-gb`, `--min-age-days`, and `--verbose` to tune or audit an explicit prune.
+`maligator cache clear --all` removes every Maligator cache-layout generation
 after the same live-command safety check, without retaining readers for old formats.
 WPT removes its per-run native scratch tree on exit; pass
 `--keep-artifacts` only when debugging generated sources or binaries.

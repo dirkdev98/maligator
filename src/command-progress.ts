@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { createCacheLease, maybeMaintainMaligatorCache } from "./cache-management.ts";
+import { createCacheLease } from "./cache-management.ts";
 import type { CacheLease } from "./cache-management.ts";
 
 export function formatCommandDuration(durationMs: number): string {
@@ -39,12 +39,6 @@ export class CommandProgress {
 		this.#stream = options.stream ?? process.stderr;
 		this.#quiet = options.quiet ?? false;
 		if (options.cacheLease !== false) {
-			try {
-				maybeMaintainMaligatorCache();
-			} catch {
-				// Another live command or maintenance pass owns the cache. The lease
-				// below remains the concurrency authority; automatic pruning is optional.
-			}
 			this.#cacheLease = createCacheLease(name, options.cacheRoot);
 			process.once("exit", this.#releaseCacheLease);
 		}
