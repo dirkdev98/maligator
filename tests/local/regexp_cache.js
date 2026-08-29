@@ -36,6 +36,21 @@ check(
 		secondMatch[2] === undefined,
 );
 
+/(a)(b)(c)?/.exec("prefix-ab-suffix");
+check(
+	"legacy RegExp statics preserve the last successful match",
+	RegExp.input === "prefix-ab-suffix" &&
+		RegExp.lastMatch === "ab" &&
+		RegExp.lastParen === "b" &&
+		RegExp.leftContext === "prefix-" &&
+		RegExp.rightContext === "-suffix" &&
+		RegExp.$1 === "a" &&
+		RegExp.$2 === "b" &&
+		RegExp.$3 === "",
+);
+RegExp.$_ = { toString: () => "assigned input" };
+check("legacy RegExp input setter coerces its value", RegExp.input === "assigned input");
+
 check(
 	"different flags do not alias",
 	!new RegExp("a").test("A") && new RegExp("a", "i").test("A"),

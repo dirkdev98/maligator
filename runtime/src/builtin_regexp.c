@@ -65,6 +65,68 @@ static MalValue regexp_substring(MalVm *vm, MalString *s, i32 start, i32 end) {
     );
 }
 
+typedef enum RegexpLegacyStateIndex {
+    REGEXP_LEGACY_INPUT,
+    REGEXP_LEGACY_LAST_MATCH,
+    REGEXP_LEGACY_LAST_PAREN,
+    REGEXP_LEGACY_LEFT_CONTEXT,
+    REGEXP_LEGACY_RIGHT_CONTEXT,
+    REGEXP_LEGACY_PAREN_1,
+    REGEXP_LEGACY_STATE_COUNT = REGEXP_LEGACY_PAREN_1 + 9,
+} RegexpLegacyStateIndex;
+
+static MalArrayObject *regexp_legacy_state(MalVm *vm) {
+    return mal_value_to_array_object(
+        vm->intrinsics[MAL_INTRINSIC_REGEXP_LEGACY_STATE]);
+}
+
+static void regexp_legacy_store(
+    MalVm *vm, RegexpLegacyStateIndex index, MalValue value
+) {
+    mal_array_object_store(regexp_legacy_state(vm), mal_key_index(index), value);
+}
+
+static MalValue regexp_legacy_load(MalVm *vm, RegexpLegacyStateIndex index) {
+    MalValue value;
+    bool present = mal_array_object_dense_get(
+        regexp_legacy_state(vm), (u32) index, &value);
+    assert(present);
+    return value;
+}
+
+static void regexp_legacy_update(
+    MalVm *vm, MalString *subject, const int32_t *captures, int32_t group_count
+) {
+    int32_t match_start = captures[0];
+    int32_t match_end = captures[1];
+    regexp_legacy_store(
+        vm, REGEXP_LEGACY_INPUT, mal_value_from_string(subject));
+    regexp_legacy_store(
+        vm, REGEXP_LEGACY_LAST_MATCH,
+        regexp_substring(vm, subject, match_start, match_end));
+    regexp_legacy_store(
+        vm, REGEXP_LEGACY_LEFT_CONTEXT,
+        regexp_substring(vm, subject, 0, match_start));
+    regexp_legacy_store(
+        vm, REGEXP_LEGACY_RIGHT_CONTEXT,
+        regexp_substring(vm, subject, match_end, (i32) mal_string_length(subject)));
+
+    MalValue empty = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    MalValue last_paren = empty;
+    for (int32_t index = 1; index <= 9; index++) {
+        MalValue value = empty;
+        if (index < group_count && captures[2 * index] >= 0) {
+            value = regexp_substring(
+                vm, subject, captures[2 * index], captures[2 * index + 1]);
+            last_paren = value;
+        }
+        regexp_legacy_store(
+            vm, (RegexpLegacyStateIndex) (REGEXP_LEGACY_PAREN_1 + index - 1),
+            value);
+    }
+    regexp_legacy_store(vm, REGEXP_LEGACY_LAST_PAREN, last_paren);
+}
+
 // Decode UTF-8 (regress group names) into a heap MalString of UTF-16 units.
 static MalString *regexp_string_from_utf8(MalVm *vm, const uint8_t *bytes, usize len) {
     c16 stack_units[128];
@@ -651,6 +713,8 @@ static MalValue regexp_builtin_exec(
             return mal_value_new_undefined();
         }
     }
+
+    regexp_legacy_update(vm, s, caps, ngroups);
 
     if (result_kind == REGEXP_BUILTIN_EXEC_MATCH_ONLY) {
         if (heap_caps) {
@@ -2277,6 +2341,82 @@ fail:
     return mal_value_new_undefined();
 }
 
+static bool regexp_legacy_require_constructor(MalVm *vm, MalValue receiver) {
+    if (receiver == vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR]) {
+        return true;
+    }
+    mal_vm_throw_error(
+        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Legacy RegExp accessor called on incompatible receiver");
+    return false;
+}
+
+static RegexpLegacyStateIndex regexp_legacy_accessor_index(MalValue callee) {
+    MalValue slot = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    return (RegexpLegacyStateIndex) mal_value_to_i32(slot);
+}
+
+static MalValue regexp_legacy_getter(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    if (!regexp_legacy_require_constructor(vm, this_value)) {
+        return mal_value_new_undefined();
+    }
+    return regexp_legacy_load(vm, regexp_legacy_accessor_index(callee));
+}
+
+static MalValue regexp_legacy_input_setter(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target;
+    (void) callee;
+    if (!regexp_legacy_require_constructor(vm, this_value)) {
+        return mal_value_new_undefined();
+    }
+    MalString *input;
+    if (!mal_vm_to_string(
+            vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &input)) {
+        return mal_value_new_undefined();
+    }
+    regexp_legacy_store(
+        vm, REGEXP_LEGACY_INPUT, mal_value_from_string(input));
+    return mal_value_new_undefined();
+}
+
+static void regexp_define_legacy_accessor(
+    MalVm *vm, MalObject *constructor, const byte *name,
+    const byte *getter_name, const byte *setter_name,
+    RegexpLegacyStateIndex index, bool writable
+) {
+    MalValue slot = mal_value_from_i32((i32) index);
+    MalValue accessors[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, accessors, countof(accessors));
+    MalObject *function_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    accessors[0] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots_arity(
+            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, getter_name),
+            0, regexp_legacy_getter, &slot, 1));
+    if (writable) {
+        accessors[1] = mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(
+                &vm->heap, function_prototype, mal_intrinsic_ascii(vm, setter_name),
+                1, regexp_legacy_input_setter));
+    }
+    MalPropertyDesc desc = mal_intrinsic_accessor_desc(
+        accessors[0], accessors[1], MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(
+        constructor, mal_intrinsic_string_key(vm, name), &desc);
+    mal_gc_unroot(&root);
+}
+
 void mal_builtin_regexp_install(MalVm *vm) {
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 
@@ -2291,11 +2431,38 @@ void mal_builtin_regexp_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
     vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE] = mal_value_from_object(prototype);
 
+    MalArrayObject *legacy_state =
+        mal_intrinsic_new_dense_array(vm, REGEXP_LEGACY_STATE_COUNT);
+    vm->intrinsics[MAL_INTRINSIC_REGEXP_LEGACY_STATE] =
+        mal_value_from_array_object(legacy_state);
+    MalValue empty = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    for (i32 index = 0; index < REGEXP_LEGACY_STATE_COUNT; index++) {
+        mal_array_object_store(legacy_state, mal_key_index(index), empty);
+    }
     mal_intrinsic_define_data(vm, constructor_object, (const byte *) "prototype", vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, (const byte *) "constructor", vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
     mal_intrinsic_define_species(vm, constructor_object);
     mal_intrinsic_define_method_n(vm, constructor_object, (const byte *) "escape", 1, regexp_escape);
+
+    regexp_define_legacy_accessor(vm, constructor_object, "input", "get input", "set input", REGEXP_LEGACY_INPUT, true);
+    regexp_define_legacy_accessor(vm, constructor_object, "$_", "get $_", "set $_", REGEXP_LEGACY_INPUT, true);
+    regexp_define_legacy_accessor(vm, constructor_object, "lastMatch", "get lastMatch", nullptr, REGEXP_LEGACY_LAST_MATCH, false);
+    regexp_define_legacy_accessor(vm, constructor_object, "$&", "get $&", nullptr, REGEXP_LEGACY_LAST_MATCH, false);
+    regexp_define_legacy_accessor(vm, constructor_object, "lastParen", "get lastParen", nullptr, REGEXP_LEGACY_LAST_PAREN, false);
+    regexp_define_legacy_accessor(vm, constructor_object, "$+", "get $+", nullptr, REGEXP_LEGACY_LAST_PAREN, false);
+    regexp_define_legacy_accessor(vm, constructor_object, "leftContext", "get leftContext", nullptr, REGEXP_LEGACY_LEFT_CONTEXT, false);
+    regexp_define_legacy_accessor(vm, constructor_object, "$`", "get $`", nullptr, REGEXP_LEGACY_LEFT_CONTEXT, false);
+    regexp_define_legacy_accessor(vm, constructor_object, "rightContext", "get rightContext", nullptr, REGEXP_LEGACY_RIGHT_CONTEXT, false);
+    regexp_define_legacy_accessor(vm, constructor_object, "$'", "get $'", nullptr, REGEXP_LEGACY_RIGHT_CONTEXT, false);
+    static const byte *paren_names[] = {"$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$9"};
+    static const byte *paren_getter_names[] = {"get $1", "get $2", "get $3", "get $4", "get $5", "get $6", "get $7", "get $8", "get $9"};
+    for (i32 index = 0; index < 9; index++) {
+        regexp_define_legacy_accessor(
+            vm, constructor_object, paren_names[index], paren_getter_names[index],
+            nullptr, (RegexpLegacyStateIndex) (REGEXP_LEGACY_PAREN_1 + index),
+            false);
+    }
 
     mal_intrinsic_define_method_n(vm, prototype, (const byte *) "exec", 1, regexp_proto_exec);
     mal_intrinsic_define_method_n(vm, prototype, (const byte *) "test", 1, regexp_proto_test);

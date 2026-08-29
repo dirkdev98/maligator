@@ -268,6 +268,8 @@ typedef enum MalIntrinsic {
 #endif
     MAL_INTRINSIC_REGEXP_CONSTRUCTOR,
     MAL_INTRINSIC_REGEXP_PROTOTYPE,
+    /** Per-realm Annex B RegExp input/match/capture state. */
+    MAL_INTRINSIC_REGEXP_LEGACY_STATE,
     // %RegExpStringIteratorPrototype%: the prototype of the iterator returned by
     // RegExp.prototype[@@matchAll] / String.prototype.matchAll.
     MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE,
