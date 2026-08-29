@@ -1086,7 +1086,7 @@ function registerAnnexBVarBindings(file: SemanticFile): void {
 				}
 				if (current === variableScope) break;
 			}
-			if (!eligible) continue;
+			if (!eligible || binding.name === "arguments") continue;
 
 			let owner = scope.parent;
 			while (
@@ -1120,7 +1120,7 @@ function registerAnnexBVarBindings(file: SemanticFile): void {
 					candidate.name === binding.name &&
 					!candidate.immutableSelfReference,
 			);
-			if (outer?.implicit && binding.name !== "arguments") continue;
+			if (outer?.implicit) continue;
 			if (!outer) {
 				outer = {
 					kind: "var",
