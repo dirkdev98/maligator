@@ -118,6 +118,9 @@ export interface Binding {
 	 */
 	immutableSelfReference?: true;
 
+	/** Annex B's var-scoped mirror for a sloppy block-level function binding. */
+	annexBVarBinding?: Binding;
+
 	/**
 	 * An ES import binding. It aliases (shares storage with) the exporting
 	 * module's binding, so the importing module must not give it its own
@@ -301,6 +304,7 @@ export function analyzeFile(file: SemanticFile) {
 	};
 	createScopesFromNode(file.ast, file);
 	collectBindingsForNode(file.ast, file);
+	registerAnnexBVarBindings(file);
 	if (file.commonjs) {
 		injectCommonJsBindings(file);
 	}
@@ -943,9 +947,7 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 				node.type === "FunctionDeclaration" &&
 				isVarScopedFunctionDeclaration(node, scope, file)
 					? "var"
-					: scope.strict
-						? "let"
-						: "var";
+					: "let";
 			// Register a function as a binding in their scope.
 			extractBindingsAndRegister(
 				file,
@@ -1034,6 +1036,103 @@ function isVarScopedFunctionDeclaration(
 		functionScope.node.body === declarationScope.node &&
 		declarationScope.node.body.includes(node)
 	);
+}
+
+function annexBVariableScope(scope: Scope): Scope {
+	let current = scope;
+	while (current.parent) {
+		const parent = current.parent;
+		if (
+			parent.node.type === "FunctionDeclaration" ||
+			parent.node.type === "FunctionExpression" ||
+			parent.node.type === "ArrowFunctionExpression"
+		) {
+			return hasParameterExpressions(parent.node) ? current : parent;
+		}
+		current = parent;
+	}
+	return current;
+}
+
+function registerAnnexBVarBindings(file: SemanticFile): void {
+	for (const scope of file.scopes) {
+		for (const binding of scope.bindings) {
+			const declaration = binding.declarationNode;
+			if (
+				binding.kind !== "let" ||
+				scope.strict ||
+				declaration?.type !== "FunctionDeclaration" ||
+				binding.name === "let" ||
+				binding.annexBVarBinding
+			) {
+				continue;
+			}
+
+			const variableScope = annexBVariableScope(scope);
+			let eligible = true;
+			for (let current: Scope | null = scope; current; current = current.parent) {
+				const conflict = current.bindings.find(
+					(candidate) =>
+						candidate !== binding &&
+						candidate.name === binding.name &&
+						candidate.kind !== "var",
+				);
+				if (conflict) {
+					const simpleCatchParameter =
+						current.node.type === "CatchClause" &&
+						current.node.param?.type === "Identifier" &&
+						conflict.declarationNode === current.node.param;
+					if (!simpleCatchParameter) eligible = false;
+				}
+				if (current === variableScope) break;
+			}
+			if (!eligible || binding.name === "arguments") continue;
+
+			let owner = scope.parent;
+			while (
+				owner &&
+				owner.node.type !== "FunctionDeclaration" &&
+				owner.node.type !== "FunctionExpression" &&
+				owner.node.type !== "ArrowFunctionExpression"
+			) {
+				owner = owner.parent;
+			}
+			const ownerNode = owner?.node;
+			if (
+				owner &&
+				ownerNode &&
+				(ownerNode.type === "FunctionDeclaration" ||
+					ownerNode.type === "FunctionExpression" ||
+					ownerNode.type === "ArrowFunctionExpression") &&
+				ownerNode.params.some((parameter) =>
+					owner.bindings.some(
+						(candidate) =>
+							candidate.name === binding.name && candidate.declarationNode === parameter,
+					),
+				)
+			) {
+				continue;
+			}
+
+			let outer = variableScope.bindings.find(
+				(candidate) =>
+					candidate.kind === "var" &&
+					candidate.name === binding.name &&
+					!candidate.immutableSelfReference,
+			);
+			if (outer?.implicit) continue;
+			if (!outer) {
+				outer = {
+					kind: "var",
+					name: binding.name,
+					declarationNode: declaration,
+					usageNodes: [],
+				};
+				variableScope.bindings.push(outer);
+			}
+			binding.annexBVarBinding = outer;
+		}
+	}
 }
 
 function hasParameterExpressions(

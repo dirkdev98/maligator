@@ -58,6 +58,27 @@ function parseWithMeriyah(
 	}
 }
 
+function normalizeAnnexBIfFunctions(program: ESTree.Program): void {
+	// Annex B models bare if-clause declarations as synthetic blocks before var mirroring.
+	traverseEstree(program.body, (node) => {
+		if (node.type !== "IfStatement") return;
+		if (node.consequent.type === "FunctionDeclaration") {
+			node.consequent = {
+				type: "BlockStatement",
+				body: [node.consequent],
+				loc: node.consequent.loc,
+			};
+		}
+		if (node.alternate?.type === "FunctionDeclaration") {
+			node.alternate = {
+				type: "BlockStatement",
+				body: [node.alternate],
+				loc: node.alternate.loc,
+			};
+		}
+	});
+}
+
 function rejectEvalReturn(body: Array<ESTree.Statement>): void {
 	const containsReturn =
 		traverseEstree(body, (node) => {
@@ -239,25 +260,26 @@ export function parseScript(
 			directEvalContext.allowSuperCall ||
 			directEvalContext.allowNewTarget ||
 			directEvalContext.privateNames.length > 0);
+	const ast = contextual
+		? contextualEvalProgram(txt, strict, directEvalContext)
+		: parseWithMeriyah(txt, {
+				...MERIYAH_OPTIONS,
+				impliedStrict: strict,
+				// Enforce static-semantic early errors so invalid source is rejected
+				// with a SyntaxError at compile: lexical catches duplicate/redeclared
+				// bindings, illegal continue/break, duplicate switch defaults, etc.;
+				// validateRegex validates regexp literals; webcompat enables the AnnexB
+				// sloppy relaxations we actually support (`\8`/`\9` string escapes,
+				// labelled/block function declarations) so they are not over-rejected.
+				// (webcompat has one meriyah bug — it accepts an invalid call-expression
+				// destructuring target `[f() = 1] = x` — but breaking real AnnexB code
+				// is worse than missing that one early error.)
+			});
+	if (!strict) normalizeAnnexBIfFunctions(ast);
 	return {
 		type: "script",
 		strict,
-
-		ast: contextual
-			? contextualEvalProgram(txt, strict, directEvalContext)
-			: parseWithMeriyah(txt, {
-					...MERIYAH_OPTIONS,
-					impliedStrict: strict,
-					// Enforce static-semantic early errors so invalid source is rejected
-					// with a SyntaxError at compile: lexical catches duplicate/redeclared
-					// bindings, illegal continue/break, duplicate switch defaults, etc.;
-					// validateRegex validates regexp literals; webcompat enables the AnnexB
-					// sloppy relaxations we actually support (`\8`/`\9` string escapes,
-					// labelled/block function declarations) so they are not over-rejected.
-					// (webcompat has one meriyah bug — it accepts an invalid call-expression
-					// destructuring target `[f() = 1] = x` — but breaking real AnnexB code
-					// is worse than missing that one early error.)
-				}),
+		ast,
 	};
 }
 

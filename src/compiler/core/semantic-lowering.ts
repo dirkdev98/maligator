@@ -2039,6 +2039,7 @@ function emitVarDeclarationInits(
 		if (
 			binding.kind !== "var" ||
 			functionNames.has(binding.name) ||
+			isDirectEvalVarBindingValue(program, fn, binding) ||
 			binding.undeclared ||
 			binding.implicit ||
 			binding === argumentsBinding ||
@@ -2052,23 +2053,8 @@ function emitVarDeclarationInits(
 
 		const location = getOrCreateBindingLocation(program, fn, binding);
 		if (location.type === "globalProperty") {
-			if (binding.declarationNode?.type !== "FunctionDeclaration") {
-				pendingGlobalNames.push(location.nameStringIndex);
-				continue;
-			}
-			flushGlobalNames();
-			const value = nextCoreVariable(fn);
-			block.emitter.emit({
-				type: "createEmpty",
-				registers: [value],
-			});
-			block.emitter.emit({
-				type: "storeGlobalProperty",
-				registers: [value],
-				nameStringIndex: location.nameStringIndex,
-				declaration: true,
-				declarationConfigurable: program.evalCompletion,
-			});
+			pendingGlobalNames.push(location.nameStringIndex);
+			continue;
 		} else {
 			flushGlobalNames();
 			const parameterBinding = scope.parent?.bindings.find(
@@ -5317,9 +5303,8 @@ function compileStatementsToBlock(
 	 *
 	 * Only set for function bodies, program/module bodies and class static blocks -
 	 * the lists where a function declaration is function/global-scoped in both strict
-	 * and sloppy mode. Nested blocks keep textual-position emission: there a sloppy
-	 * declaration's binding is hoisted to the enclosing function scope (Annex B) and
-	 * must not be assigned at block entry.
+	 * and sloppy mode. Nested blocks initialize their lexical function binding at block
+	 * entry; Annex B mirrors that value into the var scope at the textual position.
 	 */
 	hoistFunctions = false,
 	resourceScope = true,
@@ -5367,17 +5352,18 @@ function compileStatementsToBlock(
 	// Hoisting pre-pass: bind every top-level function declaration up front so the
 	// loop below can skip re-emitting them at their textual position.
 	const hoistedDeclarations = new Set<ESTree.Node>();
+	const annexBHoistedDeclarations = new Set<ESTree.FunctionDeclaration>();
+	const functionDeclarations = statements.flatMap((statement) => {
+		const declaration =
+			statement.type === "FunctionDeclaration"
+				? statement
+				: statement.type === "ExportNamedDeclaration" &&
+					  statement.declaration?.type === "FunctionDeclaration"
+					? statement.declaration
+					: undefined;
+		return declaration ? [declaration] : [];
+	});
 	if (hoistFunctions) {
-		const functionDeclarations = statements.flatMap((statement) => {
-			const declaration =
-				statement.type === "FunctionDeclaration"
-					? statement
-					: statement.type === "ExportNamedDeclaration" &&
-						  statement.declaration?.type === "FunctionDeclaration"
-						? statement.declaration
-						: undefined;
-			return declaration ? [declaration] : [];
-		});
 		// Function/Eval/GlobalDeclarationInstantiation scans in reverse and keeps
 		// only the final declaration for each name.
 		const functionNames = new Set<string>();
@@ -5435,6 +5421,17 @@ function compileStatementsToBlock(
 		for (const scope of declarationScopes) {
 			emitVarDeclarationInits(program, fn, block, scope, functionNames);
 		}
+	} else {
+		for (const declaration of functionDeclarations) {
+			const binding = fn.semanticFile.nodeToBinding.get(declaration);
+			if (binding?.kind !== "let") continue;
+			compileFunctionDeclaration(program, fn, block, declaration, false);
+			if (binding.annexBVarBinding) {
+				annexBHoistedDeclarations.add(declaration);
+			} else {
+				hoistedDeclarations.add(declaration);
+			}
+		}
 	}
 
 	for (const statement of statements) {
@@ -5489,7 +5486,9 @@ function compileStatementsToBlock(
 				break;
 			}
 			case "FunctionDeclaration": {
-				if (!hoistedDeclarations.has(statement)) {
+				if (annexBHoistedDeclarations.has(statement)) {
+					compileAnnexBVarAssignment(program, fn, block, statement);
+				} else if (!hoistedDeclarations.has(statement)) {
 					compileFunctionDeclaration(program, fn, block, statement);
 				}
 				break;
@@ -5943,6 +5942,7 @@ function compileFunctionDeclaration(
 	fn: CoreFrontendFunction,
 	block: CoreFrontendBlock,
 	statement: ESTree.FunctionDeclaration,
+	initializeAnnexBVar = true,
 ) {
 	const binding = fn.semanticFile.nodeToBinding.get(statement);
 	if (!binding) {
@@ -5955,6 +5955,7 @@ function compileFunctionDeclaration(
 			(binding.usageNodes[0] === statement || binding.usageNodes[0] === statement.id));
 	if (
 		onlyUsedByDeclaration &&
+		!binding.annexBVarBinding &&
 		!isScriptGlobalProperty(fn.semanticFile, binding) &&
 		!(statement.id && isDirectEvalVarBinding(program, fn, statement.id))
 	) {
@@ -6014,6 +6015,40 @@ function compileFunctionDeclaration(
 		});
 	} else {
 		storeRegisterAtLocation(block, location, destination);
+	}
+	if (initializeAnnexBVar) {
+		compileAnnexBVarAssignment(program, fn, block, statement);
+	}
+}
+
+function compileAnnexBVarAssignment(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
+	statement: ESTree.FunctionDeclaration,
+): void {
+	const binding = fn.semanticFile.nodeToBinding.get(statement);
+	const outer = binding?.annexBVarBinding;
+	if (!binding || !outer) return;
+	const value = loadRegisterFromLocation(
+		fn,
+		block,
+		getOrCreateBindingLocation(program, fn, binding),
+	);
+	if (isDirectEvalVarBindingValue(program, fn, outer)) {
+		const found = nextCoreVariable(fn);
+		block.emitter.emit({
+			type: "withSet",
+			registers: [found, value],
+			nameStringIndex: getOrCreateStringConstant(program, outer.name),
+		});
+		return;
+	}
+	const outerLocation = getOrCreateBindingLocation(program, fn, outer);
+	if (outerLocation.type === "globalProperty") {
+		emitGlobalPropertyStore(program, fn, { block }, outer.name, value);
+	} else {
+		storeRegisterAtLocation(block, outerLocation, value);
 	}
 }
 
@@ -12336,6 +12371,15 @@ function isDirectEvalVarBinding(
 	fn: CoreFrontendFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
+	const binding = fn.semanticFile.nodeToBinding.get(identifier);
+	return binding ? isDirectEvalVarBindingValue(program, fn, binding) : false;
+}
+
+function isDirectEvalVarBindingValue(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	binding: Binding,
+): boolean {
 	if (
 		!program.evalDirect ||
 		fn.semanticFile.strict ||
@@ -12343,8 +12387,7 @@ function isDirectEvalVarBinding(
 	) {
 		return false;
 	}
-	const binding = fn.semanticFile.nodeToBinding.get(identifier);
-	if (!binding || binding.kind !== "var" || binding.undeclared || binding.implicit) {
+	if (binding.kind !== "var" || binding.undeclared || binding.implicit) {
 		return false;
 	}
 	return fn.semanticFile.scopes[0]?.bindings.includes(binding) ?? false;
