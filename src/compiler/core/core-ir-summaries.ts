@@ -441,6 +441,76 @@ function outgoingEdges(block: CoreBlock): ReadonlyArray<OutgoingEdge> {
 	return edges;
 }
 
+function valuesLiveAcrossSuspension(
+	fn: CoreFunction,
+	registry: CoreOpcodeRegistry,
+): ReadonlySet<CoreValueId> {
+	const uses = fn.blocks.map(() => new Set<CoreValueId>());
+	const definitions = fn.blocks.map(() => new Set<CoreValueId>());
+	const successors = fn.blocks.map(() => new Set<number>());
+	const addUse = (block: CoreBlock, value: CoreValueId): void => {
+		if (!definitions[block.id]!.has(value)) uses[block.id]!.add(value);
+	};
+	for (const block of fn.blocks) {
+		for (const { value } of block.parameters) definitions[block.id]!.add(value);
+		for (const instruction of block.instructions) {
+			for (const input of instruction.inputs) addUse(block, input);
+			for (const output of instruction.outputs) definitions[block.id]!.add(output);
+		}
+		const terminator = block.terminator;
+		if (terminator.kind === "branch" || terminator.kind === "guard") {
+			addUse(block, terminator.condition);
+		} else if (terminator.kind === "switch") {
+			addUse(block, terminator.discriminant);
+		} else if (terminator.kind === "return" || terminator.kind === "throw") {
+			addUse(block, terminator.value);
+		}
+		for (const edge of outgoingEdges(block)) {
+			successors[block.id]!.add(edge.block);
+			for (const argument of edge.arguments) addUse(block, argument);
+		}
+	}
+	const liveIn = uses.map((values) => new Set(values));
+	const liveOut = fn.blocks.map(() => new Set<CoreValueId>());
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let block = fn.blocks.length - 1; block >= 0; block--) {
+			const nextOut = new Set<CoreValueId>();
+			for (const successor of successors[block]!) {
+				for (const value of liveIn[successor]!) nextOut.add(value);
+			}
+			const nextIn = new Set(uses[block]);
+			for (const value of nextOut) {
+				if (!definitions[block]!.has(value)) nextIn.add(value);
+			}
+			if (
+				nextOut.size !== liveOut[block]!.size ||
+				[...nextOut].some((value) => !liveOut[block]!.has(value)) ||
+				nextIn.size !== liveIn[block]!.size ||
+				[...nextIn].some((value) => !liveIn[block]!.has(value))
+			) {
+				liveOut[block] = nextOut;
+				liveIn[block] = nextIn;
+				changed = true;
+			}
+		}
+	}
+	const retained = new Set<CoreValueId>();
+	for (const block of fn.blocks) {
+		const live = new Set(liveOut[block.id]);
+		for (let index = block.instructions.length - 1; index >= 0; index--) {
+			const instruction = block.instructions[index]!;
+			if (coreInstructionEffects(instruction, registry).maySuspend) {
+				for (const value of live) retained.add(value);
+			}
+			for (const output of instruction.outputs) live.delete(output);
+			for (const input of instruction.inputs) live.add(input);
+		}
+	}
+	return retained;
+}
+
 /**
  * Where an operand of a call lands in the callee's frame, or undefined when the
  * mapping is not statically known.
@@ -549,6 +619,9 @@ function collectLocalFacts(
 	const parameterIndices = new Map<CoreValueId, number>(
 		fn.parameters.map((value, index) => [value, index] as const),
 	);
+	const suspensionRetained = fn.isAsync
+		? valuesLiveAcrossSuspension(fn, registry)
+		: new Set<CoreValueId>();
 
 	const raiseBase = (value: CoreValueId, level: ValueEscapeFact): void => {
 		const current = escapeBase.get(value);
@@ -565,6 +638,10 @@ function collectLocalFacts(
 	const breakContainment = (value: CoreValueId): void => {
 		containmentBase.add(value);
 	};
+	for (const value of suspensionRetained) {
+		raiseBase(value, "retained");
+		breakContainment(value);
+	}
 
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -744,8 +821,7 @@ function collectLocalFacts(
 		returnedCallSites,
 		// A heap-allocated activation keeps everything the caller handed it alive
 		// past the call, and mapped arguments alias the formals through a live object.
-		frameOutlivesCall:
-			fn.isGenerator || fn.isAsync || fn.metadata.mappedArguments === true,
+		frameOutlivesCall: fn.isGenerator || fn.metadata.mappedArguments === true,
 	};
 }
 

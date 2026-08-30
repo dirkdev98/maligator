@@ -700,6 +700,9 @@ export function materializeCoreExactScalarRepresentations(
 		const representations = new Map(
 			values.map(({ id, representation }) => [id, representation]),
 		);
+		const boxedEntryParameters = new Set(
+			fn.parameters.filter((value) => representations.get(value) === "boxed"),
+		);
 		const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
 		let nextInstruction =
 			Math.max(
@@ -851,7 +854,13 @@ export function materializeCoreExactScalarRepresentations(
 					block.id !== fn.entry &&
 					!block.parameters.some(({ role }) => role === "exception")
 				) {
-					for (const parameter of block.parameters) {
+					for (const [index, parameter] of block.parameters.entries()) {
+						const crossesBoxedEntry = representationCfg.predecessors[block.id]!.some(
+							(edge) =>
+								edge.kind === "ordinary" &&
+								boxedEntryParameters.has(edge.arguments[index]!),
+						);
+						if (crossesBoxedEntry) continue;
 						narrow(
 							parameter.value,
 							scalarCoreRepresentation(

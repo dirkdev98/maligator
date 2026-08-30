@@ -98,6 +98,17 @@ function ignoreParameter(functionIndex: number): CoreFunction {
 	return builder.finish(entry);
 }
 
+function asyncIgnoreParameter(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		isAsync: true,
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const [result] = builder.appendInstruction(entry, "createUndefined", []);
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	return builder.finish(entry);
+}
+
 function mutateParameter(functionIndex: number): CoreFunction {
 	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
 		parameterCount: 1,
@@ -345,7 +356,7 @@ describe("interprocedural summary lattices", () => {
 		});
 	});
 
-	it("reports the fresh boundary object returned by generators and async functions", () => {
+	it("reports fresh generator and async boundary objects without blanket async retention", () => {
 		const generator = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
 			isGenerator: true,
 			parameterCount: 1,
@@ -370,8 +381,57 @@ describe("interprocedural summary lattices", () => {
 		for (const summary of analysis.functions) {
 			expect(summary.returnProvenance).toEqual({ kind: "fresh" });
 			expect(summary.returnRepresentation).toBe("boxed");
-			expect(summary.parameterEscape).toEqual(["retained"]);
 		}
+		expect(analysis.summary(0)?.parameterEscape).toEqual(["retained"]);
+		expect(analysis.summary(1)?.parameterEscape).toEqual(["returned"]);
+	});
+
+	it("retains only async values live across suspension", () => {
+		const asynchronous = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			isAsync: true,
+			parameterCount: 2,
+		});
+		const entry = asynchronous.createBlock([{}, {}]);
+		const [before, after] = asynchronous
+			.block(entry)
+			.parameters.map(({ value }) => value);
+		asynchronous.appendInstruction(entry, "unary", [before!], {
+			attributes: { operator: "typeof" },
+		});
+		const [awaited] = asynchronous.appendInstruction(entry, "createUndefined", []);
+		asynchronous.appendInstruction(entry, "await", [awaited!], { outputCount: 2 });
+		const [result] = asynchronous.appendInstruction(entry, "unary", [after!], {
+			attributes: { operator: "typeof" },
+		});
+		asynchronous.setTerminator(entry, { kind: "return", value: result! });
+		const summary = analyzeCoreProgramSummaries(
+			coreProgram([asynchronous.finish(entry)]),
+		).summary(0)!;
+		expect(summary.parameterEscape).toEqual(["none", "retained"]);
+		expect(summary.parameterContainment).toEqual(["preserved", "unknown"]);
+	});
+
+	it("consumes async suspension liveness for allocation containment", () => {
+		const program: CoreProgram = {
+			...coreProgram([asyncIgnoreParameter(0), objectCaller(1, 0, false)]),
+			stringConstants: [[], [102]],
+		};
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const ablated = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining", "interprocedural"]),
+			verification: "per-pass",
+		}).program;
+		expect(analyzeCoreProgramSummaries(program).summary(0)).toMatchObject({
+			parameterEscape: ["none"],
+			parameterContainment: ["preserved"],
+		});
+		expect(coreInstructions(optimized.functions[1]!, "loadPropertyStatic")).toHaveLength(
+			0,
+		);
+		expect(coreInstructions(ablated.functions[1]!, "loadPropertyStatic")).toHaveLength(1);
 	});
 
 	it("joins two closed targets without losing their independent effects", () => {
