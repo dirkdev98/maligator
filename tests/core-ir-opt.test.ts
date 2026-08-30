@@ -3687,6 +3687,51 @@ describe("Core IR optimizer", () => {
 		});
 	});
 
+	it("folds whole-program primitive observations before final lowering", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function observe(condition) {
+				const text = condition ? "value" : "other";
+				const absent = condition ? null : undefined;
+				return typeof text === "string" && text !== 1 && !absent;
+			}
+			globalThis.result = observe(globalThis.condition);`,
+			"core-whole-program-kinds.js",
+		);
+		const compile = (ablate: boolean): CoreProgram => {
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToProgramImage(semantic, {
+				...(ablate ? { optimizationAblations: new Set(["fact-driven"] as const) } : {}),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			});
+			return optimized!;
+		};
+		const observations = (program: CoreProgram) =>
+			program.functions[functionIndexOfName(program, "observe")]!.blocks.flatMap(
+				({ instructions }) => instructions,
+			).filter(
+				({ opcode, attributes }) =>
+					opcode === "typeofCompare" ||
+					(opcode === "unary" &&
+						(attributes.operator === "typeof" || attributes.operator === "!")) ||
+					(opcode === "binary" &&
+						(attributes.operator === "===" || attributes.operator === "!==")),
+			);
+		const baseline = compile(true);
+		const optimized = compile(false);
+		expect(observations(baseline)).toHaveLength(3);
+		expect(observations(optimized)).toEqual([]);
+		expect(
+			optimized.functions[functionIndexOfName(optimized, "observe")]!.blocks.flatMap(
+				({ instructions }) => instructions,
+			).some(
+				({ opcode, attributes }) =>
+					opcode === "createBoolean" && attributes.value === true,
+			),
+		).toBe(true);
+	});
+
 	it("removes TDZ checks only when Core SSA excludes the Empty sentinel", () => {
 		const optimizedOpcodes = (source: string): Array<string> => {
 			const semantic = analyzeSourceAndRunSemanticAnalysis(source, "core-tdz.js");

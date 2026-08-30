@@ -30,6 +30,7 @@ export interface CompilerOptimizationDecision {
 export const OPTIMIZATION_ABLATIONS = [
 	"constant-folding",
 	"escape",
+	"fact-driven",
 	"inlining",
 	"interprocedural",
 	"static-properties",

@@ -23,6 +23,17 @@ import type {
 	SemanticEpochFamily,
 	WorldFactId,
 } from "../shared/compiler-facts.ts";
+import {
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "../shared/compiler-value-kinds.ts";
+import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import {
 	authorityFallback,
@@ -124,9 +135,11 @@ import {
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { selectCoreExactHeapAccesses } from "./core-ir-value-classes.ts";
 import {
+	analyzeCoreValueKinds,
 	materializeCoreExactScalarRepresentations,
 	selectCoreExactValueFacts,
 } from "./core-ir-value-kinds.ts";
+import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import {
 	CoreIrVerificationError,
 	verifyCoreFunction,
@@ -5606,6 +5619,161 @@ const foldTypeofComparisons: CoreFunctionPass = {
 	},
 };
 
+function exactTypeofResult(mask: CompilerValueKindMask): string | undefined {
+	switch (mask) {
+		case COMPILER_VALUE_KIND_UNDEFINED:
+			return "undefined";
+		case COMPILER_VALUE_KIND_NULL:
+			return "object";
+		case COMPILER_VALUE_KIND_BOOLEAN:
+			return "boolean";
+		case COMPILER_VALUE_KIND_NUMBER:
+			return "number";
+		case COMPILER_VALUE_KIND_STRING:
+			return "string";
+		case COMPILER_VALUE_KIND_SYMBOL:
+			return "symbol";
+		case COMPILER_VALUE_KIND_BIGINT:
+			return "bigint";
+		default:
+			return undefined;
+	}
+}
+
+function exactTypeofComparison(
+	mask: CompilerValueKindMask,
+	expected: unknown,
+): boolean | undefined {
+	const exact = exactTypeofResult(mask);
+	if (exact !== undefined) return exact === expected;
+	const primitive =
+		expected === "undefined"
+			? COMPILER_VALUE_KIND_UNDEFINED
+			: expected === "boolean"
+				? COMPILER_VALUE_KIND_BOOLEAN
+				: expected === "number"
+					? COMPILER_VALUE_KIND_NUMBER
+					: expected === "string"
+						? COMPILER_VALUE_KIND_STRING
+						: expected === "symbol"
+							? COMPILER_VALUE_KIND_SYMBOL
+							: expected === "bigint"
+								? COMPILER_VALUE_KIND_BIGINT
+								: undefined;
+	if (primitive !== undefined) return (mask & primitive) === 0 ? false : undefined;
+	if (expected === "object") {
+		return (mask & (COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_OBJECT)) === 0
+			? false
+			: undefined;
+	}
+	return expected === "function" && (mask & COMPILER_VALUE_KIND_OBJECT) === 0
+		? false
+		: undefined;
+}
+
+function exactKindTruthiness(mask: CompilerValueKindMask): boolean | undefined {
+	const alwaysFalsy = COMPILER_VALUE_KIND_UNDEFINED | COMPILER_VALUE_KIND_NULL;
+	if ((mask & ~alwaysFalsy) === 0) return false;
+	if ((mask & ~COMPILER_VALUE_KIND_SYMBOL) === 0) return true;
+	return undefined;
+}
+
+/** Consume closed whole-program value kinds while Core can still simplify users. */
+const foldWholeProgramValueKinds: CoreFunctionPass = {
+	name: "fold-whole-program-value-kinds",
+	ablation: "fact-driven",
+	dependsOnProgram: true,
+	run(fn, analyses, program) {
+		const valueKinds = analyses.valueKinds(program);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (instruction.inputs.length === 1 && instruction.outputs.length === 1) {
+						const input = instruction.inputs[0]!;
+						const mask = valueKinds.kindMask(fn.functionIndex, input);
+						if (instruction.opcode === "typeofCompare") {
+							const expected = instructionAttribute(instruction, "expected");
+							const matches = exactTypeofComparison(mask, expected);
+							if (matches !== undefined) {
+								changed = true;
+								return {
+									...instruction,
+									opcode: "createBoolean",
+									inputs: [],
+									attributes: {
+										value:
+											instructionAttribute(instruction, "negated") === true
+												? !matches
+												: matches,
+									},
+								};
+							}
+						}
+						if (
+							instruction.opcode === "unary" &&
+							instructionAttribute(instruction, "operator") === "typeof"
+						) {
+							const result = exactTypeofResult(mask);
+							const stringIndex =
+								result === undefined
+									? undefined
+									: exactStringConstantIndex(program, result);
+							if (stringIndex !== undefined) {
+								changed = true;
+								return {
+									...instruction,
+									opcode: "createString",
+									inputs: [],
+									attributes: { stringIndex },
+								};
+							}
+						}
+						if (
+							instruction.opcode === "unary" &&
+							instructionAttribute(instruction, "operator") === "!"
+						) {
+							const truthy = exactKindTruthiness(mask);
+							if (truthy !== undefined) {
+								changed = true;
+								return {
+									...instruction,
+									opcode: "createBoolean",
+									inputs: [],
+									attributes: { value: !truthy },
+								};
+							}
+						}
+					}
+					if (
+						instruction.opcode === "binary" &&
+						instruction.inputs.length === 2 &&
+						instruction.outputs.length === 1
+					) {
+						const operator = instructionAttribute(instruction, "operator");
+						if (operator === "===" || operator === "!==") {
+							const left = valueKinds.kindMask(fn.functionIndex, instruction.inputs[0]!);
+							const right = valueKinds.kindMask(fn.functionIndex, instruction.inputs[1]!);
+							if ((left & right) === 0) {
+								changed = true;
+								return {
+									...instruction,
+									opcode: "createBoolean",
+									inputs: [],
+									attributes: { value: operator === "!==" },
+								};
+							}
+						}
+					}
+					return instruction;
+				}),
+			}),
+		);
+		return changed ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	},
+};
+
 /** Fold an exact string SSA value into the property operation's attributes. */
 const foldStaticPropertyKeys: CoreFunctionPass = {
 	name: "fold-static-property-keys",
@@ -5746,6 +5914,14 @@ export class CoreAnalysisManager {
 				readonly context: CoreCompilationContext | undefined;
 				readonly functions: ReadonlyArray<CoreFunction>;
 				readonly analysis: CoreProgramSummaries;
+		  }
+		| undefined;
+	#valueKinds:
+		| {
+				readonly program: CoreProgram;
+				readonly context: CoreCompilationContext | undefined;
+				readonly functions: ReadonlyArray<CoreFunction>;
+				readonly analysis: CoreValueKindAnalysis;
 		  }
 		| undefined;
 
@@ -5961,6 +6137,34 @@ export class CoreAnalysisManager {
 			this.context,
 		);
 		this.#summaries = {
+			program,
+			context: this.context,
+			functions: program.functions,
+			analysis,
+		};
+		return analysis;
+	}
+
+	valueKinds(program: CoreProgram): CoreValueKindAnalysis {
+		const cached = this.#valueKinds;
+		if (cached?.program === program && cached.context === this.context) {
+			return cached.analysis;
+		}
+		if (
+			cached !== undefined &&
+			cached.context === this.context &&
+			cached.functions.length === program.functions.length &&
+			cached.functions.every((fn, index) => fn === program.functions[index])
+		) {
+			this.#valueKinds = { ...cached, program };
+			return cached.analysis;
+		}
+		const analysis = analyzeCoreValueKinds(
+			program,
+			this.context,
+			this.summaries(program),
+		);
+		this.#valueKinds = {
 			program,
 			context: this.context,
 			functions: program.functions,
@@ -11475,6 +11679,11 @@ const CORE_LOCAL_PASSES: ReadonlyArray<CoreFunctionPass> = [
 
 const CORE_PROGRAM_PASSES: ReadonlyArray<CoreFunctionPass> = [refineDirectCallEffects];
 
+/** Whole-program facts are solved once, then ordinary local cleanup consumes them. */
+const CORE_FACT_DRIVEN_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	foldWholeProgramValueKinds,
+];
+
 /**
  * Complete every certificate in `fn` with its admission record: where the
  * license's semantic-epoch dependencies are tested, and whether that one test
@@ -11888,6 +12097,12 @@ export function executeCoreOptimizations(
 		}
 		const programChanged = runFixpointPasses(CORE_PROGRAM_PASSES, traceRound++);
 		if (!programChanged) break;
+	}
+	const factDrivenChanged = runFixpointPasses(CORE_FACT_DRIVEN_PASSES, traceRound++);
+	if (factDrivenChanged) {
+		for (let localRound = 0; localRound < maxRounds; localRound++) {
+			if (!runFixpointPasses(CORE_LOCAL_PASSES, traceRound++)) break;
+		}
 	}
 	// Local passes can expose a stable callee after the normalization-time solve.
 	// Solve the final graph once, then share that exact analysis between advisory
