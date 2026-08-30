@@ -174,11 +174,3 @@ export function coreGeneratedCodeAdmitsRegion(
 		cost.compileScore <= 128 + benefitScore * cost.loopFrequency * 16
 	);
 }
-
-export function coreGeneratedCodeAdmitsGuardedDispatch(
-	cost: CoreGeneratedCodeCost,
-): boolean {
-	const avoidedGenericDispatch = cost.loopFrequency * 3;
-	const runtimeGuard = cost.loopFrequency;
-	return avoidedGenericDispatch - runtimeGuard >= cost.compileScore;
-}

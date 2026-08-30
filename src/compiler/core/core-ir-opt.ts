@@ -53,8 +53,6 @@ import {
 	normalizeCoreFact,
 } from "./core-ir-fact-implication.ts";
 import {
-	coreBlockLoopFrequency,
-	coreGeneratedCodeAdmitsGuardedDispatch,
 	coreGeneratedCodeAdmitsRegion,
 	coreGeneratedCodeCostForInstructions,
 	coreGeneratedCodeCostForRegion,
@@ -1241,10 +1239,10 @@ const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
  * falls back to generic dispatch on a mismatch, so construct keeps a guarded
  * singleton even when the lattice remains open. Ordinary calls use a narrower
  * generated-code admission rule: the guarded inliner consumes eligible open
- * candidates before this pass. A residual open singleton receives a direct-entry
- * hint only when structural loop frequency amortizes its live callee guard and
- * generic twin; otherwise only a closed singleton is admitted. The backend still
- * validates every hint against the live callee.
+ * candidates before this pass, while a residual call receives a direct-entry hint
+ * only from a closed singleton. The backend still validates that hint against the
+ * live callee; this avoids adding a speculative ABI path to an open residual call
+ * merely because the bounded lattice retained one advisory candidate.
  *
  * `%Function.prototype.call%` flattening remains guarded by the runtime's retained
  * primordial identity. Its shifted script target is admitted only when the
@@ -1284,7 +1282,6 @@ function annotateCoreDirectCallTargets(
 			return fn;
 		}
 		let definitions: Map<CoreValueId, CoreInstruction> | undefined;
-		const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
 		const definition = (value: CoreValueId): CoreInstruction | undefined =>
 			(definitions ??= functionDefinitions(fn)).get(value);
 		const closedTarget = (value: CoreValueId): number | undefined =>
@@ -1312,22 +1309,7 @@ function annotateCoreDirectCallTargets(
 				const targets = analysis.targets(fn.functionIndex, callee);
 				const singletonTarget = coreCalleeTargetsSingleFunction(targets);
 				const closedCallTarget = coreCalleeTargetsClosedFunction(targets);
-				const guardedDispatchCost = coreGeneratedCodeOverheadCost({
-					guards: 1,
-					genericTwins: 1,
-					loopFrequency: coreBlockLoopFrequency(cfg, block.id),
-				});
-				const guardedCallTarget =
-					instruction.opcode === "call" &&
-					closedCallTarget === undefined &&
-					singletonTarget !== undefined &&
-					coreGeneratedCodeAdmitsGuardedDispatch(guardedDispatchCost)
-						? singletonTarget
-						: undefined;
-				const target =
-					instruction.opcode === "call"
-						? (closedCallTarget ?? guardedCallTarget)
-						: singletonTarget;
+				const target = instruction.opcode === "call" ? closedCallTarget : singletonTarget;
 				const targetFunction =
 					target === undefined ? undefined : functionsByIndex.get(target);
 				const attributes: Record<string, CoreAttributeValue> = {
