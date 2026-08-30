@@ -1016,6 +1016,30 @@ describe("callee-target annotation", () => {
 		);
 	});
 
+	it("admits guarded residual direct dispatch inside a loop", () => {
+		const program = optimizedCore(
+			`let handler = function first(value) { return arguments.length + value; };
+			function retarget(other) { handler = other; }
+			function run(limit) {
+				let total = 0;
+				for (let index = 0; index < limit; index++) total += handler(index);
+				return total;
+			}
+			retarget(run);
+			run(1);`,
+			"call-targets-loop-cost.mjs",
+		);
+		const firstIndex = functionIndexOfName(program, "first");
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		const [site] = callSites(run);
+		expect(site?.attributes.directFunctionIndex).toBe(firstIndex);
+		expect(calleeTargetsAttribute(site!)).toEqual({
+			functions: [firstIndex],
+			anyScript: false,
+			opaque: true,
+		});
+	});
+
 	it("records generated-code decline only from the final target graph", () => {
 		const source = `function target(value) { return value + 1; }
 			function caller(open, value) {

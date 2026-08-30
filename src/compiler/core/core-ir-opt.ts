@@ -52,6 +52,15 @@ import {
 	coreFactImplies,
 	normalizeCoreFact,
 } from "./core-ir-fact-implication.ts";
+import {
+	coreBlockLoopFrequency,
+	coreGeneratedCodeAdmitsGuardedDispatch,
+	coreGeneratedCodeAdmitsRegion,
+	coreGeneratedCodeCostForInstructions,
+	coreGeneratedCodeCostForRegion,
+	coreGeneratedCodeOverheadCost,
+} from "./core-ir-generated-cost.ts";
+import type { CoreGeneratedCodeCost } from "./core-ir-generated-cost.ts";
 import { analyzeCoreLoopInductions } from "./core-ir-loops.ts";
 import type {
 	CoreInductionVariable,
@@ -143,6 +152,7 @@ import type {
 	CoreInstruction,
 	CoreInstructionId,
 	CoreProgram,
+	CoreRegion,
 	CoreRepresentation,
 	CoreTerminator,
 	CoreValueId,
@@ -1146,7 +1156,6 @@ const materializeContainedAggregateOwnSlots: CoreFunctionPass = {
 const MAX_INLINE_INSTRUCTIONS = 40;
 const MAX_INLINE_TOTAL_COST = MAX_INLINE_INSTRUCTIONS * 8;
 const MAX_GUARDED_INLINE_COST = 48;
-const GUARDED_INLINE_TARGET_COST = 2;
 const INLINE_DISQUALIFYING_OPCODES = new Set([
 	"loadThis",
 	"loadNewTarget",
@@ -1176,6 +1185,7 @@ const INLINE_DISQUALIFYING_OPCODES = new Set([
 interface LinearInlineTarget {
 	readonly blocks: ReadonlyArray<CoreBlock>;
 	readonly instructionCount: number;
+	readonly generatedCost: CoreGeneratedCodeCost;
 }
 
 interface GuardedInlineCandidate {
@@ -1231,11 +1241,10 @@ const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
  * falls back to generic dispatch on a mismatch, so construct keeps a guarded
  * singleton even when the lattice remains open. Ordinary calls use a narrower
  * generated-code admission rule: the guarded inliner consumes eligible open
- * candidates before this pass, while a residual call receives a direct-entry hint
- * only from a closed singleton. The backend still validates that hint against the
- * live callee; this admission rule avoids adding that speculative guard and generic
- * twin to an open residual path merely because the bounded lattice retained one
- * advisory candidate.
+ * candidates before this pass. A residual open singleton receives a direct-entry
+ * hint only when structural loop frequency amortizes its live callee guard and
+ * generic twin; otherwise only a closed singleton is admitted. The backend still
+ * validates every hint against the live callee.
  *
  * `%Function.prototype.call%` flattening remains guarded by the runtime's retained
  * primordial identity. Its shifted script target is admitted only when the
@@ -1275,6 +1284,7 @@ function annotateCoreDirectCallTargets(
 			return fn;
 		}
 		let definitions: Map<CoreValueId, CoreInstruction> | undefined;
+		const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
 		const definition = (value: CoreValueId): CoreInstruction | undefined =>
 			(definitions ??= functionDefinitions(fn)).get(value);
 		const closedTarget = (value: CoreValueId): number | undefined =>
@@ -1301,9 +1311,22 @@ function annotateCoreDirectCallTargets(
 				if (callee === undefined) return instruction;
 				const targets = analysis.targets(fn.functionIndex, callee);
 				const singletonTarget = coreCalleeTargetsSingleFunction(targets);
+				const closedCallTarget = coreCalleeTargetsClosedFunction(targets);
+				const guardedDispatchCost = coreGeneratedCodeOverheadCost({
+					guards: 1,
+					genericTwins: 1,
+					loopFrequency: coreBlockLoopFrequency(cfg, block.id),
+				});
+				const guardedCallTarget =
+					instruction.opcode === "call" &&
+					closedCallTarget === undefined &&
+					singletonTarget !== undefined &&
+					coreGeneratedCodeAdmitsGuardedDispatch(guardedDispatchCost)
+						? singletonTarget
+						: undefined;
 				const target =
 					instruction.opcode === "call"
-						? coreCalleeTargetsClosedFunction(targets)
+						? (closedCallTarget ?? guardedCallTarget)
 						: singletonTarget;
 				const targetFunction =
 					target === undefined ? undefined : functionsByIndex.get(target);
@@ -1460,7 +1483,19 @@ function linearInlineTarget(target: CoreFunction): LinearInlineTarget | undefine
 		}
 		blocks.push(block);
 		if (block.terminator.kind === "return") {
-			return instructionCount === 0 ? undefined : { blocks, instructionCount };
+			return instructionCount === 0
+				? undefined
+				: {
+						blocks,
+						instructionCount,
+						generatedCost: coreGeneratedCodeCostForInstructions(
+							target,
+							blocks.flatMap((candidate) =>
+								candidate.instructions.map((instruction) => ({ instruction })),
+							),
+							{ duplicatedInstructions: instructionCount },
+						),
+					};
 		}
 		if (block.terminator.kind !== "jump") return undefined;
 		block = target.blocks[block.terminator.edge.block];
@@ -2027,13 +2062,17 @@ function inlineSimpleCoreFunctions(
 						continue;
 					}
 					const guarded = closedTargetIndex === undefined || candidates.length > 1;
-					const cost = candidates.reduce(
-						(total, { linear }) =>
-							total +
-							linear.instructionCount +
-							(guarded ? GUARDED_INLINE_TARGET_COST : 0),
-						0,
-					);
+					const guardedOverhead = guarded
+						? coreGeneratedCodeOverheadCost({
+								guards: candidates.length,
+								genericTwins: 1,
+							}).compileScore
+						: 0;
+					const cost =
+						candidates.reduce(
+							(total, { linear }) => total + linear.generatedCost.compileScore,
+							0,
+						) + guardedOverhead;
 					if (guarded && cost > MAX_GUARDED_INLINE_COST) {
 						recordCallOptimizationDecision(
 							decisions,
@@ -10588,14 +10627,10 @@ function isPreExpressionOpcode(instruction: CoreInstruction): boolean {
 	);
 }
 
-function preExpressionCost(instruction: CoreInstruction): number {
-	if (
-		instruction.opcode === "mathUnaryNumber" ||
-		instruction.opcode === "mathBinaryNumber"
-	) {
-		return 4;
-	}
-	return 1;
+function preExpressionCost(fn: CoreFunction, instruction: CoreInstruction): number {
+	return coreGeneratedCodeCostForInstructions(fn, [{ instruction }], {
+		duplicatedInstructions: 1,
+	}).compileScore;
 }
 
 /**
@@ -10786,7 +10821,7 @@ function eliminateOnePartialRedundancy(
 				!valid ||
 				valuesByPredecessor.size === 0 ||
 				(missing !== undefined &&
-					preExpressionCost(candidate) * valuesByPredecessor.size <= incoming.length)
+					preExpressionCost(fn, candidate) * valuesByPredecessor.size <= incoming.length)
 			) {
 				continue;
 			}
@@ -11413,10 +11448,32 @@ function annotateRegionAdmission(
 	const cfg = analyses.controlFlow(fn);
 	const model = analyses.regionValidity(fn);
 	let changed = false;
-	const regions = fn.regions.map((region) => {
+	const regions = fn.regions.flatMap((region): ReadonlyArray<CoreRegion> => {
 		const license = coreRegionLicense(region);
 		const anchor = region.anchors[0];
-		if (license === undefined || anchor === undefined) return region;
+		if (license === undefined || anchor === undefined) return [region];
+		const guard = attributeObject(license.guard);
+		const guardCount =
+			license.guard === "structural"
+				? 1
+				: (Array.isArray(guard?.dependencies) ? guard.dependencies.length : 0) +
+					(Array.isArray(guard?.obligations) ? guard.obligations.length : 0);
+		const encodedCost = attributeObject(region.data.cost);
+		const benefitScore = typeof encodedCost?.score === "number" ? encodedCost.score : 1;
+		const generatedCost = coreGeneratedCodeCostForRegion(
+			fn,
+			cfg,
+			region.claimedInstructions,
+			{
+				guards: guardCount,
+				duplicatedInstructions: region.claimedInstructions.length,
+				genericTwins: license.genericTwin === "retained" ? 1 : 0,
+			},
+		);
+		if (!coreGeneratedCodeAdmitsRegion(generatedCost, benefitScore)) {
+			changed = true;
+			return [];
+		}
 		const validity = coreRegionAdmissionValidity(
 			fn,
 			cfg,
@@ -11424,18 +11481,28 @@ function annotateRegionAdmission(
 			coreRegionAdmissionQuery(region, anchor),
 		);
 		const existing = coreRegionAdmission(region);
-		if (existing?.anchor === anchor && existing.validity === validity) return region;
+		if (
+			existing?.anchor === anchor &&
+			existing.validity === validity &&
+			stableAttributeValue(region.data.generatedCodeCost) ===
+				stableAttributeValue(generatedCost)
+		) {
+			return [region];
+		}
 		changed = true;
-		return {
-			...region,
-			data: {
-				...region.data,
-				license: {
-					...license,
-					admission: { anchor: { $coreInstruction: anchor }, validity },
+		return [
+			{
+				...region,
+				data: {
+					...region.data,
+					generatedCodeCost: { ...generatedCost },
+					license: {
+						...license,
+						admission: { anchor: { $coreInstruction: anchor }, validity },
+					},
 				},
 			},
-		};
+		];
 	});
 	return changed ? { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 } : fn;
 }

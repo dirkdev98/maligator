@@ -70,6 +70,15 @@ function coreRegions(program: CoreProgram): ReadonlyArray<CoreRegion> {
 	return program.functions.flatMap(({ regions }) => regions);
 }
 
+function generatedCost(
+	region: CoreRegion,
+): Readonly<Record<string, unknown>> | undefined {
+	const value = region.data.generatedCodeCost;
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Readonly<Record<string, unknown>>)
+		: undefined;
+}
+
 function corePlacements(program: CoreProgram): ReadonlyArray<[string, unknown]> {
 	return coreRegions(program)
 		.map(
@@ -138,6 +147,30 @@ function regexpProjections(
 }
 
 describe("Core region property placement", () => {
+	it("records generated-code cost on every selected specialization", () => {
+		const regions = coreRegions(lockedCore(SPLIT_AND_SLICE, "region-cost.mjs"));
+		expect(regions.length).toBeGreaterThan(0);
+		for (const region of regions) {
+			const cost = generatedCost(region);
+			for (const field of [
+				"instructions",
+				"helperCalls",
+				"guards",
+				"boxingOperations",
+				"rootSlots",
+				"safepoints",
+				"duplicatedInstructions",
+				"loopFrequency",
+				"estimatedCStatements",
+				"estimatedBinaryBytes",
+				"compileScore",
+				"runtimeScore",
+			] as const) {
+				expect(typeof cost?.[field]).toBe("number");
+			}
+		}
+	});
+
 	it("certifies opposite placements for two equally adjacent property calls", () => {
 		const core = lockedCore(OPPOSITE_PLACEMENTS, "placement-opposites.js");
 		const placements = coreRegions(core)
