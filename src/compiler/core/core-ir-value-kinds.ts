@@ -760,14 +760,14 @@ export function materializeCoreExactScalarRepresentations(
 ): CoreExactValueFactSelection {
 	const analysis = analyzeCoreValueKinds(program, context, summaries);
 	let programChanged = false;
+	const stableCaptured = new Set(
+		(context?.data.singleAssignmentCapturedSlots ?? []).map(({ owner, index }) =>
+			coreCapturedSlotKey(owner, index),
+		),
+	);
 	const functions = program.functions.map((fn): CoreFunction => {
 		let blocks: ReadonlyArray<CoreBlock> = fn.blocks;
 		const values = [...fn.values];
-		const stableCaptured = new Set(
-			(context?.data.singleAssignmentCapturedSlots ?? []).map(({ owner, index }) =>
-				coreCapturedSlotKey(owner, index),
-			),
-		);
 		const users = new Map<CoreValueId, Array<CoreInstruction>>();
 		for (const instruction of fn.blocks.flatMap(({ instructions }) => instructions)) {
 			for (const input of instruction.inputs) {
