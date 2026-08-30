@@ -3386,13 +3386,19 @@ function emitInstruction(
 						firstOnRight ? `__nf_${fusion.id}_value` : externalExpr,
 					);
 					if (nativeExpr !== null) {
+						const result =
+							reps[dst] === "number"
+								? nativeExpr
+								: reps[dst] === "int32"
+									? `mal_ops_number_to_i32(${nativeExpr})`
+									: `mal_ops_number_value(${nativeExpr})`;
 						const guard = externalIsNum
 							? `__nf_${fusion.id}_ok`
 							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
 						const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
 						return [
 							`if (${guard}) {`,
-							`  r${dst} = mal_ops_number_value(${nativeExpr});`,
+							`  r${dst} = ${result};`,
 							`} else {`,
 							`  if (__nf_${fusion.id}_ok) r${first.dst} = mal_ops_number_value(__nf_${fusion.id}_value);`,
 							`  r${dst} = ${slow};`,

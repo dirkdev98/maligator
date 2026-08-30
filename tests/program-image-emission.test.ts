@@ -1064,6 +1064,16 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_ops_number_as_f64(mal_value_from_i32");
 	});
 
+	it("stores fused arithmetic in its unboxed destination representation", () => {
+		const output = emit(
+			`"use strict"; function sum(count) { let total = 0; for (let index = 0; index < count; index++) total += (index & 31) - 16; return total; } globalThis.sum = sum;`,
+		);
+		expect(output).toMatch(/r\d+ = __nf_\d+_value - \(f64\) r\d+;/);
+		expect(output).not.toMatch(
+			/r\d+ = mal_ops_number_value\(__nf_\d+_value - \(f64\) r\d+\);/,
+		);
+	});
+
 	it("keeps unbounded literal concatenation on the generic operator", () => {
 		const output = emit(
 			`"use strict"; function key(value) { return "p" + value; } globalThis.key = key;`,
