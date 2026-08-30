@@ -5,7 +5,6 @@ import type {
 	CoreFunction,
 	CoreInstruction,
 	CoreInstructionId,
-	CoreValueId,
 } from "./core-ir.ts";
 
 const BOXING_OPCODES = new Set(["binary", "unary", "toPropertyKey", "requireCoercible"]);
@@ -45,18 +44,10 @@ export interface CoreGeneratedCodeOverhead {
 }
 
 function generatedCodeCost(
-	fn: CoreFunction | undefined,
+	boxedValues: Uint8Array | undefined,
 	sites: ReadonlyArray<CoreGeneratedCodeInstructionSite>,
 	overhead: CoreGeneratedCodeOverhead,
 ): CoreGeneratedCodeCost {
-	const boxed =
-		fn === undefined
-			? undefined
-			: new Set<CoreValueId>(
-					fn.values
-						.filter(({ representation }) => representation === "boxed")
-						.map(({ id }) => id),
-				);
 	let helperCalls = 0;
 	let guards = overhead.guards ?? 0;
 	let boxingOperations = 0;
@@ -75,8 +66,12 @@ function generatedCodeCost(
 		if (BOXING_OPCODES.has(instruction.opcode)) boxingOperations++;
 		if (effects.mayGc) {
 			safepoints++;
-			if (boxed !== undefined) {
-				rootSlots += new Set(instruction.inputs.filter((value) => boxed.has(value))).size;
+			if (boxedValues !== undefined) {
+				for (const [index, value] of instruction.inputs.entries()) {
+					if (boxedValues[value] === 1 && instruction.inputs.indexOf(value) === index) {
+						rootSlots++;
+					}
+				}
 			}
 		}
 		loopFrequency = Math.max(loopFrequency, siteFrequency);
@@ -124,6 +119,50 @@ function generatedCodeCost(
 	};
 }
 
+export interface CoreGeneratedCodeCostModel {
+	forInstructions(
+		sites: ReadonlyArray<CoreGeneratedCodeInstructionSite>,
+		overhead?: CoreGeneratedCodeOverhead,
+	): CoreGeneratedCodeCost;
+	forRegion(
+		claimedInstructions: ReadonlyArray<CoreInstructionId>,
+		overhead: CoreGeneratedCodeOverhead,
+	): CoreGeneratedCodeCost;
+}
+
+export function coreGeneratedCodeCostModel(
+	fn: CoreFunction,
+	cfg?: CoreControlFlow,
+): CoreGeneratedCodeCostModel {
+	const valueLimit = (fn.values.at(-1)?.id ?? -1) + 1;
+	const boxedValues = new Uint8Array(valueLimit);
+	for (const value of fn.values) {
+		if (value.representation === "boxed") boxedValues[value.id] = 1;
+	}
+	const sitesByInstruction: Array<CoreGeneratedCodeInstructionSite | undefined> = [];
+	if (cfg !== undefined) {
+		for (const block of fn.blocks) {
+			const loopFrequency = coreBlockLoopFrequency(cfg, block.id);
+			for (const instruction of block.instructions) {
+				sitesByInstruction[instruction.id] = { instruction, loopFrequency };
+			}
+		}
+	}
+	return {
+		forInstructions(sites, overhead = {}) {
+			return generatedCodeCost(boxedValues, sites, overhead);
+		},
+		forRegion(claimedInstructions, overhead) {
+			const sites: Array<CoreGeneratedCodeInstructionSite> = [];
+			for (const instruction of claimedInstructions) {
+				const site = sitesByInstruction[instruction];
+				if (site !== undefined) sites.push(site);
+			}
+			return generatedCodeCost(boxedValues, sites, overhead);
+		},
+	};
+}
+
 export function coreBlockLoopFrequency(cfg: CoreControlFlow, block: CoreBlockId): number {
 	let depth = 0;
 	for (const loop of cfg.loops) {
@@ -137,7 +176,7 @@ export function coreGeneratedCodeCostForInstructions(
 	sites: ReadonlyArray<CoreGeneratedCodeInstructionSite>,
 	overhead: CoreGeneratedCodeOverhead = {},
 ): CoreGeneratedCodeCost {
-	return generatedCodeCost(fn, sites, overhead);
+	return coreGeneratedCodeCostModel(fn).forInstructions(sites, overhead);
 }
 
 export function coreGeneratedCodeOverheadCost(
@@ -152,17 +191,7 @@ export function coreGeneratedCodeCostForRegion(
 	claimedInstructions: ReadonlyArray<CoreInstructionId>,
 	overhead: CoreGeneratedCodeOverhead,
 ): CoreGeneratedCodeCost {
-	const claimed = new Set(claimedInstructions);
-	const sites: Array<CoreGeneratedCodeInstructionSite> = [];
-	for (const block of fn.blocks) {
-		const frequency = coreBlockLoopFrequency(cfg, block.id);
-		for (const instruction of block.instructions) {
-			if (claimed.has(instruction.id)) {
-				sites.push({ instruction, loopFrequency: frequency });
-			}
-		}
-	}
-	return generatedCodeCost(fn, sites, overhead);
+	return coreGeneratedCodeCostModel(fn, cfg).forRegion(claimedInstructions, overhead);
 }
 
 export function coreGeneratedCodeAdmitsRegion(

@@ -54,8 +54,8 @@ import {
 } from "./core-ir-fact-implication.ts";
 import {
 	coreGeneratedCodeAdmitsRegion,
+	coreGeneratedCodeCostModel,
 	coreGeneratedCodeCostForInstructions,
-	coreGeneratedCodeCostForRegion,
 	coreGeneratedCodeOverheadCost,
 } from "./core-ir-generated-cost.ts";
 import type { CoreGeneratedCodeCost } from "./core-ir-generated-cost.ts";
@@ -11429,6 +11429,7 @@ function annotateRegionAdmission(
 	if (fn.regions.length === 0) return fn;
 	const cfg = analyses.controlFlow(fn);
 	const model = analyses.regionValidity(fn);
+	const costModel = coreGeneratedCodeCostModel(fn, cfg);
 	let changed = false;
 	const regions = fn.regions.flatMap((region): ReadonlyArray<CoreRegion> => {
 		const license = coreRegionLicense(region);
@@ -11442,16 +11443,11 @@ function annotateRegionAdmission(
 					(Array.isArray(guard?.obligations) ? guard.obligations.length : 0);
 		const encodedCost = attributeObject(region.data.cost);
 		const benefitScore = typeof encodedCost?.score === "number" ? encodedCost.score : 1;
-		const generatedCost = coreGeneratedCodeCostForRegion(
-			fn,
-			cfg,
-			region.claimedInstructions,
-			{
-				guards: guardCount,
-				duplicatedInstructions: region.claimedInstructions.length,
-				genericTwins: license.genericTwin === "retained" ? 1 : 0,
-			},
-		);
+		const generatedCost = costModel.forRegion(region.claimedInstructions, {
+			guards: guardCount,
+			duplicatedInstructions: region.claimedInstructions.length,
+			genericTwins: license.genericTwin === "retained" ? 1 : 0,
+		});
 		if (!coreGeneratedCodeAdmitsRegion(generatedCost, benefitScore)) {
 			changed = true;
 			return [];
