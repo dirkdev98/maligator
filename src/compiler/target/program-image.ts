@@ -606,9 +606,9 @@ export function createConservativeNativePlan(
 }
 
 /**
- * Validate the native GC contract and materialize the static shadow-frame union.
- * This is the only permitted union operation: producers retain exact maps, while
- * the current C frame representation explicitly chooses one slot set per function.
+ * Validate the native GC contract and materialize the shadow-frame slot union.
+ * Producers retain exact maps; the C frame allocates the union once and selects
+ * the live subset dynamically at each safepoint.
  */
 export function nativeFrameRootRegisters(
 	fn: BytecodeFunction,

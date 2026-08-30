@@ -227,6 +227,8 @@ struct MalGcState {
     u64 max_pause_ns;
     usize peak_live_bytes;
     usize allocated_bytes;
+    u64 compiled_root_slots_scanned;
+    u64 compiled_root_slots_skipped;
 #if MAL_GC_CONCURRENT
     u64 cycles; // concurrent cycles started
     u64 sync_backstop; // cycles that had to finish synchronously
@@ -338,12 +340,15 @@ static void mal_gc_print_stats(void) {
     fprintf(stderr,
             "[gc-stats] collections=%llu minor=%llu major=%llu total_ms=%.3f "
             "max_pause_ms=%.3f peak_live_bytes=%llu allocated_bytes=%llu "
+            "compiled_root_slots_scanned=%llu compiled_root_slots_skipped=%llu "
             "object_slot_coallocations=%llu object_slot_grow_migrations=%llu "
             "object_slot_dictionary_migrations=%llu stack_object_materializations=%llu",
             (unsigned long long) g->collections, (unsigned long long) g->minor_count,
             (unsigned long long) g->major_count, (double) g->total_ns / 1.0e6,
             (double) g->max_pause_ns / 1.0e6, (unsigned long long) g->peak_live_bytes,
             (unsigned long long) allocated_bytes,
+            (unsigned long long) g->compiled_root_slots_scanned,
+            (unsigned long long) g->compiled_root_slots_skipped,
             (unsigned long long) mal_object_slot_coallocation_count(),
             (unsigned long long) mal_object_slot_grow_migration_count(),
             (unsigned long long) mal_object_slot_dictionary_migration_count(),
@@ -969,7 +974,31 @@ static void mal_gc_scan_fiber_exec(
     }
     mal_gc_mark_value(completion_value);
     for (MalRootFrame *frame = root_frame_head; frame != nullptr; frame = frame->prev) {
-        mal_gc_mark_values(frame->slots, frame->desc->slot_count);
+        i32 slot_count = frame->desc->slot_count;
+        u64 inactive = frame->inactive_slots;
+        if (inactive == 0) {
+            mal_gc_mark_values(frame->slots, slot_count);
+            if (g_gc != nullptr && g_gc->stats_enabled) {
+                g_gc->compiled_root_slots_scanned += (u64) slot_count;
+            }
+        } else {
+            u64 scanned = 0;
+            for (i32 slot = 0; slot < slot_count; slot++) {
+                if (slot < 64 && (inactive & (UINT64_C(1) << slot)) != 0) {
+                    /* A dead physical register can be reused at a later safepoint;
+                     * clearing it prevents reactivation from tracing a pointer freed
+                     * while this slot was inactive. */
+                    frame->slots[slot] = MAL_VALUE_UNDEFINED;
+                    continue;
+                }
+                mal_gc_mark_value(frame->slots[slot]);
+                scanned++;
+            }
+            if (g_gc != nullptr && g_gc->stats_enabled) {
+                g_gc->compiled_root_slots_scanned += scanned;
+                g_gc->compiled_root_slots_skipped += (u64) slot_count - scanned;
+            }
+        }
         mal_gc_trace_env(frame->env);
     }
     for (MalRootSpan *span = root_span_head; span != nullptr; span = span->prev) {

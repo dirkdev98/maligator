@@ -404,6 +404,28 @@ function binaryOpCanThrow(operator: string): boolean {
 	return !NON_THROWING_BINARY.has(operator);
 }
 
+function nativeInactiveRootMasks(
+	safepoints: NativeFunctionPlan["gc"]["safepoints"],
+	slotOfRegister: ReadonlyMap<number, number>,
+): ReadonlyMap<number, bigint> {
+	const masks = new Map<number, bigint>();
+	let removesAnyRoot = false;
+	for (const safepoint of safepoints) {
+		const roots = new Set(safepoint.rootRegisters);
+		let mask = 0n;
+		for (const [register, slot] of slotOfRegister) {
+			if (slot < 64 && !roots.has(register)) mask |= 1n << BigInt(slot);
+		}
+		masks.set(safepoint.instructionIp, mask);
+		removesAnyRoot ||= mask !== 0n;
+	}
+	return removesAnyRoot ? masks : new Map();
+}
+
+function cInactiveRootMask(mask: bigint): string {
+	return `UINT64_C(0x${mask.toString(16)})`;
+}
+
 /**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
@@ -482,9 +504,9 @@ function emitCompiledVariant(
 	// Execution lowering owns precise per-safepoint physical-register liveness,
 	// including operation operands/results, exceptional exits, target temporaries,
 	// and native loop-backedge polls. This static-shadow-frame backend consumes that
-	// contract by allocating the union of its exact maps. It never re-runs liveness
-	// or infers GC policy from bytecode; a later dynamic-map frame can consume the
-	// individual maps without changing the ExecutionProgram or NativePlan boundary.
+	// contract by allocating the union of its exact maps and publishing dead-slot
+	// masks at each individual site. It never re-runs liveness or infers GC policy
+	// from bytecode; slots beyond the fixed-width mask remain conservatively rooted.
 	const rootRegisters = new Set(nativeFrameRootRegisters(fn, nativeContract));
 	const valueRegs: Array<number> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
@@ -496,6 +518,7 @@ function emitCompiledVariant(
 	const slotOf = new Map<number, number>();
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const slotCount = valueRegs.length;
+	const inactiveRootMasks = nativeInactiveRootMasks(nativeContract.gc.safepoints, slotOf);
 
 	// A derived constructor's `this` is uninitialized (the EMPTY sentinel) until
 	// super() binds it, and CONSTRUCT_SUPER reassigns it mid-body — so it can't be
@@ -726,6 +749,7 @@ function emitCompiledVariant(
 		fn,
 		nativeContract.specializations,
 		nativeContract.instructions,
+		inactiveRootMasks,
 		suffix,
 		reps,
 		debug,
@@ -881,7 +905,7 @@ function emitCompiledVariant(
 	if (needsRootFrame) {
 		lines.push(
 			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
-			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .env = nullptr };`,
+			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = nullptr };`,
 			`    mal_root_frame_head = &__gc_frame;`,
 		);
 	}
@@ -1047,10 +1071,15 @@ function emitResumableFunction(
 	// from the this_value parameter (which the resume path is invoked with from the
 	// saved frame), so no mutable this-slot is needed.
 	const profileDecisions: Array<BackendProfileDecision> = [];
+	const registerSlots = new Map<number, number>();
+	for (let register = 0; register < fn.registerCount; register++) {
+		registerSlots.set(register, register);
+	}
 	const body = emitBody(
 		fn,
 		native.specializations,
 		native.instructions,
+		nativeInactiveRootMasks(native.gc.safepoints, registerSlots),
 		suffix,
 		reps,
 		debug,
@@ -1149,7 +1178,7 @@ function emitResumableFunction(
 	lines.push(`        arg_count = resume_state->frame.argument_count;`);
 	lines.push(`        callee = resume_state->frame.callee;`);
 	lines.push(
-		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .env = env };`,
+		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
 	);
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
 	lines.push(`        switch (resume_state->frame.instruction_pointer) {`);
@@ -1165,7 +1194,7 @@ function emitResumableFunction(
 	// build the captured env, then load parameters boxed before falling into body.
 	lines.push(`        __gc_slots = mal_coroutine_alloc_registers(vm, ${totalSlots});`);
 	lines.push(
-		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .env = env };`,
+		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
 	);
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
 	if (capturesEnv) {
@@ -1459,6 +1488,7 @@ function emitBody(
 	fn: BytecodeFunction,
 	specializations: ReadonlyArray<VmRegion>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+	inactiveRootMasks: ReadonlyMap<number, bigint>,
 	suffix: string,
 	reps: Array<RegisterRep>,
 	debug: boolean,
@@ -1845,6 +1875,12 @@ function emitBody(
 			// Control can arrive with a different published position.
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
+		}
+		const inactiveRootMask = inactiveRootMasks.get(ip);
+		if (inactiveRootMask !== undefined) {
+			lines.push(
+				`    __gc_frame.inactive_slots = ${cInactiveRootMask(inactiveRootMask)};`,
+			);
 		}
 		let emitted = emitInstruction(
 			fn.instructions[ip]!,

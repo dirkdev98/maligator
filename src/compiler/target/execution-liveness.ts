@@ -166,6 +166,7 @@ export function executionSafepointRootRegisters(
 			if (safepoints.has(instruction)) {
 				const atSafepoint = live.slice();
 				for (const register of instructionOperands.reads) add(atSafepoint, register);
+				for (const register of instructionOperands.writes) add(atSafepoint, register);
 				roots.set(instruction, rootRegisters(atSafepoint));
 			}
 			for (const register of instructionOperands.writes) remove(live, register);

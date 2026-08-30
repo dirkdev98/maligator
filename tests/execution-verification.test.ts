@@ -11,6 +11,7 @@ import type {
 } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import {
 	ExecutionVerificationError,
 	verifyExecutionProgram,
@@ -364,6 +365,31 @@ describe("Core target construction", () => {
 		expect(program.functions.flatMap(({ gc }) => gc.safepoints).length).toBeGreaterThan(
 			0,
 		);
+	});
+
+	it("publishes each exact native root map before its safepoint", () => {
+		const execution = optimizedTarget(HANDLER_SOURCE, "exact-native-roots.js");
+		const image = lowerExecutionToProgramImage(execution);
+		const functionIndex = image.native.functions.findIndex(({ gc }) => {
+			const maps = new Set(
+				gc.safepoints.map(({ rootRegisters }) => rootRegisters.join(",")),
+			);
+			return maps.size > 1;
+		});
+		const plan = image.native.functions[functionIndex]!;
+		const emitted = emitCompiledFunction(
+			image.runtime.functions[functionIndex]!,
+			plan,
+			functionIndex,
+			"_exact_roots",
+			false,
+		);
+		expect(emitted).not.toBeNull();
+		const updates = emitted!.source.match(
+			/__gc_frame\.inactive_slots = UINT64_C\(0x[0-9a-f]+\);/g,
+		);
+		expect(updates).toHaveLength(plan.gc.safepoints.length);
+		expect(updates).toContain("__gc_frame.inactive_slots = UINT64_C(0x0);");
 	});
 
 	it("constrains two-address operations to one register", () => {

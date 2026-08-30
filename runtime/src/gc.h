@@ -212,6 +212,10 @@ typedef struct MalRootFrame {
     const MalFrameDescriptor *desc;
     /* slot_count MalValues, owned by the compiled frame (a stack local there). */
     MalValue *slots;
+    /* The first 64 slots whose values are dead at the current compiler-certified
+     * safepoint. Zero deliberately means scan everything, preserving safety for
+     * frames that do not publish exact liveness. */
+    u64 inactive_slots;
     /* This activation's own captured-slot env (the compiled analogue of the
      * interpreter frame's env), or null when the function captures nothing. Its
      * slots hold values not yet reachable through any live closure, so the
