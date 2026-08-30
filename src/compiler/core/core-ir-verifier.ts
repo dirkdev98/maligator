@@ -1521,6 +1521,7 @@ function verifyKnownOwnSlotClaims(
 	registry: CoreOpcodeRegistry,
 	verifyExact: boolean,
 	summaries: () => CoreProgramSummaries,
+	compilationContext: CoreCompilationContext | undefined,
 ): void {
 	let hasShapeClaims = false;
 	for (const fn of program.functions) {
@@ -1564,6 +1565,7 @@ function verifyKnownOwnSlotClaims(
 			registry,
 			calleeTargets: currentSummaries.targets,
 			summaries: currentSummaries,
+			...(compilationContext === undefined ? {} : { context: compilationContext }),
 		});
 		return shapeProvenance;
 	};
@@ -2271,7 +2273,7 @@ function verifyPreTargetClaims(
 	valueClasses: () => CoreValueClassAnalysis,
 	valueKinds: () => CoreValueKindAnalysis,
 ): void {
-	verifyKnownOwnSlotClaims(program, registry, true, summaries);
+	verifyKnownOwnSlotClaims(program, registry, true, summaries, compilationContext);
 	verifyExactTypedArrayClaims(program, valueClasses);
 	verifyExactCollectionReceiverClaims(program, valueClasses);
 	verifyExactScalarAfterTdzClaims(program, valueKinds);
@@ -2425,7 +2427,13 @@ function verifyCoreProgramGraph(
 			valueKinds,
 		);
 	} else {
-		verifyKnownOwnSlotClaims(program, registry, hasExactShapeEffectFacts, summaries);
+		verifyKnownOwnSlotClaims(
+			program,
+			registry,
+			hasExactShapeEffectFacts,
+			summaries,
+			compilationContext,
+		);
 	}
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {

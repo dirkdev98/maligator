@@ -418,6 +418,7 @@ export function resolveHarnessExecutionInvocation(
 export interface BackendPairResult {
 	compiled: string;
 	interpreted: string;
+	programImage: ProgramImage;
 	/** Exact native build context shared by native emission and the MALW runner. */
 	context: NativeBuildContext;
 }
@@ -455,6 +456,7 @@ export function buildBackendPairFromOneProgramImage(
 	return {
 		compiled: compiled.binaryPath,
 		interpreted: interpreted.target,
+		programImage: image,
 		context: compiled.context,
 	};
 }

@@ -519,6 +519,9 @@ function emitCompiledVariant(
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const slotCount = valueRegs.length;
 	const inactiveRootMasks = nativeInactiveRootMasks(nativeContract.gc.safepoints, slotOf);
+	const gcSafepointIps = new Set(
+		nativeContract.gc.safepoints.map((safepoint) => safepoint.instructionIp),
+	);
 
 	// A derived constructor's `this` is uninitialized (the EMPTY sentinel) until
 	// super() binds it, and CONSTRUCT_SUPER reassigns it mid-body — so it can't be
@@ -547,12 +550,25 @@ function emitCompiledVariant(
 					`Invalid stack-object metadata at instruction ${site.allocationIp}`,
 				);
 			}
+			const scalarSlotRepresentation = stackObjectScalarSlotRepresentation(
+				fn,
+				nativeContract,
+				region,
+				site,
+			);
 			stackObjectSites.set(site.allocationIp, {
 				objectName: `__stack_object_${site.allocationIp}`,
-				slotsOffset: nextStackSlot,
+				...(scalarSlotRepresentation === undefined
+					? { slotsOffset: nextStackSlot }
+					: {
+							scalarSlot: {
+								name: `__stack_object_${site.allocationIp}_slot_0`,
+								representation: scalarSlotRepresentation,
+							},
+						}),
 				slotCount: site.slotCount,
 			});
-			nextStackSlot += site.slotCount;
+			if (scalarSlotRepresentation === undefined) nextStackSlot += site.slotCount;
 		}
 	}
 	const stackObjectMaterializations = new Map<number, StackObjectSite>();
@@ -750,6 +766,7 @@ function emitCompiledVariant(
 		nativeContract.specializations,
 		nativeContract.instructions,
 		inactiveRootMasks,
+		gcSafepointIps,
 		suffix,
 		reps,
 		debug,
@@ -854,6 +871,11 @@ function emitCompiledVariant(
 	}
 	for (const site of stackObjectSites.values()) {
 		lines.push(`    MalObject ${site.objectName};`);
+		if (site.scalarSlot !== undefined) {
+			lines.push(
+				`    ${cTypeOf(site.scalarSlot.representation)} ${site.scalarSlot.name};`,
+			);
+		}
 		if (site.inheritedLoadInstructionIndex !== undefined) {
 			lines.push(`    bool ${site.inheritedFastName} = false;`);
 			lines.push(`    MalValue ${site.inheritedValueName} = MAL_VALUE_UNDEFINED;`);
@@ -1080,6 +1102,7 @@ function emitResumableFunction(
 		native.specializations,
 		native.instructions,
 		nativeInactiveRootMasks(native.gc.safepoints, registerSlots),
+		new Set(native.gc.safepoints.map((safepoint) => safepoint.instructionIp)),
 		suffix,
 		reps,
 		debug,
@@ -1385,13 +1408,71 @@ interface NativeStringSliceNumberFusionAction {
 
 interface StackObjectSite {
 	objectName: string;
-	slotsOffset: number;
+	slotsOffset?: number;
 	slotCount: number;
+	scalarSlot?: {
+		readonly name: string;
+		readonly representation: "int32" | "number" | "boolean";
+	};
 	inheritedLoadInstructionIndex?: number;
 	inheritedIcIndex?: number;
 	inheritedFastName?: string;
 	inheritedValueName?: string;
 	inheritedGuard?: VmGuardPlan;
+}
+
+function stackObjectScalarSlotRepresentation(
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
+	region: VmStackObjectPlanRegion,
+	site: VmStackObjectPlanRegion["sites"][number],
+): "int32" | "number" | "boolean" | undefined {
+	if (
+		region.license.materialization !== "none" ||
+		site.slotCount !== 1 ||
+		site.inheritedAccessIp !== undefined ||
+		site.materializations.length !== 0
+	) {
+		return undefined;
+	}
+	const allocation = fn.instructions[site.allocationIp];
+	if (allocation?.opcode !== "CREATE_OBJECT_SHAPED") return undefined;
+	const initial = allocation.valueRegisters[0];
+	const representation =
+		initial === undefined ? undefined : native.registerRepresentations[initial];
+	if (
+		representation !== "int32" &&
+		representation !== "number" &&
+		representation !== "boolean"
+	) {
+		return undefined;
+	}
+	for (const access of site.accesses) {
+		if (access.slot !== 0) return undefined;
+		const instruction = fn.instructions[access.ip];
+		const register =
+			instruction?.opcode === "LOAD_PROPERTY_STATIC"
+				? instruction.dst
+				: instruction?.opcode === "STORE_PROPERTY_STATIC"
+					? instruction.value
+					: undefined;
+		if (
+			register === undefined ||
+			native.registerRepresentations[register] !== representation
+		) {
+			return undefined;
+		}
+	}
+	return representation;
+}
+
+function stackObjectSlotReference(site: StackObjectSite, slot: number): string {
+	if (site.scalarSlot !== undefined) {
+		if (slot !== 0) throw new Error("Scalar stack-object storage names only slot zero");
+		return site.scalarSlot.name;
+	}
+	if (site.slotsOffset === undefined) throw new Error("Stack object lacks slot storage");
+	return `__gc_slots[${site.slotsOffset + slot}]`;
 }
 
 function semanticDependencyMask(
@@ -1489,6 +1570,7 @@ function emitBody(
 	specializations: ReadonlyArray<VmRegion>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 	inactiveRootMasks: ReadonlyMap<number, bigint>,
+	gcSafepointIps: ReadonlySet<number>,
 	suffix: string,
 	reps: Array<RegisterRep>,
 	debug: boolean,
@@ -1894,6 +1976,7 @@ function emitBody(
 			coro,
 			{
 				nativePlan: nativeInstructions[ip],
+				gcSafepoint: gcSafepointIps.has(ip),
 				stackObjectSite: stackObjectSites.get(ip),
 				stackObjectAccess: stackObjectAccesses.get(ip),
 				stackObjectMaterialization: stackObjectMaterializations.get(ip),
@@ -2237,6 +2320,7 @@ function instrumentProfileExpressions(
  */
 interface NativeInstructionContext {
 	readonly nativePlan?: NativeInstructionPlan;
+	readonly gcSafepoint: boolean;
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;
@@ -2345,6 +2429,7 @@ function emitInstruction(
 	} = context;
 	const genericContext: NativeInstructionContext = {
 		nativePlan,
+		gcSafepoint: context.gcSafepoint,
 		directCompiledTargets,
 		directCompiledEntries,
 		directResultRepresentation,
@@ -2457,16 +2542,15 @@ function emitInstruction(
 			: "MAL_VALUE_UNDEFINED";
 	const onThrow = handlerIp !== undefined ? `goto L${handlerIp};` : "goto __throw_exit;";
 	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
-	// GC safepoint poll. Emitted at call returns and loop
-	// back-edges so a compiled function is interruptible for collection. Near-free
-	// until the collector raises mal_gc_poll (always false until Phase 3).
-	const poll = "if (mal_gc_poll) mal_gc_safepoint(vm);";
+	// A poll without corresponding exact-root metadata can expose dead slots or clear
+	// a just-produced result under the preceding instruction's mask.
+	const poll = context.gcSafepoint ? "if (mal_gc_poll) mal_gc_safepoint(vm);" : "";
 
 	// Where `this` is stored: a derived constructor's is a mutable rooted slot
 	// (super() rebinds it); everything else reads the immutable `this_value` param.
 	const thisRef = thisSlot >= 0 ? `__gc_slots[${thisSlot}]` : "this_value";
 
-	if (nativePlan?.kind === "exact-own-slot") {
+	if (nativePlan?.kind === "exact-own-slot" && stackObjectAccess === undefined) {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
@@ -2484,7 +2568,8 @@ function emitInstruction(
 	}
 	if (
 		nativePlan?.kind === "exact-array-length" &&
-		instruction.opcode === "LOAD_PROPERTY_STATIC"
+		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
 	) {
 		return [
 			reps[instruction.dst] === "number"
@@ -2646,10 +2731,10 @@ function emitInstruction(
 					`  ${inheritedValue} = ${icName}->value;`,
 					`  mal_perf_stack_object_init();`,
 					`  mal_perf_stack_object_inherited_fast_init();`,
-					`  ${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = ${prototypeName}, .slots = &__gc_slots[${slotsOffset}], .overflow = nullptr };`,
+					`  ${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = ${prototypeName}, .slots = &__gc_slots[${slotsOffset!}], .overflow = nullptr };`,
 					...instruction.valueRegisters.map(
 						(register, index) =>
-							`  __gc_slots[${slotsOffset + index}] = ${boxed(register)};`,
+							`  ${stackObjectSlotReference(stackObjectSite, index)} = ${boxed(register)};`,
 					),
 					`  r${instruction.dst} = mal_value_from_object(&${objectName});`,
 					`} else {`,
@@ -2663,9 +2748,10 @@ function emitInstruction(
 				// Direct initialization is essential: this storage never enters the heap,
 				// and IMMORTAL+WHITE makes tracing/finalization/remembering skip the header.
 				"mal_perf_stack_object_init();",
-				`${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = &__gc_slots[${slotsOffset}], .overflow = nullptr };`,
+				`${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = ${stackObjectSite.scalarSlot === undefined ? `&__gc_slots[${slotsOffset!}]` : "nullptr"}, .overflow = nullptr };`,
 				...instruction.valueRegisters.map(
-					(register, index) => `__gc_slots[${slotsOffset + index}] = ${boxed(register)};`,
+					(register, index) =>
+						`${stackObjectSlotReference(stackObjectSite, index)} = ${stackObjectSite.scalarSlot === undefined ? boxed(register) : `r${register}`};`,
 				),
 				`r${instruction.dst} = mal_value_from_object(&${objectName});`,
 			];
@@ -2825,6 +2911,20 @@ function emitInstruction(
 				`${relocation.enabled ? "" : "static "}const i32 __known_own_slot_store_candidates_${ip}[] = { ${candidates.join(", ")} };`,
 				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
 				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+				`  ${throwCheck}`,
+				`}`,
+			];
+		}
+		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH": {
+			const direct =
+				reps[instruction.dst] === "number"
+					? `(f64) mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)}))`
+					: `mal_value_from_u32(mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)})))`;
+			return [
+				`if (mal_value_is_heap_type(${boxed(instruction.object)}, MAL_HEAP_ARRAY_OBJECT)) {`,
+				`  r${instruction.dst} = ${direct};`,
+				`} else {`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
 			];
@@ -3011,13 +3111,13 @@ function emitInstruction(
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				if (site.inheritedLoadInstructionIndex === undefined) {
-					return [`r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`];
+					return [`r${instruction.dst} = ${stackObjectSlotReference(site, slot)};`];
 				}
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				return [
 					`if (${site.inheritedFastName}) {`,
-					`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
+					`  r${instruction.dst} = ${stackObjectSlotReference(site, slot)};`,
 					`} else {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
@@ -3176,7 +3276,9 @@ function emitInstruction(
 		case "STORE_PROPERTY_STATIC": {
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
-				return [`__gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`];
+				return [
+					`${stackObjectSlotReference(site, slot)} = ${site.scalarSlot === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
+				];
 			}
 			const key =
 				instruction.opcode === "STORE_PROPERTY_STATIC"
@@ -4304,6 +4406,28 @@ function emitInstruction(
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_function_call_direct(vm, &__cc_${ip}, ${callPlan.directCallTargetFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallTargetFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					poll,
+				];
+			}
+			if (callPlan?.guardedFunctionIndices !== undefined) {
+				const guardedCallee = `__guarded_callee_${ip}`;
+				const guardedIndex = `__guarded_index_${ip}`;
+				const branches = callPlan.guardedFunctionIndices.flatMap((target, index) => [
+					`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
+					`  ${tmp} = mal_vm_call_exact_script(vm, ${relocation.functionIndex(target)}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`}`,
+				]);
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalValue ${guardedCallee} = ${boxedOperand(instruction.callee)};`,
+					`i32 ${guardedIndex} = mal_value_is_function_object(${guardedCallee}) ? mal_function_object_function_index(mal_value_to_function_object(${guardedCallee})) : -1;`,
+					`MalCompletion ${tmp};`,
+					...branches,
+					`else {`,
+					`  ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`}`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,

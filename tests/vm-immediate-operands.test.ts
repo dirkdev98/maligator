@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	decodeVmValueOperand,
 	encodeVmValueOperand,
@@ -9,6 +11,13 @@ import {
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "immediate-operands.js");
 	return compileSemanticProgramToProgramImage(semantic);
+}
+
+function compileWithLockedBuiltins(source: string) {
+	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "builtin-immediates.js");
+	return compileSemanticProgramToProgramImage(semantic, {
+		facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+	});
 }
 
 describe("tagged VM call operands", () => {
@@ -73,5 +82,62 @@ describe("tagged VM call operands", () => {
 					instruction.opcode === "CREATE_F64" && Object.is(instruction.value, -0),
 			),
 		).toBe(true);
+	});
+
+	it("embeds primitive receivers and mixed direct-builtin arguments", () => {
+		const definition = compileWithLockedBuiltins(`
+			function invoke(dynamic) {
+				return [
+					"alpha,beta".split(","),
+					(17).valueOf(),
+					true.valueOf(),
+					Object.is(undefined, dynamic),
+					Object.is(null, false),
+				];
+			}
+			globalThis.keep = invoke;
+		`);
+		const instructions = definition.runtime.functions[1]!.instructions;
+		const calls = instructions.filter(
+			(instruction) => instruction.opcode === "CALL_BUILTIN",
+		);
+		expect(calls).toHaveLength(5);
+		if (calls.some((instruction) => instruction.opcode !== "CALL_BUILTIN")) return;
+
+		expect(decodeVmValueOperand(calls[0]!.thisValue).kind).toBe("string");
+		expect(decodeVmValueOperand(calls[0]!.arguments[0]!).kind).toBe("string");
+		expect(decodeVmValueOperand(calls[1]!.thisValue)).toEqual({
+			kind: "number",
+			value: 17,
+		});
+		expect(decodeVmValueOperand(calls[2]!.thisValue)).toEqual({
+			kind: "boolean",
+			value: true,
+		});
+		expect(calls[3]!.arguments.map(decodeVmValueOperand)).toEqual([
+			{ kind: "undefined" },
+			{ kind: "register", register: 0 },
+		]);
+		expect(calls[4]!.arguments.map(decodeVmValueOperand)).toEqual([
+			{ kind: "null" },
+			{ kind: "boolean", value: false },
+		]);
+
+		expect(
+			instructions.some(
+				(instruction) =>
+					instruction.opcode === "CREATE_NUMBER" && instruction.value === 17,
+			),
+		).toBe(false);
+		for (const opcode of [
+			"CREATE_UNDEFINED",
+			"CREATE_NULL",
+			"CREATE_BOOLEAN",
+			"CREATE_STRING",
+		]) {
+			expect(instructions.some((instruction) => instruction.opcode === opcode)).toBe(
+				false,
+			);
+		}
 	});
 });

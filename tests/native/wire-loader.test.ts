@@ -13,6 +13,7 @@ import {
 	serializeRuntimeImage,
 	WIRE_OPCODES,
 } from "../../src/compiler/target/program-image-codec.ts";
+import { encodeVmValueOperand } from "../../src/compiler/target/runtime-image.ts";
 import type {
 	RuntimeImage,
 	BytecodeFunction,
@@ -122,6 +123,133 @@ describe("wire loader side-data validation", () => {
 	it("rejects mismatched paired-array lengths", () => {
 		// Skip tag, dst, explicit count, then the first array's count and one value.
 		rejectsMutation("paired-count", afterSourceEntry(33 + 1 + 1 + 1 + 1 + 1), 2);
+	});
+
+	it("rejects guarded target metadata on CONSTRUCT", () => {
+		const constructDefinition: RuntimeImage = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [
+						{
+							opcode: "CONSTRUCT",
+							dst: 0,
+							callee: 0,
+							argumentCount: 0,
+							arguments: [],
+						},
+					],
+				},
+			],
+		};
+		const wire = serializeRuntimeImage(constructDefinition, { debugInfo: false });
+		const tag = WIRE_OPCODES.indexOf("CONSTRUCT");
+		const encodedInstruction = [tag, 0, 0, 1, 0, 0, 0];
+		const instructionOffset = wire.findIndex((_, index) =>
+			encodedInstruction.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(instructionOffset).toBeGreaterThanOrEqual(0);
+
+		const candidateCountOffset = instructionOffset + 4;
+		const forged = new Uint8Array(wire.length + 1);
+		forged.set(wire.subarray(0, candidateCountOffset));
+		forged.set([1, 0], candidateCountOffset);
+		forged.set(wire.subarray(candidateCountOffset + 1), candidateCountOffset + 2);
+		rejectsWire("construct-guarded-target", forged);
+	});
+
+	it("accepts compact final root maps and rejects malformed portable maps", () => {
+		const compactTail: RuntimeImage = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					literalShapeCount: 0,
+					registerCount: 7,
+					instructions: [{ opcode: "RETURN", value: 0 }],
+					gcSafepoints: [
+						{
+							instructionIp: 0,
+							rootRegisters: [0, 1, 2, 3, 4, 5, 6],
+							clearRegisters: [6],
+						},
+					],
+				},
+			],
+		};
+		acceptsWire(
+			"safepoint-root-map-compact-tail",
+			serializeRuntimeImage(compactTail, { debugInfo: false }),
+		);
+
+		const mappedDefinition: RuntimeImage = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [{ opcode: "RETURN", value: 0 }],
+					gcSafepoints: [{ instructionIp: 0, rootRegisters: [0] }],
+				},
+			],
+		};
+		const wire = serializeRuntimeImage(mappedDefinition, { debugInfo: false });
+		const returnTag = WIRE_OPCODES.indexOf("RETURN");
+		const encoded = [returnTag, 0, 1, 0, 1, 0, 0];
+		const offset = wire.findIndex((_, index) =>
+			encoded.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(offset).toBeGreaterThanOrEqual(0);
+		acceptsWire("safepoint-root-map", wire);
+
+		const forged = wire.slice();
+		forged[offset + 5] = 2;
+		rejectsWire("safepoint-root-map-register", forged);
+	});
+
+	it("validates portable exact Array length keys and registers", () => {
+		const lengthDefinition: RuntimeImage = {
+			...definition,
+			stringConstants: [
+				Array.from("length", (unit) => unit.charCodeAt(0)),
+				Array.from("other", (unit) => unit.charCodeAt(0)),
+			],
+			functions: [
+				{
+					...fn,
+					literalShapeCount: 0,
+					registerCount: 2,
+					instructions: [
+						{ opcode: "CREATE_ARRAY", dst: 1, length: 3 },
+						{
+							opcode: "LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
+							dst: 0,
+							object: 1,
+							stringIndex: 0,
+							icIndex: 0,
+						},
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+			],
+		};
+		const wire = serializeRuntimeImage(lengthDefinition, { debugInfo: false });
+		const tag = WIRE_OPCODES.indexOf("LOAD_PROPERTY_STATIC_ARRAY_LENGTH");
+		const encodedInstruction = [tag, 0, 2, 0];
+		const instructionOffset = wire.findIndex((_, index) =>
+			encodedInstruction.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(instructionOffset).toBeGreaterThanOrEqual(0);
+		acceptsWire("exact-array-length", wire);
+
+		const wrongKey = wire.slice();
+		wrongKey[instructionOffset + 3] = 2;
+		rejectsWire("exact-array-length-key", wrongKey);
+		const wrongObject = wire.slice();
+		wrongObject[instructionOffset + 2] = 4;
+		rejectsWire("exact-array-length-object", wrongObject);
 	});
 
 	it("rejects known-own-slot side data that disagrees with the source shape", () => {
@@ -420,16 +548,36 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
-					registerCount: 3,
+					registerCount: 1,
 					instructions: [
-						{ opcode: "CREATE_STRING", dst: 1, stringIndex: 0 },
-						{ opcode: "CREATE_STRING", dst: 2, stringIndex: 1 },
 						{
 							opcode: "CALL_BUILTIN",
 							dst: 0,
-							thisValue: 1,
+							thisValue: encodeVmValueOperand(-1, { kind: "undefined" }),
+							argumentCount: 2,
+							arguments: [
+								encodeVmValueOperand(-1, { kind: "null" }),
+								encodeVmValueOperand(-1, { kind: "boolean", value: true }),
+							],
+							operation: "Object.is",
+						},
+						{
+							opcode: "CALL_BUILTIN",
+							dst: 0,
+							thisValue: encodeVmValueOperand(-1, { kind: "null" }),
+							argumentCount: 2,
+							arguments: [
+								encodeVmValueOperand(-1, { kind: "boolean", value: false }),
+								encodeVmValueOperand(-1, { kind: "number", value: 7 }),
+							],
+							operation: "Object.is",
+						},
+						{
+							opcode: "CALL_BUILTIN",
+							dst: 0,
+							thisValue: encodeVmValueOperand(-1, { kind: "string", index: 0 }),
 							argumentCount: 1,
-							arguments: [2],
+							arguments: [encodeVmValueOperand(-1, { kind: "string", index: 1 })],
 							operation: "String.prototype.split",
 						},
 						{ opcode: "RETURN", value: 0 },
@@ -437,13 +585,30 @@ describe("wire loader side-data validation", () => {
 				},
 			],
 		};
+		const wire = serializeRuntimeImage(directDefinition, { debugInfo: false });
 		const wirePath = path.join(directory, "direct-builtin.malw");
-		writeFileSync(
-			wirePath,
-			serializeRuntimeImage(directDefinition, { debugInfo: false }),
-		);
+		writeFileSync(wirePath, wire);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
+
+		const builtinTag = WIRE_OPCODES.indexOf("CALL_BUILTIN");
+		const undefinedReceiverPrefix = [builtinTag, 0, 1, 4, 2, 3, 7];
+		const undefinedReceiverOffset = wire.findIndex((_, index) =>
+			undefinedReceiverPrefix.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(undefinedReceiverOffset).toBeGreaterThanOrEqual(0);
+		const invalidRegister = wire.slice();
+		invalidRegister[undefinedReceiverOffset + 2] = 2;
+		rejectsWire("direct-builtin-invalid-register", invalidRegister);
+
+		const splitPrefix = [builtinTag, 0, 9, 2, 1, 11];
+		const splitOffset = wire.findIndex((_, index) =>
+			splitPrefix.every((byte, operand) => wire[index + operand] === byte),
+		);
+		expect(splitOffset).toBeGreaterThanOrEqual(0);
+		const invalidString = wire.slice();
+		invalidString[splitOffset + 2] = 13;
+		rejectsWire("direct-builtin-invalid-string", invalidString);
 	});
 
 	it("rejects malformed varints and trailing data", () => {

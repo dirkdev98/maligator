@@ -340,7 +340,9 @@ static bool mal_coroutine_buffer_make_room(MalVm *vm, u32 class_index, usize byt
     return true;
 }
 
-void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values) {
+static void mal_vm_release_coroutine_buffer_impl(
+    MalVm *vm, MalValue *values, bool record_satb
+) {
     if (values == nullptr) {
         return;
     }
@@ -348,7 +350,9 @@ void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values) {
     g_coroutine_buffer_releases++;
     MAL_PERF_ADD(coroutine_buffer_release_clear_slots, buffer->used);
     for (usize i = 0; i < buffer->used; i++) {
-        mal_gc_write_barrier(buffer->values[i]);
+        if (record_satb) {
+            mal_gc_write_barrier(buffer->values[i]);
+        }
         buffer->values[i] = mal_value_new_undefined();
     }
     buffer->used = 0;
@@ -377,6 +381,14 @@ void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values) {
     if (vm->coroutine_buffer_pool_bytes > g_coroutine_buffer_peak_retained_bytes) {
         g_coroutine_buffer_peak_retained_bytes = vm->coroutine_buffer_pool_bytes;
     }
+}
+
+void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values) {
+    mal_vm_release_coroutine_buffer_impl(vm, values, true);
+}
+
+void mal_vm_release_shaded_coroutine_buffer(MalVm *vm, MalValue *values) {
+    mal_vm_release_coroutine_buffer_impl(vm, values, false);
 }
 
 void mal_vm_free_coroutine_buffer_pool(MalVm *vm) {
@@ -1131,6 +1143,7 @@ static void mal_vm_rebase_instruction(
             in->as.create_string.string_index += string_base;
             break;
         case MAL_OP_LOAD_PROPERTY_STATIC:
+        case MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH:
             in->as.load_property_static.string_index += string_base;
             break;
         case MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT: {
@@ -1241,8 +1254,15 @@ static void mal_vm_rebase_instruction(
             in->as.call.callee = mal_vm_rebase_value_operand(in->as.call.callee, string_base);
             in->as.call.this_value = mal_vm_rebase_value_operand(in->as.call.this_value, string_base);
             i32 *data = instruction_data + in->as.call.data_offset;
+            if (data[1] >= 0) {
+                data[1] += fn_base;
+            }
+            for (i32 i = 0; i < data[2]; i++) {
+                data[i + 3] += fn_base;
+            }
             for (i32 i = 0; i < data[0]; i++) {
-                data[i + 1] = mal_vm_rebase_value_operand(data[i + 1], string_base);
+                i32 operand = i + 3 + data[2];
+                data[operand] = mal_vm_rebase_value_operand(data[operand], string_base);
             }
             break;
         }
@@ -1258,8 +1278,11 @@ static void mal_vm_rebase_instruction(
         case MAL_OP_CONSTRUCT: {
             in->as.construct.callee = mal_vm_rebase_value_operand(in->as.construct.callee, string_base);
             i32 *data = instruction_data + in->as.construct.data_offset;
+            if (data[1] >= 0) {
+                data[1] += fn_base;
+            }
             for (i32 i = 0; i < data[0]; i++) {
-                data[i + 1] = mal_vm_rebase_value_operand(data[i + 1], string_base);
+                data[i + 3] = mal_vm_rebase_value_operand(data[i + 3], string_base);
             }
             break;
         }
@@ -1514,12 +1537,20 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     live->cjs_module_count = new_cjs_module_count;
 
     // The realloc above may have moved the function table out from under any
-    // frame that is live across this splice (the eval'ing frame itself, plus
-    // its callers). Re-resolve each from its `function_index` source of truth so
-    // the hot loop's cached `function` pointer stays valid. Suspended frames
-    // (generators / async awaiters) re-resolve on resume, not here.
+    // frame that is live across this splice. Re-resolve every running and saved
+    // fiber frame before later splice work can collect; the current fiber's saved
+    // slice is stale while its live slice resides in the VM.
     for (i32 i = 0; i < vm->frame_count; i++) {
         vm->frames[i].function = &functions[vm->frames[i].function_index];
+    }
+    for (MalFiber *fiber = vm->fibers_head; fiber != nullptr; fiber = fiber->next) {
+        if (fiber == vm->current_fiber || fiber->state == MAL_FIBER_FINISHED) {
+            continue;
+        }
+        for (i32 i = 0; i < fiber->exec.frame_count; i++) {
+            MalVmFrame *frame = &fiber->exec.frames[i];
+            frame->function = &functions[frame->function_index];
+        }
     }
 
     // Per-function caches grow with the function table.
@@ -1572,6 +1603,7 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     callable->generator = nullptr;
     callable->is_construct = false;
     callable->instruction_pointer = 0;
+    callable->gc_safepoint_ip = -1;
     callable->return_register = -1;
     callable->caller_frame_index = -1;
     return callable;
@@ -1603,8 +1635,8 @@ static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
     if (frame->stack_base >= 0) {
         vm->value_stack_size = frame->stack_base;
     } else {
-        mal_vm_release_coroutine_buffer(vm, frame->registers);
-        mal_vm_release_coroutine_buffer(vm, frame->arguments);
+        mal_vm_release_shaded_coroutine_buffer(vm, frame->registers);
+        mal_vm_release_shaded_coroutine_buffer(vm, frame->arguments);
     }
 }
 
@@ -1883,6 +1915,7 @@ bool mal_vm_push_function_frame(
     frame->is_construct = false;
     frame->new_target = mal_value_new_undefined();
     frame->instruction_pointer = argument_snapshot_count;
+    frame->gc_safepoint_ip = -1;
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
     frame->enter_seq = vm->frame_seq++;
@@ -1934,6 +1967,7 @@ static bool mal_vm_unwind_to_handler(MalVm *vm, i32 target_frame_count) {
 
         vm->frame_count = frame_index + 1;
         frame->instruction_pointer = innermost->handler_ip;
+        frame->gc_safepoint_ip = -1;
 #if MAL_REALMS
         // The handler can belong to a caller realm after the frames above it were
         // discarded. Enter it before the catch body performs any work.
@@ -1983,6 +2017,26 @@ static bool mal_vm_interpreter_activation_is_current(
         ;
 }
 
+static void mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruction_ip) {
+    const MalFunction *function = frame->function;
+    if (!function->gc_safepoints_trusted) return;
+    const i32 *row = function->gc_safepoints;
+    for (i32 index = 0; index < function->gc_safepoint_count; index++) {
+        i32 row_ip = *row++;
+        i32 root_count = *row++;
+        row += root_count;
+        i32 clear_count = *row++;
+        if (row_ip == instruction_ip) {
+            for (i32 clear = 0; clear < clear_count; clear++) {
+                frame->registers[row[clear]] = mal_value_new_undefined();
+            }
+            return;
+        }
+        row += clear_count;
+        if (row_ip > instruction_ip) return;
+    }
+}
+
 // Direct leaves write through the frame's published register buffer, so only the
 // shadow instruction pointer needs publishing before a helper, throw, or GC seam.
 #define MAL_VM_INTERPRETER_DIRECT_LEAF() \
@@ -1990,7 +2044,9 @@ static bool mal_vm_interpreter_activation_is_current(
 
 #define MAL_VM_INTERPRETER_ACTIVATION_BOUNDARY(call) \
     do { \
+        mal_vm_prepare_interpreter_safepoint(frame, instruction_pointer - 1); \
         frame->instruction_pointer = instruction_pointer; \
+        frame->gc_safepoint_ip = instruction_pointer - 1; \
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
@@ -2009,7 +2065,9 @@ static bool mal_vm_interpreter_activation_is_current(
 #define MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(call) \
     do { \
         MalVmInterpreterActivation activation = mal_vm_interpreter_activation(vm, frame); \
+        mal_vm_prepare_interpreter_safepoint(frame, instruction_pointer - 1); \
         frame->instruction_pointer = instruction_pointer; \
+        frame->gc_safepoint_ip = instruction_pointer - 1; \
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
@@ -2023,7 +2081,9 @@ static bool mal_vm_interpreter_activation_is_current(
 #define MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(call) \
     do { \
         MalVmInterpreterActivation activation = mal_vm_interpreter_activation(vm, frame); \
+        mal_vm_prepare_interpreter_safepoint(frame, instruction_pointer - 1); \
         frame->instruction_pointer = instruction_pointer; \
+        frame->gc_safepoint_ip = instruction_pointer - 1; \
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
@@ -2035,11 +2095,16 @@ static bool mal_vm_interpreter_activation_is_current(
         } \
     } while (0)
 
-#define MAL_VM_INTERPRETER_SYNC() \
+#define MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip) \
     do { \
+        mal_vm_prepare_interpreter_safepoint(frame, (safepoint_ip)); \
         frame->instruction_pointer = instruction_pointer; \
+        frame->gc_safepoint_ip = (safepoint_ip); \
         MAL_PERF_COUNT(interpreter_state_syncs); \
     } while (0)
+
+#define MAL_VM_INTERPRETER_SYNC() \
+    MAL_VM_INTERPRETER_SYNC_AT(instruction_pointer - 1)
 
 static void mal_vm_run_until_frame_count(
     MalVm *vm,
@@ -2329,6 +2394,20 @@ static void mal_vm_run_until_frame_count(
                 }
                 MAL_PERF_COUNT(interpreter_load_ic_sync_fallbacks);
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_property_static(frame, instruction));
+                break;
+            }
+            case MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH: {
+                MalValue object = registers[instruction->as.load_property_static.object];
+                if (mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT)) {
+                    const MalArrayObject *array =
+                        (const MalArrayObject *) mal_value_to_heap(object);
+                    registers[instruction->as.load_property_static.dst] =
+                        mal_value_from_u32(mal_array_object_length(array));
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
+                    mal_op_load_property_static(frame, instruction));
                 break;
             }
             case MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT: {
@@ -2791,11 +2870,12 @@ static void mal_vm_run_until_frame_count(
                 continue;
 
             case MAL_OP_JUMP: {
+                i32 safepoint_ip = instruction_pointer - 1;
                 bool backedge = instruction->as.jump.target_ip < instruction_pointer;
                 instruction_pointer = instruction->as.jump.target_ip;
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 if (backedge && mal_gc_poll) {
-                    MAL_VM_INTERPRETER_SYNC();
+                    MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip);
                     mal_gc_safepoint(vm);
                     frame = &vm->frames[vm->frame_count - 1];
                     instructions = frame->function->instructions;
@@ -2806,6 +2886,7 @@ static void mal_vm_run_until_frame_count(
                 continue;
             }
             case MAL_OP_JUMP_IF: {
+                i32 safepoint_ip = instruction_pointer - 1;
                 MalValue condition = registers[instruction->as.jump_if.cond];
                 bool truthy = mal_value_is_boolean(condition)
                     ? mal_value_to_boolean(condition)
@@ -2817,7 +2898,7 @@ static void mal_vm_run_until_frame_count(
                 }
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 if (backedge && mal_gc_poll) {
-                    MAL_VM_INTERPRETER_SYNC();
+                    MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip);
                     mal_gc_safepoint(vm);
                     frame = &vm->frames[vm->frame_count - 1];
                     instructions = frame->function->instructions;
@@ -2983,6 +3064,7 @@ static void mal_vm_run_until_frame_count(
 }
 
 #undef MAL_VM_INTERPRETER_SYNC
+#undef MAL_VM_INTERPRETER_SYNC_AT
 #undef MAL_VM_INTERPRETER_SYNCHRONIZED_CALL
 #undef MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER
 #undef MAL_VM_INTERPRETER_RELOAD_AND_CONTINUE

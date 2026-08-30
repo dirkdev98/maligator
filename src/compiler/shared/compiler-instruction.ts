@@ -316,6 +316,11 @@ export type CompilerInstruction =
 			 * lowering enters this target without an identity guard or dispatch fallback.
 			 */
 			directFunctionIndex?: number;
+			/**
+			 * COMPILE-ONLY: sorted finite script candidates for an open callee. Native
+			 * lowering guards the live function identity and retains generic fallback.
+			 */
+			guardedFunctionIndices?: ReadonlyArray<number>;
 			/** Native-only ABI sibling selected for this exact direct target. */
 			directEntryId?: number;
 			/**
@@ -373,6 +378,8 @@ export type CompilerInstruction =
 			operation: DirectBuiltinOperationId;
 			/** Canonical facts remain attached after dynamic dispatch is erased. */
 			knownBuiltinCall: KnownBuiltinCall;
+			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
+			immediateValues?: Array<CompilerImmediateValue | undefined>;
 	  }
 	| {
 			type: "construct";

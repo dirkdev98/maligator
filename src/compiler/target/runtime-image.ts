@@ -13,6 +13,7 @@ import type {
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
+import { executionSafepointRootRegisters } from "./execution-liveness.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
 
 /** Portable VM image contract and lowering. No native ABI or region plan belongs here. */
@@ -100,6 +101,54 @@ export function rebaseVmValueOperand(operand: number, stringBase: number): numbe
 	return decoded.kind === "string"
 		? VM_VALUE_STRING_BASE - (decoded.index + stringBase)
 		: operand;
+}
+
+function validateVmValueOperand(
+	definition: RuntimeImage,
+	fn: BytecodeFunction,
+	operand: number,
+): void {
+	if (!Number.isSafeInteger(operand)) throw new RangeError("invalid VM value operand");
+	let decoded: DecodedVmValueOperand;
+	try {
+		decoded = decodeVmValueOperand(operand);
+	} catch {
+		throw new RangeError("invalid VM value operand");
+	}
+	if (
+		(decoded.kind === "register" && decoded.register >= fn.registerCount) ||
+		(decoded.kind === "string" && decoded.index >= definition.stringConstants.length)
+	) {
+		throw new RangeError("invalid VM value operand");
+	}
+}
+
+/** Reject malformed tagged operands before they can reach portable or native output. */
+export function validateVmValueOperands(definition: RuntimeImage): void {
+	for (const fn of definition.functions) {
+		for (const instruction of fn.instructions) {
+			switch (instruction.opcode) {
+				case "CALL":
+					validateVmValueOperand(definition, fn, instruction.callee);
+					validateVmValueOperand(definition, fn, instruction.thisValue);
+					break;
+				case "CALL_BUILTIN":
+					validateVmValueOperand(definition, fn, instruction.thisValue);
+					break;
+				case "CONSTRUCT":
+					validateVmValueOperand(definition, fn, instruction.callee);
+					break;
+				default:
+					continue;
+			}
+			if (instruction.argumentCount !== instruction.arguments.length) {
+				throw new RangeError("invalid VM value operand count");
+			}
+			for (const operand of instruction.arguments) {
+				validateVmValueOperand(definition, fn, operand);
+			}
+		}
+	}
 }
 
 /** No-fallback numeric Math operation order used by VM instructions and MALW. */
@@ -251,6 +300,30 @@ export interface VmArgumentSnapshotMove {
 	source: number;
 }
 
+export interface VmSafepointRootMap {
+	instructionIp: number;
+	rootRegisters: Array<number>;
+	/** Write-only roots reset before the operation can collect. */
+	clearRegisters?: Array<number>;
+}
+
+const trustedVmSafepointRootMaps = new WeakMap<BytecodeFunction, string>();
+
+function vmSafepointRootMapTrustFingerprint(fn: BytecodeFunction): string {
+	return JSON.stringify(fn);
+}
+
+/** Trust never survives serialization or structural cloning. */
+export function vmSafepointRootMapsAreTrusted(fn: BytecodeFunction): boolean {
+	const trustedFingerprint = trustedVmSafepointRootMaps.get(fn);
+	if (trustedFingerprint === undefined) return false;
+	try {
+		return trustedFingerprint === vmSafepointRootMapTrustFingerprint(fn);
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Keep inline with the C struct
  */
@@ -263,6 +336,8 @@ export interface BytecodeFunction {
 	mappedArgumentSlots: Array<number>;
 	length: number;
 	registerCount: number;
+	/** Exact live traced registers at portable GC-capable instructions. */
+	gcSafepoints?: Array<VmSafepointRootMap>;
 	capturedCount: number;
 	strict: boolean;
 
@@ -595,6 +670,8 @@ export type BytecodeInstruction =
 			dst: number;
 			callee: number;
 			thisValue: number;
+			exactFunctionIndex?: number;
+			guardedFunctionIndices?: Array<number>;
 			argumentCount: number;
 			arguments: Array<number>;
 	  }
@@ -623,6 +700,7 @@ export type BytecodeInstruction =
 			opcode: "CONSTRUCT";
 			dst: number;
 			callee: number;
+			exactFunctionIndex?: number;
 			argumentCount: number;
 			arguments: Array<number>;
 	  }
@@ -715,6 +793,13 @@ export type BytecodeInstruction =
 	  }
 	| {
 			opcode: "LOAD_PROPERTY_STATIC";
+			dst: number;
+			object: number;
+			stringIndex: number;
+			icIndex: number;
+	  }
+	| {
+			opcode: "LOAD_PROPERTY_STATIC_ARRAY_LENGTH";
 			dst: number;
 			object: number;
 			stringIndex: number;
@@ -1144,6 +1229,7 @@ export function countPropertyIcSites(
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 			case "STORE_PROPERTY":
@@ -1333,6 +1419,100 @@ function vmShapeCaseTransparent(instruction: BytecodeInstruction): boolean {
 	}
 }
 
+/** Reject invalid advisory exact-target indices in a runtime image. */
+export function validateVmExactCallTargets(definition: RuntimeImage): void {
+	for (const fn of definition.functions) {
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode !== "CALL" && instruction.opcode !== "CONSTRUCT") continue;
+			if (
+				instruction.exactFunctionIndex !== undefined &&
+				(!isNonnegativeSafeInteger(instruction.exactFunctionIndex) ||
+					instruction.exactFunctionIndex >= definition.functions.length)
+			) {
+				throw new RangeError("invalid exact script-function target");
+			}
+			if (
+				instruction.opcode !== "CALL" ||
+				instruction.guardedFunctionIndices === undefined
+			) {
+				continue;
+			}
+			const targets = instruction.guardedFunctionIndices;
+			if (
+				instruction.exactFunctionIndex !== undefined ||
+				targets.length < 1 ||
+				targets.length > 4 ||
+				targets.some(
+					(target, index) =>
+						!isNonnegativeSafeInteger(target) ||
+						target >= definition.functions.length ||
+						(index > 0 && target <= targets[index - 1]!),
+				)
+			) {
+				throw new RangeError("invalid guarded script-function targets");
+			}
+		}
+	}
+}
+
+/** Validate portable map structure; semantic trust is not serializable. */
+export function validateVmSafepointRootMaps(definition: RuntimeImage): void {
+	for (const fn of definition.functions) {
+		let previousIp = -1;
+		for (const safepoint of fn.gcSafepoints ?? []) {
+			if (
+				!isNonnegativeSafeInteger(safepoint.instructionIp) ||
+				safepoint.instructionIp >= fn.instructions.length ||
+				safepoint.instructionIp <= previousIp
+			) {
+				throw new RangeError("invalid VM safepoint instruction");
+			}
+			previousIp = safepoint.instructionIp;
+			let previousRegister = -1;
+			for (const register of safepoint.rootRegisters) {
+				if (
+					!isNonnegativeSafeInteger(register) ||
+					register >= fn.registerCount ||
+					register <= previousRegister
+				) {
+					throw new RangeError("invalid VM safepoint root register");
+				}
+				previousRegister = register;
+			}
+			previousRegister = -1;
+			const roots = new Set(safepoint.rootRegisters);
+			for (const register of safepoint.clearRegisters ?? []) {
+				if (!roots.has(register) || register <= previousRegister) {
+					throw new RangeError("invalid VM safepoint clear register");
+				}
+				previousRegister = register;
+			}
+		}
+	}
+}
+
+/** Reject an exact Array-length opcode whose operands do not carry its proof. */
+export function validateVmExactArrayLengthLoads(definition: RuntimeImage): void {
+	const lengthKey = [0x6c, 0x65, 0x6e, 0x67, 0x74, 0x68];
+	for (const fn of definition.functions) {
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") continue;
+			const key = definition.stringConstants[instruction.stringIndex];
+			if (
+				!isNonnegativeSafeInteger(instruction.dst) ||
+				instruction.dst >= fn.registerCount ||
+				!isNonnegativeSafeInteger(instruction.object) ||
+				instruction.object >= fn.registerCount ||
+				key === undefined ||
+				key.length !== lengthKey.length ||
+				key.some((unit, index) => unit !== lengthKey[index])
+			) {
+				throw new RangeError("invalid exact Array length operation");
+			}
+		}
+	}
+}
+
 /** Reject forged or stale shared shape-case certificates in a runtime image. */
 export function validateVmShapeCases(definition: RuntimeImage): void {
 	// Also validates the shared precompiled-shape table and physical cache layout.
@@ -1477,6 +1657,15 @@ export function validateVmShapeCases(definition: RuntimeImage): void {
 			}
 		}
 	}
+}
+
+/** Validate every proof-bearing runtime field before an output consumes it. */
+export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
+	validateVmValueOperands(definition);
+	validateVmExactCallTargets(definition);
+	validateVmSafepointRootMaps(definition);
+	validateVmExactArrayLengthLoads(definition);
+	validateVmShapeCases(definition);
 }
 
 interface VmKnownShapeOrigin {
@@ -1714,7 +1903,7 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		files,
 		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),
 	};
-	validateVmShapeCases(runtime);
+	validateRuntimeImageMetadata(runtime);
 	return { runtime, functions: functionPlans };
 }
 
@@ -1907,6 +2096,7 @@ function lowerExecutionFunctionToBytecode(
 			switch (vmInstruction.opcode) {
 				case "LOAD_PROPERTY":
 				case "LOAD_PROPERTY_STATIC":
+				case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 				case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 				case "STORE_PROPERTY":
@@ -1949,6 +2139,51 @@ function lowerExecutionFunctionToBytecode(
 		parameterCount: fn.parameterCount,
 		registerCount: fn.registerCount,
 	});
+	const frameExitInstructions = (
+		fn.isGenerator || fn.isAsync
+			? fn.blocks.flatMap(({ instructions: blockInstructions }) =>
+					blockInstructions.filter(
+						(instruction) =>
+							instruction.type === "return" || instruction.type === "throw",
+					),
+				)
+			: []
+	) satisfies Array<CompilerInstruction>;
+	const frameExitRoots = executionSafepointRootRegisters(
+		fn,
+		new Set(frameExitInstructions),
+	);
+	const portableSafepoints = [
+		...fn.gc.safepoints.map(({ instruction, rootRegisters }) => ({
+			instruction,
+			rootRegisters,
+		})),
+		...frameExitInstructions.map((instruction) => ({
+			instruction,
+			rootRegisters: frameExitRoots.get(instruction) ?? [],
+		})),
+	];
+	const gcSafepoints = portableSafepoints
+		.map(({ instruction: targetInstruction, rootRegisters }) => {
+			const instructionIp = instructionIndexByTargetInstruction.get(targetInstruction);
+			if (instructionIp === undefined) {
+				throw new Error("Execution safepoint has no portable instruction");
+			}
+			const instruction = instructions[instructionIp]!;
+			const roots = new Set(rootRegisters);
+			const clearRegisters = vmInstructionWriteRegisters(instruction)
+				.filter(
+					(register) =>
+						roots.has(register) && !vmInstructionUsesRegister(instruction, register),
+				)
+				.sort((left, right) => left - right);
+			return {
+				instructionIp,
+				rootRegisters: [...rootRegisters],
+				...(clearRegisters.length === 0 ? {} : { clearRegisters }),
+			};
+		})
+		.sort((left, right) => left.instructionIp - right.instructionIp);
 
 	const bytecode: BytecodeFunction = {
 		nameStringIndex: fn.nameStringIndex,
@@ -1959,6 +2194,7 @@ function lowerExecutionFunctionToBytecode(
 		mappedArgumentSlots: [...fn.mappedArgumentSlots],
 		length: fn.length,
 		registerCount: fn.registerCount,
+		gcSafepoints,
 		capturedCount: fn.capturedCount,
 		strict: fn.strict,
 		needsArguments,
@@ -1973,6 +2209,7 @@ function lowerExecutionFunctionToBytecode(
 		fileIndex,
 		positions,
 	};
+	trustedVmSafepointRootMaps.set(bytecode, vmSafepointRootMapTrustFingerprint(bytecode));
 	return {
 		bytecode,
 		blockStartIps,
@@ -2174,6 +2411,12 @@ function lowerInstructionToBytecodeInstruction(
 					instruction.registers[2],
 					instruction.immediateValues?.[2],
 				),
+				...(instruction.directFunctionIndex === undefined
+					? {}
+					: { exactFunctionIndex: instruction.directFunctionIndex }),
+				...(instruction.guardedFunctionIndices === undefined
+					? {}
+					: { guardedFunctionIndices: [...instruction.guardedFunctionIndices] }),
 				argumentCount: instruction.registers.length - 3,
 				arguments: instruction.registers
 					.slice(3)
@@ -2201,9 +2444,16 @@ function lowerInstructionToBytecodeInstruction(
 			return {
 				opcode: "CALL_BUILTIN",
 				dst: instruction.registers[0],
-				thisValue: instruction.registers[1],
+				thisValue: encodeVmValueOperand(
+					instruction.registers[1],
+					instruction.immediateValues?.[1],
+				),
 				argumentCount: instruction.registers.length - 2,
-				arguments: instruction.registers.slice(2),
+				arguments: instruction.registers
+					.slice(2)
+					.map((register, index) =>
+						encodeVmValueOperand(register, instruction.immediateValues?.[index + 2]),
+					),
 				operation: vmDirectBuiltinOperation(instruction.operation),
 			};
 		case "construct":
@@ -2214,6 +2464,9 @@ function lowerInstructionToBytecodeInstruction(
 					instruction.registers[1],
 					instruction.immediateValues?.[1],
 				),
+				...(instruction.directFunctionIndex === undefined
+					? {}
+					: { exactFunctionIndex: instruction.directFunctionIndex }),
 				argumentCount: instruction.registers.length - 2,
 				arguments: instruction.registers
 					.slice(2)
@@ -2326,7 +2579,10 @@ function lowerInstructionToBytecodeInstruction(
 			};
 		case "loadPropertyStatic":
 			return {
-				opcode: "LOAD_PROPERTY_STATIC",
+				opcode:
+					instruction.exactArrayLength === true
+						? "LOAD_PROPERTY_STATIC_ARRAY_LENGTH"
+						: "LOAD_PROPERTY_STATIC",
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				stringIndex: instruction.stringIndex,
@@ -2686,7 +2942,8 @@ function lowerInstructionToBytecodeInstruction(
 			throw new Error(`Unexpected non-optimized local instruction ${instruction.type}`);
 	}
 
-	throw new Error(`Unknown instruction ${(instruction as { type: string }).type}`);
+	const unhandled: never = instruction;
+	throw new Error(`Unknown instruction ${(unhandled as { type: string }).type}`);
 }
 
 function getInstructionFunctionIndex(instruction: {

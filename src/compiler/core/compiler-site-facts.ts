@@ -1,4 +1,5 @@
 import type {
+	CompilerCallTargetSet,
 	CompilerFact,
 	CompilerSiteFacts,
 	FactDependency,
@@ -138,6 +139,37 @@ function knownBuiltinCall(instruction: CoreInstruction): KnownBuiltinCall | unde
 		: undefined;
 }
 
+function callTargetFact(
+	fn: CoreFunction,
+	instruction: CoreInstruction,
+	sourceSite: SourceSiteId | undefined,
+	analyzed: CompilerCallTargetSet | undefined,
+): CompilerFact<CompilerCallTargetSet> | undefined {
+	if (instruction.opcode !== "call" && instruction.opcode !== "construct") {
+		return undefined;
+	}
+	const attribute = attributeObject(instruction.attributes.calleeTargets);
+	const functions = analyzed?.functions ?? numberArray(attribute?.functions);
+	const anyScript = analyzed?.anyScript ?? attribute?.anyScript;
+	const opaque = analyzed?.opaque ?? attribute?.opaque;
+	if (
+		functions === undefined ||
+		typeof anyScript !== "boolean" ||
+		typeof opaque !== "boolean" ||
+		(functions.length === 0 && !anyScript && !opaque)
+	) {
+		return undefined;
+	}
+	return knownFact(
+		{
+			functions: [...functions],
+			anyScript,
+			opaque,
+		},
+		siteProof(fn, sourceSite, "core-call-target-analysis"),
+	);
+}
+
 function attributeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
 	return value !== null && typeof value === "object" && !Array.isArray(value)
 		? (value as Readonly<Record<string, unknown>>)
@@ -216,6 +248,18 @@ export function attachCoreCompilerSiteFacts(
 				const shape = shapeFact(program, fn, instruction, sourceSite);
 				const immutableBinding = immutableBindingFact(program, instruction, context);
 				const builtin = knownBuiltinCall(instruction);
+				const callee = instruction.inputs[0];
+				const callTargets = callTargetFact(
+					fn,
+					instruction,
+					sourceSite,
+					callee === undefined
+						? undefined
+						: compilation.targetAnalyses?.summaries.targets.targets(
+								fn.functionIndex,
+								callee,
+							),
+				);
 				const isAllocation = allocationOpcodes.has(instruction.opcode);
 				const stackObject = stackObjects.get(instruction.id);
 				const stackProof =
@@ -253,6 +297,7 @@ export function attachCoreCompilerSiteFacts(
 								builtinSemantics: builtin.semantics,
 							}),
 					...(immutableBinding === undefined ? {} : { immutableBinding }),
+					...(callTargets === undefined ? {} : { callTargets }),
 				};
 				if (
 					facts.shape !== undefined ||
@@ -260,7 +305,8 @@ export function attachCoreCompilerSiteFacts(
 					facts.representation !== undefined ||
 					facts.builtinIdentity !== undefined ||
 					facts.builtinSemantics !== undefined ||
-					facts.immutableBinding !== undefined
+					facts.immutableBinding !== undefined ||
+					facts.callTargets !== undefined
 				) {
 					sites.set(id, facts);
 					instructionSites.set(instruction, facts);

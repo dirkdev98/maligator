@@ -64,6 +64,7 @@ import type {
 	CoreConstructionBlock,
 	CoreInstructionEmitter,
 } from "./core-frontend-construction.ts";
+import { coreSingleAssignmentCells } from "./core-ir-call-targets.ts";
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
@@ -908,7 +909,45 @@ function finishCoreProgram(program: CoreFrontendContext): CoreCompilation {
 		sourcePositions: program.sourcePositions.map((position) => ({ ...position })),
 		globalCount: program.nextGlobalIndex,
 	};
-	const singleAssignment = coreSingleAssignmentCellDeclarations(program);
+	const candidates = coreSingleAssignmentCellCandidates(program);
+	const hostInstallCandidates = coreHostInstallCandidates(program);
+	const provisionalCaptured = new Map(
+		[
+			...candidates.singleAssignmentCapturedSlots,
+			...candidates.capturedLetCandidates,
+		].map((slot) => [`${slot.owner}:${slot.index}`, slot] as const),
+	);
+	const provisionalContext = {
+		facts: program.facts,
+		data: coreProgramDataFromSemantic(program.semantic, {
+			cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
+			hostInstallCandidates,
+			singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
+			singleAssignmentCapturedSlots: [...provisionalCaptured.values()],
+			retainedHostInstallers: [program.hostProcess, program.hostBuffer]
+				.flatMap((host) => (host?.retained === true ? [host.installer] : []))
+				.filter(
+					(installer, index, installers) => installers.indexOf(installer) === index,
+				),
+		}),
+	};
+	const proven = coreSingleAssignmentCells(core, coreOpcodeRegistry, provisionalContext);
+	const captured = new Map(
+		candidates.singleAssignmentCapturedSlots.map(
+			(slot) => [`${slot.owner}:${slot.index}`, slot] as const,
+		),
+	);
+	for (const slot of candidates.capturedLetCandidates) {
+		if (proven.capturedSlot(slot.owner, slot.index)) {
+			captured.set(`${slot.owner}:${slot.index}`, slot);
+		}
+	}
+	const singleAssignment = {
+		singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
+		singleAssignmentCapturedSlots: [...captured.values()].sort(
+			(left, right) => left.owner - right.owner || left.index - right.index,
+		),
+	};
 	return {
 		program: core,
 		context: {
@@ -921,7 +960,7 @@ function finishCoreProgram(program: CoreFrontendContext): CoreCompilation {
 				: { optimizationTrace: [...program.optimizationTrace] }),
 			data: coreProgramDataFromSemantic(program.semantic, {
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
-				hostInstallCandidates: coreHostInstallCandidates(program),
+				hostInstallCandidates,
 				...singleAssignment,
 				retainedHostInstallers: [program.hostProcess, program.hostBuffer]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
@@ -934,30 +973,43 @@ function finishCoreProgram(program: CoreFrontendContext): CoreCompilation {
 }
 
 /**
- * Compiler-owned cells whose binding can never be reassigned.
+ * Compiler-owned cells eligible for the whole-Core single-assignment proof.
  *
- * `const` and a named function expression's own-name binding are the only two
- * ECMAScript bindings that are initialized once and then immutable; a `var` or
- * `let` cell, a script global property, and a local slot are all excluded. An
+ * `const` and a named function expression's own-name binding are source-level
+ * immutable candidates. In a source-closed program a captured `let` is also a
+ * candidate because the whole Core graph can prove that its initialization is
+ * its only non-TDZ writer. A mutable global `let`, an open-world captured cell,
+ * a `var`, a script global property, and a local slot stay excluded: only
+ * activation-private captured storage gets the graph-derived extension. An
  * imported name never appears here in its own right: the linker rewrites its
  * usages onto the exporting module's binding, so the exporter's cell is the one
- * declared and a live binding stays a single cell.
+ * considered.
  *
- * This is a declaration, not a proof. It says what the source guarantees about
- * assignment; whether the compiled graph actually contains exactly one writer
- * and no reader outside it is checked separately against the Core graph.
+ * The captured-let candidates are filtered by `coreSingleAssignmentCells` before
+ * they enter the Core context. That proof requires exactly one named
+ * non-sentinel writer and rejects family-level writes, publication, opaque
+ * values, and host-owned storage. Existing source-immutable authority is
+ * preserved; consumers that need stronger closure recheck the current graph.
  */
-function coreSingleAssignmentCellDeclarations(program: CoreFrontendContext): {
+function coreSingleAssignmentCellCandidates(program: CoreFrontendContext): {
 	singleAssignmentGlobalSlots: Array<number>;
 	singleAssignmentCapturedSlots: Array<CoreCapturedSlotRef>;
+	capturedLetCandidates: Array<CoreCapturedSlotRef>;
 } {
 	const globals = new Set<number>();
 	const captured = new Map<string, CoreCapturedSlotRef>();
+	const capturedLets = new Map<string, CoreCapturedSlotRef>();
 	for (const [binding, location] of program.bindingToStorage) {
-		if (binding.kind !== "const" && binding.immutableSelfReference !== true) continue;
-		if (location.type === "global") globals.add(location.index);
-		else if (location.type === "captured") {
-			captured.set(`${location.functionIndex}:${location.index}`, {
+		const sourceImmutable =
+			binding.kind === "const" || binding.immutableSelfReference === true;
+		const capturedLet =
+			binding.kind === "let" &&
+			location.type === "captured" &&
+			program.facts.closure.sourceClosure.kind === "known";
+		if (sourceImmutable && location.type === "global") globals.add(location.index);
+		else if ((sourceImmutable || capturedLet) && location.type === "captured") {
+			const slots = capturedLet ? capturedLets : captured;
+			slots.set(`${location.functionIndex}:${location.index}`, {
 				owner: location.functionIndex,
 				index: location.index,
 			});
@@ -966,6 +1018,9 @@ function coreSingleAssignmentCellDeclarations(program: CoreFrontendContext): {
 	return {
 		singleAssignmentGlobalSlots: [...globals].sort((left, right) => left - right),
 		singleAssignmentCapturedSlots: [...captured.values()].sort(
+			(left, right) => left.owner - right.owner || left.index - right.index,
+		),
+		capturedLetCandidates: [...capturedLets.values()].sort(
 			(left, right) => left.owner - right.owner || left.index - right.index,
 		),
 	};
@@ -4109,8 +4164,11 @@ function compileFunctionParams(
 		argumentsBinding?.usageNodes.some(
 			(usage) => fn.semanticFile.staticArgumentsAccesses.get(usage) === undefined,
 		) ?? false;
+	const lazilyMaterializesArguments =
+		argumentsBinding !== undefined &&
+		fn.semanticFile.lazyArgumentsBindings.has(argumentsBinding);
 	let hasStaticIndex = false;
-	if (argumentsBinding && !materializesArguments) {
+	if (argumentsBinding && (!materializesArguments || lazilyMaterializesArguments)) {
 		for (const usage of argumentsBinding.usageNodes) {
 			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
 			if (access?.kind === "index") hasStaticIndex = true;
@@ -4128,7 +4186,7 @@ function compileFunctionParams(
 			fn.mappedArgumentSlots[i] = location.index;
 		}
 	}
-	if (argumentsBinding && !materializesArguments) {
+	if (argumentsBinding && (!materializesArguments || lazilyMaterializesArguments)) {
 		let argumentCountRegister: number | undefined;
 		const indexRegisters = new Map<number, number>();
 		for (const usage of argumentsBinding.usageNodes) {
@@ -4157,7 +4215,16 @@ function compileFunctionParams(
 			(fn.staticArgumentsRegisters ??= new Map()).set(usage, destination);
 		}
 	}
-	if (argumentsBinding && needsStaticFallback) {
+	if (argumentsBinding && lazilyMaterializesArguments) {
+		const empty = nextCoreVariable(fn);
+		block.emitter.emit({ type: "createEmpty", registers: [empty] });
+		fn.argumentsObjectRegister = empty;
+		storeRegisterAtLocation(
+			block,
+			getOrCreateBindingLocation(program, fn, argumentsBinding),
+			empty,
+		);
+	} else if (argumentsBinding && needsStaticFallback) {
 		const emptyFallback = compileUndefined(fn, cursor);
 		fn.argumentsObjectRegister = emptyFallback;
 		fn.staticArgumentsFallbackRegister = emptyFallback;
@@ -12724,9 +12791,11 @@ function compileStaticIdentifier(
 	}
 
 	if (binding.implicit === "arguments") {
-		// The owning function initializes this mutable binding from its arguments
-		// object. Direct reads use the local slot and arrow reads use the captured
-		// slot, so assignment is observed consistently in both cases.
+		if (fn.semanticFile.lazyArgumentsBindings.has(binding)) {
+			return loadLazyArgumentsObject(program, fn, cursor, binding);
+		}
+		// Direct reads use the local slot and arrow reads use the captured slot, so
+		// assignment is observed consistently in both cases.
 		const location = getOrCreateBindingLocation(program, fn, binding);
 		return loadRegisterFromLocation(fn, cursor.block, location);
 	}
@@ -12754,6 +12823,46 @@ function compileStaticIdentifier(
 	emitTdzGuard(program, fn, cursor.block, binding, destination);
 
 	return destination;
+}
+
+function loadLazyArgumentsObject(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	binding: Binding,
+): number {
+	const location = getOrCreateBindingLocation(program, fn, binding);
+	const result = loadRegisterFromLocation(fn, cursor.block, location);
+	const missing = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [missing, result] });
+
+	const materializeJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [missing],
+		blocks: [-1],
+	};
+	const readyJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(materializeJump, readyJump);
+
+	const materializeIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block = fn.blocks[materializeIndex]!;
+	cursor.block.emitter.emit({ type: "createArgumentsObject", registers: [result] });
+	storeRegisterAtLocation(cursor.block, location, result);
+	const materializedJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(materializedJump);
+
+	const readyIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	materializeJump.blocks[0] = materializeIndex;
+	readyJump.blocks[0] = readyIndex;
+	materializedJump.blocks[0] = readyIndex;
+	cursor.block = fn.blocks[readyIndex]!;
+	return result;
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */

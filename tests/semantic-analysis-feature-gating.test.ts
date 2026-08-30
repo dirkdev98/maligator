@@ -110,3 +110,27 @@ test("non-static implicit arguments uses conservatively retain classification", 
 		staticArgumentsTraversals: 1,
 	});
 });
+
+test("mixed arguments bindings classify parameter length reads for lazy materialization", () => {
+	const file = analyze(`
+		function mixed(value = arguments.length, observe) {
+			if (observe) return arguments;
+			return value;
+		}
+	`);
+	const access = [...file.staticArgumentsAccesses.values()];
+
+	expect(access).toEqual([expect.objectContaining({ kind: "length" })]);
+	expect(file.lazyArgumentsBindings.size).toBe(1);
+});
+
+test("dynamic and escaping parameter uses keep mixed arguments bindings eager", () => {
+	const file = analyze(`
+		function captured(value = (() => arguments.length)()) { return arguments; }
+		function evaluated(value = eval("arguments.length")) { return arguments; }
+		function indexed(value = arguments[0]) { return arguments; }
+	`);
+
+	expect(file.staticArgumentsAccesses.size).toBe(0);
+	expect(file.lazyArgumentsBindings.size).toBe(0);
+});

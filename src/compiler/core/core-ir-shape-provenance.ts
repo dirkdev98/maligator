@@ -19,6 +19,7 @@
  * monotone worklist over O(values + cells + edges).
  */
 
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import { analyzeCoreCalleeTargets } from "./core-ir-call-targets.ts";
 import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
@@ -306,12 +307,27 @@ export interface CoreShapeProvenanceAnalysis {
 export interface CoreShapeProvenanceOptions {
 	readonly registry?: CoreOpcodeRegistry;
 	readonly calleeTargets?: CoreCalleeTargetAnalysis;
+	readonly context?: CoreCompilationContext;
 	/** Closed-world entry and positional-call authority shared with other lattices. */
 	readonly summaries?: CoreProgramSummaries;
 	readonly controlFlow?: (fn: CoreFunction) => CoreControlFlow;
 	readonly canonicalValues?: (fn: CoreFunction) => ReadonlyMap<CoreValueId, CoreValueId>;
 	/** Function bodies that reach execution in the current closed image. */
 	readonly executableFunctions?: ReadonlySet<number>;
+}
+
+function sharesClosedLiteralShapeOrigins(
+	context: CoreCompilationContext | undefined,
+): boolean {
+	// A representative crosses functions only under one fixed primordial prototype
+	// authority in a complete image.
+	const facts = context?.facts;
+	return (
+		facts?.compilationMode === "full" &&
+		facts.closure.sourceClosure.kind === "known" &&
+		facts.world.primordialPolicy === "locked" &&
+		facts.world.realms === false
+	);
 }
 
 /** Validate one shaped-literal origin and return its runtime slot-key order. */
@@ -621,6 +637,8 @@ export function analyzeCoreShapeProvenance(
 
 	const origins: Array<CoreShapeOrigin> = [];
 	const originByInstruction = new Map<string, number>();
+	const literalOriginByLayout = new Map<string, number>();
+	const shareLiteralOrigins = sharesClosedLiteralShapeOrigins(options.context);
 	const constructorOriginByFunction = new Map<number, number>();
 	const aggregateFunctions = new Set<number>();
 	const modelledAggregateAllocations = new Set<string>();
@@ -644,15 +662,24 @@ export function analyzeCoreShapeProvenance(
 				const keys = coreShapedObjectKeys(program, instruction, cellForString);
 				if (keys !== undefined) {
 					aggregateFunctions.add(fn.functionIndex);
-					const origin = origins.length;
-					origins.push(
-						Object.freeze({
-							kind: "literal",
-							functionIndex: fn.functionIndex,
-							instruction: instruction.id,
-							keyStringIndices: keys,
-						}),
-					);
+					// Program-wide string-pool coordinates keep the representative anchor
+					// exact at the target boundary.
+					const layout = keys.join(",");
+					let origin = shareLiteralOrigins
+						? literalOriginByLayout.get(layout)
+						: undefined;
+					if (origin === undefined) {
+						origin = origins.length;
+						origins.push(
+							Object.freeze({
+								kind: "literal",
+								functionIndex: fn.functionIndex,
+								instruction: instruction.id,
+								keyStringIndices: keys,
+							}),
+						);
+						if (shareLiteralOrigins) literalOriginByLayout.set(layout, origin);
+					}
 					originByInstruction.set(`${fn.functionIndex}\0${instruction.id}`, origin);
 				}
 				if (instruction.opcode === "loadThis") {

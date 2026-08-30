@@ -18,12 +18,18 @@ import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import type { CoreAccessKey, CoreOwnCell } from "./core-ir-provenance.ts";
 import {
+	CORE_CALL_SUMMARY_ATTRIBUTE,
+	coreCallSummaryClaimFromAttribute,
+	coreCallValueSummaryDigest,
+} from "./core-ir-summaries.ts";
+import {
 	CORE_EFFECT_DOMAINS,
 	CORE_MEMORY_FAMILIES,
 	CORE_MEMORY_FAMILY_DOMAINS,
 } from "./core-ir.ts";
 import type {
 	CoreAccessMode,
+	CoreBlockId,
 	CoreEffectDomain,
 	CoreFunction,
 	CoreInstruction,
@@ -185,6 +191,79 @@ function instructionEffectMasks(effects: CoreInstructionEffects): EffectMasks {
 	return masks;
 }
 
+// Summary memory effects refine ordering; exception and GC behavior stay opcode-owned.
+function coreInstructionMemoryEffects(
+	instruction: CoreInstruction,
+	relativeAccesses: ReadonlyArray<CoreMemoryAccess> | undefined,
+	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+): CoreInstructionEffects {
+	const baseline = coreInstructionEffects(instruction, registry);
+	if (instruction.opcode !== "call") return baseline;
+	const claim = coreCallSummaryClaimFromAttribute(
+		instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE],
+	);
+	if (
+		claim === undefined ||
+		claim.digest !== coreCallValueSummaryDigest(claim) ||
+		(claim.effects.callsUserCode && relativeAccesses === undefined)
+	) {
+		return baseline;
+	}
+	return {
+		reads: claim.effects.reads,
+		writes: claim.effects.writes,
+		mayThrow: baseline.mayThrow,
+		maySuspend: baseline.maySuspend,
+		mayGc: baseline.mayGc,
+		callsUserCode: claim.effects.callsUserCode,
+	};
+}
+
+/**
+ * Atomically substitute a singleton call's frame-relative cells. One missing
+ * base, non-own key, or escaped allocation rejects the complete relative view;
+ * the caller then observes the ordinary coarse call effects.
+ */
+function coreCallRelativeMemoryAccesses(
+	instruction: CoreInstruction,
+	resolution: CoreMemoryResolution | undefined,
+): ReadonlyArray<CoreMemoryAccess> | undefined {
+	if (instruction.opcode !== "call" || resolution === undefined) return undefined;
+	const claim = coreCallSummaryClaimFromAttribute(
+		instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE],
+	);
+	if (
+		claim === undefined ||
+		claim.digest !== coreCallValueSummaryDigest(claim) ||
+		claim.targets.length !== 1 ||
+		claim.relativeOwnSlotEffects.length === 0
+	) {
+		return undefined;
+	}
+	const accesses: Array<CoreMemoryAccess> = [];
+	for (const effect of claim.relativeOwnSlotEffects) {
+		const operand = effect.base.kind === "receiver" ? 1 : effect.base.index + 2;
+		const base = instruction.inputs[operand];
+		if (base === undefined) return undefined;
+		const key = { kind: "string-constant", index: effect.key } as const;
+		const resolved = resolution.ownCell(base, key, effect.mode);
+		if (resolved === undefined || resolved.cell.kind !== "object-slot") {
+			return undefined;
+		}
+		accesses.push({
+			mode: effect.mode,
+			location: {
+				kind: "object-slot",
+				allocation: resolved.allocation,
+				key: resolved.cell.key,
+			},
+			base,
+			key,
+		});
+	}
+	return accesses;
+}
+
 const NO_ACCESSES: ReadonlyArray<CoreOpcodeAccess> = Object.freeze([]);
 
 function accessIsEffective(access: CoreOpcodeAccess, masks: EffectMasks): boolean {
@@ -298,7 +377,8 @@ export function coreMemoryAccesses(
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 ): ReadonlyArray<CoreMemoryAccess> {
 	const declared = effectiveAccesses(instruction, registry);
-	if (declared.length === 0) return [];
+	const relative = coreCallRelativeMemoryAccesses(instruction, resolution) ?? [];
+	if (declared.length === 0) return relative;
 	const accesses: Array<CoreMemoryAccess> = [];
 	for (const access of declared) {
 		const base =
@@ -323,7 +403,7 @@ export function coreMemoryAccesses(
 				: {}),
 		});
 	}
-	return accesses;
+	return relative.length === 0 ? accesses : [...accesses, ...relative];
 }
 
 /**
@@ -365,6 +445,18 @@ function exactPartitionFamilies(
 				const location = exactLocation(access, instruction, resolution);
 				if (location !== undefined) partitions.add(coreMemoryPartition(location));
 			}
+			for (const access of coreCallRelativeMemoryAccesses(instruction, resolution) ??
+				[]) {
+				if (access.mode !== "read" || access.location.kind === "family") continue;
+				let partitions = counts.get("object-slot");
+				if (partitions === undefined) {
+					partitions = new Set();
+					counts.set("object-slot", partitions);
+				}
+				if (partitions.size <= MAX_EXACT_PARTITIONS_PER_FAMILY) {
+					partitions.add(coreMemoryPartition(access.location));
+				}
+			}
 		}
 	}
 	return new Set(
@@ -405,6 +497,16 @@ export interface CoreMemoryVersions {
 		instruction: CoreInstructionId,
 		partition: CoreMemoryPartition,
 	): CoreMemoryVersion | undefined;
+	/** Solved partition version on entry to a block, including memory-phi identity. */
+	entryVersion(
+		block: CoreBlockId,
+		partition: CoreMemoryPartition,
+	): CoreMemoryVersion | undefined;
+	/** Solved partition version on the ordinary exit from a block. */
+	exitVersion(
+		block: CoreBlockId,
+		partition: CoreMemoryPartition,
+	): CoreMemoryVersion | undefined;
 }
 
 const NO_MEMORY_VERSIONS: CoreMemoryVersions = Object.freeze({
@@ -412,6 +514,8 @@ const NO_MEMORY_VERSIONS: CoreMemoryVersions = Object.freeze({
 	readVersion: () => undefined,
 	initializationVersion: () => undefined,
 	writeVersion: () => undefined,
+	entryVersion: () => undefined,
+	exitVersion: () => undefined,
 });
 
 /**
@@ -576,7 +680,8 @@ export function coreMemoryVersions(
 		for (const instruction of fn.blocks[blockId]!.instructions) {
 			instructionIndices.set(instruction.id, instructionCount);
 			instructionCount += 1;
-			const effects = coreInstructionEffects(instruction);
+			const relativeAccesses = coreCallRelativeMemoryAccesses(instruction, resolution);
+			const effects = coreInstructionMemoryEffects(instruction, relativeAccesses);
 			const masks = instructionEffectMasks(effects);
 			let coveredReads = 0;
 			let coveredWrites = 0;
@@ -606,6 +711,28 @@ export function coreMemoryVersions(
 				}
 				killSources.push(internExact(location));
 				notified |= familyMask;
+			}
+			for (const access of relativeAccesses ?? []) {
+				const familyMask = FAMILY_DOMAIN_MASK["object-slot"];
+				const location = exactFamilies.has("object-slot") ? access.location : undefined;
+				if (access.mode === "read") {
+					coveredReads |= familyMask;
+					if (location === undefined || location.kind === "family") {
+						readDomains |= familyMask;
+					} else {
+						const id = internExact(location);
+						readIds.push(id);
+						exactReadIds.push(id);
+					}
+				} else {
+					coveredWrites |= familyMask;
+					if (location === undefined || location.kind === "family") {
+						whole |= familyMask;
+					} else {
+						killSources.push(internExact(location));
+						notified |= familyMask;
+					}
+				}
 			}
 			// A declared domain with no surviving access — `host`, or a family this
 			// function collapsed — invalidates or observes everything the domain covers.
@@ -957,6 +1084,20 @@ export function coreMemoryVersions(
 			if (index === undefined || slot < 0) return undefined;
 			return ((index * VERSION_KINDS + VERSION_WRITE) * slots +
 				slot) as CoreMemoryVersion;
+		},
+		entryVersion(block, partition) {
+			const slot = trackedSlot(partition);
+			const state = entryStates[block];
+			return slot < 0 || state === undefined
+				? undefined
+				: (state[slot] as CoreMemoryVersion);
+		},
+		exitVersion(block, partition) {
+			const slot = trackedSlot(partition);
+			const state = exitStates[block];
+			return slot < 0 || state === undefined
+				? undefined
+				: (state[slot] as CoreMemoryVersion);
 		},
 	};
 }

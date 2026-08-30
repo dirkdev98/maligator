@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
-import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import {
+	coreInstructionEffects,
+	coreOpcodeRegistry,
+} from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	coreOptimizationMetrics,
 	executeCoreOptimizations,
@@ -53,6 +56,24 @@ function returnParameter(functionIndex: number): CoreFunction {
 	const entry = builder.createBlock([{}]);
 	const parameter = builder.block(entry).parameters[0]!.value;
 	builder.setTerminator(entry, { kind: "return", value: parameter });
+	return builder.finish(entry);
+}
+
+function returnSecondParameter(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 2,
+	});
+	const entry = builder.createBlock([{}, {}]);
+	const parameter = builder.block(entry).parameters[1]!.value;
+	builder.setTerminator(entry, { kind: "return", value: parameter });
+	return builder.finish(entry);
+}
+
+function returnReceiver(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [receiver] = builder.appendInstruction(entry, "loadThis", []);
+	builder.setTerminator(entry, { kind: "return", value: receiver! });
 	return builder.finish(entry);
 }
 
@@ -122,6 +143,19 @@ function writeGlobal(functionIndex: number, slot = 0): CoreFunction {
 	return builder.finish(entry);
 }
 
+function writeCaptured(functionIndex: number, owner = 0, index = 0): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const parameter = builder.block(entry).parameters[0]!.value;
+	builder.appendInstruction(entry, "storeCaptured", [parameter], {
+		attributes: { functionIndex: owner, index },
+	});
+	builder.setTerminator(entry, { kind: "return", value: parameter });
+	return builder.finish(entry);
+}
+
 function ignoreParameter(functionIndex: number): CoreFunction {
 	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
 		parameterCount: 1,
@@ -160,6 +194,205 @@ function mutateParameter(functionIndex: number): CoreFunction {
 		attributes: { stringIndex: 1 },
 	});
 	builder.setTerminator(entry, { kind: "return", value: value! });
+	return builder.finish(entry);
+}
+
+function mutateReceiver(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [receiver] = builder.appendInstruction(entry, "loadThis", []);
+	const [value] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 2 },
+		outputRepresentations: ["f64"],
+	});
+	builder.appendInstruction(entry, "storePropertyStatic", [receiver!, value!], {
+		attributes: { stringIndex: 1 },
+	});
+	builder.setTerminator(entry, { kind: "return", value: value! });
+	return builder.finish(entry);
+}
+
+function readParameterSlot(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const parameter = builder.block(entry).parameters[0]!.value;
+	const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [parameter], {
+		attributes: { stringIndex: 1 },
+	});
+	builder.setTerminator(entry, { kind: "return", value: loaded! });
+	return builder.finish(entry);
+}
+
+function relativeMutationCaller(
+	functionIndex: number,
+	target: number,
+	passedObject: 0 | 1,
+	loadedObject: 0 | 1,
+	loadedKey: number,
+): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const initialValues = [1, 2, 3, 4].map(
+		(value) =>
+			builder.appendInstruction(entry, "createF64", [], {
+				attributes: { value },
+				outputRepresentations: ["f64"],
+			})[0]!,
+	);
+	const [first] = builder.appendInstruction(
+		entry,
+		"createObjectShaped",
+		initialValues.slice(0, 2),
+		{ attributes: { keyStringIndices: [1, 2] } },
+	);
+	const [second] = builder.appendInstruction(
+		entry,
+		"createObjectShaped",
+		initialValues.slice(2),
+		{ attributes: { keyStringIndices: [1, 2] } },
+	);
+	const objects = [first!, second!] as const;
+	appendDirectCall(builder, entry, target, objects[passedObject]);
+	const [loaded] = builder.appendInstruction(
+		entry,
+		"loadPropertyStatic",
+		[objects[loadedObject]],
+		{ attributes: { stringIndex: loadedKey } },
+	);
+	builder.setTerminator(entry, { kind: "return", value: loaded! });
+	return builder.finish(entry);
+}
+
+function missingRelativeSlotCaller(functionIndex: number, target: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [initial] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 2 },
+		outputRepresentations: ["f64"],
+	});
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [2] },
+	});
+	appendDirectCall(builder, entry, target, object);
+	const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+		attributes: { stringIndex: 2 },
+	});
+	builder.setTerminator(entry, { kind: "return", value: loaded! });
+	return builder.finish(entry);
+}
+
+function relativeReceiverMutationCaller(
+	functionIndex: number,
+	target: number,
+): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [first] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 1 },
+		outputRepresentations: ["f64"],
+	});
+	const [second] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 2 },
+		outputRepresentations: ["f64"],
+	});
+	const [object] = builder.appendInstruction(
+		entry,
+		"createObjectShaped",
+		[first!, second!],
+		{ attributes: { keyStringIndices: [1, 2] } },
+	);
+	const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: target },
+	});
+	builder.appendInstruction(entry, "call", [callee!, object!]);
+	const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+		attributes: { stringIndex: 2 },
+	});
+	builder.setTerminator(entry, { kind: "return", value: loaded! });
+	return builder.finish(entry);
+}
+
+function relativeReadCaller(functionIndex: number, target: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [initial] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 1 },
+		outputRepresentations: ["f64"],
+	});
+	const [stored] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 2 },
+		outputRepresentations: ["f64"],
+	});
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	builder.appendInstruction(entry, "storePropertyStatic", [object!, stored!], {
+		attributes: { stringIndex: 1 },
+	});
+	const { result } = appendDirectCall(builder, entry, target, object);
+	builder.setTerminator(entry, { kind: "return", value: result });
+	return builder.finish(entry);
+}
+
+function ambiguousRelativeMutationCaller(
+	functionIndex: number,
+	firstTarget: number,
+	secondTarget: number,
+): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const condition = builder.block(entry).parameters[0]!.value;
+	const [firstValue] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 1 },
+		outputRepresentations: ["f64"],
+	});
+	const [secondValue] = builder.appendInstruction(entry, "createF64", [], {
+		attributes: { value: 2 },
+		outputRepresentations: ["f64"],
+	});
+	const [object] = builder.appendInstruction(
+		entry,
+		"createObjectShaped",
+		[firstValue!, secondValue!],
+		{ attributes: { keyStringIndices: [1, 2] } },
+	);
+	const first = builder.createBlock();
+	const second = builder.createBlock();
+	const join = builder.createBlock([{}]);
+	const [firstCallee] = builder.appendInstruction(first, "createFunction", [], {
+		attributes: { functionIndex: firstTarget },
+	});
+	const [secondCallee] = builder.appendInstruction(second, "createFunction", [], {
+		attributes: { functionIndex: secondTarget },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition,
+		consequent: { block: first, arguments: [] },
+		alternate: { block: second, arguments: [] },
+	});
+	builder.setTerminator(first, {
+		kind: "jump",
+		edge: { block: join, arguments: [firstCallee!] },
+	});
+	builder.setTerminator(second, {
+		kind: "jump",
+		edge: { block: join, arguments: [secondCallee!] },
+	});
+	const [thisValue] = builder.appendInstruction(join, "createUndefined", []);
+	builder.appendInstruction(join, "call", [
+		builder.block(join).parameters[0]!.value,
+		thisValue!,
+		object!,
+	]);
+	const [loaded] = builder.appendInstruction(join, "loadPropertyStatic", [object!], {
+		attributes: { stringIndex: 2 },
+	});
+	builder.setTerminator(join, { kind: "return", value: loaded! });
 	return builder.finish(entry);
 }
 
@@ -210,6 +443,163 @@ function appendDirectCall(
 		.block(block)
 		.instructions.find((instruction) => instruction.outputs.includes(result!))!;
 	return { callee: callee!, call, result: result! };
+}
+
+function directParameterWrapper(functionIndex: number, target: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const parameter = builder.block(entry).parameters[0]!.value;
+	const { result } = appendDirectCall(builder, entry, target, parameter);
+	builder.setTerminator(entry, { kind: "return", value: result });
+	return builder.finish(entry);
+}
+
+function directReceiverWrapper(functionIndex: number, target: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: target },
+	});
+	const [receiver] = builder.appendInstruction(entry, "loadThis", []);
+	const [result] = builder.appendInstruction(entry, "call", [callee!, receiver!]);
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	return builder.finish(entry);
+}
+
+function receiverObjectCaller(functionIndex: number, target: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const initial = builder.block(entry).parameters[0]!.value;
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial], {
+		attributes: { keyStringIndices: [1] },
+	});
+	const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: target },
+	});
+	const [result] = builder.appendInstruction(entry, "call", [callee!, object!]);
+	const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [result!], {
+		attributes: { stringIndex: 1 },
+	});
+	builder.setTerminator(entry, { kind: "return", value: loaded! });
+	return builder.finish(entry);
+}
+
+function ambiguousParameterWrapper(
+	functionIndex: number,
+	firstTarget: number,
+	secondTarget: number,
+): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 3,
+	});
+	const entry = builder.createBlock([{}, {}, {}]);
+	const [condition, first, second] = builder
+		.block(entry)
+		.parameters.map(({ value }) => value);
+	const consequent = builder.createBlock();
+	const alternate = builder.createBlock();
+	const join = builder.createBlock([{}]);
+	const [firstCallee] = builder.appendInstruction(consequent, "createFunction", [], {
+		attributes: { functionIndex: firstTarget },
+	});
+	const [secondCallee] = builder.appendInstruction(alternate, "createFunction", [], {
+		attributes: { functionIndex: secondTarget },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: consequent, arguments: [] },
+		alternate: { block: alternate, arguments: [] },
+	});
+	builder.setTerminator(consequent, {
+		kind: "jump",
+		edge: { block: join, arguments: [firstCallee!] },
+	});
+	builder.setTerminator(alternate, {
+		kind: "jump",
+		edge: { block: join, arguments: [secondCallee!] },
+	});
+	const callee = builder.block(join).parameters[0]!.value;
+	const [thisValue] = builder.appendInstruction(join, "createUndefined", []);
+	const [result] = builder.appendInstruction(join, "call", [
+		callee,
+		thisValue!,
+		first!,
+		second!,
+	]);
+	builder.setTerminator(join, { kind: "return", value: result! });
+	return builder.finish(entry);
+}
+
+function recursiveParameterWrapper(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 2,
+	});
+	const entry = builder.createBlock([{}, {}]);
+	const [condition, parameter] = builder
+		.block(entry)
+		.parameters.map(({ value }) => value);
+	const base = builder.createBlock();
+	const recurse = builder.createBlock();
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: base, arguments: [] },
+		alternate: { block: recurse, arguments: [] },
+	});
+	builder.setTerminator(base, { kind: "return", value: parameter! });
+	const [callee] = builder.appendInstruction(recurse, "createFunction", [], {
+		attributes: { functionIndex },
+	});
+	const [thisValue] = builder.appendInstruction(recurse, "createUndefined", []);
+	const [result] = builder.appendInstruction(recurse, "call", [
+		callee!,
+		thisValue!,
+		condition!,
+		parameter!,
+	]);
+	builder.setTerminator(recurse, { kind: "return", value: result! });
+	return builder.finish(entry);
+}
+
+function ambiguousObjectCaller(functionIndex: number, target: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 2,
+	});
+	const entry = builder.createBlock([{}, {}]);
+	const [condition, initial] = builder.block(entry).parameters.map(({ value }) => value);
+	const [first] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	const [otherInitial] = builder.appendInstruction(entry, "createUndefined", []);
+	const [second] = builder.appendInstruction(
+		entry,
+		"createObjectShaped",
+		[otherInitial!],
+		{
+			attributes: { keyStringIndices: [1] },
+		},
+	);
+	const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: target },
+	});
+	const [thisValue] = builder.appendInstruction(entry, "createUndefined", []);
+	const [result] = builder.appendInstruction(entry, "call", [
+		callee!,
+		thisValue!,
+		condition!,
+		first!,
+		second!,
+	]);
+	const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [result!], {
+		attributes: { stringIndex: 1 },
+	});
+	builder.setTerminator(entry, { kind: "return", value: loaded! });
+	return builder.finish(entry);
 }
 
 function directCaller(functionIndex: number, target: number): CoreFunction {
@@ -890,6 +1280,143 @@ describe("summary consumers and proof boundary", () => {
 		).toBe(false);
 	});
 
+	it("publishes contained stack-cell results before indirect call consumers", () => {
+		const compile = (body: string, path: string) => {
+			const source = `{ const read = function read(flag) { ${body} };
+				const callback = [read][0];
+				globalThis.__stackCellSummaryResult = callback(globalThis.flag) === true; }`;
+			const configured = compilerProgramFactsFromConfig(
+				resolveBuildConfig({ engine: { eval: false } }),
+			);
+			let optimized: CoreProgram | undefined;
+			let context: CoreCompilationContext | undefined;
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, path),
+				{
+					facts: withProgramClosure(
+						configured,
+						programClosureCertificate(
+							{ kind: "whole-program", entry: path },
+							[{ kind: "entry-module", module: path }],
+							[],
+						),
+					),
+					optimizationAblations: new Set(["inlining"]),
+					afterCoreOptimization(program, compilationContext) {
+						optimized = program;
+						context = compilationContext;
+					},
+				},
+			);
+			const nameOf = (fn: CoreFunction): string =>
+				String.fromCodePoint(
+					...(optimized!.stringConstants[fn.metadata.nameStringIndex] ?? []),
+				);
+			const read = optimized!.functions.find((fn) => nameOf(fn) === "read")!;
+			const representations = new Map(
+				optimized!.functions.flatMap((fn) =>
+					fn.values.map(
+						({ id, representation }) =>
+							[`${fn.functionIndex}:${id}`, representation] as const,
+					),
+				),
+			);
+			const readLoad = read.blocks
+				.flatMap(({ instructions }) => instructions)
+				.find(({ opcode }) => opcode === "loadPropertyStatic")!;
+			const callLocation = optimized!.functions
+				.flatMap((fn) =>
+					fn.blocks.flatMap(({ instructions }) =>
+						instructions.map((instruction) => ({ fn, instruction })),
+					),
+				)
+				.find(({ instruction }) => instruction.opcode === "call")!;
+			const callOutput = callLocation.instruction.outputs[0]!;
+			const resultStore = callLocation.fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.find(
+					({ opcode, attributes }) =>
+						opcode === "storePropertyStatic" &&
+						typeof attributes.stringIndex === "number" &&
+						String.fromCodePoint(
+							...(optimized!.stringConstants[attributes.stringIndex] ?? []),
+						) === "__stackCellSummaryResult",
+				)!;
+			return {
+				program: optimized!,
+				context,
+				readLoadRepresentation: representations.get(
+					`${read.functionIndex}:${readLoad.outputs[0]!}`,
+				),
+				callRepresentation: representations.get(
+					`${callLocation.fn.functionIndex}:${callOutput}`,
+				),
+				resultStoreInput: resultStore.inputs[1],
+				callOutput,
+				hasBooleanComparison: callLocation.fn.blocks.some(({ instructions }) =>
+					instructions.some(
+						({ opcode, attributes }) =>
+							opcode === "binary" && attributes.operator === "===",
+					),
+				),
+			};
+		};
+
+		const positive = compile(
+			`const object = { value: true };
+			if (flag) object.value = false;
+			return object.value;`,
+			"closed-stack-cell-summary.js",
+		);
+		expect(positive.readLoadRepresentation).toBe("boolean");
+		expect(positive.callRepresentation).toBe("boolean");
+		expect(positive.hasBooleanComparison).toBe(false);
+		expect(positive.resultStoreInput).toBe(positive.callOutput);
+
+		for (const negative of [
+			compile(
+				`const object = { value: true };
+				if (flag) object.value = 1;
+				return object.value;`,
+				"mixed-stack-cell-summary.js",
+			),
+			compile(
+				`const object = { value: true };
+				globalThis.__escapedStackCell = object;
+				if (flag) object.value = false;
+				return object.value;`,
+				"escaping-stack-cell-summary.js",
+			),
+		]) {
+			expect(negative.readLoadRepresentation).toBe("boxed");
+			expect(negative.callRepresentation).toBe("boxed");
+			expect(negative.hasBooleanComparison).toBe(true);
+		}
+
+		const rerun = executeCoreOptimizations(positive.program, {
+			ablations: new Set(["inlining"]),
+			context: positive.context,
+			verification: "per-pass",
+		});
+		const withoutSchedulerTransients = (program: CoreProgram): CoreProgram => ({
+			...program,
+			functions: program.functions.map((fn) => ({
+				...fn,
+				mutationEpoch: 0,
+				blocks: fn.blocks.map((block) => ({
+					...block,
+					instructions: block.instructions.map((instruction) => {
+						const { calleeTargets: _targets, ...attributes } = instruction.attributes;
+						return { ...instruction, attributes };
+					}),
+				})),
+			})),
+		});
+		expect(withoutSchedulerTransients(rerun.program)).toEqual(
+			withoutSchedulerTransients(positive.program),
+		);
+	});
+
 	it("consumes closed captured scalar kinds through joins and arithmetic", () => {
 		const source = `const globalOffset = 2;
 		function outer() {
@@ -1052,7 +1579,8 @@ describe("summary consumers and proof boundary", () => {
 
 	it("consumes multiply-assigned captured Int32 facts in a source-closed program", () => {
 		const path = "closed-mutable-capture-representation.js";
-		const source = `function outer() {
+		const source = `"metadata-compaction-sentinel";
+		function outer() {
 			let step = 1;
 			function advance() { step = (step + 1) | 0; }
 			return function inner() {
@@ -1094,6 +1622,9 @@ describe("summary consumers and proof boundary", () => {
 		);
 
 		expect(scalarMoves.length).toBeGreaterThanOrEqual(1);
+		expect(
+			optimized!.stringConstants.map((units) => String.fromCharCode(...units)),
+		).not.toContain("metadata-compaction-sentinel");
 	});
 
 	it("declines mutable captured scalar materialization without enough reuse", () => {
@@ -1373,6 +1904,243 @@ describe("summary consumers and proof boundary", () => {
 		});
 	});
 
+	it("substitutes a parameter-relative own-slot write without losing sibling slots", () => {
+		const program: CoreProgram = {
+			...coreProgram([mutateParameter(0), relativeMutationCaller(1, 0, 0, 0, 2)]),
+			stringConstants: [[], [120], [121]],
+		};
+		const analysis = analyzeCoreProgramSummaries(program);
+		expect(analysis.summary(0)?.relativeOwnSlotEffects).toEqual([
+			{
+				base: { kind: "parameter", index: 0 },
+				key: 1,
+				mode: "write",
+			},
+		]);
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const ablated = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining", "interprocedural"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[1]!, "loadPropertyStatic")).toHaveLength(
+			0,
+		);
+		expect(coreInstructions(ablated.functions[1]!, "loadPropertyStatic")).toHaveLength(1);
+	});
+
+	it("invalidates the substituted slot while preserving the same slot on another object", () => {
+		const sameObject: CoreProgram = {
+			...coreProgram([mutateParameter(0), relativeMutationCaller(1, 0, 0, 0, 1)]),
+			stringConstants: [[], [120], [121]],
+		};
+		const differentObject: CoreProgram = {
+			...coreProgram([mutateParameter(0), relativeMutationCaller(1, 0, 1, 0, 1)]),
+			stringConstants: [[], [120], [121]],
+		};
+		const optimizedSame = executeCoreOptimizations(sameObject, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const optimizedDifferent = executeCoreOptimizations(differentObject, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(
+			coreInstructions(optimizedSame.functions[1]!, "loadPropertyStatic"),
+		).toHaveLength(1);
+		expect(
+			coreInstructions(optimizedDifferent.functions[1]!, "loadPropertyStatic"),
+		).toHaveLength(0);
+	});
+
+	it("substitutes a receiver-relative own-slot write", () => {
+		const program: CoreProgram = {
+			...coreProgram([mutateReceiver(0), relativeReceiverMutationCaller(1, 0)]),
+			stringConstants: [[], [120], [121]],
+		};
+		expect(
+			analyzeCoreProgramSummaries(program).summary(0)?.relativeOwnSlotEffects,
+		).toEqual([
+			{
+				base: { kind: "receiver" },
+				key: 1,
+				mode: "write",
+			},
+		]);
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[1]!, "loadPropertyStatic")).toHaveLength(
+			0,
+		);
+	});
+
+	it("keeps stores observed by a parameter-relative own-slot read", () => {
+		const program: CoreProgram = {
+			...coreProgram([readParameterSlot(0), relativeReadCaller(1, 0)]),
+			stringConstants: [[], [120]],
+		};
+		expect(
+			analyzeCoreProgramSummaries(program).summary(0)?.relativeOwnSlotEffects,
+		).toEqual([
+			{
+				base: { kind: "parameter", index: 0 },
+				key: 1,
+				mode: "read",
+			},
+		]);
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[1]!, "storePropertyStatic")).toHaveLength(
+			1,
+		);
+	});
+
+	it("keeps polymorphic relative slot effects at the coarse fallback", () => {
+		const program: CoreProgram = {
+			...coreProgram([
+				mutateParameter(0),
+				mutateParameter(1),
+				ambiguousRelativeMutationCaller(2, 0, 1),
+			]),
+			stringConstants: [[], [120], [121]],
+		};
+		const analysis = analyzeCoreProgramSummaries(program);
+		const call = coreInstructions(program.functions[2]!, "call")[0]!;
+		expect(analysis.callSite(2, call.id)?.relativeOwnSlotEffects).toEqual([]);
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[2]!, "loadPropertyStatic")).toHaveLength(
+			1,
+		);
+	});
+
+	it("falls back atomically when the actual object lacks a relative slot", () => {
+		const program: CoreProgram = {
+			...coreProgram([mutateParameter(0), missingRelativeSlotCaller(1, 0)]),
+			stringConstants: [[], [120], [121]],
+		};
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[1]!, "loadPropertyStatic")).toHaveLength(
+			1,
+		);
+	});
+
+	it("composes a returned formal through a closed-target wrapper", () => {
+		const program: CoreProgram = {
+			...coreProgram([
+				returnParameter(0),
+				directParameterWrapper(1, 0),
+				objectCaller(2, 1, true),
+			]),
+			stringConstants: [[], [102]],
+		};
+		expect(analyzeCoreProgramSummaries(program).summary(1)?.returnProvenance).toEqual({
+			kind: "parameter",
+			index: 0,
+		});
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[2]!, "loadPropertyStatic")).toHaveLength(
+			0,
+		);
+	});
+
+	it("composes a returned receiver through a closed-target wrapper", () => {
+		const program: CoreProgram = {
+			...coreProgram([
+				returnReceiver(0),
+				directReceiverWrapper(1, 0),
+				receiverObjectCaller(2, 1),
+			]),
+			stringConstants: [[], [102]],
+		};
+		expect(analyzeCoreProgramSummaries(program).summary(1)?.returnProvenance).toEqual({
+			kind: "receiver",
+		});
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[2]!, "loadPropertyStatic")).toHaveLength(
+			0,
+		);
+	});
+
+	it("carries a returned formal through two wrapper summaries", () => {
+		const program: CoreProgram = {
+			...coreProgram([
+				returnParameter(0),
+				directParameterWrapper(1, 0),
+				directParameterWrapper(2, 1),
+				objectCaller(3, 2, true),
+			]),
+			stringConstants: [[], [102]],
+		};
+		const summaries = analyzeCoreProgramSummaries(program);
+		expect(summaries.summary(1)?.returnProvenance).toEqual({
+			kind: "parameter",
+			index: 0,
+		});
+		expect(summaries.summary(2)?.returnProvenance).toEqual({
+			kind: "parameter",
+			index: 0,
+		});
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[3]!, "loadPropertyStatic")).toHaveLength(
+			0,
+		);
+	});
+
+	it("keeps a returned formal through recursive summary convergence", () => {
+		const analysis = analyzeCoreProgramSummaries(
+			coreProgram([recursiveParameterWrapper(0)]),
+		);
+		expect(analysis.summary(0)?.returnProvenance).toEqual({
+			kind: "parameter",
+			index: 1,
+		});
+		expect(analysis.statistics.cyclicComponents).toBe(1);
+	});
+
+	it("keeps wrapper provenance unknown for mixed targets and actual arguments", () => {
+		const program: CoreProgram = {
+			...coreProgram([
+				returnParameter(0),
+				returnSecondParameter(1),
+				ambiguousParameterWrapper(2, 0, 1),
+				ambiguousObjectCaller(3, 2),
+			]),
+			stringConstants: [[], [102]],
+		};
+		expect(analyzeCoreProgramSummaries(program).summary(2)?.returnProvenance).toEqual({
+			kind: "unknown",
+		});
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[3]!, "loadPropertyStatic")).toHaveLength(
+			1,
+		);
+	});
+
 	it("joins finite return provenance before forwarding object state", () => {
 		const program: CoreProgram = {
 			...coreProgram([
@@ -1441,6 +2209,70 @@ describe("summary consumers and proof boundary", () => {
 				({ opcode }) => opcode === "loadGlobal",
 			),
 		).toHaveLength(0);
+	});
+
+	it("forwards exact slots across closed calls that write other memory domains", () => {
+		const slotCaller = (
+			functionIndex: number,
+			target: number,
+			family: "global" | "captured",
+		): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const stored = builder.block(entry).parameters[0]!.value;
+			if (family === "global") {
+				builder.appendInstruction(entry, "storeGlobal", [stored], {
+					attributes: { index: 0 },
+				});
+			} else {
+				builder.appendInstruction(entry, "storeCaptured", [stored], {
+					attributes: { functionIndex: 0, index: 0 },
+				});
+			}
+			appendDirectCall(builder, entry, target, stored);
+			const [loaded] = builder.appendInstruction(
+				entry,
+				family === "global" ? "loadGlobal" : "loadCaptured",
+				[],
+				{
+					attributes: family === "global" ? { index: 0 } : { functionIndex: 0, index: 0 },
+				},
+			);
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			return builder.finish(entry);
+		};
+		const optimized = executeCoreOptimizations(
+			coreProgram(
+				[
+					writeCaptured(0, 0, 1),
+					writeGlobal(1, 1),
+					slotCaller(2, 0, "global"),
+					slotCaller(3, 1, "captured"),
+					slotCaller(4, 1, "global"),
+					slotCaller(5, 0, "captured"),
+				],
+				2,
+			),
+			{ ablations: new Set(["inlining"]), verification: "per-pass" },
+		).program;
+		const loadCount = (functionIndex: number, opcode: string): number =>
+			optimized.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter((instruction) => instruction.opcode === opcode),
+			).length;
+		expect(loadCount(2, "loadGlobal")).toBe(0);
+		expect(loadCount(3, "loadCaptured")).toBe(0);
+		expect(loadCount(4, "loadGlobal")).toBe(1);
+		expect(loadCount(5, "loadCaptured")).toBe(1);
+
+		const retainedCall = callInstructions(optimized.functions[2]!)[0]!;
+		const effects = coreInstructionEffects(retainedCall);
+		expect(effects.writes).toEqual(["host"]);
+		expect(effects.mayThrow).toBe(true);
+		expect(effects.mayGc).toBe(true);
+		expect(effects.maySuspend).toBe(false);
+		expect(effects.callsUserCode).toBe(true);
 	});
 
 	it("keeps effect dimensions conservative when the callee writes", () => {

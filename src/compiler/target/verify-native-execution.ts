@@ -195,6 +195,21 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 			for (const instruction of instructions) {
 				if (instruction.type !== "call") continue;
 				const context = { functionIndex, opcode: instruction.type };
+				if (instruction.guardedFunctionIndices !== undefined) {
+					const targets = instruction.guardedFunctionIndices;
+					if (
+						instruction.directFunctionIndex !== undefined ||
+						targets.length < 1 ||
+						targets.length > 4 ||
+						targets.some(
+							(target, index) =>
+								program.functions[target] === undefined ||
+								(index > 0 && target <= targets[index - 1]!),
+						)
+					) {
+						fail("guarded call targets are not a sorted bounded source set", context);
+					}
+				}
 				if (instruction.directCallbackFunctionIndex !== undefined) {
 					if (
 						program.functions[instruction.directCallbackFunctionIndex] === undefined ||

@@ -9,7 +9,8 @@ import {
 	compressPositions,
 	computeArgumentRetentionLimit,
 	countPropertyIcSites,
-	validateVmShapeCases,
+	validateRuntimeImageMetadata,
+	vmSafepointRootMapsAreTrusted,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
@@ -189,6 +190,8 @@ function malFunctionRow(
 	instructionsSymbol: string,
 	instructionDataSymbol: string,
 	instructionDataCount: number,
+	gcSafepointsSymbol: string,
+	gcSafepointCount: number,
 	argumentSnapshotPlanSymbol: string,
 	argumentSnapshotPlanCount: number,
 	mappedArgumentSlotsSymbol: string,
@@ -207,6 +210,7 @@ function malFunctionRow(
 		`.captured_count = ${fn.capturedCount}`,
 		`.strict = ${fn.strict}`,
 		`.needs_arguments = ${fn.needsArguments}`,
+		`.gc_safepoints_trusted = ${!omitBytecode && vmSafepointRootMapsAreTrusted(fn)}`,
 		`.argument_retention_limit = ${computeArgumentRetentionLimit(fn)}`,
 		`.argument_snapshot_count = ${fn.argumentSnapshotCount}`,
 		`.argument_snapshot_plan_count = ${argumentSnapshotPlanCount}`,
@@ -223,6 +227,8 @@ function malFunctionRow(
 		`.instructions = ${omitBytecode ? "nullptr" : instructionsSymbol}`,
 		`.instruction_data_count = ${instructionDataCount}`,
 		`.instruction_data = ${instructionDataSymbol}`,
+		`.gc_safepoint_count = ${gcSafepointCount}`,
+		`.gc_safepoints = ${gcSafepointsSymbol}`,
 		`.handler_count = ${omitBytecode ? 0 : fn.handlers.length}`,
 		`.handlers = ${omitBytecode ? "nullptr" : handlersSymbol}`,
 		`.compiled = ${compiledSymbol}`,
@@ -234,6 +240,16 @@ function malFunctionRow(
 		fields.push(`.profile_site_ids = ${profileSiteIdsSymbol}`);
 	}
 	return [`    { ${fields.join(", ")} },`];
+}
+
+function safepointRootData(fn: BytecodeFunction): Array<number> {
+	return (fn.gcSafepoints ?? []).flatMap((safepoint) => [
+		safepoint.instructionIp,
+		safepoint.rootRegisters.length,
+		...safepoint.rootRegisters,
+		safepoint.clearRegisters?.length ?? 0,
+		...(safepoint.clearRegisters ?? []),
+	]);
 }
 
 function argumentSnapshotPlanBody(fn: BytecodeFunction): string {
@@ -320,11 +336,32 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				paired(index, instruction.cookedIndices, instruction.rawIndices);
 				break;
 			case "CALL":
+				if (instruction.argumentCount !== instruction.arguments.length) {
+					throw new Error("instruction side-data count mismatch");
+				}
+				offsets[index] = data.length;
+				data.push(
+					instruction.argumentCount,
+					instruction.exactFunctionIndex ?? -1,
+					instruction.guardedFunctionIndices?.length ?? 0,
+					...(instruction.guardedFunctionIndices ?? []),
+					...instruction.arguments,
+				);
+				break;
 			case "CALL_BUILTIN":
 				single(index, instruction.arguments, instruction.argumentCount);
 				break;
 			case "CONSTRUCT":
-				single(index, instruction.arguments, instruction.argumentCount);
+				if (instruction.argumentCount !== instruction.arguments.length) {
+					throw new Error("instruction side-data count mismatch");
+				}
+				offsets[index] = data.length;
+				data.push(
+					instruction.argumentCount,
+					instruction.exactFunctionIndex ?? -1,
+					0,
+					...instruction.arguments,
+				);
 				break;
 			case "COPY_DATA_PROPERTIES":
 				single(index, instruction.excluded, instruction.excludedCount);
@@ -658,7 +695,7 @@ function emitProgramImageSource(
 	maxCompiledFunctionCodeUnits?: number,
 ): EmittedProgramImageSource {
 	const runtime = image.runtime;
-	validateVmShapeCases(runtime);
+	validateRuntimeImageMetadata(runtime);
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
@@ -808,6 +845,14 @@ function emitProgramImageSource(
 				"",
 			);
 		}
+		const rootData =
+			omitBytecode[i] || !vmSafepointRootMapsAreTrusted(fn) ? [] : safepointRootData(fn);
+		if (rootData.length > 0) {
+			lines.push(
+				`static const i32 mal_function_${i}_gc_safepoints${suffix}[] = { ${rootData.join(", ")} };`,
+				"",
+			);
+		}
 		if (!omitBytecode[i]) {
 			lines.push(
 				`static const MalInstruction mal_function_${i}_instructions${suffix}[] = {`,
@@ -859,6 +904,14 @@ function emitProgramImageSource(
 					? `mal_function_${i}_instruction_data${suffix}`
 					: "nullptr",
 				instructionDataByFunction[i]!.data.length,
+				!omitBytecode[i] &&
+					vmSafepointRootMapsAreTrusted(fn) &&
+					(fn.gcSafepoints?.length ?? 0) > 0
+					? `mal_function_${i}_gc_safepoints${suffix}`
+					: "nullptr",
+				omitBytecode[i] || !vmSafepointRootMapsAreTrusted(fn)
+					? 0
+					: (fn.gcSafepoints?.length ?? 0),
 				!omitBytecode[i] && fn.argumentSnapshotPlan.length > 0
 					? `mal_function_${i}_argument_snapshot_plan${suffix}`
 					: "nullptr",
@@ -1354,6 +1407,7 @@ export function emitBatch(
 	for (let d = 0; d < images.length; ++d) {
 		const image = images[d]!;
 		const runtime = image.runtime;
+		validateRuntimeImageMetadata(runtime);
 		const suffix = `_${d}`;
 		const literalTemplatesSymbol =
 			runtime.literalTemplateData.length > 0
@@ -1427,6 +1481,8 @@ export function emitBatch(
 		const instructionSymbols: Array<string> = [];
 		const instructionDataSymbols: Array<string> = [];
 		const instructionDataCounts: Array<number> = [];
+		const gcSafepointSymbols: Array<string> = [];
+		const gcSafepointCounts: Array<number> = [];
 		const argumentSnapshotPlanSymbols: Array<string> = [];
 		const argumentSnapshotPlanCounts: Array<number> = [];
 		const mappedArgumentSlotsSymbols: Array<string> = [];
@@ -1442,6 +1498,8 @@ export function emitBatch(
 						: "nullptr",
 				);
 				instructionDataCounts.push(seedData.length);
+				gcSafepointSymbols.push("nullptr");
+				gcSafepointCounts.push(0);
 				argumentSnapshotPlanSymbols.push("nullptr");
 				argumentSnapshotPlanCounts.push(0);
 				mappedArgumentSlotsSymbols.push("nullptr");
@@ -1458,6 +1516,15 @@ export function emitBatch(
 					: "nullptr",
 			);
 			instructionDataCounts.push(sideData.data.length);
+			const rootData = vmSafepointRootMapsAreTrusted(fn) ? safepointRootData(fn) : [];
+			gcSafepointSymbols.push(
+				rootData.length > 0
+					? intern("gc_safepoints", "i32", `    ${rootData.join(", ")}`)
+					: "nullptr",
+			);
+			gcSafepointCounts.push(
+				vmSafepointRootMapsAreTrusted(fn) ? (fn.gcSafepoints?.length ?? 0) : 0,
+			);
 			argumentSnapshotPlanSymbols.push(
 				fn.argumentSnapshotPlan.length > 0
 					? intern(
@@ -1492,6 +1559,8 @@ export function emitBatch(
 					instructionSymbols[i]!,
 					instructionDataSymbols[i]!,
 					instructionDataCounts[i]!,
+					gcSafepointSymbols[i]!,
+					gcSafepointCounts[i]!,
 					argumentSnapshotPlanSymbols[i]!,
 					argumentSnapshotPlanCounts[i]!,
 					mappedArgumentSlotsSymbols[i]!,
@@ -1654,6 +1723,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key}, .ic_index = ${instruction.icIndex} } }`;
 		case "LOAD_PROPERTY_STATIC":
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC, .as.load_property_static = { .dst = ${instruction.dst}, .object = ${instruction.object}, .string_index = ${instruction.stringIndex}, .ic_index = ${instruction.icIndex} } }`;
+		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH, .as.load_property_static = { .dst = ${instruction.dst}, .object = ${instruction.object}, .string_index = ${instruction.stringIndex}, .ic_index = ${instruction.icIndex} } }`;
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT, .as.load_property_static_known_own_slot = { .dst = ${instruction.dst}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()}, .ic_index = ${instruction.icIndex} } }`;
 		case "LOAD_PROPERTY_STATIC_SHAPE_CASE":

@@ -19,11 +19,7 @@ import type {
 	VmRegion,
 	VmSemanticProtectorFact,
 } from "./program-image.ts";
-import {
-	decodeVmValueOperand,
-	validateVmShapeCases,
-	vmInstructionWriteRegisters,
-} from "./runtime-image.ts";
+import { decodeVmValueOperand, validateVmShapeCases } from "./runtime-image.ts";
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
@@ -33,7 +29,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 37;
+export const COMPILER_ARTIFACT_VERSION = 41;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -71,6 +67,18 @@ const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
 	"Array.prototype.findLastIndex",
 	"Array.prototype.flatMap",
 ]);
+
+function sameOptionalFunctionTargets(
+	left: ReadonlyArray<number> | undefined,
+	right: ReadonlyArray<number> | undefined,
+): boolean {
+	const leftTargets = left ?? [];
+	const rightTargets = right ?? [];
+	return (
+		leftTargets.length === rightTargets.length &&
+		leftTargets.every((target, index) => target === rightTargets[index])
+	);
+}
 
 const TAGGED_NUMERIC_TYPED_ARRAY_KINDS = [
 	"Int8Array",
@@ -524,6 +532,7 @@ function writeCompilerArtifact(
 			const instruction = fn.instructions[instructionIndex]!;
 			w.u32(instructionIndex);
 			if (plan.kind === "call" && instruction.opcode === "CALL") {
+				const guardedFunctionIndices = plan.guardedFunctionIndices;
 				const guardedBuiltin = plan.guardedBuiltinCall;
 				const guardedOperation = guardedBuiltin?.operation;
 				const guardedDependency = guardedBuiltin?.guard.dependencies[0];
@@ -540,10 +549,26 @@ function writeCompilerArtifact(
 							: true;
 				if (
 					!exactCollectionOperation ||
+					plan.directFunctionIndex !== instruction.exactFunctionIndex ||
+					!sameOptionalFunctionTargets(
+						guardedFunctionIndices,
+						instruction.guardedFunctionIndices,
+					) ||
 					(plan.directFunctionIndex !== undefined &&
 						(!Number.isInteger(plan.directFunctionIndex) ||
 							plan.directFunctionIndex < 0 ||
 							plan.directFunctionIndex >= def.functions.length)) ||
+					(guardedFunctionIndices !== undefined &&
+						(plan.directFunctionIndex !== undefined ||
+							guardedFunctionIndices.length < 1 ||
+							guardedFunctionIndices.length > 4 ||
+							guardedFunctionIndices.some(
+								(target, index) =>
+									!Number.isSafeInteger(target) ||
+									target < 0 ||
+									target >= def.functions.length ||
+									(index > 0 && target <= guardedFunctionIndices[index - 1]!),
+							))) ||
 					(plan.directEntryId !== undefined &&
 						(plan.directFunctionIndex === undefined ||
 							!Number.isInteger(plan.directEntryId) ||
@@ -585,6 +610,7 @@ function writeCompilerArtifact(
 				}
 				w.u8(1);
 				w.i32(plan.directFunctionIndex ?? -1);
+				w.i32Array([...(guardedFunctionIndices ?? [])]);
 				w.i32(plan.directCallTargetFunctionIndex ?? -1);
 				w.i32(plan.directCallbackFunctionIndex ?? -1);
 				w.i32(plan.directEntryId ?? -1);
@@ -601,7 +627,8 @@ function writeCompilerArtifact(
 				if (
 					!Number.isInteger(plan.directFunctionIndex) ||
 					plan.directFunctionIndex < 0 ||
-					plan.directFunctionIndex >= def.functions.length
+					plan.directFunctionIndex >= def.functions.length ||
+					plan.directFunctionIndex !== instruction.exactFunctionIndex
 				) {
 					throw new RangeError("program-image-codec: invalid direct CONSTRUCT target");
 				}
@@ -620,7 +647,8 @@ function writeCompilerArtifact(
 				w.i32(plan.length);
 			} else if (
 				plan.kind === "exact-array-length" &&
-				instruction.opcode === "LOAD_PROPERTY_STATIC"
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
 			) {
 				if (
 					String.fromCharCode(...(def.stringConstants[instruction.stringIndex] ?? [])) !==
@@ -775,13 +803,15 @@ function writeCompilerArtifact(
 					w.i32(region.callIp);
 					w.i32(region.callee);
 					w.i32(region.receiver);
+					w.i32(region.separatorIp);
 					w.i32(region.separatorStringIndex);
 					w.i32Array([...region.resultRegisters]);
 					w.u32(region.loads.length);
 					for (const load of region.loads) {
 						w.i32(load.ip);
 						w.u8(load.kind === "element" ? 1 : 2);
-						w.i32(load.kind === "element" ? load.index! : -1);
+						w.i32(load.kind === "element" ? load.keyIp : -1);
+						w.i32(load.kind === "element" ? load.index : -1);
 						w.i32(load.dst);
 					}
 					break;
@@ -1586,20 +1616,9 @@ function validateStringSplitProjectionRegion(
 	const call = fn.instructions[callIp];
 	const callPlan = nativeCallPlanAt(nativeInstructions, callIp);
 	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
+	const separatorProducer = fn.instructions[region.separatorIp];
 	const registerValid = (register: number) =>
 		Number.isInteger(register) && register >= 0 && register < fn.registerCount;
-	// Re-reads the emitted producer to check the decoded certificate's own separator
-	// and element indices. A miss rejects the image; nothing here selects code.
-	const latestDefinition = (
-		register: number,
-		beforeIp: number,
-	): BytecodeInstruction | undefined => {
-		for (let ip = beforeIp - 1; ip >= 0; ip--) {
-			const instruction = fn.instructions[ip]!;
-			if (vmInstructionWriteRegisters(instruction).includes(register)) return instruction;
-		}
-		return undefined;
-	};
 	const callMatches =
 		call?.opcode === "CALL"
 			? (dependencyMask === 1 || dependencyMask === 4) &&
@@ -1640,15 +1659,10 @@ function validateStringSplitProjectionRegion(
 	const separatorMatches =
 		separator?.kind === "string"
 			? separator.index === region.separatorStringIndex
-			: separator?.kind === "register"
-				? (() => {
-						const definition = latestDefinition(separator.register, callIp);
-						return (
-							definition?.opcode === "CREATE_STRING" &&
-							definition.stringIndex === region.separatorStringIndex
-						);
-					})()
-				: false;
+			: separator?.kind === "register" &&
+				separatorProducer?.opcode === "CREATE_STRING" &&
+				separatorProducer.dst === separator.register &&
+				separatorProducer.stringIndex === region.separatorStringIndex;
 	const resultRegisters = new Set(region.resultRegisters);
 	let operationsValid = true;
 	for (const load of region.loads) {
@@ -1665,23 +1679,20 @@ function validateStringSplitProjectionRegion(
 		if (load.kind === "length") {
 			if (
 				instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
-				load.index !== undefined ||
 				!stringConstantEquals(instruction.stringIndex, "length")
 			) {
 				operationsValid = false;
 				break;
 			}
 		} else {
-			const key =
-				instruction.opcode === "LOAD_PROPERTY"
-					? latestDefinition(instruction.key, load.ip)
-					: undefined;
+			const key = fn.instructions[load.keyIp];
 			if (
 				instruction.opcode !== "LOAD_PROPERTY" ||
 				!Number.isInteger(load.index) ||
-				load.index! < 0 ||
-				load.index! > 0xffff ||
+				load.index < 0 ||
+				load.index > 0xffff ||
 				key?.opcode !== "CREATE_NUMBER" ||
+				key.dst !== instruction.key ||
 				key.value !== load.index
 			) {
 				operationsValid = false;
@@ -1693,8 +1704,11 @@ function validateStringSplitProjectionRegion(
 	const lengthLoads = region.loads.filter((load) => load.kind === "length");
 	const operationIps = [
 		...(region.propertyIp < 0 ? [] : [region.propertyIp]),
+		region.separatorIp,
 		region.callIp,
-		...region.loads.map((load) => load.ip),
+		...region.loads.flatMap((load) =>
+			load.kind === "element" ? [load.keyIp, load.ip] : [load.ip],
+		),
 	];
 	if (
 		region.representation !== "projected-elements" ||
@@ -2112,6 +2126,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			const tag = r.u8();
 			if (tag === 1 && instruction.opcode === "CALL") {
 				const directFunctionIndex = r.i32();
+				const guardedFunctionIndices = r.i32Array();
 				const directCallTargetFunctionIndex = r.i32();
 				const directCallbackFunctionIndex = r.i32();
 				const directEntryId = r.i32();
@@ -2124,6 +2139,14 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				if (
 					directFunctionIndex < -1 ||
 					directFunctionIndex >= functions.length ||
+					guardedFunctionIndices.length > 4 ||
+					(directFunctionIndex >= 0 && guardedFunctionIndices.length !== 0) ||
+					guardedFunctionIndices.some(
+						(target, index) =>
+							target < 0 ||
+							target >= functions.length ||
+							(index > 0 && target <= guardedFunctionIndices[index - 1]!),
+					) ||
 					directCallTargetFunctionIndex < -1 ||
 					directCallTargetFunctionIndex >= functions.length ||
 					directCallbackFunctionIndex < -1 ||
@@ -2138,7 +2161,13 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					((flags & 64) !== 0 && guardedBuiltinCount !== 1) ||
 					((flags & 128) !== 0 &&
 						(guardedBuiltinCount !== 1 ||
-							guardedBuiltinCallBrandTag(collectionTag) === undefined))
+							guardedBuiltinCallBrandTag(collectionTag) === undefined)) ||
+					(directFunctionIndex < 0 ? undefined : directFunctionIndex) !==
+						instruction.exactFunctionIndex ||
+					!sameOptionalFunctionTargets(
+						guardedFunctionIndices,
+						instruction.guardedFunctionIndices,
+					)
 				) {
 					throw new RangeError("program-image-codec: invalid CALL compiler metadata");
 				}
@@ -2172,6 +2201,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				nativeInstructions[instructionIndex] = {
 					kind: "call",
 					...(directFunctionIndex < 0 ? {} : { directFunctionIndex }),
+					...(guardedFunctionIndices.length === 0 ? {} : { guardedFunctionIndices }),
 					...(directCallTargetFunctionIndex < 0 ? {} : { directCallTargetFunctionIndex }),
 					...(directCallbackFunctionIndex < 0 ? {} : { directCallbackFunctionIndex }),
 					...(directEntryId < 0 ? {} : { directEntryId }),
@@ -2184,7 +2214,11 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				};
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
 				const directFunctionIndex = r.i32();
-				if (directFunctionIndex < 0 || directFunctionIndex >= functions.length) {
+				if (
+					directFunctionIndex < 0 ||
+					directFunctionIndex >= functions.length ||
+					directFunctionIndex !== instruction.exactFunctionIndex
+				) {
 					throw new RangeError(
 						"program-image-codec: invalid CONSTRUCT compiler metadata",
 					);
@@ -2204,7 +2238,11 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					kind: "fresh-dense-reserve",
 					length: reserveLength,
 				};
-			} else if (tag === 14 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
+			} else if (
+				tag === 14 &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+			) {
 				if (
 					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==
 					"length"
@@ -2419,6 +2457,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					const callIp = r.i32();
 					const callee = r.i32();
 					const receiver = r.i32();
+					const separatorIp = r.i32();
 					const separatorStringIndex = r.i32();
 					const resultRegisters = r.i32Array();
 					if (splitIdentityTag > 1) {
@@ -2433,22 +2472,22 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					for (let loadIndex = 0; loadIndex < loadCount; loadIndex++) {
 						const ip = r.i32();
 						const loadKindTag = r.u8();
+						const keyIp = r.i32();
 						const index = r.i32();
 						const dst = r.i32();
 						if (
 							(loadKindTag !== 1 && loadKindTag !== 2) ||
-							(loadKindTag === 2 && index !== -1)
+							(loadKindTag === 2 && (keyIp !== -1 || index !== -1))
 						) {
 							throw new RangeError(
 								"program-image-codec: invalid String.split projection load",
 							);
 						}
-						loads.push({
-							ip,
-							kind: loadKindTag === 1 ? "element" : "length",
-							...(loadKindTag === 1 ? { index } : {}),
-							dst,
-						});
+						loads.push(
+							loadKindTag === 1
+								? { ip, kind: "element", keyIp, index, dst }
+								: { ip, kind: "length", dst },
+						);
 					}
 					region = {
 						kind: "string-split-projection",
@@ -2486,6 +2525,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						callIp,
 						callee,
 						receiver,
+						separatorIp,
 						separatorStringIndex,
 						resultRegisters,
 						loads,

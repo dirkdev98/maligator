@@ -37,7 +37,10 @@ import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	conservativeCompilerProgramFacts,
+	programClosureCertificate,
+} from "../src/compiler/shared/compiler-facts.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 
 function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
@@ -59,6 +62,30 @@ function productContext(program: CoreProgram): CoreCompilationContext {
 	return context;
 }
 
+function sourceClosedContext(entrypointPath: string): CoreCompilationContext {
+	const conservative = conservativeCompilerProgramFacts();
+	return {
+		facts: {
+			...conservative,
+			closure: programClosureCertificate(
+				{ kind: "whole-program", entry: entrypointPath },
+				[],
+				[],
+			),
+		},
+		data: {
+			entrypointPath,
+			moduleEvaluationOrder: [],
+			sourceFiles: [],
+			cjsModuleFunctionIndices: [],
+			hostInstallCandidates: [],
+			singleAssignmentGlobalSlots: [],
+			singleAssignmentCapturedSlots: [],
+			retainedHostInstallers: [],
+		},
+	};
+}
+
 /** A one-block function whose body a caller supplies; index 0 by default. */
 function leafFunction(functionIndex: number): CoreFunction {
 	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
@@ -73,13 +100,30 @@ function leafFunction(functionIndex: number): CoreFunction {
  * global slot; a script's declarations are reassignable global properties, which
  * this analysis deliberately never trusts.
  */
-function optimizedCore(source: string, path: string, profile = false): CoreProgram {
+function optimizedCore(
+	source: string,
+	path: string,
+	profile = false,
+	sourceClosed = false,
+): CoreProgram {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, path, parseModule(source));
 	const conservative = conservativeCompilerProgramFacts();
 	let optimized: CoreProgram | undefined;
 	compileSemanticProgramToProgramImage(semantic, {
 		profile,
-		facts: { ...conservative, world: { ...conservative.world, realms: false } },
+		facts: {
+			...conservative,
+			world: { ...conservative.world, realms: false },
+			...(sourceClosed
+				? {
+						closure: programClosureCertificate(
+							{ kind: "whole-program", entry: path },
+							[],
+							[],
+						),
+					}
+				: {}),
+		},
 		// Inlining runs before annotation and would consume the call sites this
 		// suite is about.
 		optimizationAblations: new Set(["inlining"] as const),
@@ -1030,6 +1074,109 @@ describe("callee-target annotation", () => {
 		);
 	});
 
+	it("proves a one-write captured let cell and consumes it in a nested call", () => {
+		const program = optimizedCore(
+			`function outer() {
+				let service = { run: function target(value) { return value + 1; } };
+				return function inner(value) {
+					const callback = service.run;
+					return callback(value);
+				};
+			}
+			const inner = outer();
+			inner(1);`,
+			"call-targets-stable-let.mjs",
+			false,
+			true,
+		);
+		const context = productContext(program);
+		const inner = program.functions[functionIndexOfName(program, "inner")]!;
+		const [site] = callSites(inner);
+		const target = functionIndexOfName(program, "target");
+		const analysis = analyzeCoreCalleeTargets(program, coreOpcodeRegistry, context);
+
+		expect(context.data.singleAssignmentCapturedSlots).toHaveLength(1);
+		expect(site?.attributes.directFunctionIndex).toBe(target);
+		expect(analysis.targets(inner.functionIndex, site!.inputs[0]!)).toEqual({
+			functions: [target],
+			anyScript: false,
+			opaque: false,
+		});
+		const withoutStableLet: CoreCompilationContext = {
+			...context,
+			data: { ...context.data, singleAssignmentCapturedSlots: [] },
+		};
+		expect(
+			analyzeCoreCalleeTargets(program, coreOpcodeRegistry, withoutStableLet).targets(
+				inner.functionIndex,
+				site!.inputs[0]!,
+			),
+		).toEqual({ functions: [target], anyScript: false, opaque: true });
+	});
+
+	it("declines captured let cells with later and dynamic writers", () => {
+		const cases = [
+			{
+				path: "call-targets-written-let.mjs",
+				source: `function outer(replace) {
+					let callback = function first(value) { return value + 1; };
+					const inner = function inner(value) { return callback(value); };
+					if (replace) callback = function second(value) { return value + 2; };
+					return inner;
+				}
+				outer(false)(1);`,
+				expectedTargets: ["first", "second"],
+				opaque: false,
+			},
+			{
+				path: "call-targets-eval-written-let.mjs",
+				source: `function outer() {
+					let callback = function first(value) { return value + 1; };
+					const inner = function inner(value) { return callback(value); };
+					eval("callback = function second(value) { return value + 2; }");
+					return inner;
+				}
+				outer()(1);`,
+				expectedTargets: ["first"],
+				opaque: true,
+			},
+		] as const;
+
+		for (const candidate of cases) {
+			const program = optimizedCore(candidate.source, candidate.path, false, true);
+			const context = productContext(program);
+			const inner = program.functions[functionIndexOfName(program, "inner")]!;
+			const [site] = callSites(inner);
+			const targets = analyzeCoreCalleeTargets(
+				program,
+				coreOpcodeRegistry,
+				context,
+			).targets(inner.functionIndex, site!.inputs[0]!);
+
+			expect(context.data.singleAssignmentCapturedSlots).toEqual([]);
+			expect(site?.attributes.directFunctionIndex).toBeUndefined();
+			expect(targets).toEqual({
+				functions: candidate.expectedTargets.map((name) =>
+					functionIndexOfName(program, name),
+				),
+				anyScript: false,
+				opaque: candidate.opaque,
+			});
+		}
+	});
+
+	it("keeps one-write captured let cells provisional in an open source world", () => {
+		const program = optimizedCore(
+			`function outer() {
+				let callback = function target(value) { return value + 1; };
+				return function inner(value) { return callback(value); };
+			}
+			outer()(1);`,
+			"call-targets-open-world-let.mjs",
+		);
+		expect(productContext(program).data.singleAssignmentCapturedSlots).toEqual([]);
+	});
+
 	it("records generated-code decline only from the final target graph", () => {
 		const source = `function target(value) { return value + 1; }
 			function caller(open, value) {
@@ -1102,6 +1249,195 @@ describe("callee-target annotation", () => {
 				functionIndexOfName(program, "second"),
 			].sort((left, right) => left - right),
 		);
+	});
+
+	it("resolves a detached call through a contained constant-index function table", () => {
+		const program = optimizedCore(
+			`function first(value) { return value + 1; }
+			function second(value) { return value + 2; }
+			function barrier(value) { return value; }
+			function run(value) {
+				const table = [first, second];
+				barrier(value);
+				const callback = table[1];
+				return callback(value);
+			}
+			run(1);`,
+			"call-targets-contained-function-table.mjs",
+			false,
+			true,
+		);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		const site = callSites(run).at(-1)!;
+		const target = functionIndexOfName(program, "second");
+		expect(site.attributes.directFunctionIndex).toBe(target);
+		expect(
+			analyzeCoreCalleeTargets(
+				program,
+				coreOpcodeRegistry,
+				productContext(program),
+			).targets(run.functionIndex, site.inputs[0]!),
+		).toEqual({
+			functions: [target],
+			anyScript: false,
+			opaque: false,
+		});
+	});
+
+	it("propagates a contained table target through a nested call result", () => {
+		const program = optimizedCore(
+			`function inner(value) { return value + 1; }
+			function factory() { return inner; }
+			function barrier(value) { return value; }
+			function run(value) {
+				const table = [factory];
+				barrier(value);
+				const callback = table[0];
+				return callback()(value);
+			}
+			run(1);`,
+			"call-targets-contained-function-table-result.mjs",
+			false,
+			true,
+		);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		expect(
+			callSites(run).map(({ attributes }) => attributes.directFunctionIndex),
+		).toEqual([
+			functionIndexOfName(program, "barrier"),
+			functionIndexOfName(program, "factory"),
+			functionIndexOfName(program, "inner"),
+		]);
+	});
+
+	it.each([
+		{
+			name: "mutation",
+			source: `function first() { return 1; }
+				function second() { return 2; }
+				function run(flag) {
+					const table = [first];
+					if (flag) table[0] = second;
+					const callback = table[0];
+					return callback();
+				}
+				run(false);`,
+		},
+		{
+			name: "escape",
+			source: `function target() { return 1; }
+				function run() {
+					const table = [target];
+					globalThis.saved = table;
+					const callback = table[0];
+					return callback();
+				}
+				run();`,
+		},
+		{
+			name: "dynamic index",
+			source: `function first() { return 1; }
+				function second() { return 2; }
+				function run(index) {
+					const table = [first, second];
+					const callback = table[index];
+					return callback();
+				}
+				run(0);`,
+		},
+		{
+			name: "hole",
+			source: `function first() { return 1; }
+				function second() { return 2; }
+				function run() {
+					const table = [first, , second];
+					const callback = table[1];
+					return callback();
+				}
+				run();`,
+		},
+		{
+			name: "out of range",
+			source: `function target() { return 1; }
+				function run() {
+					const table = [target];
+					const callback = table[1];
+					return callback();
+				}
+				run();`,
+		},
+	])("keeps a $name function-table load on its fallback path", ({ name, source }) => {
+		const program = optimizedCore(
+			source,
+			`call-targets-function-table-${name.replace(" ", "-")}.mjs`,
+			false,
+			true,
+		);
+		const run = program.functions[functionIndexOfName(program, "run")]!;
+		const [site] = callSites(run);
+		expect(site?.attributes.directFunctionIndex).toBeUndefined();
+		const targets = analyzeCoreCalleeTargets(
+			program,
+			coreOpcodeRegistry,
+			productContext(program),
+		).targets(run.functionIndex, site!.inputs[0]!);
+		expect(coreCalleeTargetsClosedFunction(targets)).toBeUndefined();
+		expect(coreCalleeTargetsAreOpen(targets)).toBe(true);
+	});
+
+	it("requires source closure before trusting a contained function table", () => {
+		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [table] = builder.appendInstruction(entry, "createArray", [], {
+			attributes: { length: 1 },
+		});
+		const [key] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [target] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 0 },
+		});
+		builder.appendInstruction(entry, "defineProperty", [table!, key!, target!]);
+		const [loaded] = builder.appendInstruction(entry, "loadProperty", [table!, key!]);
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const program = coreProgram([leafFunction(0), builder.finish(entry)]);
+
+		expect(
+			analyzeCoreCalleeTargets(
+				program,
+				coreOpcodeRegistry,
+				sourceClosedContext("function-table.mjs"),
+			).targets(1, loaded!),
+		).toEqual({ functions: [0], anyScript: false, opaque: false });
+		const openTargets = analyzeCoreCalleeTargets(program).targets(1, loaded!);
+		expect(coreCalleeTargetsClosedFunction(openTargets)).toBeUndefined();
+		expect(coreCalleeTargetsAreOpen(openTargets)).toBe(true);
+	});
+
+	it("does not use a function-table fact as constructor authority", () => {
+		const builder = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [table] = builder.appendInstruction(entry, "createArray", [], {
+			attributes: { length: 1 },
+		});
+		const [key] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [target] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 0 },
+		});
+		builder.appendInstruction(entry, "defineProperty", [table!, key!, target!]);
+		const [loaded] = builder.appendInstruction(entry, "loadProperty", [table!, key!]);
+		const [instance] = builder.appendInstruction(entry, "construct", [loaded!]);
+		builder.setTerminator(entry, { kind: "return", value: instance! });
+		const targets = analyzeCoreCalleeTargets(
+			coreProgram([leafFunction(0), builder.finish(entry)]),
+			coreOpcodeRegistry,
+			sourceClosedContext("function-table-constructor.mjs"),
+		).targets(1, loaded!);
+
+		expect(coreCalleeTargetsClosedFunction(targets)).toBeUndefined();
+		expect(coreCalleeTargetsAreOpen(targets)).toBe(true);
 	});
 
 	it("resolves a method from a contained immutable service object", () => {
@@ -1229,7 +1565,7 @@ describe("callee-target annotation", () => {
 		expect(targets.opaque).toBe(true);
 	});
 
-	it("rejects malformed immutable-cell authority metadata", () => {
+	it("rejects malformed single-assignment cell authority metadata", () => {
 		const program = optimizedCore(
 			`const callback = function callback(value) { return value; };
 			callback(1);`,

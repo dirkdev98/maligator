@@ -52,6 +52,8 @@ import type {
 	EffectSummary,
 	FunctionEffectSummary,
 	ModuleEffectSummary,
+	RelativeEffectBase,
+	RelativeOwnSlotEffect,
 	ReturnProvenance,
 	ReturnRepresentation,
 	SummaryRootReason,
@@ -75,7 +77,9 @@ import {
 	joinValueEscape,
 	moduleSummaryId,
 	normalizeEffectDomains,
+	normalizeRelativeOwnSlotEffects,
 	normalizeRootReasons,
+	relativeOwnSlotEffectKey,
 	returnProvenanceKey,
 } from "../shared/effect-summary.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
@@ -102,7 +106,7 @@ import type {
 /** Fact kind a call site's summary-derived effect refinement names as its proof. */
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "callee-effect-summary";
 
-/** Proof-carrying call value facts consumed only inside Core. */
+/** Proof-carrying call facts consumed only inside Core. */
 export const CORE_CALL_SUMMARY_ATTRIBUTE = "calleeSummary";
 
 /** Summary metadata that must not cross the Core-to-target boundary. */
@@ -243,6 +247,7 @@ export interface CoreFunctionSummary {
 	readonly sourcePath: string;
 	/** Transitive: every callee this analysis could name is already folded in. */
 	readonly effects: EffectSummary;
+	readonly relativeOwnSlotEffects: ReadonlyArray<RelativeOwnSlotEffect>;
 	/** Named script callees, sorted; an unnamed edge shows up as `openCallEdge`. */
 	readonly callees: ReadonlyArray<number>;
 	readonly openCallEdge: boolean;
@@ -271,6 +276,8 @@ export interface CoreCallSummaryClaim {
 	readonly targets: ReadonlyArray<number>;
 	/** Joined transitive callee effects, including the call's own frame cost. */
 	readonly effects: EffectSummary;
+	/** Present only when one closed target certifies all uses of each named base. */
+	readonly relativeOwnSlotEffects: ReadonlyArray<RelativeOwnSlotEffect>;
 	/** Escape of the ordinary call's receiver and each supplied argument. */
 	readonly receiverEscape: ValueEscapeFact;
 	readonly argumentEscape: ReadonlyArray<ValueEscapeFact>;
@@ -336,6 +343,12 @@ interface CallSite {
 	readonly result: CoreValueId | undefined;
 }
 
+interface ReturnedCallSite {
+	readonly site: CallSite;
+	readonly receiverProvenance: ReturnProvenance;
+	readonly argumentProvenance: ReadonlyArray<ReturnProvenance>;
+}
+
 interface ArgumentUse {
 	readonly value: CoreValueId;
 	readonly site: CallSite;
@@ -345,6 +358,7 @@ interface ArgumentUse {
 interface LocalFacts {
 	/** Effects of everything except calls whose effects come from a callee. */
 	readonly effects: EffectSummary;
+	readonly relativeOwnSlotEffects: ReadonlyArray<RelativeOwnSlotEffect>;
 	readonly effectSites: ReadonlyArray<CallSite>;
 	/** Every named edge, including sites whose effects stay at the baseline. */
 	readonly calleeEdges: ReadonlyArray<number>;
@@ -371,7 +385,7 @@ interface LocalFacts {
 	readonly returnProvenanceBase: ReturnProvenance;
 	readonly returnRepresentationBase: ReturnRepresentation;
 	/** Returned values produced directly by a resolvable ordinary call. */
-	readonly returnedCallSites: ReadonlyArray<CallSite>;
+	readonly returnedCallSites: ReadonlyArray<ReturnedCallSite>;
 	readonly frameOutlivesCall: boolean;
 }
 
@@ -634,6 +648,104 @@ function summaryObservesOperands(
 	);
 }
 
+function relativeBaseKey(base: RelativeEffectBase): string {
+	return base.kind === "receiver" ? "receiver" : `parameter:${base.index}`;
+}
+
+/**
+ * Certify direct frame identities whose complete use set is static property
+ * access. Substitution still has to prove every named key is an existing own
+ * writable data slot; this step only proves that no other use can publish the
+ * receiver or reach an accessor through a different operation.
+ */
+function collectLocalRelativeOwnSlotEffects(
+	fn: CoreFunction,
+): ReadonlyArray<RelativeOwnSlotEffect> {
+	if (fn.isGenerator || fn.metadata.mappedArguments === true) return [];
+	const basesByValue = new Map<CoreValueId, RelativeEffectBase>();
+	for (const [index, value] of fn.parameters.entries()) {
+		basesByValue.set(value, { kind: "parameter", index });
+	}
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.opcode !== "loadThis") continue;
+			for (const output of instruction.outputs) {
+				basesByValue.set(output, { kind: "receiver" });
+			}
+		}
+	}
+	if (basesByValue.size === 0) return [];
+
+	const invalid = new Set<string>();
+	const effects: Array<RelativeOwnSlotEffect> = [];
+	const baseByRelativeInstruction = new Map<CoreInstructionId, RelativeEffectBase>();
+	const invalidate = (base: RelativeEffectBase): void => {
+		invalid.add(relativeBaseKey(base));
+	};
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			for (const [operand, input] of instruction.inputs.entries()) {
+				const base = basesByValue.get(input);
+				if (base === undefined) continue;
+				const key = instruction.attributes.stringIndex;
+				const mode =
+					instruction.opcode === "loadPropertyStatic"
+						? "read"
+						: instruction.opcode === "storePropertyStatic"
+							? "write"
+							: undefined;
+				if (
+					operand === 0 &&
+					mode !== undefined &&
+					typeof key === "number" &&
+					Number.isSafeInteger(key) &&
+					key >= 0
+				) {
+					effects.push({ base, key, mode });
+					baseByRelativeInstruction.set(instruction.id, base);
+				} else {
+					invalidate(base);
+				}
+			}
+		}
+		const terminator = block.terminator;
+		const direct =
+			terminator.kind === "branch" || terminator.kind === "guard"
+				? terminator.condition
+				: terminator.kind === "switch"
+					? terminator.discriminant
+					: terminator.kind === "return" || terminator.kind === "throw"
+						? terminator.value
+						: undefined;
+		if (direct !== undefined) {
+			const base = basesByValue.get(direct);
+			if (base !== undefined) invalidate(base);
+		}
+		for (const edge of outgoingEdges(block)) {
+			for (const argument of edge.arguments) {
+				const base = basesByValue.get(argument);
+				if (base !== undefined) invalidate(base);
+			}
+		}
+	}
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			const instructionEffects = coreInstructionEffects(instruction);
+			if (
+				!instructionEffects.reads.includes("object-property") &&
+				!instructionEffects.writes.includes("object-property")
+			) {
+				continue;
+			}
+			const base = baseByRelativeInstruction.get(instruction.id);
+			if (base === undefined || invalid.has(relativeBaseKey(base))) return [];
+		}
+	}
+	return normalizeRelativeOwnSlotEffects(
+		effects.filter((effect) => !invalid.has(relativeBaseKey(effect.base))),
+	);
+}
+
 /**
  * Collect everything about one function that does not depend on a callee.
  *
@@ -648,6 +760,7 @@ function collectLocalFacts(
 	registry: CoreOpcodeRegistry,
 ): LocalFacts {
 	let effects = NO_EFFECT_SUMMARY;
+	const relativeOwnSlotEffects = collectLocalRelativeOwnSlotEffects(fn);
 	const effectSites: Array<CallSite> = [];
 	const calleeEdges = new Set<number>();
 	let openCallEdge = false;
@@ -664,7 +777,7 @@ function collectLocalFacts(
 		readonly value: CoreValueId;
 		readonly from: number;
 	}> = [];
-	const returnedCallSites: Array<CallSite> = [];
+	const returnedCallSites: Array<ReturnedCallSite> = [];
 	let returnProvenanceBase = RETURN_PROVENANCE_NONE;
 	let returnRepresentationBase: ReturnRepresentation = "none";
 	const definitions = new Map<CoreValueId, CoreInstruction>();
@@ -833,7 +946,32 @@ function collectLocalFacts(
 			raiseBase(terminator.value, "returned");
 			const site = callSiteByResult.get(terminator.value);
 			if (site?.opcode === "call") {
-				returnedCallSites.push(site);
+				returnedCallSites.push({
+					site,
+					receiverProvenance:
+						site.inputs[1] === undefined
+							? RETURN_PROVENANCE_UNKNOWN
+							: localReturnProvenance(
+									site.inputs[1],
+									definitions,
+									parameterIndices,
+									provenanceInputs,
+									registry,
+									provenanceMemo,
+								),
+					argumentProvenance: site.inputs
+						.slice(2)
+						.map((input) =>
+							localReturnProvenance(
+								input,
+								definitions,
+								parameterIndices,
+								provenanceInputs,
+								registry,
+								provenanceMemo,
+							),
+						),
+				});
 			} else {
 				returnProvenanceBase = joinReturnProvenance(
 					returnProvenanceBase,
@@ -877,6 +1015,7 @@ function collectLocalFacts(
 
 	return {
 		effects,
+		relativeOwnSlotEffects,
 		effectSites,
 		calleeEdges: [...calleeEdges].sort((left, right) => left - right),
 		openCallEdge,
@@ -898,6 +1037,7 @@ function collectLocalFacts(
 
 interface MutableSummary {
 	readonly effects: EffectSummary;
+	readonly relativeOwnSlotEffects: ReadonlyArray<RelativeOwnSlotEffect>;
 	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
 	readonly restParameterEscape: ValueEscapeFact;
 	readonly receiverEscape: ValueEscapeFact;
@@ -911,6 +1051,7 @@ interface MutableSummary {
 function summaryKey(summary: MutableSummary): string {
 	return [
 		effectSummaryKey(summary.effects),
+		summary.relativeOwnSlotEffects.map(relativeOwnSlotEffectKey).join(","),
 		summary.parameterEscape.join(","),
 		summary.restParameterEscape,
 		summary.receiverEscape,
@@ -925,6 +1066,7 @@ function summaryKey(summary: MutableSummary): string {
 function bottomSummary(parameterCount: number): MutableSummary {
 	return {
 		effects: NO_EFFECT_SUMMARY,
+		relativeOwnSlotEffects: [],
 		parameterEscape: new Array<ValueEscapeFact>(parameterCount).fill("none"),
 		restParameterEscape: "none",
 		receiverEscape: "none",
@@ -941,6 +1083,7 @@ function bottomSummary(parameterCount: number): MutableSummary {
 function saturatedSummary(parameterCount: number): MutableSummary {
 	return {
 		effects: EVERY_EFFECT_SUMMARY,
+		relativeOwnSlotEffects: [],
 		parameterEscape: new Array<ValueEscapeFact>(parameterCount).fill("retained"),
 		restParameterEscape: "retained",
 		receiverEscape: "retained",
@@ -986,8 +1129,16 @@ function transferSummary(
 	state: ReadonlyArray<MutableSummary | undefined>,
 ): MutableSummary {
 	let effects = local.effects;
+	let relativeOwnSlotEffects = local.relativeOwnSlotEffects;
 	for (const site of local.effectSites) {
-		effects = joinEffectSummaries(effects, joinedCalleeEffects(site, state));
+		const calleeEffects = joinedCalleeEffects(site, state);
+		effects = joinEffectSummaries(effects, calleeEffects);
+		if (
+			calleeEffects.reads.includes("object-property") ||
+			calleeEffects.writes.includes("object-property")
+		) {
+			relativeOwnSlotEffects = [];
+		}
 	}
 
 	const levels = new Map<CoreValueId, ValueEscapeFact>(local.escapeBase);
@@ -1132,19 +1283,23 @@ function transferSummary(
 
 	let returnProvenance = local.returnProvenanceBase;
 	let returnRepresentation = local.returnRepresentationBase;
-	for (const site of local.returnedCallSites) {
+	for (const returned of local.returnedCallSites) {
+		const { site } = returned;
 		for (const target of site.targets) {
 			const callee = state[target];
-			// A callee's `parameter` or `receiver` names the callee's own frame, and
-			// substituting the argument is not modelled, so it crosses as unknown.
-			returnProvenance = joinReturnProvenance(
-				returnProvenance,
-				callee === undefined ||
-					callee.returnProvenance.kind === "parameter" ||
-					callee.returnProvenance.kind === "receiver"
-					? RETURN_PROVENANCE_UNKNOWN
-					: callee.returnProvenance,
-			);
+			let provenance = callee?.returnProvenance ?? RETURN_PROVENANCE_UNKNOWN;
+			if (provenance.kind === "parameter" || provenance.kind === "receiver") {
+				// The flat lattice cannot retain the target-to-operand correlation a
+				// polymorphic relative alias would require.
+				provenance =
+					site.targets.length !== 1
+						? RETURN_PROVENANCE_UNKNOWN
+						: provenance.kind === "receiver"
+							? returned.receiverProvenance
+							: (returned.argumentProvenance[provenance.index] ??
+								RETURN_PROVENANCE_UNKNOWN);
+			}
+			returnProvenance = joinReturnProvenance(returnProvenance, provenance);
 			returnRepresentation = joinReturnRepresentation(
 				returnRepresentation,
 				callee?.returnRepresentation ?? "boxed",
@@ -1154,6 +1309,7 @@ function transferSummary(
 
 	return {
 		effects,
+		relativeOwnSlotEffects,
 		parameterEscape,
 		restParameterEscape,
 		receiverEscape,
@@ -1339,11 +1495,13 @@ export function coreCallSummaryDigest(claim: CoreCallEffectSummaryClaim): string
 	return `callee-effects:v1:[${claim.targets.join(",")}]:${effectSummaryKey(claim.effects)}`;
 }
 
-/** Digest for value facts, independent of effect precision. */
-export function coreCallValueSummaryDigest(claim: CoreCallValueSummaryClaim): string {
+/** Digest for the complete call claim carried between Core optimization passes. */
+export function coreCallValueSummaryDigest(claim: CoreCallSummaryClaim): string {
 	return [
-		"callee-values:v2",
+		"callee-summary:v4",
 		`[${claim.targets.join(",")}]`,
+		effectSummaryKey(claim.effects),
+		`[${claim.relativeOwnSlotEffects.map(relativeOwnSlotEffectKey).join(",")}]`,
 		claim.receiverEscape,
 		`[${claim.argumentEscape.join(",")}]`,
 		claim.receiverContainment,
@@ -1360,6 +1518,16 @@ export function coreCallSummaryAttribute(
 	return {
 		digest: coreCallValueSummaryDigest(claim),
 		targets: [...claim.targets],
+		effects: {
+			...claim.effects,
+			reads: [...claim.effects.reads],
+			writes: [...claim.effects.writes],
+		},
+		relativeOwnSlotEffects: claim.relativeOwnSlotEffects.map((effect) => ({
+			base: { ...effect.base },
+			key: effect.key,
+			mode: effect.mode,
+		})),
 		receiverEscape: claim.receiverEscape,
 		argumentEscape: [...claim.argumentEscape],
 		receiverContainment: claim.receiverContainment,
@@ -1644,6 +1812,7 @@ export function analyzeCoreProgramSummaries(
 			functionIndex: fn.functionIndex,
 			sourcePath: fn.metadata.sourcePath,
 			effects: solved.effects,
+			relativeOwnSlotEffects: solved.relativeOwnSlotEffects,
 			callees: callees[fn.functionIndex] ?? [],
 			openCallEdge: local[fn.functionIndex]?.openCallEdge ?? true,
 			rootReasons: reasons,
@@ -1681,9 +1850,14 @@ export function analyzeCoreProgramSummaries(
 	const claims = new Map<string, CoreCallSummaryClaim>();
 	for (const fn of program.functions) {
 		for (const site of local[fn.functionIndex]?.effectSites ?? []) {
+			const relativeOwnSlotEffects =
+				site.targets.length === 1
+					? (state[site.targets[0]!]?.relativeOwnSlotEffects ?? [])
+					: [];
 			claims.set(`${fn.functionIndex}\0${site.instruction}`, {
 				targets: site.targets,
 				effects: joinedCalleeEffects(site, state),
+				relativeOwnSlotEffects,
 				receiverEscape: joinedCallEscape(site, state, { kind: "receiver" }),
 				argumentEscape: site.inputs
 					.slice(2)
@@ -1745,6 +1919,7 @@ export function coreFunctionEffectSummaries(
 					functionIndex: summary.functionIndex,
 					module: moduleSummaryId(summary.sourcePath),
 					effects: summary.effects,
+					relativeOwnSlotEffects: summary.relativeOwnSlotEffects,
 					callees: summary.callees
 						.map((callee) =>
 							functionSummaryId(pathOf.get(callee) ?? summary.sourcePath, callee),
@@ -1875,6 +2050,36 @@ function valueContainmentFact(value: unknown): ValueContainmentFact | undefined 
 	return value === "preserved" || value === "unknown" ? value : undefined;
 }
 
+function relativeOwnSlotEffectFact(value: unknown): RelativeOwnSlotEffect | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const record = value as Record<string, unknown>;
+	if (
+		(record.mode !== "read" && record.mode !== "write") ||
+		!Number.isSafeInteger(record.key) ||
+		(record.key as number) < 0 ||
+		typeof record.base !== "object" ||
+		record.base === null
+	) {
+		return undefined;
+	}
+	const base = record.base as Record<string, unknown>;
+	const decodedBase: RelativeEffectBase | undefined =
+		base.kind === "receiver"
+			? { kind: "receiver" }
+			: base.kind === "parameter" &&
+				  Number.isSafeInteger(base.index) &&
+				  (base.index as number) >= 0
+				? { kind: "parameter", index: base.index as number }
+				: undefined;
+	return decodedBase === undefined
+		? undefined
+		: {
+				base: decodedBase,
+				key: record.key as number,
+				mode: record.mode,
+			};
+}
+
 function returnRepresentationFact(value: unknown): ReturnRepresentation | undefined {
 	return value === "none" ||
 		value === "boxed" ||
@@ -1905,18 +2110,21 @@ function returnProvenanceFact(value: unknown): ReturnProvenance | undefined {
 		: undefined;
 }
 
-/** Decode proof-carrying value metadata without trusting its shape or digest. */
+/** Decode proof-carrying call metadata without trusting its shape or digest. */
 export function coreCallSummaryClaimFromAttribute(
 	value: unknown,
-): (CoreCallValueSummaryClaim & { readonly digest: string }) | undefined {
+): (CoreCallSummaryClaim & { readonly digest: string }) | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const record = value as Record<string, unknown>;
 	if (
 		typeof record.digest !== "string" ||
 		!Array.isArray(record.targets) ||
 		record.targets.some((target) => !Number.isSafeInteger(target) || target < 0) ||
+		typeof record.effects !== "object" ||
+		record.effects === null ||
 		!Array.isArray(record.argumentEscape) ||
-		!Array.isArray(record.argumentContainment)
+		!Array.isArray(record.argumentContainment) ||
+		!Array.isArray(record.relativeOwnSlotEffects)
 	) {
 		return undefined;
 	}
@@ -1926,19 +2134,47 @@ export function coreCallSummaryClaimFromAttribute(
 	const argumentContainment = record.argumentContainment.map(valueContainmentFact);
 	const returnProvenance = returnProvenanceFact(record.returnProvenance);
 	const returnRepresentation = returnRepresentationFact(record.returnRepresentation);
+	const relativeOwnSlotEffects = record.relativeOwnSlotEffects.map(
+		relativeOwnSlotEffectFact,
+	);
 	if (
 		receiverEscape === undefined ||
 		argumentEscape.some((escape) => escape === undefined) ||
 		receiverContainment === undefined ||
 		argumentContainment.some((containment) => containment === undefined) ||
 		returnProvenance === undefined ||
-		returnRepresentation === undefined
+		returnRepresentation === undefined ||
+		relativeOwnSlotEffects.some((effect) => effect === undefined)
+	) {
+		return undefined;
+	}
+	const effectsRecord = record.effects as Record<string, unknown>;
+	const reads = domainList(effectsRecord.reads);
+	const writes = domainList(effectsRecord.writes);
+	if (
+		reads === undefined ||
+		writes === undefined ||
+		typeof effectsRecord.mayThrow !== "boolean" ||
+		typeof effectsRecord.maySuspend !== "boolean" ||
+		typeof effectsRecord.mayGc !== "boolean" ||
+		typeof effectsRecord.callsUserCode !== "boolean"
 	) {
 		return undefined;
 	}
 	return {
 		digest: record.digest,
 		targets: record.targets as ReadonlyArray<number>,
+		effects: {
+			reads: normalizeEffectDomains(reads),
+			writes: normalizeEffectDomains(writes),
+			mayThrow: effectsRecord.mayThrow,
+			maySuspend: effectsRecord.maySuspend,
+			mayGc: effectsRecord.mayGc,
+			callsUserCode: effectsRecord.callsUserCode,
+		},
+		relativeOwnSlotEffects: normalizeRelativeOwnSlotEffects(
+			relativeOwnSlotEffects as ReadonlyArray<RelativeOwnSlotEffect>,
+		),
 		receiverEscape,
 		argumentEscape: argumentEscape as ReadonlyArray<ValueEscapeFact>,
 		receiverContainment,

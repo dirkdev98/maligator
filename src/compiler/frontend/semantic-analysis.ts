@@ -49,13 +49,21 @@ export interface SemanticFile {
 	withDynamicNodes: Set<ESTree.Node>;
 
 	/**
-	 * Implicit `arguments` identifier reads proven to be direct, non-escaping
-	 * frame accesses. IR may read the frame count/value without constructing the
-	 * arguments object. The map is populated only when every use of that binding
-	 * is safe, so one mutation, escape, arrow capture, `with`, or eval use keeps
-	 * the whole binding on the ordinary object path.
+	 * Implicit `arguments` identifier reads proven to be direct frame accesses.
+	 * IR may read the frame count/value without constructing the arguments object.
+	 * A wholly static binding records every access; a mixed binding records only
+	 * accesses that run in the parameter environment before any body use can
+	 * observe the object.
 	 */
 	staticArgumentsAccesses: Map<ESTree.Node, StaticArgumentsAccess>;
+
+	/**
+	 * Mixed implicit `arguments` bindings whose parameter-environment reads are
+	 * static and whose remaining uses are local to the owning function body. IR
+	 * initializes these bindings to EMPTY and materializes the object at the first
+	 * body read, so paths that never observe `arguments` allocate nothing.
+	 */
+	lazyArgumentsBindings: Set<Binding>;
 
 	/**
 	 * Function-defining nodes (and the top-level Program) poisoned by a *direct*
@@ -248,6 +256,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		nodeToBinding: new Map(),
 		withDynamicNodes: new Set(),
 		staticArgumentsAccesses: new Map(),
+		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),
 		directEvalVariableEnvironments: new Set(),
 		directEvalThisBindings: new Map(),
@@ -592,7 +601,7 @@ function accessIsInOwningFunction(
 	usage: ESTree.Node,
 	binding: Binding,
 ): boolean {
-	const owner = file.scopes.find((scope) => scope.bindings.includes(binding));
+	const owner = argumentsBindingOwner(file, binding);
 	if (!owner) return false;
 	for (
 		let scope: Scope | null | undefined = file.nodeToScope.get(usage);
@@ -611,11 +620,52 @@ function accessIsInOwningFunction(
 	return false;
 }
 
+function argumentsBindingOwner(file: SemanticFile, binding: Binding): Scope | undefined {
+	return file.scopes.find((scope) => scope.bindings.includes(binding));
+}
+
+function usageIsInFunctionParameters(
+	usage: ESTree.Node,
+	owner: Scope,
+	parents: Map<ESTree.Node, ESTree.Node>,
+): boolean {
+	if (
+		owner.node.type !== "FunctionDeclaration" &&
+		owner.node.type !== "FunctionExpression"
+	) {
+		return false;
+	}
+	let current = usage;
+	for (;;) {
+		const parent = parents.get(current);
+		if (!parent) return false;
+		if (parent === owner.node) {
+			return owner.node.params.some((parameter) => parameter === current);
+		}
+		current = parent;
+	}
+}
+
+function canLazilyMaterializeArgumentsUse(
+	file: SemanticFile,
+	usage: ESTree.Node,
+	binding: Binding,
+): boolean {
+	return (
+		usage.type === "Identifier" &&
+		!file.withDynamicNodes.has(usage) &&
+		accessIsInOwningFunction(file, usage, binding)
+	);
+}
+
 /**
- * Classify binding-wide-safe `arguments.length` and canonical constant-index
- * reads. ECMAScript creates one mutable arguments object binding per non-arrow
- * function, so optimization is all-or-nothing for that binding: any observable
- * object use retains CreateMapped/UnmappedArgumentsObject behavior.
+ * Classify direct `arguments.length` and canonical constant-index reads. A
+ * binding whose every use is direct remains fully static. For a mixed binding,
+ * direct `arguments.length` reads in its parameter environment may stay static
+ * when every other parameter use is also such a read and every remaining use is
+ * local to the owning function body. The latter restriction lets lowering lazily
+ * materialize the one observable arguments object without making an arrow,
+ * `with`, or direct eval create the wrong activation's object.
  */
 function classifyStaticArgumentsUsage(file: SemanticFile): void {
 	const parents = new Map<ESTree.Node, ESTree.Node>();
@@ -653,16 +703,43 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 	});
 
 	for (const [binding, byNode] of candidates) {
-		if (
-			binding.usageNodes.length > 0 &&
-			binding.usageNodes.every(
-				(usage) =>
-					byNode.has(usage) && isDirectArgumentsRead(byNode.get(usage)!.member, parents),
-			)
-		) {
+		const isStaticRead = (usage: ESTree.Node): boolean => {
+			const access = byNode.get(usage);
+			return access !== undefined && isDirectArgumentsRead(access.member, parents);
+		};
+		if (binding.usageNodes.length > 0 && binding.usageNodes.every(isStaticRead)) {
 			for (const [usage, access] of byNode)
 				file.staticArgumentsAccesses.set(usage, access);
+			continue;
 		}
+
+		const owner = argumentsBindingOwner(file, binding);
+		if (!owner) continue;
+		const parameterUsages = binding.usageNodes.filter((usage) =>
+			usageIsInFunctionParameters(usage, owner, parents),
+		);
+		if (
+			parameterUsages.length === 0 ||
+			!parameterUsages.every((usage) => {
+				const access = byNode.get(usage);
+				return access?.kind === "length" && isDirectArgumentsRead(access.member, parents);
+			})
+		) {
+			continue;
+		}
+		const bodyUsages = binding.usageNodes.filter(
+			(usage) => !usageIsInFunctionParameters(usage, owner, parents),
+		);
+		if (
+			bodyUsages.length === 0 ||
+			!bodyUsages.every((usage) => canLazilyMaterializeArgumentsUse(file, usage, binding))
+		) {
+			continue;
+		}
+		for (const usage of parameterUsages) {
+			file.staticArgumentsAccesses.set(usage, byNode.get(usage)!);
+		}
+		file.lazyArgumentsBindings.add(binding);
 	}
 }
 

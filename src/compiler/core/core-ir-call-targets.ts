@@ -42,11 +42,19 @@
  */
 
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { corePredecessorEdges } from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow, corePredecessorEdges } from "./core-ir-control-flow.ts";
 import { coreMemoryAccesses } from "./core-ir-memory.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import { coreOwnCellResolver, coreOwnCellsEqual } from "./core-ir-provenance.ts";
-import type { CoreOwnCell } from "./core-ir-provenance.ts";
+import {
+	coreOwnCellResolver,
+	coreOwnCellsEqual,
+	coreProvenance,
+} from "./core-ir-provenance.ts";
+import type {
+	CoreIndexedAllocationLayout,
+	CoreOwnCell,
+	CoreProvenance,
+} from "./core-ir-provenance.ts";
 import { CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
 import type {
 	CoreAccessMode,
@@ -562,10 +570,12 @@ function censusSlotAccesses(
  *
  * Four independent obligations, none of which a declaration alone discharges:
  *
- * 1. The frontend declares the binding single-assignment. Only `const` and a
- *    named function expression's own name are; a `var` or `let` cell is not, and
- *    an import contributes its exporter's cell because the linker aliases the two
- *    onto one cell rather than copying a value out of it.
+ * 1. The frontend nominates the cell. Source-immutable bindings are always
+ *    candidates; activation-private captured `let` bindings may also be
+ *    nominated so obligations 2 to 4 can derive stability from the Core graph.
+ *    Mutable globals and `var` cells are never candidates, and an import
+ *    contributes its exporter's cell because the linker aliases the two onto one
+ *    cell rather than copying a value out of it.
  * 2. Exactly one instruction in the program writes the cell by name, and it names
  *    the value it stores.
  * 3. No family-level writer could replace the cell's value with something this
@@ -617,7 +627,7 @@ function singleAssignmentCellsFromCensus(
 	};
 }
 
-/** Re-derive a program's single-assignment cells from its graph alone. */
+/** Filter nominated cells through the program's current whole-Core graph. */
 export function coreSingleAssignmentCells(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
@@ -640,6 +650,8 @@ interface TrackedAllocation {
 	readonly instruction: CoreInstructionId;
 	/** Module namespace exotic objects cannot be mutated through an escaped alias. */
 	readonly immutable: boolean;
+	/** Activation-local containment and initialization were already proved by provenance. */
+	readonly precontained: boolean;
 	/** Canonical own-slot keys in declaration order. */
 	readonly keys: ReadonlyArray<number>;
 	/** Node holding each key's initial value, in the same order. */
@@ -647,15 +659,80 @@ interface TrackedAllocation {
 	readonly owned: ReadonlySet<number>;
 }
 
+function trackedOwnCellKey(cell: CoreOwnCell): number {
+	return cell.kind === "object-slot" ? cell.key : -cell.index - 1;
+}
+
+function indexedSlotLayout(
+	fn: CoreFunction,
+	instruction: CoreInstruction,
+	allocation: CoreOpcodeAllocation,
+	provenance: CoreProvenance | undefined,
+	registry: CoreOpcodeRegistry,
+):
+	| {
+			readonly keys: ReadonlyArray<number>;
+			readonly values: ReadonlyArray<CoreValueId>;
+	  }
+	| undefined {
+	// The value lattice is not invocation-sensitive, so a tracked element could
+	// otherwise authorize `new table[i]` without a constructor-specific proof.
+	const containsConstruct = fn.blocks.some(({ instructions }) =>
+		instructions.some(
+			({ opcode }) => registry.get(opcode)?.callTransfer?.invocation === "construct",
+		),
+	);
+	if (allocation.kind !== "indexed" || provenance === undefined || containsConstruct) {
+		return undefined;
+	}
+	const layout = provenance.layouts.find(
+		(candidate): candidate is CoreIndexedAllocationLayout =>
+			candidate.kind === "indexed" && candidate.instruction === instruction.id,
+	);
+	if (
+		layout === undefined ||
+		provenance.escape(layout.instruction) !== "contained" ||
+		layout.elements.size === 0 ||
+		layout.elements.size > CORE_OWN_CELL_KEY_CAP
+	) {
+		return undefined;
+	}
+	const definitions = new Set(
+		[...layout.elements.values()].map(({ definition }) => definition),
+	);
+	for (const block of fn.blocks) {
+		for (const candidate of block.instructions) {
+			for (const access of registry.require(candidate.opcode).accesses ?? []) {
+				if (access.mode !== "write" || access.baseOperand === undefined) continue;
+				const base = candidate.inputs[access.baseOperand];
+				if (
+					base !== undefined &&
+					provenance.allocationOf(base)?.instruction === layout.instruction &&
+					!definitions.has(candidate.id)
+				) {
+					return undefined;
+				}
+			}
+		}
+	}
+	const elements = [...layout.elements.values()].sort(
+		(left, right) => left.index - right.index,
+	);
+	return {
+		keys: elements.map(({ index }) => trackedOwnCellKey({ kind: "element", index })),
+		values: elements.map(({ value }) => value),
+	};
+}
+
 /**
  * Layout of a declared named-slot allocation, or undefined when it is not one
  * this analysis models exactly.
  *
- * Indexed allocations are deliberately excluded: an element no dominating define
- * filled is a hole, and a hole read continues to the prototype chain, where a
- * value this graph never saw could answer. Every declared key of a named-slot
- * literal is an own writable data property from the moment the object exists, so
- * no read or write of a declared key can leave the object.
+ * This helper excludes indexed allocations; those additionally require a
+ * dominating own-data definition and activation-local provenance containment.
+ * Every declared key of a named-slot literal is an own writable data property
+ * from the moment the object exists, so no read or write of a declared key can
+ * leave the object.
  */
 function namedSlotLayout(
 	instruction: CoreInstruction,
@@ -819,10 +896,10 @@ function baseOperandRole(summary: BaseAccessSummary): OperandRole {
 	}
 	if (summary.slots !== 1 || summary.prototypeReads > 0) return OPERAND_ESCAPE;
 	const slot = summary.slotKey;
-	if (slot?.kind !== "object-slot") return OPERAND_ESCAPE;
+	if (slot === undefined) return OPERAND_ESCAPE;
 	const role: OperandRole = {
 		kind: "own-slot",
-		key: slot.key,
+		key: trackedOwnCellKey(slot),
 		mode: summary.slotMode,
 		valueOperand: summary.slotValueOperand,
 	};
@@ -921,6 +998,7 @@ export function analyzeCoreCalleeTargets(
 ): CoreCalleeTargetAnalysis {
 	const census = censusSlotAccesses(program, registry);
 	const stableCells = singleAssignmentCellsFromCensus(program, census, context);
+	const sourceClosed = context?.facts.closure.sourceClosure.kind === "known";
 	const cellForString = coreOwnCellResolver(program.stringConstants);
 	const valueBase: Array<number | undefined> = [];
 	const valueLimit: Array<number | undefined> = [];
@@ -1132,6 +1210,17 @@ export function analyzeCoreCalleeTargets(
 					const index = attributeNumber(definition, "stringIndex");
 					cell = index === undefined ? undefined : cellForString(index);
 				}
+				if (definition.opcode === "createNumber" || definition.opcode === "createF64") {
+					const number = definition.attributes.value;
+					if (
+						typeof number === "number" &&
+						Number.isInteger(number) &&
+						number >= 0 &&
+						number <= 0xffff_fffe
+					) {
+						cell = { kind: "element", index: Object.is(number, -0) ? 0 : number };
+					}
+				}
 				break;
 			}
 			resolved.set(value, cell ?? null);
@@ -1331,6 +1420,13 @@ export function analyzeCoreCalleeTargets(
 		const valueNode = (value: CoreValueId): number => base + value;
 		const definitions = functionDefinitions(fn);
 		const cellForOperand = operandKeyResolver(definitions);
+		const indexedProvenance =
+			sourceClosed &&
+			fn.blocks.some(({ instructions }) =>
+				instructions.some(({ opcode }) => opcode === "createArray"),
+			)
+				? coreProvenance(fn, buildCoreControlFlow(fn, registry), program.stringConstants)
+				: undefined;
 		const functionCallReceiver = (
 			instruction: CoreInstruction,
 		): CoreValueId | undefined => {
@@ -1542,6 +1638,7 @@ export function analyzeCoreCalleeTargets(
 									functionIndex: fn.functionIndex,
 									instruction: instruction.id,
 									immutable: true,
+									precontained: false,
 									keys,
 									initialValues: values,
 									owned: new Set(keys),
@@ -1553,7 +1650,15 @@ export function analyzeCoreCalleeTargets(
 						}
 						const allocation = registry.get(instruction.opcode)?.allocation;
 						if (allocation !== undefined && result !== undefined) {
-							const layout = namedSlotLayout(instruction, allocation, cellForString);
+							const named = namedSlotLayout(instruction, allocation, cellForString);
+							const indexed = indexedSlotLayout(
+								fn,
+								instruction,
+								allocation,
+								indexedProvenance,
+								registry,
+							);
+							const layout = named ?? indexed;
 							if (
 								layout !== undefined &&
 								allocations.length < CORE_TRACKED_ALLOCATION_CAP
@@ -1563,6 +1668,7 @@ export function analyzeCoreCalleeTargets(
 									functionIndex: fn.functionIndex,
 									instruction: instruction.id,
 									immutable: false,
+									precontained: indexed !== undefined,
 									keys: layout.keys,
 									initialValues: layout.values.map(valueNode),
 									owned: new Set(layout.keys),
@@ -2057,7 +2163,11 @@ function containFunctionAllocations(
 	const { allocations, origins, registry } = input;
 	const escapeNode = (node: number): void => {
 		const origin = origins[node]!;
-		if (origin > 0 && allocations[origin - 1]?.immutable !== true) {
+		if (
+			origin > 0 &&
+			allocations[origin - 1]?.immutable !== true &&
+			allocations[origin - 1]?.precontained !== true
+		) {
 			escaped[origin - 1] = 1;
 		}
 	};
@@ -2099,7 +2209,7 @@ function containFunctionAllocations(
 				const origin = origins[node]!;
 				if (origin <= 0) continue;
 				const allocation = allocations[origin - 1]!;
-				if (allocation.immutable) continue;
+				if (allocation.immutable || allocation.precontained) continue;
 				const role = roles.get(operand) ?? OPERAND_ESCAPE;
 				switch (role.kind) {
 					case "observed":

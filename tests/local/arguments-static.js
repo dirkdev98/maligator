@@ -49,6 +49,15 @@ function repeatedSnapshots() {
 function defaultFromArguments(value = arguments.length === 0 ? 9 : arguments[0]) {
 	return value + arguments.length + (arguments[0] === undefined ? 0 : arguments[0]);
 }
+function lazyMixedArguments(value = arguments.length, observe) {
+	if (!observe) return value;
+	const first = arguments;
+	return first === arguments && first.length === 2 && value === 2;
+}
+function lazyMixedRest(value = arguments.length, ...rest) {
+	if (rest.length === 0) return value;
+	return arguments.length * 10 + rest.length + value;
+}
 function withRest(...rest) {
 	return arguments.length * 10 + rest.length;
 }
@@ -139,6 +148,10 @@ assert(
 assert(repeatedSnapshots(2, 3, 4, 5, 6) === 5528, "wide repeated snapshots");
 assert(defaultFromArguments() === 9, "omitted default parameter");
 assert(defaultFromArguments(7) === 15, "provided default parameter");
+assert(lazyMixedArguments(undefined, false) === 2, "lazy mixed arguments bypass");
+assert(lazyMixedArguments(undefined, true), "lazy mixed arguments identity");
+assert(lazyMixedRest(undefined) === 1, "lazy mixed rest bypass");
+assert(lazyMixedRest(undefined, 4, 5) === 35, "lazy mixed rest materialization");
 assert(withRest(1, 2, 3) === 33, "rest parameter");
 assert(escaped(4, 5) === 24, "escape fallback");
 assert(mutated(1) === 9, "mutation fallback");

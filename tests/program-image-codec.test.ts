@@ -15,7 +15,11 @@ import type {
 	VmRegion,
 } from "../src/compiler/target/program-image.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
-import { buildArgumentSnapshotPlan } from "../src/compiler/target/runtime-image.ts";
+import {
+	buildArgumentSnapshotPlan,
+	encodeVmValueOperand,
+	vmSafepointRootMapsAreTrusted,
+} from "../src/compiler/target/runtime-image.ts";
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
@@ -559,10 +563,89 @@ function shapeCaseDefinition(): ProgramImage {
 }
 
 describe("program-image-codec", () => {
+	it("round-trips portable root maps as untrusted metadata and rejects malformed maps", () => {
+		const mapped = withBytecodeFunctions(definition, [
+			{
+				...mainFn,
+				gcSafepoints: [
+					{ instructionIp: 0, rootRegisters: [0, 3] },
+					{ instructionIp: 27, rootRegisters: [5, 10, 11] },
+				],
+			},
+		]);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(mapped));
+		expect(restored.runtime.functions[0]!.gcSafepoints).toEqual(
+			mapped.runtime.functions[0]!.gcSafepoints,
+		);
+		expect(vmSafepointRootMapsAreTrusted(restored.runtime.functions[0]!)).toBe(false);
+
+		const malformed = withBytecodeFunctions(definition, [
+			{
+				...mainFn,
+				gcSafepoints: [{ instructionIp: 0, rootRegisters: [3, 3] }],
+			},
+		]);
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(
+			"invalid VM safepoint root register",
+		);
+	});
+
+	it("round-trips and validates tagged direct-builtin operands", () => {
+		const call: BytecodeInstruction = {
+			opcode: "CALL_BUILTIN",
+			dst: 0,
+			thisValue: encodeVmValueOperand(-1, { kind: "undefined" }),
+			argumentCount: 6,
+			arguments: [
+				1,
+				encodeVmValueOperand(-1, { kind: "null" }),
+				encodeVmValueOperand(-1, { kind: "boolean", value: false }),
+				encodeVmValueOperand(-1, { kind: "boolean", value: true }),
+				encodeVmValueOperand(-1, { kind: "number", value: -7 }),
+				encodeVmValueOperand(-1, { kind: "string", index: 0 }),
+			],
+			operation: "Object.is",
+		};
+		const builtinFunction: BytecodeFunction = {
+			...mainFn,
+			registerCount: 2,
+			instructions: [call],
+			positions: [],
+		};
+		const valid = withRuntime(withBytecodeFunctions(definition, [builtinFunction]), {
+			stringConstants: [[120]],
+		});
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(valid, { debugInfo: false }),
+		);
+		expect(restored.runtime.functions[0]!.instructions).toEqual([call]);
+
+		const withCall = (replacement: BytecodeInstruction): ProgramImage =>
+			withRuntime(valid, {
+				functions: [{ ...valid.runtime.functions[0]!, instructions: [replacement] }],
+			});
+		expect(() =>
+			serializeCompilerArtifact(
+				withCall({
+					...call,
+					thisValue: encodeVmValueOperand(-1, { kind: "string", index: 1 }),
+				}),
+			),
+		).toThrow(/invalid VM value operand/);
+		expect(() =>
+			serializeCompilerArtifact(withCall({ ...call, arguments: [2], argumentCount: 1 })),
+		).toThrow(/invalid VM value operand/);
+		expect(() =>
+			serializeCompilerArtifact(
+				withCall({ ...call, arguments: [-300_000_000], argumentCount: 1 }),
+			),
+		).toThrow(/invalid VM value operand/);
+	});
+
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-16)).toEqual([
+		expect(WIRE_OPCODES.slice(-17)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -579,6 +662,7 @@ describe("program-image-codec", () => {
 			"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			"SELECT_SHAPE_CASE",
 			"LOAD_PROPERTY_STATIC_SHAPE_CASE",
+			"LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
 		]);
 	});
 
@@ -856,6 +940,59 @@ describe("program-image-codec", () => {
 		expect(restored).toEqual(definition);
 	});
 
+	it("round-trips portable exact and guarded script targets", () => {
+		const exactInstructions: Array<BytecodeInstruction> = [
+			{
+				opcode: "CALL",
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				exactFunctionIndex: 1,
+				argumentCount: 0,
+				arguments: [],
+			},
+			{
+				opcode: "CONSTRUCT",
+				dst: 0,
+				callee: 1,
+				exactFunctionIndex: 1,
+				argumentCount: 0,
+				arguments: [],
+			},
+			{
+				opcode: "CALL",
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				guardedFunctionIndices: [0, 1],
+				argumentCount: 0,
+				arguments: [],
+			},
+		];
+		const runtimeProbe = withBytecodeFunctions(definition, [
+			{
+				...mainFn,
+				instructions: exactInstructions,
+				positions: [0, 0, 0],
+				handlers: [],
+			},
+			genFn,
+		]);
+		const probe = withNativeFunctionPlan(runtimeProbe, 0, (plan) => ({
+			...plan,
+			instructions: plan.instructions.with(2, {
+				kind: "call",
+				guardedFunctionIndices: [0, 1],
+			}),
+		}));
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(probe));
+		expect(restored.runtime.functions[0]!.instructions).toEqual(exactInstructions);
+		expect(restored.native.functions[0]!.instructions[2]).toEqual({
+			kind: "call",
+			guardedFunctionIndices: [0, 1],
+		});
+	});
+
 	it("validates stack-object access keys at both wire boundaries", () => {
 		const valid = stackObjectDefinition();
 		const wire = serializeCompilerArtifact(valid, { debugInfo: false });
@@ -989,6 +1126,9 @@ describe("program-image-codec", () => {
 				if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
 					return { ...instruction, stringIndex: 3 };
 				}
+				if (instruction.opcode === "CALL") {
+					return { ...instruction, exactFunctionIndex: 0 };
+				}
 				return instruction;
 			},
 		);
@@ -996,6 +1136,7 @@ describe("program-image-codec", () => {
 			opcode: "CONSTRUCT",
 			dst: 1,
 			callee: 2,
+			exactFunctionIndex: 0,
 			argumentCount: 1,
 			arguments: [3],
 		});
@@ -1139,6 +1280,52 @@ describe("program-image-codec", () => {
 		);
 	});
 
+	it("round-trips portable exact Array length operations and rejects stale proofs", () => {
+		const exactArrayLengthDefinition = (
+			stringConstants: Array<Array<number>>,
+			object = 1,
+		): ProgramImage => {
+			const image = withRuntime(
+				withBytecodeFunctions(definition, [
+					{
+						...mainFn,
+						registerCount: 2,
+						instructions: [
+							{ opcode: "CREATE_ARRAY", dst: 1, length: 3 },
+							{
+								opcode: "LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
+								dst: 0,
+								object,
+								stringIndex: 0,
+								icIndex: 0,
+							},
+							{ opcode: "RETURN", value: 0 },
+						],
+						positions: [0, 0, 0],
+						handlers: [],
+					},
+				]),
+				{ stringConstants },
+			);
+			return withNativeFunctionPlan(image, 0, (plan) => ({
+				...plan,
+				instructions: [undefined, { kind: "exact-array-length" }, undefined],
+			}));
+		};
+		const length = Array.from("length", (unit) => unit.charCodeAt(0));
+		const valid = exactArrayLengthDefinition([length]);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(valid))).toEqual(valid);
+
+		expect(() =>
+			serializeCompilerArtifact(
+				exactArrayLengthDefinition([Array.from("other", (unit) => unit.charCodeAt(0))]),
+			),
+		).toThrow(/invalid exact Array length operation/);
+		expect(() =>
+			serializeCompilerArtifact(exactArrayLengthDefinition([length], 2)),
+		).toThrow(/invalid exact Array length operation/);
+	});
+
 	it("rejects malformed operation-local specialization facts", () => {
 		const withInstruction = (
 			instruction: BytecodeInstruction,
@@ -1201,6 +1388,38 @@ describe("program-image-codec", () => {
 				),
 			),
 		).toThrow(/invalid direct CONSTRUCT target/);
+		expect(() =>
+			serializeCompilerArtifact(
+				withInstruction(
+					{
+						opcode: "CALL",
+						dst: 0,
+						callee: 1,
+						thisValue: 2,
+						exactFunctionIndex: 0,
+						argumentCount: 0,
+						arguments: [],
+					},
+					{ kind: "call" },
+				),
+			),
+		).toThrow(/invalid CALL specialization metadata/);
+		expect(() =>
+			serializeCompilerArtifact(
+				withInstruction(
+					{
+						opcode: "CALL",
+						dst: 0,
+						callee: 1,
+						thisValue: 2,
+						guardedFunctionIndices: [0],
+						argumentCount: 0,
+						arguments: [],
+					},
+					{ kind: "call" },
+				),
+			),
+		).toThrow(/invalid CALL specialization metadata/);
 	});
 
 	it("requires dense property IC ordinals while keeping them implicit on the wire", () => {
@@ -1439,6 +1658,62 @@ describe("program-image-codec", () => {
 			},
 		]);
 		expect(() => serializeCompilerArtifact(probe)).toThrow(/negative argument index/);
+	});
+
+	it("rejects out-of-range portable exact script-function targets", () => {
+		const probe = withRuntime(definition, {
+			functions: [
+				{
+					...mainFn,
+					instructions: [
+						{
+							opcode: "CONSTRUCT",
+							dst: 0,
+							callee: 1,
+							exactFunctionIndex: 1,
+							argumentCount: 0,
+							arguments: [],
+						},
+					],
+				},
+			],
+			functionCount: 1,
+		});
+		expect(() => serializeCompilerArtifact(probe)).toThrow(
+			/invalid exact script-function target/,
+		);
+	});
+
+	it.each([
+		[[0, 0], undefined],
+		[[1, 0], undefined],
+		[[0, 2], undefined],
+		[[0, 1], 0],
+	])("rejects non-canonical portable guarded script targets", (targets, exact) => {
+		const probe = withRuntime(definition, {
+			functions: definition.runtime.functions.map((fn, functionIndex) =>
+				functionIndex !== 0
+					? fn
+					: {
+							...fn,
+							instructions: [
+								{
+									opcode: "CALL",
+									dst: 0,
+									callee: 1,
+									thisValue: 2,
+									...(exact === undefined ? {} : { exactFunctionIndex: exact }),
+									guardedFunctionIndices: targets,
+									argumentCount: 0,
+									arguments: [],
+								},
+							],
+						},
+			),
+		});
+		expect(() => serializeCompilerArtifact(probe)).toThrow(
+			/invalid guarded script-function targets/,
+		);
 	});
 
 	it.each([

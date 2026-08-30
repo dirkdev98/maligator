@@ -3,7 +3,10 @@ import type {
 	CorePropertyPlacement,
 } from "../core/core-ir-regions.ts";
 import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
-import type { OptimizationPassDelta } from "../shared/compiler-diagnostics.ts";
+import type {
+	CompilerFactFlowReport,
+	OptimizationPassDelta,
+} from "../shared/compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "../shared/compiler-facts.ts";
 import type {
@@ -13,12 +16,12 @@ import type {
 } from "../shared/compiler-instruction.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
+import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import {
 	decodeVmValueOperand,
 	lowerVerifiedExecutionToRuntimePlan,
-	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 import type {
 	BytecodeExceptionHandler,
@@ -313,14 +316,23 @@ export type VmStringSplitProjectionRegion = VmRegionEnvelope<
 	readonly callIp: number;
 	readonly callee: number;
 	readonly receiver: number;
+	readonly separatorIp: number;
 	readonly separatorStringIndex: number;
 	readonly resultRegisters: ReadonlyArray<number>;
-	readonly loads: ReadonlyArray<{
-		readonly ip: number;
-		readonly kind: "element" | "length";
-		readonly index?: number;
-		readonly dst: number;
-	}>;
+	readonly loads: ReadonlyArray<
+		| {
+				readonly ip: number;
+				readonly kind: "element";
+				readonly keyIp: number;
+				readonly index: number;
+				readonly dst: number;
+		  }
+		| {
+				readonly ip: number;
+				readonly kind: "length";
+				readonly dst: number;
+		  }
+	>;
 };
 
 export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
@@ -507,6 +519,7 @@ export interface ProgramImage {
 		profileSites?: Array<ProfileSite>;
 		profileRemarks?: Array<CompilerRemark>;
 		optimizationTrace?: Array<OptimizationPassDelta>;
+		factFlow?: CompilerFactFlowReport;
 	};
 }
 
@@ -547,6 +560,7 @@ export type NativeInstructionPlan =
 	| {
 			readonly kind: "call";
 			readonly directFunctionIndex?: number;
+			readonly guardedFunctionIndices?: ReadonlyArray<number>;
 			readonly directEntryId?: number;
 			readonly directFunctionCall?: true;
 			readonly directCallTargetFunctionIndex?: number;
@@ -788,6 +802,13 @@ export function lowerVerifiedExecutionToProgramImage(
 		},
 	};
 	if (profile) buildProfileMetadata(program.core, context, definition);
+	if (profile) {
+		definition.diagnostics.factFlow = collectCompilerFactFlowReport(
+			context.facts,
+			runtime,
+			nativeFunctions,
+		);
+	}
 	return definition;
 }
 
@@ -809,6 +830,7 @@ function nativeInstructionPlanFromExecution(
 					: instruction.exactCollectionReceiver;
 			if (
 				instruction.directFunctionIndex === undefined &&
+				instruction.guardedFunctionIndices === undefined &&
 				instruction.directEntryId === undefined &&
 				instruction.directFunctionCall !== true &&
 				instruction.directCallTargetFunctionIndex === undefined &&
@@ -820,6 +842,7 @@ function nativeInstructionPlanFromExecution(
 			return {
 				kind: "call",
 				directFunctionIndex: instruction.directFunctionIndex,
+				guardedFunctionIndices: instruction.guardedFunctionIndices,
 				directEntryId: instruction.directEntryId,
 				directFunctionCall: instruction.directFunctionCall,
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
@@ -1987,10 +2010,16 @@ function lowerExecutionFunctionToNativePlan(
 					region.property === undefined
 						? -1
 						: instructionIndexByTargetInstruction.get(region.property);
+				const separatorIp = instructionIndexByTargetInstruction.get(region.separator);
 				const loads = region.loads.map((load) => ({
 					ip: instructionIndexByTargetInstruction.get(load.instruction),
 					kind: load.kind,
-					...(load.kind === "element" ? { index: load.index } : {}),
+					...(load.kind === "element"
+						? {
+								index: load.index,
+								keyIp: instructionIndexByTargetInstruction.get(load.key),
+							}
+						: {}),
 					dst: load.instruction.registers[0],
 				}));
 				if (
@@ -2000,17 +2029,24 @@ function lowerExecutionFunctionToNativePlan(
 					!guard.obligations.includes("materialize") ||
 					resolvedAnchors.length !== 2 ||
 					propertyIp === undefined ||
-					loads.some((load) => load.ip === undefined)
+					separatorIp === undefined ||
+					loads.some(
+						(load) =>
+							load.ip === undefined ||
+							(load.kind === "element" && load.keyIp === undefined),
+					)
 				) {
 					throw coreRegionError(region.kind, "projection metadata");
 				}
 				const loweredCall = instructions[callIp!];
 				const loweredProperty = propertyIp < 0 ? undefined : instructions[propertyIp];
+				const loweredSeparator = instructions[separatorIp];
 				const resultRegisters = [...new Set(region.resultRegisters)];
 				const resolvedLoads = loads as Array<{
 					ip: number;
 					kind: "element" | "length";
 					index?: number;
+					keyIp?: number;
 					dst: number;
 				}>;
 				resolvedLoads.sort((left, right) => left.ip - right.ip);
@@ -2021,21 +2057,8 @@ function lowerExecutionFunctionToNativePlan(
 						constant.every((codeUnit, offset) => codeUnit === value.charCodeAt(offset))
 					);
 				};
-				// Core already states the separator and element indices in the certificate;
-				// this walk only re-reads the emitted producer to check the certificate
-				// against the stream. A miss rejects the whole region with an error, so no
-				// optimization is ever selected or declined by what this scan finds.
-				const latestDefinition = (
-					register: number,
-					beforeIp: number,
-				): BytecodeInstruction | undefined => {
-					for (let ip = beforeIp - 1; ip >= 0; ip--) {
-						const candidate = instructions[ip]!;
-						if (vmInstructionWriteRegisters(candidate).includes(register))
-							return candidate;
-					}
-					return undefined;
-				};
+				// Core names the exact producers because flattened order cannot distinguish
+				// register definitions on mutually exclusive CFG paths after allocation.
 				const guardMatchesCall = (callGuard: VmGuardPlan | undefined): boolean => {
 					const regionDependency = guard.dependencies[0];
 					const callDependency = callGuard?.dependencies[0];
@@ -2085,15 +2108,10 @@ function lowerExecutionFunctionToNativePlan(
 				const separatorMatches =
 					separator?.kind === "string"
 						? separator.index === region.separatorStringIndex
-						: separator?.kind === "register"
-							? (() => {
-									const definition = latestDefinition(separator.register, callIp!);
-									return (
-										definition?.opcode === "CREATE_STRING" &&
-										definition.stringIndex === region.separatorStringIndex
-									);
-								})()
-							: false;
+						: separator?.kind === "register" &&
+							loweredSeparator?.opcode === "CREATE_STRING" &&
+							loweredSeparator.dst === separator.register &&
+							loweredSeparator.stringIndex === region.separatorStringIndex;
 				const elementLoads = resolvedLoads.filter((load) => load.kind === "element");
 				const lengthLoads = resolvedLoads.filter((load) => load.kind === "length");
 				const aliases = new Set(resultRegisters);
@@ -2110,16 +2128,14 @@ function lowerExecutionFunctionToNativePlan(
 						break;
 					}
 					if (load.kind === "element") {
-						const key =
-							lowered.opcode === "LOAD_PROPERTY"
-								? latestDefinition(lowered.key, load.ip)
-								: undefined;
+						const key = load.keyIp === undefined ? undefined : instructions[load.keyIp];
 						if (
 							lowered.opcode !== "LOAD_PROPERTY" ||
 							!Number.isInteger(load.index) ||
 							load.index! < 0 ||
 							load.index! > 0xffff ||
 							key?.opcode !== "CREATE_NUMBER" ||
+							key.dst !== lowered.key ||
 							key.value !== load.index
 						) {
 							operationsValid = false;
@@ -2136,8 +2152,11 @@ function lowerExecutionFunctionToNativePlan(
 				}
 				const payloadIps = [
 					...(propertyIp < 0 ? [] : [propertyIp]),
+					separatorIp,
 					callIp!,
-					...resolvedLoads.map((load) => load.ip),
+					...resolvedLoads.flatMap((load) =>
+						load.keyIp === undefined ? [load.ip] : [load.keyIp, load.ip],
+					),
 				];
 				if (
 					!callMatches ||
@@ -2199,9 +2218,10 @@ function lowerExecutionFunctionToNativePlan(
 					callIp: callIp!,
 					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
 					receiver: loweredCall.thisValue,
+					separatorIp,
 					separatorStringIndex: region.separatorStringIndex,
 					resultRegisters,
-					loads: resolvedLoads,
+					loads: resolvedLoads as VmStringSplitProjectionRegion["loads"],
 				});
 				break;
 			}

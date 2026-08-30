@@ -222,6 +222,13 @@ function remarkForInstruction(
 				code: "property.static-load",
 				outcome: "applied",
 			};
+		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+			return {
+				phase: "bytecode-backend",
+				operation,
+				code: "property.exact-array-length",
+				outcome: "guarded",
+			};
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
 			const firstCandidate = instruction.candidates[0]!;

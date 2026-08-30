@@ -2,9 +2,10 @@
  * Reusable exact-integer ranges and induction facts over canonical Core.
  *
  * The analysis recognizes only additive recurrences whose numeric representation
- * is explicit. It records wider relational facts, but derives concrete ranges
- * only when every executed value — including the final update that exits the
- * loop — stays an exact safe integer and the seed is not negative zero.
+ * is explicit. Numeric branch edges may narrow an existing exact-integer range,
+ * but never establish integer-ness by themselves. Concrete induction ranges are
+ * derived only when every executed value — including the final update that exits
+ * the loop — stays an exact safe integer and the seed is not negative zero.
  */
 
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
@@ -70,6 +71,13 @@ export interface CoreLoopInductionAnalysis {
 
 const INT32_MINIMUM = -0x8000_0000;
 const INT32_MAXIMUM = 0x7fff_ffff;
+const SAFE_INTEGER_MINIMUM = -Number.MAX_SAFE_INTEGER;
+const SAFE_INTEGER_MAXIMUM = Number.MAX_SAFE_INTEGER;
+
+interface CorePathRangeRefinement {
+	readonly subject: CoreValueId;
+	readonly range: CoreNumericRange;
+}
 
 function numericRange(minimum: number, maximum = minimum): CoreNumericRange | undefined {
 	return Number.isSafeInteger(minimum) &&
@@ -116,6 +124,35 @@ function comparisonOperator(value: unknown): CoreLoopComparison | undefined {
 	return value === "<" || value === "<=" || value === ">" || value === ">="
 		? value
 		: undefined;
+}
+
+function branchRange(
+	operator: CoreLoopComparison,
+	bound: number,
+	succeeds: boolean,
+): CoreNumericRange | undefined {
+	if (!Number.isSafeInteger(bound) || Object.is(bound, -0)) return undefined;
+	const relation = succeeds ? operator : negateComparison(operator);
+	switch (relation) {
+		case "<":
+			return numericRange(SAFE_INTEGER_MINIMUM, bound - 1);
+		case "<=":
+			return numericRange(SAFE_INTEGER_MINIMUM, bound);
+		case ">":
+			return numericRange(bound + 1, SAFE_INTEGER_MAXIMUM);
+		case ">=":
+			return numericRange(bound, SAFE_INTEGER_MAXIMUM);
+	}
+}
+
+function intersectNumericRanges(
+	left: CoreNumericRange,
+	right: CoreNumericRange,
+): CoreNumericRange | undefined {
+	return numericRange(
+		Math.max(left.minimum, right.minimum),
+		Math.min(left.maximum, right.maximum),
+	);
 }
 
 function exactNumber(
@@ -390,30 +427,124 @@ export function analyzeCoreLoopInductions(
 					Math.min(induction.range.minimum, induction.range.finalUpdate),
 					Math.max(induction.range.maximum, induction.range.finalUpdate),
 				);
+	const refinementsByBlock = fn.blocks.map(() => new Array<CorePathRangeRefinement>());
+	const addBranchRefinement = (
+		source: CoreBlockId,
+		target: CoreBlockId,
+		subject: CoreValueId,
+		operator: CoreLoopComparison,
+		bound: number,
+		succeeds: boolean,
+	): void => {
+		if (!cfg.dominatesEdge(source, target, target)) return;
+		const range = branchRange(operator, bound, succeeds);
+		if (range === undefined) return;
+		refinementsByBlock[target]!.push({ subject: root(subject), range });
+	};
+	for (const block of fn.blocks) {
+		const terminator = block.terminator;
+		if (terminator.kind !== "branch") continue;
+		const comparison = definitions.get(root(terminator.condition));
+		let operator = comparisonOperator(comparison?.attributes.operator);
+		if (
+			comparison?.opcode !== "binary" ||
+			comparison.inputs.length !== 2 ||
+			comparison.outputs.length !== 1 ||
+			operator === undefined ||
+			representations.get(comparison.outputs[0]!) !== "boolean" ||
+			comparison.inputs.some(
+				(value) =>
+					representations.get(value) !== "f64" && representations.get(value) !== "i32",
+			)
+		) {
+			continue;
+		}
+		let subject = comparison.inputs[0]!;
+		let bound = exactNumber(comparison.inputs[1]!, definitions, canonical);
+		if (bound === undefined) {
+			bound = exactNumber(comparison.inputs[0]!, definitions, canonical);
+			subject = comparison.inputs[1]!;
+			operator = flipComparison(operator);
+		}
+		if (
+			bound === undefined ||
+			exactNumber(subject, definitions, canonical) !== undefined
+		) {
+			continue;
+		}
+		addBranchRefinement(
+			block.id,
+			terminator.consequent.block,
+			subject,
+			operator,
+			bound,
+			true,
+		);
+		addBranchRefinement(
+			block.id,
+			terminator.alternate.block,
+			subject,
+			operator,
+			bound,
+			false,
+		);
+	}
+	const pathRangeCache = fn.blocks.map(
+		() => new Map<CoreValueId, CoreNumericRange | null>(),
+	);
+	const baseRange = (
+		value: CoreValueId,
+		block?: CoreBlockId,
+	): CoreNumericRange | undefined => {
+		const resolved = root(value);
+		const constant = constantRanges.get(resolved);
+		if (constant !== undefined) return constant;
+		const induction = byRoot.get(resolved);
+		if (induction?.range !== undefined) {
+			if (
+				block !== undefined &&
+				induction.comparison !== undefined &&
+				cfg.dominates(induction.comparison.body, block)
+			) {
+				return induction.range;
+			}
+			return fullInductionRange(induction);
+		}
+		const update = byUpdate.get(resolved);
+		if (update !== undefined) return fullInductionRange(update);
+		return representations.get(value) === "i32" ? i32Range : undefined;
+	};
 	return {
 		inductions,
-		hasNumericRanges: hasI32 || inductions.length > 0,
+		hasNumericRanges:
+			hasI32 ||
+			inductions.length > 0 ||
+			refinementsByBlock.some((refinements) => refinements.length > 0),
 		induction(value) {
 			return byRoot.get(root(value));
 		},
 		range(value, block) {
 			const resolved = root(value);
-			const constant = constantRanges.get(resolved);
-			if (constant !== undefined) return constant;
-			const induction = byRoot.get(resolved);
-			if (induction?.range !== undefined) {
-				if (
-					block !== undefined &&
-					induction.comparison !== undefined &&
-					cfg.dominates(induction.comparison.body, block)
-				) {
-					return induction.range;
+			if (block === undefined) return baseRange(value);
+			const cache = pathRangeCache[block]!;
+			if (cache.has(value)) return cache.get(value) ?? undefined;
+			let range = baseRange(value, block);
+			if (range !== undefined) {
+				let current: CoreBlockId | null = block;
+				while (current !== null) {
+					for (const refinement of refinementsByBlock[current]!) {
+						if (refinement.subject !== resolved) continue;
+						range = intersectNumericRanges(range, refinement.range);
+						if (range === undefined) break;
+					}
+					if (range === undefined) break;
+					const dominator: CoreBlockId | null | undefined =
+						cfg.immediateDominators[current];
+					current = dominator === undefined || dominator === current ? null : dominator;
 				}
-				return fullInductionRange(induction);
 			}
-			const update = byUpdate.get(resolved);
-			if (update !== undefined) return fullInductionRange(update);
-			return representations.get(value) === "i32" ? i32Range : undefined;
+			cache.set(value, range ?? null);
+			return range;
 		},
 	};
 }

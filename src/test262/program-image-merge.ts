@@ -39,6 +39,10 @@ function cloneNativeInstructionPlan(
 	if (plan.kind === "call") {
 		return {
 			...plan,
+			guardedFunctionIndices:
+				plan.guardedFunctionIndices === undefined
+					? undefined
+					: plan.guardedFunctionIndices.map((target) => target + base.function),
 			directFunctionIndex:
 				plan.directFunctionIndex === undefined
 					? undefined
@@ -186,6 +190,7 @@ function cloneInstruction(
 		case "CREATE_STRING":
 			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
 		case "LOAD_PROPERTY_STATIC":
+		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 		case "STORE_PROPERTY_STATIC":
 		case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
@@ -266,6 +271,16 @@ function cloneInstruction(
 		case "CALL":
 			return {
 				...instruction,
+				...(instruction.guardedFunctionIndices === undefined
+					? {}
+					: {
+							guardedFunctionIndices: instruction.guardedFunctionIndices.map(
+								(target) => target + base.function,
+							),
+						}),
+				...(instruction.exactFunctionIndex === undefined
+					? {}
+					: { exactFunctionIndex: instruction.exactFunctionIndex + base.function }),
 				callee: rebaseVmValueOperand(instruction.callee, base.string),
 				thisValue: rebaseVmValueOperand(instruction.thisValue, base.string),
 				arguments: instruction.arguments.map((operand) =>
@@ -283,6 +298,9 @@ function cloneInstruction(
 		case "CONSTRUCT":
 			return {
 				...instruction,
+				...(instruction.exactFunctionIndex === undefined
+					? {}
+					: { exactFunctionIndex: instruction.exactFunctionIndex + base.function }),
 				callee: rebaseVmValueOperand(instruction.callee, base.string),
 				arguments: instruction.arguments.map((operand) =>
 					rebaseVmValueOperand(operand, base.string),

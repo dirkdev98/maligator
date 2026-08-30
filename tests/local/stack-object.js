@@ -83,6 +83,37 @@ function mutableScalarAlias(flag) {
 	return object.value;
 }
 
+function scalarBranchJoin(flag) {
+	const object = { value: 0 };
+	if (flag) object.value = 51;
+	else object.value = 52;
+	return object.value;
+}
+
+function homogeneousBooleanCell(flag, count) {
+	const object = { value: true };
+	for (let i = 0; i < count; i++) {
+		if (flag) object.value = true;
+		else object.value = false;
+	}
+	return object.value;
+}
+
+function mixedCellJoin(flag, count) {
+	const object = { value: true };
+	for (let i = 0; i < count; i++) {
+		if (flag) object.value = false;
+		else object.value = 1;
+	}
+	return object.value;
+}
+
+function materializedBooleanCell(flag) {
+	const object = { value: true };
+	if (flag) object.value = false;
+	return object;
+}
+
 function recursive(depth) {
 	const o = { depth, text: "depth:" + depth };
 	const nested = depth === 0 ? 0 : recursive(depth - 1);
@@ -174,6 +205,24 @@ check("scalar initializer order", scalarInitializerOrder(43));
 check(
 	"mutable scalar alias branch",
 	mutableScalarAlias(false) === 1 && mutableScalarAlias(true) === 9,
+);
+check(
+	"scalar branch join",
+	scalarBranchJoin(true) === 51 && scalarBranchJoin(false) === 52,
+);
+check(
+	"homogeneous boolean stack cell",
+	homogeneousBooleanCell(true, 2) === true && homogeneousBooleanCell(false, 2) === false,
+);
+check(
+	"mixed stack cell join",
+	mixedCellJoin(true, 2) === false && mixedCellJoin(false, 2) === 1,
+);
+const materializedBoolean = materializedBooleanCell(true);
+check(
+	"materialized boolean stack cell",
+	materializedBoolean.value === false &&
+		Object.getPrototypeOf(materializedBoolean) === Object.prototype,
 );
 check("recursion and reentrancy", recursive(6) === 70);
 check("branch normal", branchAndException(false) === 21);

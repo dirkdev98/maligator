@@ -3,11 +3,12 @@ import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.t
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
-import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
+import { CoreFunctionBuilder, formatCoreFunction } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
+import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
 function lower(source: string) {
@@ -134,6 +135,54 @@ describe("Core IR lowering", () => {
 		).toBe(true);
 	});
 
+	it("reuses registers for values live on disjoint CFG branches", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const leftStart = builder.createBlock();
+		const right = builder.createBlock();
+		const leftEnd = builder.createBlock([{ representation: "f64" }]);
+		const merge = builder.createBlock([{ representation: "f64" }]);
+		const [left] = builder.appendInstruction(leftStart, "createF64", [], {
+			attributes: { value: 1 },
+		});
+		const [rightValue] = builder.appendInstruction(right, "createF64", [], {
+			attributes: { value: 2 },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: builder.block(entry).parameters[0]!.value,
+			consequent: { block: leftStart, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.setTerminator(leftStart, {
+			kind: "jump",
+			edge: { block: leftEnd, arguments: [left!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: merge, arguments: [rightValue!] },
+		});
+		builder.setTerminator(leftEnd, {
+			kind: "jump",
+			edge: {
+				block: merge,
+				arguments: [builder.block(leftEnd).parameters[0]!.value],
+			},
+		});
+		builder.setTerminator(merge, {
+			kind: "return",
+			value: builder.block(merge).parameters[0]!.value,
+		});
+		const fn = builder.finish(entry);
+		const allocation = coreRegisterClasses(fn, true);
+		const register = (value: NonNullable<typeof left>): number =>
+			allocation.registers.get(allocation.roots.get(value)!)!;
+
+		expect(register(left!)).toBe(register(rightValue!));
+	});
+
 	it("round-trips loops, calls, and multiple-result operations to VM form", () => {
 		const converted = lower(`
 			let total = 0;
@@ -146,6 +195,17 @@ describe("Core IR lowering", () => {
 		expect(
 			vm.runtime.functions.flatMap(({ instructions }) => instructions).length,
 		).toBeGreaterThan(10);
+		const exactFunctions = vm.runtime.functions.filter(
+			(fn) => vmSafepointRootMapsAreTrusted(fn) && (fn.gcSafepoints?.length ?? 0) > 0,
+		);
+		expect(exactFunctions.length).toBeGreaterThan(0);
+		expect(
+			exactFunctions.some((fn) =>
+				fn.gcSafepoints!.some(
+					(safepoint) => safepoint.rootRegisters.length < fn.registerCount,
+				),
+			),
+		).toBe(true);
 	});
 
 	it("resolves known shaped origins to dense VM cache rows", () => {

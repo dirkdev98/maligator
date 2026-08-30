@@ -5,6 +5,7 @@ import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
+	buildNativeProgramImage,
 	runToStdout,
 } from "../../src/test-harness.ts";
 
@@ -17,6 +18,7 @@ const compilerStressEnv = { MAL_GC_STRESS: "1000", MAL_GC_VERIFY: "1" };
 describe("bounded interpreter call-site cache", () => {
 	let interpreted: string;
 	let mixed: string;
+	let mismatched: string;
 
 	beforeAll(() => {
 		const pair = buildBackendPairFromOneProgramImage({
@@ -26,6 +28,41 @@ describe("bounded interpreter call-site cache", () => {
 		});
 		interpreted = pair.interpreted;
 		mixed = pair.compiled;
+		let exactCalls = 0;
+		let exactConstructs = 0;
+		const functions = pair.programImage.runtime.functions.map((fn) => ({
+			...fn,
+			instructions: fn.instructions.map((instruction) => {
+				if (
+					(instruction.opcode !== "CALL" && instruction.opcode !== "CONSTRUCT") ||
+					instruction.exactFunctionIndex === undefined
+				) {
+					return instruction;
+				}
+				if (instruction.opcode === "CALL") exactCalls++;
+				else exactConstructs++;
+				return {
+					...instruction,
+					exactFunctionIndex:
+						(instruction.exactFunctionIndex + 1) %
+						pair.programImage.runtime.functionCount,
+				};
+			}),
+		}));
+		if (exactCalls === 0 || exactConstructs === 0) {
+			throw new Error("fixture did not lower exact CALL and CONSTRUCT targets");
+		}
+		mismatched = buildNativeProgramImage(
+			{
+				...pair.programImage,
+				runtime: { ...pair.programImage.runtime, functions },
+			},
+			{
+				name: "interpreter-call-cache-p1-item9-mismatch",
+				outDir,
+				compiled: false,
+			},
+		);
 	});
 
 	it("preserves direct interpreted calls, eval splices, and fallback semantics", () => {
@@ -40,6 +77,10 @@ describe("bounded interpreter call-site cache", () => {
 			runToStdout(mixed, { env: { MAL_HOST_GC: "1" }, timeoutMs: 60_000 }),
 			expected,
 		);
+	});
+
+	it("falls back when portable exact-target identities do not match", () => {
+		assertExactLines(runToStdout(mismatched, { timeoutMs: 60_000 }), expected);
 	});
 
 	it("keeps epoch-guarded identities safe under GC stress", () => {

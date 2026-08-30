@@ -56,6 +56,42 @@ export interface EffectSummary {
 	readonly callsUserCode: boolean;
 }
 
+/** A function-frame identity used by a conditional own-slot effect. */
+export type RelativeEffectBase =
+	| { readonly kind: "receiver" }
+	| { readonly kind: "parameter"; readonly index: number };
+
+/**
+ * One static property operation whose receiver is a function-frame identity.
+ *
+ * The effect is conditional: a caller may substitute it only when the actual
+ * operand is proven to name this existing own data slot. Otherwise the ordinary
+ * coarse `EffectSummary` remains the answer.
+ */
+export interface RelativeOwnSlotEffect {
+	readonly base: RelativeEffectBase;
+	readonly key: number;
+	readonly mode: "read" | "write";
+}
+
+export function relativeOwnSlotEffectKey(effect: RelativeOwnSlotEffect): string {
+	const base =
+		effect.base.kind === "receiver" ? "receiver" : `parameter:${effect.base.index}`;
+	return `${base}.slot(${effect.key}).${effect.mode}`;
+}
+
+/** Deduplicated stable order used by summary equality and proof digests. */
+export function normalizeRelativeOwnSlotEffects(
+	effects: ReadonlyArray<RelativeOwnSlotEffect>,
+): ReadonlyArray<RelativeOwnSlotEffect> {
+	const byKey = new Map(
+		effects.map((effect) => [relativeOwnSlotEffectKey(effect), effect]),
+	);
+	return [...byKey]
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([, effect]) => effect);
+}
+
 const NO_DOMAINS: ReadonlyArray<EffectDomain> = Object.freeze([]);
 
 /** Bottom: nothing observed. Sound only as a fixed-point starting value. */
@@ -351,6 +387,8 @@ export interface FunctionEffectSummary {
 	/** Owning module summary id, so the two maps are navigable in both directions. */
 	readonly module: string;
 	readonly effects: EffectSummary;
+	/** Conditional exact accesses; consumers must substitute every entry atomically. */
+	readonly relativeOwnSlotEffects: ReadonlyArray<RelativeOwnSlotEffect>;
 	readonly callees: ReadonlyArray<string>;
 	readonly openCallEdge: boolean;
 	readonly externallyReachable: boolean;

@@ -1807,10 +1807,7 @@ describe("Core IR optimizer", () => {
 		expect(fn.blocks[0]!.terminator).toMatchObject({ value: fn.parameters[1] });
 	});
 
-	it("removes stores to a contained slot nothing reads", () => {
-		// Both variants store a proven primitive into a contained literal; only the
-		// second has a read that no store dominates, so its stores are the slot's
-		// only definition.
+	it("scalarizes a contained slot through a branch join", () => {
 		const build = (functionIndex: number, read: boolean): CoreFunction => {
 			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
 				parameterCount: 1,
@@ -1868,10 +1865,192 @@ describe("Core IR optimizer", () => {
 				instructions.filter((instruction) => instruction.opcode === opcode),
 			).length;
 		expect(count(0, "storePropertyStatic")).toBe(0);
-		// Neither store dominates the join, so both must survive to define the slot
-		// the surviving load reads.
-		expect(count(1, "storePropertyStatic")).toBe(2);
-		expect(count(1, "loadPropertyStatic")).toBe(1);
+		expect(count(1, "storePropertyStatic")).toBe(0);
+		expect(count(1, "loadPropertyStatic")).toBe(0);
+		expect(count(1, "createObjectShaped")).toBe(0);
+		const scalarized = outcome.program.functions[1]!;
+		const cfg = buildCoreControlFlow(scalarized, coreOpcodeRegistry);
+		expect(
+			scalarized.blocks.some(
+				(block) =>
+					block.parameters.length > 0 && cfg.predecessors[block.id]!.length === 2,
+			),
+		).toBe(true);
+	});
+
+	it("converges branch-join scalar replacement beyond the scheduler round limit", () => {
+		const joinCount = 24;
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const [zero] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [one] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		let current = entry;
+		let returned = condition;
+		for (let index = 0; index < joinCount; index++) {
+			const [object] = builder.appendInstruction(current, "createObjectShaped", [zero!], {
+				attributes: { keyStringIndices: [1] },
+			});
+			const left = builder.createBlock();
+			const right = builder.createBlock();
+			const join = builder.createBlock();
+			builder.setTerminator(current, {
+				kind: "branch",
+				condition,
+				consequent: { block: left, arguments: [] },
+				alternate: { block: right, arguments: [] },
+			});
+			builder.appendInstruction(left, "storePropertyStatic", [object!, one!], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.setTerminator(left, {
+				kind: "jump",
+				edge: { block: join, arguments: [] },
+			});
+			builder.appendInstruction(right, "storePropertyStatic", [object!, zero!], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.setTerminator(right, {
+				kind: "jump",
+				edge: { block: join, arguments: [] },
+			});
+			const [loaded] = builder.appendInstruction(join, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.appendInstruction(join, "storeGlobal", [loaded!], {
+				attributes: { index },
+			});
+			current = join;
+			returned = loaded!;
+		}
+		builder.setTerminator(current, { kind: "return", value: returned });
+
+		const outcome = executeCoreOptimizations(
+			{
+				...coreProgram([builder.finish(entry)]),
+				stringConstants: [[], [102]],
+				globalCount: joinCount,
+			},
+			{ verification: "per-pass" },
+		);
+		const propertyLoads = outcome.program.functions[0]!.blocks.flatMap(
+			({ instructions }) =>
+				instructions.filter(
+					({ opcode }) => opcode === "loadProperty" || opcode === "loadPropertyStatic",
+				),
+		);
+		expect(propertyLoads).toHaveLength(0);
+
+		const fixedPoint = executeCoreOptimizations(outcome.program, {
+			verification: "per-pass",
+		});
+		const withoutMutationEpoch = (program: CoreProgram): CoreProgram => ({
+			...program,
+			functions: program.functions.map((fn) => ({ ...fn, mutationEpoch: 0 })),
+		});
+		expect(withoutMutationEpoch(fixedPoint.program)).toEqual(
+			withoutMutationEpoch(outcome.program),
+		);
+		expect(
+			fixedPoint.program.functions[0]!.blocks.flatMap(({ instructions }) =>
+				instructions.filter(
+					({ opcode }) => opcode === "loadProperty" || opcode === "loadPropertyStatic",
+				),
+			),
+		).toHaveLength(0);
+	});
+
+	it("keeps a branch-joined aggregate materialized after one arm publishes it", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock();
+		const [zero] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [one] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [zero!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.appendInstruction(left, "storeGlobal", [object!], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(left, "storePropertyStatic", [object!, one!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(left, { kind: "jump", edge: { block: join, arguments: [] } });
+		builder.appendInstruction(right, "storePropertyStatic", [object!, zero!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [] },
+		});
+		const [loaded] = builder.appendInstruction(join, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(join, { kind: "return", value: loaded! });
+
+		const fn = executeCoreOptimizations(
+			{
+				...coreProgram([builder.finish(entry)]),
+				stringConstants: [[], [102]],
+				globalCount: 1,
+			},
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		const opcodes = fn.blocks.flatMap(({ instructions }) =>
+			instructions.map(({ opcode }) => opcode),
+		);
+		expect(opcodes).toContain("createObjectShaped");
+		expect(opcodes).toContain("storeGlobal");
+		expect(opcodes.some((opcode) => opcode.startsWith("loadProperty"))).toBe(true);
+	});
+
+	it("scalarizes a source object whose slot is selected by a branch", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function joined(flag) {
+					const object = { value: 0 };
+					if (flag) object.value = 41;
+					else object.value = 42;
+					return object.value;
+				}
+				globalThis.__joinedResult = joined(true) + joined(false);`,
+				"scalar-branch-join.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const joined = optimized!.functions[functionIndexOfName(optimized!, "joined")]!;
+		const opcodes = joined.blocks.flatMap(({ instructions }) =>
+			instructions.map(({ opcode }) => opcode),
+		);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("loadPropertyStatic");
+		expect(opcodes).not.toContain("storePropertyStatic");
 	});
 
 	it("retains a slot whose values a WeakRef or a registry could observe", () => {
@@ -3261,6 +3440,82 @@ describe("Core IR optimizer", () => {
 		).toBe(false);
 	});
 
+	it("converges exact fresh-array builtin selection through CFG cleanup", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function pushPop(value) {
+				const values = [];
+				try {
+					values.push(value);
+					return values.pop();
+				} catch (error) {
+					return 0;
+				}
+			}
+			globalThis.result = pushPop(globalThis.value);`,
+			"core-exact-array-cleanup.js",
+		);
+		let optimized: CoreProgram | undefined;
+		let optimizedContext: CoreCompilationContext | undefined;
+		compileSemanticProgramToProgramImage(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			profile: true,
+			afterCoreOptimization(program, context) {
+				optimized = program;
+				optimizedContext = context;
+			},
+		});
+
+		const pushPop = optimized!.functions[functionIndexOfName(optimized!, "pushPop")]!;
+		expect(
+			pushPop.blocks
+				.flatMap(({ instructions }) => instructions)
+				.filter(({ opcode }) => opcode === "callBuiltin")
+				.map(({ attributes }) => attributes.operation),
+		).toEqual(["Array.prototype.push", "Array.prototype.pop"]);
+		expect(
+			pushPop.blocks
+				.filter(({ handler }) => handler !== undefined)
+				.every(({ instructions }) => instructions.length > 0),
+		).toBe(true);
+
+		const trace = optimizedContext!.optimizationTrace!;
+		const rewrites = trace.filter(
+			({ pass }) => pass === "rewrite-contained-fresh-array-builtins",
+		);
+		expect(rewrites.map(({ changed }) => changed)).toEqual([true, false]);
+		const firstRewrite = trace.indexOf(rewrites[0]!);
+		const pruned = trace.findIndex(
+			(entry, index) =>
+				index > firstRewrite &&
+				entry.pass === "prune-vacuous-exception-handlers" &&
+				entry.changed,
+		);
+		const folded = trace.findIndex(
+			(entry, index) =>
+				index > pruned && entry.pass === "fold-empty-forwarding-blocks" && entry.changed,
+		);
+		expect(pruned).toBeGreaterThan(firstRewrite);
+		expect(folded).toBeGreaterThan(pruned);
+		expect(trace.indexOf(rewrites[1]!)).toBeGreaterThan(folded);
+
+		const rerun = executeCoreOptimizations(optimized!, { context: optimizedContext });
+		const withoutMutationEpoch = (program: CoreProgram): CoreProgram => ({
+			...program,
+			functions: program.functions.map((fn) => ({ ...fn, mutationEpoch: 0 })),
+		});
+		expect(withoutMutationEpoch(rerun.program)).toEqual(withoutMutationEpoch(optimized!));
+		expect(
+			rerun.context!.optimizationTrace!.filter(
+				({ pass }) => pass === "rewrite-contained-fresh-array-builtins",
+			),
+		).toEqual([expect.objectContaining({ changed: false })]);
+		expect(
+			rerun.context!.optimizationTrace!.some(
+				({ pass }) => pass === "prune-vacuous-exception-handlers",
+			),
+		).toBe(false);
+	});
+
 	it("keeps exact Date clock reads distinct and forwards only consumed arguments", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function dates(value, extra) {
@@ -4031,6 +4286,81 @@ describe("Core IR optimizer", () => {
 		expect(vmRegion.license.materialization).toBe("none");
 		expect(vmRegion.sites).toHaveLength(1);
 		expect(vmRegion.sites[0]!.materializations).toEqual([]);
+	});
+
+	it("joins closed stack-cell contents before refining property-load representations", () => {
+		const compile = (body: string, sourcePath: string) => {
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				`function read(flag, count) { ${body} }`,
+				sourcePath,
+			);
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToProgramImage(semantic, {
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			});
+			return optimized!.functions[1]!;
+		};
+		const propertyLoadRepresentations = (fn: CoreFunction) => {
+			const representations = new Map(
+				fn.values.map(({ id, representation }) => [id, representation] as const),
+			);
+			return fn.blocks.flatMap(({ instructions }) =>
+				instructions.flatMap((instruction) =>
+					instruction.opcode === "loadPropertyStatic"
+						? [representations.get(instruction.outputs[0]!)]
+						: [],
+				),
+			);
+		};
+
+		const homogeneous = compile(
+			`const object = { value: true };
+			for (let i = 0; i < count; i++) {
+				if (flag) object.value = true;
+				else object.value = false;
+			}
+			return object.value;`,
+			"core-stack-cell-boolean.js",
+		);
+		expect(propertyLoadRepresentations(homogeneous)).toEqual(["boolean"]);
+		expect(homogeneous.regions).toContainEqual(
+			expect.objectContaining({ kind: "stack-object-plan" }),
+		);
+
+		const mixed = compile(
+			`const object = { value: true };
+			for (let i = 0; i < count; i++) {
+				if (flag) object.value = false;
+				else object.value = 1;
+			}
+			return object.value;`,
+			"core-stack-cell-mixed.js",
+		);
+		expect(propertyLoadRepresentations(mixed)).toEqual(["boxed"]);
+
+		const integer = compile(
+			`const object = { value: 1 };
+			const alias = object;
+			if (flag) alias.value = 9;
+			return object.value;`,
+			"core-stack-cell-integer.js",
+		);
+		expect(propertyLoadRepresentations(integer)).toEqual(["i32"]);
+
+		const escaping = compile(
+			`const object = { value: true };
+			if (flag) object.value = false;
+			return object;`,
+			"core-stack-cell-materialized.js",
+		);
+		const escapeRegion = escaping.regions.find(
+			({ kind }) => kind === "stack-object-plan",
+		);
+		expect(escapeRegion?.data).toMatchObject({
+			license: { materialization: "on-demand" },
+		});
 	});
 
 	it("preserves every selected region beyond the former fixed VM ceiling", () => {

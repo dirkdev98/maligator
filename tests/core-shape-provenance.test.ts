@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { lowerSemanticProgramToCore as lowerSemanticProgramToCoreCompilation } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
@@ -29,6 +30,7 @@ import type {
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { programClosureCertificate } from "../src/compiler/shared/compiler-facts.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
@@ -80,6 +82,22 @@ function shapedReturn(
 	const [value] = builder.appendInstruction(entry, "createUndefined", []);
 	const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
 		attributes: { keyStringIndices: [keyStringIndex] },
+	});
+	builder.setTerminator(entry, { kind: "return", value: object! });
+	return { fn: builder.finish(entry), object: object! };
+}
+
+function shapedKeysReturn(
+	functionIndex: number,
+	keyStringIndices: ReadonlyArray<number>,
+): { readonly fn: CoreFunction; readonly object: CoreValueId } {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const values = keyStringIndices.map(
+		() => builder.appendInstruction(entry, "createUndefined", [])[0]!,
+	);
+	const [object] = builder.appendInstruction(entry, "createObjectShaped", values, {
+		attributes: { keyStringIndices: [...keyStringIndices] },
 	});
 	builder.setTerminator(entry, { kind: "return", value: object! });
 	return { fn: builder.finish(entry), object: object! };
@@ -147,6 +165,138 @@ function replaceInstruction(
 
 function selectKnownOwnSlots(program: CoreProgram) {
 	return selectCoreKnownOwnSlots(program, analyzeCoreShapeProvenance(program));
+}
+
+function closedLiteralShapeContext(
+	program: CoreProgram,
+	overrides: {
+		readonly compilationMode?: "development" | "full";
+		readonly realms?: boolean;
+	} = {},
+): CoreCompilationContext {
+	const base = coreCompilationForTest(program).context;
+	return {
+		...base,
+		facts: {
+			...base.facts,
+			compilationMode: overrides.compilationMode ?? "full",
+			world: {
+				...base.facts.world,
+				primordialPolicy: "locked",
+				eval: "disabled",
+				realms: overrides.realms ?? false,
+			},
+			closure: programClosureCertificate(
+				{ kind: "whole-program", entry: "<shape-sharing-test>" },
+				[],
+				[],
+			),
+		},
+	};
+}
+
+function mergedEquivalentLiteralProgram(mutateSecond = false): CoreProgram {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const left = builder.createBlock();
+	const right = builder.createBlock();
+	const join = builder.createBlock([{}]);
+	const [initial] = builder.appendInstruction(entry, "createUndefined", []);
+	const [first] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	const [second] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+		attributes: { keyStringIndices: [1] },
+	});
+	if (mutateSecond) {
+		builder.appendInstruction(entry, "storePropertyStatic", [second!, initial!], {
+			attributes: { stringIndex: 2 },
+		});
+	}
+	const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
+		attributes: { value: true },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: condition!,
+		consequent: { block: left, arguments: [] },
+		alternate: { block: right, arguments: [] },
+	});
+	builder.setTerminator(left, {
+		kind: "jump",
+		edge: { block: join, arguments: [first!] },
+	});
+	builder.setTerminator(right, {
+		kind: "jump",
+		edge: { block: join, arguments: [second!] },
+	});
+	const receiver = blockParameter(builder, join);
+	const [loaded] = builder.appendInstruction(join, "loadPropertyStatic", [receiver], {
+		attributes: { stringIndex: 1 },
+	});
+	builder.setTerminator(join, { kind: "return", value: loaded! });
+	return coreProgram([builder.finish(entry)]);
+}
+
+function mergedEquivalentLiteralLoopProgram(): CoreProgram {
+	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const left = builder.createBlock();
+	const right = builder.createBlock();
+	const loop = builder.createBlock([{}]);
+	const latch = builder.createBlock();
+	const exit = builder.createBlock();
+	const values = [1, 2, 3].map(
+		(value) =>
+			builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value },
+			})[0]!,
+	);
+	const [first] = builder.appendInstruction(entry, "createObjectShaped", values, {
+		attributes: { keyStringIndices: [1, 2, 3] },
+	});
+	const [second] = builder.appendInstruction(entry, "createObjectShaped", values, {
+		attributes: { keyStringIndices: [1, 2, 3] },
+	});
+	const [choose] = builder.appendInstruction(entry, "createBoolean", [], {
+		attributes: { value: true },
+	});
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: choose!,
+		consequent: { block: left, arguments: [] },
+		alternate: { block: right, arguments: [] },
+	});
+	builder.setTerminator(left, {
+		kind: "jump",
+		edge: { block: loop, arguments: [first!] },
+	});
+	builder.setTerminator(right, {
+		kind: "jump",
+		edge: { block: loop, arguments: [second!] },
+	});
+	const receiver = blockParameter(builder, loop);
+	const loaded = [1, 2, 3].map(
+		(stringIndex) =>
+			builder.appendInstruction(loop, "loadPropertyStatic", [receiver], {
+				attributes: { stringIndex },
+			})[0]!,
+	);
+	const [repeat] = builder.appendInstruction(loop, "createBoolean", [], {
+		attributes: { value: false },
+	});
+	builder.setTerminator(loop, {
+		kind: "branch",
+		condition: repeat!,
+		consequent: { block: latch, arguments: [] },
+		alternate: { block: exit, arguments: [] },
+	});
+	builder.setTerminator(latch, {
+		kind: "jump",
+		edge: { block: loop, arguments: [receiver] },
+	});
+	builder.setTerminator(exit, { kind: "return", value: loaded[2]! });
+	return coreProgram([builder.finish(entry)]);
 }
 
 function localLoopProgram(): {
@@ -478,6 +628,117 @@ describe("Core shaped-object provenance", () => {
 			],
 			opaque: false,
 		});
+	});
+
+	it("interns equivalent closed literal shapes across functions", () => {
+		const first = shapedKeysReturn(0, [1, 2]);
+		const second = shapedKeysReturn(1, [1, 2]);
+		const program = coreProgram([first.fn, second.fn]);
+		const context = closedLiteralShapeContext(program);
+		const analysis = analyzeCoreShapeProvenance(program, { context });
+		const firstOrigin = analysis.candidates(0, first.object).origins[0];
+		const secondOrigin = analysis.candidates(1, second.object).origins[0];
+
+		expect(analysis.origins).toHaveLength(1);
+		expect(analysis.statistics.origins).toBe(1);
+		expect(firstOrigin).toBe(secondOrigin);
+		expect(firstOrigin).toMatchObject({
+			kind: "literal",
+			functionIndex: 0,
+			keyStringIndices: [1, 2],
+		});
+	});
+
+	it("reuses an interned shape in an exact own-slot claim", () => {
+		const program = mergedEquivalentLiteralProgram();
+		const context = closedLiteralShapeContext(program);
+		const summaries = analyzeCoreProgramSummaries(program, coreOpcodeRegistry, context);
+		const analysis = analyzeCoreShapeProvenance(program, {
+			context,
+			calleeTargets: summaries.targets,
+			summaries,
+		});
+		const selected = selectCoreExactShapeOwnSlots(program, analysis).program;
+		const load = instructions(selected.functions[0]!, "loadPropertyStatic")[0]!;
+		const exact = load.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE] as {
+			readonly slot: number;
+			readonly origins: ReadonlyArray<unknown>;
+		};
+
+		expect(analysis.origins).toHaveLength(1);
+		expect(exact).toMatchObject({ slot: 0 });
+		expect(exact.origins).toHaveLength(1);
+		expect(exact.origins[0]).toMatchObject({ shapeFunctionIndex: 0 });
+		expect(() =>
+			verifyCoreProgram(selected, coreOpcodeRegistry, undefined, context),
+		).not.toThrow();
+	});
+
+	it("reuses one interned identity across a loop shape-case cluster", () => {
+		const program = mergedEquivalentLiteralLoopProgram();
+		const context = closedLiteralShapeContext(program);
+		const analysis = analyzeCoreShapeProvenance(program, { context });
+		const selected = selectCoreKnownOwnSlots(program, analysis).program;
+		const [selector] = instructions(selected.functions[0]!, "selectShapeCase");
+
+		expect(analysis.origins).toHaveLength(1);
+		expect(selector).toBeDefined();
+		expect(selector!.attributes[CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE]).toEqual([
+			expect.objectContaining({ shapeFunctionIndex: 0 }),
+		]);
+		expect(
+			instructions(selected.functions[0]!, "loadPropertyStaticShapeCase"),
+		).toHaveLength(3);
+		expect(() =>
+			verifyCoreProgram(selected, coreOpcodeRegistry, undefined, context),
+		).not.toThrow();
+	});
+
+	it("keeps literal shapes separate across order and world-authority boundaries", () => {
+		const first = shapedKeysReturn(0, [1, 2]);
+		const reordered = shapedKeysReturn(1, [2, 1]);
+		const orderedProgram = coreProgram([first.fn, reordered.fn]);
+		expect(
+			analyzeCoreShapeProvenance(orderedProgram, {
+				context: closedLiteralShapeContext(orderedProgram),
+			}).origins,
+		).toHaveLength(2);
+
+		const second = shapedKeysReturn(1, [1, 2]);
+		const equivalentProgram = coreProgram([first.fn, second.fn]);
+		for (const [name, context] of [
+			["open source", undefined],
+			[
+				"development compilation",
+				closedLiteralShapeContext(equivalentProgram, {
+					compilationMode: "development",
+				}),
+			],
+			["multiple realms", closedLiteralShapeContext(equivalentProgram, { realms: true })],
+		] as const) {
+			expect(
+				analyzeCoreShapeProvenance(equivalentProgram, {
+					...(context === undefined ? {} : { context }),
+				}).origins,
+				name,
+			).toHaveLength(2);
+		}
+	});
+
+	it("does not turn a shared initial shape into a stable mutated shape", () => {
+		const program = mergedEquivalentLiteralProgram(true);
+		const context = closedLiteralShapeContext(program);
+		const summaries = analyzeCoreProgramSummaries(program, coreOpcodeRegistry, context);
+		const analysis = analyzeCoreShapeProvenance(program, {
+			context,
+			calleeTargets: summaries.targets,
+			summaries,
+		});
+		const load = instructions(program.functions[0]!, "loadPropertyStatic")[0]!;
+
+		expect(analysis.origins).toHaveLength(1);
+		expect(analysis.candidates(0, load.inputs[0]!).origins).toHaveLength(1);
+		expect(analysis.exactOwnSlot(0, load.inputs[0]!, 1)).toBeUndefined();
 	});
 
 	it("joins shaped values stored in a compiler-created aggregate field", () => {

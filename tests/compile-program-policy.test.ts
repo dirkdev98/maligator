@@ -7,6 +7,7 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../src/compiler/pipeline/compile-program.ts";
+import { serializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 
 const directories: Array<string> = [];
 
@@ -64,6 +65,23 @@ describe("compileEntrypoint build policy", () => {
 			"lower to vm",
 			"serialize",
 		]);
+	});
+
+	test("keeps the portable image independent of native direct-entry planning", () => {
+		const entry = entrypoint(`
+			function format(left, right, scale) {
+				let total = 0;
+				for (let index = 0; index < 10; index++) total += scale * index;
+				return String(left) + String(right) + total;
+			}
+			console.log(format({}, {}, 3));
+		`);
+		const options = { buildConfig: resolveBuildConfig({}) };
+		const portable = compileEntrypointToBuffer(entry, options);
+		const native = compileEntrypoint(entry, options);
+
+		expect(native.native.functions.some((fn) => fn.directEntries.length > 0)).toBe(true);
+		expect(portable).toEqual(serializeRuntimeImage(native.runtime));
 	});
 
 	test("allows disabled-feature usage when no build config is supplied", () => {

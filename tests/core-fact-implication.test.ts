@@ -772,17 +772,19 @@ describe("Core fact implication", () => {
 		});
 		builder.setTerminator(join, { kind: "return", value: loaded! });
 		const built = builder.finish(entry);
-		const load = built.blocks[join]!.instructions[0]!;
+		const access = built.blocks[left]!.instructions.find(
+			({ opcode }) => opcode === "storePropertyStatic",
+		)!;
 		// A summary fact that bounds the same access more tightly. It must not become
-		// the load's proof: the verifier selects its independent containment re-proof
+		// the store's proof: the verifier selects its independent containment re-proof
 		// by the proof's fact kind, so moving the proof would silence that check.
 		const competing: CoreFact = {
 			id: coreFactId(built.facts.length),
 			kind: "test-tighter-effects",
 			value: null,
-			claims: [{ kind: "effect", instruction: load.id, effects: CORE_NO_EFFECTS }],
+			claims: [{ kind: "effect", instruction: access.id, effects: CORE_NO_EFFECTS }],
 			validity: { kind: "summary", digest: "test-tighter-effects" },
-			obligations: [{ kind: "fallback", id: "generic-load" }],
+			obligations: [{ kind: "fallback", id: "generic-store" }],
 			origin: "test",
 		};
 
@@ -795,7 +797,7 @@ describe("Core fact implication", () => {
 		).program.functions[0]!;
 		const refined = optimized.blocks
 			.flatMap(({ instructions }) => instructions)
-			.find(({ opcode }) => opcode === "loadPropertyStatic");
+			.find(({ id }) => id === access.id);
 		expect(refined?.effectRefinement).toBeDefined();
 		expect(
 			optimized.facts.find(({ id }) => id === refined?.effectRefinement?.proof)?.kind,

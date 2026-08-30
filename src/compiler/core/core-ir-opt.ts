@@ -133,8 +133,10 @@ import {
 	analyzeCoreProgramSummaries,
 	coreCallResultRepresentation,
 	coreCallSummaryAttribute,
+	coreCallSummaryClaimFromAttribute,
 	coreCallSummaryDigest,
 	coreCallSummaryFactValue,
+	coreCallValueSummaryDigest,
 	coreFunctionEffectSummaries,
 	coreModuleEffectSummaries,
 	deriveCoreCallEffectRefinement,
@@ -146,6 +148,7 @@ import {
 	selectCoreExactHeapAccesses,
 } from "./core-ir-value-classes.ts";
 import {
+	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	analyzeCoreValueKinds,
 	corePrimitiveOperatorEffectRefinement,
@@ -2387,12 +2390,42 @@ function coreInstructionBlock(
 	)?.id;
 }
 
+type CoreAggregateCellContent = "uninitialized" | "i32" | "f64" | "boolean" | "boxed";
+
+interface CoreStackObjectRegionSelection {
+	readonly region: CoreFunction["regions"][number];
+	readonly accesses: ReadonlyArray<{
+		readonly instruction: CoreInstruction;
+		readonly slot: number;
+	}>;
+	readonly slotContents: ReadonlyArray<CoreAggregateCellContent>;
+}
+
+function aggregateCellContent(
+	representation: CoreRepresentation | undefined,
+): CoreAggregateCellContent {
+	return representation === "i32" ||
+		representation === "f64" ||
+		representation === "boolean"
+		? representation
+		: "boxed";
+}
+
+function joinAggregateCellContent(
+	left: CoreAggregateCellContent,
+	right: CoreAggregateCellContent,
+): CoreAggregateCellContent {
+	if (left === "uninitialized") return right;
+	if (right === "uninitialized" || left === right) return left;
+	return "boxed";
+}
+
 function stackObjectRegion(
 	fn: CoreFunction,
 	allocation: CoreInstruction,
 	analyses: CoreAnalysisManager,
 	_program: CoreProgram,
-): CoreFunction["regions"][number] | undefined {
+): CoreStackObjectRegionSelection | undefined {
 	if (allocation.opcode !== "createObjectShaped" || allocation.outputs.length !== 1) {
 		return undefined;
 	}
@@ -2627,60 +2660,126 @@ function stackObjectRegion(
 		cause: "escape" as const,
 	}));
 	const materializes = inheritedAccess !== undefined || materializations.length > 0;
+	const slotContents = keyStringIndices.map<CoreAggregateCellContent>(
+		() => "uninitialized",
+	);
+	const representations = analyses.representations(fn);
+	for (const [slot, initial] of allocation.inputs.entries()) {
+		if (slot >= slotContents.length) break;
+		slotContents[slot] = joinAggregateCellContent(
+			slotContents[slot]!,
+			aggregateCellContent(representations.get(initial)),
+		);
+	}
+	for (const access of accesses) {
+		if (access.instruction.opcode !== "storePropertyStatic") continue;
+		const value = access.instruction.inputs[1];
+		slotContents[access.slot] = joinAggregateCellContent(
+			slotContents[access.slot]!,
+			aggregateCellContent(value === undefined ? undefined : representations.get(value)),
+		);
+	}
+	if (materializes) slotContents.fill("boxed");
 	return {
-		kind: "stack-object-plan",
-		anchors: [allocation.id],
-		claimedInstructions,
-		ordinaryBlocks,
-		exceptionalBlocks: [],
-		data: coreAttributeObject(
-			{
-				license: {
-					guard: inheritedGuard ?? {
-						dependencies: [],
-						obligations: [
-							{
-								kind: "fallback",
-								id: `stack-object:${fn.functionIndex}:${allocation.id}`,
-								cause: "escape",
-							},
-							...materializeObligations,
-						],
+		accesses,
+		slotContents,
+		region: {
+			kind: "stack-object-plan",
+			anchors: [allocation.id],
+			claimedInstructions,
+			ordinaryBlocks,
+			exceptionalBlocks: [],
+			data: coreAttributeObject(
+				{
+					license: {
+						guard: inheritedGuard ?? {
+							dependencies: [],
+							obligations: [
+								{
+									kind: "fallback",
+									id: `stack-object:${fn.functionIndex}:${allocation.id}`,
+									cause: "escape",
+								},
+								...materializeObligations,
+							],
+						},
+						genericTwin: "retained",
+						materialization: materializes ? "on-demand" : "none",
 					},
-					genericTwin: "retained",
-					materialization: materializes ? "on-demand" : "none",
-				},
-				representation: "activation-local-fixed-shape-objects",
-				cost: {
-					score: Math.max(1, keyStringIndices.length),
-					metadataOperations: claimedInstructions.length,
-				},
-				sites: [
-					{
-						allocation: { $coreInstruction: allocation.id },
-						slotCount: keyStringIndices.length,
-						accesses: accesses.map(({ instruction, slot }) => ({
-							instruction: { $coreInstruction: instruction.id },
-							slot,
-						})),
-						...(inheritedAccess === undefined
-							? {}
-							: {
-									inheritedAccess: {
-										$coreInstruction: inheritedAccess.id,
-									},
-								}),
-						materializations: materializations.map(({ id }) => ({
-							instruction: { $coreInstruction: id },
-							kind: "return",
-						})),
+					representation: "activation-local-fixed-shape-objects",
+					cost: {
+						score: Math.max(1, keyStringIndices.length),
+						metadataOperations: claimedInstructions.length,
 					},
-				],
-			},
-			"stack-object-plan",
-		),
+					sites: [
+						{
+							allocation: { $coreInstruction: allocation.id },
+							slotCount: keyStringIndices.length,
+							accesses: accesses.map(({ instruction, slot }) => ({
+								instruction: { $coreInstruction: instruction.id },
+								slot,
+							})),
+							...(inheritedAccess === undefined
+								? {}
+								: {
+										inheritedAccess: {
+											$coreInstruction: inheritedAccess.id,
+										},
+									}),
+							materializations: materializations.map(({ id }) => ({
+								instruction: { $coreInstruction: id },
+								kind: "return",
+							})),
+						},
+					],
+				},
+				"stack-object-plan",
+			),
+		},
 	};
 }
+
+// A one-cell stack object exposes its scalar payload to the summary solver.
+const refineStackObjectCellRepresentations: CoreFunctionPass = {
+	name: "refine-stack-object-cell-representations",
+	ablation: "escape",
+	run(fn, analyses, program) {
+		const refinements = new Map<CoreValueId, CoreRepresentation>();
+		for (const block of fn.blocks) {
+			for (const allocation of block.instructions) {
+				if (allocation.opcode !== "createObjectShaped") continue;
+				const selection = stackObjectRegion(fn, allocation, analyses, program);
+				if (selection === undefined || selection.slotContents.length !== 1) continue;
+				const content = selection.slotContents[0];
+				if (content !== "i32" && content !== "f64" && content !== "boolean") {
+					continue;
+				}
+				for (const access of selection.accesses) {
+					if (access.instruction.opcode !== "loadPropertyStatic") continue;
+					const output = access.instruction.outputs[0];
+					if (output !== undefined) refinements.set(output, content);
+				}
+			}
+		}
+		if (refinements.size === 0) return fn;
+		let changed = false;
+		const values = fn.values.map((value) => {
+			const representation = refinements.get(value.id);
+			if (representation === undefined || representation === value.representation) {
+				return value;
+			}
+			if (
+				value.representation !== "boxed" &&
+				!(value.representation === "f64" && representation === "i32")
+			) {
+				return value;
+			}
+			changed = true;
+			return { ...value, representation };
+		});
+		return changed ? { ...fn, values, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	},
+};
 
 const selectStackObjectRegions: CoreFunctionPass = {
 	name: "select-stack-object-regions",
@@ -2700,8 +2799,8 @@ const selectStackObjectRegions: CoreFunctionPass = {
 				) {
 					continue;
 				}
-				const region = stackObjectRegion(fn, instruction, analyses, program);
-				if (region !== undefined) regions.push(region);
+				const selection = stackObjectRegion(fn, instruction, analyses, program);
+				if (selection !== undefined) regions.push(selection.region);
 			}
 		}
 		return regions.length === fn.regions.length
@@ -4985,6 +5084,7 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 					readonly instruction: CoreInstruction;
 					readonly kind: "element" | "length";
 					readonly index?: number;
+					readonly key?: CoreInstruction;
 				}> = [];
 				const projectedIndices = new Set<number>();
 				let lengthSeen = false;
@@ -5030,7 +5130,7 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 							!projectedIndices.has(index) &&
 							instructionDominates(key, consumer)
 						) {
-							loads.push({ instruction: consumer, kind: "element", index });
+							loads.push({ instruction: consumer, kind: "element", index, key });
 							projectedIndices.add(index);
 							continue;
 						}
@@ -5046,8 +5146,11 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 				loads.sort((left, right) => order(left.instruction) - order(right.instruction));
 				const claimed = [
 					...(property === undefined ? [] : [property]),
+					separator,
 					call,
-					...loads.map(({ instruction }) => instruction),
+					...loads.flatMap(({ instruction, key }) =>
+						key === undefined ? [instruction] : [key, instruction],
+					),
 				];
 				const ordinaryBlocks = [
 					...new Set(claimed.map(({ id }) => locations.get(id)!.block.id)),
@@ -5112,6 +5215,7 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 							splitIdentity: coreProofIsWorldInvariant(builtin.proof)
 								? "authority-invariant"
 								: "runtime-guarded",
+							separator: { $coreInstruction: separator.id },
 							separatorStringIndex,
 							resultRegisters: resultValues.map((value) => ({
 								$coreValue: value,
@@ -5120,6 +5224,9 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 								instruction: { $coreInstruction: load.instruction.id },
 								kind: load.kind,
 								...(load.index === undefined ? {} : { index: load.index }),
+								...(load.key === undefined
+									? {}
+									: { key: { $coreInstruction: load.key.id } }),
 							})),
 						},
 						"string-split-projection",
@@ -6380,11 +6487,70 @@ function instructionAttribute(instruction: CoreInstruction, name: string): unkno
  * the key is one of its own writable data slots; a contained allocation's shape
  * can no longer change, so that slot is a plain cell for the rest of its life.
  */
+function memoryProvenance(
+	analyses: CoreAnalysisManager,
+	fn: CoreFunction,
+): CoreProvenance {
+	const ordinary = analyses.provenance(fn);
+	const candidates = fn.blocks.flatMap(({ instructions }) =>
+		instructions.flatMap((instruction) => {
+			if (instruction.opcode !== "call") return [];
+			const claim = coreCallSummaryClaimFromAttribute(
+				instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE],
+			);
+			if (
+				claim === undefined ||
+				claim.digest !== coreCallValueSummaryDigest(claim) ||
+				claim.targets.length !== 1 ||
+				claim.relativeOwnSlotEffects.length === 0
+			) {
+				return [];
+			}
+			return [{ instruction, claim }];
+		}),
+	);
+	let active = candidates;
+	let provenance = ordinary;
+	while (active.length > 0) {
+		const assumptions = new Map<CoreInstructionId, Set<number>>();
+		for (const { instruction, claim } of active) {
+			assumptions.set(
+				instruction.id,
+				new Set(
+					claim.relativeOwnSlotEffects.map((effect) =>
+						effect.base.kind === "receiver" ? 1 : effect.base.index + 2,
+					),
+				),
+			);
+		}
+		const conditional = ordinary.withAssumedNonEscapingOperands(assumptions);
+		const retained = active.filter(({ instruction, claim }) =>
+			claim.relativeOwnSlotEffects.every((effect) => {
+				const operand = effect.base.kind === "receiver" ? 1 : effect.base.index + 2;
+				const base = instruction.inputs[operand];
+				if (base === undefined) return false;
+				const resolved = conditional.ownCell(
+					base,
+					{ kind: "string-constant", index: effect.key },
+					effect.mode,
+				);
+				return resolved?.cell.kind === "object-slot";
+			}),
+		);
+		if (retained.length === active.length) {
+			provenance = conditional;
+			break;
+		}
+		active = retained;
+	}
+	return provenance;
+}
+
 function memoryResolution(
 	analyses: CoreAnalysisManager,
 	fn: CoreFunction,
+	provenance = memoryProvenance(analyses, fn),
 ): CoreMemoryResolution {
-	const provenance = analyses.provenance(fn);
 	return {
 		ownCell: (base, key, mode) => {
 			const resolved = provenance.ownCell(base, key, mode);
@@ -9011,6 +9177,12 @@ function pruneVacuousHandlers(fn: CoreFunction): CoreFunction {
 	});
 }
 
+const pruneVacuousExceptionHandlers: CoreFunctionPass = {
+	name: "prune-vacuous-exception-handlers",
+	changesControlFlow: true,
+	run: pruneVacuousHandlers,
+};
+
 function valueNumberingKey(
 	instruction: CoreInstruction,
 	memoryVersion: string,
@@ -9020,6 +9192,9 @@ function valueNumberingKey(
 }
 
 function isValueNumberingCandidate(instruction: CoreInstruction): boolean {
+	if (instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] !== undefined) {
+		return false;
+	}
 	const effects = coreInstructionEffects(instruction);
 	return !(
 		instruction.outputs.length === 0 ||
@@ -9030,6 +9205,16 @@ function isValueNumberingCandidate(instruction: CoreInstruction): boolean {
 		effects.writes.length > 0 ||
 		effects.callsUserCode ||
 		effects.maySuspend
+	);
+}
+
+function isEliminableMove(instruction: CoreInstruction): boolean {
+	// The marked move is a checked boxed-to-scalar conversion, not an SSA alias.
+	return (
+		instruction.opcode === "move" &&
+		instruction.inputs.length === 1 &&
+		instruction.outputs.length === 1 &&
+		instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === undefined
 	);
 }
 
@@ -9088,11 +9273,7 @@ function mayCopyOrValueNumber(fn: CoreFunction): boolean {
 	const candidates = new Set<string>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			if (
-				instruction.opcode === "move" &&
-				instruction.inputs.length === 1 &&
-				instruction.outputs.length === 1
-			) {
+			if (isEliminableMove(instruction)) {
 				return true;
 			}
 			if (!isValueNumberingCandidate(instruction)) continue;
@@ -9303,6 +9484,7 @@ const refineOwnDataCellAccesses: CoreFunctionPass = {
 				...block,
 				instructions: block.instructions.map((instruction): CoreInstruction => {
 					if (
+						instruction.opcode === "call" ||
 						instruction.effectRefinement !== undefined ||
 						protectedInstructions.has(instruction.id)
 					) {
@@ -9639,6 +9821,7 @@ interface ForwardableAccess {
 	readonly partition: CoreMemoryPartition;
 	readonly mode: "read" | "write";
 	readonly value: CoreValueId;
+	readonly containedObjectSlot: boolean;
 }
 
 function forwardableMemoryAccesses(
@@ -9647,10 +9830,17 @@ function forwardableMemoryAccesses(
 ): ReadonlyArray<ForwardableAccess> {
 	const forwardable: Array<ForwardableAccess> = [];
 	const effects = coreInstructionEffects(instruction);
-	// An operation that also runs user code or suspends may leave the slot holding
-	// something other than the value it stored, so its store is not forwardable
-	// even though the version it installs is fresh.
-	if (effects.callsUserCode || effects.maySuspend) return forwardable;
+	// Suspension and independent user code can change a slot after the declared
+	// access. Static/dynamic property opcodes are the exception only when the
+	// resolution below proves their access is the existing own data cell itself.
+	const conditionallyExactProperty =
+		instruction.opcode === "loadProperty" ||
+		instruction.opcode === "loadPropertyStatic" ||
+		instruction.opcode === "storeProperty" ||
+		instruction.opcode === "storePropertyStatic";
+	if ((effects.callsUserCode && !conditionallyExactProperty) || effects.maySuspend) {
+		return forwardable;
+	}
 	for (const access of coreMemoryAccesses(instruction, resolution)) {
 		if (!coreMemoryLocationIsExact(access.location)) continue;
 		if (!FORWARDABLE_MEMORY_LOCATION_KINDS.has(access.location.kind)) {
@@ -9662,6 +9852,7 @@ function forwardableMemoryAccesses(
 			partition: coreMemoryPartition(access.location),
 			mode: access.mode,
 			value,
+			containedObjectSlot: access.location.kind === "object-slot",
 		});
 	}
 	return forwardable;
@@ -9704,6 +9895,246 @@ function mayForwardMemoryAccesses(
 		}
 	}
 	return [...written].some((partition) => read.has(partition));
+}
+
+function corePropertyLoadCount(fn: CoreFunction): number {
+	return fn.blocks.reduce(
+		(count, block) =>
+			count +
+			block.instructions.filter(
+				({ opcode }) => opcode === "loadProperty" || opcode === "loadPropertyStatic",
+			).length,
+		0,
+	);
+}
+
+/**
+ * Materialize a value phi only when memory SSA's entry phi is exactly the read's
+ * version and every direct ordinary predecessor has one edge-available SSA value.
+ * Cyclic and exceptional joins stay in memory form because an edge argument cannot
+ * represent their iteration- or prefix-dependent memory state.
+ */
+function forwardOneContainedObjectSlotJoinLoad(
+	fn: CoreFunction,
+	analyses: CoreAnalysisManager,
+	provenance: CoreProvenance,
+	resolution: CoreMemoryResolution | undefined,
+	memory: CoreMemoryVersions,
+): CoreFunction | undefined {
+	const cfg = analyses.controlFlow(fn);
+	const representations = analyses.representations(fn);
+	const { instructions: protectedInstructions, inputs: protectedInputs } =
+		analyses.regionProtection(fn);
+	const cyclicBlocks = new Set<CoreBlockId>();
+	for (const loop of cfg.loops) for (const block of loop.blocks) cyclicBlocks.add(block);
+	for (const cycle of cfg.irreducibleCycles) {
+		for (const block of cycle.blocks) cyclicBlocks.add(block);
+	}
+	interface VersionValue {
+		readonly value: CoreValueId;
+		readonly block: CoreBlockId;
+	}
+	const valuesByVersion = new Map<number, VersionValue>();
+	for (const layout of provenance.layouts) {
+		if (
+			layout.kind !== "named-slots" ||
+			provenance.escape(layout.instruction) !== "contained"
+		) {
+			continue;
+		}
+		const block = coreInstructionBlock(fn, layout.instruction);
+		if (block === undefined || cyclicBlocks.has(block)) continue;
+		for (const [index, key] of layout.keys.entries()) {
+			const value = layout.initialValues[index];
+			if (value === undefined) continue;
+			const version = memory.initializationVersion(
+				layout.instruction,
+				coreMemoryPartition({
+					kind: "object-slot",
+					allocation: layout.instruction,
+					key,
+				}),
+			);
+			if (version !== undefined) valuesByVersion.set(version, { value, block });
+		}
+	}
+	for (const block of fn.blocks) {
+		if (cyclicBlocks.has(block.id)) continue;
+		for (const instruction of block.instructions) {
+			for (const access of forwardableMemoryAccesses(instruction, resolution)) {
+				if (access.mode !== "write" || !access.containedObjectSlot) continue;
+				const version = memory.writeVersion(instruction.id, access.partition);
+				if (version !== undefined) {
+					valuesByVersion.set(version, { value: access.value, block: block.id });
+				}
+			}
+		}
+	}
+	if (valuesByVersion.size === 0) return undefined;
+
+	for (const block of fn.blocks) {
+		if (
+			block.id === fn.entry ||
+			block.id === fn.bodyEntry ||
+			block.handler !== undefined ||
+			block.parameters.some(({ role }) => role === "exception") ||
+			cyclicBlocks.has(block.id)
+		) {
+			continue;
+		}
+		const incoming = cfg.predecessors[block.id]!;
+		const predecessorIds = new Set(incoming.map(({ from }) => from));
+		if (
+			incoming.length < 2 ||
+			predecessorIds.size !== incoming.length ||
+			incoming.some(({ kind, from }) => {
+				const predecessor = fn.blocks[from]!;
+				return (
+					kind !== "ordinary" ||
+					cyclicBlocks.has(from) ||
+					predecessor.handler !== undefined ||
+					protectedInstructions.has(predecessor.terminator.id) ||
+					predecessor.terminator.kind !== "jump" ||
+					predecessor.terminator.edge.block !== block.id
+				);
+			})
+		) {
+			continue;
+		}
+		for (const candidate of block.instructions) {
+			const accesses = forwardableMemoryAccesses(candidate, resolution);
+			const access = accesses[0];
+			const output = candidate.outputs[0];
+			if (
+				accesses.length !== 1 ||
+				access?.mode !== "read" ||
+				!access.containedObjectSlot ||
+				output === undefined ||
+				candidate.outputs.length !== 1 ||
+				access.value !== output ||
+				protectedInstructions.has(candidate.id) ||
+				protectedInputs.has(output)
+			) {
+				continue;
+			}
+			const readVersion = memory.readVersion(candidate.id, access.partition);
+			if (
+				readVersion === undefined ||
+				memory.entryVersion(block.id, access.partition) !== readVersion
+			) {
+				continue;
+			}
+			const valuesByPredecessor = new Map<CoreBlockId, CoreValueId>();
+			let sourceRepresentation: CoreRepresentation | undefined;
+			let valid = true;
+			for (const edge of incoming) {
+				const version = memory.exitVersion(edge.from, access.partition);
+				const source = version === undefined ? undefined : valuesByVersion.get(version);
+				const representation =
+					source === undefined ? undefined : representations.get(source.value);
+				if (
+					source === undefined ||
+					representation === undefined ||
+					(source.block !== edge.from &&
+						!cfg.instructionDominatesBlock(source.block, edge.from)) ||
+					(sourceRepresentation !== undefined && sourceRepresentation !== representation)
+				) {
+					valid = false;
+					break;
+				}
+				sourceRepresentation = representation;
+				valuesByPredecessor.set(edge.from, source.value);
+			}
+			const destinationRepresentation = representations.get(output);
+			const needsBoxing =
+				destinationRepresentation === "boxed" &&
+				(sourceRepresentation === "f64" ||
+					sourceRepresentation === "i32" ||
+					sourceRepresentation === "boolean");
+			if (
+				!valid ||
+				sourceRepresentation === undefined ||
+				destinationRepresentation === undefined ||
+				(sourceRepresentation !== destinationRepresentation && !needsBoxing)
+			) {
+				continue;
+			}
+
+			const reuseOutput = sourceRepresentation === destinationRepresentation;
+			const parameterValue = reuseOutput
+				? output
+				: coreValueId((fn.values.at(-1)?.id ?? -1) + 1);
+			const parameterIndex = block.parameters.length;
+			const blocks = fn.blocks.map((current): CoreBlock => {
+				if (current.id === block.id) {
+					return {
+						...current,
+						parameters: [
+							...current.parameters,
+							{
+								value: parameterValue,
+								representation: sourceRepresentation,
+								role: "value",
+							},
+						],
+						instructions: reuseOutput
+							? current.instructions.filter(({ id }) => id !== candidate.id)
+							: current.instructions.map((instruction) =>
+									instruction.id === candidate.id
+										? {
+												...withoutEffectRefinement(instruction),
+												opcode: "move",
+												inputs: [parameterValue],
+												attributes: {},
+											}
+										: instruction,
+								),
+					};
+				}
+				const argument = valuesByPredecessor.get(current.id);
+				if (argument === undefined || current.terminator.kind !== "jump") {
+					return current;
+				}
+				return {
+					...current,
+					terminator: {
+						...current.terminator,
+						edge: {
+							...current.terminator.edge,
+							arguments: [...current.terminator.edge.arguments, argument],
+						},
+					},
+				};
+			});
+			let values = fn.values;
+			if (reuseOutput) {
+				values = fn.values.map((value) =>
+					value.id === output
+						? {
+								...value,
+								definition: {
+									kind: "block-parameter" as const,
+									block: block.id,
+									index: parameterIndex,
+								},
+							}
+						: value,
+				);
+			} else {
+				values = fn.values.concat({
+					id: parameterValue,
+					representation: sourceRepresentation,
+					definition: {
+						kind: "block-parameter",
+						block: block.id,
+						index: parameterIndex,
+					},
+				});
+			}
+			return { ...fn, blocks, values, mutationEpoch: fn.mutationEpoch + 1 };
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -9869,9 +10300,32 @@ const forwardFreshAllocationPrefixLoads: CoreFunctionPass = {
 const forwardMemoryAccesses: CoreFunctionPass = {
 	name: "forward-memory-accesses",
 	changesControlFlow: true,
-	run(fn, analyses) {
-		const provenance = analyses.provenance(fn);
-		const resolution = memoryResolution(analyses, fn);
+	run(input, analyses) {
+		let fn = input;
+		let propertyLoads = corePropertyLoadCount(fn);
+		for (;;) {
+			const joinProvenance = memoryProvenance(analyses, fn);
+			const joinResolution = memoryResolution(analyses, fn, joinProvenance);
+			if (!mayForwardMemoryAccesses(fn, joinResolution, joinProvenance)) break;
+			const next = forwardOneContainedObjectSlotJoinLoad(
+				fn,
+				analyses,
+				joinProvenance,
+				joinResolution,
+				analyses.memory(fn),
+			);
+			if (next === undefined) break;
+			const nextPropertyLoads = corePropertyLoadCount(next);
+			if (nextPropertyLoads >= propertyLoads) {
+				throw new Error(
+					"Contained object-slot join forwarding changed without removing a property load",
+				);
+			}
+			fn = next;
+			propertyLoads = nextPropertyLoads;
+		}
+		const provenance = memoryProvenance(analyses, fn);
+		const resolution = memoryResolution(analyses, fn, provenance);
 		if (!mayForwardMemoryAccesses(fn, resolution, provenance)) return fn;
 		const cfg = analyses.controlFlow(fn);
 		const memory = analyses.memory(fn);
@@ -11202,10 +11656,7 @@ function localCopyAndValueNumber(
 	const candidateBlocks = fn.blocks.filter((block) =>
 		block.instructions.some(
 			(instruction) =>
-				(instruction.opcode === "move" &&
-					instruction.inputs.length === 1 &&
-					instruction.outputs.length === 1) ||
-				isValueNumberingCandidate(instruction),
+				isEliminableMove(instruction) || isValueNumberingCandidate(instruction),
 		),
 	);
 	if (candidateBlocks.length !== 1) return undefined;
@@ -11228,11 +11679,7 @@ function localCopyAndValueNumber(
 			...original,
 			inputs: original.inputs.map((value) => resolveValue(value, replacements)),
 		};
-		if (
-			instruction.opcode === "move" &&
-			instruction.inputs.length === 1 &&
-			instruction.outputs.length === 1
-		) {
+		if (isEliminableMove(instruction)) {
 			replacements.set(instruction.outputs[0]!, instruction.inputs[0]!);
 			removedInstructions.add(instruction.id);
 			continue;
@@ -11343,9 +11790,7 @@ const copyAndValueNumber: CoreFunctionPass = {
 						inputs: original.inputs.map((value) => resolveValue(value, replacements)),
 					};
 					if (
-						instruction.opcode === "move" &&
-						instruction.inputs.length === 1 &&
-						instruction.outputs.length === 1 &&
+						isEliminableMove(instruction) &&
 						!protectedInputs.has(instruction.outputs[0]!)
 					) {
 						replacements.set(instruction.outputs[0]!, instruction.inputs[0]!);
@@ -12304,6 +12749,7 @@ const CORE_LOCAL_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	eliminateTrivialBlockArguments,
 	sparseConditionalConstantPropagation,
 	refineValueRepresentations,
+	refineStackObjectCellRepresentations,
 	simplifyAlgebraicValues,
 	subsumeCoreFactProofs,
 	foldSubsumedCoreGuards,
@@ -12335,6 +12781,19 @@ const CORE_FACT_DRIVEN_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	refineExactShapeOwnSlotEffects,
 	refineExactCollectionBuiltinEffects,
 	eliminateRedundantPrimitiveCoercions,
+];
+
+/**
+ * Exact builtin selection deletes the property seam that kept these blocks and
+ * values alive. Every pass here is deletion-only, so the structural measure in
+ * the scheduler is a termination proof rather than an iteration allowance.
+ */
+const CORE_EXACT_BUILTIN_CLEANUP_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	deadInstructionElimination,
+	eliminateTrivialBlockArguments,
+	pruneVacuousExceptionHandlers,
+	foldEmptyForwardingBlocks,
+	combineLinearBlocks,
 ];
 
 /**
@@ -12422,7 +12881,6 @@ function withRegionAdmission(pass: CoreFunctionPass): CoreFunctionPass {
 }
 
 const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
-	rewriteContainedFreshArrayBuiltins,
 	annotateFreshDenseIndexedReserves,
 	annotateBoundedStringCharCodeAtPositions,
 	withRegionAdmission(selectStackObjectRegions),
@@ -12450,6 +12908,107 @@ function claimedInstructionSnapshots(
 		}
 	}
 	return snapshots;
+}
+
+function genericCoreCallCount(functions: ReadonlyArray<CoreFunction>): number {
+	let count = 0;
+	for (const fn of functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.opcode === "call") count++;
+			}
+		}
+	}
+	return count;
+}
+
+function scalarCoreRepresentationRank(functions: ReadonlyArray<CoreFunction>): number {
+	let rank = 0;
+	for (const fn of functions) {
+		for (const value of fn.values) {
+			if (value.representation === "i32") rank += 2;
+			else if (
+				value.representation === "f64" ||
+				value.representation === "boolean" ||
+				value.representation === "string"
+			)
+				rank++;
+		}
+	}
+	return rank;
+}
+
+function scalarCoreConsumerPotential(functions: ReadonlyArray<CoreFunction>): number {
+	let potential = 0;
+	for (const fn of functions) {
+		for (const value of fn.values) {
+			if (value.representation === "boxed") potential += 2;
+			else if (value.representation === "f64") potential++;
+		}
+		for (const block of fn.blocks) {
+			for (const parameter of block.parameters) {
+				if (parameter.representation === "boxed") potential += 2;
+				else if (parameter.representation === "f64") potential++;
+			}
+			for (const instruction of block.instructions) {
+				if (
+					instruction.opcode === "loadPropertyStatic" &&
+					instruction.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] !== true
+				) {
+					potential++;
+				}
+			}
+		}
+	}
+	return potential;
+}
+
+function directCallResultConsumerPotential(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+): number {
+	let potential = 0;
+	for (const fn of program.functions) {
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.opcode !== "call") continue;
+				const output = instruction.outputs[0];
+				if (output === undefined) continue;
+				const claim = summaries.callSite(fn.functionIndex, instruction.id);
+				const representation =
+					claim === undefined ? "boxed" : coreCallResultRepresentation(claim);
+				if (representations.get(output) !== representation) potential += 2;
+				const expected =
+					claim === undefined || representation === "boxed"
+						? undefined
+						: coreCallSummaryAttribute(claim);
+				if (
+					stableAttributeValue(instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE]) !==
+					stableAttributeValue(expected)
+				) {
+					potential++;
+				}
+			}
+		}
+	}
+	return potential;
+}
+
+function deletionOnlyCoreMeasure(functions: ReadonlyArray<CoreFunction>): number {
+	let measure = 0;
+	for (const fn of functions) {
+		measure += fn.blocks.length + fn.values.length + fn.facts.length;
+		for (const block of fn.blocks) {
+			measure +=
+				block.instructions.length +
+				block.parameters.length +
+				(block.handler === undefined ? 0 : 1);
+		}
+	}
+	return measure;
 }
 
 function claimingRegionKinds(fn: CoreFunction, instruction: CoreInstructionId): string {
@@ -12752,6 +13311,42 @@ export function executeCoreOptimizations(
 		const programChanged = runFixpointPasses(CORE_PROGRAM_PASSES, traceRound++);
 		if (!programChanged) break;
 	}
+	// Exact fresh-array builtin selection is monotone: every successful pass turns
+	// at least one generic call into callBuiltin, and the cleanup group can only
+	// delete structure. Re-run the selector only when that deletion exposes a
+	// stronger containment proof; the two strict measures make this a fixpoint,
+	// not a guessed extra round. This must precede call-target refresh, compaction,
+	// and region selection so all three describe the cleaned graph.
+	let remainingGenericCalls = genericCoreCallCount(functions);
+	for (;;) {
+		activeFunctions = new Set(functions.map(({ functionIndex }) => functionIndex));
+		const exactBuiltinChanged = runFixpointPasses(
+			[rewriteContainedFreshArrayBuiltins],
+			traceRound++,
+		);
+		if (!exactBuiltinChanged) break;
+		const callsAfterSelection = genericCoreCallCount(functions);
+		if (callsAfterSelection >= remainingGenericCalls) {
+			throw new Error(
+				"Exact fresh-array builtin selection changed without consuming a generic call",
+			);
+		}
+		remainingGenericCalls = callsAfterSelection;
+		for (;;) {
+			const beforeCleanup = deletionOnlyCoreMeasure(functions);
+			const cleanupChanged = runFixpointPasses(
+				CORE_EXACT_BUILTIN_CLEANUP_PASSES,
+				traceRound++,
+			);
+			if (!cleanupChanged) break;
+			if (deletionOnlyCoreMeasure(functions) >= beforeCleanup) {
+				throw new Error(
+					"Exact fresh-array builtin cleanup changed without deleting Core structure",
+				);
+			}
+		}
+		workingProgram = { ...workingProgram, functions };
+	}
 	let postFactCleanupChanged = false;
 	const exactHeapPublishedEarly = options.ablations?.has("fact-driven") !== true;
 	if (exactHeapPublishedEarly) {
@@ -12807,6 +13402,7 @@ export function executeCoreOptimizations(
 			registry: coreOpcodeRegistry,
 			calleeTargets: shapeSummaries.targets,
 			summaries: shapeSummaries,
+			...(compilationContext === undefined ? {} : { context: compilationContext }),
 			controlFlow: (fn) => analyses.controlFlow(fn),
 			canonicalValues: (fn) => analyses.canonicalValues(fn),
 		});
@@ -12847,9 +13443,100 @@ export function executeCoreOptimizations(
 
 		workingProgram = { ...workingProgram, functions };
 	}
+	let scalarChanged = false;
+	if (options.ablations?.has("interprocedural") !== true) {
+		const scalarBefore = tracedMetrics;
+		// Consumers strictly discharge representation or summary-metadata debt;
+		// materialization strictly raises scalar rank, so neither side needs a round cap.
+		for (;;) {
+			let consumersChanged = false;
+			for (const consumer of [
+				refineStackObjectCellRepresentations,
+				refineDirectCallResultRepresentations,
+				refineValueRepresentations,
+			]) {
+				const consumerInput = { ...workingProgram, functions };
+				const consumerPotential =
+					consumer === refineDirectCallResultRepresentations
+						? directCallResultConsumerPotential(
+								consumerInput,
+								analyses.summaries(consumerInput),
+							)
+						: scalarCoreConsumerPotential(functions);
+				activeFunctions = new Set(functions.map(({ functionIndex }) => functionIndex));
+				const consumerChanged = runFixpointPasses([consumer], traceRound++);
+				const nextConsumerInput = { ...workingProgram, functions };
+				const nextConsumerPotential =
+					consumer === refineDirectCallResultRepresentations
+						? directCallResultConsumerPotential(
+								nextConsumerInput,
+								analyses.summaries(nextConsumerInput),
+							)
+						: scalarCoreConsumerPotential(functions);
+				if (nextConsumerPotential > consumerPotential) {
+					throw new Error(
+						`${consumer.name} widened exact scalar proof state (${consumerPotential} -> ${nextConsumerPotential})`,
+					);
+				}
+				if (consumerChanged && nextConsumerPotential === consumerPotential) {
+					throw new Error(`${consumer.name} changed without reducing imprecision`);
+				}
+				consumersChanged ||= consumerChanged;
+			}
+			workingProgram = { ...workingProgram, functions };
+			const scalarInput = workingProgram;
+			const publishedScalarRank = scalarCoreRepresentationRank(functions);
+			const scalarSelection = materializeCoreExactScalarRepresentations(
+				scalarInput,
+				compilationContext,
+				analyses.summaries(scalarInput),
+			);
+			for (const [index, fn] of scalarSelection.program.functions.entries()) {
+				const before = functions[index];
+				if (before !== undefined && before !== fn) {
+					analyses.inheritControlFlow(before, fn);
+				}
+			}
+			workingProgram = scalarSelection.program;
+			functions = [...scalarSelection.program.functions];
+			scalarChanged ||= consumersChanged || scalarSelection.changed;
+			const nextPublishedScalarRank = scalarCoreRepresentationRank(functions);
+			if (scalarSelection.changed && nextPublishedScalarRank <= publishedScalarRank) {
+				throw new Error(
+					"Exact scalar materialization changed without publishing a scalar representation",
+				);
+			}
+			if (!consumersChanged && !scalarSelection.changed) break;
+		}
+		if (scalarChanged) {
+			changed = true;
+			verifyMutatedProgram(workingProgram, {
+				stage: "fixpoint",
+				pass: "converge-exact-scalar-consumers",
+				round: traceRound,
+			});
+		}
+		if (scalarBefore !== undefined) {
+			const scalarAfter = coreOptimizationMetrics(workingProgram);
+			tracedMetrics = scalarAfter;
+			optimizationTrace.push(
+				optimizationPassDelta(
+					{
+						pass: "converge-exact-scalar-consumers",
+						stage: "fixpoint",
+						status: "executed",
+						changed: scalarChanged,
+						ablation: "interprocedural",
+					},
+					scalarBefore,
+					scalarAfter,
+				),
+			);
+		}
+	}
 	activeFunctions = new Set(functions.map(({ functionIndex }) => functionIndex));
 	const factDrivenChanged = runFixpointPasses(CORE_FACT_DRIVEN_PASSES, traceRound++);
-	postFactCleanupChanged ||= factDrivenChanged;
+	postFactCleanupChanged ||= scalarChanged || factDrivenChanged;
 	if (postFactCleanupChanged) {
 		activeFunctions = new Set(functions.map(({ functionIndex }) => functionIndex));
 		for (let localRound = 0; localRound < maxRounds; localRound++) {
@@ -13072,79 +13759,6 @@ export function executeCoreOptimizations(
 			);
 		}
 	}
-	if (options.ablations?.has("interprocedural") !== true) {
-		const exactScalarBefore = tracedMetrics;
-		let exactScalarChanged = false;
-		let exactScalarConverged = false;
-		const exactScalarRoundLimit = Math.max(4, maxRounds);
-		for (let round = 0; round < exactScalarRoundLimit; round++) {
-			const exactScalarInput = { ...workingProgram, functions };
-			const exactScalarSelection = materializeCoreExactScalarRepresentations(
-				exactScalarInput,
-				compilationContext,
-				analyses.summaries(exactScalarInput),
-			);
-			for (const [index, fn] of exactScalarSelection.program.functions.entries()) {
-				const before = functions[index];
-				if (before !== undefined && before !== fn)
-					analyses.inheritControlFlow(before, fn);
-			}
-			workingProgram = exactScalarSelection.program;
-			functions = [...exactScalarSelection.program.functions];
-			if (!exactScalarSelection.changed) {
-				exactScalarConverged = true;
-				break;
-			}
-			exactScalarChanged = true;
-			const effectInput = { ...workingProgram, functions };
-			functions = functions.map((fn) => {
-				const next = refineDirectCallEffects.run(fn, analyses, effectInput);
-				if (next !== fn) analyses.inheritControlFlow(fn, next);
-				return next;
-			});
-			workingProgram = { ...workingProgram, functions };
-			const representationInput = workingProgram;
-			functions = functions.map((fn) => {
-				const next = refineDirectCallResultRepresentations.run(
-					fn,
-					analyses,
-					representationInput,
-				);
-				if (next !== fn) analyses.inheritControlFlow(fn, next);
-				return next;
-			});
-			workingProgram = { ...workingProgram, functions };
-		}
-		if (!exactScalarConverged) {
-			throw new Error(
-				"Exact scalar representation and summary refinement did not converge",
-			);
-		}
-		if (exactScalarChanged) {
-			changed = true;
-			verifyMutatedProgram(workingProgram, {
-				stage: "finalization",
-				pass: "materialize-exact-scalar-representations",
-			});
-		}
-		if (exactScalarBefore !== undefined) {
-			const exactScalarAfter = coreOptimizationMetrics(workingProgram);
-			tracedMetrics = exactScalarAfter;
-			optimizationTrace.push(
-				optimizationPassDelta(
-					{
-						pass: "materialize-exact-scalar-representations",
-						stage: "finalization",
-						status: "executed",
-						changed: exactScalarChanged,
-						ablation: "interprocedural",
-					},
-					exactScalarBefore,
-					exactScalarAfter,
-				),
-			);
-		}
-	}
 	const earlyShapeRetractionBefore = tracedMetrics;
 	const earlyShapeRetraction = retractCoreKnownOwnSlots({ ...workingProgram, functions });
 	if (earlyShapeRetraction.changed) {
@@ -13333,6 +13947,7 @@ export function executeCoreOptimizations(
 	const shapeProvenance = analyzeCoreShapeProvenance(summaryProgram, {
 		registry: coreOpcodeRegistry,
 		...(summaries === undefined ? {} : { calleeTargets: summaries.targets, summaries }),
+		...(compilationContext === undefined ? {} : { context: compilationContext }),
 		controlFlow: (fn) => analyses.controlFlow(fn),
 		canonicalValues: (fn) => analyses.canonicalValues(fn),
 	});

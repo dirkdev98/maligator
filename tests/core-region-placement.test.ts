@@ -288,6 +288,48 @@ describe("Core region property placement", () => {
 		);
 	});
 
+	it("carries exact String.split producers through the compiler artifact", () => {
+		const definition = lockedDefinition(SPLIT_AND_SLICE, "split-producers.js");
+		const functionIndex = definition.native.functions.findIndex((fn) =>
+			fn.specializations.some((region) => region.kind === "string-split-projection"),
+		);
+		const owner = definition.native.functions[functionIndex]!;
+		const regionIndex = owner.specializations.findIndex(
+			(region) => region.kind === "string-split-projection",
+		);
+		const region = owner.specializations[regionIndex]!;
+		if (region.kind !== "string-split-projection") {
+			throw new Error("missing String.split projection");
+		}
+		const fn = definition.runtime.functions[functionIndex]!;
+		expect(fn.instructions[region.separatorIp]?.opcode).toBe("CREATE_STRING");
+		const elementLoad = region.loads.find((load) => load.kind === "element");
+		if (elementLoad?.kind !== "element") throw new Error("missing projected element");
+		const key = fn.instructions[elementLoad.keyIp];
+		const load = fn.instructions[elementLoad.ip];
+		expect(key?.opcode).toBe("CREATE_NUMBER");
+		expect(load?.opcode).toBe("LOAD_PROPERTY");
+		if (key?.opcode !== "CREATE_NUMBER" || load?.opcode !== "LOAD_PROPERTY") {
+			throw new Error("invalid String.split producer instructions");
+		}
+		expect(key.dst).toBe(load.key);
+		expect(key.value).toBe(elementLoad.index);
+		expect(
+			vmRegions(deserializeCompilerArtifact(serializeCompilerArtifact(definition))),
+		).toEqual(vmRegions(definition));
+
+		expect(() =>
+			serializeCompilerArtifact(
+				withVmRegion(definition, functionIndex, regionIndex, {
+					...region,
+					loads: region.loads.map((candidate) =>
+						candidate === elementLoad ? { ...candidate, keyIp: candidate.ip } : candidate,
+					),
+				}),
+			),
+		).toThrow(/invalid String\.split projection region/);
+	});
+
 	it("rejects an invalid placement value in a Core certificate", () => {
 		const core = lockedCore(SPLIT_AND_SLICE, "placement-invalid.js");
 		const functionIndex = core.functions.findIndex(({ regions }) =>

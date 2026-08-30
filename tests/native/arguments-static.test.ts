@@ -83,8 +83,8 @@ describe("static arguments access", () => {
 			expect(line).toBeDefined();
 			const field = (key: string): number =>
 				Number(line?.match(new RegExp(`${key}=([0-9]+)`))?.[1] ?? -1);
-			expect(field("logical_values")).toBe(38);
-			expect(field("destination_writes")).toBe(name === "interpreted" ? 37 : 38);
+			expect(field("logical_values")).toBe(42);
+			expect(field("destination_writes")).toBe(name === "interpreted" ? 41 : 42);
 			expect(field("temporary_copies")).toBe(name === "interpreted" ? 2 : 0);
 			const coroutine = result.stderr
 				.split("\n")

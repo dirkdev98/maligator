@@ -307,6 +307,65 @@ ok(
 	invokeSmallCapture(1000) === 1001 && invokeSmallCapture(2000) === 2001,
 );
 
+const makeStableLetInvoker = function () {
+	let service = {
+		run: function stableLetTarget(value) {
+			return value + 40;
+		},
+	};
+	return function stableLetInner(value) {
+		const callback = service.run;
+		return callback(value);
+	};
+};
+ok("stable let capture", makeStableLetInvoker()(2) === 42);
+
+const makeRecursiveLetInvoker = function () {
+	let recurse = function recursiveLetTarget(value) {
+		return value === 0 ? 0 : recurse(value - 1) + 1;
+	};
+	return recurse;
+};
+ok("recursive stable let capture", makeRecursiveLetInvoker()(5) === 5);
+
+const makeMutableLetInvoker = function (replace) {
+	let callback = function mutableLetFirst(value) {
+		return value + 10;
+	};
+	const inner = function mutableLetInner(value) {
+		return callback(value);
+	};
+	if (replace) {
+		callback = function mutableLetSecond(value) {
+			return value + 20;
+		};
+	}
+	return inner;
+};
+ok(
+	"mutable let capture",
+	makeMutableLetInvoker(false)(2) === 12 && makeMutableLetInvoker(true)(2) === 22,
+);
+
+const callStableLetBeforeInitialization = function () {
+	const early = function () {
+		return service.run();
+	};
+	let threw = false;
+	try {
+		early();
+	} catch (error) {
+		threw = error instanceof ReferenceError;
+	}
+	let service = {
+		run: function initializedLetTarget() {
+			return 42;
+		},
+	};
+	return threw && early() === 42;
+};
+ok("stable let retains TDZ", callStableLetBeforeInitialization());
+
 const identityTarget = function identityTarget(expected) {
 	return this === undefined && identityTarget === expected;
 };
@@ -373,5 +432,5 @@ try {
 }
 ok("overflow", overflowed);
 
-ok("check count", checks === 31);
+ok("check count", checks === 35);
 console.log("direct-known-call PASS");

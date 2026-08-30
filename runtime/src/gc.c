@@ -603,11 +603,53 @@ static void mal_gc_trace_env(MalEnv *env) {
     }
 }
 
+typedef void (*MalGcFrameValueVisitor)(MalValue value);
+
+static bool mal_gc_visit_exact_frame_registers(
+    MalVmFrame *frame,
+    MalGcFrameValueVisitor visit) {
+    const MalFunction *function = frame->function;
+    if (function == nullptr || !function->gc_safepoints_trusted ||
+        frame->gc_safepoint_ip < 0 || frame->registers == nullptr) {
+        return false;
+    }
+    const i32 *row = function->gc_safepoints;
+    for (i32 index = 0; index < function->gc_safepoint_count; index++) {
+        i32 instruction_ip = *row++;
+        i32 root_count = *row++;
+        if (instruction_ip == frame->gc_safepoint_ip) {
+            for (i32 root = 0; root < root_count; root++) {
+                visit(frame->registers[row[root]]);
+            }
+            return true;
+        }
+        row += root_count;
+        i32 clear_count = *row++;
+        row += clear_count;
+        if (instruction_ip > frame->gc_safepoint_ip) break;
+    }
+    return false;
+}
+
+static void mal_gc_visit_frame_registers(
+    MalVmFrame *frame,
+    MalGcFrameValueVisitor visit) {
+    if (frame->function == nullptr || frame->registers == nullptr) {
+        return;
+    }
+    if (mal_gc_visit_exact_frame_registers(frame, visit)) {
+        return;
+    }
+    for (i32 register_index = 0;
+         register_index < frame->function->register_count;
+         register_index++) {
+        visit(frame->registers[register_index]);
+    }
+}
+
 /** Trace an interpreter / generator activation frame. */
 static void mal_gc_trace_frame(MalVmFrame *frame) {
-    if (frame->function != nullptr) {
-        mal_gc_mark_values(frame->registers, frame->function->register_count);
-    }
+    mal_gc_visit_frame_registers(frame, mal_gc_mark_value);
     mal_gc_mark_values(frame->arguments, frame->argument_count);
     mal_gc_mark_value(frame->this_value);
     mal_gc_mark_value(frame->arguments_object);
@@ -621,16 +663,7 @@ static void mal_gc_trace_frame(MalVmFrame *frame) {
  * is active (call sites gate on mal_gc_marking_active); the env is boxed as a heap
  * value so the deletion barrier keeps the activation's captured-slot env too. */
 void mal_gc_satb_shade_frame(MalVmFrame *frame) {
-    // Null-safe on the register/argument buffers, mirroring mal_gc_trace_frame
-    // (which routes through mal_gc_mark_values, itself null-guarded): a frame can
-    // have a non-null function yet a not-yet-allocated register buffer (a coroutine
-    // frame captured before its buffer is adopted), so shading must skip a null
-    // buffer rather than deref it.
-    if (frame->function != nullptr && frame->registers != nullptr) {
-        for (i32 i = 0; i < frame->function->register_count; ++i) {
-            mal_gc_satb_record(frame->registers[i]);
-        }
-    }
+    mal_gc_visit_frame_registers(frame, mal_gc_satb_record);
     if (frame->arguments != nullptr) {
         for (i32 i = 0; i < frame->argument_count; ++i) {
             mal_gc_satb_record(frame->arguments[i]);
@@ -968,7 +1001,41 @@ static void mal_gc_scan_fiber_exec(
     MalValue completion_value,
     MalRootFrame *root_frame_head,
     MalRootSpan *root_span_head) {
-    mal_gc_mark_values(value_stack, value_stack_size);
+    i32 stack_cursor = 0;
+    bool exact_stack_windows = true;
+    for (i32 i = 0; i < frame_count; i++) {
+        const MalVmFrame *frame = &frames[i];
+        if (frame->stack_base < 0) continue;
+        if (frame->function == nullptr) {
+            exact_stack_windows = false;
+            break;
+        }
+        i32 retained_arguments = frame->arguments == nullptr ? 0 : frame->argument_count;
+        i64 frame_end = (i64) frame->stack_base + retained_arguments +
+            frame->function->register_count;
+        if (frame->stack_base < stack_cursor ||
+            frame_end < frame->stack_base || frame_end > value_stack_size) {
+            exact_stack_windows = false;
+            break;
+        }
+        stack_cursor = (i32) frame_end;
+    }
+    if (!exact_stack_windows) {
+        mal_gc_mark_values(value_stack, value_stack_size);
+    } else {
+        stack_cursor = 0;
+        for (i32 i = 0; i < frame_count; i++) {
+            const MalVmFrame *frame = &frames[i];
+            if (frame->stack_base < 0) continue;
+            mal_gc_mark_values(
+                value_stack + stack_cursor,
+                frame->stack_base - stack_cursor);
+            i32 retained_arguments = frame->arguments == nullptr ? 0 : frame->argument_count;
+            stack_cursor = frame->stack_base + retained_arguments +
+                frame->function->register_count;
+        }
+        mal_gc_mark_values(value_stack + stack_cursor, value_stack_size - stack_cursor);
+    }
     for (i32 i = 0; i < frame_count; ++i) {
         mal_gc_trace_frame(&frames[i]);
     }

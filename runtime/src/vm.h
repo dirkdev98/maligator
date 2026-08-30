@@ -781,6 +781,8 @@ typedef struct MalFunction {
     const i32 *mapped_argument_slots;
     const MalInstruction *instructions;
     const i32 *instruction_data;
+    /** Flat [ip, root_count, roots..., clear_count, clears...] sorted by IP. */
+    const i32 *gc_safepoints;
     const MalExceptionHandler *handlers;
     MalCompiledFunction compiled;
     const MalLineEntry *positions;
@@ -821,6 +823,8 @@ typedef struct MalFunction {
     i32 instruction_count;
     i32 instruction_data_count;
 
+    i32 gc_safepoint_count;
+
     i32 handler_count;
 
     /**
@@ -836,6 +840,8 @@ typedef struct MalFunction {
     /** Whether any activation can retain supplied arguments after entry. */
     bool needs_arguments;
     bool mapped_arguments;
+    /** False for loader-provided metadata that cannot prove semantic completeness. */
+    bool gc_safepoints_trusted;
 
     /**
      * A derived class constructor. Its `this` is uninitialized (the EMPTY
@@ -860,7 +866,7 @@ typedef struct MalFunction {
     bool has_prototype;
 } MalFunction;
 
-static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 144 : 136),
+static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 152 : 144),
               "function metadata outgrew its packed layout");
 
 /**
@@ -1914,6 +1920,8 @@ typedef struct MalVmFrame {
     i32 stack_base;
 
     i32 instruction_pointer;
+    /** Published operation IP while execution is inside a GC-capable boundary. */
+    i32 gc_safepoint_ip;
     i32 return_register;
     i32 caller_frame_index;
     /**
@@ -1922,7 +1930,7 @@ typedef struct MalVmFrame {
     bool is_construct;
 } MalVmFrame;
 
-static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 136 : 128),
+static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 144 : 136),
               "interpreter frame outgrew its packed layout");
 
 typedef MalVmFrame MalCallable;
@@ -1951,6 +1959,8 @@ u64 mal_coroutine_buffer_dropped_count(void);
 u64 mal_coroutine_buffer_peak_retained_bytes(void);
 MalValue *mal_vm_alloc_coroutine_buffer(MalVm *vm, i32 slot_count);
 void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values);
+/** Skip per-slot barriers; the owning frame must be exact-shaded during active marking. */
+void mal_vm_release_shaded_coroutine_buffer(MalVm *vm, MalValue *values);
 void mal_vm_free_coroutine_buffer_pool(MalVm *vm);
 
 /**

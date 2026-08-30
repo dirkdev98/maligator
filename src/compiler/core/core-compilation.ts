@@ -35,7 +35,9 @@ export interface CoreProgramData {
 	}>;
 	readonly cjsModuleFunctionIndices: ReadonlyArray<number>;
 	readonly hostInstallCandidates: ReadonlyArray<CoreHostInstallCandidate>;
+	/** Source-immutable cells, plus graph-proven activation-private cells. */
 	readonly singleAssignmentGlobalSlots: ReadonlyArray<number>;
+	/** Source-immutable cells, plus captured lets with one named non-TDZ writer. */
 	readonly singleAssignmentCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
 	readonly retainedHostInstallers: ReadonlyArray<string>;
 }

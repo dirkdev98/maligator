@@ -28,6 +28,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
 import { testProgramImage } from "./helpers/program-image.ts";
 
 const instructions: Array<BytecodeInstruction> = [
@@ -285,27 +286,27 @@ describe("emit-program-image instruction packing", () => {
 	it("emits one flattened side table and raw f64 words", () => {
 		const output = emitProgramImage(definition, { compiled: false });
 		expect(output).toContain(
-			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, 7, 8, 1, 9, 2, 10, 11, 3, 0, 2, 3, 2, 1, 4, 2, 8, 9 };",
+			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, -1, 0, 7, 8, 1, -1, 0, 9, 2, 10, 11, 3, 0, 2, 3, 2, 1, 4, 2, 8, 9 };",
 		);
-		for (const offset of [0, 5, 10, 15, 18, 20, 23, 27, 30]) {
+		for (const offset of [0, 5, 10, 15, 20, 24, 27, 31, 34]) {
 			expect(output).toContain(`.data_offset = ${offset}`);
 		}
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x80000000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff00000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff80000u");
 		expect(output).toContain(".instruction_data = mal_function_0_instruction_data");
-		expect(output).toContain(".instruction_data_count = 33");
+		expect(output).toContain(".instruction_data_count = 37");
 		expect(output).toContain(".argument_snapshot_count = 0");
 		expect(output).toContain(".argument_snapshot_plan_count = 0");
 		expect(output).toContain(".argument_snapshot_plan = nullptr");
 		expect(output).toContain(
-			".as.init_global_vars = { .data_offset = 23, .declaration_configurable = true }",
+			".as.init_global_vars = { .data_offset = 27, .declaration_configurable = true }",
 		);
 		expect(output).toContain(
-			".as.create_private_names = { .owner_function_index = 0, .data_offset = 27 }",
+			".as.create_private_names = { .owner_function_index = 0, .data_offset = 31 }",
 		);
 		expect(output).toContain(
-			".as.init_private_fields = { .object = 6, .data_offset = 30 }",
+			".as.init_private_fields = { .object = 6, .data_offset = 34 }",
 		);
 		expect(output).toContain(
 			".as.typeof_compare = { .dst = 7, .src = 6, .expected = MAL_TYPEOF_NUMBER, .negated = true }",
@@ -522,6 +523,58 @@ describe("emit-program-image instruction packing", () => {
 		expect(output.match(/\.instruction_data = mal_shared_insn_data_/g)).toHaveLength(2);
 	});
 
+	it("rejects malformed runtime proofs from ordinary and batch C output", () => {
+		const invalidCallFunction: BytecodeFunction = {
+			...fn,
+			instructions: fn.instructions.map((instruction) =>
+				instruction.opcode === "CALL"
+					? { ...instruction, callee: fn.registerCount }
+					: instruction,
+			),
+		};
+		const invalidCall: ProgramImage = {
+			...definition,
+			runtime: { ...definition.runtime, functions: [invalidCallFunction] },
+			native: createConservativeNativePlan([invalidCallFunction]),
+		};
+
+		const exactLengthInstructions: Array<BytecodeInstruction> = [
+			{
+				opcode: "LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
+				dst: 0,
+				object: 1,
+				stringIndex: 0,
+				icIndex: 0,
+			},
+			{ opcode: "RETURN", value: 0 },
+		];
+		const invalidLengthFunction: BytecodeFunction = {
+			...fn,
+			registerCount: 2,
+			literalShapeCount: 0,
+			instructions: exactLengthInstructions,
+			positions: [0, 0],
+			handlers: [],
+		};
+		const invalidLength: ProgramImage = {
+			...definition,
+			runtime: {
+				...definition.runtime,
+				stringConstants: [Array.from("other", (unit) => unit.charCodeAt(0))],
+				functions: [invalidLengthFunction],
+			},
+			native: createConservativeNativePlan([invalidLengthFunction]),
+		};
+
+		for (const output of [
+			(image: ProgramImage) => emitProgramImage(image),
+			(image: ProgramImage) => emitBatch([image], { compiled: false }),
+		]) {
+			expect(() => output(invalidCall)).toThrow(/invalid VM value operand/);
+			expect(() => output(invalidLength)).toThrow(/invalid exact Array length operation/);
+		}
+	});
+
 	it("emits native bulk-private helper calls", () => {
 		const output = emitProgramImage(definition);
 		expect(output).toContain("mal_vm_op_create_private_names(vm, env, 0, 2");
@@ -544,7 +597,7 @@ describe("emit-program-image instruction packing", () => {
 			},
 			native: createConservativeNativePlan(functions),
 		};
-		const budget = 20_000;
+		const budget = 24_000;
 		const units = emitProgramTranslationUnits(splitDefinition, {}, budget);
 
 		expect(units.length).toBeGreaterThan(2);
@@ -817,6 +870,62 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).not.toContain("mal_direct_");
 	});
 
+	it("emits trusted portable root tables only for verified in-process lowering", () => {
+		const source = `
+			function* keep(flag) {
+				const live = { value: 42 };
+				const dead = { value: 1 };
+				if (flag) yield live;
+				return live.value + dead.value;
+			}
+			globalThis.keep = keep;
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"portable-root-maps.js",
+			parseScript(source, { strict: false }),
+		);
+		const output = emitProgramImage(compileSemanticProgramToProgramImage(semantic), {
+			compiled: false,
+		});
+		expect(output).toContain(".gc_safepoints_trusted = true");
+		expect(output).toMatch(/mal_function_\d+_gc_safepoints\[\] = \{ \d+, \d+/);
+		expect(output).toMatch(
+			/\.gc_safepoint_count = [1-9]\d*, \.gc_safepoints = mal_function_\d+_gc_safepoints/,
+		);
+	});
+
+	it("revokes portable root-map trust after in-place bytecode mutation", () => {
+		const source = `
+			function* keep(value) {
+				const live = { value };
+				yield live;
+				return live.value;
+			}
+			globalThis.keep = keep;
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"portable-root-map-mutation.js",
+			parseScript(source, { strict: false }),
+		);
+		const image = compileSemanticProgramToProgramImage(semantic);
+		const functionIndex = image.runtime.functions.findIndex(
+			(fn) => (fn.gcSafepoints?.length ?? 0) > 0,
+		);
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		const fn = image.runtime.functions[functionIndex]!;
+		expect(vmSafepointRootMapsAreTrusted(fn)).toBe(true);
+		fn.gcSafepoints![0]!.rootRegisters = [];
+		delete fn.gcSafepoints![0]!.clearRegisters;
+		expect(vmSafepointRootMapsAreTrusted(fn)).toBe(false);
+
+		const output = emitProgramImage(image, { compiled: false });
+		expect(output).not.toContain(
+			`static const i32 mal_function_${functionIndex}_gc_safepoints`,
+		);
+	});
+
 	it("uses a null side table when a function has no variable operands", () => {
 		const simple = {
 			...definition,
@@ -889,6 +998,30 @@ describe("native update-expression representation", () => {
 		});
 	}
 
+	it("carries exact fresh-array length reads into portable bytecode", () => {
+		const definition = lower(`
+			function readLength() {
+				const values = [1, 2, 3];
+				return values.length;
+			}
+			globalThis.result = readLength();
+		`);
+		const specialized = definition.runtime.functions.flatMap((fn, functionIndex) =>
+			fn.instructions.flatMap((instruction, instructionIndex) =>
+				instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH"
+					? [{ functionIndex, instructionIndex }]
+					: [],
+			),
+		);
+		expect(specialized).toHaveLength(1);
+		const site = specialized[0]!;
+		expect(
+			definition.native.functions[site.functionIndex]!.instructions[
+				site.instructionIndex
+			],
+		).toEqual({ kind: "exact-array-length" });
+	});
+
 	it("consumes scalarized and sunk object plans in emitted C", () => {
 		const scalarized = emitLocked(`
 			function read(value) {
@@ -912,6 +1045,53 @@ describe("native update-expression representation", () => {
 		expect(sunk).toContain("MalObject __stack_object_");
 		expect(sunk).toContain("mal_vm_materialize_stack_object(");
 		expect(sunk).not.toContain("mal_vm_create_object_shaped(");
+	});
+
+	it("keeps homogeneous local stack cells unboxed until observability requires boxing", () => {
+		const homogeneousDefinition = lower(`
+			function read(flag, count) {
+				const object = { value: true };
+				for (let i = 0; i < count; i++) {
+					if (flag) object.value = true;
+					else object.value = false;
+				}
+				return object.value;
+			}
+			globalThis.result = read(globalThis.flag, 2);
+		`);
+		const homogeneous = emitProgramImage(
+			deserializeCompilerArtifact(serializeCompilerArtifact(homogeneousDefinition)),
+			{ compiled: true },
+		);
+		expect(homogeneous).toMatch(/bool __stack_object_\d+_slot_0;/);
+		expect(homogeneous).toMatch(/\.slots = nullptr[^\n]+\n/);
+		expect(homogeneous).toMatch(/__stack_object_\d+_slot_0 = r\d+;/);
+		expect(homogeneous).toMatch(/r\d+ = __stack_object_\d+_slot_0;/);
+
+		const mixed = emit(`
+			function read(flag, count) {
+				const object = { value: true };
+				for (let i = 0; i < count; i++) {
+					if (flag) object.value = false;
+					else object.value = 1;
+				}
+				return object.value;
+			}
+			globalThis.result = read(globalThis.flag, 2);
+		`);
+		expect(mixed).not.toMatch(/__stack_object_\d+_slot_0/);
+		expect(mixed).toMatch(/\.slots = &__gc_slots\[\d+\]/);
+
+		const materialized = emit(`
+			function read(flag) {
+				const object = { value: true };
+				if (flag) object.value = false;
+				return object;
+			}
+			globalThis.result = read(globalThis.flag);
+		`);
+		expect(materialized).not.toMatch(/__stack_object_\d+_slot_0/);
+		expect(materialized).toContain("mal_vm_materialize_stack_object(");
 	});
 
 	it("proves numeric induction variables during direct Core construction", () => {
@@ -2344,6 +2524,31 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("MAL_BUILTIN_COLLECTION_MAP_GET");
 		expect(output).toContain("MAL_BUILTIN_COLLECTION_MAP_SET");
 		expect(output).toContain("MAL_BUILTIN_COLLECTION_SET_ADD");
+	});
+
+	it("polls only collection operations with exact-root safepoint metadata", () => {
+		const output = emitLocked(`
+			function read(key) {
+				const map = new Map([[key, "value"]]);
+				return map.get(key);
+			}
+			globalThis.read = read;
+		`);
+		const lines = output.split("\n");
+		const poll = "if (mal_gc_poll) mal_gc_safepoint(vm);";
+		const constructLine = lines.findIndex((line) =>
+			line.includes("mal_vm_construct_value"),
+		);
+		const getLine = lines.findIndex((line) => line.includes("mal_builtin_map_get_known"));
+
+		expect(constructLine).toBeGreaterThanOrEqual(0);
+		expect(
+			lines.slice(constructLine + 1, constructLine + 5).map((line) => line.trim()),
+		).toContain(poll);
+		expect(getLine).toBeGreaterThanOrEqual(0);
+		expect(
+			lines.slice(getLine + 1, getLine + 4).map((line) => line.trim()),
+		).not.toContain(poll);
 	});
 });
 

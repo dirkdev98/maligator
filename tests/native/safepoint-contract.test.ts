@@ -11,6 +11,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-safepoint-contract-"));
 describe("execution safepoint contract", () => {
 	let expected: string;
 	let compiledFromArtifact: string;
+	let interpreted: string;
 	const frontendEvents: Array<"hit" | "miss"> = [];
 
 	beforeAll(() => {
@@ -29,12 +30,28 @@ describe("execution safepoint contract", () => {
 			outDir,
 			onFrontendCacheEvent: ({ cache }) => frontendEvents.push(cache),
 		});
+		interpreted = buildNativeBinary({
+			fixture,
+			name: "safepoint-contract-interpreted",
+			compiled: false,
+			profileEnabled: true,
+			outDir,
+		});
 	}, 600_000);
 
 	it("survives calls, exceptional edges, and loop polls after artifact restore", () => {
 		expect(frontendEvents.at(-1)).toBe("hit");
 		expect(
 			runToStdout(compiledFromArtifact, {
+				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+				timeoutMs: 60_000,
+			}),
+		).toBe(expected);
+	});
+
+	it("survives the same contract through the portable interpreter", () => {
+		expect(
+			runToStdout(interpreted, {
 				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
 				timeoutMs: 60_000,
 			}),

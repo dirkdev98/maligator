@@ -388,6 +388,12 @@ export type ShapeFact =
 
 export type RepresentationFact = "heap" | "stack";
 
+export interface CompilerCallTargetSet {
+	readonly functions: ReadonlyArray<number>;
+	readonly anyScript: boolean;
+	readonly opaque: boolean;
+}
+
 /** Residual facts keyed to a final optimized instruction, before register reuse. */
 export interface CompilerSiteFacts {
 	readonly id: string;
@@ -400,6 +406,7 @@ export interface CompilerSiteFacts {
 	readonly builtinIdentity?: CompilerFact<string>;
 	readonly builtinSemantics?: CompilerFact<KnownBuiltinSemantics>;
 	readonly immutableBinding?: CompilerFact<"immutable">;
+	readonly callTargets?: CompilerFact<CompilerCallTargetSet>;
 }
 
 export interface CompilerProgramFacts {

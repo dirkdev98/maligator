@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 30u
+#define WIRE_VERSION 34u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -398,6 +398,36 @@ static i32 rd_side_single(Rd *r, I32Builder *builder, i32 expected_count) {
     return offset;
 }
 
+static i32 rd_side_guarded_call(
+    Rd *r, I32Builder *builder, i32 exact_function_index, bool allow_guarded
+) {
+    i32 offset = (i32) builder->count;
+    u32 target_count = rd_count(r, 2);
+    i32 targets[4];
+    for (u32 i = 0; r->ok && i < target_count && i < countof(targets); i++) {
+        targets[i] = rd_i32(r);
+    }
+    i32 expected_count = rd_i32(r);
+    u32 count = rd_count(r, 1);
+    if (!r->ok || target_count > 4 || (!allow_guarded && target_count != 0) ||
+        (exact_function_index >= 0 && target_count != 0) ||
+        expected_count < 0 || count != (u32) expected_count ||
+        !i32_builder_reserve(builder, r, (usize) count + target_count + 3)) {
+        r->ok = false;
+        return 0;
+    }
+    builder->data[builder->count++] = (i32) count;
+    builder->data[builder->count++] = exact_function_index;
+    builder->data[builder->count++] = (i32) target_count;
+    for (u32 i = 0; i < target_count; i++) {
+        builder->data[builder->count++] = targets[i];
+    }
+    for (u32 i = 0; i < count; i++) {
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    return offset;
+}
+
 static i32 rd_side_pair(Rd *r, I32Builder *builder) {
     i32 offset = (i32) builder->count;
     u32 first_count = rd_count(r, 1);
@@ -647,8 +677,12 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.call.dst = rd_i32(r);
             o->as.call.callee = rd_i32(r);
             o->as.call.this_value = rd_i32(r);
-            i32 count = rd_i32(r);
-            o->as.call.data_offset = rd_side_single(r, side_data, count);
+            i32 exact_function_index = rd_i32(r);
+            if (exact_function_index < -1) {
+                r->ok = false;
+            }
+            o->as.call.data_offset = rd_side_guarded_call(
+                r, side_data, exact_function_index, true);
             return;
         }
         case WIRE_CALL_BUILTIN: {
@@ -669,8 +703,12 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->opcode = MAL_OP_CONSTRUCT;
             o->as.construct.dst = rd_i32(r);
             o->as.construct.callee = rd_i32(r);
-            i32 count = rd_i32(r);
-            o->as.construct.data_offset = rd_side_single(r, side_data, count);
+            i32 exact_function_index = rd_i32(r);
+            if (exact_function_index < -1) {
+                r->ok = false;
+            }
+            o->as.construct.data_offset = rd_side_guarded_call(
+                r, side_data, exact_function_index, false);
             return;
         }
         case WIRE_CATCH:
@@ -765,6 +803,12 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             return;
         case WIRE_LOAD_PROPERTY_STATIC:
             o->opcode = MAL_OP_LOAD_PROPERTY_STATIC;
+            o->as.load_property_static.dst = rd_i32(r);
+            o->as.load_property_static.object = rd_i32(r);
+            o->as.load_property_static.string_index = rd_i32(r);
+            return;
+        case WIRE_LOAD_PROPERTY_STATIC_ARRAY_LENGTH:
+            o->opcode = MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH;
             o->as.load_property_static.dst = rd_i32(r);
             o->as.load_property_static.object = rd_i32(r);
             o->as.load_property_static.string_index = rd_i32(r);
@@ -1195,6 +1239,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL, load_global);
         MAL_WRITES_DST(MAL_OP_LOAD_PROPERTY, load_property);
         MAL_WRITES_DST(MAL_OP_LOAD_PROPERTY_STATIC, load_property_static);
+        MAL_WRITES_DST(MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH, load_property_static);
         MAL_WRITES_DST(
             MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT,
             load_property_static_known_own_slot);
@@ -1352,6 +1397,7 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
             break;
     }
     fn->strict = rd_u8(r) != 0;
+    fn->gc_safepoints_trusted = false;
     fn->needs_arguments = rd_u8(r) != 0;
     fn->is_derived_constructor = rd_u8(r) != 0;
     fn->is_class_constructor = rd_u8(r) != 0;
@@ -1415,6 +1461,7 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
                 instructions[i].as.load_property.ic_index = fn->property_ic_count++;
                 break;
             case MAL_OP_LOAD_PROPERTY_STATIC:
+            case MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH:
                 instructions[i].as.load_property_static.ic_index = fn->property_ic_count++;
                 break;
             case MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT:
@@ -1580,6 +1627,70 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
     fn->instruction_data_count = (i32) side_data.count;
     fn->instruction_data = instruction_data;
 
+    u32 gc_safepoint_count = rd_count(r, 2);
+    I32Builder gc_safepoints = {0};
+    i32 previous_ip = -1;
+    for (u32 i = 0; r->ok && i < gc_safepoint_count; i++) {
+        i32 instruction_ip = rd_i32(r);
+        u32 root_count = rd_count(r, 1);
+        if (instruction_ip <= previous_ip || instruction_ip < 0 ||
+            instruction_ip >= fn->instruction_count ||
+            root_count > (u32) fn->register_count ||
+            !i32_builder_reserve(&gc_safepoints, r, (usize) root_count + 2)) {
+            r->ok = false;
+            break;
+        }
+        previous_ip = instruction_ip;
+        gc_safepoints.data[gc_safepoints.count++] = instruction_ip;
+        gc_safepoints.data[gc_safepoints.count++] = (i32) root_count;
+        usize root_base = gc_safepoints.count;
+        i32 previous_register = -1;
+        for (u32 root = 0; r->ok && root < root_count; root++) {
+            i32 reg = rd_i32(r);
+            if (reg <= previous_register || reg < 0 || reg >= fn->register_count) {
+                r->ok = false;
+                break;
+            }
+            previous_register = reg;
+            gc_safepoints.data[gc_safepoints.count++] = reg;
+        }
+        u32 clear_count = rd_count(r, 1);
+        if (clear_count > root_count ||
+            !i32_builder_reserve(&gc_safepoints, r, (usize) clear_count + 1)) {
+            r->ok = false;
+            break;
+        }
+        gc_safepoints.data[gc_safepoints.count++] = (i32) clear_count;
+        previous_register = -1;
+        u32 root_cursor = 0;
+        for (u32 clear = 0; r->ok && clear < clear_count; clear++) {
+            i32 reg = rd_i32(r);
+            while (root_cursor < root_count &&
+                   gc_safepoints.data[root_base + root_cursor] < reg) {
+                root_cursor++;
+            }
+            if (root_cursor == root_count ||
+                gc_safepoints.data[root_base + root_cursor] != reg ||
+                reg <= previous_register) {
+                r->ok = false;
+                break;
+            }
+            previous_register = reg;
+            gc_safepoints.data[gc_safepoints.count++] = reg;
+        }
+    }
+    i32 *gc_safepoint_data = arena_array(
+        L, r, gc_safepoints.count, sizeof(i32), alignof(i32));
+    if (r->ok && gc_safepoints.count > 0) {
+        memcpy(
+            gc_safepoint_data,
+            gc_safepoints.data,
+            gc_safepoints.count * sizeof(i32));
+    }
+    free(gc_safepoints.data);
+    fn->gc_safepoint_count = (i32) gc_safepoint_count;
+    fn->gc_safepoints = gc_safepoint_data;
+
     u32 handler_count = rd_count(r, 3);
     fn->handler_count = (i32) handler_count;
     MalExceptionHandler *handlers = arena_array(
@@ -1665,6 +1776,42 @@ static bool mal_loaded_strings_equal(const MalString *left, const MalString *rig
     if (left->length != right->length) return false;
     for (usize index = 0; index < left->length; index++) {
         if (left->code_units[index] != right->code_units[index]) return false;
+    }
+    return true;
+}
+
+static bool mal_loaded_value_operand_valid(
+    const MalFunction *owner, u32 string_count, i32 operand
+) {
+    if (operand >= 0) return operand < owner->register_count;
+    if (operand >= MAL_VALUE_OPERAND_TRUE) return true;
+    if (operand <= MAL_VALUE_OPERAND_STRING_BASE &&
+        operand >= MAL_VALUE_OPERAND_STRING_MIN) {
+        return MAL_VALUE_OPERAND_STRING_BASE - operand < (i32) string_count;
+    }
+    return operand <= MAL_VALUE_OPERAND_I28_BASE &&
+        operand >= MAL_VALUE_OPERAND_I28_MIN;
+}
+
+static bool mal_loaded_exact_array_length_valid(
+    const MalString *strings,
+    u32 string_count,
+    const MalFunction *owner,
+    const MalInstruction *instruction
+) {
+    i32 dst = instruction->as.load_property_static.dst;
+    i32 object = instruction->as.load_property_static.object;
+    i32 string_index = instruction->as.load_property_static.string_index;
+    if (dst < 0 || dst >= owner->register_count ||
+        object < 0 || object >= owner->register_count ||
+        string_index < 0 || string_index >= (i32) string_count) {
+        return false;
+    }
+    static const c16 length_key[] = {'l', 'e', 'n', 'g', 't', 'h'};
+    const MalString *key = &strings[string_index];
+    if (key->length != countof(length_key)) return false;
+    for (usize index = 0; index < countof(length_key); index++) {
+        if (key->code_units[index] != length_key[index]) return false;
     }
     return true;
 }
@@ -2013,10 +2160,70 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         const MalFunction *fn = &functions[f];
         for (i32 ip = 0; r.ok && ip < fn->instruction_count; ip++) {
             const MalInstruction *instruction = &fn->instructions[ip];
+            if (instruction->opcode == MAL_OP_CALL) {
+                const i32 *data =
+                    &fn->instruction_data[instruction->as.call.data_offset];
+                i32 argument_count = data[0];
+                i32 exact = data[1];
+                i32 target_count = data[2];
+                if (!mal_loaded_value_operand_valid(
+                        fn, string_count, instruction->as.call.callee) ||
+                    !mal_loaded_value_operand_valid(
+                        fn, string_count, instruction->as.call.this_value) ||
+                    exact >= (i32) function_count || target_count < 0 || target_count > 4 ||
+                    (exact >= 0 && target_count != 0)) {
+                    r.ok = false;
+                }
+                for (i32 target = 0; r.ok && target < target_count; target++) {
+                    i32 function_index = data[target + 3];
+                    if (function_index < 0 || function_index >= (i32) function_count ||
+                        (target > 0 && function_index <= data[target + 2])) {
+                        r.ok = false;
+                    }
+                }
+                for (i32 argument = 0; r.ok && argument < argument_count; argument++) {
+                    if (!mal_loaded_value_operand_valid(
+                            fn, string_count, data[3 + target_count + argument])) {
+                        r.ok = false;
+                    }
+                }
+            } else if (instruction->opcode == MAL_OP_CALL_BUILTIN) {
+                const i32 *data =
+                    &fn->instruction_data[instruction->as.call_builtin.data_offset];
+                if (!mal_loaded_value_operand_valid(
+                        fn, string_count, instruction->as.call_builtin.this_value)) {
+                    r.ok = false;
+                }
+                for (i32 argument = 0; r.ok && argument < data[0]; argument++) {
+                    if (!mal_loaded_value_operand_valid(
+                            fn, string_count, data[argument + 1])) {
+                        r.ok = false;
+                    }
+                }
+            } else if (instruction->opcode == MAL_OP_CONSTRUCT) {
+                const i32 *data =
+                    &fn->instruction_data[instruction->as.construct.data_offset];
+                if (!mal_loaded_value_operand_valid(
+                        fn, string_count, instruction->as.construct.callee) ||
+                    data[1] >= (i32) function_count || data[2] != 0) {
+                    r.ok = false;
+                }
+                for (i32 argument = 0; r.ok && argument < data[0]; argument++) {
+                    if (!mal_loaded_value_operand_valid(
+                            fn, string_count, data[argument + 3])) {
+                        r.ok = false;
+                    }
+                }
+            }
             if ((instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT ||
                  instruction->opcode == MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) &&
                 !mal_loaded_known_own_slot_valid(
                     def, string_count, fn, instruction)) {
+                r.ok = false;
+            }
+            if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH &&
+                !mal_loaded_exact_array_length_valid(
+                    strings, string_count, fn, instruction)) {
                 r.ok = false;
             }
             if (instruction->opcode == MAL_OP_SELECT_SHAPE_CASE &&

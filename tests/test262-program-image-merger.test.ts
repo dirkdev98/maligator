@@ -5,6 +5,10 @@ import type {
 	BytecodeInstruction,
 	RuntimeImage,
 } from "../src/compiler/target/runtime-image.ts";
+import {
+	decodeVmValueOperand,
+	encodeVmValueOperand,
+} from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
@@ -162,6 +166,7 @@ describe("Test262 VM image merger", () => {
 				dst: 0,
 				callee: 1,
 				thisValue: 2,
+				exactFunctionIndex: 0,
 				argumentCount: 0,
 				arguments: [],
 			},
@@ -169,6 +174,7 @@ describe("Test262 VM image merger", () => {
 				opcode: "CONSTRUCT",
 				dst: 0,
 				callee: 1,
+				exactFunctionIndex: 0,
 				argumentCount: 0,
 				arguments: [],
 			},
@@ -219,6 +225,14 @@ describe("Test262 VM image merger", () => {
 				stringIndex: 0,
 				icIndex: 4,
 				candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 }],
+			},
+			{
+				opcode: "CALL_BUILTIN",
+				dst: 0,
+				thisValue: encodeVmValueOperand(-1, { kind: "string", index: 0 }),
+				argumentCount: 2,
+				arguments: [encodeVmValueOperand(-1, { kind: "string", index: 0 }), 1],
+				operation: "Object.is",
 			},
 		];
 		const secondFunction = vmFunction(indexed);
@@ -282,6 +296,20 @@ describe("Test262 VM image merger", () => {
 			keyStringIndices: [2],
 			valueRegisters: [1],
 		});
+		const rebasedBuiltin = rebased.find(
+			(instruction) => instruction.opcode === "CALL_BUILTIN",
+		);
+		expect(rebasedBuiltin?.opcode).toBe("CALL_BUILTIN");
+		if (rebasedBuiltin?.opcode === "CALL_BUILTIN") {
+			expect(decodeVmValueOperand(rebasedBuiltin.thisValue)).toEqual({
+				kind: "string",
+				index: 2,
+			});
+			expect(rebasedBuiltin.arguments.map(decodeVmValueOperand)).toEqual([
+				{ kind: "string", index: 2 },
+				{ kind: "register", register: 1 },
+			]);
+		}
 		expect(rebased[10]).toMatchObject({
 			cacheSlot: 3,
 			cookedIndices: [2, -1],
@@ -298,6 +326,8 @@ describe("Test262 VM image merger", () => {
 			capturedIndices: [0, 2],
 		});
 		expect(rebased[15]).toMatchObject({ object: 0, keyRegisters: [1, 2] });
+		expect(rebased[16]).toMatchObject({ exactFunctionIndex: 2 });
+		expect(rebased[17]).toMatchObject({ exactFunctionIndex: 2 });
 		const rebasedNative = merged.native.functions[2]!.instructions;
 		expect(rebasedNative[16]).toMatchObject({
 			directFunctionIndex: 2,
@@ -306,17 +336,49 @@ describe("Test262 VM image merger", () => {
 		});
 		expect(rebasedNative[17]).toMatchObject({ directFunctionIndex: 2 });
 		expect(rebased[18]).toMatchObject({ opcode: "BINARY", operator: "+" });
-		expect(rebased.at(-2)).toMatchObject({
+		expect(rebased.at(-3)).toMatchObject({
 			opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			stringIndex: 2,
 			candidates: [{ shapeFunctionIndex: 2, shapeCacheIndex: 0, slot: 0 }],
 		});
-		expect(rebased.at(-1)).toMatchObject({
+		expect(rebased.at(-2)).toMatchObject({
 			opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 			stringIndex: 2,
 			candidates: [{ shapeFunctionIndex: 2, shapeCacheIndex: 0, slot: 0 }],
 		});
 		expect(second.runtime.functions[0]!.instructions).toEqual(indexed);
+	});
+
+	it("rebases portable and native guarded call-target sets", () => {
+		const guardedCall: BytecodeInstruction = {
+			opcode: "CALL",
+			dst: 0,
+			callee: 1,
+			thisValue: 2,
+			guardedFunctionIndices: [0, 1],
+			argumentCount: 0,
+			arguments: [],
+		};
+		const guardedBase = image({
+			functions: [
+				vmFunction([guardedCall]),
+				vmFunction([{ opcode: "RETURN", value: 0 }]),
+			],
+		});
+		const guarded = withNativeFunctionPlan(guardedBase, 0, (plan) => ({
+			...plan,
+			instructions: plan.instructions.with(0, {
+				kind: "call",
+				guardedFunctionIndices: [0, 1],
+			}),
+		}));
+		const merged = mergeProgramImages([image(), guarded]).image;
+		expect(merged.runtime.functions[1]!.instructions[0]).toMatchObject({
+			guardedFunctionIndices: [1, 2],
+		});
+		expect(merged.native.functions[1]!.instructions[0]).toMatchObject({
+			guardedFunctionIndices: [1, 2],
+		});
 	});
 
 	it("rejects malformed image counts and literal-template streams", () => {

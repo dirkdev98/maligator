@@ -3,6 +3,7 @@ import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
 import type { CoreFunction } from "../core/core-ir.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import { coreInstructionNeedsOperationSafepoint } from "./core-operation-contract.ts";
 import type {
 	ExecutionFunction,
 	ExecutionParallelCopy,
@@ -329,12 +330,15 @@ function verifyInstructionOperands(model: FunctionModel): void {
 				);
 			}
 			const immediates = instructionImmediates(instruction);
-			const embeddable = instruction.type === "call" || instruction.type === "construct";
+			const embeddable =
+				instruction.type === "call" ||
+				instruction.type === "callBuiltin" ||
+				instruction.type === "construct";
 			for (const [position, register] of (registers ?? []).entries()) {
 				const operandContext = { ...context, register };
 				if (register === -1) {
 					if (!embeddable || position < shape.writes) {
-						fail("only a call or construct argument may drop its register", {
+						fail("only a call-like operand may drop its register", {
 							...context,
 						});
 					}
@@ -745,13 +749,7 @@ function verifyGcRoots(model: FunctionModel, core: CoreFunction): void {
 	const expected = new Map(
 		core.blocks.flatMap(({ instructions }) =>
 			instructions
-				.filter(
-					(instruction) =>
-						(
-							instruction.effectRefinement?.effects ??
-							coreOpcodeRegistry.require(instruction.opcode).effects
-						).mayGc,
-				)
+				.filter((instruction) => coreInstructionNeedsOperationSafepoint(instruction))
 				.map((instruction) => [instruction.id, instruction] as const),
 		),
 	);

@@ -18,6 +18,7 @@ import type {
 	PlannedDirectEntry,
 } from "./lower-execution.ts";
 import {
+	coreSupportsDirectEntries,
 	lowerCoreCompilationWithDirectEntries,
 	physicalRegisterClass,
 } from "./lower-execution.ts";
@@ -48,27 +49,6 @@ function directEntryResultRepresentation(
 	return first !== "boxed" && representations.every((entry) => entry === first)
 		? first
 		: "boxed";
-}
-
-const RAW_ARGUMENT_OPCODES = new Set([
-	"loadArgumentCount",
-	"loadArgument",
-	"loadStaticArgument",
-	"createArgumentsObject",
-	"createRestArguments",
-]);
-
-function supportsDirectEntry(fn: CoreFunction): boolean {
-	return (
-		!fn.isGenerator &&
-		!fn.isAsync &&
-		!fn.metadata.isClassConstructor &&
-		!fn.metadata.isDerivedConstructor &&
-		!fn.metadata.mappedArguments &&
-		!fn.blocks.some(({ instructions }) =>
-			instructions.some(({ opcode }) => RAW_ARGUMENT_OPCODES.has(opcode)),
-		)
-	);
 }
 
 /** Select a bounded set of explicit native ABIs from the final closed call graph. */
@@ -115,7 +95,7 @@ function planDirectEntries(core: CoreProgram): DirectEntryPlan {
 				const targetIndex = instruction.attributes.directFunctionIndex;
 				if (typeof targetIndex !== "number") continue;
 				const target = core.functions[targetIndex];
-				if (target === undefined || !supportsDirectEntry(target)) continue;
+				if (target === undefined || !coreSupportsDirectEntries(target)) continue;
 				const exactArguments = coreExactCallArgumentRepresentations(
 					instruction.attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE],
 					target.parameters.length,

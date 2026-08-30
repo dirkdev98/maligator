@@ -257,9 +257,115 @@ describe("Core whole-program function reachability", () => {
 			true,
 		);
 		const analysis = analyzeCoreFunctionReachability(program);
+		const compacted = compactCoreProgramFunctions(program, analysis);
 
 		expect([...analysis.executable].sort((left, right) => left - right)).toEqual([0, 1]);
-		expect(compactCoreProgramFunctions(program, analysis).changed).toBe(false);
+		expect(compacted.program.functions).toHaveLength(2);
+	});
+
+	it("densely relocates live Core metadata when every function remains executable", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			metadata: { nameStringIndex: 1, sourcePath: "metadata-compaction.js" },
+		});
+		const entry = builder.createBlock();
+		const [stringValue] = builder.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 3 },
+			sourcePosition: 3,
+		});
+		const [bigintValue] = builder.appendInstruction(entry, "createBigint", [], {
+			attributes: { bigintIndex: 1 },
+		});
+		const [template] = builder.appendInstruction(
+			entry,
+			"instantiateLiteralTemplate",
+			[],
+			{ attributes: { templateOffset: 2 } },
+		);
+		const [object] = builder.appendInstruction(
+			entry,
+			"createObjectShaped",
+			[stringValue!, template!],
+			{
+				attributes: { keyStringIndices: [4, 1] },
+			},
+		);
+		const stringBlock = builder.createBlock();
+		const bigintBlock = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "switch",
+			discriminant: stringValue!,
+			cases: [
+				{
+					value: { kind: "string", index: 4 },
+					edge: { block: stringBlock, arguments: [] },
+				},
+			],
+			default: { block: bigintBlock, arguments: [] },
+			sourcePosition: 3,
+		});
+		builder.setTerminator(stringBlock, { kind: "return", value: object! });
+		builder.setTerminator(bigintBlock, { kind: "return", value: bigintValue! });
+		const shell = closedProgram([builder.finish(entry)]);
+		const program: CoreProgram = {
+			...shell,
+			stringConstants: [[100], [110], [101], [118], [107]],
+			bigintConstants: [11n, 22n],
+			literalTemplateData: [5, 2, 8, 2, 5, 3, 6, 1],
+			sourcePositions: [
+				{ line: 1, column: 0 },
+				{ line: 20, column: 2 },
+				{ line: 2, column: 0 },
+				{
+					line: 30,
+					column: 3,
+					inlinedFunctionIndex: 0,
+					callerPosId: 1,
+				},
+			],
+		};
+		contexts.set(program, contextFor(shell));
+
+		const compacted = compactCoreProgramFunctions(program);
+		const fn = compacted.program.functions[0]!;
+		const instructions = fn.blocks.flatMap(({ instructions }) => instructions);
+		const createString = instructions.find(({ opcode }) => opcode === "createString")!;
+		const createBigint = instructions.find(({ opcode }) => opcode === "createBigint")!;
+		const createObject = instructions.find(
+			({ opcode }) => opcode === "createObjectShaped",
+		)!;
+		const instantiate = instructions.find(
+			({ opcode }) => opcode === "instantiateLiteralTemplate",
+		)!;
+		const switched = fn.blocks.find(
+			({ terminator }) => terminator.kind === "switch",
+		)!.terminator;
+
+		expect(compacted.changed).toBe(true);
+		expect(compacted.program.functions).toHaveLength(1);
+		expect(compacted.program.stringConstants).toEqual([[110], [118], [107]]);
+		expect(compacted.program.bigintConstants).toEqual([22n]);
+		expect(compacted.program.literalTemplateData).toEqual([8, 2, 5, 1, 6, 0]);
+		expect(compacted.program.sourcePositions).toEqual([
+			{ line: 20, column: 2 },
+			{
+				line: 30,
+				column: 3,
+				inlinedFunctionIndex: 0,
+				callerPosId: 0,
+			},
+		]);
+		expect(fn.metadata.nameStringIndex).toBe(0);
+		expect(createString.attributes.stringIndex).toBe(1);
+		expect(createString.sourcePosition).toBe(1);
+		expect(createBigint.attributes.bigintIndex).toBe(0);
+		expect(createObject.attributes.keyStringIndices).toEqual([2, 0]);
+		expect(instantiate.attributes.templateOffset).toBe(0);
+		expect(switched).toMatchObject({
+			kind: "switch",
+			sourcePosition: 1,
+			cases: [{ value: { kind: "string", index: 2 } }],
+		});
+		expect(() => verifyCoreProgram(compacted.program, coreOpcodeRegistry)).not.toThrow();
 	});
 
 	it("removes the body of a function retained only for observable identity", () => {
@@ -420,7 +526,8 @@ describe("Core whole-program function reachability", () => {
 		const program: CoreProgram = {
 			...shell,
 			sourcePositions: [
-				{ line: 1, column: 1, inlinedFunctionIndex: 2, callerPosId: 1 },
+				{ line: 99, column: 9 },
+				{ line: 1, column: 1, inlinedFunctionIndex: 2, callerPosId: 2 },
 				{ line: 2, column: 1 },
 			],
 		};
@@ -429,7 +536,7 @@ describe("Core whole-program function reachability", () => {
 			optimizationDecisions: [
 				{
 					functionIndex: 0,
-					positionId: 0,
+					positionId: 1,
 					operation: "call",
 					phase: "optimization",
 					code: "optimization.applied.test",
@@ -442,7 +549,13 @@ describe("Core whole-program function reachability", () => {
 
 		expect([...analysis.executable]).toEqual([0]);
 		expect([...analysis.retained].sort((left, right) => left - right)).toEqual([0, 2]);
-		expect(compacted.program.sourcePositions[0]!.inlinedFunctionIndex).toBe(1);
+		expect(compacted.program.sourcePositions).toEqual([
+			{ line: 1, column: 1, inlinedFunctionIndex: 1, callerPosId: 1 },
+			{ line: 2, column: 1 },
+		]);
+		expect(compacted.context!.optimizationDecisions).toEqual([
+			expect.objectContaining({ functionIndex: 0, positionId: 0 }),
+		]);
 	});
 
 	it("rebases nested function scopes in retained builtin proofs", () => {
@@ -603,5 +716,35 @@ describe("Core whole-program function reachability", () => {
 		expect(optimized!.functions).toHaveLength(2);
 		expect(definition.runtime.functionCount).toBe(2);
 		expect(definition.runtime.functions).toHaveLength(2);
+	});
+
+	it("omits unreachable constants from the target program image", () => {
+		const deadElements = Array.from({ length: 16 }, () => '"dead-metadata-only"').join(
+			", ",
+		);
+		const source = `
+			function dead() {
+				return [${deadElements}, 9876543210123456789n];
+			}
+			globalThis.liveText = "live-metadata";
+			globalThis.liveBigint = 1234567890123456789n;
+		`;
+		const path = "closed-metadata-product.mjs";
+		const definition = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, path, parseModule(source)),
+			{
+				facts: moduleFacts(path, true),
+				optimizationAblations: new Set(["inlining"]),
+			},
+		);
+		const strings = definition.runtime.stringConstants.map((units) =>
+			String.fromCharCode(...units),
+		);
+
+		expect(strings).toContain("live-metadata");
+		expect(strings).not.toContain("dead-metadata-only");
+		expect(definition.runtime.bigintConstants).toContain(1234567890123456789n);
+		expect(definition.runtime.bigintConstants).not.toContain(9876543210123456789n);
+		expect(definition.runtime.literalTemplateData).toEqual([]);
 	});
 });

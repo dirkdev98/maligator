@@ -1,5 +1,9 @@
 import type { CoreCompilation } from "../core/core-compilation.ts";
-import { CORE_INTERNAL_TARGET_ATTRIBUTES } from "../core/core-ir-call-targets.ts";
+import {
+	CORE_CALLEE_TARGET_CAP,
+	CORE_CALLEE_TARGETS_ATTRIBUTE,
+	CORE_INTERNAL_TARGET_ATTRIBUTES,
+} from "../core/core-ir-call-targets.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -50,6 +54,10 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
+import {
+	coreInstructionNeedsOperationSafepoint,
+	requireCoreTargetOperationContract,
+} from "./core-operation-contract.ts";
 import type {
 	ExecutionFunction,
 	ExecutionDirectEntry,
@@ -84,6 +92,28 @@ export interface PlannedDirectEntry {
 export interface DirectEntryPlan {
 	readonly entriesByFunction: ReadonlyArray<ReadonlyArray<PlannedDirectEntry>>;
 	readonly entryByCall: ReadonlyMap<CoreInstruction, number>;
+}
+
+const RAW_ARGUMENT_OPCODES = new Set([
+	"loadArgumentCount",
+	"loadArgument",
+	"loadStaticArgument",
+	"createArgumentsObject",
+	"createRestArguments",
+]);
+
+/** Whether the canonical ABI may acquire typed native-only entry siblings. */
+export function coreSupportsDirectEntries(fn: CoreFunction): boolean {
+	return (
+		!fn.isGenerator &&
+		!fn.isAsync &&
+		!fn.metadata.isClassConstructor &&
+		!fn.metadata.isDerivedConstructor &&
+		!fn.metadata.mappedArguments &&
+		!fn.blocks.some(({ instructions }) =>
+			instructions.some(({ opcode }) => RAW_ARGUMENT_OPCODES.has(opcode)),
+		)
+	);
 }
 
 const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
@@ -174,6 +204,37 @@ function targetAttributes(
 	return attributes;
 }
 
+function guardedCallTargets(
+	instruction: CoreInstruction,
+): ReadonlyArray<number> | undefined {
+	if (
+		instruction.opcode !== "call" ||
+		typeof instruction.attributes.directFunctionIndex === "number"
+	) {
+		return undefined;
+	}
+	const attribute = instruction.attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
+	if (attribute === null || typeof attribute !== "object" || Array.isArray(attribute)) {
+		return undefined;
+	}
+	const functions = (attribute as { readonly functions?: unknown }).functions;
+	if (
+		!Array.isArray(functions) ||
+		functions.length === 0 ||
+		functions.length > CORE_CALLEE_TARGET_CAP ||
+		!functions.every(
+			(target, index) =>
+				typeof target === "number" &&
+				Number.isSafeInteger(target) &&
+				target >= 0 &&
+				(index === 0 || target > functions[index - 1]!),
+		)
+	) {
+		return undefined;
+	}
+	return functions as ReadonlyArray<number>;
+}
+
 /**
  * Materialize Core's independently re-proved containment certificate as the
  * physical slot it names. The fact is intentionally consumed here, after the
@@ -235,6 +296,7 @@ function rebuildInstruction(
 	regionNamed: boolean,
 	forceBoxed: boolean,
 ): CompilerInstruction {
+	const contract = requireCoreTargetOperationContract(instruction.opcode);
 	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
 	const exactShapeOwnSlot = coreExactShapeOwnSlotFromAttribute(
 		instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE],
@@ -283,7 +345,9 @@ function rebuildInstruction(
 	// describes even though the producer stays materialized.
 	if (
 		!regionNamed &&
-		(instruction.opcode === "call" || instruction.opcode === "construct")
+		(instruction.opcode === "call" ||
+			instruction.opcode === "callBuiltin" ||
+			instruction.opcode === "construct")
 	) {
 		for (const [index, input] of instruction.inputs.entries()) {
 			const value = coreImmediateValue(loweringIndex, input);
@@ -293,9 +357,11 @@ function rebuildInstruction(
 			immediateValues[position] = value;
 		}
 	}
+	const guardedFunctionIndices = guardedCallTargets(instruction);
 	return {
-		type: instruction.opcode,
+		type: contract.targetType,
 		...targetAttributes(instruction.attributes),
+		...(guardedFunctionIndices === undefined ? {} : { guardedFunctionIndices }),
 		...(exactOwnSlot === undefined ? {} : { exactOwnSlot }),
 		...(exactArrayLength ? { exactArrayLength: true } : {}),
 		...(exactContainedArrayElement ? { exactContainedArrayElement: true } : {}),
@@ -589,14 +655,14 @@ export function coreRegisterClasses(
 	// Target edge lowering emits parallel copies for distinct block arguments. Moves
 	// and single-source ordinary phis are semantic aliases, however, and must retain
 	// one register both to erase their redundant copies and to preserve region
-	// contracts selected over canonical values. Allocate those canonical classes as
-	// conservative live intervals. This avoids the dense pairwise interference graph
-	// that made large self-hosted functions quadratic while preserving the safety
-	// rule that unrelated values whose lifetimes can overlap never share a register.
+	// contracts selected over canonical values. Sparse per-block ranges keep mutually
+	// exclusive paths disjoint without rebuilding the dense pairwise interference
+	// graph that made large self-hosted functions quadratic.
 	interface LiveInterval {
 		readonly value: CoreValueId;
 		start: number;
 		end: number;
+		readonly blockRanges: Map<CoreBlockId, { start: number; end: number }>;
 	}
 	const intervals = new Array<LiveInterval | undefined>(
 		(core.values.at(-1)?.id ?? -1) + 1,
@@ -606,33 +672,55 @@ export function coreRegisterClasses(
 			value: id,
 			start: Number.POSITIVE_INFINITY,
 			end: Number.NEGATIVE_INFINITY,
+			blockRanges: new Map(),
 		};
 	}
-	const touch = (value: CoreValueId, position: number): void => {
+	const touch = (
+		value: CoreValueId,
+		block: CoreBlockId,
+		position: number,
+		blockPosition: number,
+	): void => {
 		const interval = intervals[value];
 		if (interval === undefined) throw new Error(`Core allocation lost value %${value}`);
 		interval.start = Math.min(interval.start, position);
 		interval.end = Math.max(interval.end, position);
+		const range = interval.blockRanges.get(block);
+		if (range === undefined) {
+			interval.blockRanges.set(block, {
+				start: blockPosition,
+				end: blockPosition,
+			});
+		} else {
+			range.start = Math.min(range.start, blockPosition);
+			range.end = Math.max(range.end, blockPosition);
+		}
 	};
 	let nextPosition = 0;
 	for (const block of core.blocks) {
 		const blockStart = nextPosition++;
-		for (const { value } of block.parameters) touch(value, blockStart);
-		for (const value of liveIn[block.id]!) touch(value, blockStart);
-		for (const instruction of block.instructions) {
+		for (const { value } of block.parameters) touch(value, block.id, blockStart, 0);
+		for (const value of liveIn[block.id]!) touch(value, block.id, blockStart, 0);
+		for (const [instructionIndex, instruction] of block.instructions.entries()) {
 			const position = nextPosition++;
-			for (const input of instruction.inputs) touch(input, position);
-			for (const output of instruction.outputs) touch(output, position);
+			for (const input of instruction.inputs)
+				touch(input, block.id, position, instructionIndex + 1);
+			for (const output of instruction.outputs)
+				touch(output, block.id, position, instructionIndex + 1);
 		}
 		const blockEnd = nextPosition++;
-		for (const value of blockTerminatorValues[block.id]!) touch(value, blockEnd);
-		for (const argument of block.handler?.arguments ?? []) touch(argument, blockEnd);
-		for (const value of liveOut[block.id]!) touch(value, blockEnd);
+		const blockEndPosition = block.instructions.length + 1;
+		for (const value of blockTerminatorValues[block.id]!)
+			touch(value, block.id, blockEnd, blockEndPosition);
+		for (const argument of block.handler?.arguments ?? [])
+			touch(argument, block.id, blockEnd, blockEndPosition);
+		for (const value of liveOut[block.id]!)
+			touch(value, block.id, blockEnd, blockEndPosition);
 		// Handler parameters are initialized before the protected block executes and
 		// must remain intact at every instruction that can transfer to the handler.
 		for (const parameter of handlerParameters(block)) {
-			touch(parameter, blockStart);
-			touch(parameter, blockEnd);
+			touch(parameter, block.id, blockStart, 0);
+			touch(parameter, block.id, blockEnd, blockEndPosition);
 		}
 	}
 	for (const interval of intervals) {
@@ -684,10 +772,25 @@ export function coreRegisterClasses(
 		const root = roots.get(interval.value)!;
 		const existing = classIntervals.get(root);
 		if (existing === undefined) {
-			classIntervals.set(root, { ...interval, value: root });
+			classIntervals.set(root, {
+				...interval,
+				value: root,
+				blockRanges: new Map(
+					[...interval.blockRanges].map(([block, range]) => [block, { ...range }]),
+				),
+			});
 		} else {
 			existing.start = Math.min(existing.start, interval.start);
 			existing.end = Math.max(existing.end, interval.end);
+			for (const [block, range] of interval.blockRanges) {
+				const current = existing.blockRanges.get(block);
+				if (current === undefined) {
+					existing.blockRanges.set(block, { ...range });
+				} else {
+					current.start = Math.min(current.start, range.start);
+					current.end = Math.max(current.end, range.end);
+				}
+			}
 		}
 	}
 	const abi = new Map<CoreValueId, number>(
@@ -827,115 +930,150 @@ export function coreRegisterClasses(
 		(left, right) =>
 			left.start - right.start || left.end - right.end || left.value - right.value,
 	);
-	const abiIntervals = new Map<number, LiveInterval>();
-	const abiRootByColor = new Map<number, CoreValueId>();
-	for (const [root, color] of abiRoots)
-		abiIntervals.set(color, classIntervals.get(root)!);
-	for (const [root, color] of abiRoots) abiRootByColor.set(color, root);
-	const active: Array<LiveInterval> = [];
-	const activeColorCounts = new Map<number, number>();
+	const rootsByColor = new Map<number, Array<CoreValueId>>();
+	for (const [root, color] of abiRoots) rootsByColor.set(color, [root]);
+	const blockRangesByColor = new Map<
+		number,
+		Map<CoreBlockId, Array<{ start: number; end: number }>>
+	>();
 	const certificateColors = new Set<number>();
-	const addActive = (interval: LiveInterval): void => {
-		active.push(interval);
-		const color = registers.get(interval.value)!;
-		activeColorCounts.set(color, (activeColorCounts.get(color) ?? 0) + 1);
+	const intervalsOverlap = (left: LiveInterval, right: LiveInterval): boolean => {
+		const ranges =
+			left.blockRanges.size <= right.blockRanges.size
+				? left.blockRanges
+				: right.blockRanges;
+		const other = ranges === left.blockRanges ? right.blockRanges : left.blockRanges;
+		for (const [block, range] of ranges) {
+			const candidate = other.get(block);
+			if (
+				candidate !== undefined &&
+				range.start <= candidate.end &&
+				candidate.start <= range.end
+			) {
+				return true;
+			}
+		}
+		return false;
 	};
-	for (const interval of orderedIntervals) {
-		let remaining = 0;
-		for (const candidate of active) {
-			if (candidate.end >= interval.start) {
-				active[remaining++] = candidate;
+	const colorRangesOverlap = (color: number, interval: LiveInterval): boolean => {
+		const byBlock = blockRangesByColor.get(color);
+		if (byBlock === undefined) return false;
+		for (const [block, range] of interval.blockRanges) {
+			for (const candidate of byBlock.get(block) ?? []) {
+				if (candidate.start > range.end) break;
+				if (range.start <= candidate.end) return true;
+			}
+		}
+		return false;
+	};
+	const addColorRanges = (color: number, interval: LiveInterval): void => {
+		const byBlock =
+			blockRangesByColor.get(color) ??
+			new Map<CoreBlockId, Array<{ start: number; end: number }>>();
+		for (const [block, range] of interval.blockRanges) {
+			const ranges = byBlock.get(block) ?? [];
+			const first = ranges.findIndex((candidate) => candidate.end + 1 >= range.start);
+			if (first < 0) {
+				ranges.push({ ...range });
+				byBlock.set(block, ranges);
 				continue;
 			}
-			const color = registers.get(candidate.value)!;
-			const count = activeColorCounts.get(color)! - 1;
-			if (count === 0) activeColorCounts.delete(color);
-			else activeColorCounts.set(color, count);
+			if (ranges[first]!.start > range.end + 1) {
+				ranges.splice(first, 0, { ...range });
+				byBlock.set(block, ranges);
+				continue;
+			}
+			let end = first;
+			let start = Math.min(ranges[first]!.start, range.start);
+			let finish = Math.max(ranges[first]!.end, range.end);
+			while (end + 1 < ranges.length && ranges[end + 1]!.start <= finish + 1) {
+				end++;
+				start = Math.min(start, ranges[end]!.start);
+				finish = Math.max(finish, ranges[end]!.end);
+			}
+			ranges.splice(first, end - first + 1, { start, end: finish });
+			byBlock.set(block, ranges);
 		}
-		active.length = remaining;
+		blockRangesByColor.set(color, byBlock);
+	};
+	for (const [root, color] of abiRoots) {
+		addColorRanges(color, classIntervals.get(root)!);
+	}
+	const colorAvailable = (
+		color: number,
+		interval: LiveInterval,
+		representation: CoreRepresentation,
+		allowCopyOverlap = false,
+	): boolean => {
+		if (
+			reservedAbiColors.has(color) ||
+			certificateColors.has(color) ||
+			(colorRepresentations.has(color) &&
+				colorRepresentations.get(color) !== representation)
+		) {
+			return false;
+		}
+		if (!colorRangesOverlap(color, interval)) return true;
+		if (!allowCopyOverlap) return false;
+		return (rootsByColor.get(color) ?? []).every((root) => {
+			if (copyCompatible(interval.value, root)) return true;
+			return !intervalsOverlap(interval, classIntervals.get(root)!);
+		});
+	};
+	const assignColor = (
+		interval: LiveInterval,
+		color: number,
+		representation: CoreRepresentation,
+	): void => {
+		registers.set(interval.value, color);
+		colorRepresentations.set(color, representation);
+		const colored = rootsByColor.get(color) ?? [];
+		colored.push(interval.value);
+		rootsByColor.set(color, colored);
+		addColorRanges(color, interval);
+		nextUniqueColor = Math.max(nextUniqueColor, color + 1);
+	};
+	for (const interval of orderedIntervals) {
 		const fixedColor = abiRoots.get(interval.value);
 		if (fixedColor !== undefined) {
-			if (
-				active.some(
-					(candidate) =>
-						registers.get(candidate.value) === fixedColor &&
-						!copyCompatible(candidate.value, interval.value),
-				)
-			) {
+			const conflicts = (rootsByColor.get(fixedColor) ?? []).some(
+				(root) =>
+					root !== interval.value &&
+					!copyCompatible(root, interval.value) &&
+					intervalsOverlap(classIntervals.get(root)!, interval),
+			);
+			if (conflicts)
 				throw new Error(`Core ABI register r${fixedColor} overlaps another live value`);
-			}
-			addActive(interval);
 			continue;
 		}
 		const representation = representations.get(interval.value)!;
 		if (shapeCaseRoots.has(interval.value)) {
-			registers.set(interval.value, nextUniqueColor);
-			colorRepresentations.set(nextUniqueColor, representation);
-			certificateColors.add(nextUniqueColor);
-			nextUniqueColor++;
-			addActive(interval);
+			const color = nextUniqueColor;
+			assignColor(interval, color, representation);
+			certificateColors.add(color);
 			continue;
 		}
 		if (!reuseRegisters) {
-			registers.set(interval.value, nextUniqueColor);
-			colorRepresentations.set(nextUniqueColor, representation);
-			nextUniqueColor++;
-			addActive(interval);
+			assignColor(interval, nextUniqueColor, representation);
 			continue;
 		}
 		const preferredColor = [...(copyPartners.get(interval.value) ?? [])]
 			.map((partner) => registers.get(partner))
 			.find((candidate): candidate is number => {
 				if (candidate === undefined) return false;
-				if (reservedAbiColors.has(candidate)) return false;
-				if (certificateColors.has(candidate)) return false;
-				if (colorRepresentations.get(candidate) !== representation) return false;
-				if (
-					active.some(
-						(activeInterval) =>
-							registers.get(activeInterval.value) === candidate &&
-							!copyCompatible(interval.value, activeInterval.value),
-					)
-				) {
-					return false;
-				}
-				const abiInterval = abiIntervals.get(candidate);
-				const abiRoot = abiRootByColor.get(candidate);
-				return (
-					abiInterval === undefined ||
-					abiInterval.end < interval.start ||
-					interval.end < abiInterval.start ||
-					(abiRoot !== undefined && copyCompatible(interval.value, abiRoot))
-				);
+				return colorAvailable(candidate, interval, representation, true);
 			});
 		let color = preferredColor ?? 0;
 		if (preferredColor === undefined) {
-			while (
-				activeColorCounts.has(color) ||
-				reservedAbiColors.has(color) ||
-				certificateColors.has(color) ||
-				(colorRepresentations.has(color) &&
-					colorRepresentations.get(color) !== representation) ||
-				(abiIntervals.has(color) &&
-					abiIntervals.get(color)!.start <= interval.end &&
-					interval.start <= abiIntervals.get(color)!.end)
-			) {
-				color++;
-			}
+			while (!colorAvailable(color, interval, representation)) color++;
 		}
-		registers.set(interval.value, color);
-		colorRepresentations.set(color, representation);
-		nextUniqueColor = Math.max(nextUniqueColor, color + 1);
-		addActive(interval);
+		assignColor(interval, color, representation);
 	}
 	const safepoints = new Set<CoreInstructionId>(
 		core.blocks.flatMap(({ instructions }) =>
-			instructions.flatMap((instruction) => {
-				const effects =
-					instruction.effectRefinement?.effects ??
-					coreOpcodeRegistry.require(instruction.opcode).effects;
-				return effects.mayGc ? [instruction.id] : [];
-			}),
+			instructions.flatMap((instruction) =>
+				coreInstructionNeedsOperationSafepoint(instruction) ? [instruction.id] : [],
+			),
 		),
 	);
 	return {
@@ -970,7 +1108,7 @@ function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructi
 }
 
 /**
- * Constant producers whose every consumer embeds them as a call operand. Encoding
+ * Constant producers whose every consumer embeds them as a call-like operand. Encoding
  * only: the operand still realizes the same constant at the same call, so the
  * omission removes no Core operation and grants no license. A region certificate
  * names both ends out of embedding — the producer so it stays materialized, and
@@ -990,7 +1128,9 @@ function immediateOnlyInstructions(
 		for (const instruction of block.instructions) {
 			for (const input of instruction.inputs) {
 				if (
-					(instruction.opcode === "call" || instruction.opcode === "construct") &&
+					(instruction.opcode === "call" ||
+						instruction.opcode === "callBuiltin" ||
+						instruction.opcode === "construct") &&
 					!protectedInstructions.has(instruction.id) &&
 					coreImmediateValue(index, input) !== undefined
 				) {
@@ -1145,11 +1285,9 @@ function lowerFunctionToTarget(
 		core,
 		reuseRegisters,
 		new Set(
-			plannedDirectEntries.flatMap(({ parameterRepresentations }) =>
-				parameterRepresentations.flatMap((representation, index) =>
-					representation === "boxed" ? [] : [index],
-				),
-			),
+			coreSupportsDirectEntries(core)
+				? core.parameters.map((_parameter, index) => index)
+				: [],
 		),
 	);
 	const parallelCopies: Array<ExecutionParallelCopy> = [];
@@ -1569,7 +1707,8 @@ export function lowerCoreCompilationWithDirectEntries(
 /**
  * Select and allocate the bytecode/runtime contract without native-only ABI variants.
  * Runtime eval serializes no NativePlan, so planning those entries would retain dead
- * compiler machinery and reserve registers for a consumer that cannot observe it.
+ * compiler machinery. Canonical allocation still preserves eligible ABI parameter
+ * colors so a native overlay cannot perturb the portable image.
  */
 export function lowerCoreCompilationToRuntimeExecution(
 	compilation: CoreCompilation,

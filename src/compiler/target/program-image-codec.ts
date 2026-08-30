@@ -2,7 +2,7 @@ import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
-	validateVmShapeCases,
+	validateRuntimeImageMetadata,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
@@ -22,7 +22,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 30;
+export const WIRE_VERSION = 34;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -438,7 +438,7 @@ export function writeRuntimeImage(
 	version: number,
 	options: { debugInfo?: boolean },
 ): void {
-	validateVmShapeCases(def);
+	validateRuntimeImageMetadata(def);
 	const debug = options.debugInfo !== false;
 
 	w.fixedU32(magic);
@@ -561,6 +561,13 @@ function writeFunction(w: Writer, fn: BytecodeFunction, debug: boolean): void {
 		writeInstruction(w, instruction);
 	}
 
+	w.u32(fn.gcSafepoints?.length ?? 0);
+	for (const safepoint of fn.gcSafepoints ?? []) {
+		w.i32(safepoint.instructionIp);
+		w.i32Array(safepoint.rootRegisters);
+		w.i32Array(safepoint.clearRegisters ?? []);
+	}
+
 	w.u32(fn.handlers.length);
 	for (const handler of fn.handlers) {
 		w.i32(handler.startIp);
@@ -616,6 +623,7 @@ function validatePropertyIcIndices(fn: BytecodeFunction): void {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 			case "STORE_PROPERTY":
@@ -765,6 +773,8 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.dst);
 			w.i32(i.callee);
 			w.i32(i.thisValue);
+			w.i32(i.exactFunctionIndex ?? -1);
+			w.i32Array(i.guardedFunctionIndices ?? []);
 			w.i32(i.argumentCount);
 			w.i32Array(i.arguments);
 			return;
@@ -789,6 +799,8 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 		case "CONSTRUCT":
 			w.i32(i.dst);
 			w.i32(i.callee);
+			w.i32(i.exactFunctionIndex ?? -1);
+			w.i32Array([]);
 			w.i32(i.argumentCount);
 			w.i32Array(i.arguments);
 			return;
@@ -871,6 +883,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.key);
 			return;
 		case "LOAD_PROPERTY_STATIC":
+		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 			w.i32(i.dst);
 			w.i32(i.object);
 			w.i32(i.stringIndex);
@@ -1270,7 +1283,7 @@ export function readRuntimeImage(
 		sourcePositions,
 		cjsModuleFunctionIndices,
 	};
-	validateVmShapeCases(runtimeImage);
+	validateRuntimeImageMetadata(runtimeImage);
 	return { reader: r, runtime: runtimeImage };
 }
 
@@ -1308,6 +1321,7 @@ function readFunction(r: Reader): BytecodeFunction {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
 			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
 			case "STORE_PROPERTY":
@@ -1320,6 +1334,19 @@ function readFunction(r: Reader): BytecodeFunction {
 				break;
 		}
 		instructions.push(instruction);
+	}
+
+	const safepointCount = r.count(2);
+	const gcSafepoints: NonNullable<BytecodeFunction["gcSafepoints"]> = [];
+	for (let i = 0; i < safepointCount; i++) {
+		const instructionIp = r.i32();
+		const rootRegisters = r.i32Array();
+		const clearRegisters = r.i32Array();
+		gcSafepoints.push({
+			instructionIp,
+			rootRegisters,
+			...(clearRegisters.length === 0 ? {} : { clearRegisters }),
+		});
 	}
 
 	const handlerCount = r.count(3);
@@ -1343,6 +1370,7 @@ function readFunction(r: Reader): BytecodeFunction {
 		mappedArguments,
 		length,
 		registerCount,
+		...(gcSafepoints.length === 0 ? {} : { gcSafepoints }),
 		capturedCount,
 		strict,
 		needsArguments,
@@ -1488,15 +1516,28 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			};
 		case "CREATE_FUNCTION":
 			return { opcode, dst: r.i32(), functionIndex: r.i32() };
-		case "CALL":
+		case "CALL": {
+			const dst = r.i32();
+			const callee = r.i32();
+			const thisValue = r.i32();
+			const exactFunctionIndex = r.i32();
+			const guardedFunctionIndices = r.i32Array();
+			const argumentCount = r.i32();
+			const arguments_ = r.i32Array();
+			if (exactFunctionIndex < -1) {
+				throw new RangeError("program-image-codec: invalid exact CALL target");
+			}
 			return {
 				opcode,
-				dst: r.i32(),
-				callee: r.i32(),
-				thisValue: r.i32(),
-				argumentCount: r.i32(),
-				arguments: r.i32Array(),
+				dst,
+				callee,
+				thisValue,
+				...(exactFunctionIndex < 0 ? {} : { exactFunctionIndex }),
+				...(guardedFunctionIndices.length === 0 ? {} : { guardedFunctionIndices }),
+				argumentCount,
+				arguments: arguments_,
 			};
+		}
 		case "MATH_UNARY_NUMBER": {
 			const dst = r.i32();
 			const src = r.i32();
@@ -1542,14 +1583,25 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				operation,
 			};
 		}
-		case "CONSTRUCT":
+		case "CONSTRUCT": {
+			const dst = r.i32();
+			const callee = r.i32();
+			const exactFunctionIndex = r.i32();
+			const guardedFunctionIndices = r.i32Array();
+			const argumentCount = r.i32();
+			const arguments_ = r.i32Array();
+			if (exactFunctionIndex < -1 || guardedFunctionIndices.length !== 0) {
+				throw new RangeError("program-image-codec: invalid exact CONSTRUCT target");
+			}
 			return {
 				opcode,
-				dst: r.i32(),
-				callee: r.i32(),
-				argumentCount: r.i32(),
-				arguments: r.i32Array(),
+				dst,
+				callee,
+				...(exactFunctionIndex < 0 ? {} : { exactFunctionIndex }),
+				argumentCount,
+				arguments: arguments_,
 			};
+		}
 		case "TRY_BEGIN":
 			return { opcode, handlerIp: 0 };
 		case "TRY_END":
@@ -1603,6 +1655,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 		case "LOAD_PROPERTY":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32(), icIndex: -1 };
 		case "LOAD_PROPERTY_STATIC":
+		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 			return {
 				opcode,
 				dst: r.i32(),

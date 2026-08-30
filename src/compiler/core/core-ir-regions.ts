@@ -77,6 +77,7 @@ export interface CoreAllocatedStringSplitProjectionRegion extends CoreAllocatedR
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
 	readonly splitIdentity: CoreBuiltinIdentityDecision;
+	readonly separator: Extract<CompilerInstruction, { type: "createString" }>;
 	readonly separatorStringIndex: number;
 	/** Allocated registers for every Core SSA alias licensed as the call result. */
 	readonly resultRegisters: ReadonlyArray<number>;
@@ -85,6 +86,7 @@ export interface CoreAllocatedStringSplitProjectionRegion extends CoreAllocatedR
 				readonly instruction: Extract<CompilerInstruction, { type: "loadProperty" }>;
 				readonly kind: "element";
 				readonly index: number;
+				readonly key: Extract<CompilerInstruction, { type: "createNumber" }>;
 		  }
 		| {
 				readonly instruction: Extract<
