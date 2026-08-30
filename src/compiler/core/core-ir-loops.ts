@@ -1,5 +1,5 @@
 /**
- * Reusable induction and range facts over canonical Core loops.
+ * Reusable exact-integer ranges and induction facts over canonical Core.
  *
  * The analysis recognizes only additive recurrences whose numeric representation
  * is explicit. It records wider relational facts, but derives concrete ranges
@@ -18,9 +18,14 @@ import type {
 
 export type CoreLoopComparison = "<" | "<=" | ">" | ">=";
 
-export interface CoreInductionRange {
+export interface CoreNumericRange {
 	readonly minimum: number;
 	readonly maximum: number;
+	readonly exactSafeIntegers: true;
+	readonly excludesNegativeZero: true;
+}
+
+export interface CoreInductionRange extends CoreNumericRange {
 	/** First value for which the controlling comparison succeeds. */
 	readonly first: number;
 	/** Last value for which the controlling comparison succeeds. */
@@ -29,8 +34,6 @@ export interface CoreInductionRange {
 	readonly finalUpdate: number;
 	/** Upper bound when another exit can leave the loop earlier. */
 	readonly maximumIterations: number;
-	readonly exactSafeIntegers: true;
-	readonly excludesNegativeZero: true;
 }
 
 export interface CoreInductionVariable {
@@ -41,7 +44,7 @@ export interface CoreInductionVariable {
 	readonly update: CoreValueId;
 	readonly updateInstruction: CoreInstructionId;
 	readonly step: number;
-	readonly representation: "f64";
+	readonly representation: "f64" | "i32";
 	/**
 	 * Header relation normalized with the induction on the left. When the bound is
 	 * not loop-invariant, consumers may use it only within the same iteration on
@@ -60,7 +63,27 @@ export interface CoreInductionVariable {
 
 export interface CoreLoopInductionAnalysis {
 	readonly inductions: ReadonlyArray<CoreInductionVariable>;
+	readonly hasNumericRanges: boolean;
 	induction(value: CoreValueId): CoreInductionVariable | undefined;
+	range(value: CoreValueId, block?: CoreBlockId): CoreNumericRange | undefined;
+}
+
+const INT32_MINIMUM = -0x8000_0000;
+const INT32_MAXIMUM = 0x7fff_ffff;
+
+function numericRange(minimum: number, maximum = minimum): CoreNumericRange | undefined {
+	return Number.isSafeInteger(minimum) &&
+		Number.isSafeInteger(maximum) &&
+		minimum <= maximum &&
+		!Object.is(minimum, -0) &&
+		!Object.is(maximum, -0)
+		? {
+				minimum,
+				maximum,
+				exactSafeIntegers: true,
+				excludesNegativeZero: true,
+			}
+		: undefined;
 }
 
 function flipComparison(operator: CoreLoopComparison): CoreLoopComparison {
@@ -114,6 +137,7 @@ function concreteRange(
 	bound: number | undefined,
 	step: number,
 	operator: CoreLoopComparison,
+	representation: "f64" | "i32",
 ): CoreInductionRange | undefined {
 	if (
 		initial === undefined ||
@@ -159,6 +183,20 @@ function concreteRange(
 	) {
 		return undefined;
 	}
+	if (representation === "i32") {
+		const minimumInt32 = BigInt(INT32_MINIMUM);
+		const maximumInt32 = BigInt(INT32_MAXIMUM);
+		if (
+			start < minimumInt32 ||
+			start > maximumInt32 ||
+			last < minimumInt32 ||
+			last > maximumInt32 ||
+			finalUpdate < minimumInt32 ||
+			finalUpdate > maximumInt32
+		) {
+			return undefined;
+		}
+	}
 	const firstNumber = Number(start);
 	const lastNumber = Number(last);
 	return {
@@ -173,7 +211,7 @@ function concreteRange(
 	};
 }
 
-/** Analyze canonical f64 block-argument recurrences in O(values + loop headers). */
+/** Analyze canonical numeric block-argument recurrences and reusable integer ranges. */
 export function analyzeCoreLoopInductions(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
@@ -201,7 +239,8 @@ export function analyzeCoreLoopInductions(
 		return definition?.opcode === "unary" &&
 			definition.attributes.operator === "tonumeric" &&
 			definition.inputs.length === 1 &&
-			representations.get(definition.inputs[0]!) === "f64"
+			(representations.get(definition.inputs[0]!) === "f64" ||
+				representations.get(definition.inputs[0]!) === "i32")
 			? root(definition.inputs[0]!)
 			: root(value);
 	};
@@ -219,7 +258,9 @@ export function analyzeCoreLoopInductions(
 		if (initialEdge === undefined || updateEdge === undefined) continue;
 		const header = fn.blocks[loop.header]!;
 		for (const [parameterIndex, parameter] of header.parameters.entries()) {
-			if (parameter.representation !== "f64") continue;
+			if (parameter.representation !== "f64" && parameter.representation !== "i32") {
+				continue;
+			}
 			const initial = initialEdge.arguments[parameterIndex];
 			const update = updateEdge.arguments[parameterIndex];
 			if (initial === undefined || update === undefined) continue;
@@ -227,7 +268,7 @@ export function analyzeCoreLoopInductions(
 			if (
 				updateDefinition === undefined ||
 				locations.get(updateDefinition.id) !== latch ||
-				representations.get(update) !== "f64"
+				representations.get(update) !== parameter.representation
 			) {
 				continue;
 			}
@@ -309,6 +350,7 @@ export function analyzeCoreLoopInductions(
 							exactNumber(comparison.bound, definitions, canonical),
 							step,
 							comparison.operator,
+							parameter.representation,
 						);
 			inductions.push({
 				loop,
@@ -318,18 +360,60 @@ export function analyzeCoreLoopInductions(
 				update,
 				updateInstruction: updateDefinition.id,
 				step,
-				representation: "f64",
+				representation: parameter.representation,
 				...(comparison === undefined ? {} : { comparison }),
 				...(range === undefined ? {} : { range }),
 			});
 		}
 	}
 	const byRoot = new Map<CoreValueId, CoreInductionVariable>();
-	for (const induction of inductions) byRoot.set(root(induction.value), induction);
+	const byUpdate = new Map<CoreValueId, CoreInductionVariable>();
+	for (const induction of inductions) {
+		byRoot.set(root(induction.value), induction);
+		byUpdate.set(root(induction.update), induction);
+	}
+	const constantRanges = new Map<CoreValueId, CoreNumericRange>();
+	let hasI32 = false;
+	for (const value of fn.values) {
+		if (value.representation === "i32") hasI32 = true;
+		const exact = exactNumber(value.id, definitions, canonical);
+		const range = exact === undefined ? undefined : numericRange(exact);
+		if (range !== undefined) constantRanges.set(root(value.id), range);
+	}
+	const i32Range = numericRange(INT32_MINIMUM, INT32_MAXIMUM)!;
+	const fullInductionRange = (
+		induction: CoreInductionVariable,
+	): CoreNumericRange | undefined =>
+		induction.range === undefined
+			? undefined
+			: numericRange(
+					Math.min(induction.range.minimum, induction.range.finalUpdate),
+					Math.max(induction.range.maximum, induction.range.finalUpdate),
+				);
 	return {
 		inductions,
+		hasNumericRanges: hasI32 || inductions.length > 0,
 		induction(value) {
 			return byRoot.get(root(value));
+		},
+		range(value, block) {
+			const resolved = root(value);
+			const constant = constantRanges.get(resolved);
+			if (constant !== undefined) return constant;
+			const induction = byRoot.get(resolved);
+			if (induction?.range !== undefined) {
+				if (
+					block !== undefined &&
+					induction.comparison !== undefined &&
+					cfg.dominates(induction.comparison.body, block)
+				) {
+					return induction.range;
+				}
+				return fullInductionRange(induction);
+			}
+			const update = byUpdate.get(resolved);
+			if (update !== undefined) return fullInductionRange(update);
+			return representations.get(value) === "i32" ? i32Range : undefined;
 		},
 	};
 }

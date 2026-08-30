@@ -71,6 +71,13 @@ function crossesSafeIntegerBoundary() {
 }
 check("safe-integer boundary", crossesSafeIntegerBoundary() === "2:9007199254740992");
 
+function int32Range(flag) {
+	const value = (flag ? 0x7fffffff : -0x80000000) | 0;
+	return `${value < 0x80000000}:${value >= -0x80000000}:${value < 0x7fffffff}`;
+}
+check("int32 upper range", int32Range(true) === "true:true:false");
+check("int32 lower range", int32Range(false) === "true:true:true");
+
 function protectedReads() {
 	let reads = 0;
 	let total = 0;
@@ -131,5 +138,5 @@ String.prototype.charCodeAt = function (position) {
 check("bounded String method mutation fallback", stringChecksum("AB") === 5);
 String.prototype.charCodeAt = originalCharCodeAt;
 
-check("checks ran", passed === 18);
+check("checks ran", passed === 20);
 console.log("core-loop-optimizations PASS");

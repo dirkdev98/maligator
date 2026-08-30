@@ -259,6 +259,8 @@ const NUMERIC_BINARY_REPRESENTATION_OPERATORS = new Set([
 	"%",
 ]);
 
+const INT32_BINARY_REPRESENTATION_OPERATORS = new Set(["&", "|", "^", "<<", ">>"]);
+
 const COMPARISON_REPRESENTATION_OPERATORS = new Set([
 	"<",
 	"<=",
@@ -7600,7 +7602,7 @@ const refineValueRepresentations: CoreFunctionPass = {
 					);
 					if (candidates.size !== 1) return false;
 					const candidate = [...candidates][0];
-					return candidate === "f64" || candidate === "boolean";
+					return candidate === "i32" || candidate === "f64" || candidate === "boolean";
 				})
 			) {
 				return true;
@@ -7639,7 +7641,7 @@ const refineValueRepresentations: CoreFunctionPass = {
 					if (index !== 0 || instruction.inputs.length === 0) return false;
 					if (instruction.opcode === "move" && instruction.inputs.length === 1) {
 						const input = representations.get(instruction.inputs[0]!);
-						return input === "f64" || input === "boolean";
+						return input === "i32" || input === "f64" || input === "boolean";
 					}
 					return (
 						((instruction.opcode === "binary" &&
@@ -7648,7 +7650,9 @@ const refineValueRepresentations: CoreFunctionPass = {
 								["-", "+", "~", "tonumeric", "increment", "decrement"].includes(
 									String(operator),
 								))) &&
-						instruction.inputs.every((input) => representations.get(input) === "f64")
+						instruction.inputs.every((input) =>
+							["i32", "f64"].includes(representations.get(input) ?? ""),
+						)
 					);
 				});
 			});
@@ -7663,7 +7667,7 @@ const refineValueRepresentations: CoreFunctionPass = {
 		let progress = true;
 		const narrow = (
 			value: CoreValueId,
-			representation: "f64" | "boolean" | undefined,
+			representation: "i32" | "f64" | "boolean" | undefined,
 		): void => {
 			if (representation !== undefined && representations.get(value) === "boxed") {
 				representations.set(value, representation);
@@ -7692,7 +7696,9 @@ const refineValueRepresentations: CoreFunctionPass = {
 								const candidate = [...candidates][0];
 								narrow(
 									parameter.value,
-									candidate === "f64" || candidate === "boolean" ? candidate : undefined,
+									candidate === "i32" || candidate === "f64" || candidate === "boolean"
+										? candidate
+										: undefined,
 								);
 							}
 						}
@@ -7700,7 +7706,7 @@ const refineValueRepresentations: CoreFunctionPass = {
 				}
 				for (const instruction of block.instructions) {
 					for (const [index, output] of instruction.outputs.entries()) {
-						let candidate: "f64" | "boolean" | undefined;
+						let candidate: "i32" | "f64" | "boolean" | undefined;
 						const operator = instructionAttribute(instruction, "operator");
 						if (
 							instruction.opcode === "createF64" ||
@@ -7728,7 +7734,10 @@ const refineValueRepresentations: CoreFunctionPass = {
 							instruction.inputs.length === 1
 						) {
 							const input = representations.get(instruction.inputs[0]!);
-							candidate = input === "f64" || input === "boolean" ? input : undefined;
+							candidate =
+								input === "i32" || input === "f64" || input === "boolean"
+									? input
+									: undefined;
 						} else if (
 							index === 0 &&
 							((instruction.opcode === "binary" &&
@@ -7738,9 +7747,17 @@ const refineValueRepresentations: CoreFunctionPass = {
 										String(operator),
 									))) &&
 							instruction.inputs.length > 0 &&
-							instruction.inputs.every((input) => representations.get(input) === "f64")
+							instruction.inputs.every((input) =>
+								["i32", "f64"].includes(representations.get(input) ?? ""),
+							)
 						) {
-							candidate = "f64";
+							candidate =
+								instruction.opcode === "unary" && operator === "~"
+									? "i32"
+									: instruction.opcode === "binary" &&
+										  INT32_BINARY_REPRESENTATION_OPERATORS.has(String(operator))
+										? "i32"
+										: "f64";
 						}
 						narrow(output, candidate);
 					}
@@ -10524,9 +10541,75 @@ function oppositeLoopComparison(left: string, right: CoreLoopComparison): boolea
 	);
 }
 
+function numericRangeComparisonTruth(
+	instruction: CoreInstruction,
+	block: CoreBlockId,
+	analysis: CoreLoopInductionAnalysis,
+	representations: ReadonlyMap<CoreValueId, string>,
+): boolean | undefined {
+	if (
+		instruction.opcode !== "binary" ||
+		instruction.inputs.length !== 2 ||
+		instruction.outputs.length !== 1 ||
+		instruction.inputs.some(
+			(value) =>
+				representations.get(value) !== "f64" && representations.get(value) !== "i32",
+		) ||
+		representations.get(instruction.outputs[0]!) !== "boolean"
+	) {
+		return undefined;
+	}
+	const operator = instruction.attributes.operator;
+	if (typeof operator !== "string") return undefined;
+	const left = analysis.range(instruction.inputs[0]!, block);
+	const right = analysis.range(instruction.inputs[1]!, block);
+	if (left === undefined || right === undefined) return undefined;
+	switch (operator) {
+		case "<":
+			if (left.maximum < right.minimum) return true;
+			if (left.minimum >= right.maximum) return false;
+			return undefined;
+		case "<=":
+			if (left.maximum <= right.minimum) return true;
+			if (left.minimum > right.maximum) return false;
+			return undefined;
+		case ">":
+			if (left.minimum > right.maximum) return true;
+			if (left.maximum <= right.minimum) return false;
+			return undefined;
+		case ">=":
+			if (left.minimum >= right.maximum) return true;
+			if (left.maximum < right.minimum) return false;
+			return undefined;
+		case "==":
+		case "===":
+			if (left.maximum < right.minimum || right.maximum < left.minimum) return false;
+			if (
+				left.minimum === left.maximum &&
+				right.minimum === right.maximum &&
+				left.minimum === right.minimum
+			) {
+				return true;
+			}
+			return undefined;
+		case "!=":
+		case "!==": {
+			const equal = numericRangeComparisonTruth(
+				{ ...instruction, attributes: { ...instruction.attributes, operator: "===" } },
+				block,
+				analysis,
+				representations,
+			);
+			return equal === undefined ? undefined : !equal;
+		}
+		default:
+			return undefined;
+	}
+}
+
 /**
  * Fold a comparison only where the loop's successful control edge dominates it.
- * The endpoint test is valid because the supported f64 relations are monotone;
+ * The endpoint test is valid because the supported numeric relations are monotone;
  * equality is folded only when the exact safe-integer interval excludes the key.
  */
 function loopComparisonTruth(
@@ -10542,7 +10625,10 @@ function loopComparisonTruth(
 		instruction.opcode !== "binary" ||
 		instruction.inputs.length !== 2 ||
 		instruction.outputs.length !== 1 ||
-		instruction.inputs.some((value) => representations.get(value) !== "f64") ||
+		instruction.inputs.some(
+			(value) =>
+				representations.get(value) !== "f64" && representations.get(value) !== "i32",
+		) ||
 		representations.get(instruction.outputs[0]!) !== "boolean" ||
 		induction.comparison === undefined ||
 		!induction.loop.blocks.has(block) ||
@@ -10550,7 +10636,7 @@ function loopComparisonTruth(
 	) {
 		return undefined;
 	}
-	// Generic binary operations can rerun boxed coercions. The f64/boolean gate is
+	// Generic binary operations can rerun boxed coercions. The numeric/boolean gate is
 	// what makes deleting this comparison effect-free, not merely a range fact.
 	const operatorAttribute = instruction.attributes.operator;
 	if (typeof operatorAttribute !== "string") return undefined;
@@ -10582,42 +10668,40 @@ function loopComparisonTruth(
 	return atMinimum !== undefined && atMinimum === atMaximum ? atMinimum : undefined;
 }
 
-function loopStrengthReductionValue(
+function numericStrengthReductionValue(
 	instruction: CoreInstruction,
 	block: CoreBlockId,
-	induction: CoreInductionVariable,
-	cfg: CoreControlFlow,
-	definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
+	analysis: CoreLoopInductionAnalysis,
 	representations: ReadonlyMap<CoreValueId, string>,
-	root: (value: CoreValueId) => CoreValueId,
 ): CoreValueId | undefined {
 	if (
 		instruction.opcode !== "binary" ||
 		instruction.attributes.operator !== "%" ||
 		instruction.inputs.length !== 2 ||
 		instruction.outputs.length !== 1 ||
-		representations.get(instruction.outputs[0]!) !== "f64" ||
-		representations.get(instruction.inputs[0]!) !== "f64" ||
-		representations.get(instruction.inputs[1]!) !== "f64" ||
-		induction.range === undefined ||
-		induction.comparison === undefined ||
-		root(instruction.inputs[0]!) !== root(induction.value) ||
-		!cfg.dominates(induction.comparison.body, block)
+		(representations.get(instruction.inputs[0]!) !== "f64" &&
+			representations.get(instruction.inputs[0]!) !== "i32") ||
+		(representations.get(instruction.inputs[1]!) !== "f64" &&
+			representations.get(instruction.inputs[1]!) !== "i32") ||
+		representations.get(instruction.outputs[0]!) !==
+			representations.get(instruction.inputs[0]!)
 	) {
 		return undefined;
 	}
-	const range = induction.range;
-	const divisor = numericConstant(instruction.inputs[1]!, definitions, root);
-	return divisor !== undefined &&
-		Number.isSafeInteger(divisor) &&
-		divisor > range.maximum &&
+	const range = analysis.range(instruction.inputs[0]!, block);
+	const divisor = analysis.range(instruction.inputs[1]!, block);
+	return range !== undefined &&
+		divisor !== undefined &&
+		divisor.minimum === divisor.maximum &&
+		Number.isSafeInteger(divisor.minimum) &&
+		divisor.minimum > range.maximum &&
 		range.minimum >= 0
 		? instruction.inputs[0]
 		: undefined;
 }
 
 /**
- * Consume exact induction facts in two representation-safe ways:
+ * Consume exact integer ranges in two representation-safe ways:
  *
  * - comparisons on the comparison-true side become constants when every value in
  *   the proven interval gives the same answer;
@@ -10628,10 +10712,19 @@ function loopStrengthReductionValue(
  */
 const optimizeLoopRanges: CoreFunctionPass = {
 	name: "optimize-loop-ranges",
+	ablation: "fact-driven",
 	run(fn, analyses) {
-		if (fn.blocks.length < 3) return fn;
+		if (
+			(fn.blocks.length < 3 &&
+				!fn.values.some(({ representation }) => representation === "i32")) ||
+			!fn.blocks.some((block) =>
+				block.instructions.some(({ opcode }) => opcode === "binary"),
+			)
+		) {
+			return fn;
+		}
 		const analysis = analyses.loopInductions(fn);
-		if (analysis.inductions.length === 0) return fn;
+		if (!analysis.hasNumericRanges) return fn;
 		const cfg = analyses.controlFlow(fn);
 		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
@@ -10662,7 +10755,11 @@ const optimizeLoopRanges: CoreFunctionPass = {
 						instruction.opcode !== "binary" ||
 						instruction.inputs.length !== 2 ||
 						instruction.outputs.length !== 1 ||
-						instruction.inputs.some((value) => representations.get(value) !== "f64")
+						instruction.inputs.some(
+							(value) =>
+								representations.get(value) !== "f64" &&
+								representations.get(value) !== "i32",
+						)
 					) {
 						return instruction;
 					}
@@ -10689,28 +10786,44 @@ const optimizeLoopRanges: CoreFunctionPass = {
 									: { sourcePosition: instruction.sourcePosition }),
 							};
 						}
-						const reduced = loopStrengthReductionValue(
-							instruction,
-							block.id,
-							induction,
-							cfg,
-							definitions,
-							representations,
-							root,
-						);
-						if (reduced !== undefined) {
-							changed = true;
-							return {
-								id: instruction.id,
-								opcode: "move",
-								inputs: [reduced],
-								outputs: instruction.outputs,
-								attributes: {},
-								...(instruction.sourcePosition === undefined
-									? {}
-									: { sourcePosition: instruction.sourcePosition }),
-							};
-						}
+					}
+					const truth = numericRangeComparisonTruth(
+						instruction,
+						block.id,
+						analysis,
+						representations,
+					);
+					if (truth !== undefined) {
+						changed = true;
+						return {
+							id: instruction.id,
+							opcode: "createBoolean",
+							inputs: [],
+							outputs: instruction.outputs,
+							attributes: { value: truth },
+							...(instruction.sourcePosition === undefined
+								? {}
+								: { sourcePosition: instruction.sourcePosition }),
+						};
+					}
+					const reduced = numericStrengthReductionValue(
+						instruction,
+						block.id,
+						analysis,
+						representations,
+					);
+					if (reduced !== undefined) {
+						changed = true;
+						return {
+							id: instruction.id,
+							opcode: "move",
+							inputs: [reduced],
+							outputs: instruction.outputs,
+							attributes: {},
+							...(instruction.sourcePosition === undefined
+								? {}
+								: { sourcePosition: instruction.sourcePosition }),
+						};
 					}
 					return instruction;
 				}),

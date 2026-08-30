@@ -2484,19 +2484,19 @@ describe("Core IR optimizer", () => {
 	});
 
 	it("derives exact ranges only for safe additive block-argument inductions", () => {
-		const build = (initial: number) => {
+		const build = (initial: number, representation: "f64" | "i32" = "f64") => {
 			const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 			const entry = builder.createBlock();
-			const header = builder.createBlock([{ representation: "f64" }]);
+			const header = builder.createBlock([{ representation }]);
 			const body = builder.createBlock();
-			const exit = builder.createBlock([{ representation: "f64" }]);
+			const exit = builder.createBlock([{ representation }]);
 			const [seed] = builder.appendInstruction(entry, "createF64", [], {
 				attributes: { value: initial },
-				outputRepresentations: ["f64"],
+				outputRepresentations: [representation],
 			});
 			const [bound] = builder.appendInstruction(entry, "createF64", [], {
 				attributes: { value: 10 },
-				outputRepresentations: ["f64"],
+				outputRepresentations: [representation],
 			});
 			builder.setTerminator(entry, {
 				kind: "jump",
@@ -2515,7 +2515,7 @@ describe("Core IR optimizer", () => {
 			});
 			const [next] = builder.appendInstruction(body, "unary", [counter], {
 				attributes: { operator: "increment" },
-				outputRepresentations: ["f64"],
+				outputRepresentations: [representation],
 			});
 			builder.setTerminator(body, {
 				kind: "jump",
@@ -2550,6 +2550,72 @@ describe("Core IR optimizer", () => {
 				.loopInductions(negativeZero.fn)
 				.induction(negativeZero.counter)?.range,
 		).toBeUndefined();
+		const int32 = build(0, "i32");
+		expect(
+			new CoreAnalysisManager().loopInductions(int32.fn).induction(int32.counter),
+		).toMatchObject({
+			representation: "i32",
+			range: { minimum: 0, maximum: 9, finalUpdate: 10 },
+		});
+	});
+
+	it("folds comparisons from reusable int32 ranges", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "i32" }]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [first] = builder.appendInstruction(left, "createF64", [], {
+			attributes: { value: 1 },
+			outputRepresentations: ["i32"],
+		});
+		const [second] = builder.appendInstruction(right, "createF64", [], {
+			attributes: { value: 2 },
+			outputRepresentations: ["i32"],
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [first!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [second!] },
+		});
+		const value = builder.block(join).parameters[0]!.value;
+		const [limit] = builder.appendInstruction(join, "createF64", [], {
+			attributes: { value: 0x8000_0000 },
+			outputRepresentations: ["f64"],
+		});
+		const [comparison] = builder.appendInstruction(join, "binary", [value, limit!], {
+			attributes: { operator: "<" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(join, { kind: "return", value: comparison! });
+		const program = coreProgram([builder.finish(entry)]);
+		const baseline = executeCoreOptimizations(program, {
+			ablations: new Set(["fact-driven"]),
+			verification: "per-pass",
+		}).program.functions[0]!;
+		const optimized = executeCoreOptimizations(program, {
+			verification: "per-pass",
+		}).program.functions[0]!;
+		const opcodes = (fn: CoreFunction) =>
+			fn.blocks.flatMap(({ instructions }) => instructions).map(({ opcode }) => opcode);
+
+		expect(opcodes(baseline)).toContain("binary");
+		expect(opcodes(optimized)).not.toContain("binary");
+		expect(
+			optimized.blocks
+				.flatMap(({ instructions }) => instructions)
+				.find(({ opcode }) => opcode === "createBoolean")?.attributes.value,
+		).toBe(true);
 	});
 
 	it("uses exact loop ranges for comparisons and remainder strength reduction", () => {
