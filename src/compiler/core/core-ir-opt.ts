@@ -1184,7 +1184,7 @@ const materializeContainedAggregateOwnSlots: CoreFunctionPass = {
 
 const MAX_INLINE_INSTRUCTIONS = 40;
 const MAX_INLINE_TOTAL_COST = MAX_INLINE_INSTRUCTIONS * 8;
-const MAX_GUARDED_INLINE_COST = 48;
+const MAX_GUARDED_INLINE_STATEMENTS = 64;
 const MAX_FINITE_DISPATCH_TARGETS = 4;
 const MAX_FINITE_DISPATCH_COST = 40;
 const INLINE_DISQUALIFYING_OPCODES = new Set([
@@ -2208,10 +2208,8 @@ function inlineSimpleCoreFunctions(
 		const guardedFallbacks = new Set(guardedInlineFallbackCalls(original));
 		const targetsForValue = (value: CoreValueId): CoreCalleeTargets =>
 			relocatedTargets.get(value) ?? calleeTargets.targets(original.functionIndex, value);
-		// Keep the same worst-case clone budget as the former eight-call ceiling,
-		// but spend it on actual body/guard cost. This admits long chains of tiny
-		// allocation helpers whose objects can disappear only after inlining while
-		// still capping growth from large bodies.
+		// Inline admission bounds emitted statements; compile score also charges
+		// optimizer work that does not survive into the cloned fast path.
 		for (let expansion = 0; expansion < MAX_INLINE_TOTAL_COST; expansion++) {
 			let next: CoreFunction | undefined;
 			let loopBlocks: ReadonlySet<CoreBlockId> | undefined;
@@ -2256,19 +2254,20 @@ function inlineSimpleCoreFunctions(
 							? coreGeneratedCodeOverheadCost({
 									guards: candidates.length,
 									genericTwins: 1,
-								}).compileScore
-							: 0;
-					const cost =
+								})
+							: undefined;
+					const codeCost =
 						declineReason === undefined
 							? candidates.reduce(
-									(total, { linear }) => total + linear.generatedCost.compileScore,
-									0,
-								) + guardedOverhead
+									(total, { linear }) =>
+										total + linear.generatedCost.estimatedCStatements,
+									guardedOverhead?.estimatedCStatements ?? 0,
+								)
 							: Number.POSITIVE_INFINITY;
 					const inlineAdmitted =
 						declineReason === undefined &&
-						(!guarded || cost <= MAX_GUARDED_INLINE_COST) &&
-						totalCost + cost <= MAX_INLINE_TOTAL_COST;
+						(!guarded || codeCost <= MAX_GUARDED_INLINE_STATEMENTS) &&
+						totalCost + codeCost <= MAX_INLINE_TOTAL_COST;
 					const inlined = !inlineAdmitted
 						? undefined
 						: guarded
@@ -2299,7 +2298,7 @@ function inlineSimpleCoreFunctions(
 								);
 					if (inlined !== undefined) {
 						next = inlined.fn;
-						totalCost += cost;
+						totalCost += codeCost;
 						for (const [value, targets] of inlined.relocatedTargets) {
 							relocatedTargets.set(value, targets);
 						}

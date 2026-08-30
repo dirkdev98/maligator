@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 34u
+#define WIRE_VERSION 35u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -46,7 +46,6 @@ static const MalMathUnaryOp wire_math_unary_number_ops[] = {
     MAL_MATH_UNARY_ABS,
     MAL_MATH_UNARY_FLOOR,
     MAL_MATH_UNARY_CEIL,
-    MAL_MATH_UNARY_ROUND,
     MAL_MATH_UNARY_TRUNC,
     MAL_MATH_UNARY_SQRT,
     MAL_MATH_UNARY_CBRT,
@@ -70,12 +69,39 @@ static const MalMathUnaryOp wire_math_unary_number_ops[] = {
     MAL_MATH_UNARY_LOG1P,
     MAL_MATH_UNARY_EXPM1,
     MAL_MATH_UNARY_FROUND,
+    MAL_MATH_UNARY_ROUND,
 };
 
 static const MalMathBinaryOp wire_math_binary_number_ops[] = {
     MAL_MATH_BINARY_MIN,
     MAL_MATH_BINARY_MAX,
 };
+
+static const MalGuardedBuiltinCallOp wire_guarded_builtin_call_ops[] = {
+    MAL_GUARDED_BUILTIN_MAP_GET,
+    MAL_GUARDED_BUILTIN_MAP_SET,
+    MAL_GUARDED_BUILTIN_MAP_HAS,
+    MAL_GUARDED_BUILTIN_MAP_DELETE,
+    MAL_GUARDED_BUILTIN_SET_ADD,
+    MAL_GUARDED_BUILTIN_SET_HAS,
+    MAL_GUARDED_BUILTIN_SET_DELETE,
+    MAL_GUARDED_BUILTIN_ARRAY_PUSH,
+};
+
+static_assert(
+    MAL_MATH_UNARY_ROUND == countof(wire_math_unary_number_ops),
+    "guarded unary side tags must stay contiguous"
+);
+static_assert(
+    MAL_MATH_BINARY_MAX == countof(wire_math_binary_number_ops),
+    "guarded binary side tags must stay contiguous"
+);
+static_assert(
+    MAL_GUARDED_BUILTIN_MAP_GET == 0 &&
+        MAL_GUARDED_BUILTIN_ARRAY_PUSH + 1 ==
+            countof(wire_guarded_builtin_call_ops),
+    "guarded builtin call side tags must stay contiguous"
+);
 
 static const MalDirectBuiltinOp wire_direct_builtin_ops[] = {
 #define MAL_DIRECT_BUILTIN_OP(operation) operation,
@@ -683,6 +709,32 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             }
             o->as.call.data_offset = rd_side_guarded_call(
                 r, side_data, exact_function_index, true);
+            u8 guarded_tag = rd_u8(r);
+            i32 guarded_side_tag = 0;
+            if (guarded_tag > 0 &&
+                guarded_tag <= countof(wire_math_unary_number_ops)) {
+                guarded_side_tag = wire_math_unary_number_ops[guarded_tag - 1];
+            } else if (guarded_tag > countof(wire_math_unary_number_ops)) {
+                usize extended_tag =
+                    guarded_tag - 1 - countof(wire_math_unary_number_ops);
+                if (extended_tag < countof(wire_math_binary_number_ops)) {
+                    guarded_side_tag = -wire_math_binary_number_ops[extended_tag];
+                } else {
+                    usize builtin_call_tag =
+                        extended_tag - countof(wire_math_binary_number_ops);
+                    if (builtin_call_tag >= countof(wire_guarded_builtin_call_ops)) {
+                        r->ok = false;
+                    } else {
+                        guarded_side_tag = MAL_MATH_UNARY_ROUND + 1 +
+                            wire_guarded_builtin_call_ops[builtin_call_tag];
+                    }
+                }
+            }
+            if (!i32_builder_reserve(side_data, r, 1)) {
+                r->ok = false;
+            } else {
+                side_data->data[side_data->count++] = guarded_side_tag;
+            }
             return;
         }
         case WIRE_CALL_BUILTIN: {
@@ -2172,6 +2224,17 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         fn, string_count, instruction->as.call.this_value) ||
                     exact >= (i32) function_count || target_count < 0 || target_count > 4 ||
                     (exact >= 0 && target_count != 0)) {
+                    r.ok = false;
+                }
+                i32 guarded_tag = data[3 + target_count + argument_count];
+                if ((guarded_tag > 0 &&
+                     ((guarded_tag <= MAL_MATH_UNARY_ROUND && argument_count != 1) ||
+                      guarded_tag > MAL_MATH_UNARY_ROUND + 1 +
+                          MAL_GUARDED_BUILTIN_ARRAY_PUSH ||
+                      (guarded_tag == MAL_MATH_UNARY_ROUND + 1 +
+                          MAL_GUARDED_BUILTIN_ARRAY_PUSH && argument_count > 4))) ||
+                    (guarded_tag < 0 &&
+                     (-guarded_tag > MAL_MATH_BINARY_MAX || argument_count != 2))) {
                     r.ok = false;
                 }
                 for (i32 target = 0; r.ok && target < target_count; target++) {

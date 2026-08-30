@@ -29,7 +29,7 @@ import type {
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
-import { testProgramImage } from "./helpers/program-image.ts";
+import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
 const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CREATE_F64", dst: 0, value: -0 },
@@ -286,27 +286,27 @@ describe("emit-program-image instruction packing", () => {
 	it("emits one flattened side table and raw f64 words", () => {
 		const output = emitProgramImage(definition, { compiled: false });
 		expect(output).toContain(
-			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, -1, 0, 7, 8, 1, -1, 0, 9, 2, 10, 11, 3, 0, 2, 3, 2, 1, 4, 2, 8, 9 };",
+			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, -1, 0, 7, 8, 0, 1, -1, 0, 9, 2, 10, 11, 3, 0, 2, 3, 2, 1, 4, 2, 8, 9 };",
 		);
-		for (const offset of [0, 5, 10, 15, 20, 24, 27, 31, 34]) {
+		for (const offset of [0, 5, 10, 15, 21, 25, 28, 32, 35]) {
 			expect(output).toContain(`.data_offset = ${offset}`);
 		}
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x80000000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff00000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff80000u");
 		expect(output).toContain(".instruction_data = mal_function_0_instruction_data");
-		expect(output).toContain(".instruction_data_count = 37");
+		expect(output).toContain(".instruction_data_count = 38");
 		expect(output).toContain(".argument_snapshot_count = 0");
 		expect(output).toContain(".argument_snapshot_plan_count = 0");
 		expect(output).toContain(".argument_snapshot_plan = nullptr");
 		expect(output).toContain(
-			".as.init_global_vars = { .data_offset = 27, .declaration_configurable = true }",
+			".as.init_global_vars = { .data_offset = 28, .declaration_configurable = true }",
 		);
 		expect(output).toContain(
-			".as.create_private_names = { .owner_function_index = 0, .data_offset = 31 }",
+			".as.create_private_names = { .owner_function_index = 0, .data_offset = 32 }",
 		);
 		expect(output).toContain(
-			".as.init_private_fields = { .object = 6, .data_offset = 34 }",
+			".as.init_private_fields = { .object = 6, .data_offset = 35 }",
 		);
 		expect(output).toContain(
 			".as.typeof_compare = { .dst = 7, .src = 6, .expected = MAL_TYPEOF_NUMBER, .negated = true }",
@@ -895,6 +895,229 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
+	it("coalesces straight-line native root masks and republishes them at joins", () => {
+		const call = (argument: number): BytecodeInstruction => ({
+			opcode: "CALL",
+			dst: 3,
+			callee: 0,
+			thisValue: -1,
+			argumentCount: 1,
+			arguments: [argument],
+		});
+		const exactRootFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			registerCount: 4,
+			instructions: [
+				call(1),
+				call(1),
+				{ opcode: "JUMP", targetIp: 4 },
+				{ opcode: "RETURN", value: 3 },
+				call(1),
+				call(1),
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 4 },
+				call(2),
+				{ opcode: "RETURN", value: 3 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({
+				...definition.runtime,
+				functions: [exactRootFunction],
+			}),
+			0,
+			(plan) => ({
+				...plan,
+				gc: {
+					safepoints: [
+						{ kind: "operation", instructionIp: 0, rootRegisters: [0, 1, 3] },
+						{ kind: "operation", instructionIp: 1, rootRegisters: [0, 1, 3] },
+						{ kind: "operation", instructionIp: 4, rootRegisters: [0, 1, 3] },
+						{ kind: "operation", instructionIp: 5, rootRegisters: [0, 1, 3] },
+						{ kind: "loop-backedge", instructionIp: 6, rootRegisters: [0, 2, 3] },
+						{ kind: "operation", instructionIp: 7, rootRegisters: [0, 2, 3] },
+					],
+				},
+			}),
+		);
+		const output = emitProgramImage(image, { compiled: true });
+
+		expect(output).toContain(
+			"#define MAL_ROOT_MASK(mask) (__gc_frame.inactive_slots = UINT64_C(mask))",
+		);
+		expect(output.match(/__gc_frame\.inactive_slots = UINT64_C/g)).toHaveLength(1);
+		expect(output.match(/MAL_ROOT_MASK\(0x4\);/g)).toHaveLength(2);
+		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(2);
+		expect(output).toMatch(/L4:;\n {4}MAL_ROOT_MASK\(0x4\);/);
+		expect(output).toMatch(
+			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); \} goto L4;/,
+		);
+	});
+
+	it("publishes exact TDZ roots only inside the throwing branch", () => {
+		const call: BytecodeInstruction = {
+			opcode: "CALL",
+			dst: 0,
+			callee: 1,
+			thisValue: -1,
+			argumentCount: 0,
+			arguments: [],
+		};
+		const exactTdzFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			registerCount: 2,
+			instructions: [
+				call,
+				{ opcode: "THROW_IF_TDZ", src: 0, nameStringIndex: 1 },
+				call,
+				{ opcode: "RETURN", value: 0 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({
+				...definition.runtime,
+				functions: [exactTdzFunction],
+			}),
+			0,
+			(plan) => ({
+				...plan,
+				gc: {
+					safepoints: [
+						{ kind: "operation", instructionIp: 0, rootRegisters: [1] },
+						{ kind: "operation", instructionIp: 1, rootRegisters: [0] },
+						{ kind: "operation", instructionIp: 2, rootRegisters: [1] },
+					],
+				},
+			}),
+		);
+		const output = emitProgramImage(image, { compiled: true });
+
+		expect(output.match(/MAL_ROOT_MASK\(0x1\);/g)).toHaveLength(2);
+		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(1);
+		expect(output).toMatch(
+			/if \(mal_value_is_empty\(r0\)\) \{\n\s+MAL_ROOT_MASK\(0x2\);\n\s+mal_vm_op_throw_if_tdz/,
+		);
+		expect(output).toMatch(
+			/mal_vm_op_throw_if_tdz[\s\S]*?\n\s+\}\n\s+MAL_ROOT_MASK\(0x1\);/,
+		);
+	});
+
+	it("publishes exact known-own-slot roots only inside the generic fallback", () => {
+		const call: BytecodeInstruction = {
+			opcode: "CALL",
+			dst: 0,
+			callee: 1,
+			thisValue: -1,
+			argumentCount: 0,
+			arguments: [],
+		};
+		const exactSlotFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			registerCount: 2,
+			literalShapeCount: 1,
+			instructions: [
+				call,
+				{
+					opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+					dst: 0,
+					object: 0,
+					stringIndex: 1,
+					icIndex: 0,
+					candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 }],
+				},
+				call,
+				{ opcode: "RETURN", value: 0 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({
+				...definition.runtime,
+				functions: [exactSlotFunction],
+				precompiledLiteralShapes: [
+					{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [1] },
+				],
+			}),
+			0,
+			(plan) => ({
+				...plan,
+				gc: {
+					safepoints: [
+						{ kind: "operation", instructionIp: 0, rootRegisters: [1] },
+						{ kind: "operation", instructionIp: 1, rootRegisters: [0] },
+						{ kind: "operation", instructionIp: 2, rootRegisters: [1] },
+					],
+				},
+			}),
+		);
+		const output = emitProgramImage(image, { compiled: true });
+
+		expect(output.match(/MAL_ROOT_MASK\(0x1\);/g)).toHaveLength(2);
+		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(1);
+		expect(output).toMatch(
+			/if \(mal_vm_try_load_known_own_slots[^\n]+\) \{[\s\S]*?\} else \{\n\s+MAL_ROOT_MASK\(0x2\);\n\s+r0 = mal_vm_op_load_property_ic/,
+		);
+		expect(output).toMatch(
+			/mal_vm_op_load_property_ic[\s\S]*?\n\s+\}\n\s+MAL_ROOT_MASK\(0x1\);/,
+		);
+	});
+
+	it("publishes exact static-property roots only inside the generic fallback", () => {
+		const call: BytecodeInstruction = {
+			opcode: "CALL",
+			dst: 0,
+			callee: 1,
+			thisValue: -1,
+			argumentCount: 0,
+			arguments: [],
+		};
+		const exactLoadFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			registerCount: 2,
+			instructions: [
+				call,
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					dst: 0,
+					object: 0,
+					stringIndex: 1,
+					icIndex: 0,
+				},
+				call,
+				{ opcode: "RETURN", value: 0 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({
+				...definition.runtime,
+				functions: [exactLoadFunction],
+			}),
+			0,
+			(plan) => ({
+				...plan,
+				gc: {
+					safepoints: [
+						{ kind: "operation", instructionIp: 0, rootRegisters: [1] },
+						{ kind: "operation", instructionIp: 1, rootRegisters: [0] },
+						{ kind: "operation", instructionIp: 2, rootRegisters: [1] },
+					],
+				},
+			}),
+		);
+		const output = emitProgramImage(image, { compiled: true });
+
+		expect(output.match(/MAL_ROOT_MASK\(0x1\);/g)).toHaveLength(2);
+		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(1);
+		expect(output).toMatch(
+			/if \(mal_vm_property_try_load_static[^\n]+\) \{[\s\S]*?\} else \{\n\s+MAL_ROOT_MASK\(0x2\);\n\s+r0 = mal_vm_op_load_property_ic/,
+		);
+		expect(output).toMatch(
+			/mal_vm_op_load_property_ic[\s\S]*?\n\s+\}\n\s+MAL_ROOT_MASK\(0x1\);/,
+		);
+	});
+
 	it("revokes portable root-map trust after in-place bytecode mutation", () => {
 		const source = `
 			function* keep(value) {
@@ -1102,7 +1325,9 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 		expect(output).toContain("+= 1.0;");
-		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
+		expect(output).toMatch(
+			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); \}/,
+		);
 	});
 
 	it("rejects a tagged region when its common control-flow envelope is incomplete", () => {
@@ -1340,6 +1565,20 @@ describe("native update-expression representation", () => {
 	it("guards direct unary and binary Math calls by exact callbacks", () => {
 		const source = `"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } function constants() { const a = 1.25; const b = -0; return Math.floor(a) + Math.max(a, b); } globalThis.keep = [calculate, constants];`;
 		const definition = lower(source);
+		const guardedMathCalls = definition.runtime.functions.flatMap(({ instructions }) =>
+			instructions.flatMap((instruction) =>
+				instruction.opcode === "CALL" && instruction.guardedMathCall !== undefined
+					? [instruction.guardedMathCall]
+					: [],
+			),
+		);
+		expect(guardedMathCalls).toEqual(
+			expect.arrayContaining([
+				{ kind: "unary", operation: "Math.round" },
+				{ kind: "unary", operation: "Math.floor" },
+				{ kind: "binary", operation: "Math.max" },
+			]),
+		);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
 			definition,
 		);
@@ -1348,10 +1587,132 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_math_binary_fast");
 		expect(output).not.toContain("mal_builtin_math_unary_number_known");
 		expect(output).not.toContain("mal_builtin_math_binary_number_known");
+		expect(output).not.toMatch(
+			/MAL_ROOT_MASK\([^)]+\);\n\s+static MalMath(?:Unary|Binary)Op/,
+		);
+		expect(output).toMatch(
+			/if \(mal_builtin_math_unary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); \}/,
+		);
+		expect(output).toMatch(
+			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); \}/,
+		);
+		expect(output).toMatch(
+			/if \(mal_gc_poll\) \{ (MAL_ROOT_MASK\(0x[\da-f]+\)); mal_gc_safepoint\(vm\); \}\n\s+MalObject \*__property_receiver_[\s\S]*?\} else \{\n\s+\1;\n\s+r\d+ = mal_vm_op_load_property_ic/,
+		);
 
 		const lockedOutput = emitLocked(source);
 		expect(lockedOutput).toContain("mal_builtin_math_unary_number_known");
 		expect(lockedOutput).toContain("mal_builtin_math_binary_number_known");
+	});
+
+	it("publishes locked Math root masks only when polling and forgets conditional state", () => {
+		const exactMathFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			registerCount: 4,
+			instructions: [
+				{ opcode: "CREATE_UNDEFINED", dst: 0 },
+				{ opcode: "CREATE_UNDEFINED", dst: 1 },
+				{ opcode: "CREATE_F64", dst: 2, value: 1.25 },
+				{
+					opcode: "CALL",
+					dst: 0,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 0,
+					arguments: [],
+				},
+				{
+					opcode: "CALL",
+					dst: 3,
+					callee: 0,
+					thisValue: 1,
+					argumentCount: 1,
+					arguments: [2],
+					guardedMathCall: { kind: "unary", operation: "Math.floor" },
+				},
+				{
+					opcode: "CALL",
+					dst: 0,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 0,
+					arguments: [],
+				},
+				{ opcode: "RETURN", value: 3 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({
+				...definition.runtime,
+				functions: [exactMathFunction],
+			}),
+			0,
+			(plan) => ({
+				...plan,
+				registerRepresentations: ["boxed", "boxed", "number", "number"],
+				gc: {
+					safepoints: [
+						{ kind: "operation", instructionIp: 3, rootRegisters: [1] },
+						{ kind: "operation", instructionIp: 4, rootRegisters: [0] },
+						{ kind: "operation", instructionIp: 5, rootRegisters: [1] },
+					],
+				},
+				instructions: plan.instructions.with(4, {
+					kind: "call",
+					guardedBuiltinCall: {
+						operation: "Math.floor",
+						guard: {
+							dependencies: [{ kind: "world", fact: "primordials.locked" }],
+							obligations: ["fallback"],
+						},
+					},
+				}),
+			}),
+		);
+		const output = emitProgramImage(image, { compiled: true });
+
+		expect(output).toMatch(
+			/MAL_ROOT_MASK\(0x1\);[\s\S]*?r3 = mal_builtin_math_unary_number_known\(MAL_MATH_UNARY_FLOOR, r2\);\n\s+if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); \}\n\s+MAL_ROOT_MASK\(0x1\);/,
+		);
+	});
+
+	it("carries guarded builtin calls into portable bytecode", () => {
+		const definition = lower(`
+			function update(key, value) {
+				const map = new Map();
+				const set = new Set();
+				const values = [];
+				const previous = map.get(key);
+				map.set(key, value);
+				set.add(key);
+				values.push(value);
+				values.push(1, 2, 3, 4, value);
+				return [previous, map, set, values];
+			}
+			globalThis.update = update;
+		`);
+		const guardedBuiltinCalls = definition.runtime.functions.flatMap(({ instructions }) =>
+			instructions.flatMap((instruction) =>
+				instruction.opcode === "CALL" && instruction.guardedBuiltinCall !== undefined
+					? [instruction.guardedBuiltinCall.operation]
+					: [],
+			),
+		);
+		expect(guardedBuiltinCalls).toEqual(
+			expect.arrayContaining([
+				"Map.prototype.get",
+				"Map.prototype.set",
+				"Set.prototype.add",
+				"Array.prototype.push",
+			]),
+		);
+		expect(
+			guardedBuiltinCalls.filter((operation) => operation === "Array.prototype.push"),
+		).toHaveLength(1);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
+			definition,
+		);
 	});
 
 	it("erases locked Math property Gets only for no-fallback numeric calls", () => {
@@ -2521,9 +2882,9 @@ describe("native update-expression representation", () => {
 			globalThis.update = update;
 		`);
 		expect(output).toContain("mal_builtin_collection_direct(vm, &__cc_");
-		expect(output).toContain("MAL_BUILTIN_COLLECTION_MAP_GET");
-		expect(output).toContain("MAL_BUILTIN_COLLECTION_MAP_SET");
-		expect(output).toContain("MAL_BUILTIN_COLLECTION_SET_ADD");
+		expect(output).toContain("MAL_GUARDED_BUILTIN_MAP_GET");
+		expect(output).toContain("MAL_GUARDED_BUILTIN_MAP_SET");
+		expect(output).toContain("MAL_GUARDED_BUILTIN_SET_ADD");
 	});
 
 	it("polls only collection operations with exact-root safepoint metadata", () => {

@@ -10,6 +10,7 @@ import {
 	computeArgumentRetentionLimit,
 	countPropertyIcSites,
 	validateRuntimeImageMetadata,
+	vmGuardedCallSideTag,
 	vmSafepointRootMapsAreTrusted,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
@@ -133,6 +134,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_async_iterator.h"',
 	// Compiled coroutines cast their backend entry state to MalGeneratorObject.
 	'#include "generator_object.h"',
+	"#define MAL_ROOT_MASK(mask) (__gc_frame.inactive_slots = UINT64_C(mask))",
 	"",
 ];
 
@@ -346,6 +348,10 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 					instruction.guardedFunctionIndices?.length ?? 0,
 					...(instruction.guardedFunctionIndices ?? []),
 					...instruction.arguments,
+					vmGuardedCallSideTag(
+						instruction.guardedMathCall,
+						instruction.guardedBuiltinCall,
+					),
 				);
 				break;
 			case "CALL_BUILTIN":

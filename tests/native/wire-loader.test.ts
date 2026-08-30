@@ -13,10 +13,16 @@ import {
 	serializeRuntimeImage,
 	WIRE_OPCODES,
 } from "../../src/compiler/target/program-image-codec.ts";
-import { encodeVmValueOperand } from "../../src/compiler/target/runtime-image.ts";
+import {
+	encodeVmValueOperand,
+	VM_GUARDED_BUILTIN_CALL_OPERATIONS,
+	VM_MATH_BINARY_NUMBER_OPERATIONS,
+	VM_MATH_UNARY_NUMBER_OPERATIONS,
+} from "../../src/compiler/target/runtime-image.ts";
 import type {
 	RuntimeImage,
 	BytecodeFunction,
+	BytecodeInstruction,
 } from "../../src/compiler/target/runtime-image.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 
@@ -609,6 +615,162 @@ describe("wire loader side-data validation", () => {
 		const invalidString = wire.slice();
 		invalidString[splitOffset + 2] = 13;
 		rejectsWire("direct-builtin-invalid-string", invalidString);
+	});
+
+	it("loads guarded Math and collection call tags and rejects malformed hints", () => {
+		const entrypoint = path.join(directory, "guarded-call-tags.mjs");
+		writeFileSync(
+			entrypoint,
+			`function guardedOperations(map, array, value) {
+				array.push(value);
+				return Math.round(value) + Math.max(value, 3) + map.get("answer");
+			}
+			globalThis.guardedOperations = guardedOperations;
+			const array = [];
+			globalThis.result = guardedOperations(new Map([["answer", 4]]), array, 2.4);
+			if (globalThis.result !== 9 || array.length !== 1 || array[0] !== 2.4) {
+				throw new Error("guarded call tag execution mismatch");
+			}\n`,
+		);
+		const guardedDefinition = compileEntrypoint(entrypoint, {
+			stripTypes: stripCompactTypes,
+			buildConfig: resolveBuildConfig({ engine: { primordials: "mutable" } }),
+		});
+		type GuardedCall = Extract<BytecodeInstruction, { opcode: "CALL" }>;
+		type GuardedSite = {
+			functionIndex: number;
+			instructionIndex: number;
+			instruction: GuardedCall;
+		};
+		const guardedSites: Array<GuardedSite> = [];
+		for (const [functionIndex, fn] of guardedDefinition.runtime.functions.entries()) {
+			for (const [instructionIndex, instruction] of fn.instructions.entries()) {
+				if (
+					instruction.opcode === "CALL" &&
+					(instruction.guardedMathCall !== undefined ||
+						instruction.guardedBuiltinCall !== undefined)
+				) {
+					guardedSites.push({ functionIndex, instructionIndex, instruction });
+				}
+			}
+		}
+		const unary = guardedSites.find(
+			(site) => site.instruction.guardedMathCall?.kind === "unary",
+		);
+		const binary = guardedSites.find(
+			(site) => site.instruction.guardedMathCall?.kind === "binary",
+		);
+		const collection = guardedSites.find(
+			(site) => site.instruction.guardedBuiltinCall?.operation === "Map.prototype.get",
+		);
+		const arrayPush = guardedSites.find(
+			(site) => site.instruction.guardedBuiltinCall?.operation === "Array.prototype.push",
+		);
+		expect(unary).toBeDefined();
+		expect(binary).toBeDefined();
+		expect(collection).toBeDefined();
+		expect(arrayPush).toBeDefined();
+		if (
+			unary === undefined ||
+			binary === undefined ||
+			collection === undefined ||
+			arrayPush === undefined
+		) {
+			throw new Error("expected guarded call sites");
+		}
+
+		const wire = serializeRuntimeImage(guardedDefinition.runtime, { debugInfo: false });
+		const guardedTagOffset = (site: GuardedSite): number => {
+			const functions = guardedDefinition.runtime.functions.map((fn, functionIndex) => {
+				if (functionIndex !== site.functionIndex) return fn;
+				return {
+					...fn,
+					instructions: fn.instructions.map((instruction, instructionIndex) => {
+						if (instructionIndex !== site.instructionIndex) return instruction;
+						if (instruction.opcode !== "CALL") throw new Error("expected CALL");
+						const unguarded: GuardedCall = { ...instruction };
+						delete unguarded.guardedMathCall;
+						delete unguarded.guardedBuiltinCall;
+						return unguarded;
+					}),
+				};
+			});
+			const unguardedWire = serializeRuntimeImage(
+				{ ...guardedDefinition.runtime, functions },
+				{ debugInfo: false },
+			);
+			const differences: Array<number> = [];
+			for (let index = 0; index < wire.length; index++) {
+				if (wire[index] !== unguardedWire[index]) differences.push(index);
+			}
+			expect(differences).toHaveLength(1);
+			const offset = differences[0]!;
+			expect(unguardedWire[offset]).toBe(0);
+			return offset;
+		};
+		const unaryTagOffset = guardedTagOffset(unary);
+		const binaryTagOffset = guardedTagOffset(binary);
+		const collectionTagOffset = guardedTagOffset(collection);
+		const arrayPushTagOffset = guardedTagOffset(arrayPush);
+		expect(wire[unaryTagOffset]).toBeGreaterThan(0);
+		expect(wire[binaryTagOffset]).toBeGreaterThan(0);
+		expect(wire[collectionTagOffset]).toBeGreaterThan(wire[binaryTagOffset]!);
+		expect(wire[arrayPushTagOffset]).toBeGreaterThan(wire[collectionTagOffset]!);
+		acceptsWire("guarded-call-tags", wire);
+
+		const invalidTag = wire.slice();
+		invalidTag[collectionTagOffset] = 0xff;
+		rejectsWire("guarded-call-invalid-tag", invalidTag);
+
+		const invalidArity = wire.slice();
+		invalidArity[unaryTagOffset] = wire[binaryTagOffset]!;
+		rejectsWire("guarded-call-invalid-arity", invalidArity);
+
+		const genericFiveArgumentCall: Extract<BytecodeInstruction, { opcode: "CALL" }> = {
+			opcode: "CALL",
+			dst: 0,
+			callee: 0,
+			thisValue: 0,
+			argumentCount: 5,
+			arguments: [0, 0, 0, 0, 0],
+		};
+		const fiveArgumentDefinition = (guarded: boolean): RuntimeImage => ({
+			...definition,
+			functions: [
+				{
+					...fn,
+					literalShapeCount: 0,
+					instructions: [
+						guarded
+							? ({
+									...genericFiveArgumentCall,
+									guardedBuiltinCall: { operation: "Map.prototype.get" },
+								} satisfies BytecodeInstruction)
+							: genericFiveArgumentCall,
+					],
+				},
+			],
+		});
+		const genericFiveArgumentWire = serializeRuntimeImage(fiveArgumentDefinition(false), {
+			debugInfo: false,
+		});
+		const guardedFiveArgumentWire = serializeRuntimeImage(fiveArgumentDefinition(true), {
+			debugInfo: false,
+		});
+		const fiveArgumentDifferences: Array<number> = [];
+		for (let index = 0; index < genericFiveArgumentWire.length; index++) {
+			if (genericFiveArgumentWire[index] !== guardedFiveArgumentWire[index]) {
+				fiveArgumentDifferences.push(index);
+			}
+		}
+		expect(fiveArgumentDifferences).toHaveLength(1);
+		const invalidArrayPushArity = genericFiveArgumentWire.slice();
+		invalidArrayPushArity[fiveArgumentDifferences[0]!] =
+			VM_MATH_UNARY_NUMBER_OPERATIONS.length +
+			VM_MATH_BINARY_NUMBER_OPERATIONS.length +
+			VM_GUARDED_BUILTIN_CALL_OPERATIONS.indexOf("Array.prototype.push") +
+			1;
+		rejectsWire("guarded-array-push-invalid-arity", invalidArrayPushArity);
 	});
 
 	it("rejects malformed varints and trailing data", () => {

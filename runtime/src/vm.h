@@ -33,6 +33,17 @@ typedef enum MalDirectBuiltinOp {
 #include "generated/primordial_registry.inc"
 } MalDirectBuiltinOp;
 
+typedef enum MalGuardedBuiltinCallOp {
+    MAL_GUARDED_BUILTIN_MAP_GET,
+    MAL_GUARDED_BUILTIN_MAP_SET,
+    MAL_GUARDED_BUILTIN_MAP_HAS,
+    MAL_GUARDED_BUILTIN_MAP_DELETE,
+    MAL_GUARDED_BUILTIN_SET_ADD,
+    MAL_GUARDED_BUILTIN_SET_HAS,
+    MAL_GUARDED_BUILTIN_SET_DELETE,
+    MAL_GUARDED_BUILTIN_ARRAY_PUSH,
+} MalGuardedBuiltinCallOp;
+
 /** Packed literal-template tags; mirrored by src/compiler/core/semantic-lowering.ts. */
 typedef enum MalLiteralTemplateTag {
     MAL_LITERAL_NULL,

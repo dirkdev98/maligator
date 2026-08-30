@@ -3,16 +3,6 @@
 #include "./defaults.h"
 #include "vm.h"
 
-typedef enum MalBuiltinCollectionDirectOp {
-    MAL_BUILTIN_COLLECTION_MAP_GET,
-    MAL_BUILTIN_COLLECTION_MAP_SET,
-    MAL_BUILTIN_COLLECTION_MAP_HAS,
-    MAL_BUILTIN_COLLECTION_MAP_DELETE,
-    MAL_BUILTIN_COLLECTION_SET_ADD,
-    MAL_BUILTIN_COLLECTION_SET_HAS,
-    MAL_BUILTIN_COLLECTION_SET_DELETE,
-} MalBuiltinCollectionDirectOp;
-
 typedef enum MalBuiltinCollectionReceiverFact {
     MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN,
     MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP,
@@ -63,7 +53,7 @@ MalValue mal_builtin_map_delete_known(
 MalCompletion mal_builtin_collection_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,
-    MalBuiltinCollectionDirectOp operation,
+    MalGuardedBuiltinCallOp operation,
     MalBuiltinCollectionReceiverFact receiver_fact,
     MalValue callee,
     MalValue this_value,

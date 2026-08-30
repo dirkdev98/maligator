@@ -993,6 +993,107 @@ describe("program-image-codec", () => {
 		});
 	});
 
+	it("round-trips and validates guarded Math call hints", () => {
+		const calls: Array<BytecodeInstruction> = [
+			{
+				opcode: "CALL",
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				guardedMathCall: { kind: "unary", operation: "Math.round" },
+				argumentCount: 1,
+				arguments: [3],
+			},
+			{
+				opcode: "CALL",
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				guardedMathCall: { kind: "binary", operation: "Math.max" },
+				argumentCount: 2,
+				arguments: [3, 4],
+			},
+			{
+				opcode: "CALL",
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				guardedBuiltinCall: { operation: "Map.prototype.set" },
+				argumentCount: 2,
+				arguments: [3, 4],
+			},
+			{
+				opcode: "CALL",
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				guardedBuiltinCall: { operation: "Array.prototype.push" },
+				argumentCount: 4,
+				arguments: [3, 4, 3, 4],
+			},
+		];
+		const withCalls = (instructions: Array<BytecodeInstruction>): ProgramImage =>
+			withBytecodeFunctions(definition, [
+				{
+					...mainFn,
+					registerCount: 5,
+					instructions,
+					positions: instructions.map(() => 0),
+					handlers: [],
+				},
+			]);
+		const restored = deserializeCompilerArtifact(
+			serializeCompilerArtifact(withCalls(calls), { debugInfo: false }),
+		);
+		expect(restored.runtime.functions[0]!.instructions).toEqual(calls);
+		expect(() =>
+			serializeCompilerArtifact(
+				withCalls([
+					{
+						opcode: "CALL",
+						dst: 0,
+						callee: 1,
+						thisValue: 2,
+						guardedMathCall: { kind: "unary", operation: "Math.round" },
+						argumentCount: 2,
+						arguments: [3, 4],
+					},
+				]),
+			),
+		).toThrow("invalid guarded Math call");
+		expect(() =>
+			serializeCompilerArtifact(
+				withCalls([
+					{
+						opcode: "CALL",
+						dst: 0,
+						callee: 1,
+						thisValue: 2,
+						guardedMathCall: { kind: "unary", operation: "Math.round" },
+						guardedBuiltinCall: { operation: "Map.prototype.get" },
+						argumentCount: 1,
+						arguments: [3],
+					},
+				]),
+			),
+		).toThrow("invalid guarded builtin call");
+		expect(() =>
+			serializeCompilerArtifact(
+				withCalls([
+					{
+						opcode: "CALL",
+						dst: 0,
+						callee: 1,
+						thisValue: 2,
+						guardedBuiltinCall: { operation: "Array.prototype.push" },
+						argumentCount: 5,
+						arguments: [3, 4, 3, 4, 3],
+					},
+				]),
+			),
+		).toThrow("invalid guarded builtin call");
+	});
+
 	it("validates stack-object access keys at both wire boundaries", () => {
 		const valid = stackObjectDefinition();
 		const wire = serializeCompilerArtifact(valid, { debugInfo: false });

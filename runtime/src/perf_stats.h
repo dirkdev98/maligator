@@ -217,6 +217,10 @@ typedef struct MalPerfStats {
     u64 binary_number_other_fallbacks;
 
     u64 interpreter_direct_leaf_executions;
+    u64 interpreter_guard_branch_fusions;
+    u64 interpreter_global_tdz_fusions;
+    u64 interpreter_binary_branch_fusions;
+    u64 interpreter_create_object_shaped_jump_fusions;
     u64 interpreter_boundary_dispatches;
     u64 interpreter_state_syncs;
     u64 interpreter_state_reloads;

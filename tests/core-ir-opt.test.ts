@@ -19,7 +19,11 @@ import { CORE_NO_EFFECTS, CoreFunctionBuilder } from "../src/compiler/core/core-
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_TOP,
@@ -4118,6 +4122,106 @@ describe("Core IR optimizer", () => {
 				.flatMap(({ instructions }) => instructions)
 				.some(({ opcode }) => opcode === "call"),
 		).toBe(false);
+	});
+
+	it("keeps an exact allocation-helper chain within the generated code budget", () => {
+		const sourcePath = "core-inline-allocation-chain.js";
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`const vector = (x, y, z) => ({ x, y, z });
+			const scale = (value, factor) =>
+				vector(value.x * factor, value.y * factor, value.z * factor);
+			const add = (left, right) =>
+				vector(left.x + right.x, left.y + right.y, left.z + right.z);
+			const dot = (left, right) =>
+				left.x * right.x + left.y * right.y + left.z * right.z;
+			function hot(limit) {
+				let checksum = 0;
+				for (let index = 0; index < limit; index++) {
+					const first = vector(index, index + 1, index + 2);
+					const second = scale(first, 0.5);
+					const result = add(first, second);
+					checksum += dot(result, second);
+				}
+				return checksum;
+			}
+			hot(10);`,
+			sourcePath,
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(semantic, {
+			facts: withProgramClosure(
+				compilerProgramFactsFromConfig(resolveBuildConfig({})),
+				programClosureCertificate(
+					{ kind: "whole-program", entry: sourcePath },
+					[{ kind: "entry-module", module: sourcePath }],
+					[],
+				),
+			),
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const hot = optimized!.functions[functionIndexOfName(optimized!, "hot")]!;
+		const instructions = hot.blocks.flatMap(({ instructions }) => instructions);
+		expect(instructions.some(({ opcode }) => opcode === "call")).toBe(false);
+		expect(
+			instructions.some(
+				({ opcode }) => opcode === "createObject" || opcode === "createObjectShaped",
+			),
+		).toBe(false);
+	});
+
+	it("admits benchmark-sized guarded helpers by emitted statement cost", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`const vector = (x, y, z) => ({ x, y, z });
+			const scale = (value, factor) =>
+				vector(value.x * factor, value.y * factor, value.z * factor);
+			const add = (left, right) =>
+				vector(left.x + right.x, left.y + right.y, left.z + right.z);
+			const dot = (left, right) =>
+				left.x * right.x + left.y * right.y + left.z * right.z;
+			function hot(limit) {
+				let checksum = 0;
+				for (let index = 0; index < limit; index++) {
+					const first = vector(index, index + 1, index + 2);
+					const second = scale(first, 0.5);
+					const result = add(first, second);
+					checksum += dot(result, second);
+				}
+				return checksum;
+			}
+			hot(10);`,
+			"core-guarded-inline-allocation-chain.js",
+		);
+		let optimized: CoreProgram | undefined;
+		let optimizedContext: CoreCompilationContext | undefined;
+		compileSemanticProgramToProgramImage(semantic, {
+			profile: true,
+			afterCoreOptimization(program, context) {
+				optimized = program;
+				optimizedContext = context;
+			},
+		});
+
+		const hotIndex = functionIndexOfName(optimized!, "hot");
+		const instructions = optimized!.functions[hotIndex]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		);
+		expect(
+			instructions.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(6);
+		expect(
+			instructions.some(
+				({ attributes }) => typeof attributes.finiteDispatchTarget === "number",
+			),
+		).toBe(false);
+		expect(
+			optimizedContext!.optimizationDecisions?.filter(
+				({ functionIndex, code }) =>
+					functionIndex === hotIndex && code === "optimization.applied.inline",
+			),
+		).toHaveLength(4);
 	});
 
 	it("does not relocate argument reads into the caller activation", () => {

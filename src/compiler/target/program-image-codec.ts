@@ -4,6 +4,7 @@ import {
 	compressPositions,
 	validateRuntimeImageMetadata,
 	VM_DIRECT_BUILTIN_OPERATIONS,
+	VM_GUARDED_BUILTIN_CALL_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./runtime-image.ts";
@@ -22,7 +23,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 34;
+export const WIRE_VERSION = 35;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -47,6 +48,78 @@ function mathBinaryNumberTag(operation: string): number {
 	if (tag < 0)
 		throw new RangeError(`program-image-codec: unsupported Math op ${operation}`);
 	return tag;
+}
+
+type VmGuardedMathCall = NonNullable<
+	Extract<BytecodeInstruction, { opcode: "CALL" }>["guardedMathCall"]
+>;
+type VmGuardedBuiltinCall = NonNullable<
+	Extract<BytecodeInstruction, { opcode: "CALL" }>["guardedBuiltinCall"]
+>;
+
+function guardedMathCallTag(call: VmGuardedMathCall | undefined): number {
+	if (call === undefined) return 0;
+	if (call.kind === "unary") return mathUnaryNumberTag(call.operation) + 1;
+	return mathBinaryNumberTag(call.operation) + VM_MATH_UNARY_NUMBER_OPERATIONS.length + 1;
+}
+
+function guardedMathCallFromTag(tag: number): VmGuardedMathCall | undefined {
+	if (tag === 0) return undefined;
+	const operationIndex = tag - 1;
+	if (operationIndex < VM_MATH_UNARY_NUMBER_OPERATIONS.length) {
+		return {
+			kind: "unary",
+			operation: VM_MATH_UNARY_NUMBER_OPERATIONS[operationIndex]!,
+		};
+	}
+	const binaryOperation =
+		VM_MATH_BINARY_NUMBER_OPERATIONS[
+			operationIndex - VM_MATH_UNARY_NUMBER_OPERATIONS.length
+		];
+	if (binaryOperation === undefined) {
+		throw new RangeError("program-image-codec: invalid guarded Math call");
+	}
+	return { kind: "binary", operation: binaryOperation };
+}
+
+function guardedCallTag(
+	mathCall: VmGuardedMathCall | undefined,
+	builtinCall: VmGuardedBuiltinCall | undefined,
+): number {
+	if (mathCall !== undefined && builtinCall !== undefined) {
+		throw new RangeError("program-image-codec: invalid guarded call");
+	}
+	if (mathCall !== undefined) return guardedMathCallTag(mathCall);
+	if (builtinCall === undefined) return 0;
+	const operation = (VM_GUARDED_BUILTIN_CALL_OPERATIONS as ReadonlyArray<string>).indexOf(
+		builtinCall.operation,
+	);
+	if (operation < 0) {
+		throw new RangeError("program-image-codec: invalid guarded builtin call");
+	}
+	return (
+		VM_MATH_UNARY_NUMBER_OPERATIONS.length +
+		VM_MATH_BINARY_NUMBER_OPERATIONS.length +
+		operation +
+		1
+	);
+}
+
+function guardedCallFromTag(tag: number): {
+	guardedMathCall?: VmGuardedMathCall;
+	guardedBuiltinCall?: VmGuardedBuiltinCall;
+} {
+	if (tag === 0) return {};
+	const mathTagCount =
+		VM_MATH_UNARY_NUMBER_OPERATIONS.length + VM_MATH_BINARY_NUMBER_OPERATIONS.length;
+	if (tag <= mathTagCount) {
+		return { guardedMathCall: guardedMathCallFromTag(tag)! };
+	}
+	const operation = VM_GUARDED_BUILTIN_CALL_OPERATIONS[tag - mathTagCount - 1];
+	if (operation === undefined) {
+		throw new RangeError("program-image-codec: invalid guarded builtin call");
+	}
+	return { guardedBuiltinCall: { operation } };
 }
 
 function directBuiltinTag(operation: string): number {
@@ -777,6 +850,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32Array(i.guardedFunctionIndices ?? []);
 			w.i32(i.argumentCount);
 			w.i32Array(i.arguments);
+			w.u8(guardedCallTag(i.guardedMathCall, i.guardedBuiltinCall));
 			return;
 		case "MATH_UNARY_NUMBER":
 			w.i32(i.dst);
@@ -1524,6 +1598,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 			const guardedFunctionIndices = r.i32Array();
 			const argumentCount = r.i32();
 			const arguments_ = r.i32Array();
+			const guardedCall = guardedCallFromTag(r.u8());
 			if (exactFunctionIndex < -1) {
 				throw new RangeError("program-image-codec: invalid exact CALL target");
 			}
@@ -1534,6 +1609,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				thisValue,
 				...(exactFunctionIndex < 0 ? {} : { exactFunctionIndex }),
 				...(guardedFunctionIndices.length === 0 ? {} : { guardedFunctionIndices }),
+				...guardedCall,
 				argumentCount,
 				arguments: arguments_,
 			};

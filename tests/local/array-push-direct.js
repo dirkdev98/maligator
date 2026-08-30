@@ -20,6 +20,12 @@ let sum = 0;
 for (let i = 0; i < collected.length; i++) sum += collected[i].value;
 ok("gc rooted values", sum === (2999 * 3000) / 2);
 
+const wide = [];
+ok(
+	"bounded portable fallback",
+	wide.push(1, 2, 3, 4, 5) === 5 && wide.join(",") === "1,2,3,4,5",
+);
+
 const own = [];
 own.push = function (value) {
 	this[0] = value * 2;
@@ -110,5 +116,28 @@ try {
 }
 ok("large length fallback", maxLengthThrew && maxLength.length === 4294967295);
 
-ok("check count", checks === 15);
+let inheritedSetterValue = 0;
+let inheritedSetterReceiver;
+Object.defineProperty(Array.prototype, "0", {
+	configurable: true,
+	set(value) {
+		inheritedSetterValue = value;
+		inheritedSetterReceiver = this;
+	},
+});
+const inheritedSetter = [];
+const inheritedSetterResult = inheritedSetter.push(11);
+const inheritedSetterOwn = Object.prototype.hasOwnProperty.call(inheritedSetter, "0");
+delete Array.prototype[0];
+Array.prototype.length = 0;
+ok(
+	"inherited indexed setter",
+	inheritedSetterResult === 1 &&
+		inheritedSetterValue === 11 &&
+		inheritedSetterReceiver === inheritedSetter &&
+		!inheritedSetterOwn &&
+		inheritedSetter.length === 1,
+);
+
+ok("check count", checks === 17);
 console.log("array-push-direct PASS");

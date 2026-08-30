@@ -382,13 +382,19 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
-        "[perf-interpreter-stats] direct_leaf_executions=%llu boundary_dispatches=%llu "
+        "[perf-interpreter-stats] direct_leaf_executions=%llu guard_branch_fusions=%llu "
+        "global_tdz_fusions=%llu binary_branch_fusions=%llu "
+        "create_object_shaped_jump_fusions=%llu boundary_dispatches=%llu "
         "state_syncs=%llu state_reloads=%llu normal_helper_continuations=%llu "
         "strict_direct_hits=%llu "
         "strict_string_fallbacks=%llu local_load_ic_hits=%llu local_store_ic_hits=%llu "
         "load_ic_sync_fallbacks=%llu store_ic_sync_fallbacks=%llu "
         "iterator_dense_hits=%llu iterator_sync_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.interpreter_direct_leaf_executions,
+        (unsigned long long) mal_perf_stats.interpreter_guard_branch_fusions,
+        (unsigned long long) mal_perf_stats.interpreter_global_tdz_fusions,
+        (unsigned long long) mal_perf_stats.interpreter_binary_branch_fusions,
+        (unsigned long long) mal_perf_stats.interpreter_create_object_shaped_jump_fusions,
         (unsigned long long) mal_perf_stats.interpreter_boundary_dispatches,
         (unsigned long long) mal_perf_stats.interpreter_state_syncs,
         (unsigned long long) mal_perf_stats.interpreter_state_reloads,

@@ -102,3 +102,13 @@ MalValue mal_builtin_array_pop_contained(MalVm *vm, MalValue this_value);
  * call boundary and falls back to the ordinary algorithm on rejection.
  */
 bool mal_builtin_array_push_virtual_guard(MalVm *vm);
+
+/** Try a non-reentrant dense append; false leaves JS-visible Array state unchanged. */
+bool mal_builtin_array_push_try_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue *result_out
+);

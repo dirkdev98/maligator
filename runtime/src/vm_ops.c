@@ -16,6 +16,7 @@
 #include "builtin_date.h"
 #include "builtin_iterator.h"
 #include "builtin_map.h"
+#include "builtin_math.h"
 #include "builtin_number.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
@@ -25,6 +26,7 @@
 #include "gc.h"
 #include "generator_object.h"
 #include "intrinsics.h"
+#include "map_object.h"
 #include "promise_object.h"
 #include "primordials.h"
 #include "heap_bigint.h"
@@ -2408,6 +2410,216 @@ void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
     }
     mal_vm_call_dispatch(vm, callee, this_value, base, argument_count, dst);
     mal_vm_fill_interp_call_cache(vm, caller_function_index, call_ip, callee);
+}
+
+bool mal_op_call_guarded_math(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.call.data_offset);
+    i32 argument_count = data[0];
+    i32 guarded_function_count = data[2];
+    const i32 *arguments = &data[3 + guarded_function_count];
+    i32 math_tag = arguments[argument_count];
+    MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);
+    MalValue result;
+    if (math_tag > 0) {
+        MalMathUnaryOp operation = (MalMathUnaryOp) math_tag;
+        if (!mal_builtin_math_unary_fast(
+                callee, &operation,
+                mal_op_value_operand(callable, arguments[0]), &result)) {
+            return false;
+        }
+    } else if (math_tag < 0) {
+        MalMathBinaryOp operation = (MalMathBinaryOp) -math_tag;
+        if (!mal_builtin_math_binary_fast(
+                callee, &operation,
+                mal_op_value_operand(callable, arguments[0]),
+                mal_op_value_operand(callable, arguments[1]), &result)) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    callable->registers[instruction->as.call.dst] = result;
+    return true;
+}
+
+bool mal_op_call_guarded_builtin(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    MalVm *vm = callable->vm;
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.call.data_offset);
+    i32 argument_count = data[0];
+    i32 guarded_function_count = data[2];
+    const i32 *argument_operands = &data[3 + guarded_function_count];
+    i32 operation = argument_operands[argument_count] -
+        (MAL_MATH_UNARY_ROUND + 1);
+    MalValue receiver = mal_op_value_operand(
+        callable, instruction->as.call.this_value);
+    if (operation == MAL_GUARDED_BUILTIN_ARRAY_PUSH) {
+        if (argument_count > 4) {
+            MAL_PERF_COUNT(array_push_direct_fallbacks);
+            return false;
+        }
+        MalValue arguments[4] = {
+            mal_value_new_undefined(),
+            mal_value_new_undefined(),
+            mal_value_new_undefined(),
+            mal_value_new_undefined(),
+        };
+        for (i32 i = 0; i < argument_count; i++) {
+            arguments[i] = mal_op_value_operand(callable, argument_operands[i]);
+        }
+        MalValue result;
+        if (!mal_builtin_array_push_try_direct(
+                vm,
+                mal_op_value_operand(callable, instruction->as.call.callee),
+                receiver,
+                arguments,
+                argument_count,
+                &result)) {
+            MAL_PERF_COUNT(array_push_direct_fallbacks);
+            return false;
+        }
+        MAL_PERF_COUNT(array_push_direct_hits);
+        callable->registers[instruction->as.call.dst] = result;
+        return true;
+    }
+    MalIntrinsic expected;
+    bool receiver_matches;
+    switch ((MalGuardedBuiltinCallOp) operation) {
+        case MAL_GUARDED_BUILTIN_MAP_GET:
+            expected = MAL_INTRINSIC_MAP_PROTOTYPE_GET;
+            receiver_matches = mal_value_is_map_object(receiver) &&
+                !mal_value_to_map_object(receiver)->weak;
+            break;
+        case MAL_GUARDED_BUILTIN_MAP_SET:
+            expected = MAL_INTRINSIC_MAP_PROTOTYPE_SET;
+            receiver_matches = mal_value_is_map_object(receiver) &&
+                !mal_value_to_map_object(receiver)->weak;
+            break;
+        case MAL_GUARDED_BUILTIN_MAP_HAS:
+            expected = MAL_INTRINSIC_MAP_PROTOTYPE_HAS;
+            receiver_matches = mal_value_is_map_object(receiver) &&
+                !mal_value_to_map_object(receiver)->weak;
+            break;
+        case MAL_GUARDED_BUILTIN_MAP_DELETE:
+            expected = MAL_INTRINSIC_MAP_PROTOTYPE_DELETE;
+            receiver_matches = mal_value_is_map_object(receiver) &&
+                !mal_value_to_map_object(receiver)->weak;
+            break;
+        case MAL_GUARDED_BUILTIN_SET_ADD:
+            expected = MAL_INTRINSIC_SET_PROTOTYPE_ADD;
+            receiver_matches = mal_value_is_set_object(receiver) &&
+                !mal_value_to_map_object(receiver)->weak;
+            break;
+        case MAL_GUARDED_BUILTIN_SET_HAS:
+            expected = MAL_INTRINSIC_SET_PROTOTYPE_HAS;
+            receiver_matches = mal_value_is_set_object(receiver) &&
+                !mal_value_to_map_object(receiver)->weak;
+            break;
+        case MAL_GUARDED_BUILTIN_SET_DELETE:
+            expected = MAL_INTRINSIC_SET_PROTOTYPE_DELETE;
+            receiver_matches = mal_value_is_set_object(receiver) &&
+                !mal_value_to_map_object(receiver)->weak;
+            break;
+        default:
+            return false;
+    }
+    MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);
+    if (!receiver_matches || callee != vm->intrinsics[expected]) return false;
+
+    MalValue arguments[2] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    for (i32 i = 0; i < argument_count && i < 2; i++) {
+        arguments[i] = mal_op_value_operand(callable, argument_operands[i]);
+    }
+    MalValue result;
+    switch ((MalGuardedBuiltinCallOp) operation) {
+        case MAL_GUARDED_BUILTIN_MAP_GET:
+            result = mal_builtin_map_get_known(vm, receiver, arguments, argument_count);
+            break;
+        case MAL_GUARDED_BUILTIN_MAP_SET:
+            result = mal_builtin_map_set_known(vm, receiver, arguments, argument_count);
+            break;
+        case MAL_GUARDED_BUILTIN_MAP_HAS:
+            result = mal_builtin_map_has_known(vm, receiver, arguments, argument_count);
+            break;
+        case MAL_GUARDED_BUILTIN_MAP_DELETE:
+            result = mal_builtin_map_delete_known(vm, receiver, arguments, argument_count);
+            break;
+        case MAL_GUARDED_BUILTIN_SET_ADD:
+            result = mal_builtin_set_add_known(vm, receiver, arguments, argument_count);
+            break;
+        case MAL_GUARDED_BUILTIN_SET_HAS:
+            result = mal_builtin_set_has_known(vm, receiver, arguments, argument_count);
+            break;
+        case MAL_GUARDED_BUILTIN_SET_DELETE:
+            result = mal_builtin_set_delete_known(vm, receiver, arguments, argument_count);
+            break;
+        default:
+            abort();
+    }
+    callable->registers[instruction->as.call.dst] = result;
+    return true;
+}
+
+void mal_op_call_builtin_exact_collection(
+    MalCallable *callable, const MalInstruction *instruction
+) {
+    MalDirectBuiltinOp operation =
+        (MalDirectBuiltinOp) instruction->as.call_builtin.operation;
+    MalVm *vm = callable->vm;
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.call_builtin.data_offset);
+    i32 argument_count = data[0];
+    MalValue arguments[2] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    for (i32 i = 0; i < argument_count && i < 2; i++) {
+        arguments[i] = mal_op_value_operand(callable, data[i + 1]);
+    }
+    MalValue receiver = mal_op_value_operand(
+        callable, instruction->as.call_builtin.this_value);
+    MalValue result;
+    switch (operation) {
+        case MAL_DIRECT_BUILTIN_MAP_GET:
+            result = mal_builtin_map_get_known(
+                vm, receiver, arguments, argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_MAP_SET:
+            result = mal_builtin_map_set_known(
+                vm, receiver, arguments, argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_MAP_HAS:
+            result = mal_builtin_map_has_known(
+                vm, receiver, arguments, argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_MAP_DELETE:
+            result = mal_builtin_map_delete_known(
+                vm, receiver, arguments, argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_SET_ADD:
+            result = mal_builtin_set_add_known(
+                vm, receiver, arguments, argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_SET_HAS:
+            result = mal_builtin_set_has_known(
+                vm, receiver, arguments, argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_SET_DELETE:
+            result = mal_builtin_set_delete_known(
+                vm, receiver, arguments, argument_count);
+            break;
+        default:
+            abort();
+    }
+    callable->registers[instruction->as.call_builtin.dst] = result;
 }
 
 void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instruction) {

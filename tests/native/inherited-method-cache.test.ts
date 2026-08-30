@@ -18,6 +18,7 @@ describe("inherited built-in method and native call caches", () => {
 	let interpreted: string;
 	let monkeyPatch: string;
 	let watchedMonkeyPatch: string;
+	let watchedMonkeyPatchInterpreted: string;
 	let accessor: string;
 	let ordinaryCompiled: string;
 	let ordinaryInterpreted: string;
@@ -55,6 +56,12 @@ describe("inherited built-in method and native call caches", () => {
 			fixture: "tests/local/watched-intrinsic-cache-monkey-patch.js",
 			name: "watched-intrinsic-cache-monkey-patch",
 			compiled: true,
+			outDir,
+		});
+		watchedMonkeyPatchInterpreted = buildNativeBinary({
+			fixture: "tests/local/watched-intrinsic-cache-monkey-patch.js",
+			name: "watched-intrinsic-cache-monkey-patch-ni",
+			compiled: false,
 			outDir,
 		});
 		accessor = buildNativeBinary({
@@ -171,8 +178,17 @@ describe("inherited built-in method and native call caches", () => {
 		]);
 	});
 
-	it("invalidates watched intrinsic own values", () => {
-		assertExactLines(runToStdout(watchedMonkeyPatch), [
+	it.each([
+		["compiled", () => watchedMonkeyPatch],
+		["interpreted", () => watchedMonkeyPatchInterpreted],
+	])("invalidates watched intrinsic own values in %s mode", (_name, binary) => {
+		assertExactLines(runToStdout(binary()), [
+			"watched-intrinsic-cache-monkey-patch PASS",
+		]);
+	});
+
+	it("preserves guarded Math fallback under interpreted GC stress", () => {
+		assertExactLines(runToStdout(watchedMonkeyPatchInterpreted, { env: STRESS_ENV }), [
 			"watched-intrinsic-cache-monkey-patch PASS",
 		]);
 	});

@@ -418,7 +418,7 @@ MalValue mal_builtin_map_set_known(
 MalCompletion mal_builtin_collection_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,
-    MalBuiltinCollectionDirectOp operation,
+    MalGuardedBuiltinCallOp operation,
     MalBuiltinCollectionReceiverFact receiver_fact,
     MalValue callee,
     MalValue this_value,
@@ -427,25 +427,25 @@ MalCompletion mal_builtin_collection_direct(
 ) {
     MalIntrinsic expected;
     switch (operation) {
-        case MAL_BUILTIN_COLLECTION_MAP_GET:
+        case MAL_GUARDED_BUILTIN_MAP_GET:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_GET;
             break;
-        case MAL_BUILTIN_COLLECTION_MAP_SET:
+        case MAL_GUARDED_BUILTIN_MAP_SET:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_SET;
             break;
-        case MAL_BUILTIN_COLLECTION_MAP_HAS:
+        case MAL_GUARDED_BUILTIN_MAP_HAS:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_HAS;
             break;
-        case MAL_BUILTIN_COLLECTION_MAP_DELETE:
+        case MAL_GUARDED_BUILTIN_MAP_DELETE:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_DELETE;
             break;
-        case MAL_BUILTIN_COLLECTION_SET_ADD:
+        case MAL_GUARDED_BUILTIN_SET_ADD:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_ADD;
             break;
-        case MAL_BUILTIN_COLLECTION_SET_HAS:
+        case MAL_GUARDED_BUILTIN_SET_HAS:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_HAS;
             break;
-        case MAL_BUILTIN_COLLECTION_SET_DELETE:
+        case MAL_GUARDED_BUILTIN_SET_DELETE:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_DELETE;
             break;
         default:
@@ -453,11 +453,11 @@ MalCompletion mal_builtin_collection_direct(
     }
 
     const bool has_operation =
-        operation == MAL_BUILTIN_COLLECTION_MAP_HAS ||
-        operation == MAL_BUILTIN_COLLECTION_SET_HAS;
+        operation == MAL_GUARDED_BUILTIN_MAP_HAS ||
+        operation == MAL_GUARDED_BUILTIN_SET_HAS;
     const bool delete_operation =
-        operation == MAL_BUILTIN_COLLECTION_MAP_DELETE ||
-        operation == MAL_BUILTIN_COLLECTION_SET_DELETE;
+        operation == MAL_GUARDED_BUILTIN_MAP_DELETE ||
+        operation == MAL_GUARDED_BUILTIN_SET_DELETE;
     const bool exact_map =
         receiver_fact == MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP;
     const bool exact_set =
@@ -475,7 +475,7 @@ MalCompletion mal_builtin_collection_direct(
 
     if (arg_count >= 0 && callee_matches &&
         mal_value_is_native_function_object(callee)) {
-        if (operation == MAL_BUILTIN_COLLECTION_MAP_GET &&
+        if (operation == MAL_GUARDED_BUILTIN_MAP_GET &&
             (exact_map || (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
             if (exact_map || !map->weak) {
@@ -488,7 +488,7 @@ MalCompletion mal_builtin_collection_direct(
                         arg_count >= 1 ? args[0] : mal_value_new_undefined()),
                 };
             }
-        } else if (operation == MAL_BUILTIN_COLLECTION_MAP_SET &&
+        } else if (operation == MAL_GUARDED_BUILTIN_MAP_SET &&
                    (exact_map ||
                     (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
@@ -535,7 +535,7 @@ MalCompletion mal_builtin_collection_direct(
                         map, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
                 };
             }
-        } else if (operation == MAL_BUILTIN_COLLECTION_SET_ADD &&
+        } else if (operation == MAL_GUARDED_BUILTIN_SET_ADD &&
                    (exact_set ||
                     (unknown_receiver && mal_value_is_set_object(this_value)))) {
             MalMapObject *set = mal_value_to_map_object(this_value);

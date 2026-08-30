@@ -2,6 +2,14 @@ function assert(condition, message) {
 	if (!condition) throw new Error(message);
 }
 
+function readFreshMap(key) {
+	const values = new Map();
+	values.set("answer", { value: 42 });
+	return values.get(key)?.value;
+}
+
+assert(readFreshMap("answer") === 42, "contained fresh Map direct calls");
+
 class Registry {
 	#map = new Map([["answer", { value: 42 }]]);
 	#set = new Set(["present"]);

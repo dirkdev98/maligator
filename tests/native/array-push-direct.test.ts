@@ -19,6 +19,7 @@ function field(line: string, name: string): number {
 
 describe("guarded direct Array.prototype.push", () => {
 	let compiled: string;
+	let interpreted: string;
 	beforeAll(() => {
 		compiled = buildNativeBinary({
 			fixture,
@@ -27,29 +28,42 @@ describe("guarded direct Array.prototype.push", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+		interpreted = buildNativeBinary({
+			fixture,
+			name: "array-push-direct-interpreted",
+			compiled: false,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
 	}, 600_000);
 
 	it("preserves overrides, mutation, exceptional fallbacks, and return values", () => {
-		assertExactLines(runToStdout(compiled), ["array-push-direct PASS"]);
+		for (const binary of [compiled, interpreted]) {
+			assertExactLines(runToStdout(binary), ["array-push-direct PASS"]);
+		}
 	});
 
 	it("keeps appended values live under GC stress", () => {
-		assertExactLines(runToStdout(compiled, { env: STRESS_ENV }), [
-			"array-push-direct PASS",
-		]);
+		for (const binary of [compiled, interpreted]) {
+			assertExactLines(runToStdout(binary, { env: STRESS_ENV }), [
+				"array-push-direct PASS",
+			]);
+		}
 	});
 
 	it("takes both guarded dense hits and unchanged generic fallbacks", () => {
-		const result = spawnSync(compiled, [], {
-			env: { ...process.env, MAL_PERF_STATS: "1" },
-			encoding: "utf-8",
-		});
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-		const line = result.stderr
-			.split("\n")
-			.find((candidate) => candidate.startsWith("[perf-array-stats]"));
-		expect(line).toBeDefined();
-		expect(field(line ?? "", "push_direct_hits")).toBeGreaterThan(3000);
-		expect(field(line ?? "", "push_direct_fallbacks")).toBeGreaterThanOrEqual(8);
+		for (const binary of [compiled, interpreted]) {
+			const result = spawnSync(binary, [], {
+				env: { ...process.env, MAL_PERF_STATS: "1" },
+				encoding: "utf-8",
+			});
+			expect(result.status, result.stderr || result.stdout).toBe(0);
+			const line = result.stderr
+				.split("\n")
+				.find((candidate) => candidate.startsWith("[perf-array-stats]"));
+			expect(line).toBeDefined();
+			expect(field(line ?? "", "push_direct_hits")).toBeGreaterThan(3000);
+			expect(field(line ?? "", "push_direct_fallbacks")).toBeGreaterThanOrEqual(8);
+		}
 	});
 });

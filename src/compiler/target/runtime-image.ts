@@ -8,6 +8,7 @@ import { coreInstructionId } from "../core/core-ir.ts";
 import type { CoreProgram } from "../core/core-ir.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
+import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
@@ -144,6 +145,33 @@ export function validateVmValueOperands(definition: RuntimeImage): void {
 			if (instruction.argumentCount !== instruction.arguments.length) {
 				throw new RangeError("invalid VM value operand count");
 			}
+			if (instruction.opcode === "CALL" && instruction.guardedMathCall !== undefined) {
+				const guardedMathCall = instruction.guardedMathCall;
+				const valid =
+					guardedMathCall.kind === "unary"
+						? instruction.argumentCount === 1 &&
+							(VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(
+								guardedMathCall.operation,
+							)
+						: guardedMathCall.kind === "binary" &&
+							instruction.argumentCount === 2 &&
+							(VM_MATH_BINARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(
+								guardedMathCall.operation,
+							);
+				if (!valid) throw new RangeError("invalid guarded Math call");
+			}
+			if (
+				instruction.opcode === "CALL" &&
+				instruction.guardedBuiltinCall !== undefined &&
+				(!(VM_GUARDED_BUILTIN_CALL_OPERATIONS as ReadonlyArray<string>).includes(
+					instruction.guardedBuiltinCall.operation,
+				) ||
+					instruction.guardedMathCall !== undefined ||
+					(instruction.guardedBuiltinCall.operation === "Array.prototype.push" &&
+						instruction.argumentCount > 4))
+			) {
+				throw new RangeError("invalid guarded builtin call");
+			}
 			for (const operand of instruction.arguments) {
 				validateVmValueOperand(definition, fn, operand);
 			}
@@ -156,7 +184,6 @@ export const VM_MATH_UNARY_NUMBER_OPERATIONS = [
 	"Math.abs",
 	"Math.floor",
 	"Math.ceil",
-	"Math.round",
 	"Math.trunc",
 	"Math.sqrt",
 	"Math.cbrt",
@@ -180,9 +207,21 @@ export const VM_MATH_UNARY_NUMBER_OPERATIONS = [
 	"Math.log1p",
 	"Math.expm1",
 	"Math.fround",
+	"Math.round",
 ] as const;
 
 export const VM_MATH_BINARY_NUMBER_OPERATIONS = ["Math.min", "Math.max"] as const;
+
+export const VM_GUARDED_BUILTIN_CALL_OPERATIONS = [
+	"Map.prototype.get",
+	"Map.prototype.set",
+	"Map.prototype.has",
+	"Map.prototype.delete",
+	"Set.prototype.add",
+	"Set.prototype.has",
+	"Set.prototype.delete",
+	"Array.prototype.push",
+] as const;
 
 export interface VmKnownOwnSlotCandidate {
 	readonly shapeFunctionIndex: number;
@@ -223,9 +262,42 @@ export interface RuntimeImage {
 /** Exact builtin calls whose dynamic property/callback seam was erased in Core. */
 export const VM_DIRECT_BUILTIN_OPERATIONS = directBuiltinOperationIds;
 
-type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];
-type VmMathBinaryNumberOperation = (typeof VM_MATH_BINARY_NUMBER_OPERATIONS)[number];
+export type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];
+export type VmMathBinaryNumberOperation =
+	(typeof VM_MATH_BINARY_NUMBER_OPERATIONS)[number];
 type VmDirectBuiltinOperation = DirectBuiltinOperationId;
+
+export type VmGuardedMathCall =
+	| { kind: "unary"; operation: VmMathUnaryNumberOperation }
+	| { kind: "binary"; operation: VmMathBinaryNumberOperation };
+
+export interface VmGuardedBuiltinCall {
+	readonly operation: (typeof VM_GUARDED_BUILTIN_CALL_OPERATIONS)[number];
+}
+
+export function vmGuardedCallSideTag(
+	mathCall: VmGuardedMathCall | undefined,
+	builtinCall: VmGuardedBuiltinCall | undefined,
+): number {
+	if (mathCall !== undefined && builtinCall !== undefined) {
+		throw new RangeError("invalid guarded call");
+	}
+	if (builtinCall !== undefined) {
+		const operation = (
+			VM_GUARDED_BUILTIN_CALL_OPERATIONS as ReadonlyArray<string>
+		).indexOf(builtinCall.operation);
+		if (operation < 0) throw new RangeError("invalid guarded builtin call");
+		return VM_MATH_UNARY_NUMBER_OPERATIONS.length + operation + 1;
+	}
+	if (mathCall === undefined) return 0;
+	const operations =
+		mathCall.kind === "unary"
+			? (VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>)
+			: (VM_MATH_BINARY_NUMBER_OPERATIONS as ReadonlyArray<string>);
+	const operation = operations.indexOf(mathCall.operation);
+	if (operation < 0) throw new RangeError("invalid guarded Math call");
+	return mathCall.kind === "unary" ? operation + 1 : -(operation + 1);
+}
 
 function vmMathUnaryNumberOperation(operation: string): VmMathUnaryNumberOperation {
 	if ((VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(operation)) {
@@ -672,6 +744,10 @@ export type BytecodeInstruction =
 			thisValue: number;
 			exactFunctionIndex?: number;
 			guardedFunctionIndices?: Array<number>;
+			/** Advisory exact-callback probe; failure preserves the ordinary CALL. */
+			guardedMathCall?: VmGuardedMathCall;
+			/** Advisory builtin probe; failure preserves the ordinary CALL. */
+			guardedBuiltinCall?: VmGuardedBuiltinCall;
 			argumentCount: number;
 			arguments: Array<number>;
 	  }
@@ -2400,6 +2476,49 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 			};
 		case "call": {
+			const knownCall = instruction.knownBuiltinCall;
+			const knownOperation = knownCall?.operation;
+			let guardedMathCall: VmGuardedMathCall | undefined;
+			let guardedBuiltinCall: VmGuardedBuiltinCall | undefined;
+			if (
+				knownOperation !== undefined &&
+				knownBuiltinCallProves(knownCall, knownOperation) &&
+				knownCall?.identity.kind === "known" &&
+				knownCall.identity.proof.obligations.some(({ kind }) => kind === "fallback")
+			) {
+				if (
+					instruction.registers.length === 4 &&
+					(VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(
+						knownOperation,
+					)
+				) {
+					guardedMathCall = {
+						kind: "unary",
+						operation: vmMathUnaryNumberOperation(knownOperation),
+					};
+				} else if (
+					instruction.registers.length === 5 &&
+					(VM_MATH_BINARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(
+						knownOperation,
+					)
+				) {
+					guardedMathCall = {
+						kind: "binary",
+						operation: vmMathBinaryNumberOperation(knownOperation),
+					};
+				}
+				if (
+					(VM_GUARDED_BUILTIN_CALL_OPERATIONS as ReadonlyArray<string>).includes(
+						knownOperation,
+					) &&
+					(knownOperation !== "Array.prototype.push" ||
+						instruction.registers.length - 3 <= 4)
+				) {
+					guardedBuiltinCall = {
+						operation: knownOperation as VmGuardedBuiltinCall["operation"],
+					};
+				}
+			}
 			return {
 				opcode: "CALL",
 				dst: instruction.registers[0],
@@ -2417,6 +2536,8 @@ function lowerInstructionToBytecodeInstruction(
 				...(instruction.guardedFunctionIndices === undefined
 					? {}
 					: { guardedFunctionIndices: [...instruction.guardedFunctionIndices] }),
+				...(guardedMathCall === undefined ? {} : { guardedMathCall }),
+				...(guardedBuiltinCall === undefined ? {} : { guardedBuiltinCall }),
 				argumentCount: instruction.registers.length - 3,
 				arguments: instruction.registers
 					.slice(3)

@@ -1821,6 +1821,32 @@ bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
         live.desc.value == callee;
 }
 
+bool mal_builtin_array_push_try_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue *result_out
+) {
+    if (arg_count < 0 || !mal_value_is_array_object(this_value) ||
+        callee != vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH] ||
+        !mal_builtin_array_push_virtual_guard(vm)) {
+        return false;
+    }
+    MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    MalArrayObject *array = mal_value_to_array_object(this_value);
+    if (!mal_value_is_array_object(prototype_value) ||
+        array->object.prototype != mal_value_to_object(prototype_value) ||
+        mal_object_get_own(
+            &array->object, mal_intrinsic_string_key(vm, "push")).present ||
+        !mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
+        return false;
+    }
+    *result_out = mal_ops_number_value((f64) array->length);
+    return true;
+}
+
 static bool mal_builtin_array_private_iterator_protocol_guard(MalVm *vm) {
     MalValue array_prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     MalValue iterator_prototype_value =
@@ -1859,24 +1885,15 @@ MalCompletion mal_builtin_array_push_direct(
     bool *exact_hit_out
 ) {
     if (exact_hit_out != nullptr) *exact_hit_out = false;
-    if (arg_count >= 0 && mal_value_is_array_object(this_value) &&
-        callee == vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH] &&
-        mal_builtin_array_push_virtual_guard(vm)) {
-        MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
-        MalArrayObject *array = mal_value_to_array_object(this_value);
-        MalKey push_key = mal_intrinsic_string_key(vm, "push");
-        if (mal_value_is_array_object(prototype_value) &&
-            array->object.prototype == mal_value_to_object(prototype_value) &&
-            !mal_object_get_own(&array->object, push_key).present) {
-            if (mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
-                if (exact_hit_out != nullptr) *exact_hit_out = true;
-                MAL_PERF_COUNT(array_push_direct_hits);
-                return (MalCompletion) {
-                    .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_ops_number_value((f64) array->length),
-                };
-            }
-        }
+    MalValue result;
+    if (mal_builtin_array_push_try_direct(
+            vm, callee, this_value, args, arg_count, &result)) {
+        if (exact_hit_out != nullptr) *exact_hit_out = true;
+        MAL_PERF_COUNT(array_push_direct_hits);
+        return (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = result,
+        };
     }
 
     MAL_PERF_COUNT(array_push_direct_fallbacks);

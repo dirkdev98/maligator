@@ -19,6 +19,7 @@ function field(line: string, name: string): number {
 
 describe("guarded direct Map and Set dispatch", () => {
 	let compiled: string;
+	let interpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -28,6 +29,12 @@ describe("guarded direct Map and Set dispatch", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+		interpreted = buildNativeBinary({
+			fixture,
+			name: "collection-direct-interpreted",
+			compiled: false,
+			outDir,
+		});
 	}, 600_000);
 
 	it("preserves collection semantics and guarded fallbacks", () => {
@@ -36,6 +43,11 @@ describe("guarded direct Map and Set dispatch", () => {
 
 	it("keeps directly stored keys and values live under GC stress", () => {
 		assertPassLine(runToStdout(compiled, { env: STRESS_ENV }), "collection-direct");
+	});
+
+	it("preserves exact collection leaves in the portable interpreter", () => {
+		assertPassLine(runToStdout(interpreted), "collection-direct");
+		assertPassLine(runToStdout(interpreted, { env: STRESS_ENV }), "collection-direct");
 	});
 
 	it("takes each direct path while retaining generic misses", () => {

@@ -240,6 +240,20 @@ const weak = new WeakMap([[weakKey, 5]]);
 ok("WeakMap fallback get", weak.get(weakKey) === 5);
 ok("WeakMap fallback set", weak.set(weakKey, 6) === weak && weak.get(weakKey) === 6);
 
+let crossBrandThrows = 0;
+for (const invoke of [
+	() => Map.prototype.get.call(weak, weakKey),
+	() => Map.prototype.has.call(new Set(), weakKey),
+	() => Set.prototype.add.call(new WeakSet(), weakKey),
+]) {
+	try {
+		invoke();
+	} catch (error) {
+		if (error instanceof TypeError) crossBrandThrows++;
+	}
+}
+ok("cross-brand collection fallback", crossBrandThrows === 3);
+
 let proxyThrew = false;
 try {
 	new Proxy(new Map(), {}).get("key");

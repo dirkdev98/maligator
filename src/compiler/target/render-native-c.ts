@@ -422,8 +422,8 @@ export function nativeInactiveRootMasks(
 	return removesAnyRoot ? masks : new Map();
 }
 
-function cInactiveRootMask(mask: bigint): string {
-	return `UINT64_C(0x${mask.toString(16)})`;
+function cInactiveRootMaskPublication(mask: bigint): string {
+	return `MAL_ROOT_MASK(0x${mask.toString(16)})`;
 }
 
 /**
@@ -519,8 +519,11 @@ function emitCompiledVariant(
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const slotCount = valueRegs.length;
 	const inactiveRootMasks = nativeInactiveRootMasks(nativeContract.gc.safepoints, slotOf);
-	const gcSafepointIps = new Set(
-		nativeContract.gc.safepoints.map((safepoint) => safepoint.instructionIp),
+	const gcSafepointKinds = new Map(
+		nativeContract.gc.safepoints.map((safepoint) => [
+			safepoint.instructionIp,
+			safepoint.kind,
+		]),
 	);
 
 	// A derived constructor's `this` is uninitialized (the EMPTY sentinel) until
@@ -766,7 +769,7 @@ function emitCompiledVariant(
 		nativeContract.specializations,
 		nativeContract.instructions,
 		inactiveRootMasks,
-		gcSafepointIps,
+		gcSafepointKinds,
 		suffix,
 		reps,
 		debug,
@@ -1102,7 +1105,9 @@ function emitResumableFunction(
 		native.specializations,
 		native.instructions,
 		nativeInactiveRootMasks(native.gc.safepoints, registerSlots),
-		new Set(native.gc.safepoints.map((safepoint) => safepoint.instructionIp)),
+		new Map(
+			native.gc.safepoints.map((safepoint) => [safepoint.instructionIp, safepoint.kind]),
+		),
 		suffix,
 		reps,
 		debug,
@@ -1570,7 +1575,10 @@ function emitBody(
 	specializations: ReadonlyArray<VmRegion>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 	inactiveRootMasks: ReadonlyMap<number, bigint>,
-	gcSafepointIps: ReadonlySet<number>,
+	gcSafepointKinds: ReadonlyMap<
+		number,
+		NativeFunctionPlan["gc"]["safepoints"][number]["kind"]
+	>,
 	suffix: string,
 	reps: Array<RegisterRep>,
 	debug: boolean,
@@ -1951,18 +1959,74 @@ function emitBody(
 	// this frame. Pure arithmetic/control-flow transitions need no native-frame write.
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
+	let lastPublishedInactiveRootMask: bigint | undefined;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
-			// Control can arrive with a different published position.
+			// Control can arrive with different published frame metadata.
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
+			lastPublishedInactiveRootMask = undefined;
 		}
+		const safepointKind = gcSafepointKinds.get(ip);
 		const inactiveRootMask = inactiveRootMasks.get(ip);
-		if (inactiveRootMask !== undefined) {
-			lines.push(
-				`    __gc_frame.inactive_slots = ${cInactiveRootMask(inactiveRootMask)};`,
-			);
+		const loopBackedgeInactiveRootMask =
+			safepointKind === "loop-backedge" &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const mathCallInactiveRootMask =
+			safepointKind === "operation" &&
+			(mathUnaryCalls.has(ip) || mathBinaryCalls.has(ip)) &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const tdzInactiveRootMask =
+			safepointKind === "operation" &&
+			fn.instructions[ip]!.opcode === "THROW_IF_TDZ" &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const knownOwnSlotLoadInactiveRootMask =
+			safepointKind === "operation" &&
+			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const staticPropertyLoadInactiveRootMask =
+			safepointKind === "operation" &&
+			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
+			nativeInstructions[ip] === undefined &&
+			stackObjectAccesses.get(ip) === undefined &&
+			stackObjectInheritedAccesses.get(ip) === undefined &&
+			nativeStringSplitProjectionActionByIp.get(ip) === undefined &&
+			nativeStringSplitCursorActionByIp.get(ip) === undefined &&
+			nativeRegExpExecProjectionActionByIp.get(ip) === undefined &&
+			nativeRegExpIteratorProjectionActionByIp.get(ip) === undefined &&
+			nativeStringSliceNumberFusionActionByIp.get(ip) === undefined &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		if (
+			inactiveRootMask !== undefined &&
+			loopBackedgeInactiveRootMask === undefined &&
+			mathCallInactiveRootMask === undefined &&
+			tdzInactiveRootMask === undefined &&
+			knownOwnSlotLoadInactiveRootMask === undefined &&
+			staticPropertyLoadInactiveRootMask === undefined &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
+		) {
+			lines.push(`    ${cInactiveRootMaskPublication(inactiveRootMask)};`);
+		}
+		if (
+			inactiveRootMask !== undefined &&
+			loopBackedgeInactiveRootMask === undefined &&
+			mathCallInactiveRootMask === undefined &&
+			tdzInactiveRootMask === undefined &&
+			knownOwnSlotLoadInactiveRootMask === undefined &&
+			staticPropertyLoadInactiveRootMask === undefined
+		) {
+			lastPublishedInactiveRootMask = inactiveRootMask;
 		}
 		let emitted = emitInstruction(
 			fn.instructions[ip]!,
@@ -1976,7 +2040,12 @@ function emitBody(
 			coro,
 			{
 				nativePlan: nativeInstructions[ip],
-				gcSafepoint: gcSafepointIps.has(ip),
+				gcSafepoint: safepointKind !== undefined,
+				loopBackedgeInactiveRootMask,
+				mathCallInactiveRootMask,
+				tdzInactiveRootMask,
+				knownOwnSlotLoadInactiveRootMask,
+				staticPropertyLoadInactiveRootMask,
 				stackObjectSite: stackObjectSites.get(ip),
 				stackObjectAccess: stackObjectAccesses.get(ip),
 				stackObjectMaterialization: stackObjectMaterializations.get(ip),
@@ -2002,6 +2071,15 @@ function emitBody(
 		);
 		if (emitted === null) {
 			return null;
+		}
+		if (
+			mathCallInactiveRootMask !== undefined ||
+			tdzInactiveRootMask !== undefined ||
+			knownOwnSlotLoadInactiveRootMask !== undefined ||
+			staticPropertyLoadInactiveRootMask !== undefined
+		) {
+			// Conditional paths can preserve the old mask or publish the instruction's mask.
+			lastPublishedInactiveRootMask = undefined;
 		}
 		if (debug && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
 			const pos = fn.positions[ip] ?? -1;
@@ -2321,6 +2399,11 @@ function instrumentProfileExpressions(
 interface NativeInstructionContext {
 	readonly nativePlan?: NativeInstructionPlan;
 	readonly gcSafepoint: boolean;
+	readonly loopBackedgeInactiveRootMask?: bigint;
+	readonly mathCallInactiveRootMask?: bigint;
+	readonly tdzInactiveRootMask?: bigint;
+	readonly knownOwnSlotLoadInactiveRootMask?: bigint;
+	readonly staticPropertyLoadInactiveRootMask?: bigint;
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;
@@ -2430,6 +2513,11 @@ function emitInstruction(
 	const genericContext: NativeInstructionContext = {
 		nativePlan,
 		gcSafepoint: context.gcSafepoint,
+		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
+		mathCallInactiveRootMask: context.mathCallInactiveRootMask,
+		tdzInactiveRootMask: context.tdzInactiveRootMask,
+		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
+		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
 		directCompiledTargets,
 		directCompiledEntries,
 		directResultRepresentation,
@@ -2544,7 +2632,20 @@ function emitInstruction(
 	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
 	// A poll without corresponding exact-root metadata can expose dead slots or clear
 	// a just-produced result under the preceding instruction's mask.
-	const poll = context.gcSafepoint ? "if (mal_gc_poll) mal_gc_safepoint(vm);" : "";
+	const poll =
+		context.loopBackedgeInactiveRootMask === undefined
+			? context.gcSafepoint
+				? "if (mal_gc_poll) mal_gc_safepoint(vm);"
+				: ""
+			: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; mal_gc_safepoint(vm); }`;
+	const mathPoll =
+		context.mathCallInactiveRootMask === undefined
+			? poll
+			: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask)}; mal_gc_safepoint(vm); }`;
+	const mathFallbackRootPublication =
+		context.mathCallInactiveRootMask === undefined
+			? []
+			: [`  ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask)};`];
 
 	// Where `this` is stored: a derived constructor's is a mutable rooted slot
 	// (super() rebinds it); everything else reads the immutable `this_value` param.
@@ -2649,6 +2750,9 @@ function emitInstruction(
 			// throw propagates out, exactly like the interpreter op.
 			return [
 				`if (mal_value_is_empty(${boxed(instruction.src)})) {`,
+				...(context.tdzInactiveRootMask === undefined
+					? []
+					: [`  ${cInactiveRootMaskPublication(context.tdzInactiveRootMask)};`]),
 				`  mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${relocation.stringIndex(instruction.nameStringIndex)});`,
 				`  ${throwCheck}`,
 				`}`,
@@ -2867,6 +2971,11 @@ function emitInstruction(
 				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
 				`  r${instruction.dst} = __known_own_slot_${ip};`,
 				`} else {`,
+				...(context.knownOwnSlotLoadInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.knownOwnSlotLoadInactiveRootMask)};`,
+						]),
 				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
@@ -3200,6 +3309,11 @@ function emitInstruction(
 				`if (${probe}) {`,
 				`  r${instruction.dst} = __v_${ip};`,
 				`} else {`,
+				...(context.staticPropertyLoadInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.staticPropertyLoadInactiveRootMask)};`,
+						]),
 				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
@@ -4345,13 +4459,13 @@ function emitInstruction(
 				guardedBuiltinOperation === "Set.prototype.delete"
 			) {
 				const operation = {
-					"Map.prototype.get": "MAL_BUILTIN_COLLECTION_MAP_GET",
-					"Map.prototype.set": "MAL_BUILTIN_COLLECTION_MAP_SET",
-					"Map.prototype.has": "MAL_BUILTIN_COLLECTION_MAP_HAS",
-					"Map.prototype.delete": "MAL_BUILTIN_COLLECTION_MAP_DELETE",
-					"Set.prototype.add": "MAL_BUILTIN_COLLECTION_SET_ADD",
-					"Set.prototype.has": "MAL_BUILTIN_COLLECTION_SET_HAS",
-					"Set.prototype.delete": "MAL_BUILTIN_COLLECTION_SET_DELETE",
+					"Map.prototype.get": "MAL_GUARDED_BUILTIN_MAP_GET",
+					"Map.prototype.set": "MAL_GUARDED_BUILTIN_MAP_SET",
+					"Map.prototype.has": "MAL_GUARDED_BUILTIN_MAP_HAS",
+					"Map.prototype.delete": "MAL_GUARDED_BUILTIN_MAP_DELETE",
+					"Set.prototype.add": "MAL_GUARDED_BUILTIN_SET_ADD",
+					"Set.prototype.has": "MAL_GUARDED_BUILTIN_SET_HAS",
+					"Set.prototype.delete": "MAL_GUARDED_BUILTIN_SET_DELETE",
 				}[guardedBuiltinOperation];
 				const receiverFact =
 					callPlan?.exactCollectionReceiver === "Map"
@@ -4543,7 +4657,7 @@ function emitInstruction(
 				) {
 					return [
 						`r${instruction.dst} = mal_builtin_math_unary_number_known(${nativeOperation}, ${nativeArgument});`,
-						poll,
+						mathPoll,
 					];
 				}
 				return [
@@ -4552,12 +4666,13 @@ function emitInstruction(
 					`if (mal_builtin_math_unary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(argument)}, &__math_result_${ip})) {`,
 					`  r${instruction.dst} = __math_result_${ip};`,
 					`} else {`,
+					...mathFallbackRootPublication,
 					`  static MalCallCache __cc_${ip};`,
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
-					poll,
+					mathPoll,
 				];
 			}
 			if (mathBinaryCall) {
@@ -4576,7 +4691,7 @@ function emitInstruction(
 				) {
 					return [
 						`r${instruction.dst} = mal_builtin_math_binary_number_known(${nativeOperation}, ${nativeLeft}, ${nativeRight});`,
-						poll,
+						mathPoll,
 					];
 				}
 				return [
@@ -4585,12 +4700,13 @@ function emitInstruction(
 					`if (mal_builtin_math_binary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(left)}, ${boxedOperand(right)}, &__math_result_${ip})) {`,
 					`  r${instruction.dst} = __math_result_${ip};`,
 					`} else {`,
+					...mathFallbackRootPublication,
 					`  static MalCallCache __cc_${ip};`,
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
-					poll,
+					mathPoll,
 				];
 			}
 			// A per-site polymorphic call cache: exact native callees and ordinary compiled
