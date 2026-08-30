@@ -1188,6 +1188,46 @@ describe("Core IR optimizer", () => {
 		).toBe(true);
 	});
 
+	it("retracts a primitive effect proof when a later pass rewrites the operator", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const parameter = builder.block(entry).parameters[0]!.value;
+		const [type] = builder.appendInstruction(entry, "unary", [parameter], {
+			attributes: { operator: "typeof" },
+		});
+		const [number] = builder.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 1 },
+		});
+		const [matches] = builder.appendInstruction(entry, "binary", [type!, number!], {
+			attributes: { operator: "===" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(entry, { kind: "return", value: matches! });
+		const program = {
+			...coreProgram([builder.finish(entry)]),
+			stringConstants: [[], [..."number"].map((unit) => unit.charCodeAt(0))],
+		};
+		const refined = executeCoreOptimizations(program, {
+			ablations: new Set(["constant-folding"]),
+			verification: "per-pass",
+		}).program;
+		const binary = refined.functions[0]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		).find(({ opcode }) => opcode === "binary");
+		expect(binary?.effectRefinement).toBeDefined();
+
+		const folded = executeCoreOptimizations(refined, {
+			verification: "per-pass",
+		}).program;
+		const comparison = folded.functions[0]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		).find(({ opcode }) => opcode === "typeofCompare");
+		expect(comparison?.effectRefinement).toBeUndefined();
+		expect(() => verifyCoreProgram(folded, coreOpcodeRegistry)).not.toThrow();
+	});
+
 	it("removes coercion work already decided by primitive kinds", () => {
 		const build = (functionIndex: number, coercible: boolean): CoreFunction => {
 			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {

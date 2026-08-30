@@ -845,12 +845,12 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 							for (const output of property.outputs) removedValues.add(output);
 						}
 						numericOutputs.add(instruction.outputs[0]!);
-						return {
+						return withoutEffectRefinement({
 							...instruction,
 							opcode: numericRewrite,
 							inputs: arguments_,
 							attributes: { operation: descriptor.id },
-						};
+						});
 					}
 					if (exactRewrite !== undefined) {
 						removedInstructions.add(property.id);
@@ -859,7 +859,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 							exactRewrite.forwardedArgumentLimit === undefined
 								? arguments_
 								: arguments_.slice(0, exactRewrite.forwardedArgumentLimit);
-						return {
+						return withoutEffectRefinement({
 							...instruction,
 							opcode: "callBuiltin",
 							inputs: [instruction.inputs[1]!, ...forwardedArguments],
@@ -867,7 +867,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 								operation: exactRewrite.id,
 								knownBuiltinCall: coreAttribute(knownBuiltinCall, "knownBuiltinCall"),
 							},
-						};
+						});
 					}
 					return {
 						...instruction,
@@ -1081,7 +1081,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 					.map((instruction): CoreInstruction => {
 						const candidate = byCall.get(instruction.id);
 						if (candidate !== undefined) {
-							return {
+							return withoutEffectRefinement({
 								...instruction,
 								opcode: "callBuiltin",
 								inputs: [instruction.inputs[1]!, ...candidate.forwardedArguments],
@@ -1089,7 +1089,7 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 									operation: candidate.operation,
 									knownBuiltinCall: instruction.attributes.knownBuiltinCall!,
 								},
-							};
+							});
 						}
 						return exactElementLoads.has(instruction.id)
 							? {
@@ -5596,12 +5596,12 @@ const foldExactObjectObservations: CoreFunctionPass = {
 						const expected = instructionAttribute(instruction, "expected");
 						const negated = instructionAttribute(instruction, "negated") === true;
 						changed = true;
-						return {
+						return withoutEffectRefinement({
 							...instruction,
 							opcode: "createBoolean",
 							inputs: [],
 							attributes: { value: (expected === "object") !== negated },
-						};
+						});
 					}
 					if (
 						objectStringIndex !== undefined &&
@@ -5611,12 +5611,12 @@ const foldExactObjectObservations: CoreFunctionPass = {
 						origins.has(instruction.inputs[0]!)
 					) {
 						changed = true;
-						return {
+						return withoutEffectRefinement({
 							...instruction,
 							opcode: "createString",
 							inputs: [],
 							attributes: { stringIndex: objectStringIndex },
-						};
+						});
 					}
 					if (instruction.opcode !== "binary" || instruction.inputs.length !== 2) {
 						return instruction;
@@ -5635,14 +5635,14 @@ const foldExactObjectObservations: CoreFunctionPass = {
 					if (left === undefined || right === undefined) return instruction;
 					const equal = left === right;
 					changed = true;
-					return {
+					return withoutEffectRefinement({
 						...instruction,
 						opcode: "createBoolean",
 						inputs: [],
 						attributes: {
 							value: operator === "!==" || operator === "!=" ? !equal : equal,
 						},
-					};
+					});
 				}),
 			}),
 		);
@@ -5825,7 +5825,7 @@ const foldTypeofComparisons: CoreFunctionPass = {
 						return instruction;
 					}
 					changed = true;
-					return {
+					return withoutEffectRefinement({
 						...instruction,
 						opcode: "typeofCompare",
 						inputs: [unary.inputs[0]!],
@@ -5833,7 +5833,7 @@ const foldTypeofComparisons: CoreFunctionPass = {
 							expected,
 							negated: operator === "!==" || operator === "!=",
 						},
-					};
+					});
 				}),
 			}),
 		);
@@ -5921,7 +5921,7 @@ const foldWholeProgramValueKinds: CoreFunctionPass = {
 							const matches = exactTypeofComparison(mask, expected);
 							if (matches !== undefined) {
 								changed = true;
-								return {
+								return withoutEffectRefinement({
 									...instruction,
 									opcode: "createBoolean",
 									inputs: [],
@@ -5931,7 +5931,7 @@ const foldWholeProgramValueKinds: CoreFunctionPass = {
 												? !matches
 												: matches,
 									},
-								};
+								});
 							}
 						}
 						if (
@@ -5945,12 +5945,12 @@ const foldWholeProgramValueKinds: CoreFunctionPass = {
 									: exactStringConstantIndex(program, result);
 							if (stringIndex !== undefined) {
 								changed = true;
-								return {
+								return withoutEffectRefinement({
 									...instruction,
 									opcode: "createString",
 									inputs: [],
 									attributes: { stringIndex },
-								};
+								});
 							}
 						}
 						if (
@@ -5960,12 +5960,12 @@ const foldWholeProgramValueKinds: CoreFunctionPass = {
 							const truthy = exactKindTruthiness(mask);
 							if (truthy !== undefined) {
 								changed = true;
-								return {
+								return withoutEffectRefinement({
 									...instruction,
 									opcode: "createBoolean",
 									inputs: [],
 									attributes: { value: !truthy },
-								};
+								});
 							}
 						}
 					}
@@ -5980,12 +5980,12 @@ const foldWholeProgramValueKinds: CoreFunctionPass = {
 							const right = valueKinds.kindMask(fn.functionIndex, instruction.inputs[1]!);
 							if ((left & right) === 0) {
 								changed = true;
-								return {
+								return withoutEffectRefinement({
 									...instruction,
 									opcode: "createBoolean",
 									inputs: [],
 									attributes: { value: operator === "!==" },
-								};
+								});
 							}
 						}
 					}
@@ -6323,7 +6323,7 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 					const stringIndex = strings.get(canonical.get(key) ?? key);
 					if (stringIndex === undefined) return instruction;
 					changed = true;
-					return {
+					return withoutEffectRefinement({
 						...instruction,
 						opcode:
 							instruction.opcode === "loadProperty"
@@ -6331,7 +6331,7 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 								: "storePropertyStatic",
 						inputs: instruction.inputs.filter((_, index) => index !== 1),
 						attributes: { ...instruction.attributes, stringIndex },
-					};
+					});
 				}),
 			}),
 		);
@@ -7231,7 +7231,7 @@ function foldedInstruction(
 	  }
 	| undefined {
 	const common = {
-		...instruction,
+		...withoutEffectRefinement(instruction),
 		inputs: [],
 	};
 	switch (value.kind) {
@@ -8354,7 +8354,7 @@ const simplifyAlgebraicValues: CoreFunctionPass = {
 					}
 					if (replacement === undefined) return instruction;
 					changed = true;
-					return replacement;
+					return withoutEffectRefinement(replacement);
 				}),
 			}),
 		);
