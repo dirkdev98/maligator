@@ -1185,6 +1185,76 @@ describe("Core IR optimizer", () => {
 		).toBe(true);
 	});
 
+	it("removes coercion work already decided by primitive kinds", () => {
+		const build = (functionIndex: number, coercible: boolean): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const condition = builder.block(entry).parameters[0]!.value;
+			const left = builder.createBlock();
+			const right = builder.createBlock();
+			const join = builder.createBlock();
+			const [base] = coercible
+				? builder.appendInstruction(entry, "createBoolean", [], {
+						attributes: { value: true },
+					})
+				: builder.appendInstruction(entry, "createNull", []);
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition,
+				consequent: { block: left, arguments: [] },
+				alternate: { block: right, arguments: [] },
+			});
+			const [first] = builder.appendInstruction(left, "createString", [], {
+				attributes: { stringIndex: 0 },
+			});
+			const [second] = builder.appendInstruction(right, "createString", [], {
+				attributes: { stringIndex: 1 },
+			});
+			builder.setTerminator(left, {
+				kind: "jump",
+				edge: { block: join, arguments: [first!] },
+			});
+			builder.setTerminator(right, {
+				kind: "jump",
+				edge: { block: join, arguments: [second!] },
+			});
+			const key = builder.appendBlockParameter(join);
+			builder.appendInstruction(join, "requireCoercible", [base!]);
+			const [propertyKey] = builder.appendInstruction(join, "toPropertyKey", [
+				base!,
+				key,
+			]);
+			builder.setTerminator(join, { kind: "return", value: propertyKey! });
+			return builder.finish(entry);
+		};
+		const program = {
+			...coreProgram([build(0, true), build(1, false)]),
+			stringConstants: [[], []],
+		};
+		const baseline = executeCoreOptimizations(program, {
+			ablations: new Set(["fact-driven"]),
+			verification: "per-pass",
+		}).program;
+		const optimized = executeCoreOptimizations(program, {
+			verification: "per-pass",
+		}).program;
+		const coercions = (fn: CoreFunction) =>
+			fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.filter(
+					({ opcode }) => opcode === "requireCoercible" || opcode === "toPropertyKey",
+				);
+
+		expect(coercions(baseline.functions[0]!)).toHaveLength(2);
+		expect(coercions(optimized.functions[0]!)).toHaveLength(0);
+		expect(coercions(optimized.functions[1]!).map(({ opcode }) => opcode)).toEqual([
+			"requireCoercible",
+			"requireCoercible",
+		]);
+	});
+
 	it("forwards own data slots of a contained shaped literal", () => {
 		// { f0: a, f1: b }; o.f1 = a; return o.f0 + o.f1
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 2 });

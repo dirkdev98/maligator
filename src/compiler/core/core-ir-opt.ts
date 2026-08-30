@@ -32,6 +32,7 @@ import {
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_UNDEFINED,
+	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
@@ -5854,6 +5855,76 @@ const refinePrimitiveOperatorEffects: CoreFunctionPass = {
 			],
 			mutationEpoch: fn.mutationEpoch + 1,
 		};
+	},
+};
+
+const CORE_NULLISH_VALUE_KINDS = COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_UNDEFINED;
+const CORE_PROPERTY_KEY_VALUE_KINDS =
+	COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL;
+
+const eliminateRedundantPrimitiveCoercions: CoreFunctionPass = {
+	name: "eliminate-redundant-primitive-coercions",
+	ablation: "fact-driven",
+	dependsOnProgram: true,
+	run(fn, analyses, program) {
+		const valueKinds = analyses.valueKinds(program);
+		const { instructions: protectedInstructions, inputs: protectedInputs } =
+			analyses.regionProtection(fn);
+		const replacements = new Map<CoreValueId, CoreValueId>();
+		const removedInstructions = new Set<number>();
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (
+						instruction.effectRefinement !== undefined ||
+						protectedInstructions.has(instruction.id) ||
+						instruction.outputs.some((output) => protectedInputs.has(output))
+					) {
+						return instruction;
+					}
+					if (instruction.opcode === "requireCoercible") {
+						const input = instruction.inputs[0];
+						const mask =
+							input === undefined ? 0 : valueKinds.kindMask(fn.functionIndex, input);
+						if (mask === 0 || (mask & CORE_NULLISH_VALUE_KINDS) !== 0) {
+							return instruction;
+						}
+						removedInstructions.add(instruction.id);
+						changed = true;
+						return instruction;
+					}
+					if (
+						instruction.opcode !== "toPropertyKey" ||
+						instruction.inputs.length !== 2 ||
+						instruction.outputs.length !== 1
+					) {
+						return instruction;
+					}
+					const [base, key] = instruction.inputs;
+					const keyMask = valueKinds.kindMask(fn.functionIndex, key!);
+					if (!compilerValueKindMaskIsSubset(keyMask, CORE_PROPERTY_KEY_VALUE_KINDS)) {
+						return instruction;
+					}
+					replacements.set(instruction.outputs[0]!, key!);
+					changed = true;
+					const baseMask = valueKinds.kindMask(fn.functionIndex, base!);
+					if (baseMask !== 0 && (baseMask & CORE_NULLISH_VALUE_KINDS) === 0) {
+						removedInstructions.add(instruction.id);
+						return instruction;
+					}
+					return {
+						id: instruction.id,
+						opcode: "requireCoercible",
+						inputs: [base!],
+						outputs: [],
+						attributes: {},
+					};
+				}),
+			}),
+		);
+		return changed ? rewriteFunction(fn, blocks, replacements, removedInstructions) : fn;
 	},
 };
 
@@ -11788,6 +11859,7 @@ const CORE_PROGRAM_PASSES: ReadonlyArray<CoreFunctionPass> = [refineDirectCallEf
 const CORE_FACT_DRIVEN_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldWholeProgramValueKinds,
 	refinePrimitiveOperatorEffects,
+	eliminateRedundantPrimitiveCoercions,
 ];
 
 /**
