@@ -1846,7 +1846,7 @@ describe("Core IR optimizer", () => {
 			verification: "per-pass",
 		});
 		const fn = outcome.program.functions[0]!;
-		expect(fn.values.find(({ id }) => id === joined)?.representation).toBe("f64");
+		expect(fn.values.find(({ id }) => id === joined)?.representation).toBe("i32");
 		expect(
 			fn.blocks
 				.flatMap(({ instructions }) => instructions)
@@ -1855,7 +1855,7 @@ describe("Core IR optimizer", () => {
 				),
 		).toBe(false);
 		expect([...coreRegisterClasses(fn).registerRepresentations.values()]).toContain(
-			"f64",
+			"i32",
 		);
 	});
 

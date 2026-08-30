@@ -404,7 +404,7 @@ function binaryOpCanThrow(operator: string): boolean {
 	return !NON_THROWING_BINARY.has(operator);
 }
 
-function nativeInactiveRootMasks(
+export function nativeInactiveRootMasks(
 	safepoints: NativeFunctionPlan["gc"]["safepoints"],
 	slotOfRegister: ReadonlyMap<number, number>,
 ): ReadonlyMap<number, bigint> {

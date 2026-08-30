@@ -445,9 +445,20 @@ function valuesLiveAcrossSuspension(
 	fn: CoreFunction,
 	registry: CoreOpcodeRegistry,
 ): ReadonlySet<CoreValueId> {
+	if (
+		!fn.blocks.some(({ instructions }) =>
+			instructions.some(
+				(instruction) => coreInstructionEffects(instruction, registry).maySuspend,
+			),
+		)
+	) {
+		return new Set();
+	}
 	const uses = fn.blocks.map(() => new Set<CoreValueId>());
 	const definitions = fn.blocks.map(() => new Set<CoreValueId>());
 	const successors = fn.blocks.map(() => new Set<number>());
+	const predecessors = fn.blocks.map(() => new Set<number>());
+	const suspensionInstructions = new Set<CoreInstruction>();
 	const addUse = (block: CoreBlock, value: CoreValueId): void => {
 		if (!definitions[block.id]!.has(value)) uses[block.id]!.add(value);
 	};
@@ -456,6 +467,9 @@ function valuesLiveAcrossSuspension(
 		for (const instruction of block.instructions) {
 			for (const input of instruction.inputs) addUse(block, input);
 			for (const output of instruction.outputs) definitions[block.id]!.add(output);
+			if (coreInstructionEffects(instruction, registry).maySuspend) {
+				suspensionInstructions.add(instruction);
+			}
 		}
 		const terminator = block.terminator;
 		if (terminator.kind === "branch" || terminator.kind === "guard") {
@@ -466,34 +480,47 @@ function valuesLiveAcrossSuspension(
 			addUse(block, terminator.value);
 		}
 		for (const edge of outgoingEdges(block)) {
-			successors[block.id]!.add(edge.block);
+			if (!successors[block.id]!.has(edge.block)) {
+				successors[block.id]!.add(edge.block);
+				predecessors[edge.block]!.add(block.id);
+			}
 			for (const argument of edge.arguments) addUse(block, argument);
 		}
 	}
 	const liveIn = uses.map((values) => new Set(values));
 	const liveOut = fn.blocks.map(() => new Set<CoreValueId>());
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (let block = fn.blocks.length - 1; block >= 0; block--) {
-			const nextOut = new Set<CoreValueId>();
-			for (const successor of successors[block]!) {
-				for (const value of liveIn[successor]!) nextOut.add(value);
-			}
-			const nextIn = new Set(uses[block]);
-			for (const value of nextOut) {
-				if (!definitions[block]!.has(value)) nextIn.add(value);
-			}
-			if (
-				nextOut.size !== liveOut[block]!.size ||
-				[...nextOut].some((value) => !liveOut[block]!.has(value)) ||
-				nextIn.size !== liveIn[block]!.size ||
-				[...nextIn].some((value) => !liveIn[block]!.has(value))
-			) {
-				liveOut[block] = nextOut;
-				liveIn[block] = nextIn;
-				changed = true;
-			}
+	const sameValues = (
+		left: ReadonlySet<CoreValueId>,
+		right: ReadonlySet<CoreValueId>,
+	): boolean => {
+		if (left.size !== right.size) return false;
+		for (const value of left) {
+			if (!right.has(value)) return false;
+		}
+		return true;
+	};
+	const worklist: Array<number> = fn.blocks.map(({ id }) => id);
+	const queued = new Uint8Array(fn.blocks.length).fill(1);
+	while (worklist.length > 0) {
+		const block = worklist.pop()!;
+		queued[block] = 0;
+		const nextOut = new Set<CoreValueId>();
+		for (const successor of successors[block]!) {
+			for (const value of liveIn[successor]!) nextOut.add(value);
+		}
+		const nextIn = new Set(uses[block]);
+		for (const value of nextOut) {
+			if (!definitions[block]!.has(value)) nextIn.add(value);
+		}
+		if (sameValues(nextOut, liveOut[block]!) && sameValues(nextIn, liveIn[block]!)) {
+			continue;
+		}
+		liveOut[block] = nextOut;
+		liveIn[block] = nextIn;
+		for (const predecessor of predecessors[block]!) {
+			if (queued[predecessor] !== 0) continue;
+			queued[predecessor] = 1;
+			worklist.push(predecessor);
 		}
 	}
 	const retained = new Set<CoreValueId>();
@@ -501,7 +528,7 @@ function valuesLiveAcrossSuspension(
 		const live = new Set(liveOut[block.id]);
 		for (let index = block.instructions.length - 1; index >= 0; index--) {
 			const instruction = block.instructions[index]!;
-			if (coreInstructionEffects(instruction, registry).maySuspend) {
+			if (suspensionInstructions.has(instruction)) {
 				for (const value of live) retained.add(value);
 			}
 			for (const output of instruction.outputs) live.delete(output);

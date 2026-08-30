@@ -129,6 +129,10 @@ export function executionSafepointRootRegisters(
 		}),
 	);
 	const successors = blockSuccessors(fn);
+	const predecessors: Array<Array<number>> = fn.blocks.map(() => []);
+	for (const [block, targets] of successors.entries()) {
+		for (const target of targets) predecessors[target]!.push(block);
+	}
 	const transfer = (block: number, out: Uint32Array): Uint32Array => {
 		const live = out.slice();
 		for (let index = operands[block]!.length - 1; index >= 0; index--) {
@@ -138,19 +142,22 @@ export function executionSafepointRootRegisters(
 		return live;
 	};
 	const liveIn: Array<Uint32Array> = fn.blocks.map(() => new Uint32Array(wordCount));
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (let block = fn.blocks.length - 1; block >= 0; block--) {
-			const out = new Uint32Array(wordCount);
-			for (const successor of successors[block]!) {
-				unionInto(out, liveIn[successor]!);
-			}
-			const live = transfer(block, out);
-			if (!sameRegisters(live, liveIn[block]!)) {
-				liveIn[block] = live;
-				changed = true;
-			}
+	const worklist = fn.blocks.map((_, block) => block);
+	const queued = new Uint8Array(fn.blocks.length).fill(1);
+	while (worklist.length > 0) {
+		const block = worklist.pop()!;
+		queued[block] = 0;
+		const out = new Uint32Array(wordCount);
+		for (const successor of successors[block]!) {
+			unionInto(out, liveIn[successor]!);
+		}
+		const live = transfer(block, out);
+		if (sameRegisters(live, liveIn[block]!)) continue;
+		liveIn[block] = live;
+		for (const predecessor of predecessors[block]!) {
+			if (queued[predecessor] !== 0) continue;
+			queued[predecessor] = 1;
+			worklist.push(predecessor);
 		}
 	}
 
