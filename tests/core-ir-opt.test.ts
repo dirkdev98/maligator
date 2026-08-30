@@ -3043,6 +3043,56 @@ describe("Core IR optimizer", () => {
 		});
 	});
 
+	it("publishes contained collection calls before fact-driven cleanup", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function read(value) {
+				const map = new Map();
+				map.set("value", value);
+				return map.get("value");
+			}
+			globalThis.result = read(globalThis.value);`,
+			"core-early-exact-heap.js",
+		);
+		let optimized: CoreProgram | undefined;
+		let optimizedContext: CoreCompilationContext | undefined;
+		compileSemanticProgramToProgramImage(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			optimizationAblations: new Set(["inlining"]),
+			profile: true,
+			afterCoreOptimization(program, context) {
+				optimized = program;
+				optimizedContext = context;
+			},
+		});
+
+		expect(optimizedContext!.optimizationTrace).toContainEqual(
+			expect.objectContaining({
+				pass: "publish-exact-heap-consequences",
+				changed: true,
+			}),
+		);
+		const collectionCalls = optimized!.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions }) => instructions)
+			.filter(({ opcode }) => opcode === "callBuiltin");
+		const set = collectionCalls.find(
+			({ attributes }) => attributes.operation === "Map.prototype.set",
+		)!;
+		const get = collectionCalls.find(
+			({ attributes }) => attributes.operation === "Map.prototype.get",
+		)!;
+		expect(set.effectRefinement?.effects).toMatchObject({
+			mayGc: true,
+			mayThrow: false,
+			callsUserCode: false,
+		});
+		expect(get.effectRefinement?.effects).toMatchObject({
+			mayGc: false,
+			mayThrow: false,
+			callsUserCode: false,
+		});
+	});
+
 	it("preserves a dense-fill reserve when its exit is the next loop header", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function fillAndRead() {

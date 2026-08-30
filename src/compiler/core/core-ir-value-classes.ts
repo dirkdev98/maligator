@@ -32,6 +32,7 @@ import type {
 	CoreBlockId,
 	CoreFunction,
 	CoreInstruction,
+	CoreInstructionEffects,
 	CoreInstructionId,
 	CoreProgram,
 	CoreValueId,
@@ -39,10 +40,35 @@ import type {
 
 export const CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE = "exactTypedArrayKind";
 export const CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE = "exactCollectionReceiver";
+export const CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT =
+	"exact-collection-builtin-effects";
 
 export type CoreNumericTypedArrayKind = CompilerNumericTypedArrayKind;
 export type CoreExactCollectionBrand = "Map" | "Set";
 export type CoreExactHeapBrand = CoreNumericTypedArrayKind | CoreExactCollectionBrand;
+
+export function coreExactCollectionBuiltinEffects(
+	instruction: CoreInstruction,
+): CoreInstructionEffects | undefined {
+	if (instruction.opcode !== "callBuiltin") return undefined;
+	const operation = instruction.attributes.operation;
+	const brand = coreCollectionReceiverBrandForOperation(operation);
+	if (brand === undefined) return undefined;
+	const writes =
+		operation === "Map.prototype.set" ||
+		operation === "Map.prototype.delete" ||
+		operation === "Set.prototype.add" ||
+		operation === "Set.prototype.delete";
+	const mayGc = operation === "Map.prototype.set" || operation === "Set.prototype.add";
+	return {
+		reads: ["object-property"],
+		writes: writes ? ["object-property"] : [],
+		mayThrow: false,
+		maySuspend: false,
+		mayGc,
+		callsUserCode: false,
+	};
+}
 
 const NUMERIC_TYPED_ARRAY_KINDS: ReadonlySet<string> = new Set([
 	"Int8Array",

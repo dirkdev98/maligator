@@ -9,6 +9,10 @@ import {
 	compactCoreProgramFunctions as compactCoreProgramFunctionsWithContext,
 } from "../src/compiler/core/core-ir-reachability.ts";
 import { CORE_KNOWN_OWN_SLOT_ATTRIBUTE } from "../src/compiler/core/core-ir-shape-provenance.ts";
+import {
+	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
+	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+} from "../src/compiler/core/core-ir-value-kinds.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
@@ -514,6 +518,72 @@ describe("Core whole-program function reachability", () => {
 
 		expect(compacted.changed).toBe(true);
 		expect(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in load.attributes).toBe(false);
+	});
+
+	it("retracts graph-derived primitive certificates during dense compaction", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftNumber] = builder.appendInstruction(left, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [rightNumber] = builder.appendInstruction(right, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftNumber!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightNumber!] },
+		});
+		const number = builder.appendBlockParameter(join);
+		const [one] = builder.appendInstruction(join, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [result] = builder.appendInstruction(join, "binary", [number, one!], {
+			attributes: { operator: "+" },
+		});
+		builder.setTerminator(join, { kind: "return", value: result! });
+		const optimized = executeCoreOptimizations(closedProgram([builder.finish(entry)]), {
+			verification: "per-pass",
+		}).program.functions[0]!;
+		expect(
+			optimized.facts.some(({ kind }) => kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT),
+		).toBe(true);
+
+		const compactedProgram = compactCoreProgramFunctions(
+			closedProgram([optimized, leafFunction(1)]),
+			{
+				executable: new Set([0]),
+				retained: new Set([0]),
+				reasons: new Map([[0, new Set(["program-entry" as const])]]),
+				sourceClosed: true,
+			},
+		).program;
+		const compacted = compactedProgram.functions[0]!;
+		const binary = compacted.blocks
+			.flatMap(({ instructions }) => instructions)
+			.find(({ opcode }) => opcode === "binary")!;
+
+		expect(
+			compacted.facts.some(({ kind }) => kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT),
+		).toBe(false);
+		expect(binary.effectRefinement).toBeUndefined();
+		expect(CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE in binary.attributes).toBe(false);
+		verifyCoreProgram(compactedProgram, coreOpcodeRegistry);
 	});
 
 	it("publishes the compact function table to VM lowering", () => {

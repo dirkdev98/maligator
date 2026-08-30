@@ -4,17 +4,21 @@ import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import type { CoreOptimizationOptions } from "../src/compiler/core/core-ir-opt.ts";
 import {
+	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE,
 	CORE_SHAPE_CASE_SLOTS_ATTRIBUTE,
 	CORE_SHAPE_ORIGIN_CAP,
 	analyzeCoreShapeProvenance,
+	coreExactShapeOwnSlotEffects,
 	coreConstructorShapeLayout,
 	coreKnownOwnSlotFromAttribute,
 	rebaseCoreShapeProvenance,
 	retractCoreKnownOwnSlots,
+	selectCoreExactShapeOwnSlots,
 	selectCoreKnownOwnSlots,
 } from "../src/compiler/core/core-ir-shape-provenance.ts";
+import { analyzeCoreProgramSummaries } from "../src/compiler/core/core-ir-summaries.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { CoreFunctionBuilder, coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import type {
@@ -1475,6 +1479,36 @@ describe("Core known own-slot selection", () => {
 			CORE_KNOWN_OWN_SLOT_ATTRIBUTE in
 				instructions(program.functions[0]!, "storePropertyStatic")[0]!.attributes,
 		).toBe(false);
+	});
+
+	it("publishes stable exact slots without admitting guarded shape cases", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [initial] = builder.appendInstruction(entry, "createUndefined", []);
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [initial!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const program = coreProgram([builder.finish(entry)]);
+		const summaries = analyzeCoreProgramSummaries(program);
+		const selected = selectCoreExactShapeOwnSlots(
+			program,
+			analyzeCoreShapeProvenance(program, { summaries }),
+		);
+		const load = instructions(selected.program.functions[0]!, "loadPropertyStatic")[0]!;
+
+		expect(selected.changed).toBe(true);
+		expect(load.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE]).toMatchObject({
+			slot: 0,
+		});
+		expect(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in load.attributes).toBe(false);
+		expect(coreExactShapeOwnSlotEffects(load)).toMatchObject({
+			mayThrow: false,
+			callsUserCode: false,
+		});
 	});
 
 	it("shares one shape selection across two safe non-loop loads", () => {

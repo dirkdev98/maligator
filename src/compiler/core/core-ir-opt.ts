@@ -117,8 +117,13 @@ import {
 import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
+	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
+	CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
 	analyzeCoreShapeProvenance,
+	coreExactShapeOwnSlotDigest,
+	coreExactShapeOwnSlotEffects,
 	retractCoreKnownOwnSlots,
+	selectCoreExactShapeOwnSlots,
 	selectCoreKnownOwnSlots,
 } from "./core-ir-shape-provenance.ts";
 import {
@@ -134,7 +139,11 @@ import {
 	deriveCoreCallEffectRefinement,
 } from "./core-ir-summaries.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
-import { selectCoreExactHeapAccesses } from "./core-ir-value-classes.ts";
+import {
+	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
+	coreExactCollectionBuiltinEffects,
+	selectCoreExactHeapAccesses,
+} from "./core-ir-value-classes.ts";
 import {
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	analyzeCoreValueKinds,
@@ -5860,6 +5869,147 @@ const refinePrimitiveOperatorEffects: CoreFunctionPass = {
 	},
 };
 
+const refineExactShapeOwnSlotEffects: CoreFunctionPass = {
+	name: "refine-exact-shape-own-slot-effects",
+	ablation: "fact-driven",
+	preservesValueKinds: true,
+	run(fn) {
+		const existingFacts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		const retained = new Set<CoreFactId>();
+		const added: Array<CoreFact> = [];
+		let nextFact = nextFactId(fn);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					const current = instruction.effectRefinement;
+					const ownsCurrent =
+						current !== undefined &&
+						existingFacts.get(current.proof)?.kind ===
+							CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT;
+					if (current !== undefined && !ownsCurrent) return instruction;
+					const refined = coreExactShapeOwnSlotEffects(instruction);
+					const value = instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE];
+					const digest = coreExactShapeOwnSlotDigest(value);
+					if (refined === undefined || digest === undefined) {
+						if (!ownsCurrent) return instruction;
+						changed = true;
+						return withoutEffectRefinement(instruction);
+					}
+					if (ownsCurrent) {
+						const fact = existingFacts.get(current.proof)!;
+						if (
+							fact.validity.kind === "summary" &&
+							fact.validity.digest === digest &&
+							effectSummariesEqual(current.effects, refined)
+						) {
+							retained.add(fact.id);
+							return instruction;
+						}
+					}
+					const proof = coreFactId(nextFact++);
+					added.push({
+						id: proof,
+						kind: CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
+						value,
+						claims: [{ kind: "effect", instruction: instruction.id, effects: refined }],
+						validity: { kind: "summary", digest },
+						obligations: [],
+						origin: "core-shape-provenance",
+					});
+					changed = true;
+					return { ...instruction, effectRefinement: { effects: refined, proof } };
+				}),
+			}),
+		);
+		if (!changed) return fn;
+		return {
+			...fn,
+			blocks,
+			facts: [
+				...fn.facts.filter(
+					(fact) =>
+						fact.kind !== CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT || retained.has(fact.id),
+				),
+				...added,
+			],
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
+const refineExactCollectionBuiltinEffects: CoreFunctionPass = {
+	name: "refine-exact-collection-builtin-effects",
+	ablation: "fact-driven",
+	preservesValueKinds: true,
+	run(fn) {
+		const existingFacts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		const retained = new Set<CoreFactId>();
+		const added: Array<CoreFact> = [];
+		let nextFact = nextFactId(fn);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					const current = instruction.effectRefinement;
+					const ownsCurrent =
+						current !== undefined &&
+						existingFacts.get(current.proof)?.kind ===
+							CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT;
+					if (current !== undefined && !ownsCurrent) return instruction;
+					const refined = coreExactCollectionBuiltinEffects(instruction);
+					const operation = instruction.attributes.operation;
+					if (refined === undefined || typeof operation !== "string") {
+						if (!ownsCurrent) return instruction;
+						changed = true;
+						return withoutEffectRefinement(instruction);
+					}
+					const digest = `exact-collection-builtin:${operation}`;
+					if (ownsCurrent) {
+						const fact = existingFacts.get(current.proof)!;
+						if (
+							fact.validity.kind === "summary" &&
+							fact.validity.digest === digest &&
+							effectSummariesEqual(current.effects, refined)
+						) {
+							retained.add(fact.id);
+							return instruction;
+						}
+					}
+					const proof = coreFactId(nextFact++);
+					added.push({
+						id: proof,
+						kind: CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
+						value: operation,
+						claims: [{ kind: "effect", instruction: instruction.id, effects: refined }],
+						validity: { kind: "summary", digest },
+						obligations: [],
+						origin: "core-value-classes",
+					});
+					changed = true;
+					return { ...instruction, effectRefinement: { effects: refined, proof } };
+				}),
+			}),
+		);
+		if (!changed) return fn;
+		return {
+			...fn,
+			blocks,
+			facts: [
+				...fn.facts.filter(
+					(fact) =>
+						fact.kind !== CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT ||
+						retained.has(fact.id),
+				),
+				...added,
+			],
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
 const CORE_NULLISH_VALUE_KINDS = COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_UNDEFINED;
 const CORE_PROPERTY_KEY_VALUE_KINDS =
 	COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL;
@@ -8023,6 +8173,8 @@ const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_OWN_DATA_CELL_FACT,
 	CORE_CALL_EFFECT_SUMMARY_FACT,
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+	CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
+	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 ]);
 
 function coreFactValidityRank(fact: CoreFact): number {
@@ -11972,6 +12124,8 @@ const CORE_PROGRAM_PASSES: ReadonlyArray<CoreFunctionPass> = [refineDirectCallEf
 const CORE_FACT_DRIVEN_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldWholeProgramValueKinds,
 	refinePrimitiveOperatorEffects,
+	refineExactShapeOwnSlotEffects,
+	refineExactCollectionBuiltinEffects,
 	eliminateRedundantPrimitiveCoercions,
 ];
 
@@ -12390,11 +12544,110 @@ export function executeCoreOptimizations(
 		const programChanged = runFixpointPasses(CORE_PROGRAM_PASSES, traceRound++);
 		if (!programChanged) break;
 	}
+	let postFactCleanupChanged = false;
+	const exactHeapPublishedEarly = options.ablations?.has("fact-driven") !== true;
+	if (exactHeapPublishedEarly) {
+		const heapBefore = tracedMetrics;
+		const heapInput = { ...workingProgram, functions };
+		const heapSelection = selectCoreExactHeapAccesses(
+			heapInput,
+			compilationContext,
+			(fn) => analyses.controlFlow(fn),
+			options.ablations?.has("interprocedural") === true
+				? undefined
+				: analyses.summaries(heapInput),
+			(fn) => analyses.canonicalValues(fn),
+		);
+		if (heapSelection.changed) {
+			workingProgram = heapSelection.program;
+			functions = [...heapSelection.program.functions];
+			analyses = new CoreAnalysisManager(
+				heapSelection.program.stringConstants,
+				compilationContext,
+			);
+			changed = true;
+			postFactCleanupChanged = true;
+			verifyMutatedProgram(heapSelection.program, {
+				stage: "fixpoint",
+				pass: "publish-exact-heap-consequences",
+				round: traceRound,
+			});
+		}
+		if (heapBefore !== undefined) {
+			const heapAfter = coreOptimizationMetrics(heapSelection.program);
+			tracedMetrics = heapAfter;
+			optimizationTrace.push(
+				optimizationPassDelta(
+					{
+						pass: "publish-exact-heap-consequences",
+						stage: "fixpoint",
+						round: traceRound++,
+						status: "executed",
+						changed: heapSelection.changed,
+						ablation: "fact-driven",
+					},
+					heapBefore,
+					heapAfter,
+				),
+			);
+		}
+
+		const shapeBefore = tracedMetrics;
+		const shapeInput = { ...workingProgram, functions };
+		const shapeSummaries = analyses.summaries(shapeInput);
+		const shapeProvenance = analyzeCoreShapeProvenance(shapeInput, {
+			registry: coreOpcodeRegistry,
+			calleeTargets: shapeSummaries.targets,
+			summaries: shapeSummaries,
+			controlFlow: (fn) => analyses.controlFlow(fn),
+			canonicalValues: (fn) => analyses.canonicalValues(fn),
+		});
+		const shapeSelection = selectCoreExactShapeOwnSlots(shapeInput, shapeProvenance);
+		if (shapeSelection.changed) {
+			workingProgram = shapeSelection.program;
+			functions = [...shapeSelection.program.functions];
+			analyses = new CoreAnalysisManager(
+				shapeSelection.program.stringConstants,
+				compilationContext,
+			);
+			changed = true;
+			postFactCleanupChanged = true;
+			verifyMutatedProgram(shapeSelection.program, {
+				stage: "fixpoint",
+				pass: "publish-exact-shape-consequences",
+				round: traceRound,
+			});
+		}
+		if (shapeBefore !== undefined) {
+			const shapeAfter = coreOptimizationMetrics(shapeSelection.program);
+			tracedMetrics = shapeAfter;
+			optimizationTrace.push(
+				optimizationPassDelta(
+					{
+						pass: "publish-exact-shape-consequences",
+						stage: "fixpoint",
+						round: traceRound++,
+						status: "executed",
+						changed: shapeSelection.changed,
+						ablation: "fact-driven",
+					},
+					shapeBefore,
+					shapeAfter,
+				),
+			);
+		}
+
+		workingProgram = { ...workingProgram, functions };
+	}
+	activeFunctions = new Set(functions.map(({ functionIndex }) => functionIndex));
 	const factDrivenChanged = runFixpointPasses(CORE_FACT_DRIVEN_PASSES, traceRound++);
-	if (factDrivenChanged) {
+	postFactCleanupChanged ||= factDrivenChanged;
+	if (postFactCleanupChanged) {
+		activeFunctions = new Set(functions.map(({ functionIndex }) => functionIndex));
 		for (let localRound = 0; localRound < maxRounds; localRound++) {
 			if (!runFixpointPasses(CORE_LOCAL_PASSES, traceRound++)) break;
 		}
+		workingProgram = { ...workingProgram, functions };
 	}
 	// Local passes can expose a stable callee after the normalization-time solve.
 	// Solve the final graph once, then share that exact analysis between advisory
@@ -12684,6 +12937,40 @@ export function executeCoreOptimizations(
 			);
 		}
 	}
+	const earlyShapeRetractionBefore = tracedMetrics;
+	const earlyShapeRetraction = retractCoreKnownOwnSlots({ ...workingProgram, functions });
+	if (earlyShapeRetraction.changed) {
+		workingProgram = earlyShapeRetraction.program;
+		functions = [...earlyShapeRetraction.program.functions];
+		analyses = new CoreAnalysisManager(
+			earlyShapeRetraction.program.stringConstants,
+			compilationContext,
+		);
+		changed = true;
+		verifyMutatedProgram(earlyShapeRetraction.program, {
+			stage: "finalization",
+			pass: "retract-early-shape-consequences",
+		});
+	}
+	if (earlyShapeRetractionBefore !== undefined) {
+		const earlyShapeRetractionAfter = coreOptimizationMetrics(
+			earlyShapeRetraction.program,
+		);
+		tracedMetrics = earlyShapeRetractionAfter;
+		optimizationTrace.push(
+			optimizationPassDelta(
+				{
+					pass: "retract-early-shape-consequences",
+					stage: "finalization",
+					status: "executed",
+					changed: earlyShapeRetraction.changed,
+					ablation: "fact-driven",
+				},
+				earlyShapeRetractionBefore,
+				earlyShapeRetractionAfter,
+			),
+		);
+	}
 	for (const pass of CORE_FINALIZATION_PASSES) {
 		const beforeProgram = { ...workingProgram, functions };
 		const before = tracedMetrics;
@@ -12745,13 +13032,15 @@ export function executeCoreOptimizations(
 		options.ablations?.has("interprocedural") === true
 			? undefined
 			: analyses.summaries(valueClassInput);
-	const valueClassSelection = selectCoreExactHeapAccesses(
-		valueClassInput,
-		compilationContext,
-		(fn) => analyses.controlFlow(fn),
-		valueClassSummaries,
-		(fn) => analyses.canonicalValues(fn),
-	);
+	const valueClassSelection = exactHeapPublishedEarly
+		? { program: valueClassInput, changed: false }
+		: selectCoreExactHeapAccesses(
+				valueClassInput,
+				compilationContext,
+				(fn) => analyses.controlFlow(fn),
+				valueClassSummaries,
+				(fn) => analyses.canonicalValues(fn),
+			);
 	for (const [index, fn] of valueClassSelection.program.functions.entries()) {
 		const before = functions[index];
 		if (before !== undefined && before !== fn) analyses.inheritControlFlow(before, fn);

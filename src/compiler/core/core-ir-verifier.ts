@@ -36,6 +36,7 @@ import type { CoreRegionValidityModel } from "./core-ir-region-validity.ts";
 import {
 	analyzeCoreShapeProvenance,
 	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
+	CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE,
 	CORE_SHAPE_CASE_MAX_LOADS,
@@ -43,6 +44,8 @@ import {
 	CORE_SHAPE_CASE_MIN_LOADS,
 	CORE_SHAPE_CASE_SLOTS_ATTRIBUTE,
 	coreExactShapeOwnSlotFromAttribute,
+	coreExactShapeOwnSlotDigest,
+	coreExactShapeOwnSlotEffects,
 	coreKnownOwnSlotFromAttribute,
 	coreShapeCaseCandidatesFromAttribute,
 	coreShapeCaseSlotsFromAttribute,
@@ -63,10 +66,12 @@ import {
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
 	analyzeCoreValueClasses,
+	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 	coreCollectionReceiverBrandForOperation,
 	coreExactCollectionBrand,
+	coreExactCollectionBuiltinEffects,
 	coreNumericTypedArrayKind,
 } from "./core-ir-value-classes.ts";
 import type { CoreValueClassAnalysis } from "./core-ir-value-classes.ts";
@@ -1391,6 +1396,71 @@ function verifyPrimitiveOperatorEffectRefinements(
 	}
 }
 
+function verifyExactShapeOwnSlotEffectRefinements(program: CoreProgram): void {
+	for (const fn of program.functions) {
+		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const refinement = instruction.effectRefinement;
+				if (refinement === undefined) continue;
+				const fact = facts.get(refinement.proof);
+				if (fact?.kind !== CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT) continue;
+				const where = `instruction @${instruction.id} in function ${fn.functionIndex}`;
+				const digest = coreExactShapeOwnSlotDigest(fact.value);
+				const currentDigest = coreExactShapeOwnSlotDigest(
+					instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE],
+				);
+				if (
+					fact.validity.kind !== "summary" ||
+					digest === undefined ||
+					fact.validity.digest !== digest ||
+					currentDigest !== digest
+				) {
+					fail(`${where} names an invalid exact-shape effect fact`);
+				}
+				const licensed = coreExactShapeOwnSlotEffects(instruction);
+				if (
+					licensed === undefined ||
+					!effectSummariesEqual(refinement.effects, licensed)
+				) {
+					fail(`${where} refines further than its exact shape slot licenses`);
+				}
+			}
+		}
+	}
+}
+
+function verifyExactCollectionBuiltinEffectRefinements(program: CoreProgram): void {
+	for (const fn of program.functions) {
+		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const refinement = instruction.effectRefinement;
+				if (refinement === undefined) continue;
+				const fact = facts.get(refinement.proof);
+				if (fact?.kind !== CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT) continue;
+				const operation = instruction.attributes.operation;
+				const where = `instruction @${instruction.id} in function ${fn.functionIndex}`;
+				if (
+					typeof operation !== "string" ||
+					fact.value !== operation ||
+					fact.validity.kind !== "summary" ||
+					fact.validity.digest !== `exact-collection-builtin:${operation}`
+				) {
+					fail(`${where} names an invalid exact collection builtin effect fact`);
+				}
+				const licensed = coreExactCollectionBuiltinEffects(instruction);
+				if (
+					licensed === undefined ||
+					!effectSummariesEqual(refinement.effects, licensed)
+				) {
+					fail(`${where} refines further than its exact collection builtin licenses`);
+				}
+			}
+		}
+	}
+}
+
 /** Verify function graphs together with the immutable metadata they index. */
 interface CoreProgramVerificationCache {
 	readonly registry: CoreOpcodeRegistry;
@@ -2285,6 +2355,9 @@ function verifyCoreProgramGraph(
 			fail(`source position ${index} has invalid caller position`);
 		}
 	}
+	const hasExactShapeEffectFacts = program.functions.some((fn) =>
+		fn.facts.some(({ kind }) => kind === CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT),
+	);
 	if (context?.stage === "pre-target") {
 		verifyPreTargetClaims(
 			program,
@@ -2295,7 +2368,7 @@ function verifyCoreProgramGraph(
 			valueKinds,
 		);
 	} else {
-		verifyKnownOwnSlotClaims(program, registry, false, summaries);
+		verifyKnownOwnSlotClaims(program, registry, hasExactShapeEffectFacts, summaries);
 	}
 	for (const [index, fn] of program.functions.entries()) {
 		if (fn.functionIndex !== index) {
@@ -2326,4 +2399,6 @@ function verifyCoreProgramGraph(
 	}
 	verifySummaryClaims(program, registry, summaries);
 	verifyPrimitiveOperatorEffectRefinements(program, valueKinds);
+	verifyExactShapeOwnSlotEffectRefinements(program);
+	verifyExactCollectionBuiltinEffectRefinements(program);
 }

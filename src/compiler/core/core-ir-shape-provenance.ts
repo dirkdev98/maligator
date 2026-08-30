@@ -34,6 +34,7 @@ import type {
 	CoreBlockId,
 	CoreFunction,
 	CoreInstruction,
+	CoreInstructionEffects,
 	CoreInstructionId,
 	CoreOpcodeRegistry,
 	CoreProgram,
@@ -46,6 +47,7 @@ export const CORE_SHAPE_ORIGIN_CAP = 4;
 /** Target-visible advisory slot candidate owned by the Core shape selector. */
 export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
 export const CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE = "exactShapeOwnSlot";
+export const CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT = "exact-shape-own-slot-effects";
 export const CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE = "shapeCaseCandidates";
 export const CORE_SHAPE_CASE_SLOTS_ATTRIBUTE = "shapeCaseSlots";
 
@@ -1374,6 +1376,102 @@ export interface CoreKnownOwnSlotSelection {
 	readonly changed: boolean;
 }
 
+export function coreExactShapeOwnSlotDigest(value: unknown): string | undefined {
+	const claim = coreExactShapeOwnSlotFromAttribute(value);
+	return claim === undefined
+		? undefined
+		: `exact-shape-slot:${claim.slot}:${claim.origins
+				.map(
+					({ shapeFunctionIndex, shapeInstruction }) =>
+						`${shapeFunctionIndex}:${shapeInstruction}`,
+				)
+				.join(",")}`;
+}
+
+export function coreExactShapeOwnSlotEffects(
+	instruction: CoreInstruction,
+): CoreInstructionEffects | undefined {
+	if (
+		(instruction.opcode !== "loadPropertyStatic" &&
+			instruction.opcode !== "storePropertyStatic") ||
+		coreExactShapeOwnSlotFromAttribute(
+			instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE],
+		) === undefined
+	) {
+		return undefined;
+	}
+	const baseline = coreOpcodeRegistry.require(instruction.opcode).effects;
+	return {
+		reads: baseline.reads.filter((domain) => domain !== "host"),
+		writes: baseline.writes.filter((domain) => domain !== "host"),
+		mayThrow: false,
+		maySuspend: baseline.maySuspend,
+		mayGc: baseline.mayGc,
+		callsUserCode: false,
+	};
+}
+
+/** Publish only stable exact slots, leaving guarded target layout selection final. */
+export function selectCoreExactShapeOwnSlots(
+	program: CoreProgram,
+	provenance: CoreShapeProvenanceAnalysis,
+): CoreKnownOwnSlotSelection {
+	let changed = false;
+	const functions = program.functions.map((fn): CoreFunction => {
+		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
+		let functionChanged = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					let exact: CoreExactShapeOwnSlot | undefined;
+					if (
+						(instruction.opcode === "loadPropertyStatic" ||
+							instruction.opcode === "storePropertyStatic") &&
+						!claimed.has(instruction.id)
+					) {
+						const stringIndex = instruction.attributes.stringIndex;
+						const receiver = instruction.inputs[0];
+						if (typeof stringIndex === "number" && receiver !== undefined) {
+							exact = provenance.exactOwnSlot(fn.functionIndex, receiver, stringIndex);
+						}
+					}
+					const hasExisting =
+						CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in instruction.attributes;
+					const existing = coreExactShapeOwnSlotFromAttribute(
+						instruction.attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE],
+					);
+					if (
+						exact === undefined
+							? !hasExisting
+							: hasExisting && exactShapeOwnSlotsEqual(existing, exact)
+					) {
+						return instruction;
+					}
+					const attributes: Record<string, CoreAttributeValue> = {
+						...instruction.attributes,
+					};
+					delete attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE];
+					if (exact !== undefined) {
+						attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE] = {
+							slot: exact.slot,
+							origins: exact.origins.map((origin) => ({
+								shapeFunctionIndex: origin.shapeFunctionIndex,
+								shapeInstruction: origin.shapeInstruction,
+							})),
+						};
+					}
+					changed = true;
+					functionChanged = true;
+					return { ...instruction, attributes };
+				}),
+			}),
+		);
+		return functionChanged ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	});
+	return { program: changed ? { ...program, functions } : program, changed };
+}
+
 export const CORE_SHAPE_CASE_MIN_LOADS = 2;
 export const CORE_SHAPE_CASE_MAX_LOADS = 16;
 export const CORE_SHAPE_CASE_MAX_SPAN = 64;
@@ -1618,6 +1716,11 @@ export function retractCoreKnownOwnSlots(
 ): CoreKnownOwnSlotSelection {
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
+		const exactEffectProofs = new Set(
+			fn.facts
+				.filter(({ kind }) => kind === CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT)
+				.map(({ id }) => id),
+		);
 		const removedShapeCases = new Set<CoreInstructionId>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -1626,11 +1729,15 @@ export function retractCoreKnownOwnSlots(
 				}
 			}
 		}
-		let functionChanged = false;
+		let functionChanged = exactEffectProofs.size > 0;
+		if (functionChanged) changed = true;
 		const blocks = fn.blocks.map((block): CoreBlock => {
 			let blockChanged = false;
 			const instructions = block.instructions.flatMap(
 				(instruction): ReadonlyArray<CoreInstruction> => {
+					const removeRefinement =
+						instruction.effectRefinement !== undefined &&
+						exactEffectProofs.has(instruction.effectRefinement.proof);
 					if (instruction.opcode === "selectShapeCase") {
 						changed = true;
 						functionChanged = true;
@@ -1641,7 +1748,8 @@ export function retractCoreKnownOwnSlots(
 					if (
 						!clustered &&
 						!(CORE_KNOWN_OWN_SLOT_ATTRIBUTE in instruction.attributes) &&
-						!(CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in instruction.attributes)
+						!(CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE in instruction.attributes) &&
+						!removeRefinement
 					) {
 						return [instruction];
 					}
@@ -1654,16 +1762,17 @@ export function retractCoreKnownOwnSlots(
 					changed = true;
 					functionChanged = true;
 					blockChanged = true;
-					return [
-						clustered
-							? {
-									...instruction,
-									opcode: "loadPropertyStatic",
-									inputs: instruction.inputs.slice(0, 1),
-									attributes,
-								}
-							: { ...instruction, attributes },
-					];
+					const rewritten = clustered
+						? {
+								...instruction,
+								opcode: "loadPropertyStatic",
+								inputs: instruction.inputs.slice(0, 1),
+								attributes,
+							}
+						: { ...instruction, attributes };
+					if (!removeRefinement) return [rewritten];
+					const { effectRefinement: _refinement, ...withoutRefinement } = rewritten;
+					return [withoutRefinement];
 				},
 			);
 			return blockChanged ? { ...block, instructions } : block;
@@ -1677,6 +1786,7 @@ export function retractCoreKnownOwnSlots(
 							value.definition.kind !== "instruction" ||
 							!removedShapeCases.has(value.definition.instruction),
 					),
+					facts: fn.facts.filter(({ id }) => !exactEffectProofs.has(id)),
 					mutationEpoch: fn.mutationEpoch + 1,
 				}
 			: fn;

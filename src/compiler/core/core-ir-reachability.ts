@@ -19,9 +19,18 @@ import type {
 	CoreCalleeTargets,
 } from "./core-ir-call-targets.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import { CORE_KNOWN_OWN_SLOT_ATTRIBUTE } from "./core-ir-shape-provenance.ts";
+import {
+	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
+	CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
+	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
+} from "./core-ir-shape-provenance.ts";
 import { CORE_CALL_EFFECT_SUMMARY_FACT } from "./core-ir-summaries.ts";
 import { CORE_CALL_SUMMARY_ATTRIBUTE } from "./core-ir-summaries.ts";
+import {
+	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
+	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+} from "./core-ir-value-kinds.ts";
 import type {
 	CoreAttributeObject,
 	CoreAttributeValue,
@@ -427,6 +436,9 @@ function remapSemanticAttributes(
 	// in process. Retract target-facing hints here so the final selector can publish
 	// the dense function coordinate after all region ownership is settled.
 	delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+	delete attributes[CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE];
+	delete attributes[CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE];
+	delete attributes[CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE];
 	if (attributes.knownBuiltinCall !== undefined) {
 		attributes.knownBuiltinCall = remapProofFunctionScopes(
 			attributes.knownBuiltinCall,
@@ -484,9 +496,14 @@ export function compactCoreProgramFunctions(
 		if (!reachability.executable.has(fn.functionIndex)) {
 			return retainedIdentityStub(fn, functionIndex);
 		}
-		const summaryProofs = new Set(
+		const retractedProofs = new Set(
 			fn.facts
-				.filter(({ kind }) => kind === CORE_CALL_EFFECT_SUMMARY_FACT)
+				.filter(
+					({ kind }) =>
+						kind === CORE_CALL_EFFECT_SUMMARY_FACT ||
+						kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT ||
+						kind === CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
+				)
 				.map(({ id }) => id),
 		);
 		const removedIdentityValues = new Set<number>();
@@ -563,7 +580,7 @@ export function compactCoreProgramFunctions(
 						...instruction,
 						attributes: remapSemanticAttributes(instruction, oldToNew),
 						...(instruction.effectRefinement !== undefined &&
-						summaryProofs.has(instruction.effectRefinement.proof)
+						retractedProofs.has(instruction.effectRefinement.proof)
 							? { effectRefinement: undefined }
 							: {}),
 					})),
@@ -575,7 +592,7 @@ export function compactCoreProgramFunctions(
 						? { ...value, representation: "boxed" }
 						: value,
 				),
-			facts: fn.facts.filter(({ id }) => !summaryProofs.has(id)),
+			facts: fn.facts.filter(({ id }) => !retractedProofs.has(id)),
 			regions: [],
 			mutationEpoch: fn.mutationEpoch + 1,
 		};

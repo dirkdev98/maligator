@@ -308,6 +308,11 @@ const write = (
 const OPCODE_ACCESSES = {
 	// The callee is implicit in the activation rather than an SSA operand.
 	generatorStart: [read("prototype")],
+	// Operation-specific refinements narrow this conservative receiver-state envelope.
+	callBuiltin: [
+		read("object-slot", { baseOperand: 0 }),
+		write("object-slot", { baseOperand: 0 }),
+	],
 	loadLocal: [read("local-slot", { attributes: ["index"] })],
 	storeLocal: [write("local-slot", { attributes: ["index"], valueOperand: 0 })],
 	loadCaptured: [read("captured-slot", { attributes: ["functionIndex", "index"] })],
