@@ -1225,6 +1225,108 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("lowers chained sole explicit throws into their local handlers", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const innerHandler = builder.createBlock([{ role: "exception" }]);
+		const outerHandler = builder.createBlock([{ role: "exception" }]);
+		const thrown = builder.block(entry).parameters[0]!.value;
+		builder.setHandler(entry, innerHandler);
+		builder.setTerminator(entry, { kind: "throw", value: thrown });
+		const rethrown = builder.block(innerHandler).parameters[0]!.value;
+		builder.setHandler(innerHandler, outerHandler);
+		builder.setTerminator(innerHandler, { kind: "throw", value: rethrown });
+		builder.setTerminator(outerHandler, {
+			kind: "return",
+			value: builder.block(outerHandler).parameters[0]!.value,
+		});
+
+		const fn = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			verification: "per-pass",
+		}).program.functions[0]!;
+		expect(fn.blocks).toHaveLength(1);
+		expect(fn.blocks[0]!.handler).toBeUndefined();
+		expect(fn.blocks[0]!.terminator).toMatchObject({ kind: "return", value: thrown });
+	});
+
+	it("lowers shared explicit throws but keeps potentially throwing prefixes", () => {
+		const shared = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = shared.createBlock([{}]);
+		const left = shared.createBlock();
+		const right = shared.createBlock();
+		const handler = shared.createBlock([{ role: "exception" }]);
+		const thrown = shared.block(entry).parameters[0]!.value;
+		shared.setTerminator(entry, {
+			kind: "branch",
+			condition: thrown,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		for (const block of [left, right]) {
+			shared.setHandler(block, handler);
+			shared.setTerminator(block, { kind: "throw", value: thrown });
+		}
+		shared.setTerminator(handler, {
+			kind: "return",
+			value: shared.block(handler).parameters[0]!.value,
+		});
+
+		const throwing = new CoreFunctionBuilder(1, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const throwingEntry = throwing.createBlock([{}]);
+		const throwingHandler = throwing.createBlock([{ role: "exception" }]);
+		const callee = throwing.block(throwingEntry).parameters[0]!.value;
+		throwing.appendInstruction(throwingEntry, "call", [callee, callee]);
+		throwing.setHandler(throwingEntry, throwingHandler);
+		throwing.setTerminator(throwingEntry, { kind: "throw", value: callee });
+		throwing.setTerminator(throwingHandler, {
+			kind: "return",
+			value: throwing.block(throwingHandler).parameters[0]!.value,
+		});
+
+		const [sharedResult, throwingResult] = executeCoreOptimizations(
+			coreProgram([shared.finish(entry), throwing.finish(throwingEntry)]),
+			{ verification: "per-pass" },
+		).program.functions;
+		expect(sharedResult!.blocks.every(({ handler: edge }) => edge === undefined)).toBe(
+			true,
+		);
+		expect(
+			sharedResult!.blocks.every(({ terminator }) => terminator.kind !== "throw"),
+		).toBe(true);
+		expect(throwingResult!.blocks[0]!.handler).toBeDefined();
+	});
+
+	it("lowers source try/catch around an explicit local throw", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function local(value) {
+					try { throw value; }
+					catch (error) { return error; }
+				}
+				globalThis.__localExceptionResult = local(42);`,
+				"local-exception-flow.js",
+			),
+			{
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const local = optimized!.functions[functionIndexOfName(optimized!, "local")]!;
+		expect(local.blocks.every(({ handler }) => handler === undefined)).toBe(true);
+		expect(local.blocks.every(({ terminator }) => terminator.kind !== "throw")).toBe(
+			true,
+		);
+	});
+
 	it("keeps property accesses outside the private fresh-object prefix", () => {
 		const build = (
 			functionIndex: number,

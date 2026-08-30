@@ -46,6 +46,7 @@ import {
 	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
+import { analyzeCoreLocalExceptionFlows } from "./core-ir-exception-flow.ts";
 import {
 	coreFactFamilyKeys,
 	coreFactImplies,
@@ -8062,6 +8063,49 @@ const simplifyControlFlow: CoreFunctionPass = {
 	},
 };
 
+/** Replace local-only unwind regions with equivalent explicit value edges. */
+const lowerLocalThrowCatchFlows: CoreFunctionPass = {
+	name: "lower-local-throw-catch-flows",
+	changesControlFlow: true,
+	run(fn, analyses) {
+		const flows = analyzeCoreLocalExceptionFlows(fn, analyses.controlFlow(fn));
+		if (flows.length === 0) return fn;
+		const bySource = new Map(flows.map((flow) => [flow.source, flow]));
+		const handlerBlocks = new Set(flows.map(({ handler }) => handler));
+		return {
+			...fn,
+			blocks: fn.blocks.map((block): CoreBlock => {
+				const parameters = handlerBlocks.has(block.id)
+					? block.parameters.map((parameter, index) =>
+							index === 0 ? { ...parameter, role: "value" as const } : parameter,
+						)
+					: block.parameters;
+				const flow = bySource.get(block.id);
+				if (flow !== undefined) {
+					return {
+						...block,
+						parameters,
+						handler: undefined,
+						terminator: {
+							kind: "jump",
+							id: block.terminator.id,
+							edge: {
+								block: flow.handler,
+								arguments: [flow.thrownValue, ...flow.handlerArguments],
+							},
+							...(block.terminator.sourcePosition === undefined
+								? {}
+								: { sourcePosition: block.terminator.sourcePosition }),
+						},
+					};
+				}
+				return parameters === block.parameters ? block : { ...block, parameters };
+			}),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
 const IDENTITY_PRODUCING_OPCODES = new Set([
 	"createArgumentsObject",
 	"createArray",
@@ -11330,6 +11374,7 @@ const CORE_LOCAL_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	subsumeCoreFactProofs,
 	foldSubsumedCoreGuards,
 	simplifyControlFlow,
+	lowerLocalThrowCatchFlows,
 	foldEmptyForwardingBlocks,
 	combineLinearBlocks,
 	canonicalizeLoops,
