@@ -80,35 +80,6 @@ to restore; generic passes may naturally rediscover their useful results.
 These levels are cumulative facts consumed by one optimizer, not separate pipelines.
 Runtime eval may remove source closure without invalidating authority closure.
 
-## Fact-driven optimization
-
-Prefer utilizing facts and effects already available in Core. Extend their precision
-only together with the optimization that consumes it. Keep mutable-world performance
-neutral or better while specializing locked builds.
-
-The current base already has initial scalar replacement and allocation sinking,
-whole-program reachability DCE, guarded shape-origin loads, exact execution safepoint
-maps, and bounded scalar native direct entries. Runtime-wire compilation and native
-products share optimized Core but now terminate independently.
-
-- [ ] Complete module, export, publication, eval, reflection, Realm, host,
-      retained-identity, and open-edge reachability modeling; immediately consume the
-      closed graph to remove unreachable functions, helpers, metadata, and disabled
-      feature support.
-
-- [ ] Collect live value-class and alias facts across stores and calls; consume them
-      for guarded unboxing, redundant-check elimination, and memory optimization only
-      where representative output can amortize the required runtime admission.
-
-- [ ] Collect local exception-flow facts for values, handlers, completion order, stack
-      observation, and effects; consume them to lower equivalent local throw and catch
-      regions to ordinary control flow.
-
-- [ ] Collect generated-code cost facts for helper calls, guards, boxing, root slots,
-      safepoints, duplication, loop frequency, downstream C compilation, and binary
-      size; consume them to gate region versioning, guarded dispatch, inlining, PRE,
-      specialization, and cloning.
-
 ## Compiler infrastructure
 
 - [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand

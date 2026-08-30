@@ -723,7 +723,11 @@ describe("adversarial Core graphs", () => {
 		const optimized = optimizeVerified(coreProgramOf([certifiedFunction])).program;
 		const fn = optimized.functions[0]!;
 
-		expect(fn.regions).toEqual(certifiedFunction.regions);
+		expect(fn.regions).toHaveLength(1);
+		const region = fn.regions[0]!;
+		const { generatedCodeCost, ...regionData } = region.data;
+		expect(generatedCodeCost).toBeDefined();
+		expect({ ...region, data: regionData }).toEqual(certifiedFunction.regions[0]);
 		expect(fn.blocks[entry]!.instructions.find(({ id }) => id === claimed.id)).toEqual(
 			claimed,
 		);
