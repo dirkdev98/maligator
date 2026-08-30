@@ -164,7 +164,7 @@ describe("adversarial Core graphs", () => {
 			attributes: { value: 99 },
 		});
 		const [leftValue] = builder.appendInstruction(left, "createF64", [], {
-			attributes: { value: 1 },
+			attributes: { value: 1.5 },
 			outputRepresentations: ["f64"],
 		});
 		builder.setTerminator(left, {
@@ -172,7 +172,7 @@ describe("adversarial Core graphs", () => {
 			edge: { block: merge, arguments: [leftValue!] },
 		});
 		const [rightValue] = builder.appendInstruction(right, "createF64", [], {
-			attributes: { value: 2 },
+			attributes: { value: 2.5 },
 			outputRepresentations: ["f64"],
 		});
 		// A copy on the incoming edge forces copy propagation to rewrite the block
@@ -275,7 +275,7 @@ describe("adversarial Core graphs", () => {
 		expect(cfg.loops[0]!.header).toBe(header);
 		expect(cfg.loops[0]!.latches).toEqual(new Set([body]));
 		expect(fn.blocks[header]!.parameters).toEqual([
-			{ value: carried, representation: "boxed", role: "value" },
+			{ value: carried, representation: "f64", role: "value" },
 		]);
 		expect(ordinaryPredecessorCount(fn, header)).toBe(2);
 		expect(fn.blocks[body]!.terminator).toMatchObject({
