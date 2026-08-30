@@ -43,6 +43,7 @@ import type {
 	CoreEdge,
 	CoreFunction,
 	CoreInstruction,
+	CoreInstructionEffects,
 	CoreProgram,
 	CoreTerminator,
 	CoreValueId,
@@ -53,6 +54,7 @@ export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
 	"exactCallArgumentRepresentations";
 export const CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE = "exactBinaryInputKindMasks";
 export const CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE = "exactScalarAfterTdz";
+export const CORE_PRIMITIVE_OPERATOR_EFFECT_FACT = "primitive-operator-effects";
 
 export type CoreExactScalarKind = "int32" | "number" | "boolean" | "string";
 export type CoreExactCallArgumentRepresentation = "boxed" | CoreExactScalarKind;
@@ -106,6 +108,12 @@ const INT32_RESULT_BINARY_OPERATORS: ReadonlySet<string> = new Set([
 	"^",
 	"<<",
 	">>",
+]);
+
+const NON_COERCING_UNARY_OPERATORS: ReadonlySet<string> = new Set([
+	"!",
+	"typeof",
+	"void",
 ]);
 
 const CAPTURED_SCALAR_AMORTIZATION_MINIMUM = 4;
@@ -554,6 +562,61 @@ export function coreBinaryInputKindMasksHaveExactNativeSemantics(
 		compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED) &&
 		compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED)
 	);
+}
+
+/** Effects licensed solely by exact primitive operand kinds and operator semantics. */
+export function corePrimitiveOperatorEffectRefinement(
+	instruction: CoreInstruction,
+	masks: ReadonlyArray<CompilerValueKindMask>,
+): CoreInstructionEffects | undefined {
+	const operator = instruction.attributes.operator;
+	let primitive = false;
+	let gcFree = false;
+	if (instruction.opcode === "unary" && masks.length === 1) {
+		const numberOnly = compilerValueKindMaskIsSubset(
+			masks[0]!,
+			COMPILER_VALUE_KIND_NUMBER,
+		);
+		primitive =
+			typeof operator === "string" &&
+			(NON_COERCING_UNARY_OPERATORS.has(operator) ||
+				(NUMERIC_UNARY_OPERATORS.has(operator) && numberOnly));
+		gcFree =
+			typeof operator === "string" &&
+			(NON_COERCING_UNARY_OPERATORS.has(operator) || numberOnly);
+	} else if (instruction.opcode === "binary" && masks.length === 2) {
+		const numbersOnly = masks.every((mask) =>
+			compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMBER),
+		);
+		primitive =
+			typeof operator === "string" &&
+			(["===", "!=="].includes(operator) ||
+				(NUMERIC_BINARY_OPERATORS.has(operator) && numbersOnly) ||
+				(operator === "+" &&
+					masks.every((mask) =>
+						compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_STRING),
+					)) ||
+				coreBinaryInputKindMasksHaveExactNativeSemantics(operator, [
+					masks[0]!,
+					masks[1]!,
+				]));
+		gcFree =
+			typeof operator === "string" &&
+			(["===", "!=="].includes(operator) ||
+				(numbersOnly &&
+					(NUMERIC_BINARY_OPERATORS.has(operator) ||
+						["<", "<=", ">", ">=", "==", "!="].includes(operator))));
+	}
+	if (!primitive) return undefined;
+	const baseline = coreOpcodeRegistry.require(instruction.opcode).effects;
+	return {
+		reads: baseline.reads.filter((domain) => domain !== "host"),
+		writes: baseline.writes.filter((domain) => domain !== "host"),
+		mayThrow: false,
+		maySuspend: baseline.maySuspend,
+		mayGc: gcFree ? false : baseline.mayGc,
+		callsUserCode: false,
+	};
 }
 
 export function coreExactCallArgumentRepresentations(

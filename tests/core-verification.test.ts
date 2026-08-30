@@ -7,6 +7,7 @@ import { CoreFunctionBuilder, coreValueId } from "../src/compiler/core/core-ir.t
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { COMPILER_VALUE_KIND_STRING } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
@@ -170,6 +171,53 @@ describe("Core verification boundaries", () => {
 		expect(() => lowerCoreCompilationToExecution(coreCompilationForTest(broken))).toThrow(
 			/Core IR verification failed \[stage=pre-target\]: function 0 has unknown name string/,
 		);
+	});
+
+	it("re-proves primitive operator effects from current operand kinds", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function add(condition) {
+				const value = condition ? 1 : 2;
+				return value + 3;
+			}
+			add(globalThis.condition);`,
+			"core-primitive-effect-proof.js",
+		);
+		const lowered = lowerSemanticProgramToCore(semantic);
+		const optimized = executeCoreOptimizations(lowered.program, {
+			context: lowered.context,
+		});
+		const owner = optimized.program.functions.find((fn) =>
+			fn.facts.some(({ kind }) => kind === "primitive-operator-effects"),
+		)!;
+		const proof = owner.facts.find(({ kind }) => kind === "primitive-operator-effects")!;
+		const forged: CoreProgram = {
+			...optimized.program,
+			functions: optimized.program.functions.map((fn) =>
+				fn !== owner
+					? fn
+					: {
+							...fn,
+							facts: fn.facts.map((fact) =>
+								fact.id !== proof.id
+									? fact
+									: {
+											...fact,
+											value: {
+												operator: "+",
+												masks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
+											},
+											validity: {
+												kind: "summary",
+												digest: `primitive-operator:+:${COMPILER_VALUE_KIND_STRING},${COMPILER_VALUE_KIND_STRING}`,
+											},
+										},
+							),
+						},
+			),
+		};
+		expect(() =>
+			verifyCoreProgram(forged, coreOpcodeRegistry, undefined, optimized.context),
+		).toThrow(/operand kinds/);
 	});
 
 	it("names the responsible pass when development verification sees a claimed-instruction mutation", () => {

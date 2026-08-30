@@ -135,7 +135,9 @@ import {
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { selectCoreExactHeapAccesses } from "./core-ir-value-classes.ts";
 import {
+	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	analyzeCoreValueKinds,
+	corePrimitiveOperatorEffectRefinement,
 	materializeCoreExactScalarRepresentations,
 	selectCoreExactValueFacts,
 } from "./core-ir-value-kinds.ts";
@@ -5683,6 +5685,7 @@ const foldWholeProgramValueKinds: CoreFunctionPass = {
 	name: "fold-whole-program-value-kinds",
 	ablation: "fact-driven",
 	dependsOnProgram: true,
+	preservesValueKinds: true,
 	run(fn, analyses, program) {
 		const valueKinds = analyses.valueKinds(program);
 		let changed = false;
@@ -5774,6 +5777,86 @@ const foldWholeProgramValueKinds: CoreFunctionPass = {
 	},
 };
 
+const refinePrimitiveOperatorEffects: CoreFunctionPass = {
+	name: "refine-primitive-operator-effects",
+	ablation: "fact-driven",
+	dependsOnProgram: true,
+	preservesValueKinds: true,
+	run(fn, analyses, program) {
+		const valueKinds = analyses.valueKinds(program);
+		const existingFacts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		const retained = new Set<CoreFactId>();
+		const added: Array<CoreFact> = [];
+		let nextFact = nextFactId(fn);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					const current = instruction.effectRefinement;
+					const ownsCurrent =
+						current !== undefined &&
+						existingFacts.get(current.proof)?.kind ===
+							CORE_PRIMITIVE_OPERATOR_EFFECT_FACT;
+					if (current !== undefined && !ownsCurrent) return instruction;
+					if (instruction.opcode !== "unary" && instruction.opcode !== "binary") {
+						if (!ownsCurrent) return instruction;
+						changed = true;
+						return withoutEffectRefinement(instruction);
+					}
+					const masks = instruction.inputs.map((input) =>
+						valueKinds.kindMask(fn.functionIndex, input),
+					);
+					const refined = corePrimitiveOperatorEffectRefinement(instruction, masks);
+					if (refined === undefined) {
+						if (!ownsCurrent) return instruction;
+						changed = true;
+						return withoutEffectRefinement(instruction);
+					}
+					const operator = instructionAttribute(instruction, "operator");
+					const digest = `primitive-operator:${String(operator)}:${masks.join(",")}`;
+					if (ownsCurrent) {
+						const fact = existingFacts.get(current.proof)!;
+						if (
+							fact.validity.kind === "summary" &&
+							fact.validity.digest === digest &&
+							effectSummariesEqual(current.effects, refined)
+						) {
+							retained.add(fact.id);
+							return instruction;
+						}
+					}
+					const proof = coreFactId(nextFact++);
+					added.push({
+						id: proof,
+						kind: CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+						value: { operator: String(operator), masks: [...masks] },
+						claims: [{ kind: "effect", instruction: instruction.id, effects: refined }],
+						validity: { kind: "summary", digest },
+						obligations: [],
+						origin: "core-value-kind-analysis",
+					});
+					changed = true;
+					return { ...instruction, effectRefinement: { effects: refined, proof } };
+				}),
+			}),
+		);
+		if (!changed) return fn;
+		return {
+			...fn,
+			blocks,
+			facts: [
+				...fn.facts.filter(
+					(fact) =>
+						fact.kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT || retained.has(fact.id),
+				),
+				...added,
+			],
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
 /** Fold an exact string SSA value into the property operation's attributes. */
 const foldStaticPropertyKeys: CoreFunctionPass = {
 	name: "fold-static-property-keys",
@@ -5839,6 +5922,8 @@ interface CoreFunctionPass {
 	readonly ablation?: OptimizationAblation;
 	/** The result may change when another function changes. */
 	readonly dependsOnProgram?: boolean;
+	/** Every output retains the same semantic kind as the input snapshot. */
+	readonly preservesValueKinds?: boolean;
 	/** Block identity is part of a region certificate until CFG regions migrate. */
 	readonly changesControlFlow?: boolean;
 	run(
@@ -6171,6 +6256,12 @@ export class CoreAnalysisManager {
 			analysis,
 		};
 		return analysis;
+	}
+
+	inheritValueKinds(before: CoreProgram, after: CoreProgram): void {
+		const cached = this.#valueKinds;
+		if (cached?.program !== before || cached.context !== this.context) return;
+		this.#valueKinds = { ...cached, program: after, functions: after.functions };
 	}
 
 	loopInductions(fn: CoreFunction): CoreLoopInductionAnalysis {
@@ -7834,7 +7925,7 @@ const simplifyAlgebraicValues: CoreFunctionPass = {
 /**
  * The verifier re-proves an effect refinement from scratch when its proof has one
  * of these kinds: `verifyOwnDataCellRefinements` re-derives containment, and the
- * program-level callee-summary check re-derives the call summary. Both select the
+ * program-level checks re-derive call summaries and primitive operand kinds. They
  * work by proof kind, so moving a refinement onto or off one of them would
  * silently change which independent check runs. Proofs of these kinds are never
  * rewired.
@@ -7843,6 +7934,7 @@ const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_OWN_DATA_CELL_FACT,
 	CORE_CALL_EFFECT_SUMMARY_FACT,
+	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 ]);
 
 function coreFactValidityRank(fact: CoreFact): number {
@@ -8414,6 +8506,7 @@ const IDENTITY_PRODUCING_OPCODES = new Set([
 // explicit so a newly added resource load is never commoned until its effect
 // partition (or immutable producer semantics) has been reviewed.
 const IMMUTABLE_VALUE_NUMBERING_OPCODES = new Set([
+	"binary",
 	"createBigint",
 	"createBoolean",
 	"createEmpty",
@@ -8430,7 +8523,22 @@ const IMMUTABLE_VALUE_NUMBERING_OPCODES = new Set([
 	"mathUnaryNumber",
 	"move",
 	"typeofCompare",
+	"unary",
 ]);
+
+function instructionIsDiscardable(instruction: CoreInstruction): boolean {
+	if (coreOpcodeRegistry.require(instruction.opcode).discardable) return true;
+	if (instruction.effectRefinement === undefined) return false;
+	const effects = coreInstructionEffects(instruction);
+	return (
+		effects.reads.length === 0 &&
+		effects.writes.length === 0 &&
+		!effects.mayThrow &&
+		!effects.maySuspend &&
+		!effects.mayGc &&
+		!effects.callsUserCode
+	);
+}
 
 function pruneVacuousHandlers(fn: CoreFunction): CoreFunction {
 	let changed = false;
@@ -8464,11 +8572,10 @@ function valueNumberingKey(
 }
 
 function isValueNumberingCandidate(instruction: CoreInstruction): boolean {
-	const descriptor = coreOpcodeRegistry.require(instruction.opcode);
 	const effects = coreInstructionEffects(instruction);
 	return !(
 		instruction.outputs.length === 0 ||
-		!descriptor.discardable ||
+		!instructionIsDiscardable(instruction) ||
 		IDENTITY_PRODUCING_OPCODES.has(instruction.opcode) ||
 		(effects.reads.length === 0 &&
 			!IMMUTABLE_VALUE_NUMBERING_OPCODES.has(instruction.opcode)) ||
@@ -8580,12 +8687,11 @@ function loopInvariantCandidate(
 	resolution: CoreMemoryResolution,
 	representations: ReadonlyMap<CoreValueId, string>,
 ): LoopInvariantCandidate | undefined {
-	const descriptor = coreOpcodeRegistry.require(instruction.opcode);
 	const arrayLength = isContainedArrayLengthRead(instruction, provenance);
 	if (
 		instruction.outputs.length === 0 ||
 		IDENTITY_PRODUCING_OPCODES.has(instruction.opcode) ||
-		(!descriptor.discardable && !arrayLength)
+		(!instructionIsDiscardable(instruction) && !arrayLength)
 	) {
 		return undefined;
 	}
@@ -10825,9 +10931,8 @@ function coreLiveness(fn: CoreFunction): CoreLiveness {
 	};
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			const descriptor = coreOpcodeRegistry.require(instruction.opcode);
 			const discardable =
-				descriptor.discardable ||
+				instructionIsDiscardable(instruction) ||
 				(instruction.opcode === "unary" &&
 					instructionAttribute(instruction, "operator") === "typeof");
 			if (!discardable) markInstruction(instruction);
@@ -11682,6 +11787,7 @@ const CORE_PROGRAM_PASSES: ReadonlyArray<CoreFunctionPass> = [refineDirectCallEf
 /** Whole-program facts are solved once, then ordinary local cleanup consumes them. */
 const CORE_FACT_DRIVEN_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldWholeProgramValueKinds,
+	refinePrimitiveOperatorEffects,
 ];
 
 /**
@@ -12055,14 +12161,15 @@ export function executeCoreOptimizations(
 				}
 			}
 			if (nextFunctions !== undefined) functions = nextFunctions;
+			const afterProgram = { ...workingProgram, functions };
 			if (passChanged) {
-				verifyMutatedProgram(
-					{ ...workingProgram, functions },
-					{ stage: "fixpoint", pass: pass.name, round },
-				);
+				if (pass.preservesValueKinds === true) {
+					analyses.inheritValueKinds(beforeProgram, afterProgram);
+				}
+				verifyMutatedProgram(afterProgram, { stage: "fixpoint", pass: pass.name, round });
 			}
 			if (before !== undefined) {
-				const after = coreOptimizationMetrics({ ...workingProgram, functions });
+				const after = coreOptimizationMetrics(afterProgram);
 				tracedMetrics = after;
 				optimizationTrace.push(
 					optimizationPassDelta(

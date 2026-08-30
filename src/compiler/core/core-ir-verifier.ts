@@ -1,3 +1,4 @@
+import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual, effectSummaryCovers } from "../shared/effect-summary.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
@@ -74,9 +75,11 @@ import {
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
 	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
+	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	coreBinaryInputKindMasksHaveExactNativeSemantics,
 	coreExactBinaryInputKindMasks,
 	coreExactCallArgumentRepresentations,
+	corePrimitiveOperatorEffectRefinement,
 } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import type {
@@ -1326,6 +1329,68 @@ function verifySummaryClaims(
 	}
 }
 
+function verifyPrimitiveOperatorEffectRefinements(
+	program: CoreProgram,
+	valueKinds: () => CoreValueKindAnalysis,
+): void {
+	let analysis: CoreValueKindAnalysis | undefined;
+	for (const fn of program.functions) {
+		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const refinement = instruction.effectRefinement;
+				if (refinement === undefined) continue;
+				const fact = facts.get(refinement.proof);
+				if (fact?.kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT) continue;
+				const where = `instruction @${instruction.id} in function ${fn.functionIndex}`;
+				if (fact.validity.kind !== "summary") {
+					fail(
+						`${where} names a primitive-operator fact whose validity is not a summary`,
+					);
+				}
+				const value =
+					typeof fact.value === "object" &&
+					fact.value !== null &&
+					!Array.isArray(fact.value)
+						? (fact.value as Record<string, unknown>)
+						: undefined;
+				const masks = Array.isArray(value?.masks) ? value.masks : undefined;
+				if (
+					value?.operator !== instruction.attributes.operator ||
+					masks === undefined ||
+					masks.length !== instruction.inputs.length ||
+					!masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true }))
+				) {
+					fail(`${where} names an unreadable primitive-operator fact`);
+				}
+				const typedMasks = masks as ReadonlyArray<number>;
+				const digest = `primitive-operator:${String(value!.operator)}:${typedMasks.join(",")}`;
+				if (fact.validity.digest !== digest) {
+					fail(`${where} names a primitive-operator fact with a mismatched digest`);
+				}
+				analysis ??= valueKinds();
+				if (
+					instruction.inputs.some(
+						(input, index) =>
+							analysis!.kindMask(fn.functionIndex, input) !== typedMasks[index],
+					)
+				) {
+					fail(
+						`${where} carries primitive operand kinds the current graph does not prove`,
+					);
+				}
+				const licensed = corePrimitiveOperatorEffectRefinement(instruction, typedMasks);
+				if (
+					licensed === undefined ||
+					!effectSummariesEqual(refinement.effects, licensed)
+				) {
+					fail(`${where} refines further than its primitive operand kinds license`);
+				}
+			}
+		}
+	}
+}
+
 /** Verify function graphs together with the immutable metadata they index. */
 interface CoreProgramVerificationCache {
 	readonly registry: CoreOpcodeRegistry;
@@ -2260,4 +2325,5 @@ function verifyCoreProgramGraph(
 		);
 	}
 	verifySummaryClaims(program, registry, summaries);
+	verifyPrimitiveOperatorEffectRefinements(program, valueKinds);
 }

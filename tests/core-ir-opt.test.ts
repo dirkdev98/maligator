@@ -1117,6 +1117,74 @@ describe("Core IR optimizer", () => {
 		expect(opcodes(1)).toContain("throwIfTdz");
 	});
 
+	it("uses primitive operator effects to forward memory across coercion sites", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock();
+		const [before] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftNumber] = builder.appendInstruction(left, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [rightNumber] = builder.appendInstruction(right, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftNumber!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightNumber!] },
+		});
+		const number = builder.appendBlockParameter(join);
+		const [one] = builder.appendInstruction(join, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.appendInstruction(join, "binary", [number, one!], {
+			attributes: { operator: "+" },
+		});
+		const [after] = builder.appendInstruction(join, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [same] = builder.appendInstruction(join, "binary", [before!, after!], {
+			attributes: { operator: "===" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(join, { kind: "return", value: same! });
+		const program = { ...coreProgram([builder.finish(entry)]), globalCount: 1 };
+		const baseline = executeCoreOptimizations(program, {
+			ablations: new Set(["fact-driven"]),
+			verification: "per-pass",
+		}).program.functions[0]!;
+		const optimized = executeCoreOptimizations(program, {
+			verification: "per-pass",
+		}).program.functions[0]!;
+
+		expect(globalLoadCount(baseline)).toBe(2);
+		expect(globalLoadCount(optimized)).toBe(1);
+		expect(
+			optimized.blocks
+				.flatMap(({ instructions }) => instructions)
+				.filter(({ opcode }) => opcode === "binary"),
+		).toHaveLength(1);
+		expect(
+			optimized.facts.some(({ kind }) => kind === "primitive-operator-effects"),
+		).toBe(true);
+	});
+
 	it("forwards own data slots of a contained shaped literal", () => {
 		// { f0: a, f1: b }; o.f1 = a; return o.f0 + o.f1
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 2 });
