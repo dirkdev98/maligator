@@ -99,22 +99,28 @@ All six ranked slices are implemented. Each checkpoint includes focused Core or
 native semantic coverage; the temporary benchmarks compared the fact consumer
 against its ablation on identical generated workloads.
 
-| Slice | Checkpoint | Retained result |
-| ----- | ---------- | --------------- |
-| Primitive-kind folding | `fa105ae2` | Removed all 720 targeted observations and cut the generated workload from 6,723 to 2,643 instructions; median compilation moved from 155.34 ms to 149.79 ms. |
-| Primitive operator effects | `453e0f20` | Removed 320 roots and 640 safepoints from 320 primitive numeric functions. The isolated fact solve raised compilation from about 55 ms to 68 ms, so consumers share one cached solve. |
-| Redundant coercions | `c3f75d2e` | Removed all 640 targeted coercions, 960 instructions, 320 roots, and 640 safepoints. The generated fact-heavy compile moved from about 35 ms to 59 ms. |
-| Numeric ranges | `b2016516` | Folded all 320 targeted loop comparisons, reducing 2,560 instructions to 640 and removing all 320 boxed operations and safepoints; compilation moved from about 24.1 ms to 27.9 ms. |
-| Early heap and shape consequences | `87fe6f22` | In 120 collection and 120 typed-array cases, exact collection effects removed 240 roots and 240 safepoints; compilation moved from 570.63 ms to 608.54 ms. |
-| Finite-target dispatch | `e7193bc3` | A small two-target hot loop moved from 50.84 ms to 26.07 ms median with Node-identical output. The 160-caller compile workload moved from 384.82 ms to 485.29 ms, so dispatch is limited to natural loops, at most four targets, and a fixed expansion budget. |
+| Slice                             | Checkpoint | Retained result                                                                                                                                                                                                                                                |
+| --------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Primitive-kind folding            | `fa105ae2` | Removed all 720 targeted observations and cut the generated workload from 6,723 to 2,643 instructions; median compilation moved from 155.34 ms to 149.79 ms.                                                                                                   |
+| Primitive operator effects        | `453e0f20` | Removed 320 roots and 640 safepoints from 320 primitive numeric functions. The isolated fact solve raised compilation from about 55 ms to 68 ms, so consumers share one cached solve.                                                                          |
+| Redundant coercions               | `c3f75d2e` | Removed all 640 targeted coercions, 960 instructions, 320 roots, and 640 safepoints. The generated fact-heavy compile moved from about 35 ms to 59 ms.                                                                                                         |
+| Numeric ranges                    | `b2016516` | Folded all 320 targeted loop comparisons, reducing 2,560 instructions to 640 and removing all 320 boxed operations and safepoints; compilation moved from about 24.1 ms to 27.9 ms.                                                                            |
+| Early heap and shape consequences | `87fe6f22` | In 120 collection and 120 typed-array cases, exact collection effects removed 240 roots and 240 safepoints; compilation moved from 570.63 ms to 608.54 ms.                                                                                                     |
+| Finite-target dispatch            | `e7193bc3` | A small two-target hot loop moved from 50.84 ms to 26.07 ms median with Node-identical output. The 160-caller compile workload moved from 384.82 ms to 485.29 ms, so dispatch is limited to natural loops, at most four targets, and a fixed expansion budget. |
 
 The range work exposed a native numeric-fusion representation mismatch. Checkpoint
 `67743d99` fixes the output consumer and covers the mixed Int32/Number path in both
 emitted C and native differential tests.
+
+The normal gate exposed two proof-lifetime seams. Checkpoint `a85309eb` retracts
+effect certificates when a semantic rewrite changes their operator or operands;
+`51119649` keeps a wider primitive-kind certificate valid under later semantic
+narrowing while the verifier still rejects any widening beyond its licensed mask.
 
 The follow-up five-investigation Node-hosted compiler pass retained one data-structure
 change: `3aaad493` shares the stable captured-slot index across all functions during
 scalar materialization. Full self-compile Core optimization improved from 28.09 s to
 27.23 s and 27.14 s in the two retained samples. Lazy use indexing, duplicate-CFG
 reuse, TDZ preindexing, and a nested numeric captured-slot index were rejected after
-repeated full-lane regressions.
+repeated full-lane regressions. The final committed-tree sanity sample completed in
+27.79 s under modest UI background load.
