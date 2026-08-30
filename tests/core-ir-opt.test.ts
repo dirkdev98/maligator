@@ -1859,6 +1859,37 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("materializes exact scalars carried through exception handlers", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function carry(callback) {
+				let message = "base";
+				try {
+					if (callback()) message += "suffix";
+					callback();
+				} catch (error) {}
+				return message;
+			}`,
+			"core-exception-scalar.js",
+		);
+		let optimized: CoreProgram | undefined;
+		expect(() =>
+			compileSemanticProgramToProgramImage(semantic, {
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			}),
+		).not.toThrow();
+		const fn = optimized!.functions[functionIndexOfName(optimized!, "carry")]!;
+		const handler = fn.blocks.find(
+			({ parameters }) => parameters[0]?.role === "exception",
+		)!;
+		expect(
+			handler.parameters
+				.slice(1)
+				.map(({ value }) => fn.values.find(({ id }) => id === value)!.representation),
+		).toContain("string");
+	});
+
 	it("hoists speculatable loop invariants but keeps identity creation in the loop", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
 		const entry = builder.createBlock([{}]);

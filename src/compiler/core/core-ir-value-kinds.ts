@@ -700,9 +700,6 @@ export function materializeCoreExactScalarRepresentations(
 		const representations = new Map(
 			values.map(({ id, representation }) => [id, representation]),
 		);
-		const boxedEntryParameters = new Set(
-			fn.parameters.filter((value) => representations.get(value) === "boxed"),
-		);
 		const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
 		let nextInstruction =
 			Math.max(
@@ -830,6 +827,163 @@ export function materializeCoreExactScalarRepresentations(
 			{ ...fn, blocks, values },
 			coreOpcodeRegistry,
 		);
+		const valueDefinitions = new Map(
+			values.map(({ id, definition }) => [id, definition]),
+		);
+		const instructions = new Map(
+			blocks.flatMap((block) =>
+				block.instructions.map((instruction) => [instruction.id, instruction] as const),
+			),
+		);
+		type ScalarRepresentation = Exclude<
+			ReturnType<typeof scalarCoreRepresentation>,
+			undefined
+		>;
+		// Invalid leaves propagate backward; cycles survive only when every external
+		// dependency can use the same scalar ABI, which is the required greatest fixpoint.
+		const limit = (values.at(-1)?.id ?? -1) + 1;
+		const scalarRepresentations = new Array<ScalarRepresentation | undefined>(limit);
+		for (const { id } of values) {
+			const analyzed = scalarCoreRepresentation(
+				analysis.exactScalar(fn.functionIndex, id),
+			);
+			const current = representations.get(id);
+			scalarRepresentations[id] =
+				analyzed ??
+				(current === "i32" ||
+				current === "f64" ||
+				current === "boolean" ||
+				current === "string"
+					? current
+					: undefined);
+		}
+		const materializable = new Uint8Array(limit);
+		const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(limit);
+		const compatibleInput = (
+			input: CoreValueId,
+			expected: ScalarRepresentation,
+		): boolean => {
+			const inputRepresentation = scalarRepresentations[input];
+			return (
+				inputRepresentation === expected ||
+				(expected === "f64" && inputRepresentation === "i32")
+			);
+		};
+		const numericInput = (input: CoreValueId): boolean =>
+			scalarRepresentations[input] === "i32" || scalarRepresentations[input] === "f64";
+		for (const { id: value } of values) {
+			const expected = scalarRepresentations[value];
+			if (expected === undefined) continue;
+			const current = representations.get(value);
+			if (current === expected) {
+				materializable[value] = 1;
+				dependencies[value] = [];
+				continue;
+			}
+			if (current !== "boxed" && !(current === "f64" && expected === "i32")) {
+				continue;
+			}
+			const definition = valueDefinitions.get(value);
+			if (definition?.kind === "block-parameter") {
+				const block = blocks[definition.block]!;
+				const parameter = block.parameters[definition.index];
+				const exceptional = block.parameters[0]?.role === "exception";
+				const incoming = representationCfg.predecessors[block.id]!;
+				if (
+					block.id === fn.entry ||
+					parameter?.role === "exception" ||
+					incoming.length === 0
+				) {
+					continue;
+				}
+				const arguments_ = incoming.map((edge) => {
+					if (edge.kind !== (exceptional ? "exceptional" : "ordinary")) {
+						return undefined;
+					}
+					return edge.arguments[definition.index - (exceptional ? 1 : 0)];
+				});
+				if (
+					arguments_.some(
+						(argument) => argument === undefined || !compatibleInput(argument, expected),
+					)
+				) {
+					continue;
+				}
+				materializable[value] = 1;
+				dependencies[value] = arguments_ as ReadonlyArray<CoreValueId>;
+				continue;
+			}
+			if (definition?.kind !== "instruction" || definition.index !== 0) continue;
+			const instruction = instructions.get(definition.instruction);
+			if (instruction?.outputs.length !== 1) continue;
+			let inputs: ReadonlyArray<CoreValueId> | undefined;
+			if (
+				instruction.opcode === "move" &&
+				instruction.inputs.length === 1 &&
+				compatibleInput(instruction.inputs[0]!, expected)
+			) {
+				inputs = instruction.inputs;
+			} else if (
+				instruction.opcode === "createF64" ||
+				instruction.opcode === "createNumber" ||
+				instruction.opcode === "createBoolean" ||
+				instruction.opcode === "createString"
+			) {
+				inputs = [];
+			} else if (
+				instruction.opcode === "unary" &&
+				instruction.inputs.length === 1 &&
+				typeof instruction.attributes.operator === "string" &&
+				NUMERIC_UNARY_OPERATORS.has(instruction.attributes.operator) &&
+				expected === (instruction.attributes.operator === "~" ? "i32" : "f64") &&
+				numericInput(instruction.inputs[0]!)
+			) {
+				inputs = instruction.inputs;
+			} else if (
+				instruction.opcode === "binary" &&
+				instruction.inputs.length === 2 &&
+				typeof instruction.attributes.operator === "string"
+			) {
+				const operator = instruction.attributes.operator;
+				if (operator === "+" && expected === "string") {
+					inputs = [];
+				} else if (
+					NUMERIC_RESULT_OPERATORS.has(operator) &&
+					expected === (INT32_RESULT_BINARY_OPERATORS.has(operator) ? "i32" : "f64") &&
+					instruction.inputs.every(numericInput)
+				) {
+					inputs = instruction.inputs;
+				}
+			}
+			if (inputs !== undefined) {
+				materializable[value] = 1;
+				dependencies[value] = inputs;
+			}
+		}
+		const dependents = new Array<Array<CoreValueId> | undefined>(limit);
+		const invalid = new Array<CoreValueId>();
+		for (const { id: value } of values) {
+			if (materializable[value] === 0) continue;
+			const inputs = dependencies[value]!;
+			if (inputs.some((input) => materializable[input] === 0)) {
+				materializable[value] = 0;
+				invalid.push(value);
+				continue;
+			}
+			for (const input of inputs) {
+				const users = dependents[input] ?? [];
+				users.push(value);
+				dependents[input] = users;
+			}
+		}
+		while (invalid.length > 0) {
+			const value = invalid.pop()!;
+			for (const dependent of dependents[value] ?? []) {
+				if (materializable[dependent] === 0) continue;
+				materializable[dependent] = 0;
+				invalid.push(dependent);
+			}
+		}
 		let progress = true;
 		const narrow = (
 			value: CoreValueId,
@@ -847,54 +1001,44 @@ export function materializeCoreExactScalarRepresentations(
 			changed = true;
 			progress = true;
 		};
+		for (const { id } of values) {
+			if (materializable[id] !== 0) narrow(id, scalarRepresentations[id]);
+		}
+		const ordinaryIncoming = representationCfg.predecessors.map((incoming) =>
+			incoming.every(({ kind }) => kind === "ordinary") ? incoming : undefined,
+		);
+		const scalarRepresentation = (
+			value: CoreValueId,
+		): ScalarRepresentation | undefined => {
+			const representation = representations.get(value);
+			return representation === "i32" ||
+				representation === "f64" ||
+				representation === "boolean" ||
+				representation === "string"
+				? representation
+				: undefined;
+		};
 		while (progress) {
 			progress = false;
 			for (const block of blocks) {
-				if (
-					block.id !== fn.entry &&
-					!block.parameters.some(({ role }) => role === "exception")
-				) {
+				const incoming = block.id === fn.entry ? undefined : ordinaryIncoming[block.id];
+				if (incoming !== undefined) {
 					for (const [index, parameter] of block.parameters.entries()) {
-						const crossesBoxedEntry = representationCfg.predecessors[block.id]!.some(
-							(edge) =>
-								edge.kind === "ordinary" &&
-								boxedEntryParameters.has(edge.arguments[index]!),
-						);
-						if (crossesBoxedEntry) continue;
-						narrow(
-							parameter.value,
-							scalarCoreRepresentation(
-								analysis.exactScalar(fn.functionIndex, parameter.value),
-							),
-						);
-					}
-				}
-				if (
-					block.id !== fn.entry &&
-					!block.parameters.some(({ role }) => role === "exception")
-				) {
-					const incoming = representationCfg.predecessors[block.id]!.filter(
-						({ kind }) => kind === "ordinary",
-					);
-					if (incoming.length === representationCfg.predecessors[block.id]!.length) {
-						for (const [index, parameter] of block.parameters.entries()) {
-							const candidates = new Set(
-								incoming.map(({ arguments: arguments_ }) =>
-									representations.get(arguments_[index]!),
-								),
-							);
-							if (candidates.size !== 1) continue;
-							const candidate = [...candidates][0];
-							narrow(
-								parameter.value,
-								candidate === "i32" ||
-									candidate === "f64" ||
-									candidate === "boolean" ||
-									candidate === "string"
-									? candidate
-									: undefined,
-							);
+						let candidate: ScalarRepresentation | undefined;
+						let consistent = incoming.length > 0;
+						for (const edge of incoming) {
+							const representation = scalarRepresentation(edge.arguments[index]!);
+							if (representation === undefined) {
+								consistent = false;
+								break;
+							}
+							candidate ??= representation;
+							if (candidate !== representation) {
+								consistent = false;
+								break;
+							}
 						}
+						if (consistent) narrow(parameter.value, candidate);
 					}
 				}
 				for (const instruction of block.instructions) {
@@ -919,10 +1063,7 @@ export function materializeCoreExactScalarRepresentations(
 						instruction.opcode === "createBoolean" ||
 						instruction.opcode === "createString"
 					) {
-						narrow(
-							output,
-							scalarCoreRepresentation(analysis.exactScalar(fn.functionIndex, output)),
-						);
+						narrow(output, scalarRepresentations[output]);
 						continue;
 					}
 					const operator = instruction.attributes.operator;
@@ -951,7 +1092,7 @@ export function materializeCoreExactScalarRepresentations(
 					if (
 						instruction.opcode === "binary" &&
 						instruction.attributes.operator === "+" &&
-						analysis.exactScalar(fn.functionIndex, output) === "string"
+						scalarRepresentations[output] === "string"
 					) {
 						narrow(output, "string");
 					}
