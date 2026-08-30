@@ -91,19 +91,6 @@ whole-program reachability DCE, guarded shape-origin loads, exact execution safe
 maps, and bounded scalar native direct entries. Runtime-wire compilation and native
 products share optimized Core but now terminate independently.
 
-- [ ] Extend escape and containment facts across inlining, joins, exceptions, and
-      suspension; immediately consume them for scalar replacement, stack allocation,
-      allocation sinking, and dead-store elimination.
-
-- [ ] Extend interprocedural summaries with identity, shape, value-class, allocation,
-      throw, and suspension facts one dimension at a time; consume each addition in
-      the call-site optimizations that motivated it.
-
-- [ ] Consume the exact per-safepoint root maps already carried by ExecutionProgram
-      and NativePlan to move beyond the current per-function union shadow frame where
-      measurement justifies the extra root updates. Preserve hidden allocations,
-      exceptional exits, loop polling, direct-entry variants, and every GC mode.
-
 - [ ] Complete module, export, publication, eval, reflection, Realm, host,
       retained-identity, and open-edge reachability modeling; immediately consume the
       closed graph to remove unreachable functions, helpers, metadata, and disabled
