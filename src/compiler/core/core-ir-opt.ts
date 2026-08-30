@@ -11808,13 +11808,19 @@ export function executeCoreOptimizations(
 			}
 			let passChanged = false;
 			let regionBlockedFunctions = 0;
-			functions = functions.map((fn) => {
+			let nextFunctions: Array<CoreFunction> | undefined;
+			for (
+				let functionPosition = 0;
+				functionPosition < functions.length;
+				functionPosition++
+			) {
+				const fn = functions[functionPosition]!;
 				if (pass.dependsOnProgram !== true && !activeFunctions.has(fn.functionIndex)) {
-					return fn;
+					continue;
 				}
 				if (fn.regions.length > 0 && pass.changesControlFlow === true) {
 					regionBlockedFunctions++;
-					return fn;
+					continue;
 				}
 				const next = acceptPassResult(
 					fn,
@@ -11836,9 +11842,10 @@ export function executeCoreOptimizations(
 					changed = true;
 					activeFunctions.add(fn.functionIndex);
 					nextActiveFunctions.add(fn.functionIndex);
+					(nextFunctions ??= [...functions])[functionPosition] = next;
 				}
-				return next;
-			});
+			}
+			if (nextFunctions !== undefined) functions = nextFunctions;
 			if (passChanged) {
 				verifyMutatedProgram(
 					{ ...workingProgram, functions },
