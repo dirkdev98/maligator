@@ -258,6 +258,30 @@ describe("Core whole-program function reachability", () => {
 		expect(compactCoreProgramFunctions(program, analysis).changed).toBe(false);
 	});
 
+	it("removes the body of a function retained only for observable identity", () => {
+		const program = coreModule(
+			`
+				function identityOnly() { return 42; }
+				globalThis.answer = identityOnly === identityOnly;
+			`,
+			true,
+		);
+		const identity = program.functions[1]!;
+		const analysis = analyzeCoreFunctionReachability(program);
+		const compacted = compactCoreProgramFunctions(program, analysis);
+		const stub = compacted.program.functions[1]!;
+
+		expect([...analysis.executable]).toEqual([0]);
+		expect([...analysis.retained].sort((left, right) => left - right)).toEqual([0, 1]);
+		expect(compacted.changed).toBe(true);
+		expect(stub.metadata).toEqual(identity.metadata);
+		expect(stub.blocks).toHaveLength(1);
+		expect(stub.blocks[0]!.instructions.map(({ opcode }) => opcode)).toEqual([
+			"createUndefined",
+		]);
+		expect(() => verifyCoreProgram(compacted.program, coreOpcodeRegistry)).not.toThrow();
+	});
+
 	it("traverses callees entered through direct Function.prototype.call dispatch", () => {
 		const input = coreModule(
 			`

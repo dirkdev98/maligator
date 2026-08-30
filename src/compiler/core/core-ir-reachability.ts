@@ -25,11 +25,12 @@ import { CORE_CALL_SUMMARY_ATTRIBUTE } from "./core-ir-summaries.ts";
 import type {
 	CoreAttributeObject,
 	CoreAttributeValue,
-	CoreFunction,
 	CoreInstruction,
 	CoreProgram,
 	CoreValueId,
 } from "./core-ir.ts";
+import { CoreFunctionBuilder } from "./core-ir.ts";
+import type { CoreFunction } from "./core-ir.ts";
 
 export type CoreFunctionReachabilityReason =
 	| "program-entry"
@@ -435,6 +436,19 @@ function remapSemanticAttributes(
 	return attributes;
 }
 
+function retainedIdentityStub(fn: CoreFunction, functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		isGenerator: fn.isGenerator,
+		isAsync: fn.isAsync,
+		parameterCount: fn.parameters.length,
+		metadata: fn.metadata,
+	});
+	const entry = builder.createBlock(fn.parameters.map(() => ({})));
+	const [result] = builder.appendInstruction(entry, "createUndefined", []);
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	return { ...builder.finish(entry), mutationEpoch: fn.mutationEpoch + 1 };
+}
+
 /**
  * Densely rebase a closed Core image to the rows retained by reachability.
  * Summary and region annotations are deliberately retracted. Direct dispatch
@@ -448,7 +462,8 @@ export function compactCoreProgramFunctions(
 	reachability ??= analyzeCoreFunctionReachability(program, undefined, context);
 	if (
 		!reachability.sourceClosed ||
-		reachability.retained.size === program.functions.length
+		(reachability.retained.size === program.functions.length &&
+			reachability.executable.size === program.functions.length)
 	) {
 		return {
 			program,
@@ -466,6 +481,9 @@ export function compactCoreProgramFunctions(
 		retained.map((fn, index) => [fn.functionIndex, index] as const),
 	);
 	const functions = retained.map((fn, functionIndex): CoreFunction => {
+		if (!reachability.executable.has(fn.functionIndex)) {
+			return retainedIdentityStub(fn, functionIndex);
+		}
 		const summaryProofs = new Set(
 			fn.facts
 				.filter(({ kind }) => kind === CORE_CALL_EFFECT_SUMMARY_FACT)
@@ -583,6 +601,7 @@ export function compactCoreProgramFunctions(
 						: {
 								optimizationDecisions: context.optimizationDecisions.flatMap(
 									(decision) => {
+										if (!reachability.executable.has(decision.functionIndex)) return [];
 										const mapped = oldToNew.get(decision.functionIndex);
 										return mapped === undefined
 											? []
