@@ -3338,27 +3338,30 @@ function emitInstruction(
 				const first = fusion.first;
 				const firstOnLeft = left === first.dst;
 				const firstOnRight = right === first.dst;
+				const firstLeftIsNum =
+					reps[first.left] === "int32" || reps[first.left] === "number";
+				const firstRightIsNum =
+					reps[first.right] === "int32" || reps[first.right] === "number";
 				const firstExpr = nativeNumberExpr(
 					first.operator,
-					reps[first.left] === "number"
+					firstLeftIsNum
 						? num(first.left)
 						: `mal_ops_number_as_f64(${boxed(first.left)})`,
-					reps[first.right] === "number"
+					firstRightIsNum
 						? num(first.right)
 						: `mal_ops_number_as_f64(${boxed(first.right)})`,
 				);
 				if ((firstOnLeft || firstOnRight) && firstExpr !== null) {
 					const external = firstOnLeft ? right : left;
-					const externalExpr =
-						reps[external] === "number"
-							? num(external)
-							: `mal_ops_number_as_f64(${boxed(external)})`;
+					const externalIsNum = reps[external] === "int32" || reps[external] === "number";
+					const externalExpr = externalIsNum
+						? num(external)
+						: `mal_ops_number_as_f64(${boxed(external)})`;
 					const compare = NATIVE_COMPARE[operator];
 					if (compare !== undefined) {
-						const guard =
-							reps[external] === "number"
-								? `__nf_${fusion.id}_ok`
-								: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
+						const guard = externalIsNum
+							? `__nf_${fusion.id}_ok`
+							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
 						const fast = firstOnLeft
 							? `__nf_${fusion.id}_value ${compare} ${externalExpr}`
 							: `${externalExpr} ${compare} __nf_${fusion.id}_value`;
@@ -3383,10 +3386,9 @@ function emitInstruction(
 						firstOnRight ? `__nf_${fusion.id}_value` : externalExpr,
 					);
 					if (nativeExpr !== null) {
-						const guard =
-							reps[external] === "number"
-								? `__nf_${fusion.id}_ok`
-								: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
+						const guard = externalIsNum
+							? `__nf_${fusion.id}_ok`
+							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
 						const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
 						return [
 							`if (${guard}) {`,

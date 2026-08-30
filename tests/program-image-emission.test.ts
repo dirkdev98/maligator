@@ -1060,7 +1060,8 @@ describe("native update-expression representation", () => {
 			`"use strict"; function divisible(value) { return value % 7 === 0; } globalThis.divisible = divisible;`,
 		);
 		expect(output).toMatch(/__nf_(\d+)_value = mal_number_remainder/);
-		expect(output).toMatch(/__nf_\d+_value == r\d+/);
+		expect(output).toMatch(/__nf_\d+_value == (?:r\d+|\(f64\) r\d+)/);
+		expect(output).not.toContain("mal_ops_number_as_f64(mal_value_from_i32");
 	});
 
 	it("keeps unbounded literal concatenation on the generic operator", () => {
@@ -1095,7 +1096,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("static MalValue mal_compiled_1(");
 		expect(output).not.toContain("mal_vm_op_throw_if_tdz");
 		expect(output).not.toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
-		expect(output).toContain(" += ");
+		expect(output).toMatch(/(?: \+= |r\d+ = \(f64\) r\d+ \+ \(f64\) r\d+)/);
 	});
 
 	it("does not synthesize watched epochs for ordinary resumable property loads", () => {
