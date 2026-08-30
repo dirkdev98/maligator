@@ -50,6 +50,37 @@ function returnParameter(functionIndex: number): CoreFunction {
 	return builder.finish(entry);
 }
 
+function returnParameterThroughJoin(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+		parameterCount: 1,
+	});
+	const entry = builder.createBlock([{}]);
+	const parameter = builder.block(entry).parameters[0]!.value;
+	const consequent = builder.createBlock();
+	const alternate = builder.createBlock();
+	const join = builder.createBlock([{}]);
+	builder.setTerminator(entry, {
+		kind: "branch",
+		condition: parameter,
+		consequent: { block: consequent, arguments: [] },
+		alternate: { block: alternate, arguments: [] },
+	});
+	builder.setTerminator(consequent, {
+		kind: "jump",
+		edge: { block: join, arguments: [parameter] },
+	});
+	const [moved] = builder.appendInstruction(alternate, "move", [parameter]);
+	builder.setTerminator(alternate, {
+		kind: "jump",
+		edge: { block: join, arguments: [moved!] },
+	});
+	builder.setTerminator(join, {
+		kind: "return",
+		value: builder.block(join).parameters[0]!.value,
+	});
+	return builder.finish(entry);
+}
+
 function returnF64(functionIndex: number): CoreFunction {
 	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
 	const entry = builder.createBlock();
@@ -1165,6 +1196,28 @@ describe("summary consumers and proof boundary", () => {
 			0,
 		);
 		expect(coreInstructions(ablated.functions[2]!, "loadPropertyStatic")).toHaveLength(1);
+	});
+
+	it("summarizes returned identities through block parameters", () => {
+		const program: CoreProgram = {
+			...coreProgram([returnParameterThroughJoin(0), objectCaller(1, 0, true)]),
+			stringConstants: [[], [102]],
+		};
+		expect(analyzeCoreProgramSummaries(program).summary(0)).toMatchObject({
+			returnProvenance: { kind: "parameter", index: 0 },
+		});
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const ablated = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining", "interprocedural"]),
+			verification: "per-pass",
+		}).program;
+		expect(coreInstructions(optimized.functions[1]!, "loadPropertyStatic")).toHaveLength(
+			0,
+		);
+		expect(coreInstructions(ablated.functions[1]!, "loadPropertyStatic")).toHaveLength(1);
 	});
 
 	it("propagates a pure effect summary transitively to memory consumers", () => {

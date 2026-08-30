@@ -539,31 +539,60 @@ function localReturnProvenance(
 	value: CoreValueId,
 	definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
 	parameterIndices: ReadonlyMap<CoreValueId, number>,
+	forwardedInputs: ReadonlyMap<CoreValueId, ReadonlyArray<CoreValueId>>,
 	registry: CoreOpcodeRegistry,
+	memo: Map<CoreValueId, ReturnProvenance>,
 ): ReturnProvenance {
-	const seen = new Set<CoreValueId>();
-	let current = value;
-	while (!seen.has(current)) {
-		seen.add(current);
+	const visiting = new Set<CoreValueId>();
+	const visit = (current: CoreValueId): ReturnProvenance => {
+		const cached = memo.get(current);
+		if (cached !== undefined) return cached;
+		if (visiting.has(current)) return RETURN_PROVENANCE_NONE;
+		visiting.add(current);
 		const parameter = parameterIndices.get(current);
-		if (parameter !== undefined) return { kind: "parameter", index: parameter };
-		const definition = definitions.get(current);
-		if (definition === undefined) return RETURN_PROVENANCE_UNKNOWN;
-		if (definition.opcode === "move" && definition.inputs.length === 1) {
-			current = definition.inputs[0]!;
-			continue;
+		if (parameter !== undefined) {
+			const result = { kind: "parameter", index: parameter } as const;
+			memo.set(current, result);
+			visiting.delete(current);
+			return result;
 		}
-		if (definition.opcode === "loadThis") return { kind: "receiver" };
-		if (PRIMITIVE_RESULT_OPCODES.has(definition.opcode)) return { kind: "primitive" };
-		if (
+		const forwarded = forwardedInputs.get(current);
+		if (forwarded !== undefined) {
+			let result = RETURN_PROVENANCE_NONE;
+			for (const input of forwarded) {
+				result = joinReturnProvenance(result, visit(input));
+			}
+			if (result.kind !== "none") memo.set(current, result);
+			visiting.delete(current);
+			return result;
+		}
+		const definition = definitions.get(current);
+		if (definition === undefined) {
+			visiting.delete(current);
+			return RETURN_PROVENANCE_UNKNOWN;
+		}
+		if (definition.opcode === "move" && definition.inputs.length === 1) {
+			const result = visit(definition.inputs[0]!);
+			memo.set(current, result);
+			visiting.delete(current);
+			return result;
+		}
+		let result: ReturnProvenance;
+		if (definition.opcode === "loadThis") result = { kind: "receiver" };
+		else if (PRIMITIVE_RESULT_OPCODES.has(definition.opcode)) {
+			result = { kind: "primitive" };
+		} else if (
 			registry.get(definition.opcode)?.allocation !== undefined ||
 			FRESH_IDENTITY_OPCODES.has(definition.opcode)
 		) {
-			return { kind: "fresh" };
-		}
-		return RETURN_PROVENANCE_UNKNOWN;
-	}
-	return RETURN_PROVENANCE_UNKNOWN;
+			result = { kind: "fresh" };
+		} else result = RETURN_PROVENANCE_UNKNOWN;
+		memo.set(current, result);
+		visiting.delete(current);
+		return result;
+	};
+	const result = visit(value);
+	return result.kind === "none" ? RETURN_PROVENANCE_UNKNOWN : result;
 }
 
 function summaryObservesOperands(
@@ -613,6 +642,8 @@ function collectLocalFacts(
 	let returnRepresentationBase: ReturnRepresentation = "none";
 	const definitions = new Map<CoreValueId, CoreInstruction>();
 	const callSiteByResult = new Map<CoreValueId, CallSite>();
+	const provenanceInputs = new Map<CoreValueId, Array<CoreValueId>>();
+	const provenanceMemo = new Map<CoreValueId, ReturnProvenance>();
 	const representations = new Map<CoreValueId, CoreRepresentation>(
 		fn.values.map(({ id, representation }) => [id, representation] as const),
 	);
@@ -646,6 +677,17 @@ function collectLocalFacts(
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			for (const output of instruction.outputs) definitions.set(output, instruction);
+		}
+		for (const edge of outgoingEdges(block)) {
+			const target = fn.blocks[edge.block];
+			if (target === undefined) continue;
+			for (const [index, argument] of edge.arguments.entries()) {
+				const parameter = target.parameters[index + edge.parameterOffset];
+				if (parameter === undefined) continue;
+				const existing = provenanceInputs.get(parameter.value);
+				if (existing === undefined) provenanceInputs.set(parameter.value, [argument]);
+				else existing.push(argument);
+			}
 		}
 	}
 
@@ -772,7 +814,9 @@ function collectLocalFacts(
 						terminator.value,
 						definitions,
 						parameterIndices,
+						provenanceInputs,
 						registry,
+						provenanceMemo,
 					),
 				);
 			}
