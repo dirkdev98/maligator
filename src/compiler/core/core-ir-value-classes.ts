@@ -10,6 +10,7 @@
 
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
+import { coreCapturedSlotKey, coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	buildCoreControlFlow,
@@ -103,10 +104,6 @@ function valueLimit(fn: CoreFunction): number {
 	return limit;
 }
 
-function capturedKey(owner: number, index: number): string {
-	return `${owner}:${index}`;
-}
-
 /** Solve immutable heap brands through local SSA and stable compiler cells. */
 export function analyzeCoreValueClasses(
 	program: CoreProgram,
@@ -150,9 +147,10 @@ export function analyzeCoreValueClasses(
 	const stableGlobals = new Set(context.data.singleAssignmentGlobalSlots);
 	const stableCaptured = new Set(
 		context.data.singleAssignmentCapturedSlots.map(({ owner, index }) =>
-			capturedKey(owner, index),
+			coreCapturedSlotKey(owner, index),
 		),
 	);
+	const trackedCaptured = coreClosedCapturedValueSlots(program, context);
 	const globalNodes = new Map<number, number>();
 	const capturedNodes = new Map<string, number>();
 	const privateNodes = new Map<string, number>();
@@ -165,7 +163,7 @@ export function analyzeCoreValueClasses(
 		return node;
 	};
 	const capturedNode = (owner: number, index: number): number => {
-		const key = capturedKey(owner, index);
+		const key = coreCapturedSlotKey(owner, index);
 		let node = capturedNodes.get(key);
 		if (node === undefined) {
 			node = nodeCount++;
@@ -237,11 +235,11 @@ export function analyzeCoreValueClasses(
 			if (
 				typeof owner !== "number" ||
 				typeof index !== "number" ||
-				!stableCaptured.has(capturedKey(owner, index))
+				!stableCaptured.has(coreCapturedSlotKey(owner, index))
 			) {
 				return undefined;
 			}
-			return capturedKey(owner, index);
+			return coreCapturedSlotKey(owner, index);
 		};
 		for (const [index, parameter] of fn.parameters.entries()) {
 			if (interprocedural.parameterOpen(fn.functionIndex, index)) {
@@ -357,7 +355,7 @@ export function analyzeCoreValueClasses(
 					if (
 						typeof owner === "number" &&
 						typeof index === "number" &&
-						stableCaptured.has(capturedKey(owner, index))
+						trackedCaptured.has(coreCapturedSlotKey(owner, index))
 					) {
 						const cell = capturedNode(owner, index);
 						addEdge(cell, valueNode(fn.functionIndex, output));
@@ -373,7 +371,7 @@ export function analyzeCoreValueClasses(
 						typeof owner === "number" &&
 						typeof index === "number" &&
 						source !== undefined &&
-						stableCaptured.has(capturedKey(owner, index))
+						trackedCaptured.has(coreCapturedSlotKey(owner, index))
 					) {
 						const cell = capturedNode(owner, index);
 						if (definitions.get(root(source))?.opcode === "createEmpty") {

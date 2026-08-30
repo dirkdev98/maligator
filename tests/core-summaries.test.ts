@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
@@ -24,6 +25,11 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 
 function coreProgram(
@@ -430,7 +436,9 @@ describe("interprocedural summary lattices", () => {
 			attributes: { operator: "typeof" },
 		});
 		const [awaited] = asynchronous.appendInstruction(entry, "createUndefined", []);
-		asynchronous.appendInstruction(entry, "await", [awaited!], { outputCount: 2 });
+		asynchronous.appendInstruction(entry, "await", [awaited!], {
+			outputCount: 2,
+		});
 		const [result] = asynchronous.appendInstruction(entry, "unary", [after!], {
 			attributes: { operator: "typeof" },
 		});
@@ -1040,6 +1048,196 @@ describe("summary consumers and proof boundary", () => {
 			),
 		);
 		expect(scalarMoves).toEqual([]);
+	});
+
+	it("consumes multiply-assigned captured Int32 facts in a source-closed program", () => {
+		const path = "closed-mutable-capture-representation.js";
+		const source = `function outer() {
+			let step = 1;
+			function advance() { step = (step + 1) | 0; }
+			return function inner() {
+				advance();
+				const current = step;
+				return (current * 3 + current * 5 + current * 7 + current * 11) | 0;
+			};
+		}
+		const inner = outer();
+		globalThis.__mutableCaptureResult = inner();`;
+		const configured = compilerProgramFactsFromConfig(
+			resolveBuildConfig({ engine: { eval: false } }),
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, path),
+			{
+				facts: withProgramClosure(
+					configured,
+					programClosureCertificate(
+						{ kind: "whole-program", entry: path },
+						[{ kind: "entry-module", module: path }],
+						[],
+					),
+				),
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const scalarMoves = optimized!.functions.flatMap(({ blocks }) =>
+			blocks.flatMap(({ instructions }) =>
+				instructions.filter(
+					(instruction) =>
+						instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "int32",
+				),
+			),
+		);
+
+		expect(scalarMoves.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("declines mutable captured scalar materialization without enough reuse", () => {
+		const path = "closed-low-reuse-capture.js";
+		const source = `function outer() {
+			let value = 0;
+			return function next() {
+				value = (value + 1) | 0;
+				return value;
+			};
+		}
+		const next = outer();
+		globalThis.__lowReuseCaptureResult = next();`;
+		const configured = compilerProgramFactsFromConfig(
+			resolveBuildConfig({ engine: { eval: false } }),
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, path),
+			{
+				facts: withProgramClosure(
+					configured,
+					programClosureCertificate(
+						{ kind: "whole-program", entry: path },
+						[{ kind: "entry-module", module: path }],
+						[],
+					),
+				),
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		expect(
+			optimized!.functions.flatMap(({ blocks }) =>
+				blocks.flatMap(({ instructions }) =>
+					instructions.filter(
+						(instruction) =>
+							instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] !== undefined,
+					),
+				),
+			),
+		).toEqual([]);
+	});
+
+	it("consumes one-brand mutable captured collection facts", () => {
+		const path = "closed-mutable-collection.js";
+		const source = `function outer() {
+			let values = new Map();
+			function reset() { values = new Map(); }
+			return function inner(key) {
+				reset();
+				values.set(key, 42);
+				return values.get(key);
+			};
+		}
+		const inner = outer();
+		globalThis.__mutableCollectionResult = inner("answer");`;
+		const configured = compilerProgramFactsFromConfig(
+			resolveBuildConfig({
+				engine: { eval: false, primordials: "locked" },
+			}),
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, path),
+			{
+				facts: withProgramClosure(
+					configured,
+					programClosureCertificate(
+						{ kind: "whole-program", entry: path },
+						[{ kind: "entry-module", module: path }],
+						[],
+					),
+				),
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = optimized!.functions.flatMap(({ blocks }) =>
+			blocks.flatMap(({ instructions }) =>
+				instructions.flatMap((instruction) =>
+					instruction.opcode === "callBuiltin" &&
+					typeof instruction.attributes.operation === "string"
+						? [instruction.attributes.operation]
+						: [],
+				),
+			),
+		);
+
+		expect(operations).toEqual(
+			expect.arrayContaining(["Map.prototype.set", "Map.prototype.get"]),
+		);
+	});
+
+	it("keeps mapped-arguments capture writes outside closed cell facts", () => {
+		const path = "closed-mapped-capture.js";
+		const source = `function outer(value) {
+			function inner() { return value + value; }
+			arguments[0] = "changed";
+			return inner;
+		}
+		const inner = outer(2);
+		globalThis.__mappedCaptureResult = inner();`;
+		const configured = compilerProgramFactsFromConfig(
+			resolveBuildConfig({ engine: { eval: false } }),
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, path),
+			{
+				facts: withProgramClosure(
+					configured,
+					programClosureCertificate(
+						{ kind: "whole-program", entry: path },
+						[{ kind: "entry-module", module: path }],
+						[],
+					),
+				),
+				optimizationAblations: new Set(["inlining"]),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const inner = optimized!.functions.find(
+			(fn) =>
+				String.fromCodePoint(
+					...(optimized!.stringConstants[fn.metadata.nameStringIndex] ?? []),
+				) === "inner",
+		)!;
+
+		expect(
+			inner.blocks.flatMap(({ instructions }) =>
+				instructions.filter(
+					(instruction) =>
+						instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] !== undefined,
+				),
+			),
+		).toEqual([]);
 	});
 
 	it("does not treat a constructor's primitive return as its construct result", () => {

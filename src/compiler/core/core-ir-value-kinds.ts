@@ -23,6 +23,7 @@ import {
 	compilerValueKindMaskIsValid,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import { coreCapturedSlotKey, coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import {
@@ -76,10 +77,6 @@ function valueLimit(fn: CoreFunction): number {
 	return limit;
 }
 
-function capturedKey(owner: number, index: number): string {
-	return `${owner}:${index}`;
-}
-
 const NUMERIC_UNARY_OPERATORS: ReadonlySet<string> = new Set([
 	"-",
 	"+",
@@ -109,6 +106,16 @@ const INT32_RESULT_BINARY_OPERATORS: ReadonlySet<string> = new Set([
 	"^",
 	"<<",
 	">>",
+]);
+
+const CAPTURED_SCALAR_AMORTIZATION_MINIMUM = 4;
+
+const SCALAR_CONSUMER_OPCODES: ReadonlySet<string> = new Set([
+	"binary",
+	"mathBinaryNumber",
+	"mathUnaryNumber",
+	"typeofCompare",
+	"unary",
 ]);
 
 function numberIsExactInt32(value: unknown): boolean {
@@ -206,11 +213,7 @@ export function analyzeCoreValueKinds(
 	const valueNode = (functionIndex: number, value: CoreValueId): number =>
 		valueBases.get(functionIndex)! + value;
 	const stableGlobals = new Set(context?.data.singleAssignmentGlobalSlots ?? []);
-	const stableCaptured = new Set(
-		(context?.data.singleAssignmentCapturedSlots ?? []).map(({ owner, index }) =>
-			capturedKey(owner, index),
-		),
-	);
+	const trackedCaptured = coreClosedCapturedValueSlots(program, context);
 	const globalNodes = new Map<number, number>();
 	const capturedNodes = new Map<string, number>();
 	const globalNode = (slot: number): number => {
@@ -222,7 +225,7 @@ export function analyzeCoreValueKinds(
 		return node;
 	};
 	const capturedNode = (owner: number, index: number): number => {
-		const key = capturedKey(owner, index);
+		const key = coreCapturedSlotKey(owner, index);
 		let node = capturedNodes.get(key);
 		if (node === undefined) {
 			node = nodeCount++;
@@ -330,7 +333,7 @@ export function analyzeCoreValueKinds(
 					if (
 						typeof owner === "number" &&
 						typeof index === "number" &&
-						stableCaptured.has(capturedKey(owner, index))
+						trackedCaptured.has(coreCapturedSlotKey(owner, index))
 					) {
 						addEdge(capturedNode(owner, index), valueNode(fn.functionIndex, output));
 					} else addSeed(valueNode(fn.functionIndex, output), COMPILER_VALUE_KIND_TOP);
@@ -344,7 +347,7 @@ export function analyzeCoreValueKinds(
 						typeof owner === "number" &&
 						typeof index === "number" &&
 						source !== undefined &&
-						stableCaptured.has(capturedKey(owner, index))
+						trackedCaptured.has(coreCapturedSlotKey(owner, index))
 					) {
 						addEdge(valueNode(fn.functionIndex, source), capturedNode(owner, index));
 					}
@@ -697,6 +700,37 @@ export function materializeCoreExactScalarRepresentations(
 	const functions = program.functions.map((fn): CoreFunction => {
 		let blocks: ReadonlyArray<CoreBlock> = fn.blocks;
 		const values = [...fn.values];
+		const stableCaptured = new Set(
+			(context?.data.singleAssignmentCapturedSlots ?? []).map(({ owner, index }) =>
+				coreCapturedSlotKey(owner, index),
+			),
+		);
+		const users = new Map<CoreValueId, Array<CoreInstruction>>();
+		for (const instruction of fn.blocks.flatMap(({ instructions }) => instructions)) {
+			for (const input of instruction.inputs) {
+				const current = users.get(input);
+				if (current === undefined) users.set(input, [instruction]);
+				else current.push(instruction);
+			}
+		}
+		const scalarConsumerScore = (initial: CoreValueId): number => {
+			const pending = [initial];
+			const seen = new Set<CoreValueId>();
+			let score = 0;
+			while (pending.length > 0) {
+				const value = pending.pop()!;
+				if (seen.has(value)) continue;
+				seen.add(value);
+				for (const instruction of users.get(value) ?? []) {
+					if (instruction.opcode === "move") {
+						pending.push(...instruction.outputs);
+					} else if (SCALAR_CONSUMER_OPCODES.has(instruction.opcode)) {
+						score++;
+					}
+				}
+			}
+			return score;
+		};
 		const representations = new Map(
 			values.map(({ id, representation }) => [id, representation]),
 		);
@@ -723,12 +757,32 @@ export function materializeCoreExactScalarRepresentations(
 				const kind = analysis.exactScalar(fn.functionIndex, output);
 				const representation = scalarCoreRepresentation(kind);
 				if (representation === undefined) continue;
+				if (instruction.opcode === "loadCaptured") {
+					const owner = instruction.attributes.functionIndex;
+					const index = instruction.attributes.index;
+					const stable =
+						typeof owner === "number" &&
+						typeof index === "number" &&
+						stableCaptured.has(coreCapturedSlotKey(owner, index));
+					if (
+						!stable &&
+						scalarConsumerScore(output) < CAPTURED_SCALAR_AMORTIZATION_MINIMUM
+					) {
+						continue;
+					}
+				}
 				const checks = blocks.flatMap((candidate) =>
 					candidate.instructions
 						.flatMap((candidateInstruction, index) =>
 							candidateInstruction.opcode === "throwIfTdz" &&
 							candidateInstruction.inputs[0] === output
-								? [{ block: candidate.id, index, instruction: candidateInstruction }]
+								? [
+										{
+											block: candidate.id,
+											index,
+											instruction: candidateInstruction,
+										},
+									]
 								: [],
 						)
 						.toReversed(),

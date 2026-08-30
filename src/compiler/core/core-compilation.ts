@@ -59,6 +59,47 @@ export interface CoreCompilation {
 	};
 }
 
+export function coreCapturedSlotKey(owner: number, index: number): string {
+	return `${owner}:${index}`;
+}
+
+/** Captured cells whose complete write graph is visible to Core. */
+export function coreClosedCapturedValueSlots(
+	program: CoreProgram,
+	context: CoreCompilationContext | undefined,
+): ReadonlySet<string> {
+	const slots = new Set(
+		(context?.data.singleAssignmentCapturedSlots ?? []).map(({ owner, index }) =>
+			coreCapturedSlotKey(owner, index),
+		),
+	);
+	if (context?.facts.closure.sourceClosure.kind !== "known") return slots;
+	const mapped = new Set(
+		program.functions.flatMap((fn) =>
+			fn.metadata.mappedArgumentSlots.map((index) =>
+				coreCapturedSlotKey(fn.functionIndex, index),
+			),
+		),
+	);
+	for (const key of mapped) slots.delete(key);
+	for (const fn of program.functions) {
+		for (const instruction of fn.blocks.flatMap(({ instructions }) => instructions)) {
+			if (
+				instruction.opcode !== "loadCaptured" &&
+				instruction.opcode !== "storeCaptured"
+			) {
+				continue;
+			}
+			const owner = instruction.attributes.functionIndex;
+			const index = instruction.attributes.index;
+			if (typeof owner !== "number" || typeof index !== "number") continue;
+			const key = coreCapturedSlotKey(owner, index);
+			if (!mapped.has(key)) slots.add(key);
+		}
+	}
+	return slots;
+}
+
 /** Normalize the only semantic-program fields retained after frontend lowering. */
 export function coreProgramDataFromSemantic(
 	semantic: Pick<SemanticProgram, "entrypointPath" | "files" | "graph">,

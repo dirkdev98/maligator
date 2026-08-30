@@ -4,6 +4,7 @@ function makeWorker() {
 	const suffix = "!";
 	const wide = 2147483648;
 	const signedZero = -0;
+	let mutableCounter = 0;
 
 	function int32Leaf() {
 		return step;
@@ -11,6 +12,11 @@ function makeWorker() {
 
 	function stringLeaf() {
 		return label;
+	}
+
+	function mutableInt32Leaf() {
+		mutableCounter = (mutableCounter + step) | 0;
+		return mutableCounter;
 	}
 
 	function retainStringAcrossAllocation() {
@@ -35,6 +41,8 @@ function makeWorker() {
 			wide,
 			1 / signedZero,
 			retainStringAcrossAllocation(),
+			mutableInt32Leaf(),
+			mutableInt32Leaf(),
 		];
 	};
 }

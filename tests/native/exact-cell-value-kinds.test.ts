@@ -28,7 +28,7 @@ describe("exact Int32 and String cell value kinds", () => {
 		}));
 	}, 600_000);
 
-	it("preserves Int32 widening, negative zero, String values, and direct calls", () => {
+	it("preserves mutable Int32, widening, negative zero, String, and direct calls", () => {
 		expect(runToStdout(compiled)).toBe(expected);
 		expect(runToStdout(interpreted)).toBe(expected);
 	});
