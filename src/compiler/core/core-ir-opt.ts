@@ -5842,6 +5842,70 @@ export class CoreAnalysisManager {
 		return analysis;
 	}
 
+	inheritCanonicalValues(before: CoreFunction, after: CoreFunction): void {
+		const analysis = this.#canonicalValues.get(before);
+		if (
+			analysis === undefined ||
+			before.entry !== after.entry ||
+			before.bodyEntry !== after.bodyEntry ||
+			before.values.length !== after.values.length ||
+			before.blocks.length !== after.blocks.length
+		) {
+			return;
+		}
+		for (let index = 0; index < before.values.length; index++) {
+			if (before.values[index]!.id !== after.values[index]!.id) return;
+		}
+		for (let index = 0; index < before.blocks.length; index++) {
+			const left = before.blocks[index]!;
+			const right = after.blocks[index]!;
+			if (
+				left.id !== right.id ||
+				left.terminator !== right.terminator ||
+				left.handler !== right.handler ||
+				left.parameters.length !== right.parameters.length ||
+				left.parameters.some(
+					(parameter, parameterIndex) =>
+						parameter.value !== right.parameters[parameterIndex]!.value ||
+						parameter.role !== right.parameters[parameterIndex]!.role,
+				)
+			) {
+				return;
+			}
+			let leftIndex = 0;
+			let rightIndex = 0;
+			for (;;) {
+				while (
+					leftIndex < left.instructions.length &&
+					left.instructions[leftIndex]!.opcode !== "move"
+				) {
+					leftIndex++;
+				}
+				while (
+					rightIndex < right.instructions.length &&
+					right.instructions[rightIndex]!.opcode !== "move"
+				) {
+					rightIndex++;
+				}
+				const leftMove = left.instructions[leftIndex];
+				const rightMove = right.instructions[rightIndex];
+				if (leftMove === undefined || rightMove === undefined) {
+					if (leftMove !== rightMove) return;
+					break;
+				}
+				if (
+					leftMove.inputs[0] !== rightMove.inputs[0] ||
+					leftMove.outputs[0] !== rightMove.outputs[0]
+				) {
+					return;
+				}
+				leftIndex++;
+				rightIndex++;
+			}
+		}
+		this.#canonicalValues.set(after, analysis);
+	}
+
 	provenance(fn: CoreFunction): CoreProvenance {
 		let analysis = this.#provenance.get(fn);
 		if (analysis === undefined) {
@@ -11766,6 +11830,7 @@ export function executeCoreOptimizations(
 				const functionChanged = next !== fn;
 				if (functionChanged) {
 					analyses.inheritControlFlow(fn, next);
+					analyses.inheritCanonicalValues(fn, next);
 					passChanged = true;
 					roundChanged = true;
 					changed = true;

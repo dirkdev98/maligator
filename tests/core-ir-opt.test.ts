@@ -74,6 +74,42 @@ function functionIndexOfName(program: CoreProgram, name: string): number {
 }
 
 describe("Core IR optimizer", () => {
+	it("reuses canonical roots only while move and phi structure is unchanged", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 2,
+		});
+		const entry = builder.createBlock([{}, {}]);
+		const [first, second] = builder.block(entry).parameters.map(({ value }) => value);
+		const [moved] = builder.appendInstruction(entry, "move", [first!]);
+		builder.setTerminator(entry, { kind: "return", value: moved! });
+		const fn = builder.finish(entry);
+		const analyses = new CoreAnalysisManager();
+		const roots = analyses.canonicalValues(fn);
+		const factsOnly = {
+			...fn,
+			facts: [...fn.facts],
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+		analyses.inheritCanonicalValues(fn, factsOnly);
+		expect(analyses.canonicalValues(factsOnly)).toBe(roots);
+
+		const changedMove = {
+			...fn,
+			blocks: fn.blocks.map((block) => ({
+				...block,
+				instructions: block.instructions.map((instruction) =>
+					instruction.opcode === "move"
+						? { ...instruction, inputs: [second!] }
+						: instruction,
+				),
+			})),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+		analyses.inheritCanonicalValues(fn, changedMove);
+		expect(analyses.canonicalValues(changedMove)).not.toBe(roots);
+		expect(analyses.canonicalValues(changedMove).get(moved!)).toBe(second);
+	});
+
 	it("counts refined safepoints, boxed roots, and guard terminators in traces", () => {
 		const rooted = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
 		const rootedEntry = rooted.createBlock([{}]);
