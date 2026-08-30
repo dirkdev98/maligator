@@ -12,6 +12,7 @@ import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALLEE_TARGETS_ATTRIBUTE,
+	CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE,
 	analyzeCoreCalleeTargets,
 } from "./core-ir-call-targets.ts";
 import type {
@@ -424,6 +425,7 @@ function remapSemanticAttributes(
 		"directFunctionIndex",
 		"directCallTargetFunctionIndex",
 		"directCallbackFunctionIndex",
+		CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE,
 	]) {
 		const target = attributes[key];
 		if (typeof target === "number") {

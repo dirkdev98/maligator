@@ -11,7 +11,10 @@ import {
 	coreOptimizationMetrics,
 	executeCoreOptimizations,
 } from "../src/compiler/core/core-ir-opt.ts";
-import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
+import {
+	verifyCoreFunction,
+	verifyCoreProgram,
+} from "../src/compiler/core/core-ir-verifier.ts";
 import { CORE_NO_EFFECTS, CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -3312,6 +3315,103 @@ describe("Core IR optimizer", () => {
 			anyScript: false,
 			opaque: true,
 		});
+	});
+
+	it("dispatches a residual finite target set through guarded direct calls", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function caller(useSecond, value) {
+				function first(input) {
+					if (input > 0) return input + 1;
+					return input - 1;
+				}
+				function second(input) {
+					if (input > 0) return input + 2;
+					return input - 2;
+				}
+				const handler = useSecond ? second : first;
+				let total = 0;
+				for (let index = 0; index < 3; index++) total += handler(value + index);
+				return total * 2;
+			}
+			globalThis.result = caller(globalThis.useSecond, globalThis.value);`,
+			"core-finite-dispatch.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const caller = optimized!.functions[functionIndexOfName(optimized!, "caller")]!;
+		const instructions = caller.blocks.flatMap(({ instructions }) => instructions);
+		const guards = instructions.filter(({ opcode }) => opcode === "guardFunctionIndex");
+		const calls = instructions.filter(({ opcode }) => opcode === "call");
+		const direct = calls.filter(
+			({ attributes }) => typeof attributes.finiteDispatchTarget === "number",
+		);
+		const fallback = calls.filter(
+			({ attributes }) => attributes.finiteDispatchTarget === undefined,
+		);
+		const targetIndices = [
+			functionIndexOfName(optimized!, "first"),
+			functionIndexOfName(optimized!, "second"),
+		].sort((left, right) => left - right);
+		expect(guards).toHaveLength(2);
+		expect(
+			guards
+				.map(({ attributes }) => attributes.functionIndex)
+				.sort((left, right) => Number(left) - Number(right)),
+		).toEqual(targetIndices);
+		expect(direct).toHaveLength(2);
+		expect(
+			direct
+				.map(({ attributes }) => attributes.directFunctionIndex)
+				.sort((left, right) => Number(left) - Number(right)),
+		).toEqual(targetIndices);
+		expect(fallback).toHaveLength(1);
+		expect(fallback[0]!.attributes.directFunctionIndex).toBeUndefined();
+		expect(fallback[0]!.attributes.calleeTargets).toMatchObject({
+			functions: targetIndices,
+			anyScript: false,
+			opaque: false,
+		});
+
+		const rerun = executeCoreOptimizations(optimized!).program;
+		const rerunCaller = rerun.functions[functionIndexOfName(rerun, "caller")]!;
+		expect(
+			rerunCaller.blocks
+				.flatMap(({ instructions }) => instructions)
+				.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(2);
+
+		const forged: CoreProgram = {
+			...optimized!,
+			functions: optimized!.functions.map((fn) =>
+				fn !== caller
+					? fn
+					: {
+							...fn,
+							blocks: fn.blocks.map((block) => ({
+								...block,
+								instructions: block.instructions.map((instruction) =>
+									instruction === guards[0]
+										? {
+												...instruction,
+												attributes: {
+													...instruction.attributes,
+													functionIndex: targetIndices[1]!,
+												},
+											}
+										: instruction,
+								),
+							})),
+						},
+			),
+		};
+		expect(() => verifyCoreProgram(forged, coreOpcodeRegistry)).toThrow(
+			"is not protected by its function-index guard",
+		);
 	});
 
 	it("guards and inlines a class static method candidate", () => {

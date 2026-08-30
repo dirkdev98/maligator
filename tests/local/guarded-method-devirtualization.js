@@ -39,6 +39,32 @@ class UniqueCalculator {
 
 check(new UniqueCalculator().compute(4) === 5, "unique class method");
 
+function finiteDispatch(useSecond, value) {
+	function first(input) {
+		if (input > 0) return input + 1;
+		return input - 1;
+	}
+	function second(input) {
+		if (input > 0) return input + 2;
+		return input - 2;
+	}
+	const handler = useSecond ? second : first;
+	let total = 0;
+	for (let index = 0; index < 2; index++) total += handler(value + index);
+	return total;
+}
+check(finiteDispatch(false, 4) === 11, "finite dispatch first positive");
+check(finiteDispatch(true, 4) === 13, "finite dispatch second positive");
+check(finiteDispatch(false, -4) === -9, "finite dispatch first negative");
+check(finiteDispatch(true, -4) === -11, "finite dispatch second negative");
+
+function mixedInt32NumberFusion(count) {
+	let total = 0;
+	for (let index = 0; index < count; index++) total += (index & 31) - 16;
+	return total;
+}
+check(mixedInt32NumberFusion(100) === -106, "mixed int32 Number fusion");
+
 const polymorphic = [new AddOne(), new AddTwo(), new AddThree()];
 let sum = 0;
 for (let i = 0; i < 300; i++) sum += invoke(polymorphic[i % 3], 10);

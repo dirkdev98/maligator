@@ -1,6 +1,7 @@
 import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual, effectSummaryCovers } from "../shared/effect-summary.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
@@ -2103,6 +2104,56 @@ function verifyExactCallArgumentClaims(
 	}
 }
 
+function verifyFiniteDispatchClaims(program: CoreProgram): void {
+	for (const fn of program.functions) {
+		const definitions = new Map<CoreValueId, CoreInstruction>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) definitions.set(output, instruction);
+			}
+		}
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const target = instruction.attributes[CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE];
+				if (target === undefined) continue;
+				const where = `instruction @${instruction.id} in function ${fn.functionIndex}`;
+				if (
+					instruction.opcode !== "call" ||
+					typeof target !== "number" ||
+					!Number.isSafeInteger(target) ||
+					target < 0 ||
+					program.functions[target] === undefined ||
+					instruction.attributes.directFunctionIndex !== target
+				) {
+					fail(`${where} carries an invalid finite-dispatch target`);
+				}
+				const predecessors = fn.blocks.filter((candidate) =>
+					coreTerminatorEdges(candidate.terminator).some(
+						({ block: targetBlock }) => targetBlock === block.id,
+					),
+				);
+				const guarded =
+					predecessors.length === 1 &&
+					predecessors.some((candidate) => {
+						if (
+							candidate.terminator.kind !== "branch" ||
+							candidate.terminator.consequent.block !== block.id
+						) {
+							return false;
+						}
+						const guard = definitions.get(candidate.terminator.condition);
+						return (
+							guard?.opcode === "guardFunctionIndex" &&
+							guard.attributes.functionIndex === target &&
+							guard.inputs[0] === instruction.inputs[0]
+						);
+					});
+				if (!guarded) fail(`${where} is not protected by its function-index guard`);
+			}
+		}
+	}
+}
+
 function verifyExactScalarAfterTdzClaims(
 	program: CoreProgram,
 	valueKinds: () => CoreValueKindAnalysis,
@@ -2398,6 +2449,7 @@ function verifyCoreProgramGraph(
 		);
 	}
 	verifySummaryClaims(program, registry, summaries);
+	verifyFiniteDispatchClaims(program);
 	verifyPrimitiveOperatorEffectRefinements(program, valueKinds);
 	verifyExactShapeOwnSlotEffectRefinements(program);
 	verifyExactCollectionBuiltinEffectRefinements(program);

@@ -857,32 +857,46 @@ describe("callee-target annotation", () => {
 	it.each([
 		{
 			name: "derived class",
+			guardedCandidate: false,
 			source: `class Base {}
 				class Service extends Base { handle(value) { return value + 1; } }`,
 		},
 		{
 			name: "accessor",
+			guardedCandidate: false,
 			source: `function handle(value) { return value + 1; }
 				class Service { get callback() { return handle; } }`,
 		},
 		{
 			name: "computed method",
+			guardedCandidate: true,
 			source: `class Service { ["handle"](value) { return value + 1; } }`,
 		},
-	])("leaves a $name constructor property read unresolved", ({ name, source }) => {
-		const property = name === "accessor" ? "callback" : "handle";
-		const program = optimizedCore(
-			`${source}
+	])(
+		"leaves a $name constructor property read unresolved",
+		({ name, source, guardedCandidate }) => {
+			const property = name === "accessor" ? "callback" : "handle";
+			const program = optimizedCore(
+				`${source}
 			function caller(value) { return new Service().${property}(value); }
 			caller(1);`,
-			`call-targets-constructor-${name.replaceAll(" ", "-")}.mjs`,
-		);
-		const caller = program.functions[functionIndexOfName(program, "caller")]!;
-		const site = callSites(caller).find(({ opcode }) => opcode === "call");
-		expect(site).toBeDefined();
-		expect(site!.attributes.directFunctionIndex).toBeUndefined();
-		expect(calleeTargetsAttribute(site!)).toBeUndefined();
-	});
+				`call-targets-constructor-${name.replaceAll(" ", "-")}.mjs`,
+			);
+			const caller = program.functions[functionIndexOfName(program, "caller")]!;
+			const site = callSites(caller).find(({ opcode }) => opcode === "call");
+			expect(site).toBeDefined();
+			expect(site!.attributes.directFunctionIndex).toBeUndefined();
+			expect(calleeTargetsAttribute(site!)).toEqual(
+				guardedCandidate
+					? {
+							functions: [expect.any(Number)],
+							anyScript: false,
+							opaque: true,
+						}
+					: undefined,
+			);
+		},
+	);
 
 	it("keeps Function.prototype.call flattening with its exact receiver target", () => {
 		const program = optimizedCore(

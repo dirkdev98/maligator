@@ -2167,10 +2167,12 @@ function containAllocations(input: ContainmentInput): {
  * This complete lattice state is dropped rather than lowered or serialized.
  */
 export const CORE_CALLEE_TARGETS_ATTRIBUTE = "calleeTargets";
+export const CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE = "finiteDispatchTarget";
 
 /** Attributes this analysis owns that never cross the Core-to-target boundary. */
 export const CORE_INTERNAL_TARGET_ATTRIBUTES: ReadonlySet<string> = new Set([
 	CORE_CALLEE_TARGETS_ATTRIBUTE,
+	CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE,
 ]);
 
 /**

@@ -43,6 +43,7 @@ import {
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALLEE_TARGETS_ATTRIBUTE,
+	CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE,
 	analyzeCoreCalleeTargets,
 	coreCalleeTargetsAttribute,
 	coreCalleeTargetsClosedFunction,
@@ -1181,6 +1182,8 @@ const materializeContainedAggregateOwnSlots: CoreFunctionPass = {
 const MAX_INLINE_INSTRUCTIONS = 40;
 const MAX_INLINE_TOTAL_COST = MAX_INLINE_INSTRUCTIONS * 8;
 const MAX_GUARDED_INLINE_COST = 48;
+const MAX_FINITE_DISPATCH_TARGETS = 4;
+const MAX_FINITE_DISPATCH_COST = 40;
 const INLINE_DISQUALIFYING_OPCODES = new Set([
 	"loadThis",
 	"loadNewTarget",
@@ -1364,7 +1367,17 @@ function annotateCoreDirectCallTargets(
 						"generated-code-cost",
 					);
 				}
+				const finiteDispatchTarget =
+					typeof instruction.attributes[CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE] ===
+					"number"
+						? instruction.attributes[CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE]
+						: undefined;
 				if (
+					finiteDispatchTarget !== undefined &&
+					functionsByIndex.has(finiteDispatchTarget)
+				) {
+					attributes.directFunctionIndex = finiteDispatchTarget;
+				} else if (
 					targetFunction !== undefined &&
 					(instruction.opcode === "call" ||
 						(!targetFunction.isGenerator &&
@@ -1537,7 +1550,7 @@ function recordCallOptimizationDecision(
 	fn: CoreFunction,
 	call: CoreInstruction,
 	outcome: "applied" | "declined",
-	reason: OptimizationDecisionReason | "inline",
+	reason: OptimizationDecisionReason | "finite-dispatch" | "inline",
 ): void {
 	const positionId = call.sourcePosition;
 	if (decisions === undefined || positionId === undefined) return;
@@ -1966,6 +1979,180 @@ function inlineGuardedLinearCalls(
 	};
 }
 
+function dispatchFiniteDirectCalls(
+	fn: CoreFunction,
+	block: CoreBlock,
+	call: CoreInstruction,
+	targets: ReadonlyArray<number>,
+): CoreFunction | undefined {
+	if (targets.length === 0 || call.outputs.length !== 1 || call.inputs.length < 2) {
+		return undefined;
+	}
+	const callIndex = block.instructions.findIndex(({ id }) => id === call.id);
+	if (callIndex < 0) return undefined;
+	let nextInstruction = nextInstructionId(fn);
+	let nextValue = fn.values.reduce((next, value) => Math.max(next, value.id + 1), 0);
+	const fallbackOutput = coreValueId(nextValue++);
+	const directOutputs = targets.map(() => coreValueId(nextValue++));
+	const guardValues = targets.map(() => coreValueId(nextValue++));
+	const controls = targets.map(() => ({
+		guard: coreInstructionId(nextInstruction++),
+		branch: coreInstructionId(nextInstruction++),
+		directCall: coreInstructionId(nextInstruction++),
+		directTerminator: coreInstructionId(nextInstruction++),
+	}));
+	const fallbackTerminator = coreInstructionId(nextInstruction++);
+	const blockBase = fn.blocks.length;
+	const directBlock = (index: number): CoreBlockId => coreBlockId(blockBase + index * 2);
+	const guardBlock = (index: number): CoreBlockId =>
+		index === 0 ? block.id : coreBlockId(blockBase + index * 2 - 1);
+	const fallbackBlock = coreBlockId(blockBase + targets.length * 2 - 1);
+	const joinBlock = coreBlockId(blockBase + targets.length * 2);
+	const originalOutput = call.outputs[0]!;
+	const output = fn.values.find(({ id }) => id === originalOutput);
+	if (output === undefined) return undefined;
+	const handler = block.handler === undefined ? {} : { handler: block.handler };
+	const guardedBlock = (
+		index: number,
+		prefix: ReadonlyArray<CoreInstruction> = [],
+		parameters: CoreBlock["parameters"] = [],
+	): CoreBlock => {
+		const control = controls[index]!;
+		const guard: CoreInstruction = {
+			id: control.guard,
+			opcode: "guardFunctionIndex",
+			inputs: [call.inputs[0]!],
+			outputs: [guardValues[index]!],
+			attributes: { functionIndex: targets[index]! },
+			...(call.sourcePosition === undefined
+				? {}
+				: { sourcePosition: call.sourcePosition }),
+		};
+		return {
+			id: guardBlock(index),
+			parameters,
+			instructions: [...prefix, guard],
+			terminator: {
+				id: control.branch,
+				kind: "branch",
+				condition: guardValues[index]!,
+				consequent: { block: directBlock(index), arguments: [] },
+				alternate: {
+					block: index + 1 < targets.length ? guardBlock(index + 1) : fallbackBlock,
+					arguments: [],
+				},
+				...(call.sourcePosition === undefined
+					? {}
+					: { sourcePosition: call.sourcePosition }),
+			},
+			...handler,
+		};
+	};
+	const fallbackCall: CoreInstruction = { ...call, outputs: [fallbackOutput] };
+	const blocks: Array<CoreBlock> = fn.blocks.map((candidate) =>
+		candidate.id === block.id
+			? guardedBlock(0, candidate.instructions.slice(0, callIndex), candidate.parameters)
+			: candidate,
+	);
+	for (const [index, target] of targets.entries()) {
+		const attributes: Record<string, CoreAttributeValue> = {
+			...call.attributes,
+			directFunctionIndex: target,
+			[CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE]: target,
+		};
+		delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
+		blocks.push({
+			id: directBlock(index),
+			parameters: [],
+			instructions: [
+				{
+					...call,
+					id: controls[index]!.directCall,
+					outputs: [directOutputs[index]!],
+					attributes,
+					effectRefinement: undefined,
+				},
+			],
+			terminator: {
+				id: controls[index]!.directTerminator,
+				kind: "jump",
+				edge: { block: joinBlock, arguments: [directOutputs[index]!] },
+			},
+			...handler,
+		});
+		if (index + 1 < targets.length) blocks.push(guardedBlock(index + 1));
+	}
+	blocks.push(
+		{
+			id: fallbackBlock,
+			parameters: [],
+			instructions: [fallbackCall],
+			terminator: {
+				id: fallbackTerminator,
+				kind: "jump",
+				edge: { block: joinBlock, arguments: [fallbackOutput] },
+			},
+			...handler,
+		},
+		{
+			id: joinBlock,
+			parameters: [
+				{
+					value: originalOutput,
+					representation: output.representation,
+					role: "value",
+				},
+			],
+			instructions: block.instructions.slice(callIndex + 1),
+			terminator: block.terminator,
+			...handler,
+		},
+	);
+	const values = fn.values
+		.map((value) =>
+			value.id === originalOutput
+				? {
+						...value,
+						definition: {
+							kind: "block-parameter" as const,
+							block: joinBlock,
+							index: 0,
+						},
+					}
+				: value,
+		)
+		.concat([
+			{
+				id: fallbackOutput,
+				representation: output.representation,
+				definition: {
+					kind: "instruction" as const,
+					instruction: call.id,
+					index: 0,
+				},
+			},
+			...directOutputs.map((value, index) => ({
+				id: value,
+				representation: output.representation,
+				definition: {
+					kind: "instruction" as const,
+					instruction: controls[index]!.directCall,
+					index: 0,
+				},
+			})),
+			...guardValues.map((value, index) => ({
+				id: value,
+				representation: "boolean" as const,
+				definition: {
+					kind: "instruction" as const,
+					instruction: controls[index]!.guard,
+					index: 0,
+				},
+			})),
+		]);
+	return { ...fn, blocks, values, mutationEpoch: fn.mutationEpoch + 1 };
+}
+
 /** Generic twins already protected by a function-index guard in this graph. */
 function guardedInlineFallbackCalls(fn: CoreFunction): ReadonlySet<CoreInstructionId> {
 	const definitions = functionDefinitions(fn);
@@ -1989,12 +2176,10 @@ function guardedInlineFallbackCalls(fn: CoreFunction): ReadonlySet<CoreInstructi
 /**
  * Replace a call with callee bodies from its bounded target fact.
  *
- * A closed singleton erases the call. Every open singleton or finite multi-target
- * set emits a live function-index guard chain and keeps the original generic call
- * as its mismatch twin. The chain is admitted only when every named target has a
- * relocatable linear body and their combined body-plus-guard cost fits one fixed
- * budget. Target identity still comes from the whole-program lattice: a local
- * scan cannot know that a nested closure rebinds the same captured cell.
+ * A closed singleton erases the call. Inlinable open targets use guarded bodies;
+ * a small residual set in a natural loop instead guards direct calls and retains
+ * the generic mismatch twin. Target identity still comes from the whole-program
+ * lattice: a local scan cannot know that a nested closure rebinds a captured cell.
  */
 function inlineSimpleCoreFunctions(
 	program: CoreProgram,
@@ -2026,12 +2211,14 @@ function inlineSimpleCoreFunctions(
 		// still capping growth from large bodies.
 		for (let expansion = 0; expansion < MAX_INLINE_TOTAL_COST; expansion++) {
 			let next: CoreFunction | undefined;
+			let loopBlocks: ReadonlySet<CoreBlockId> | undefined;
 			for (const block of fn.blocks) {
 				for (const call of block.instructions) {
 					if (
 						call.opcode !== "call" ||
 						call.inputs.length < 2 ||
-						guardedFallbacks.has(call.id)
+						guardedFallbacks.has(call.id) ||
+						typeof call.attributes[CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE] === "number"
 					) {
 						continue;
 					}
@@ -2060,74 +2247,53 @@ function inlineSimpleCoreFunctions(
 						}
 						candidates.push({ target, linear });
 					}
-					if (declineReason !== undefined) {
-						recordCallOptimizationDecision(
-							decisions,
-							fn,
-							call,
-							"declined",
-							declineReason,
-						);
-						continue;
-					}
 					const guarded = closedTargetIndex === undefined || candidates.length > 1;
-					const guardedOverhead = guarded
-						? coreGeneratedCodeOverheadCost({
-								guards: candidates.length,
-								genericTwins: 1,
-							}).compileScore
-						: 0;
+					const guardedOverhead =
+						guarded && declineReason === undefined
+							? coreGeneratedCodeOverheadCost({
+									guards: candidates.length,
+									genericTwins: 1,
+								}).compileScore
+							: 0;
 					const cost =
-						candidates.reduce(
-							(total, { linear }) => total + linear.generatedCost.compileScore,
-							0,
-						) + guardedOverhead;
-					if (guarded && cost > MAX_GUARDED_INLINE_COST) {
-						recordCallOptimizationDecision(
-							decisions,
-							fn,
-							call,
-							"declined",
-							"expansion-limit",
-						);
-						continue;
-					}
-					if (totalCost + cost > MAX_INLINE_TOTAL_COST) {
-						recordCallOptimizationDecision(
-							decisions,
-							fn,
-							call,
-							"declined",
-							"expansion-limit",
-						);
-						continue;
-					}
-					const inlined = guarded
-						? (() => {
-								const result = inlineGuardedLinearCalls(
+						declineReason === undefined
+							? candidates.reduce(
+									(total, { linear }) => total + linear.generatedCost.compileScore,
+									0,
+								) + guardedOverhead
+							: Number.POSITIVE_INFINITY;
+					const inlineAdmitted =
+						declineReason === undefined &&
+						(!guarded || cost <= MAX_GUARDED_INLINE_COST) &&
+						totalCost + cost <= MAX_INLINE_TOTAL_COST;
+					const inlined = !inlineAdmitted
+						? undefined
+						: guarded
+							? (() => {
+									const result = inlineGuardedLinearCalls(
+										fn,
+										block,
+										call,
+										candidates,
+										positions,
+										calleeTargets,
+										targetsForValue,
+									);
+									if (result !== undefined) {
+										guardedFallbacks.add(result.fallbackCall);
+									}
+									return result;
+								})()
+							: inlineLinearCall(
 									fn,
 									block,
 									call,
-									candidates,
+									candidates[0]!.target,
+									candidates[0]!.linear,
 									positions,
 									calleeTargets,
 									targetsForValue,
 								);
-								if (result !== undefined) {
-									guardedFallbacks.add(result.fallbackCall);
-								}
-								return result;
-							})()
-						: inlineLinearCall(
-								fn,
-								block,
-								call,
-								candidates[0]!.target,
-								candidates[0]!.linear,
-								positions,
-								calleeTargets,
-								targetsForValue,
-							);
 					if (inlined !== undefined) {
 						next = inlined.fn;
 						totalCost += cost;
@@ -2135,12 +2301,54 @@ function inlineSimpleCoreFunctions(
 							relocatedTargets.set(value, targets);
 						}
 						recordCallOptimizationDecision(decisions, fn, call, "applied", "inline");
-						if (verification === "per-pass") {
-							verifyCoreFunction(next, coreOpcodeRegistry, {
-								stage: "normalization",
-								pass: "inline-small-functions",
-							});
+					} else if (closedTargetIndex === undefined) {
+						loopBlocks ??= new Set(
+							buildCoreControlFlow(fn, coreOpcodeRegistry).loops.flatMap((loop) => [
+								...loop.blocks,
+							]),
+						);
+						const dispatchCost = coreGeneratedCodeOverheadCost({
+							guards: targetIndices.length,
+							duplicatedInstructions: targetIndices.length,
+							genericTwins: 1,
+						}).compileScore;
+						if (
+							loopBlocks.has(block.id) &&
+							targetIndices.length <= MAX_FINITE_DISPATCH_TARGETS &&
+							dispatchCost <= MAX_FINITE_DISPATCH_COST &&
+							totalCost + dispatchCost <= MAX_INLINE_TOTAL_COST
+						) {
+							next = dispatchFiniteDirectCalls(fn, block, call, targetIndices);
+							if (next !== undefined) {
+								guardedFallbacks.add(call.id);
+								totalCost += dispatchCost;
+								recordCallOptimizationDecision(
+									decisions,
+									fn,
+									call,
+									"applied",
+									"finite-dispatch",
+								);
+							}
 						}
+					}
+					if (next === undefined) {
+						recordCallOptimizationDecision(
+							decisions,
+							fn,
+							call,
+							"declined",
+							declineReason ?? "expansion-limit",
+						);
+						continue;
+					} else if (verification === "per-pass") {
+						verifyCoreFunction(next, coreOpcodeRegistry, {
+							stage: "normalization",
+							pass:
+								inlined === undefined
+									? "dispatch-finite-call-targets"
+									: "inline-small-functions",
+						});
 					}
 					break;
 				}
