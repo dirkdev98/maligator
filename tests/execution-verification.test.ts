@@ -367,6 +367,28 @@ describe("Core target construction", () => {
 		);
 	});
 
+	it("models every resumable native register as a traced MalValue", () => {
+		const program = optimizedTarget(
+			`
+				async function retain(value) { return await value; }
+				async function main() {
+					const one = 1;
+					const value = await retain(41 + one);
+					globalThis.result = value - one;
+				}
+				main();
+			`,
+			"resumable-roots.mjs",
+		);
+		const resumable = program.functions.filter((fn) => fn.isAsync || fn.isGenerator);
+
+		expect(resumable.length).toBeGreaterThan(0);
+		for (const fn of resumable) {
+			expect(new Set(fn.registerRepresentations)).toEqual(new Set(["boxed"]));
+		}
+		expect(() => verifyNativeExecutionProgram(program)).not.toThrow();
+	});
+
 	it("maps exact native root sets onto shadow-frame slots", () => {
 		const masks = nativeInactiveRootMasks(
 			[

@@ -233,6 +233,7 @@ function rebuildInstruction(
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
 	registerForValue: (value: CoreValueId) => number,
 	regionNamed: boolean,
+	forceBoxed: boolean,
 ): CompilerInstruction {
 	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
 	const exactShapeOwnSlot = coreExactShapeOwnSlotFromAttribute(
@@ -265,6 +266,7 @@ function rebuildInstruction(
 				)
 			: undefined;
 	const exactScalarAfterTdz =
+		!forceBoxed &&
 		instruction.opcode === "move" &&
 		(instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "int32" ||
 			instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === "number" ||
@@ -1243,6 +1245,7 @@ function lowerFunctionToTarget(
 				instruction,
 				registerForValue,
 				protectedInstructions.has(instruction.id),
+				core.isGenerator || core.isAsync,
 			);
 			const directEntryId = directEntryByCall.get(instruction);
 			if (directEntryId !== undefined && lowered.type === "call") {
@@ -1430,7 +1433,12 @@ function lowerFunctionToTarget(
 			if (representation === undefined) {
 				throw new Error(`Core allocation left r${register} without a representation`);
 			}
-			return physicalRegisterClass(representation);
+			// Resumable native frames persist every register in a MalValue array; the
+			// execution contract must expose that physical representation so liveness
+			// cannot omit a scalar that the collector may clear before suspension.
+			return core.isGenerator || core.isAsync
+				? "boxed"
+				: physicalRegisterClass(representation);
 		},
 	);
 	const fnWithoutGc: Omit<ExecutionFunction, "gc" | "directEntries"> = {

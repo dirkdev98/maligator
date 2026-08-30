@@ -76,18 +76,21 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 	if (verifiedNativeExecutionPrograms.has(program)) return;
 	verifyExecutionProgram(program);
 	for (const [functionIndex, fn] of program.functions.entries()) {
+		const coreFunction = program.core.functions[functionIndex]!;
 		const coreClaims = new Map<number, "int32" | "number" | "boolean" | "string">(
-			program.core.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
-				instructions.flatMap((instruction) => {
-					const kind = instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE];
-					return kind === "int32" ||
-						kind === "number" ||
-						kind === "boolean" ||
-						kind === "string"
-						? [[instruction.id, kind] as const]
-						: [];
-				}),
-			),
+			coreFunction.isGenerator || coreFunction.isAsync
+				? []
+				: coreFunction.blocks.flatMap(({ instructions }) =>
+						instructions.flatMap((instruction) => {
+							const kind = instruction.attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE];
+							return kind === "int32" ||
+								kind === "number" ||
+								kind === "boolean" ||
+								kind === "string"
+								? [[instruction.id, kind] as const]
+								: [];
+						}),
+					),
 		);
 		for (const instruction of fn.blocks.flatMap(({ instructions }) => instructions)) {
 			if (instruction.type !== "move" || instruction.exactScalarAfterTdz === undefined) {
