@@ -21,6 +21,10 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
@@ -1226,6 +1230,69 @@ describe("Core IR optimizer", () => {
 		).find(({ opcode }) => opcode === "typeofCompare");
 		expect(comparison?.effectRefinement).toBeUndefined();
 		expect(() => verifyCoreProgram(folded, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("keeps a primitive effect proof while operand kinds narrow", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const parameter = builder.block(entry).parameters[0]!.value;
+		const [nullValue] = builder.appendInstruction(entry, "createNull", []);
+		const [firstComparison] = builder.appendInstruction(
+			entry,
+			"binary",
+			[parameter, nullValue!],
+			{ attributes: { operator: "===" } },
+		);
+		const proof = builder.addFact({
+			kind: "primitive-operator-effects",
+			value: {
+				operator: "===",
+				masks: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP],
+			},
+			claims: [],
+			validity: {
+				kind: "summary",
+				digest: `primitive-operator:===:${COMPILER_VALUE_KIND_TOP},${COMPILER_VALUE_KIND_TOP}`,
+			},
+			obligations: [],
+			origin: "test-primitive-kinds",
+		});
+		const [secondComparison] = builder.appendInstruction(
+			entry,
+			"binary",
+			[firstComparison!, parameter],
+			{
+				attributes: { operator: "===" },
+				effectRefinement: { effects: CORE_NO_EFFECTS, proof },
+			},
+		);
+		builder.setTerminator(entry, { kind: "return", value: secondComparison! });
+		const input = builder.finish(entry);
+		const secondInstruction = input.values.find(
+			({ id }) => id === secondComparison,
+		)!.definition;
+		expect(secondInstruction.kind).toBe("instruction");
+
+		const optimized = executeCoreOptimizations(coreProgram([input]), {
+			verification: "per-pass",
+		}).program;
+		const refreshed = optimized.functions[0]!.facts.find(
+			(fact) =>
+				fact.kind === "primitive-operator-effects" &&
+				secondInstruction.kind === "instruction" &&
+				fact.claims.some(
+					(claim) =>
+						claim.kind === "effect" &&
+						claim.instruction === secondInstruction.instruction,
+				),
+		);
+		expect(refreshed?.value).toMatchObject({
+			operator: "===",
+			masks: [COMPILER_VALUE_KIND_BOOLEAN, COMPILER_VALUE_KIND_TOP],
+		});
+		expect(() => verifyCoreProgram(optimized, coreOpcodeRegistry)).not.toThrow();
 	});
 
 	it("removes coercion work already decided by primitive kinds", () => {

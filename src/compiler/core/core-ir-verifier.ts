@@ -1,4 +1,7 @@
-import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
+import {
+	compilerValueKindMaskIsSubset,
+	compilerValueKindMaskIsValid,
+} from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual, effectSummaryCovers } from "../shared/effect-summary.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_FINITE_DISPATCH_TARGET_ATTRIBUTE } from "./core-ir-call-targets.ts";
@@ -1378,11 +1381,14 @@ function verifyPrimitiveOperatorEffectRefinements(
 				if (
 					instruction.inputs.some(
 						(input, index) =>
-							analysis!.kindMask(fn.functionIndex, input) !== typedMasks[index],
+							!compilerValueKindMaskIsSubset(
+								analysis!.kindMask(fn.functionIndex, input),
+								typedMasks[index]!,
+							),
 					)
 				) {
 					fail(
-						`${where} carries primitive operand kinds the current graph does not prove`,
+						`${where} carries primitive operand kinds that do not cover the current graph`,
 					);
 				}
 				const licensed = corePrimitiveOperatorEffectRefinement(instruction, typedMasks);
