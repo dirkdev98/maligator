@@ -1270,7 +1270,7 @@ describe("native update-expression representation", () => {
 		expect(sunk).not.toContain("mal_vm_create_object_shaped(");
 	});
 
-	it("keeps homogeneous local stack cells unboxed until observability requires boxing", () => {
+	it("keeps scalarized homogeneous fields unboxed until joins require boxing", () => {
 		const homogeneousDefinition = lower(`
 			function read(flag, count) {
 				const object = { value: true };
@@ -1286,10 +1286,11 @@ describe("native update-expression representation", () => {
 			deserializeCompilerArtifact(serializeCompilerArtifact(homogeneousDefinition)),
 			{ compiled: true },
 		);
-		expect(homogeneous).toMatch(/bool __stack_object_\d+_slot_0;/);
-		expect(homogeneous).toMatch(/\.slots = nullptr[^\n]+\n/);
-		expect(homogeneous).toMatch(/__stack_object_\d+_slot_0 = r\d+;/);
-		expect(homogeneous).toMatch(/r\d+ = __stack_object_\d+_slot_0;/);
+		expect(homogeneous).not.toContain("__stack_object_");
+		expect(homogeneous).toMatch(/bool r\d+;/);
+		expect(homogeneous).toMatch(
+			/return mal_ops_construct_result\(mal_value_new_boolean\(r\d+\)/,
+		);
 
 		const mixed = emit(`
 			function read(flag, count) {
@@ -1303,7 +1304,8 @@ describe("native update-expression representation", () => {
 			globalThis.result = read(globalThis.flag, 2);
 		`);
 		expect(mixed).not.toMatch(/__stack_object_\d+_slot_0/);
-		expect(mixed).toMatch(/\.slots = &__gc_slots\[\d+\]/);
+		expect(mixed).toMatch(/r\d+ = mal_value_new_boolean\(r\d+\);/);
+		expect(mixed).toMatch(/r\d+ = mal_value_from_i32\(r\d+\);/);
 
 		const materialized = emit(`
 			function read(flag) {

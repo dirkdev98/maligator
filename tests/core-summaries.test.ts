@@ -1280,7 +1280,7 @@ describe("summary consumers and proof boundary", () => {
 		).toBe(false);
 	});
 
-	it("publishes contained stack-cell results before indirect call consumers", () => {
+	it("publishes scalarized contained-field results before indirect call consumers", () => {
 		const compile = (body: string, path: string) => {
 			const source = `{ const read = function read(flag) { ${body} };
 				const callback = [read][0];
@@ -1321,9 +1321,10 @@ describe("summary consumers and proof boundary", () => {
 					),
 				),
 			);
-			const readLoad = read.blocks
-				.flatMap(({ instructions }) => instructions)
-				.find(({ opcode }) => opcode === "loadPropertyStatic")!;
+			const readReturn = read.blocks.find(
+				({ terminator }) => terminator.kind === "return",
+			)?.terminator;
+			if (readReturn?.kind !== "return") throw new Error("missing read return");
 			const callLocation = optimized!.functions
 				.flatMap((fn) =>
 					fn.blocks.flatMap(({ instructions }) =>
@@ -1345,8 +1346,8 @@ describe("summary consumers and proof boundary", () => {
 			return {
 				program: optimized!,
 				context,
-				readLoadRepresentation: representations.get(
-					`${read.functionIndex}:${readLoad.outputs[0]!}`,
+				readResultRepresentation: representations.get(
+					`${read.functionIndex}:${readReturn.value}`,
 				),
 				callRepresentation: representations.get(
 					`${callLocation.fn.functionIndex}:${callOutput}`,
@@ -1368,7 +1369,7 @@ describe("summary consumers and proof boundary", () => {
 			return object.value;`,
 			"closed-stack-cell-summary.js",
 		);
-		expect(positive.readLoadRepresentation).toBe("boolean");
+		expect(positive.readResultRepresentation).toBe("boolean");
 		expect(positive.callRepresentation).toBe("boolean");
 		expect(positive.hasBooleanComparison).toBe(false);
 		expect(positive.resultStoreInput).toBe(positive.callOutput);
@@ -1388,7 +1389,7 @@ describe("summary consumers and proof boundary", () => {
 				"escaping-stack-cell-summary.js",
 			),
 		]) {
-			expect(negative.readLoadRepresentation).toBe("boxed");
+			expect(negative.readResultRepresentation).toBe("boxed");
 			expect(negative.callRepresentation).toBe("boxed");
 			expect(negative.hasBooleanComparison).toBe(true);
 		}

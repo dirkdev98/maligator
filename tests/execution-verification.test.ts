@@ -29,15 +29,18 @@ const BRANCH_SOURCE = `
 `;
 
 const HANDLER_SOURCE = `
-	function preserve(object, callback) {
+	function preserve(callback) {
+		let value = 1;
 		try {
 			callback();
-			return object.value;
+			value = 2;
+			callback();
+			return value;
 		} catch (error) {
-			return object.value + String(error).length;
+			return value + String(error).length;
 		}
 	}
-	preserve({ value: 2 }, () => { throw new Error("x"); });
+	preserve(() => { throw new Error("x"); });
 `;
 
 const NESTED_HANDLER_SOURCE = `
@@ -308,7 +311,7 @@ describe("Core target construction", () => {
 		).toHaveLength(1);
 	});
 
-	it("orders handler inputs before catch when an exception entry is itself protected", () => {
+	it("orders declared handler inputs before catch when an exception entry is itself protected", () => {
 		const program = optimizedTarget(NESTED_HANDLER_SOURCE, "verified-nested-handler.js");
 		const match = program.functions
 			.flatMap((fn, functionIndex) => {
@@ -328,25 +331,48 @@ describe("Core target construction", () => {
 			})
 			.find(({ instructions }) => instructions[0]?.type === "tryBegin");
 		expect(match).toBeDefined();
-		const copy = match!.fn.parallelCopies.find(
-			(candidate) =>
-				candidate.kind === "handler-input" &&
-				match!.instructions.includes(candidate.moves[0]!),
+		const catchInstruction = match!.instructions.find(({ type }) => type === "catch");
+		if (catchInstruction?.type !== "catch") throw new Error("missing catch");
+		const destination = catchInstruction.registers[0];
+		const source = match!.fn.registerRepresentations.findIndex(
+			(representation, register) =>
+				register !== destination &&
+				representation === match!.fn.registerRepresentations[destination],
 		);
-		expect(copy).toBeDefined();
-		expect(match!.instructions.slice(1, copy!.moves.length + 1)).toEqual(copy!.moves);
-		expect(match!.instructions[copy!.moves.length + 1]?.type).toBe("catch");
+		if (source < 0) throw new Error("missing handler-input source register");
+		const move: Extract<CompilerInstruction, { type: "move" }> = {
+			type: "move",
+			registers: [destination, source],
+		};
+		const copy = {
+			kind: "handler-input" as const,
+			assignments: [{ destination, source }],
+			moves: [move],
+			temporaries: [],
+		};
+		const declared = withFunction(program, match!.functionIndex, {
+			blocks: match!.fn.blocks.with(match!.block, {
+				instructions: [match!.instructions[0]!, move, ...match!.instructions.slice(1)],
+			}),
+			parallelCopies: [...match!.fn.parallelCopies, copy],
+		});
+		expect(() => verifyExecutionProgram(declared)).not.toThrow();
+		expect(() => lowerExecutionToProgramImage(declared)).not.toThrow();
 
 		const marker = match!.instructions.find(({ type }) => type === "sourcePos");
 		if (marker?.type !== "sourcePos") throw new Error("missing source position");
-		const catchIndex = copy!.moves.length + 1;
+		const instructions =
+			declared.functions[match!.functionIndex]!.blocks[match!.block]!.instructions;
+		const catchIndex = copy.moves.length + 1;
+		expect(instructions.slice(1, catchIndex)).toEqual(copy.moves);
+		expect(instructions[catchIndex]?.type).toBe("catch");
 		const marked = withFunction(
-			program,
+			declared,
 			match!.functionIndex,
-			withBlock(match!.fn, match!.block, [
-				...match!.instructions.slice(0, catchIndex),
+			withBlock(declared.functions[match!.functionIndex]!, match!.block, [
+				...instructions.slice(0, catchIndex),
 				{ ...marker },
-				...match!.instructions.slice(catchIndex),
+				...instructions.slice(catchIndex),
 			]),
 		);
 		expect(() => verifyExecutionProgram(marked)).not.toThrow();
@@ -1172,12 +1198,13 @@ describe("Core target verification", () => {
 
 	it("requires stack-object access slots to name the accessed allocation key", () => {
 		const program = optimizedTarget(
-			`function read(value, replace) {
+			`function read(value, replace, escape) {
 				const object = { first: value, second: 2 };
 				if (replace) object.second = 1;
+				if (escape) return object;
 				return object.second;
 			}
-			read(3, false);`,
+			read(3, false, false);`,
 			"stack-object-slot-key.js",
 		);
 		expect(() => lowerExecutionToProgramImage(program)).not.toThrow();
