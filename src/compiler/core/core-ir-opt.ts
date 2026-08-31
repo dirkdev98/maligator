@@ -3168,7 +3168,7 @@ const NATIVE_NUMERIC_FUSION_FINISH_OPERATORS = new Set([
 	"!==",
 ]);
 
-const ARRAY_LENGTH_COMPARISON_OPERATORS = new Set([
+const INDEXED_LENGTH_LOOP_OPERATORS = new Set([
 	"<",
 	"<=",
 	">",
@@ -3179,8 +3179,8 @@ const ARRAY_LENGTH_COMPARISON_OPERATORS = new Set([
 	"!==",
 ]);
 
-const selectArrayLengthComparisonRegions: CoreFunctionPass = {
-	name: "select-array-length-comparison-regions",
+const selectIndexedLengthLoopRegions: CoreFunctionPass = {
+	name: "select-indexed-length-loop-regions",
 	run(fn, analyses, program) {
 		if (fn.isGenerator || fn.isAsync) return fn;
 		const hasCandidate = fn.blocks.some(({ instructions }) =>
@@ -3192,7 +3192,7 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 					decodeString(program, load.attributes.stringIndex) === "length" &&
 					comparison?.opcode === "binary" &&
 					typeof comparison.attributes.operator === "string" &&
-					ARRAY_LENGTH_COMPARISON_OPERATORS.has(comparison.attributes.operator) &&
+					INDEXED_LENGTH_LOOP_OPERATORS.has(comparison.attributes.operator) &&
 					comparison.inputs.includes(load.outputs[0]!)
 				);
 			}),
@@ -3278,7 +3278,7 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 					decodeString(program, load.attributes.stringIndex) !== "length" ||
 					comparison.opcode !== "binary" ||
 					typeof comparison.attributes.operator !== "string" ||
-					!ARRAY_LENGTH_COMPARISON_OPERATORS.has(comparison.attributes.operator) ||
+					!INDEXED_LENGTH_LOOP_OPERATORS.has(comparison.attributes.operator) ||
 					comparison.inputs.length !== 2 ||
 					comparison.outputs.length !== 1 ||
 					lengthPosition === undefined ||
@@ -3355,7 +3355,7 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 			regions: [
 				...fn.regions,
 				{
-					kind: "array-length-comparison",
+					kind: "indexed-length-loop",
 					anchors: [first.load.id, first.comparison.id],
 					claimedInstructions,
 					ordinaryBlocks: [
@@ -3374,12 +3374,12 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 								genericTwin: "retained",
 								materialization: "none",
 							},
-							representation: "live-array-length-comparisons",
+							representation: "live-indexed-length-loops",
 							cost: {
 								score: sites.length * 4 + elementCount * 3,
 								metadataOperations: claimedInstructions.length,
 							},
-							runtimeGuard: "exact-array",
+							runtimeGuard: "array-or-numeric-typed-array",
 							sites: sites.map(({ load, comparison, lengthPosition, elements }) => ({
 								load: { $coreInstruction: load.id },
 								comparison: { $coreInstruction: comparison.id },
@@ -3390,7 +3390,7 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 								})),
 							})),
 						},
-						"array-length-comparison",
+						"indexed-length-loop",
 					),
 				},
 			],
@@ -14392,7 +14392,7 @@ const CORE_REGION_CANDIDATE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectStringCharCodeAtChainRegions,
 	selectIteratorCursorRegions,
 	selectIteratorResultVirtualizationRegions,
-	selectArrayLengthComparisonRegions,
+	selectIndexedLengthLoopRegions,
 	selectNumericFusionRegions,
 ];
 

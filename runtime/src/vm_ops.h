@@ -1562,6 +1562,40 @@ static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
     return UINT32_MAX;
 }
 
+static inline bool mal_vm_admit_numeric_typed_array_length(
+    MalVm *vm, MalValue receiver, MalTypedArrayObject **out, u32 *length
+) {
+    if (!mal_primitive_method_protector ||
+        !mal_value_is_typed_array_object(receiver)) {
+        return false;
+    }
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+    if (mal_typed_array_is_bigint(array->kind) ||
+        array->object.prototype != mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + array->kind]) ||
+        mal_object_get_own(
+            &array->object, mal_intrinsic_string_key(vm, "length")).present) {
+        return false;
+    }
+    *out = array;
+    *length = mal_typed_array_object_length(array);
+    return true;
+}
+
+static inline void mal_vm_numeric_typed_array_store_known_receiver(
+    MalVm *vm, MalTypedArrayObject *array, f64 index, MalValue value, bool strict
+) {
+    if (array->buffer->immutable) {
+        if (strict) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Cannot assign to read only property");
+        }
+        return;
+    }
+    mal_typed_array_object_set(vm, array, mal_vm_typed_array_numeric_index(index), value);
+}
+
 /**
  * Exact numeric TypedArray access licensed by immutable brand provenance. The
  * compiler proves the receiver came from the named locked intrinsic constructor.

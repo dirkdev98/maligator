@@ -1510,21 +1510,21 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 	});
 
-	it("consumes the Core-owned live Array length comparison region", () => {
+	it("consumes the Core-owned indexed length loop region", () => {
 		const definition = lower(
 			`"use strict"; function sum(values) { let total = 0; for (let index = 0; index < values.length; ++index) total += values[index]; return total; } globalThis.sum = sum;`,
 		);
 		const regions = specializations(definition).filter(
-			(region) => region.kind === "array-length-comparison",
+			(region) => region.kind === "indexed-length-loop",
 		);
 		expect(regions).toHaveLength(1);
 		const region = regions[0];
-		if (region?.kind !== "array-length-comparison") {
-			throw new Error("expected Array length comparison region");
+		if (region?.kind !== "indexed-length-loop") {
+			throw new Error("expected indexed length loop region");
 		}
 		expect(region).toMatchObject({
-			representation: "live-array-length-comparisons",
-			runtimeGuard: "exact-array",
+			representation: "live-indexed-length-loops",
+			runtimeGuard: "array-or-numeric-typed-array",
 		});
 		expect(region.sites).toHaveLength(1);
 		expect(Number.isSafeInteger(region.sites[0]!.loadIp)).toBe(true);
@@ -1535,12 +1535,14 @@ describe("native update-expression representation", () => {
 			specializations(deserializeCompilerArtifact(serializeCompilerArtifact(definition))),
 		).toEqual(specializations(definition));
 		const output = emitProgramImage(definition, { compiled: true });
-		expect(output).toContain("__array_length_");
+		expect(output).toContain("__indexed_length_");
 		expect(output).not.toContain(".mode == MAL_IC_MODE_ARRAY_LENGTH");
 		expect(output).toContain("->length");
 		expect(output).toMatch(
-			/mal_vm_array_try_load\(__array_length_\d+_array, r\d+, &__array_element_\d+\)/,
+			/mal_vm_array_try_load\(__indexed_length_\d+_array, r\d+, &__indexed_element_\d+\)/,
 		);
+		expect(output).toContain("mal_vm_admit_numeric_typed_array_length(vm,");
+		expect(output).toContain("mal_typed_array_object_get(vm,");
 	});
 
 	it("does not retain raw dense iterator cursors across generator suspension", () => {

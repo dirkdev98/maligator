@@ -33,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 46;
+export const COMPILER_ARTIFACT_VERSION = 47;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -817,8 +817,8 @@ function writeCompilerArtifact(
 			);
 			w.i32(region.license.admission.anchorIp);
 			switch (region.kind) {
-				case "array-length-comparison":
-					w.u8(region.runtimeGuard === "exact-array" ? 1 : 0);
+				case "indexed-length-loop":
+					w.u8(region.runtimeGuard === "array-or-numeric-typed-array" ? 1 : 0);
 					w.u32(region.sites.length);
 					for (const site of region.sites) {
 						w.i32(site.loadIp);
@@ -1096,8 +1096,8 @@ function validateRegion(
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
-		case "array-length-comparison":
-			validateArrayLengthComparisonRegion(
+		case "indexed-length-loop":
+			validateIndexedLengthLoopRegion(
 				fn,
 				region,
 				stringConstants,
@@ -1220,9 +1220,9 @@ function validateNumericFusionRegion(
 	}
 }
 
-function validateArrayLengthComparisonRegion(
+function validateIndexedLengthLoopRegion(
 	fn: BytecodeFunction,
-	region: Extract<VmRegion, { kind: "array-length-comparison" }>,
+	region: Extract<VmRegion, { kind: "indexed-length-loop" }>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	registerRepresentations: ReadonlyArray<VmRegisterRepresentation>,
 ): void {
@@ -1242,8 +1242,8 @@ function validateArrayLengthComparisonRegion(
 		region.license.guard.obligations[0] !== "fallback" ||
 		region.license.genericTwin !== "retained" ||
 		region.license.materialization !== "none" ||
-		region.representation !== "live-array-length-comparisons" ||
-		region.runtimeGuard !== "exact-array" ||
+		region.representation !== "live-indexed-length-loops" ||
+		region.runtimeGuard !== "array-or-numeric-typed-array" ||
 		region.sites.length === 0 ||
 		region.sites.length > 32 ||
 		region.anchors.length !== 2 ||
@@ -1295,7 +1295,7 @@ function validateArrayLengthComparisonRegion(
 			);
 		})
 	) {
-		throw new RangeError("program-image-codec: invalid array-length-comparison region");
+		throw new RangeError("program-image-codec: invalid indexed-length-loop region");
 	}
 }
 
@@ -2630,7 +2630,9 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				) {
 					throw new RangeError("program-image-codec: invalid exact Array length hint");
 				}
-				nativeInstructions[instructionIndex] = { kind: "exact-array-length" };
+				nativeInstructions[instructionIndex] = {
+					kind: "exact-array-length",
+				};
 			} else if (tag === 15 && instruction.opcode === "LOAD_PROPERTY") {
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-contained-array-element",
@@ -2748,7 +2750,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
-				const arrayLengthComparisonContract =
+				const indexedLengthLoopContract =
 					kindTag === 15 &&
 					representationTag === 15 &&
 					materializationTag === 0 &&
@@ -2789,7 +2791,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						!stringSliceNumberContract &&
 						!stackObjectPlanContract &&
 						!numericFusionContract &&
-						!arrayLengthComparisonContract &&
+						!indexedLengthLoopContract &&
 						!stringCharCodeAtChainContract &&
 						!iteratorCursorContract &&
 						!iteratorResultVirtualizationContract)
@@ -3312,7 +3314,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					const runtimeGuardTag = r.u8();
 					const siteCount = r.count(2);
 					const sites: Array<
-						Extract<VmRegion, { kind: "array-length-comparison" }>["sites"][number]
+						Extract<VmRegion, { kind: "indexed-length-loop" }>["sites"][number]
 					> = [];
 					for (let site = 0; site < siteCount; site++) {
 						const loadIp = r.i32();
@@ -3339,23 +3341,23 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					}
 					if (runtimeGuardTag !== 1) {
 						throw new RangeError(
-							"program-image-codec: invalid array-length-comparison guard",
+							"program-image-codec: invalid indexed-length-loop guard",
 						);
 					}
 					region = {
-						kind: "array-length-comparison",
+						kind: "indexed-length-loop",
 						license: {
 							guard: { dependencies: [], obligations: ["fallback"] },
 							genericTwin: "retained",
 							materialization: "none",
 							admission,
 						},
-						representation: "live-array-length-comparisons",
+						representation: "live-indexed-length-loops",
 						anchors,
 						claimedIps,
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
-						runtimeGuard: "exact-array",
+						runtimeGuard: "array-or-numeric-typed-array",
 						sites,
 					};
 				} else if (kindTag === 16) {

@@ -1628,13 +1628,13 @@ interface NativeNumericFusionAction {
 	readonly first: Extract<BytecodeInstruction, { opcode: "BINARY" }>;
 }
 
-interface ArrayLengthComparisonAction {
+interface IndexedLengthLoopAction {
 	readonly loadIp: number;
 	readonly role: "load" | "compare" | "element";
-	readonly site: Extract<VmRegion, { kind: "array-length-comparison" }>["sites"][number];
+	readonly site: Extract<VmRegion, { kind: "indexed-length-loop" }>["sites"][number];
 	readonly element?: Extract<
 		VmRegion,
-		{ kind: "array-length-comparison" }
+		{ kind: "indexed-length-loop" }
 	>["sites"][number]["elements"][number];
 }
 
@@ -1697,16 +1697,16 @@ function emitBody(
 		const common = { id: pair.firstIp, first };
 		numericFusionActionByIp.set(action.ip, { ...common, role: action.role });
 	}
-	const arrayLengthComparisonActionByIp = new Map<number, ArrayLengthComparisonAction>();
+	const indexedLengthLoopActionByIp = new Map<number, IndexedLengthLoopAction>();
 	for (const action of regionActions) {
 		const region = specializations[action.regionIndex];
-		if (region?.kind !== "array-length-comparison") continue;
+		if (region?.kind !== "indexed-length-loop") continue;
 		const site = region.sites[action.primaryIndex ?? -1];
 		if (
 			site === undefined ||
 			(action.role !== "load" && action.role !== "compare" && action.role !== "element")
 		) {
-			throw new Error("Invalid array-length-comparison action");
+			throw new Error("Invalid indexed-length-loop action");
 		}
 		const load = fn.instructions[site.loadIp];
 		const comparison = fn.instructions[site.comparisonIp];
@@ -1748,11 +1748,11 @@ function emitBody(
 					: action.role === "compare"
 						? site.comparisonIp
 						: element!.ip) ||
-			arrayLengthComparisonActionByIp.has(action.ip)
+			indexedLengthLoopActionByIp.has(action.ip)
 		) {
-			throw new Error("Invalid array-length-comparison region");
+			throw new Error("Invalid indexed-length-loop region");
 		}
-		arrayLengthComparisonActionByIp.set(action.ip, {
+		indexedLengthLoopActionByIp.set(action.ip, {
 			loadIp: site.loadIp,
 			role: action.role,
 			site,
@@ -2079,12 +2079,13 @@ function emitBody(
 			`f64 __string_slice_number_${fusion.sliceCallIp}_value = 0;`,
 		);
 	}
-	for (const action of arrayLengthComparisonActionByIp.values()) {
+	for (const action of indexedLengthLoopActionByIp.values()) {
 		if (action.role !== "load") continue;
 		lines.push(
-			`bool __array_length_${action.loadIp}_fast = false;`,
-			`MalArrayObject *__array_length_${action.loadIp}_array = nullptr;`,
-			`u32 __array_length_${action.loadIp}_value = 0;`,
+			`u8 __indexed_length_${action.loadIp}_kind = 0;`,
+			`MalArrayObject *__indexed_length_${action.loadIp}_array = nullptr;`,
+			`MalTypedArrayObject *__indexed_length_${action.loadIp}_typed_array = nullptr;`,
+			`u32 __indexed_length_${action.loadIp}_value = 0;`,
 		);
 	}
 	if (
@@ -2234,7 +2235,7 @@ function emitBody(
 				mappedArguments: fn.mappedArguments,
 				mappedArgumentSlots: fn.mappedArgumentSlots,
 				hasPrototype: fn.hasPrototype,
-				arrayLengthComparisonAction: arrayLengthComparisonActionByIp.get(ip),
+				indexedLengthLoopAction: indexedLengthLoopActionByIp.get(ip),
 				nativeStringSplitProjectionAction: nativeStringSplitProjectionActionByIp.get(ip),
 				nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
 				nativeRegExpExecProjectionAction: nativeRegExpExecProjectionActionByIp.get(ip),
@@ -2597,7 +2598,7 @@ interface NativeInstructionContext {
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
-	readonly arrayLengthComparisonAction?: ArrayLengthComparisonAction;
+	readonly indexedLengthLoopAction?: IndexedLengthLoopAction;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
@@ -2687,7 +2688,7 @@ function emitInstruction(
 		mappedArguments,
 		mappedArgumentSlots,
 		hasPrototype,
-		arrayLengthComparisonAction,
+		indexedLengthLoopAction,
 		nativeStringSplitProjectionAction,
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
@@ -3473,14 +3474,16 @@ function emitInstruction(
 								throwCheck,
 							];
 				if (
-					arrayLengthComparisonAction?.role === "element" &&
-					arrayLengthComparisonAction.element?.kind === "load"
+					indexedLengthLoopAction?.role === "element" &&
+					indexedLengthLoopAction.element?.kind === "load"
 				) {
-					const id = arrayLengthComparisonAction.loadIp;
+					const id = indexedLengthLoopAction.loadIp;
 					return [
-						`MalValue __array_element_${ip};`,
-						`if (__array_length_${id}_fast && mal_vm_array_try_load(__array_length_${id}_array, ${num(instruction.key)}, &__array_element_${ip})) {`,
-						`  r${instruction.dst} = __array_element_${ip};`,
+						`MalValue __indexed_element_${ip};`,
+						`if (__indexed_length_${id}_kind == 1 && mal_vm_array_try_load(__indexed_length_${id}_array, ${num(instruction.key)}, &__indexed_element_${ip})) {`,
+						`  r${instruction.dst} = __indexed_element_${ip};`,
+						`} else if (__indexed_length_${id}_kind == 2) {`,
+						`  r${instruction.dst} = mal_typed_array_object_get(vm, __indexed_length_${id}_typed_array, mal_vm_typed_array_numeric_index(${num(instruction.key)}));`,
 						`} else {`,
 						...ordinary.map((line) => `  ${line}`),
 						`}`,
@@ -3544,15 +3547,18 @@ function emitInstruction(
 				`  ${throwCheck}`,
 				`}`,
 			];
-			if (arrayLengthComparisonAction?.role === "load") {
-				const id = arrayLengthComparisonAction.loadIp;
+			if (indexedLengthLoopAction?.role === "load") {
+				const id = indexedLengthLoopAction.loadIp;
 				return [
-					`__array_length_${id}_fast = false;`,
-					`__array_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
-					`if (__array_length_${id}_array != nullptr) {`,
-					`  __array_length_${id}_fast = true;`,
-					`  __array_length_${id}_value = __array_length_${id}_array->length;`,
+					`__indexed_length_${id}_kind = 0;`,
+					`__indexed_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
+					`if (__indexed_length_${id}_array != nullptr) {`,
+					`  __indexed_length_${id}_kind = 1;`,
+					`  __indexed_length_${id}_value = __indexed_length_${id}_array->length;`,
 					`  mal_perf_ic_load_array_length_hit();`,
+					`} else if (mal_vm_admit_numeric_typed_array_length(vm, ${boxed(instruction.object)}, &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)) {`,
+					`  __indexed_length_${id}_kind = 2;`,
+					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __indexed_length_${id}_value` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
 					`} else {`,
 					...ordinary.map((line) => `  ${line}`),
 					`}`,
@@ -3656,12 +3662,16 @@ function emitInstruction(
 								throwCheck,
 							];
 				if (
-					arrayLengthComparisonAction?.role === "element" &&
-					arrayLengthComparisonAction.element?.kind === "store"
+					indexedLengthLoopAction?.role === "element" &&
+					indexedLengthLoopAction.element?.kind === "store"
 				) {
-					const id = arrayLengthComparisonAction.loadIp;
+					const id = indexedLengthLoopAction.loadIp;
 					return [
-						`if (!(__array_length_${id}_fast && mal_vm_array_try_store(__array_length_${id}_array, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+						`if (__indexed_length_${id}_kind == 1 && mal_vm_array_try_store(__indexed_length_${id}_array, ${num(instruction.key)}, ${boxed(instruction.value)})) {`,
+						`} else if (__indexed_length_${id}_kind == 2) {`,
+						`  mal_vm_numeric_typed_array_store_known_receiver(vm, __indexed_length_${id}_typed_array, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict});`,
+						`  ${throwCheck}`,
+						`} else {`,
 						...ordinary.map((line) => `  ${line}`),
 						`}`,
 					];
@@ -3763,18 +3773,18 @@ function emitInstruction(
 				nativePlan?.kind === "exact-binary-input-kinds"
 					? nativePlan.inputKindMasks
 					: undefined;
-			if (arrayLengthComparisonAction?.role === "compare") {
+			if (indexedLengthLoopAction?.role === "compare") {
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				const compareOperator = NATIVE_COMPARE[operator];
 				if (compareOperator === undefined) return null;
-				const length = `(f64) __array_length_${arrayLengthComparisonAction.loadIp}_value`;
+				const length = `(f64) __indexed_length_${indexedLengthLoopAction.loadIp}_value`;
 				const fast =
-					arrayLengthComparisonAction.site.lengthPosition === 1
+					indexedLengthLoopAction.site.lengthPosition === 1
 						? `${length} ${compareOperator} ${num(right)}`
 						: `${num(left)} ${compareOperator} ${length}`;
 				return [
-					`if (__array_length_${arrayLengthComparisonAction.loadIp}_fast) {`,
+					`if (__indexed_length_${indexedLengthLoopAction.loadIp}_kind != 0) {`,
 					dstIsBool
 						? `  r${dst} = ${fast};`
 						: `  r${dst} = mal_value_new_boolean(${fast});`,

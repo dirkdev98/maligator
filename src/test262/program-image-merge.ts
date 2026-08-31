@@ -140,7 +140,7 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
 			};
-		case "array-length-comparison":
+		case "indexed-length-loop":
 			return {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,

@@ -1410,7 +1410,11 @@ describe("program-image-codec", () => {
 			);
 			return withNativeFunctionPlan(image, 0, (plan) => ({
 				...plan,
-				instructions: [undefined, { kind: "exact-array-length" }, undefined],
+				instructions: [
+					undefined,
+					{ kind: "exact-array-length" },
+					undefined,
+				],
 			}));
 		};
 		const length = Array.from("length", (unit) => unit.charCodeAt(0));

@@ -353,14 +353,14 @@ export interface CoreAllocatedNumericFusionRegion extends CoreAllocatedRegionEnv
 	}>;
 }
 
-export interface CoreAllocatedArrayLengthComparisonRegion extends CoreAllocatedRegionEnvelope<
-	"array-length-comparison",
-	"live-array-length-comparisons",
+export interface CoreAllocatedIndexedLengthLoopRegion extends CoreAllocatedRegionEnvelope<
+	"indexed-length-loop",
+	"live-indexed-length-loops",
 	"none",
 	ReadonlyArray<CompilerInstruction>,
 	"structural"
 > {
-	readonly runtimeGuard: "exact-array";
+	readonly runtimeGuard: "array-or-numeric-typed-array";
 	readonly sites: ReadonlyArray<{
 		readonly load: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 		readonly comparison: Extract<CompilerInstruction, { type: "binary" }>;
@@ -414,7 +414,7 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 
 /** Tagged post-allocation Core proof table consumed only by VM target lowering. */
 export type CoreAllocatedRegion =
-	| CoreAllocatedArrayLengthComparisonRegion
+	| CoreAllocatedIndexedLengthLoopRegion
 	| CoreAllocatedArrayValuesIteratorCursorRegion
 	| CoreAllocatedIteratorResultVirtualizationRegion
 	| CoreAllocatedMapIteratorCursorRegion

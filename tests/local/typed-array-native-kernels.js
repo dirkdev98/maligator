@@ -151,6 +151,38 @@ check(
 	dynamicChecksum === 37497500 && dynamicLoad(dynamic, "0") === dynamic[0],
 );
 
+function indexedSum(values) {
+	let total = 0;
+	for (let index = 0; index < values.length; index++) total += values[index];
+	return total;
+}
+
+function indexedIncrement(values) {
+	for (let index = 0; index < values.length; index++) values[index] = values[index] + 1;
+}
+
+const indexedUint8 = new Uint8Array([1, 2, 3, 4]);
+const indexedFloat64 = new Float64Array([0.5, 1.25, -2]);
+indexedIncrement(indexedUint8);
+check(
+	"guarded numeric TypedArray indexed loops",
+	indexedSum(indexedUint8) === 14 && indexedSum(indexedFloat64) === -0.25,
+);
+
+const shadowedLength = new Uint8Array([7, 8, 9]);
+Object.defineProperty(shadowedLength, "length", { value: 1 });
+check("indexed loop falls back for an own length", indexedSum(shadowedLength) === 7);
+
+function indexedBigIntSum(values) {
+	let total = 0n;
+	for (let index = 0; index < values.length; index++) total += values[index];
+	return total;
+}
+check(
+	"indexed loop falls back for BigInt TypedArrays",
+	indexedBigIntSum(new BigInt64Array([2n, 3n, 5n])) === 10n,
+);
+
 dynamicStore(dynamic, -0, 91);
 check("dynamic negative zero addresses zero", dynamicLoad(dynamic, -0) === 91);
 

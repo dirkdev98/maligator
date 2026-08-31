@@ -135,12 +135,12 @@ export const CORE_REGION_STRATEGIES = {
 		fallbackFrontier: "retained-instruction",
 		maximumClaims: 64,
 	},
-	"array-length-comparison": {
+	"indexed-length-loop": {
 		artifactTag: 15,
-		family: "structural",
-		representation: "live-array-length-comparisons",
+		family: "operation-chain",
+		representation: "live-indexed-length-loops",
 		composition: "exclusive",
-		correspondence: "local-equivalence",
+		correspondence: "operation-trace",
 		lifetime: "claimed-region",
 		invalidatingEffects: ["guard-failure"],
 		stateSynchronization: "none",

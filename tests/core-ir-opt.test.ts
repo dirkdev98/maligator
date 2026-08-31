@@ -2980,7 +2980,7 @@ describe("Core IR optimizer", () => {
 		expect(loop.blocks.has(lengthLoads[0]!.block)).toBe(false);
 	});
 
-	it("certifies a live Array length comparison before target lowering", () => {
+	it("certifies a live indexed length loop before target lowering", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function sum(values) {
 				let total = 0;
@@ -2996,7 +2996,7 @@ describe("Core IR optimizer", () => {
 			},
 		});
 		const coreRegion = optimized!.functions[1]!.regions.find(
-			({ kind }) => kind === "array-length-comparison",
+			({ kind }) => kind === "indexed-length-loop",
 		);
 		expect(coreRegion?.anchors).toHaveLength(2);
 		expect(coreRegion?.claimedInstructions).toHaveLength(3);
@@ -3011,25 +3011,25 @@ describe("Core IR optimizer", () => {
 				genericTwin: "retained",
 				materialization: "none",
 			},
-			representation: "live-array-length-comparisons",
-			runtimeGuard: "exact-array",
+			representation: "live-indexed-length-loops",
+			runtimeGuard: "array-or-numeric-typed-array",
 		});
 		expect(JSON.stringify(coreRegion?.data)).toMatch(
 			/"sites":\[\{"load":\{"\$coreInstruction":\d+\},"comparison":\{"\$coreInstruction":\d+\},"lengthPosition":2,"elements":\[\{"instruction":\{"\$coreInstruction":\d+\},"kind":"load"\}\]\}\]/,
 		);
 		const vmRegion = definition.native.functions[1]!.specializations.find(
-			({ kind }) => kind === "array-length-comparison",
+			({ kind }) => kind === "indexed-length-loop",
 		);
-		if (vmRegion?.kind !== "array-length-comparison") {
-			throw new Error("expected Array length comparison region");
+		if (vmRegion?.kind !== "indexed-length-loop") {
+			throw new Error("expected indexed length loop region");
 		}
 		expect(vmRegion).toMatchObject({
-			kind: "array-length-comparison",
+			kind: "indexed-length-loop",
 			license: {
 				materialization: "none",
 			},
-			representation: "live-array-length-comparisons",
-			runtimeGuard: "exact-array",
+			representation: "live-indexed-length-loops",
+			runtimeGuard: "array-or-numeric-typed-array",
 		});
 		expect(vmRegion.sites).toHaveLength(1);
 		expect(Number.isSafeInteger(vmRegion.sites[0]!.loadIp)).toBe(true);
@@ -3044,7 +3044,7 @@ describe("Core IR optimizer", () => {
 		["non-strict inequality", "index != values.length", 2],
 		["strict inequality", "index !== values.length", 2],
 		["inclusive comparison", "index <= values.length", 2],
-	] as const)("certifies %s Array loop tests", (_name, condition, lengthPosition) => {
+	] as const)("certifies %s indexed loop tests", (_name, condition, lengthPosition) => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function visit(values) { let total = 0; for (let index = 0; ${condition}; index++) { total += values[index]; if (index > 8) break; } return total; }`,
 			"core-array-length-orientation.js",
@@ -3057,13 +3057,13 @@ describe("Core IR optimizer", () => {
 		});
 		const region = optimized!.functions
 			.flatMap(({ regions }) => regions)
-			.find(({ kind }) => kind === "array-length-comparison");
+			.find(({ kind }) => kind === "indexed-length-loop");
 		expect(region?.data).toMatchObject({
 			sites: [{ lengthPosition, elements: [{ kind: "load" }] }],
 		});
 	});
 
-	it("does not create an Array length region for a one-shot comparison", () => {
+	it("does not create an indexed length region for a one-shot comparison", () => {
 		const optimized = optimizedClosedModule(
 			`export function before(index, values) { return index < values.length; }`,
 			"core-one-shot-array-length.js",
@@ -3071,7 +3071,7 @@ describe("Core IR optimizer", () => {
 		expect(
 			optimized.functions
 				.flatMap(({ regions }) => regions)
-				.some(({ kind }) => kind === "array-length-comparison"),
+				.some(({ kind }) => kind === "indexed-length-loop"),
 		).toBe(false);
 	});
 
@@ -3912,7 +3912,7 @@ describe("Core IR optimizer", () => {
 				}
 			}
 			globalThis.result = pushPop(globalThis.value);`,
-			"core-exact-array-cleanup.js",
+			"core-array-or-numeric-typed-array-cleanup.js",
 		);
 		let optimized: CoreProgram | undefined;
 		let optimizedContext: CoreCompilationContext | undefined;
