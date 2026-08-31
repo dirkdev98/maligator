@@ -541,8 +541,12 @@ export function coreProvenance(
 			}
 		}
 	}
+	const layoutCache = new Map<CoreValueId, CoreAllocationLayout | null>();
 	const layoutOf = (value: CoreValueId): CoreAllocationLayout | undefined => {
-		let root = canonical(value);
+		const initialRoot = canonical(value);
+		const cached = layoutCache.get(initialRoot);
+		if (cached !== undefined) return cached ?? undefined;
+		let root = initialRoot;
 		const seen = new Set<CoreValueId>();
 		while (!seen.has(root)) {
 			seen.add(root);
@@ -550,7 +554,9 @@ export function coreProvenance(
 			if (alias === undefined) break;
 			root = canonical(alias);
 		}
-		return ambiguousRoots.has(root) ? undefined : layoutByRoot.get(root);
+		const layout = ambiguousRoots.has(root) ? undefined : layoutByRoot.get(root);
+		layoutCache.set(initialRoot, layout ?? null);
+		return layout;
 	};
 	const invalidIndexedLayouts = new Set<CoreInstructionId>();
 	for (const block of fn.blocks) {
