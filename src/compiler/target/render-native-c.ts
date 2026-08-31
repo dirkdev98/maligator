@@ -1566,6 +1566,11 @@ interface NativeNumericFusionAction {
 	readonly first: Extract<BytecodeInstruction, { opcode: "BINARY" }>;
 }
 
+interface ArrayLengthComparisonAction {
+	readonly loadIp: number;
+	readonly role: "load" | "compare";
+}
+
 /**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
@@ -1618,6 +1623,33 @@ function emitBody(
 			const common = { id: pair.firstIp, first };
 			numericFusionActionByIp.set(pair.firstIp, { ...common, role: "start" });
 			numericFusionActionByIp.set(pair.finishIp, { ...common, role: "finish" });
+		}
+	}
+	const arrayLengthComparisonActionByIp = new Map<number, ArrayLengthComparisonAction>();
+	for (const region of specializations.filter(
+		(candidate) => candidate.kind === "array-length-comparison",
+	)) {
+		for (const site of region.sites) {
+			const load = fn.instructions[site.loadIp];
+			const comparison = fn.instructions[site.comparisonIp];
+			if (
+				load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				comparison?.opcode !== "BINARY" ||
+				comparison.operator !== "<" ||
+				comparison.right !== load.dst ||
+				arrayLengthComparisonActionByIp.has(site.loadIp) ||
+				arrayLengthComparisonActionByIp.has(site.comparisonIp)
+			) {
+				throw new Error("Invalid array-length-comparison region");
+			}
+			arrayLengthComparisonActionByIp.set(site.loadIp, {
+				loadIp: site.loadIp,
+				role: "load",
+			});
+			arrayLengthComparisonActionByIp.set(site.comparisonIp, {
+				loadIp: site.loadIp,
+				role: "compare",
+			});
 		}
 	}
 	const jumpTargets = new Set<number>();
@@ -1861,7 +1893,6 @@ function emitBody(
 			lockedIdentity,
 		});
 	}
-
 	const lines: Array<string> = [];
 	for (const site of stringSplitProjectionSites.values()) {
 		lines.push(
@@ -1914,6 +1945,13 @@ function emitBody(
 		lines.push(
 			`bool __string_slice_number_${fusion.sliceCallIp}_fast = false;`,
 			`f64 __string_slice_number_${fusion.sliceCallIp}_value = 0;`,
+		);
+	}
+	for (const action of arrayLengthComparisonActionByIp.values()) {
+		if (action.role !== "load") continue;
+		lines.push(
+			`bool __array_length_${action.loadIp}_fast = false;`,
+			`u32 __array_length_${action.loadIp}_value = 0;`,
 		);
 	}
 	if (
@@ -2058,6 +2096,7 @@ function emitBody(
 				mappedArguments: fn.mappedArguments,
 				mappedArgumentSlots: fn.mappedArgumentSlots,
 				hasPrototype: fn.hasPrototype,
+				arrayLengthComparisonAction: arrayLengthComparisonActionByIp.get(ip),
 				nativeStringSplitProjectionAction: nativeStringSplitProjectionActionByIp.get(ip),
 				nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
 				nativeRegExpExecProjectionAction: nativeRegExpExecProjectionActionByIp.get(ip),
@@ -2416,6 +2455,7 @@ interface NativeInstructionContext {
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
+	readonly arrayLengthComparisonAction?: ArrayLengthComparisonAction;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
@@ -2502,6 +2542,7 @@ function emitInstruction(
 		mappedArguments,
 		mappedArgumentSlots,
 		hasPrototype,
+		arrayLengthComparisonAction,
 		nativeStringSplitProjectionAction,
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
@@ -3318,6 +3359,20 @@ function emitInstruction(
 				`  ${throwCheck}`,
 				`}`,
 			];
+			if (arrayLengthComparisonAction?.role === "load") {
+				const id = arrayLengthComparisonAction.loadIp;
+				return [
+					`__array_length_${id}_fast = false;`,
+					`MalArrayObject *__array_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
+					`if (__array_length_${id}_array != nullptr) {`,
+					`  __array_length_${id}_fast = true;`,
+					`  __array_length_${id}_value = __array_length_${id}_array->length;`,
+					`  mal_perf_ic_load_array_length_hit();`,
+					`} else {`,
+					...ordinary.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (nativeStringSplitCursorAction?.role === "length") {
 				const { site } = nativeStringSplitCursorAction;
 				const id = site.callIp;
@@ -3510,6 +3565,20 @@ function emitInstruction(
 				nativePlan?.kind === "exact-binary-input-kinds"
 					? nativePlan.inputKindMasks
 					: undefined;
+			if (arrayLengthComparisonAction?.role === "compare") {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const fast = `${num(left)} < (f64) __array_length_${arrayLengthComparisonAction.loadIp}_value`;
+				return [
+					`if (__array_length_${arrayLengthComparisonAction.loadIp}_fast) {`,
+					dstIsBool
+						? `  r${dst} = ${fast};`
+						: `  r${dst} = mal_value_new_boolean(${fast});`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (operator === "in") {
 				const numberGuard = leftIsNum ? "" : `mal_ops_is_number(${boxed(left)}) && `;
 				return [

@@ -16,6 +16,7 @@ import type {
 	NativeInstructionPlan,
 	ProgramImage,
 	VmGuardedBuiltinCall,
+	VmRegisterRepresentation,
 	VmRegion,
 	VmSemanticProtectorFact,
 } from "./program-image.ts";
@@ -29,7 +30,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 42;
+export const COMPILER_ARTIFACT_VERSION = 43;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -727,6 +728,7 @@ function writeCompilerArtifact(
 				claimedRegionInstructions,
 				def.stringConstants,
 				native.instructions,
+				native.registerRepresentations,
 			);
 			const kindTag =
 				region.kind === "string-split-cursor"
@@ -741,7 +743,9 @@ function writeCompilerArtifact(
 									? 7
 									: region.kind === "stack-object-plan"
 										? 11
-										: 14;
+										: region.kind === "numeric-fusion"
+											? 14
+											: 15;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -779,6 +783,14 @@ function writeCompilerArtifact(
 			w.u8(region.license.admission.validity === "once" ? 1 : 0);
 			w.i32(region.license.admission.anchorIp);
 			switch (region.kind) {
+				case "array-length-comparison":
+					w.u8(region.runtimeGuard === "exact-array" ? 1 : 0);
+					w.u32(region.sites.length);
+					for (const site of region.sites) {
+						w.i32(site.loadIp);
+						w.i32(site.comparisonIp);
+					}
+					break;
 				case "string-split-cursor":
 					w.i32(region.propertyIp);
 					writePropertyPlacement(w, region.propertyPlacement);
@@ -1003,9 +1015,18 @@ function validateRegion(
 	claimed: Set<number>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+	registerRepresentations: ReadonlyArray<VmRegisterRepresentation>,
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
+		case "array-length-comparison":
+			validateArrayLengthComparisonRegion(
+				fn,
+				region,
+				stringConstants,
+				registerRepresentations,
+			);
+			break;
 		case "string-split-cursor":
 			validateStringSplitCursorRegion(fn, region, nativeInstructions);
 			break;
@@ -1101,6 +1122,54 @@ function validateNumericFusionRegion(
 		})
 	) {
 		throw new RangeError("program-image-codec: invalid numeric-fusion region");
+	}
+}
+
+function validateArrayLengthComparisonRegion(
+	fn: BytecodeFunction,
+	region: Extract<VmRegion, { kind: "array-length-comparison" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	registerRepresentations: ReadonlyArray<VmRegisterRepresentation>,
+): void {
+	const payloadIps = region.sites.flatMap(({ loadIp, comparisonIp }) => [
+		loadIp,
+		comparisonIp,
+	]);
+	if (
+		region.composition !== undefined ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== 1 ||
+		region.license.guard.obligations[0] !== "fallback" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "none" ||
+		region.representation !== "live-array-length-comparisons" ||
+		region.runtimeGuard !== "exact-array" ||
+		region.sites.length === 0 ||
+		region.sites.length > 32 ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.sites[0]!.loadIp ||
+		region.anchors[1] !== region.sites[0]!.comparisonIp ||
+		new Set(payloadIps).size !== payloadIps.length ||
+		payloadIps.length !== region.claimedIps.length ||
+		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		region.cost.score !== region.sites.length * 4 ||
+		region.cost.metadataOperations !== payloadIps.length ||
+		region.sites.some(({ loadIp, comparisonIp }) => {
+			const load = fn.instructions[loadIp];
+			const comparison = fn.instructions[comparisonIp];
+			return (
+				load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				String.fromCharCode(...(stringConstants[load.stringIndex] ?? [])) !== "length" ||
+				comparison?.opcode !== "BINARY" ||
+				comparison.operator !== "<" ||
+				comparison.right !== load.dst ||
+				comparisonIp !== loadIp + 1 ||
+				(registerRepresentations[comparison.left] !== "int32" &&
+					registerRepresentations[comparison.left] !== "number")
+			);
+		})
+	) {
+		throw new RangeError("program-image-codec: invalid array-length-comparison region");
 	}
 }
 
@@ -2362,6 +2431,12 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
+				const arrayLengthComparisonContract =
+					kindTag === 15 &&
+					representationTag === 15 &&
+					materializationTag === 0 &&
+					dependencyMask === 0 &&
+					obligationMask === 1;
 				if (
 					compositionTag > 1 ||
 					(compositionTag === 1) !== numericFusionContract ||
@@ -2373,7 +2448,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						!regexpIteratorProjectionContract &&
 						!stringSliceNumberContract &&
 						!stackObjectPlanContract &&
-						!numericFusionContract)
+						!numericFusionContract &&
+						!arrayLengthComparisonContract)
 				) {
 					throw new RangeError("program-image-codec: invalid function region contract");
 				}
@@ -2889,10 +2965,47 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						runtimeGuard: "number-operands",
 						pairs,
 					};
+				} else if (kindTag === 15) {
+					const runtimeGuardTag = r.u8();
+					const siteCount = r.count(2);
+					const sites: Array<
+						Extract<VmRegion, { kind: "array-length-comparison" }>["sites"][number]
+					> = [];
+					for (let site = 0; site < siteCount; site++) {
+						sites.push({ loadIp: r.i32(), comparisonIp: r.i32() });
+					}
+					if (runtimeGuardTag !== 1) {
+						throw new RangeError(
+							"program-image-codec: invalid array-length-comparison guard",
+						);
+					}
+					region = {
+						kind: "array-length-comparison",
+						license: {
+							guard: { dependencies: [], obligations: ["fallback"] },
+							genericTwin: "retained",
+							materialization: "none",
+							admission,
+						},
+						representation: "live-array-length-comparisons",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						runtimeGuard: "exact-array",
+						sites,
+					};
 				} else {
 					throw new RangeError("program-image-codec: invalid function region kind");
 				}
-				validateRegion(fn, region, claimed, stringConstants, nativeInstructions);
+				validateRegion(
+					fn,
+					region,
+					claimed,
+					stringConstants,
+					nativeInstructions,
+					registerRepresentations,
+				);
 				regions.push(region);
 			}
 		}

@@ -1406,6 +1406,13 @@ static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalVal
 static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static(
     MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
 ) {
+    if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
+        mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) {
+        const MalArrayObject *array = (const MalArrayObject *) mal_value_to_heap(receiver);
+        *out = mal_ops_number_value((f64) array->length);
+        mal_perf_ic_load_array_length_hit();
+        return true;
+    }
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE ||
         ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||

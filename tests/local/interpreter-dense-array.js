@@ -157,6 +157,61 @@ try {
 delete Array.prototype[4];
 check(caughtError === setterError, "fallback throw resumes at catch");
 
+const indexedGrowing = [1, 2];
+const indexedGrownValues = [];
+for (let index = 0; index < indexedGrowing.length; ++index) {
+	indexedGrownValues.push(indexedGrowing[index]);
+	if (index === 0) indexedGrowing.push(3);
+}
+check(indexedGrownValues.join(",") === "1,2,3", "indexed loop reads live growing length");
+
+const indexedShrinking = [1, 2, 3];
+const indexedShrunkValues = [];
+for (let index = 0; index < indexedShrinking.length; ++index) {
+	indexedShrunkValues.push(indexedShrinking[index]);
+	indexedShrinking.length = 1;
+}
+check(indexedShrunkValues.join(",") === "1", "indexed loop reads live shrinking length");
+
+let proxyLengthGets = 0;
+const indexedProxy = new Proxy([4, 5], {
+	get(target, key, receiver) {
+		if (key === "length") proxyLengthGets++;
+		return Reflect.get(target, key, receiver);
+	},
+});
+let indexedProxySum = 0;
+for (let index = 0; index < indexedProxy.length; ++index) {
+	indexedProxySum += indexedProxy[index];
+}
+check(indexedProxySum === 9 && proxyLengthGets === 3, "indexed proxy keeps length gets");
+
+let arrayLikeLengthGets = 0;
+let arrayLikeLengthCoercions = 0;
+const indexedArrayLike = {
+	0: 6,
+	1: 7,
+	get length() {
+		arrayLikeLengthGets++;
+		return {
+			[Symbol.toPrimitive]() {
+				arrayLikeLengthCoercions++;
+				return 2;
+			},
+		};
+	},
+};
+let indexedArrayLikeSum = 0;
+for (let index = 0; index < indexedArrayLike.length; ++index) {
+	indexedArrayLikeSum += indexedArrayLike[index];
+}
+check(
+	indexedArrayLikeSum === 13 &&
+		arrayLikeLengthGets === 3 &&
+		arrayLikeLengthCoercions === 3,
+	"indexed array-like keeps length coercions",
+);
+
 let iteratedSum = 0;
 const iterated = [1, 2, 3, 4];
 for (let repeat = 0; repeat < 500; repeat++) {

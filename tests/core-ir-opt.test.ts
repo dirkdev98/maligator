@@ -2980,6 +2980,69 @@ describe("Core IR optimizer", () => {
 		expect(loop.blocks.has(lengthLoads[0]!.block)).toBe(false);
 	});
 
+	it("certifies a live Array length comparison before target lowering", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function sum(values) {
+				let total = 0;
+				for (let index = 0; index < values.length; ++index) total += values[index];
+				return total;
+			}`,
+			"core-live-array-length.js",
+		);
+		let optimized: CoreProgram | undefined;
+		const definition = compileSemanticProgramToProgramImage(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		const coreRegion = optimized!.functions[1]!.regions.find(
+			({ kind }) => kind === "array-length-comparison",
+		);
+		expect(coreRegion?.anchors).toHaveLength(2);
+		expect(coreRegion?.claimedInstructions).toEqual(coreRegion?.anchors);
+		expect(coreRegion?.data).toMatchObject({
+			license: {
+				guard: "structural",
+				genericTwin: "retained",
+				materialization: "none",
+			},
+			representation: "live-array-length-comparisons",
+			runtimeGuard: "exact-array",
+		});
+		expect(JSON.stringify(coreRegion?.data)).toMatch(
+			/"sites":\[\{"load":\{"\$coreInstruction":\d+\},"comparison":\{"\$coreInstruction":\d+\}\}\]/,
+		);
+		const vmRegion = definition.native.functions[1]!.specializations.find(
+			({ kind }) => kind === "array-length-comparison",
+		);
+		if (vmRegion?.kind !== "array-length-comparison") {
+			throw new Error("expected Array length comparison region");
+		}
+		expect(vmRegion).toMatchObject({
+			kind: "array-length-comparison",
+			license: {
+				materialization: "none",
+			},
+			representation: "live-array-length-comparisons",
+			runtimeGuard: "exact-array",
+		});
+		expect(vmRegion.sites).toHaveLength(1);
+		expect(Number.isSafeInteger(vmRegion.sites[0]!.loadIp)).toBe(true);
+		expect(Number.isSafeInteger(vmRegion.sites[0]!.comparisonIp)).toBe(true);
+	});
+
+	it("does not create an Array length region for a one-shot comparison", () => {
+		const optimized = optimizedClosedModule(
+			`export function before(index, values) { return index < values.length; }`,
+			"core-one-shot-array-length.js",
+		);
+		expect(
+			optimized.functions
+				.flatMap(({ regions }) => regions)
+				.some(({ kind }) => kind === "array-length-comparison"),
+		).toBe(false);
+	});
+
 	it("carries the loop range proof into guarded String bounds metadata", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function checksum(value) {

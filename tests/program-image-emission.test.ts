@@ -1424,6 +1424,34 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
 	});
 
+	it("consumes the Core-owned live Array length comparison region", () => {
+		const definition = lower(
+			`"use strict"; function sum(values) { let total = 0; for (let index = 0; index < values.length; ++index) total += values[index]; return total; } globalThis.sum = sum;`,
+		);
+		const regions = specializations(definition).filter(
+			(region) => region.kind === "array-length-comparison",
+		);
+		expect(regions).toHaveLength(1);
+		const region = regions[0];
+		if (region?.kind !== "array-length-comparison") {
+			throw new Error("expected Array length comparison region");
+		}
+		expect(region).toMatchObject({
+			representation: "live-array-length-comparisons",
+			runtimeGuard: "exact-array",
+		});
+		expect(region.sites).toHaveLength(1);
+		expect(Number.isSafeInteger(region.sites[0]!.loadIp)).toBe(true);
+		expect(Number.isSafeInteger(region.sites[0]!.comparisonIp)).toBe(true);
+		expect(
+			specializations(deserializeCompilerArtifact(serializeCompilerArtifact(definition))),
+		).toEqual(specializations(definition));
+		const output = emitProgramImage(definition, { compiled: true });
+		expect(output).toContain("__array_length_");
+		expect(output).not.toContain(".mode == MAL_IC_MODE_ARRAY_LENGTH");
+		expect(output).toContain("->length");
+	});
+
 	it("does not retain raw dense iterator cursors across generator suspension", () => {
 		const output = emit(
 			`"use strict"; function* values() { for (const value of [1, 2]) yield value; } globalThis.values = values;`,

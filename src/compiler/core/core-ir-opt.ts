@@ -3163,6 +3163,157 @@ const NATIVE_NUMERIC_FUSION_FINISH_OPERATORS = new Set([
 	"!==",
 ]);
 
+const selectArrayLengthComparisonRegions: CoreFunctionPass = {
+	name: "select-array-length-comparison-regions",
+	run(fn, analyses, program) {
+		if (fn.isGenerator || fn.isAsync) return fn;
+		const hasCandidate = fn.blocks.some(({ instructions }) =>
+			instructions.some((load, index) => {
+				const comparison = instructions[index + 1];
+				return (
+					load.opcode === "loadPropertyStatic" &&
+					typeof load.attributes.stringIndex === "number" &&
+					decodeString(program, load.attributes.stringIndex) === "length" &&
+					comparison?.opcode === "binary" &&
+					comparison.attributes.operator === "<"
+				);
+			}),
+		);
+		if (!hasCandidate) return fn;
+		const cfg = analyses.controlFlow(fn);
+		const occupied = new Set(
+			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const uses = new Map<
+			CoreValueId,
+			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+		>();
+		const nonInstructionUses = new Set<CoreValueId>();
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation]),
+		);
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const [position, input] of instruction.inputs.entries()) {
+					const entries = uses.get(input) ?? [];
+					entries.push({ instruction, position });
+					uses.set(input, entries);
+				}
+			}
+			if (block.handler !== undefined) {
+				for (const value of block.handler.arguments) nonInstructionUses.add(value);
+			}
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				for (const value of edge.arguments) nonInstructionUses.add(value);
+			}
+			switch (block.terminator.kind) {
+				case "branch":
+				case "guard":
+					nonInstructionUses.add(block.terminator.condition);
+					break;
+				case "switch":
+					nonInstructionUses.add(block.terminator.discriminant);
+					break;
+				case "return":
+				case "throw":
+					nonInstructionUses.add(block.terminator.value);
+					break;
+				case "jump":
+				case "unreachable":
+					break;
+			}
+		}
+
+		const sites: Array<{
+			readonly load: CoreInstruction;
+			readonly comparison: CoreInstruction;
+			readonly block: CoreBlockId;
+		}> = [];
+		for (const block of fn.blocks) {
+			if (!cfg.loops.some((loop) => loop.blocks.has(block.id))) continue;
+			for (let index = 0; index + 1 < block.instructions.length; index++) {
+				const load = block.instructions[index]!;
+				const comparison = block.instructions[index + 1]!;
+				if (
+					load.opcode !== "loadPropertyStatic" ||
+					load.inputs.length !== 1 ||
+					load.outputs.length !== 1 ||
+					load.attributes[CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE] === true ||
+					load.attributes.primitiveStringLength === true ||
+					typeof load.attributes.stringIndex !== "number" ||
+					decodeString(program, load.attributes.stringIndex) !== "length" ||
+					comparison.opcode !== "binary" ||
+					comparison.attributes.operator !== "<" ||
+					comparison.inputs.length !== 2 ||
+					comparison.outputs.length !== 1 ||
+					comparison.inputs[1] !== load.outputs[0] ||
+					(representations.get(comparison.inputs[0]!) !== "i32" &&
+						representations.get(comparison.inputs[0]!) !== "f64") ||
+					occupied.has(load.id) ||
+					occupied.has(comparison.id)
+				) {
+					continue;
+				}
+				const output = load.outputs[0]!;
+				const outputUses = uses.get(output) ?? [];
+				if (
+					nonInstructionUses.has(output) ||
+					outputUses.length !== 1 ||
+					outputUses[0]!.instruction !== comparison ||
+					outputUses[0]!.position !== 1
+				) {
+					continue;
+				}
+				sites.push({ load, comparison, block: block.id });
+				occupied.add(load.id);
+				occupied.add(comparison.id);
+				if (sites.length >= 32) break;
+			}
+			if (sites.length >= 32) break;
+		}
+		const first = sites[0];
+		if (first === undefined) return fn;
+		const claimedInstructions = sites.flatMap(({ load, comparison }) => [
+			load.id,
+			comparison.id,
+		]);
+		return {
+			...fn,
+			regions: [
+				...fn.regions,
+				{
+					kind: "array-length-comparison",
+					anchors: [first.load.id, first.comparison.id],
+					claimedInstructions,
+					ordinaryBlocks: [...new Set(sites.map(({ block }) => block))],
+					exceptionalBlocks: [],
+					data: coreAttributeObject(
+						{
+							license: {
+								guard: "structural",
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: "live-array-length-comparisons",
+							cost: {
+								score: sites.length * 4,
+								metadataOperations: claimedInstructions.length,
+							},
+							runtimeGuard: "exact-array",
+							sites: sites.map(({ load, comparison }) => ({
+								load: { $coreInstruction: load.id },
+								comparison: { $coreInstruction: comparison.id },
+							})),
+						},
+						"array-length-comparison",
+					),
+				},
+			],
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
 const selectNumericFusionRegions: CoreFunctionPass = {
 	name: "select-numeric-fusion-regions",
 	run(fn) {
@@ -13797,6 +13948,7 @@ const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	withRegionAdmission(selectStringSplitCursorRegions),
 	withRegionAdmission(selectStringSplitProjectionRegions),
 	withRegionAdmission(selectStringSliceNumberRegions),
+	withRegionAdmission(selectArrayLengthComparisonRegions),
 	withRegionAdmission(selectNumericFusionRegions),
 	materializeContainedAggregateOwnSlots,
 ];

@@ -470,7 +470,20 @@ export type VmNumericFusionRegion = VmRegionEnvelope<
 	}>;
 };
 
+export type VmArrayLengthComparisonRegion = VmRegionEnvelope<
+	"array-length-comparison",
+	"live-array-length-comparisons",
+	"none"
+> & {
+	readonly runtimeGuard: "exact-array";
+	readonly sites: ReadonlyArray<{
+		readonly loadIp: number;
+		readonly comparisonIp: number;
+	}>;
+};
+
 export type VmRegion =
+	| VmArrayLengthComparisonRegion
 	| VmRegExpExecProjectionRegion
 	| VmRegExpIteratorProjectionRegion
 	| VmStringSliceNumberRegion
@@ -1025,6 +1038,99 @@ function lowerExecutionFunctionToNativePlan(
 			anchorIp: admissionAnchorIp,
 			validity: admissionValidity,
 		};
+		if (region.kind === "array-length-comparison") {
+			const anchors = region.anchors.map((instruction) =>
+				instructionIndexByTargetInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByTargetInstruction.get(instruction),
+			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
+			const sites = region.sites.map(({ load, comparison }) => ({
+				loadIp: instructionIndexByTargetInstruction.get(load),
+				comparisonIp: instructionIndexByTargetInstruction.get(comparison),
+			}));
+			if (
+				region.license.guard !== "structural" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "none" ||
+				region.representation !== "live-array-length-comparisons" ||
+				region.runtimeGuard !== "exact-array" ||
+				region.controlFlow.ordinaryBlocks.length === 0 ||
+				region.controlFlow.exceptionalBlocks.length !== 0 ||
+				anchors.some((ip) => ip === undefined) ||
+				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
+				sites.length === 0 ||
+				sites.length > 32 ||
+				sites.some((site) => site.loadIp === undefined || site.comparisonIp === undefined)
+			) {
+				throw coreRegionError(region.kind, "structural contract");
+			}
+			const resolvedAnchors = anchors as Array<number>;
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const resolvedSites = sites as Array<{
+				readonly loadIp: number;
+				readonly comparisonIp: number;
+			}>;
+			const payloadIps = resolvedSites.flatMap(({ loadIp, comparisonIp }) => [
+				loadIp,
+				comparisonIp,
+			]);
+			let valid =
+				resolvedAnchors.length === 2 &&
+				resolvedAnchors[0] === resolvedSites[0]!.loadIp &&
+				resolvedAnchors[1] === resolvedSites[0]!.comparisonIp &&
+				new Set(payloadIps).size === payloadIps.length &&
+				payloadIps.length === resolvedClaimedIps.length &&
+				payloadIps.every((ip) => resolvedClaimedIps.includes(ip)) &&
+				!payloadIps.some((ip) => claimedRegionInstructions.has(ip)) &&
+				region.cost.score === resolvedSites.length * 4 &&
+				region.cost.metadataOperations === payloadIps.length;
+			for (const site of resolvedSites) {
+				const load = instructions[site.loadIp];
+				const comparison = instructions[site.comparisonIp];
+				const left = comparison?.opcode === "BINARY" ? comparison.left : -1;
+				if (
+					load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					String.fromCharCode(...(stringConstants[load.stringIndex] ?? [])) !==
+						"length" ||
+					comparison?.opcode !== "BINARY" ||
+					comparison.operator !== "<" ||
+					comparison.right !== load.dst ||
+					site.comparisonIp !== site.loadIp + 1 ||
+					(fn.registerRepresentations[left] !== "int32" &&
+						fn.registerRepresentations[left] !== "number")
+				) {
+					valid = false;
+				}
+			}
+			if (!valid) throw coreRegionError(region.kind, "instruction or cost contract");
+			checkAdmission(region.kind, resolvedClaimedIps, admission);
+			for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+			regions.push({
+				kind: "array-length-comparison",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback"] },
+					genericTwin: "retained",
+					materialization: "none",
+					admission,
+				},
+				representation: "live-array-length-comparisons",
+				anchors: resolvedAnchors,
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: [],
+				},
+				cost: { ...region.cost },
+				runtimeGuard: "exact-array",
+				sites: resolvedSites,
+			});
+			continue;
+		}
 		if (region.kind === "numeric-fusion") {
 			const anchors = region.anchors.map((instruction) =>
 				instructionIndexByTargetInstruction.get(instruction),

@@ -265,6 +265,23 @@ export interface CoreAllocatedNumericFusionRegion extends CoreAllocatedRegionEnv
 	}>;
 }
 
+export interface CoreAllocatedArrayLengthComparisonRegion extends CoreAllocatedRegionEnvelope<
+	"array-length-comparison",
+	"live-array-length-comparisons",
+	"none",
+	readonly [
+		Extract<CompilerInstruction, { type: "loadPropertyStatic" }>,
+		Extract<CompilerInstruction, { type: "binary" }>,
+	],
+	"structural"
+> {
+	readonly runtimeGuard: "exact-array";
+	readonly sites: ReadonlyArray<{
+		readonly load: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+		readonly comparison: Extract<CompilerInstruction, { type: "binary" }>;
+	}>;
+}
+
 /** Fixed-shape stack-object table after register allocation. */
 export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionEnvelope<
 	"stack-object-plan",
@@ -304,6 +321,7 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 
 /** Tagged post-allocation Core proof table consumed only by VM target lowering. */
 export type CoreAllocatedRegion =
+	| CoreAllocatedArrayLengthComparisonRegion
 	| CoreAllocatedNumericFusionRegion
 	| CoreAllocatedRegExpExecProjectionRegion
 	| CoreAllocatedRegExpIteratorProjectionRegion
