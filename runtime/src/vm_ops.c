@@ -1373,10 +1373,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     }
 
     const MalFunction *definition = &vm->runtime_image->functions[function_index];
-    MalString *name = definition->name_string_index >= 0 &&
-            definition->name_string_index < vm->runtime_image->string_constant_count
-        ? &vm->runtime_image->string_constants[definition->name_string_index]
-        : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
+    MalString *name = mal_vm_function_name(vm, definition);
     MalFunctionObject *function = mal_function_object_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[prototype_slot]),

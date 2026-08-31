@@ -2766,7 +2766,8 @@ function lowerExecutionFunctionToBytecode(
 		.sort((left, right) => left.instructionIp - right.instructionIp);
 
 	const bytecode: BytecodeFunction = {
-		nameStringIndex: fn.nameStringIndex,
+		nameStringIndex:
+			stringConstants[fn.nameStringIndex]!.length === 0 ? -1 : fn.nameStringIndex,
 		isGenerator: fn.isGenerator,
 		isAsync: fn.isAsync,
 		parameterCount: fn.parameterCount,

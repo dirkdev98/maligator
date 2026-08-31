@@ -284,4 +284,17 @@ describe("RuntimeImage constant compaction", () => {
 		expect(new Set(offsets)).toEqual(new Set([0]));
 		expect(runtime.literalTemplateData).toHaveLength(42);
 	});
+
+	it("represents anonymous function names without a string constant", () => {
+		const source = "globalThis.answer = 42;";
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"anonymous-name.js",
+			parseScript(source, { strict: false }),
+		);
+		const runtime = compileSemanticProgramToRuntimeImage(semantic);
+
+		expect(runtime.functions[0]!.nameStringIndex).toBe(-1);
+		expect(runtime.stringConstants).not.toContainEqual([]);
+	});
 });

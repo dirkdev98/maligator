@@ -2339,3 +2339,5 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
  * Resolve the display name of a callable, or null for non-callables.
  */
 MalString *mal_vm_callable_name(MalVm *vm, MalValue callee);
+
+MalString *mal_vm_function_name(MalVm *vm, const MalFunction *function);

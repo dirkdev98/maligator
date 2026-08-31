@@ -650,7 +650,7 @@ static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_
     bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
     const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
     bool have_file = function->file_index >= 0 && function->file_index < vm->runtime_image->file_count;
-    const MalString *name = &vm->runtime_image->string_constants[function->name_string_index];
+    const MalString *name = mal_vm_function_name(vm, function);
     MalValue slots[MAL_CALLSITE_SLOT_COUNT] = {
         have_file
             ? mal_value_from_string(

@@ -209,6 +209,33 @@ check(
 		ordinaryStack.indexOf("Error: boom\n    at ") === 0,
 );
 
+const anonymousFunction = (0, function () {});
+check("anonymous Function name", anonymousFunction.name === "");
+
+const anonymousStack = (function () {
+	return new Error("anonymous").stack;
+})();
+check(
+	"anonymous default stack frame",
+	typeof anonymousStack === "string" &&
+		anonymousStack.indexOf("Error: anonymous\n    at <anonymous> (") === 0,
+);
+
+Error.prepareStackTrace = function anonymousPrepare(_target, callsites) {
+	return callsites[0].getFunctionName();
+};
+function anonymousCallSiteBoundary() {
+	const value = {};
+	Error.captureStackTrace(value, anonymousCallSiteBoundary);
+	return value.stack;
+}
+const anonymousCallSiteName = (0,
+function () {
+	return anonymousCallSiteBoundary();
+})();
+check("anonymous CallSite function name", anonymousCallSiteName === null);
+Error.prepareStackTrace = undefined;
+
 caught = undefined;
 try {
 	Error.captureStackTrace(1);

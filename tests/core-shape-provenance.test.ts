@@ -1470,7 +1470,9 @@ describe("Core known own-slot selection", () => {
 		const descriptor = vm.runtime.precompiledLiteralShapes.find(
 			(shape) => shape.functionIndex === origin.functionIndex,
 		);
-		expect(descriptor?.keyStringIndices).toEqual(origin.keyStringIndices);
+		expect(
+			descriptor?.keyStringIndices.map((index) => vm.runtime.stringConstants[index]),
+		).toEqual(origin.keyStringIndices.map((index) => optimized.stringConstants[index]));
 		expect(vm.runtime.functions[origin.functionIndex]!.literalShapeCount).toBe(1);
 		expect(
 			vm.runtime.functions[origin.functionIndex]!.instructions.some(
