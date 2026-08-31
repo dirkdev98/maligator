@@ -2347,6 +2347,35 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("keeps a virtual field live across suspension", () => {
+		let program: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function* preserve(value) {
+					const object = { held: value };
+					yield 0;
+					object.held = 0;
+					return 1;
+				}`,
+				"scalar-suspended-virtual-field.js",
+			),
+			{
+				afterCoreOptimization(optimized) {
+					program = optimized;
+				},
+			},
+		);
+		const preserve = program!.functions[functionIndexOfName(program!, "preserve")]!;
+		const instructions = preserve.blocks.flatMap(({ instructions }) => instructions);
+		const opcodes = instructions.map(({ opcode }) => opcode);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("storePropertyStatic");
+		const yieldIndex = instructions.findIndex(({ opcode }) => opcode === "yield");
+		expect(yieldIndex).toBeGreaterThanOrEqual(0);
+		expect(instructions[yieldIndex + 1]?.opcode).toBe("rootUse");
+		expect(instructions[yieldIndex + 1]?.inputs).toHaveLength(1);
+	});
+
 	it("dead-store elimination retains a slot whose values a WeakRef could observe", () => {
 		// Same unread slot as above, but the values that occupy it are not proven
 		// primitives, so how long the slot references them stays observable through

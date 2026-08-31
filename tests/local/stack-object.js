@@ -144,6 +144,16 @@ function scalarLoopRootedAcrossCall(count, observe) {
 	return alive;
 }
 
+function* scalarSuspendedRooted() {
+	const target = { tag: "suspended" };
+	const object = { held: target };
+	const watcher = new WeakRef(target);
+	yield watcher;
+	const alive = watcher.deref() !== undefined;
+	object.held = 0;
+	return alive;
+}
+
 function homogeneousBooleanCell(flag, count) {
 	const object = { value: true };
 	for (let i = 0; i < count; i++) {
@@ -295,6 +305,13 @@ check(
 	"loop-carried explicit-root boxed scalar replacement",
 	scalarLoopRootedAcrossCall(0, () => allocateNoise(470)) &&
 		scalarLoopRootedAcrossCall(2, () => allocateNoise(480)),
+);
+const suspendedRoot = scalarSuspendedRooted();
+const suspendedWatcher = suspendedRoot.next().value;
+allocateNoise(490);
+check(
+	"suspended explicit-root boxed scalar replacement",
+	suspendedWatcher.deref() !== undefined && suspendedRoot.next().value === true,
 );
 check(
 	"homogeneous boolean stack cell",

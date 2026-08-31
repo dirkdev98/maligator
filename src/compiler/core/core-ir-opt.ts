@@ -11163,16 +11163,13 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 					if (index >= lastAccess && !liveIntoSuccessor) continue;
 					const instruction = block.instructions[index]!;
 					const effects = coreInstructionEffects(instruction);
-					if (effects.maySuspend) {
-						valid = false;
-						break;
-					}
-					if (!effects.mayGc) continue;
+					if (!effects.mayGc && !effects.maySuspend) continue;
 					const values = [
 						...new Set(
 							[...currentFields.values()].filter(
 								(value) =>
-									!cannotBeHeldWeakly(value) && !instruction.inputs.includes(value),
+									!cannotBeHeldWeakly(value) &&
+									(effects.maySuspend || !instruction.inputs.includes(value)),
 							),
 						),
 					];

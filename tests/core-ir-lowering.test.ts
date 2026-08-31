@@ -278,6 +278,43 @@ describe("Core IR lowering", () => {
 		expect(safepoint?.rootRegisters).toContain(callSite.marker.registers[0]);
 	});
 
+	it("carries a virtual field through a suspension safepoint", () => {
+		const optimized = executeCoreOptimizations(
+			lower(`
+				function* preserve(value) {
+					const object = { held: value };
+					yield 0;
+					object.held = 0;
+					return 1;
+				}
+			`),
+		).program;
+		const core = optimized.functions.find((fn) =>
+			fn.blocks.some((block) =>
+				block.instructions.some(({ opcode }) => opcode === "rootUse"),
+			),
+		)!;
+		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
+		const fn = target.functions[core.functionIndex]!;
+		const suspension = fn.blocks
+			.flatMap((block) =>
+				block.instructions.flatMap((instruction, index) => {
+					if (instruction.type !== "rootUse") return [];
+					const previous = block.instructions[index - 1];
+					return previous?.type === "yield"
+						? [{ marker: instruction, yield: previous }]
+						: [];
+				}),
+			)
+			.at(0);
+		expect(suspension).toBeDefined();
+		if (suspension === undefined) return;
+		const safepoint = fn.gc.safepoints.find(
+			(candidate) => candidate.instruction === suspension.yield,
+		);
+		expect(safepoint?.rootRegisters).toContain(suspension.marker.registers[0]);
+	});
+
 	it("reuses registers for values live on disjoint CFG branches", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
 			parameterCount: 1,
