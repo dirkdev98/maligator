@@ -10710,8 +10710,9 @@ function coreControlObservesAnyValue(
  * delay collection but cannot expose an earlier one.
  *
  * Moves and all-ordinary block parameters are structural spellings of the same
- * contained identity. Acyclic paths may cross blocks; differing incoming fields
- * become explicit value parameters so their roots remain ordinary SSA liveness.
+ * contained identity. Differing incoming fields become explicit value parameters,
+ * including loop-header phis for reducible loop-carried state, so their roots
+ * remain ordinary SSA liveness.
  */
 const scalarizeRootedContainedObjects: CoreFunctionPass = {
 	name: "scalarize-rooted-contained-objects",
@@ -10757,6 +10758,13 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				continue;
 			}
 			const stores: Array<{
+				readonly instruction: CoreInstruction;
+				readonly block: CoreBlock;
+				readonly index: number;
+				readonly key: number;
+				readonly value: CoreValueId;
+			}> = [];
+			const loads: Array<{
 				readonly instruction: CoreInstruction;
 				readonly block: CoreBlock;
 				readonly index: number;
@@ -10834,20 +10842,27 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 						if (position === 0 && aliasMoves.has(instruction.id)) continue;
 						const stringIndex = instruction.attributes.stringIndex;
 						const stored = instruction.inputs[1];
+						const loaded = instruction.outputs[0];
 						const ownCell =
-							instruction.opcode === "storePropertyStatic" &&
+							(instruction.opcode === "loadPropertyStatic" ||
+								instruction.opcode === "storePropertyStatic") &&
 							position === 0 &&
 							typeof stringIndex === "number"
 								? provenance.ownCell(
 										input,
 										{ kind: "string-constant", index: stringIndex },
-										"write",
+										instruction.opcode === "loadPropertyStatic" ? "read" : "write",
 									)
 								: undefined;
 						if (
 							ownCell?.layout.instruction !== layout.instruction ||
 							ownCell.cell.kind !== "object-slot" ||
-							stored === undefined ||
+							(instruction.opcode === "storePropertyStatic"
+								? stored === undefined
+								: instruction.opcode !== "loadPropertyStatic" ||
+									loaded === undefined ||
+									instruction.outputs.length !== 1 ||
+									protectedInputs.has(loaded)) ||
 							(block === allocationLocation.block
 								? index <= allocationLocation.index
 								: !cfg.instructionDominatesBlock(
@@ -10860,13 +10875,23 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							valid = false;
 							break;
 						}
-						stores.push({
-							instruction,
-							block,
-							index,
-							key: ownCell.cell.key,
-							value: stored,
-						});
+						if (instruction.opcode === "storePropertyStatic") {
+							stores.push({
+								instruction,
+								block,
+								index,
+								key: ownCell.cell.key,
+								value: stored!,
+							});
+						} else {
+							loads.push({
+								instruction,
+								block,
+								index,
+								key: ownCell.cell.key,
+								value: loaded!,
+							});
+						}
 					}
 					if (!valid) break;
 				}
@@ -10877,7 +10902,12 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				stores.map((store) => [store.instruction.id, store] as const),
 			);
 			if (uniqueStores.size !== stores.length) continue;
+			const uniqueLoads = new Map(
+				loads.map((load) => [load.instruction.id, load] as const),
+			);
+			if (uniqueLoads.size !== loads.length) continue;
 			const orderedStores = [...uniqueStores.values()];
+			const orderedLoads = [...uniqueLoads.values()];
 			const storesByBlock = new Map<
 				CoreBlockId,
 				Map<number, (typeof orderedStores)[number]>
@@ -10890,10 +10920,22 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				}
 				storesInBlock.set(store.index, store);
 			}
-			const blocksCanReachStore = new Set<CoreBlockId>(
-				orderedStores.map(({ block }) => block.id),
+			const loadsByBlock = new Map<
+				CoreBlockId,
+				Map<number, (typeof orderedLoads)[number]>
+			>();
+			for (const load of orderedLoads) {
+				let loadsInBlock = loadsByBlock.get(load.block.id);
+				if (loadsInBlock === undefined) {
+					loadsInBlock = new Map();
+					loadsByBlock.set(load.block.id, loadsInBlock);
+				}
+				loadsInBlock.set(load.index, load);
+			}
+			const blocksCanReachAccess = new Set<CoreBlockId>(
+				[...orderedStores, ...orderedLoads].map(({ block }) => block.id),
 			);
-			const worklist = [...blocksCanReachStore];
+			const worklist = [...blocksCanReachAccess];
 			while (worklist.length > 0 && valid) {
 				const block = worklist.pop()!;
 				if (block === allocationLocation.block.id) continue;
@@ -10906,22 +10948,22 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 						valid = false;
 						break;
 					}
-					if (!blocksCanReachStore.has(edge.from)) {
-						blocksCanReachStore.add(edge.from);
+					if (!blocksCanReachAccess.has(edge.from)) {
+						blocksCanReachAccess.add(edge.from);
 						worklist.push(edge.from);
 					}
 				}
 			}
-			const cyclicBlocks = new Set<CoreBlockId>();
-			for (const loop of cfg.loops)
-				for (const block of loop.blocks) cyclicBlocks.add(block);
+			const irreducibleBlocks = new Set<CoreBlockId>();
 			for (const cycle of cfg.irreducibleCycles) {
-				for (const block of cycle.blocks) cyclicBlocks.add(block);
+				for (const block of cycle.blocks) irreducibleBlocks.add(block);
 			}
 			if (
 				!valid ||
-				[...blocksCanReachStore].some(
-					(block) => cyclicBlocks.has(block) || fn.blocks[block]!.handler !== undefined,
+				cfg.loops.some(({ blocks }) => blocks.has(allocationLocation.block.id)) ||
+				[...blocksCanReachAccess].some(
+					(block) =>
+						irreducibleBlocks.has(block) || fn.blocks[block]!.handler !== undefined,
 				)
 			) {
 				continue;
@@ -10933,12 +10975,14 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				readonly value: CoreValueId;
 				readonly representation: CoreRepresentation;
 				readonly index: number;
-				readonly argumentsByPredecessor: ReadonlyMap<CoreBlockId, CoreValueId>;
+				readonly key: number;
 			}
 			const virtualFieldParameters = new Map<CoreBlockId, Array<VirtualFieldParameter>>();
 			const virtualFieldRepresentations = new Map<CoreValueId, CoreRepresentation>();
+			const representationOf = (value: CoreValueId): CoreRepresentation | undefined =>
+				virtualFieldRepresentations.get(value) ?? representations.get(value);
 			const cannotBeHeldWeakly = (value: CoreValueId): boolean => {
-				const representation = virtualFieldRepresentations.get(value);
+				const representation = representationOf(value);
 				return representation === "f64" ||
 					representation === "i32" ||
 					representation === "boolean"
@@ -10946,8 +10990,43 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 					: provenance.cannotBeHeldWeakly(value);
 			};
 			let nextValue = (fn.values.at(-1)?.id ?? -1) + 1;
+			for (const loop of cfg.loops) {
+				if (!blocksCanReachAccess.has(loop.header)) continue;
+				const block = fn.blocks[loop.header]!;
+				const parameters: Array<VirtualFieldParameter> = [];
+				for (const [keyIndex, key] of layout.keys.entries()) {
+					const possibleValues = [
+						layout.initialValues[keyIndex]!,
+						...orderedStores
+							.filter((store) => store.key === key && loop.blocks.has(store.block.id))
+							.map(({ value }) => value),
+					];
+					const representation = representationOf(possibleValues[0]!);
+					if (
+						representation === undefined ||
+						possibleValues.some((value) => representationOf(value) !== representation)
+					) {
+						valid = false;
+						break;
+					}
+					const value = coreValueId(nextValue++);
+					parameters.push({
+						value,
+						representation,
+						index: block.parameters.length + parameters.length,
+						key,
+					});
+					virtualFieldRepresentations.set(value, representation);
+				}
+				if (!valid) break;
+				virtualFieldParameters.set(loop.header, parameters);
+			}
+			if (!valid) continue;
+			const replacements = new Map<CoreValueId, CoreValueId>();
+			const replacementInstructions = new Map<CoreInstructionId, CoreInstruction>();
+			const removedAccessInstructions = new Set<CoreInstructionId>();
 			for (const blockId of cfg.reversePostorder) {
-				if (!blocksCanReachStore.has(blockId)) continue;
+				if (!blocksCanReachAccess.has(blockId)) continue;
 				const block = fn.blocks[blockId]!;
 				let currentFields: Map<number, CoreValueId>;
 				let start = 0;
@@ -10956,6 +11035,12 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 						layout.keys.map((key, index) => [key, layout.initialValues[index]!] as const),
 					);
 					start = allocationLocation.index + 1;
+				} else if (virtualFieldParameters.has(blockId)) {
+					currentFields = new Map(
+						virtualFieldParameters
+							.get(blockId)!
+							.map(({ key, value }) => [key, value] as const),
+					);
 				} else {
 					const incoming = cfg.predecessors[blockId]!.filter(
 						({ kind }) => kind === "ordinary",
@@ -10990,12 +11075,12 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							currentFields.set(key, existing.value);
 							continue;
 						}
-						const representation = representations.get(firstValue);
+						const representation = representationOf(firstValue);
 						if (
 							representation === undefined ||
 							incomingValues.some(
 								(value) =>
-									value === undefined || representations.get(value) !== representation,
+									value === undefined || representationOf(value) !== representation,
 							)
 						) {
 							valid = false;
@@ -11007,11 +11092,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							value,
 							representation,
 							index: block.parameters.length + parameters.length,
-							argumentsByPredecessor: new Map(
-								incoming.map(
-									(edge, index) => [edge.from, incomingValues[index]!] as const,
-								),
-							),
+							key,
 						});
 						virtualFieldParameters.set(blockId, parameters);
 						virtualFieldRepresentations.set(value, representation);
@@ -11021,17 +11102,55 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				}
 				const storesInBlock =
 					storesByBlock.get(blockId) ?? new Map<number, (typeof orderedStores)[number]>();
-				const lastStore = Math.max(-1, ...storesInBlock.keys());
+				const loadsInBlock =
+					loadsByBlock.get(blockId) ?? new Map<number, (typeof orderedLoads)[number]>();
+				const lastAccess = Math.max(-1, ...storesInBlock.keys(), ...loadsInBlock.keys());
 				const liveIntoSuccessor = cfg.successors[blockId]!.some(
-					({ kind, to }) => kind === "ordinary" && blocksCanReachStore.has(to),
+					({ kind, to }) => kind === "ordinary" && blocksCanReachAccess.has(to),
 				);
 				for (let index = start; index < block.instructions.length; index++) {
 					const store = storesInBlock.get(index);
 					if (store !== undefined) {
-						currentFields.set(store.key, store.value);
+						currentFields.set(store.key, resolveValue(store.value, replacements));
+						removedAccessInstructions.add(store.instruction.id);
 						continue;
 					}
-					if (index >= lastStore && !liveIntoSuccessor) continue;
+					const load = loadsInBlock.get(index);
+					if (load !== undefined) {
+						const source = currentFields.get(load.key);
+						const sourceRepresentation =
+							source === undefined ? undefined : representationOf(source);
+						const destinationRepresentation = representationOf(load.value);
+						if (
+							source === undefined ||
+							sourceRepresentation === undefined ||
+							destinationRepresentation === undefined
+						) {
+							valid = false;
+							break;
+						}
+						if (sourceRepresentation === destinationRepresentation) {
+							replacements.set(load.value, source);
+							removedAccessInstructions.add(load.instruction.id);
+						} else if (
+							destinationRepresentation === "boxed" &&
+							(sourceRepresentation === "f64" ||
+								sourceRepresentation === "i32" ||
+								sourceRepresentation === "boolean")
+						) {
+							replacementInstructions.set(load.instruction.id, {
+								...withoutEffectRefinement(load.instruction),
+								opcode: "move",
+								inputs: [source],
+								attributes: {},
+							});
+						} else {
+							valid = false;
+							break;
+						}
+						continue;
+					}
+					if (index >= lastAccess && !liveIntoSuccessor) continue;
 					const instruction = block.instructions[index]!;
 					const effects = coreInstructionEffects(instruction);
 					if (effects.maySuspend) {
@@ -11054,16 +11173,21 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 			}
 			if (!valid) continue;
 
-			const removedInstructions = new Set<CoreInstructionId>([
+			const transformedInstructions = new Set<CoreInstructionId>([
 				layout.instruction,
 				...orderedStores.map(({ instruction }) => instruction.id),
+				...orderedLoads.map(({ instruction }) => instruction.id),
+			]);
+			const removedInstructions = new Set<CoreInstructionId>([
+				layout.instruction,
+				...removedAccessInstructions,
 			]);
 			const affectedFacts = new Set(
 				fn.facts
 					.filter((fact) =>
 						fact.claims.some((claim) =>
 							claim.kind === "effect"
-								? removedInstructions.has(claim.instruction)
+								? transformedInstructions.has(claim.instruction)
 								: aliases.has(claim.subject),
 						),
 					)
@@ -11078,7 +11202,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				fn.blocks.some((block) =>
 					block.instructions.some(
 						(instruction) =>
-							!removedInstructions.has(instruction.id) &&
+							!transformedInstructions.has(instruction.id) &&
 							instruction.effectRefinement !== undefined &&
 							affectedFacts.has(instruction.effectRefinement.proof),
 					),
@@ -11117,44 +11241,78 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 								role: "value" as const,
 							})),
 						],
-						instructions: block.instructions.flatMap((instruction) => {
-							if (instruction.id === layout.instruction) {
-								return [
-									{
-										id: placeholderInstructionId,
-										opcode: "createUndefined",
-										inputs: [],
-										outputs: [layout.result],
-										attributes: {},
-									} satisfies CoreInstruction,
-								];
-							}
-							if (removedInstructions.has(instruction.id)) return [];
-							const rootUse = rootUsesAfter.get(instruction.id);
-							return rootUse === undefined ? [instruction] : [instruction, rootUse];
-						}),
-						terminator: remapTerminatorEdges(block.terminator, (edge) => {
-							const targetParameters = virtualFieldParameters.get(edge.block);
-							if (targetParameters === undefined) return edge;
-							return {
-								...edge,
-								arguments: [
-									...edge.arguments,
-									...targetParameters.map((parameter) => {
-										const argument = parameter.argumentsByPredecessor.get(block.id);
-										if (argument === undefined) {
-											throw new Error(
-												`Missing virtual field argument on b${block.id} -> b${edge.block}`,
-											);
-										}
-										return argument;
-									}),
-								],
-							};
-						}),
+						instructions: block.instructions.flatMap(
+							(instruction): ReadonlyArray<CoreInstruction> => {
+								if (instruction.id === layout.instruction) {
+									return [
+										{
+											id: placeholderInstructionId,
+											opcode: "createUndefined",
+											inputs: [],
+											outputs: [layout.result],
+											attributes: {},
+										} satisfies CoreInstruction,
+									];
+								}
+								if (removedInstructions.has(instruction.id)) return [];
+								const rootUse = rootUsesAfter.get(instruction.id);
+								const retained =
+									replacementInstructions.get(instruction.id) ?? instruction;
+								const rewritten = {
+									...retained,
+									inputs: retained.inputs.map((value) =>
+										resolveValue(value, replacements),
+									),
+								};
+								return rootUse === undefined
+									? [rewritten]
+									: [
+											rewritten,
+											{
+												...rootUse,
+												inputs: rootUse.inputs.map((value) =>
+													resolveValue(value, replacements),
+												),
+											},
+										];
+							},
+						),
+						terminator: remapTerminatorEdges(
+							rewriteTerminator(block.terminator, replacements),
+							(edge) => {
+								const targetParameters = virtualFieldParameters.get(edge.block);
+								if (targetParameters === undefined) return edge;
+								return {
+									...edge,
+									arguments: [
+										...edge.arguments,
+										...targetParameters.map((parameter) => {
+											const argument = exitFields.get(block.id)?.get(parameter.key);
+											if (argument === undefined) {
+												throw new Error(
+													`Missing virtual field argument on b${block.id} -> b${edge.block}`,
+												);
+											}
+											return resolveValue(argument, replacements);
+										}),
+									],
+								};
+							},
+						),
+						...(block.handler === undefined
+							? {}
+							: {
+									handler: {
+										...block.handler,
+										arguments: block.handler.arguments.map((value) =>
+											resolveValue(value, replacements),
+										),
+									},
+								}),
 					};
 				}),
 				values: fn.values
+					.filter(({ id }) => !replacements.has(id))
 					.map((value) =>
 						value.id === layout.result
 							? {
@@ -11176,6 +11334,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							})),
 						),
 					),
+				facts: rewriteFactClaimSubjects(fn.facts, replacements),
 				mutationEpoch: fn.mutationEpoch + 1,
 			};
 			return deadInstructionElimination.run(stripped, analyses, program);

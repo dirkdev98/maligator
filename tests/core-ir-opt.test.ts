@@ -2272,6 +2272,48 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("scalarizes and roots a loop-carried virtual field", () => {
+		let program: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function preserve(initial, replacement, count) {
+					const object = { held: initial };
+					for (let index = 0; index < count; index++) {
+						globalThis.observe();
+						object.held = replacement;
+					}
+					return object.held;
+				}`,
+				"scalar-loop-carried-virtual-field.js",
+			),
+			{
+				afterCoreOptimization(optimized) {
+					program = optimized;
+				},
+			},
+		);
+		const preserve = program!.functions[functionIndexOfName(program!, "preserve")]!;
+		const instructions = preserve.blocks.flatMap(({ instructions }) => instructions);
+		const opcodes = instructions.map(({ opcode }) => opcode);
+		const heldStringIndex = program!.stringConstants.findIndex(
+			(units) => String.fromCharCode(...units) === "held",
+		);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(
+			instructions.some(
+				({ opcode, attributes }) =>
+					(opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") &&
+					attributes.stringIndex === heldStringIndex,
+			),
+		).toBe(false);
+		const rootUse = instructions.find(({ opcode }) => opcode === "rootUse");
+		expect(rootUse?.inputs).toHaveLength(1);
+		const rooted = rootUse?.inputs[0];
+		expect(preserve.values.find(({ id }) => id === rooted)?.definition.kind).toBe(
+			"block-parameter",
+		);
+	});
+
 	it("dead-store elimination retains a slot whose values a WeakRef could observe", () => {
 		// Same unread slot as above, but the values that occupy it are not proven
 		// primitives, so how long the slot references them stays observable through
@@ -4638,8 +4680,8 @@ describe("Core IR optimizer", () => {
 			return object.value;`,
 			"core-stack-cell-boolean.js",
 		);
-		expect(propertyLoadRepresentations(homogeneous)).toEqual(["boolean"]);
-		expect(homogeneous.regions).toContainEqual(
+		expect(propertyLoadRepresentations(homogeneous)).toEqual([]);
+		expect(homogeneous.regions).not.toContainEqual(
 			expect.objectContaining({ kind: "stack-object-plan" }),
 		);
 
@@ -4661,7 +4703,7 @@ describe("Core IR optimizer", () => {
 			return object.value;`,
 			"core-stack-cell-integer.js",
 		);
-		expect(propertyLoadRepresentations(integer)).toEqual(["i32"]);
+		expect(propertyLoadRepresentations(integer)).toEqual([]);
 
 		const escaping = compile(
 			`const object = { value: true };
@@ -4683,10 +4725,11 @@ describe("Core IR optimizer", () => {
 			(_, index) =>
 				`const object${index} = { value: values[${index}] };
 				if (values[${index}]) object${index}.value = values[${index}] + 1;
+				if (escape === ${index}) return object${index};
 				total += object${index}.value;`,
 		).join("\n");
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
-			`function many(values) {
+			`function many(values, escape) {
 				let total = 0;
 				${declarations}
 				return total;

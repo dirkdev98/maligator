@@ -232,6 +232,52 @@ describe("Core IR lowering", () => {
 		expect(safepoint?.rootRegisters).toContain(callSite.marker.registers[0]);
 	});
 
+	it("roots a loop-carried virtual-field parameter at an in-loop safepoint", () => {
+		const optimized = executeCoreOptimizations(
+			lower(`
+				function preserve(initial, replacement, count) {
+					const object = { held: initial };
+					for (let index = 0; index < count; index++) {
+						globalThis.observe();
+						object.held = replacement;
+					}
+					return object.held;
+				}
+			`),
+		).program;
+		const core = optimized.functions.find((fn) =>
+			fn.blocks.some((block) =>
+				block.instructions.some(({ opcode }) => opcode === "rootUse"),
+			),
+		)!;
+		const rooted = core.blocks
+			.flatMap(({ instructions }) => instructions)
+			.find(({ opcode }) => opcode === "rootUse")!.inputs[0]!;
+		expect(core.values.find(({ id }) => id === rooted)?.definition.kind).toBe(
+			"block-parameter",
+		);
+
+		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
+		const fn = target.functions[core.functionIndex]!;
+		const callSite = fn.blocks
+			.flatMap((block) =>
+				block.instructions.flatMap((instruction, index) => {
+					if (instruction.type !== "rootUse") return [];
+					const previous = block.instructions[index - 1];
+					return previous?.type === "call"
+						? [{ marker: instruction, call: previous }]
+						: [];
+				}),
+			)
+			.at(0);
+		expect(callSite).toBeDefined();
+		if (callSite === undefined) return;
+		const safepoint = fn.gc.safepoints.find(
+			(candidate) => candidate.instruction === callSite.call,
+		);
+		expect(safepoint?.rootRegisters).toContain(callSite.marker.registers[0]);
+	});
+
 	it("reuses registers for values live on disjoint CFG branches", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
 			parameterCount: 1,
