@@ -2272,6 +2272,39 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("boxes and roots a mixed-representation virtual-field join", () => {
+		let program: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function preserve(candidate, chooseObject) {
+					const object = { held: null };
+					if (chooseObject) object.held = candidate;
+					else object.held = 1;
+					globalThis.observe();
+					object.held = 0;
+					return 1;
+				}`,
+				"scalar-mixed-virtual-field.js",
+			),
+			{
+				afterCoreOptimization(optimized) {
+					program = optimized;
+				},
+			},
+		);
+		const preserve = program!.functions[functionIndexOfName(program!, "preserve")]!;
+		const instructions = preserve.blocks.flatMap(({ instructions }) => instructions);
+		const opcodes = instructions.map(({ opcode }) => opcode);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("storePropertyStatic");
+		const rootUse = instructions.find(({ opcode }) => opcode === "rootUse");
+		expect(rootUse?.inputs).toHaveLength(1);
+		const rooted = rootUse?.inputs[0];
+		const rootedValue = preserve.values.find(({ id }) => id === rooted);
+		expect(rootedValue?.definition.kind).toBe("block-parameter");
+		expect(rootedValue?.representation).toBe("boxed");
+	});
+
 	it("scalarizes and roots a loop-carried virtual field", () => {
 		let program: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
@@ -4644,7 +4677,7 @@ describe("Core IR optimizer", () => {
 		).toBe(false);
 	});
 
-	it("joins closed stack-cell contents before refining property-load representations", () => {
+	it("scalarizes closed cells after joining their value representations", () => {
 		const compile = (body: string, sourcePath: string) => {
 			const semantic = analyzeSourceAndRunSemanticAnalysis(
 				`function read(flag, count) { ${body} }`,
@@ -4694,7 +4727,10 @@ describe("Core IR optimizer", () => {
 			return object.value;`,
 			"core-stack-cell-mixed.js",
 		);
-		expect(propertyLoadRepresentations(mixed)).toEqual(["boxed"]);
+		expect(propertyLoadRepresentations(mixed)).toEqual([]);
+		expect(mixed.regions).not.toContainEqual(
+			expect.objectContaining({ kind: "stack-object-plan" }),
+		);
 
 		const integer = compile(
 			`const object = { value: 1 };

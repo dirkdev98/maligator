@@ -10981,6 +10981,20 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 			const virtualFieldRepresentations = new Map<CoreValueId, CoreRepresentation>();
 			const representationOf = (value: CoreValueId): CoreRepresentation | undefined =>
 				virtualFieldRepresentations.get(value) ?? representations.get(value);
+			const joinedRepresentation = (
+				values: ReadonlyArray<CoreValueId>,
+			): CoreRepresentation | undefined => {
+				const first = representationOf(values[0]!);
+				if (
+					first === undefined ||
+					values.some((value) => representationOf(value) === undefined)
+				) {
+					return undefined;
+				}
+				return values.every((value) => representationOf(value) === first)
+					? first
+					: "boxed";
+			};
 			const cannotBeHeldWeakly = (value: CoreValueId): boolean => {
 				const representation = representationOf(value);
 				return representation === "f64" ||
@@ -11001,11 +11015,8 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							.filter((store) => store.key === key && loop.blocks.has(store.block.id))
 							.map(({ value }) => value),
 					];
-					const representation = representationOf(possibleValues[0]!);
-					if (
-						representation === undefined ||
-						possibleValues.some((value) => representationOf(value) !== representation)
-					) {
+					const representation = joinedRepresentation(possibleValues);
+					if (representation === undefined) {
 						valid = false;
 						break;
 					}
@@ -11057,7 +11068,10 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 					for (const key of layout.keys) {
 						const incomingValues = incomingFields.map((fields) => fields!.get(key));
 						const firstValue = incomingValues[0];
-						if (firstValue === undefined) {
+						if (
+							firstValue === undefined ||
+							incomingValues.some((value) => value === undefined)
+						) {
 							valid = false;
 							break;
 						}
@@ -11075,14 +11089,10 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							currentFields.set(key, existing.value);
 							continue;
 						}
-						const representation = representationOf(firstValue);
-						if (
-							representation === undefined ||
-							incomingValues.some(
-								(value) =>
-									value === undefined || representationOf(value) !== representation,
-							)
-						) {
+						const representation = joinedRepresentation(
+							incomingValues as ReadonlyArray<CoreValueId>,
+						);
+						if (representation === undefined) {
 							valid = false;
 							break;
 						}

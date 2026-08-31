@@ -117,6 +117,18 @@ function scalarJoinedRootedAcrossCall(chooseLeft, observe) {
 	return alive;
 }
 
+function scalarMixedJoinedRootedAcrossCall(useObject, observe) {
+	const target = { tag: "target" };
+	const object = { held: null };
+	if (useObject) object.held = target;
+	else object.held = 1;
+	const watcher = new WeakRef(target);
+	observe();
+	const alive = watcher.deref() !== undefined;
+	object.held = 0;
+	return useObject ? alive : true;
+}
+
 function scalarLoopRootedAcrossCall(count, observe) {
 	const initial = { tag: "initial" };
 	const replacement = { tag: "replacement" };
@@ -273,6 +285,11 @@ check(
 	"joined explicit-root boxed scalar replacement",
 	scalarJoinedRootedAcrossCall(true, () => allocateNoise(450)) &&
 		scalarJoinedRootedAcrossCall(false, () => allocateNoise(460)),
+);
+check(
+	"mixed joined explicit-root boxed scalar replacement",
+	scalarMixedJoinedRootedAcrossCall(true, () => allocateNoise(465)) &&
+		scalarMixedJoinedRootedAcrossCall(false, () => allocateNoise(466)),
 );
 check(
 	"loop-carried explicit-root boxed scalar replacement",
