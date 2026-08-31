@@ -10,7 +10,11 @@ import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { OPTIMIZATION_ABLATIONS } from "../src/compiler/shared/compiler-diagnostics.ts";
-import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	conservativeCompilerProgramFacts,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import type {
 	ExecutionFunction,
@@ -617,14 +621,19 @@ function summarizeRuntime(image: RuntimeImage, wire: Uint8Array, c: string) {
 }
 
 function compileMode(sample: Sample, mode: ModeId) {
-	const semantic = analyzeSourceAndRunSemanticAnalysis(
-		sample.source,
-		`output-explorer/${sample.id}.js`,
+	const sourcePath = `output-explorer/${sample.id}.js`;
+	const semantic = analyzeSourceAndRunSemanticAnalysis(sample.source, sourcePath);
+	const facts = withProgramClosure(
+		{
+			...conservativeCompilerProgramFacts(),
+			compilationMode: mode === "full" ? ("full" as const) : ("development" as const),
+		},
+		programClosureCertificate(
+			{ kind: "whole-program", entry: sourcePath },
+			[{ kind: "entry-module", module: sourcePath }],
+			[],
+		),
 	);
-	const facts = {
-		...conservativeCompilerProgramFacts(),
-		compilationMode: mode === "full" ? ("full" as const) : ("development" as const),
-	};
 	const core = lowerSemanticProgramToCore(semantic, {
 		facts,
 		collectOptimizationDiagnostics: true,
