@@ -2148,6 +2148,97 @@ describe("Core IR optimizer", () => {
 		expect(rootUse?.inputs).toHaveLength(1);
 	});
 
+	it("scalarizes a contained object through a must-alias move", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 2,
+		});
+		const entry = builder.createBlock([{}, {}]);
+		const [value, observe] = builder.block(entry).parameters.map(({ value }) => value);
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		const [alias] = builder.appendInstruction(entry, "move", [object!]);
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.appendInstruction(entry, "call", [observe!, receiver!]);
+		const [zero] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		builder.appendInstruction(entry, "storePropertyStatic", [alias!, zero!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: zero! });
+
+		const optimized = executeCoreOptimizations(
+			{
+				...coreProgram([builder.finish(entry)]),
+				stringConstants: [[], [104, 101, 108, 100]],
+			},
+			{ maxRounds: 1 },
+		).program.functions[0]!;
+		const instructions = optimized.blocks.flatMap(({ instructions }) => instructions);
+		const opcodes = instructions.map(({ opcode }) => opcode);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("move");
+		expect(opcodes).not.toContain("storePropertyStatic");
+		expect(opcodes).toContain("rootUse");
+	});
+
+	it("scalarizes a contained object through a must-alias block parameter", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 3,
+		});
+		const entry = builder.createBlock([{}, {}, {}]);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "boxed" }]);
+		const [value, condition, observe] = builder
+			.block(entry)
+			.parameters.map(({ value }) => value);
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
+			attributes: { keyStringIndices: [1] },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftAlias] = builder.appendInstruction(left, "move", [object!]);
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftAlias!] },
+		});
+		const [rightAlias] = builder.appendInstruction(right, "move", [object!]);
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightAlias!] },
+		});
+		const alias = builder.block(join).parameters[0]!.value;
+		const [receiver] = builder.appendInstruction(join, "createUndefined", []);
+		builder.appendInstruction(join, "call", [observe!, receiver!]);
+		const [zero] = builder.appendInstruction(join, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		builder.appendInstruction(join, "storePropertyStatic", [alias, zero!], {
+			attributes: { stringIndex: 1 },
+		});
+		builder.setTerminator(join, { kind: "return", value: zero! });
+
+		const optimized = executeCoreOptimizations(
+			{
+				...coreProgram([builder.finish(entry)]),
+				stringConstants: [[], [104, 101, 108, 100]],
+			},
+			{ maxRounds: 1, verification: "per-pass" },
+		).program.functions[0]!;
+		const opcodes = optimized.blocks.flatMap(({ instructions }) =>
+			instructions.map(({ opcode }) => opcode),
+		);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("storePropertyStatic");
+		expect(opcodes).toEqual(expect.arrayContaining(["call", "rootUse"]));
+	});
+
 	it("dead-store elimination retains a slot whose values a WeakRef could observe", () => {
 		// Same unread slot as above, but the values that occupy it are not proven
 		// primitives, so how long the slot references them stays observable through
@@ -4444,7 +4535,7 @@ describe("Core IR optimizer", () => {
 		expect(typeof vmRegion.sites[0]!.inheritedAccessIp).toBe("number");
 	});
 
-	it("certifies a fully local stack object without a materializer", () => {
+	it("scalarizes a fully local object across branch stores", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function read(value, replace) {
 				const object = { value };
@@ -4461,26 +4552,21 @@ describe("Core IR optimizer", () => {
 			},
 		});
 
-		const coreRegion = optimized!.functions[1]!.regions.find(
-			({ kind }) => kind === "stack-object-plan",
+		const fn = optimized!.functions[1]!;
+		const opcodes = fn.blocks.flatMap(({ instructions }) =>
+			instructions.map(({ opcode }) => opcode),
 		);
-		expect(coreRegion?.data).toMatchObject({
-			license: {
-				guard: { obligations: [{ kind: "fallback" }] },
-				materialization: "none",
-			},
-			sites: [{ materializations: [] }],
-		});
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("loadPropertyStatic");
+		expect(opcodes).not.toContain("storePropertyStatic");
+		expect(fn.regions.some(({ kind }) => kind === "stack-object-plan")).toBe(false);
 
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
-		const vmRegion = restored.native.functions[1]!.specializations.find(
-			({ kind }) => kind === "stack-object-plan",
-		);
-		expect(vmRegion?.kind).toBe("stack-object-plan");
-		if (vmRegion?.kind !== "stack-object-plan") throw new Error("expected stack region");
-		expect(vmRegion.license.materialization).toBe("none");
-		expect(vmRegion.sites).toHaveLength(1);
-		expect(vmRegion.sites[0]!.materializations).toEqual([]);
+		expect(
+			restored.native.functions[1]!.specializations.some(
+				({ kind }) => kind === "stack-object-plan",
+			),
+		).toBe(false);
 	});
 
 	it("joins closed stack-cell contents before refining property-load representations", () => {

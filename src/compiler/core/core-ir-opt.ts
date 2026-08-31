@@ -10677,22 +10677,20 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 	},
 };
 
-function coreControlUsesValue(block: CoreBlock, value: CoreValueId): boolean {
-	if (block.handler?.arguments.includes(value) === true) return true;
-	if (
-		coreTerminatorEdges(block.terminator).some((edge) => edge.arguments.includes(value))
-	) {
-		return true;
-	}
+function coreControlObservesAnyValue(
+	block: CoreBlock,
+	values: ReadonlySet<CoreValueId>,
+): boolean {
+	if (block.handler?.arguments.some((value) => values.has(value)) === true) return true;
 	switch (block.terminator.kind) {
 		case "branch":
 		case "guard":
-			return block.terminator.condition === value;
+			return values.has(block.terminator.condition);
 		case "switch":
-			return block.terminator.discriminant === value;
+			return values.has(block.terminator.discriminant);
 		case "return":
 		case "throw":
-			return block.terminator.value === value;
+			return values.has(block.terminator.value);
 		case "jump":
 		case "unreachable":
 			return false;
@@ -10710,12 +10708,17 @@ function coreControlUsesValue(block: CoreBlock, value: CoreValueId): boolean {
  * target root map, while runtime lowering emits no instruction for the marker.
  * Removing the allocation and stores only removes collection points, which can
  * delay collection but cannot expose an earlier one.
+ *
+ * Moves and all-ordinary block parameters are structural spellings of the same
+ * contained identity. Acyclic paths may cross blocks while each joined field has
+ * one identical incoming SSA value; differing field values require a field phi.
  */
 const scalarizeRootedContainedObjects: CoreFunctionPass = {
 	name: "scalarize-rooted-contained-objects",
 	ablation: "escape",
 	run(fn, analyses, program) {
 		const provenance = analyses.provenance(fn);
+		const cfg = analyses.controlFlow(fn);
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
 			analyses.regionProtection(fn);
 		const locations = new Map<
@@ -10727,13 +10730,21 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				locations.set(instruction.id, { block, index });
 			}
 		}
+		const valuesById = new Map(fn.values.map((value) => [value.id, value] as const));
 
 		for (const layout of provenance.layouts) {
+			const aliases = new Set(
+				fn.values
+					.filter(
+						({ id }) => provenance.allocationOf(id)?.instruction === layout.instruction,
+					)
+					.map(({ id }) => id),
+			);
 			if (
 				layout.kind !== "named-slots" ||
 				provenance.escape(layout.instruction) !== "contained" ||
 				protectedInstructions.has(layout.instruction) ||
-				protectedInputs.has(layout.result)
+				[...aliases].some((value) => protectedInputs.has(value))
 			) {
 				continue;
 			}
@@ -10746,19 +10757,80 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 			}
 			const stores: Array<{
 				readonly instruction: CoreInstruction;
+				readonly block: CoreBlock;
 				readonly index: number;
 				readonly key: number;
 				readonly value: CoreValueId;
 			}> = [];
+			const aliasMoves = new Set<CoreInstructionId>();
 			let valid = true;
-			for (const block of fn.blocks) {
-				if (coreControlUsesValue(block, layout.result)) {
+			for (const alias of aliases) {
+				if (alias === layout.result) continue;
+				const definition = valuesById.get(alias)?.definition;
+				if (definition?.kind === "instruction") {
+					const location = locations.get(definition.instruction);
+					const instruction =
+						location === undefined
+							? undefined
+							: location.block.instructions[location.index];
+					if (
+						instruction?.opcode !== "move" ||
+						instruction.inputs.length !== 1 ||
+						!aliases.has(instruction.inputs[0]!) ||
+						instruction.outputs.length !== 1 ||
+						instruction.outputs[0] !== alias ||
+						protectedInstructions.has(instruction.id)
+					) {
+						valid = false;
+						break;
+					}
+					aliasMoves.add(instruction.id);
+					continue;
+				}
+				if (definition?.kind !== "block-parameter") {
 					valid = false;
 					break;
 				}
+				const block = fn.blocks[definition.block];
+				const incoming = cfg.predecessors[definition.block]!;
+				if (
+					block === undefined ||
+					block.handler !== undefined ||
+					block.parameters[definition.index]?.role === "exception" ||
+					incoming.length === 0 ||
+					incoming.some(
+						(edge) =>
+							edge.kind !== "ordinary" || !aliases.has(edge.arguments[definition.index]!),
+					)
+				) {
+					valid = false;
+					break;
+				}
+			}
+			if (!valid) continue;
+			for (const block of fn.blocks) {
+				if (coreControlObservesAnyValue(block, aliases)) {
+					valid = false;
+					break;
+				}
+				for (const edge of coreTerminatorEdges(block.terminator)) {
+					const parameters = fn.blocks[edge.block]?.parameters;
+					if (
+						parameters === undefined ||
+						edge.arguments.some(
+							(argument, index) =>
+								aliases.has(argument) && !aliases.has(parameters[index]!.value),
+						)
+					) {
+						valid = false;
+						break;
+					}
+				}
+				if (!valid) break;
 				for (const [index, instruction] of block.instructions.entries()) {
 					for (const [position, input] of instruction.inputs.entries()) {
-						if (input !== layout.result) continue;
+						if (!aliases.has(input)) continue;
+						if (position === 0 && aliasMoves.has(instruction.id)) continue;
 						const stringIndex = instruction.attributes.stringIndex;
 						const stored = instruction.inputs[1];
 						const ownCell =
@@ -10766,7 +10838,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							position === 0 &&
 							typeof stringIndex === "number"
 								? provenance.ownCell(
-										layout.result,
+										input,
 										{ kind: "string-constant", index: stringIndex },
 										"write",
 									)
@@ -10775,8 +10847,13 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							ownCell?.layout.instruction !== layout.instruction ||
 							ownCell.cell.kind !== "object-slot" ||
 							stored === undefined ||
-							block !== allocationLocation.block ||
-							index <= allocationLocation.index ||
+							(block === allocationLocation.block
+								? index <= allocationLocation.index
+								: !cfg.instructionDominatesBlock(
+										allocationLocation.block.id,
+										block.id,
+									)) ||
+							block.handler !== undefined ||
 							protectedInstructions.has(instruction.id)
 						) {
 							valid = false;
@@ -10784,6 +10861,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 						}
 						stores.push({
 							instruction,
+							block,
 							index,
 							key: ownCell.cell.key,
 							value: stored,
@@ -10798,44 +10876,124 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				stores.map((store) => [store.instruction.id, store] as const),
 			);
 			if (uniqueStores.size !== stores.length) continue;
-			const orderedStores = [...uniqueStores.values()].sort(
-				(left, right) => left.index - right.index,
+			const orderedStores = [...uniqueStores.values()];
+			const storesByBlock = new Map<
+				CoreBlockId,
+				Map<number, (typeof orderedStores)[number]>
+			>();
+			for (const store of orderedStores) {
+				let storesInBlock = storesByBlock.get(store.block.id);
+				if (storesInBlock === undefined) {
+					storesInBlock = new Map();
+					storesByBlock.set(store.block.id, storesInBlock);
+				}
+				storesInBlock.set(store.index, store);
+			}
+			const blocksCanReachStore = new Set<CoreBlockId>(
+				orderedStores.map(({ block }) => block.id),
 			);
-			const finalStoreIndex = orderedStores.at(-1)!.index;
-			const currentFields = new Map(
-				layout.keys.map((key, index) => [key, layout.initialValues[index]!] as const),
-			);
-			const storeAt = new Map(
-				orderedStores.map((store) => [store.index, store] as const),
-			);
-			const rootValuesAfter = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
-			for (
-				let index = allocationLocation.index + 1;
-				valid && index <= finalStoreIndex;
-				index++
+			const worklist = [...blocksCanReachStore];
+			while (worklist.length > 0 && valid) {
+				const block = worklist.pop()!;
+				if (block === allocationLocation.block.id) continue;
+				for (const edge of cfg.predecessors[block]!) {
+					if (
+						edge.kind !== "ordinary" ||
+						(edge.from !== allocationLocation.block.id &&
+							!cfg.instructionDominatesBlock(allocationLocation.block.id, edge.from))
+					) {
+						valid = false;
+						break;
+					}
+					if (!blocksCanReachStore.has(edge.from)) {
+						blocksCanReachStore.add(edge.from);
+						worklist.push(edge.from);
+					}
+				}
+			}
+			const cyclicBlocks = new Set<CoreBlockId>();
+			for (const loop of cfg.loops)
+				for (const block of loop.blocks) cyclicBlocks.add(block);
+			for (const cycle of cfg.irreducibleCycles) {
+				for (const block of cycle.blocks) cyclicBlocks.add(block);
+			}
+			if (
+				!valid ||
+				[...blocksCanReachStore].some(
+					(block) => cyclicBlocks.has(block) || fn.blocks[block]!.handler !== undefined,
+				)
 			) {
-				const store = storeAt.get(index);
-				if (store !== undefined) {
-					currentFields.set(store.key, store.value);
-					continue;
+				continue;
+			}
+
+			const rootValuesAfter = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
+			const exitFields = new Map<CoreBlockId, ReadonlyMap<number, CoreValueId>>();
+			for (const blockId of cfg.reversePostorder) {
+				if (!blocksCanReachStore.has(blockId)) continue;
+				const block = fn.blocks[blockId]!;
+				let currentFields: Map<number, CoreValueId>;
+				let start = 0;
+				if (block === allocationLocation.block) {
+					currentFields = new Map(
+						layout.keys.map((key, index) => [key, layout.initialValues[index]!] as const),
+					);
+					start = allocationLocation.index + 1;
+				} else {
+					const incoming = cfg.predecessors[blockId]!.filter(
+						({ kind }) => kind === "ordinary",
+					);
+					const first =
+						incoming[0] === undefined ? undefined : exitFields.get(incoming[0].from);
+					if (first === undefined) {
+						valid = false;
+						break;
+					}
+					currentFields = new Map(first);
+					for (const edge of incoming.slice(1)) {
+						const candidate = exitFields.get(edge.from);
+						if (
+							candidate === undefined ||
+							[...currentFields].some(([key, value]) => candidate.get(key) !== value)
+						) {
+							valid = false;
+							break;
+						}
+					}
+					if (!valid) break;
 				}
-				const instruction = allocationLocation.block.instructions[index]!;
-				const effects = coreInstructionEffects(instruction);
-				if (effects.maySuspend) {
-					valid = false;
-					break;
-				}
-				if (!effects.mayGc) continue;
-				const values = [
-					...new Set(
-						[...currentFields.values()].filter(
-							(value) =>
-								!provenance.cannotBeHeldWeakly(value) &&
-								!instruction.inputs.includes(value),
+				const storesInBlock =
+					storesByBlock.get(blockId) ?? new Map<number, (typeof orderedStores)[number]>();
+				const lastStore = Math.max(-1, ...storesInBlock.keys());
+				const liveIntoSuccessor = cfg.successors[blockId]!.some(
+					({ kind, to }) => kind === "ordinary" && blocksCanReachStore.has(to),
+				);
+				for (let index = start; index < block.instructions.length; index++) {
+					const store = storesInBlock.get(index);
+					if (store !== undefined) {
+						currentFields.set(store.key, store.value);
+						continue;
+					}
+					if (index >= lastStore && !liveIntoSuccessor) continue;
+					const instruction = block.instructions[index]!;
+					const effects = coreInstructionEffects(instruction);
+					if (effects.maySuspend) {
+						valid = false;
+						break;
+					}
+					if (!effects.mayGc) continue;
+					const values = [
+						...new Set(
+							[...currentFields.values()].filter(
+								(value) =>
+									!provenance.cannotBeHeldWeakly(value) &&
+									!instruction.inputs.includes(value),
+							),
 						),
-					),
-				];
-				if (values.length > 0) rootValuesAfter.set(instruction.id, values);
+					];
+					if (values.length > 0) rootValuesAfter.set(instruction.id, values);
+				}
+				if (!valid) break;
+				exitFields.set(blockId, currentFields);
 			}
 			if (!valid) continue;
 
@@ -10849,7 +11007,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 						fact.claims.some((claim) =>
 							claim.kind === "effect"
 								? removedInstructions.has(claim.instruction)
-								: claim.subject === layout.result,
+								: aliases.has(claim.subject),
 						),
 					)
 					.map(({ id }) => id),
@@ -10872,6 +11030,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				continue;
 			}
 			let instructionId = nextInstructionId(fn);
+			const placeholderInstructionId = coreInstructionId(instructionId++);
 			const rootUsesAfter = new Map(
 				[...rootValuesAfter].map(
 					([after, inputs]) =>
@@ -10892,12 +11051,34 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				blocks: fn.blocks.map((block) => ({
 					...block,
 					instructions: block.instructions.flatMap((instruction) => {
+						if (instruction.id === layout.instruction) {
+							return [
+								{
+									id: placeholderInstructionId,
+									opcode: "createUndefined",
+									inputs: [],
+									outputs: [layout.result],
+									attributes: {},
+								} satisfies CoreInstruction,
+							];
+						}
 						if (removedInstructions.has(instruction.id)) return [];
 						const rootUse = rootUsesAfter.get(instruction.id);
 						return rootUse === undefined ? [instruction] : [instruction, rootUse];
 					}),
 				})),
-				values: fn.values.filter(({ id }) => id !== layout.result),
+				values: fn.values.map((value) =>
+					value.id === layout.result
+						? {
+								...value,
+								definition: {
+									kind: "instruction" as const,
+									instruction: placeholderInstructionId,
+									index: 0,
+								},
+							}
+						: value,
+				),
 				mutationEpoch: fn.mutationEpoch + 1,
 			};
 			return deadInstructionElimination.run(stripped, analyses, program);
