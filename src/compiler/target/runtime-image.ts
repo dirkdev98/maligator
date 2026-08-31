@@ -2544,8 +2544,9 @@ function lowerExecutionFunctionToBytecode(
 	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
 	literalShapeCount: number,
 ): RuntimeFunctionLoweringPlan {
-	// Source-position and exception-range markers carry no executable opcode, so
-	// block start IPs count only instructions that survive flattening.
+	// Compile-only reachability, source-position, and exception-range markers carry
+	// no executable opcode, so block start IPs count only instructions that survive
+	// flattening.
 	const blockStartIps = new Map<number, number>();
 	let nextInstructionPointer = 0;
 
@@ -2554,6 +2555,7 @@ function lowerExecutionFunctionToBytecode(
 		for (const instruction of fn.blocks[i]!.instructions) {
 			if (
 				instruction.type !== "sourcePos" &&
+				instruction.type !== "rootUse" &&
 				instruction.type !== "tryBegin" &&
 				instruction.type !== "tryEnd"
 			) {
@@ -2590,6 +2592,7 @@ function lowerExecutionFunctionToBytecode(
 				currentPos = instruction.pos;
 				continue;
 			}
+			if (instruction.type === "rootUse") continue;
 			if (instruction.type === "tryBegin") {
 				const handlerIp = blockStartIps.get(instruction.blocks[0]);
 				if (handlerIp === undefined) {
@@ -2807,6 +2810,8 @@ function lowerInstructionToBytecodeInstruction(
 		case "sourcePos":
 			// Markers are consumed into `positions` and stripped before this point.
 			throw new Error("sourcePos marker must be stripped before lowering");
+		case "rootUse":
+			throw new Error("rootUse marker must be stripped before lowering");
 		case "move":
 			return {
 				opcode: "MOVE",

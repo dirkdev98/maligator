@@ -96,6 +96,13 @@ function scalarOperandRootedObject(value) {
 	return point.x;
 }
 
+function scalarRootedAcrossCall(value, observe) {
+	const object = { held: value };
+	observe();
+	object.held = 0;
+	return 1;
+}
+
 function homogeneousBooleanCell(flag, count) {
 	const object = { value: true };
 	for (let i = 0; i < count; i++) {
@@ -228,6 +235,10 @@ check(
 	"operand-rooted boxed scalar replacement",
 	scalarOperandRootedObject(coercibleScalarOperand) === 9 &&
 		coercibleScalarOperand.coercions === 2,
+);
+check(
+	"explicit-root boxed scalar replacement",
+	scalarRootedAcrossCall({ tag: "held" }, () => allocateNoise(440)) === 1,
 );
 check(
 	"homogeneous boolean stack cell",

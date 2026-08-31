@@ -144,6 +144,22 @@ function structuralProgram(program: CoreProgram) {
 }
 
 describe("Core verification boundaries", () => {
+	it("rejects root uses of untraced values", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [number] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 1 },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(entry, "rootUse", [number!]);
+		const [result] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+
+		expect(() =>
+			verifyCoreProgram(coreProgram([builder.finish(entry)]), coreOpcodeRegistry),
+		).toThrow(/roots a non-traced value/);
+	});
+
 	it("rejects an invalid program before optimization runs", () => {
 		expect(() => executeCoreOptimizations(programWithUndefinedUse())).toThrow(
 			/Core IR verification failed \[stage=pre-optimization function=0\]: terminator @\d+ uses unknown value 97/,

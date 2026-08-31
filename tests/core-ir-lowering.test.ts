@@ -135,6 +135,57 @@ describe("Core IR lowering", () => {
 		).toBe(true);
 	});
 
+	it("lowers virtual-field root uses into safepoint metadata without an opcode", () => {
+		const optimized = executeCoreOptimizations(
+			lower(`
+				function preserve(value) {
+					const object = { held: value };
+					globalThis.observe();
+					object.held = 0;
+					return 1;
+				}
+			`),
+		).program;
+		const core = optimized.functions.find((fn) =>
+			fn.blocks.some((block) =>
+				block.instructions.some(({ opcode }) => opcode === "rootUse"),
+			),
+		)!;
+		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
+		const fn = target.functions[core.functionIndex]!;
+		const instructions = fn.blocks.flatMap(({ instructions }) => instructions);
+		const callSite = fn.blocks
+			.flatMap((block) =>
+				block.instructions.flatMap((instruction, index) => {
+					if (instruction.type !== "rootUse") return [];
+					const previous = block.instructions[index - 1];
+					return previous?.type === "call"
+						? [{ marker: instruction, call: previous }]
+						: [];
+				}),
+			)
+			.at(0);
+		expect(callSite?.marker.type).toBe("rootUse");
+		if (callSite === undefined) return;
+		const marker = callSite.marker;
+		const safepoint = fn.gc.safepoints.find(
+			(candidate) => candidate.instruction === callSite.call,
+		);
+		expect(safepoint?.rootRegisters).toContain(marker.registers[0]);
+
+		const executableCount = instructions.filter(
+			({ type }) =>
+				type !== "sourcePos" &&
+				type !== "rootUse" &&
+				type !== "tryBegin" &&
+				type !== "tryEnd",
+		).length;
+		const vm = lowerExecutionToProgramImage(target);
+		expect(vm.runtime.functions[core.functionIndex]!.instructions).toHaveLength(
+			executableCount,
+		);
+	});
+
 	it("reuses registers for values live on disjoint CFG branches", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
 			parameterCount: 1,

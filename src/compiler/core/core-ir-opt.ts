@@ -10704,18 +10704,15 @@ function coreControlUsesValue(block: CoreBlock, value: CoreValueId): boolean {
  *
  * Forwarding has already replaced every readable own slot with its SSA value. A
  * boxed occupant can nevertheless be observed through WeakRef while user code or
- * collection runs, so this first scalar-replacement slice requires every such
- * occupant to be an operand of each surviving collection point before the
- * object's final use. The target root contract keeps operation operands live for
- * the complete operation; removing the allocation and stores only removes
- * collection points, which can delay collection but cannot expose an earlier one.
- *
- * Requiring direct operands makes the proof stable under later DCE and value
- * rewriting. Broader virtual-field liveness needs an explicit Core root-use
- * representation rather than relying on an incidental later use.
+ * collection runs. Direct operands are already rooted for an operation's whole
+ * duration; every other virtual field receives a compile-only `rootUse` after the
+ * collection point. Ordinary SSA liveness then carries the field into the exact
+ * target root map, while runtime lowering emits no instruction for the marker.
+ * Removing the allocation and stores only removes collection points, which can
+ * delay collection but cannot expose an earlier one.
  */
-const scalarizeOperandRootedContainedObjects: CoreFunctionPass = {
-	name: "scalarize-operand-rooted-contained-objects",
+const scalarizeRootedContainedObjects: CoreFunctionPass = {
+	name: "scalarize-rooted-contained-objects",
 	ablation: "escape",
 	run(fn, analyses, program) {
 		const provenance = analyses.provenance(fn);
@@ -10811,6 +10808,7 @@ const scalarizeOperandRootedContainedObjects: CoreFunctionPass = {
 			const storeAt = new Map(
 				orderedStores.map((store) => [store.index, store] as const),
 			);
+			const rootValuesAfter = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
 			for (
 				let index = allocationLocation.index + 1;
 				valid && index <= finalStoreIndex;
@@ -10828,15 +10826,16 @@ const scalarizeOperandRootedContainedObjects: CoreFunctionPass = {
 					break;
 				}
 				if (!effects.mayGc) continue;
-				for (const value of currentFields.values()) {
-					if (
-						!provenance.cannotBeHeldWeakly(value) &&
-						!instruction.inputs.includes(value)
-					) {
-						valid = false;
-						break;
-					}
-				}
+				const values = [
+					...new Set(
+						[...currentFields.values()].filter(
+							(value) =>
+								!provenance.cannotBeHeldWeakly(value) &&
+								!instruction.inputs.includes(value),
+						),
+					),
+				];
+				if (values.length > 0) rootValuesAfter.set(instruction.id, values);
 			}
 			if (!valid) continue;
 
@@ -10872,13 +10871,31 @@ const scalarizeOperandRootedContainedObjects: CoreFunctionPass = {
 			) {
 				continue;
 			}
+			let instructionId = nextInstructionId(fn);
+			const rootUsesAfter = new Map(
+				[...rootValuesAfter].map(
+					([after, inputs]) =>
+						[
+							after,
+							{
+								id: coreInstructionId(instructionId++),
+								opcode: "rootUse",
+								inputs,
+								outputs: [],
+								attributes: {},
+							} satisfies CoreInstruction,
+						] as const,
+				),
+			);
 			const stripped: CoreFunction = {
 				...fn,
 				blocks: fn.blocks.map((block) => ({
 					...block,
-					instructions: block.instructions.filter(
-						({ id }) => !removedInstructions.has(id),
-					),
+					instructions: block.instructions.flatMap((instruction) => {
+						if (removedInstructions.has(instruction.id)) return [];
+						const rootUse = rootUsesAfter.get(instruction.id);
+						return rootUse === undefined ? [instruction] : [instruction, rootUse];
+					}),
 				})),
 				values: fn.values.filter(({ id }) => id !== layout.result),
 				mutationEpoch: fn.mutationEpoch + 1,
@@ -13144,7 +13161,7 @@ const CORE_LOCAL_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	refineOwnDataCellAccesses,
 	forwardFreshAllocationPrefixLoads,
 	forwardMemoryAccesses,
-	scalarizeOperandRootedContainedObjects,
+	scalarizeRootedContainedObjects,
 	eliminateDeadStores,
 	eliminateDeadAllocations,
 	sinkFreshAllocations,

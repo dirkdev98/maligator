@@ -66,6 +66,15 @@ export type CompilerInstruction =
 			pos: number;
 	  }
 	| {
+			/**
+			 * COMPILE-ONLY: keep traced registers reachable through every preceding
+			 * safepoint until this marker. Execution liveness consumes the reads and
+			 * runtime/native lowering strips the marker without emitting an opcode.
+			 */
+			type: "rootUse";
+			registers: [number, ...Array<number>];
+	  }
+	| {
 			type: "move";
 
 			// [dest, source]

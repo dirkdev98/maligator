@@ -85,7 +85,11 @@ function lastExecutable(
 ): CompilerInstruction | undefined {
 	for (let index = instructions.length - 1; index >= 0; index--) {
 		const instruction = instructions[index]!;
-		if (instruction.type !== "sourcePos" && instruction.type !== "tryEnd") {
+		if (
+			instruction.type !== "sourcePos" &&
+			instruction.type !== "rootUse" &&
+			instruction.type !== "tryEnd"
+		) {
 			return instruction;
 		}
 	}
@@ -421,7 +425,9 @@ function verifyInstructionOperands(model: FunctionModel): void {
 					});
 				}
 			}
-			if (instruction.type !== "sourcePos") previousSemanticInstruction = instruction;
+			if (instruction.type !== "sourcePos" && instruction.type !== "rootUse") {
+				previousSemanticInstruction = instruction;
+			}
 		}
 	}
 }
@@ -923,6 +929,7 @@ function verifyRegions(model: FunctionModel): void {
 			}
 			if (
 				instruction.type === "sourcePos" ||
+				instruction.type === "rootUse" ||
 				instruction.type === "tryBegin" ||
 				instruction.type === "tryEnd"
 			) {

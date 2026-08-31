@@ -37,6 +37,12 @@ describe("Core target operation contract", () => {
 			outputCount: 0,
 			representation: "none",
 		});
+		expect(coreTargetOperationContracts.get("rootUse")).toMatchObject({
+			targetType: "rootUse",
+			outputCount: 0,
+			representation: "none",
+			safepoint: "instruction-effects",
+		});
 	});
 
 	it("rejects a canonical registry that omits a target lowering", () => {

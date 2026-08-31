@@ -838,6 +838,15 @@ function verifyCoreFunctionGraph(
 				descriptor.outputs.minimum,
 				descriptor.outputs.maximum,
 			);
+			if (
+				instruction.opcode === "rootUse" &&
+				instruction.inputs.some((input) => {
+					const representation = values[input]?.representation;
+					return representation !== "boxed" && representation !== "string";
+				})
+			) {
+				fail(`instruction @${instruction.id} roots a non-traced value`);
+			}
 			for (const [outputIndex, output] of instruction.outputs.entries()) {
 				const value = values[output];
 				if (

@@ -2117,7 +2117,7 @@ describe("Core IR optimizer", () => {
 		expect(ablatedOpcodes).toContain("storePropertyStatic");
 	});
 
-	it("keeps a boxed contained field when an intervening safepoint does not root it", () => {
+	it("roots a boxed virtual field across an intervening safepoint", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
@@ -2139,9 +2139,13 @@ describe("Core IR optimizer", () => {
 		const opcodes = preserve.blocks.flatMap(({ instructions }) =>
 			instructions.map(({ opcode }) => opcode),
 		);
-		expect(opcodes).toEqual(
-			expect.arrayContaining(["createObjectShaped", "call", "storePropertyStatic"]),
-		);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("storePropertyStatic");
+		expect(opcodes).toEqual(expect.arrayContaining(["call", "rootUse"]));
+		const rootUse = preserve.blocks
+			.flatMap(({ instructions }) => instructions)
+			.find(({ opcode }) => opcode === "rootUse");
+		expect(rootUse?.inputs).toHaveLength(1);
 	});
 
 	it("dead-store elimination retains a slot whose values a WeakRef could observe", () => {

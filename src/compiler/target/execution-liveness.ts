@@ -37,7 +37,11 @@ function lastExecutable(
 ): CompilerInstruction | undefined {
 	for (let index = instructions.length - 1; index >= 0; index--) {
 		const instruction = instructions[index]!;
-		if (instruction.type !== "sourcePos" && instruction.type !== "tryEnd") {
+		if (
+			instruction.type !== "sourcePos" &&
+			instruction.type !== "rootUse" &&
+			instruction.type !== "tryEnd"
+		) {
 			return instruction;
 		}
 	}
@@ -194,6 +198,7 @@ export function executionLoopBackedgeInstructions(
 		for (const instruction of instructions) {
 			if (
 				instruction.type !== "sourcePos" &&
+				instruction.type !== "rootUse" &&
 				instruction.type !== "tryBegin" &&
 				instruction.type !== "tryEnd"
 			) {
@@ -207,6 +212,7 @@ export function executionLoopBackedgeInstructions(
 		for (const instruction of instructions) {
 			if (
 				instruction.type === "sourcePos" ||
+				instruction.type === "rootUse" ||
 				instruction.type === "tryBegin" ||
 				instruction.type === "tryEnd"
 			) {
