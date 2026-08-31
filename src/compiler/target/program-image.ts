@@ -557,6 +557,11 @@ export type VmArrayLengthComparisonRegion = VmRegionEnvelope<
 	readonly sites: ReadonlyArray<{
 		readonly loadIp: number;
 		readonly comparisonIp: number;
+		readonly lengthPosition: 1 | 2;
+		readonly elements: ReadonlyArray<{
+			readonly ip: number;
+			readonly kind: "load" | "store";
+		}>;
 	}>;
 };
 
@@ -690,6 +695,9 @@ export function vmRegionActions(
 				for (const [siteIndex, site] of region.sites.entries()) {
 					add(regionIndex, site.loadIp, "load", siteIndex);
 					add(regionIndex, site.comparisonIp, "compare", siteIndex);
+					for (const [elementIndex, element] of site.elements.entries()) {
+						add(regionIndex, element.ip, "element", siteIndex, elementIndex);
+					}
 				}
 				break;
 			case "array-values-iterator-cursor":
@@ -1349,10 +1357,17 @@ function lowerExecutionFunctionToNativePlan(
 			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
 				blockStartIps.get(blockIndex),
 			);
-			const sites = region.sites.map(({ load, comparison }) => ({
-				loadIp: instructionIndexByTargetInstruction.get(load),
-				comparisonIp: instructionIndexByTargetInstruction.get(comparison),
-			}));
+			const sites = region.sites.map(
+				({ load, comparison, lengthPosition, elements }) => ({
+					loadIp: instructionIndexByTargetInstruction.get(load),
+					comparisonIp: instructionIndexByTargetInstruction.get(comparison),
+					lengthPosition,
+					elements: elements.map(({ instruction, kind }) => ({
+						ip: instructionIndexByTargetInstruction.get(instruction),
+						kind,
+					})),
+				}),
+			);
 			if (
 				region.license.guard !== "structural" ||
 				region.license.genericTwin !== "retained" ||
@@ -1366,7 +1381,18 @@ function lowerExecutionFunctionToNativePlan(
 				ordinaryBlockIps.some((ip) => ip === undefined) ||
 				sites.length === 0 ||
 				sites.length > 32 ||
-				sites.some((site) => site.loadIp === undefined || site.comparisonIp === undefined)
+				sites.some(
+					(site) =>
+						site.loadIp === undefined ||
+						site.comparisonIp === undefined ||
+						(site.lengthPosition !== 1 && site.lengthPosition !== 2) ||
+						site.elements.length > 8 ||
+						site.elements.some(
+							(element) =>
+								element.ip === undefined ||
+								(element.kind !== "load" && element.kind !== "store"),
+						),
+				)
 			) {
 				throw coreRegionError(region.kind, "structural contract");
 			}
@@ -1375,11 +1401,21 @@ function lowerExecutionFunctionToNativePlan(
 			const resolvedSites = sites as Array<{
 				readonly loadIp: number;
 				readonly comparisonIp: number;
+				readonly lengthPosition: 1 | 2;
+				readonly elements: Array<{
+					readonly ip: number;
+					readonly kind: "load" | "store";
+				}>;
 			}>;
-			const payloadIps = resolvedSites.flatMap(({ loadIp, comparisonIp }) => [
+			const payloadIps = resolvedSites.flatMap(({ loadIp, comparisonIp, elements }) => [
 				loadIp,
 				comparisonIp,
+				...elements.map(({ ip }) => ip),
 			]);
+			const elementCount = resolvedSites.reduce(
+				(total, site) => total + site.elements.length,
+				0,
+			);
 			let valid =
 				resolvedAnchors.length === 2 &&
 				resolvedAnchors[0] === resolvedSites[0]!.loadIp &&
@@ -1388,22 +1424,47 @@ function lowerExecutionFunctionToNativePlan(
 				payloadIps.length === resolvedClaimedIps.length &&
 				payloadIps.every((ip) => resolvedClaimedIps.includes(ip)) &&
 				!payloadIps.some((ip) => claimedRegionInstructions.has(ip)) &&
-				region.cost.score === resolvedSites.length * 4 &&
+				region.cost.score === resolvedSites.length * 4 + elementCount * 3 &&
 				region.cost.metadataOperations === payloadIps.length;
 			for (const site of resolvedSites) {
 				const load = instructions[site.loadIp];
 				const comparison = instructions[site.comparisonIp];
-				const left = comparison?.opcode === "BINARY" ? comparison.left : -1;
+				const other =
+					comparison?.opcode === "BINARY"
+						? site.lengthPosition === 1
+							? comparison.right
+							: comparison.left
+						: -1;
+				const length =
+					comparison?.opcode === "BINARY"
+						? site.lengthPosition === 1
+							? comparison.left
+							: comparison.right
+						: -1;
 				if (
 					load?.opcode !== "LOAD_PROPERTY_STATIC" ||
 					String.fromCharCode(...(stringConstants[load.stringIndex] ?? [])) !==
 						"length" ||
 					comparison?.opcode !== "BINARY" ||
-					comparison.operator !== "<" ||
-					comparison.right !== load.dst ||
+					!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(
+						comparison.operator,
+					) ||
+					length !== load.dst ||
 					site.comparisonIp !== site.loadIp + 1 ||
-					(fn.registerRepresentations[left] !== "int32" &&
-						fn.registerRepresentations[left] !== "number")
+					(fn.registerRepresentations[other] !== "int32" &&
+						fn.registerRepresentations[other] !== "number") ||
+					site.elements.some(({ ip, kind }) => {
+						const element = instructions[ip];
+						return (
+							ip <= site.comparisonIp ||
+							(kind === "load"
+								? element?.opcode !== "LOAD_PROPERTY"
+								: element?.opcode !== "STORE_PROPERTY") ||
+							(element?.opcode === "LOAD_PROPERTY" || element?.opcode === "STORE_PROPERTY"
+								? element.object !== load.object || element.key !== other
+								: true)
+						);
+					})
 				) {
 					valid = false;
 				}

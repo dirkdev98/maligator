@@ -1630,7 +1630,12 @@ interface NativeNumericFusionAction {
 
 interface ArrayLengthComparisonAction {
 	readonly loadIp: number;
-	readonly role: "load" | "compare";
+	readonly role: "load" | "compare" | "element";
+	readonly site: Extract<VmRegion, { kind: "array-length-comparison" }>["sites"][number];
+	readonly element?: Extract<
+		VmRegion,
+		{ kind: "array-length-comparison" }
+	>["sites"][number]["elements"][number];
 }
 
 /**
@@ -1697,17 +1702,52 @@ function emitBody(
 		const region = specializations[action.regionIndex];
 		if (region?.kind !== "array-length-comparison") continue;
 		const site = region.sites[action.primaryIndex ?? -1];
-		if (site === undefined || (action.role !== "load" && action.role !== "compare")) {
+		if (
+			site === undefined ||
+			(action.role !== "load" && action.role !== "compare" && action.role !== "element")
+		) {
 			throw new Error("Invalid array-length-comparison action");
 		}
 		const load = fn.instructions[site.loadIp];
 		const comparison = fn.instructions[site.comparisonIp];
+		const element =
+			action.role === "element" ? site.elements[action.secondaryIndex ?? -1] : undefined;
+		const length =
+			comparison?.opcode === "BINARY"
+				? site.lengthPosition === 1
+					? comparison.left
+					: comparison.right
+				: -1;
+		const other =
+			comparison?.opcode === "BINARY"
+				? site.lengthPosition === 1
+					? comparison.right
+					: comparison.left
+				: -1;
+		const elementInstruction =
+			element === undefined ? undefined : fn.instructions[element.ip];
 		if (
 			load?.opcode !== "LOAD_PROPERTY_STATIC" ||
 			comparison?.opcode !== "BINARY" ||
-			comparison.operator !== "<" ||
-			comparison.right !== load.dst ||
-			action.ip !== (action.role === "load" ? site.loadIp : site.comparisonIp) ||
+			!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(comparison.operator) ||
+			length !== load.dst ||
+			(action.role === "element"
+				? element === undefined ||
+					(element.kind === "load"
+						? elementInstruction?.opcode !== "LOAD_PROPERTY"
+						: elementInstruction?.opcode !== "STORE_PROPERTY") ||
+					(elementInstruction?.opcode === "LOAD_PROPERTY" ||
+					elementInstruction?.opcode === "STORE_PROPERTY"
+						? elementInstruction.object !== load.object ||
+							elementInstruction.key !== other
+						: true)
+				: element !== undefined) ||
+			action.ip !==
+				(action.role === "load"
+					? site.loadIp
+					: action.role === "compare"
+						? site.comparisonIp
+						: element!.ip) ||
 			arrayLengthComparisonActionByIp.has(action.ip)
 		) {
 			throw new Error("Invalid array-length-comparison region");
@@ -1715,6 +1755,8 @@ function emitBody(
 		arrayLengthComparisonActionByIp.set(action.ip, {
 			loadIp: site.loadIp,
 			role: action.role,
+			site,
+			...(element === undefined ? {} : { element }),
 		});
 	}
 	const nativeStringCharCodeAtChainActionByIp = new Map<
@@ -2041,6 +2083,7 @@ function emitBody(
 		if (action.role !== "load") continue;
 		lines.push(
 			`bool __array_length_${action.loadIp}_fast = false;`,
+			`MalArrayObject *__array_length_${action.loadIp}_array = nullptr;`,
 			`u32 __array_length_${action.loadIp}_value = 0;`,
 		);
 	}
@@ -3429,6 +3472,20 @@ function emitInstruction(
 								`r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
 								throwCheck,
 							];
+				if (
+					arrayLengthComparisonAction?.role === "element" &&
+					arrayLengthComparisonAction.element?.kind === "load"
+				) {
+					const id = arrayLengthComparisonAction.loadIp;
+					return [
+						`MalValue __array_element_${ip};`,
+						`if (__array_length_${id}_fast && mal_vm_array_try_load(__array_length_${id}_array, ${num(instruction.key)}, &__array_element_${ip})) {`,
+						`  r${instruction.dst} = __array_element_${ip};`,
+						`} else {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (nativeStringSplitCursorAction?.role === "element") {
 					const { site } = nativeStringSplitCursorAction;
 					const id = site.callIp;
@@ -3491,7 +3548,7 @@ function emitInstruction(
 				const id = arrayLengthComparisonAction.loadIp;
 				return [
 					`__array_length_${id}_fast = false;`,
-					`MalArrayObject *__array_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
+					`__array_length_${id}_array = mal_vm_as_array(${boxed(instruction.object)});`,
 					`if (__array_length_${id}_array != nullptr) {`,
 					`  __array_length_${id}_fast = true;`,
 					`  __array_length_${id}_value = __array_length_${id}_array->length;`,
@@ -3585,18 +3642,31 @@ function emitInstruction(
 			// the general [[Set]] fallback keeps the throw check.
 			const receiverName = `__property_receiver_${ip}`;
 			if (instruction.opcode === "STORE_PROPERTY") {
-				return reps[instruction.key] === "number"
-					? [
-							`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-							`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
-							`  mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-							`  ${throwCheck}`,
-							`}`,
-						]
-					: [
-							`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-							throwCheck,
-						];
+				const ordinary =
+					reps[instruction.key] === "number"
+						? [
+								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+								`  mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+								`  ${throwCheck}`,
+								`}`,
+							]
+						: [
+								`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+								throwCheck,
+							];
+				if (
+					arrayLengthComparisonAction?.role === "element" &&
+					arrayLengthComparisonAction.element?.kind === "store"
+				) {
+					const id = arrayLengthComparisonAction.loadIp;
+					return [
+						`if (!(__array_length_${id}_fast && mal_vm_array_try_store(__array_length_${id}_array, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				return ordinary;
 			}
 			const probe = `${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`;
 			return [
@@ -3696,7 +3766,13 @@ function emitInstruction(
 			if (arrayLengthComparisonAction?.role === "compare") {
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
-				const fast = `${num(left)} < (f64) __array_length_${arrayLengthComparisonAction.loadIp}_value`;
+				const compareOperator = NATIVE_COMPARE[operator];
+				if (compareOperator === undefined) return null;
+				const length = `(f64) __array_length_${arrayLengthComparisonAction.loadIp}_value`;
+				const fast =
+					arrayLengthComparisonAction.site.lengthPosition === 1
+						? `${length} ${compareOperator} ${num(right)}`
+						: `${num(left)} ${compareOperator} ${length}`;
 				return [
 					`if (__array_length_${arrayLengthComparisonAction.loadIp}_fast) {`,
 					dstIsBool

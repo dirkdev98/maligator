@@ -2999,7 +2999,12 @@ describe("Core IR optimizer", () => {
 			({ kind }) => kind === "array-length-comparison",
 		);
 		expect(coreRegion?.anchors).toHaveLength(2);
-		expect(coreRegion?.claimedInstructions).toEqual(coreRegion?.anchors);
+		expect(coreRegion?.claimedInstructions).toHaveLength(3);
+		expect(
+			coreRegion?.anchors.every((anchor) =>
+				coreRegion.claimedInstructions.includes(anchor),
+			),
+		).toBe(true);
 		expect(coreRegion?.data).toMatchObject({
 			license: {
 				guard: "structural",
@@ -3010,7 +3015,7 @@ describe("Core IR optimizer", () => {
 			runtimeGuard: "exact-array",
 		});
 		expect(JSON.stringify(coreRegion?.data)).toMatch(
-			/"sites":\[\{"load":\{"\$coreInstruction":\d+\},"comparison":\{"\$coreInstruction":\d+\}\}\]/,
+			/"sites":\[\{"load":\{"\$coreInstruction":\d+\},"comparison":\{"\$coreInstruction":\d+\},"lengthPosition":2,"elements":\[\{"instruction":\{"\$coreInstruction":\d+\},"kind":"load"\}\]\}\]/,
 		);
 		const vmRegion = definition.native.functions[1]!.specializations.find(
 			({ kind }) => kind === "array-length-comparison",
@@ -3029,6 +3034,33 @@ describe("Core IR optimizer", () => {
 		expect(vmRegion.sites).toHaveLength(1);
 		expect(Number.isSafeInteger(vmRegion.sites[0]!.loadIp)).toBe(true);
 		expect(Number.isSafeInteger(vmRegion.sites[0]!.comparisonIp)).toBe(true);
+		expect(vmRegion.sites[0]!.lengthPosition).toBe(2);
+		expect(vmRegion.sites[0]!.elements).toHaveLength(1);
+		expect(vmRegion.sites[0]!.elements[0]!.kind).toBe("load");
+	});
+
+	it.each([
+		["length on the left", "values.length > index", 1],
+		["non-strict inequality", "index != values.length", 2],
+		["strict inequality", "index !== values.length", 2],
+		["inclusive comparison", "index <= values.length", 2],
+	] as const)("certifies %s Array loop tests", (_name, condition, lengthPosition) => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function visit(values) { let total = 0; for (let index = 0; ${condition}; index++) { total += values[index]; if (index > 8) break; } return total; }`,
+			"core-array-length-orientation.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		const region = optimized!.functions
+			.flatMap(({ regions }) => regions)
+			.find(({ kind }) => kind === "array-length-comparison");
+		expect(region?.data).toMatchObject({
+			sites: [{ lengthPosition, elements: [{ kind: "load" }] }],
+		});
 	});
 
 	it("does not create an Array length region for a one-shot comparison", () => {

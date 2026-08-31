@@ -173,6 +173,42 @@ for (let index = 0; index < indexedShrinking.length; ++index) {
 }
 check(indexedShrunkValues.join(",") === "1", "indexed loop reads live shrinking length");
 
+const reversedLength = [2, 3, 4];
+let reversedLengthProduct = 1;
+for (let index = 0; reversedLength.length > index; ++index) {
+	reversedLengthProduct *= reversedLength[index];
+}
+check(reversedLengthProduct === 24, "indexed loop supports reversed length comparison");
+
+const unequalLength = [5, 6, 7];
+let unequalLengthSum = 0;
+for (let index = 0; index !== unequalLength.length; ++index) {
+	unequalLengthSum += unequalLength[index];
+}
+check(unequalLengthSum === 18, "indexed loop supports strict length inequality");
+
+let loopHoleSetValue;
+const loopStorePrototype = Object.create(Array.prototype, {
+	1: {
+		configurable: true,
+		set(value) {
+			loopHoleSetValue = value;
+		},
+	},
+});
+const loopStored = [1, , 3];
+Object.setPrototypeOf(loopStored, loopStorePrototype);
+for (let index = 0; index < loopStored.length; ++index) {
+	loopStored[index] = index + 10;
+}
+check(
+	loopStored[0] === 10 &&
+		loopHoleSetValue === 11 &&
+		!Object.hasOwn(loopStored, 1) &&
+		loopStored[2] === 12,
+	"indexed loop store preserves inherited hole setter",
+);
+
 let proxyLengthGets = 0;
 const indexedProxy = new Proxy([4, 5], {
 	get(target, key, receiver) {

@@ -144,7 +144,10 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 			return {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
-				sites: region.sites.map((site) => ({ ...site })),
+				sites: region.sites.map((site) => ({
+					...site,
+					elements: site.elements.map((element) => ({ ...element })),
+				})),
 			};
 		case "numeric-fusion":
 			return {

@@ -3168,6 +3168,17 @@ const NATIVE_NUMERIC_FUSION_FINISH_OPERATORS = new Set([
 	"!==",
 ]);
 
+const ARRAY_LENGTH_COMPARISON_OPERATORS = new Set([
+	"<",
+	"<=",
+	">",
+	">=",
+	"==",
+	"!=",
+	"===",
+	"!==",
+]);
+
 const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 	name: "select-array-length-comparison-regions",
 	run(fn, analyses, program) {
@@ -3180,7 +3191,9 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 					typeof load.attributes.stringIndex === "number" &&
 					decodeString(program, load.attributes.stringIndex) === "length" &&
 					comparison?.opcode === "binary" &&
-					comparison.attributes.operator === "<"
+					typeof comparison.attributes.operator === "string" &&
+					ARRAY_LENGTH_COMPARISON_OPERATORS.has(comparison.attributes.operator) &&
+					comparison.inputs.includes(load.outputs[0]!)
 				);
 			}),
 		);
@@ -3232,13 +3245,29 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 		const sites: Array<{
 			readonly load: CoreInstruction;
 			readonly comparison: CoreInstruction;
+			readonly lengthPosition: 1 | 2;
+			readonly elements: ReadonlyArray<{
+				readonly instruction: CoreInstruction;
+				readonly kind: "load" | "store";
+				readonly block: CoreBlockId;
+			}>;
 			readonly block: CoreBlockId;
 		}> = [];
 		for (const block of fn.blocks) {
-			if (!cfg.loops.some((loop) => loop.blocks.has(block.id))) continue;
+			const loop = cfg.loops
+				.filter((candidate) => candidate.blocks.has(block.id))
+				.toSorted((left, right) => left.blocks.size - right.blocks.size)[0];
+			if (loop === undefined) continue;
 			for (let index = 0; index + 1 < block.instructions.length; index++) {
 				const load = block.instructions[index]!;
 				const comparison = block.instructions[index + 1]!;
+				const lengthPosition =
+					comparison.inputs[0] === load.outputs[0]
+						? 1
+						: comparison.inputs[1] === load.outputs[0]
+							? 2
+							: undefined;
+				const otherPosition = lengthPosition === 1 ? 1 : 0;
 				if (
 					load.opcode !== "loadPropertyStatic" ||
 					load.inputs.length !== 1 ||
@@ -3248,12 +3277,13 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 					typeof load.attributes.stringIndex !== "number" ||
 					decodeString(program, load.attributes.stringIndex) !== "length" ||
 					comparison.opcode !== "binary" ||
-					comparison.attributes.operator !== "<" ||
+					typeof comparison.attributes.operator !== "string" ||
+					!ARRAY_LENGTH_COMPARISON_OPERATORS.has(comparison.attributes.operator) ||
 					comparison.inputs.length !== 2 ||
 					comparison.outputs.length !== 1 ||
-					comparison.inputs[1] !== load.outputs[0] ||
-					(representations.get(comparison.inputs[0]!) !== "i32" &&
-						representations.get(comparison.inputs[0]!) !== "f64") ||
+					lengthPosition === undefined ||
+					(representations.get(comparison.inputs[otherPosition]!) !== "i32" &&
+						representations.get(comparison.inputs[otherPosition]!) !== "f64") ||
 					occupied.has(load.id) ||
 					occupied.has(comparison.id)
 				) {
@@ -3265,23 +3295,61 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 					nonInstructionUses.has(output) ||
 					outputUses.length !== 1 ||
 					outputUses[0]!.instruction !== comparison ||
-					outputUses[0]!.position !== 1
+					outputUses[0]!.position !== lengthPosition - 1
 				) {
 					continue;
 				}
-				sites.push({ load, comparison, block: block.id });
+				const receiver = load.inputs[0]!;
+				const induction = comparison.inputs[otherPosition]!;
+				const elements: Array<{
+					readonly instruction: CoreInstruction;
+					readonly kind: "load" | "store";
+					readonly block: CoreBlockId;
+				}> = [];
+				for (const candidateBlock of fn.blocks) {
+					if (
+						!loop.blocks.has(candidateBlock.id) ||
+						!cfg.dominates(block.id, candidateBlock.id)
+					) {
+						continue;
+					}
+					for (const instruction of candidateBlock.instructions) {
+						const kind =
+							instruction.opcode === "loadProperty"
+								? "load"
+								: instruction.opcode === "storeProperty"
+									? "store"
+									: undefined;
+						if (
+							kind === undefined ||
+							instruction.inputs[0] !== receiver ||
+							instruction.inputs[1] !== induction ||
+							occupied.has(instruction.id) ||
+							(candidateBlock.id === block.id && instruction.id <= comparison.id)
+						) {
+							continue;
+						}
+						elements.push({ instruction, kind, block: candidateBlock.id });
+						if (elements.length >= 8) break;
+					}
+					if (elements.length >= 8) break;
+				}
+				sites.push({ load, comparison, lengthPosition, elements, block: block.id });
 				occupied.add(load.id);
 				occupied.add(comparison.id);
+				for (const element of elements) occupied.add(element.instruction.id);
 				if (sites.length >= 32) break;
 			}
 			if (sites.length >= 32) break;
 		}
 		const first = sites[0];
 		if (first === undefined) return fn;
-		const claimedInstructions = sites.flatMap(({ load, comparison }) => [
+		const claimedInstructions = sites.flatMap(({ load, comparison, elements }) => [
 			load.id,
 			comparison.id,
+			...elements.map(({ instruction }) => instruction.id),
 		]);
+		const elementCount = sites.reduce((total, site) => total + site.elements.length, 0);
 		return {
 			...fn,
 			regions: [
@@ -3290,7 +3358,14 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 					kind: "array-length-comparison",
 					anchors: [first.load.id, first.comparison.id],
 					claimedInstructions,
-					ordinaryBlocks: [...new Set(sites.map(({ block }) => block))],
+					ordinaryBlocks: [
+						...new Set(
+							sites.flatMap(({ block, elements }) => [
+								block,
+								...elements.map((element) => element.block),
+							]),
+						),
+					],
 					exceptionalBlocks: [],
 					data: coreAttributeObject(
 						{
@@ -3301,13 +3376,18 @@ const selectArrayLengthComparisonRegions: CoreFunctionPass = {
 							},
 							representation: "live-array-length-comparisons",
 							cost: {
-								score: sites.length * 4,
+								score: sites.length * 4 + elementCount * 3,
 								metadataOperations: claimedInstructions.length,
 							},
 							runtimeGuard: "exact-array",
-							sites: sites.map(({ load, comparison }) => ({
+							sites: sites.map(({ load, comparison, lengthPosition, elements }) => ({
 								load: { $coreInstruction: load.id },
 								comparison: { $coreInstruction: comparison.id },
+								lengthPosition,
+								elements: elements.map(({ instruction, kind }) => ({
+									instruction: { $coreInstruction: instruction.id },
+									kind,
+								})),
 							})),
 						},
 						"array-length-comparison",

@@ -357,16 +357,21 @@ export interface CoreAllocatedArrayLengthComparisonRegion extends CoreAllocatedR
 	"array-length-comparison",
 	"live-array-length-comparisons",
 	"none",
-	readonly [
-		Extract<CompilerInstruction, { type: "loadPropertyStatic" }>,
-		Extract<CompilerInstruction, { type: "binary" }>,
-	],
+	ReadonlyArray<CompilerInstruction>,
 	"structural"
 > {
 	readonly runtimeGuard: "exact-array";
 	readonly sites: ReadonlyArray<{
 		readonly load: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 		readonly comparison: Extract<CompilerInstruction, { type: "binary" }>;
+		readonly lengthPosition: 1 | 2;
+		readonly elements: ReadonlyArray<{
+			readonly instruction: Extract<
+				CompilerInstruction,
+				{ type: "loadProperty" | "storeProperty" }
+			>;
+			readonly kind: "load" | "store";
+		}>;
 	}>;
 }
 

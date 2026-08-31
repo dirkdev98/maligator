@@ -33,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 45;
+export const COMPILER_ARTIFACT_VERSION = 46;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -823,6 +823,12 @@ function writeCompilerArtifact(
 					for (const site of region.sites) {
 						w.i32(site.loadIp);
 						w.i32(site.comparisonIp);
+						w.u8(site.lengthPosition);
+						w.u32(site.elements.length);
+						for (const element of site.elements) {
+							w.i32(element.ip);
+							w.u8(element.kind === "load" ? 1 : 2);
+						}
 					}
 					break;
 				case "string-split-cursor":
@@ -1220,10 +1226,15 @@ function validateArrayLengthComparisonRegion(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	registerRepresentations: ReadonlyArray<VmRegisterRepresentation>,
 ): void {
-	const payloadIps = region.sites.flatMap(({ loadIp, comparisonIp }) => [
+	const payloadIps = region.sites.flatMap(({ loadIp, comparisonIp, elements }) => [
 		loadIp,
 		comparisonIp,
+		...elements.map(({ ip }) => ip),
 	]);
+	const elementCount = region.sites.reduce(
+		(total, site) => total + site.elements.length,
+		0,
+	);
 	if (
 		region.composition !== undefined ||
 		region.license.guard.dependencies.length !== 0 ||
@@ -1241,20 +1252,46 @@ function validateArrayLengthComparisonRegion(
 		new Set(payloadIps).size !== payloadIps.length ||
 		payloadIps.length !== region.claimedIps.length ||
 		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		region.cost.score !== region.sites.length * 4 ||
+		region.cost.score !== region.sites.length * 4 + elementCount * 3 ||
 		region.cost.metadataOperations !== payloadIps.length ||
-		region.sites.some(({ loadIp, comparisonIp }) => {
+		region.sites.some(({ loadIp, comparisonIp, lengthPosition, elements }) => {
 			const load = fn.instructions[loadIp];
 			const comparison = fn.instructions[comparisonIp];
+			const other =
+				comparison?.opcode === "BINARY"
+					? lengthPosition === 1
+						? comparison.right
+						: comparison.left
+					: -1;
+			const length =
+				comparison?.opcode === "BINARY"
+					? lengthPosition === 1
+						? comparison.left
+						: comparison.right
+					: -1;
 			return (
 				load?.opcode !== "LOAD_PROPERTY_STATIC" ||
 				String.fromCharCode(...(stringConstants[load.stringIndex] ?? [])) !== "length" ||
 				comparison?.opcode !== "BINARY" ||
-				comparison.operator !== "<" ||
-				comparison.right !== load.dst ||
+				!["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(comparison.operator) ||
+				(lengthPosition !== 1 && lengthPosition !== 2) ||
+				length !== load.dst ||
 				comparisonIp !== loadIp + 1 ||
-				(registerRepresentations[comparison.left] !== "int32" &&
-					registerRepresentations[comparison.left] !== "number")
+				(registerRepresentations[other] !== "int32" &&
+					registerRepresentations[other] !== "number") ||
+				elements.length > 8 ||
+				elements.some(({ ip, kind }) => {
+					const element = fn.instructions[ip];
+					return (
+						ip <= comparisonIp ||
+						(kind === "load"
+							? element?.opcode !== "LOAD_PROPERTY"
+							: element?.opcode !== "STORE_PROPERTY") ||
+						(element?.opcode === "LOAD_PROPERTY" || element?.opcode === "STORE_PROPERTY"
+							? element.object !== load.object || element.key !== other
+							: true)
+					);
+				})
 			);
 		})
 	) {
@@ -3278,7 +3315,27 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						Extract<VmRegion, { kind: "array-length-comparison" }>["sites"][number]
 					> = [];
 					for (let site = 0; site < siteCount; site++) {
-						sites.push({ loadIp: r.i32(), comparisonIp: r.i32() });
+						const loadIp = r.i32();
+						const comparisonIp = r.i32();
+						const lengthPosition = r.u8();
+						const elementCount = r.count(2);
+						const elements: Array<{ ip: number; kind: "load" | "store" }> = [];
+						for (let element = 0; element < elementCount; element++) {
+							const ip = r.i32();
+							const kindTag = r.u8();
+							if (kindTag !== 1 && kindTag !== 2) {
+								throw new RangeError(
+									"program-image-codec: invalid array-length element kind",
+								);
+							}
+							elements.push({ ip, kind: kindTag === 1 ? "load" : "store" });
+						}
+						if (lengthPosition !== 1 && lengthPosition !== 2) {
+							throw new RangeError(
+								"program-image-codec: invalid array-length operand position",
+							);
+						}
+						sites.push({ loadIp, comparisonIp, lengthPosition, elements });
 					}
 					if (runtimeGuardTag !== 1) {
 						throw new RangeError(

@@ -1529,6 +1529,8 @@ describe("native update-expression representation", () => {
 		expect(region.sites).toHaveLength(1);
 		expect(Number.isSafeInteger(region.sites[0]!.loadIp)).toBe(true);
 		expect(Number.isSafeInteger(region.sites[0]!.comparisonIp)).toBe(true);
+		expect(region.sites[0]!.lengthPosition).toBe(2);
+		expect(region.sites[0]!.elements).toHaveLength(1);
 		expect(
 			specializations(deserializeCompilerArtifact(serializeCompilerArtifact(definition))),
 		).toEqual(specializations(definition));
@@ -1536,6 +1538,9 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("__array_length_");
 		expect(output).not.toContain(".mode == MAL_IC_MODE_ARRAY_LENGTH");
 		expect(output).toContain("->length");
+		expect(output).toMatch(
+			/mal_vm_array_try_load\(__array_length_\d+_array, r\d+, &__array_element_\d+\)/,
+		);
 	});
 
 	it("does not retain raw dense iterator cursors across generator suspension", () => {
