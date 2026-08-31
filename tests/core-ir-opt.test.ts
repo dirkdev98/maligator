@@ -2376,6 +2376,48 @@ describe("Core IR optimizer", () => {
 		expect(instructions[yieldIndex + 1]?.inputs).toHaveLength(1);
 	});
 
+	it("carries and roots a virtual field through an exception handler", () => {
+		let program: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function preserve(value, callback) {
+					const object = { held: value };
+					try {
+						callback();
+					} catch (error) {
+						globalThis.observe();
+						object.held = 0;
+						return 1;
+					}
+					object.held = 0;
+					return 1;
+				}`,
+				"scalar-exceptional-virtual-field.js",
+			),
+			{
+				afterCoreOptimization(optimized) {
+					program = optimized;
+				},
+			},
+		);
+		const preserve = program!.functions[functionIndexOfName(program!, "preserve")]!;
+		const instructions = preserve.blocks.flatMap(({ instructions }) => instructions);
+		const opcodes = instructions.map(({ opcode }) => opcode);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("storePropertyStatic");
+		const handlerRoot = instructions
+			.filter(({ opcode }) => opcode === "rootUse")
+			.flatMap(({ inputs }) => inputs)
+			.find((value) => {
+				const definition = preserve.values.find(({ id }) => id === value)?.definition;
+				return (
+					definition?.kind === "block-parameter" &&
+					preserve.blocks[definition.block]?.parameters[0]?.role === "exception"
+				);
+			});
+		expect(handlerRoot).toBeDefined();
+	});
+
 	it("dead-store elimination retains a slot whose values a WeakRef could observe", () => {
 		// Same unread slot as above, but the values that occupy it are not proven
 		// primitives, so how long the slot references them stays observable through

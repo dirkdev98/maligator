@@ -154,6 +154,22 @@ function* scalarSuspendedRooted() {
 	return alive;
 }
 
+function scalarExceptionalRooted(throwing, observe) {
+	const target = { tag: "exceptional" };
+	const object = { held: target };
+	const watcher = new WeakRef(target);
+	try {
+		throwing();
+	} catch (error) {
+		observe();
+		const alive = watcher.deref() !== undefined;
+		object.held = 0;
+		return alive && error.message === "expected";
+	}
+	object.held = 0;
+	return false;
+}
+
 function homogeneousBooleanCell(flag, count) {
 	const object = { value: true };
 	for (let i = 0; i < count; i++) {
@@ -312,6 +328,16 @@ allocateNoise(490);
 check(
 	"suspended explicit-root boxed scalar replacement",
 	suspendedWatcher.deref() !== undefined && suspendedRoot.next().value === true,
+);
+check(
+	"exceptional explicit-root boxed scalar replacement",
+	scalarExceptionalRooted(
+		() => {
+			allocateNoise(500);
+			throw new Error("expected");
+		},
+		() => allocateNoise(501),
+	),
 );
 check(
 	"homogeneous boolean stack cell",

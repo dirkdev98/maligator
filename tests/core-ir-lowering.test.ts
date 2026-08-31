@@ -315,6 +315,50 @@ describe("Core IR lowering", () => {
 		expect(safepoint?.rootRegisters).toContain(suspension.marker.registers[0]);
 	});
 
+	it("carries a virtual field through an exceptional safepoint", () => {
+		const optimized = executeCoreOptimizations(
+			lower(`
+				function preserve(value, callback) {
+					const object = { held: value };
+					try {
+						callback();
+					} catch (error) {
+						globalThis.observe();
+						object.held = 0;
+						return 1;
+					}
+					object.held = 0;
+					return 1;
+				}
+			`),
+		).program;
+		const core = optimized.functions.find((fn) =>
+			fn.blocks.some(({ handler }) => handler !== undefined),
+		)!;
+		const protectedBlock = core.blocks.find(({ handler }) => handler !== undefined)!;
+		const handler = core.blocks[protectedBlock.handler!.block]!;
+		const field = handler.parameters.at(-1)!.value;
+		expect(handler.parameters[0]?.role).toBe("exception");
+		expect(
+			handler.instructions.some(
+				({ opcode, inputs }) => opcode === "rootUse" && inputs.includes(field),
+			),
+		).toBe(true);
+
+		const source = protectedBlock.handler!.arguments.at(-1)!;
+		const allocation = coreRegisterClasses(core, true);
+		const register = (value: typeof source): number =>
+			allocation.registers.get(allocation.roots.get(value)!)!;
+		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
+		const fn = target.functions[core.functionIndex]!;
+		const call = protectedBlock.instructions.find(({ opcode }) => opcode === "call")!;
+		const safepoint = fn.gc.safepoints.find(
+			(candidate) =>
+				candidate.kind === "operation" && candidate.coreInstruction === call.id,
+		);
+		expect(safepoint?.rootRegisters).toContain(register(source));
+	});
+
 	it("reuses registers for values live on disjoint CFG branches", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
 			parameterCount: 1,

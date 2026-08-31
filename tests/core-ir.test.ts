@@ -448,6 +448,8 @@ describe("Core IR", () => {
 		expect(buildCoreControlFlow(fn, opcodes).successors[entry]).toEqual([
 			expect.objectContaining({ to: handler, kind: "exceptional" }),
 		]);
+		const canonical = coreCanonicalValueRoots(fn, buildCoreControlFlow(fn, opcodes));
+		expect(canonical.get(builder.block(handler).parameters[1]!.value)).toBe(input);
 
 		const invalid = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
 		const invalidEntry = invalid.createBlock([{ representation: "boxed" }]);

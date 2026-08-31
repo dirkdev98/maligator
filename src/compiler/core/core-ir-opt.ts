@@ -10681,7 +10681,6 @@ function coreControlObservesAnyValue(
 	block: CoreBlock,
 	values: ReadonlySet<CoreValueId>,
 ): boolean {
-	if (block.handler?.arguments.some((value) => values.has(value)) === true) return true;
 	switch (block.terminator.kind) {
 		case "branch":
 		case "guard":
@@ -10802,15 +10801,17 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				}
 				const block = fn.blocks[definition.block];
 				const incoming = cfg.predecessors[definition.block]!;
+				const parameter = block?.parameters[definition.index];
 				if (
 					block === undefined ||
-					block.handler !== undefined ||
-					block.parameters[definition.index]?.role === "exception" ||
+					parameter === undefined ||
+					parameter.role === "exception" ||
 					incoming.length === 0 ||
-					incoming.some(
-						(edge) =>
-							edge.kind !== "ordinary" || !aliases.has(edge.arguments[definition.index]!),
-					)
+					incoming.some((edge) => {
+						const argumentIndex =
+							edge.kind === "exceptional" ? definition.index - 1 : definition.index;
+						return argumentIndex < 0 || !aliases.has(edge.arguments[argumentIndex]!);
+					})
 				) {
 					valid = false;
 					break;
@@ -10836,6 +10837,20 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 					}
 				}
 				if (!valid) break;
+				if (block.handler !== undefined) {
+					const target = fn.blocks[block.handler.block];
+					if (
+						target === undefined ||
+						block.handler.arguments.some(
+							(argument, index) =>
+								aliases.has(argument) &&
+								!aliases.has(target.parameters[index + 1]!.value),
+						)
+					) {
+						valid = false;
+						break;
+					}
+				}
 				for (const [index, instruction] of block.instructions.entries()) {
 					for (const [position, input] of instruction.inputs.entries()) {
 						if (!aliases.has(input)) continue;
@@ -10941,9 +10956,8 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				if (block === allocationLocation.block.id) continue;
 				for (const edge of cfg.predecessors[block]!) {
 					if (
-						edge.kind !== "ordinary" ||
-						(edge.from !== allocationLocation.block.id &&
-							!cfg.instructionDominatesBlock(allocationLocation.block.id, edge.from))
+						edge.from !== allocationLocation.block.id &&
+						!cfg.instructionDominatesBlock(allocationLocation.block.id, edge.from)
 					) {
 						valid = false;
 						break;
@@ -10961,10 +10975,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 			if (
 				!valid ||
 				cfg.loops.some(({ blocks }) => blocks.has(allocationLocation.block.id)) ||
-				[...blocksCanReachAccess].some(
-					(block) =>
-						irreducibleBlocks.has(block) || fn.blocks[block]!.handler !== undefined,
-				)
+				[...blocksCanReachAccess].some((block) => irreducibleBlocks.has(block))
 			) {
 				continue;
 			}
@@ -11032,10 +11043,49 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				if (!valid) break;
 				virtualFieldParameters.set(loop.header, parameters);
 			}
+			const handlerTargets = new Set(
+				fn.blocks.flatMap(({ handler }) =>
+					handler !== undefined && blocksCanReachAccess.has(handler.block)
+						? [handler.block]
+						: [],
+				),
+			);
+			for (const blockId of handlerTargets) {
+				if (virtualFieldParameters.has(blockId)) {
+					valid = false;
+					break;
+				}
+				const block = fn.blocks[blockId]!;
+				const parameters: Array<VirtualFieldParameter> = [];
+				for (const [keyIndex, key] of layout.keys.entries()) {
+					const possibleValues = [
+						layout.initialValues[keyIndex]!,
+						...orderedStores
+							.filter((store) => store.key === key)
+							.map(({ value }) => value),
+					];
+					const representation = joinedRepresentation(possibleValues);
+					if (representation === undefined) {
+						valid = false;
+						break;
+					}
+					const value = coreValueId(nextValue++);
+					parameters.push({
+						value,
+						representation,
+						index: block.parameters.length + parameters.length,
+						key,
+					});
+					virtualFieldRepresentations.set(value, representation);
+				}
+				if (!valid) break;
+				virtualFieldParameters.set(blockId, parameters);
+			}
 			if (!valid) continue;
 			const replacements = new Map<CoreValueId, CoreValueId>();
 			const replacementInstructions = new Map<CoreInstructionId, CoreInstruction>();
 			const removedAccessInstructions = new Set<CoreInstructionId>();
+			const entryFields = new Map<CoreBlockId, ReadonlyMap<number, CoreValueId>>();
 			for (const blockId of cfg.reversePostorder) {
 				if (!blocksCanReachAccess.has(blockId)) continue;
 				const block = fn.blocks[blockId]!;
@@ -11110,6 +11160,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 					}
 					if (!valid) break;
 				}
+				entryFields.set(blockId, new Map(currentFields));
 				const storesInBlock =
 					storesByBlock.get(blockId) ?? new Map<number, (typeof orderedStores)[number]>();
 				const loadsInBlock =
@@ -11311,9 +11362,22 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 							: {
 									handler: {
 										...block.handler,
-										arguments: block.handler.arguments.map((value) =>
-											resolveValue(value, replacements),
-										),
+										arguments: [
+											...block.handler.arguments.map((value) =>
+												resolveValue(value, replacements),
+											),
+											...(virtualFieldParameters.get(block.handler.block) ?? []).map(
+												(parameter) => {
+													const argument = entryFields.get(block.id)?.get(parameter.key);
+													if (argument === undefined) {
+														throw new Error(
+															`Missing virtual field handler argument on b${block.id} -> b${block.handler!.block}`,
+														);
+													}
+													return resolveValue(argument, replacements);
+												},
+											),
+										],
 									},
 								}),
 					};

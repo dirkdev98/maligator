@@ -751,7 +751,20 @@ export function coreProvenance(
 						}
 					}
 				}
-				for (const argument of block.handler?.arguments ?? []) escapeValue(argument);
+				if (block.handler !== undefined) {
+					const target = fn.blocks[block.handler.block];
+					for (const [index, argument] of block.handler.arguments.entries()) {
+						const layout = layoutOf(argument);
+						if (layout === undefined) continue;
+						const parameter = target?.parameters[index + 1];
+						if (
+							parameter === undefined ||
+							canonical(parameter.value) !== canonical(layout.result)
+						) {
+							escaped.add(layout.instruction);
+						}
+					}
+				}
 			}
 		}
 		return escaped;
@@ -1194,22 +1207,18 @@ export function coreContainedAggregateProvenance(
 	for (const block of fn.blocks) {
 		const incomingEdges = cfg.predecessors[block.id] ?? [];
 		for (const [index, parameter] of block.parameters.entries()) {
-			let ordinarySource = false;
+			let structuralSource = false;
 			let excludedSource = parameter.role === "exception";
 			for (const edge of incomingEdges) {
-				if (edge.kind !== "ordinary") {
-					excludedSource = true;
-					continue;
-				}
-				const argument = edge.arguments[index];
+				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
 				if (argument === undefined) {
 					excludedSource = true;
 					continue;
 				}
-				ordinarySource = true;
+				structuralSource = true;
 				addEdge(argument, parameter.value);
 			}
-			if (block.id === fn.entry || !ordinarySource || excludedSource) {
+			if (block.id === fn.entry || !structuralSource || excludedSource) {
 				opaqueSeeds.push(parameter.value);
 			}
 		}

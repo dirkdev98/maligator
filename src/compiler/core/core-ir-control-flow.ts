@@ -70,7 +70,7 @@ export interface CoreControlFlow {
 }
 
 /**
- * Canonical producer identity through moves and all-ordinary single-value phis.
+ * Canonical producer identity through moves and explicit ordinary/handler phis.
  *
  * Phi equivalences form a directed graph because loop-carried arguments can refer
  * back to one another. Condense that graph into SCCs, then solve its DAG from
@@ -141,14 +141,14 @@ export function coreCanonicalValueRoots(
 	}
 	for (const block of fn.blocks) {
 		const incoming = cfg.predecessors[block.id]!;
-		if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
-			continue;
-		}
+		if (incoming.length === 0) continue;
 		for (const [index, parameter] of block.parameters.entries()) {
+			if (parameter.role === "exception") continue;
 			const sources = new Array<CoreValueId>(incoming.length);
 			let complete = true;
 			for (let predecessor = 0; predecessor < incoming.length; predecessor += 1) {
-				const source = incoming[predecessor]!.arguments[index];
+				const edge = incoming[predecessor]!;
+				const source = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
 				if (source === undefined) {
 					complete = false;
 					break;
