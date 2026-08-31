@@ -7928,6 +7928,7 @@ export class CoreAnalysisManager {
 			program,
 			coreOpcodeRegistry,
 			this.context,
+			(fn) => this.controlFlow(fn),
 		);
 		this.#summaries = {
 			program,
@@ -7956,6 +7957,7 @@ export class CoreAnalysisManager {
 			program,
 			this.context,
 			this.summaries(program),
+			(fn) => this.controlFlow(fn),
 		);
 		this.#valueKinds = {
 			program,
@@ -15553,6 +15555,7 @@ export function executeCoreOptimizations(
 				scalarInput,
 				compilationContext,
 				analyses.summaries(scalarInput),
+				(fn) => analyses.controlFlow(fn),
 			);
 			for (const [index, fn] of scalarSelection.program.functions.entries()) {
 				const before = functions[index];
@@ -15618,6 +15621,7 @@ export function executeCoreOptimizations(
 			targetRefreshInput,
 			coreOpcodeRegistry,
 			compilationContext,
+			(fn) => analyses.controlFlow(fn),
 		);
 		const targetRefresh = annotateCoreDirectCallTargets(
 			targetRefreshInput,
@@ -15965,6 +15969,7 @@ export function executeCoreOptimizations(
 		scalarArgumentInput,
 		compilationContext,
 		scalarArgumentSummaries,
+		(fn) => analyses.controlFlow(fn),
 	);
 	analyses.inheritSummaries(scalarArgumentInput, scalarArgumentSelection.program);
 	for (const [index, fn] of scalarArgumentSelection.program.functions.entries()) {

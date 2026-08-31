@@ -89,6 +89,7 @@ import {
 	coreCalleeTargetsClosedFunction,
 } from "./core-ir-call-targets.ts";
 import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import type {
 	CoreAttributeObject,
@@ -1737,8 +1738,9 @@ export function analyzeCoreProgramSummaries(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 	context?: CoreCompilationContext,
+	controlFlow?: (fn: CoreFunction) => CoreControlFlow,
 ): CoreProgramSummaries {
-	const targets = analyzeCoreCalleeTargets(program, registry, context);
+	const targets = analyzeCoreCalleeTargets(program, registry, context, controlFlow);
 	const count = program.functions.length;
 	const byIndex = new Array<CoreFunction | undefined>(count);
 	for (const fn of program.functions) byIndex[fn.functionIndex] = fn;

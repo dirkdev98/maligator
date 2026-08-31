@@ -43,6 +43,7 @@
 
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow, corePredecessorEdges } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreMemoryAccesses } from "./core-ir-memory.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import {
@@ -995,6 +996,7 @@ export function analyzeCoreCalleeTargets(
 	program: CoreProgram,
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 	context?: CoreCompilationContext,
+	controlFlow?: (fn: CoreFunction) => CoreControlFlow,
 ): CoreCalleeTargetAnalysis {
 	const census = censusSlotAccesses(program, registry);
 	const stableCells = singleAssignmentCellsFromCensus(program, census, context);
@@ -1425,7 +1427,11 @@ export function analyzeCoreCalleeTargets(
 			fn.blocks.some(({ instructions }) =>
 				instructions.some(({ opcode }) => opcode === "createArray"),
 			)
-				? coreProvenance(fn, buildCoreControlFlow(fn, registry), program.stringConstants)
+				? coreProvenance(
+						fn,
+						controlFlow?.(fn) ?? buildCoreControlFlow(fn, registry),
+						program.stringConstants,
+					)
 				: undefined;
 		const functionCallReceiver = (
 			instruction: CoreInstruction,

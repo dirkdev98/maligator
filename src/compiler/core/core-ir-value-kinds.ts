@@ -26,6 +26,7 @@ import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import { coreCapturedSlotKey, coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
 	analyzeCoreInterproceduralValueFlow,
 	corePositionalCallArguments,
@@ -199,9 +200,11 @@ export function analyzeCoreValueKinds(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
 	summaries?: CoreProgramSummaries,
+	controlFlow?: (fn: CoreFunction) => CoreControlFlow,
 ): CoreValueKindAnalysis {
 	const wholeProgram =
-		summaries ?? analyzeCoreProgramSummaries(program, coreOpcodeRegistry, context);
+		summaries ??
+		analyzeCoreProgramSummaries(program, coreOpcodeRegistry, context, controlFlow);
 	const flow = analyzeCoreInterproceduralValueFlow(
 		program,
 		wholeProgram,
@@ -280,7 +283,7 @@ export function analyzeCoreValueKinds(
 				addSeed(valueNode(fn.functionIndex, parameter), COMPILER_VALUE_KIND_UNDEFINED);
 			}
 		}
-		const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
+		const cfg = controlFlow?.(fn) ?? buildCoreControlFlow(fn, coreOpcodeRegistry);
 		for (const block of fn.blocks) {
 			const incoming = cfg.predecessors[block.id] ?? [];
 			for (const [index, parameter] of block.parameters.entries()) {
@@ -757,8 +760,9 @@ export function materializeCoreExactScalarRepresentations(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
 	summaries?: CoreProgramSummaries,
+	controlFlow?: (fn: CoreFunction) => CoreControlFlow,
 ): CoreExactValueFactSelection {
-	const analysis = analyzeCoreValueKinds(program, context, summaries);
+	const analysis = analyzeCoreValueKinds(program, context, summaries, controlFlow);
 	let programChanged = false;
 	const stableCaptured = new Set(
 		(context?.data.singleAssignmentCapturedSlots ?? []).map(({ owner, index }) =>
@@ -797,7 +801,7 @@ export function materializeCoreExactScalarRepresentations(
 		const representations = new Map(
 			values.map(({ id, representation }) => [id, representation]),
 		);
-		const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
+		const cfg = controlFlow?.(fn) ?? buildCoreControlFlow(fn, coreOpcodeRegistry);
 		let nextInstruction =
 			Math.max(
 				-1,
@@ -1244,8 +1248,9 @@ export function selectCoreExactValueFacts(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
 	summaries?: CoreProgramSummaries,
+	controlFlow?: (fn: CoreFunction) => CoreControlFlow,
 ): CoreExactValueFactSelection {
-	const analysis = analyzeCoreValueKinds(program, context, summaries);
+	const analysis = analyzeCoreValueKinds(program, context, summaries, controlFlow);
 	let changed = false;
 	const functions = program.functions.map((fn): CoreFunction => {
 		let functionChanged = false;
