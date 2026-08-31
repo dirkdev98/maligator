@@ -1806,7 +1806,7 @@ describe("summary consumers and proof boundary", () => {
 		});
 
 		const optimized = executeCoreOptimizations(program, {
-			ablations: new Set(["inlining"]),
+			ablations: new Set(["inlining", "escape"]),
 			verification: "per-pass",
 		}).program;
 		expect(coreInstructions(optimized.functions[2]!, "storePropertyStatic")).toHaveLength(

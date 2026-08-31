@@ -195,7 +195,7 @@ globalThis.count = counter(2) + counter(3);`,
 		group: "Data",
 		title: "Objects & shapes",
 		summary:
-			"A static object literal followed by property reads and writes shows shape data and guarded fast paths.",
+			"A contained object literal shows slot forwarding, scalar replacement, and the generic shaped-object fallback.",
 		source: `function update(value) {
 	const point = { x: value, y: value + 1 };
 	point.x = point.x + point.y;
@@ -204,16 +204,16 @@ globalThis.count = counter(2) + counter(3);`,
 globalThis.point = update(4);`,
 		trails: [
 			{
-				title: "Static shape",
+				title: "Scalar replacement",
 				explanation:
-					"Known keys can produce a shaped-object template and exact or guarded slot operations while retaining generic semantics where required.",
+					"The raw Core graph creates a shaped object. Full optimization forwards its exact own slots and jointly erases the contained identity and final store.",
 				queries: {
 					source: "point.x",
-					preCore: "Property",
-					optimizedCore: "createObjectShaped",
-					target: "exactOwnSlot",
-					malw: "CREATE_OBJECT_SHAPED",
-					c: "__literal_shapes",
+					preCore: "createObjectShaped",
+					optimizedCore: "binary",
+					target: '"operator": "+"',
+					malw: "BINARY",
+					c: "MAL_BIN_ADD",
 				},
 			},
 		],

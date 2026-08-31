@@ -10677,6 +10677,218 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 	},
 };
 
+function coreControlUsesValue(block: CoreBlock, value: CoreValueId): boolean {
+	if (block.handler?.arguments.includes(value) === true) return true;
+	if (
+		coreTerminatorEdges(block.terminator).some((edge) => edge.arguments.includes(value))
+	) {
+		return true;
+	}
+	switch (block.terminator.kind) {
+		case "branch":
+		case "guard":
+			return block.terminator.condition === value;
+		case "switch":
+			return block.terminator.discriminant === value;
+		case "return":
+		case "throw":
+			return block.terminator.value === value;
+		case "jump":
+		case "unreachable":
+			return false;
+	}
+}
+
+/**
+ * Erase one contained shaped object as a transaction with its remaining writes.
+ *
+ * Forwarding has already replaced every readable own slot with its SSA value. A
+ * boxed occupant can nevertheless be observed through WeakRef while user code or
+ * collection runs, so this first scalar-replacement slice requires every such
+ * occupant to be an operand of each surviving collection point before the
+ * object's final use. The target root contract keeps operation operands live for
+ * the complete operation; removing the allocation and stores only removes
+ * collection points, which can delay collection but cannot expose an earlier one.
+ *
+ * Requiring direct operands makes the proof stable under later DCE and value
+ * rewriting. Broader virtual-field liveness needs an explicit Core root-use
+ * representation rather than relying on an incidental later use.
+ */
+const scalarizeOperandRootedContainedObjects: CoreFunctionPass = {
+	name: "scalarize-operand-rooted-contained-objects",
+	ablation: "escape",
+	run(fn, analyses, program) {
+		const provenance = analyses.provenance(fn);
+		const { instructions: protectedInstructions, inputs: protectedInputs } =
+			analyses.regionProtection(fn);
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+			}
+		}
+
+		for (const layout of provenance.layouts) {
+			if (
+				layout.kind !== "named-slots" ||
+				provenance.escape(layout.instruction) !== "contained" ||
+				protectedInstructions.has(layout.instruction) ||
+				protectedInputs.has(layout.result)
+			) {
+				continue;
+			}
+			const allocationLocation = locations.get(layout.instruction);
+			if (
+				allocationLocation === undefined ||
+				allocationLocation.block.handler !== undefined
+			) {
+				continue;
+			}
+			const stores: Array<{
+				readonly instruction: CoreInstruction;
+				readonly index: number;
+				readonly key: number;
+				readonly value: CoreValueId;
+			}> = [];
+			let valid = true;
+			for (const block of fn.blocks) {
+				if (coreControlUsesValue(block, layout.result)) {
+					valid = false;
+					break;
+				}
+				for (const [index, instruction] of block.instructions.entries()) {
+					for (const [position, input] of instruction.inputs.entries()) {
+						if (input !== layout.result) continue;
+						const stringIndex = instruction.attributes.stringIndex;
+						const stored = instruction.inputs[1];
+						const ownCell =
+							instruction.opcode === "storePropertyStatic" &&
+							position === 0 &&
+							typeof stringIndex === "number"
+								? provenance.ownCell(
+										layout.result,
+										{ kind: "string-constant", index: stringIndex },
+										"write",
+									)
+								: undefined;
+						if (
+							ownCell?.layout.instruction !== layout.instruction ||
+							ownCell.cell.kind !== "object-slot" ||
+							stored === undefined ||
+							block !== allocationLocation.block ||
+							index <= allocationLocation.index ||
+							protectedInstructions.has(instruction.id)
+						) {
+							valid = false;
+							break;
+						}
+						stores.push({
+							instruction,
+							index,
+							key: ownCell.cell.key,
+							value: stored,
+						});
+					}
+					if (!valid) break;
+				}
+				if (!valid) break;
+			}
+			if (!valid || stores.length === 0) continue;
+			const uniqueStores = new Map(
+				stores.map((store) => [store.instruction.id, store] as const),
+			);
+			if (uniqueStores.size !== stores.length) continue;
+			const orderedStores = [...uniqueStores.values()].sort(
+				(left, right) => left.index - right.index,
+			);
+			const finalStoreIndex = orderedStores.at(-1)!.index;
+			const currentFields = new Map(
+				layout.keys.map((key, index) => [key, layout.initialValues[index]!] as const),
+			);
+			const storeAt = new Map(
+				orderedStores.map((store) => [store.index, store] as const),
+			);
+			for (
+				let index = allocationLocation.index + 1;
+				valid && index <= finalStoreIndex;
+				index++
+			) {
+				const store = storeAt.get(index);
+				if (store !== undefined) {
+					currentFields.set(store.key, store.value);
+					continue;
+				}
+				const instruction = allocationLocation.block.instructions[index]!;
+				const effects = coreInstructionEffects(instruction);
+				if (effects.maySuspend) {
+					valid = false;
+					break;
+				}
+				if (!effects.mayGc) continue;
+				for (const value of currentFields.values()) {
+					if (
+						!provenance.cannotBeHeldWeakly(value) &&
+						!instruction.inputs.includes(value)
+					) {
+						valid = false;
+						break;
+					}
+				}
+			}
+			if (!valid) continue;
+
+			const removedInstructions = new Set<CoreInstructionId>([
+				layout.instruction,
+				...orderedStores.map(({ instruction }) => instruction.id),
+			]);
+			const affectedFacts = new Set(
+				fn.facts
+					.filter((fact) =>
+						fact.claims.some((claim) =>
+							claim.kind === "effect"
+								? removedInstructions.has(claim.instruction)
+								: claim.subject === layout.result,
+						),
+					)
+					.map(({ id }) => id),
+			);
+			if (
+				fn.facts.some(
+					(fact) =>
+						affectedFacts.has(fact.id) &&
+						fact.obligations.some(({ kind }) => kind !== "guard"),
+				) ||
+				fn.blocks.some((block) =>
+					block.instructions.some(
+						(instruction) =>
+							!removedInstructions.has(instruction.id) &&
+							instruction.effectRefinement !== undefined &&
+							affectedFacts.has(instruction.effectRefinement.proof),
+					),
+				)
+			) {
+				continue;
+			}
+			const stripped: CoreFunction = {
+				...fn,
+				blocks: fn.blocks.map((block) => ({
+					...block,
+					instructions: block.instructions.filter(
+						({ id }) => !removedInstructions.has(id),
+					),
+				})),
+				values: fn.values.filter(({ id }) => id !== layout.result),
+				mutationEpoch: fn.mutationEpoch + 1,
+			};
+			return deadInstructionElimination.run(stripped, analyses, program);
+		}
+		return fn;
+	},
+};
+
 /**
  * Remove stores to a contained aggregate that nothing can read.
  *
@@ -12932,6 +13144,7 @@ const CORE_LOCAL_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	refineOwnDataCellAccesses,
 	forwardFreshAllocationPrefixLoads,
 	forwardMemoryAccesses,
+	scalarizeOperandRootedContainedObjects,
 	eliminateDeadStores,
 	eliminateDeadAllocations,
 	sinkFreshAllocations,

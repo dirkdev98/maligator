@@ -90,6 +90,12 @@ function scalarBranchJoin(flag) {
 	return object.value;
 }
 
+function scalarOperandRootedObject(value) {
+	const point = { x: value, y: value + 1 };
+	point.x = point.x + point.y;
+	return point.x;
+}
+
 function homogeneousBooleanCell(flag, count) {
 	const object = { value: true };
 	for (let i = 0; i < count; i++) {
@@ -209,6 +215,19 @@ check(
 check(
 	"scalar branch join",
 	scalarBranchJoin(true) === 51 && scalarBranchJoin(false) === 52,
+);
+const coercibleScalarOperand = {
+	coercions: 0,
+	valueOf() {
+		this.coercions++;
+		allocateNoise(430 + this.coercions);
+		return 4;
+	},
+};
+check(
+	"operand-rooted boxed scalar replacement",
+	scalarOperandRootedObject(coercibleScalarOperand) === 9 &&
+		coercibleScalarOperand.coercions === 2,
 );
 check(
 	"homogeneous boolean stack cell",

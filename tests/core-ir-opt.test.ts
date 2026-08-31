@@ -2082,7 +2082,69 @@ describe("Core IR optimizer", () => {
 		expect(opcodes).not.toContain("storePropertyStatic");
 	});
 
-	it("retains a slot whose values a WeakRef or a registry could observe", () => {
+	it("jointly erases an operand-rooted boxed object and its final store", () => {
+		const compile = (ablateEscape: boolean): CoreFunction => {
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`function update(value) {
+						const point = { x: value, y: value + 1 };
+						point.x = point.x + point.y;
+						return point.x;
+					}
+					globalThis.point = update(4);`,
+					"scalar-operand-rooted-object.js",
+				),
+				{
+					...(ablateEscape
+						? { optimizationAblations: new Set(["escape"] as const) }
+						: {}),
+					afterCoreOptimization(program) {
+						optimized = program;
+					},
+				},
+			);
+			return optimized!.functions[functionIndexOfName(optimized!, "update")]!;
+		};
+		const opcodes = (fn: CoreFunction) =>
+			fn.blocks.flatMap(({ instructions }) => instructions.map(({ opcode }) => opcode));
+
+		const optimizedOpcodes = opcodes(compile(false));
+		expect(optimizedOpcodes).not.toContain("createObjectShaped");
+		expect(optimizedOpcodes).not.toContain("storePropertyStatic");
+		const ablatedOpcodes = opcodes(compile(true));
+		expect(ablatedOpcodes).toContain("createObjectShaped");
+		expect(ablatedOpcodes).toContain("storePropertyStatic");
+	});
+
+	it("keeps a boxed contained field when an intervening safepoint does not root it", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function preserve(value) {
+					const object = { held: value };
+					globalThis.observe();
+					object.held = 0;
+					return 1;
+				}`,
+				"scalar-unrooted-contained-field.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const preserve = optimized!.functions[functionIndexOfName(optimized!, "preserve")]!;
+		const opcodes = preserve.blocks.flatMap(({ instructions }) =>
+			instructions.map(({ opcode }) => opcode),
+		);
+		expect(opcodes).toEqual(
+			expect.arrayContaining(["createObjectShaped", "call", "storePropertyStatic"]),
+		);
+	});
+
+	it("dead-store elimination retains a slot whose values a WeakRef could observe", () => {
 		// Same unread slot as above, but the values that occupy it are not proven
 		// primitives, so how long the slot references them stays observable through
 		// WeakRef.deref and FinalizationRegistry callbacks.
@@ -2121,7 +2183,7 @@ describe("Core IR optimizer", () => {
 				...coreProgram([build(0, "parameter"), build(1, "number")]),
 				stringConstants: [[], [102]],
 			},
-			{ verification: "per-pass" },
+			{ verification: "per-pass", ablations: new Set(["escape"]) },
 		);
 		const stores = (functionIndex: number) =>
 			outcome.program.functions[functionIndex]!.blocks.flatMap(({ instructions }) =>
