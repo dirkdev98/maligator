@@ -28,6 +28,7 @@
 		"bench:profile-overhead": "node ./scripts/profile-overhead.ts",
 		"bench:self-compile-profile": "node ./scripts/profile-self-compile.ts",
 		"env:check": "node ./scripts/agent-environment.ts",
+		"explore:outputs": "node ./scripts/output-explorer.ts",
 		"format": "node ./scripts/quality.ts format",
 		"generate:bytecode-operations": "node ./scripts/generate-bytecode-operations.ts",
 		"lint": "node ./scripts/quality.ts lint",

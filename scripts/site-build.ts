@@ -29,6 +29,7 @@ function build(): string {
 let binary = "";
 const progress = new CommandProgress("site-build");
 progress.start("update generated site data and build the native server");
+execFileSync(process.execPath, ["scripts/output-explorer.ts"], { stdio: "inherit" });
 for (let attempt = 0; attempt < 4; attempt++) {
 	progress.stage(attempt + 1, 4, `stabilize site metadata (attempt ${attempt + 1})`);
 	updateSite();
