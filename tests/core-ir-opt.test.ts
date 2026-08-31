@@ -17,6 +17,7 @@ import {
 } from "../src/compiler/core/core-ir-verifier.ts";
 import { CORE_NO_EFFECTS, CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
+import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
@@ -71,6 +72,30 @@ function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 		sourcePositions: [],
 		globalCount: 0,
 	};
+}
+
+function optimizedClosedModule(source: string, sourcePath: string): CoreProgram {
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		source,
+		sourcePath,
+		parseModule(source),
+	);
+	let optimized: CoreProgram | undefined;
+	compileSemanticProgramToProgramImage(semantic, {
+		facts: withProgramClosure(
+			compilerProgramFactsFromConfig(resolveBuildConfig({ engine: { eval: false } })),
+			programClosureCertificate(
+				{ kind: "whole-program", entry: sourcePath },
+				[{ kind: "entry-module", module: sourcePath }],
+				[],
+			),
+		),
+		afterCoreOptimization(program) {
+			optimized = program;
+		},
+	});
+	expect(optimized).toBeDefined();
+	return optimized!;
 }
 
 function functionIndexOfName(program: CoreProgram, name: string): number {
@@ -4653,6 +4678,43 @@ describe("Core IR optimizer", () => {
 
 		expect(safe).not.toContain("throwIfTdz");
 		expect(unsafe).toContain("throwIfTdz");
+	});
+
+	it("keeps source-closed binding cells initialized across value-clobbering effects", () => {
+		const optimized = optimizedClosedModule(
+			`const integer = 42;
+			const floating = 3.5;
+			const text = "café 🐊";
+			const huge = 0x123456789abcdef0123456789n;
+			globalThis.constants = [integer, floating, text, huge, true, null, undefined];`,
+			"core-closed-tdz-constants.mjs",
+		);
+		const strings = optimized.stringConstants.map((units) =>
+			String.fromCharCode(...units),
+		);
+		const opcodes = optimized.functions.flatMap(({ blocks }) =>
+			blocks.flatMap(({ instructions }) => instructions.map(({ opcode }) => opcode)),
+		);
+
+		expect(strings).toEqual(["", "café 🐊", "constants"]);
+		expect(opcodes).not.toContain("throwIfTdz");
+	});
+
+	it("keeps a source-closed TDZ check when initialization does not dominate the read", () => {
+		const optimized = optimizedClosedModule(
+			`if (globalThis.condition) globalThis.answer = value;
+			let value = 1;`,
+			"core-closed-tdz-before-init.mjs",
+		);
+		const strings = optimized.stringConstants.map((units) =>
+			String.fromCharCode(...units),
+		);
+		const opcodes = optimized.functions.flatMap(({ blocks }) =>
+			blocks.flatMap(({ instructions }) => instructions.map(({ opcode }) => opcode)),
+		);
+
+		expect(strings).toContain("value");
+		expect(opcodes).toContain("throwIfTdz");
 	});
 
 	it("folds primitive arithmetic with exact f64 edge semantics", () => {

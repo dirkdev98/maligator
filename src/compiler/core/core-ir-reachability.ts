@@ -9,6 +9,10 @@
  */
 
 import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
+import {
+	compactLiteralTemplateSegments,
+	remapLiteralTemplateConstants,
+} from "../shared/literal-template-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALLEE_TARGETS_ATTRIBUTE,
@@ -494,140 +498,6 @@ function remapCoreConstantReferences(
 	return result;
 }
 
-function visitLiteralTemplateSegment(
-	data: ReadonlyArray<number>,
-	offset: number,
-	noteString: (index: number, where: string) => void,
-	noteBigint: (index: number, where: string) => void,
-): number {
-	let position = offset;
-	const actions: Array<"node" | "property"> = ["node"];
-	const take = (where: string): number => {
-		if (position >= data.length) {
-			throw new Error(`Truncated Core literal-template ${where}`);
-		}
-		return data[position++]!;
-	};
-	while (actions.length > 0) {
-		const action = actions.pop()!;
-		if (action === "property") {
-			const tag = take("object key tag");
-			if (tag !== 10) throw new Error(`Unknown Core literal-template object tag ${tag}`);
-			noteString(take("object key"), "literal-template string");
-			actions.push("node");
-			continue;
-		}
-		const tag = take("node");
-		switch (tag) {
-			case 0:
-			case 1:
-			case 2:
-			case 7:
-				break;
-			case 3:
-				take("integer");
-				break;
-			case 4:
-				take("number low word");
-				take("number high word");
-				break;
-			case 5:
-				noteString(take("string"), "literal-template string");
-				break;
-			case 6:
-				noteBigint(take("bigint"), "literal-template bigint");
-				break;
-			case 8: {
-				const count = take("array length");
-				for (let index = 0; index < count; index++) actions.push("node");
-				break;
-			}
-			case 9: {
-				const count = take("object size");
-				for (let index = 0; index < count; index++) actions.push("property");
-				break;
-			}
-			default:
-				throw new Error(`Unknown Core literal-template tag ${tag}`);
-		}
-	}
-	return position;
-}
-
-function compactLiteralTemplateSegments(
-	data: ReadonlyArray<number>,
-	liveOffsets: ReadonlySet<number>,
-	noteString: (index: number, where: string) => void,
-	noteBigint: (index: number, where: string) => void,
-): {
-	readonly data: ReadonlyArray<number>;
-	readonly oldToNew: ReadonlyMap<number, number>;
-} {
-	const compacted: Array<number> = [];
-	const oldToNew = new Map<number, number>();
-	for (const offset of [...liveOffsets].sort((left, right) => left - right)) {
-		if (!Number.isSafeInteger(offset) || offset < 0 || offset >= data.length) {
-			throw new Error(`Core instruction names unknown literal-template offset ${offset}`);
-		}
-		const end = visitLiteralTemplateSegment(data, offset, noteString, noteBigint);
-		oldToNew.set(offset, compacted.length);
-		compacted.push(...data.slice(offset, end));
-	}
-	return { data: compacted, oldToNew };
-}
-
-function remapLiteralTemplateConstants(
-	data: ReadonlyArray<number>,
-	segmentOffsets: ReadonlyArray<number>,
-	stringOldToNew: ReadonlyMap<number, number>,
-	bigintOldToNew: ReadonlyMap<number, number>,
-): ReadonlyArray<number> {
-	const remapped = [...data];
-	for (const offset of segmentOffsets) {
-		let position = offset;
-		const actions: Array<"node" | "property"> = ["node"];
-		while (actions.length > 0) {
-			const action = actions.pop()!;
-			if (action === "property") {
-				position += 1;
-				remapped[position] = remapMetadataRequired(
-					stringOldToNew,
-					remapped[position]!,
-					"literal-template string",
-				);
-				position += 1;
-				actions.push("node");
-				continue;
-			}
-			const tag = remapped[position++]!;
-			if (tag === 3) position += 1;
-			else if (tag === 4) position += 2;
-			else if (tag === 5) {
-				remapped[position] = remapMetadataRequired(
-					stringOldToNew,
-					remapped[position]!,
-					"literal-template string",
-				);
-				position += 1;
-			} else if (tag === 6) {
-				remapped[position] = remapMetadataRequired(
-					bigintOldToNew,
-					remapped[position]!,
-					"literal-template bigint",
-				);
-				position += 1;
-			} else if (tag === 8) {
-				const count = remapped[position++]!;
-				for (let index = 0; index < count; index++) actions.push("node");
-			} else if (tag === 9) {
-				const count = remapped[position++]!;
-				for (let index = 0; index < count; index++) actions.push("property");
-			}
-		}
-	}
-	return remapped;
-}
-
 function remapProofFunctionScopes(
 	value: CoreAttributeValue,
 	oldToNew: ReadonlyMap<number, number>,
@@ -651,6 +521,7 @@ function remapProofFunctionScopes(
 function remapSemanticAttributes(
 	instruction: CoreInstruction,
 	oldToNew: ReadonlyMap<number, number>,
+	preserveCalleeTargets = false,
 ): CoreInstruction["attributes"] {
 	const attributes: Record<string, CoreAttributeValue> = {
 		...instruction.attributes,
@@ -685,7 +556,7 @@ function remapSemanticAttributes(
 			attributes[key] = remapRequired(oldToNew, target, key);
 		}
 	}
-	delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
+	if (!preserveCalleeTargets) delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
 	delete attributes[CORE_CALL_SUMMARY_ATTRIBUTE];
 	// Shape origins are analyzed on the pre-compaction executable graph and rebased
 	// in process. Retract target-facing hints here so the final selector can publish
@@ -719,13 +590,15 @@ function retainedIdentityStub(fn: CoreFunction, functionIndex: number): CoreFunc
 function retractMetadataCompactionAnalyses(
 	fn: CoreFunction,
 	functionOldToNew: ReadonlyMap<number, number>,
+	preserveGraphStableAnalyses = false,
 ): CoreFunction {
 	const retractedProofs = new Set(
 		fn.facts
 			.filter(
 				({ kind }) =>
 					kind === CORE_CALL_EFFECT_SUMMARY_FACT ||
-					kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT ||
+					(!preserveGraphStableAnalyses &&
+						kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT) ||
 					kind === CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
 			)
 			.map(({ id }) => id),
@@ -743,7 +616,11 @@ function retractMetadataCompactionAnalyses(
 			...block,
 			instructions: block.instructions.map((instruction) => ({
 				...instruction,
-				attributes: remapSemanticAttributes(instruction, functionOldToNew),
+				attributes: remapSemanticAttributes(
+					instruction,
+					functionOldToNew,
+					preserveGraphStableAnalyses,
+				),
 				...(instruction.effectRefinement !== undefined &&
 				retractedProofs.has(instruction.effectRefinement.proof)
 					? { effectRefinement: undefined }
@@ -777,6 +654,7 @@ function compactCoreProgramMetadata(
 	functionOldToNew: ReadonlyMap<number, number>,
 	context: CoreCompilationContext | undefined,
 	analysisContractRetracted: boolean,
+	preserveGraphStableAnalyses = false,
 ): CoreFunctionCompactionResult {
 	const liveStrings = new Set<number>();
 	const liveBigints = new Set<number>();
@@ -869,8 +747,11 @@ function compactCoreProgramMetadata(
 	const templates = compactLiteralTemplateSegments(
 		program.literalTemplateData,
 		liveTemplateOffsets,
-		noteString,
-		noteBigint,
+		"Core literal-template",
+		{
+			string: (index) => noteString(index, "literal-template string"),
+			bigint: (index) => noteBigint(index, "literal-template bigint"),
+		},
 	);
 
 	const stringOldToNew = denseMetadataRelocation(
@@ -903,7 +784,11 @@ function compactCoreProgramMetadata(
 			{
 				...program,
 				functions: program.functions.map((fn) =>
-					retractMetadataCompactionAnalyses(fn, functionOldToNew),
+					retractMetadataCompactionAnalyses(
+						fn,
+						functionOldToNew,
+						preserveGraphStableAnalyses,
+					),
 				),
 			},
 			functionOldToNew,
@@ -1067,9 +952,12 @@ function compactCoreProgramMetadata(
 			),
 			literalTemplateData: remapLiteralTemplateConstants(
 				templates.data,
-				[...templates.oldToNew.values()],
-				stringOldToNew,
-				bigintOldToNew,
+				[...new Set(templates.oldToNew.values())],
+				"Core literal-template",
+				(index) =>
+					remapMetadataRequired(stringOldToNew, index, "literal-template string"),
+				(index) =>
+					remapMetadataRequired(bigintOldToNew, index, "literal-template bigint"),
 			),
 			sourcePositions,
 		},
@@ -1089,14 +977,10 @@ export function compactCoreProgramFunctions(
 ): CoreFunctionCompactionResult {
 	reachability ??= analyzeCoreFunctionReachability(program, undefined, context);
 	if (!reachability.sourceClosed) {
-		return {
-			program,
-			...(context === undefined ? {} : { context }),
-			changed: false,
-			oldToNew: new Map(
-				program.functions.map((fn) => [fn.functionIndex, fn.functionIndex]),
-			),
-		};
+		const oldToNew = new Map(
+			program.functions.map((fn) => [fn.functionIndex, fn.functionIndex]),
+		);
+		return compactCoreProgramMetadata(program, oldToNew, context, false, true);
 	}
 	const functionChanged =
 		reachability.retained.size !== program.functions.length ||

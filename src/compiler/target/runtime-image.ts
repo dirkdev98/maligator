@@ -13,6 +13,10 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
+import {
+	compactLiteralTemplateSegments,
+	remapLiteralTemplateConstants,
+} from "../shared/literal-template-data.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { executionSafepointRootRegisters } from "./execution-liveness.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
@@ -124,23 +128,44 @@ function validateVmValueOperand(
 	}
 }
 
+type VmCallInstruction = Extract<
+	BytecodeInstruction,
+	{ opcode: "CALL" | "CALL_BUILTIN" | "CONSTRUCT" }
+>;
+
+function isVmCallInstruction(
+	instruction: BytecodeInstruction,
+): instruction is VmCallInstruction {
+	return (
+		instruction.opcode === "CALL" ||
+		instruction.opcode === "CALL_BUILTIN" ||
+		instruction.opcode === "CONSTRUCT"
+	);
+}
+
+function vmValueOperandEntries(
+	instruction: VmCallInstruction,
+): ReadonlyArray<{ readonly name: string; readonly operand: number }> {
+	const entries: Array<{ name: string; operand: number }> = [];
+	if (instruction.opcode !== "CALL_BUILTIN") {
+		entries.push({ name: "callee", operand: instruction.callee });
+	}
+	if (instruction.opcode !== "CONSTRUCT") {
+		entries.push({ name: "thisValue", operand: instruction.thisValue });
+	}
+	for (const [index, operand] of instruction.arguments.entries()) {
+		entries.push({ name: `arguments[${index}]`, operand });
+	}
+	return entries;
+}
+
 /** Reject malformed tagged operands before they can reach portable or native output. */
 export function validateVmValueOperands(definition: RuntimeImage): void {
 	for (const fn of definition.functions) {
 		for (const instruction of fn.instructions) {
-			switch (instruction.opcode) {
-				case "CALL":
-					validateVmValueOperand(definition, fn, instruction.callee);
-					validateVmValueOperand(definition, fn, instruction.thisValue);
-					break;
-				case "CALL_BUILTIN":
-					validateVmValueOperand(definition, fn, instruction.thisValue);
-					break;
-				case "CONSTRUCT":
-					validateVmValueOperand(definition, fn, instruction.callee);
-					break;
-				default:
-					continue;
+			if (!isVmCallInstruction(instruction)) continue;
+			for (const { operand } of vmValueOperandEntries(instruction)) {
+				validateVmValueOperand(definition, fn, operand);
 			}
 			if (instruction.argumentCount !== instruction.arguments.length) {
 				throw new RangeError("invalid VM value operand count");
@@ -1744,6 +1769,483 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	validateVmShapeCases(definition);
 }
 
+export interface RuntimeImageConstantRetentionEntry {
+	readonly index: number;
+	readonly reasons: ReadonlyArray<string>;
+}
+
+export interface RuntimeImageConstantRetentionReport {
+	readonly strings: {
+		readonly originalCount: number;
+		readonly retainedCount: number;
+		readonly entries: ReadonlyArray<RuntimeImageConstantRetentionEntry>;
+	};
+	readonly bigints: {
+		readonly originalCount: number;
+		readonly retainedCount: number;
+		readonly entries: ReadonlyArray<RuntimeImageConstantRetentionEntry>;
+	};
+	readonly literalTemplates: {
+		readonly originalWordCount: number;
+		readonly retainedWordCount: number;
+		readonly entries: ReadonlyArray<{
+			readonly offset: number;
+			readonly reasons: ReadonlyArray<string>;
+		}>;
+	};
+}
+
+export interface RuntimeImageConstantCompactionResult {
+	readonly runtime: RuntimeImage;
+	readonly changed: boolean;
+	readonly report: RuntimeImageConstantRetentionReport;
+	readonly stringOldToNew: ReadonlyMap<number, number>;
+	readonly bigintOldToNew: ReadonlyMap<number, number>;
+	readonly templateOldToNew: ReadonlyMap<number, number>;
+}
+
+const RUNTIME_STRING_INDEX_KEYS: ReadonlySet<string> = new Set([
+	"keyStringIndex",
+	"nameStringIndex",
+	"separatorStringIndex",
+	"stringIndex",
+]);
+
+const RUNTIME_STRING_INDEX_ARRAY_KEYS: ReadonlySet<string> = new Set([
+	"cookedIndices",
+	"keyStringIndices",
+	"nameIndices",
+	"nameStringIndices",
+	"rawIndices",
+]);
+
+function addRuntimeConstantRetentionReason(
+	reasons: Map<number, Set<string>>,
+	poolLength: number,
+	index: number,
+	reason: string,
+	kind: string,
+): void {
+	if (!Number.isSafeInteger(index) || index < 0 || index >= poolLength) {
+		throw new RangeError(`invalid RuntimeImage ${kind} index ${index} at ${reason}`);
+	}
+	let entries = reasons.get(index);
+	if (entries === undefined) {
+		entries = new Set();
+		reasons.set(index, entries);
+	}
+	entries.add(reason);
+}
+
+function visitRuntimeConstantReferences(
+	value: unknown,
+	path: string,
+	noteString: (index: number, reason: string) => void,
+	noteBigint: (index: number, reason: string) => void,
+	noteTemplate: (offset: number, reason: string) => void,
+	key?: string,
+): void {
+	if (typeof value === "number") {
+		if (RUNTIME_STRING_INDEX_KEYS.has(key ?? "")) noteString(value, path);
+		else if (key === "bigintIndex") noteBigint(value, path);
+		else if (key === "templateOffset") noteTemplate(value, path);
+		return;
+	}
+	if (value === null || typeof value !== "object") return;
+	if (Array.isArray(value)) {
+		if (RUNTIME_STRING_INDEX_ARRAY_KEYS.has(key ?? "")) {
+			for (const [index, entry] of value.entries()) {
+				if (typeof entry !== "number") {
+					throw new RangeError(`invalid RuntimeImage string index at ${path}[${index}]`);
+				}
+				if (key === "cookedIndices" && entry < 0) continue;
+				noteString(entry, `${path}[${index}]`);
+			}
+			return;
+		}
+		for (const [index, entry] of value.entries()) {
+			visitRuntimeConstantReferences(
+				entry,
+				`${path}[${index}]`,
+				noteString,
+				noteBigint,
+				noteTemplate,
+			);
+		}
+		return;
+	}
+	for (const [entryKey, entry] of Object.entries(value)) {
+		visitRuntimeConstantReferences(
+			entry,
+			`${path}.${entryKey}`,
+			noteString,
+			noteBigint,
+			noteTemplate,
+			entryKey,
+		);
+	}
+}
+
+function remapRuntimeConstantRequired(
+	oldToNew: ReadonlyMap<number, number>,
+	index: number,
+	where: string,
+): number {
+	const mapped = oldToNew.get(index);
+	if (mapped === undefined) {
+		throw new Error(`RuntimeImage removed constant ${index} still named by ${where}`);
+	}
+	return mapped;
+}
+
+function remapRuntimeConstantReferences(
+	value: unknown,
+	stringOldToNew: ReadonlyMap<number, number>,
+	bigintOldToNew: ReadonlyMap<number, number>,
+	templateOldToNew: ReadonlyMap<number, number>,
+	key?: string,
+): unknown {
+	if (typeof value === "number") {
+		if (RUNTIME_STRING_INDEX_KEYS.has(key ?? "")) {
+			return remapRuntimeConstantRequired(stringOldToNew, value, key!);
+		}
+		if (key === "bigintIndex") {
+			return remapRuntimeConstantRequired(bigintOldToNew, value, key);
+		}
+		if (key === "templateOffset") {
+			return remapRuntimeConstantRequired(templateOldToNew, value, key);
+		}
+		return value;
+	}
+	if (value === null || typeof value !== "object") return value;
+	if (Array.isArray(value)) {
+		if (RUNTIME_STRING_INDEX_ARRAY_KEYS.has(key ?? "")) {
+			return value.map((index) =>
+				typeof index === "number" && key === "cookedIndices" && index < 0
+					? index
+					: remapRuntimeConstantRequired(stringOldToNew, index as number, key!),
+			);
+		}
+		return value.map((entry) =>
+			remapRuntimeConstantReferences(
+				entry,
+				stringOldToNew,
+				bigintOldToNew,
+				templateOldToNew,
+			),
+		);
+	}
+	const remapped: Record<string, unknown> = {};
+	for (const [entryKey, entry] of Object.entries(value)) {
+		remapped[entryKey] = remapRuntimeConstantReferences(
+			entry,
+			stringOldToNew,
+			bigintOldToNew,
+			templateOldToNew,
+			entryKey,
+		);
+	}
+	return remapped;
+}
+
+function compactRuntimeConstantPool<T>(
+	values: ReadonlyArray<T>,
+	live: ReadonlyMap<number, ReadonlySet<string>>,
+	keyFor: (value: T) => string,
+): { readonly values: ReadonlyArray<T>; readonly oldToNew: ReadonlyMap<number, number> } {
+	const compacted: Array<T> = [];
+	const oldToNew = new Map<number, number>();
+	const canonicalIndices = new Map<string, number>();
+	for (const [index, value] of values.entries()) {
+		if (!live.has(index)) continue;
+		const key = keyFor(value);
+		let mapped = canonicalIndices.get(key);
+		if (mapped === undefined) {
+			mapped = compacted.length;
+			compacted.push(value);
+			canonicalIndices.set(key, mapped);
+		}
+		oldToNew.set(index, mapped);
+	}
+	return { values: compacted, oldToNew };
+}
+
+function runtimeConstantRetentionEntries(
+	reasons: ReadonlyMap<number, ReadonlySet<string>>,
+): ReadonlyArray<RuntimeImageConstantRetentionEntry> {
+	return [...reasons.entries()]
+		.sort(([left], [right]) => left - right)
+		.map(([index, entries]) => ({ index, reasons: [...entries].sort() }));
+}
+
+function remapVmValueOperandConstants(
+	operand: number,
+	stringOldToNew: ReadonlyMap<number, number>,
+	where: string,
+): number {
+	const decoded = decodeVmValueOperand(operand);
+	if (decoded.kind !== "string") return operand;
+	return encodeVmValueOperand(0, {
+		kind: "string",
+		index: remapRuntimeConstantRequired(stringOldToNew, decoded.index, where),
+	});
+}
+
+function remapRuntimeInstructionConstants(
+	instruction: BytecodeInstruction,
+	stringOldToNew: ReadonlyMap<number, number>,
+	bigintOldToNew: ReadonlyMap<number, number>,
+	templateOldToNew: ReadonlyMap<number, number>,
+): BytecodeInstruction {
+	const remapped = remapRuntimeConstantReferences(
+		instruction,
+		stringOldToNew,
+		bigintOldToNew,
+		templateOldToNew,
+	) as BytecodeInstruction;
+	switch (remapped.opcode) {
+		case "CALL":
+			return {
+				...remapped,
+				callee: remapVmValueOperandConstants(
+					remapped.callee,
+					stringOldToNew,
+					"CALL.callee",
+				),
+				thisValue: remapVmValueOperandConstants(
+					remapped.thisValue,
+					stringOldToNew,
+					"CALL.thisValue",
+				),
+				arguments: remapped.arguments.map((operand, index) =>
+					remapVmValueOperandConstants(
+						operand,
+						stringOldToNew,
+						`CALL.arguments[${index}]`,
+					),
+				),
+			};
+		case "CALL_BUILTIN":
+			return {
+				...remapped,
+				thisValue: remapVmValueOperandConstants(
+					remapped.thisValue,
+					stringOldToNew,
+					"CALL_BUILTIN.thisValue",
+				),
+				arguments: remapped.arguments.map((operand, index) =>
+					remapVmValueOperandConstants(
+						operand,
+						stringOldToNew,
+						`CALL_BUILTIN.arguments[${index}]`,
+					),
+				),
+			};
+		case "CONSTRUCT":
+			return {
+				...remapped,
+				callee: remapVmValueOperandConstants(
+					remapped.callee,
+					stringOldToNew,
+					"CONSTRUCT.callee",
+				),
+				arguments: remapped.arguments.map((operand, index) =>
+					remapVmValueOperandConstants(
+						operand,
+						stringOldToNew,
+						`CONSTRUCT.arguments[${index}]`,
+					),
+				),
+			};
+		default:
+			return remapped;
+	}
+}
+
+/** Remove constants that no final portable VM consumer can observe. */
+export function compactRuntimeImageConstants(
+	definition: RuntimeImage,
+): RuntimeImageConstantCompactionResult {
+	validateRuntimeImageMetadata(definition);
+	const stringReasons = new Map<number, Set<string>>();
+	const bigintReasons = new Map<number, Set<string>>();
+	const templateReasons = new Map<number, Set<string>>();
+	const noteString = (index: number, reason: string): void =>
+		addRuntimeConstantRetentionReason(
+			stringReasons,
+			definition.stringConstants.length,
+			index,
+			reason,
+			"string",
+		);
+	const noteBigint = (index: number, reason: string): void =>
+		addRuntimeConstantRetentionReason(
+			bigintReasons,
+			definition.bigintConstants.length,
+			index,
+			reason,
+			"bigint",
+		);
+	const noteTemplate = (offset: number, reason: string): void =>
+		addRuntimeConstantRetentionReason(
+			templateReasons,
+			definition.literalTemplateData.length,
+			offset,
+			reason,
+			"literal-template",
+		);
+	for (const [functionIndex, fn] of definition.functions.entries()) {
+		if (fn.nameStringIndex >= 0) {
+			noteString(fn.nameStringIndex, `function ${functionIndex} nameStringIndex`);
+		}
+		for (const [instructionIndex, instruction] of fn.instructions.entries()) {
+			const instructionPath = `function ${functionIndex} instruction ${instructionIndex} ${instruction.opcode}`;
+			visitRuntimeConstantReferences(
+				instruction,
+				instructionPath,
+				noteString,
+				noteBigint,
+				noteTemplate,
+			);
+			if (!isVmCallInstruction(instruction)) continue;
+			for (const { name, operand } of vmValueOperandEntries(instruction)) {
+				const decoded = decodeVmValueOperand(operand);
+				if (decoded.kind === "string") {
+					noteString(decoded.index, `${instructionPath}.${name}`);
+				}
+			}
+		}
+	}
+	for (const [shapeIndex, shape] of definition.precompiledLiteralShapes.entries()) {
+		visitRuntimeConstantReferences(
+			shape,
+			`precompiled literal shape ${shapeIndex}`,
+			noteString,
+			noteBigint,
+			noteTemplate,
+		);
+	}
+	const templates = compactLiteralTemplateSegments(
+		definition.literalTemplateData,
+		new Set(templateReasons.keys()),
+		"RuntimeImage literal-template",
+		{
+			string: (index, offset) => noteString(index, `literal template ${offset} string`),
+			bigint: (index, offset) => noteBigint(index, `literal template ${offset} bigint`),
+		},
+	);
+	const stringPool = compactRuntimeConstantPool(
+		definition.stringConstants,
+		stringReasons,
+		(value) => value.join(","),
+	);
+	const bigintPool = compactRuntimeConstantPool(
+		definition.bigintConstants,
+		bigintReasons,
+		(value) => value.toString(),
+	);
+	const stringOldToNew = stringPool.oldToNew;
+	const bigintOldToNew = bigintPool.oldToNew;
+	const report: RuntimeImageConstantRetentionReport = {
+		strings: {
+			originalCount: definition.stringConstants.length,
+			retainedCount: stringPool.values.length,
+			entries: runtimeConstantRetentionEntries(stringReasons),
+		},
+		bigints: {
+			originalCount: definition.bigintConstants.length,
+			retainedCount: bigintPool.values.length,
+			entries: runtimeConstantRetentionEntries(bigintReasons),
+		},
+		literalTemplates: {
+			originalWordCount: definition.literalTemplateData.length,
+			retainedWordCount: templates.data.length,
+			entries: [...templateReasons.entries()]
+				.sort(([left], [right]) => left - right)
+				.map(([offset, reasons]) => ({ offset, reasons: [...reasons].sort() })),
+		},
+	};
+	const changed =
+		stringPool.values.length !== definition.stringConstants.length ||
+		bigintPool.values.length !== definition.bigintConstants.length ||
+		templates.data.length !== definition.literalTemplateData.length;
+	if (!changed) {
+		return {
+			runtime: definition,
+			changed: false,
+			report,
+			stringOldToNew,
+			bigintOldToNew,
+			templateOldToNew: templates.oldToNew,
+		};
+	}
+	const functions = definition.functions.map((fn) => {
+		const trustedSafepoints = vmSafepointRootMapsAreTrusted(fn);
+		const remapped: BytecodeFunction = {
+			...fn,
+			nameStringIndex:
+				fn.nameStringIndex < 0
+					? fn.nameStringIndex
+					: remapRuntimeConstantRequired(
+							stringOldToNew,
+							fn.nameStringIndex,
+							"function nameStringIndex",
+						),
+			instructions: fn.instructions.map((instruction) =>
+				remapRuntimeInstructionConstants(
+					instruction,
+					stringOldToNew,
+					bigintOldToNew,
+					templates.oldToNew,
+				),
+			),
+		};
+		if (trustedSafepoints) {
+			trustedVmSafepointRootMaps.set(
+				remapped,
+				vmSafepointRootMapTrustFingerprint(remapped),
+			);
+		}
+		return remapped;
+	});
+	const runtime: RuntimeImage = {
+		...definition,
+		functions,
+		stringConstants: stringPool.values.map((value) => [...value]),
+		bigintConstants: [...bigintPool.values],
+		literalTemplateData: [
+			...remapLiteralTemplateConstants(
+				templates.data,
+				[...new Set(templates.oldToNew.values())],
+				"RuntimeImage literal-template",
+				(index) =>
+					remapRuntimeConstantRequired(stringOldToNew, index, "literal-template string"),
+				(index) =>
+					remapRuntimeConstantRequired(bigintOldToNew, index, "literal-template bigint"),
+			),
+		],
+		precompiledLiteralShapes: definition.precompiledLiteralShapes.map((shape) => ({
+			...shape,
+			keyStringIndices: shape.keyStringIndices.map((index) =>
+				remapRuntimeConstantRequired(
+					stringOldToNew,
+					index,
+					"precompiled literal shape keyStringIndices",
+				),
+			),
+		})),
+	};
+	validateRuntimeImageMetadata(runtime);
+	return {
+		runtime,
+		changed: true,
+		report,
+		stringOldToNew,
+		bigintOldToNew,
+		templateOldToNew: templates.oldToNew,
+	};
+}
+
 interface VmKnownShapeOrigin {
 	readonly keyStringIndices: ReadonlyArray<number>;
 	readonly shapeCacheIndex: number;
@@ -1985,7 +2487,9 @@ export function lowerVerifiedExecutionToRuntimePlan(
 
 export function lowerExecutionToRuntimeImage(program: ExecutionProgram): RuntimeImage {
 	verifyExecutionProgram(program);
-	return lowerVerifiedExecutionToRuntimePlan(program).runtime;
+	return compactRuntimeImageConstants(
+		lowerVerifiedExecutionToRuntimePlan(program).runtime,
+	).runtime;
 }
 
 function buildHostInstalls(

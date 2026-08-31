@@ -20,6 +20,7 @@ import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import {
+	compactRuntimeImageConstants,
 	decodeVmValueOperand,
 	lowerVerifiedExecutionToRuntimePlan,
 } from "./runtime-image.ts";
@@ -29,6 +30,7 @@ import type {
 	BytecodeInstruction,
 	RuntimeFunctionLoweringPlan,
 	RuntimeImage,
+	RuntimeImageConstantRetentionReport,
 } from "./runtime-image.ts";
 
 export const VM_GUARDED_BUILTIN_OPERATIONS = [
@@ -754,6 +756,46 @@ export function programImageStats(definition: ProgramImage): ProgramImageStats {
 	};
 }
 
+export interface ProgramImageConstantCompactionResult {
+	readonly definition: ProgramImage;
+	readonly changed: boolean;
+	readonly report: RuntimeImageConstantRetentionReport;
+}
+
+/** Rebase native consumers after the portable constant pools become final. */
+export function compactProgramImageConstants(
+	definition: ProgramImage,
+): ProgramImageConstantCompactionResult {
+	const compacted = compactRuntimeImageConstants(definition.runtime);
+	if (!compacted.changed) {
+		return { definition, changed: false, report: compacted.report };
+	}
+	const functions = definition.native.functions.map((fn) => ({
+		...fn,
+		specializations: fn.specializations.map((region) => {
+			if (region.kind !== "string-split-projection") return region;
+			const separatorStringIndex = compacted.stringOldToNew.get(
+				region.separatorStringIndex,
+			);
+			if (separatorStringIndex === undefined) {
+				throw new Error(
+					`RuntimeImage removed String.split separator ${region.separatorStringIndex}`,
+				);
+			}
+			return { ...region, separatorStringIndex };
+		}),
+	}));
+	return {
+		definition: {
+			...definition,
+			runtime: compacted.runtime,
+			native: { ...definition.native, functions },
+		},
+		changed: true,
+		report: compacted.report,
+	};
+}
+
 /** Materialize the native product after its terminal has verified every ABI variant. */
 export function lowerVerifiedExecutionToProgramImage(
 	program: ExecutionProgram,
@@ -809,7 +851,7 @@ export function lowerVerifiedExecutionToProgramImage(
 			nativeFunctions,
 		);
 	}
-	return definition;
+	return compactProgramImageConstants(definition).definition;
 }
 
 /**

@@ -426,7 +426,27 @@ describe("Core whole-program function reachability", () => {
 		expect(analysis.sourceClosed).toBe(false);
 		expect(analysis.executable.size).toBe(program.functions.length);
 		expect(analysis.retained.size).toBe(program.functions.length);
-		expect(result).toMatchObject({ program, changed: false });
+		expect(result.program.functions).toHaveLength(program.functions.length);
+		expect(result.program.functions.map(({ functionIndex }) => functionIndex)).toEqual(
+			program.functions.map(({ functionIndex }) => functionIndex),
+		);
+		expect(() => verifyCoreProgram(result.program, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("compacts structurally dead metadata without source closure", () => {
+		const shell = coreModule("", false);
+		const program = {
+			...shell,
+			stringConstants: [[], [100]],
+		};
+		contexts.set(program, contextFor(shell));
+
+		const result = compactCoreProgramFunctions(program);
+
+		expect(result.changed).toBe(true);
+		expect(result.program.functions).toHaveLength(program.functions.length);
+		expect(result.program.stringConstants).toEqual([[]]);
+		expect(() => verifyCoreProgram(result.program, coreOpcodeRegistry)).not.toThrow();
 	});
 
 	it("keeps finite script candidates without widening an opaque alternative", () => {

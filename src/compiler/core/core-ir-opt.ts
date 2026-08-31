@@ -5769,6 +5769,214 @@ const MAY_PRODUCE_EMPTY_OPCODES = new Set([
 	"loadPropertyStaticShapeCase",
 ]);
 
+function coreMaybeEmptyValues(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+	definitelyInitializedLoads: ReadonlySet<CoreInstructionId> = new Set(),
+): Uint8Array {
+	const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
+	const maybeEmpty = new Uint8Array(valueCount);
+	const dependencies = new Array<Array<CoreValueId> | undefined>(valueCount);
+	const pending: Array<CoreValueId> = [];
+	const markMaybeEmpty = (value: CoreValueId): void => {
+		if (maybeEmpty[value] !== 0) return;
+		maybeEmpty[value] = 1;
+		pending.push(value);
+	};
+	const addDependency = (source: CoreValueId, destination: CoreValueId): void => {
+		const targets = dependencies[source] ?? (dependencies[source] = []);
+		targets.push(destination);
+	};
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				(MAY_PRODUCE_EMPTY_OPCODES.has(instruction.opcode) &&
+					!definitelyInitializedLoads.has(instruction.id)) ||
+				(instruction.opcode === "loadThis" && fn.metadata.isDerivedConstructor)
+			) {
+				for (const output of instruction.outputs) markMaybeEmpty(output);
+			}
+			if (instruction.opcode === "move" || instruction.opcode === "setThis") {
+				for (const input of instruction.inputs) {
+					for (const output of instruction.outputs) addDependency(input, output);
+				}
+			}
+		}
+		const incoming = cfg.predecessors[block.id]!;
+		for (const [index, parameter] of block.parameters.entries()) {
+			if (parameter.role === "exception") continue;
+			for (const edge of incoming) {
+				const argumentIndex =
+					edge.kind === "exceptional" && block.parameters[0]?.role === "exception"
+						? index - 1
+						: index;
+				const argument = argumentIndex < 0 ? undefined : edge.arguments[argumentIndex];
+				if (argument === undefined) markMaybeEmpty(parameter.value);
+				else addDependency(argument, parameter.value);
+			}
+		}
+	}
+	while (pending.length > 0) {
+		const source = pending.pop()!;
+		for (const destination of dependencies[source] ?? []) {
+			markMaybeEmpty(destination);
+		}
+	}
+	return maybeEmpty;
+}
+
+function closedWorldInitializedBindingLoads(
+	fn: CoreFunction,
+	analyses: CoreAnalysisManager,
+	baselineMaybeEmpty: Uint8Array,
+): ReadonlySet<CoreInstructionId> {
+	if (analyses.context?.facts.closure.sourceClosure.kind !== "known") return new Set();
+
+	const accessesByInstruction = new Map<
+		CoreInstructionId,
+		ReadonlyArray<CoreMemoryAccess>
+	>();
+	const cellIndices = new Map<string, number>();
+	const bindingCellKey = (access: CoreMemoryAccess): string | undefined => {
+		const location = access.location;
+		return location.kind === "global-slot"
+			? `global\0${location.slot}`
+			: location.kind === "local-slot"
+				? `local\0${location.slot}`
+				: undefined;
+	};
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			const accesses = coreMemoryAccesses(instruction);
+			accessesByInstruction.set(instruction.id, accesses);
+			for (const access of accesses) {
+				if (access.mode !== "read" || access.result === undefined) continue;
+				const key = bindingCellKey(access);
+				if (key !== undefined && !cellIndices.has(key)) {
+					cellIndices.set(key, cellIndices.size);
+				}
+			}
+		}
+	}
+	if (cellIndices.size === 0) return new Set();
+
+	const reads = new Map<CoreInstructionId, Array<number>>();
+	const writes = new Map<
+		CoreInstructionId,
+		Array<{ readonly cell: number; readonly value?: CoreValueId }>
+	>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			for (const access of accessesByInstruction.get(instruction.id) ?? []) {
+				const key = bindingCellKey(access);
+				const cell = key === undefined ? undefined : cellIndices.get(key);
+				if (cell === undefined) continue;
+				if (access.mode === "read" && access.result !== undefined) {
+					const cells = reads.get(instruction.id) ?? [];
+					cells.push(cell);
+					reads.set(instruction.id, cells);
+				} else if (access.mode === "write") {
+					const cells = writes.get(instruction.id) ?? [];
+					cells.push({
+						cell,
+						...(access.value === undefined ? {} : { value: access.value }),
+					});
+					writes.set(instruction.id, cells);
+				}
+			}
+		}
+	}
+
+	const wordCount = Math.ceil(cellIndices.size / 32);
+	const entries = fn.blocks.map(() => new Uint32Array(wordCount));
+	const exits = fn.blocks.map(() => new Uint32Array(wordCount));
+	const lastWordMask =
+		cellIndices.size % 32 === 0
+			? 0xffffffff
+			: 0xffffffff >>> (32 - (cellIndices.size % 32));
+	const fillTop = (state: Uint32Array): void => {
+		state.fill(0xffffffff);
+		state[wordCount - 1] = lastWordMask;
+	};
+	const cfg = analyses.controlFlow(fn);
+	for (const block of fn.blocks) {
+		if (!cfg.reachable.has(block.id) || block.id === fn.entry) continue;
+		fillTop(entries[block.id]!);
+		fillTop(exits[block.id]!);
+	}
+	const hasCell = (state: Uint32Array, cell: number): boolean =>
+		(state[cell >>> 5]! & (1 << (cell & 31))) !== 0;
+	const updateCell = (state: Uint32Array, cell: number, initialized: boolean): void => {
+		const word = cell >>> 5;
+		const mask = 1 << (cell & 31);
+		if (initialized) state[word] = state[word]! | mask;
+		else state[word] = state[word]! & ~mask;
+	};
+	const applyWrites = (state: Uint32Array, instruction: CoreInstruction): void => {
+		for (const write of writes.get(instruction.id) ?? []) {
+			updateCell(
+				state,
+				write.cell,
+				write.value !== undefined && baselineMaybeEmpty[write.value] === 0,
+			);
+		}
+	};
+	const replaceIfDifferent = (target: Uint32Array, source: Uint32Array): boolean => {
+		let changed = false;
+		for (let word = 0; word < wordCount; word++) {
+			if (target[word] === source[word]) continue;
+			target[word] = source[word]!;
+			changed = true;
+		}
+		return changed;
+	};
+	const nextEntry = new Uint32Array(wordCount);
+	const nextExit = new Uint32Array(wordCount);
+	// Source-closed calls may replace a binding's JavaScript value, but only an
+	// explicit Core write can manufacture Empty and restore its uninitialized state.
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const blockId of cfg.reversePostorder) {
+			const block = fn.blocks[blockId]!;
+			if (blockId === fn.entry) {
+				nextEntry.fill(0);
+			} else {
+				fillTop(nextEntry);
+				let predecessorCount = 0;
+				for (const edge of cfg.predecessors[blockId]!) {
+					if (!cfg.reachable.has(edge.from)) continue;
+					predecessorCount++;
+					const source =
+						edge.kind === "exceptional" ? entries[edge.from]! : exits[edge.from]!;
+					for (let word = 0; word < wordCount; word++) {
+						nextEntry[word] = nextEntry[word]! & source[word]!;
+					}
+				}
+				if (predecessorCount === 0) nextEntry.fill(0);
+			}
+			changed = replaceIfDifferent(entries[blockId]!, nextEntry) || changed;
+			nextExit.set(nextEntry);
+			for (const instruction of block.instructions) applyWrites(nextExit, instruction);
+			changed = replaceIfDifferent(exits[blockId]!, nextExit) || changed;
+		}
+	}
+
+	const initializedLoads = new Set<CoreInstructionId>();
+	const state = new Uint32Array(wordCount);
+	for (const blockId of cfg.reversePostorder) {
+		state.set(entries[blockId]!);
+		for (const instruction of fn.blocks[blockId]!.instructions) {
+			const readCells = reads.get(instruction.id);
+			if (readCells !== undefined && readCells.every((cell) => hasCell(state, cell))) {
+				initializedLoads.add(instruction.id);
+			}
+			applyWrites(state, instruction);
+		}
+	}
+	return initializedLoads;
+}
+
 /**
  * Empty is an internal TDZ sentinel, not a JavaScript value. Core SSA makes its
  * provenance explicit, so remove a check only when no incoming definition can
@@ -5787,53 +5995,16 @@ const eliminateRedundantTdzChecks: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const valueCount = (fn.values.at(-1)?.id ?? -1) + 1;
-		const maybeEmpty = new Uint8Array(valueCount);
-		const dependencies = new Array<Array<CoreValueId> | undefined>(valueCount);
-		const pending: Array<CoreValueId> = [];
-		const markMaybeEmpty = (value: CoreValueId): void => {
-			if (maybeEmpty[value] !== 0) return;
-			maybeEmpty[value] = 1;
-			pending.push(value);
-		};
-		const addDependency = (source: CoreValueId, destination: CoreValueId): void => {
-			const targets = dependencies[source] ?? (dependencies[source] = []);
-			targets.push(destination);
-		};
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (
-					MAY_PRODUCE_EMPTY_OPCODES.has(instruction.opcode) ||
-					(instruction.opcode === "loadThis" && fn.metadata.isDerivedConstructor)
-				) {
-					for (const output of instruction.outputs) markMaybeEmpty(output);
-				}
-				if (instruction.opcode === "move" || instruction.opcode === "setThis") {
-					for (const input of instruction.inputs) {
-						for (const output of instruction.outputs) addDependency(input, output);
-					}
-				}
-			}
-			const incoming = cfg.predecessors[block.id]!;
-			for (const [index, parameter] of block.parameters.entries()) {
-				if (parameter.role === "exception") continue;
-				for (const edge of incoming) {
-					const argumentIndex =
-						edge.kind === "exceptional" && block.parameters[0]?.role === "exception"
-							? index - 1
-							: index;
-					const argument = argumentIndex < 0 ? undefined : edge.arguments[argumentIndex];
-					if (argument === undefined) markMaybeEmpty(parameter.value);
-					else addDependency(argument, parameter.value);
-				}
-			}
-		}
-		while (pending.length > 0) {
-			const source = pending.pop()!;
-			for (const destination of dependencies[source] ?? []) {
-				markMaybeEmpty(destination);
-			}
-		}
+		const baselineMaybeEmpty = coreMaybeEmptyValues(fn, cfg);
+		const definitelyInitializedLoads = closedWorldInitializedBindingLoads(
+			fn,
+			analyses,
+			baselineMaybeEmpty,
+		);
+		const maybeEmpty =
+			definitelyInitializedLoads.size === 0
+				? baselineMaybeEmpty
+				: coreMaybeEmptyValues(fn, cfg, definitelyInitializedLoads);
 
 		let removed = false;
 		const blocks = fn.blocks.map(
