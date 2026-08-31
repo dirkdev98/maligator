@@ -103,6 +103,20 @@ function scalarRootedAcrossCall(value, observe) {
 	return 1;
 }
 
+function scalarJoinedRootedAcrossCall(chooseLeft, observe) {
+	const initial = { tag: "initial" };
+	const left = { tag: "left" };
+	const right = { tag: "right" };
+	const object = { held: initial };
+	if (chooseLeft) object.held = left;
+	else object.held = right;
+	const watcher = new WeakRef(chooseLeft ? left : right);
+	observe();
+	const alive = watcher.deref() !== undefined;
+	object.held = 0;
+	return alive;
+}
+
 function homogeneousBooleanCell(flag, count) {
 	const object = { value: true };
 	for (let i = 0; i < count; i++) {
@@ -239,6 +253,11 @@ check(
 check(
 	"explicit-root boxed scalar replacement",
 	scalarRootedAcrossCall({ tag: "held" }, () => allocateNoise(440)) === 1,
+);
+check(
+	"joined explicit-root boxed scalar replacement",
+	scalarJoinedRootedAcrossCall(true, () => allocateNoise(450)) &&
+		scalarJoinedRootedAcrossCall(false, () => allocateNoise(460)),
 );
 check(
 	"homogeneous boolean stack cell",

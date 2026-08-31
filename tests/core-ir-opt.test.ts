@@ -2239,6 +2239,39 @@ describe("Core IR optimizer", () => {
 		expect(opcodes).toEqual(expect.arrayContaining(["call", "rootUse"]));
 	});
 
+	it("roots a joined virtual field through an explicit field parameter", () => {
+		let program: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function preserve(initial, left, right, chooseLeft) {
+					const object = { held: initial };
+					if (chooseLeft) object.held = left;
+					else object.held = right;
+					globalThis.observe();
+					object.held = 0;
+					return 1;
+				}`,
+				"scalar-joined-virtual-field.js",
+			),
+			{
+				afterCoreOptimization(optimized) {
+					program = optimized;
+				},
+			},
+		);
+		const preserve = program!.functions[functionIndexOfName(program!, "preserve")]!;
+		const instructions = preserve.blocks.flatMap(({ instructions }) => instructions);
+		const opcodes = instructions.map(({ opcode }) => opcode);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("storePropertyStatic");
+		const rootUse = instructions.find(({ opcode }) => opcode === "rootUse");
+		expect(rootUse?.inputs).toHaveLength(1);
+		const rooted = rootUse?.inputs[0];
+		expect(preserve.values.find(({ id }) => id === rooted)?.definition.kind).toBe(
+			"block-parameter",
+		);
+	});
+
 	it("dead-store elimination retains a slot whose values a WeakRef could observe", () => {
 		// Same unread slot as above, but the values that occupy it are not proven
 		// primitives, so how long the slot references them stays observable through

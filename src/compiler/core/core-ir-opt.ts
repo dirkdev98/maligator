@@ -10710,8 +10710,8 @@ function coreControlObservesAnyValue(
  * delay collection but cannot expose an earlier one.
  *
  * Moves and all-ordinary block parameters are structural spellings of the same
- * contained identity. Acyclic paths may cross blocks while each joined field has
- * one identical incoming SSA value; differing field values require a field phi.
+ * contained identity. Acyclic paths may cross blocks; differing incoming fields
+ * become explicit value parameters so their roots remain ordinary SSA liveness.
  */
 const scalarizeRootedContainedObjects: CoreFunctionPass = {
 	name: "scalarize-rooted-contained-objects",
@@ -10719,6 +10719,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 	run(fn, analyses, program) {
 		const provenance = analyses.provenance(fn);
 		const cfg = analyses.controlFlow(fn);
+		const representations = analyses.representations(fn);
 		const { instructions: protectedInstructions, inputs: protectedInputs } =
 			analyses.regionProtection(fn);
 		const locations = new Map<
@@ -10928,6 +10929,23 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 
 			const rootValuesAfter = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
 			const exitFields = new Map<CoreBlockId, ReadonlyMap<number, CoreValueId>>();
+			interface VirtualFieldParameter {
+				readonly value: CoreValueId;
+				readonly representation: CoreRepresentation;
+				readonly index: number;
+				readonly argumentsByPredecessor: ReadonlyMap<CoreBlockId, CoreValueId>;
+			}
+			const virtualFieldParameters = new Map<CoreBlockId, Array<VirtualFieldParameter>>();
+			const virtualFieldRepresentations = new Map<CoreValueId, CoreRepresentation>();
+			const cannotBeHeldWeakly = (value: CoreValueId): boolean => {
+				const representation = virtualFieldRepresentations.get(value);
+				return representation === "f64" ||
+					representation === "i32" ||
+					representation === "boolean"
+					? true
+					: provenance.cannotBeHeldWeakly(value);
+			};
+			let nextValue = (fn.values.at(-1)?.id ?? -1) + 1;
 			for (const blockId of cfg.reversePostorder) {
 				if (!blocksCanReachStore.has(blockId)) continue;
 				const block = fn.blocks[blockId]!;
@@ -10942,22 +10960,62 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 					const incoming = cfg.predecessors[blockId]!.filter(
 						({ kind }) => kind === "ordinary",
 					);
-					const first =
-						incoming[0] === undefined ? undefined : exitFields.get(incoming[0].from);
-					if (first === undefined) {
+					const incomingFields = incoming.map((edge) => exitFields.get(edge.from));
+					if (
+						incomingFields.length === 0 ||
+						incomingFields.some((candidate) => candidate === undefined)
+					) {
 						valid = false;
 						break;
 					}
-					currentFields = new Map(first);
-					for (const edge of incoming.slice(1)) {
-						const candidate = exitFields.get(edge.from);
+					currentFields = new Map();
+					for (const key of layout.keys) {
+						const incomingValues = incomingFields.map((fields) => fields!.get(key));
+						const firstValue = incomingValues[0];
+						if (firstValue === undefined) {
+							valid = false;
+							break;
+						}
+						if (incomingValues.every((value) => value === firstValue)) {
+							currentFields.set(key, firstValue);
+							continue;
+						}
+						const existing = block.parameters.find((parameter, index) =>
+							incoming.every(
+								(edge, incomingIndex) =>
+									edge.arguments[index] === incomingValues[incomingIndex],
+							),
+						);
+						if (existing !== undefined) {
+							currentFields.set(key, existing.value);
+							continue;
+						}
+						const representation = representations.get(firstValue);
 						if (
-							candidate === undefined ||
-							[...currentFields].some(([key, value]) => candidate.get(key) !== value)
+							representation === undefined ||
+							incomingValues.some(
+								(value) =>
+									value === undefined || representations.get(value) !== representation,
+							)
 						) {
 							valid = false;
 							break;
 						}
+						const value = coreValueId(nextValue++);
+						const parameters = virtualFieldParameters.get(blockId) ?? [];
+						parameters.push({
+							value,
+							representation,
+							index: block.parameters.length + parameters.length,
+							argumentsByPredecessor: new Map(
+								incoming.map(
+									(edge, index) => [edge.from, incomingValues[index]!] as const,
+								),
+							),
+						});
+						virtualFieldParameters.set(blockId, parameters);
+						virtualFieldRepresentations.set(value, representation);
+						currentFields.set(key, value);
 					}
 					if (!valid) break;
 				}
@@ -10985,8 +11043,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 						...new Set(
 							[...currentFields.values()].filter(
 								(value) =>
-									!provenance.cannotBeHeldWeakly(value) &&
-									!instruction.inputs.includes(value),
+									!cannotBeHeldWeakly(value) && !instruction.inputs.includes(value),
 							),
 						),
 					];
@@ -11048,37 +11105,77 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 			);
 			const stripped: CoreFunction = {
 				...fn,
-				blocks: fn.blocks.map((block) => ({
-					...block,
-					instructions: block.instructions.flatMap((instruction) => {
-						if (instruction.id === layout.instruction) {
-							return [
-								{
-									id: placeholderInstructionId,
-									opcode: "createUndefined",
-									inputs: [],
-									outputs: [layout.result],
-									attributes: {},
-								} satisfies CoreInstruction,
-							];
-						}
-						if (removedInstructions.has(instruction.id)) return [];
-						const rootUse = rootUsesAfter.get(instruction.id);
-						return rootUse === undefined ? [instruction] : [instruction, rootUse];
-					}),
-				})),
-				values: fn.values.map((value) =>
-					value.id === layout.result
-						? {
-								...value,
-								definition: {
-									kind: "instruction" as const,
-									instruction: placeholderInstructionId,
-									index: 0,
-								},
+				blocks: fn.blocks.map((block) => {
+					const fieldParameters = virtualFieldParameters.get(block.id) ?? [];
+					return {
+						...block,
+						parameters: [
+							...block.parameters,
+							...fieldParameters.map(({ value, representation }) => ({
+								value,
+								representation,
+								role: "value" as const,
+							})),
+						],
+						instructions: block.instructions.flatMap((instruction) => {
+							if (instruction.id === layout.instruction) {
+								return [
+									{
+										id: placeholderInstructionId,
+										opcode: "createUndefined",
+										inputs: [],
+										outputs: [layout.result],
+										attributes: {},
+									} satisfies CoreInstruction,
+								];
 							}
-						: value,
-				),
+							if (removedInstructions.has(instruction.id)) return [];
+							const rootUse = rootUsesAfter.get(instruction.id);
+							return rootUse === undefined ? [instruction] : [instruction, rootUse];
+						}),
+						terminator: remapTerminatorEdges(block.terminator, (edge) => {
+							const targetParameters = virtualFieldParameters.get(edge.block);
+							if (targetParameters === undefined) return edge;
+							return {
+								...edge,
+								arguments: [
+									...edge.arguments,
+									...targetParameters.map((parameter) => {
+										const argument = parameter.argumentsByPredecessor.get(block.id);
+										if (argument === undefined) {
+											throw new Error(
+												`Missing virtual field argument on b${block.id} -> b${edge.block}`,
+											);
+										}
+										return argument;
+									}),
+								],
+							};
+						}),
+					};
+				}),
+				values: fn.values
+					.map((value) =>
+						value.id === layout.result
+							? {
+									...value,
+									definition: {
+										kind: "instruction" as const,
+										instruction: placeholderInstructionId,
+										index: 0,
+									},
+								}
+							: value,
+					)
+					.concat(
+						[...virtualFieldParameters.entries()].flatMap(([block, parameters]) =>
+							parameters.map(({ value, representation, index }) => ({
+								id: value,
+								representation,
+								definition: { kind: "block-parameter" as const, block, index },
+							})),
+						),
+					),
 				mutationEpoch: fn.mutationEpoch + 1,
 			};
 			return deadInstructionElimination.run(stripped, analyses, program);
