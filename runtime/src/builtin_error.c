@@ -650,7 +650,14 @@ static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_
     bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
     const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
     bool have_file = function->file_index >= 0 && function->file_index < vm->runtime_image->file_count;
-    const MalString *name = mal_vm_function_name(vm, function);
+    MalValue function_name = mal_value_new_null();
+    if (function->name_string_index >= 0
+        && function->name_string_index < vm->runtime_image->string_constant_count) {
+        MalString *name = &vm->runtime_image->string_constants[function->name_string_index];
+        if (mal_string_length(name) > 0) {
+            function_name = mal_value_from_string(name);
+        }
+    }
     MalValue slots[MAL_CALLSITE_SLOT_COUNT] = {
         have_file
             ? mal_value_from_string(
@@ -658,7 +665,7 @@ static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_
             : mal_value_new_null(),
         have_pos ? mal_value_from_i32(pos->line) : mal_value_new_null(),
         have_pos ? mal_value_from_i32(pos->column + 1) : mal_value_new_null(),
-        mal_string_length(name) > 0 ? mal_value_from_string((MalString *) name) : mal_value_new_null(),
+        function_name,
         mal_value_new_undefined(),
     };
     MalObject *site = mal_intrinsic_new_object(vm);

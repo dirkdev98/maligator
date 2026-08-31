@@ -3842,8 +3842,11 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
 
                 mal_stack_buf_push_ascii(&buf, "\n    at ");
 
-                const MalString *name = mal_vm_function_name(vm, function);
-                if (mal_string_length(name) > 0) {
+                const MalString *name = function->name_string_index >= 0 &&
+                        function->name_string_index < vm->runtime_image->string_constant_count
+                    ? &vm->runtime_image->string_constants[function->name_string_index]
+                    : nullptr;
+                if (name != nullptr && mal_string_length(name) > 0) {
                     mal_stack_buf_push_string(&buf, name);
                 } else {
                     mal_stack_buf_push_ascii(&buf, "<anonymous>");
@@ -4843,15 +4846,6 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
     return completion;
 }
 
-MalString *mal_vm_function_name(MalVm *vm, const MalFunction *function) {
-    if (function->name_string_index >= 0
-        && function->name_string_index < vm->runtime_image->string_constant_count) {
-        return &vm->runtime_image->string_constants[function->name_string_index];
-    }
-
-    return mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
-}
-
 MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
     if (mal_value_is_native_function_object(callee)) {
         return mal_native_function_object_name(mal_value_to_native_function_object(callee));
@@ -4864,10 +4858,15 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
     }
 
     if (mal_value_is_function_object(callee)) {
-        const MalFunction *function = &vm->runtime_image->functions[
+        i32 name_index = vm->runtime_image->functions[
             mal_function_object_function_index(mal_value_to_function_object(callee))
-        ];
-        return mal_vm_function_name(vm, function);
+        ].name_string_index;
+
+        if (name_index >= 0 && name_index < vm->runtime_image->string_constant_count) {
+            return &vm->runtime_image->string_constants[name_index];
+        }
+
+        return mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
     }
 
     return nullptr;
