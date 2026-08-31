@@ -2,7 +2,7 @@
   "schema": 3,
   "javascript": {
     "workload": "javascript-v1",
-    "runs": 7,
+    "runs": 5,
     "nativeBuild": {
       "mode": "production",
       "optimizationFlags": [
@@ -25,26 +25,26 @@
       "allocation": 77034407
     },
     "node": {
-      "wallMs": 528.996541,
+      "wallMs": 373.763875,
       "phaseMs": {
-        "core": 82,
-        "objects": 62,
-        "collections": 104,
-        "text": 100,
-        "async": 72,
-        "allocation": 67
+        "core": 58,
+        "objects": 44,
+        "collections": 74,
+        "text": 71,
+        "async": 49,
+        "allocation": 46
       }
     },
     "modes": {
       "closed-compiled": {
-        "wallMs": 1979.849083,
+        "wallMs": 1417.558792,
         "phaseMs": {
-          "core": 254,
-          "objects": 592,
-          "collections": 341,
-          "text": 458,
-          "async": 139,
-          "allocation": 207
+          "core": 178,
+          "objects": 428,
+          "collections": 246,
+          "text": 316,
+          "async": 100,
+          "allocation": 150
         },
         "world": "closed",
         "backend": "compiled",
@@ -53,24 +53,24 @@
           "eval": false,
           "realms": false
         },
-        "ratio": 3.7426503380482408,
-        "balancedRatio": 3.719795296599284,
+        "ratio": 3.792658645782715,
+        "balancedRatio": 3.784792679042457,
         "binaryBytes": 2515800,
         "collections": 145,
         "allocatedMb": 606.7498474121094,
         "peakLiveKb": 15991.921875,
-        "maxPauseMs": 3.723,
-        "rssMb": 43.328125
+        "maxPauseMs": 2.617,
+        "rssMb": 43.15625
       },
       "open-compiled": {
-        "wallMs": 3002.625542,
+        "wallMs": 2150.443958,
         "phaseMs": {
-          "core": 266,
-          "objects": 655,
-          "collections": 370,
-          "text": 408,
-          "async": 146,
-          "allocation": 1163
+          "core": 183,
+          "objects": 461,
+          "collections": 267,
+          "text": 285,
+          "async": 103,
+          "allocation": 839
         },
         "world": "open",
         "backend": "compiled",
@@ -79,24 +79,24 @@
           "eval": true,
           "realms": true
         },
-        "ratio": 5.676077836584569,
-        "balancedRatio": 5.095794069043672,
-        "binaryBytes": 30003720,
+        "ratio": 5.75348261786937,
+        "balancedRatio": 5.136064218863659,
+        "binaryBytes": 29446904,
         "collections": 471,
-        "allocatedMb": 2153.5431518554688,
+        "allocatedMb": 2153.5431213378906,
         "peakLiveKb": 22649.484375,
-        "maxPauseMs": 11.702,
-        "rssMb": 88.765625
+        "maxPauseMs": 7.984,
+        "rssMb": 88.671875
       },
       "closed-interpreted": {
-        "wallMs": 5748.820292,
+        "wallMs": 3971.850958,
         "phaseMs": {
-          "core": 1035,
-          "objects": 1775,
-          "collections": 651,
-          "text": 576,
-          "async": 198,
-          "allocation": 1519
+          "core": 710,
+          "objects": 1185,
+          "collections": 443,
+          "text": 395,
+          "async": 133,
+          "allocation": 1095
         },
         "world": "closed",
         "backend": "interpreted",
@@ -105,24 +105,24 @@
           "eval": false,
           "realms": false
         },
-        "ratio": 10.867406204835659,
-        "balancedRatio": 9.65946694147247,
+        "ratio": 10.626631474216175,
+        "balancedRatio": 9.443937519290923,
         "binaryBytes": 2401880,
         "collections": 160,
-        "allocatedMb": 666.07568359375,
+        "allocatedMb": 666.0756530761719,
         "peakLiveKb": 20933.359375,
-        "maxPauseMs": 5.301,
-        "rssMb": 43.015625
+        "maxPauseMs": 3.72,
+        "rssMb": 44
       },
       "open-interpreted": {
-        "wallMs": 7279.665041,
+        "wallMs": 5038.461833,
         "phaseMs": {
-          "core": 1050,
-          "objects": 1846,
-          "collections": 680,
-          "text": 533,
-          "async": 209,
-          "allocation": 2963
+          "core": 715,
+          "objects": 1231,
+          "collections": 466,
+          "text": 368,
+          "async": 144,
+          "allocation": 2098
         },
         "world": "open",
         "backend": "interpreted",
@@ -131,83 +131,83 @@
           "eval": true,
           "realms": true
         },
-        "ratio": 13.761271533531636,
-        "balancedRatio": 10.93070429926669,
-        "binaryBytes": 29790888,
+        "ratio": 13.480333895296864,
+        "balancedRatio": 10.709606796061012,
+        "binaryBytes": 29234072,
         "collections": 516,
-        "allocatedMb": 2212.868942260742,
+        "allocatedMb": 2212.868911743164,
         "peakLiveKb": 10614.140625,
-        "maxPauseMs": 5,
-        "rssMb": 54.609375
+        "maxPauseMs": 3.836,
+        "rssMb": 55.578125
       }
     }
   },
   "http": {
     "world": "closed",
-    "runs": 7,
+    "runs": 5,
     "bare": {
-      "malRps": 81018.59340943213,
-      "nodeRps": 54183.555495664055,
-      "ratio": 1.4952616650621147,
-      "malP99Ms": 1.539833,
-      "nodeP99Ms": 2.045833,
+      "malRps": 151082.43115437817,
+      "nodeRps": 93289.71637068574,
+      "ratio": 1.6194971646612544,
+      "malP99Ms": 0.92125,
+      "nodeP99Ms": 1.041375,
       "binaryBytes": 3378160
     },
     "express": {
-      "binaryBytes": 10453888,
+      "binaryBytes": 10437376,
       "workloads": {
         "routes": {
-          "malRps": 17210.875353539912,
-          "nodeRps": 26454.662938484405,
-          "ratio": 0.6505800279353674,
-          "malP99Ms": 6.01725,
-          "nodeP99Ms": 3.848666
+          "malRps": 25557.642701658307,
+          "nodeRps": 43345.72277363438,
+          "ratio": 0.5896231753967681,
+          "malP99Ms": 3.020209,
+          "nodeP99Ms": 2.229625
         },
         "json": {
-          "malRps": 11513.980077178787,
-          "nodeRps": 25518.991937479717,
-          "ratio": 0.4511925904200086,
-          "malP99Ms": 8.707917,
-          "nodeP99Ms": 3.9287080000000003
+          "malRps": 17973.13581270674,
+          "nodeRps": 41818.64991914501,
+          "ratio": 0.4297875672088221,
+          "malP99Ms": 4.008875000000001,
+          "nodeP99Ms": 2.322958
         },
         "form": {
-          "malRps": 9107.691173130965,
-          "nodeRps": 23672.119643857073,
-          "ratio": 0.38474337364606953,
-          "malP99Ms": 10.938167,
-          "nodeP99Ms": 4.736790999999999
+          "malRps": 14921.44338411653,
+          "nodeRps": 38373.87997742391,
+          "ratio": 0.3888437497822764,
+          "malP99Ms": 4.645584,
+          "nodeP99Ms": 2.5233339999999997
         }
       }
     }
   },
   "selfCompile": {
     "world": "closed",
-    "maligatorMs": 145483.090375,
-    "nodeMs": 27744.291875,
+    "maligatorMs": 334891.972708,
+    "nodeMs": 54532.157042,
     "maligatorPhases": {
-      "graphMs": 665,
-      "semanticMs": 1593,
-      "lowerSemanticMs": 15344,
-      "optimizeMs": 117715,
+      "graphMs": 677,
+      "semanticMs": 1642,
+      "lowerSemanticMs": 17009,
+      "optimizeMs": 296636,
       "regallocMs": 0,
-      "lowerMs": 1088,
-      "emitMs": 8630,
-      "writeMs": 103
+      "lowerMs": 3990,
+      "emitMs": 11308,
+      "writeMs": 169
     },
     "nodePhases": {
-      "graphMs": 168,
+      "graphMs": 178,
       "semanticMs": 232,
-      "lowerSemanticMs": 3230,
-      "optimizeMs": 22176,
+      "lowerSemanticMs": 3325,
+      "optimizeMs": 47660,
       "regallocMs": 0,
-      "lowerMs": 362,
-      "emitMs": 1383,
-      "writeMs": 97
+      "lowerMs": 937,
+      "emitMs": 1759,
+      "writeMs": 191
     },
-    "runs": 7,
-    "units": 10,
-    "maligatorCodeUnits": 66039202,
-    "nodeCodeUnits": 66039202,
+    "runs": 5,
+    "units": 11,
+    "maligatorCodeUnits": 74691241,
+    "nodeCodeUnits": 74691241,
     "platform": "darwin",
     "arch": "arm64",
     "nodeVersion": "v26.7.0"
