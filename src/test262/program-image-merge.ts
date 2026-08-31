@@ -135,6 +135,13 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				kind: region.kind,
 				stepIps: [...region.stepIps],
 			};
+		case "iterator-entry-pair-virtualization":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				innerStepIps: [...region.innerStepIps],
+				innerCloseIps: [...region.innerCloseIps],
+			};
 		case "string-char-code-at-chain":
 			return {
 				...cloneRegionEnvelope(region),

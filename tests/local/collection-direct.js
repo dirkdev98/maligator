@@ -30,6 +30,19 @@ for (let i = 0; i < 4000; i++) {
 }
 ok("direct scalar collection operations", scalarScore === 16000);
 
+const entryMap = new Map([
+	[1, 2],
+	[3, 4],
+]);
+let entryTotal = 0;
+for (const [key, value] of entryMap) entryTotal += key + value;
+ok("virtual Map entry pairs", entryTotal === 10);
+
+const entrySet = new Set([3, 5]);
+let setEntryTotal = 0;
+for (const [first, second] of entrySet.entries()) setEntryTotal += first + second;
+ok("Set entry pair semantics", setEntryTotal === 16);
+
 function privateFreshMapGet(key) {
 	const values = new Map();
 	values.set("answer", 42);
@@ -201,6 +214,19 @@ Set.prototype.delete = function (key) {
 };
 ok("Set delete prototype override", new Set().delete("prototype-delete"));
 Set.prototype.delete = intrinsicSetDelete;
+
+const intrinsicArrayIterator = Array.prototype[Symbol.iterator];
+const reversedEntryMap = new Map([["key", "value"]]);
+Array.prototype[Symbol.iterator] = function* () {
+	yield this[1];
+	yield this[0];
+};
+let reversedEntry = "";
+for (const [first, second] of reversedEntryMap) {
+	reversedEntry = first + ":" + second;
+}
+Array.prototype[Symbol.iterator] = intrinsicArrayIterator;
+ok("entry-pair materialization fallback", reversedEntry === "value:key");
 
 const mutationMap = new Map([["key", 11]]);
 function openGetWithArgumentMutation(collection, key) {

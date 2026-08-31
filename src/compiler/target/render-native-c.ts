@@ -1482,6 +1482,17 @@ interface NativeIteratorResultVirtualizationAction {
 	readonly region: Extract<VmRegion, { kind: "iterator-result-virtualization" }>;
 }
 
+type NativeIteratorEntryPairVirtualization = Extract<
+	VmRegion,
+	{ kind: "iterator-entry-pair-virtualization" }
+>;
+
+interface NativeIteratorEntryPairVirtualizationAction {
+	readonly region: NativeIteratorEntryPairVirtualization;
+	readonly role: "outerStep" | "innerInitialize" | "innerStep" | "innerClose";
+	readonly index?: number;
+}
+
 function nativeIteratorCursorProtocol(cursor: NativeIteratorCursor): string {
 	switch (cursor.protocol) {
 		case "array-values":
@@ -1824,6 +1835,10 @@ function emitBody(
 		number,
 		NativeIteratorResultVirtualizationAction
 	>();
+	const nativeIteratorEntryPairVirtualizationActionByIp = new Map<
+		number,
+		NativeIteratorEntryPairVirtualizationAction
+	>();
 	for (const action of regionActions) {
 		const region = specializations[action.regionIndex];
 		if (region === undefined) throw new Error("Native region action names no region");
@@ -1857,6 +1872,21 @@ function emitBody(
 				throw new Error("Duplicate iterator-result virtualization action");
 			}
 			nativeIteratorResultVirtualizationActionByIp.set(action.ip, { region });
+		} else if (region.kind === "iterator-entry-pair-virtualization") {
+			const index = action.primaryIndex;
+			const valid =
+				(action.role === "outerStep" && action.ip === region.outerStepIp) ||
+				(action.role === "innerInitialize" && action.ip === region.innerInitializeIp) ||
+				(action.role === "innerStep" && action.ip === region.innerStepIps[index ?? -1]) ||
+				(action.role === "innerClose" && action.ip === region.innerCloseIps[index ?? -1]);
+			if (!valid || nativeIteratorEntryPairVirtualizationActionByIp.has(action.ip)) {
+				throw new Error("Duplicate iterator entry-pair virtualization action");
+			}
+			nativeIteratorEntryPairVirtualizationActionByIp.set(action.ip, {
+				region,
+				role: action.role,
+				...(index === undefined ? {} : { index }),
+			});
 		}
 	}
 	const jumpTargets = new Set<number>();
@@ -2063,6 +2093,15 @@ function emitBody(
 		if (action.role !== "initialize") continue;
 		lines.push(
 			`MalIteratorObject *__iter_cursor_${action.cursor.initializeIp} = nullptr;`,
+		);
+	}
+	for (const action of nativeIteratorEntryPairVirtualizationActionByIp.values()) {
+		if (action.role !== "outerStep") continue;
+		const id = action.region.outerStepIp;
+		lines.push(
+			`bool __iter_entry_pair_${id}_fast = false;`,
+			`MalValue __iter_entry_pair_${id}_first = MAL_VALUE_UNDEFINED;`,
+			`MalValue __iter_entry_pair_${id}_second = MAL_VALUE_UNDEFINED;`,
 		);
 	}
 	for (const site of stringSplitProjectionSites.values()) {
@@ -2291,6 +2330,8 @@ function emitBody(
 				nativeIteratorCursorAction: nativeIteratorCursorActionByIp.get(ip),
 				nativeIteratorResultVirtualizationAction:
 					nativeIteratorResultVirtualizationActionByIp.get(ip),
+				nativeIteratorEntryPairVirtualizationAction:
+					nativeIteratorEntryPairVirtualizationActionByIp.get(ip),
 				numericFusionAction: numericFusionActionByIp.get(ip),
 				relocation,
 			},
@@ -2652,6 +2693,7 @@ interface NativeInstructionContext {
 	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
 	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
 	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
+	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly relocation: NativeRelocationExpressions;
 }
@@ -2743,6 +2785,7 @@ function emitInstruction(
 		nativeBuiltinCollectionCallChainAction,
 		nativeIteratorCursorAction,
 		nativeIteratorResultVirtualizationAction,
+		nativeIteratorEntryPairVirtualizationAction,
 		numericFusionAction,
 		relocation,
 	} = context;
@@ -5176,6 +5219,17 @@ function emitInstruction(
 					`__iter_cursor_${cursor.initializeIp} = mal_vm_iterator_protocol_cursor(&${rec}, ${nativeIteratorCursorProtocol(cursor)});`,
 				);
 			}
+			if (nativeIteratorEntryPairVirtualizationAction?.role === "innerInitialize") {
+				const id = nativeIteratorEntryPairVirtualizationAction.region.outerStepIp;
+				return [
+					`if (__iter_entry_pair_${id}_fast) {`,
+					`  r${instruction.iteratorDst} = MAL_VALUE_UNDEFINED;`,
+					`  r${instruction.nextDst} = MAL_VALUE_UNDEFINED;`,
+					`} else {`,
+					...lines.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			return lines;
 		}
 		case "GET_ASYNC_ITERATOR": {
@@ -5190,6 +5244,43 @@ function emitInstruction(
 			];
 		}
 		case "ITERATOR_STEP": {
+			if (nativeIteratorEntryPairVirtualizationAction?.role === "outerStep") {
+				const { region } = nativeIteratorEntryPairVirtualizationAction;
+				const rec = `iter_rec_${ip}`;
+				const val = `iter_val_${ip}`;
+				const done = `iter_done_${ip}`;
+				return [
+					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
+					`MalValue ${val} = MAL_VALUE_UNDEFINED; bool ${done};`,
+					`__iter_entry_pair_${ip}_fast = ${regionAdmissionGuard(region.license)} && mal_vm_iterator_step_entry_pair_protocol_cursor(&${rec}, &__iter_entry_pair_${ip}_first, &__iter_entry_pair_${ip}_second, &${done});`,
+					`if (__iter_entry_pair_${ip}_fast) { MAL_PERF_COUNT(iterator_entry_pair_hits); } else { MAL_PERF_COUNT(iterator_entry_pair_fallbacks); }`,
+					`if (!__iter_entry_pair_${ip}_fast && !mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow}`,
+					`r${instruction.valueDst} = __iter_entry_pair_${ip}_fast ? MAL_VALUE_UNDEFINED : ${val};`,
+					reps[instruction.doneDst] === "boolean"
+						? `r${instruction.doneDst} = ${done};`
+						: `r${instruction.doneDst} = mal_value_new_boolean(${done});`,
+				];
+			}
+			if (nativeIteratorEntryPairVirtualizationAction?.role === "innerStep") {
+				const { region, index } = nativeIteratorEntryPairVirtualizationAction;
+				const fallback = emitGenericInstruction();
+				if (fallback === null || index === undefined) return null;
+				const id = region.outerStepIp;
+				const value =
+					index === 0
+						? `__iter_entry_pair_${id}_first`
+						: `__iter_entry_pair_${id}_second`;
+				return [
+					`if (__iter_entry_pair_${id}_fast) {`,
+					`  r${instruction.valueDst} = ${value};`,
+					...(reps[instruction.doneDst] === "boolean"
+						? [`  r${instruction.doneDst} = false;`]
+						: [`  r${instruction.doneDst} = mal_value_new_boolean(false);`]),
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			const rec = `iter_rec_${ip}`;
 			const val = `iter_val_${ip}`;
 			const done = `iter_done_${ip}`;
@@ -5237,6 +5328,16 @@ function emitInstruction(
 			];
 		}
 		case "ITERATOR_CLOSE": {
+			if (nativeIteratorEntryPairVirtualizationAction?.role === "innerClose") {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const id = nativeIteratorEntryPairVirtualizationAction.region.outerStepIp;
+				return [
+					`if (!__iter_entry_pair_${id}_fast) {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			const rec = `iter_rec_${ip}`;
 			if (instruction.normal) {
 				// Normal-completion close: propagate return()'s throw and TypeError

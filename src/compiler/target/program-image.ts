@@ -531,6 +531,23 @@ export type VmIteratorResultVirtualizationRegion = VmRegionEnvelope<
 	readonly fallback: "materialize-result-then-observe";
 };
 
+export type VmIteratorEntryPairVirtualizationRegion = VmRegionEnvelope<
+	"iterator-entry-pair-virtualization",
+	"virtual-iterator-entry-pair",
+	"on-demand"
+> & {
+	readonly composition: "overlay";
+	readonly cursorInitializeIp: number;
+	readonly outerStepIp: number;
+	readonly innerInitializeIp: number;
+	readonly innerStepIps: readonly [number, number];
+	readonly innerCloseIps: ReadonlyArray<number>;
+	readonly runtimeGuard: "exact-map-or-set-entry-cursor";
+	readonly correspondence: "entry-pair-elements";
+	readonly stateSynchronization: "authoritative-language-object";
+	readonly fallback: "materialize-entry-pair-then-iterate";
+};
+
 export type VmStackObjectPlanRegion = VmRegionEnvelope<
 	"stack-object-plan",
 	"activation-local-fixed-shape-objects",
@@ -586,6 +603,7 @@ export type VmRegion =
 	| VmIndexedLengthLoopRegion
 	| VmArrayValuesIteratorCursorRegion
 	| VmBuiltinCollectionCallChainRegion
+	| VmIteratorEntryPairVirtualizationRegion
 	| VmIteratorResultVirtualizationRegion
 	| VmMapIteratorCursorRegion
 	| VmRegExpExecProjectionRegion
@@ -668,11 +686,15 @@ export type VmRegionActionRole =
 	| "element"
 	| "finish"
 	| "inherited"
+	| "innerClose"
+	| "innerInitialize"
+	| "innerStep"
 	| "initialize"
 	| "length"
 	| "load"
 	| "materialize"
 	| "number"
+	| "outerStep"
 	| "property"
 	| "slice"
 	| "start"
@@ -731,6 +753,16 @@ export function vmRegionActions(
 			case "iterator-result-virtualization":
 				for (const [stepIndex, stepIp] of region.stepIps.entries()) {
 					add(regionIndex, stepIp, "step", stepIndex);
+				}
+				break;
+			case "iterator-entry-pair-virtualization":
+				add(regionIndex, region.outerStepIp, "outerStep");
+				add(regionIndex, region.innerInitializeIp, "innerInitialize");
+				for (const [stepIndex, stepIp] of region.innerStepIps.entries()) {
+					add(regionIndex, stepIp, "innerStep", stepIndex);
+				}
+				for (const [closeIndex, closeIp] of region.innerCloseIps.entries()) {
+					add(regionIndex, closeIp, "innerClose", closeIndex);
 				}
 				break;
 			case "numeric-fusion":
@@ -1729,6 +1761,153 @@ function lowerExecutionFunctionToNativePlan(
 				runtimeGuard: "exact-builtin-iterator-next",
 				correspondence: "done-value-observation",
 				fallback: "materialize-result-then-observe",
+			});
+			continue;
+		}
+		if (region.kind === "iterator-entry-pair-virtualization") {
+			const anchors = region.anchors.map((instruction) =>
+				instructionIndexByTargetInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByTargetInstruction.get(instruction),
+			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
+			const exceptionalHandlerIps = region.controlFlow.exceptionalBlocks.map(
+				(blockIndex) => blockStartIps.get(blockIndex),
+			);
+			const cursorInitializeIp = instructionIndexByTargetInstruction.get(
+				region.cursorInitialize,
+			);
+			const outerStepIp = instructionIndexByTargetInstruction.get(region.outerStep);
+			const innerInitializeIp = instructionIndexByTargetInstruction.get(
+				region.innerInitialize,
+			);
+			const innerStepIps = region.innerSteps.map((step) =>
+				instructionIndexByTargetInstruction.get(step),
+			);
+			const innerCloseIps = region.innerCloses.map((close) =>
+				instructionIndexByTargetInstruction.get(close),
+			);
+			const obligations = [
+				...new Set(region.license.guard.obligations.map(({ kind }) => kind)),
+			].sort();
+			const dependency = region.license.guard.dependencies[0];
+			const vmDependency: VmSemanticDependency | undefined =
+				dependency?.kind === "world" && dependency.fact === "primordials.locked"
+					? { kind: "world", fact: "primordials.locked" }
+					: dependency?.kind === "epoch" && dependency.family === "watched-methods"
+						? { kind: "epoch", family: "watched-methods" }
+						: undefined;
+			const license = vmRegionLicense(
+				[
+					{
+						dependencies: vmDependency === undefined ? [] : [vmDependency],
+						obligations,
+					},
+				],
+				"on-demand",
+				admission,
+			);
+			if (
+				license === undefined ||
+				region.license.guard.dependencies.length !== 1 ||
+				vmDependency === undefined ||
+				obligations.length !== 2 ||
+				obligations[0] !== "fallback" ||
+				obligations[1] !== "materialize" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "on-demand" ||
+				region.license.admission.mode !== "capture" ||
+				region.representation !== "virtual-iterator-entry-pair" ||
+				region.composition !== "overlay" ||
+				region.runtimeGuard !== "exact-map-or-set-entry-cursor" ||
+				region.correspondence !== "entry-pair-elements" ||
+				region.stateSynchronization !== "authoritative-language-object" ||
+				region.fallback !== "materialize-entry-pair-then-iterate" ||
+				anchors.some((ip) => ip === undefined) ||
+				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
+				exceptionalHandlerIps.some((ip) => ip === undefined) ||
+				cursorInitializeIp === undefined ||
+				outerStepIp === undefined ||
+				innerInitializeIp === undefined ||
+				innerStepIps.length !== 2 ||
+				innerStepIps.some((ip) => ip === undefined) ||
+				innerCloseIps.some((ip) => ip === undefined)
+			) {
+				throw coreRegionError(region.kind, "entry-pair contract");
+			}
+			const resolvedAnchors = anchors as Array<number>;
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const resolvedInnerStepIps = innerStepIps as [number, number];
+			const resolvedInnerCloseIps = innerCloseIps as Array<number>;
+			const cursorInitialize = instructions[cursorInitializeIp];
+			const outerStep = instructions[outerStepIp];
+			const innerInitialize = instructions[innerInitializeIp];
+			const payloadIps = [
+				cursorInitializeIp,
+				outerStepIp,
+				innerInitializeIp,
+				...resolvedInnerStepIps,
+				...resolvedInnerCloseIps,
+			];
+			if (
+				resolvedAnchors.length !== 2 ||
+				resolvedAnchors[0] !== outerStepIp ||
+				resolvedAnchors[1] !== innerInitializeIp ||
+				new Set(payloadIps).size !== payloadIps.length ||
+				payloadIps.length !== resolvedClaimedIps.length ||
+				payloadIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
+				cursorInitialize?.opcode !== "GET_ITERATOR" ||
+				outerStep?.opcode !== "ITERATOR_STEP" ||
+				outerStep.iterator !== cursorInitialize.iteratorDst ||
+				outerStep.next !== cursorInitialize.nextDst ||
+				innerInitialize?.opcode !== "GET_ITERATOR" ||
+				innerInitialize.source !== outerStep.valueDst ||
+				resolvedInnerStepIps.some((ip) => {
+					const step = instructions[ip];
+					return (
+						step?.opcode !== "ITERATOR_STEP" ||
+						step.iterator !== innerInitialize.iteratorDst ||
+						step.next !== innerInitialize.nextDst
+					);
+				}) ||
+				resolvedInnerCloseIps.some((ip) => {
+					const close = instructions[ip];
+					return (
+						close?.opcode !== "ITERATOR_CLOSE" ||
+						close.iterator !== innerInitialize.iteratorDst
+					);
+				}) ||
+				region.cost.score !== 32 ||
+				region.cost.metadataOperations !== payloadIps.length
+			) {
+				throw coreRegionError(region.kind, "entry-pair instruction contract");
+			}
+			checkAdmission(region.kind, resolvedClaimedIps, admission);
+			regions.push({
+				kind: "iterator-entry-pair-virtualization",
+				license: { ...license, materialization: "on-demand" },
+				representation: "virtual-iterator-entry-pair",
+				composition: "overlay",
+				anchors: resolvedAnchors,
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: exceptionalHandlerIps as Array<number>,
+				},
+				cost: { ...region.cost },
+				cursorInitializeIp,
+				outerStepIp,
+				innerInitializeIp,
+				innerStepIps: resolvedInnerStepIps,
+				innerCloseIps: resolvedInnerCloseIps,
+				runtimeGuard: "exact-map-or-set-entry-cursor",
+				correspondence: "entry-pair-elements",
+				stateSynchronization: "authoritative-language-object",
+				fallback: "materialize-entry-pair-then-iterate",
 			});
 			continue;
 		}

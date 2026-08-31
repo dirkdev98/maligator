@@ -79,8 +79,11 @@ static MalValue mal_builtin_iterator_pair(MalVm *vm, MalValue first, MalValue se
 // access. The full advance runs with collection suppressed (see iterator_step), so
 // values held across an internal allocation (an entries pair) are not swept.
 
-static bool mal_builtin_iterator_map_advance(
-    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+static void mal_builtin_iterator_map_take_entry(
+    MalIteratorObject *iterator,
+    MalValue *key_out,
+    MalValue *mapped_out,
+    bool *done_out
 ) {
     MalMapObject *map = mal_value_to_map_object(iterator->target);
 
@@ -93,28 +96,42 @@ static bool mal_builtin_iterator_map_advance(
     if (!mal_table_iter_next(&table_iter, &key, &entry)) {
         iterator->done = true;
         mal_iterator_object_release_table_pin(iterator);
-        *value_out = mal_value_new_undefined();
+        *key_out = mal_value_new_undefined();
+        *mapped_out = mal_value_new_undefined();
         *done_out = true;
-        return true;
+        return;
     }
 
     iterator->index = (u64) table_iter.index;
+    *key_out = key.value;
+    *mapped_out = mal_table_entry_value(map->entries, entry);
     *done_out = false;
+}
+
+static bool mal_builtin_iterator_map_advance(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
+    MalValue key;
+    MalValue mapped;
+    mal_builtin_iterator_map_take_entry(iterator, &key, &mapped, done_out);
+    if (*done_out) {
+        *value_out = mal_value_new_undefined();
+        return true;
+    }
 
     switch (iterator->kind) {
         case MAL_ITERATOR_MAP_KEYS:
         case MAL_ITERATOR_SET_VALUES:
-            *value_out = key.value;
+            *value_out = key;
             return true;
         case MAL_ITERATOR_MAP_VALUES:
-            *value_out = mal_table_entry_value(map->entries, entry);
+            *value_out = mapped;
             return true;
         case MAL_ITERATOR_MAP_ENTRIES:
-            *value_out =
-                mal_builtin_iterator_pair(vm, key.value, mal_table_entry_value(map->entries, entry));
+            *value_out = mal_builtin_iterator_pair(vm, key, mapped);
             return true;
         case MAL_ITERATOR_SET_ENTRIES:
-            *value_out = mal_builtin_iterator_pair(vm, key.value, key.value);
+            *value_out = mal_builtin_iterator_pair(vm, key, key);
             return true;
         default:
             *value_out = mal_value_new_undefined();
@@ -432,6 +449,36 @@ bool mal_vm_iterator_step_protocol_cursor(
     bool ok = mal_builtin_iterator_object_advance(vm, cursor, value_out, done_out);
     vm->gc_native_frames--;
     return ok;
+}
+
+bool mal_vm_iterator_step_entry_pair_protocol_cursor(
+    const MalIteratorRecord *record,
+    MalValue *first_out,
+    MalValue *second_out,
+    bool *done_out
+) {
+    MalIteratorObject *cursor = mal_vm_iterator_protocol_cursor(
+        record, MAL_ITERATOR_CURSOR_MAP);
+    if (cursor == nullptr) {
+        cursor = mal_vm_iterator_protocol_cursor(record, MAL_ITERATOR_CURSOR_SET);
+    }
+    if (cursor == nullptr) return false;
+    if ((cursor->kind != MAL_ITERATOR_MAP_ENTRIES ||
+         !mal_value_is_map_object(cursor->target)) &&
+        (cursor->kind != MAL_ITERATOR_SET_ENTRIES ||
+         !mal_value_is_set_object(cursor->target))) {
+        return false;
+    }
+    if (cursor->done) {
+        *first_out = mal_value_new_undefined();
+        *second_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
+    }
+    MalValue mapped;
+    mal_builtin_iterator_map_take_entry(cursor, first_out, &mapped, done_out);
+    *second_out = cursor->kind == MAL_ITERATOR_MAP_ENTRIES ? mapped : *first_out;
+    return true;
 }
 
 static MalValue mal_builtin_iterator_prototype_iterator(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

@@ -1510,6 +1510,42 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 	});
 
+	it("virtualizes exact Map entry pairs while retaining materialization fallback", () => {
+		const source = `
+			function visit() {
+				let total = 0;
+				for (const [key, value] of new Map([[1, 2], [3, 4]])) total += key + value;
+				return total;
+			}
+			globalThis.visit = visit;
+		`;
+		const definition = lockedDefinition(source);
+		const regions = specializations(definition).filter(
+			(region) => region.kind === "iterator-entry-pair-virtualization",
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			representation: "virtual-iterator-entry-pair",
+			composition: "overlay",
+			runtimeGuard: "exact-map-or-set-entry-cursor",
+			correspondence: "entry-pair-elements",
+			stateSynchronization: "authoritative-language-object",
+			fallback: "materialize-entry-pair-then-iterate",
+			license: {
+				materialization: "on-demand",
+				admission: { mode: "capture" },
+				guard: { obligations: ["fallback", "materialize"] },
+			},
+		});
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
+			definition,
+		);
+		const output = emitProgramImage(definition, { compiled: true });
+		expect(output).toContain("mal_vm_iterator_step_entry_pair_protocol_cursor(");
+		expect(output).toContain("__iter_entry_pair_");
+		expect(output).toContain("mal_vm_iterator_step(vm,");
+	});
+
 	it("consumes the Core-owned indexed length loop region", () => {
 		const definition = lower(
 			`"use strict"; function sum(values) { let total = 0; for (let index = 0; index < values.length; ++index) total += values[index]; return total; } globalThis.sum = sum;`,

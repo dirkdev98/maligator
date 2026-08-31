@@ -329,6 +329,32 @@ export interface CoreAllocatedIteratorResultVirtualizationRegion extends CoreAll
 	readonly fallback: "materialize-result-then-observe";
 }
 
+export interface CoreAllocatedIteratorEntryPairVirtualizationRegion extends CoreAllocatedRegionEnvelope<
+	"iterator-entry-pair-virtualization",
+	"virtual-iterator-entry-pair",
+	"on-demand",
+	readonly [
+		Extract<CompilerInstruction, { type: "iteratorStep" }>,
+		Extract<CompilerInstruction, { type: "getIterator" }>,
+	]
+> {
+	readonly composition: "overlay";
+	readonly cursorInitialize: Extract<CompilerInstruction, { type: "getIterator" }>;
+	readonly outerStep: Extract<CompilerInstruction, { type: "iteratorStep" }>;
+	readonly innerInitialize: Extract<CompilerInstruction, { type: "getIterator" }>;
+	readonly innerSteps: readonly [
+		Extract<CompilerInstruction, { type: "iteratorStep" }>,
+		Extract<CompilerInstruction, { type: "iteratorStep" }>,
+	];
+	readonly innerCloses: ReadonlyArray<
+		Extract<CompilerInstruction, { type: "iteratorClose" }>
+	>;
+	readonly runtimeGuard: "exact-map-or-set-entry-cursor";
+	readonly correspondence: "entry-pair-elements";
+	readonly stateSynchronization: "authoritative-language-object";
+	readonly fallback: "materialize-entry-pair-then-iterate";
+}
+
 /** Closed indexed String#split consumer loop after register allocation. */
 export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegionEnvelope<
 	"string-split-cursor",
@@ -442,6 +468,7 @@ export type CoreAllocatedRegion =
 	| CoreAllocatedIndexedLengthLoopRegion
 	| CoreAllocatedArrayValuesIteratorCursorRegion
 	| CoreAllocatedBuiltinCollectionCallChainRegion
+	| CoreAllocatedIteratorEntryPairVirtualizationRegion
 	| CoreAllocatedIteratorResultVirtualizationRegion
 	| CoreAllocatedMapIteratorCursorRegion
 	| CoreAllocatedNumericFusionRegion

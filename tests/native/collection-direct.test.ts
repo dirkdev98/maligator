@@ -69,5 +69,7 @@ describe("guarded direct Map and Set dispatch", () => {
 		expect(field(line ?? "", "direct_set_has_hits")).toBeGreaterThan(4000);
 		expect(field(line ?? "", "direct_set_delete_hits")).toBeGreaterThan(4000);
 		expect(field(line ?? "", "direct_fallbacks")).toBeGreaterThanOrEqual(8);
+		expect(field(line ?? "", "entry_pair_hits")).toBeGreaterThanOrEqual(3);
+		expect(field(line ?? "", "entry_pair_fallbacks")).toBeGreaterThanOrEqual(1);
 	});
 });

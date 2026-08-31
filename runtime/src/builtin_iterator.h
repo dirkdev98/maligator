@@ -37,6 +37,12 @@ MalIteratorObject *mal_vm_iterator_protocol_cursor(
 bool mal_vm_iterator_step_protocol_cursor(
     MalVm *vm, MalIteratorObject *cursor, MalValue *value_out, bool *done_out);
 
+bool mal_vm_iterator_step_entry_pair_protocol_cursor(
+    const MalIteratorRecord *record,
+    MalValue *first_out,
+    MalValue *second_out,
+    bool *done_out);
+
 /**
  * Install %IteratorPrototype% and the Map/Set/Array/String iterator
  * prototypes. Requires the well-known symbols.

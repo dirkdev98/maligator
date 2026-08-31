@@ -33,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 48;
+export const COMPILER_ARTIFACT_VERSION = 49;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -412,6 +412,37 @@ function builtinCollectionCallChainGuardMasks(
 		obligationMask !== 1
 	) {
 		throw new RangeError("program-image-codec: invalid builtin collection chain guard");
+	}
+	return { dependencyMask, obligationMask };
+}
+
+function iteratorEntryPairGuardMasks(
+	license: Extract<VmRegion, { kind: "iterator-entry-pair-virtualization" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else {
+			throw new RangeError(
+				"program-image-codec: unsupported iterator entry-pair dependency",
+			);
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "on-demand" ||
+		license.admission.mode !== "capture" ||
+		(dependencyMask !== 1 && dependencyMask !== 4) ||
+		obligationMask !== 3
+	) {
+		throw new RangeError("program-image-codec: invalid iterator entry-pair guard");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -841,11 +872,13 @@ function writeCompilerArtifact(
 										? stringCharCodeAtChainGuardMasks(region.license)
 										: region.kind === "builtin-collection-call-chain"
 											? builtinCollectionCallChainGuardMasks(region.license)
-											: region.kind === "stack-object-plan"
-												? stackObjectPlanGuardMasks(region.license)
-												: region.kind === "iterator-result-virtualization"
-													? { dependencyMask: 0, obligationMask: 3 }
-													: { dependencyMask: 0, obligationMask: 1 };
+											: region.kind === "iterator-entry-pair-virtualization"
+												? iteratorEntryPairGuardMasks(region.license)
+												: region.kind === "stack-object-plan"
+													? stackObjectPlanGuardMasks(region.license)
+													: region.kind === "iterator-result-virtualization"
+														? { dependencyMask: 0, obligationMask: 3 }
+														: { dependencyMask: 0, obligationMask: 1 };
 			w.u8(kindTag);
 			w.u8(region.composition === "overlay" ? 1 : 0);
 			w.i32Array([...region.anchors]);
@@ -1060,6 +1093,17 @@ function writeCompilerArtifact(
 					w.u8(region.correspondence === "done-value-observation" ? 1 : 0);
 					w.u8(region.fallback === "materialize-result-then-observe" ? 1 : 0);
 					break;
+				case "iterator-entry-pair-virtualization":
+					w.i32(region.cursorInitializeIp);
+					w.i32(region.outerStepIp);
+					w.i32(region.innerInitializeIp);
+					w.i32Array([...region.innerStepIps]);
+					w.i32Array([...region.innerCloseIps]);
+					w.u8(region.runtimeGuard === "exact-map-or-set-entry-cursor" ? 1 : 0);
+					w.u8(region.correspondence === "entry-pair-elements" ? 1 : 0);
+					w.u8(region.stateSynchronization === "authoritative-language-object" ? 1 : 0);
+					w.u8(region.fallback === "materialize-entry-pair-then-iterate" ? 1 : 0);
+					break;
 				case "stack-object-plan":
 					w.u32(region.sites.length);
 					for (const site of region.sites) {
@@ -1121,6 +1165,7 @@ function validateRegionEnvelope(
 			region.kind !== "string-slice-number" &&
 			region.kind !== "string-char-code-at-chain" &&
 			region.kind !== "builtin-collection-call-chain" &&
+			region.kind !== "iterator-entry-pair-virtualization" &&
 			region.kind !== "iterator-result-virtualization" &&
 			region.kind !== "array-values-iterator-cursor" &&
 			region.kind !== "string-iterator-cursor" &&
@@ -1212,6 +1257,9 @@ function validateRegion(
 			break;
 		case "iterator-result-virtualization":
 			validateIteratorResultVirtualizationRegion(fn, region);
+			break;
+		case "iterator-entry-pair-virtualization":
+			validateIteratorEntryPairVirtualizationRegion(fn, region);
 			break;
 		case "stack-object-plan":
 			validateStackObjectPlanRegion(fn, region);
@@ -1774,6 +1822,74 @@ function validateIteratorResultVirtualizationRegion(
 		throw new RangeError(
 			"program-image-codec: invalid iterator-result virtualization region",
 		);
+	}
+}
+
+function validateIteratorEntryPairVirtualizationRegion(
+	fn: BytecodeFunction,
+	region: Extract<VmRegion, { kind: "iterator-entry-pair-virtualization" }>,
+): void {
+	iteratorEntryPairGuardMasks(region.license);
+	const cursorInitialize = fn.instructions[region.cursorInitializeIp];
+	const outerStep = fn.instructions[region.outerStepIp];
+	const innerInitialize = fn.instructions[region.innerInitializeIp];
+	const payload = [
+		region.cursorInitializeIp,
+		region.outerStepIp,
+		region.innerInitializeIp,
+		...region.innerStepIps,
+		...region.innerCloseIps,
+	];
+	const activeHandlers = new Set<number>();
+	for (const ip of payload) {
+		for (const handler of fn.handlers) {
+			if (ip >= handler.startIp && ip < handler.endIp)
+				activeHandlers.add(handler.handlerIp);
+		}
+	}
+	if (
+		region.representation !== "virtual-iterator-entry-pair" ||
+		region.composition !== "overlay" ||
+		region.runtimeGuard !== "exact-map-or-set-entry-cursor" ||
+		region.correspondence !== "entry-pair-elements" ||
+		region.stateSynchronization !== "authoritative-language-object" ||
+		region.fallback !== "materialize-entry-pair-then-iterate" ||
+		region.license.admission.anchorIp !== region.outerStepIp ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.outerStepIp ||
+		region.anchors[1] !== region.innerInitializeIp ||
+		region.innerStepIps.length !== 2 ||
+		region.innerCloseIps.length > 8 ||
+		new Set(payload).size !== payload.length ||
+		payload.length !== region.claimedIps.length ||
+		payload.some((ip) => !region.claimedIps.includes(ip)) ||
+		cursorInitialize?.opcode !== "GET_ITERATOR" ||
+		outerStep?.opcode !== "ITERATOR_STEP" ||
+		outerStep.iterator !== cursorInitialize.iteratorDst ||
+		outerStep.next !== cursorInitialize.nextDst ||
+		innerInitialize?.opcode !== "GET_ITERATOR" ||
+		innerInitialize.source !== outerStep.valueDst ||
+		region.innerStepIps.some((ip) => {
+			const step = fn.instructions[ip];
+			return (
+				step?.opcode !== "ITERATOR_STEP" ||
+				step.iterator !== innerInitialize.iteratorDst ||
+				step.next !== innerInitialize.nextDst
+			);
+		}) ||
+		region.innerCloseIps.some((ip) => {
+			const close = fn.instructions[ip];
+			return (
+				close?.opcode !== "ITERATOR_CLOSE" ||
+				close.iterator !== innerInitialize.iteratorDst
+			);
+		}) ||
+		region.cost.score !== 32 ||
+		region.cost.metadataOperations !== payload.length ||
+		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip))
+	) {
+		throw new RangeError("program-image-codec: invalid iterator entry-pair region");
 	}
 }
 
@@ -2905,10 +3021,19 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 1 &&
 					admissionTag === 2;
+				const iteratorEntryPairContract =
+					kindTag === 24 &&
+					representationTag === 24 &&
+					materializationTag === 1 &&
+					(dependencyMask === 1 || dependencyMask === 4) &&
+					obligationMask === 3 &&
+					admissionTag === 2;
 				if (
 					compositionTag > 1 ||
 					(compositionTag === 1) !==
-						(numericFusionContract || iteratorResultVirtualizationContract) ||
+						(numericFusionContract ||
+							iteratorResultVirtualizationContract ||
+							iteratorEntryPairContract) ||
 					genericTwinTag !== 1 ||
 					admissionTag > 2 ||
 					(!stringSplitCursorContract &&
@@ -2922,7 +3047,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						!stringCharCodeAtChainContract &&
 						!iteratorCursorContract &&
 						!iteratorResultVirtualizationContract &&
-						!builtinCollectionCallChainContract)
+						!builtinCollectionCallChainContract &&
+						!iteratorEntryPairContract)
 				) {
 					throw new RangeError("program-image-codec: invalid function region contract");
 				}
@@ -3682,6 +3808,58 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						callee,
 						receiver,
 						result,
+					};
+				} else if (kindTag === 24) {
+					const cursorInitializeIp = r.i32();
+					const outerStepIp = r.i32();
+					const innerInitializeIp = r.i32();
+					const innerStepIps = r.i32Array();
+					const innerCloseIps = r.i32Array();
+					const runtimeGuardTag = r.u8();
+					const correspondenceTag = r.u8();
+					const synchronizationTag = r.u8();
+					const fallbackTag = r.u8();
+					if (
+						innerStepIps.length !== 2 ||
+						innerCloseIps.length > 8 ||
+						runtimeGuardTag !== 1 ||
+						correspondenceTag !== 1 ||
+						synchronizationTag !== 1 ||
+						fallbackTag !== 1
+					) {
+						throw new RangeError(
+							"program-image-codec: invalid iterator entry-pair header",
+						);
+					}
+					region = {
+						kind: "iterator-entry-pair-virtualization",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [{ kind: "epoch", family: "watched-methods" }],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "on-demand",
+							admission,
+						},
+						representation: "virtual-iterator-entry-pair",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						cursorInitializeIp,
+						outerStepIp,
+						innerInitializeIp,
+						innerStepIps: [innerStepIps[0]!, innerStepIps[1]!],
+						innerCloseIps,
+						runtimeGuard: "exact-map-or-set-entry-cursor",
+						correspondence: "entry-pair-elements",
+						stateSynchronization: "authoritative-language-object",
+						fallback: "materialize-entry-pair-then-iterate",
 					};
 				} else {
 					throw new RangeError("program-image-codec: invalid function region kind");

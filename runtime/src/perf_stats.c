@@ -317,7 +317,8 @@ static void mal_perf_stats_print(void) {
         "direct_get_hits=%llu direct_set_hits=%llu "
         "direct_map_has_hits=%llu direct_map_delete_hits=%llu "
         "direct_add_hits=%llu direct_set_has_hits=%llu "
-        "direct_set_delete_hits=%llu direct_fallbacks=%llu\n",
+        "direct_set_delete_hits=%llu direct_fallbacks=%llu "
+        "entry_pair_hits=%llu entry_pair_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.map_get_set_cache_checks,
         (unsigned long long) mal_perf_stats.map_get_set_cache_hits,
         (unsigned long long) mal_perf_stats.map_get_set_cache_misses,
@@ -329,7 +330,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.collection_direct_set_add_hits,
         (unsigned long long) mal_perf_stats.collection_direct_set_has_hits,
         (unsigned long long) mal_perf_stats.collection_direct_set_delete_hits,
-        (unsigned long long) mal_perf_stats.collection_direct_fallbacks
+        (unsigned long long) mal_perf_stats.collection_direct_fallbacks,
+        (unsigned long long) mal_perf_stats.iterator_entry_pair_hits,
+        (unsigned long long) mal_perf_stats.iterator_entry_pair_fallbacks
     );
     fprintf(
         stderr,

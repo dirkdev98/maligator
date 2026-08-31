@@ -40,7 +40,7 @@ export interface CoreRegionStrategyDefinition {
 	readonly family: CoreRegionFamily;
 	readonly representation: string;
 	readonly composition: "exclusive" | "overlay";
-	readonly compositionLayer?: "iterator-result" | "numeric-value";
+	readonly compositionLayer?: "iterator-entry-pair" | "iterator-result" | "numeric-value";
 	readonly correspondence: CoreRegionCorrespondence;
 	readonly lifetime: CoreRegionLifetime;
 	readonly invalidatingEffects: ReadonlyArray<CoreRegionInvalidatingEffect>;
@@ -243,6 +243,19 @@ export const CORE_REGION_STRATEGIES = {
 		stateSynchronization: "none",
 		fallbackFrontier: "before-fast-operation",
 		maximumClaims: 2,
+	},
+	"iterator-entry-pair-virtualization": {
+		artifactTag: 24,
+		family: "stateful-protocol",
+		representation: "virtual-iterator-entry-pair",
+		composition: "overlay",
+		compositionLayer: "iterator-entry-pair",
+		correspondence: "forward-simulation",
+		lifetime: "claimed-region",
+		invalidatingEffects: ["guard-failure", "observation", "semantic-epoch-change"],
+		stateSynchronization: "authoritative-language-object",
+		fallbackFrontier: "before-state-mutation",
+		maximumClaims: 16,
 	},
 } as const satisfies Record<string, CoreRegionStrategyDefinition>;
 

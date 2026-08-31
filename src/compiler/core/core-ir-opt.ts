@@ -6078,6 +6078,219 @@ const selectIteratorCursorRegions: CoreFunctionPass = {
 	},
 };
 
+const selectIteratorEntryPairVirtualizationRegions: CoreFunctionPass = {
+	name: "select-iterator-entry-pair-virtualization-regions",
+	run(fn, analyses) {
+		if (fn.isGenerator || fn.isAsync) return fn;
+		const protector = analyses.context?.facts.protectors.get("watched-methods");
+		const guard = compilerGuardPlan(
+			[protector],
+			[
+				regionGenericTwin("iterator-entry-pair-virtualization", fn.functionIndex),
+				{
+					kind: "materialize",
+					id: `iterator-entry-pair-virtualization:${fn.functionIndex}`,
+					cause: "materialization",
+				},
+			],
+		);
+		if (guard === undefined) return fn;
+		const cfg = analyses.controlFlow(fn);
+		const canonical = analyses.canonicalValues(fn);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const definitions = analyses.definitions(fn);
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		const uses = new Map<
+			CoreValueId,
+			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+		>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+				for (const [position, input] of instruction.inputs.entries()) {
+					const entries = uses.get(root(input)) ?? [];
+					entries.push({ instruction, position });
+					uses.set(root(input), entries);
+				}
+			}
+		}
+		const instructionDominates = (
+			producer: CoreInstruction,
+			consumer: CoreInstruction,
+		): boolean => {
+			const producerLocation = locations.get(producer.id);
+			const consumerLocation = locations.get(consumer.id);
+			if (producerLocation === undefined || consumerLocation === undefined) return false;
+			return producerLocation.block.id === consumerLocation.block.id
+				? producerLocation.index < consumerLocation.index
+				: cfg.dominates(producerLocation.block.id, consumerLocation.block.id);
+		};
+		const selectedOuterSteps = new Set<CoreInstructionId>();
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			for (const outerStep of block.instructions) {
+				if (
+					outerStep?.opcode !== "iteratorStep" ||
+					outerStep.outputs.length !== 2 ||
+					selectedOuterSteps.has(outerStep.id)
+				) {
+					continue;
+				}
+				const cursorInitialize = definitions.get(root(outerStep.inputs[0]!));
+				if (
+					cursorInitialize?.opcode !== "getIterator" ||
+					root(cursorInitialize.outputs[1]!) !== root(outerStep.inputs[1]!)
+				) {
+					continue;
+				}
+				const sourceDefinition = definitions.get(root(cursorInitialize.inputs[0]!));
+				const exactCollection = sourceDefinition?.attributes.exactCollectionReceiver;
+				const constructor =
+					sourceDefinition?.opcode === "construct"
+						? definitions.get(root(sourceDefinition.inputs[0]!))
+						: undefined;
+				const intrinsic =
+					constructor?.opcode === "loadIntrinsic"
+						? constructor.attributes.intrinsic
+						: undefined;
+				if (
+					exactCollection !== "Map" &&
+					exactCollection !== "Set" &&
+					intrinsic !== "Map" &&
+					intrinsic !== "Set"
+				) {
+					continue;
+				}
+				const pairUses = uses.get(root(outerStep.outputs[0]!)) ?? [];
+				const innerInitialize =
+					pairUses.length === 1 &&
+					pairUses[0]!.position === 0 &&
+					pairUses[0]!.instruction.opcode === "getIterator"
+						? pairUses[0]!.instruction
+						: undefined;
+				if (
+					innerInitialize === undefined ||
+					innerInitialize.outputs.length !== 2 ||
+					!instructionDominates(outerStep, innerInitialize)
+				) {
+					continue;
+				}
+				const innerIterator = root(innerInitialize.outputs[0]!);
+				const innerNext = root(innerInitialize.outputs[1]!);
+				const iteratorUses = uses.get(innerIterator) ?? [];
+				const nextUses = uses.get(innerNext) ?? [];
+				const innerSteps = iteratorUses
+					.filter(
+						({ instruction, position }) =>
+							position === 0 &&
+							instruction.opcode === "iteratorStep" &&
+							root(instruction.inputs[1]!) === innerNext,
+					)
+					.map(({ instruction }) => instruction);
+				const innerCloses = iteratorUses
+					.filter(
+						({ instruction, position }) =>
+							position === 0 && instruction.opcode === "iteratorClose",
+					)
+					.map(({ instruction }) => instruction);
+				if (
+					innerSteps.length !== 2 ||
+					innerCloses.length > 8 ||
+					iteratorUses.length !== innerSteps.length + innerCloses.length ||
+					nextUses.length !== innerSteps.length ||
+					nextUses.some(
+						({ instruction, position }) =>
+							position !== 1 || !innerSteps.includes(instruction),
+					)
+				) {
+					continue;
+				}
+				const orderedSteps = instructionDominates(innerSteps[0]!, innerSteps[1]!)
+					? ([innerSteps[0]!, innerSteps[1]!] as const)
+					: instructionDominates(innerSteps[1]!, innerSteps[0]!)
+						? ([innerSteps[1]!, innerSteps[0]!] as const)
+						: undefined;
+				if (orderedSteps === undefined) continue;
+				const innerInitializeLocation = locations.get(innerInitialize.id)!;
+				const firstStepLocation = locations.get(orderedSteps[0].id)!;
+				const secondStepLocation = locations.get(orderedSteps[1].id)!;
+				if (
+					innerInitializeLocation.block.instructions.length !== 1 ||
+					innerInitializeLocation.block.terminator.kind !== "jump" ||
+					innerInitializeLocation.block.terminator.edge.block !==
+						firstStepLocation.block.id ||
+					firstStepLocation.block.instructions.length !== 1 ||
+					firstStepLocation.block.terminator.kind !== "jump" ||
+					firstStepLocation.block.terminator.edge.block !== secondStepLocation.block.id ||
+					secondStepLocation.block.instructions.length !== 1 ||
+					innerCloses.some(({ id }) => locations.get(id)!.block.instructions.length !== 1)
+				) {
+					continue;
+				}
+				const claimedInstructions = [
+					cursorInitialize.id,
+					outerStep.id,
+					innerInitialize.id,
+					...orderedSteps.map(({ id }) => id),
+					...innerCloses.map(({ id }) => id),
+				];
+				const ordinaryBlocks = [
+					...new Set(claimedInstructions.map((id) => locations.get(id)!.block.id)),
+				];
+				const exceptionalBlocks = [
+					...new Set(
+						claimedInstructions.flatMap((id) => {
+							const handler = locations.get(id)?.block.handler;
+							return handler === undefined ? [] : [handler.block];
+						}),
+					),
+				];
+				regions.push({
+					kind: "iterator-entry-pair-virtualization",
+					anchors: [outerStep.id, innerInitialize.id],
+					claimedInstructions,
+					ordinaryBlocks,
+					exceptionalBlocks,
+					data: coreAttributeObject(
+						{
+							license: {
+								guard,
+								genericTwin: "retained",
+								materialization: "on-demand",
+							},
+							representation: "virtual-iterator-entry-pair",
+							composition: "overlay",
+							cost: {
+								score: 32,
+								metadataOperations: claimedInstructions.length,
+							},
+							cursorInitialize: { $coreInstruction: cursorInitialize.id },
+							outerStep: { $coreInstruction: outerStep.id },
+							innerInitialize: { $coreInstruction: innerInitialize.id },
+							innerSteps: orderedSteps.map(({ id }) => ({ $coreInstruction: id })),
+							innerCloses: innerCloses.map(({ id }) => ({ $coreInstruction: id })),
+							runtimeGuard: "exact-map-or-set-entry-cursor",
+							correspondence: "entry-pair-elements",
+							stateSynchronization: "authoritative-language-object",
+							fallback: "materialize-entry-pair-then-iterate",
+						},
+						"iterator-entry-pair-virtualization",
+					),
+				});
+				selectedOuterSteps.add(outerStep.id);
+				if (selectedOuterSteps.size >= 8) break;
+			}
+			if (selectedOuterSteps.size >= 8) break;
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
 const selectIteratorResultVirtualizationRegions: CoreFunctionPass = {
 	name: "select-iterator-result-virtualization-regions",
 	run(fn) {
@@ -14467,7 +14680,8 @@ function annotateRegionAdmission(
 		const admissionQuery = coreRegionAdmissionQuery(region, anchor);
 		const mode =
 			region.kind === "string-char-code-at-chain" ||
-			region.kind === "builtin-collection-call-chain"
+			region.kind === "builtin-collection-call-chain" ||
+			region.kind === "iterator-entry-pair-virtualization"
 				? "capture"
 				: coreRegionAdmissionMode(fn, cfg, model, admissionQuery);
 		const strategy = Object.hasOwn(CORE_REGION_STRATEGIES, region.kind)
@@ -14523,6 +14737,7 @@ const CORE_REGION_CANDIDATE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectStringCharCodeAtChainRegions,
 	selectBuiltinCollectionCallChainRegions,
 	selectIteratorCursorRegions,
+	selectIteratorEntryPairVirtualizationRegions,
 	selectIteratorResultVirtualizationRegions,
 	selectIndexedLengthLoopRegions,
 	selectNumericFusionRegions,
