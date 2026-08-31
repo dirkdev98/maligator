@@ -94,7 +94,7 @@ function programWithClaimedDeadInstruction(): CoreProgram {
 							materialization: "none",
 							admission: {
 								anchor: { $coreInstruction: claimed.id },
-								validity: "once",
+								mode: "stable",
 							},
 						},
 					},

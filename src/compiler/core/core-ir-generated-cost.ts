@@ -24,6 +24,9 @@ export interface CoreGeneratedCodeCost {
 	readonly safepoints: number;
 	readonly duplicatedInstructions: number;
 	readonly genericTwins: number;
+	readonly admissionChecks: number;
+	readonly materializationPaths: number;
+	readonly stateSynchronizations: number;
 	readonly loopFrequency: number;
 	readonly estimatedCStatements: number;
 	readonly estimatedBinaryBytes: number;
@@ -40,6 +43,9 @@ export interface CoreGeneratedCodeOverhead {
 	readonly guards?: number;
 	readonly duplicatedInstructions?: number;
 	readonly genericTwins?: number;
+	readonly admissionChecks?: number;
+	readonly materializationPaths?: number;
+	readonly stateSynchronizations?: number;
 	readonly loopFrequency?: number;
 }
 
@@ -80,8 +86,18 @@ function generatedCodeCost(
 	const instructions = sites.length;
 	const duplicatedInstructions = overhead.duplicatedInstructions ?? 0;
 	const genericTwins = overhead.genericTwins ?? 0;
+	const admissionChecks = overhead.admissionChecks ?? 0;
+	const materializationPaths = overhead.materializationPaths ?? 0;
+	const stateSynchronizations = overhead.stateSynchronizations ?? 0;
 	const estimatedCStatements =
-		instructions + helperCalls * 2 + guards * 2 + boxingOperations + genericTwins;
+		instructions +
+		helperCalls * 2 +
+		guards * 2 +
+		boxingOperations +
+		genericTwins +
+		admissionChecks * 2 +
+		materializationPaths * 4 +
+		stateSynchronizations * 2;
 	const estimatedBinaryBytes =
 		estimatedCStatements * 8 + inputOperands * 2 + duplicatedInstructions * 4;
 	const compileScore =
@@ -93,6 +109,9 @@ function generatedCodeCost(
 		safepoints * 2 +
 		duplicatedInstructions +
 		genericTwins +
+		admissionChecks * 2 +
+		materializationPaths * 4 +
+		stateSynchronizations * 2 +
 		Math.ceil(estimatedBinaryBytes / 32);
 	const runtimeScore =
 		loopFrequency *
@@ -101,7 +120,10 @@ function generatedCodeCost(
 			guards +
 			boxingOperations * 2 +
 			rootSlots +
-			safepoints * 2);
+			safepoints * 2 +
+			admissionChecks +
+			materializationPaths * 6 +
+			stateSynchronizations * 2);
 	return {
 		instructions,
 		helperCalls,
@@ -111,6 +133,9 @@ function generatedCodeCost(
 		safepoints,
 		duplicatedInstructions,
 		genericTwins,
+		admissionChecks,
+		materializationPaths,
+		stateSynchronizations,
 		loopFrequency,
 		estimatedCStatements,
 		estimatedBinaryBytes,

@@ -19,6 +19,7 @@ import {
 	emitRelocatableNativeOverlayTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
 import {
+	vmRegionActions,
 	vmRegionLicense,
 	vmSemanticProtectorGuard,
 } from "../src/compiler/target/program-image.ts";
@@ -149,6 +150,7 @@ function withSpecializations(
 			functions: definition.native.functions.with(functionIndex, {
 				...owner,
 				specializations: next,
+				regionActions: vmRegionActions(next),
 			}),
 		},
 	};
@@ -171,7 +173,7 @@ describe("emit-program-image instruction packing", () => {
 				},
 			],
 			"on-demand",
-			{ anchorIp: 0, validity: "per-use" },
+			{ anchorIp: 0, mode: "per-use" },
 		);
 		expect(license).toEqual({
 			guard: {
@@ -183,7 +185,7 @@ describe("emit-program-image instruction packing", () => {
 			},
 			genericTwin: "retained",
 			materialization: "on-demand",
-			admission: { anchorIp: 0, validity: "per-use" },
+			admission: { anchorIp: 0, mode: "per-use" },
 		});
 	});
 
@@ -1412,16 +1414,100 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
 	});
 
-	it("keeps iterator execution generic until Core owns a cursor region", () => {
+	it("consumes the Core-owned authoritative Array iterator cursor", () => {
 		const source = `"use strict"; function sum(values) { let total = 0; for (const value of values) total += value; return total; } globalThis.sum = sum;`;
 		const definition = lower(source);
+		const regions = specializations(definition).filter(
+			(region) => region.kind === "array-values-iterator-cursor",
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			representation: "array-values-authoritative-cursor",
+			protocol: "array-values",
+			stateSynchronization: "authoritative-language-object",
+			suspension: "forbidden",
+		});
+		const virtualResults = specializations(definition).filter(
+			(region) => region.kind === "iterator-result-virtualization",
+		);
+		expect(virtualResults).toHaveLength(1);
+		expect(virtualResults[0]).toMatchObject({
+			representation: "virtual-iterator-result",
+			composition: "overlay",
+			correspondence: "done-value-observation",
+			fallback: "materialize-result-then-observe",
+			license: {
+				materialization: "on-demand",
+				guard: { obligations: ["fallback", "materialize"] },
+			},
+		});
+		const ownerIndex = definition.native.functions.findIndex((fn) =>
+			fn.specializations.includes(regions[0]!),
+		);
+		const owner = definition.native.functions[ownerIndex]!;
+		const virtualIndex = owner.specializations.findIndex(
+			(region) => region.kind === "iterator-result-virtualization",
+		);
+		const virtualRegion = owner.specializations[virtualIndex]!;
+		if (virtualRegion.kind !== "iterator-result-virtualization") {
+			throw new Error("missing iterator-result virtualization region");
+		}
+		const stepIp = virtualRegion.stepIps[0]!;
+		expect(owner.regionActions.filter((action) => action.ip === stepIp)).toMatchObject([
+			{ role: "step" },
+			{ role: "step" },
+		]);
+		const staleActions: ProgramImage = {
+			...definition,
+			native: {
+				...definition.native,
+				functions: definition.native.functions.with(ownerIndex, {
+					...owner,
+					regionActions: owner.regionActions.slice(1),
+				}),
+			},
+		};
+		expect(() => emitProgramImage(staleActions, { compiled: true })).toThrow(
+			/stale region actions/,
+		);
+		expect(() => serializeCompilerArtifact(staleActions)).toThrow(
+			/stale native region actions/,
+		);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
 			definition,
 		);
 		const output = emitProgramImage(definition, { compiled: true });
-		expect(output).not.toContain("MalIteratorObject *__dense_iter_");
-		expect(output).not.toContain("mal_vm_iterator_step_dense_array_cursor(vm,");
+		expect(output).toContain("MalIteratorObject *__iter_cursor_");
+		expect(output).toContain("mal_vm_iterator_protocol_cursor(");
+		expect(output).toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
+
+		const retainedGeneric = withSpecializations(
+			definition,
+			ownerIndex,
+			owner.specializations.filter(
+				(region) =>
+					region.kind !== "iterator-result-virtualization" &&
+					!region.kind.endsWith("iterator-cursor"),
+			),
+		);
+		const genericOutput = emitProgramImage(retainedGeneric, { compiled: true });
+		expect(genericOutput).toContain("mal_vm_iterator_step(vm,");
+		expect(genericOutput).not.toContain("mal_vm_iterator_step_fast(vm,");
+	});
+
+	it.each([
+		["String", `"a😀"`, "string-iterator-cursor"],
+		["TypedArray", "new Uint8Array([1, 2])", "typed-array-iterator-cursor"],
+		["Map", "new Map([[1, 2]])", "map-iterator-cursor"],
+		["Set", "new Set([1, 2])", "set-iterator-cursor"],
+	])("selects the %s stateful iterator protocol", (_name, iterable, kind) => {
+		const definition = lower(
+			`"use strict"; function visit() { for (const value of ${iterable}) globalThis.value = value; } globalThis.visit = visit;`,
+		);
+		expect(specializations(definition).some((region) => region.kind === kind)).toBe(true);
+		const output = emitProgramImage(definition, { compiled: true });
+		expect(output).toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 	});
 
 	it("consumes the Core-owned live Array length comparison region", () => {
@@ -1458,6 +1544,8 @@ describe("native update-expression representation", () => {
 		);
 		expect(output).not.toContain("MalIteratorObject *__dense_iter_");
 		expect(output).not.toContain("mal_vm_iterator_step_dense_array_cursor(vm,");
+		expect(output).not.toContain("MalIteratorObject *__iter_cursor_");
+		expect(output).not.toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
 	});
 
@@ -1831,7 +1919,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(", 3, nullptr);");
 	});
 
-	it("emits the generic String charCodeAt dispatch until Core owns a fusion", () => {
+	it("consumes the Core-owned String charCodeAt operation chain", () => {
 		const code = `
 			function codeUnit(value, index) {
 				return value.charCodeAt(index);
@@ -1839,12 +1927,22 @@ describe("native update-expression representation", () => {
 			globalThis.codeUnit = codeUnit;
 		`;
 		const definition = lower(code);
+		const regions = specializations(definition).filter(
+			(region) => region.kind === "string-char-code-at-chain",
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			representation: "primitive-string-code-unit",
+			runtimeGuard: "primitive-string-number-position",
+			evaluationOrder: "capture-property-before-arguments",
+			license: { admission: { mode: "capture" } },
+		});
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
 			definition,
 		);
 		const output = emitProgramImage(definition, { compiled: true });
-		expect(output).not.toContain("mal_vm_local_watched_primitive_value_try_load_static");
-		expect(output).not.toContain("mal_builtin_string_char_code_at_number(");
+		expect(output).toContain("mal_vm_local_watched_primitive_value_try_load_static");
+		expect(output).toContain("__string_char_code_at_");
 		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
 		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
 		expect(output).toContain(", 1);");
@@ -1863,9 +1961,11 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).not.toContain(
 			"mal_vm_local_watched_primitive_value_try_load_static",
 		);
-		expect(lockedOutput).not.toContain("mal_builtin_string_char_code_at_number(");
+		expect(lockedOutput).toContain("mal_builtin_string_char_code_at_known(vm,");
 		expect(lockedOutput).toContain("mal_vm_op_load_property_ic(vm,");
-		expect(lockedOutput).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
+		expect(lockedOutput).not.toContain(
+			"mal_builtin_string_char_code_at_direct(vm, &__cc_",
+		);
 	});
 
 	it("consumes the Core-certified bounded String relation in the backend", () => {
@@ -1879,8 +1979,8 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.checksum = checksum;
 		`);
-		expect(output).toContain("mal_builtin_string_char_code_at_direct_in_bounds(");
-		expect(output).not.toContain("mal_builtin_string_char_code_at_direct(vm,");
+		expect(output).toContain("mal_builtin_string_char_code_at_in_bounds(");
+		expect(output).not.toContain("mal_builtin_string_char_code_at_direct_in_bounds(");
 		expect(output).toContain(
 			"mal_value_from_i32((i32) mal_string_length(mal_value_to_string(",
 		);
@@ -2355,7 +2455,7 @@ describe("native update-expression representation", () => {
 			license: {
 				genericTwin: "retained",
 				materialization: "on-demand",
-				admission: { validity: "per-use" },
+				admission: { mode: "per-use" },
 				guard: {
 					dependencies: [{ kind: "epoch", family: "watched-methods" }],
 					obligations: ["fallback", "materialize"],
@@ -2436,7 +2536,7 @@ describe("native update-expression representation", () => {
 			license: {
 				genericTwin: "retained",
 				materialization: "on-demand",
-				admission: { validity: "per-use" },
+				admission: { mode: "per-use" },
 				guard: {
 					dependencies: [{ kind: "epoch", family: "watched-methods" }],
 					obligations: ["fallback", "materialize"],
@@ -2455,7 +2555,7 @@ describe("native update-expression representation", () => {
 			splitIdentity: "authority-invariant",
 			trimIdentity: "authority-invariant",
 			propertyPlacement: "call-fallback",
-			license: { admission: { validity: "once" } },
+			license: { admission: { mode: "stable" } },
 		});
 
 		const cached = deserializeCompilerArtifact(

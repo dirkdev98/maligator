@@ -953,8 +953,12 @@ function verifyRegions(model: FunctionModel): void {
 		if (!claimed.has(admission.anchor)) {
 			fail("region admission anchor is not claimed", context);
 		}
-		if (admission.validity !== "once" && admission.validity !== "per-use") {
-			fail("region admission has an invalid validity", context);
+		if (
+			admission.mode !== "capture" &&
+			admission.mode !== "stable" &&
+			admission.mode !== "per-use"
+		) {
+			fail("region admission has an invalid mode", context);
 		}
 		for (const [role, blocks] of [
 			["ordinary", region.controlFlow.ordinaryBlocks],

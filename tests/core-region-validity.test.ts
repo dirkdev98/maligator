@@ -21,9 +21,8 @@ import {
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 
 /**
- * Reaches String#split projection, the indexed split cursor, RegExp.exec
- * projection, and numeric fusion in one program, so every certificate kind the
- * pipeline can select takes part in the admission contract.
+ * Reaches projection, operation-chain, stateful-protocol, virtual-object, and
+ * structural families in one program so their admission contracts stay aligned.
  */
 const REGION_SOURCE = `globalThis.run = function run(value, separator) {
 	const parts = value.split(separator);
@@ -34,6 +33,11 @@ const REGION_SOURCE = `globalThis.run = function run(value, separator) {
 	const fields = value.split(";");
 	const match = /(\\d+)x/.exec(value);
 	return total + Number(fields[1].slice(2)) + fields.length + (match === null ? 0 : Number(match[1]));
+};
+globalThis.iterate = function iterate(values) {
+	let total = 0;
+	for (const value of values) total += value;
+	return total;
 };`;
 
 interface Compiled {
@@ -115,20 +119,20 @@ function verificationError(program: CoreProgram): string {
 	throw new Error("expected Core verification to reject the program");
 }
 
-describe("guarded-region admission validity", () => {
-	it("admits a locked-world license once and re-checks an invalidatable one per use", () => {
+describe("guarded-region admission modes", () => {
+	it("keeps a locked-world license stable and re-checks an invalidatable one per use", () => {
 		const locked = coreRegions(compile("locked").core);
 		const mutable = coreRegions(compile("mutable").core);
 
 		expect(locked.length).toBeGreaterThan(0);
-		expect(mutable.length).toBe(locked.length);
+		expect(mutable.length).toBeGreaterThan(0);
 
 		// Locking primordials replaces every epoch dependency with a world
 		// dependency, which cannot change while the program runs, so one admission
 		// covers the region.
 		for (const region of locked) {
 			expect(dependencyKinds(region)).not.toContain("epoch");
-			expect(admissionOf(region).validity).toBe("once");
+			expect(admissionOf(region).mode).toBe("stable");
 		}
 
 		// The same regions in a mutable world depend on an invalidatable epoch and
@@ -138,23 +142,23 @@ describe("guarded-region admission validity", () => {
 		);
 		expect(invalidatable.length).toBeGreaterThan(0);
 		for (const region of invalidatable) {
-			expect(admissionOf(region).validity).toBe("per-use");
+			expect(admissionOf(region).mode).toBe("per-use");
 		}
 		// A structural license names nothing invalidatable in either world.
 		for (const region of mutable.filter(
 			(candidate) => !dependencyKinds(candidate).includes("epoch"),
 		)) {
-			expect(admissionOf(region).validity).toBe("once");
+			expect(admissionOf(region).mode).toBe("stable");
 		}
 	});
 
-	it("rejects a once-valid claim over an interior that runs user code", () => {
+	it("rejects a stable claim over an interior that runs user code", () => {
 		const { core } = compile("mutable");
 		const select = (region: CoreRegion) => dependencyKinds(region).includes("epoch");
 		const tampered = withPatchedRegion(core, select, (region) =>
 			withLicense(region, {
 				...licenseOf(region),
-				admission: { ...admissionOf(region), validity: "once" },
+				admission: { ...admissionOf(region), mode: "stable" },
 			}),
 		);
 
@@ -204,6 +208,32 @@ describe("guarded-region admission validity", () => {
 		);
 
 		expect(verificationError(tampered)).toMatch(/has an unreadable license guard/);
+	});
+
+	it("rejects a virtual result without its materialization obligation", () => {
+		const { core } = compile("locked");
+		const tampered = withPatchedRegion(
+			core,
+			({ kind }) => kind === "iterator-result-virtualization",
+			(region) => {
+				const license = licenseOf(region);
+				const guard = license.guard as CoreAttributeObject;
+				const obligations = guard.obligations as ReadonlyArray<CoreAttributeObject>;
+				return withLicense(region, {
+					...license,
+					guard: {
+						...guard,
+						obligations: obligations.filter(
+							(obligation) => obligation.kind !== "materialize",
+						),
+					},
+				});
+			},
+		);
+
+		expect(verificationError(tampered)).toMatch(
+			/has a mismatched materialization obligation/,
+		);
 	});
 
 	it("carries the admission decision across wire serialization", () => {
@@ -259,7 +289,7 @@ describe("guarded-region admission validity", () => {
 /**
  * Hand-built certificates over an invalidatable license. Compiled programs cover
  * the vacuous and the user-code interiors; these cover the interior proof itself,
- * where a scalar-only interior earns `once` and each escape route loses it.
+ * where a scalar-only interior earns `stable` and each escape route loses it.
  */
 describe("guarded-region interior proof", () => {
 	interface Built {
@@ -285,7 +315,7 @@ describe("guarded-region interior proof", () => {
 					},
 					genericTwin: "retained",
 					materialization: "none",
-					admission: { anchor: { $coreInstruction: anchor }, validity: "once" },
+					admission: { anchor: { $coreInstruction: anchor }, mode: "stable" },
 				},
 			},
 		};

@@ -1,3 +1,4 @@
+import { coreRegionStrategy } from "../core/core-ir-region-strategies.ts";
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import type {
 	CompilerExactCollectionBrand,
@@ -8,6 +9,8 @@ import type { Reader } from "./program-image-codec.ts";
 import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
 import {
 	nativeFrameRootRegisters,
+	vmRegionActions,
+	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
 	VM_GUARDED_BUILTIN_OPERATIONS,
 } from "./program-image.ts";
@@ -30,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 43;
+export const COMPILER_ARTIFACT_VERSION = 45;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -327,6 +330,39 @@ function stringSliceNumberGuardMasks(
 		obligationMask !== 1
 	) {
 		throw new RangeError("program-image-codec: invalid String.slice Number guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
+function stringCharCodeAtChainGuardMasks(
+	license: Extract<VmRegion, { kind: "string-char-code-at-chain" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else {
+			throw new RangeError(
+				"program-image-codec: unsupported String.charCodeAt chain dependency",
+			);
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "none" ||
+		license.admission.mode !== "capture" ||
+		(dependencyMask !== 1 && dependencyMask !== 4) ||
+		obligationMask !== 1
+	) {
+		throw new RangeError(
+			"program-image-codec: invalid String.charCodeAt chain guard plan",
+		);
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -719,6 +755,9 @@ function writeCompilerArtifact(
 		}
 
 		const regions = [...native.specializations];
+		if (!vmRegionActionsAreCurrent(regions, native.regionActions)) {
+			throw new RangeError("program-image-codec: stale native region actions");
+		}
 		w.u32(regions.length);
 		const claimedRegionInstructions = new Set<number>();
 		for (const region of regions) {
@@ -730,22 +769,7 @@ function writeCompilerArtifact(
 				native.instructions,
 				native.registerRepresentations,
 			);
-			const kindTag =
-				region.kind === "string-split-cursor"
-					? 2
-					: region.kind === "string-split-projection"
-						? 4
-						: region.kind === "regexp-exec-projection"
-							? 5
-							: region.kind === "regexp-iterator-projection"
-								? 6
-								: region.kind === "string-slice-number"
-									? 7
-									: region.kind === "stack-object-plan"
-										? 11
-										: region.kind === "numeric-fusion"
-											? 14
-											: 15;
+			const kindTag = coreRegionStrategy(region.kind).artifactTag;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -764,9 +788,13 @@ function writeCompilerArtifact(
 								? regexpIteratorProjectionGuardMasks(region.license)
 								: region.kind === "string-slice-number"
 									? stringSliceNumberGuardMasks(region.license)
-									: region.kind === "stack-object-plan"
-										? stackObjectPlanGuardMasks(region.license)
-										: { dependencyMask: 0, obligationMask: 1 };
+									: region.kind === "string-char-code-at-chain"
+										? stringCharCodeAtChainGuardMasks(region.license)
+										: region.kind === "stack-object-plan"
+											? stackObjectPlanGuardMasks(region.license)
+											: region.kind === "iterator-result-virtualization"
+												? { dependencyMask: 0, obligationMask: 3 }
+												: { dependencyMask: 0, obligationMask: 1 };
 			w.u8(kindTag);
 			w.u8(region.composition === "overlay" ? 1 : 0);
 			w.i32Array([...region.anchors]);
@@ -780,7 +808,13 @@ function writeCompilerArtifact(
 			w.u8(materializationTag);
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
-			w.u8(region.license.admission.validity === "once" ? 1 : 0);
+			w.u8(
+				region.license.admission.mode === "stable"
+					? 1
+					: region.license.admission.mode === "capture"
+						? 2
+						: 0,
+			);
 			w.i32(region.license.admission.anchorIp);
 			switch (region.kind) {
 				case "array-length-comparison":
@@ -928,6 +962,36 @@ function writeCompilerArtifact(
 					w.f64(region.sliceStart);
 					w.i32(region.result);
 					break;
+				case "string-char-code-at-chain":
+					w.i32(region.propertyIp);
+					w.i32(region.callIp);
+					w.u8(region.methodIdentity === "authority-invariant" ? 1 : 0);
+					w.u8(region.runtimeGuard === "primitive-string-number-position" ? 1 : 0);
+					w.u8(region.evaluationOrder === "capture-property-before-arguments" ? 1 : 0);
+					w.i32(region.propertyIcIndex);
+					w.i32(region.callee);
+					w.i32(region.receiver);
+					w.i32(region.result);
+					break;
+				case "array-values-iterator-cursor":
+				case "string-iterator-cursor":
+				case "typed-array-iterator-cursor":
+				case "map-iterator-cursor":
+				case "set-iterator-cursor":
+					w.i32(region.initializeIp);
+					w.i32Array([...region.stepIps]);
+					w.i32(region.iterator);
+					w.i32(region.next);
+					w.u8(region.runtimeGuard === "exact-iterator-brand-next-target" ? 1 : 0);
+					w.u8(region.stateSynchronization === "authoritative-language-object" ? 1 : 0);
+					w.u8(region.suspension === "forbidden" ? 1 : 0);
+					break;
+				case "iterator-result-virtualization":
+					w.i32Array([...region.stepIps]);
+					w.u8(region.runtimeGuard === "exact-builtin-iterator-next" ? 1 : 0);
+					w.u8(region.correspondence === "done-value-observation" ? 1 : 0);
+					w.u8(region.fallback === "materialize-result-then-observe" ? 1 : 0);
+					break;
 				case "stack-object-plan":
 					w.u32(region.sites.length);
 					for (const site of region.sites) {
@@ -987,6 +1051,13 @@ function validateRegionEnvelope(
 		) ||
 		(region.kind !== "regexp-iterator-projection" &&
 			region.kind !== "string-slice-number" &&
+			region.kind !== "string-char-code-at-chain" &&
+			region.kind !== "iterator-result-virtualization" &&
+			region.kind !== "array-values-iterator-cursor" &&
+			region.kind !== "string-iterator-cursor" &&
+			region.kind !== "typed-array-iterator-cursor" &&
+			region.kind !== "map-iterator-cursor" &&
+			region.kind !== "set-iterator-cursor" &&
 			region.controlFlow.exceptionalHandlerIps.length !== 0) ||
 		!Number.isSafeInteger(region.cost.score) ||
 		region.cost.score <= 0 ||
@@ -1046,6 +1117,24 @@ function validateRegion(
 			break;
 		case "string-slice-number":
 			validateStringSliceNumberRegion(fn, region, stringConstants, nativeInstructions);
+			break;
+		case "string-char-code-at-chain":
+			validateStringCharCodeAtChainRegion(
+				fn,
+				region,
+				stringConstants,
+				nativeInstructions,
+			);
+			break;
+		case "array-values-iterator-cursor":
+		case "string-iterator-cursor":
+		case "typed-array-iterator-cursor":
+		case "map-iterator-cursor":
+		case "set-iterator-cursor":
+			validateIteratorCursorRegion(fn, region);
+			break;
+		case "iterator-result-virtualization":
+			validateIteratorResultVirtualizationRegion(fn, region);
 			break;
 		case "stack-object-plan":
 			validateStackObjectPlanRegion(fn, region);
@@ -1342,6 +1431,192 @@ function validateStringSliceNumberRegion(
 		region.claimedIps.some((ip) => !payload.has(ip))
 	) {
 		throw new RangeError("program-image-codec: invalid String.slice Number region");
+	}
+}
+
+function validateStringCharCodeAtChainRegion(
+	fn: BytecodeFunction,
+	region: Extract<VmRegion, { kind: "string-char-code-at-chain" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+): void {
+	stringCharCodeAtChainGuardMasks(region.license);
+	const property = fn.instructions[region.propertyIp];
+	const call = fn.instructions[region.callIp];
+	const callPlan = nativeCallPlanAt(nativeInstructions, region.callIp);
+	const expectedMethodIdentity =
+		callPlan?.guardedBuiltinCall !== undefined &&
+		vmGuardIsWorldInvariant(callPlan.guardedBuiltinCall.guard)
+			? "authority-invariant"
+			: "runtime-guarded";
+	const activeHandlers = new Set<number>();
+	for (const ip of region.claimedIps) {
+		for (const handler of fn.handlers) {
+			if (ip >= handler.startIp && ip < handler.endIp) {
+				activeHandlers.add(handler.handlerIp);
+			}
+		}
+	}
+	if (
+		region.representation !== "primitive-string-code-unit" ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.propertyIp ||
+		region.anchors[1] !== region.callIp ||
+		region.claimedIps.length !== 2 ||
+		!region.claimedIps.includes(region.propertyIp) ||
+		!region.claimedIps.includes(region.callIp) ||
+		region.license.admission.anchorIp !== region.propertyIp ||
+		property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
+			"charCodeAt" ||
+		property.icIndex !== region.propertyIcIndex ||
+		call?.opcode !== "CALL" ||
+		callPlan?.guardedBuiltinCall?.operation !== "String.prototype.charCodeAt" ||
+		call.arguments.length > 1 ||
+		property.dst !== call.callee ||
+		property.object !== call.thisValue ||
+		region.propertyIp >= region.callIp ||
+		region.methodIdentity !== expectedMethodIdentity ||
+		region.runtimeGuard !== "primitive-string-number-position" ||
+		region.evaluationOrder !== "capture-property-before-arguments" ||
+		region.callee !== call.callee ||
+		region.receiver !== call.thisValue ||
+		region.result !== call.dst ||
+		region.cost.score !== 12 ||
+		region.cost.metadataOperations !== 2 ||
+		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip))
+	) {
+		throw new RangeError("program-image-codec: invalid String.charCodeAt chain region");
+	}
+}
+
+type VmIteratorCursorRegion = Extract<
+	VmRegion,
+	{
+		kind:
+			| "array-values-iterator-cursor"
+			| "string-iterator-cursor"
+			| "typed-array-iterator-cursor"
+			| "map-iterator-cursor"
+			| "set-iterator-cursor";
+	}
+>;
+
+function validateIteratorCursorRegion(
+	fn: BytecodeFunction,
+	region: VmIteratorCursorRegion,
+): void {
+	const expected = {
+		"array-values-iterator-cursor": ["array-values-authoritative-cursor", "array-values"],
+		"string-iterator-cursor": ["string-authoritative-cursor", "string"],
+		"typed-array-iterator-cursor": [
+			"typed-array-authoritative-cursor",
+			"typed-array-values",
+		],
+		"map-iterator-cursor": ["map-authoritative-cursor", "map"],
+		"set-iterator-cursor": ["set-authoritative-cursor", "set"],
+	} as const;
+	const [representation, protocol] = expected[region.kind];
+	const initialize = fn.instructions[region.initializeIp];
+	const payload = [region.initializeIp, ...region.stepIps];
+	const activeHandlers = new Set<number>();
+	for (const ip of payload) {
+		for (const handler of fn.handlers) {
+			if (ip >= handler.startIp && ip < handler.endIp) {
+				activeHandlers.add(handler.handlerIp);
+			}
+		}
+	}
+	if (
+		fn.isGenerator ||
+		fn.isAsync ||
+		region.representation !== representation ||
+		region.protocol !== protocol ||
+		region.runtimeGuard !== "exact-iterator-brand-next-target" ||
+		region.stateSynchronization !== "authoritative-language-object" ||
+		region.suspension !== "forbidden" ||
+		region.composition !== undefined ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== 1 ||
+		region.license.guard.obligations[0] !== "fallback" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "none" ||
+		region.license.admission.mode !== "stable" ||
+		region.license.admission.anchorIp !== region.initializeIp ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.initializeIp ||
+		region.anchors[1] !== region.stepIps[0] ||
+		initialize?.opcode !== "GET_ITERATOR" ||
+		initialize.iteratorDst !== region.iterator ||
+		initialize.nextDst !== region.next ||
+		region.stepIps.length === 0 ||
+		region.stepIps.length > 32 ||
+		new Set(payload).size !== payload.length ||
+		payload.length !== region.claimedIps.length ||
+		payload.some((ip) => !region.claimedIps.includes(ip)) ||
+		region.stepIps.some((ip) => {
+			const step = fn.instructions[ip];
+			return (
+				step?.opcode !== "ITERATOR_STEP" ||
+				step.iterator !== region.iterator ||
+				step.next !== region.next
+			);
+		}) ||
+		region.cost.score !== region.stepIps.length * 8 ||
+		region.cost.metadataOperations !== payload.length ||
+		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip))
+	) {
+		throw new RangeError(`program-image-codec: invalid ${region.kind} region`);
+	}
+}
+
+function validateIteratorResultVirtualizationRegion(
+	fn: BytecodeFunction,
+	region: Extract<VmRegion, { kind: "iterator-result-virtualization" }>,
+): void {
+	const activeHandlers = new Set<number>();
+	for (const ip of region.stepIps) {
+		for (const handler of fn.handlers) {
+			if (ip >= handler.startIp && ip < handler.endIp) {
+				activeHandlers.add(handler.handlerIp);
+			}
+		}
+	}
+	if (
+		region.representation !== "virtual-iterator-result" ||
+		region.composition !== "overlay" ||
+		region.runtimeGuard !== "exact-builtin-iterator-next" ||
+		region.correspondence !== "done-value-observation" ||
+		region.fallback !== "materialize-result-then-observe" ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== 2 ||
+		region.license.guard.obligations[0] !== "fallback" ||
+		region.license.guard.obligations[1] !== "materialize" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "on-demand" ||
+		region.license.admission.mode !== "stable" ||
+		region.license.admission.anchorIp !== region.stepIps[0] ||
+		region.anchors.length !== 1 ||
+		region.anchors[0] !== region.stepIps[0] ||
+		region.stepIps.length === 0 ||
+		region.stepIps.length > 64 ||
+		new Set(region.stepIps).size !== region.stepIps.length ||
+		region.stepIps.length !== region.claimedIps.length ||
+		region.stepIps.some(
+			(ip) =>
+				!region.claimedIps.includes(ip) ||
+				fn.instructions[ip]?.opcode !== "ITERATOR_STEP",
+		) ||
+		region.cost.score !== region.stepIps.length * 6 ||
+		region.cost.metadataOperations !== region.stepIps.length ||
+		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip))
+	) {
+		throw new RangeError(
+			"program-image-codec: invalid iterator-result virtualization region",
+		);
 	}
 }
 
@@ -2387,7 +2662,12 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				const admissionAnchorIp = r.i32();
 				const admission = {
 					anchorIp: admissionAnchorIp,
-					validity: admissionTag === 1 ? ("once" as const) : ("per-use" as const),
+					mode:
+						admissionTag === 1
+							? ("stable" as const)
+							: admissionTag === 2
+								? ("capture" as const)
+								: ("per-use" as const),
 				};
 				const stringSplitCursorContract =
 					kindTag === 2 &&
@@ -2437,11 +2717,34 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
+				const stringCharCodeAtChainContract =
+					kindTag === 16 &&
+					representationTag === 16 &&
+					materializationTag === 0 &&
+					(dependencyMask === 1 || dependencyMask === 4) &&
+					obligationMask === 1 &&
+					admissionTag === 2;
+				const iteratorCursorContract =
+					kindTag >= 17 &&
+					kindTag <= 21 &&
+					representationTag === kindTag &&
+					materializationTag === 0 &&
+					dependencyMask === 0 &&
+					obligationMask === 1 &&
+					admissionTag === 1;
+				const iteratorResultVirtualizationContract =
+					kindTag === 22 &&
+					representationTag === 22 &&
+					materializationTag === 1 &&
+					dependencyMask === 0 &&
+					obligationMask === 3 &&
+					admissionTag === 1;
 				if (
 					compositionTag > 1 ||
-					(compositionTag === 1) !== numericFusionContract ||
+					(compositionTag === 1) !==
+						(numericFusionContract || iteratorResultVirtualizationContract) ||
 					genericTwinTag !== 1 ||
-					admissionTag > 1 ||
+					admissionTag > 2 ||
 					(!stringSplitCursorContract &&
 						!stringSplitProjectionContract &&
 						!regexpExecProjectionContract &&
@@ -2449,7 +2752,10 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						!stringSliceNumberContract &&
 						!stackObjectPlanContract &&
 						!numericFusionContract &&
-						!arrayLengthComparisonContract)
+						!arrayLengthComparisonContract &&
+						!stringCharCodeAtChainContract &&
+						!iteratorCursorContract &&
+						!iteratorResultVirtualizationContract)
 				) {
 					throw new RangeError("program-image-codec: invalid function region contract");
 				}
@@ -2995,6 +3301,157 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						runtimeGuard: "exact-array",
 						sites,
 					};
+				} else if (kindTag === 16) {
+					const propertyIp = r.i32();
+					const callIp = r.i32();
+					const methodIdentityTag = r.u8();
+					const runtimeGuardTag = r.u8();
+					const evaluationOrderTag = r.u8();
+					const propertyIcIndex = r.i32();
+					const callee = r.i32();
+					const receiver = r.i32();
+					const result = r.i32();
+					if (
+						methodIdentityTag > 1 ||
+						runtimeGuardTag !== 1 ||
+						evaluationOrderTag !== 1
+					) {
+						throw new RangeError(
+							"program-image-codec: invalid String.charCodeAt chain header",
+						);
+					}
+					region = {
+						kind: "string-char-code-at-chain",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [{ kind: "epoch", family: "watched-methods" }],
+								obligations: ["fallback"],
+							},
+							genericTwin: "retained",
+							materialization: "none",
+							admission,
+						},
+						representation: "primitive-string-code-unit",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						propertyIp,
+						callIp,
+						methodIdentity:
+							methodIdentityTag === 1 ? "authority-invariant" : "runtime-guarded",
+						runtimeGuard: "primitive-string-number-position",
+						evaluationOrder: "capture-property-before-arguments",
+						propertyIcIndex,
+						callee,
+						receiver,
+						result,
+					};
+				} else if (kindTag >= 17 && kindTag <= 21) {
+					const initializeIp = r.i32();
+					const stepIps = r.i32Array();
+					const iterator = r.i32();
+					const next = r.i32();
+					const runtimeGuardTag = r.u8();
+					const stateSynchronizationTag = r.u8();
+					const suspensionTag = r.u8();
+					if (
+						runtimeGuardTag !== 1 ||
+						stateSynchronizationTag !== 1 ||
+						suspensionTag !== 1
+					) {
+						throw new RangeError("program-image-codec: invalid iterator cursor header");
+					}
+					const common = {
+						license: {
+							guard: { dependencies: [], obligations: ["fallback" as const] },
+							genericTwin: "retained" as const,
+							materialization: "none" as const,
+							admission,
+						},
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						initializeIp,
+						stepIps,
+						iterator,
+						next,
+						runtimeGuard: "exact-iterator-brand-next-target" as const,
+						stateSynchronization: "authoritative-language-object" as const,
+						suspension: "forbidden" as const,
+					};
+					if (kindTag === 17) {
+						region = {
+							...common,
+							kind: "array-values-iterator-cursor",
+							representation: "array-values-authoritative-cursor",
+							protocol: "array-values",
+						};
+					} else if (kindTag === 18) {
+						region = {
+							...common,
+							kind: "string-iterator-cursor",
+							representation: "string-authoritative-cursor",
+							protocol: "string",
+						};
+					} else if (kindTag === 19) {
+						region = {
+							...common,
+							kind: "typed-array-iterator-cursor",
+							representation: "typed-array-authoritative-cursor",
+							protocol: "typed-array-values",
+						};
+					} else if (kindTag === 20) {
+						region = {
+							...common,
+							kind: "map-iterator-cursor",
+							representation: "map-authoritative-cursor",
+							protocol: "map",
+						};
+					} else {
+						region = {
+							...common,
+							kind: "set-iterator-cursor",
+							representation: "set-authoritative-cursor",
+							protocol: "set",
+						};
+					}
+				} else if (kindTag === 22) {
+					const stepIps = r.i32Array();
+					const runtimeGuardTag = r.u8();
+					const correspondenceTag = r.u8();
+					const fallbackTag = r.u8();
+					if (runtimeGuardTag !== 1 || correspondenceTag !== 1 || fallbackTag !== 1) {
+						throw new RangeError(
+							"program-image-codec: invalid iterator-result virtualization header",
+						);
+					}
+					region = {
+						kind: "iterator-result-virtualization",
+						license: {
+							guard: {
+								dependencies: [],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "on-demand",
+							admission,
+						},
+						representation: "virtual-iterator-result",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						stepIps,
+						runtimeGuard: "exact-builtin-iterator-next",
+						correspondence: "done-value-observation",
+						fallback: "materialize-result-then-observe",
+					};
 				} else {
 					throw new RangeError("program-image-codec: invalid function region kind");
 				}
@@ -3017,6 +3474,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			gc: { safepoints },
 			instructions: nativeInstructions,
 			specializations: regions,
+			regionActions: vmRegionActions(regions),
 		};
 		nativeFrameRootRegisters(fn, nativeFunction);
 		nativeFunctions.push(nativeFunction);

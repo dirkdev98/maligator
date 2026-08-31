@@ -729,7 +729,7 @@ describe("Core IR", () => {
 		const complete = builder.finish(entry);
 		const producer = complete.blocks[0]!.instructions[0]!;
 		const terminator = complete.blocks[0]!.terminator;
-		const invalid = {
+		const invalid: CoreFunction = {
 			...complete,
 			regions: [
 				{

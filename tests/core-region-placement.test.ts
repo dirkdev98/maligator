@@ -12,6 +12,7 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
+import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import type { ProgramImage, VmRegion } from "../src/compiler/target/program-image.ts";
 import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
@@ -160,6 +161,10 @@ describe("Core region property placement", () => {
 				"rootSlots",
 				"safepoints",
 				"duplicatedInstructions",
+				"genericTwins",
+				"admissionChecks",
+				"materializationPaths",
+				"stateSynchronizations",
 				"loopFrequency",
 				"estimatedCStatements",
 				"estimatedBinaryBytes",
@@ -503,13 +508,15 @@ function withVmRegion(
 	region: VmRegion,
 ): ProgramImage {
 	const owner = definition.native.functions[functionIndex]!;
+	const specializations = owner.specializations.with(regionIndex, region);
 	return {
 		...definition,
 		native: {
 			...definition.native,
 			functions: definition.native.functions.with(functionIndex, {
 				...owner,
-				specializations: owner.specializations.with(regionIndex, region),
+				specializations,
+				regionActions: vmRegionActions(specializations),
 			}),
 		},
 	};

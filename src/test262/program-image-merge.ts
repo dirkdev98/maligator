@@ -99,6 +99,47 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "array-values-iterator-cursor":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				stepIps: [...region.stepIps],
+			};
+		case "string-iterator-cursor":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				stepIps: [...region.stepIps],
+			};
+		case "typed-array-iterator-cursor":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				stepIps: [...region.stepIps],
+			};
+		case "map-iterator-cursor":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				stepIps: [...region.stepIps],
+			};
+		case "set-iterator-cursor":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				stepIps: [...region.stepIps],
+			};
+		case "iterator-result-virtualization":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				stepIps: [...region.stepIps],
+			};
+		case "string-char-code-at-chain":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+			};
 		case "array-length-comparison":
 			return {
 				...cloneRegionEnvelope(region),
@@ -586,6 +627,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				specializations: native.specializations.map((region) =>
 					cloneRegion(region, base),
 				),
+				regionActions: native.regionActions.map((action) => ({ ...action })),
 				compilerSiteIds: native.compilerSiteIds ? [...native.compilerSiteIds] : undefined,
 			})),
 		);

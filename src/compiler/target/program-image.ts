@@ -132,12 +132,12 @@ export interface VmRegionLicense {
 	/**
 	 * Where the license's semantic-epoch dependencies are admitted, and whether
 	 * that one admission covers every licensed use. Core owns the interior proof;
-	 * a backend reads `validity` instead of rediscovering epoch stability from the
+	 * a backend reads this mode instead of rediscovering epoch stability from the
 	 * emitted distance between an admission and a use.
 	 */
 	readonly admission: {
 		readonly anchorIp: number;
-		readonly validity: "once" | "per-use";
+		readonly mode: "capture" | "stable" | "per-use";
 	};
 }
 
@@ -436,6 +436,84 @@ export type VmStringSliceNumberRegion = VmRegionEnvelope<
 	readonly result: number;
 };
 
+export type VmStringCharCodeAtChainRegion = VmRegionEnvelope<
+	"string-char-code-at-chain",
+	"primitive-string-code-unit",
+	"none"
+> & {
+	readonly propertyIp: number;
+	readonly callIp: number;
+	readonly methodIdentity: CoreBuiltinIdentityDecision;
+	readonly runtimeGuard: "primitive-string-number-position";
+	readonly evaluationOrder: "capture-property-before-arguments";
+	readonly propertyIcIndex: number;
+	readonly callee: number;
+	readonly receiver: number;
+	readonly result: number;
+};
+
+type VmIteratorCursorRegion<
+	Kind extends
+		| "array-values-iterator-cursor"
+		| "string-iterator-cursor"
+		| "typed-array-iterator-cursor"
+		| "map-iterator-cursor"
+		| "set-iterator-cursor",
+	Representation extends string,
+	Protocol extends "array-values" | "string" | "typed-array-values" | "map" | "set",
+> = VmRegionEnvelope<Kind, Representation, "none"> & {
+	readonly initializeIp: number;
+	readonly stepIps: ReadonlyArray<number>;
+	readonly iterator: number;
+	readonly next: number;
+	readonly protocol: Protocol;
+	readonly runtimeGuard: "exact-iterator-brand-next-target";
+	readonly stateSynchronization: "authoritative-language-object";
+	readonly suspension: "forbidden";
+};
+
+export type VmArrayValuesIteratorCursorRegion = VmIteratorCursorRegion<
+	"array-values-iterator-cursor",
+	"array-values-authoritative-cursor",
+	"array-values"
+>;
+
+export type VmStringIteratorCursorRegion = VmIteratorCursorRegion<
+	"string-iterator-cursor",
+	"string-authoritative-cursor",
+	"string"
+>;
+
+export type VmTypedArrayIteratorCursorRegion = VmIteratorCursorRegion<
+	"typed-array-iterator-cursor",
+	"typed-array-authoritative-cursor",
+	"typed-array-values"
+>;
+
+export type VmMapIteratorCursorRegion = VmIteratorCursorRegion<
+	"map-iterator-cursor",
+	"map-authoritative-cursor",
+	"map"
+>;
+
+export type VmSetIteratorCursorRegion = VmIteratorCursorRegion<
+	"set-iterator-cursor",
+	"set-authoritative-cursor",
+	"set"
+>;
+
+export type VmIteratorResultVirtualizationRegion = VmRegionEnvelope<
+	"iterator-result-virtualization",
+	"virtual-iterator-result",
+	"on-demand"
+> & {
+	readonly composition: "overlay";
+	readonly stepIps: ReadonlyArray<number>;
+	readonly runtimeGuard: "exact-builtin-iterator-next";
+	readonly correspondence: "done-value-observation";
+	readonly fallback: "materialize-result-then-observe";
+};
+
 export type VmStackObjectPlanRegion = VmRegionEnvelope<
 	"stack-object-plan",
 	"activation-local-fixed-shape-objects",
@@ -484,13 +562,20 @@ export type VmArrayLengthComparisonRegion = VmRegionEnvelope<
 
 export type VmRegion =
 	| VmArrayLengthComparisonRegion
+	| VmArrayValuesIteratorCursorRegion
+	| VmIteratorResultVirtualizationRegion
+	| VmMapIteratorCursorRegion
 	| VmRegExpExecProjectionRegion
 	| VmRegExpIteratorProjectionRegion
 	| VmStringSliceNumberRegion
 	| VmNumericFusionRegion
 	| VmStackObjectPlanRegion
+	| VmStringCharCodeAtChainRegion
+	| VmStringIteratorCursorRegion
 	| VmStringSplitProjectionRegion
-	| VmStringSplitCursorRegion;
+	| VmStringSplitCursorRegion
+	| VmSetIteratorCursorRegion
+	| VmTypedArrayIteratorCursorRegion;
 
 /** Physical storage selected by Core target lowering for native emission. */
 export type VmRegisterRepresentation =
@@ -544,6 +629,218 @@ export interface NativePlan {
 	readonly functions: ReadonlyArray<NativeFunctionPlan>;
 }
 
+export type VmRegionActionRole =
+	| "access"
+	| "allocate"
+	| "call"
+	| "capture"
+	| "charCodeAtCall"
+	| "charCodeAtProperty"
+	| "caseLength"
+	| "caseLowerCall"
+	| "caseLowerProperty"
+	| "caseUpperCall"
+	| "caseUpperProperty"
+	| "compare"
+	| "element"
+	| "finish"
+	| "inherited"
+	| "initialize"
+	| "length"
+	| "load"
+	| "materialize"
+	| "number"
+	| "property"
+	| "slice"
+	| "start"
+	| "step"
+	| "trimCall"
+	| "trimProperty";
+
+export interface VmRegionAction {
+	readonly ip: number;
+	readonly regionIndex: number;
+	readonly role: VmRegionActionRole;
+	readonly primaryIndex?: number;
+	readonly secondaryIndex?: number;
+}
+
+export function vmRegionActions(
+	regions: ReadonlyArray<VmRegion>,
+): ReadonlyArray<VmRegionAction> {
+	const actions: Array<VmRegionAction> = [];
+	const add = (
+		regionIndex: number,
+		ip: number,
+		role: VmRegionActionRole,
+		primaryIndex?: number,
+		secondaryIndex?: number,
+	): void => {
+		actions.push({
+			ip,
+			regionIndex,
+			role,
+			...(primaryIndex === undefined ? {} : { primaryIndex }),
+			...(secondaryIndex === undefined ? {} : { secondaryIndex }),
+		});
+	};
+	for (const [regionIndex, region] of regions.entries()) {
+		switch (region.kind) {
+			case "array-length-comparison":
+				for (const [siteIndex, site] of region.sites.entries()) {
+					add(regionIndex, site.loadIp, "load", siteIndex);
+					add(regionIndex, site.comparisonIp, "compare", siteIndex);
+				}
+				break;
+			case "array-values-iterator-cursor":
+			case "string-iterator-cursor":
+			case "typed-array-iterator-cursor":
+			case "map-iterator-cursor":
+			case "set-iterator-cursor":
+				add(regionIndex, region.initializeIp, "initialize");
+				for (const [stepIndex, stepIp] of region.stepIps.entries()) {
+					add(regionIndex, stepIp, "step", stepIndex);
+				}
+				break;
+			case "iterator-result-virtualization":
+				for (const [stepIndex, stepIp] of region.stepIps.entries()) {
+					add(regionIndex, stepIp, "step", stepIndex);
+				}
+				break;
+			case "numeric-fusion":
+				for (const [pairIndex, pair] of region.pairs.entries()) {
+					add(regionIndex, pair.firstIp, "start", pairIndex);
+					add(regionIndex, pair.finishIp, "finish", pairIndex);
+				}
+				break;
+			case "stack-object-plan":
+				for (const [siteIndex, site] of region.sites.entries()) {
+					add(regionIndex, site.allocationIp, "allocate", siteIndex);
+					for (const [accessIndex, access] of site.accesses.entries()) {
+						add(regionIndex, access.ip, "access", siteIndex, accessIndex);
+					}
+					if (site.inheritedAccessIp !== undefined) {
+						add(regionIndex, site.inheritedAccessIp, "inherited", siteIndex);
+					}
+					for (const [
+						materializationIndex,
+						materialization,
+					] of site.materializations.entries()) {
+						add(
+							regionIndex,
+							materialization.ip,
+							"materialize",
+							siteIndex,
+							materializationIndex,
+						);
+					}
+				}
+				break;
+			case "string-char-code-at-chain":
+				add(regionIndex, region.propertyIp, "property");
+				add(regionIndex, region.callIp, "call");
+				break;
+			case "string-slice-number":
+				if (region.propertyPlacement === "call-fallback") {
+					add(regionIndex, region.propertyIp, "property");
+				}
+				add(regionIndex, region.sliceCallIp, "slice");
+				add(regionIndex, region.numberCallIp, "number");
+				break;
+			case "string-split-projection":
+				if (region.propertyPlacement === "call-fallback") {
+					add(regionIndex, region.propertyIp, "property");
+				}
+				add(regionIndex, region.callIp, "call");
+				for (const [loadIndex, load] of region.loads.entries()) {
+					add(regionIndex, load.ip, load.kind, loadIndex);
+				}
+				break;
+			case "string-split-cursor":
+				if (region.propertyPlacement === "call-fallback") {
+					add(regionIndex, region.propertyIp, "property");
+				}
+				add(regionIndex, region.anchors[0]!, "call");
+				add(regionIndex, region.anchors[2]!, "length");
+				add(regionIndex, region.elementIp, "element");
+				add(regionIndex, region.trimPropertyIp, "trimProperty");
+				add(regionIndex, region.trimCallIp, "trimCall");
+				break;
+			case "regexp-exec-projection":
+				if (region.propertyPlacement === "call-fallback") {
+					add(regionIndex, region.propertyIp, "property");
+				}
+				add(regionIndex, region.callIp, "call");
+				for (const [loadIndex, load] of region.loads.entries()) {
+					add(regionIndex, load.ip, "capture", loadIndex);
+					if (load.consumer?.kind === "length") {
+						add(regionIndex, load.consumer.propertyIp, "length", loadIndex);
+					} else if (load.consumer?.kind === "charCodeAtZero") {
+						add(regionIndex, load.consumer.propertyIp, "charCodeAtProperty", loadIndex);
+						add(regionIndex, load.consumer.callIp, "charCodeAtCall", loadIndex);
+					} else if (load.consumer?.kind === "number") {
+						add(regionIndex, load.consumer.callIp, "number", loadIndex);
+					} else if (load.consumer?.kind === "asciiCaseLength") {
+						add(
+							regionIndex,
+							load.consumer.upperPropertyIp,
+							"caseUpperProperty",
+							loadIndex,
+						);
+						add(regionIndex, load.consumer.upperCallIp, "caseUpperCall", loadIndex);
+						add(
+							regionIndex,
+							load.consumer.lowerPropertyIp,
+							"caseLowerProperty",
+							loadIndex,
+						);
+						add(regionIndex, load.consumer.lowerCallIp, "caseLowerCall", loadIndex);
+						add(regionIndex, load.consumer.lengthPropertyIp, "caseLength", loadIndex);
+					}
+				}
+				break;
+			case "regexp-iterator-projection":
+				add(regionIndex, region.stepIp, "step");
+				for (const [loadIndex, load] of region.loads.entries()) {
+					add(regionIndex, load.ip, "capture", loadIndex);
+					add(regionIndex, load.numberCallIp, "number", loadIndex);
+				}
+				break;
+			default: {
+				const unreachable: never = region;
+				throw new Error(`Unknown VM region ${(unreachable as VmRegion).kind}`);
+			}
+		}
+	}
+	actions.sort(
+		(left, right) =>
+			left.ip - right.ip ||
+			left.regionIndex - right.regionIndex ||
+			left.role.localeCompare(right.role) ||
+			(left.primaryIndex ?? -1) - (right.primaryIndex ?? -1) ||
+			(left.secondaryIndex ?? -1) - (right.secondaryIndex ?? -1),
+	);
+	return actions;
+}
+
+export function vmRegionActionsAreCurrent(
+	regions: ReadonlyArray<VmRegion>,
+	actions: ReadonlyArray<VmRegionAction>,
+): boolean {
+	const expected = vmRegionActions(regions);
+	return (
+		actions.length === expected.length &&
+		actions.every(
+			(action, index) =>
+				action.ip === expected[index]?.ip &&
+				action.regionIndex === expected[index]?.regionIndex &&
+				action.role === expected[index]?.role &&
+				action.primaryIndex === expected[index]?.primaryIndex &&
+				action.secondaryIndex === expected[index]?.secondaryIndex,
+		)
+	);
+}
+
 export interface NativeFunctionPlan {
 	readonly functionIndex: number;
 	readonly mode: "direct" | "resumable";
@@ -560,6 +857,7 @@ export interface NativeFunctionPlan {
 	/** One native-only decision per bytecode IP; absent entries mean generic lowering. */
 	readonly instructions: ReadonlyArray<NativeInstructionPlan | undefined>;
 	readonly specializations: ReadonlyArray<VmRegion>;
+	readonly regionActions: ReadonlyArray<VmRegionAction>;
 	readonly compilerSiteIds?: ReadonlyArray<string | undefined>;
 }
 
@@ -630,6 +928,7 @@ export function createConservativeNativePlan(
 			},
 			instructions: Array.from({ length: fn.instructions.length }),
 			specializations: [],
+			regionActions: [],
 		})),
 	};
 }
@@ -1027,16 +1326,18 @@ function lowerExecutionFunctionToNativePlan(
 		const admissionAnchorIp = instructionIndexByTargetInstruction.get(
 			region.license.admission.anchor,
 		);
-		const admissionValidity = region.license.admission.validity;
+		const admissionMode = region.license.admission.mode;
 		if (
 			admissionAnchorIp === undefined ||
-			(admissionValidity !== "once" && admissionValidity !== "per-use")
+			(admissionMode !== "capture" &&
+				admissionMode !== "stable" &&
+				admissionMode !== "per-use")
 		) {
 			throw coreRegionError(region.kind, "license admission");
 		}
 		const admission = {
 			anchorIp: admissionAnchorIp,
-			validity: admissionValidity,
+			mode: admissionMode,
 		};
 		if (region.kind === "array-length-comparison") {
 			const anchors = region.anchors.map((instruction) =>
@@ -1128,6 +1429,226 @@ function lowerExecutionFunctionToNativePlan(
 				cost: { ...region.cost },
 				runtimeGuard: "exact-array",
 				sites: resolvedSites,
+			});
+			continue;
+		}
+		if (
+			region.kind === "array-values-iterator-cursor" ||
+			region.kind === "string-iterator-cursor" ||
+			region.kind === "typed-array-iterator-cursor" ||
+			region.kind === "map-iterator-cursor" ||
+			region.kind === "set-iterator-cursor"
+		) {
+			const anchors = region.anchors.map((instruction) =>
+				instructionIndexByTargetInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByTargetInstruction.get(instruction),
+			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
+			const exceptionalHandlerIps = region.controlFlow.exceptionalBlocks.map(
+				(blockIndex) => blockStartIps.get(blockIndex),
+			);
+			const initializeIp = instructionIndexByTargetInstruction.get(region.initialize);
+			const stepIps = region.steps.map((step) =>
+				instructionIndexByTargetInstruction.get(step),
+			);
+			if (
+				region.license.guard !== "structural" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "none" ||
+				region.license.admission.mode !== "stable" ||
+				region.runtimeGuard !== "exact-iterator-brand-next-target" ||
+				region.stateSynchronization !== "authoritative-language-object" ||
+				region.suspension !== "forbidden" ||
+				fn.isGenerator ||
+				fn.isAsync ||
+				initializeIp === undefined ||
+				stepIps.length === 0 ||
+				stepIps.some((ip) => ip === undefined) ||
+				anchors.some((ip) => ip === undefined) ||
+				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
+				exceptionalHandlerIps.some((ip) => ip === undefined)
+			) {
+				throw coreRegionError(region.kind, "structural contract");
+			}
+			const resolvedAnchors = anchors as Array<number>;
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const resolvedStepIps = stepIps as Array<number>;
+			const initialize = instructions[initializeIp];
+			const payloadIps = [initializeIp, ...resolvedStepIps];
+			if (
+				initialize?.opcode !== "GET_ITERATOR" ||
+				resolvedAnchors.length !== 2 ||
+				resolvedAnchors[0] !== initializeIp ||
+				resolvedAnchors[1] !== resolvedStepIps[0] ||
+				new Set(payloadIps).size !== payloadIps.length ||
+				payloadIps.length !== resolvedClaimedIps.length ||
+				payloadIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
+				payloadIps.some((ip) => claimedRegionInstructions.has(ip)) ||
+				resolvedStepIps.some((ip) => {
+					const step = instructions[ip];
+					return (
+						step?.opcode !== "ITERATOR_STEP" ||
+						step.iterator !== initialize.iteratorDst ||
+						step.next !== initialize.nextDst
+					);
+				}) ||
+				region.cost.score !== resolvedStepIps.length * 8 ||
+				region.cost.metadataOperations !== payloadIps.length
+			) {
+				throw coreRegionError(region.kind, "instruction or claim contract");
+			}
+			checkAdmission(region.kind, resolvedClaimedIps, admission);
+			for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+			const common = {
+				license: {
+					guard: { dependencies: [], obligations: ["fallback" as const] },
+					genericTwin: "retained" as const,
+					materialization: "none" as const,
+					admission,
+				},
+				anchors: resolvedAnchors,
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: exceptionalHandlerIps as Array<number>,
+				},
+				cost: { ...region.cost },
+				initializeIp,
+				stepIps: resolvedStepIps,
+				iterator: initialize.iteratorDst,
+				next: initialize.nextDst,
+				runtimeGuard: "exact-iterator-brand-next-target" as const,
+				stateSynchronization: "authoritative-language-object" as const,
+				suspension: "forbidden" as const,
+			};
+			switch (region.kind) {
+				case "array-values-iterator-cursor":
+					regions.push({
+						...common,
+						kind: region.kind,
+						representation: "array-values-authoritative-cursor",
+						protocol: "array-values",
+					});
+					break;
+				case "string-iterator-cursor":
+					regions.push({
+						...common,
+						kind: region.kind,
+						representation: "string-authoritative-cursor",
+						protocol: "string",
+					});
+					break;
+				case "typed-array-iterator-cursor":
+					regions.push({
+						...common,
+						kind: region.kind,
+						representation: "typed-array-authoritative-cursor",
+						protocol: "typed-array-values",
+					});
+					break;
+				case "map-iterator-cursor":
+					regions.push({
+						...common,
+						kind: region.kind,
+						representation: "map-authoritative-cursor",
+						protocol: "map",
+					});
+					break;
+				case "set-iterator-cursor":
+					regions.push({
+						...common,
+						kind: region.kind,
+						representation: "set-authoritative-cursor",
+						protocol: "set",
+					});
+					break;
+			}
+			continue;
+		}
+		if (region.kind === "iterator-result-virtualization") {
+			const anchors = region.anchors.map((instruction) =>
+				instructionIndexByTargetInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByTargetInstruction.get(instruction),
+			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
+			const exceptionalHandlerIps = region.controlFlow.exceptionalBlocks.map(
+				(blockIndex) => blockStartIps.get(blockIndex),
+			);
+			const stepIps = region.steps.map((step) =>
+				instructionIndexByTargetInstruction.get(step),
+			);
+			const obligations = [
+				...new Set(region.license.guard.obligations.map(({ kind }) => kind)),
+			].sort();
+			if (
+				region.license.guard.dependencies.length !== 0 ||
+				obligations.length !== 2 ||
+				obligations[0] !== "fallback" ||
+				obligations[1] !== "materialize" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "on-demand" ||
+				region.license.admission.mode !== "stable" ||
+				region.representation !== "virtual-iterator-result" ||
+				region.composition !== "overlay" ||
+				region.runtimeGuard !== "exact-builtin-iterator-next" ||
+				region.correspondence !== "done-value-observation" ||
+				region.fallback !== "materialize-result-then-observe" ||
+				anchors.length !== 1 ||
+				anchors.some((ip) => ip === undefined) ||
+				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
+				exceptionalHandlerIps.some((ip) => ip === undefined) ||
+				stepIps.length === 0 ||
+				stepIps.length > 64 ||
+				stepIps.some((ip) => ip === undefined)
+			) {
+				throw coreRegionError(region.kind, "virtual-result contract");
+			}
+			const resolvedAnchors = anchors as Array<number>;
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const resolvedStepIps = stepIps as Array<number>;
+			if (
+				resolvedAnchors[0] !== resolvedStepIps[0] ||
+				new Set(resolvedStepIps).size !== resolvedStepIps.length ||
+				resolvedStepIps.length !== resolvedClaimedIps.length ||
+				resolvedStepIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
+				resolvedStepIps.some((ip) => instructions[ip]?.opcode !== "ITERATOR_STEP") ||
+				region.cost.score !== resolvedStepIps.length * 6 ||
+				region.cost.metadataOperations !== resolvedStepIps.length
+			) {
+				throw coreRegionError(region.kind, "instruction or cost contract");
+			}
+			checkAdmission(region.kind, resolvedClaimedIps, admission);
+			regions.push({
+				kind: "iterator-result-virtualization",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback", "materialize"] },
+					genericTwin: "retained",
+					materialization: "on-demand",
+					admission,
+				},
+				representation: "virtual-iterator-result",
+				composition: "overlay",
+				anchors: resolvedAnchors,
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: exceptionalHandlerIps as Array<number>,
+				},
+				cost: { ...region.cost },
+				stepIps: resolvedStepIps,
+				runtimeGuard: "exact-builtin-iterator-next",
+				correspondence: "done-value-observation",
+				fallback: "materialize-result-then-observe",
 			});
 			continue;
 		}
@@ -1477,6 +1998,7 @@ function lowerExecutionFunctionToNativePlan(
 			exceptionalHandlerIps.some((ip) => ip === undefined) ||
 			(region.kind !== "regexp-iterator-projection" &&
 				region.kind !== "string-slice-number" &&
+				region.kind !== "string-char-code-at-chain" &&
 				region.controlFlow.exceptionalBlocks.length !== 0) ||
 			!Number.isSafeInteger(region.cost.score) ||
 			region.cost.score <= 0 ||
@@ -2151,6 +2673,84 @@ function lowerExecutionFunctionToNativePlan(
 				});
 				break;
 			}
+			case "string-char-code-at-chain": {
+				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
+				const callIp = instructionIndexByTargetInstruction.get(region.call);
+				const propertyIcIndex = propertyIcIndexByInstruction.get(region.property);
+				const property = propertyIp === undefined ? undefined : instructions[propertyIp];
+				const call = callIp === undefined ? undefined : instructions[callIp];
+				const expectedMethodIdentity = vmGuardIsWorldInvariant(guard)
+					? "authority-invariant"
+					: "runtime-guarded";
+				const payloadIps = new Set([propertyIp, callIp]);
+				if (
+					region.representation !== "primitive-string-code-unit" ||
+					region.license.materialization !== "none" ||
+					region.license.admission.mode !== "capture" ||
+					region.runtimeGuard !== "primitive-string-number-position" ||
+					region.evaluationOrder !== "capture-property-before-arguments" ||
+					region.methodIdentity !== expectedMethodIdentity ||
+					propertyIp === undefined ||
+					callIp === undefined ||
+					propertyIcIndex === undefined ||
+					property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
+						"charCodeAt" ||
+					call?.opcode !== "CALL" ||
+					!vmCallProvesBuiltin(
+						(() => {
+							const plan = nativePlanOf(call);
+							return plan?.kind === "call" ? plan : undefined;
+						})(),
+						"String.prototype.charCodeAt",
+						{
+							lowering: "guarded-primitive-string",
+							result: "number",
+							effects: ["coerce", "throw"],
+						},
+					) ||
+					call.arguments.length > 1 ||
+					property.dst !== call.callee ||
+					property.object !== call.thisValue ||
+					resolvedAnchors.length !== 2 ||
+					resolvedAnchors[0] !== propertyIp ||
+					resolvedAnchors[1] !== callIp ||
+					payloadIps.size !== 2 ||
+					resolvedClaimedIps.length !== 2 ||
+					resolvedClaimedIps.some((ip) => !payloadIps.has(ip)) ||
+					region.cost.metadataOperations !== 2
+				) {
+					throw coreRegionError(region.kind, "instruction or claim contract");
+				}
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "string-char-code-at-chain",
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "none",
+						admission,
+					},
+					representation: "primitive-string-code-unit",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: resolvedOrdinaryBlockIps,
+						exceptionalHandlerIps: resolvedExceptionalHandlerIps,
+					},
+					cost: region.cost,
+					propertyIp,
+					callIp,
+					methodIdentity: region.methodIdentity,
+					runtimeGuard: "primitive-string-number-position",
+					evaluationOrder: "capture-property-before-arguments",
+					propertyIcIndex,
+					callee: call.callee,
+					receiver: call.thisValue,
+					result: call.dst,
+				});
+				break;
+			}
 			case "string-split-projection": {
 				const callIp = resolvedAnchors[0];
 				const firstLoadIp = resolvedAnchors[1];
@@ -2569,6 +3169,7 @@ function lowerExecutionFunctionToNativePlan(
 		gc: { safepoints },
 		instructions: nativeInstructions,
 		specializations: regions,
+		regionActions: vmRegionActions(regions),
 		...(compilerSiteIds.some((site) => site !== undefined) ? { compilerSiteIds } : {}),
 	};
 }

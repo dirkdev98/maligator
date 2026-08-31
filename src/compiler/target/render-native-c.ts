@@ -15,6 +15,7 @@ import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
 	nativeFrameRootRegisters,
 	vmCallProvesBuiltin,
+	vmRegionActionsAreCurrent,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
 } from "./program-image.ts";
@@ -24,6 +25,7 @@ import type {
 	NativeInstructionPlan,
 	VmGuardPlan,
 	VmRegion,
+	VmRegionAction,
 	VmRegionLicense,
 	VmRegisterRepresentation,
 	VmSemanticDependency,
@@ -535,97 +537,109 @@ function emitCompiledVariant(
 	const stackSlotsBase = slotCount + (fn.isDerivedConstructor ? 1 : 0);
 	const stackObjectSites = new Map<number, StackObjectSite>();
 	let nextStackSlot = stackSlotsBase;
-	const stackObjectPlanRegions = nativeContract.specializations.filter(
-		(region): region is VmStackObjectPlanRegion => region.kind === "stack-object-plan",
-	);
-	for (const region of stackObjectPlanRegions) {
-		for (const site of region.sites) {
-			const instruction = fn.instructions[site.allocationIp];
-			if (
-				(instruction?.opcode !== "CREATE_OBJECT" &&
-					instruction?.opcode !== "CREATE_OBJECT_SHAPED") ||
-				(instruction.opcode === "CREATE_OBJECT"
-					? site.slotCount !== 0
-					: instruction.count !== site.slotCount) ||
-				stackObjectSites.has(site.allocationIp)
-			) {
-				throw new Error(
-					`Invalid stack-object metadata at instruction ${site.allocationIp}`,
-				);
-			}
-			const scalarSlotRepresentation = stackObjectScalarSlotRepresentation(
-				fn,
-				nativeContract,
-				region,
-				site,
-			);
-			stackObjectSites.set(site.allocationIp, {
-				objectName: `__stack_object_${site.allocationIp}`,
-				...(scalarSlotRepresentation === undefined
-					? { slotsOffset: nextStackSlot }
-					: {
-							scalarSlot: {
-								name: `__stack_object_${site.allocationIp}_slot_0`,
-								representation: scalarSlotRepresentation,
-							},
-						}),
-				slotCount: site.slotCount,
-			});
-			if (scalarSlotRepresentation === undefined) nextStackSlot += site.slotCount;
+	for (const action of nativeContract.regionActions) {
+		const region = nativeContract.specializations[action.regionIndex];
+		if (region?.kind !== "stack-object-plan" || action.role !== "allocate") continue;
+		const site = region.sites[action.primaryIndex ?? -1];
+		if (site === undefined || action.ip !== site.allocationIp) {
+			throw new Error("Invalid stack-object allocation action");
 		}
+		const instruction = fn.instructions[site.allocationIp];
+		if (
+			(instruction?.opcode !== "CREATE_OBJECT" &&
+				instruction?.opcode !== "CREATE_OBJECT_SHAPED") ||
+			(instruction.opcode === "CREATE_OBJECT"
+				? site.slotCount !== 0
+				: instruction.count !== site.slotCount) ||
+			stackObjectSites.has(site.allocationIp)
+		) {
+			throw new Error(
+				`Invalid stack-object metadata at instruction ${site.allocationIp}`,
+			);
+		}
+		const scalarSlotRepresentation = stackObjectScalarSlotRepresentation(
+			fn,
+			nativeContract,
+			region,
+			site,
+		);
+		stackObjectSites.set(site.allocationIp, {
+			objectName: `__stack_object_${site.allocationIp}`,
+			...(scalarSlotRepresentation === undefined
+				? { slotsOffset: nextStackSlot }
+				: {
+						scalarSlot: {
+							name: `__stack_object_${site.allocationIp}_slot_0`,
+							representation: scalarSlotRepresentation,
+						},
+					}),
+			slotCount: site.slotCount,
+		});
+		if (scalarSlotRepresentation === undefined) nextStackSlot += site.slotCount;
 	}
 	const stackObjectMaterializations = new Map<number, StackObjectSite>();
 	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
 	const stackObjectInheritedAccesses = new Map<number, StackObjectSite>();
-	for (const region of stackObjectPlanRegions) {
-		for (const planSite of region.sites) {
-			const site = stackObjectSites.get(planSite.allocationIp)!;
-			for (const materialization of planSite.materializations) {
-				const instruction = fn.instructions[materialization.ip];
-				if (
-					materialization.kind !== "return" ||
-					instruction?.opcode !== "RETURN" ||
-					stackObjectMaterializations.has(materialization.ip)
-				) {
-					throw new Error(
-						`Invalid stack-object materialization metadata at instruction ${materialization.ip}`,
-					);
-				}
-				stackObjectMaterializations.set(materialization.ip, site);
-			}
-			for (const access of planSite.accesses) {
-				const instruction = fn.instructions[access.ip];
-				if (
-					(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
-						instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
-					access.slot < 0 ||
-					access.slot >= site.slotCount ||
-					stackObjectAccesses.has(access.ip)
-				) {
-					throw new Error(
-						`Invalid stack-object access metadata at instruction ${access.ip}`,
-					);
-				}
-				stackObjectAccesses.set(access.ip, { site, slot: access.slot });
-			}
-			if (planSite.inheritedAccessIp === undefined) continue;
-			const instruction = fn.instructions[planSite.inheritedAccessIp];
+	for (const action of nativeContract.regionActions) {
+		const region = nativeContract.specializations[action.regionIndex];
+		if (region?.kind !== "stack-object-plan" || action.role === "allocate") continue;
+		const planSite = region.sites[action.primaryIndex ?? -1];
+		const site =
+			planSite === undefined ? undefined : stackObjectSites.get(planSite.allocationIp);
+		if (planSite === undefined || site === undefined) {
+			throw new Error("Stack-object action has no allocation site");
+		}
+		if (action.role === "materialize") {
+			const materialization = planSite.materializations[action.secondaryIndex ?? -1];
+			const instruction = fn.instructions[action.ip];
 			if (
+				materialization?.ip !== action.ip ||
+				materialization.kind !== "return" ||
+				instruction?.opcode !== "RETURN" ||
+				stackObjectMaterializations.has(action.ip)
+			) {
+				throw new Error(
+					`Invalid stack-object materialization metadata at instruction ${action.ip}`,
+				);
+			}
+			stackObjectMaterializations.set(action.ip, site);
+		} else if (action.role === "access") {
+			const access = planSite.accesses[action.secondaryIndex ?? -1];
+			const instruction = fn.instructions[action.ip];
+			if (
+				access?.ip !== action.ip ||
+				(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+				access.slot < 0 ||
+				access.slot >= site.slotCount ||
+				stackObjectAccesses.has(action.ip)
+			) {
+				throw new Error(
+					`Invalid stack-object access metadata at instruction ${action.ip}`,
+				);
+			}
+			stackObjectAccesses.set(action.ip, { site, slot: access.slot });
+		} else if (action.role === "inherited") {
+			const instruction = fn.instructions[action.ip];
+			if (
+				planSite.inheritedAccessIp !== action.ip ||
 				instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
 				region.license.guard.dependencies.length === 0 ||
 				site.inheritedLoadInstructionIndex !== undefined ||
-				stackObjectInheritedAccesses.has(planSite.inheritedAccessIp)
+				stackObjectInheritedAccesses.has(action.ip)
 			) {
 				throw new Error(
-					`Invalid inherited stack-object access metadata at instruction ${planSite.inheritedAccessIp}`,
+					`Invalid inherited stack-object access metadata at instruction ${action.ip}`,
 				);
 			}
-			site.inheritedLoadInstructionIndex = planSite.inheritedAccessIp;
+			site.inheritedLoadInstructionIndex = action.ip;
 			site.inheritedIcIndex = instruction.icIndex;
 			site.inheritedFastName = `${site.objectName}_inherited_fast`;
 			site.inheritedValueName = `${site.objectName}_inherited_value`;
 			site.inheritedGuard = region.license.guard;
-			stackObjectInheritedAccesses.set(planSite.inheritedAccessIp, site);
+			stackObjectInheritedAccesses.set(action.ip, site);
+		} else {
+			throw new Error(`Invalid stack-object action ${action.role}`);
 		}
 	}
 	const stringSplitProjectionSites = new Map<number, NativeStringSplitProjectionSite>();
@@ -680,7 +694,7 @@ function emitCompiledVariant(
 			subjectSlot: nextStackSlot,
 			separatorSlot: nextStackSlot + 1,
 			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
-			semanticEpochStable: cursor.license.admission.validity === "once",
+			semanticEpochStable: cursor.license.admission.mode === "stable",
 			epochName: `__string_split_cursor_${callIp}_semantic_epoch`,
 			lockedIdentity: cursor.splitIdentity === "authority-invariant",
 			lockedTrimIdentity: cursor.trimIdentity === "authority-invariant",
@@ -767,6 +781,7 @@ function emitCompiledVariant(
 	const body = emitBody(
 		fn,
 		nativeContract.specializations,
+		nativeContract.regionActions,
 		nativeContract.instructions,
 		inactiveRootMasks,
 		gcSafepointKinds,
@@ -1103,6 +1118,7 @@ function emitResumableFunction(
 	const body = emitBody(
 		fn,
 		native.specializations,
+		native.regionActions,
 		native.instructions,
 		nativeInactiveRootMasks(native.gc.safepoints, registerSlots),
 		new Map(
@@ -1343,7 +1359,7 @@ interface NativeStringSplitCursorSite {
 	subjectSlot: number;
 	separatorSlot: number;
 	trimCalleeSlot?: number;
-	/** Core's `once` admission: no licensed use re-validates the named epochs. */
+	/** Core proved the admitted semantic epochs stable across every licensed use. */
 	semanticEpochStable: boolean;
 	epochName: string;
 	lockedIdentity: boolean;
@@ -1409,6 +1425,52 @@ interface NativeStringSliceNumberFusionAction {
 	role: "property" | "slice" | "number";
 	lockedIdentity: boolean;
 	propertyLoad?: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+}
+
+type NativeStringCharCodeAtChain = Extract<
+	VmRegion,
+	{ kind: "string-char-code-at-chain" }
+>;
+
+interface NativeStringCharCodeAtChainAction {
+	readonly chain: NativeStringCharCodeAtChain;
+	readonly role: "property" | "call";
+}
+
+type NativeIteratorCursor = Extract<
+	VmRegion,
+	{
+		kind:
+			| "array-values-iterator-cursor"
+			| "string-iterator-cursor"
+			| "typed-array-iterator-cursor"
+			| "map-iterator-cursor"
+			| "set-iterator-cursor";
+	}
+>;
+
+interface NativeIteratorCursorAction {
+	readonly cursor: NativeIteratorCursor;
+	readonly role: "initialize" | "step";
+}
+
+interface NativeIteratorResultVirtualizationAction {
+	readonly region: Extract<VmRegion, { kind: "iterator-result-virtualization" }>;
+}
+
+function nativeIteratorCursorProtocol(cursor: NativeIteratorCursor): string {
+	switch (cursor.protocol) {
+		case "array-values":
+			return "MAL_ITERATOR_CURSOR_ARRAY_VALUES";
+		case "string":
+			return "MAL_ITERATOR_CURSOR_STRING_VALUES";
+		case "typed-array-values":
+			return "MAL_ITERATOR_CURSOR_TYPED_ARRAY_VALUES";
+		case "map":
+			return "MAL_ITERATOR_CURSOR_MAP";
+		case "set":
+			return "MAL_ITERATOR_CURSOR_SET";
+	}
 }
 
 interface StackObjectSite {
@@ -1578,6 +1640,7 @@ interface ArrayLengthComparisonAction {
 function emitBody(
 	fn: BytecodeFunction,
 	specializations: ReadonlyArray<VmRegion>,
+	regionActions: ReadonlyArray<VmRegionAction>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 	inactiveRootMasks: ReadonlyMap<number, bigint>,
 	gcSafepointKinds: ReadonlyMap<
@@ -1605,51 +1668,112 @@ function emitBody(
 	profileDecisions: Array<BackendProfileDecision>,
 	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
 ): Array<string> | null {
+	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
+		throw new Error("Native function has stale region actions");
+	}
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
-	for (const region of specializations.filter(
-		(candidate) => candidate.kind === "numeric-fusion",
-	)) {
-		for (const pair of region.pairs) {
-			const first = fn.instructions[pair.firstIp];
-			const finish = fn.instructions[pair.finishIp];
-			if (
-				first?.opcode !== "BINARY" ||
-				finish?.opcode !== "BINARY" ||
-				numericFusionActionByIp.has(pair.firstIp) ||
-				numericFusionActionByIp.has(pair.finishIp)
-			) {
-				throw new Error("Invalid numeric-fusion region");
-			}
-			const common = { id: pair.firstIp, first };
-			numericFusionActionByIp.set(pair.firstIp, { ...common, role: "start" });
-			numericFusionActionByIp.set(pair.finishIp, { ...common, role: "finish" });
+	for (const action of regionActions) {
+		const region = specializations[action.regionIndex];
+		if (region?.kind !== "numeric-fusion") continue;
+		const pair = region.pairs[action.primaryIndex ?? -1];
+		if (pair === undefined || (action.role !== "start" && action.role !== "finish")) {
+			throw new Error("Invalid numeric-fusion action");
 		}
+		const first = fn.instructions[pair.firstIp];
+		const finish = fn.instructions[pair.finishIp];
+		if (
+			first?.opcode !== "BINARY" ||
+			finish?.opcode !== "BINARY" ||
+			action.ip !== (action.role === "start" ? pair.firstIp : pair.finishIp) ||
+			numericFusionActionByIp.has(action.ip)
+		) {
+			throw new Error("Invalid numeric-fusion region");
+		}
+		const common = { id: pair.firstIp, first };
+		numericFusionActionByIp.set(action.ip, { ...common, role: action.role });
 	}
 	const arrayLengthComparisonActionByIp = new Map<number, ArrayLengthComparisonAction>();
-	for (const region of specializations.filter(
-		(candidate) => candidate.kind === "array-length-comparison",
-	)) {
-		for (const site of region.sites) {
-			const load = fn.instructions[site.loadIp];
-			const comparison = fn.instructions[site.comparisonIp];
+	for (const action of regionActions) {
+		const region = specializations[action.regionIndex];
+		if (region?.kind !== "array-length-comparison") continue;
+		const site = region.sites[action.primaryIndex ?? -1];
+		if (site === undefined || (action.role !== "load" && action.role !== "compare")) {
+			throw new Error("Invalid array-length-comparison action");
+		}
+		const load = fn.instructions[site.loadIp];
+		const comparison = fn.instructions[site.comparisonIp];
+		if (
+			load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			comparison?.opcode !== "BINARY" ||
+			comparison.operator !== "<" ||
+			comparison.right !== load.dst ||
+			action.ip !== (action.role === "load" ? site.loadIp : site.comparisonIp) ||
+			arrayLengthComparisonActionByIp.has(action.ip)
+		) {
+			throw new Error("Invalid array-length-comparison region");
+		}
+		arrayLengthComparisonActionByIp.set(action.ip, {
+			loadIp: site.loadIp,
+			role: action.role,
+		});
+	}
+	const nativeStringCharCodeAtChainActionByIp = new Map<
+		number,
+		NativeStringCharCodeAtChainAction
+	>();
+	for (const action of regionActions) {
+		const chain = specializations[action.regionIndex];
+		if (chain?.kind !== "string-char-code-at-chain") continue;
+		if (
+			(action.role !== "property" && action.role !== "call") ||
+			action.ip !== (action.role === "property" ? chain.propertyIp : chain.callIp) ||
+			nativeStringCharCodeAtChainActionByIp.has(action.ip)
+		) {
+			throw new Error("Duplicate String.charCodeAt chain action");
+		}
+		nativeStringCharCodeAtChainActionByIp.set(action.ip, {
+			chain,
+			role: action.role,
+		});
+	}
+	const nativeIteratorCursorActionByIp = new Map<number, NativeIteratorCursorAction>();
+	const nativeIteratorResultVirtualizationActionByIp = new Map<
+		number,
+		NativeIteratorResultVirtualizationAction
+	>();
+	for (const action of regionActions) {
+		const region = specializations[action.regionIndex];
+		if (region === undefined) throw new Error("Native region action names no region");
+		if (
+			region.kind === "array-values-iterator-cursor" ||
+			region.kind === "string-iterator-cursor" ||
+			region.kind === "typed-array-iterator-cursor" ||
+			region.kind === "map-iterator-cursor" ||
+			region.kind === "set-iterator-cursor"
+		) {
 			if (
-				load?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				comparison?.opcode !== "BINARY" ||
-				comparison.operator !== "<" ||
-				comparison.right !== load.dst ||
-				arrayLengthComparisonActionByIp.has(site.loadIp) ||
-				arrayLengthComparisonActionByIp.has(site.comparisonIp)
+				(action.role !== "initialize" && action.role !== "step") ||
+				action.ip !==
+					(action.role === "initialize"
+						? region.initializeIp
+						: region.stepIps[action.primaryIndex ?? -1]) ||
+				nativeIteratorCursorActionByIp.has(action.ip)
 			) {
-				throw new Error("Invalid array-length-comparison region");
+				throw new Error("Duplicate iterator cursor action");
 			}
-			arrayLengthComparisonActionByIp.set(site.loadIp, {
-				loadIp: site.loadIp,
-				role: "load",
+			nativeIteratorCursorActionByIp.set(action.ip, {
+				cursor: region,
+				role: action.role,
 			});
-			arrayLengthComparisonActionByIp.set(site.comparisonIp, {
-				loadIp: site.loadIp,
-				role: "compare",
-			});
+		} else if (region.kind === "iterator-result-virtualization") {
+			if (
+				action.role !== "step" ||
+				action.ip !== region.stepIps[action.primaryIndex ?? -1] ||
+				nativeIteratorResultVirtualizationActionByIp.has(action.ip)
+			) {
+				throw new Error("Duplicate iterator-result virtualization action");
+			}
+			nativeIteratorResultVirtualizationActionByIp.set(action.ip, { region });
 		}
 	}
 	const jumpTargets = new Set<number>();
@@ -1702,170 +1826,130 @@ function emitBody(
 		number,
 		NativeStringSplitProjectionAction
 	>();
-	for (const site of stringSplitProjectionSites.values()) {
+	for (const action of regionActions) {
+		const projection = specializations[action.regionIndex];
+		if (projection?.kind !== "string-split-projection") continue;
+		const site = stringSplitProjectionSites.get(projection.callIp);
+		if (site === undefined) throw new Error("String.split projection action has no site");
 		const propertyLoad = regionFallbackPropertyLoad(
 			fn,
-			site.projection.propertyPlacement,
-			site.projection.propertyIp,
+			projection.propertyPlacement,
+			projection.propertyIp,
 			site.lockedIdentity,
 		);
-		nativeStringSplitProjectionActionByIp.set(site.projection.callIp, {
+		const load =
+			action.primaryIndex === undefined
+				? undefined
+				: projection.loads[action.primaryIndex];
+		if (
+			(action.role !== "property" &&
+				action.role !== "call" &&
+				action.role !== "element" &&
+				action.role !== "length") ||
+			((action.role === "element" || action.role === "length") &&
+				(load === undefined || load.kind !== action.role))
+		) {
+			throw new Error("Invalid String.split projection action");
+		}
+		nativeStringSplitProjectionActionByIp.set(action.ip, {
 			site,
-			role: "call",
-			propertyLoad,
+			role: action.role,
+			...(load === undefined ? {} : { load }),
+			...(propertyLoad === undefined ? {} : { propertyLoad }),
 		});
-		if (propertyLoad !== undefined) {
-			nativeStringSplitProjectionActionByIp.set(site.projection.propertyIp, {
-				site,
-				role: "property",
-				propertyLoad,
-			});
-		}
-		for (const load of site.projection.loads) {
-			nativeStringSplitProjectionActionByIp.set(load.ip, {
-				site,
-				role: load.kind,
-				load,
-			});
-		}
 	}
 	const nativeStringSplitCursorActionByIp = new Map<
 		number,
 		NativeStringSplitCursorAction
 	>();
-	for (const site of stringSplitCursorSites.values()) {
-		const cursor = site.cursor;
+	for (const action of regionActions) {
+		const cursor = specializations[action.regionIndex];
+		if (cursor?.kind !== "string-split-cursor") continue;
+		const site = stringSplitCursorSites.get(cursor.anchors[0]!);
+		if (site === undefined) throw new Error("String.split cursor action has no site");
 		const propertyLoad = regionFallbackPropertyLoad(
 			fn,
 			cursor.propertyPlacement,
 			cursor.propertyIp,
 			site.lockedIdentity,
 		);
-		nativeStringSplitCursorActionByIp.set(site.callIp, {
-			site,
-			role: "call",
-			propertyLoad,
-		});
-		if (propertyLoad !== undefined) {
-			nativeStringSplitCursorActionByIp.set(cursor.propertyIp, {
-				site,
-				role: "property",
-				propertyLoad,
-			});
+		if (
+			action.role !== "property" &&
+			action.role !== "call" &&
+			action.role !== "length" &&
+			action.role !== "element" &&
+			action.role !== "trimProperty" &&
+			action.role !== "trimCall"
+		) {
+			throw new Error("Invalid String.split cursor action");
 		}
-		nativeStringSplitCursorActionByIp.set(site.lengthIp, {
+		nativeStringSplitCursorActionByIp.set(action.ip, {
 			site,
-			role: "length",
-		});
-		nativeStringSplitCursorActionByIp.set(cursor.elementIp, {
-			site,
-			role: "element",
-		});
-		nativeStringSplitCursorActionByIp.set(cursor.trimPropertyIp, {
-			site,
-			role: "trimProperty",
-		});
-		nativeStringSplitCursorActionByIp.set(cursor.trimCallIp, {
-			site,
-			role: "trimCall",
+			role: action.role,
+			...(propertyLoad === undefined ? {} : { propertyLoad }),
 		});
 	}
 	const nativeRegExpExecProjectionActionByIp = new Map<
 		number,
 		NativeRegExpExecProjectionAction
 	>();
-	for (const site of regexpExecProjectionSites.values()) {
+	for (const action of regionActions) {
+		const projection = specializations[action.regionIndex];
+		if (projection?.kind !== "regexp-exec-projection") continue;
+		const site = regexpExecProjectionSites.get(projection.callIp);
+		if (site === undefined) throw new Error("RegExp projection action has no site");
 		const propertyLoad = regionFallbackPropertyLoad(
 			fn,
-			site.projection.propertyPlacement,
-			site.projection.propertyIp,
-			site.projection.lockedFreshLiteral,
+			projection.propertyPlacement,
+			projection.propertyIp,
+			projection.lockedFreshLiteral,
 		);
-		nativeRegExpExecProjectionActionByIp.set(site.projection.callIp, {
+		const load =
+			action.primaryIndex === undefined
+				? undefined
+				: projection.loads[action.primaryIndex];
+		if (action.primaryIndex !== undefined && load === undefined) {
+			throw new Error("Invalid RegExp projection action payload");
+		}
+		nativeRegExpExecProjectionActionByIp.set(action.ip, {
 			site,
-			role: "call",
-			propertyLoad,
+			role: action.role as NativeRegExpExecProjectionAction["role"],
+			...(load === undefined ? {} : { load }),
+			...(propertyLoad === undefined ? {} : { propertyLoad }),
 		});
-		if (propertyLoad !== undefined) {
-			nativeRegExpExecProjectionActionByIp.set(site.projection.propertyIp, {
-				site,
-				role: "property",
-				propertyLoad,
-			});
-		}
-		for (const load of site.loads) {
-			nativeRegExpExecProjectionActionByIp.set(load.ip, {
-				site,
-				role: "capture",
-				load,
-			});
-			if (load.consumer?.kind === "length") {
-				nativeRegExpExecProjectionActionByIp.set(load.consumer.propertyIp, {
-					site,
-					role: "length",
-					load,
-				});
-			} else if (load.consumer?.kind === "charCodeAtZero") {
-				nativeRegExpExecProjectionActionByIp.set(load.consumer.propertyIp, {
-					site,
-					role: "charCodeAtProperty",
-					load,
-				});
-				nativeRegExpExecProjectionActionByIp.set(load.consumer.callIp, {
-					site,
-					role: "charCodeAtCall",
-					load,
-				});
-			} else if (load.consumer?.kind === "number") {
-				nativeRegExpExecProjectionActionByIp.set(load.consumer.callIp, {
-					site,
-					role: "number",
-					load,
-				});
-			} else if (load.consumer?.kind === "asciiCaseLength") {
-				for (const [ip, role] of [
-					[load.consumer.upperPropertyIp, "caseUpperProperty"],
-					[load.consumer.upperCallIp, "caseUpperCall"],
-					[load.consumer.lowerPropertyIp, "caseLowerProperty"],
-					[load.consumer.lowerCallIp, "caseLowerCall"],
-					[load.consumer.lengthPropertyIp, "caseLength"],
-				] as const) {
-					nativeRegExpExecProjectionActionByIp.set(ip, { site, role, load });
-				}
-			}
-		}
 	}
 	const nativeRegExpIteratorProjectionActionByIp = new Map<
 		number,
 		NativeRegExpIteratorProjectionAction
 	>();
-	for (const site of regexpIteratorProjectionSites.values()) {
-		nativeRegExpIteratorProjectionActionByIp.set(site.projection.stepIp, {
-			site,
-			role: "step",
-		});
-		for (const load of site.loads) {
-			nativeRegExpIteratorProjectionActionByIp.set(load.ip, {
-				site,
-				role: "capture",
-				load,
-			});
-			nativeRegExpIteratorProjectionActionByIp.set(load.numberCallIp, {
-				site,
-				role: "number",
-				load,
-			});
+	for (const action of regionActions) {
+		const projection = specializations[action.regionIndex];
+		if (projection?.kind !== "regexp-iterator-projection") continue;
+		const site = regexpIteratorProjectionSites.get(projection.stepIp);
+		if (site === undefined) throw new Error("RegExp iterator action has no site");
+		const load =
+			action.primaryIndex === undefined
+				? undefined
+				: projection.loads[action.primaryIndex];
+		if (
+			(action.role !== "step" && action.role !== "capture" && action.role !== "number") ||
+			(action.primaryIndex !== undefined && load === undefined)
+		) {
+			throw new Error("Invalid RegExp iterator action");
 		}
+		nativeRegExpIteratorProjectionActionByIp.set(action.ip, {
+			site,
+			role: action.role,
+			...(load === undefined ? {} : { load }),
+		});
 	}
 	const nativeStringSliceNumberFusionActionByIp = new Map<
 		number,
 		NativeStringSliceNumberFusionAction
 	>();
-	const stringSliceNumberRegions = specializations.filter(
-		(region): region is NativeStringSliceNumberFusion =>
-			region.kind === "string-slice-number",
-	);
-	for (const fusion of stringSliceNumberRegions) {
+	for (const action of regionActions) {
+		const fusion = specializations[action.regionIndex];
+		if (fusion?.kind !== "string-slice-number") continue;
 		const lockedIdentity = fusion.builtinIdentities === "authority-invariant";
 		const propertyLoad = regionFallbackPropertyLoad(
 			fn,
@@ -1873,27 +1957,31 @@ function emitBody(
 			fusion.propertyIp,
 			lockedIdentity,
 		);
-		nativeStringSliceNumberFusionActionByIp.set(fusion.sliceCallIp, {
-			fusion,
-			role: "slice",
-			lockedIdentity,
-			propertyLoad,
-		});
-		if (propertyLoad !== undefined) {
-			nativeStringSliceNumberFusionActionByIp.set(fusion.propertyIp, {
-				fusion,
-				role: "property",
-				lockedIdentity,
-				propertyLoad,
-			});
+		if (
+			action.role !== "property" &&
+			action.role !== "slice" &&
+			action.role !== "number"
+		) {
+			throw new Error("Invalid String.slice Number action");
 		}
-		nativeStringSliceNumberFusionActionByIp.set(fusion.numberCallIp, {
+		nativeStringSliceNumberFusionActionByIp.set(action.ip, {
 			fusion,
-			role: "number",
+			role: action.role,
 			lockedIdentity,
+			...(propertyLoad === undefined ? {} : { propertyLoad }),
 		});
 	}
 	const lines: Array<string> = [];
+	for (const action of nativeStringCharCodeAtChainActionByIp.values()) {
+		if (action.role !== "call") continue;
+		lines.push(`bool __string_char_code_at_${action.chain.callIp}_captured = false;`);
+	}
+	for (const action of nativeIteratorCursorActionByIp.values()) {
+		if (action.role !== "initialize") continue;
+		lines.push(
+			`MalIteratorObject *__iter_cursor_${action.cursor.initializeIp} = nullptr;`,
+		);
+	}
 	for (const site of stringSplitProjectionSites.values()) {
 		lines.push(
 			`bool __string_split_${site.projection.callIp}_fast = false;`,
@@ -1941,7 +2029,9 @@ function emitBody(
 			`i32 __regexp_iter_${site.projection.stepIp}_ends[${site.loads.length}];`,
 		);
 	}
-	for (const fusion of stringSliceNumberRegions) {
+	for (const action of nativeStringSliceNumberFusionActionByIp.values()) {
+		if (action.role !== "slice") continue;
+		const { fusion } = action;
 		lines.push(
 			`bool __string_slice_number_${fusion.sliceCallIp}_fast = false;`,
 			`f64 __string_slice_number_${fusion.sliceCallIp}_value = 0;`,
@@ -1956,6 +2046,10 @@ function emitBody(
 	}
 	if (
 		[...stringSplitCursorSites.values()].some((site) => !site.lockedIdentity) ||
+		[...nativeStringCharCodeAtChainActionByIp.values()].some(
+			(action) =>
+				action.role === "call" && action.chain.methodIdentity === "runtime-guarded",
+		) ||
 		[...regexpExecProjectionSites.values()].some((site) =>
 			site.loads.some(
 				(load) =>
@@ -2042,6 +2136,7 @@ function emitBody(
 			nativeRegExpExecProjectionActionByIp.get(ip) === undefined &&
 			nativeRegExpIteratorProjectionActionByIp.get(ip) === undefined &&
 			nativeStringSliceNumberFusionActionByIp.get(ip) === undefined &&
+			nativeStringCharCodeAtChainActionByIp.get(ip) === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -2104,6 +2199,10 @@ function emitBody(
 					nativeRegExpIteratorProjectionActionByIp.get(ip),
 				nativeStringSliceNumberFusionAction:
 					nativeStringSliceNumberFusionActionByIp.get(ip),
+				nativeStringCharCodeAtChainAction: nativeStringCharCodeAtChainActionByIp.get(ip),
+				nativeIteratorCursorAction: nativeIteratorCursorActionByIp.get(ip),
+				nativeIteratorResultVirtualizationAction:
+					nativeIteratorResultVirtualizationActionByIp.get(ip),
 				numericFusionAction: numericFusionActionByIp.get(ip),
 				relocation,
 			},
@@ -2461,6 +2560,9 @@ interface NativeInstructionContext {
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
 	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
 	readonly nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction;
+	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
+	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
+	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly relocation: NativeRelocationExpressions;
 }
@@ -2548,6 +2650,9 @@ function emitInstruction(
 		nativeRegExpExecProjectionAction,
 		nativeRegExpIteratorProjectionAction,
 		nativeStringSliceNumberFusionAction,
+		nativeStringCharCodeAtChainAction,
+		nativeIteratorCursorAction,
+		nativeIteratorResultVirtualizationAction,
 		numericFusionAction,
 		relocation,
 	} = context;
@@ -3081,6 +3186,29 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeStringCharCodeAtChainAction?.role === "property"
+			) {
+				const { chain } = nativeStringCharCodeAtChainAction;
+				const captured = `__string_char_code_at_${chain.callIp}_captured`;
+				const receiver = boxed(instruction.object);
+				const capture =
+					chain.methodIdentity === "authority-invariant"
+						? `mal_value_is_string(${receiver})`
+						: `mal_value_is_string(${receiver}) && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst})`;
+				return [
+					`${captured} = ${capture};`,
+					`if (${captured}) {`,
+					...(chain.methodIdentity === "authority-invariant"
+						? [`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`]
+						: []),
+					`} else {`,
+					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${receiver}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &__property_ic[${instruction.icIndex}]);`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				(nativeStringSplitProjectionAction?.role === "property" ||
@@ -4217,6 +4345,63 @@ function emitInstruction(
 						: reps[instruction.dst] === "boolean"
 							? `mal_value_to_boolean(${value})`
 							: value;
+			if (nativeStringCharCodeAtChainAction?.role === "call") {
+				const { chain } = nativeStringCharCodeAtChainAction;
+				const captured = `__string_char_code_at_${chain.callIp}_captured`;
+				const boundedArgument =
+					args.length === 1 ? decodeVmValueOperand(args[0]!) : undefined;
+				const boundedPosition =
+					callPlan?.directStringCharCodeAtPosition === "inBounds" &&
+					boundedArgument?.kind === "register" &&
+					reps[boundedArgument.register] === "number"
+						? `r${boundedArgument.register}`
+						: undefined;
+				if (boundedPosition !== undefined) {
+					const direct = `mal_builtin_string_char_code_at_in_bounds(${boxedOperand(instruction.thisValue)}, (usize) ${boundedPosition})`;
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`if (${captured}) {`,
+						`  r${instruction.dst} = ${callResult(direct)};`,
+						`} else {`,
+						`  MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);`,
+						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+						`}`,
+						poll,
+					];
+				}
+				if (chain.methodIdentity === "authority-invariant") {
+					const value = `string_char_code_at_${ip}_value`;
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`if (${captured}) {`,
+						`  MalValue ${value} = mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  ${throwCheck}`,
+						`  r${instruction.dst} = ${callResult(value)};`,
+						`} else {`,
+						`  MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);`,
+						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+						`}`,
+						poll,
+					];
+				}
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp};`,
+					`if (${captured}) {`,
+					`  ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`} else {`,
+					`  MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);`,
+					`  ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`}`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					poll,
+				];
+			}
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitCursorAction;
 				const id = site.callIp;
@@ -4843,12 +5028,19 @@ function emitInstruction(
 			return [`mal_vm_op_require_coercible(vm, ${boxed(instruction.src)});`, throwCheck];
 		case "GET_ITERATOR": {
 			const rec = `iter_rec_${ip}`;
-			return [
+			const lines = [
 				`MalIteratorRecord ${rec};`,
 				`if (!mal_vm_get_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow}`,
 				`r${instruction.iteratorDst} = ${rec}.iterator;`,
 				`r${instruction.nextDst} = ${rec}.next_method;`,
 			];
+			if (nativeIteratorCursorAction?.role === "initialize") {
+				const { cursor } = nativeIteratorCursorAction;
+				lines.push(
+					`__iter_cursor_${cursor.initializeIp} = mal_vm_iterator_protocol_cursor(&${rec}, ${nativeIteratorCursorProtocol(cursor)});`,
+				);
+			}
+			return lines;
 		}
 		case "GET_ASYNC_ITERATOR": {
 			// GetIterator(source, async): fetch @@asyncIterator (falling back to a
@@ -4865,7 +5057,17 @@ function emitInstruction(
 			const rec = `iter_rec_${ip}`;
 			const val = `iter_val_${ip}`;
 			const done = `iter_done_${ip}`;
-			const step = `mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`;
+			const virtualResult = nativeIteratorResultVirtualizationAction !== undefined;
+			if (virtualResult) {
+				regionAdmissionGuard(nativeIteratorResultVirtualizationAction.region.license);
+			}
+			const genericStep = virtualResult
+				? `mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`
+				: `mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})`;
+			const step =
+				nativeIteratorCursorAction?.role === "step"
+					? `(__iter_cursor_${nativeIteratorCursorAction.cursor.initializeIp} != nullptr ? mal_vm_iterator_step_protocol_cursor(vm, __iter_cursor_${nativeIteratorCursorAction.cursor.initializeIp}, &${val}, &${done}) : ${genericStep})`
+					: genericStep;
 			if (nativeRegExpIteratorProjectionAction?.role === "step") {
 				const site = nativeRegExpIteratorProjectionAction.site;
 				const admission = regionAdmissionGuard(site.projection.license);

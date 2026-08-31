@@ -387,7 +387,7 @@ function stackObjectDefinition(): ProgramImage {
 					guard: { dependencies: [], obligations: ["fallback"] },
 					genericTwin: "retained",
 					materialization: "none",
-					admission: { anchorIp: 2, validity: "once" },
+					admission: { anchorIp: 2, mode: "stable" },
 				},
 				representation: "activation-local-fixed-shape-objects",
 				anchors: [2],

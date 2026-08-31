@@ -712,7 +712,7 @@ describe("adversarial Core graphs", () => {
 							materialization: "none",
 							admission: {
 								anchor: { $coreInstruction: claimed.id },
-								validity: "once",
+								mode: "stable",
 							},
 						},
 					},

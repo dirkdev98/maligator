@@ -23,6 +23,20 @@ typedef struct MalIteratorRecord {
     MalValue next_method;
 } MalIteratorRecord;
 
+typedef enum MalIteratorCursorProtocol : u8 {
+    MAL_ITERATOR_CURSOR_ARRAY_VALUES,
+    MAL_ITERATOR_CURSOR_STRING_VALUES,
+    MAL_ITERATOR_CURSOR_TYPED_ARRAY_VALUES,
+    MAL_ITERATOR_CURSOR_MAP,
+    MAL_ITERATOR_CURSOR_SET,
+} MalIteratorCursorProtocol;
+
+MalIteratorObject *mal_vm_iterator_protocol_cursor(
+    const MalIteratorRecord *record, MalIteratorCursorProtocol protocol);
+
+bool mal_vm_iterator_step_protocol_cursor(
+    MalVm *vm, MalIteratorObject *cursor, MalValue *value_out, bool *done_out);
+
 /**
  * Install %IteratorPrototype% and the Map/Set/Array/String iterator
  * prototypes. Requires the well-known symbols.

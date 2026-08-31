@@ -9,6 +9,7 @@
 
 import { EFFECT_DOMAINS, NO_EFFECT_SUMMARY } from "../shared/effect-summary.ts";
 import type { EffectDomain, EffectSummary } from "../shared/effect-summary.ts";
+import type { CoreRegionKind } from "./core-ir-region-strategies.ts";
 
 declare const coreBlockIdBrand: unique symbol;
 declare const coreInstructionIdBrand: unique symbol;
@@ -702,7 +703,7 @@ export interface CoreFunctionMetadata {
  * the entire certificate without changing JavaScript behavior.
  */
 export interface CoreRegion {
-	readonly kind: string;
+	readonly kind: CoreRegionKind;
 	readonly anchors: ReadonlyArray<CoreInstructionId>;
 	readonly claimedInstructions: ReadonlyArray<CoreInstructionId>;
 	readonly ordinaryBlocks: ReadonlyArray<CoreBlockId>;

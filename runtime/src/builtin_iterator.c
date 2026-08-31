@@ -380,6 +380,60 @@ static MalNativeFunctionCallback mal_builtin_iterator_expected_next(MalIteratorK
     return nullptr;
 }
 
+MalIteratorObject *mal_vm_iterator_protocol_cursor(
+    const MalIteratorRecord *record, MalIteratorCursorProtocol protocol
+) {
+    if (!mal_value_is_iterator_object(record->iterator) ||
+        !mal_value_is_native_function_object(record->next_method)) {
+        return nullptr;
+    }
+    MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
+    if (mal_native_function_object_callback(
+            mal_value_to_native_function_object(record->next_method)) !=
+        mal_builtin_iterator_expected_next(iterator->kind)) {
+        return nullptr;
+    }
+    switch (protocol) {
+        case MAL_ITERATOR_CURSOR_ARRAY_VALUES:
+            return iterator->kind == MAL_ITERATOR_ARRAY_VALUES &&
+                    mal_value_is_array_object(iterator->target)
+                ? iterator
+                : nullptr;
+        case MAL_ITERATOR_CURSOR_STRING_VALUES:
+            return iterator->kind == MAL_ITERATOR_STRING_VALUES &&
+                    mal_value_is_string(iterator->target)
+                ? iterator
+                : nullptr;
+        case MAL_ITERATOR_CURSOR_TYPED_ARRAY_VALUES:
+            return iterator->kind == MAL_ITERATOR_ARRAY_VALUES &&
+                    mal_value_is_typed_array_object(iterator->target)
+                ? iterator
+                : nullptr;
+        case MAL_ITERATOR_CURSOR_MAP:
+            return iterator->kind >= MAL_ITERATOR_MAP_KEYS &&
+                    iterator->kind <= MAL_ITERATOR_MAP_ENTRIES &&
+                    mal_value_is_map_object(iterator->target)
+                ? iterator
+                : nullptr;
+        case MAL_ITERATOR_CURSOR_SET:
+            return iterator->kind >= MAL_ITERATOR_SET_VALUES &&
+                    iterator->kind <= MAL_ITERATOR_SET_ENTRIES &&
+                    mal_value_is_set_object(iterator->target)
+                ? iterator
+                : nullptr;
+    }
+    return nullptr;
+}
+
+bool mal_vm_iterator_step_protocol_cursor(
+    MalVm *vm, MalIteratorObject *cursor, MalValue *value_out, bool *done_out
+) {
+    vm->gc_native_frames++;
+    bool ok = mal_builtin_iterator_object_advance(vm, cursor, value_out, done_out);
+    vm->gc_native_frames--;
+    return ok;
+}
+
 static MalValue mal_builtin_iterator_prototype_iterator(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) args;

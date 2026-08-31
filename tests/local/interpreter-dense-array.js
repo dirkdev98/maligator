@@ -243,6 +243,42 @@ for (const value of growing) {
 }
 check(grownValues.join(",") === "1,2,3", "for-of reads live growing length");
 
+const stringIteratorValues = [];
+for (const value of "A\u{1f600}B") stringIteratorValues.push(value);
+check(
+	stringIteratorValues.join("|") === "A|\u{1f600}|B",
+	"string for-of advances by Unicode code point",
+);
+
+const typedArrayIteratorValues = [];
+for (const value of new Uint16Array([5, 9])) typedArrayIteratorValues.push(value);
+check(typedArrayIteratorValues.join(",") === "5,9", "TypedArray for-of reads values");
+
+const liveMap = new Map([
+	["a", 1],
+	["b", 2],
+]);
+const liveMapValues = [];
+for (const entry of liveMap) {
+	liveMapValues.push(entry[0] + ":" + entry[1]);
+	if (entry[0] === "a") {
+		liveMap.delete("b");
+		liveMap.set("c", 3);
+	}
+}
+check(liveMapValues.join(",") === "a:1,c:3", "Map for-of observes live mutations");
+
+const liveSet = new Set([1, 2]);
+const liveSetValues = [];
+for (const value of liveSet) {
+	liveSetValues.push(value);
+	if (value === 1) {
+		liveSet.delete(2);
+		liveSet.add(3);
+	}
+}
+check(liveSetValues.join(",") === "1,3", "Set for-of observes live mutations");
+
 const shrinking = [1, 2, 3];
 const shrunkValues = [];
 for (const value of shrinking) {

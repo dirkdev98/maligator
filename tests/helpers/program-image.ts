@@ -1,4 +1,7 @@
-import { createConservativeNativePlan } from "../../src/compiler/target/program-image.ts";
+import {
+	createConservativeNativePlan,
+	vmRegionActions,
+} from "../../src/compiler/target/program-image.ts";
 import type {
 	NativeFunctionPlan,
 	ProgramImage,
@@ -24,9 +27,13 @@ export function withNativeFunctionPlan(
 	update: (plan: NativeFunctionPlan, fn: BytecodeFunction) => NativeFunctionPlan,
 ): ProgramImage {
 	const functions = [...image.native.functions];
-	functions[functionIndex] = update(
+	const updated = update(
 		functions[functionIndex]!,
 		image.runtime.functions[functionIndex]!,
 	);
+	functions[functionIndex] = {
+		...updated,
+		regionActions: vmRegionActions(updated.specializations),
+	};
 	return { ...image, native: { ...image.native, functions } };
 }

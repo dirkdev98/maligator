@@ -230,7 +230,7 @@ describe("RuntimeImage constant compaction", () => {
 				},
 				genericTwin: "retained",
 				materialization: "whole-region",
-				admission: { anchorIp: 0, validity: "once" },
+				admission: { anchorIp: 0, mode: "stable" },
 			},
 			representation: "projected-elements",
 			anchors: [],

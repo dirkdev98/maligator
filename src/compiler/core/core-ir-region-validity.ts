@@ -4,10 +4,10 @@
  * A guarded region names the semantic epochs its fast path depends on. Admitting
  * them is one runtime test; keeping them admitted is a proof obligation about the
  * region's interior. `per-use` says every licensed use re-tests the condition,
- * which is always correct. `once` says the admission test at the region's anchor
- * covers every licensed use, so no use re-tests it.
+ * which is always correct. `stable` says the admission at the region's anchor
+ * remains valid for every licensed use.
  *
- * `once` is only claimable when the interior cannot reach a seam that invalidates
+ * `stable` is only claimable when the interior cannot reach a seam that invalidates
  * a named epoch. The proof is re-derived from the Core effect model and the
  * control-flow graph rather than trusted from the pass that made the claim, so a
  * later transform that drops an instruction into a licensed interior turns the
@@ -29,15 +29,18 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 
-export type CoreRegionAdmissionValidity = "once" | "per-use";
+export type CoreRegionAdmissionMode = "capture" | "stable" | "per-use";
 
-export const CORE_REGION_ADMISSION_VALIDITIES: ReadonlyArray<CoreRegionAdmissionValidity> =
-	["once", "per-use"];
+export const CORE_REGION_ADMISSION_MODES: ReadonlyArray<CoreRegionAdmissionMode> = [
+	"capture",
+	"stable",
+	"per-use",
+];
 
 /** Region-certificate admission record, in Core identities. */
 export interface CoreRegionAdmission {
 	readonly anchor: CoreInstructionId;
-	readonly validity: CoreRegionAdmissionValidity;
+	readonly mode: CoreRegionAdmissionMode;
 }
 
 /**
@@ -184,11 +187,14 @@ export function coreRegionAdmission(region: CoreRegion): CoreRegionAdmission | u
 	const admission = attributeObject(coreRegionLicense(region)?.admission);
 	if (admission === undefined) return undefined;
 	const anchor = attributeObject(admission.anchor)?.$coreInstruction;
-	const validity = admission.validity;
-	if (typeof anchor !== "number" || (validity !== "once" && validity !== "per-use")) {
+	const mode = admission.mode;
+	if (
+		typeof anchor !== "number" ||
+		(mode !== "capture" && mode !== "stable" && mode !== "per-use")
+	) {
 		return undefined;
 	}
-	return { anchor: anchor as CoreInstructionId, validity };
+	return { anchor: anchor as CoreInstructionId, mode };
 }
 
 /**
@@ -299,21 +305,21 @@ export function coreRegionInteriorKeepsAdmission(
 }
 
 /**
- * Classify a region's admission validity from its license and its interior.
+ * Classify a region's admission mode from its license and its interior.
  *
  * A license that names no epoch family has nothing an interior could invalidate,
- * so `once` holds without an interior proof: a world dependency such as locked
+ * so `stable` holds without an interior proof: a world dependency such as locked
  * primordials cannot change while the program runs, and a purely structural
  * license re-tests its operands at each use anyway. Everything else must earn
- * `once`, and an unreadable license earns nothing.
+ * `stable`, and an unreadable license earns nothing.
  */
-export function coreRegionAdmissionValidity(
+export function coreRegionAdmissionMode(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
 	model: CoreRegionValidityModel,
 	query: CoreRegionAdmissionQuery,
-): CoreRegionAdmissionValidity {
+): CoreRegionAdmissionMode {
 	if (query.epochFamilies === undefined) return "per-use";
-	if (query.epochFamilies.size === 0) return "once";
-	return coreRegionInteriorKeepsAdmission(fn, cfg, model, query) ? "once" : "per-use";
+	if (query.epochFamilies.size === 0) return "stable";
+	return coreRegionInteriorKeepsAdmission(fn, cfg, model, query) ? "stable" : "per-use";
 }

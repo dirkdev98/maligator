@@ -26,7 +26,7 @@ export interface CoreAllocatedRegionEnvelope<
 		 */
 		readonly admission: {
 			readonly anchor: CompilerInstruction;
-			readonly validity: "once" | "per-use";
+			readonly mode: "capture" | "stable" | "per-use";
 		};
 	};
 	readonly representation: Representation;
@@ -216,6 +216,94 @@ export interface CoreAllocatedStringSliceNumberRegion extends CoreAllocatedRegio
 	readonly sliceStart: number;
 }
 
+export interface CoreAllocatedStringCharCodeAtChainRegion extends CoreAllocatedRegionEnvelope<
+	"string-char-code-at-chain",
+	"primitive-string-code-unit",
+	"none",
+	readonly [
+		Extract<CompilerInstruction, { type: "loadPropertyStatic" }>,
+		Extract<CompilerInstruction, { type: "call" }>,
+	]
+> {
+	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly call: Extract<CompilerInstruction, { type: "call" }>;
+	readonly methodIdentity: CoreBuiltinIdentityDecision;
+	readonly runtimeGuard: "primitive-string-number-position";
+	readonly evaluationOrder: "capture-property-before-arguments";
+}
+
+type CoreAllocatedIteratorCursorRegion<
+	Kind extends
+		| "array-values-iterator-cursor"
+		| "string-iterator-cursor"
+		| "typed-array-iterator-cursor"
+		| "map-iterator-cursor"
+		| "set-iterator-cursor",
+	Representation extends string,
+	Protocol extends "array-values" | "string" | "typed-array-values" | "map" | "set",
+> = CoreAllocatedRegionEnvelope<
+	Kind,
+	Representation,
+	"none",
+	readonly [
+		Extract<CompilerInstruction, { type: "getIterator" }>,
+		Extract<CompilerInstruction, { type: "iteratorStep" }>,
+	],
+	"structural"
+> & {
+	readonly initialize: Extract<CompilerInstruction, { type: "getIterator" }>;
+	readonly steps: ReadonlyArray<Extract<CompilerInstruction, { type: "iteratorStep" }>>;
+	readonly protocol: Protocol;
+	readonly runtimeGuard: "exact-iterator-brand-next-target";
+	readonly stateSynchronization: "authoritative-language-object";
+	readonly suspension: "forbidden";
+};
+
+export type CoreAllocatedArrayValuesIteratorCursorRegion =
+	CoreAllocatedIteratorCursorRegion<
+		"array-values-iterator-cursor",
+		"array-values-authoritative-cursor",
+		"array-values"
+	>;
+
+export type CoreAllocatedStringIteratorCursorRegion = CoreAllocatedIteratorCursorRegion<
+	"string-iterator-cursor",
+	"string-authoritative-cursor",
+	"string"
+>;
+
+export type CoreAllocatedTypedArrayIteratorCursorRegion =
+	CoreAllocatedIteratorCursorRegion<
+		"typed-array-iterator-cursor",
+		"typed-array-authoritative-cursor",
+		"typed-array-values"
+	>;
+
+export type CoreAllocatedMapIteratorCursorRegion = CoreAllocatedIteratorCursorRegion<
+	"map-iterator-cursor",
+	"map-authoritative-cursor",
+	"map"
+>;
+
+export type CoreAllocatedSetIteratorCursorRegion = CoreAllocatedIteratorCursorRegion<
+	"set-iterator-cursor",
+	"set-authoritative-cursor",
+	"set"
+>;
+
+export interface CoreAllocatedIteratorResultVirtualizationRegion extends CoreAllocatedRegionEnvelope<
+	"iterator-result-virtualization",
+	"virtual-iterator-result",
+	"on-demand",
+	readonly [Extract<CompilerInstruction, { type: "iteratorStep" }>]
+> {
+	readonly composition: "overlay";
+	readonly steps: ReadonlyArray<Extract<CompilerInstruction, { type: "iteratorStep" }>>;
+	readonly runtimeGuard: "exact-builtin-iterator-next";
+	readonly correspondence: "done-value-observation";
+	readonly fallback: "materialize-result-then-observe";
+}
+
 /** Closed indexed String#split consumer loop after register allocation. */
 export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegionEnvelope<
 	"string-split-cursor",
@@ -322,10 +410,17 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 /** Tagged post-allocation Core proof table consumed only by VM target lowering. */
 export type CoreAllocatedRegion =
 	| CoreAllocatedArrayLengthComparisonRegion
+	| CoreAllocatedArrayValuesIteratorCursorRegion
+	| CoreAllocatedIteratorResultVirtualizationRegion
+	| CoreAllocatedMapIteratorCursorRegion
 	| CoreAllocatedNumericFusionRegion
 	| CoreAllocatedRegExpExecProjectionRegion
 	| CoreAllocatedRegExpIteratorProjectionRegion
 	| CoreAllocatedStackObjectPlanRegion
+	| CoreAllocatedStringCharCodeAtChainRegion
+	| CoreAllocatedStringIteratorCursorRegion
 	| CoreAllocatedStringSliceNumberRegion
 	| CoreAllocatedStringSplitProjectionRegion
-	| CoreAllocatedStringSplitCursorRegion;
+	| CoreAllocatedStringSplitCursorRegion
+	| CoreAllocatedSetIteratorCursorRegion
+	| CoreAllocatedTypedArrayIteratorCursorRegion;

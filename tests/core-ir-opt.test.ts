@@ -5271,7 +5271,7 @@ describe("Core IR optimizer", () => {
 		const call = complete.blocks[0]!.instructions.find(
 			(instruction) => instruction.opcode === "call",
 		)!;
-		const protectedFunction = {
+		const protectedFunction: CoreFunction = {
 			...complete,
 			regions: [
 				{
@@ -5288,7 +5288,7 @@ describe("Core IR optimizer", () => {
 							materialization: "none",
 							admission: {
 								anchor: { $coreInstruction: call.id },
-								validity: "once",
+								mode: "stable",
 							},
 						},
 					},
@@ -5323,7 +5323,7 @@ describe("Core IR optimizer", () => {
 		const claimed = complete.blocks[0]!.instructions.find(
 			(instruction) => instruction.outputs[0] === dead,
 		)!;
-		const protectedFunction = {
+		const protectedFunction: CoreFunction = {
 			...complete,
 			regions: [
 				{
@@ -5340,7 +5340,7 @@ describe("Core IR optimizer", () => {
 							materialization: "none",
 							admission: {
 								anchor: { $coreInstruction: claimed.id },
-								validity: "once",
+								mode: "stable",
 							},
 						},
 					},

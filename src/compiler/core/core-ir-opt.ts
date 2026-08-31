@@ -109,9 +109,14 @@ import {
 	compactCoreProgramFunctions,
 } from "./core-ir-reachability.ts";
 import {
+	CORE_REGION_STRATEGIES,
+	coreRegionStrategy,
+} from "./core-ir-region-strategies.ts";
+import type { RegisteredCoreRegionKind } from "./core-ir-region-strategies.ts";
+import {
 	coreRegionAdmission,
 	coreRegionAdmissionQuery,
-	coreRegionAdmissionValidity,
+	coreRegionAdmissionMode,
 	coreRegionLicense,
 	coreRegionValidityModel,
 } from "./core-ir-region-validity.ts";
@@ -5576,6 +5581,368 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 		return regions.length === fn.regions.length
 			? fn
 			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
+const selectStringCharCodeAtChainRegions: CoreFunctionPass = {
+	name: "select-string-char-code-at-chain-regions",
+	run(fn, analyses, program) {
+		if (
+			fn.regions.filter(({ kind }) => kind === "string-char-code-at-chain").length >= 8
+		) {
+			return fn;
+		}
+		const definitions = analyses.definitions(fn);
+		const canonical = analyses.canonicalValues(fn);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const uses = new Map<
+			CoreValueId,
+			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+		>();
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+				for (const [position, input] of instruction.inputs.entries()) {
+					const entries = uses.get(root(input)) ?? [];
+					entries.push({ instruction, position });
+					uses.set(root(input), entries);
+				}
+			}
+		}
+		const occupied = new Set(
+			fn.regions
+				.filter(({ kind }) => kind !== "numeric-fusion")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			for (const call of block.instructions) {
+				if (
+					call.opcode !== "call" ||
+					call.outputs.length !== 1 ||
+					(call.inputs.length !== 2 && call.inputs.length !== 3)
+				) {
+					continue;
+				}
+				const builtin = coreKnownBuiltinProof(call, "String.prototype.charCodeAt", {
+					lowering: "guarded-primitive-string",
+					result: "number",
+				});
+				if (builtin === undefined) continue;
+				const property = definitions.get(root(call.inputs[0]!));
+				const propertyLocation =
+					property === undefined ? undefined : locations.get(property.id);
+				const callLocation = locations.get(call.id);
+				if (
+					property?.opcode !== "loadPropertyStatic" ||
+					property.inputs.length !== 1 ||
+					property.outputs.length !== 1 ||
+					root(property.inputs[0]!) !== root(call.inputs[1]!) ||
+					typeof property.attributes.stringIndex !== "number" ||
+					decodeString(program, property.attributes.stringIndex) !== "charCodeAt" ||
+					uses.get(root(property.outputs[0]!))?.length !== 1 ||
+					uses.get(root(property.outputs[0]!))?.[0]?.instruction !== call ||
+					uses.get(root(property.outputs[0]!))?.[0]?.position !== 0 ||
+					propertyLocation === undefined ||
+					callLocation === undefined ||
+					propertyLocation.block !== callLocation.block ||
+					propertyLocation.index >= callLocation.index ||
+					occupied.has(property.id) ||
+					occupied.has(call.id)
+				) {
+					continue;
+				}
+				const claimedInstructions = [property.id, call.id];
+				const handler = block.handler;
+				regions.push({
+					kind: "string-char-code-at-chain",
+					anchors: claimedInstructions,
+					claimedInstructions,
+					ordinaryBlocks: [block.id],
+					exceptionalBlocks: handler === undefined ? [] : [handler.block],
+					data: coreAttributeObject(
+						{
+							license: {
+								guard: {
+									dependencies: builtin.proof.dependencies,
+									obligations: [
+										...builtin.proof.obligations,
+										regionGenericTwin(
+											"string-char-code-at-chain",
+											builtin.sourceSite ?? fn.functionIndex,
+										),
+									],
+								},
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: "primitive-string-code-unit",
+							cost: { score: 12, metadataOperations: 2 },
+							property: { $coreInstruction: property.id },
+							call: { $coreInstruction: call.id },
+							methodIdentity: coreProofIsWorldInvariant(builtin.proof)
+								? "authority-invariant"
+								: "runtime-guarded",
+							runtimeGuard: "primitive-string-number-position",
+							evaluationOrder: "capture-property-before-arguments",
+						},
+						"string-char-code-at-chain",
+					),
+				});
+				occupied.add(property.id);
+				occupied.add(call.id);
+				if (
+					regions.filter(({ kind }) => kind === "string-char-code-at-chain").length >= 8
+				) {
+					break;
+				}
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
+type CoreIteratorCursorKind =
+	| "array-values-iterator-cursor"
+	| "string-iterator-cursor"
+	| "typed-array-iterator-cursor"
+	| "map-iterator-cursor"
+	| "set-iterator-cursor";
+
+const CORE_ITERATOR_CURSOR_PROTOCOL = {
+	"array-values-iterator-cursor": {
+		representation: "array-values-authoritative-cursor",
+		protocol: "array-values",
+	},
+	"string-iterator-cursor": {
+		representation: "string-authoritative-cursor",
+		protocol: "string",
+	},
+	"typed-array-iterator-cursor": {
+		representation: "typed-array-authoritative-cursor",
+		protocol: "typed-array-values",
+	},
+	"map-iterator-cursor": {
+		representation: "map-authoritative-cursor",
+		protocol: "map",
+	},
+	"set-iterator-cursor": {
+		representation: "set-authoritative-cursor",
+		protocol: "set",
+	},
+} as const satisfies Record<CoreIteratorCursorKind, Readonly<Record<string, string>>>;
+
+const selectIteratorCursorRegions: CoreFunctionPass = {
+	name: "select-iterator-cursor-regions",
+	run(fn, analyses) {
+		if (fn.isGenerator || fn.isAsync) return fn;
+		const canonical = analyses.canonicalValues(fn);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const definitions = analyses.definitions(fn);
+		const representations = analyses.representations(fn);
+		const locations = new Map<CoreInstructionId, CoreBlock>();
+		const stepsByInput = new Map<CoreValueId, Array<CoreInstruction>>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				locations.set(instruction.id, block);
+				if (instruction.opcode !== "iteratorStep") continue;
+				const iterator = instruction.inputs[0];
+				if (iterator === undefined) continue;
+				const steps = stepsByInput.get(root(iterator)) ?? [];
+				steps.push(instruction);
+				stepsByInput.set(root(iterator), steps);
+			}
+		}
+		const occupied = new Set(
+			fn.regions
+				.filter(({ kind }) => kind !== "numeric-fusion")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			for (const initialize of block.instructions) {
+				if (
+					initialize.opcode !== "getIterator" ||
+					initialize.inputs.length !== 1 ||
+					initialize.outputs.length !== 2 ||
+					occupied.has(initialize.id)
+				) {
+					continue;
+				}
+				const iterator = root(initialize.outputs[0]!);
+				const next = root(initialize.outputs[1]!);
+				const steps = (stepsByInput.get(iterator) ?? []).filter(
+					(step) => root(step.inputs[1]!) === next && !occupied.has(step.id),
+				);
+				if (steps.length === 0 || steps.length > 32) continue;
+				const source = root(initialize.inputs[0]!);
+				const sourceDefinition = definitions.get(source);
+				const exactTypedArray = sourceDefinition?.attributes.exactTypedArrayKind;
+				const exactCollection = sourceDefinition?.attributes.exactCollectionReceiver;
+				const constructor =
+					sourceDefinition?.opcode === "construct"
+						? definitions.get(root(sourceDefinition.inputs[0]!))
+						: undefined;
+				const intrinsic =
+					constructor?.opcode === "loadIntrinsic"
+						? constructor.attributes.intrinsic
+						: undefined;
+				const typedArrayIntrinsic =
+					typeof intrinsic === "string" &&
+					[
+						"Int8Array",
+						"Uint8Array",
+						"Uint8ClampedArray",
+						"Int16Array",
+						"Uint16Array",
+						"Int32Array",
+						"Uint32Array",
+						"Float32Array",
+						"Float64Array",
+						"BigInt64Array",
+						"BigUint64Array",
+					].includes(intrinsic);
+				const kind: CoreIteratorCursorKind =
+					representations.get(source) === "string"
+						? "string-iterator-cursor"
+						: typeof exactTypedArray === "string" || typedArrayIntrinsic
+							? "typed-array-iterator-cursor"
+							: exactCollection === "Map" || intrinsic === "Map"
+								? "map-iterator-cursor"
+								: exactCollection === "Set" || intrinsic === "Set"
+									? "set-iterator-cursor"
+									: "array-values-iterator-cursor";
+				const strategy = CORE_ITERATOR_CURSOR_PROTOCOL[kind];
+				const claimedInstructions = [initialize.id, ...steps.map(({ id }) => id)];
+				const ordinaryBlocks = [
+					...new Set(claimedInstructions.map((id) => locations.get(id)!.id)),
+				];
+				const exceptionalBlocks = [
+					...new Set(
+						claimedInstructions.flatMap((id) => {
+							const handler = locations.get(id)?.handler;
+							return handler === undefined ? [] : [handler.block];
+						}),
+					),
+				];
+				regions.push({
+					kind,
+					anchors: [initialize.id, steps[0]!.id],
+					claimedInstructions,
+					ordinaryBlocks,
+					exceptionalBlocks,
+					data: coreAttributeObject(
+						{
+							license: {
+								guard: "structural",
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: strategy.representation,
+							cost: {
+								score: steps.length * 8,
+								metadataOperations: claimedInstructions.length,
+							},
+							initialize: { $coreInstruction: initialize.id },
+							steps: steps.map((step) => ({ $coreInstruction: step.id })),
+							protocol: strategy.protocol,
+							runtimeGuard: "exact-iterator-brand-next-target",
+							stateSynchronization: "authoritative-language-object",
+							suspension: "forbidden",
+						},
+						kind,
+					),
+				});
+				for (const instruction of claimedInstructions) occupied.add(instruction);
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
+const selectIteratorResultVirtualizationRegions: CoreFunctionPass = {
+	name: "select-iterator-result-virtualization-regions",
+	run(fn) {
+		const alreadyClaimed = new Set(
+			fn.regions
+				.filter(({ kind }) => kind === "iterator-result-virtualization")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const locations = new Map<CoreInstructionId, CoreBlock>();
+		const steps: Array<CoreInstruction> = [];
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				locations.set(instruction.id, block);
+				if (
+					instruction.opcode === "iteratorStep" &&
+					!alreadyClaimed.has(instruction.id)
+				) {
+					steps.push(instruction);
+				}
+			}
+		}
+		if (steps.length === 0) return fn;
+		const regions = [...fn.regions];
+		for (let offset = 0; offset < steps.length; offset += 64) {
+			const shard = steps.slice(offset, offset + 64);
+			const claimedInstructions = shard.map(({ id }) => id);
+			const ordinaryBlocks = [...new Set(shard.map(({ id }) => locations.get(id)!.id))];
+			const exceptionalBlocks = [
+				...new Set(
+					shard.flatMap(({ id }) => {
+						const handler = locations.get(id)?.handler;
+						return handler === undefined ? [] : [handler.block];
+					}),
+				),
+			];
+			const site = shard[0]!.id;
+			regions.push({
+				kind: "iterator-result-virtualization",
+				anchors: [site],
+				claimedInstructions,
+				ordinaryBlocks,
+				exceptionalBlocks,
+				data: coreAttributeObject(
+					{
+						license: {
+							guard: {
+								dependencies: [],
+								obligations: [
+									regionGenericTwin("iterator-result-virtualization", site),
+									{
+										kind: "materialize",
+										id: `iterator-result-virtualization:${fn.functionIndex}:${site}`,
+										cause: "materialization",
+									},
+								],
+							},
+							genericTwin: "retained",
+							materialization: "on-demand",
+						},
+						representation: "virtual-iterator-result",
+						composition: "overlay",
+						cost: {
+							score: shard.length * 6,
+							metadataOperations: shard.length,
+						},
+						steps: shard.map(({ id }) => ({ $coreInstruction: id })),
+						runtimeGuard: "exact-builtin-iterator-next",
+						correspondence: "done-value-observation",
+						fallback: "materialize-result-then-observe",
+					},
+					"iterator-result-virtualization",
+				),
+			});
+		}
+		return { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
 	},
 };
 
@@ -13887,25 +14254,31 @@ function annotateRegionAdmission(
 					(Array.isArray(guard?.obligations) ? guard.obligations.length : 0);
 		const encodedCost = attributeObject(region.data.cost);
 		const benefitScore = typeof encodedCost?.score === "number" ? encodedCost.score : 1;
+		const admissionQuery = coreRegionAdmissionQuery(region, anchor);
+		const mode =
+			region.kind === "string-char-code-at-chain"
+				? "capture"
+				: coreRegionAdmissionMode(fn, cfg, model, admissionQuery);
+		const strategy = Object.hasOwn(CORE_REGION_STRATEGIES, region.kind)
+			? coreRegionStrategy(region.kind as RegisteredCoreRegionKind)
+			: undefined;
 		const generatedCost = costModel.forRegion(region.claimedInstructions, {
 			guards: guardCount,
 			duplicatedInstructions: region.claimedInstructions.length,
 			genericTwins: license.genericTwin === "retained" ? 1 : 0,
+			admissionChecks: mode === "per-use" ? region.claimedInstructions.length : 1,
+			materializationPaths: license.materialization === "none" ? 0 : 1,
+			stateSynchronizations:
+				strategy === undefined || strategy.stateSynchronization === "none" ? 0 : 1,
 		});
 		if (!coreGeneratedCodeAdmitsRegion(generatedCost, benefitScore)) {
 			changed = true;
 			return [];
 		}
-		const validity = coreRegionAdmissionValidity(
-			fn,
-			cfg,
-			model,
-			coreRegionAdmissionQuery(region, anchor),
-		);
 		const existing = coreRegionAdmission(region);
 		if (
 			existing?.anchor === anchor &&
-			existing.validity === validity &&
+			existing.mode === mode &&
 			stableAttributeValue(region.data.generatedCodeCost) ===
 				stableAttributeValue(generatedCost)
 		) {
@@ -13920,7 +14293,7 @@ function annotateRegionAdmission(
 					generatedCodeCost: { ...generatedCost },
 					license: {
 						...license,
-						admission: { anchor: { $coreInstruction: anchor }, validity },
+						admission: { anchor: { $coreInstruction: anchor }, mode },
 					},
 				},
 			},
@@ -13929,27 +14302,230 @@ function annotateRegionAdmission(
 	return changed ? { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 } : fn;
 }
 
-/** A selection pass states its certificate; the shared derivation completes it. */
-function withRegionAdmission(pass: CoreFunctionPass): CoreFunctionPass {
-	return {
-		...pass,
-		run(fn, analyses, program) {
-			return annotateRegionAdmission(pass.run(fn, analyses, program), analyses);
-		},
-	};
+const CORE_REGION_CANDIDATE_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	selectStackObjectRegions,
+	selectRegExpExecProjectionRegions,
+	selectRegExpIteratorProjectionRegions,
+	selectStringSplitCursorRegions,
+	selectStringSplitProjectionRegions,
+	selectStringSliceNumberRegions,
+	selectStringCharCodeAtChainRegions,
+	selectIteratorCursorRegions,
+	selectIteratorResultVirtualizationRegions,
+	selectArrayLengthComparisonRegions,
+	selectNumericFusionRegions,
+];
+
+function regionCandidateKey(region: CoreRegion): string {
+	return `${region.kind}\0${region.anchors.join(",")}\0${region.claimedInstructions.join(",")}`;
 }
+
+function regionCandidatesConflict(left: CoreRegion, right: CoreRegion): boolean {
+	const leftClaims = new Set(left.claimedInstructions);
+	if (!right.claimedInstructions.some((instruction) => leftClaims.has(instruction))) {
+		return false;
+	}
+	const leftStrategy = Object.hasOwn(CORE_REGION_STRATEGIES, left.kind)
+		? coreRegionStrategy(left.kind as RegisteredCoreRegionKind)
+		: undefined;
+	const rightStrategy = Object.hasOwn(CORE_REGION_STRATEGIES, right.kind)
+		? coreRegionStrategy(right.kind as RegisteredCoreRegionKind)
+		: undefined;
+	if (
+		leftStrategy?.composition === "overlay" &&
+		rightStrategy?.composition === "overlay"
+	) {
+		return leftStrategy.compositionLayer === rightStrategy.compositionLayer;
+	}
+	return (
+		leftStrategy?.composition !== "overlay" && rightStrategy?.composition !== "overlay"
+	);
+}
+
+function regionCandidateWeight(region: CoreRegion): number {
+	const encodedCost = attributeObject(region.data.cost);
+	const generated = attributeObject(region.data.generatedCodeCost);
+	const encodedBenefit =
+		typeof encodedCost?.score === "number" && Number.isFinite(encodedCost.score)
+			? encodedCost.score
+			: 1;
+	const strategy = Object.hasOwn(CORE_REGION_STRATEGIES, region.kind)
+		? coreRegionStrategy(region.kind as RegisteredCoreRegionKind)
+		: undefined;
+	const benefitPerClaim =
+		strategy?.family === "stateful-protocol" ||
+		strategy?.family === "projection" ||
+		strategy?.family === "virtual-object"
+			? 8
+			: strategy?.family === "operation-chain"
+				? 4
+				: 1;
+	const benefit = encodedBenefit + region.claimedInstructions.length * benefitPerClaim;
+	const runtimeCost =
+		typeof generated?.runtimeScore === "number" && Number.isFinite(generated.runtimeScore)
+			? generated.runtimeScore
+			: 0;
+	const compile =
+		typeof generated?.compileScore === "number" && Number.isFinite(generated.compileScore)
+			? generated.compileScore
+			: 0;
+	const frequency =
+		typeof generated?.loopFrequency === "number" &&
+		Number.isFinite(generated.loopFrequency)
+			? generated.loopFrequency
+			: 1;
+	return Math.max(1, benefit * Math.max(1, frequency) * 16 - runtimeCost - compile);
+}
+
+function exactRegionIndependentSet(
+	component: ReadonlyArray<number>,
+	conflicts: ReadonlyArray<ReadonlySet<number>>,
+	weights: ReadonlyArray<number>,
+	keys: ReadonlyArray<string>,
+): ReadonlyArray<number> {
+	let best: Array<number> = [];
+	let bestWeight = -1;
+	const visit = (
+		remaining: ReadonlyArray<number>,
+		chosen: Array<number>,
+		weight: number,
+	) => {
+		if (remaining.length === 0) {
+			const chosenKey = chosen
+				.map((index) => keys[index])
+				.sort()
+				.join("\0");
+			const bestKey = best
+				.map((index) => keys[index])
+				.sort()
+				.join("\0");
+			if (weight > bestWeight || (weight === bestWeight && chosenKey < bestKey)) {
+				best = [...chosen];
+				bestWeight = weight;
+			}
+			return;
+		}
+		const optimistic =
+			weight + remaining.reduce((total, index) => total + weights[index]!, 0);
+		if (optimistic < bestWeight) return;
+		const [head, ...tail] = remaining as [number, ...Array<number>];
+		visit(tail, chosen, weight);
+		visit(
+			tail.filter((index) => !conflicts[head]!.has(index)),
+			[...chosen, head],
+			weight + weights[head]!,
+		);
+	};
+	visit(component, [], 0);
+	return best;
+}
+
+function greedyRegionIndependentSet(
+	component: ReadonlyArray<number>,
+	conflicts: ReadonlyArray<ReadonlySet<number>>,
+	weights: ReadonlyArray<number>,
+	keys: ReadonlyArray<string>,
+): ReadonlyArray<number> {
+	const selected = new Set<number>();
+	const ordered = [...component].sort((left, right) => {
+		const leftDensity = (weights[left] ?? 0) / ((conflicts[left]?.size ?? 0) + 1);
+		const rightDensity = (weights[right] ?? 0) / ((conflicts[right]?.size ?? 0) + 1);
+		return rightDensity - leftDensity || keys[left]!.localeCompare(keys[right]!);
+	});
+	for (const candidate of ordered) {
+		if ([...selected].some((chosen) => conflicts[candidate]!.has(chosen))) continue;
+		selected.add(candidate);
+	}
+	for (const candidate of ordered) {
+		if (selected.has(candidate)) continue;
+		const displaced = [...selected].filter((chosen) => conflicts[candidate]!.has(chosen));
+		if (
+			displaced.length > 0 &&
+			weights[candidate]! >
+				displaced.reduce((total, chosen) => total + weights[chosen]!, 0)
+		) {
+			for (const chosen of displaced) selected.delete(chosen);
+			selected.add(candidate);
+		}
+	}
+	return [...selected];
+}
+
+const selectGuardedRegions: CoreFunctionPass = {
+	name: "select-guarded-regions",
+	run(fn, analyses, program) {
+		const baseKeys = new Set(fn.regions.map(regionCandidateKey));
+		const candidates = new Map<string, CoreRegion>();
+		for (const pass of CORE_REGION_CANDIDATE_PASSES) {
+			const result = pass.run(fn, analyses, program);
+			for (const region of result.regions) {
+				const key = regionCandidateKey(region);
+				if (!baseKeys.has(key)) candidates.set(key, region);
+			}
+		}
+		if (candidates.size === 0) return annotateRegionAdmission(fn, analyses);
+		const admitted = annotateRegionAdmission(
+			{
+				...fn,
+				regions: [...fn.regions, ...candidates.values()],
+				mutationEpoch: fn.mutationEpoch + 1,
+			},
+			analyses,
+		);
+		const choices = admitted.regions.filter(
+			(region) => !baseKeys.has(regionCandidateKey(region)),
+		);
+		const eligible = choices.filter(
+			(candidate) =>
+				!fn.regions.some((existing) => regionCandidatesConflict(candidate, existing)),
+		);
+		const conflicts = eligible.map(() => new Set<number>());
+		for (let left = 0; left < eligible.length; left++) {
+			for (let right = left + 1; right < eligible.length; right++) {
+				if (!regionCandidatesConflict(eligible[left]!, eligible[right]!)) continue;
+				conflicts[left]!.add(right);
+				conflicts[right]!.add(left);
+			}
+		}
+		const weights = eligible.map(regionCandidateWeight);
+		const keys = eligible.map(regionCandidateKey);
+		const unseen = new Set(eligible.map((_region, index) => index));
+		const selected = new Set<number>();
+		while (unseen.size > 0) {
+			const seed = Math.min(...unseen);
+			const component: Array<number> = [];
+			const pending = [seed];
+			unseen.delete(seed);
+			while (pending.length > 0) {
+				const current = pending.pop()!;
+				component.push(current);
+				for (const adjacent of conflicts[current]!) {
+					if (!unseen.delete(adjacent)) continue;
+					pending.push(adjacent);
+				}
+			}
+			const chosen =
+				component.length <= 18
+					? exactRegionIndependentSet(component, conflicts, weights, keys)
+					: greedyRegionIndependentSet(component, conflicts, weights, keys);
+			for (const index of chosen) selected.add(index);
+		}
+		const regions = [
+			...fn.regions,
+			...eligible.filter((_region, index) => selected.has(index)),
+		];
+		return {
+			...fn,
+			regions,
+			mutationEpoch: Math.max(fn.mutationEpoch + 1, admitted.mutationEpoch),
+		};
+	},
+};
 
 const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateFreshDenseIndexedReserves,
 	annotateBoundedStringCharCodeAtPositions,
-	withRegionAdmission(selectStackObjectRegions),
-	withRegionAdmission(selectRegExpExecProjectionRegions),
-	withRegionAdmission(selectRegExpIteratorProjectionRegions),
-	withRegionAdmission(selectStringSplitCursorRegions),
-	withRegionAdmission(selectStringSplitProjectionRegions),
-	withRegionAdmission(selectStringSliceNumberRegions),
-	withRegionAdmission(selectArrayLengthComparisonRegions),
-	withRegionAdmission(selectNumericFusionRegions),
+	selectGuardedRegions,
 	materializeContainedAggregateOwnSlots,
 ];
 

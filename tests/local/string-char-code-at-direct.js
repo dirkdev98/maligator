@@ -79,5 +79,16 @@ ok("prototype replacement", codeUnit("override", 3) === 11);
 String.prototype.charCodeAt = original;
 ok("restored method remains conformant", codeUnit("Z", 0) === 90);
 
-ok("checks ran", passed === 15);
+function mutateWhileEvaluatingPosition(value) {
+	return value.charCodeAt(
+		((String.prototype.charCodeAt = function () {
+			return 999;
+		}),
+		0),
+	);
+}
+ok("method captured before argument mutation", mutateWhileEvaluatingPosition("A") === 65);
+String.prototype.charCodeAt = original;
+
+ok("checks ran", passed === 16);
 console.log("string-char-code-at-direct PASS");

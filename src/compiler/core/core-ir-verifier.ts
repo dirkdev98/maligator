@@ -29,6 +29,11 @@ import {
 	coreProvenance,
 } from "./core-ir-provenance.ts";
 import {
+	CORE_REGION_STRATEGIES,
+	coreRegionStrategy,
+} from "./core-ir-region-strategies.ts";
+import type { RegisteredCoreRegionKind } from "./core-ir-region-strategies.ts";
+import {
 	coreRegionAdmission,
 	coreRegionAdmissionQuery,
 	coreRegionInteriorKeepsAdmission,
@@ -405,10 +410,10 @@ const UNLICENSABLE_EPOCH_FAMILIES: ReadonlySet<string> = new Set([
 /**
  * Verify the part of a region license every layer downstream depends on: that the
  * license is readable, keeps its generic twin, names a lowerable set of epoch
- * families, and carries an admission record whose `once` claim the graph actually
+ * families, and carries an admission record whose `stable` claim the graph actually
  * supports.
  *
- * The `once` proof is recomputed here rather than trusted, following the
+ * The `stable` proof is recomputed here rather than trusted, following the
  * own-data-cell precedent: a transform that lets an opaque instruction into a
  * licensed interior fails at this boundary instead of silently keeping a stale
  * proof. `per-use` needs no interior proof — re-testing at each use is always
@@ -435,6 +440,23 @@ function verifyRegionLicense(
 	) {
 		fail(`region ${region.kind} has an invalid materialization plan`);
 	}
+	const guard =
+		license.guard !== null && typeof license.guard === "object"
+			? (license.guard as Readonly<Record<string, unknown>>)
+			: undefined;
+	const obligations = Array.isArray(guard?.obligations) ? guard.obligations : [];
+	const hasMaterializationObligation = obligations.some(
+		(obligation) =>
+			obligation !== null &&
+			typeof obligation === "object" &&
+			(obligation as Readonly<Record<string, unknown>>).kind === "materialize",
+	);
+	if (
+		(license.guard === "structural" || guard !== undefined) &&
+		(license.materialization !== "none") !== hasMaterializationObligation
+	) {
+		fail(`region ${region.kind} has a mismatched materialization obligation`);
+	}
 	const families = coreRegionLicenseEpochFamilies(region);
 	if (families === undefined) {
 		fail(`region ${region.kind} has an unreadable license guard`);
@@ -454,7 +476,7 @@ function verifyRegionLicense(
 		fail(`region ${region.kind} admits at unclaimed instruction @${admission.anchor}`);
 	}
 	if (
-		admission.validity === "once" &&
+		admission.mode === "stable" &&
 		families.size > 0 &&
 		!coreRegionInteriorKeepsAdmission(
 			fn,
@@ -934,6 +956,25 @@ function verifyCoreFunctionGraph(
 		fn.regions.length === 0 ? undefined : coreRegionValidityModel(fn, registry);
 	for (const [regionIndex, region] of fn.regions.entries()) {
 		if (region.kind.length === 0) fail(`region ${regionIndex} has an empty kind`);
+		const registered = Object.hasOwn(CORE_REGION_STRATEGIES, region.kind);
+		if (!registered && !region.kind.startsWith("test-")) {
+			fail(`region ${region.kind} is not a registered strategy`);
+		}
+		if (registered) {
+			const strategy = coreRegionStrategy(region.kind as RegisteredCoreRegionKind);
+			if (region.claimedInstructions.length > strategy.maximumClaims) {
+				fail(`region ${region.kind} exceeds its claim limit`);
+			}
+			if (region.data.representation !== strategy.representation) {
+				fail(`region ${region.kind} has a mismatched representation`);
+			}
+			if (
+				(region.data.composition === "overlay") !==
+				(strategy.composition === "overlay")
+			) {
+				fail(`region ${region.kind} has a mismatched composition policy`);
+			}
+		}
 		if (region.anchors.length === 0) fail(`region ${region.kind} has no anchors`);
 		const claimed = new Set(region.claimedInstructions);
 		if (claimed.size !== region.claimedInstructions.length) {
