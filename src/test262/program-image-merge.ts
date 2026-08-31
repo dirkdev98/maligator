@@ -140,6 +140,11 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
 			};
+		case "builtin-collection-call-chain":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+			};
 		case "indexed-length-loop":
 			return {
 				...cloneRegionEnvelope(region),

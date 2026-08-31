@@ -232,6 +232,31 @@ export interface CoreAllocatedStringCharCodeAtChainRegion extends CoreAllocatedR
 	readonly evaluationOrder: "capture-property-before-arguments";
 }
 
+export type CoreCollectionBuiltinOperation =
+	| "Map.prototype.get"
+	| "Map.prototype.set"
+	| "Map.prototype.has"
+	| "Map.prototype.delete"
+	| "Set.prototype.add"
+	| "Set.prototype.has"
+	| "Set.prototype.delete";
+
+export interface CoreAllocatedBuiltinCollectionCallChainRegion extends CoreAllocatedRegionEnvelope<
+	"builtin-collection-call-chain",
+	"captured-collection-method",
+	"none",
+	readonly [
+		Extract<CompilerInstruction, { type: "loadPropertyStatic" }>,
+		Extract<CompilerInstruction, { type: "call" }>,
+	]
+> {
+	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly call: Extract<CompilerInstruction, { type: "call" }>;
+	readonly operation: CoreCollectionBuiltinOperation;
+	readonly runtimeGuard: "exact-collection-method";
+	readonly evaluationOrder: "capture-property-before-arguments";
+}
+
 type CoreAllocatedIteratorCursorRegion<
 	Kind extends
 		| "array-values-iterator-cursor"
@@ -416,6 +441,7 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 export type CoreAllocatedRegion =
 	| CoreAllocatedIndexedLengthLoopRegion
 	| CoreAllocatedArrayValuesIteratorCursorRegion
+	| CoreAllocatedBuiltinCollectionCallChainRegion
 	| CoreAllocatedIteratorResultVirtualizationRegion
 	| CoreAllocatedMapIteratorCursorRegion
 	| CoreAllocatedNumericFusionRegion

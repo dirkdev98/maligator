@@ -1437,6 +1437,30 @@ interface NativeStringCharCodeAtChainAction {
 	readonly role: "property" | "call";
 }
 
+type NativeBuiltinCollectionCallChain = Extract<
+	VmRegion,
+	{ kind: "builtin-collection-call-chain" }
+>;
+
+interface NativeBuiltinCollectionCallChainAction {
+	readonly chain: NativeBuiltinCollectionCallChain;
+	readonly role: "property" | "call";
+}
+
+function nativeBuiltinCollectionOperation(
+	operation: NativeBuiltinCollectionCallChain["operation"],
+): string {
+	return {
+		"Map.prototype.get": "MAL_GUARDED_BUILTIN_MAP_GET",
+		"Map.prototype.set": "MAL_GUARDED_BUILTIN_MAP_SET",
+		"Map.prototype.has": "MAL_GUARDED_BUILTIN_MAP_HAS",
+		"Map.prototype.delete": "MAL_GUARDED_BUILTIN_MAP_DELETE",
+		"Set.prototype.add": "MAL_GUARDED_BUILTIN_SET_ADD",
+		"Set.prototype.has": "MAL_GUARDED_BUILTIN_SET_HAS",
+		"Set.prototype.delete": "MAL_GUARDED_BUILTIN_SET_DELETE",
+	}[operation];
+}
+
 type NativeIteratorCursor = Extract<
 	VmRegion,
 	{
@@ -1763,20 +1787,37 @@ function emitBody(
 		number,
 		NativeStringCharCodeAtChainAction
 	>();
+	const nativeBuiltinCollectionCallChainActionByIp = new Map<
+		number,
+		NativeBuiltinCollectionCallChainAction
+	>();
 	for (const action of regionActions) {
 		const chain = specializations[action.regionIndex];
-		if (chain?.kind !== "string-char-code-at-chain") continue;
-		if (
-			(action.role !== "property" && action.role !== "call") ||
-			action.ip !== (action.role === "property" ? chain.propertyIp : chain.callIp) ||
-			nativeStringCharCodeAtChainActionByIp.has(action.ip)
-		) {
-			throw new Error("Duplicate String.charCodeAt chain action");
+		if (chain?.kind === "string-char-code-at-chain") {
+			if (
+				(action.role !== "property" && action.role !== "call") ||
+				action.ip !== (action.role === "property" ? chain.propertyIp : chain.callIp) ||
+				nativeStringCharCodeAtChainActionByIp.has(action.ip)
+			) {
+				throw new Error("Duplicate String.charCodeAt chain action");
+			}
+			nativeStringCharCodeAtChainActionByIp.set(action.ip, {
+				chain,
+				role: action.role,
+			});
+		} else if (chain?.kind === "builtin-collection-call-chain") {
+			if (
+				(action.role !== "property" && action.role !== "call") ||
+				action.ip !== (action.role === "property" ? chain.propertyIp : chain.callIp) ||
+				nativeBuiltinCollectionCallChainActionByIp.has(action.ip)
+			) {
+				throw new Error("Duplicate collection call-chain action");
+			}
+			nativeBuiltinCollectionCallChainActionByIp.set(action.ip, {
+				chain,
+				role: action.role,
+			});
 		}
-		nativeStringCharCodeAtChainActionByIp.set(action.ip, {
-			chain,
-			role: action.role,
-		});
 	}
 	const nativeIteratorCursorActionByIp = new Map<number, NativeIteratorCursorAction>();
 	const nativeIteratorResultVirtualizationActionByIp = new Map<
@@ -2181,6 +2222,7 @@ function emitBody(
 			nativeRegExpIteratorProjectionActionByIp.get(ip) === undefined &&
 			nativeStringSliceNumberFusionActionByIp.get(ip) === undefined &&
 			nativeStringCharCodeAtChainActionByIp.get(ip) === undefined &&
+			nativeBuiltinCollectionCallChainActionByIp.get(ip) === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -2244,6 +2286,8 @@ function emitBody(
 				nativeStringSliceNumberFusionAction:
 					nativeStringSliceNumberFusionActionByIp.get(ip),
 				nativeStringCharCodeAtChainAction: nativeStringCharCodeAtChainActionByIp.get(ip),
+				nativeBuiltinCollectionCallChainAction:
+					nativeBuiltinCollectionCallChainActionByIp.get(ip),
 				nativeIteratorCursorAction: nativeIteratorCursorActionByIp.get(ip),
 				nativeIteratorResultVirtualizationAction:
 					nativeIteratorResultVirtualizationActionByIp.get(ip),
@@ -2605,6 +2649,7 @@ interface NativeInstructionContext {
 	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
 	readonly nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction;
 	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
+	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
 	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
 	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
@@ -2695,6 +2740,7 @@ function emitInstruction(
 		nativeRegExpIteratorProjectionAction,
 		nativeStringSliceNumberFusionAction,
 		nativeStringCharCodeAtChainAction,
+		nativeBuiltinCollectionCallChainAction,
 		nativeIteratorCursorAction,
 		nativeIteratorResultVirtualizationAction,
 		numericFusionAction,
@@ -3230,6 +3276,18 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeBuiltinCollectionCallChainAction?.role === "property"
+			) {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				return [
+					`if (!mal_vm_try_capture_collection_method(vm, ${nativeBuiltinCollectionOperation(nativeBuiltinCollectionCallChainAction.chain.operation)}, ${boxed(instruction.object)}, &r${instruction.dst})) {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				nativeStringCharCodeAtChainAction?.role === "property"
@@ -4798,15 +4856,7 @@ function emitInstruction(
 				guardedBuiltinOperation === "Set.prototype.has" ||
 				guardedBuiltinOperation === "Set.prototype.delete"
 			) {
-				const operation = {
-					"Map.prototype.get": "MAL_GUARDED_BUILTIN_MAP_GET",
-					"Map.prototype.set": "MAL_GUARDED_BUILTIN_MAP_SET",
-					"Map.prototype.has": "MAL_GUARDED_BUILTIN_MAP_HAS",
-					"Map.prototype.delete": "MAL_GUARDED_BUILTIN_MAP_DELETE",
-					"Set.prototype.add": "MAL_GUARDED_BUILTIN_SET_ADD",
-					"Set.prototype.has": "MAL_GUARDED_BUILTIN_SET_HAS",
-					"Set.prototype.delete": "MAL_GUARDED_BUILTIN_SET_DELETE",
-				}[guardedBuiltinOperation];
+				const operation = nativeBuiltinCollectionOperation(guardedBuiltinOperation);
 				const receiverFact =
 					callPlan?.exactCollectionReceiver === "Map"
 						? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP"

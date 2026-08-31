@@ -33,7 +33,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 47;
+export const COMPILER_ARTIFACT_VERSION = 48;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -133,6 +133,24 @@ function guardedBuiltinCallBrandTag(
 	if (operation?.startsWith("Map.prototype.")) return "Map";
 	if (operation?.startsWith("Set.prototype.")) return "Set";
 	return undefined;
+}
+
+function collectionOperationFromTag(
+	tag: number,
+): Extract<VmRegion, { kind: "builtin-collection-call-chain" }>["operation"] {
+	const operation = TAGGED_GUARDED_BUILTIN_OPERATIONS[tag - 1];
+	if (
+		operation !== "Map.prototype.get" &&
+		operation !== "Map.prototype.set" &&
+		operation !== "Map.prototype.has" &&
+		operation !== "Map.prototype.delete" &&
+		operation !== "Set.prototype.add" &&
+		operation !== "Set.prototype.has" &&
+		operation !== "Set.prototype.delete"
+	) {
+		throw new RangeError("program-image-codec: invalid collection operation tag");
+	}
+	return operation;
 }
 
 function stringSplitCursorGuardMasks(
@@ -363,6 +381,37 @@ function stringCharCodeAtChainGuardMasks(
 		throw new RangeError(
 			"program-image-codec: invalid String.charCodeAt chain guard plan",
 		);
+	}
+	return { dependencyMask, obligationMask };
+}
+
+function builtinCollectionCallChainGuardMasks(
+	license: Extract<VmRegion, { kind: "builtin-collection-call-chain" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else {
+			throw new RangeError(
+				"program-image-codec: unsupported builtin collection chain dependency",
+			);
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "none" ||
+		license.admission.mode !== "capture" ||
+		(dependencyMask !== 1 && dependencyMask !== 4) ||
+		obligationMask !== 1
+	) {
+		throw new RangeError("program-image-codec: invalid builtin collection chain guard");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -790,11 +839,13 @@ function writeCompilerArtifact(
 									? stringSliceNumberGuardMasks(region.license)
 									: region.kind === "string-char-code-at-chain"
 										? stringCharCodeAtChainGuardMasks(region.license)
-										: region.kind === "stack-object-plan"
-											? stackObjectPlanGuardMasks(region.license)
-											: region.kind === "iterator-result-virtualization"
-												? { dependencyMask: 0, obligationMask: 3 }
-												: { dependencyMask: 0, obligationMask: 1 };
+										: region.kind === "builtin-collection-call-chain"
+											? builtinCollectionCallChainGuardMasks(region.license)
+											: region.kind === "stack-object-plan"
+												? stackObjectPlanGuardMasks(region.license)
+												: region.kind === "iterator-result-virtualization"
+													? { dependencyMask: 0, obligationMask: 3 }
+													: { dependencyMask: 0, obligationMask: 1 };
 			w.u8(kindTag);
 			w.u8(region.composition === "overlay" ? 1 : 0);
 			w.i32Array([...region.anchors]);
@@ -979,6 +1030,17 @@ function writeCompilerArtifact(
 					w.i32(region.receiver);
 					w.i32(region.result);
 					break;
+				case "builtin-collection-call-chain":
+					w.i32(region.propertyIp);
+					w.i32(region.callIp);
+					w.u8(taggedGuardedBuiltinOperation(region.operation));
+					w.u8(region.runtimeGuard === "exact-collection-method" ? 1 : 0);
+					w.u8(region.evaluationOrder === "capture-property-before-arguments" ? 1 : 0);
+					w.i32(region.propertyIcIndex);
+					w.i32(region.callee);
+					w.i32(region.receiver);
+					w.i32(region.result);
+					break;
 				case "array-values-iterator-cursor":
 				case "string-iterator-cursor":
 				case "typed-array-iterator-cursor":
@@ -1058,6 +1120,7 @@ function validateRegionEnvelope(
 		(region.kind !== "regexp-iterator-projection" &&
 			region.kind !== "string-slice-number" &&
 			region.kind !== "string-char-code-at-chain" &&
+			region.kind !== "builtin-collection-call-chain" &&
 			region.kind !== "iterator-result-virtualization" &&
 			region.kind !== "array-values-iterator-cursor" &&
 			region.kind !== "string-iterator-cursor" &&
@@ -1126,6 +1189,14 @@ function validateRegion(
 			break;
 		case "string-char-code-at-chain":
 			validateStringCharCodeAtChainRegion(
+				fn,
+				region,
+				stringConstants,
+				nativeInstructions,
+			);
+			break;
+		case "builtin-collection-call-chain":
+			validateBuiltinCollectionCallChainRegion(
 				fn,
 				region,
 				stringConstants,
@@ -1525,6 +1596,55 @@ function validateStringCharCodeAtChainRegion(
 		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip))
 	) {
 		throw new RangeError("program-image-codec: invalid String.charCodeAt chain region");
+	}
+}
+
+function validateBuiltinCollectionCallChainRegion(
+	fn: BytecodeFunction,
+	region: Extract<VmRegion, { kind: "builtin-collection-call-chain" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+): void {
+	builtinCollectionCallChainGuardMasks(region.license);
+	const property = fn.instructions[region.propertyIp];
+	const call = fn.instructions[region.callIp];
+	const callPlan = nativeCallPlanAt(nativeInstructions, region.callIp);
+	const activeHandlers = new Set<number>();
+	for (const ip of region.claimedIps) {
+		for (const handler of fn.handlers) {
+			if (ip >= handler.startIp && ip < handler.endIp)
+				activeHandlers.add(handler.handlerIp);
+		}
+	}
+	if (
+		region.representation !== "captured-collection-method" ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.propertyIp ||
+		region.anchors[1] !== region.callIp ||
+		region.claimedIps.length !== 2 ||
+		!region.claimedIps.includes(region.propertyIp) ||
+		!region.claimedIps.includes(region.callIp) ||
+		region.license.admission.anchorIp !== region.propertyIp ||
+		property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
+			region.operation.split(".").at(-1) ||
+		property.icIndex !== region.propertyIcIndex ||
+		call?.opcode !== "CALL" ||
+		callPlan?.guardedBuiltinCall?.operation !== region.operation ||
+		property.dst !== call.callee ||
+		property.object !== call.thisValue ||
+		region.propertyIp >= region.callIp ||
+		region.runtimeGuard !== "exact-collection-method" ||
+		region.evaluationOrder !== "capture-property-before-arguments" ||
+		region.callee !== call.callee ||
+		region.receiver !== call.thisValue ||
+		region.result !== call.dst ||
+		region.cost.score !== 14 ||
+		region.cost.metadataOperations !== 2 ||
+		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip))
+	) {
+		throw new RangeError("program-image-codec: invalid builtin collection chain region");
 	}
 }
 
@@ -2778,6 +2898,13 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					dependencyMask === 0 &&
 					obligationMask === 3 &&
 					admissionTag === 1;
+				const builtinCollectionCallChainContract =
+					kindTag === 23 &&
+					representationTag === 23 &&
+					materializationTag === 0 &&
+					(dependencyMask === 1 || dependencyMask === 4) &&
+					obligationMask === 1 &&
+					admissionTag === 2;
 				if (
 					compositionTag > 1 ||
 					(compositionTag === 1) !==
@@ -2794,7 +2921,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						!indexedLengthLoopContract &&
 						!stringCharCodeAtChainContract &&
 						!iteratorCursorContract &&
-						!iteratorResultVirtualizationContract)
+						!iteratorResultVirtualizationContract &&
+						!builtinCollectionCallChainContract)
 				) {
 					throw new RangeError("program-image-codec: invalid function region contract");
 				}
@@ -3510,6 +3638,50 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						runtimeGuard: "exact-builtin-iterator-next",
 						correspondence: "done-value-observation",
 						fallback: "materialize-result-then-observe",
+					};
+				} else if (kindTag === 23) {
+					const propertyIp = r.i32();
+					const callIp = r.i32();
+					const operation = collectionOperationFromTag(r.u8());
+					const runtimeGuardTag = r.u8();
+					const evaluationOrderTag = r.u8();
+					const propertyIcIndex = r.i32();
+					const callee = r.i32();
+					const receiver = r.i32();
+					const result = r.i32();
+					if (runtimeGuardTag !== 1 || evaluationOrderTag !== 1) {
+						throw new RangeError(
+							"program-image-codec: invalid builtin collection chain header",
+						);
+					}
+					region = {
+						kind: "builtin-collection-call-chain",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [{ kind: "epoch", family: "watched-methods" }],
+								obligations: ["fallback"],
+							},
+							genericTwin: "retained",
+							materialization: "none",
+							admission,
+						},
+						representation: "captured-collection-method",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						propertyIp,
+						callIp,
+						operation,
+						runtimeGuard: "exact-collection-method",
+						evaluationOrder: "capture-property-before-arguments",
+						propertyIcIndex,
+						callee,
+						receiver,
+						result,
 					};
 				} else {
 					throw new RangeError("program-image-codec: invalid function region kind");

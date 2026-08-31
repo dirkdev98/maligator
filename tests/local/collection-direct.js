@@ -203,12 +203,15 @@ ok("Set delete prototype override", new Set().delete("prototype-delete"));
 Set.prototype.delete = intrinsicSetDelete;
 
 const mutationMap = new Map([["key", 11]]);
-const mutationResult = mutationMap.get(
-	((Map.prototype.get = function () {
-		return 99;
-	}),
-	"key"),
-);
+function openGetWithArgumentMutation(collection, key) {
+	return collection.get(
+		((Map.prototype.get = function () {
+			return 99;
+		}),
+		key),
+	);
+}
+const mutationResult = openGetWithArgumentMutation(mutationMap, "key");
 Map.prototype.get = intrinsicGet;
 ok("method loaded before argument mutation", mutationResult === 11);
 

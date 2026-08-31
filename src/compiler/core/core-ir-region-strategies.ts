@@ -232,6 +232,18 @@ export const CORE_REGION_STRATEGIES = {
 		fallbackFrontier: "materialize-then-generic",
 		maximumClaims: 64,
 	},
+	"builtin-collection-call-chain": {
+		artifactTag: 23,
+		family: "operation-chain",
+		representation: "captured-collection-method",
+		composition: "exclusive",
+		correspondence: "operation-trace",
+		lifetime: "single-operation",
+		invalidatingEffects: ["guard-failure", "semantic-epoch-change"],
+		stateSynchronization: "none",
+		fallbackFrontier: "before-fast-operation",
+		maximumClaims: 2,
+	},
 } as const satisfies Record<string, CoreRegionStrategyDefinition>;
 
 export type RegisteredCoreRegionKind = keyof typeof CORE_REGION_STRATEGIES;

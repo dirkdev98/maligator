@@ -4,6 +4,7 @@
 #include "array_object.h"
 #include "builtin_iterator.h"
 #include "function_object.h" // mal_function_object_function_index, for the call guard
+#include "map_object.h"
 #include "object_ops.h"
 #include "perf_stats.h"
 #include "scalar_bits.h"
@@ -63,6 +64,83 @@ static inline bool mal_vm_semantic_dependencies_validate(
     return activity_epoch != 0 &&
         activity_epoch == vm->semantic_epochs.activity &&
         mal_vm_semantic_dependencies_hold(vm, dependencies);
+}
+
+static inline bool mal_vm_try_capture_collection_method(
+    MalVm *vm,
+    MalGuardedBuiltinCallOp operation,
+    MalValue receiver,
+    MalValue *method_out
+) {
+    if (!mal_primitive_method_protector) return false;
+
+    MalMapObject *collection;
+    MalIntrinsic prototype_intrinsic;
+    MalIntrinsic method_intrinsic;
+    const byte *method_name;
+    const bool map_receiver = mal_value_is_map_object(receiver);
+    const bool set_receiver = mal_value_is_set_object(receiver);
+    if (map_receiver) {
+        collection = mal_value_to_map_object(receiver);
+        if (collection->weak) return false;
+        prototype_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE;
+        switch (operation) {
+            case MAL_GUARDED_BUILTIN_MAP_GET:
+                method_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE_GET;
+                method_name = "get";
+                break;
+            case MAL_GUARDED_BUILTIN_MAP_SET:
+                method_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE_SET;
+                method_name = "set";
+                break;
+            case MAL_GUARDED_BUILTIN_MAP_HAS:
+            case MAL_GUARDED_BUILTIN_SET_HAS:
+                method_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE_HAS;
+                method_name = "has";
+                break;
+            case MAL_GUARDED_BUILTIN_MAP_DELETE:
+            case MAL_GUARDED_BUILTIN_SET_DELETE:
+                method_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE_DELETE;
+                method_name = "delete";
+                break;
+            default:
+                return false;
+        }
+    } else if (set_receiver) {
+        collection = mal_value_to_map_object(receiver);
+        if (collection->weak) return false;
+        prototype_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE;
+        switch (operation) {
+            case MAL_GUARDED_BUILTIN_SET_ADD:
+                method_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE_ADD;
+                method_name = "add";
+                break;
+            case MAL_GUARDED_BUILTIN_MAP_HAS:
+            case MAL_GUARDED_BUILTIN_SET_HAS:
+                method_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE_HAS;
+                method_name = "has";
+                break;
+            case MAL_GUARDED_BUILTIN_MAP_DELETE:
+            case MAL_GUARDED_BUILTIN_SET_DELETE:
+                method_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE_DELETE;
+                method_name = "delete";
+                break;
+            default:
+                return false;
+        }
+    } else {
+        return false;
+    }
+
+    if (collection->object.prototype !=
+            mal_value_to_object(vm->intrinsics[prototype_intrinsic]) ||
+        mal_object_get_own(
+            &collection->object,
+            mal_intrinsic_string_key(vm, method_name)).present) {
+        return false;
+    }
+    *method_out = vm->intrinsics[method_intrinsic];
+    return true;
 }
 
 /**

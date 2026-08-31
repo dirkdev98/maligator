@@ -1,5 +1,6 @@
 import type {
 	CoreBuiltinIdentityDecision,
+	CoreCollectionBuiltinOperation,
 	CorePropertyPlacement,
 } from "../core/core-ir-regions.ts";
 import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
@@ -452,6 +453,22 @@ export type VmStringCharCodeAtChainRegion = VmRegionEnvelope<
 	readonly result: number;
 };
 
+export type VmBuiltinCollectionCallChainRegion = VmRegionEnvelope<
+	"builtin-collection-call-chain",
+	"captured-collection-method",
+	"none"
+> & {
+	readonly propertyIp: number;
+	readonly callIp: number;
+	readonly operation: CoreCollectionBuiltinOperation;
+	readonly runtimeGuard: "exact-collection-method";
+	readonly evaluationOrder: "capture-property-before-arguments";
+	readonly propertyIcIndex: number;
+	readonly callee: number;
+	readonly receiver: number;
+	readonly result: number;
+};
+
 type VmIteratorCursorRegion<
 	Kind extends
 		| "array-values-iterator-cursor"
@@ -568,6 +585,7 @@ export type VmIndexedLengthLoopRegion = VmRegionEnvelope<
 export type VmRegion =
 	| VmIndexedLengthLoopRegion
 	| VmArrayValuesIteratorCursorRegion
+	| VmBuiltinCollectionCallChainRegion
 	| VmIteratorResultVirtualizationRegion
 	| VmMapIteratorCursorRegion
 	| VmRegExpExecProjectionRegion
@@ -745,6 +763,7 @@ export function vmRegionActions(
 				}
 				break;
 			case "string-char-code-at-chain":
+			case "builtin-collection-call-chain":
 				add(regionIndex, region.propertyIp, "property");
 				add(regionIndex, region.callIp, "call");
 				break;
@@ -2060,6 +2079,7 @@ function lowerExecutionFunctionToNativePlan(
 			(region.kind !== "regexp-iterator-projection" &&
 				region.kind !== "string-slice-number" &&
 				region.kind !== "string-char-code-at-chain" &&
+				region.kind !== "builtin-collection-call-chain" &&
 				region.controlFlow.exceptionalBlocks.length !== 0) ||
 			!Number.isSafeInteger(region.cost.score) ||
 			region.cost.score <= 0 ||
@@ -2804,6 +2824,76 @@ function lowerExecutionFunctionToNativePlan(
 					callIp,
 					methodIdentity: region.methodIdentity,
 					runtimeGuard: "primitive-string-number-position",
+					evaluationOrder: "capture-property-before-arguments",
+					propertyIcIndex,
+					callee: call.callee,
+					receiver: call.thisValue,
+					result: call.dst,
+				});
+				break;
+			}
+			case "builtin-collection-call-chain": {
+				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
+				const callIp = instructionIndexByTargetInstruction.get(region.call);
+				const propertyIcIndex = propertyIcIndexByInstruction.get(region.property);
+				const property = propertyIp === undefined ? undefined : instructions[propertyIp];
+				const call = callIp === undefined ? undefined : instructions[callIp];
+				const callPlan =
+					call === undefined
+						? undefined
+						: (() => {
+								const plan = nativePlanOf(call);
+								return plan?.kind === "call" ? plan : undefined;
+							})();
+				const payloadIps = new Set([propertyIp, callIp]);
+				if (
+					region.representation !== "captured-collection-method" ||
+					region.license.materialization !== "none" ||
+					region.license.admission.mode !== "capture" ||
+					region.runtimeGuard !== "exact-collection-method" ||
+					region.evaluationOrder !== "capture-property-before-arguments" ||
+					propertyIp === undefined ||
+					callIp === undefined ||
+					propertyIcIndex === undefined ||
+					property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
+						region.operation.split(".").at(-1) ||
+					call?.opcode !== "CALL" ||
+					!vmCallProvesBuiltin(callPlan, region.operation) ||
+					property.dst !== call.callee ||
+					property.object !== call.thisValue ||
+					resolvedAnchors.length !== 2 ||
+					resolvedAnchors[0] !== propertyIp ||
+					resolvedAnchors[1] !== callIp ||
+					payloadIps.size !== 2 ||
+					resolvedClaimedIps.length !== 2 ||
+					resolvedClaimedIps.some((ip) => !payloadIps.has(ip)) ||
+					region.cost.score !== 14 ||
+					region.cost.metadataOperations !== 2
+				) {
+					throw coreRegionError(region.kind, "instruction or claim contract");
+				}
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "builtin-collection-call-chain",
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "none",
+						admission,
+					},
+					representation: "captured-collection-method",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: resolvedOrdinaryBlockIps,
+						exceptionalHandlerIps: resolvedExceptionalHandlerIps,
+					},
+					cost: region.cost,
+					propertyIp,
+					callIp,
+					operation: region.operation,
+					runtimeGuard: "exact-collection-method",
 					evaluationOrder: "capture-property-before-arguments",
 					propertyIcIndex,
 					callee: call.callee,

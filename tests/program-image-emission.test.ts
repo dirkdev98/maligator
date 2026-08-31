@@ -3009,7 +3009,7 @@ describe("native update-expression representation", () => {
 	});
 
 	it("emits guarded direct collection dispatch from call metadata", () => {
-		const output = emit(`
+		const source = `
 			function update(map, set, key, value) {
 				const previous = map.get(key);
 				map.set(key, value);
@@ -3017,7 +3017,29 @@ describe("native update-expression representation", () => {
 				return previous;
 			}
 			globalThis.update = update;
-		`);
+		`;
+		const definition = lower(source);
+		const regions = specializations(definition).filter(
+			(region) => region.kind === "builtin-collection-call-chain",
+		);
+		expect(regions).toHaveLength(3);
+		expect(
+			regions.map(
+				(region) => region.kind === "builtin-collection-call-chain" && region.operation,
+			),
+		).toEqual(["Map.prototype.get", "Map.prototype.set", "Set.prototype.add"]);
+		expect(regions[0]).toMatchObject({
+			representation: "captured-collection-method",
+			runtimeGuard: "exact-collection-method",
+			evaluationOrder: "capture-property-before-arguments",
+			license: { admission: { mode: "capture" }, materialization: "none" },
+		});
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(definition))).toEqual(
+			definition,
+		);
+		const output = emitProgramImage(definition, { compiled: true });
+		expect(output).toContain("mal_vm_try_capture_collection_method(vm,");
+		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
 		expect(output).toContain("mal_builtin_collection_direct(vm, &__cc_");
 		expect(output).toContain("MAL_GUARDED_BUILTIN_MAP_GET");
 		expect(output).toContain("MAL_GUARDED_BUILTIN_MAP_SET");

@@ -5788,6 +5788,136 @@ const selectStringCharCodeAtChainRegions: CoreFunctionPass = {
 	},
 };
 
+const COLLECTION_CALL_CHAIN_OPERATIONS = new Set([
+	"Map.prototype.get",
+	"Map.prototype.set",
+	"Map.prototype.has",
+	"Map.prototype.delete",
+	"Set.prototype.add",
+	"Set.prototype.has",
+	"Set.prototype.delete",
+]);
+
+const selectBuiltinCollectionCallChainRegions: CoreFunctionPass = {
+	name: "select-builtin-collection-call-chain-regions",
+	run(fn, analyses, program) {
+		const definitions = analyses.definitions(fn);
+		const canonical = analyses.canonicalValues(fn);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const uses = new Map<CoreValueId, Array<CoreInstruction>>();
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+				for (const input of instruction.inputs) {
+					const entries = uses.get(root(input)) ?? [];
+					entries.push(instruction);
+					uses.set(root(input), entries);
+				}
+			}
+		}
+		const occupied = new Set(
+			fn.regions
+				.filter(({ kind }) => kind !== "numeric-fusion")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			for (const call of block.instructions) {
+				if (
+					call.opcode !== "call" ||
+					call.outputs.length !== 1 ||
+					call.inputs.length < 2
+				) {
+					continue;
+				}
+				const operation = attributeObject(call.attributes.knownBuiltinCall)?.operation;
+				if (
+					typeof operation !== "string" ||
+					!COLLECTION_CALL_CHAIN_OPERATIONS.has(operation)
+				) {
+					continue;
+				}
+				const builtin = coreKnownBuiltinProof(call, operation, {
+					lowering: "guarded-native-collection",
+				});
+				if (builtin === undefined) continue;
+				const property = definitions.get(root(call.inputs[0]!));
+				const propertyLocation =
+					property === undefined ? undefined : locations.get(property.id);
+				const callLocation = locations.get(call.id);
+				if (
+					property?.opcode !== "loadPropertyStatic" ||
+					property.inputs.length !== 1 ||
+					property.outputs.length !== 1 ||
+					root(property.inputs[0]!) !== root(call.inputs[1]!) ||
+					typeof property.attributes.stringIndex !== "number" ||
+					decodeString(program, property.attributes.stringIndex) !==
+						operation.split(".").at(-1) ||
+					uses.get(root(property.outputs[0]!))?.length !== 1 ||
+					uses.get(root(property.outputs[0]!))?.[0] !== call ||
+					propertyLocation === undefined ||
+					callLocation === undefined ||
+					propertyLocation.block !== callLocation.block ||
+					propertyLocation.index >= callLocation.index ||
+					occupied.has(property.id) ||
+					occupied.has(call.id)
+				) {
+					continue;
+				}
+				const claimedInstructions = [property.id, call.id];
+				regions.push({
+					kind: "builtin-collection-call-chain",
+					anchors: claimedInstructions,
+					claimedInstructions,
+					ordinaryBlocks: [block.id],
+					exceptionalBlocks: block.handler === undefined ? [] : [block.handler.block],
+					data: coreAttributeObject(
+						{
+							license: {
+								guard: {
+									dependencies: builtin.proof.dependencies,
+									obligations: [
+										...builtin.proof.obligations,
+										regionGenericTwin(
+											"builtin-collection-call-chain",
+											builtin.sourceSite ?? fn.functionIndex,
+										),
+									],
+								},
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: "captured-collection-method",
+							cost: { score: 14, metadataOperations: 2 },
+							property: { $coreInstruction: property.id },
+							call: { $coreInstruction: call.id },
+							operation,
+							runtimeGuard: "exact-collection-method",
+							evaluationOrder: "capture-property-before-arguments",
+						},
+						"builtin-collection-call-chain",
+					),
+				});
+				occupied.add(property.id);
+				occupied.add(call.id);
+				if (
+					regions.filter(({ kind }) => kind === "builtin-collection-call-chain").length >=
+					8
+				) {
+					break;
+				}
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
 type CoreIteratorCursorKind =
 	| "array-values-iterator-cursor"
 	| "string-iterator-cursor"
@@ -14336,7 +14466,8 @@ function annotateRegionAdmission(
 		const benefitScore = typeof encodedCost?.score === "number" ? encodedCost.score : 1;
 		const admissionQuery = coreRegionAdmissionQuery(region, anchor);
 		const mode =
-			region.kind === "string-char-code-at-chain"
+			region.kind === "string-char-code-at-chain" ||
+			region.kind === "builtin-collection-call-chain"
 				? "capture"
 				: coreRegionAdmissionMode(fn, cfg, model, admissionQuery);
 		const strategy = Object.hasOwn(CORE_REGION_STRATEGIES, region.kind)
@@ -14390,6 +14521,7 @@ const CORE_REGION_CANDIDATE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectStringSplitProjectionRegions,
 	selectStringSliceNumberRegions,
 	selectStringCharCodeAtChainRegions,
+	selectBuiltinCollectionCallChainRegions,
 	selectIteratorCursorRegions,
 	selectIteratorResultVirtualizationRegions,
 	selectIndexedLengthLoopRegions,
