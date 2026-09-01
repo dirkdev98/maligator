@@ -167,6 +167,7 @@ describe("Core optimizer infrastructure", () => {
 			const { program, functions } = programWithTwoFunctions();
 			const target = functions[0]!;
 			let runs = 0;
+			const remaining: Array<number> = [];
 			const pass: CorePass = {
 				name: "bounded-rewrite",
 				stage: "canonicalize",
@@ -181,8 +182,9 @@ describe("Core optimizer infrastructure", () => {
 					representations: true,
 				},
 				budget: { maxWorkItems: 10, maxEdits: 10, exhaustion },
-				run({ item }) {
+				run({ item, remainingEdits }) {
 					if (item.scope !== "function" || item.function !== target.id) return undefined;
+					remaining.push(remainingEdits);
 					runs++;
 					if (runs > 2) return undefined;
 					const editor = CoreEditor.open(program, target.id);
@@ -199,6 +201,7 @@ describe("Core optimizer infrastructure", () => {
 			return {
 				runs,
 				representation: program.function(target.id).valueRepresentation(target.value),
+				remaining,
 				exhausted: report.finish(program, {
 					directEntries: [],
 					specializations: [],
@@ -209,11 +212,13 @@ describe("Core optimizer infrastructure", () => {
 		expect(run(1, "stop")).toEqual({
 			runs: 1,
 			representation: "f64",
+			remaining: [10],
 			exhausted: ["bounded-rewrite"],
 		});
 		expect(run(1, "error")).toEqual({
 			runs: 3,
 			representation: "i32",
+			remaining: [10, 9, 8],
 			exhausted: [],
 		});
 	});

@@ -1996,7 +1996,7 @@ const mergeLinearBlocks: CorePass = {
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
-		const { program, item } = context;
+		const { program, item, remainingEdits } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
@@ -2007,11 +2007,21 @@ const mergeLinearBlocks: CorePass = {
 				...loop.exits.filter(({ dedicated }) => dedicated).map(({ to }) => to),
 			]),
 		);
+		let selected: Array<{
+			readonly predecessor: CoreBlockId;
+			readonly target: CoreBlockId;
+			readonly edgeArguments: ReadonlyArray<CoreValueId>;
+			readonly parameters: ReadonlyArray<CoreValueId>;
+			readonly bodyInstructions: ReadonlyArray<CoreInstructionId>;
+		}> = [];
+		const selectedBlocks = new Set<CoreBlockId>();
+		let estimatedEdits = 0;
 		for (const predecessor of fn.blockIds()) {
 			const predecessorTerminator = fn.terminatorPayload(fn.blockTerminator(predecessor));
 			if (predecessorTerminator.kind !== "jump") continue;
 			const target = predecessorTerminator.edge.block;
 			if (
+				target === predecessor ||
 				target === fn.entry ||
 				target === fn.bodyEntry ||
 				protectedLoopBlocks.has(predecessor) ||
@@ -2029,14 +2039,75 @@ const mergeLinearBlocks: CorePass = {
 				continue;
 			const parameters = fn.blockParameters(target);
 			if (parameters.length !== predecessorTerminator.edge.arguments.length) continue;
-			const editor = CoreEditor.open(program, item.function);
-			for (const [index, parameter] of parameters.entries()) {
-				editor.replaceValueUses(
-					parameter.value,
-					predecessorTerminator.edge.arguments[index]!,
-				);
+			if (selectedBlocks.has(predecessor) || selectedBlocks.has(target)) continue;
+			const bodyInstructions = [...fn.bodyInstructionIds(target)];
+			const parameterValues = new Set(parameters.map(({ value }) => value));
+			const replacementInstructions = new Set(
+				[...parameterValues].flatMap((value) =>
+					[...fn.uses(value)].map(({ instruction }) => instruction),
+				),
+			);
+			const handlerEdits =
+				parameterValues.size === 0
+					? 0
+					: [...fn.blockIds()].filter((block) =>
+							fn
+								.blockHandler(block)
+								?.arguments.some((argument) => parameterValues.has(argument)),
+						).length;
+			const candidateEdits =
+				bodyInstructions.length + replacementInstructions.size + handlerEdits + 2;
+			if (estimatedEdits + candidateEdits > remainingEdits) continue;
+			selected.push({
+				predecessor,
+				target,
+				edgeArguments: predecessorTerminator.edge.arguments,
+				parameters: parameters.map(({ value }) => value),
+				bodyInstructions,
+			});
+			selectedBlocks.add(predecessor);
+			selectedBlocks.add(target);
+			estimatedEdits += candidateEdits;
+		}
+		if (selected.length === 0) return undefined;
+		const rawReplacements = new Map(
+			selected.flatMap(({ edgeArguments, parameters }) =>
+				parameters.map((parameter, index) => [parameter, edgeArguments[index]!] as const),
+			),
+		);
+		const resolveReplacement = (value: CoreValueId): CoreValueId | undefined => {
+			const seen = new Set<CoreValueId>([value]);
+			let replacement = rawReplacements.get(value)!;
+			while (rawReplacements.has(replacement)) {
+				if (seen.has(replacement)) return undefined;
+				seen.add(replacement);
+				replacement = rawReplacements.get(replacement)!;
 			}
-			for (const instruction of [...fn.bodyInstructionIds(target)]) {
+			return replacement;
+		};
+		let replacements = new Map<CoreValueId, CoreValueId>();
+		let cyclic = false;
+		for (const value of rawReplacements.keys()) {
+			const replacement = resolveReplacement(value);
+			if (replacement === undefined) {
+				cyclic = true;
+				break;
+			}
+			replacements.set(value, replacement);
+		}
+		if (cyclic) {
+			selected = [selected[0]!];
+			replacements = new Map(
+				selected[0]!.parameters.map((parameter, index) => [
+					parameter,
+					selected[0]!.edgeArguments[index]!,
+				]),
+			);
+		}
+		const editor = CoreEditor.open(program, item.function);
+		editor.replaceValueUsesMany(replacements);
+		for (const { predecessor, target, bodyInstructions } of selected) {
+			for (const instruction of bodyInstructions) {
 				editor.moveInstruction(instruction, predecessor, fn.blockTerminator(predecessor));
 			}
 			editor.replaceTerminator(
@@ -2044,9 +2115,8 @@ const mergeLinearBlocks: CorePass = {
 				fn.terminatorPayload(fn.blockTerminator(target)),
 			);
 			editor.removeBlock(target);
-			return editor.commit();
 		}
-		return undefined;
+		return editor.commit();
 	},
 };
 

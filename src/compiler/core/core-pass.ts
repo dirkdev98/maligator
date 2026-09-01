@@ -60,6 +60,7 @@ export interface CorePassContext {
 	readonly program: CoreProgram;
 	readonly compilationContext: CoreCompilationContext;
 	readonly item: CorePassWorkItem;
+	readonly remainingEdits: number;
 	analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result;
 }
 
@@ -100,12 +101,14 @@ export function corePassContext(
 	analyses: CoreAnalysisManager,
 	pass: CorePass,
 	item: CorePassWorkItem,
+	remainingEdits: number,
 ): CorePassContext {
 	const allowed = new Set(pass.requiredAnalyses.map(({ key }) => key));
 	return {
 		program,
 		compilationContext,
 		item,
+		remainingEdits,
 		analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result {
 			if (!allowed.has(definition.key)) {
 				throw new Error(

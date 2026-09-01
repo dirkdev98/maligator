@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreFunctionId, CoreValueId } from "../src/compiler/core/core-ir.ts";
+import { CORE_LOCAL_CANONICALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
 import type { CoreFunctionStore, CoreProgram } from "../src/compiler/core/core-store.ts";
 import { CoreProgram as MutableCoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
@@ -325,13 +329,25 @@ describe("Core empty forwarding blocks", () => {
 			current = next;
 		}
 		builder.setTerminator(current, { kind: "return", value: returned! });
-		const result = optimized({ program, function: builder.finish(entry).function });
+		const function_ = builder.finish(entry).function;
+		const optimization = optimizeCore(
+			{ program, context: programAnalysisContext() },
+			{ verification: "per-pass" },
+		);
+		const result = {
+			program: optimization.compilation.program,
+			fn: optimization.compilation.program.function(function_),
+		};
 		expect(blocks(result.fn)).toHaveLength(1);
 		expect(
 			[...result.fn.bodyInstructionIds(result.fn.entry)].filter(
 				(instruction) => result.fn.instructionOpcodeName(instruction) === "createObject",
 			),
 		).toHaveLength(20);
+		const merging = optimization.report.passes.find(
+			({ pass }) => pass === "linear-block-merging",
+		);
+		expect(merging?.changedItems).toBeLessThanOrEqual(6);
 	});
 
 	it("rewrites dominated uses when a linear merge deletes a narrowed phi", () => {
@@ -362,6 +378,54 @@ describe("Core empty forwarding blocks", () => {
 			value,
 		});
 		expect(result.fn.isValueLive(parameter)).toBe(false);
+	});
+
+	it("preserves parameter substitutions across disjoint linear pairs", () => {
+		const { program, builder } = fixture();
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: true },
+			outputRepresentations: ["boolean"],
+		});
+		const first = builder.createBlock([{ representation: "boolean" }]);
+		const middle = builder.createBlock();
+		const exit = builder.createBlock([{ representation: "boolean" }]);
+		const firstParameter = parameters(builder, first)[0]!;
+		const exitParameter = parameters(builder, exit)[0]!;
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: first, arguments: [value!] },
+		});
+		builder.appendInstruction(first, "createObject", []);
+		builder.setTerminator(first, {
+			kind: "jump",
+			edge: { block: middle, arguments: [] },
+		});
+		builder.appendInstruction(middle, "createObject", []);
+		builder.setTerminator(middle, {
+			kind: "jump",
+			edge: { block: exit, arguments: [firstParameter] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: exitParameter });
+		const function_ = builder.finish(entry).function;
+		const context = programAnalysisContext();
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const pass = CORE_LOCAL_CANONICALIZATION_PASSES.find(
+			({ name }) => name === "linear-block-merging",
+		)!;
+		new CorePassManager(program, context, analyses, report, {
+			verification: "per-pass",
+		}).runStage("canonicalize", [pass]);
+		verifyCoreProgram(program, { stage: "pre-target" }, context);
+		const result = { program, fn: program.function(function_) };
+
+		expect(blocks(result.fn)).toHaveLength(1);
+		expect(
+			result.fn.terminatorPayload(result.fn.blockTerminator(result.fn.entry)),
+		).toEqual({ kind: "return", value });
+		expect(result.fn.isValueLive(firstParameter)).toBe(false);
+		expect(result.fn.isValueLive(exitParameter)).toBe(false);
 	});
 
 	it("substitutes a linear block parameter in every call operand", () => {

@@ -155,6 +155,7 @@ export class CorePassManager {
 					this.#analyses,
 					work.pass,
 					work.item,
+					work.pass.budget.maxEdits - used.edits,
 				),
 			);
 			const elapsedMs = Date.now() - passStartedAt;
