@@ -20,6 +20,7 @@ import type {
 	CoreFunctionId,
 	CoreFunctionMetadata,
 	CoreFunctionOptions,
+	CoreImmediate,
 	CoreInstructionAttributes,
 	CoreInstructionEffects,
 	CoreInstructionId,
@@ -253,110 +254,157 @@ function sortedIds<Id extends number>(ids: ReadonlySet<Id>): Array<Id> {
 	return [...ids].sort((left, right) => left - right);
 }
 
-function cloneEdgeArguments(values: ReadonlyArray<CoreValueId>): Array<CoreValueId> {
-	return [...values];
+type CoreTerminatorShape =
+	| {
+			readonly kind: "jump";
+			readonly block: CoreBlockId;
+			readonly argumentCount: number;
+	  }
+	| {
+			readonly kind: "branch";
+			readonly consequentBlock: CoreBlockId;
+			readonly consequentArgumentCount: number;
+			readonly alternateBlock: CoreBlockId;
+			readonly alternateArgumentCount: number;
+	  }
+	| {
+			readonly kind: "guard";
+			readonly fact: CoreFactId;
+			readonly successBlock: CoreBlockId;
+			readonly successArgumentCount: number;
+			readonly fallbackBlock: CoreBlockId;
+			readonly fallbackArgumentCount: number;
+	  }
+	| {
+			readonly kind: "switch";
+			readonly cases: ReadonlyArray<{
+				readonly value: CoreImmediate;
+				readonly block: CoreBlockId;
+				readonly argumentCount: number;
+			}>;
+			readonly defaultBlock: CoreBlockId;
+			readonly defaultArgumentCount: number;
+	  }
+	| { readonly kind: "return" }
+	| { readonly kind: "throw" }
+	| { readonly kind: "unreachable" };
+
+function freezeImmediate(value: CoreImmediate): CoreImmediate {
+	return Object.freeze({ ...value });
 }
 
-function cloneTerminator(payload: CoreTerminatorPayload): CoreTerminatorPayload {
+function terminatorShape(payload: CoreTerminatorPayload): CoreTerminatorShape {
 	switch (payload.kind) {
 		case "jump":
-			return {
+			return Object.freeze({
 				kind: "jump",
-				edge: {
-					block: payload.edge.block,
-					arguments: cloneEdgeArguments(payload.edge.arguments),
-				},
-			};
+				block: payload.edge.block,
+				argumentCount: payload.edge.arguments.length,
+			});
 		case "branch":
-			return {
+			return Object.freeze({
 				kind: "branch",
-				condition: payload.condition,
-				consequent: {
-					block: payload.consequent.block,
-					arguments: cloneEdgeArguments(payload.consequent.arguments),
-				},
-				alternate: {
-					block: payload.alternate.block,
-					arguments: cloneEdgeArguments(payload.alternate.arguments),
-				},
-			};
+				consequentBlock: payload.consequent.block,
+				consequentArgumentCount: payload.consequent.arguments.length,
+				alternateBlock: payload.alternate.block,
+				alternateArgumentCount: payload.alternate.arguments.length,
+			});
 		case "guard":
-			return {
+			return Object.freeze({
 				kind: "guard",
-				condition: payload.condition,
 				fact: payload.fact,
-				success: {
-					block: payload.success.block,
-					arguments: cloneEdgeArguments(payload.success.arguments),
-				},
-				fallback: {
-					block: payload.fallback.block,
-					arguments: cloneEdgeArguments(payload.fallback.arguments),
-				},
-			};
-		case "switch":
-			return {
-				kind: "switch",
-				discriminant: payload.discriminant,
-				cases: payload.cases.map(({ value, edge }) => ({
-					value,
-					edge: { block: edge.block, arguments: cloneEdgeArguments(edge.arguments) },
-				})),
-				default: {
-					block: payload.default.block,
-					arguments: cloneEdgeArguments(payload.default.arguments),
-				},
-			};
-		case "return":
-		case "throw":
-			return { kind: payload.kind, value: payload.value };
-		case "unreachable":
-			return { kind: "unreachable" };
-	}
-}
-
-function freezeTerminator(payload: CoreTerminatorPayload): CoreTerminatorPayload {
-	const cloned = cloneTerminator(payload);
-	const edge = (value: CoreEdge): CoreEdge =>
-		Object.freeze({
-			block: value.block,
-			arguments: Object.freeze([...value.arguments]),
-		});
-	switch (cloned.kind) {
-		case "jump":
-			return Object.freeze({ kind: "jump", edge: edge(cloned.edge) });
-		case "branch":
-			return Object.freeze({
-				kind: "branch",
-				condition: cloned.condition,
-				consequent: edge(cloned.consequent),
-				alternate: edge(cloned.alternate),
-			});
-		case "guard":
-			return Object.freeze({
-				kind: "guard",
-				condition: cloned.condition,
-				fact: cloned.fact,
-				success: edge(cloned.success),
-				fallback: edge(cloned.fallback),
+				successBlock: payload.success.block,
+				successArgumentCount: payload.success.arguments.length,
+				fallbackBlock: payload.fallback.block,
+				fallbackArgumentCount: payload.fallback.arguments.length,
 			});
 		case "switch":
 			return Object.freeze({
 				kind: "switch",
-				discriminant: cloned.discriminant,
 				cases: Object.freeze(
-					cloned.cases.map(({ value, edge: caseEdge }) =>
-						Object.freeze({ value: Object.freeze({ ...value }), edge: edge(caseEdge) }),
+					payload.cases.map(({ value, edge }) =>
+						Object.freeze({
+							value: freezeImmediate(value),
+							block: edge.block,
+							argumentCount: edge.arguments.length,
+						}),
 					),
 				),
-				default: edge(cloned.default),
+				defaultBlock: payload.default.block,
+				defaultArgumentCount: payload.default.arguments.length,
 			});
 		case "return":
 		case "throw":
-			return Object.freeze({ kind: cloned.kind, value: cloned.value });
+			return Object.freeze({ kind: payload.kind });
 		case "unreachable":
 			return Object.freeze({ kind: "unreachable" });
 	}
+}
+
+function terminatorPayloadFromShape(
+	shape: CoreTerminatorShape,
+	operands: ReadonlyArray<CoreValueId>,
+): CoreTerminatorPayload {
+	let cursor = 0;
+	const takeValue = (): CoreValueId => {
+		const value = operands[cursor++];
+		if (value === undefined) throw new Error(`Malformed Core ${shape.kind} operands`);
+		return value;
+	};
+	const takeEdge = (block: CoreBlockId, count: number): CoreEdge => {
+		const end = cursor + count;
+		if (end > operands.length) throw new Error(`Malformed Core ${shape.kind} operands`);
+		const edge = { block, arguments: operands.slice(cursor, end) };
+		cursor = end;
+		return edge;
+	};
+	let payload: CoreTerminatorPayload;
+	switch (shape.kind) {
+		case "jump":
+			payload = {
+				kind: "jump",
+				edge: takeEdge(shape.block, shape.argumentCount),
+			};
+			break;
+		case "branch":
+			payload = {
+				kind: "branch",
+				condition: takeValue(),
+				consequent: takeEdge(shape.consequentBlock, shape.consequentArgumentCount),
+				alternate: takeEdge(shape.alternateBlock, shape.alternateArgumentCount),
+			};
+			break;
+		case "guard":
+			payload = {
+				kind: "guard",
+				condition: takeValue(),
+				fact: shape.fact,
+				success: takeEdge(shape.successBlock, shape.successArgumentCount),
+				fallback: takeEdge(shape.fallbackBlock, shape.fallbackArgumentCount),
+			};
+			break;
+		case "switch":
+			payload = {
+				kind: "switch",
+				discriminant: takeValue(),
+				cases: shape.cases.map(({ value, block, argumentCount }) => ({
+					value: { ...value },
+					edge: takeEdge(block, argumentCount),
+				})),
+				default: takeEdge(shape.defaultBlock, shape.defaultArgumentCount),
+			};
+			break;
+		case "return":
+		case "throw":
+			payload = { kind: shape.kind, value: takeValue() };
+			break;
+		case "unreachable":
+			payload = { kind: "unreachable" };
+			break;
+	}
+	if (cursor !== operands.length)
+		throw new Error(`Malformed Core ${shape.kind} operands`);
+	return payload;
 }
 
 function freezeAttribute(value: CoreAttributeValue): CoreAttributeValue {
@@ -520,7 +568,7 @@ export class CoreFunctionStore {
 	readonly #instructionSourcePosition: Array<number> = [];
 	readonly #instructionEffectRefinementRef: Array<number> = [];
 	readonly #instructionPayload: Array<
-		CoreInstructionAttributes | CoreTerminatorPayload | undefined
+		CoreInstructionAttributes | CoreTerminatorShape | undefined
 	> = [];
 	readonly #operands: Array<CoreValueId> = [];
 	readonly #operandUses: Array<number> = [];
@@ -910,14 +958,17 @@ export class CoreFunctionStore {
 		if (this.instructionKind(id) !== "operation") {
 			throw new Error(`Core instruction ${id} is not an operation`);
 		}
-		return (this.#instructionPayload[id] as CoreInstructionAttributes | undefined) ?? {};
+		return this.#instructionPayload[id] ?? {};
 	}
 
 	terminatorPayload(id: CoreInstructionId): CoreTerminatorPayload {
 		if (this.instructionKind(id) === "operation") {
 			throw new Error(`Core instruction ${id} is not a terminator`);
 		}
-		return cloneTerminator(this.#instructionPayload[id] as CoreTerminatorPayload);
+		return terminatorPayloadFromShape(
+			this.#instructionPayload[id] as CoreTerminatorShape,
+			this.instructionOperands(id),
+		);
 	}
 
 	valueRepresentation(id: CoreValueId): CoreRepresentation {
@@ -1105,7 +1156,7 @@ export class CoreFunctionStore {
 			TERMINATOR_CODES[payload.kind],
 			terminatorOperands(payload),
 			[],
-			freezeTerminator(payload),
+			terminatorShape(payload),
 			sourcePosition,
 			undefined,
 			undefined,
@@ -1306,7 +1357,7 @@ export class CoreFunctionStore {
 			throw new Error(`Core instruction ${instruction} is not a terminator`);
 		}
 		this.#instructionOpcode[instruction] = TERMINATOR_CODES[payload.kind];
-		this.#instructionPayload[instruction] = freezeTerminator(payload);
+		this.#instructionPayload[instruction] = terminatorShape(payload);
 		this._replaceOperands(mutation, instruction, terminatorOperands(payload));
 	}
 
@@ -1401,7 +1452,7 @@ export class CoreFunctionStore {
 		opcode: CoreOpcodeId | number,
 		operands: ReadonlyArray<CoreValueId>,
 		outputRepresentations: ReadonlyArray<CoreRepresentation>,
-		payload: CoreInstructionAttributes | CoreTerminatorPayload,
+		payload: CoreInstructionAttributes | CoreTerminatorShape,
 		sourcePosition: number | undefined,
 		effectRefinement: CoreEffectRefinement | undefined,
 		before: CoreInstructionId | undefined,

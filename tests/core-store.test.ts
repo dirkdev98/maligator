@@ -7,7 +7,12 @@ import {
 	CoreOpcodeRegistry,
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
-import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreEdge,
+	CoreTerminatorPayload,
+	CoreValueId,
+} from "../src/compiler/core/core-ir.ts";
 import * as coreStore from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 
@@ -60,6 +65,216 @@ function oneFunction(program = new CoreProgram(registry())) {
 	};
 }
 
+function terminatorFixture(kind: CoreTerminatorPayload["kind"]) {
+	const program = new CoreProgram(registry());
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
+	const entry = builder.createBlock([
+		{ representation: "boxed" },
+		{ representation: "boxed" },
+		{ representation: "boxed" },
+	]);
+	const [condition, first, second] = builder
+		.blockParameters(entry)
+		.map(({ value }) => value) as [CoreValueId, CoreValueId, CoreValueId];
+	let expected: CoreTerminatorPayload;
+
+	switch (kind) {
+		case "jump": {
+			const target = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			builder.setTerminator(target, {
+				kind: "return",
+				value: builder.blockParameters(target)[0]!.value,
+			});
+			expected = { kind, edge: { block: target, arguments: [first, second] } };
+			builder.setTerminator(entry, expected);
+			break;
+		}
+		case "branch": {
+			const consequent = builder.createBlock([{ representation: "boxed" }]);
+			const alternate = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			builder.setTerminator(consequent, {
+				kind: "return",
+				value: builder.blockParameters(consequent)[0]!.value,
+			});
+			builder.setTerminator(alternate, {
+				kind: "return",
+				value: builder.blockParameters(alternate)[0]!.value,
+			});
+			expected = {
+				kind,
+				condition,
+				consequent: { block: consequent, arguments: [first] },
+				alternate: { block: alternate, arguments: [first, second] },
+			};
+			builder.setTerminator(entry, expected);
+			break;
+		}
+		case "guard": {
+			const success = builder.createBlock([{ representation: "boxed" }]);
+			const fallback = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			builder.setTerminator(success, {
+				kind: "return",
+				value: builder.blockParameters(success)[0]!.value,
+			});
+			builder.setTerminator(fallback, {
+				kind: "return",
+				value: builder.blockParameters(fallback)[0]!.value,
+			});
+			const fact = builder.setGuardTerminator(entry, {
+				condition,
+				success: { block: success, arguments: [first] },
+				fallback: { block: fallback, arguments: [first, second] },
+				fact: {
+					kind: "terminator-storage",
+					value: true,
+					claims: [],
+					origin: "test",
+				},
+			});
+			expected = {
+				kind,
+				condition,
+				fact,
+				success: { block: success, arguments: [first] },
+				fallback: { block: fallback, arguments: [first, second] },
+			};
+			break;
+		}
+		case "switch": {
+			const firstCase = builder.createBlock([{ representation: "boxed" }]);
+			const secondCase = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			const defaultBlock = builder.createBlock();
+			builder.setTerminator(firstCase, {
+				kind: "return",
+				value: builder.blockParameters(firstCase)[0]!.value,
+			});
+			builder.setTerminator(secondCase, {
+				kind: "return",
+				value: builder.blockParameters(secondCase)[0]!.value,
+			});
+			builder.setTerminator(defaultBlock, { kind: "unreachable" });
+			expected = {
+				kind,
+				discriminant: condition,
+				cases: [
+					{
+						value: { kind: "number", value: 1 },
+						edge: { block: firstCase, arguments: [first] },
+					},
+					{
+						value: { kind: "number", value: 2 },
+						edge: { block: secondCase, arguments: [first, second] },
+					},
+				],
+				default: { block: defaultBlock, arguments: [] },
+			};
+			builder.setTerminator(entry, expected);
+			break;
+		}
+		case "return":
+		case "throw":
+			expected = { kind, value: first };
+			builder.setTerminator(entry, expected);
+			break;
+		case "unreachable":
+			expected = { kind };
+			builder.setTerminator(entry, expected);
+			break;
+	}
+
+	const finished = builder.finish(entry);
+	const fn = program.function(finished.function);
+	return {
+		program,
+		fn,
+		entry,
+		condition,
+		first,
+		second,
+		instruction: fn.blockTerminator(entry),
+		expected,
+	};
+}
+
+function payloadOperands(payload: CoreTerminatorPayload): ReadonlyArray<CoreValueId> {
+	switch (payload.kind) {
+		case "jump":
+			return payload.edge.arguments;
+		case "branch":
+			return [
+				payload.condition,
+				...payload.consequent.arguments,
+				...payload.alternate.arguments,
+			];
+		case "guard":
+			return [
+				payload.condition,
+				...payload.success.arguments,
+				...payload.fallback.arguments,
+			];
+		case "switch":
+			return [
+				payload.discriminant,
+				...payload.cases.flatMap(({ edge }) => edge.arguments),
+				...payload.default.arguments,
+			];
+		case "return":
+		case "throw":
+			return [payload.value];
+		case "unreachable":
+			return [];
+	}
+}
+
+function mutateTerminatorSnapshot(payload: CoreTerminatorPayload): void {
+	const mutateEdge = (edge: CoreEdge) => {
+		(edge as { block: CoreBlockId }).block = 99 as CoreBlockId;
+		if (edge.arguments.length > 0) {
+			(edge.arguments as Array<CoreValueId>)[0] = 99 as CoreValueId;
+		}
+	};
+	switch (payload.kind) {
+		case "jump":
+			mutateEdge(payload.edge);
+			break;
+		case "branch":
+			(payload as { condition: CoreValueId }).condition = 99 as CoreValueId;
+			mutateEdge(payload.consequent);
+			mutateEdge(payload.alternate);
+			break;
+		case "guard":
+			(payload as { condition: CoreValueId }).condition = 99 as CoreValueId;
+			mutateEdge(payload.success);
+			mutateEdge(payload.fallback);
+			break;
+		case "switch":
+			(payload as { discriminant: CoreValueId }).discriminant = 99 as CoreValueId;
+			mutateEdge(payload.cases[0]!.edge);
+			(payload.cases[0]!.value as { value: number }).value = 99;
+			mutateEdge(payload.default);
+			break;
+		case "return":
+		case "throw":
+			(payload as { value: CoreValueId }).value = 99 as CoreValueId;
+			break;
+		case "unreachable":
+			(payload as { kind: string }).kind = "return";
+			break;
+	}
+}
+
 describe("Core store", () => {
 	it("checks function identities without enumerating the program", () => {
 		const { program, fn } = oneFunction();
@@ -83,6 +298,164 @@ describe("Core store", () => {
 		expect(fn.instructionOpcodeName(0 as never)).toBe("constant");
 		expect(fn.instructionPrevious(1 as never)).toBe(0);
 		expect(fn.instructionNext(1 as never)).toBe(2);
+	});
+
+	it.each([
+		"jump",
+		"branch",
+		"guard",
+		"switch",
+		"return",
+		"throw",
+		"unreachable",
+	] as const)("reconstructs %s inputs from one dense operand range", (kind) => {
+		const { program, fn, instruction, expected } = terminatorFixture(kind);
+		const operands = payloadOperands(expected);
+
+		expect(fn.terminatorPayload(instruction)).toEqual(expected);
+		expect(fn.instructionOperands(instruction)).toEqual(operands);
+		for (const value of new Set(operands)) {
+			const expectedUses = operands
+				.flatMap((candidate, operand) =>
+					candidate === value ? [{ instruction, operand }] : [],
+				)
+				.reverse();
+			expect([...fn.uses(value)]).toEqual(expectedUses);
+			expect(fn.valueUseCount(value)).toBe(expectedUses.length);
+		}
+
+		const operandSnapshot = fn.instructionOperands(instruction) as Array<CoreValueId>;
+		if (operandSnapshot.length > 0) operandSnapshot[0] = 99 as CoreValueId;
+		const payloadSnapshot = fn.terminatorPayload(instruction);
+		mutateTerminatorSnapshot(payloadSnapshot);
+		expect(fn.instructionOperands(instruction)).toEqual(operands);
+		expect(fn.terminatorPayload(instruction)).toEqual(expected);
+		expect(fn.terminatorPayload(instruction)).not.toBe(payloadSnapshot);
+
+		program.seal();
+		expect(() => verifyCoreProgram(program)).not.toThrow();
+	});
+
+	it("keeps terminator shape, operands, uses, and changed edges exact through edits", () => {
+		const { program, fn, entry, condition, first, second, instruction, expected } =
+			terminatorFixture("branch");
+		if (expected.kind !== "branch") throw new Error("expected branch fixture");
+		const initialLayout = fn.instructionLayout(instruction);
+		const redirect = CoreEditor.open(program, fn.id);
+		const redirected = redirect.createBlock([{ representation: "boxed" }]);
+		const redirectedParameter = fn.blockParameters(redirected)[0]!.value;
+		redirect.setTerminator(redirected, {
+			kind: "return",
+			value: redirectedParameter,
+		});
+		redirect.redirectEdge(entry, expected.consequent.block, {
+			block: redirected,
+			arguments: [second],
+		});
+		const redirectChanges = redirect.commit();
+		const redirectedLayout = fn.instructionLayout(instruction);
+
+		expect(fn.blockTerminator(entry)).toBe(instruction);
+		expect(fn.terminatorPayload(instruction)).toEqual({
+			...expected,
+			consequent: { block: redirected, arguments: [second] },
+		});
+		expect(fn.instructionOperands(instruction)).toEqual([
+			condition,
+			second,
+			first,
+			second,
+		]);
+		expect([...fn.uses(condition)]).toEqual([{ instruction, operand: 0 }]);
+		expect([...fn.uses(first)]).toEqual([{ instruction, operand: 2 }]);
+		expect([...fn.uses(second)]).toEqual([
+			{ instruction, operand: 3 },
+			{ instruction, operand: 1 },
+		]);
+		expect(redirectedLayout.operandStart).toBeGreaterThan(initialLayout.operandStart);
+		for (let index = 0; index < initialLayout.operandCount; index++) {
+			const oldOperand = fn.operandRecord(initialLayout.operandStart + index);
+			expect(fn.useLayout(oldOperand.use).live).toBe(false);
+		}
+		expect(redirectChanges.edges).toEqual([
+			{ kind: "control-flow", source: entry, target: expected.consequent.block },
+			{ kind: "control-flow", source: entry, target: expected.alternate.block },
+			{ kind: "control-flow", source: entry, target: redirected },
+		]);
+
+		const replace = CoreEditor.open(program, fn.id);
+		replace.replaceTerminator(entry, { kind: "throw", value: first });
+		const replaceChanges = replace.commit();
+
+		expect(fn.blockTerminator(entry)).toBe(instruction);
+		expect(fn.terminatorPayload(instruction)).toEqual({ kind: "throw", value: first });
+		expect(fn.instructionOperands(instruction)).toEqual([first]);
+		expect([...fn.uses(condition)]).toEqual([]);
+		expect([...fn.uses(first)]).toEqual([{ instruction, operand: 0 }]);
+		expect([...fn.uses(second)]).toEqual([]);
+		expect(replaceChanges.edges).toEqual([
+			{ kind: "control-flow", source: entry, target: expected.alternate.block },
+			{ kind: "control-flow", source: entry, target: redirected },
+		]);
+		program.seal();
+		expect(() => verifyCoreProgram(program)).not.toThrow();
+	});
+
+	it("reconstructs a terminator solely from dense operands after replacing value uses", () => {
+		const { program, fn, entry, condition, first, second, instruction, expected } =
+			terminatorFixture("branch");
+		if (expected.kind !== "branch") throw new Error("expected branch fixture");
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceValueUses(first, second);
+		const changes = editor.commit();
+
+		expect(fn.terminatorPayload(instruction)).toEqual({
+			...expected,
+			consequent: { ...expected.consequent, arguments: [second] },
+			alternate: { ...expected.alternate, arguments: [second, second] },
+		});
+		expect(fn.instructionOperands(instruction)).toEqual([
+			condition,
+			second,
+			second,
+			second,
+		]);
+		expect([...fn.uses(first)]).toEqual([]);
+		expect([...fn.uses(second)]).toEqual([
+			{ instruction, operand: 3 },
+			{ instruction, operand: 2 },
+			{ instruction, operand: 1 },
+		]);
+		expect(changes.instructions).toEqual([instruction]);
+		expect(changes.values).toEqual([condition, first, second]);
+		expect(changes.edges).toEqual([
+			{ kind: "control-flow", source: entry, target: expected.consequent.block },
+			{ kind: "control-flow", source: entry, target: expected.alternate.block },
+		]);
+		program.seal();
+		expect(() => verifyCoreProgram(program)).not.toThrow();
+	});
+
+	it("lets the verifier reject a replacement whose dense edge arguments are invalid", () => {
+		const { program, fn, entry, instruction, expected } = terminatorFixture("jump");
+		if (expected.kind !== "jump") throw new Error("expected jump fixture");
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceTerminator(entry, {
+			kind: "jump",
+			edge: { block: expected.edge.block, arguments: [] },
+		});
+		editor.commit();
+
+		expect(fn.terminatorPayload(instruction)).toEqual({
+			kind: "jump",
+			edge: { block: expected.edge.block, arguments: [] },
+		});
+		expect(fn.instructionOperands(instruction)).toEqual([]);
+		for (const value of expected.edge.arguments) expect([...fn.uses(value)]).toEqual([]);
+		program.seal();
+		expect(() => verifyCoreProgram(program)).toThrow(
+			/ordinary edge b0 -> b1 passes 0 values to 2 parameters/,
+		);
 	});
 
 	it("leaves tombstones and never reuses an instruction identity", () => {
