@@ -99,6 +99,16 @@ describe("bounded Core cross-call transforms", () => {
 			programCompilerWork: 1,
 		});
 		expect(compilerLimited.admit(candidate("work", 1, 2))).toBe("compiler-work-cost");
+
+		const ordered = new CoreTransformCandidateService();
+		for (const key of ["c", "a", "b"]) ordered.offer(candidate(key, 1));
+		expect(ordered.next()?.key).toBe("a");
+		ordered.offer(candidate("aa", 1));
+		expect([ordered.next()?.key, ordered.next()?.key, ordered.next()?.key]).toEqual([
+			"aa",
+			"b",
+			"c",
+		]);
 	});
 
 	it("separately discovers metadata and inline candidates", () => {

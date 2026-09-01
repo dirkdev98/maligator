@@ -13,7 +13,9 @@ export type CoreTransformKind =
 	| "string-split-projection"
 	| "string-slice-number"
 	| "regexp-exec-projection"
-	| "regexp-iterator-projection";
+	| "regexp-iterator-projection"
+	| "string-char-code-at-chain"
+	| "builtin-collection-call-chain";
 
 export type CoreTransformDeclineReason =
 	| "expansion-limit"
@@ -87,6 +89,8 @@ function transformKindCounts(): Record<CoreTransformKind, number> {
 		"string-slice-number": 0,
 		"regexp-exec-projection": 0,
 		"regexp-iterator-projection": 0,
+		"string-char-code-at-chain": 0,
+		"builtin-collection-call-chain": 0,
 	};
 }
 
@@ -102,6 +106,49 @@ function declineReasonCounts(): Record<CoreTransformDeclineReason, number> {
 		representation: 0,
 		"target-support": 0,
 	};
+}
+
+function candidatePrecedes(
+	left: CoreTransformCandidate,
+	right: CoreTransformCandidate,
+): boolean {
+	return left.key < right.key;
+}
+
+function pushCandidate(
+	heap: Array<CoreTransformCandidate>,
+	candidate: CoreTransformCandidate,
+): void {
+	let index = heap.length;
+	heap.push(candidate);
+	while (index > 0) {
+		const parent = Math.floor((index - 1) / 2);
+		if (!candidatePrecedes(candidate, heap[parent]!)) break;
+		heap[index] = heap[parent]!;
+		index = parent;
+	}
+	heap[index] = candidate;
+}
+
+function popCandidate(
+	heap: Array<CoreTransformCandidate>,
+): CoreTransformCandidate | undefined {
+	const first = heap[0];
+	const last = heap.pop();
+	if (first === undefined || last === undefined || heap.length === 0) return first;
+	let index = 0;
+	while (true) {
+		const left = index * 2 + 1;
+		if (left >= heap.length) break;
+		const right = left + 1;
+		const child =
+			right < heap.length && candidatePrecedes(heap[right]!, heap[left]!) ? right : left;
+		if (!candidatePrecedes(heap[child]!, last)) break;
+		heap[index] = heap[child]!;
+		index = child;
+	}
+	heap[index] = last;
+	return first;
 }
 
 export class CoreTransformCandidateService {
@@ -125,14 +172,13 @@ export class CoreTransformCandidateService {
 	offer(candidate: CoreTransformCandidate): boolean {
 		if (this.#known.has(candidate.key)) return false;
 		this.#known.add(candidate.key);
-		this.#queue.push(candidate);
+		pushCandidate(this.#queue, candidate);
 		this.#considered++;
 		return true;
 	}
 
 	next(): CoreTransformCandidate | undefined {
-		this.#queue.sort((left, right) => left.key.localeCompare(right.key));
-		return this.#queue.shift();
+		return popCandidate(this.#queue);
 	}
 
 	admit(candidate: CoreTransformCandidate): CoreTransformDeclineReason | undefined {
