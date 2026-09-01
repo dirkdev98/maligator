@@ -38,10 +38,6 @@ import type {
 	SemanticProgram,
 	StaticArgumentsAccess,
 } from "../frontend/semantic-analysis.ts";
-import type {
-	CompilerOptimizationDecision,
-	OptimizationPassDelta,
-} from "../shared/compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type {
@@ -78,10 +74,6 @@ interface CoreFrontendContext {
 	core: CoreProgram;
 	/** Shared immutable analysis seed and program summaries. */
 	facts: CompilerProgramFacts;
-	/** Profile-only structured decisions recorded while transforms still see candidates. */
-	optimizationDecisions?: Array<CompilerOptimizationDecision>;
-	/** Profile-only stable pass names and selected before/after compiler counters. */
-	optimizationTrace?: Array<OptimizationPassDelta>;
 
 	/**
 	 * Eval-completion mode: compile the entry (Script) so it returns its
@@ -767,17 +759,12 @@ export function constructSemanticProgramCore(
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
 		facts?: CompilerProgramFacts;
-		collectOptimizationDiagnostics?: boolean;
 	} = {},
 ): ConstructedCoreCompilation {
 	const program: CoreFrontendContext = {
 		semantic,
 		core: new CoreProgram(coreOpcodeRegistry),
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
-		optimizationDecisions:
-			options.collectOptimizationDiagnostics === true ? [] : undefined,
-		optimizationTrace: options.collectOptimizationDiagnostics === true ? [] : undefined,
-
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,
 		directEvalContext: options.directEvalContext ?? {
@@ -912,12 +899,6 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		program: program.core,
 		context: {
 			facts: program.facts,
-			...(program.optimizationDecisions === undefined
-				? {}
-				: { optimizationDecisions: [...program.optimizationDecisions] }),
-			...(program.optimizationTrace === undefined
-				? {}
-				: { optimizationTrace: [...program.optimizationTrace] }),
 			data: coreProgramDataFromSemantic(program.semantic, {
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
 				hostInstallCandidates,

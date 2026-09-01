@@ -1634,9 +1634,9 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function sum(count) { let total = 0; for (let index = 0; index < count; index++) total += (index & 31) - 16; return total; } globalThis.sum = sum;`,
 		);
-		expect(output).toMatch(/r\d+ = __nf_\d+_value - \(f64\) r\d+;/);
+		expect(output).toMatch(/r\d+ = r\d+ - r\d+;/);
 		expect(output).not.toMatch(
-			/r\d+ = mal_ops_number_value\(__nf_\d+_value - \(f64\) r\d+\);/,
+			/r\d+ = mal_ops_number_value\([^;]* - [^;]*\);/,
 		);
 	});
 
@@ -1648,13 +1648,13 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
 	});
 
-	it("keeps proven in-place numeric loop updates unboxed", () => {
+	it("keeps proven numeric loop updates unboxed", () => {
 		const output = emit(
 			`"use strict"; function count(limit) { let value = 0; while (value < limit) value++; return value; } globalThis.count = count;`,
 		);
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
-		expect(output).toContain("+= 1.0;");
+		expect(output).toMatch(/r\d+ = r\d+ \+ 1\.0;/);
 	});
 
 	it("takes a dense own-element fast path for the in operator", () => {
@@ -1672,7 +1672,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("static MalValue mal_compiled_1(");
 		expect(output).not.toContain("mal_vm_op_throw_if_tdz");
 		expect(output).not.toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
-		expect(output).toMatch(/(?: \+= |r\d+ = \(f64\) r\d+ \+ \(f64\) r\d+)/);
+		expect(output).toMatch(/r\d+ = r\d+ \+ r\d+;/);
 	});
 
 	it("does not synthesize watched epochs for ordinary resumable property loads", () => {

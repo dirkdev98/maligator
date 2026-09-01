@@ -18,6 +18,8 @@ import {
 } from "../compiler/frontend/semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
+import type { CoreOptimizationPlan } from "../compiler/core/core-ir-regions.ts";
+import type { CoreOptimizationReport } from "../compiler/core/core-optimization-report.ts";
 import {
 	serializeRuntimeImage,
 	WIRE_VERSION,
@@ -244,6 +246,8 @@ function buildTestGraph(
 
 export interface CompiledProfiledTestImage {
 	programImage: ProgramImage;
+	optimizationReport: CoreOptimizationReport;
+	optimizationPlan: CoreOptimizationPlan;
 	entries: Array<string>;
 	dependencies: Array<string>;
 }
@@ -285,11 +289,23 @@ export function compileProfiledTestImage(
 	const semantic = runSemanticAnalysisForGraph(graph);
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	let optimizationReport: CoreOptimizationReport | undefined;
+	let optimizationPlan: CoreOptimizationPlan | undefined;
+	const programImage = compileSemanticProgramToProgramImage(semantic, {
+		optimization: "full",
+		profile: true,
+		afterCoreOptimization(_program, _context, report, plan) {
+			optimizationReport = report;
+			optimizationPlan = plan;
+		},
+	});
+	if (optimizationReport === undefined || optimizationPlan === undefined) {
+		throw new Error("profiled test compilation lost its Core optimization sidecar");
+	}
 	return {
-		programImage: compileSemanticProgramToProgramImage(semantic, {
-			optimization: "full",
-			profile: true,
-		}),
+		programImage,
+		optimizationReport,
+		optimizationPlan,
 		entries,
 		dependencies,
 	};

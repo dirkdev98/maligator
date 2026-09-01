@@ -1,17 +1,19 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import {
+	CORE_LOCAL_PROVENANCE_ANALYSIS,
+	analyzeCoreProvenance,
+} from "./core-ir-provenance.ts";
+import type {
+	CoreAccessKey,
+	CoreNamedAllocationLayout,
+	CoreProvenance,
+} from "./core-ir-provenance.ts";
 import type {
 	CoreAccessMode,
 	CoreFunctionId,
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
-import {
-	analyzeCoreProvenance,
-} from "./core-ir-provenance.ts";
-import type {
-	CoreAccessKey,
-	CoreNamedAllocationLayout,
-} from "./core-ir-provenance.ts";
 import type { CoreProgram } from "./core-store.ts";
 
 export const CORE_SHAPE_ORIGIN_CAP = 4;
@@ -43,28 +45,40 @@ export interface CoreExactShapeOwnSlot {
 }
 
 function nonnegativeInteger(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && !Object.is(value, -0);
+	return (
+		typeof value === "number" &&
+		Number.isSafeInteger(value) &&
+		value >= 0 &&
+		!Object.is(value, -0)
+	);
 }
 
 export function coreShapeCaseCandidatesFromAttribute(
 	value: unknown,
 ): ReadonlyArray<CoreShapeCaseCandidate> | undefined {
-	if (!Array.isArray(value) || value.length < 1 || value.length > CORE_SHAPE_ORIGIN_CAP) return undefined;
+	if (!Array.isArray(value) || value.length < 1 || value.length > CORE_SHAPE_ORIGIN_CAP)
+		return undefined;
 	const identities = new Set<string>();
 	const candidates: Array<CoreShapeCaseCandidate> = [];
 	for (const entry of value as ReadonlyArray<unknown>) {
-		if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+		if (entry === null || typeof entry !== "object" || Array.isArray(entry))
+			return undefined;
 		const candidate = entry as Record<string, unknown>;
-		if (Object.keys(candidate).length !== 2 ||
+		if (
+			Object.keys(candidate).length !== 2 ||
 			!nonnegativeInteger(candidate.shapeFunctionIndex) ||
-			!nonnegativeInteger(candidate.shapeInstruction)) return undefined;
+			!nonnegativeInteger(candidate.shapeInstruction)
+		)
+			return undefined;
 		const identity = `${candidate.shapeFunctionIndex}:${candidate.shapeInstruction}`;
 		if (identities.has(identity)) return undefined;
 		identities.add(identity);
-		candidates.push(Object.freeze({
-			shapeFunctionIndex: candidate.shapeFunctionIndex,
-			shapeInstruction: candidate.shapeInstruction as CoreInstructionId,
-		}));
+		candidates.push(
+			Object.freeze({
+				shapeFunctionIndex: candidate.shapeFunctionIndex,
+				shapeInstruction: candidate.shapeInstruction as CoreInstructionId,
+			}),
+		);
 	}
 	return Object.freeze(candidates);
 }
@@ -72,33 +86,52 @@ export function coreShapeCaseCandidatesFromAttribute(
 export function coreShapeCaseSlotsFromAttribute(
 	value: unknown,
 ): ReadonlyArray<number> | undefined {
-	if (!Array.isArray(value) || value.length < 1 || value.length > CORE_SHAPE_ORIGIN_CAP ||
-		!value.every((slot) => nonnegativeInteger(slot) && slot < 64)) return undefined;
+	if (
+		!Array.isArray(value) ||
+		value.length < 1 ||
+		value.length > CORE_SHAPE_ORIGIN_CAP ||
+		!value.every((slot) => nonnegativeInteger(slot) && slot < 64)
+	)
+		return undefined;
 	return Object.freeze([...(value as ReadonlyArray<number>)]);
 }
 
-export function coreKnownOwnSlotFromAttribute(value: unknown): CoreKnownOwnSlot | undefined {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+export function coreKnownOwnSlotFromAttribute(
+	value: unknown,
+): CoreKnownOwnSlot | undefined {
+	if (value === null || typeof value !== "object" || Array.isArray(value))
+		return undefined;
 	const record = value as Record<string, unknown>;
-	if (Object.keys(record).length !== 1 || !Array.isArray(record.candidates) ||
-		record.candidates.length < 1 || record.candidates.length > CORE_SHAPE_ORIGIN_CAP) return undefined;
+	if (
+		Object.keys(record).length !== 1 ||
+		!Array.isArray(record.candidates) ||
+		record.candidates.length < 1 ||
+		record.candidates.length > CORE_SHAPE_ORIGIN_CAP
+	)
+		return undefined;
 	const identities = new Set<string>();
 	const candidates: Array<CoreKnownOwnSlotCandidate> = [];
 	for (const entry of record.candidates as ReadonlyArray<unknown>) {
-		if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+		if (entry === null || typeof entry !== "object" || Array.isArray(entry))
+			return undefined;
 		const candidate = entry as Record<string, unknown>;
-		if (Object.keys(candidate).length !== 3 ||
+		if (
+			Object.keys(candidate).length !== 3 ||
 			!nonnegativeInteger(candidate.shapeFunctionIndex) ||
 			!nonnegativeInteger(candidate.shapeInstruction) ||
-			!nonnegativeInteger(candidate.slot)) return undefined;
+			!nonnegativeInteger(candidate.slot)
+		)
+			return undefined;
 		const identity = `${candidate.shapeFunctionIndex}:${candidate.shapeInstruction}`;
 		if (identities.has(identity)) return undefined;
 		identities.add(identity);
-		candidates.push(Object.freeze({
-			shapeFunctionIndex: candidate.shapeFunctionIndex,
-			shapeInstruction: candidate.shapeInstruction as CoreInstructionId,
-			slot: candidate.slot,
-		}));
+		candidates.push(
+			Object.freeze({
+				shapeFunctionIndex: candidate.shapeFunctionIndex,
+				shapeInstruction: candidate.shapeInstruction as CoreInstructionId,
+				slot: candidate.slot,
+			}),
+		);
 	}
 	return Object.freeze({ candidates: Object.freeze(candidates) });
 }
@@ -106,11 +139,19 @@ export function coreKnownOwnSlotFromAttribute(value: unknown): CoreKnownOwnSlot 
 export function coreExactShapeOwnSlotFromAttribute(
 	value: unknown,
 ): CoreExactShapeOwnSlot | undefined {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+	if (value === null || typeof value !== "object" || Array.isArray(value))
+		return undefined;
 	const record = value as Record<string, unknown>;
-	if (Object.keys(record).length !== 2 || !nonnegativeInteger(record.slot) || record.slot >= 64) return undefined;
+	if (
+		Object.keys(record).length !== 2 ||
+		!nonnegativeInteger(record.slot) ||
+		record.slot >= 64
+	)
+		return undefined;
 	const origins = coreShapeCaseCandidatesFromAttribute(record.origins);
-	return origins === undefined ? undefined : Object.freeze({ slot: record.slot, origins });
+	return origins === undefined
+		? undefined
+		: Object.freeze({ slot: record.slot, origins });
 }
 
 export interface CoreShapeOrigin {
@@ -148,30 +189,43 @@ export interface CoreShapeProvenanceAnalysis {
 		base: CoreValueId,
 		key: CoreAccessKey,
 		mode: CoreAccessMode,
-	): { readonly layout: CoreNamedAllocationLayout; readonly slot: number; readonly origin: CoreShapeOrigin } | undefined;
+	):
+		| {
+				readonly layout: CoreNamedAllocationLayout;
+				readonly slot: number;
+				readonly origin: CoreShapeOrigin;
+		  }
+		| undefined;
 }
 
 export function analyzeCoreShapeProvenance(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
+	provenance: CoreProvenance = analyzeCoreProvenance(program, functionId),
 ): CoreShapeProvenanceAnalysis {
-	const provenance = analyzeCoreProvenance(program, functionId);
 	const origins = new Map<CoreInstructionId, CoreShapeOrigin>();
 	for (const layout of provenance.layouts) {
 		if (layout.kind !== "named-slots") continue;
-		origins.set(layout.instruction, Object.freeze({
-			function: functionId,
-			instruction: layout.instruction,
-			keys: layout.keys,
-		}));
+		origins.set(
+			layout.instruction,
+			Object.freeze({
+				function: functionId,
+				instruction: layout.instruction,
+				keys: layout.keys,
+			}),
+		);
 	}
 	let exactSlotQueries = 0;
 	const result: CoreShapeProvenanceAnalysis = {
 		function: functionId,
 		statistics: {
 			allocations: origins.size,
-			contained: [...origins].filter(([instruction]) => provenance.escape(instruction) === "contained").length,
-			get exactSlotQueries() { return exactSlotQueries; },
+			contained: [...origins].filter(
+				([instruction]) => provenance.escape(instruction) === "contained",
+			).length,
+			get exactSlotQueries() {
+				return exactSlotQueries;
+			},
 		},
 		candidates(value) {
 			const layout = provenance.allocationOf(value);
@@ -184,7 +238,8 @@ export function analyzeCoreShapeProvenance(
 		exactOwnSlot(base, key, mode) {
 			exactSlotQueries++;
 			const resolved = provenance.ownCell(base, key, mode);
-			if (resolved?.layout.kind !== "named-slots" || resolved.cell.kind !== "object-slot") return undefined;
+			if (resolved?.layout.kind !== "named-slots" || resolved.cell.kind !== "object-slot")
+				return undefined;
 			const slot = resolved.layout.keys.indexOf(resolved.cell.key);
 			const origin = origins.get(resolved.layout.instruction);
 			return slot < 0 || origin === undefined
@@ -195,16 +250,22 @@ export function analyzeCoreShapeProvenance(
 	return Object.freeze(result);
 }
 
-export const CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS: CoreAnalysisDefinition<CoreShapeProvenanceAnalysis> = {
-	key: "local-shape-provenance",
-	scope: "function",
-	functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
-	programDependencies: ["data"],
-	compute({ program, request }) {
-		if (request.scope !== "function") throw new Error("Expected function analysis request");
-		return analyzeCoreShapeProvenance(program, request.function);
-	},
-};
+export const CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS: CoreAnalysisDefinition<CoreShapeProvenanceAnalysis> =
+	{
+		key: "local-shape-provenance",
+		scope: "function",
+		functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
+		programDependencies: ["data"],
+		compute({ program, request, get }) {
+			if (request.scope !== "function")
+				throw new Error("Expected function analysis request");
+			return analyzeCoreShapeProvenance(
+				program,
+				request.function,
+				get(CORE_LOCAL_PROVENANCE_ANALYSIS, request),
+			);
+		},
+	};
 
 export function coreExactShapeOwnSlotDigest(value: unknown): string | undefined {
 	const claim = coreExactShapeOwnSlotFromAttribute(value);

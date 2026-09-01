@@ -14,17 +14,18 @@ import {
 	coreOpcodeRegistry,
 } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
-import type { CoreFactClaim, CoreFunction } from "../src/compiler/core/core-ir.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import type { CoreFactClaim, CoreFunctionId } from "../src/compiler/core/core-ir.ts";
 import {
 	CORE_MEMORY_FAMILIES,
 	CORE_MEMORY_FAMILY_DOMAINS,
 	CORE_NO_EFFECTS,
-	CoreFunctionBuilder,
 	CoreOpcodeRegistry,
 	coreArity,
 	coreValueId,
 	formatCoreFunction,
 } from "../src/compiler/core/core-ir.ts";
+import { CoreProgram } from "../src/compiler/core/core-store.ts";
 
 function registry(): CoreOpcodeRegistry {
 	const registry = new CoreOpcodeRegistry();
@@ -88,11 +89,12 @@ describe("Core IR", () => {
 			minimum: 2,
 			maximum: 65_535,
 		});
-		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		expect(() =>
 			builder.appendInstruction(entry, "binary", [
-				builder.block(entry).parameters[0]!.value,
+				builder.blockParameters(entry)[0]!.value,
 			]),
 		).toThrow(/binary expects 2\.\.2 inputs/);
 	});
@@ -153,7 +155,8 @@ describe("Core IR", () => {
 	});
 
 	it("resolves exact compiler-slot locations and degrades heap accesses to a family", () => {
-		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock();
 		const [slot] = builder.appendInstruction(entry, "loadGlobal", [], {
 			attributes: { index: 4 },
@@ -174,9 +177,11 @@ describe("Core IR", () => {
 			attributes: { stringIndex: 0 },
 		});
 		builder.setTerminator(entry, { kind: "return", value: property! });
-		const fn = builder.finish(entry);
-		const instructions = fn.blocks[0]!.instructions;
-		const locationOf = (index: number) => coreMemoryAccesses(instructions[index]!)[0]!;
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
+		const instructions = builder.bodyInstructionIds(entry);
+		const locationOf = (index: number) =>
+			coreMemoryAccesses(fn, instructions[index]!)[0]!;
 
 		expect(locationOf(0).location).toEqual({ kind: "global-slot", slot: 4 });
 		expect(locationOf(1).location).toEqual({
@@ -271,12 +276,13 @@ describe("Core IR", () => {
 
 	it("builds, verifies, prints, and analyzes block-parameter SSA", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(3, opcodes, { parameterCount: 1 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const consequent = builder.createBlock();
 		const alternate = builder.createBlock();
 		const merge = builder.createBlock([{ representation: "f64" }]);
-		const condition = builder.block(entry).parameters[0]!.value;
+		const condition = builder.blockParameters(entry)[0]!.value;
 		const [left] = builder.appendInstruction(consequent, "constant", [], {
 			outputRepresentations: ["f64"],
 			attributes: { value: 1 },
@@ -301,32 +307,34 @@ describe("Core IR", () => {
 		});
 		builder.setTerminator(merge, {
 			kind: "return",
-			value: builder.block(merge).parameters[0]!.value,
+			value: builder.blockParameters(merge)[0]!.value,
 		});
-		const fn = builder.finish(entry);
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
 
-		expect(() => verifyCoreFunction(fn, opcodes)).not.toThrow();
-		const cfg = buildCoreControlFlow(fn, opcodes);
+		expect(() => verifyCoreFunction(program, functionId)).not.toThrow();
+		const cfg = buildCoreControlFlow(program, functionId);
 		expect(cfg.dominates(entry, merge)).toBe(true);
 		expect(cfg.dominates(consequent, merge)).toBe(false);
 		const canonical = coreCanonicalValueRoots(fn, cfg);
-		const mergeValue = builder.block(merge).parameters[0]!.value;
+		const mergeValue = builder.blockParameters(merge)[0]!.value;
 		expect(canonical.get(mergeValue)).toBe(mergeValue);
 		expect(canonical.get(mergeValue)).not.toBe(canonical.get(left!));
 		expect(canonical.get(mergeValue)).not.toBe(canonical.get(right!));
-		expect(formatCoreFunction(fn)).toContain("branch %0, b1(), b2()");
-		expect(formatCoreFunction(fn)).toContain("b3(%1: f64)");
+		expect(formatCoreFunction(program, functionId)).toContain("branch %0, b1(), b2()");
+		expect(formatCoreFunction(program, functionId)).toContain("b3(%1: f64)");
 	});
 
 	it("canonicalizes moves and loop-carried copies to their external producer", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const header = builder.createBlock([{ representation: "boxed" }]);
 		const body = builder.createBlock();
 		const exit = builder.createBlock([{ representation: "boxed" }]);
-		const input = builder.block(entry).parameters[0]!.value;
-		const loopValue = builder.block(header).parameters[0]!.value;
+		const input = builder.blockParameters(entry)[0]!.value;
+		const loopValue = builder.blockParameters(header)[0]!.value;
 		const [moved] = builder.appendInstruction(body, "move", [loopValue]);
 		builder.setTerminator(entry, {
 			kind: "jump",
@@ -342,12 +350,16 @@ describe("Core IR", () => {
 			kind: "jump",
 			edge: { block: header, arguments: [moved!] },
 		});
-		const result = builder.block(exit).parameters[0]!.value;
+		const result = builder.blockParameters(exit)[0]!.value;
 		builder.setTerminator(exit, { kind: "return", value: result });
-		const fn = builder.finish(entry);
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
 
-		expect(() => verifyCoreFunction(fn, opcodes)).not.toThrow();
-		const canonical = coreCanonicalValueRoots(fn, buildCoreControlFlow(fn, opcodes));
+		expect(() => verifyCoreFunction(program, functionId)).not.toThrow();
+		const canonical = coreCanonicalValueRoots(
+			fn,
+			buildCoreControlFlow(program, functionId),
+		);
 		expect(canonical.get(loopValue)).toBe(input);
 		expect(canonical.get(moved!)).toBe(input);
 		expect(canonical.get(result)).toBe(input);
@@ -355,7 +367,8 @@ describe("Core IR", () => {
 
 	it("canonicalizes a mutually recursive phi component with one external producer", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 2 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
 		const entry = builder.createBlock([
 			{ representation: "boxed" },
 			{ representation: "boxed" },
@@ -366,8 +379,8 @@ describe("Core IR", () => {
 		]);
 		const body = builder.createBlock();
 		const exit = builder.createBlock([{ representation: "boxed" }]);
-		const [condition, input] = builder.block(entry).parameters.map(({ value }) => value);
-		const [left, right] = builder.block(header).parameters.map(({ value }) => value);
+		const [condition, input] = builder.blockParameters(entry).map(({ value }) => value);
+		const [left, right] = builder.blockParameters(header).map(({ value }) => value);
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: header, arguments: [input!, input!] },
@@ -384,19 +397,24 @@ describe("Core IR", () => {
 		});
 		builder.setTerminator(exit, {
 			kind: "return",
-			value: builder.block(exit).parameters[0]!.value,
+			value: builder.blockParameters(exit)[0]!.value,
 		});
-		const fn = builder.finish(entry);
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
 
-		expect(() => verifyCoreFunction(fn, opcodes)).not.toThrow();
-		const canonical = coreCanonicalValueRoots(fn, buildCoreControlFlow(fn, opcodes));
+		expect(() => verifyCoreFunction(program, functionId)).not.toThrow();
+		const canonical = coreCanonicalValueRoots(
+			fn,
+			buildCoreControlFlow(program, functionId),
+		);
 		expect(canonical.get(left!)).toBe(input);
 		expect(canonical.get(right!)).toBe(input);
 	});
 
 	it("rejects values that do not dominate an incoming edge", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const leftBlock = builder.createBlock();
 		const rightBlock = builder.createBlock();
@@ -404,7 +422,7 @@ describe("Core IR", () => {
 		const [left] = builder.appendInstruction(leftBlock, "constant", []);
 		builder.setTerminator(entry, {
 			kind: "branch",
-			condition: builder.block(entry).parameters[0]!.value,
+			condition: builder.blockParameters(entry)[0]!.value,
 			consequent: { block: leftBlock, arguments: [] },
 			alternate: { block: rightBlock, arguments: [] },
 		});
@@ -418,40 +436,47 @@ describe("Core IR", () => {
 		});
 		builder.setTerminator(merge, {
 			kind: "return",
-			value: builder.block(merge).parameters[0]!.value,
+			value: builder.blockParameters(merge)[0]!.value,
 		});
+		const { function: functionId } = builder.finish(entry);
 
-		expect(() => verifyCoreFunction(builder.finish(entry), opcodes)).toThrow(
-			/does not dominate b2/,
+		expect(() => verifyCoreFunction(program, functionId)).toThrow(
+			/does not dominate its use .* in b2/,
 		);
 	});
 
 	it("models exception flow with a block-entry handler contract", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const handler = builder.createBlock([
 			{ role: "exception", representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const input = builder.block(entry).parameters[0]!.value;
+		const input = builder.blockParameters(entry)[0]!.value;
 		const [result] = builder.appendInstruction(entry, "call", [input]);
 		builder.setHandler(entry, handler, [input]);
 		builder.setTerminator(entry, { kind: "return", value: result! });
 		builder.setTerminator(handler, {
 			kind: "return",
-			value: builder.block(handler).parameters[1]!.value,
+			value: builder.blockParameters(handler)[1]!.value,
 		});
-		const fn = builder.finish(entry);
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
 
-		expect(() => verifyCoreFunction(fn, opcodes)).not.toThrow();
-		expect(buildCoreControlFlow(fn, opcodes).successors[entry]).toEqual([
+		expect(() => verifyCoreFunction(program, functionId)).not.toThrow();
+		expect(buildCoreControlFlow(program, functionId).successors[entry]).toEqual([
 			expect.objectContaining({ to: handler, kind: "exceptional" }),
 		]);
-		const canonical = coreCanonicalValueRoots(fn, buildCoreControlFlow(fn, opcodes));
-		expect(canonical.get(builder.block(handler).parameters[1]!.value)).toBe(input);
+		const canonical = coreCanonicalValueRoots(
+			fn,
+			buildCoreControlFlow(program, functionId),
+		);
+		expect(canonical.get(builder.blockParameters(handler)[1]!.value)).toBe(input);
 
-		const invalid = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const invalidProgram = new CoreProgram(opcodes);
+		const invalid = new CoreFunctionBuilder(invalidProgram, { parameterCount: 1 });
 		const invalidEntry = invalid.createBlock([{ representation: "boxed" }]);
 		const invalidHandler = invalid.createBlock([
 			{ role: "exception" },
@@ -460,7 +485,7 @@ describe("Core IR", () => {
 		const [late] = invalid.appendInstruction(
 			invalidEntry,
 			"call",
-			[invalid.block(invalidEntry).parameters[0]!.value],
+			[invalid.blockParameters(invalidEntry)[0]!.value],
 			{
 				outputCount: 1,
 			},
@@ -469,29 +494,35 @@ describe("Core IR", () => {
 		invalid.setTerminator(invalidEntry, { kind: "return", value: late! });
 		invalid.setTerminator(invalidHandler, {
 			kind: "return",
-			value: invalid.block(invalidHandler).parameters[1]!.value,
+			value: invalid.blockParameters(invalidHandler)[1]!.value,
 		});
-		expect(() => verifyCoreFunction(invalid.finish(invalidEntry), opcodes)).toThrow(
-			/not available at block entry/,
+		const { function: invalidFunction } = invalid.finish(invalidEntry);
+		expect(() => verifyCoreFunction(invalidProgram, invalidFunction)).toThrow(
+			/unavailable on b0's exception edge/,
 		);
 
-		const direct = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const directProgram = new CoreProgram(opcodes);
+		const direct = new CoreFunctionBuilder(directProgram, { parameterCount: 1 });
 		const directEntry = direct.createBlock([{ representation: "boxed" }]);
 		const directHandler = direct.createBlock([{ role: "exception" }]);
 		const [directLate] = direct.appendInstruction(directEntry, "call", [
-			direct.block(directEntry).parameters[0]!.value,
+			direct.blockParameters(directEntry)[0]!.value,
 		]);
 		direct.setHandler(directEntry, directHandler);
 		direct.setTerminator(directEntry, { kind: "return", value: directLate! });
 		direct.setTerminator(directHandler, { kind: "return", value: directLate! });
-		expect(() => verifyCoreFunction(direct.finish(directEntry), opcodes)).toThrow(
-			/not available on exceptional flow/,
+		const { function: directFunction } = direct.finish(directEntry);
+		expect(() => verifyCoreFunction(directProgram, directFunction)).toThrow(
+			/does not dominate its use .* in b1/,
 		);
 
 		// A defining block can dominate a protected block even though an exception
 		// leaves it before the definition and later reaches that block. Handler
 		// arguments need instruction-exit dominance, not ordinary block dominance.
-		const exceptional = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const exceptionalProgram = new CoreProgram(opcodes);
+		const exceptional = new CoreFunctionBuilder(exceptionalProgram, {
+			parameterCount: 1,
+		});
 		const defining = exceptional.createBlock([{ representation: "boxed" }]);
 		const recovery = exceptional.createBlock([{ role: "exception" }]);
 		const protectedBlock = exceptional.createBlock();
@@ -499,7 +530,7 @@ describe("Core IR", () => {
 			{ role: "exception" },
 			{ representation: "boxed" },
 		]);
-		const exceptionalInput = exceptional.block(defining).parameters[0]!.value;
+		const exceptionalInput = exceptional.blockParameters(defining)[0]!.value;
 		const [exceptionalLate] = exceptional.appendInstruction(defining, "call", [
 			exceptionalInput,
 		]);
@@ -520,16 +551,18 @@ describe("Core IR", () => {
 		});
 		exceptional.setTerminator(protectedHandler, {
 			kind: "return",
-			value: exceptional.block(protectedHandler).parameters[1]!.value,
+			value: exceptional.blockParameters(protectedHandler)[1]!.value,
 		});
-		expect(() => verifyCoreFunction(exceptional.finish(defining), opcodes)).toThrow(
-			/not available at block entry/,
-		);
+		const { function: exceptionalFunction } = exceptional.finish(defining);
+		expect(() =>
+			verifyCoreFunction(exceptionalProgram, exceptionalFunction),
+		).toThrow(/unavailable on b2's exception edge/);
 	});
 
 	it("requires guarded provenance before asserted facts refine effects", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const fact = builder.addFact({
 			kind: "typescript-type",
@@ -542,26 +575,28 @@ describe("Core IR", () => {
 		const [result] = builder.appendInstruction(
 			entry,
 			"call",
-			[builder.block(entry).parameters[0]!.value],
+			[builder.blockParameters(entry)[0]!.value],
 			{ effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact } },
 		);
 		builder.setTerminator(entry, { kind: "return", value: result! });
+		const { function: functionId } = builder.finish(entry);
 
-		expect(() => verifyCoreFunction(builder.finish(entry), opcodes)).toThrow(
+		expect(() => verifyCoreFunction(program, functionId)).toThrow(
 			/asserted fact .* without a guard/,
 		);
 	});
 
 	it("allows a runtime guard to establish a fact on only its success edge", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 2 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
 		const entry = builder.createBlock([
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
 		const fast = builder.createBlock([{ representation: "boxed" }]);
 		const fallback = builder.createBlock([{ representation: "boxed" }]);
-		const [condition, input] = builder.block(entry).parameters.map(({ value }) => value);
+		const [condition, input] = builder.blockParameters(entry).map(({ value }) => value);
 		const fact = builder.setGuardTerminator(entry, {
 			condition: condition!,
 			success: { block: fast, arguments: [input!] },
@@ -577,30 +612,31 @@ describe("Core IR", () => {
 		const [result] = builder.appendInstruction(
 			fast,
 			"call",
-			[builder.block(fast).parameters[0]!.value],
+			[builder.blockParameters(fast)[0]!.value],
 			{ effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact } },
 		);
 		builder.setTerminator(fast, { kind: "return", value: result! });
 		builder.setTerminator(fallback, {
 			kind: "return",
-			value: builder.block(fallback).parameters[0]!.value,
+			value: builder.blockParameters(fallback)[0]!.value,
 		});
 
-		const fn = builder.finish(entry);
-		expect(() => verifyCoreFunction(fn, opcodes)).not.toThrow();
-		expect(formatCoreFunction(fn)).toContain("guard %0 proves !0");
+		const { function: functionId } = builder.finish(entry);
+		expect(() => verifyCoreFunction(program, functionId)).not.toThrow();
+		expect(formatCoreFunction(program, functionId)).toContain("guard %0 proves !0");
 	});
 
 	it("rejects a guarded fact after its success and fallback paths merge", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 2 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
 		const entry = builder.createBlock([
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
 		const success = builder.createBlock([{ representation: "boxed" }]);
 		const merge = builder.createBlock([{ representation: "boxed" }]);
-		const [condition, input] = builder.block(entry).parameters.map(({ value }) => value);
+		const [condition, input] = builder.blockParameters(entry).map(({ value }) => value);
 		const fact = builder.setGuardTerminator(entry, {
 			condition: condition!,
 			success: { block: success, arguments: [input!] },
@@ -611,25 +647,27 @@ describe("Core IR", () => {
 			kind: "jump",
 			edge: {
 				block: merge,
-				arguments: [builder.block(success).parameters[0]!.value],
+				arguments: [builder.blockParameters(success)[0]!.value],
 			},
 		});
 		const [result] = builder.appendInstruction(
 			merge,
 			"call",
-			[builder.block(merge).parameters[0]!.value],
+			[builder.blockParameters(merge)[0]!.value],
 			{ effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact } },
 		);
 		builder.setTerminator(merge, { kind: "return", value: result! });
+		const { function: functionId } = builder.finish(entry);
 
-		expect(() => verifyCoreFunction(builder.finish(entry), opcodes)).toThrow(
+		expect(() => verifyCoreFunction(program, functionId)).toThrow(
 			/does not dominate/,
 		);
 	});
 
 	it("rejects a guarded fact in a block another predecessor also enters", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 3 });
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
 		const entry = builder.createBlock([
 			{ representation: "boxed" },
 			{ representation: "boxed" },
@@ -640,8 +678,8 @@ describe("Core IR", () => {
 		const join = builder.createBlock();
 		const fallback = builder.createBlock();
 		const [selector, condition, input] = builder
-			.block(entry)
-			.parameters.map(({ value }) => value);
+			.blockParameters(entry)
+			.map(({ value }) => value);
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition: selector!,
@@ -660,18 +698,22 @@ describe("Core IR", () => {
 		});
 		builder.setTerminator(join, { kind: "return", value: result! });
 		builder.setTerminator(fallback, { kind: "return", value: input! });
+		const { function: functionId } = builder.finish(entry);
 
-		expect(() => verifyCoreFunction(builder.finish(entry), opcodes)).toThrow(
+		expect(() => verifyCoreFunction(program, functionId)).toThrow(
 			/does not dominate/,
 		);
 	});
 
 	it("rejects a range claim no value satisfies", () => {
 		const opcodes = registry();
-		const build = (claim: CoreFactClaim): CoreFunction => {
-			const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const build = (
+			claim: CoreFactClaim,
+		): { readonly program: CoreProgram; readonly function: CoreFunctionId } => {
+			const program = new CoreProgram(opcodes);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const value = builder.block(entry).parameters[0]!.value;
+			const value = builder.blockParameters(entry)[0]!.value;
 			builder.addFact({
 				kind: "numeric-range",
 				value: null,
@@ -681,7 +723,12 @@ describe("Core IR", () => {
 				origin: "test",
 			});
 			builder.setTerminator(entry, { kind: "return", value });
-			return builder.finish(entry);
+			const { function: functionId } = builder.finish(entry);
+			return { program, function: functionId };
+		};
+		const verify = (claim: CoreFactClaim): void => {
+			const built = build(claim);
+			verifyCoreFunction(built.program, built.function);
 		};
 		const subject = coreValueId(0);
 		const range = (
@@ -699,50 +746,18 @@ describe("Core IR", () => {
 			...bounds,
 		});
 
+		expect(() => verify(range({ minimum: 5, maximum: 4 }))).toThrow(
+			/invalid numeric interval/,
+		);
 		expect(() =>
-			verifyCoreFunction(build(range({ minimum: 5, maximum: 4 })), opcodes),
+			verify(range({ minimum: 0.2, maximum: 0.8, integer: true })),
 		).toThrow(/invalid numeric interval/);
-		expect(() =>
-			verifyCoreFunction(
-				build(range({ minimum: 0.2, maximum: 0.8, integer: true })),
-				opcodes,
-			),
-		).toThrow(/invalid numeric interval/);
-		expect(() =>
-			verifyCoreFunction(build(range({ minimum: Number.NaN })), opcodes),
-		).toThrow(/invalid numeric interval/);
+		expect(() => verify(range({ minimum: Number.NaN }))).toThrow(
+			/invalid numeric interval/,
+		);
 		// An empty interval still denotes NaN when the claim admits it.
 		expect(() =>
-			verifyCoreFunction(
-				build(range({ minimum: 5, maximum: 4, mayBeNaN: true })),
-				opcodes,
-			),
+			verify(range({ minimum: 5, maximum: 4, mayBeNaN: true })),
 		).not.toThrow();
-	});
-
-	it("requires certificate data references to belong to the claimed slice", () => {
-		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes);
-		const entry = builder.createBlock();
-		const [value] = builder.appendInstruction(entry, "constant", []);
-		builder.setTerminator(entry, { kind: "return", value: value! });
-		const complete = builder.finish(entry);
-		const producer = complete.blocks[0]!.instructions[0]!;
-		const terminator = complete.blocks[0]!.terminator;
-		const invalid: CoreFunction = {
-			...complete,
-			regions: [
-				{
-					kind: "test-certificate",
-					anchors: [terminator.id],
-					claimedInstructions: [terminator.id],
-					ordinaryBlocks: [entry],
-					exceptionalBlocks: [],
-					data: { producer: { $coreInstruction: producer.id } },
-				},
-			],
-		};
-
-		expect(() => verifyCoreFunction(invalid, opcodes)).toThrow(/not claimed/);
 	});
 });

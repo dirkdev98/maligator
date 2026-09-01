@@ -23,6 +23,9 @@ import {
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 
 const context: CoreCompilationContext = {
@@ -54,6 +57,34 @@ function program(): CoreProgram {
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it("scalar-replaces operand-rooted shaped-object updates", () => {
+		const source = `globalThis.update = function update(value) {
+			const point = { x: value, y: value + 1 };
+			point.x = point.x + point.y;
+			return point.x;
+		};`;
+		const compilation = optimizeSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				source,
+				"operand-rooted-object.js",
+				parseScript(source, { strict: false }),
+			),
+			{},
+			(_phase, run) => run(),
+		);
+		const functionId = [...compilation.program.functionIds()].find(
+			(candidate) => compilation.program.function(candidate).parameterCount === 1,
+		)!;
+		const fn = compilation.program.function(functionId);
+		const opcodes = [...fn.instructionIds()].flatMap((instruction) =>
+			fn.instructionKind(instruction) === "operation"
+				? [fn.instructionOpcodeName(instruction)]
+				: [],
+		);
+		expect(opcodes).not.toContain("createObjectShaped");
+		expect(opcodes).not.toContain("storePropertyStatic");
+	});
+
 	it("classifies exact own slots and scalar-replaces a contained shaped object", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);
@@ -537,11 +568,9 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		});
 		const [sum] = builder.appendInstruction(entry, "binary", [one!, one!], {
 			attributes: { operator: "+" },
-			outputRepresentations: ["f64"],
 		});
 		const [next] = builder.appendInstruction(entry, "binary", [sum!, one!], {
 			attributes: { operator: "+" },
-			outputRepresentations: ["f64"],
 		});
 		builder.appendInstruction(entry, "rootUse", [object!]);
 		builder.setTerminator(entry, { kind: "return", value: next! });

@@ -9,7 +9,6 @@ export interface CoreFrontendOptions {
 	readonly evalDirect?: boolean;
 	readonly directEvalContext?: DirectEvalContext;
 	readonly facts?: CompilerProgramFacts;
-	readonly collectOptimizationDiagnostics?: boolean;
 	readonly runPhase?: <T>(phase: "construct core ir", run: () => T) => T;
 }
 
@@ -26,7 +25,6 @@ export function lowerSemanticProgramToCore(
 			evalDirect: options.evalDirect,
 			directEvalContext: options.directEvalContext,
 			facts: options.facts,
-			collectOptimizationDiagnostics: options.collectOptimizationDiagnostics,
 		}),
 	);
 }

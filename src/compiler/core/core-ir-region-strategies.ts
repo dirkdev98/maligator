@@ -257,6 +257,18 @@ export const CORE_REGION_STRATEGIES = {
 		fallbackFrontier: "before-state-mutation",
 		maximumClaims: 16,
 	},
+	"function-call-chain": {
+		artifactTag: 25,
+		family: "operation-chain",
+		representation: "guarded-function-call-flattening",
+		composition: "exclusive",
+		correspondence: "operation-trace",
+		lifetime: "single-operation",
+		invalidatingEffects: ["guard-failure", "semantic-epoch-change"],
+		stateSynchronization: "none",
+		fallbackFrontier: "before-fast-operation",
+		maximumClaims: 2,
+	},
 } as const satisfies Record<string, CoreRegionStrategyDefinition>;
 
 export type RegisteredCoreRegionKind = keyof typeof CORE_REGION_STRATEGIES;
@@ -296,8 +308,66 @@ export function coreRegionKindFromArtifactTag(
 const CORE_PLAN_ONLY_TARGET_STRATEGIES: ReadonlySet<string> = new Set([
 	"dense-array-plan",
 	"guarded-direct-call",
+	"numeric-fusion",
+	"regexp-exec-projection",
+	"regexp-iterator-projection",
+	"stack-object-plan",
+	"string-slice-number",
+	"string-split-projection",
+	"string-char-code-at-chain",
+	"builtin-collection-call-chain",
+	"array-values-iterator-cursor",
+	"string-iterator-cursor",
+	"typed-array-iterator-cursor",
+	"map-iterator-cursor",
+	"set-iterator-cursor",
+	"iterator-result-virtualization",
+	"iterator-entry-pair-virtualization",
+	"fresh-array-length",
+	"indexed-length-loop",
+	"function-call-chain",
+	"string-split-cursor",
+]);
+
+const CORE_NUMERIC_FUSION_START_OPERATORS: ReadonlySet<string> = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+const CORE_NUMERIC_FUSION_FINISH_OPERATORS: ReadonlySet<string> = new Set([
+	...CORE_NUMERIC_FUSION_START_OPERATORS,
+	"<",
+	"<=",
+	">",
+	">=",
+	"==",
+	"!=",
+	"===",
+	"!==",
 ]);
 
 export function coreTargetSupportsSpecialization(kind: string): boolean {
-	return kind in CORE_REGION_STRATEGIES || CORE_PLAN_ONLY_TARGET_STRATEGIES.has(kind);
+	return CORE_PLAN_ONLY_TARGET_STRATEGIES.has(kind);
+}
+
+export function coreTargetSupportsNumericFusionOperator(
+	operator: unknown,
+	role: "start" | "finish",
+): operator is string {
+	return (
+		typeof operator === "string" &&
+		(role === "start"
+			? CORE_NUMERIC_FUSION_START_OPERATORS
+			: CORE_NUMERIC_FUSION_FINISH_OPERATORS
+		).has(operator)
+	);
 }

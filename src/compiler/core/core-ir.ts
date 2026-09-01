@@ -722,6 +722,7 @@ export type {
 	CoreChangeSet,
 	CoreChangedEdge,
 	CoreBlockLayout,
+	CoreEffectRefinementLayout,
 	CoreFunctionVersions,
 	CoreInstructionLayout,
 	CoreInstructionKind,

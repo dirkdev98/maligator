@@ -13,16 +13,23 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 	verifyExecutionProgram(program);
 	for (const [functionIndex, fn] of program.functions.entries()) {
 		if (fn.directEntries.length > 4) {
-			throw new ExecutionVerificationError("native function has too many direct entries", {
-				functionIndex,
-			});
+			throw new ExecutionVerificationError(
+				"native function has too many direct entries",
+				{
+					functionIndex,
+				},
+			);
 		}
 		for (const [entryIndex, entry] of fn.directEntries.entries()) {
-			if (entry.id !== entryIndex ||
+			if (
+				entry.id !== entryIndex ||
 				entry.parameterRepresentations.length !== fn.parameterCount ||
 				entry.registerRepresentations.length !== fn.registerCount ||
-				entry.parameterRepresentations.some((representation, parameter) =>
-					entry.registerRepresentations[parameter] !== representation)) {
+				entry.parameterRepresentations.some(
+					(representation, parameter) =>
+						entry.registerRepresentations[parameter] !== representation,
+				)
+			) {
 				throw new ExecutionVerificationError("native direct entry has an invalid ABI", {
 					functionIndex,
 				});

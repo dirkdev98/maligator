@@ -1,7 +1,11 @@
 import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
+import {
+	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
+	buildCoreControlFlow,
+	coreCanonicalValueRoots,
+} from "./core-ir-control-flow.ts";
 import type {
 	CoreFunctionId,
 	CoreInstructionEffects,
@@ -35,7 +39,7 @@ export function coreNumericTypedArrayKind(
 	value: unknown,
 ): CoreNumericTypedArrayKind | undefined {
 	return typeof value === "string" && NUMERIC_TYPED_ARRAY_KINDS.has(value)
-		? value as CoreNumericTypedArrayKind
+		? (value as CoreNumericTypedArrayKind)
 		: undefined;
 }
 
@@ -59,15 +63,21 @@ export function coreExactCollectionBuiltinEffects(
 	instruction: CoreInstructionId,
 	provenBrand?: CoreExactCollectionBrand,
 ): CoreInstructionEffects | undefined {
-	if (fn.instructionKind(instruction) !== "operation" ||
-		fn.instructionOpcodeName(instruction) !== "callBuiltin") return undefined;
+	if (
+		fn.instructionKind(instruction) !== "operation" ||
+		fn.instructionOpcodeName(instruction) !== "callBuiltin"
+	)
+		return undefined;
 	const operation = fn.instructionAttributes(instruction).operation;
 	const expected = coreCollectionReceiverBrandForOperation(operation);
-	const exact = provenBrand ?? coreExactCollectionBrand(
-		fn.instructionAttributes(instruction)[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE],
-	);
+	const exact =
+		provenBrand ??
+		coreExactCollectionBrand(
+			fn.instructionAttributes(instruction)[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE],
+		);
 	if (expected === undefined || exact !== expected) return undefined;
-	const writes = operation === "Map.prototype.set" ||
+	const writes =
+		operation === "Map.prototype.set" ||
 		operation === "Map.prototype.delete" ||
 		operation === "Set.prototype.add" ||
 		operation === "Set.prototype.delete";
@@ -89,35 +99,58 @@ export interface CoreValueClassAnalysis {
 		readonly seeded: number;
 		readonly propagated: number;
 	};
-	exactHeapBrand(value: CoreValueId, at?: CoreInstructionId): CoreExactHeapBrand | undefined;
-	exactNumericTypedArray(value: CoreValueId, at?: CoreInstructionId): CoreNumericTypedArrayKind | undefined;
-	containedCollection(value: CoreValueId, at?: CoreInstructionId): CoreExactCollectionBrand | undefined;
+	exactHeapBrand(
+		value: CoreValueId,
+		at?: CoreInstructionId,
+	): CoreExactHeapBrand | undefined;
+	exactNumericTypedArray(
+		value: CoreValueId,
+		at?: CoreInstructionId,
+	): CoreNumericTypedArrayKind | undefined;
+	containedCollection(
+		value: CoreValueId,
+		at?: CoreInstructionId,
+	): CoreExactCollectionBrand | undefined;
 }
 
 export function analyzeCoreValueClasses(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 	context?: CoreCompilationContext,
+	canonicalRoots?: ReadonlyMap<CoreValueId, CoreValueId>,
 ): CoreValueClassAnalysis {
 	const fn = program.function(functionId);
-	const roots = coreCanonicalValueRoots(fn, buildCoreControlFlow(program, functionId));
+	const roots =
+		canonicalRoots ??
+		coreCanonicalValueRoots(fn, buildCoreControlFlow(program, functionId));
 	const brands = new Array<CoreExactHeapBrand | undefined>(fn.valueCapacity);
 	const unsafe = new Uint8Array(fn.valueCapacity);
 	let seeded = 0;
 	if (context?.facts.world.primordialPolicy === "locked") {
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "construct") continue;
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "construct"
+			)
+				continue;
 			const callee = fn.instructionOperands(instruction)[0];
 			const output = fn.instructionResults(instruction)[0];
 			if (callee === undefined || output === undefined) continue;
 			const calleeRoot = roots.get(callee) ?? callee;
 			const definition = fn.valueDefinition(calleeRoot);
-			if (definition.kind !== "instruction" ||
+			if (
+				definition.kind !== "instruction" ||
 				fn.instructionKind(definition.instruction) !== "operation" ||
-				fn.instructionOpcodeName(definition.instruction) !== "loadIntrinsic") continue;
-			const brand = coreNumericTypedArrayKind(fn.instructionAttributes(definition.instruction).intrinsic) ??
-				coreExactCollectionBrand(fn.instructionAttributes(definition.instruction).intrinsic);
+				fn.instructionOpcodeName(definition.instruction) !== "loadIntrinsic"
+			)
+				continue;
+			const brand =
+				coreNumericTypedArrayKind(
+					fn.instructionAttributes(definition.instruction).intrinsic,
+				) ??
+				coreExactCollectionBrand(
+					fn.instructionAttributes(definition.instruction).intrinsic,
+				);
 			if (brand !== undefined) {
 				brands[roots.get(output) ?? output] = brand;
 				seeded++;
@@ -127,7 +160,8 @@ export function analyzeCoreValueClasses(
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const attributes = fn.instructionAttributes(instruction);
-		const brand = coreNumericTypedArrayKind(attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]) ??
+		const brand =
+			coreNumericTypedArrayKind(attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]) ??
 			coreExactCollectionBrand(attributes[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE]);
 		if (brand === undefined) continue;
 		for (const output of fn.instructionResults(instruction)) {
@@ -161,8 +195,12 @@ export function analyzeCoreValueClasses(
 				const operation = fn.instructionAttributes(use.instruction).operation;
 				const expected = coreCollectionReceiverBrandForOperation(operation);
 				if (expected === brand) {
-					if ((operation === "Map.prototype.set" || operation === "Set.prototype.add") &&
-						fn.instructionResults(use.instruction).some((output) => fn.valueUseCount(output) > 0)) {
+					if (
+						(operation === "Map.prototype.set" || operation === "Set.prototype.add") &&
+						fn
+							.instructionResults(use.instruction)
+							.some((output) => fn.valueUseCount(output) > 0)
+					) {
 						unsafe[valueRoot] = 1;
 					}
 					continue;
@@ -182,28 +220,39 @@ export function analyzeCoreValueClasses(
 		},
 		containedCollection(value) {
 			const valueRoot = roots.get(value) ?? value;
-			return unsafe[valueRoot] === 0 ? coreExactCollectionBrand(brands[valueRoot]) : undefined;
+			return unsafe[valueRoot] === 0
+				? coreExactCollectionBrand(brands[valueRoot])
+				: undefined;
 		},
 	};
 	return Object.freeze(result);
 }
 
-export const CORE_LOCAL_VALUE_CLASS_ANALYSIS: CoreAnalysisDefinition<CoreValueClassAnalysis> = {
-	key: "local-value-classes",
-	scope: "function",
-	functionDependencies: ["body", "cfg", "exceptionFlow", "facts", "representations"],
-	contextIdentity: (context) => context.facts.world.primordialPolicy,
-	compute({ program, context, request }) {
-		if (request.scope !== "function") throw new Error("Expected function analysis request");
-		return analyzeCoreValueClasses(program, request.function, context);
-	},
-};
+export const CORE_LOCAL_VALUE_CLASS_ANALYSIS: CoreAnalysisDefinition<CoreValueClassAnalysis> =
+	{
+		key: "local-value-classes",
+		scope: "function",
+		functionDependencies: ["body", "cfg", "exceptionFlow", "facts", "representations"],
+		contextIdentity: (context) => context.facts.world.primordialPolicy,
+		compute({ program, context, request, get }) {
+			if (request.scope !== "function")
+				throw new Error("Expected function analysis request");
+			return analyzeCoreValueClasses(
+				program,
+				request.function,
+				context,
+				get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request),
+			);
+		},
+	};
 
 export interface CoreExactHeapSelection {
 	readonly program: CoreProgram;
 	readonly changed: boolean;
 }
 
-export function selectCoreExactHeapAccesses(program: CoreProgram): CoreExactHeapSelection {
+export function selectCoreExactHeapAccesses(
+	program: CoreProgram,
+): CoreExactHeapSelection {
 	return Object.freeze({ program, changed: false });
 }

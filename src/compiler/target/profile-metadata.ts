@@ -493,7 +493,6 @@ export function buildProfileMetadata(
 	const sites: Array<ProfileSite> = [];
 	const remarks: Array<CompilerRemark> = [];
 	const remarkKeys = new Set<string>();
-	const decisionSiteByKey = new Map<string, number>();
 	const addRemark = (siteId: number, remark: Omit<CompilerRemark, "siteId">): void => {
 		const remarkKey = `${siteId}:${remark.code}:${remark.reason ?? ""}`;
 		if (remarkKeys.has(remarkKey)) return;
@@ -520,71 +519,6 @@ export function buildProfileMetadata(
 				: (runtime.files[candidate.fileIndex] ?? "<unknown>"),
 		);
 	};
-	const ensureDecisionSite = (
-		functionIndex: number,
-		positionId: number,
-		operation: string,
-	): number | undefined => {
-		const decisionKey = `${functionIndex}:${positionId}:${operation}`;
-		const existing = decisionSiteByKey.get(decisionKey);
-		if (existing !== undefined) return existing;
-		const position = runtime.sourcePositions[positionId];
-		if (position === undefined) return undefined;
-		const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
-		const leafFile = functionFile(leafFunctionIndex);
-		const leafSource = fileByPath.get(leafFile)?.contents ?? "";
-		const anchor = (leafSource.split("\n")[position.line - 1] ?? "")
-			.trim()
-			.replaceAll(/\s+/g, " ");
-		const inlineChain: Array<{ functionIndex: number; positionId: number }> = [];
-		let chainPositionId = positionId;
-		let guard = 0;
-		while (chainPositionId >= 0 && guard++ < 1024) {
-			const chainPosition = runtime.sourcePositions[chainPositionId];
-			if (chainPosition === undefined) break;
-			inlineChain.push({
-				functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
-				positionId: chainPositionId,
-			});
-			chainPositionId = chainPosition.callerPosId ?? -1;
-		}
-		const chainKey = inlineChain
-			.map((entry) => {
-				const chainPosition = runtime.sourcePositions[entry.positionId]!;
-				const chainFile = functionFile(entry.functionIndex);
-				const chainSource = fileByPath.get(chainFile)?.contents ?? "";
-				const chainAnchor = (chainSource.split("\n")[chainPosition.line - 1] ?? "")
-					.trim()
-					.replaceAll(/\s+/g, " ");
-				return `${relativeFile(chainFile)}:${functionName(entry.functionIndex)}:${chainAnchor}:${chainPosition.column}`;
-			})
-			.join("<-");
-		const originKey = `${relativeFile(leafFile)}\u0000${functionName(leafFunctionIndex)}\u0000${anchor}\u0000${position.column}\u0000${operation}\u00000`;
-		const originId = logicalId(originKey);
-		const instanceId = logicalId(`${originKey}\u0000${chainKey}`);
-		const physicalFile = functionFile(functionIndex);
-		const siteId = sites.length;
-		sites.push({
-			id: siteId,
-			logicalId: instanceId,
-			originId,
-			instanceId,
-			regionId: logicalId(
-				`${relativeFile(physicalFile)}\u0000${functionName(functionIndex)}\u0000${chainKey}`,
-			),
-			functionIndex,
-			instructionIndex: -1,
-			positionId,
-			file: relativeFile(leafFile),
-			line: position.line,
-			column: position.column,
-			operation,
-			inlineChain,
-		});
-		decisionSiteByKey.set(decisionKey, siteId);
-		return siteId;
-	};
-
 	for (const [functionIndex, fn] of runtime.functions.entries()) {
 		const physicalFile = normalizedPath(runtime.files[fn.fileIndex] ?? "<unknown>");
 		const siteIds = new Array<number>(fn.instructions.length).fill(-1);
@@ -651,10 +585,6 @@ export function buildProfileMetadata(
 				inlineChain,
 			});
 			siteIds[instructionIndex] = siteId;
-			const decisionKey = `${functionIndex}:${positionId}:${operation}`;
-			if (!decisionSiteByKey.has(decisionKey)) {
-				decisionSiteByKey.set(decisionKey, siteId);
-			}
 			const compilerSiteId =
 				image.native.functions[functionIndex]?.compilerSiteIds?.[instructionIndex];
 			const compilerSite =
@@ -669,22 +599,6 @@ export function buildProfileMetadata(
 			}
 		}
 		fn.profileSiteIds = siteIds;
-	}
-
-	for (const decision of context.optimizationDecisions ?? []) {
-		const siteId = ensureDecisionSite(
-			decision.functionIndex,
-			decision.positionId,
-			decision.operation,
-		);
-		if (siteId === undefined) continue;
-		addRemark(siteId, {
-			phase: decision.phase,
-			operation: decision.operation,
-			code: decision.code,
-			outcome: decision.outcome,
-			...(decision.reason === undefined ? {} : { reason: decision.reason }),
-		});
 	}
 
 	image.diagnostics.profileSites = sites;

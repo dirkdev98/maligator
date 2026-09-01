@@ -1,6 +1,7 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
 import type {
+	CoreBlockId,
 	CoreFunctionId,
 	CoreInstructionId,
 	SealedCoreProgram,
@@ -28,10 +29,7 @@ export interface ExecutionFunctionMap {
 	readonly executionToCore: ReadonlyArray<CoreFunctionId>;
 }
 
-export function executionFunctionIndex(
-	map: ExecutionFunctionMap,
-	core: number,
-): number {
+export function executionFunctionIndex(map: ExecutionFunctionMap, core: number): number {
 	if (!Number.isSafeInteger(core) || core < 0) {
 		throw new Error(`Invalid Core function reference ${core}`);
 	}
@@ -105,6 +103,7 @@ export interface ExecutionFunction {
 	readonly blocks: ReadonlyArray<{
 		readonly instructions: ReadonlyArray<CompilerInstruction>;
 	}>;
+	readonly coreBlocks: ReadonlyArray<CoreBlockId>;
 	/** Typed Core decisions, already relocated to allocated registers and blocks. */
 	readonly specializations: ReadonlyArray<CoreAllocatedRegion>;
 	readonly isGenerator: boolean;

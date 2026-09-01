@@ -8,6 +8,7 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { vmExceptionHandlerTargets } from "../src/compiler/target/runtime-image.ts";
+import { coreFunctions, coreOperations } from "./helpers/core-inspection.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
@@ -31,9 +32,8 @@ test("super reads retain their receiver through Core, lowering, and wire encodin
 			optional() { return super.x?.(); }
 		}
 	`);
-	const superLoads = core.functions
-		.flatMap((fn) => fn.blocks)
-		.flatMap((block) => block.instructions)
+	const superLoads = coreFunctions(core)
+		.flatMap(coreOperations)
 		.filter((instruction) => instruction.opcode === "loadSuperProperty");
 	expect(superLoads.length).toBeGreaterThanOrEqual(7);
 	for (const load of superLoads) {
@@ -61,27 +61,24 @@ test("object literal methods are non-constructible without depending on sibling 
 	const withSuper = compile(
 		`const object = { method() {}, other() { return super.x; } };`,
 	).core;
-	expect(withoutSuper.functions[1]?.metadata.hasPrototype).toBe(false);
-	expect(withSuper.functions[1]?.metadata.hasPrototype).toBe(false);
+	expect(coreFunctions(withoutSuper)[1]?.metadata.hasPrototype).toBe(false);
+	expect(coreFunctions(withSuper)[1]?.metadata.hasPrototype).toBe(false);
 	expect(
-		withoutSuper.functions
-			.flatMap(({ blocks }) => blocks)
-			.flatMap(({ instructions }) => instructions)
+		coreFunctions(withoutSuper)
+			.flatMap(coreOperations)
 			.filter(({ opcode }) => opcode === "createObjectShaped"),
 	).toHaveLength(1);
 	expect(
-		withSuper.functions
-			.flatMap(({ blocks }) => blocks)
-			.flatMap(({ instructions }) => instructions)
+		coreFunctions(withSuper)
+			.flatMap(coreOperations)
 			.filter(({ opcode }) => opcode === "createObjectShaped"),
 	).toHaveLength(0);
 });
 
 test("class heritage defines the constructor prototype without ordinary assignment", () => {
 	const { core, semantic } = compile(`class B {}; class D extends B {}`);
-	const prototypeDefinitions = core.functions
-		.flatMap((fn) => fn.blocks)
-		.flatMap((block) => block.instructions)
+	const prototypeDefinitions = coreFunctions(core)
+		.flatMap(coreOperations)
 		.filter(
 			(instruction) =>
 				instruction.opcode === "defineProperty" &&

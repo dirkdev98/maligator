@@ -1,6 +1,6 @@
 import { effectSummaryCovers, normalizeEffectSummary } from "../shared/effect-summary.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type {
 	CoreBlockId,
@@ -9,6 +9,7 @@ import type {
 	CoreFactId,
 	CoreInstructionEffects,
 	CoreInstructionId,
+	CoreValueId,
 } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -343,7 +344,8 @@ function guardSuccess(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): { readonly from: CoreBlockId; readonly to: CoreBlockId } | undefined {
-	if (!fn.isInstructionLive(instruction) || fn.instructionKind(instruction) !== "guard") return undefined;
+	if (!fn.isInstructionLive(instruction) || fn.instructionKind(instruction) !== "guard")
+		return undefined;
 	const payload = fn.terminatorPayload(instruction);
 	return payload.kind === "guard"
 		? { from: fn.instructionBlock(instruction), to: payload.success.block }
@@ -356,28 +358,88 @@ export function analyzeCoreFactAvailability(
 ): CoreFactAvailabilityAnalysis {
 	const factIds = [...fn.factIds()];
 	const available = new Array<ReadonlyArray<CoreFactId> | undefined>(fn.blockCapacity);
-	const guardAvailable = (instruction: CoreInstructionId, block: CoreBlockId): boolean => {
+	const instructionOrder = new Int32Array(fn.instructionCapacity);
+	for (const block of fn.blockIds()) {
+		let point = 0;
+		for (const instruction of fn.instructionIds(block)) {
+			instructionOrder[instruction] = point++;
+		}
+	}
+	const guardAvailable = (
+		instruction: CoreInstructionId,
+		block: CoreBlockId,
+	): boolean => {
 		const success = guardSuccess(fn, instruction);
 		return success !== undefined && cfg.dominatesEdge(success.from, success.to, block);
 	};
 	const factAvailable = (fact: CoreFact, block: CoreBlockId): boolean => {
-		if (fact.validity.kind === "guard" && !guardAvailable(fact.validity.instruction, block)) return false;
-		return fact.obligations.every((obligation) =>
-			obligation.kind !== "guard" || guardAvailable(obligation.instruction, block),
+		if (fact.validity.kind === "guard") {
+			if (!guardAvailable(fact.validity.instruction, block)) return false;
+		} else if (fact.validity.kind !== "world" && fact.validity.kind !== "summary") {
+			if (!fact.obligations.some(({ kind }) => kind === "guard")) return false;
+		}
+		return fact.obligations.every(
+			(obligation) =>
+				obligation.kind !== "guard" || guardAvailable(obligation.instruction, block),
 		);
 	};
-	const atBlock = (block: CoreBlockId): ReadonlyArray<CoreFactId> => {
+	const valueAvailableAtInstruction = (
+		subject: CoreValueId,
+		instruction: CoreInstructionId,
+	): boolean => {
+		const block = fn.instructionBlock(instruction);
+		const definition = fn.valueDefinition(subject);
+		if (definition.kind === "block-parameter") {
+			return definition.block === block || cfg.dominates(definition.block, block);
+		}
+		const definitionBlock = fn.instructionBlock(definition.instruction);
+		return definitionBlock === block
+			? instructionOrder[definition.instruction]! < instructionOrder[instruction]!
+			: cfg.instructionDominatesBlock(definitionBlock, block);
+	};
+	const subjectsAvailableAtInstruction = (
+		fact: CoreFact,
+		instruction: CoreInstructionId,
+	): boolean =>
+		fact.claims.every(
+			(claim) =>
+				claim.kind === "effect" ||
+				valueAvailableAtInstruction(claim.subject, instruction),
+		);
+	const validAtBlock = (block: CoreBlockId): ReadonlyArray<CoreFactId> => {
 		const cached = available[block];
 		if (cached !== undefined) return cached;
-		const result = Object.freeze(factIds.filter((fact) => factAvailable(fn.fact(fact), block)));
+		const result = Object.freeze(
+			factIds.filter((fact) => factAvailable(fn.fact(fact), block)),
+		);
 		available[block] = result;
 		return result;
 	};
+	const valueAvailableAtBlock = (subject: CoreValueId, block: CoreBlockId): boolean => {
+		const definition = fn.valueDefinition(subject);
+		return definition.kind === "block-parameter"
+			? definition.block === block || cfg.dominates(definition.block, block)
+			: cfg.instructionDominatesBlock(fn.instructionBlock(definition.instruction), block);
+	};
+	const subjectsAvailableAtBlock = (fact: CoreFact, block: CoreBlockId): boolean =>
+		fact.claims.every(
+			(claim) => claim.kind === "effect" || valueAvailableAtBlock(claim.subject, block),
+		);
+	const atBlock = (block: CoreBlockId): ReadonlyArray<CoreFactId> =>
+		Object.freeze(
+			validAtBlock(block).filter((fact) =>
+				subjectsAvailableAtBlock(fn.fact(fact), block),
+			),
+		);
 	const result: CoreFactAvailabilityAnalysis = {
 		facts: Object.freeze(factIds),
 		availableAtBlock: atBlock,
 		availableAtInstruction(instruction) {
-			return atBlock(fn.instructionBlock(instruction));
+			return Object.freeze(
+				validAtBlock(fn.instructionBlock(instruction)).filter((fact) =>
+					subjectsAvailableAtInstruction(fn.fact(fact), instruction),
+				),
+			);
 		},
 		impliesAtBlock(block, required) {
 			return atBlock(block).find((fact) => coreFactImplies(fn.fact(fact), required));
@@ -386,15 +448,16 @@ export function analyzeCoreFactAvailability(
 	return Object.freeze(result);
 }
 
-export const CORE_FACT_AVAILABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFactAvailabilityAnalysis> = {
-	key: "fact-availability",
-	scope: "function",
-	functionDependencies: ["facts", "body", "cfg"],
-	compute({ program, request }) {
-		if (request.scope !== "function") throw new Error("Expected function analysis");
-		return analyzeCoreFactAvailability(
-			program.function(request.function),
-			buildCoreControlFlow(program, request.function, { exceptions: true }),
-		);
-	},
-};
+export const CORE_FACT_AVAILABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFactAvailabilityAnalysis> =
+	{
+		key: "fact-availability",
+		scope: "function",
+		functionDependencies: ["facts", "body", "cfg"],
+		compute({ program, request, get }) {
+			if (request.scope !== "function") throw new Error("Expected function analysis");
+			return analyzeCoreFactAvailability(
+				program.function(request.function),
+				get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request),
+			);
+		},
+	};

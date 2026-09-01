@@ -5,10 +5,7 @@ import {
 	isCoreOpcode,
 } from "../core/core-ir-opcodes.ts";
 import type { CoreOpcode } from "../core/core-ir-opcodes.ts";
-import type {
-	CoreInstructionId,
-	CoreOpcodeRegistry,
-} from "../core/core-ir.ts";
+import type { CoreInstructionId, CoreOpcodeRegistry } from "../core/core-ir.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 

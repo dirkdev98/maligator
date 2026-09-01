@@ -306,7 +306,7 @@ const hoistLoopInvariants: CorePass = {
 	],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	preserves: ["control-flow", "exception-control-flow"],
-	changes: { ...CONTROL_FLOW_CHANGES, cfg: false },
+	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
@@ -363,7 +363,7 @@ const eliminateDominatedRedundancy: CorePass = {
 	],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
 	preserves: ["exception-control-flow"],
-	changes: { ...CONTROL_FLOW_CHANGES, cfg: false },
+	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
@@ -663,7 +663,11 @@ const LOOP_SCALAR_OPERATIONS: ReadonlySet<string> = new Set([
 	"rootUse",
 ]);
 
-const LOOP_SCALAR_CONSUMERS: ReadonlySet<string> = new Set(["storeProperty"]);
+const LOOP_SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
+	"loadProperty",
+	"storeProperty",
+	"throwIfTdz",
+]);
 
 const LOOP_SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 	"createNumber",
@@ -695,7 +699,11 @@ const selectLoopScalarRepresentations: CorePass = {
 		if (inductions.length === 0) return undefined;
 		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const inductionValues = new Set(
+			inductions.flatMap(({ value, initial, update }) => [value, initial, update]),
+		);
 		const numeric = (value: CoreValueId): boolean => {
+			if (inductionValues.has(value)) return true;
 			const scalar = kinds.exactScalar(value);
 			return scalar === "number" || scalar === "int32";
 		};
@@ -765,10 +773,23 @@ const selectLoopScalarRepresentations: CorePass = {
 				!LOOP_SCALAR_PRODUCERS.has(fn.instructionOpcodeName(definition.instruction))
 			)
 				return undefined;
-			for (const { instruction } of fn.uses(value)) {
+			for (const { instruction, operand } of fn.uses(value)) {
 				if (fn.instructionKind(instruction) !== "operation") continue;
 				const opcode = fn.instructionOpcodeName(instruction);
-				if (!LOOP_SCALAR_OPERATIONS.has(opcode) && !LOOP_SCALAR_CONSUMERS.has(opcode))
+				const builtin = fn.instructionAttributes(instruction).knownBuiltinCall;
+				const builtinOperation =
+					builtin !== null && typeof builtin === "object" && !Array.isArray(builtin)
+						? Object.entries(builtin).find(([key]) => key === "operation")?.[1]
+						: undefined;
+				const stringCharCodeAtPosition =
+					opcode === "call" &&
+					operand === 2 &&
+					builtinOperation === "String.prototype.charCodeAt";
+				if (
+					!LOOP_SCALAR_OPERATIONS.has(opcode) &&
+					!LOOP_SCALAR_CONSUMERS.has(opcode) &&
+					!stringCharCodeAtPosition
+				)
 					return undefined;
 			}
 		}

@@ -15,7 +15,18 @@ export type CoreTransformKind =
 	| "regexp-exec-projection"
 	| "regexp-iterator-projection"
 	| "string-char-code-at-chain"
-	| "builtin-collection-call-chain";
+	| "builtin-collection-call-chain"
+	| "array-values-iterator-cursor"
+	| "string-iterator-cursor"
+	| "typed-array-iterator-cursor"
+	| "map-iterator-cursor"
+	| "set-iterator-cursor"
+	| "iterator-result-virtualization"
+	| "iterator-entry-pair-virtualization"
+	| "fresh-array-length"
+	| "indexed-length-loop"
+	| "function-call-chain"
+	| "string-split-cursor";
 
 export type CoreTransformDeclineReason =
 	| "expansion-limit"
@@ -91,6 +102,17 @@ function transformKindCounts(): Record<CoreTransformKind, number> {
 		"regexp-iterator-projection": 0,
 		"string-char-code-at-chain": 0,
 		"builtin-collection-call-chain": 0,
+		"array-values-iterator-cursor": 0,
+		"string-iterator-cursor": 0,
+		"typed-array-iterator-cursor": 0,
+		"map-iterator-cursor": 0,
+		"set-iterator-cursor": 0,
+		"iterator-result-virtualization": 0,
+		"iterator-entry-pair-virtualization": 0,
+		"fresh-array-length": 0,
+		"indexed-length-loop": 0,
+		"function-call-chain": 0,
+		"string-split-cursor": 0,
 	};
 }
 

@@ -21,11 +21,20 @@ describe("Core local shape provenance", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);
 		const entry = builder.createBlock();
-		const [first] = builder.appendInstruction(entry, "createNumber", [], { attributes: { value: 1 } });
-		const [second] = builder.appendInstruction(entry, "createNumber", [], { attributes: { value: 2 } });
-		const [object] = builder.appendInstruction(entry, "createObjectShaped", [first!, second!], {
-			attributes: { keyStringIndices: [0, 1] },
+		const [first] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
 		});
+		const [second] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		const [object] = builder.appendInstruction(
+			entry,
+			"createObjectShaped",
+			[first!, second!],
+			{
+				attributes: { keyStringIndices: [0, 1] },
+			},
+		);
 		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
 			attributes: { stringIndex: 1 },
 		});
@@ -38,14 +47,19 @@ describe("Core local shape provenance", () => {
 			"read",
 		);
 		expect(slot).toMatchObject({ slot: 1, origin: { function: finished.function } });
-		expect(analysis.candidates(object!)).toMatchObject({ opaque: false, origins: [{ keys: [0, 1] }] });
+		expect(analysis.candidates(object!)).toMatchObject({
+			opaque: false,
+			origins: [{ keys: [0, 1] }],
+		});
 	});
 
 	it("does not publish an exact slot after an out-of-layout access", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);
 		const entry = builder.createBlock();
-		const [first] = builder.appendInstruction(entry, "createNumber", [], { attributes: { value: 1 } });
+		const [first] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
 		const [object] = builder.appendInstruction(entry, "createObjectShaped", [first!], {
 			attributes: { keyStringIndices: [0] },
 		});
@@ -55,7 +69,9 @@ describe("Core local shape provenance", () => {
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		const finished = builder.finish(entry);
 		const analysis = analyzeCoreShapeProvenance(core, finished.function);
-		expect(analysis.exactOwnSlot(object!, { kind: "string-constant", index: 0 }, "read")).toBeUndefined();
+		expect(
+			analysis.exactOwnSlot(object!, { kind: "string-constant", index: 0 }, "read"),
+		).toBeUndefined();
 	});
 
 	it("keeps opaque values separate from finite allocation origins", () => {
@@ -65,9 +81,9 @@ describe("Core local shape provenance", () => {
 		const parameter = builder.blockParameters(entry)[0]!.value;
 		builder.setTerminator(entry, { kind: "return", value: parameter });
 		const finished = builder.finish(entry);
-		expect(analyzeCoreShapeProvenance(core, finished.function).candidates(parameter)).toBe(
-			CORE_SHAPE_CANDIDATES_OPAQUE,
-		);
+		expect(
+			analyzeCoreShapeProvenance(core, finished.function).candidates(parameter),
+		).toBe(CORE_SHAPE_CANDIDATES_OPAQUE);
 	});
 
 	it("parses target certificates without trusting malformed candidate data", () => {
@@ -76,19 +92,25 @@ describe("Core local shape provenance", () => {
 		};
 		expect(coreKnownOwnSlotFromAttribute(known)).toEqual(known);
 		expect(coreKnownOwnSlotFromAttribute({ candidates: [] })).toBeUndefined();
-		expect(coreKnownOwnSlotFromAttribute({
-			candidates: [known.candidates[0], known.candidates[0]],
-		})).toBeUndefined();
-		expect(coreShapeCaseCandidatesFromAttribute([
-			{ shapeFunctionIndex: 0, shapeInstruction: 3 },
-		])).toHaveLength(1);
+		expect(
+			coreKnownOwnSlotFromAttribute({
+				candidates: [known.candidates[0], known.candidates[0]],
+			}),
+		).toBeUndefined();
+		expect(
+			coreShapeCaseCandidatesFromAttribute([
+				{ shapeFunctionIndex: 0, shapeInstruction: 3 },
+			]),
+		).toHaveLength(1);
 	});
 
 	it("requires a bounded slot and nonempty origins for exact-shape certificates", () => {
-		expect(coreExactShapeOwnSlotFromAttribute({
-			slot: 2,
-			origins: [{ shapeFunctionIndex: 0, shapeInstruction: 3 }],
-		})).toMatchObject({ slot: 2 });
+		expect(
+			coreExactShapeOwnSlotFromAttribute({
+				slot: 2,
+				origins: [{ shapeFunctionIndex: 0, shapeInstruction: 3 }],
+			}),
+		).toMatchObject({ slot: 2 });
 		expect(coreExactShapeOwnSlotFromAttribute({ slot: 64, origins: [] })).toBeUndefined();
 	});
 });

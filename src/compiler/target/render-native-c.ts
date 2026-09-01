@@ -563,9 +563,15 @@ function emitCompiledVariant(
 			region,
 			site,
 		);
+		const elided =
+			site.accesses.length === 0 &&
+			site.inheritedAccessIp === undefined &&
+			site.materializations.length === 0;
 		stackObjectSites.set(site.allocationIp, {
 			objectName: `__stack_object_${site.allocationIp}`,
-			...(scalarSlotRepresentation === undefined
+			...(elided
+				? { elided: true }
+				: scalarSlotRepresentation === undefined
 				? { slotsOffset: nextStackSlot }
 				: {
 						scalarSlot: {
@@ -575,7 +581,7 @@ function emitCompiledVariant(
 					}),
 			slotCount: site.slotCount,
 		});
-		if (scalarSlotRepresentation === undefined) nextStackSlot += site.slotCount;
+		if (!elided && scalarSlotRepresentation === undefined) nextStackSlot += site.slotCount;
 	}
 	const stackObjectMaterializations = new Map<number, StackObjectSite>();
 	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
@@ -609,7 +615,9 @@ function emitCompiledVariant(
 			if (
 				access?.ip !== action.ip ||
 				(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
-					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+					instruction?.opcode !== "STORE_PROPERTY_STATIC" &&
+					instruction?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+					instruction?.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") ||
 				access.slot < 0 ||
 				access.slot >= site.slotCount ||
 				stackObjectAccesses.has(action.ip)
@@ -888,6 +896,7 @@ function emitCompiledVariant(
 		lines.push(`    MalValue __gc_slots[${totalSlots}];`);
 	}
 	for (const site of stackObjectSites.values()) {
+		if (site.elided === true) continue;
 		lines.push(`    MalObject ${site.objectName};`);
 		if (site.scalarSlot !== undefined) {
 			lines.push(
@@ -1510,6 +1519,7 @@ function nativeIteratorCursorProtocol(cursor: NativeIteratorCursor): string {
 
 interface StackObjectSite {
 	objectName: string;
+	elided?: true;
 	slotsOffset?: number;
 	slotCount: number;
 	scalarSlot?: {
@@ -1553,9 +1563,11 @@ function stackObjectScalarSlotRepresentation(
 		if (access.slot !== 0) return undefined;
 		const instruction = fn.instructions[access.ip];
 		const register =
-			instruction?.opcode === "LOAD_PROPERTY_STATIC"
+			instruction?.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction?.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
 				? instruction.dst
-				: instruction?.opcode === "STORE_PROPERTY_STATIC"
+				: instruction?.opcode === "STORE_PROPERTY_STATIC" ||
+					  instruction?.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
 					? instruction.value
 					: undefined;
 		if (
@@ -3077,12 +3089,18 @@ function emitInstruction(
 			if (stackObjectSite === undefined) {
 				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`, throwCheck];
 			}
+			if (stackObjectSite.elided === true) {
+				return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
+			}
 			return [
 				"mal_perf_stack_object_init();",
 				`${stackObjectSite.objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = mal_shape_root(&vm->heap), .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = nullptr, .overflow = nullptr };`,
 				`r${instruction.dst} = mal_value_from_object(&${stackObjectSite.objectName});`,
 			];
 		case "CREATE_OBJECT_SHAPED": {
+			if (stackObjectSite?.elided === true) {
+				return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
+			}
 			// Build the literal's shape once in the VM-owned dense site row and
 			// create the object directly in it — no per-property defines.
 			const keys = instruction.keyStringIndices
@@ -3239,6 +3257,10 @@ function emitInstruction(
 			];
 		}
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
+			if (stackObjectAccess !== undefined) {
+				const { site, slot } = stackObjectAccess;
+				return [`r${instruction.dst} = ${stackObjectSlotReference(site, slot)};`];
+			}
 			const candidates = instruction.candidates.flatMap((candidate) => [
 				relocation.functionIndex(candidate.shapeFunctionIndex),
 				candidate.shapeCacheIndex,
@@ -3290,6 +3312,12 @@ function emitInstruction(
 			];
 		}
 		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
+			if (stackObjectAccess !== undefined) {
+				const { site, slot } = stackObjectAccess;
+				return [
+					`${stackObjectSlotReference(site, slot)} = ${site.scalarSlot === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
+				];
+			}
 			const candidates = instruction.candidates.flatMap((candidate) => [
 				relocation.functionIndex(candidate.shapeFunctionIndex),
 				candidate.shapeCacheIndex,
@@ -4844,6 +4872,37 @@ function emitInstruction(
 				];
 			}
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
+			if (
+				nativeBuiltinCollectionCallChainAction?.role === "call" &&
+				nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies
+					.length === 1 &&
+				nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies[0]
+					?.kind === "world" &&
+				nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies[0]
+					.fact === "primordials.locked" &&
+				((nativeBuiltinCollectionCallChainAction.chain.operation.startsWith("Map.") &&
+					callPlan?.exactCollectionReceiver === "Map") ||
+					(nativeBuiltinCollectionCallChainAction.chain.operation.startsWith("Set.") &&
+						callPlan?.exactCollectionReceiver === "Set"))
+			) {
+				const operation = nativeBuiltinCollectionCallChainAction.chain.operation;
+				const helper = {
+					"Map.prototype.get": "mal_builtin_map_get_known",
+					"Map.prototype.set": "mal_builtin_map_set_known",
+					"Map.prototype.has": "mal_builtin_map_has_known",
+					"Map.prototype.delete": "mal_builtin_map_delete_known",
+					"Set.prototype.add": "mal_builtin_set_add_known",
+					"Set.prototype.has": "mal_builtin_set_has_known",
+					"Set.prototype.delete": "mal_builtin_set_delete_known",
+				}[operation];
+				return [
+					`r${instruction.dst} = ${helper}(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					throwCheck,
+					...(operation === "Map.prototype.set" || operation === "Set.prototype.add"
+						? [poll]
+						: []),
+				];
+			}
 			const arrayIterationOperation =
 				guardedBuiltinOperation === undefined
 					? undefined
@@ -5284,8 +5343,10 @@ function emitInstruction(
 			const rec = `iter_rec_${ip}`;
 			const val = `iter_val_${ip}`;
 			const done = `iter_done_${ip}`;
-			const virtualResult = nativeIteratorResultVirtualizationAction !== undefined;
-			if (virtualResult) {
+			const virtualResult =
+				nativeIteratorResultVirtualizationAction !== undefined ||
+				nativeRegExpIteratorProjectionAction?.role === "step";
+			if (nativeIteratorResultVirtualizationAction !== undefined) {
 				regionAdmissionGuard(nativeIteratorResultVirtualizationAction.region.license);
 			}
 			const genericStep = virtualResult

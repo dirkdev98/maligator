@@ -4,10 +4,7 @@ import type {
 	CorePropertyPlacement,
 } from "../core/core-ir-regions.ts";
 import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
-import type {
-	CompilerFactFlowReport,
-	OptimizationPassDelta,
-} from "../shared/compiler-diagnostics.ts";
+import type { CompilerFactFlowReport } from "../shared/compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "../shared/compiler-facts.ts";
 import type {
@@ -659,7 +656,6 @@ export interface ProgramImage {
 	readonly diagnostics: {
 		profileSites?: Array<ProfileSite>;
 		profileRemarks?: Array<CompilerRemark>;
-		optimizationTrace?: Array<OptimizationPassDelta>;
 		factFlow?: CompilerFactFlowReport;
 	};
 }
@@ -1208,16 +1204,13 @@ export function lowerVerifiedExecutionToProgramImage(
 			semanticProtectors,
 			functions: nativeFunctions,
 		},
-		diagnostics: {
-			...(profile && context.optimizationTrace !== undefined
-				? { optimizationTrace: [...context.optimizationTrace] }
-				: {}),
-		},
+		diagnostics: {},
 	};
 	if (profile) buildProfileMetadata(program.core, context, definition);
 	if (profile) {
 		definition.diagnostics.factFlow = collectCompilerFactFlowReport(
 			context.facts,
+			program.functionMap,
 			runtime,
 			nativeFunctions,
 		);
@@ -2110,7 +2103,9 @@ function lowerExecutionFunctionToNativePlan(
 							access.slot < 0 ||
 							access.slot >= site.slotCount ||
 							(property?.opcode !== "LOAD_PROPERTY_STATIC" &&
-								property?.opcode !== "STORE_PROPERTY_STATIC") ||
+								property?.opcode !== "STORE_PROPERTY_STATIC" &&
+								property?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+								property?.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") ||
 							allocation.opcode !== "CREATE_OBJECT_SHAPED" ||
 							allocation.keyStringIndices[access.slot] !== property.stringIndex
 						);
@@ -3318,6 +3313,10 @@ function lowerExecutionFunctionToNativePlan(
 				);
 				const trimCallIp = instructionIndexByTargetInstruction.get(region.trimCall);
 				const compareIp = instructionIndexByTargetInstruction.get(region.compare);
+				const advanceIp =
+					region.advance === undefined
+						? undefined
+						: instructionIndexByTargetInstruction.get(region.advance);
 				const incrementIp = instructionIndexByTargetInstruction.get(region.increment);
 				const exitIp = blockStartIps.get(region.exitBlock);
 				const trimIcIndex = propertyIcIndexByInstruction.get(region.trimProperty);
@@ -3348,6 +3347,8 @@ function lowerExecutionFunctionToNativePlan(
 				const loweredCompare = instructions[compareIp];
 				const loweredElement = instructions[elementIp];
 				const loweredTrimCall = instructions[trimCallIp];
+				const loweredAdvance =
+					advanceIp === undefined ? undefined : instructions[advanceIp];
 				const loweredIncrement = instructions[incrementIp];
 				const resultRegisters = [...new Set(region.resultRegisters)];
 				const expectedSplitIdentity =
@@ -3378,9 +3379,17 @@ function lowerExecutionFunctionToNativePlan(
 					loweredElement.key !== loweredCompare.left ||
 					region.splitIdentity !== expectedSplitIdentity ||
 					region.trimIdentity !== expectedTrimIdentity ||
+					(region.advance !== undefined && advanceIp === undefined) ||
+					(loweredAdvance !== undefined &&
+						(loweredAdvance.opcode !== "UNARY" ||
+							loweredAdvance.operator !== "tonumeric" ||
+							loweredAdvance.src !== loweredCompare.left)) ||
 					loweredIncrement?.opcode !== "UNARY" ||
 					loweredIncrement.operator !== "increment" ||
-					loweredIncrement.src !== loweredCompare.left ||
+					loweredIncrement.src !==
+						(loweredAdvance?.opcode === "UNARY"
+							? loweredAdvance.dst
+							: loweredCompare.left) ||
 					loweredIncrement.dst !== loweredCompare.left ||
 					resultRegisters.length === 0 ||
 					!resultRegisters.includes(loweredCall.dst) ||
@@ -3410,6 +3419,7 @@ function lowerExecutionFunctionToNativePlan(
 					trimPropertyIp,
 					trimCallIp,
 					...resolvedPrimitiveStringLengthIps,
+					...(advanceIp === undefined ? [] : [advanceIp]),
 					incrementIp,
 					backedgeIp!,
 				];

@@ -1,11 +1,7 @@
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
-import type {
-	CompilerOptimizationDecision,
-	OptimizationPassDelta,
-} from "../shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import type { VerifiedCoreOptimizationPlan } from "./core-ir-regions.ts";
 import type { CoreProgram, SealedCoreProgram } from "./core-ir.ts";
-import type { CoreOptimizationPlan } from "./core-ir-regions.ts";
 
 /** A captured cell: its function index or negative per-iteration scope id, plus slot. */
 export interface CoreCapturedSlotRef {
@@ -46,8 +42,6 @@ export interface CoreProgramData {
 export interface CoreCompilationContext {
 	readonly facts: CompilerProgramFacts;
 	readonly data: CoreProgramData;
-	readonly optimizationDecisions?: ReadonlyArray<CompilerOptimizationDecision>;
-	readonly optimizationTrace?: ReadonlyArray<OptimizationPassDelta>;
 }
 
 /** Mutable construction boundary consumed only by Core optimization. */
@@ -60,7 +54,7 @@ export interface ConstructedCoreCompilation {
 export interface CoreCompilation {
 	readonly program: SealedCoreProgram;
 	readonly context: CoreCompilationContext;
-	readonly plan: CoreOptimizationPlan;
+	readonly plan: VerifiedCoreOptimizationPlan;
 }
 
 export function coreCapturedSlotKey(owner: number, index: number): string {

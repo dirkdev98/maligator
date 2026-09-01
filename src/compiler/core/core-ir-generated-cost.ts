@@ -61,7 +61,8 @@ function generatedCodeCost(
 			fn === undefined ||
 			!fn.isInstructionLive(instruction) ||
 			fn.instructionKind(instruction) !== "operation"
-		) continue;
+		)
+			continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const effects = coreInstructionEffects(fn, instruction);
 		if (effects.callsUserCode || effects.mayGc || LOWERED_HELPER_OPCODES.has(opcode)) {
@@ -88,19 +89,39 @@ function generatedCodeCost(
 	const materializationPaths = overhead.materializationPaths ?? 0;
 	const stateSynchronizations = overhead.stateSynchronizations ?? 0;
 	const estimatedCStatements =
-		instructions + helperCalls * 2 + guards * 2 + boxingOperations + genericTwins +
-		admissionChecks * 2 + materializationPaths * 4 + stateSynchronizations * 2;
+		instructions +
+		helperCalls * 2 +
+		guards * 2 +
+		boxingOperations +
+		genericTwins +
+		admissionChecks * 2 +
+		materializationPaths * 4 +
+		stateSynchronizations * 2;
 	const estimatedBinaryBytes =
 		estimatedCStatements * 8 + inputOperands * 2 + duplicatedInstructions * 4;
 	const compileScore =
-		estimatedCStatements + helperCalls * 3 + guards * 2 + boxingOperations + rootSlots +
-		safepoints * 2 + duplicatedInstructions + genericTwins + admissionChecks * 2 +
-		materializationPaths * 4 + stateSynchronizations * 2 +
+		estimatedCStatements +
+		helperCalls * 3 +
+		guards * 2 +
+		boxingOperations +
+		rootSlots +
+		safepoints * 2 +
+		duplicatedInstructions +
+		genericTwins +
+		admissionChecks * 2 +
+		materializationPaths * 4 +
+		stateSynchronizations * 2 +
 		Math.ceil(estimatedBinaryBytes / 32);
 	const runtimeScore =
 		loopFrequency *
-		(instructions + helperCalls * 6 + guards + boxingOperations * 2 + rootSlots +
-			safepoints * 2 + admissionChecks + materializationPaths * 6 +
+		(instructions +
+			helperCalls * 6 +
+			guards +
+			boxingOperations * 2 +
+			rootSlots +
+			safepoints * 2 +
+			admissionChecks +
+			materializationPaths * 6 +
 			stateSynchronizations * 2);
 	return Object.freeze({
 		instructions,

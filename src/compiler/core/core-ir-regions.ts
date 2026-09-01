@@ -1,4 +1,7 @@
-import type { CompilerGuardPlan } from "../shared/compiler-facts.ts";
+import type {
+	CompilerGuardPlan,
+	KnownBuiltinCall,
+} from "../shared/compiler-facts.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import type {
 	CoreBlockId,
@@ -7,10 +10,8 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
-import type {
-	CoreFunctionVersions,
-	CoreProgramVersions,
-} from "./core-store.ts";
+import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
+import type { CoreFunctionVersions, CoreProgramVersions } from "./core-store.ts";
 import type {
 	CoreTransformBudgetStatistics,
 	CoreTransformDeclineReason,
@@ -20,7 +21,24 @@ export type CorePlanSpecializationKind =
 	| "guarded-direct-call"
 	| "stack-object-plan"
 	| "dense-array-plan"
-	| "numeric-fusion";
+	| "numeric-fusion"
+	| "string-split-projection"
+	| "regexp-exec-projection"
+	| "regexp-iterator-projection"
+	| "string-slice-number"
+	| "string-char-code-at-chain"
+	| "builtin-collection-call-chain"
+	| "array-values-iterator-cursor"
+	| "string-iterator-cursor"
+	| "typed-array-iterator-cursor"
+	| "map-iterator-cursor"
+	| "set-iterator-cursor"
+	| "iterator-result-virtualization"
+	| "iterator-entry-pair-virtualization"
+	| "fresh-array-length"
+	| "indexed-length-loop"
+	| "function-call-chain"
+	| "string-split-cursor";
 
 export type CorePlanRepresentation = Exclude<
 	CoreRepresentation,
@@ -42,9 +60,14 @@ export interface CorePlanCost {
 	readonly runtimeBenefit: number;
 }
 
-export interface CorePlanSpecialization {
+export interface CorePlanAdmission {
+	readonly anchor: CoreInstructionId;
+	readonly mode: "capture" | "stable" | "per-use";
+}
+
+interface CorePlanSpecializationBase<Kind extends CorePlanSpecializationKind> {
 	readonly id: string;
-	readonly kind: CorePlanSpecializationKind;
+	readonly kind: Kind;
 	readonly function: CoreFunctionId;
 	readonly anchors: ReadonlyArray<CoreInstructionId>;
 	readonly claimedInstructions: ReadonlyArray<CoreInstructionId>;
@@ -59,9 +82,293 @@ export interface CorePlanSpecialization {
 	readonly fallback: "canonical-core";
 	readonly semanticProtectors: ReadonlyArray<string>;
 	readonly targetFunctions: ReadonlyArray<CoreFunctionId>;
+	readonly admission: CorePlanAdmission;
 	readonly composition: "exclusive" | "overlay";
 	readonly cost: CorePlanCost;
 }
+
+export interface CorePlanStackObjectSpecialization
+	extends CorePlanSpecializationBase<"stack-object-plan"> {
+	readonly stackObject: {
+		readonly allocation: CoreInstructionId;
+		readonly mode: "elided" | "activation-local";
+		readonly slotCount: number;
+		readonly accesses: ReadonlyArray<{
+			readonly instruction: CoreInstructionId;
+			readonly slot: number;
+		}>;
+		readonly materializations: ReadonlyArray<{
+			readonly instruction: CoreInstructionId;
+			readonly kind: "return";
+		}>;
+	};
+}
+
+export interface CorePlanDenseArraySpecialization
+	extends CorePlanSpecializationBase<"dense-array-plan"> {
+	readonly denseArray: {
+		readonly allocation: CoreInstructionId;
+		readonly store: CoreInstructionId;
+		readonly loopHeader: CoreBlockId;
+		readonly length: number;
+	};
+}
+
+export interface CorePlanStringSplitProjectionSpecialization
+	extends CorePlanSpecializationBase<"string-split-projection"> {
+	readonly stringSplitProjection: {
+		readonly guard: CompilerGuardPlan;
+		readonly builtinCall: KnownBuiltinCall;
+		readonly property?: CoreInstructionId;
+		readonly propertyPlacement: CorePropertyPlacement;
+		readonly splitIdentity: CoreBuiltinIdentityDecision;
+		readonly call: CoreInstructionId;
+		readonly separator: CoreInstructionId;
+		readonly separatorStringIndex: number;
+		readonly resultValues: ReadonlyArray<CoreValueId>;
+		readonly loads: ReadonlyArray<
+			| {
+					readonly instruction: CoreInstructionId;
+					readonly kind: "element";
+					readonly index: number;
+					readonly key: CoreInstructionId;
+			  }
+			| {
+					readonly instruction: CoreInstructionId;
+					readonly kind: "length";
+			  }
+		>;
+	};
+}
+
+export interface CorePlanStringSliceNumberSpecialization
+	extends CorePlanSpecializationBase<"string-slice-number"> {
+	readonly stringSliceNumber: {
+		readonly guard: CompilerGuardPlan;
+		readonly builtinCall: KnownBuiltinCall;
+		readonly property: CoreInstructionId;
+		readonly propertyPlacement: CorePropertyPlacement;
+		readonly builtinIdentities: CoreBuiltinIdentityDecision;
+		readonly sliceCall: CoreInstructionId;
+		readonly sliceStartInstruction: CoreInstructionId;
+		readonly numberIntrinsic: CoreInstructionId;
+		readonly numberCall: CoreInstructionId;
+		readonly sliceStart: number;
+	};
+}
+
+export interface CorePlanRegExpExecProjectionSpecialization
+	extends CorePlanSpecializationBase<"regexp-exec-projection"> {
+	readonly regexpExecProjection: {
+		readonly guard: CompilerGuardPlan;
+		readonly builtinCall: KnownBuiltinCall;
+		readonly property: CoreInstructionId;
+		readonly propertyPlacement: CorePropertyPlacement;
+		readonly call: CoreInstructionId;
+		readonly resultValues: ReadonlyArray<CoreValueId>;
+		readonly nullChecks: ReadonlyArray<{
+			readonly comparison: CoreInstructionId;
+			readonly nullValue: CoreInstructionId;
+		}>;
+		readonly lockedLiteral?: {
+			readonly constructorIntrinsic: CoreInstructionId;
+			readonly construct: CoreInstructionId;
+		};
+		readonly loads: ReadonlyArray<{
+			readonly instruction: CoreInstructionId;
+			readonly key: CoreInstructionId;
+			readonly captureIndex: number;
+			readonly consumer?:
+				| { readonly kind: "length"; readonly property: CoreInstructionId }
+				| {
+						readonly kind: "charCodeAtZero";
+						readonly methodIdentity: CoreBuiltinIdentityDecision;
+						readonly property: CoreInstructionId;
+						readonly call: CoreInstructionId;
+						readonly zero?: CoreInstructionId;
+				  }
+				| {
+						readonly kind: "number";
+						readonly intrinsic: CoreInstructionId;
+						readonly call: CoreInstructionId;
+				  }
+				| {
+						readonly kind: "asciiCaseLength";
+						readonly methodIdentity: CoreBuiltinIdentityDecision;
+						readonly upperProperty: CoreInstructionId;
+						readonly upperCall: CoreInstructionId;
+						readonly lowerProperty: CoreInstructionId;
+						readonly lowerCall: CoreInstructionId;
+						readonly resultMoves: ReadonlyArray<CoreInstructionId>;
+						readonly lengthProperty: CoreInstructionId;
+				  };
+		}>;
+	};
+}
+
+export interface CorePlanRegExpIteratorProjectionSpecialization
+	extends CorePlanSpecializationBase<"regexp-iterator-projection"> {
+	readonly regexpIteratorProjection: {
+		readonly guard: CompilerGuardPlan;
+		readonly step: CoreInstructionId;
+		readonly doneBranch: CoreInstructionId;
+		readonly exitBlock: CoreBlockId;
+		readonly resultValues: ReadonlyArray<CoreValueId>;
+		readonly loads: ReadonlyArray<{
+			readonly instruction: CoreInstructionId;
+			readonly key: CoreInstructionId;
+			readonly captureIndex: number;
+			readonly numberIntrinsic: CoreInstructionId;
+			readonly numberCall: CoreInstructionId;
+		}>;
+	};
+}
+
+export interface CorePlanStringCharCodeAtSpecialization
+	extends CorePlanSpecializationBase<"string-char-code-at-chain"> {
+	readonly stringCharCodeAt: {
+		readonly guard: CompilerGuardPlan;
+		readonly builtinCall: KnownBuiltinCall;
+		readonly property: CoreInstructionId;
+		readonly call: CoreInstructionId;
+		readonly methodIdentity: CoreBuiltinIdentityDecision;
+		readonly bounded?: {
+			readonly length: CoreInstructionId;
+			readonly comparison: CoreInstructionId;
+			readonly update: CoreInstructionId;
+		};
+	};
+}
+
+export interface CorePlanBuiltinCollectionCallSpecialization
+	extends CorePlanSpecializationBase<"builtin-collection-call-chain"> {
+	readonly builtinCollectionCall: {
+		readonly guard: CompilerGuardPlan;
+		readonly builtinCall: KnownBuiltinCall;
+		readonly property: CoreInstructionId;
+		readonly call: CoreInstructionId;
+		readonly operation: CoreCollectionBuiltinOperation;
+		readonly exactReceiver?: CoreExactCollectionBrand;
+	};
+}
+
+export type CorePlanIteratorCursorKind =
+	| "array-values-iterator-cursor"
+	| "string-iterator-cursor"
+	| "typed-array-iterator-cursor"
+	| "map-iterator-cursor"
+	| "set-iterator-cursor";
+
+export type CorePlanIteratorCursorProtocol =
+	| "array-values"
+	| "string"
+	| "typed-array-values"
+	| "map"
+	| "set";
+
+export interface CorePlanIteratorCursorSpecialization
+	extends CorePlanSpecializationBase<CorePlanIteratorCursorKind> {
+	readonly iteratorCursor: {
+		readonly initialize: CoreInstructionId;
+		readonly steps: ReadonlyArray<CoreInstructionId>;
+		readonly protocol: CorePlanIteratorCursorProtocol;
+	};
+}
+
+export interface CorePlanIteratorResultVirtualizationSpecialization
+	extends CorePlanSpecializationBase<"iterator-result-virtualization"> {
+	readonly iteratorResultVirtualization: {
+		readonly guard: CompilerGuardPlan;
+		readonly steps: ReadonlyArray<CoreInstructionId>;
+	};
+}
+
+export interface CorePlanIteratorEntryPairVirtualizationSpecialization
+	extends CorePlanSpecializationBase<"iterator-entry-pair-virtualization"> {
+	readonly iteratorEntryPairVirtualization: {
+		readonly guard: CompilerGuardPlan;
+		readonly cursorInitialize: CoreInstructionId;
+		readonly outerStep: CoreInstructionId;
+		readonly innerInitialize: CoreInstructionId;
+		readonly innerSteps: readonly [CoreInstructionId, CoreInstructionId];
+		readonly innerCloses: ReadonlyArray<CoreInstructionId>;
+	};
+}
+
+export interface CorePlanFreshArrayLengthSpecialization
+	extends CorePlanSpecializationBase<"fresh-array-length"> {
+	readonly freshArrayLength: {
+		readonly allocation: CoreInstructionId;
+		readonly load: CoreInstructionId;
+		readonly length: number;
+	};
+}
+
+export interface CorePlanIndexedLengthLoopSpecialization
+	extends CorePlanSpecializationBase<"indexed-length-loop"> {
+	readonly indexedLengthLoop: {
+		readonly load: CoreInstructionId;
+		readonly comparison: CoreInstructionId;
+		readonly lengthPosition: 1 | 2;
+		readonly elements: ReadonlyArray<{
+			readonly instruction: CoreInstructionId;
+			readonly kind: "load" | "store";
+		}>;
+	};
+}
+
+export interface CorePlanFunctionCallChainSpecialization
+	extends CorePlanSpecializationBase<"function-call-chain"> {
+	readonly functionCall: {
+		readonly property: CoreInstructionId;
+		readonly call: CoreInstructionId;
+		readonly targetFunction?: CoreFunctionId;
+	};
+}
+
+export interface CorePlanStringSplitCursorSpecialization
+	extends CorePlanSpecializationBase<"string-split-cursor"> {
+	readonly stringSplitCursor: {
+		readonly guard: CompilerGuardPlan;
+		readonly splitBuiltinCall: KnownBuiltinCall;
+		readonly trimBuiltinCall: KnownBuiltinCall;
+		readonly property: CoreInstructionId;
+		readonly propertyPlacement: CorePropertyPlacement;
+		readonly splitIdentity: CoreBuiltinIdentityDecision;
+		readonly trimIdentity: CoreBuiltinIdentityDecision;
+		readonly call: CoreInstructionId;
+		readonly length: CoreInstructionId;
+		readonly compare: CoreInstructionId;
+		readonly branch: CoreInstructionId;
+		readonly element: CoreInstructionId;
+		readonly trimProperty: CoreInstructionId;
+		readonly trimCall: CoreInstructionId;
+		readonly advance?: CoreInstructionId;
+		readonly increment: CoreInstructionId;
+		readonly backedge: CoreInstructionId;
+		readonly resultValues: ReadonlyArray<CoreValueId>;
+		readonly primitiveStringLengths: ReadonlyArray<CoreInstructionId>;
+		readonly exitBlock: CoreBlockId;
+	};
+}
+
+export type CorePlanSpecialization =
+	| CorePlanSpecializationBase<"guarded-direct-call" | "numeric-fusion">
+	| CorePlanStackObjectSpecialization
+	| CorePlanDenseArraySpecialization
+	| CorePlanStringSplitProjectionSpecialization
+	| CorePlanStringSliceNumberSpecialization
+	| CorePlanRegExpExecProjectionSpecialization
+	| CorePlanRegExpIteratorProjectionSpecialization
+	| CorePlanStringCharCodeAtSpecialization
+	| CorePlanBuiltinCollectionCallSpecialization
+	| CorePlanIteratorCursorSpecialization
+	| CorePlanIteratorResultVirtualizationSpecialization
+	| CorePlanIteratorEntryPairVirtualizationSpecialization
+	| CorePlanFreshArrayLengthSpecialization
+	| CorePlanIndexedLengthLoopSpecialization
+	| CorePlanFunctionCallChainSpecialization
+	| CorePlanStringSplitCursorSpecialization;
 
 export interface CoreDirectEntryCallSite {
 	readonly caller: CoreFunctionId;
@@ -97,10 +404,21 @@ export interface CoreOptimizationPlanStatistics extends CoreTransformBudgetStati
 export interface CoreOptimizationPlan {
 	readonly version: CorePlanVersionStamp;
 	readonly liveFunctions: ReadonlyArray<CoreFunctionId>;
+	readonly blockOrders: ReadonlyArray<{
+		readonly function: CoreFunctionId;
+		readonly blocks: ReadonlyArray<CoreBlockId>;
+		readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
+	}>;
 	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
 	readonly specializations: ReadonlyArray<CorePlanSpecialization>;
 	readonly statistics: CoreOptimizationPlanStatistics;
 }
+
+declare const VERIFIED_CORE_OPTIMIZATION_PLAN: unique symbol;
+
+export type VerifiedCoreOptimizationPlan = CoreOptimizationPlan & {
+	readonly [VERIFIED_CORE_OPTIMIZATION_PLAN]: true;
+};
 
 /**
  * Post-allocation form of a Core speculative-region certificate. Core owns the
@@ -477,6 +795,7 @@ export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegio
 	readonly element: Extract<CompilerInstruction, { type: "loadProperty" }>;
 	readonly trimProperty: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly trimCall: Extract<CompilerInstruction, { type: "call" }>;
+	readonly advance?: Extract<CompilerInstruction, { type: "unary" }>;
 	readonly increment: Extract<CompilerInstruction, { type: "unary" }>;
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly primitiveStringLengths: ReadonlyArray<

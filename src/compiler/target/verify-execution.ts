@@ -1,6 +1,5 @@
 import { coreOpcodeRegistry, isCoreOpcode } from "../core/core-ir-opcodes.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
-import { coreTerminatorEdges } from "../core/core-ir-control-flow.ts";
 import type { CoreInstructionId } from "../core/core-ir.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
@@ -201,6 +200,14 @@ function verifyProgramCardinality(program: ExecutionProgram): void {
 			fail("target function has no Core function identity", context);
 		}
 		const coreFunction = core.function(coreFunctionId);
+		if (
+			fn.coreBlocks.length === 0 ||
+			fn.coreBlocks[0] !== coreFunction.entry ||
+			new Set(fn.coreBlocks).size !== fn.coreBlocks.length ||
+			fn.coreBlocks.some((block) => !coreFunction.isBlockLive(block))
+		) {
+			fail("target Core block mapping is invalid", context);
+		}
 		if (
 			fn.functionIndex !== index ||
 			program.functionMap.coreToExecution[coreFunctionId] !== index
@@ -769,24 +776,7 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 
 function verifyGcRoots(model: FunctionModel, core: CoreFunctionStore): void {
 	const { fn, functionIndex } = model;
-	const reachable = new Set([core.entry]);
-	const pending = [core.entry];
-	while (pending.length > 0) {
-		const block = pending.pop()!;
-		const successors = [
-			...coreTerminatorEdges(core.terminatorPayload(core.blockTerminator(block))).map(
-				({ block }) => block,
-			),
-			...(core.blockHandler(block) === undefined
-				? []
-				: [core.blockHandler(block)!.block]),
-		];
-		for (const successor of successors) {
-			if (reachable.has(successor)) continue;
-			reachable.add(successor);
-			pending.push(successor);
-		}
-	}
+	const reachable = new Set(fn.coreBlocks);
 	const expected = new Set<CoreInstructionId>();
 	const coreInstructions = new Set<CoreInstructionId>();
 	for (const instruction of core.instructionIds()) {

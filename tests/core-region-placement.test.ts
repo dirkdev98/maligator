@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
-import type { CoreProgram, CoreRegion } from "../src/compiler/core/core-ir.ts";
+import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
+import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-validity.ts";
+import type {
+	CoreOptimizationPlan,
+	CorePlanSpecialization,
+} from "../src/compiler/core/core-ir-regions.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
@@ -14,9 +18,7 @@ import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-na
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import type { ProgramImage, VmRegion } from "../src/compiler/target/program-image.ts";
-import { coreCompilationForTest } from "./helpers/core-compilation.ts";
 
-/** One RegExp.exec projection per function: a fresh locked literal, then an open receiver. */
 const OPPOSITE_PLACEMENTS = `globalThis.inline = function inline(value) {
 	const match = /(\\d+)x/.exec(value);
 	if (match === null) return -1;
@@ -33,80 +35,45 @@ const SPLIT_AND_SLICE = `globalThis.parse = function parse(value) {
 	return Number(fields[1].slice(2)) + fields[0].length + fields.length;
 };`;
 
-/** The same regions reached through a branch whose arms are semantically empty. */
 const FORWARDED_SPLIT_AND_SLICE = {
 	plain: `globalThis.parse = function parse(value, flag) {
-	const fields = value.split(";");
-	return Number(fields[1].slice(2)) + fields[0].length + fields.length;
-};`,
+		const fields = value.split(";");
+		return Number(fields[1].slice(2)) + fields[0].length + fields.length;
+	};`,
 	forwarded: `globalThis.parse = function parse(value, flag) {
-	if (flag) {} else {}
-	const fields = value.split(";");
-	return Number(fields[1].slice(2)) + fields[0].length + fields.length;
-};`,
+		if (flag) {} else {}
+		const fields = value.split(";");
+		return Number(fields[1].slice(2)) + fields[0].length + fields.length;
+	};`,
 };
 
-function lockedCore(source: string, path: string): CoreProgram {
-	let optimized: CoreProgram | undefined;
-	compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(source, path),
+function semantic(source: string, path: string) {
+	return analyzeSourceAndRunSemanticAnalysis(
+		source,
+		path,
+		parseScript(source, { strict: false }),
+	);
+}
+
+function optimize(
+	source: string,
+	path: string,
+	primordials: "locked" | "mutable" = "locked",
+): CoreCompilation {
+	return optimizeSemanticProgramToCore(
+		semantic(source, path),
 		{
-			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
-			afterCoreOptimization(program) {
-				optimized = program;
-			},
+			facts: compilerProgramFactsFromConfig(
+				resolveBuildConfig({ engine: { primordials } }),
+			),
 		},
-	);
-	return optimized!;
-}
-
-function lockedDefinition(source: string, path: string): ProgramImage {
-	return compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(source, path),
-		{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		(_phase, run) => run(),
 	);
 }
 
-function coreRegions(program: CoreProgram): ReadonlyArray<CoreRegion> {
-	return program.functions.flatMap(({ regions }) => regions);
-}
-
-function generatedCost(
-	region: CoreRegion,
-): Readonly<Record<string, unknown>> | undefined {
-	const value = region.data.generatedCodeCost;
-	return value !== null && typeof value === "object" && !Array.isArray(value)
-		? (value as Readonly<Record<string, unknown>>)
-		: undefined;
-}
-
-function corePlacements(program: CoreProgram): ReadonlyArray<[string, unknown]> {
-	return coreRegions(program)
-		.map(
-			(region) =>
-				[
-					region.kind,
-					(region.data as { propertyPlacement?: unknown }).propertyPlacement,
-				] as [string, unknown],
-		)
-		.filter(([, placement]) => placement !== undefined)
-		.sort(([left], [right]) => left.localeCompare(right));
-}
-
-/** Parameter-only blocks whose whole body is a jump: what the Core pass folds away. */
-function emptyForwardingBlocks(program: CoreProgram): ReadonlyArray<string> {
-	return program.functions.flatMap((fn) =>
-		fn.blocks
-			.filter(
-				(block) =>
-					block.id !== fn.entry &&
-					block.id !== fn.bodyEntry &&
-					block.instructions.length === 0 &&
-					block.handler === undefined &&
-					!block.parameters.some(({ role }) => role === "exception") &&
-					block.terminator.kind === "jump",
-			)
-			.map((block) => `f${fn.functionIndex}b${block.id}`),
+function lower(compilation: CoreCompilation, reuseRegisters = true): ProgramImage {
+	return lowerExecutionToProgramImage(
+		lowerCoreCompilationToExecution(compilation, { reuseRegisters }),
 	);
 }
 
@@ -114,391 +81,57 @@ function vmRegions(definition: ProgramImage): ReadonlyArray<VmRegion> {
 	return definition.native.functions.flatMap(({ specializations }) => specializations);
 }
 
-/** Region kind, placement, and opcode selection, with every register identity dropped. */
-function semanticRegionShape(
-	definition: ProgramImage,
-): ReadonlyArray<Record<string, unknown>> {
+function propertyPlacement(
+	selection: CorePlanSpecialization,
+): "in-place" | "call-fallback" | undefined {
+	switch (selection.kind) {
+		case "string-split-cursor":
+			return selection.stringSplitCursor.propertyPlacement;
+		case "string-split-projection":
+			return selection.stringSplitProjection.propertyPlacement;
+		case "string-slice-number":
+			return selection.stringSliceNumber.propertyPlacement;
+		case "regexp-exec-projection":
+			return selection.regexpExecProjection.propertyPlacement;
+		default:
+			return undefined;
+	}
+}
+
+function semanticPlanShape(compilation: CoreCompilation) {
+	return compilation.plan.specializations
+		.map((selection) => {
+			const fn = compilation.program.function(selection.function);
+			return {
+				kind: selection.kind,
+				placement: propertyPlacement(selection),
+				admission: selection.admission.mode,
+				claimed: selection.claimedInstructions
+					.map((instruction) =>
+						fn.instructionKind(instruction) === "operation"
+							? fn.instructionOpcodeName(instruction)
+							: fn.instructionKind(instruction),
+					)
+					.sort(),
+			};
+		})
+		.sort((left, right) => left.kind.localeCompare(right.kind));
+}
+
+function semanticVmShape(definition: ProgramImage) {
 	return definition.native.functions
 		.flatMap((native) =>
 			native.specializations.map((region) => {
-				const fn = definition.runtime.functions[native.functionIndex]!;
 				return {
 					kind: region.kind,
 					representation: region.representation,
-					materialization: region.license.materialization,
-					dependencies: region.license.guard.dependencies,
 					placement: (region as { propertyPlacement?: string }).propertyPlacement,
-					anchorOpcodes: region.anchors.map((ip) => fn.instructions[ip]?.opcode),
-					claimedOpcodes: region.claimedIps
-						.map((ip) => fn.instructions[ip]?.opcode)
-						.sort(),
+					admission: region.license.admission.mode,
+					anchors: [...region.anchors],
 				};
 			}),
 		)
 		.sort((left, right) => left.kind.localeCompare(right.kind));
-}
-
-function regexpProjections(
-	definition: ProgramImage,
-): ReadonlyArray<Extract<VmRegion, { kind: "regexp-exec-projection" }>> {
-	return vmRegions(definition).filter(
-		(region): region is Extract<VmRegion, { kind: "regexp-exec-projection" }> =>
-			region.kind === "regexp-exec-projection",
-	);
-}
-
-describe("Core region property placement", () => {
-	it("records generated-code cost on every selected specialization", () => {
-		const regions = coreRegions(lockedCore(SPLIT_AND_SLICE, "region-cost.mjs"));
-		expect(regions.length).toBeGreaterThan(0);
-		for (const region of regions) {
-			const cost = generatedCost(region);
-			for (const field of [
-				"instructions",
-				"helperCalls",
-				"guards",
-				"boxingOperations",
-				"rootSlots",
-				"safepoints",
-				"duplicatedInstructions",
-				"genericTwins",
-				"admissionChecks",
-				"materializationPaths",
-				"stateSynchronizations",
-				"loopFrequency",
-				"estimatedCStatements",
-				"estimatedBinaryBytes",
-				"compileScore",
-				"runtimeScore",
-			] as const) {
-				expect(typeof cost?.[field]).toBe("number");
-			}
-		}
-	});
-
-	it("certifies opposite placements for two equally adjacent property calls", () => {
-		const core = lockedCore(OPPOSITE_PLACEMENTS, "placement-opposites.js");
-		const placements = coreRegions(core)
-			.filter(({ kind }) => kind === "regexp-exec-projection")
-			.map((region) => ({
-				placement: (region.data as { propertyPlacement?: string }).propertyPlacement,
-				locked: (region.data as { lockedLiteral?: unknown }).lockedLiteral !== undefined,
-			}));
-		expect(placements).toHaveLength(2);
-		expect(new Set(placements.map(({ placement }) => placement))).toEqual(
-			new Set(["in-place", "call-fallback"]),
-		);
-		// The deferred one is the locked fresh literal, not the closer one.
-		expect(placements.find(({ locked }) => locked)?.placement).toBe("call-fallback");
-		expect(placements.find(({ locked }) => !locked)?.placement).toBe("in-place");
-
-		const definition = lockedDefinition(OPPOSITE_PLACEMENTS, "placement-opposites.js");
-		const projections = regexpProjections(definition);
-		expect(projections).toHaveLength(2);
-		for (const projection of projections) {
-			const functionIndex = definition.native.functions.findIndex((candidate) =>
-				candidate.specializations.includes(projection),
-			);
-			const fn = definition.runtime.functions[functionIndex]!;
-			// Both sites emit the load immediately before its call, so adjacency cannot
-			// be what separates them.
-			expect(projection.propertyIp + 1).toBe(projection.callIp);
-			expect(fn.instructions[projection.propertyIp]?.opcode).toBe("LOAD_PROPERTY_STATIC");
-		}
-		expect(
-			projections.map(({ propertyPlacement, lockedFreshLiteral }) => ({
-				propertyPlacement,
-				lockedFreshLiteral,
-			})),
-		).toEqual(
-			expect.arrayContaining([
-				{ propertyPlacement: "call-fallback", lockedFreshLiteral: true },
-				{ propertyPlacement: "in-place", lockedFreshLiteral: false },
-			]),
-		);
-	});
-
-	it("keeps placement and eligibility stable when source positions move", () => {
-		const shifted = `// leading comment\n\n\n${OPPOSITE_PLACEMENTS.split("\n").join("\n\n")}\n`;
-		const baseline = lockedCore(OPPOSITE_PLACEMENTS, "placement-positions.js");
-		const perturbed = lockedCore(shifted, "placement-positions-shifted.js");
-		expect(perturbed.sourcePositions).not.toEqual(baseline.sourcePositions);
-		expect(corePlacements(perturbed)).toEqual(corePlacements(baseline));
-		expect(
-			coreRegions(perturbed)
-				.map(({ kind }) => kind)
-				.sort(),
-		).toEqual(
-			coreRegions(baseline)
-				.map(({ kind }) => kind)
-				.sort(),
-		);
-
-		expect(
-			semanticRegionShape(lockedDefinition(shifted, "placement-positions-shifted.js")),
-		).toEqual(
-			semanticRegionShape(
-				lockedDefinition(OPPOSITE_PLACEMENTS, "placement-positions.js"),
-			),
-		);
-	});
-
-	it("selects the same regions and placements with and without register reuse", () => {
-		for (const source of [OPPOSITE_PLACEMENTS, SPLIT_AND_SLICE]) {
-			const core = lockedCore(source, "placement-register-reuse.js");
-			const reused = lowerExecutionToProgramImage(
-				lowerCoreCompilationToExecution(coreCompilationForTest(core), {
-					reuseRegisters: true,
-				}),
-			);
-			const distinct = lowerExecutionToProgramImage(
-				lowerCoreCompilationToExecution(coreCompilationForTest(core), {
-					reuseRegisters: false,
-				}),
-			);
-			expect(
-				distinct.runtime.functions.map(({ registerCount }) => registerCount),
-			).not.toEqual(reused.runtime.functions.map(({ registerCount }) => registerCount));
-			expect(semanticRegionShape(distinct)).toEqual(semanticRegionShape(reused));
-			expect(vmRegions(distinct)).toHaveLength(vmRegions(reused).length);
-		}
-	});
-
-	it("keeps placement and eligibility across a semantically empty forwarding block", () => {
-		// Empty branch arms contribute blocks that only jump on. Core folds them, so
-		// neither region selection nor placement may notice the changed layout.
-		const baseline = lockedCore(FORWARDED_SPLIT_AND_SLICE.plain, "placement-layout.js");
-		const perturbed = lockedCore(
-			FORWARDED_SPLIT_AND_SLICE.forwarded,
-			"placement-layout-forwarded.js",
-		);
-		expect(
-			perturbed.functions.some(({ blocks }) =>
-				blocks.some(({ terminator }) => terminator.kind === "branch"),
-			),
-		).toBe(false);
-		expect(emptyForwardingBlocks(perturbed)).toEqual([]);
-		expect(corePlacements(perturbed)).toEqual(corePlacements(baseline));
-		expect(
-			semanticRegionShape(
-				lockedDefinition(
-					FORWARDED_SPLIT_AND_SLICE.forwarded,
-					"placement-layout-forwarded.js",
-				),
-			),
-		).toEqual(
-			semanticRegionShape(
-				lockedDefinition(FORWARDED_SPLIT_AND_SLICE.plain, "placement-layout.js"),
-			),
-		);
-	});
-
-	it("carries exact String.split producers through the compiler artifact", () => {
-		const definition = lockedDefinition(SPLIT_AND_SLICE, "split-producers.js");
-		const functionIndex = definition.native.functions.findIndex((fn) =>
-			fn.specializations.some((region) => region.kind === "string-split-projection"),
-		);
-		const owner = definition.native.functions[functionIndex]!;
-		const regionIndex = owner.specializations.findIndex(
-			(region) => region.kind === "string-split-projection",
-		);
-		const region = owner.specializations[regionIndex]!;
-		if (region.kind !== "string-split-projection") {
-			throw new Error("missing String.split projection");
-		}
-		const fn = definition.runtime.functions[functionIndex]!;
-		expect(fn.instructions[region.separatorIp]?.opcode).toBe("CREATE_STRING");
-		const elementLoad = region.loads.find((load) => load.kind === "element");
-		if (elementLoad?.kind !== "element") throw new Error("missing projected element");
-		const key = fn.instructions[elementLoad.keyIp];
-		const load = fn.instructions[elementLoad.ip];
-		expect(key?.opcode).toBe("CREATE_NUMBER");
-		expect(load?.opcode).toBe("LOAD_PROPERTY");
-		if (key?.opcode !== "CREATE_NUMBER" || load?.opcode !== "LOAD_PROPERTY") {
-			throw new Error("invalid String.split producer instructions");
-		}
-		expect(key.dst).toBe(load.key);
-		expect(key.value).toBe(elementLoad.index);
-		expect(
-			vmRegions(deserializeCompilerArtifact(serializeCompilerArtifact(definition))),
-		).toEqual(vmRegions(definition));
-
-		expect(() =>
-			serializeCompilerArtifact(
-				withVmRegion(definition, functionIndex, regionIndex, {
-					...region,
-					loads: region.loads.map((candidate) =>
-						candidate === elementLoad ? { ...candidate, keyIp: candidate.ip } : candidate,
-					),
-				}),
-			),
-		).toThrow(/invalid String\.split projection region/);
-	});
-
-	it("rejects an invalid placement value in a Core certificate", () => {
-		const core = lockedCore(SPLIT_AND_SLICE, "placement-invalid.js");
-		const functionIndex = core.functions.findIndex(({ regions }) =>
-			regions.some(
-				(region) =>
-					(region.data as { propertyPlacement?: unknown }).propertyPlacement !==
-					undefined,
-			),
-		);
-		const owner = core.functions[functionIndex]!;
-		const regionIndex = owner.regions.findIndex(
-			(region) =>
-				(region.data as { propertyPlacement?: unknown }).propertyPlacement !== undefined,
-		);
-		const region = owner.regions[regionIndex]!;
-		const tampered: CoreProgram = {
-			...core,
-			functions: core.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions.with(regionIndex, {
-					...region,
-					data: { ...region.data, propertyPlacement: "wherever" },
-				}),
-			}),
-		};
-		expect(() => verifyCoreProgram(tampered, coreOpcodeRegistry)).toThrow(
-			/invalid property placement wherever/,
-		);
-	});
-
-	it("rejects a deferred placement whose producer is not the call's only consumer", () => {
-		const core = lockedCore(SPLIT_AND_SLICE, "placement-consumer.js");
-		const { program, functionIndex, regionIndex } = findPlacementRegion(core, () => true);
-		const region = program.functions[functionIndex]!.regions[regionIndex]!;
-		expect(region.anchors.length).toBeGreaterThan(1);
-		// Point the certificate's call anchor at another claimed instruction. The
-		// producer still has one consumer, but it is no longer the anchor's callee.
-		const tampered = withRegion(program, functionIndex, regionIndex, {
-			...region,
-			anchors: [region.anchors[1]!, region.anchors[0]!, ...region.anchors.slice(2)],
-			data: { ...region.data, propertyPlacement: "call-fallback" },
-		});
-		expect(() => verifyCoreProgram(tampered, coreOpcodeRegistry)).toThrow(
-			/is not consumed only as the callee of|defers @\d+ across the block/,
-		);
-	});
-
-	it("rejects a deferred placement without a locked identity at the target boundary", () => {
-		const core = lockedCore(OPPOSITE_PLACEMENTS, "placement-unlocked.js");
-		const { program, functionIndex, regionIndex } = findPlacementRegion(
-			core,
-			(region) =>
-				region.kind === "regexp-exec-projection" &&
-				(region.data as { propertyPlacement?: unknown }).propertyPlacement === "in-place",
-		);
-		const region = program.functions[functionIndex]!.regions[regionIndex]!;
-		const tampered = withRegion(program, functionIndex, regionIndex, {
-			...region,
-			data: { ...region.data, propertyPlacement: "call-fallback" },
-		});
-		// Core's graph still satisfies the placement's structural half; the open
-		// receiver's missing locked identity is caught where the license is consumed.
-		expect(() => verifyCoreProgram(tampered, coreOpcodeRegistry)).not.toThrow();
-		expect(() =>
-			lowerExecutionToProgramImage(
-				lowerCoreCompilationToExecution(coreCompilationForTest(tampered)),
-			),
-		).toThrow(/regexp-exec-projection/);
-	});
-
-	it("round-trips placement through the wire form and rejects an invalid tag", () => {
-		const definition = lockedDefinition(SPLIT_AND_SLICE, "placement-wire.js");
-		const placements = vmRegions(definition).map(
-			(region) => (region as { propertyPlacement?: string }).propertyPlacement,
-		);
-		expect(placements).toContain("call-fallback");
-		const bytes = serializeCompilerArtifact(definition, { debugInfo: false });
-		const cached = deserializeCompilerArtifact(bytes);
-		expect(
-			vmRegions(cached).map(
-				(region) => (region as { propertyPlacement?: string }).propertyPlacement,
-			),
-		).toEqual(placements);
-		expect(vmRegions(cached)).toEqual(vmRegions(definition));
-
-		const { functionIndex, regionIndex } = findVmSliceRegion(definition);
-		const region =
-			definition.native.functions[functionIndex]!.specializations[regionIndex]!;
-		if (region.kind !== "string-slice-number") throw new Error("missing fusion region");
-		const asInPlace = serializeCompilerArtifact(
-			withVmRegion(definition, functionIndex, regionIndex, {
-				...region,
-				propertyPlacement: "in-place",
-			}),
-			{ debugInfo: false },
-		);
-		// The only byte that moves when the placement flips is the placement tag, so
-		// this locates it without hard-coding the payload layout.
-		const differing = [...bytes].flatMap((byte, index) =>
-			byte === asInPlace[index] ? [] : [index],
-		);
-		expect(differing).toHaveLength(1);
-		const corrupted = Uint8Array.from(bytes);
-		corrupted[differing[0]!] = 2;
-		expect(() => deserializeCompilerArtifact(corrupted)).toThrow(
-			/invalid region property placement/,
-		);
-
-		expect(() =>
-			serializeCompilerArtifact(
-				withVmRegion(definition, functionIndex, regionIndex, {
-					...region,
-					propertyPlacement: "everywhere" as unknown as typeof region.propertyPlacement,
-				}),
-			),
-		).toThrow(/invalid String\.slice Number region|invalid region property placement/);
-	});
-});
-
-function findPlacementRegion(
-	program: CoreProgram,
-	predicate: (region: CoreRegion) => boolean,
-): { program: CoreProgram; functionIndex: number; regionIndex: number } {
-	const carries = (region: CoreRegion) =>
-		(region.data as { propertyPlacement?: unknown }).propertyPlacement !== undefined &&
-		predicate(region);
-	const functionIndex = program.functions.findIndex(({ regions }) =>
-		regions.some(carries),
-	);
-	if (functionIndex < 0) throw new Error("no placement-carrying region");
-	const regionIndex = program.functions[functionIndex]!.regions.findIndex(carries);
-	return { program, functionIndex, regionIndex };
-}
-
-function withRegion(
-	program: CoreProgram,
-	functionIndex: number,
-	regionIndex: number,
-	region: CoreRegion,
-): CoreProgram {
-	const owner = program.functions[functionIndex]!;
-	return {
-		...program,
-		functions: program.functions.with(functionIndex, {
-			...owner,
-			regions: owner.regions.with(regionIndex, region),
-		}),
-	};
-}
-
-function findVmSliceRegion(definition: ProgramImage): {
-	functionIndex: number;
-	regionIndex: number;
-} {
-	const functionIndex = definition.native.functions.findIndex((fn) =>
-		fn.specializations.some((region) => region.kind === "string-slice-number"),
-	);
-	if (functionIndex < 0) throw new Error("no string-slice-number region");
-	return {
-		functionIndex,
-		regionIndex: definition.native.functions[functionIndex]!.specializations.findIndex(
-			(region) => region.kind === "string-slice-number",
-		),
-	};
 }
 
 function withVmRegion(
@@ -521,3 +154,350 @@ function withVmRegion(
 		},
 	};
 }
+
+describe("Core plan property placement", () => {
+	it("records generated-code cost on every selected specialization", () => {
+		const plan = optimize(SPLIT_AND_SLICE, "region-cost.mjs").plan;
+		expect(plan.specializations.length).toBeGreaterThan(0);
+		for (const selection of plan.specializations) {
+			expect(Number.isFinite(selection.cost.generatedCode)).toBe(true);
+			expect(Number.isFinite(selection.cost.compilerWork)).toBe(true);
+			expect(Number.isFinite(selection.cost.runtimeBenefit)).toBe(true);
+			expect(selection.cost.generatedCode).toBeGreaterThanOrEqual(0);
+			expect(selection.cost.compilerWork).toBeGreaterThan(0);
+		}
+	});
+
+	it("certifies opposite placements for two equally adjacent property calls", () => {
+		const compilation = optimize(OPPOSITE_PLACEMENTS, "placement-opposites.js");
+		const projections = compilation.plan.specializations.filter(
+			(selection) => selection.kind === "regexp-exec-projection",
+		);
+		expect(projections).toHaveLength(2);
+		expect(
+			projections.map((selection) => ({
+				placement: selection.regexpExecProjection.propertyPlacement,
+				locked: selection.regexpExecProjection.lockedLiteral !== undefined,
+			})),
+		).toEqual(
+			expect.arrayContaining([
+				{ placement: "call-fallback", locked: true },
+				{ placement: "in-place", locked: false },
+			]),
+		);
+		const lowered = lower(compilation);
+		for (const projection of vmRegions(lowered).filter(
+			(region): region is Extract<VmRegion, { kind: "regexp-exec-projection" }> =>
+				region.kind === "regexp-exec-projection",
+		)) {
+			expect(projection.propertyIp + 1).toBe(projection.callIp);
+		}
+	});
+
+	it("keeps placement and eligibility stable when source positions move", () => {
+		const shifted = `// leading comment\n\n\n${OPPOSITE_PLACEMENTS.split("\n").join("\n\n")}\n`;
+		const baseline = optimize(OPPOSITE_PLACEMENTS, "placement-positions.js");
+		const perturbed = optimize(shifted, "placement-positions-shifted.js");
+		expect(perturbed.program.sourcePositions).not.toEqual(
+			baseline.program.sourcePositions,
+		);
+		expect(semanticPlanShape(perturbed)).toEqual(semanticPlanShape(baseline));
+		expect(semanticVmShape(lower(perturbed))).toEqual(semanticVmShape(lower(baseline)));
+	});
+
+	it("selects the same regions and placements with and without register reuse", () => {
+		for (const source of [OPPOSITE_PLACEMENTS, SPLIT_AND_SLICE]) {
+			const compilation = optimize(source, "placement-register-reuse.js");
+			const reused = lower(compilation, true);
+			const distinct = lower(compilation, false);
+			expect(
+				distinct.runtime.functions.map(({ registerCount }) => registerCount),
+			).not.toEqual(reused.runtime.functions.map(({ registerCount }) => registerCount));
+			expect(semanticVmShape(distinct)).toEqual(semanticVmShape(reused));
+		}
+	});
+
+	it("keeps placement and eligibility across a semantically empty forwarding block", () => {
+		const baseline = optimize(FORWARDED_SPLIT_AND_SLICE.plain, "placement-layout.js");
+		const forwarded = optimize(
+			FORWARDED_SPLIT_AND_SLICE.forwarded,
+			"placement-layout-forwarded.js",
+		);
+		expect(semanticPlanShape(forwarded)).toEqual(semanticPlanShape(baseline));
+		expect(semanticVmShape(lower(forwarded))).toEqual(semanticVmShape(lower(baseline)));
+	});
+
+	it("carries exact String.split producers through the compiler artifact", () => {
+		const definition = lower(optimize(SPLIT_AND_SLICE, "split-producers.js"));
+		const functionIndex = definition.native.functions.findIndex((fn) =>
+			fn.specializations.some(({ kind }) => kind === "string-split-projection"),
+		);
+		const region = definition.native.functions[functionIndex]!.specializations.find(
+			(candidate) => candidate.kind === "string-split-projection",
+		);
+		if (region?.kind !== "string-split-projection") {
+			throw new Error("missing String.split projection");
+		}
+		const bytecode = definition.runtime.functions[functionIndex]!;
+		expect(bytecode.instructions[region.separatorIp]?.opcode).toBe("CREATE_STRING");
+		const element = region.loads.find((load) => load.kind === "element");
+		if (element?.kind !== "element") throw new Error("missing projected element");
+		expect(bytecode.instructions[element.keyIp]?.opcode).toBe("CREATE_NUMBER");
+		expect(bytecode.instructions[element.ip]?.opcode).toBe("LOAD_PROPERTY");
+		const key = bytecode.instructions[element.keyIp];
+		const load = bytecode.instructions[element.ip];
+		if (key?.opcode !== "CREATE_NUMBER" || load?.opcode !== "LOAD_PROPERTY") {
+			throw new Error("invalid String.split producer instructions");
+		}
+		expect(key.dst).toBe(load.key);
+		expect(key.value).toBe(element.index);
+		expect(
+			vmRegions(deserializeCompilerArtifact(serializeCompilerArtifact(definition))),
+		).toEqual(vmRegions(definition));
+		const owner = definition.native.functions[functionIndex]!;
+		const regionIndex = owner.specializations.indexOf(region);
+		expect(() =>
+			serializeCompilerArtifact(
+				withVmRegion(definition, functionIndex, regionIndex, {
+					...region,
+					loads: region.loads.map((candidate) =>
+						candidate === element ? { ...candidate, keyIp: candidate.ip } : candidate,
+					),
+				}),
+			),
+		).toThrow(/invalid String\.split projection region/);
+	});
+
+	it("rejects an invalid placement value in a Core plan", () => {
+		const compilation = optimize(SPLIT_AND_SLICE, "placement-invalid.js");
+		const index = compilation.plan.specializations.findIndex(
+			(selection) => selection.kind === "string-slice-number",
+		);
+		const selection = compilation.plan.specializations[index];
+		if (selection?.kind !== "string-slice-number") throw new Error("missing slice plan");
+		const invalid: CoreOptimizationPlan = {
+			...compilation.plan,
+			specializations: compilation.plan.specializations.with(index, {
+				...selection,
+				stringSliceNumber: {
+					...selection.stringSliceNumber,
+					propertyPlacement: "wherever" as never,
+				},
+			}),
+		};
+		expect(() => verifyCoreOptimizationPlan(compilation.program, invalid)).toThrow(
+			/invalid String\.slice Number certificate|property placement/,
+		);
+	});
+
+	it("rejects a deferred placement whose producer is not the call's only consumer", () => {
+		const compilation = optimize(SPLIT_AND_SLICE, "placement-consumer.js");
+		const index = compilation.plan.specializations.findIndex(
+			(selection) => selection.kind === "string-split-projection",
+		);
+		const selection = compilation.plan.specializations[index];
+		if (selection?.kind !== "string-split-projection") {
+			throw new Error("missing split projection plan");
+		}
+		const foreign = selection.claimedInstructions.find(
+			(instruction) => instruction !== selection.stringSplitProjection.call,
+		)!;
+		const invalid: CoreOptimizationPlan = {
+			...compilation.plan,
+			specializations: compilation.plan.specializations.with(index, {
+				...selection,
+				stringSplitProjection: {
+					...selection.stringSplitProjection,
+					call: foreign,
+				},
+			}),
+		};
+		expect(() => verifyCoreOptimizationPlan(compilation.program, invalid)).toThrow(
+			/invalid String\.split projection certificate/,
+		);
+	});
+
+	it("rejects a deferred placement without locked identity at the Core boundary", () => {
+		const compilation = optimize(
+			`globalThis.first = function first(value) {
+				const fields = value.split(";");
+				return fields[0];
+			};`,
+			"placement-unlocked.js",
+			"mutable",
+		);
+		const index = compilation.plan.specializations.findIndex(
+			(selection) => selection.kind === "string-split-projection",
+		);
+		const selection = compilation.plan.specializations[index];
+		if (selection?.kind !== "string-split-projection")
+			throw new Error("missing split plan");
+		expect(selection.stringSplitProjection.propertyPlacement).toBe("in-place");
+		const invalid: CoreOptimizationPlan = {
+			...compilation.plan,
+			specializations: compilation.plan.specializations.with(index, {
+				...selection,
+				stringSplitProjection: {
+					...selection.stringSplitProjection,
+					propertyPlacement: "call-fallback",
+				},
+			}),
+		};
+		expect(() => verifyCoreOptimizationPlan(compilation.program, invalid)).toThrow(
+			/invalid String\.split projection certificate/,
+		);
+	});
+
+	it("round-trips placement through the wire form and rejects an invalid tag", () => {
+		const definition = lower(optimize(SPLIT_AND_SLICE, "placement-wire.js"));
+		const placements = vmRegions(definition).map(
+			(region) => (region as { propertyPlacement?: string }).propertyPlacement,
+		);
+		expect(placements).toContain("call-fallback");
+		const bytes = serializeCompilerArtifact(definition, { debugInfo: false });
+		const restored = deserializeCompilerArtifact(bytes);
+		expect(vmRegions(restored)).toEqual(vmRegions(definition));
+
+		const functionIndex = definition.native.functions.findIndex((fn) =>
+			fn.specializations.some(({ kind }) => kind === "string-slice-number"),
+		);
+		const owner = definition.native.functions[functionIndex]!;
+		const regionIndex = owner.specializations.findIndex(
+			({ kind }) => kind === "string-slice-number",
+		);
+		const region = owner.specializations[regionIndex];
+		if (region?.kind !== "string-slice-number") throw new Error("missing slice region");
+		const alternate = serializeCompilerArtifact(
+			withVmRegion(definition, functionIndex, regionIndex, {
+				...region,
+				propertyPlacement: "in-place",
+			}),
+			{ debugInfo: false },
+		);
+		const differing = [...bytes].flatMap((byte, index) =>
+			byte === alternate[index] ? [] : [index],
+		);
+		expect(differing).toHaveLength(1);
+		const corrupted = Uint8Array.from(bytes);
+		corrupted[differing[0]!] = 2;
+		expect(() => deserializeCompilerArtifact(corrupted)).toThrow(
+			/invalid region property placement/,
+		);
+	});
+});
+
+describe("late plan migration gates", () => {
+	it("does not create an indexed length plan for a one-shot comparison", () => {
+		const compilation = optimize(
+			`globalThis.before = function before(index, values) {
+				return index < values.length;
+			};`,
+			"core-one-shot-array-length.js",
+		);
+		expect(
+			compilation.plan.specializations.some(({ kind }) => kind === "indexed-length-loop"),
+		).toBe(false);
+	});
+
+	it.each([
+		["length on the left", "values.length > index", 1],
+		["non-strict inequality", "index != values.length", 2],
+		["strict inequality", "index !== values.length", 2],
+		["inclusive comparison", "index <= values.length", 2],
+	] as const)("certifies %s indexed loop tests", (_name, condition, lengthPosition) => {
+		const compilation = optimize(
+			`globalThis.visit = function visit(values) {
+				let total = 0;
+				for (let index = 0; ${condition}; index++) {
+					total += values[index];
+					if (index > 8) break;
+				}
+				return total;
+			};`,
+			"core-array-length-orientation.js",
+		);
+		const selection = compilation.plan.specializations.find(
+			(candidate) => candidate.kind === "indexed-length-loop",
+		);
+		if (selection?.kind !== "indexed-length-loop") {
+			throw new Error("missing indexed-length plan");
+		}
+		expect(selection.indexedLengthLoop).toMatchObject({
+			lengthPosition,
+			elements: [{ kind: "load" }],
+		});
+	});
+
+	it("preserves a dense-fill reserve when its exit is the next loop header", () => {
+		const compilation = optimize(
+			`globalThis.fillAndRead = function fillAndRead() {
+				let total = 0;
+				for (let outer = 0; outer < 8; outer++) {
+					const values = [];
+					for (let index = 0; index < 32; index++) values[index] = index;
+					for (let index = 0; index < 32; index++) total += values[index];
+				}
+				return total;
+			};`,
+			"core-dense-fill-consecutive-loops.js",
+		);
+		const dense = compilation.plan.specializations.find(
+			(selection) => selection.kind === "dense-array-plan",
+		);
+		if (dense?.kind !== "dense-array-plan") throw new Error("missing dense plan");
+		expect(dense.denseArray.length).toBe(32);
+		const execution = lowerCoreCompilationToExecution(compilation);
+		expect(
+			execution.functions
+				.flatMap(({ blocks }) => blocks)
+				.flatMap(({ instructions }) => instructions)
+				.find(
+					(instruction) =>
+						instruction.type === "createArray" &&
+						instruction.freshDenseReserveLength === 32,
+				),
+		).toBeDefined();
+	});
+
+	it("converges exact fresh-array builtin selection through CFG cleanup", () => {
+		const compilation = optimize(
+			`function pushPop(value) {
+				const values = [];
+				try {
+					values.push(value);
+					return values.pop();
+				} catch (error) {
+					return 0;
+				}
+			}
+			globalThis.result = pushPop(globalThis.value);`,
+			"core-array-or-numeric-typed-array-cleanup.js",
+		);
+		const operations = [...compilation.program.functionIds()].flatMap((functionId) => {
+			const fn = compilation.program.function(functionId);
+			return [...fn.instructionIds()].flatMap((instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "callBuiltin"
+					? [fn.instructionAttributes(instruction).operation]
+					: [],
+			);
+		});
+		expect(operations).toEqual(
+			expect.arrayContaining(["Array.prototype.push", "Array.prototype.pop"]),
+		);
+	});
+
+	it("rejects a stack object that enters a mixed-value join", () => {
+		const compilation = optimize(
+			`globalThis.choose = function choose(value, useObject) {
+				let result = value;
+				if (useObject) result = { kind: "chosen", value };
+				return result;
+			};`,
+			"core-stack-object-mixed-join.js",
+		);
+		expect(
+			compilation.plan.specializations.some(({ kind }) => kind === "stack-object-plan"),
+		).toBe(false);
+	});
+});

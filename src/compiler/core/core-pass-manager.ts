@@ -21,6 +21,7 @@ interface PassConsumption {
 
 export interface CorePassManagerOptions {
 	readonly verification?: CoreVerificationProfile;
+	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly sccs?: ReadonlyArray<{
 		readonly id: string;
 		readonly functions: ReadonlyArray<number>;
@@ -52,6 +53,7 @@ export class CorePassManager {
 	readonly #analyses: CoreAnalysisManager;
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #verification: CoreVerificationProfile;
+	readonly #optionalMaxRunsPerWorkItem: number;
 	readonly #sccs: ReadonlyArray<{
 		readonly id: string;
 		readonly functions: ReadonlyArray<number>;
@@ -69,6 +71,14 @@ export class CorePassManager {
 		this.#analyses = analyses;
 		this.#report = report;
 		this.#verification = options.verification ?? "boundary";
+		this.#optionalMaxRunsPerWorkItem =
+			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
+		if (
+			!Number.isSafeInteger(this.#optionalMaxRunsPerWorkItem) ||
+			this.#optionalMaxRunsPerWorkItem < 1
+		) {
+			throw new Error("Core pass work-item run limit must be a positive integer");
+		}
 		this.#sccs = options.sccs ?? [];
 	}
 
@@ -82,10 +92,22 @@ export class CorePassManager {
 		const queue: Array<QueuedPassWork> = [];
 		let queueIndex = 0;
 		const queued = new Set<string>();
+		const runs = new Map<string, number>();
+		const profileExhausted = new Set<string>();
 		const consumption = new Map<string, PassConsumption>();
 		const enqueue = (pass: CorePass, item: CorePassWorkItem): void => {
 			const key = workKey(pass, item);
 			if (queued.has(key)) return;
+			if (
+				pass.budget.exhaustion === "stop" &&
+				(runs.get(key) ?? 0) >= this.#optionalMaxRunsPerWorkItem
+			) {
+				if (!profileExhausted.has(key)) {
+					profileExhausted.add(key);
+					this.#report.recordBudgetExhaustion(pass.name);
+				}
+				return;
+			}
 			queued.add(key);
 			queue.push({ pass, item, key });
 			this.#report.recordQueuePush(queue.length - queueIndex);
@@ -106,6 +128,7 @@ export class CorePassManager {
 		while (queueIndex < queue.length) {
 			const work = queue[queueIndex++]!;
 			queued.delete(work.key);
+			runs.set(work.key, (runs.get(work.key) ?? 0) + 1);
 			this.#report.recordQueuePop();
 			const used = consumption.get(work.pass.name) ?? {
 				workItems: 0,

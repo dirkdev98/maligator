@@ -1457,7 +1457,9 @@ function validateStackObjectPlanRegion(
 			const instruction = fn.instructions[access.ip];
 			if (
 				(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
-					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+					instruction?.opcode !== "STORE_PROPERTY_STATIC" &&
+					instruction?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+					instruction?.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT") ||
 				access.slot < 0 ||
 				access.slot >= site.slotCount ||
 				allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
@@ -2397,7 +2399,37 @@ function validateStringSplitCursorRegion(
 	const trimCall = fn.instructions[region.trimCallIp];
 	const trimCallPlan = nativeCallPlanAt(nativeInstructions, region.trimCallIp);
 	const increment = fn.instructions[backedgeIp - 1];
+	const possibleAdvance = fn.instructions[backedgeIp - 2];
+	const advance =
+		possibleAdvance?.opcode === "UNARY" &&
+		possibleAdvance.operator === "tonumeric"
+			? possibleAdvance
+			: undefined;
+	const advanceIp =
+		advance !== undefined &&
+		advance.src === region.index &&
+		increment?.opcode === "UNARY" &&
+		increment.src === advance.dst
+			? backedgeIp - 2
+			: undefined;
 	const backedge = fn.instructions[backedgeIp];
+	const backedgeReachesHeader = (() => {
+		if (backedge?.opcode !== "JUMP") return false;
+		const visited = new Set<number>();
+		let ip = backedge.targetIp;
+		while (ip !== lengthIp) {
+			if (visited.has(ip)) return false;
+			visited.add(ip);
+			const instruction = fn.instructions[ip];
+			if (instruction?.opcode === "MOVE") {
+				ip++;
+				continue;
+			}
+			if (instruction?.opcode !== "JUMP") return false;
+			ip = instruction.targetIp;
+		}
+		return true;
+	})();
 	const operationIps = [
 		...(region.propertyIp < 0 ? [] : [region.propertyIp]),
 		callIp,
@@ -2408,6 +2440,7 @@ function validateStringSplitCursorRegion(
 		region.trimPropertyIp,
 		region.trimCallIp,
 		...region.primitiveStringLengthIps,
+		...(advanceIp === undefined ? [] : [advanceIp]),
 		backedgeIp - 1,
 		backedgeIp,
 	];
@@ -2491,7 +2524,6 @@ function validateStringSplitCursorRegion(
 		headerBranch.targetIp !== region.elementIp ||
 		exitJump?.opcode !== "JUMP" ||
 		exitJump.targetIp !== region.exitIp ||
-		region.elementIp !== headerBranchIp + 2 ||
 		element?.opcode !== "LOAD_PROPERTY" ||
 		!resultRegisters.has(element.object) ||
 		element.key !== region.index ||
@@ -2507,12 +2539,11 @@ function validateStringSplitCursorRegion(
 		trimCallPlan?.guardedBuiltinCall?.operation !== "String.prototype.trim" ||
 		increment?.opcode !== "UNARY" ||
 		increment.operator !== "increment" ||
-		increment.src !== region.index ||
+		increment.src !==
+			(advanceIp === undefined ? region.index : advance!.dst) ||
 		increment.dst !== region.index ||
-		backedge?.opcode !== "JUMP" ||
-		backedge.targetIp !== lengthIp ||
+		!backedgeReachesHeader ||
 		backedgeIp <= region.trimCallIp ||
-		region.exitIp !== backedgeIp + 1 ||
 		region.exitIp < 0 ||
 		region.exitIp > fn.instructions.length ||
 		region.primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS ||

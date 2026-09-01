@@ -1756,6 +1756,39 @@ export function validateVmShapeCases(definition: RuntimeImage): void {
 	}
 }
 
+function validateVmSourcePositions(definition: RuntimeImage): void {
+	for (const [positionId, position] of definition.sourcePositions.entries()) {
+		if (
+			!Number.isSafeInteger(position.line) ||
+			position.line < 1 ||
+			!Number.isSafeInteger(position.column) ||
+			position.column < 0
+		) {
+			throw new RangeError(`invalid RuntimeImage source position ${positionId}`);
+		}
+		if (
+			position.callerPosId !== undefined &&
+			(!Number.isSafeInteger(position.callerPosId) ||
+				position.callerPosId < 0 ||
+				position.callerPosId >= definition.sourcePositions.length)
+		) {
+			throw new RangeError(
+				`invalid RuntimeImage source position caller ${position.callerPosId}`,
+			);
+		}
+		if (
+			position.inlinedFunctionIndex !== undefined &&
+			(!Number.isSafeInteger(position.inlinedFunctionIndex) ||
+				position.inlinedFunctionIndex < 0 ||
+				position.inlinedFunctionIndex >= definition.functionCount)
+		) {
+			throw new RangeError(
+				`invalid RuntimeImage inline function ${position.inlinedFunctionIndex}`,
+			);
+		}
+	}
+}
+
 /** Validate every proof-bearing runtime field before an output consumes it. */
 export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	validateVmValueOperands(definition);
@@ -1763,6 +1796,7 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	validateVmSafepointRootMaps(definition);
 	validateVmExactArrayLengthLoads(definition);
 	validateVmShapeCases(definition);
+	validateVmSourcePositions(definition);
 }
 
 export interface RuntimeImageConstantRetentionEntry {
@@ -2258,6 +2292,27 @@ function buildKnownShapeLayout(
 ): VmKnownShapeLayout {
 	const origins: Array<Map<number, VmKnownShapeOrigin>> = [];
 	const literalShapeCounts: Array<number> = [];
+	const referencedOrigins = new Set<string>();
+	for (const fn of functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const candidates =
+					instruction.type === "selectShapeCase"
+						? instruction.shapeCaseCandidates
+						: (instruction.type === "loadPropertyStatic" ||
+									instruction.type === "storePropertyStatic") &&
+							  instruction.knownOwnSlot !== undefined
+							? instruction.knownOwnSlot.candidates
+							: [];
+				for (const candidate of candidates) {
+					referencedOrigins.add(
+						`${candidate.shapeFunctionIndex}\0${candidate.shapeInstruction}`,
+					);
+				}
+			}
+		}
+	}
+	const precompiledLiteralShapes: Array<VmPrecompiledLiteralShape> = [];
 	for (const fn of functions) {
 		const cacheIndexByInstruction = new Map<CompilerInstruction, number>();
 		let shapeCacheIndex = 0;
@@ -2284,6 +2339,13 @@ function buildKnownShapeLayout(
 				keyStringIndices: safepoint.instruction.keyStringIndices,
 				shapeCacheIndex: cacheIndex,
 			});
+			if (referencedOrigins.has(`${fn.functionIndex}\0${safepoint.coreInstruction}`)) {
+				precompiledLiteralShapes.push({
+					functionIndex: fn.functionIndex,
+					shapeCacheIndex: cacheIndex,
+					keyStringIndices: safepoint.instruction.keyStringIndices,
+				});
+			}
 		}
 		origins[fn.functionIndex] = functionOrigins;
 		literalShapeCounts[fn.functionIndex] = shapeCacheIndex;
@@ -2291,7 +2353,7 @@ function buildKnownShapeLayout(
 	return {
 		origins,
 		literalShapeCounts,
-		precompiledLiteralShapes: [],
+		precompiledLiteralShapes,
 	};
 }
 
@@ -2368,7 +2430,17 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		),
 		hostInstalls: buildHostInstalls(context, functions),
 		files,
-		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),
+		sourcePositions: core.sourcePositions.map((position) => ({
+			...position,
+			...(position.inlinedFunctionIndex === undefined
+				? {}
+				: {
+						inlinedFunctionIndex: executionFunctionIndex(
+							program.functionMap,
+							position.inlinedFunctionIndex,
+						),
+					}),
+		})),
 	};
 	validateRuntimeImageMetadata(runtime);
 	return { runtime, functions: functionPlans };

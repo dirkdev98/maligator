@@ -1,5 +1,5 @@
-import type { CoreCompilationContext } from "../../src/compiler/core/core-compilation.ts";
 import { CoreFunctionBuilder } from "../../src/compiler/core/core-builder.ts";
+import type { CoreCompilationContext } from "../../src/compiler/core/core-compilation.ts";
 import { coreOpcodeRegistry } from "../../src/compiler/core/core-ir-opcodes.ts";
 import type {
 	CoreFunctionId,

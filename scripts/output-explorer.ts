@@ -61,7 +61,7 @@ interface Sample {
 
 type StageId = "preCore" | "optimizedCore" | "target" | "malw" | "c";
 type ViewId = "source" | StageId;
-type ModeId = "ablated" | "full";
+type ModeId = "generic" | "full";
 
 const SAMPLES: ReadonlyArray<Sample> = [
 	{
@@ -697,12 +697,14 @@ function compileMode(compiled: ReturnType<typeof compileSampleCore>, mode: ModeI
 	const plan =
 		mode === "full"
 			? compiled.result.compilation.plan
-			: genericPlan(compiled.result.compilation.plan);
+			: verifyCoreOptimizationPlan(
+					compiled.result.compilation.program,
+					genericPlan(compiled.result.compilation.plan),
+				);
 	const optimized: CoreCompilation =
 		mode === "full"
 			? compiled.result.compilation
 			: Object.freeze({ ...compiled.result.compilation, plan });
-	if (mode !== "full") verifyCoreOptimizationPlan(optimized.program, plan);
 	const execution = lowerCoreCompilationToExecution(optimized, { reuseRegisters: true });
 	const image = lowerExecutionToProgramImage(execution, false);
 	const wire = serializeRuntimeImage(image.runtime, { debugInfo: true });
@@ -769,7 +771,7 @@ function stageOutput(result: ReturnType<typeof compileMode>, stage: StageId): st
 
 function validateTrails(
 	sample: Sample,
-	ablated: ReturnType<typeof compileMode>,
+	generic: ReturnType<typeof compileMode>,
 	full: ReturnType<typeof compileMode>,
 ): void {
 	for (const trail of sample.trails) {
@@ -780,7 +782,7 @@ function validateTrails(
 				stage === "source"
 					? [sample.source]
 					: stage === "optimizedCore"
-						? [ablated.optimizedCore, full.optimizedCore]
+						? [generic.optimizedCore, full.optimizedCore]
 						: [stageOutput(full, stage)];
 			const present = outputs.every((output) =>
 				output.toLowerCase().includes(query.toLowerCase()),
@@ -835,14 +837,14 @@ function writeArtifact(relativePath: string, content: string | Uint8Array): stri
 const samples = SAMPLES.map((sample) => {
 	const compiled = compileSampleCore(sample);
 	const full = compileMode(compiled, "full");
-	const ablated = compileMode(compiled, "ablated");
-	validateTrails(sample, ablated, full);
+	const generic = compileMode(compiled, "generic");
+	validateTrails(sample, generic, full);
 	const base = sample.id;
 	const sourcePath = writeArtifact(path.join(base, "source.js"), `${sample.source}\n`);
 	const preCorePath = writeArtifact(path.join(base, "pre-core.txt"), `${full.preCore}\n`);
 	const modeData = Object.fromEntries(
-		(["ablated", "full"] as const).map((mode) => {
-			const result = mode === "full" ? full : ablated;
+		(["generic", "full"] as const).map((mode) => {
+			const result = mode === "full" ? full : generic;
 			const prefix = path.join(base, mode);
 			const artifacts = {
 				optimizedCore: writeArtifact(
@@ -904,7 +906,7 @@ const manifest = {
 			version: WIRE_VERSION,
 		},
 		optimizationModes: {
-			ablated: { profile: "canonical-generic-target" },
+			generic: { profile: "canonical-generic-target" },
 			full: { profile: "selected-late-plan" },
 		},
 	},
@@ -915,9 +917,9 @@ writeFileSync(path.join(snapshotRoot, "manifest.json"), `${stableJson(manifest)}
 const pageData = {
 	manifest: { snapshot: manifest.snapshot },
 	samples: samples.map((sample) => {
-		const ablated = sample.modes.ablated;
+		const generic = sample.modes.generic;
 		const full = sample.modes.full;
-		if (ablated === undefined || full === undefined) {
+		if (generic === undefined || full === undefined) {
 			throw new Error(`${sample.id}: missing output mode`);
 		}
 		return {
@@ -929,7 +931,7 @@ const pageData = {
 			trails: sample.trails,
 			preCore: sample.preCore,
 			modes: {
-				ablated: { optimizedCore: ablated.optimizedCore },
+				generic: { optimizedCore: generic.optimizedCore },
 				full: {
 					optimizedCore: full.optimizedCore,
 					target: full.target,

@@ -349,17 +349,27 @@ export function analyzeCoreLoopInductions(
 		const updateEdge = incoming.find(({ from }) => from === latch);
 		if (initialEdge === undefined || updateEdge === undefined) continue;
 		for (const [parameterIndex, parameter] of fn.blockParameters(loop.header).entries()) {
-			const representation = numericRepresentation(parameter.value);
-			if (representation === undefined) continue;
 			const initial = initialEdge.arguments[parameterIndex];
 			const update = updateEdge.arguments[parameterIndex];
-			if (
-				initial === undefined ||
-				update === undefined ||
-				numericRepresentation(update) !== representation
-			)
-				continue;
-			const recurrence = recurrenceStep(fn, update, parameter.value, root, exactScalar);
+			if (initial === undefined || update === undefined) continue;
+			const initialScalar = exactScalar?.(initial);
+			let representation = numericRepresentation(parameter.value);
+			const bootstrap =
+				representation === undefined &&
+				(initialScalar === "number" || initialScalar === "int32");
+			const recurrenceScalar = bootstrap
+				? (value: CoreValueId): CoreExactScalarKind | undefined =>
+						root(value) === root(parameter.value)
+							? initialScalar
+							: exactScalar?.(value)
+				: exactScalar;
+			const recurrence = recurrenceStep(
+				fn,
+				update,
+				parameter.value,
+				root,
+				recurrenceScalar,
+			);
 			if (
 				recurrence === undefined ||
 				fn.instructionBlock(recurrence.instruction) !== latch ||
@@ -367,7 +377,19 @@ export function analyzeCoreLoopInductions(
 				recurrence.step === 0
 			)
 				continue;
-			const controlling = loopComparison(fn, loop, parameter.value, root, exactScalar);
+			if (bootstrap) representation = "f64";
+			if (
+				representation === undefined ||
+				(!bootstrap && numericRepresentation(update) !== representation)
+			)
+				continue;
+			const controlling = loopComparison(
+				fn,
+				loop,
+				parameter.value,
+				root,
+				recurrenceScalar,
+			);
 			const range =
 				controlling?.boundLoopInvariant === true
 					? concreteRange(

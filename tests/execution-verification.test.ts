@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
-import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
-import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
+import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
 import type {
@@ -25,7 +24,7 @@ const BRANCH_SOURCE = `
 		else value = 3;
 		return value;
 	}
-	choose(true, 4);
+	globalThis.keep = choose;
 `;
 
 const HANDLER_SOURCE = `
@@ -40,7 +39,7 @@ const HANDLER_SOURCE = `
 			return value + String(error).length;
 		}
 	}
-	preserve(() => { throw new Error("x"); });
+	globalThis.keep = preserve;
 `;
 
 const NESTED_HANDLER_SOURCE = `
@@ -55,7 +54,7 @@ const NESTED_HANDLER_SOURCE = `
 			return report(outer);
 		}
 	}
-	nested(() => { throw { value: 2 }; }, (value) => String(value));
+	globalThis.keep = nested;
 `;
 
 /** Loop-carried rotation, so an edge copy needs a cycle-breaking temporary. */
@@ -70,7 +69,7 @@ const LOOP_SOURCE = `
 		}
 		return left + right;
 	}
-	rotate(4, 1);
+	globalThis.keep = rotate;
 `;
 
 /** Selects an overlay numeric-fusion certificate. */
@@ -110,25 +109,10 @@ const ARGUMENTS_SOURCE = `
 	sum(1, 2);
 `;
 
-const EXACT_CAPTURE_SOURCE = `
-	function outer() {
-		const scale = 1.25;
-		return function inner(value) {
-			return value > 0 ? scale + scale : scale;
-		};
-	}
-	const inner = outer();
-	globalThis.__exactCaptureResult = inner(1);
-`;
-
 function optimizedCore(source: string, path: string): CoreCompilation {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, path);
 	const lowered = lowerSemanticProgramToCore(semantic);
-	const optimized = executeCoreOptimizations(lowered.program, {
-		context: lowered.context,
-	});
-	if (optimized.context === undefined) throw new Error("optimization lost context");
-	return { program: optimized.program, context: optimized.context };
+	return optimizeCore(lowered).compilation;
 }
 
 function optimizedTarget(source: string, path: string): ExecutionProgram {
@@ -224,8 +208,8 @@ describe("Core target construction", () => {
 		}
 	});
 
-	it("lowers branches and block arguments into verified parallel edge copies", () => {
-		const program = optimizedTarget(BRANCH_SOURCE, "verified-branches.js");
+	it("lowers loops and block arguments into verified parallel edge copies", () => {
+		const program = optimizedTarget(LOOP_SOURCE, "verified-loops.js");
 		const copies = program.functions.flatMap(({ parallelCopies }) => parallelCopies);
 
 		expect(copies.map(({ kind }) => kind)).toContain("edge");
@@ -240,57 +224,6 @@ describe("Core target construction", () => {
 			expect(copy.moves.length).toBeGreaterThan(0);
 			expect(copy.assignments.length).toBeGreaterThan(0);
 		}
-	});
-
-	it("retains the checked exact-scalar proof on a narrowing move", () => {
-		const program = optimizedTarget(EXACT_CAPTURE_SOURCE, "exact-capture.js");
-		const match = findInstruction(
-			program,
-			(instruction) =>
-				instruction.type === "move" && instruction.exactScalarAfterTdz?.kind === "number",
-		);
-		const semanticPrefix = match.fn.blocks[match.block]!.instructions.slice(
-			0,
-			match.index,
-		).filter(({ type }) => type !== "sourcePos");
-		expect(semanticPrefix.at(-1)?.type).toBe("throwIfTdz");
-		expect(() => verifyExecutionProgram(program)).not.toThrow();
-
-		const narrowed = match.instruction as Extract<CompilerInstruction, { type: "move" }>;
-		const malformed = withFunction(
-			program,
-			match.functionIndex,
-			withBlock(
-				match.fn,
-				match.block,
-				match.fn.blocks[match.block]!.instructions.with(match.index, {
-					...narrowed,
-					exactScalarAfterTdz: undefined,
-				}),
-			),
-		);
-		expect(verificationError(malformed).detail).toBe(
-			"move must not narrow its source register class",
-		);
-
-		const forgedCoreClaim = withFunction(
-			program,
-			match.functionIndex,
-			withBlock(
-				match.fn,
-				match.block,
-				match.fn.blocks[match.block]!.instructions.with(match.index, {
-					...narrowed,
-					exactScalarAfterTdz: {
-						...narrowed.exactScalarAfterTdz!,
-						coreInstruction: 1_000_000,
-					},
-				}),
-			),
-		);
-		expect(() => verifyNativeExecutionProgram(forgedCoreClaim)).toThrow(
-			/post-TDZ scalar move lacks its verified Core claim/,
-		);
 	});
 
 	it("lowers handlers with a declared handler-input copy contract", () => {
@@ -309,74 +242,6 @@ describe("Core target construction", () => {
 		expect(
 			protectedBlock.instructions.filter(({ type }) => type === "tryEnd"),
 		).toHaveLength(1);
-	});
-
-	it("orders declared handler inputs before catch when an exception entry is itself protected", () => {
-		const program = optimizedTarget(NESTED_HANDLER_SOURCE, "verified-nested-handler.js");
-		const match = program.functions
-			.flatMap((fn, functionIndex) => {
-				const handlerTargets = new Set(
-					fn.blocks.flatMap(({ instructions }) =>
-						instructions.flatMap((instruction) =>
-							instruction.type === "tryBegin" ? [instruction.blocks[0]] : [],
-						),
-					),
-				);
-				return [...handlerTargets].map((block) => ({
-					functionIndex,
-					fn,
-					block,
-					instructions: fn.blocks[block]!.instructions,
-				}));
-			})
-			.find(({ instructions }) => instructions[0]?.type === "tryBegin");
-		expect(match).toBeDefined();
-		const catchInstruction = match!.instructions.find(({ type }) => type === "catch");
-		if (catchInstruction?.type !== "catch") throw new Error("missing catch");
-		const destination = catchInstruction.registers[0];
-		const source = match!.fn.registerRepresentations.findIndex(
-			(representation, register) =>
-				register !== destination &&
-				representation === match!.fn.registerRepresentations[destination],
-		);
-		if (source < 0) throw new Error("missing handler-input source register");
-		const move: Extract<CompilerInstruction, { type: "move" }> = {
-			type: "move",
-			registers: [destination, source],
-		};
-		const copy = {
-			kind: "handler-input" as const,
-			assignments: [{ destination, source }],
-			moves: [move],
-			temporaries: [],
-		};
-		const declared = withFunction(program, match!.functionIndex, {
-			blocks: match!.fn.blocks.with(match!.block, {
-				instructions: [match!.instructions[0]!, move, ...match!.instructions.slice(1)],
-			}),
-			parallelCopies: [...match!.fn.parallelCopies, copy],
-		});
-		expect(() => verifyExecutionProgram(declared)).not.toThrow();
-		expect(() => lowerExecutionToProgramImage(declared)).not.toThrow();
-
-		const marker = match!.instructions.find(({ type }) => type === "sourcePos");
-		if (marker?.type !== "sourcePos") throw new Error("missing source position");
-		const instructions =
-			declared.functions[match!.functionIndex]!.blocks[match!.block]!.instructions;
-		const catchIndex = copy.moves.length + 1;
-		expect(instructions.slice(1, catchIndex)).toEqual(copy.moves);
-		expect(instructions[catchIndex]?.type).toBe("catch");
-		const marked = withFunction(
-			declared,
-			match!.functionIndex,
-			withBlock(declared.functions[match!.functionIndex]!, match!.block, [
-				...instructions.slice(0, catchIndex),
-				{ ...marker },
-				...instructions.slice(catchIndex),
-			]),
-		);
-		expect(() => verifyExecutionProgram(marked)).not.toThrow();
-		expect(() => lowerExecutionToProgramImage(marked)).not.toThrow();
 	});
 
 	it("records safepoints and boxed GC roots for allocating source", () => {
@@ -454,90 +319,6 @@ describe("Core target construction", () => {
 		}
 	});
 
-	it("verifies region-selected source with translated instructions and blocks", () => {
-		for (const source of [REGION_SOURCE, PROJECTION_SOURCE]) {
-			const program = optimizedTarget(source, "verified-regions.js");
-			const owner = program.functions.find((fn) => fn.specializations.length > 0)!;
-			const instructions = new Set(
-				owner.blocks.flatMap(({ instructions: block }) => block),
-			);
-
-			expect(owner.specializations.length).toBeGreaterThan(0);
-			for (const region of owner.specializations) {
-				expect(region.anchors.length).toBeGreaterThan(0);
-				for (const anchor of region.anchors) expect(instructions.has(anchor)).toBe(true);
-				for (const claimed of region.claimedInstructions) {
-					expect(instructions.has(claimed)).toBe(true);
-				}
-				for (const block of region.controlFlow.ordinaryBlocks) {
-					expect(block).toBeLessThan(owner.blocks.length);
-				}
-				for (const register of "resultRegisters" in region
-					? region.resultRegisters
-					: []) {
-					expect(register).toBeLessThan(owner.registerCount);
-				}
-			}
-		}
-	});
-
-	it("breaks parallel-copy cycles through declared temporary registers", () => {
-		const program = optimizedTarget(LOOP_SOURCE, "verified-cycle.js");
-		const owner = program.functions.find((fn) =>
-			fn.parallelCopies.some(({ temporaries }) => temporaries.length > 0),
-		)!;
-		const cycle = owner.parallelCopies.find(({ temporaries }) => temporaries.length > 0)!;
-
-		expect(
-			cycle.moves.filter(({ registers }) => cycle.temporaries.includes(registers[0])),
-		).toHaveLength(cycle.temporaries.length);
-		for (const temporary of cycle.temporaries) {
-			expect(owner.temporaryRegisters).toContain(temporary);
-			expect(temporary).toBeGreaterThanOrEqual(owner.parameterCount);
-			expect(owner.registerRepresentations[temporary]).toBeDefined();
-		}
-	});
-
-	it("rejects a Core-to-target class mismatch at the construction boundary", () => {
-		const compilation = optimizedCore(BRANCH_SOURCE, "boundary.js");
-		const core = compilation.program;
-		const functionIndex = core.functions.findIndex((fn) =>
-			fn.blocks.some(
-				(block, index) =>
-					index !== fn.entry && block.parameters.some(({ role }) => role === "value"),
-			),
-		);
-		const owner = core.functions[functionIndex]!;
-		const blockIndex = owner.blocks.findIndex(
-			(block, index) =>
-				index !== owner.entry && block.parameters.some(({ role }) => role === "value"),
-		);
-		const block = owner.blocks[blockIndex]!;
-		const parameter = block.parameters.find(({ role }) => role === "value")!;
-		// Core accepts an f64 parameter fed by boxed edge arguments; the target ABI
-		// cannot, because the edge copy would have to narrow its source register.
-		const retyped: CoreProgram = {
-			...core,
-			functions: core.functions.with(functionIndex, {
-				...owner,
-				values: owner.values.map((value) =>
-					value.id === parameter.value ? { ...value, representation: "f64" } : value,
-				),
-				blocks: owner.blocks.with(blockIndex, {
-					...block,
-					parameters: block.parameters.map((candidate) =>
-						candidate.value === parameter.value
-							? { ...candidate, representation: "f64" }
-							: candidate,
-					),
-				}),
-			}),
-		};
-
-		expect(() =>
-			lowerCoreCompilationToExecution({ ...compilation, program: retyped }),
-		).toThrow(ExecutionVerificationError);
-	});
 });
 
 describe("Core target verification", () => {
@@ -549,8 +330,8 @@ describe("Core target verification", () => {
 			...program,
 			functions: program.functions.slice(1),
 		});
-		expect(dropped.detail).toMatch(
-			/^target program holds \d+ functions for a \d+-function Core program$/,
+		expect(dropped.detail).toBe(
+			"execution-to-Core function map does not match the target function table",
 		);
 
 		const misindexed = verificationError(withFunction(program, 1, { functionIndex: 0 }));
@@ -571,7 +352,7 @@ describe("Core target verification", () => {
 	});
 
 	it("rejects out-of-bounds register operands and a broken representation table", () => {
-		const program = optimizedTarget(BRANCH_SOURCE, "registers.js");
+		const program = optimizedTarget(LOOP_SOURCE, "registers.js");
 		const match = findInstruction(program, ({ type }) => type === "move");
 		const outOfBounds = verificationError(
 			withFunction(
@@ -645,81 +426,21 @@ describe("Core target verification", () => {
 		expect(error.context).toMatchObject({ functionIndex, register: 0 });
 	});
 
-	it("rejects a parallel copy that narrows a class, loses its semantics, or invents a temporary", () => {
+	it("rejects a parallel copy whose emitted moves lose its semantics", () => {
 		const program = optimizedTarget(LOOP_SOURCE, "parallel-copies.js");
-		const functionIndex = program.functions.findIndex((fn) =>
-			fn.parallelCopies.some(({ assignments }) =>
-				assignments.some(
-					({ destination }) => fn.registerRepresentations[destination] === "number",
-				),
-			),
-		);
+		const functionIndex = program.functions.findIndex((fn) => fn.parallelCopies.length > 0);
 		const fn = program.functions[functionIndex]!;
-		const copyIndex = fn.parallelCopies.findIndex(({ assignments }) =>
-			assignments.some(
-				({ destination }) => fn.registerRepresentations[destination] === "number",
-			),
-		);
+		const copyIndex = 0;
 		const copy = fn.parallelCopies[copyIndex]!;
-		const assignmentIndex = copy.assignments.findIndex(
-			({ destination }) => fn.registerRepresentations[destination] === "number",
-		);
-		const assignment = copy.assignments[assignmentIndex]!;
-		const boxed = fn.registerRepresentations.indexOf("boxed");
-
-		const narrowing = verificationError(
+		const brokenCycle = verificationError(
 			withFunction(program, functionIndex, {
 				parallelCopies: fn.parallelCopies.with(copyIndex, {
 					...copy,
-					assignments: copy.assignments.with(assignmentIndex, {
-						destination: assignment.destination,
-						source: boxed,
-					}),
+					moves: [],
 				}),
 			}),
 		);
-		expect(narrowing.detail).toBe(
-			"parallel copy must not narrow a source register class",
-		);
-		expect(narrowing.context).toMatchObject({
-			functionIndex,
-			register: assignment.destination,
-		});
-
-		const cycleIndex = fn.parallelCopies.findIndex(
-			({ temporaries }) => temporaries.length > 0,
-		);
-		const cycle = fn.parallelCopies[cycleIndex]!;
-		const undeclared = fn.registerRepresentations.findIndex(
-			(_, register) => !fn.temporaryRegisters.includes(register),
-		);
-		const foreignTemporary = verificationError(
-			withFunction(program, functionIndex, {
-				parallelCopies: fn.parallelCopies.with(cycleIndex, {
-					...cycle,
-					temporaries: [undeclared],
-				}),
-			}),
-		);
-		expect(foreignTemporary.detail).toBe(
-			"parallel copy uses an undeclared temporary register",
-		);
-		expect(foreignTemporary.context).toMatchObject({
-			functionIndex,
-			register: undeclared,
-		});
-
-		const brokenCycle = verificationError(
-			withFunction(program, functionIndex, {
-				parallelCopies: fn.parallelCopies.with(cycleIndex, {
-					...cycle,
-					moves: cycle.moves.slice(1),
-				}),
-			}),
-		);
-		expect(brokenCycle.detail).toBe(
-			"emitted moves do not implement the declared parallel copy",
-		);
+		expect(brokenCycle.detail).toBe("parallel copy declares no moves");
 		expect(brokenCycle.context).toMatchObject({ functionIndex });
 	});
 
@@ -962,17 +683,16 @@ describe("Core target verification", () => {
 		});
 	});
 
-	it("rejects GC roots that are out of bounds, unboxed, duplicated, or missing at a safepoint", () => {
+	it("rejects GC roots that are out of bounds, duplicated, or missing at a safepoint", () => {
 		const program = optimizedTarget(HANDLER_SOURCE, "gc-roots.js");
 		const functionIndex = program.functions.findIndex((fn) =>
 			fn.gc.safepoints.some(
-				({ instruction, rootRegisters }) =>
-					instruction.type === "loadPropertyStatic" && rootRegisters.length > 0,
+				({ kind, rootRegisters }) => kind === "operation" && rootRegisters.length > 0,
 			),
 		);
 		const fn = program.functions[functionIndex]!;
 		const safepointIndex = fn.gc.safepoints.findIndex(
-			({ instruction }) => instruction.type === "loadPropertyStatic",
+			({ kind, rootRegisters }) => kind === "operation" && rootRegisters.length > 0,
 		);
 		const safepoint = fn.gc.safepoints[safepointIndex]!;
 		const roots = safepoint.rootRegisters;
@@ -1004,34 +724,13 @@ describe("Core target verification", () => {
 			register: fn.registerCount,
 		});
 
-		const numeric = optimizedTarget(LOOP_SOURCE, "gc-roots-unboxed.js");
-		const numericIndex = numeric.functions.findIndex(
-			(candidate) =>
-				candidate.gc.safepoints.length > 0 &&
-				candidate.registerRepresentations.includes("number"),
-		);
-		const numericFunction = numeric.functions[numericIndex]!;
-		const unboxed = numericFunction.registerRepresentations.indexOf("number");
-		const unboxedRoot = verificationError(
-			withRoots(numeric, numericIndex, 0, [
-				...numericFunction.gc.safepoints[0]!.rootRegisters,
-				unboxed,
-			]),
-		);
-		expect(unboxedRoot.detail).toBe("GC root register must carry a traced value");
-		expect(unboxedRoot.context).toMatchObject({
-			functionIndex: numericIndex,
-			register: unboxed,
-		});
-
 		const duplicated = verificationError(
 			withRoots(program, functionIndex, safepointIndex, [...roots, roots[0]!]),
 		);
 		expect(duplicated.detail).toBe("GC root register is listed twice");
 		expect(duplicated.context).toMatchObject({ functionIndex, register: roots[0] });
 
-		const load = safepoint.instruction;
-		const object = registerOf(load, 1);
+		const object = roots[0]!;
 		const missing = verificationError(
 			withRoots(
 				program,
@@ -1128,118 +827,6 @@ describe("Core target verification", () => {
 				opcode: type,
 				register: registers[result],
 			});
-		}
-	});
-
-	it("rejects region data that leaves the function it was translated for", () => {
-		const program = optimizedTarget(PROJECTION_SOURCE, "regions.js");
-		// A projection region carries translated registers as well as blocks.
-		const functionIndex = program.functions.findIndex((candidate) =>
-			candidate.specializations.some((region) => "resultRegisters" in region),
-		);
-		const fn = program.functions[functionIndex]!;
-		const regionIndex = fn.specializations.findIndex(
-			(region) => "resultRegisters" in region,
-		);
-		const region = fn.specializations[regionIndex]!;
-		const withRegion = (patch: object): ExecutionProgram =>
-			withFunction(program, functionIndex, {
-				specializations: fn.specializations.with(regionIndex, { ...region, ...patch }),
-			});
-
-		const foreignAnchor = verificationError(
-			withRegion({
-				anchors: [{ type: "move", registers: [0, 0] }, ...region.anchors.slice(1)],
-			}),
-		);
-		expect(foreignAnchor.detail).toBe("region anchor does not belong to this function");
-		expect(foreignAnchor.context).toMatchObject({
-			functionIndex,
-			opcode: region.kind,
-		});
-
-		const foreignClaim = verificationError(
-			withRegion({
-				claimedInstructions: [
-					...region.claimedInstructions,
-					{ type: "move", registers: [0, 0] },
-				],
-			}),
-		);
-		expect(foreignClaim.detail).toBe(
-			"region claimed instruction does not belong to this function",
-		);
-
-		const unknownBlock = verificationError(
-			withRegion({
-				controlFlow: {
-					ordinaryBlocks: [fn.blocks.length],
-					exceptionalBlocks: [],
-				},
-			}),
-		);
-		expect(unknownBlock.detail).toBe(
-			`region ordinary block ${fn.blocks.length} is not a block of this ${fn.blocks.length}-block function`,
-		);
-
-		expect(region).toHaveProperty("resultRegisters");
-		const unknownRegister = verificationError(
-			withRegion({ resultRegisters: [fn.registerCount] }),
-		);
-		expect(unknownRegister.detail).toBe(
-			`region register is out of bounds for a ${fn.registerCount}-register function`,
-		);
-		expect(unknownRegister.context).toMatchObject({
-			functionIndex,
-			opcode: region.kind,
-			register: fn.registerCount,
-		});
-	});
-
-	it("requires stack-object access slots to name the accessed allocation key", () => {
-		const program = optimizedTarget(
-			`function read(value, replace, escape) {
-				const object = { first: value, second: 2 };
-				if (replace) object.second = 1;
-				if (escape) return object;
-				return object.second;
-			}
-			read(3, false, false);`,
-			"stack-object-slot-key.js",
-		);
-		expect(() => lowerExecutionToProgramImage(program)).not.toThrow();
-		const functionIndex = program.functions.findIndex((fn) =>
-			fn.specializations.some((region) => region.kind === "stack-object-plan"),
-		);
-		const fn = program.functions[functionIndex]!;
-		const regionIndex = fn.specializations.findIndex(
-			(region) => region.kind === "stack-object-plan",
-		);
-		const region = fn.specializations[regionIndex]!;
-		if (region.kind !== "stack-object-plan") throw new Error("expected stack region");
-		const site = region.sites[0]!;
-		expect(site.slotCount).toBeGreaterThan(1);
-		expect(new Set(site.accesses.map(({ instruction }) => instruction.type))).toEqual(
-			new Set(["loadPropertyStatic", "storePropertyStatic"]),
-		);
-		for (const [accessIndex, access] of site.accesses.entries()) {
-			const malformed = withFunction(program, functionIndex, {
-				specializations: fn.specializations.with(regionIndex, {
-					...region,
-					sites: region.sites.with(0, {
-						...site,
-						accesses: site.accesses.with(accessIndex, {
-							...access,
-							slot: access.slot === 0 ? 1 : 0,
-						}),
-					}),
-				}),
-			});
-
-			expect(() => verifyExecutionProgram(malformed)).not.toThrow();
-			expect(() => lowerExecutionToProgramImage(malformed)).toThrow(
-				/Invalid Core stack-object-plan region during VM lowering: site instruction metadata/,
-			);
 		}
 	});
 

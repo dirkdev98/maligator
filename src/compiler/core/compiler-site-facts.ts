@@ -11,7 +11,12 @@ import type {
 } from "../shared/compiler-facts.ts";
 import { knownFact, sourceSiteId } from "../shared/compiler-facts.ts";
 import type { CoreCompilation, CoreCompilationContext } from "./core-compilation.ts";
-import type { CoreFunction, CoreInstruction, CoreProgram } from "./core-ir.ts";
+import type {
+	CoreFunctionId,
+	CoreInstructionAttributes,
+	CoreInstructionId,
+} from "./core-ir.ts";
+import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const allocationOpcodes = new Set([
 	"createObject",
@@ -26,32 +31,48 @@ const allocationOpcodes = new Set([
 	"createBigint",
 ]);
 
-function functionId(fn: CoreFunction): string {
-	return `${encodeURIComponent(fn.metadata.sourcePath)}#${fn.functionIndex}`;
+export function coreCompilerSiteId(
+	functionId: CoreFunctionId,
+	block: number,
+	instruction: CoreInstructionId,
+	opcode: string,
+): string {
+	return `${functionId}:${block}:${instruction}:${opcode}`;
+}
+
+function compilerFunctionId(fn: CoreFunctionStore): string {
+	return `${encodeURIComponent(fn.metadata.sourcePath)}#${fn.id}`;
+}
+
+function sourceOwner(
+	program: CoreProgram,
+	fallback: CoreFunctionStore,
+	functionIndex: number | undefined,
+): CoreFunctionStore | undefined {
+	if (functionIndex === undefined) return fallback;
+	for (const functionId of program.functionIds()) {
+		if (functionId === functionIndex) return program.function(functionId);
+	}
+	return undefined;
 }
 
 function logicalSourceSite(
 	program: CoreProgram,
-	fn: CoreFunction,
+	fn: CoreFunctionStore,
 	positionId: number | undefined,
 	kind: string,
 ): SourceSiteId | undefined {
 	if (positionId === undefined) return undefined;
 	const position = program.sourcePositions[positionId];
 	if (position === undefined) return undefined;
-	const owner =
-		position.inlinedFunctionIndex === undefined
-			? fn
-			: program.functions.find(
-					(candidate) => candidate.functionIndex === position.inlinedFunctionIndex,
-				);
+	const owner = sourceOwner(program, fn, position.inlinedFunctionIndex);
 	return owner === undefined
 		? undefined
 		: sourceSiteId(owner.metadata.sourcePath, position.line, position.column, kind);
 }
 
 function siteProof(
-	fn: CoreFunction,
+	fn: CoreFunctionStore,
 	sourceSite: SourceSiteId | undefined,
 	origin: string,
 	dependencies: ReadonlyArray<FactDependency> = [],
@@ -60,7 +81,7 @@ function siteProof(
 	return {
 		scope:
 			sourceSite === undefined
-				? { kind: "function", id: fn.functionIndex }
+				? { kind: "function", id: fn.id }
 				: { kind: "site", id: sourceSite },
 		dependencies,
 		obligations,
@@ -81,25 +102,26 @@ function decodeString(program: CoreProgram, index: number): string {
 
 function shapeFact(
 	program: CoreProgram,
-	fn: CoreFunction,
-	instruction: CoreInstruction,
+	fn: CoreFunctionStore,
+	opcode: string,
+	attributes: CoreInstructionAttributes,
 	sourceSite: SourceSiteId | undefined,
 ): CompilerFact<ShapeFact> | undefined {
-	if (instruction.opcode === "createObject") {
+	if (opcode === "createObject") {
 		return knownFact(
 			{ kind: "object", keys: [] },
 			siteProof(fn, sourceSite, "fresh-empty-object"),
 		);
 	}
-	if (instruction.opcode === "createObjectShaped") {
-		const indices = numberArray(instruction.attributes.keyStringIndices);
+	if (opcode === "createObjectShaped") {
+		const indices = numberArray(attributes.keyStringIndices);
 		if (indices === undefined) return undefined;
 		return knownFact(
 			{ kind: "object", keys: indices.map((index) => decodeString(program, index)) },
 			siteProof(fn, sourceSite, "static-literal-shape"),
 		);
 	}
-	if (instruction.opcode === "createArray") {
+	if (opcode === "createArray") {
 		return knownFact(
 			{ kind: "array", elements: "dense" },
 			siteProof(fn, sourceSite, "fresh-dense-array"),
@@ -110,48 +132,51 @@ function shapeFact(
 
 function immutableBindingFact(
 	program: CoreProgram,
-	instruction: CoreInstruction,
+	opcode: string,
+	attributes: CoreInstructionAttributes,
 	context: CoreCompilationContext,
 ): CompilerFact<"immutable"> | undefined {
-	const facts = context.facts;
-	if (instruction.opcode === "loadIntrinsic") {
-		const intrinsic = instruction.attributes.intrinsic;
+	if (opcode === "loadIntrinsic") {
+		const intrinsic = attributes.intrinsic;
 		return typeof intrinsic === "string"
-			? facts.immutableGlobalBindings.get(intrinsic)
+			? context.facts.immutableGlobalBindings.get(intrinsic)
 			: undefined;
 	}
-	if (
-		instruction.opcode === "loadGlobalProperty" ||
-		instruction.opcode === "storeGlobalProperty"
-	) {
-		const index = instruction.attributes.nameStringIndex;
+	if (opcode === "loadGlobalProperty" || opcode === "storeGlobalProperty") {
+		const index = attributes.nameStringIndex;
 		return typeof index === "number"
-			? facts.immutableGlobalBindings.get(decodeString(program, index))
+			? context.facts.immutableGlobalBindings.get(decodeString(program, index))
 			: undefined;
 	}
 	return undefined;
 }
 
-function knownBuiltinCall(instruction: CoreInstruction): KnownBuiltinCall | undefined {
-	const candidate = instruction.attributes.knownBuiltinCall;
+function knownBuiltinCall(
+	attributes: CoreInstructionAttributes,
+): KnownBuiltinCall | undefined {
+	const candidate = attributes.knownBuiltinCall;
 	return candidate !== null && typeof candidate === "object"
 		? (candidate as unknown as KnownBuiltinCall)
 		: undefined;
 }
 
+function attributeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Readonly<Record<string, unknown>>)
+		: undefined;
+}
+
 function callTargetFact(
-	fn: CoreFunction,
-	instruction: CoreInstruction,
+	fn: CoreFunctionStore,
+	opcode: string,
+	attributes: CoreInstructionAttributes,
 	sourceSite: SourceSiteId | undefined,
-	analyzed: CompilerCallTargetSet | undefined,
 ): CompilerFact<CompilerCallTargetSet> | undefined {
-	if (instruction.opcode !== "call" && instruction.opcode !== "construct") {
-		return undefined;
-	}
-	const attribute = attributeObject(instruction.attributes.calleeTargets);
-	const functions = analyzed?.functions ?? numberArray(attribute?.functions);
-	const anyScript = analyzed?.anyScript ?? attribute?.anyScript;
-	const opaque = analyzed?.opaque ?? attribute?.opaque;
+	if (opcode !== "call" && opcode !== "construct") return undefined;
+	const attribute = attributeObject(attributes.calleeTargets);
+	const functions = numberArray(attribute?.functions);
+	const anyScript = attribute?.anyScript;
+	const opaque = attribute?.opaque;
 	if (
 		functions === undefined ||
 		typeof anyScript !== "boolean" ||
@@ -161,132 +186,73 @@ function callTargetFact(
 		return undefined;
 	}
 	return knownFact(
-		{
-			functions: [...functions],
-			anyScript,
-			opaque,
-		},
-		siteProof(fn, sourceSite, "core-call-target-analysis"),
+		{ functions: [...functions], anyScript, opaque },
+		siteProof(fn, sourceSite, "core-call-target-summary"),
 	);
 }
 
-function attributeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
-	return value !== null && typeof value === "object" && !Array.isArray(value)
-		? (value as Readonly<Record<string, unknown>>)
-		: undefined;
+function selectedStackAllocations(compilation: CoreCompilation): ReadonlySet<string> {
+	return new Set(
+		compilation.plan.specializations
+			.filter(({ kind }) => kind === "stack-object-plan")
+			.flatMap(({ function: functionId, anchors }) =>
+				anchors.map((instruction) => `${functionId}:${instruction}`),
+			),
+	);
 }
 
-function stackObjectFacts(fn: CoreFunction): Map<
-	number,
-	{
-		readonly escape: "none" | "returned";
-		readonly dependencies: ReadonlyArray<FactDependency>;
-		readonly obligations: ReadonlyArray<FactObligation>;
-	}
-> {
-	const facts = new Map<
-		number,
-		{
-			readonly escape: "none" | "returned";
-			readonly dependencies: ReadonlyArray<FactDependency>;
-			readonly obligations: ReadonlyArray<FactObligation>;
-		}
-	>();
-	for (const region of fn.regions) {
-		if (region.kind !== "stack-object-plan") continue;
-		const license = attributeObject(region.data.license);
-		const guard = attributeObject(license?.guard);
-		const dependencies = guard?.dependencies;
-		const obligations = guard?.obligations;
-		const sites = region.data.sites;
-		if (
-			!Array.isArray(sites) ||
-			!Array.isArray(dependencies) ||
-			!Array.isArray(obligations)
-		) {
-			continue;
-		}
-		for (const site of sites) {
-			const siteObject = attributeObject(site);
-			if (siteObject === undefined) continue;
-			const allocation = attributeObject(siteObject.allocation);
-			const instruction = allocation?.$coreInstruction;
-			if (typeof instruction !== "number") continue;
-			facts.set(instruction, {
-				escape:
-					Array.isArray(siteObject.materializations) &&
-					siteObject.materializations.length > 0
-						? "returned"
-						: "none",
-				dependencies,
-				obligations,
-			});
-		}
-	}
-	return facts;
-}
-
-/** Attach final residual facts directly to immutable Core instruction identities. */
+/** Derive residual site facts from sealed Core and its selected plan without analysis. */
 export function attachCoreCompilerSiteFacts(
 	compilation: CoreCompilation,
 ): CoreCompilation {
 	const { program, context } = compilation;
 	const sites = new Map<string, CompilerSiteFacts>();
-	const instructionSites = context.facts.instructionSites;
-
-	for (const fn of program.functions) {
-		const stackObjects = stackObjectFacts(fn);
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				const id = `${fn.functionIndex}:${block.id}:${instruction.id}:${instruction.opcode}`;
+	const stackAllocations = selectedStackAllocations(compilation);
+	for (const functionId of program.functionIds()) {
+		const fn = program.function(functionId);
+		for (const block of fn.blockIds()) {
+			for (const instruction of fn.bodyInstructionIds(block)) {
+				const opcode = fn.instructionOpcodeName(instruction);
+				const attributes = fn.instructionAttributes(instruction);
+				const id = coreCompilerSiteId(functionId, block, instruction, opcode);
 				const sourceSite = logicalSourceSite(
 					program,
 					fn,
-					instruction.sourcePosition,
-					`residual:${instruction.opcode}`,
+					fn.instructionSourcePosition(instruction),
+					`residual:${opcode}`,
 				);
-				const shape = shapeFact(program, fn, instruction, sourceSite);
-				const immutableBinding = immutableBindingFact(program, instruction, context);
-				const builtin = knownBuiltinCall(instruction);
-				const callee = instruction.inputs[0];
-				const callTargets = callTargetFact(
-					fn,
-					instruction,
-					sourceSite,
-					callee === undefined
-						? undefined
-						: compilation.targetAnalyses?.summaries.targets.targets(
-								fn.functionIndex,
-								callee,
-							),
+				const shape = shapeFact(program, fn, opcode, attributes, sourceSite);
+				const immutableBinding = immutableBindingFact(
+					program,
+					opcode,
+					attributes,
+					context,
 				);
-				const isAllocation = allocationOpcodes.has(instruction.opcode);
-				const stackObject = stackObjects.get(instruction.id);
-				const stackProof =
-					stackObject === undefined
-						? undefined
-						: siteProof(
-								fn,
-								sourceSite,
-								"core-stack-object-region",
-								stackObject.dependencies,
-								stackObject.obligations,
-							);
+				const builtin = knownBuiltinCall(attributes);
+				const callTargets = callTargetFact(fn, opcode, attributes, sourceSite);
+				const isAllocation = allocationOpcodes.has(opcode);
+				const isStack = stackAllocations.has(`${functionId}:${instruction}`);
 				const representation = isAllocation
 					? knownFact(
-							stackProof === undefined ? ("heap" as const) : ("stack" as const),
-							stackProof ?? siteProof(fn, sourceSite, "residual-heap-value"),
+							isStack ? ("stack" as const) : ("heap" as const),
+							siteProof(
+								fn,
+								sourceSite,
+								isStack ? "core-specialization-plan" : "residual-heap-value",
+							),
 						)
 					: undefined;
-				const escape =
-					stackObject === undefined || stackProof === undefined
-						? undefined
-						: knownFact(stackObject.escape, stackProof);
+				const escape = isStack
+					? knownFact(
+							"none" as const,
+							siteProof(fn, sourceSite, "core-specialization-plan"),
+						)
+					: undefined;
 				const facts: CompilerSiteFacts = {
 					id,
 					...(sourceSite === undefined ? {} : { sourceSite }),
-					functionId: functionId(fn),
-					instruction: instruction.opcode,
+					functionId: compilerFunctionId(fn),
+					instruction: opcode,
 					...(shape === undefined ? {} : { shape }),
 					...(escape === undefined ? {} : { escape }),
 					...(representation === undefined ? {} : { representation }),
@@ -309,18 +275,15 @@ export function attachCoreCompilerSiteFacts(
 					facts.callTargets !== undefined
 				) {
 					sites.set(id, facts);
-					instructionSites.set(instruction, facts);
 				}
 			}
 		}
 	}
-
-	return {
+	return Object.freeze({
 		...compilation,
-		program,
-		context: {
+		context: Object.freeze({
 			...context,
-			facts: { ...context.facts, sites },
-		},
-	};
+			facts: Object.freeze({ ...context.facts, sites }),
+		}),
+	});
 }

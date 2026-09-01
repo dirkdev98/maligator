@@ -1,12 +1,10 @@
 import { expect, test } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
-import type {
-	CoreFunction,
-	CoreInstruction,
-	CoreProgram,
-} from "../src/compiler/core/core-ir.ts";
+import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
+import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { coreFunctions, coreOperations } from "./helpers/core-inspection.ts";
 
 function compileScript(source: string, evalCompletion = false) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
@@ -17,12 +15,8 @@ function compileScript(source: string, evalCompletion = false) {
 	return lowerSemanticProgramToCore(semantic, { evalCompletion }).program;
 }
 
-function instructionsOf(fn: CoreFunction): Array<CoreInstruction> {
-	return fn.blocks.flatMap((block) => block.instructions);
-}
-
-function functionsNamed(program: CoreProgram, name: string): Array<CoreFunction> {
-	return program.functions.filter(
+function functionsNamed(program: CoreProgram, name: string): Array<CoreFunctionStore> {
+	return coreFunctions(program).filter(
 		(fn) =>
 			String.fromCharCode(...program.stringConstants[fn.metadata.nameStringIndex]!) ===
 			name,
@@ -43,7 +37,7 @@ test.each([
 		const functions = functionsNamed(compileScript(source, evalCompletion), "f");
 
 		expect(functions).toHaveLength(1);
-		const values = instructionsOf(functions[0]!)
+		const values = coreOperations(functions[0]!)
 			.filter(({ opcode }) => opcode === "createNumber")
 			.map(({ attributes }) => attributes.value);
 		expect(values).toContain(2);
@@ -64,7 +58,7 @@ test.each([false, true])(
 
 		expect(functions).toHaveLength(1);
 		expect(
-			instructionsOf(functions[0]!).some(
+			coreOperations(functions[0]!).some(
 				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 2,
 			),
 		).toBe(true);
@@ -73,7 +67,7 @@ test.each([false, true])(
 
 test("duplicate global functions perform one declaration check and initialization", () => {
 	const program = compileScript("function f(){} function f(){} f()", true);
-	const instructions = instructionsOf(program.functions[0]!);
+	const instructions = coreOperations(coreFunctions(program)[0]!);
 	const nameIndex = program.stringConstants.findIndex(
 		(value) => String.fromCharCode(...value) === "f",
 	);

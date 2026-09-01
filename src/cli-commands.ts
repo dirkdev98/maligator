@@ -471,12 +471,6 @@ function compileAndBuild(
 					stripperIdentity: context.installation.frontendIdentity,
 					session: frontendSession,
 					optimization: production ? "full" : "development",
-					...(command.kind === "build" &&
-					command.internal.optimizationAblations.length > 0
-						? {
-								optimizationAblations: new Set(command.internal.optimizationAblations),
-							}
-						: {}),
 					// Debug builds pay per-pass Core verification so a broken transform
 					// names its own pass instead of surfacing at a later boundary.
 					...(debugEnabled ? { coreVerification: "per-pass" as const } : {}),
@@ -812,6 +806,10 @@ function compileAndBuild(
 					binaryPath,
 					frontend.programImage,
 					command.profileCompiler === true ? "compiler" : "sampling",
+					{
+						coreOptimizationReport: frontend.optimizationReport,
+						coreOptimizationPlan: frontend.optimizationPlan,
+					},
 				),
 			)
 		: undefined;
@@ -1355,6 +1353,10 @@ function executeProfiledTests(
 		binary,
 		compiled.programImage,
 		command.profileCompiler === true ? "compiler" : "sampling",
+		{
+			coreOptimizationReport: compiled.optimizationReport,
+			coreOptimizationPlan: compiled.optimizationPlan,
+		},
 	);
 	const capture = createProfileCapture("test", profile);
 	const executionStartedAt = Date.now();

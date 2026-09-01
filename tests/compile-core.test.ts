@@ -85,9 +85,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			expect(execution.functionMap.coreToExecution[core]).toBe(index);
 		}
 		expect(execution.functions.every((fn) => fn.functionIndex >= 0)).toBe(true);
-		expect(execution.functions.every((fn) => fn.specializations.length === 0)).toBe(
-			true,
-		);
+		expect(execution.functions.every((fn) => fn.specializations.length === 0)).toBe(true);
 		expect(execution.functions.every((fn) => fn.directEntries.length === 0)).toBe(true);
 	});
 

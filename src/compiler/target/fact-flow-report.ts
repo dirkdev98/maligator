@@ -4,6 +4,8 @@ import type {
 	CompilerFactFlowReport,
 } from "../shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import { executionFunctionIndex } from "./execution-ir.ts";
+import type { ExecutionFunctionMap } from "./execution-ir.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import type { BytecodeInstruction, RuntimeImage } from "./runtime-image.ts";
 
@@ -77,6 +79,7 @@ function outputEvent(
 /** Trace residual Core call-target sets through execution lowering and both outputs. */
 export function collectCompilerFactFlowReport(
 	facts: CompilerProgramFacts,
+	functionMap: ExecutionFunctionMap,
 	runtime: RuntimeImage,
 	nativeFunctions: ReadonlyArray<NativeFunctionPlan>,
 ): CompilerFactFlowReport {
@@ -99,6 +102,9 @@ export function collectCompilerFactFlowReport(
 	)) {
 		if (site.callTargets?.kind !== "known") continue;
 		const targets = site.callTargets.value;
+		const functions = targets.functions.map((target) =>
+			executionFunctionIndex(functionMap, target),
+		);
 		const events: Array<CompilerFactFlowEvent> = [
 			{
 				phase: "core-optimization",
@@ -123,10 +129,7 @@ export function collectCompilerFactFlowReport(
 			const runtimeTargets = runtimeCallTargets(runtimeInstruction);
 			const nativeTargets = nativeCallTargets(nativeInstruction);
 			const selectedTargets = runtimeTargets ?? nativeTargets;
-			if (
-				selectedTargets === undefined ||
-				!validNarrowing(targets.functions, selectedTargets)
-			) {
+			if (selectedTargets === undefined || !validNarrowing(functions, selectedTargets)) {
 				events.push({
 					phase: "core-to-execution",
 					disposition: "dropped",
@@ -142,9 +145,7 @@ export function collectCompilerFactFlowReport(
 			}
 			events.push({
 				phase: "core-to-execution",
-				disposition: sameTargets(targets.functions, selectedTargets)
-					? "consumed"
-					: "narrowed",
+				disposition: sameTargets(functions, selectedTargets) ? "consumed" : "narrowed",
 				artifact:
 					selectedTargets.length === 1 ? "directFunctionIndex" : "guardedFunctionIndices",
 				functionIndex,
@@ -163,7 +164,7 @@ export function collectCompilerFactFlowReport(
 					functionIndex,
 					instructionIndex,
 					runtimeTargets,
-					targets.functions,
+					functions,
 				),
 				outputEvent(
 					"native-output",
@@ -174,7 +175,7 @@ export function collectCompilerFactFlowReport(
 					functionIndex,
 					instructionIndex,
 					nativeTargets,
-					targets.functions,
+					functions,
 				),
 			);
 		}
@@ -182,7 +183,7 @@ export function collectCompilerFactFlowReport(
 			family: "call-targets",
 			siteId: site.id,
 			...(site.sourceSite === undefined ? {} : { sourceSite: site.sourceSite }),
-			functions: [...targets.functions],
+			functions,
 			anyScript: targets.anyScript,
 			opaque: targets.opaque,
 			events,

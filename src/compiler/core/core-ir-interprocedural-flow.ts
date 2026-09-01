@@ -54,31 +54,36 @@ export function analyzeCoreInterproceduralValueFlow(
 		const operands = fn.instructionOperands(instruction);
 		const callee = operands[transfer.calleeOperand];
 		if (callee === undefined) continue;
-		const receiver = transfer.receiverOperand === undefined
-			? undefined
-			: operands[transfer.receiverOperand];
+		const receiver =
+			transfer.receiverOperand === undefined
+				? undefined
+				: operands[transfer.receiverOperand];
 		if (transfer.invocation === "construct") constructs++;
 		if (transfer.arguments.kind === "positional") {
 			positionalCalls++;
-			calls.push(Object.freeze({
-				caller: fn.id,
-				instruction,
-				callee,
-				...(receiver === undefined ? {} : { receiver }),
-				arguments: Object.freeze(operands.slice(transfer.arguments.firstOperand)),
-				transfer,
-			}));
+			calls.push(
+				Object.freeze({
+					caller: fn.id,
+					instruction,
+					callee,
+					...(receiver === undefined ? {} : { receiver }),
+					arguments: Object.freeze(operands.slice(transfer.arguments.firstOperand)),
+					transfer,
+				}),
+			);
 		} else {
 			aggregateCalls++;
 			const aggregateArguments = operands[transfer.arguments.operand];
-			calls.push(Object.freeze({
-				caller: fn.id,
-				instruction,
-				callee,
-				...(receiver === undefined ? {} : { receiver }),
-				...(aggregateArguments === undefined ? {} : { aggregateArguments }),
-				transfer,
-			}));
+			calls.push(
+				Object.freeze({
+					caller: fn.id,
+					instruction,
+					callee,
+					...(receiver === undefined ? {} : { receiver }),
+					...(aggregateArguments === undefined ? {} : { aggregateArguments }),
+					transfer,
+				}),
+			);
 		}
 	}
 	return Object.freeze({
@@ -92,12 +97,14 @@ export function analyzeCoreInterproceduralValueFlow(
 	});
 }
 
-export const CORE_LOCAL_INTERPROCEDURAL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreLocalInterproceduralFlow> = {
-	key: "local-interprocedural-flow",
-	scope: "function",
-	functionDependencies: ["body", "calls"],
-	compute({ program, request }) {
-		if (request.scope !== "function") throw new Error("Expected function analysis request");
-		return analyzeCoreInterproceduralValueFlow(program.function(request.function));
-	},
-};
+export const CORE_LOCAL_INTERPROCEDURAL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreLocalInterproceduralFlow> =
+	{
+		key: "local-interprocedural-flow",
+		scope: "function",
+		functionDependencies: ["body", "calls"],
+		compute({ program, request }) {
+			if (request.scope !== "function")
+				throw new Error("Expected function analysis request");
+			return analyzeCoreInterproceduralValueFlow(program.function(request.function));
+		},
+	};

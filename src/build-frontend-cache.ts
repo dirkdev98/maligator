@@ -21,8 +21,9 @@ import {
 	compilerProducerIdentity,
 } from "./compiler-cache-identity.ts";
 import type { CoreCompilationContext } from "./compiler/core/core-compilation.ts";
+import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
 import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.ts";
-import type { CoreProgram } from "./compiler/core/core-ir.ts";
+import type { SealedCoreProgram } from "./compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import type {
@@ -38,10 +39,7 @@ import {
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
-import type {
-	CompilerDiagnostic,
-	OptimizationAblation,
-} from "./compiler/shared/compiler-diagnostics.ts";
+import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import {
 	compilerProgramFactsFromConfig,
 	unanalyzedProgramClosure,
@@ -133,6 +131,7 @@ export interface CompiledBuildFrontend {
 	imageStats: ProgramImageStats;
 	diagnostics: Array<CompilerDiagnostic>;
 	optimizationReport?: CoreOptimizationReport;
+	optimizationPlan?: CoreOptimizationPlan;
 	/** Open on a cache hit: a restored program image is returned without a graph. */
 	closure: ProgramClosureCertificate;
 	wires?: Array<Uint8Array>;
@@ -148,7 +147,6 @@ export interface CompileBuildFrontendOptions {
 	/** Node compatibility globals evaluated before a Node-surface application. */
 	nodeGlobalsSource?: string;
 	optimization?: "development" | "full";
-	optimizationAblations?: ReadonlySet<OptimizationAblation>;
 	/**
 	 * Core verification depth. Not part of cache identity: verification observes
 	 * the compilation without changing the artifact it produces.
@@ -168,9 +166,10 @@ export interface CompileBuildFrontendOptions {
 	/** Split stable package dependencies into a separately cached development image. */
 	relocatable?: boolean;
 	afterCoreOptimization?: (
-		program: CoreProgram,
+		program: SealedCoreProgram,
 		context: CoreCompilationContext,
 		report: CoreOptimizationReport,
+		plan: CoreOptimizationPlan,
 	) => void;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	/** Optional self-hosted worker command for independent dependency islands. */
@@ -205,7 +204,6 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			nodeGlobals:
 				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
-			optimizationAblations: [...(options.optimizationAblations ?? [])].sort(),
 			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
 			configuration: compilerConfigurationIdentity(options.config),
@@ -603,6 +601,7 @@ export function compileBuildFrontend(
 	let fragmentArtifacts: { hits: number; misses: number } | undefined;
 	let fragmentFallback: string | undefined;
 	let optimizationReport: CoreOptimizationReport | undefined;
+	let optimizationPlan: CoreOptimizationPlan | undefined;
 	if (
 		options.relocatable === true &&
 		options.forceCompile !== true &&
@@ -664,9 +663,16 @@ export function compileBuildFrontend(
 			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 			diagnostics = diagnosticsForSemantic(semantic);
-			programImage = compileProgramImage(semantic, facts, options, phases, (report) => {
-				optimizationReport = report;
-			});
+			programImage = compileProgramImage(
+				semantic,
+				facts,
+				options,
+				phases,
+				(report, plan) => {
+					optimizationReport = report;
+					optimizationPlan = plan;
+				},
+			);
 			const serializeStartedAt = Date.now();
 			compilerWire = serializeCompilerArtifact(programImage);
 			wires = [serializeRuntimeImage(programImage.runtime)];
@@ -679,9 +685,16 @@ export function compileBuildFrontend(
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 		}
 		diagnostics = diagnosticsForSemantic(semantic);
-		programImage = compileProgramImage(semantic, facts, options, phases, (report) => {
-			optimizationReport = report;
-		});
+		programImage = compileProgramImage(
+			semantic,
+			facts,
+			options,
+			phases,
+			(report, plan) => {
+				optimizationReport = report;
+				optimizationPlan = plan;
+			},
+		);
 		const serializeStartedAt = Date.now();
 		compilerWire = serializeCompilerArtifact(programImage);
 		wires = [serializeRuntimeImage(programImage.runtime)];
@@ -755,6 +768,7 @@ export function compileBuildFrontend(
 		imageStats,
 		diagnostics,
 		...(optimizationReport === undefined ? {} : { optimizationReport }),
+		...(optimizationPlan === undefined ? {} : { optimizationPlan }),
 		fragmentArtifacts,
 		fragmentFallback,
 	};
@@ -765,17 +779,16 @@ function compileProgramImage(
 	facts: CompilerProgramFacts,
 	options: CompileBuildFrontendOptions,
 	phases: BuildFrontendPhases,
-	onOptimizationReport: (report: CoreOptimizationReport) => void,
+	onOptimization: (report: CoreOptimizationReport, plan: CoreOptimizationPlan) => void,
 ): ProgramImage {
 	return compileSemanticProgramToProgramImage(semantic, {
 		facts,
 		optimization: options.optimization,
-		optimizationAblations: options.optimizationAblations,
 		coreVerification: options.coreVerification,
 		profile: options.profile,
-		afterCoreOptimization(program, context, report) {
-			options.afterCoreOptimization?.(program, context, report);
-			onOptimizationReport(report);
+		afterCoreOptimization(program, context, report, plan) {
+			options.afterCoreOptimization?.(program, context, report, plan);
+			onOptimization(report, plan);
 		},
 		runPhase(phase, run) {
 			const phaseStartedAt = Date.now();

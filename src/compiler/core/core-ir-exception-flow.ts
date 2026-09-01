@@ -1,8 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import {
-	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
-	buildCoreControlFlow,
-} from "./core-ir-control-flow.ts";
+import { CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreBlockId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
@@ -33,8 +30,10 @@ function localThrowCatchFlow(
 		if (effects.mayThrow || effects.maySuspend) return undefined;
 	}
 	const exception = fn.blockParameters(handler.block)[0];
-	if (exception?.role !== "exception" ||
-		fn.valueRepresentation(terminator.value) !== exception.representation) {
+	if (
+		exception?.role !== "exception" ||
+		fn.valueRepresentation(terminator.value) !== exception.representation
+	) {
 		return undefined;
 	}
 	return Object.freeze({
@@ -58,11 +57,14 @@ export function analyzeCoreLocalExceptionFlows(
 		if (flow !== undefined) candidates.push(flow);
 	}
 	const candidateSources = new Map(candidates.map((flow) => [flow.source, flow.handler]));
-	return Object.freeze(candidates.filter(({ handler }) =>
-		(cfg.predecessors[handler] ?? []).every((edge) =>
-			edge.kind === "exceptional" && candidateSources.get(edge.from) === handler,
+	return Object.freeze(
+		candidates.filter(({ handler }) =>
+			(cfg.predecessors[handler] ?? []).every(
+				(edge) =>
+					edge.kind === "exceptional" && candidateSources.get(edge.from) === handler,
+			),
 		),
-	));
+	);
 }
 
 export const CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS: CoreAnalysisDefinition<
@@ -70,14 +72,17 @@ export const CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS: CoreAnalysisDefinition<
 > = {
 	key: "local-exception-flow",
 	scope: "function",
-	functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
-	compute({ program, request }) {
+	functionDependencies: [
+		"body",
+		"cfg",
+		"exceptionFlow",
+		"memoryEffects",
+		"representations",
+	],
+	compute({ program, request, get }) {
 		if (request.scope !== "function") throw new Error("Expected function analysis");
 		const fn = program.function(request.function);
-		return analyzeCoreLocalExceptionFlows(
-			fn,
-			buildCoreControlFlow(program, request.function, { exceptions: true }),
-		);
+		return analyzeCoreLocalExceptionFlows(fn, get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, request));
 	},
 };
 

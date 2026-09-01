@@ -159,6 +159,65 @@ describe("Core optimizer infrastructure", () => {
 		expect(run(true)).toEqual([1, 1]);
 	});
 
+	it("bounds only optional development work and reports profile exhaustion", () => {
+		const run = (
+			optionalMaxRunsPerWorkItem: number | undefined,
+			exhaustion: "stop" | "error",
+		) => {
+			const { program, functions } = programWithTwoFunctions();
+			const target = functions[0]!;
+			let runs = 0;
+			const pass: CorePass = {
+				name: "bounded-rewrite",
+				stage: "canonicalize",
+				scope: "function",
+				requiredAnalyses: [],
+				wakesOn: ["representations"],
+				preserves: [],
+				changes: {
+					cfg: false,
+					calls: false,
+					facts: false,
+					representations: true,
+				},
+				budget: { maxWorkItems: 10, maxEdits: 10, exhaustion },
+				run({ item }) {
+					if (item.scope !== "function" || item.function !== target.id) return undefined;
+					runs++;
+					if (runs > 2) return undefined;
+					const editor = CoreEditor.open(program, target.id);
+					editor.setValueRepresentation(target.value, runs === 1 ? "f64" : "i32");
+					return editor.commit();
+				},
+			};
+			const { analyses, report } = analysisHarness(program);
+			new CorePassManager(program, context(), analyses, report, {
+				...(optionalMaxRunsPerWorkItem === undefined
+					? {}
+					: { optionalMaxRunsPerWorkItem }),
+			}).runStage("canonicalize", [pass]);
+			return {
+				runs,
+				representation: program.function(target.id).valueRepresentation(target.value),
+				exhausted: report.finish(program, {
+					directEntries: [],
+					specializations: [],
+				}).budget.exhaustedPasses,
+			};
+		};
+
+		expect(run(1, "stop")).toEqual({
+			runs: 1,
+			representation: "f64",
+			exhausted: ["bounded-rewrite"],
+		});
+		expect(run(1, "error")).toEqual({
+			runs: 3,
+			representation: "i32",
+			exhausted: [],
+		});
+	});
+
 	it("wakes an earlier consumer after an in-place producer rewrite", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const target = functions[0]!;
@@ -215,10 +274,10 @@ describe("Core optimizer infrastructure", () => {
 		};
 		const { analyses, report } = analysisHarness(program);
 
-		new CorePassManager(program, context(), analyses, report).runStage(
-			"canonicalize",
-			[observer, rewrite],
-		);
+		new CorePassManager(program, context(), analyses, report).runStage("canonicalize", [
+			observer,
+			rewrite,
+		]);
 
 		expect(fn.instructionOpcodeName(producer)).toBe("rewritten-identity");
 		expect(consumerRuns).toBe(2);
@@ -272,7 +331,9 @@ describe("Core optimizer infrastructure", () => {
 				const editor = CoreEditor.open(program, target.id);
 				const destination = editor.createBlock([{ representation: "boxed" }]);
 				const parameter = program.function(target.id).blockParameters(destination)[0]!;
-				editor.removeInstruction(program.function(target.id).blockTerminator(target.entry));
+				editor.removeInstruction(
+					program.function(target.id).blockTerminator(target.entry),
+				);
 				editor.setTerminator(target.entry, {
 					kind: "jump",
 					edge: { block: destination, arguments: [] },

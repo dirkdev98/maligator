@@ -12,6 +12,7 @@ import {
 	functionHasDirectEval,
 } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
+import { coreFunctions, coreOperations } from "./helpers/core-inspection.ts";
 
 /** Analyze a script and return its single SemanticFile. */
 function analyze(source: string, strict = true) {
@@ -30,9 +31,7 @@ function generatedDirectEvalContext(source: string): DirectEvalContext {
 		parseScript(source, { strict: false }),
 	);
 	const program = lowerSemanticProgramToCore(semantic).program;
-	const instructions = program.functions.flatMap((fn) =>
-		fn.blocks.flatMap((block) => block.instructions),
-	);
+	const instructions = coreFunctions(program).flatMap(coreOperations);
 	const intrinsic = instructions.find(
 		(instruction) =>
 			instruction.opcode === "loadIntrinsic" &&
@@ -299,9 +298,7 @@ test("strict direct eval keeps var and function declarations off the global obje
 		},
 	);
 	const program = lowerSemanticProgramToCore(semantic, { evalDirect: true }).program;
-	const instructions = program.functions.flatMap((fn) =>
-		fn.blocks.flatMap((block) => block.instructions),
-	);
+	const instructions = coreFunctions(program).flatMap(coreOperations);
 
 	expect(
 		instructions.some(

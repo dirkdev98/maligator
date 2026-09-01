@@ -1,10 +1,9 @@
 import { hash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type {
-	CompilerFactFlowReport,
-	OptimizationPassDelta,
-} from "./compiler/shared/compiler-diagnostics.ts";
+import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
+import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
+import type { CompilerFactFlowReport } from "./compiler/shared/compiler-diagnostics.ts";
 import type { CompilerRemark, ProfileSite } from "./compiler/target/profile-metadata.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { profilePhaseName } from "./profile-phases.ts";
@@ -82,8 +81,14 @@ export interface PreparedProfile {
 	functions: Array<{ name: string; file: string }>;
 	sites: Array<ProfileSite>;
 	remarks: Array<CompilerRemark>;
-	optimizationTrace?: Array<OptimizationPassDelta>;
+	coreOptimizationReport?: CoreOptimizationReport;
+	coreOptimizationPlan?: CoreOptimizationPlan;
 	factFlow?: CompilerFactFlowReport;
+}
+
+export interface ProfileOptimizationSidecar {
+	readonly coreOptimizationReport?: CoreOptimizationReport;
+	readonly coreOptimizationPlan?: CoreOptimizationPlan;
 }
 
 interface RawFrame {
@@ -259,6 +264,7 @@ export function prepareProfile(
 	binaryPath: string,
 	image: ProgramImage,
 	mode: PreparedProfile["mode"] = "sampling",
+	optimization: ProfileOptimizationSidecar = {},
 ): PreparedProfile {
 	const prepared: PreparedProfile = {
 		schema: 3,
@@ -271,7 +277,8 @@ export function prepareProfile(
 		})),
 		sites: image.diagnostics.profileSites ?? [],
 		remarks: image.diagnostics.profileRemarks ?? [],
-		optimizationTrace: image.diagnostics.optimizationTrace ?? [],
+		coreOptimizationReport: optimization.coreOptimizationReport,
+		coreOptimizationPlan: optimization.coreOptimizationPlan,
 		factFlow: image.diagnostics.factFlow,
 	};
 	prepared.captureIdentity = profileCaptureIdentity(prepared);
