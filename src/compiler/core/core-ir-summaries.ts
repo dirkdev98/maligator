@@ -226,40 +226,67 @@ function analyzeLocalSummary(
 	for (const [index, parameter] of fn.parameters.entries()) {
 		origins[parameter] = Object.freeze({ kind: "parameter", index });
 	}
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const block of cfg.reversePostorder) {
-			const parameters = fn.blockParameters(block);
-			for (const edge of cfg.predecessors[block] ?? []) {
-				if (edge.kind !== "ordinary") continue;
-				for (const [index, parameter] of parameters.entries()) {
-					const argument = edge.arguments[index];
-					if (argument !== undefined) {
-						changed =
-							raiseOrigin(origins, parameter.value, origins[argument]!) || changed;
-					}
-				}
+	type OriginTransfer = {
+		readonly output: CoreValueId;
+		readonly inputs: ReadonlyArray<CoreValueId>;
+		readonly evaluate: () => ValueOrigin;
+	};
+	const transfers: Array<OriginTransfer> = [];
+	for (const block of cfg.reversePostorder) {
+		const parameters = fn.blockParameters(block);
+		for (const [index, parameter] of parameters.entries()) {
+			const incoming = (cfg.predecessors[block] ?? []).flatMap((edge) => {
+				if (edge.kind !== "ordinary") return [];
+				const argument = edge.arguments[index];
+				return argument === undefined ? [] : [argument];
+			});
+			if (incoming.length === 0) continue;
+			transfers.push({
+				output: parameter.value,
+				inputs: incoming,
+				evaluate: () =>
+					incoming.reduce(
+						(origin, value) => joinOrigins(origin, origins[value]!),
+						ORIGIN_NONE,
+					),
+			});
+		}
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			const opcode = fn.instructionOpcodeName(instruction);
+			const operand = opcode === "move" ? fn.instructionOperands(instruction)[0] : undefined;
+			const inputs = operand === undefined ? [] : [operand];
+			for (const output of fn.instructionResults(instruction)) {
+				transfers.push({
+					output,
+					inputs,
+					evaluate: () => {
+						if (operand !== undefined) return origins[operand]!;
+						if (opcode === "loadThis") return { kind: "receiver" };
+						if (FRESH_RESULTS.has(opcode)) return { kind: "fresh" };
+						if (PRIMITIVE_RESULTS.has(opcode)) return { kind: "primitive" };
+						return ORIGIN_UNKNOWN;
+					},
+				});
 			}
-			for (const instruction of fn.bodyInstructionIds(block)) {
-				const results = fn.instructionResults(instruction);
-				if (results.length === 0) continue;
-				const opcode = fn.instructionOpcodeName(instruction);
-				let origin: ValueOrigin = ORIGIN_UNKNOWN;
-				if (opcode === "move") {
-					const operand = fn.instructionOperands(instruction)[0];
-					origin = operand === undefined ? ORIGIN_UNKNOWN : origins[operand]!;
-				} else if (opcode === "loadThis") {
-					origin = { kind: "receiver" };
-				} else if (FRESH_RESULTS.has(opcode)) {
-					origin = { kind: "fresh" };
-				} else if (PRIMITIVE_RESULTS.has(opcode)) {
-					origin = { kind: "primitive" };
-				}
-				for (const result of results) {
-					changed = raiseOrigin(origins, result, origin) || changed;
-				}
-			}
+		}
+	}
+	const dependents = Array.from({ length: fn.valueCapacity }, () => new Array<number>());
+	for (const [index, transfer] of transfers.entries()) {
+		for (const input of transfer.inputs) dependents[input]!.push(index);
+	}
+	const queue = transfers.map((_, index) => index);
+	const queued = new Uint8Array(transfers.length);
+	queued.fill(1);
+	let cursor = 0;
+	while (cursor < queue.length) {
+		const index = queue[cursor++]!;
+		queued[index] = 0;
+		const transfer = transfers[index]!;
+		if (!raiseOrigin(origins, transfer.output, transfer.evaluate())) continue;
+		for (const dependent of dependents[transfer.output]!) {
+			if (queued[dependent] !== 0) continue;
+			queued[dependent] = 1;
+			queue.push(dependent);
 		}
 	}
 
@@ -689,8 +716,9 @@ function analyzeProgramSummaries(
 	let callerWakeups = 0;
 	const affectedCallers = new Set<CoreFunctionId>();
 	const changedPublished = new Set<CoreFunctionId>();
-	while (queue.length > 0) {
-		const sccIndex = queue.shift()!;
+	let queueCursor = 0;
+	while (queueCursor < queue.length) {
+		const sccIndex = queue[queueCursor++]!;
 		queued.delete(sccIndex);
 		const scc = sccs[sccIndex]!;
 		for (const functionId of scc.functions) {
@@ -707,22 +735,29 @@ function analyzeProgramSummaries(
 				),
 			);
 		}
-		let changed = true;
-		while (changed) {
-			changed = false;
-			for (const functionId of scc.functions) {
-				const next = deriveSummary(
-					program,
-					functionId,
-					local.get(functionId)!,
-					targets,
-					current,
-					reasons,
-				);
-				const prior = current.get(functionId);
-				current.set(functionId, next);
-				sccTransfers++;
-				if (prior === undefined || summaryKey(prior) !== summaryKey(next)) changed = true;
+		const members = new Set(scc.functions);
+		const memberQueue = [...scc.functions];
+		const memberQueued = new Set(scc.functions);
+		let memberCursor = 0;
+		while (memberCursor < memberQueue.length) {
+			const functionId = memberQueue[memberCursor++]!;
+			memberQueued.delete(functionId);
+			const next = deriveSummary(
+				program,
+				functionId,
+				local.get(functionId)!,
+				targets,
+				current,
+				reasons,
+			);
+			const prior = current.get(functionId);
+			current.set(functionId, next);
+			sccTransfers++;
+			if (prior !== undefined && summaryKey(prior) === summaryKey(next)) continue;
+			for (const caller of targets.callers(functionId)) {
+				if (!members.has(caller) || memberQueued.has(caller)) continue;
+				memberQueued.add(caller);
+				memberQueue.push(caller);
 			}
 		}
 		for (const functionId of scc.functions) {

@@ -6,6 +6,10 @@ import type { CoreCalleeTargets, CoreIndexedCallSite } from "./core-ir-call-targ
 import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "./core-ir-summaries.ts";
+import {
+	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
+	coreValueKindObservation,
+} from "./core-ir-value-kinds.ts";
 import type {
 	CoreAttributeValue,
 	CoreFunctionId,
@@ -40,6 +44,8 @@ export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetSta
 	readonly callGraphFunctionsAnalyzed: number;
 	readonly sccTransfers: number;
 	readonly callerWakeups: number;
+	readonly valueKindFunctionEvaluations: number;
+	readonly valueKindFolds: number;
 }
 
 interface AppliedTransform {
@@ -678,6 +684,42 @@ function applyCandidate(
 	}
 }
 
+function foldProgramValueKindObservations(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+): {
+	readonly changes: ReadonlyArray<CoreChangeSet>;
+	readonly folds: number;
+} {
+	const kinds = analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+	const changes: Array<CoreChangeSet> = [];
+	let foldCount = 0;
+	for (const functionId of kinds.changedFunctions) {
+		const fn = program.function(functionId);
+		const values = kinds.values(functionId);
+		const folds = [...fn.instructionIds()].flatMap((instruction) => {
+			const result = coreValueKindObservation(
+				program,
+				fn,
+				instruction,
+				(value) => values.kindMask(value),
+			);
+			return result === undefined ? [] : [{ instruction, result }];
+		});
+		if (folds.length === 0) continue;
+		const editor = CoreEditor.open(program, functionId);
+		for (const { instruction, result } of folds) {
+			editor.replaceInstruction(instruction, "createBoolean", [], {
+				attributes: { value: result },
+				sourcePosition: fn.instructionSourcePosition(instruction),
+			});
+		}
+		changes.push(editor.commit());
+		foldCount += folds.length;
+	}
+	return { changes, folds: foldCount };
+}
+
 export function runCoreCrossCallTransforms(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -740,9 +782,25 @@ export function runCoreCrossCallTransforms(
 		passes.runStage("memory", CORE_MEMORY_PASSES, inlineChanges);
 		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, inlineChanges);
 	}
+	const valueKinds = analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+		scope: "program",
+	});
+	const valueKindFolds = foldProgramValueKindObservations(program, analyses);
+	if (valueKindFolds.changes.length > 0) {
+		passes.runStage(
+			"canonicalize",
+			CORE_LOCAL_CANONICALIZATION_PASSES,
+			valueKindFolds.changes,
+		);
+	}
 	summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
 		scope: "program",
 	});
+	if (valueKindFolds.changes.length > 0) {
+		callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
+		sccTransfers += summaries.statistics.sccTransfers;
+		callerWakeups += summaries.statistics.callerWakeups;
+	}
 	const budget = service.statistics();
 	return Object.freeze({
 		summaries,
@@ -753,6 +811,8 @@ export function runCoreCrossCallTransforms(
 			callGraphFunctionsAnalyzed,
 			sccTransfers,
 			callerWakeups,
+			valueKindFunctionEvaluations: valueKinds.statistics.functionsEvaluated,
+			valueKindFolds: valueKindFolds.folds,
 		}),
 	});
 }

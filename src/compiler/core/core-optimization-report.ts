@@ -87,6 +87,8 @@ export interface CoreTransformWorkReport {
 	readonly callGraphFunctionsAnalyzed: number;
 	readonly sccTransfers: number;
 	readonly callerWakeups: number;
+	readonly valueKindFunctionEvaluations: number;
+	readonly valueKindFolds: number;
 }
 
 export interface CoreProgramWorkReport {
@@ -204,6 +206,8 @@ export class CoreOptimizationReportBuilder {
 		callGraphFunctionsAnalyzed: 0,
 		sccTransfers: 0,
 		callerWakeups: 0,
+		valueKindFunctionEvaluations: 0,
+		valueKindFolds: 0,
 	});
 	#planWork: CorePlanWorkReport = Object.freeze({
 		discovered: 0,
@@ -474,7 +478,7 @@ export function formatCoreOptimizationReport(
 					.filter(([, count]) => count > 0)
 					.map(([reason, count]) => `${reason}=${count}`)
 					.join(", ") || "none"
-			}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, SCC transfers ${report.transforms.sccTransfers}, caller wakeups ${report.transforms.callerWakeups}`,
+			}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, SCC transfers ${report.transforms.sccTransfers}, caller wakeups ${report.transforms.callerWakeups}, value kinds evaluated ${report.transforms.valueKindFunctionEvaluations}/folded ${report.transforms.valueKindFolds}`,
 		},
 		{
 			label: "Core optimizer discovery",

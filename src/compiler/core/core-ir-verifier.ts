@@ -1,6 +1,13 @@
+import { effectSummaryCovers } from "../shared/effect-summary.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import {
+	CORE_FACT_ALTERNATIVE_LIMIT,
+	CORE_FACT_CLAIM_LIMIT,
+	coreFactClaimIsSatisfiable,
+} from "./core-ir-fact-implication.ts";
 import type {
 	CoreAttributeValue,
 	CoreBlockId,
@@ -543,7 +550,7 @@ function verifyEdge(
 	}
 }
 
-function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): void {
+function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreControlFlow {
 	for (const block of fn.blockIds()) {
 		const payload = fn.terminatorPayload(fn.blockTerminator(block));
 		for (const edge of coreTerminatorEdges(payload))
@@ -595,6 +602,7 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): void {
 		(dominator, block) => cfg.dominates(dominator, block),
 		(dominator, block) => cfg.instructionDominatesBlock(dominator, block),
 	);
+	return cfg;
 }
 
 function verifyDominance(
@@ -676,7 +684,12 @@ function verifyFactReference(fn: CoreFunctionStore, fact: CoreFact): void {
 		if ("subject" in claim && !fn.isValueLive(claim.subject)) {
 			fail(`fact !${fact.id} references deleted value %${claim.subject}`);
 		}
-		if ("instruction" in claim) requireInstruction(claim.instruction, "claim");
+		if (
+			claim.kind === "effect" &&
+			(claim.instruction < 0 || claim.instruction >= fn.instructionCapacity)
+		) {
+			fail(`fact !${fact.id} references unknown instruction @${claim.instruction}`);
+		}
 	}
 	if (fact.validity.kind === "guard") {
 		requireInstruction(fact.validity.instruction, "validity");
@@ -691,8 +704,18 @@ function verifyFactReference(fn: CoreFunctionStore, fact: CoreFact): void {
 		}
 	}
 	for (const obligation of fact.obligations) {
-		if (obligation.kind === "guard")
+		if (obligation.kind === "guard") {
 			requireInstruction(obligation.instruction, "obligation");
+			if (fn.instructionKind(obligation.instruction) !== "guard") {
+				fail(`fact !${fact.id} has an invalid guard obligation`);
+			}
+			const payload = fn.terminatorPayload(obligation.instruction);
+			if (payload.kind !== "guard" || payload.fact !== fact.id) {
+				fail(`fact !${fact.id} has an invalid guard obligation`);
+			}
+		} else if (obligation.id.length === 0) {
+			fail(`fact !${fact.id} has an empty ${obligation.kind} obligation`);
+		}
 	}
 }
 
@@ -706,6 +729,99 @@ function verifyFacts(fn: CoreFunctionStore): void {
 			fail(`fact !${fact} has empty provenance metadata`);
 		}
 		verifyFactReference(fn, record);
+		if (record.claims.length > CORE_FACT_CLAIM_LIMIT) {
+			fail(`fact !${fact} has too many semantic claims`);
+		}
+		for (const [claimIndex, claim] of record.claims.entries()) {
+			const where = `fact !${fact} claim ${claimIndex}`;
+			switch (claim.kind) {
+				case "identity":
+					if (
+						claim.identities.length === 0 ||
+						claim.identities.length > CORE_FACT_ALTERNATIVE_LIMIT
+					) {
+						fail(`${where} has an invalid finite identity set`);
+					}
+					break;
+				case "shape":
+					if (
+						claim.shapes.length === 0 ||
+						claim.shapes.length > CORE_FACT_ALTERNATIVE_LIMIT ||
+						claim.shapes.some((shape) => shape.length === 0)
+					) {
+						fail(`${where} has an invalid finite shape set`);
+					}
+					break;
+				case "range":
+					if (
+						(claim.minimum !== null && Number.isNaN(claim.minimum)) ||
+						(claim.maximum !== null && Number.isNaN(claim.maximum)) ||
+						!coreFactClaimIsSatisfiable(claim)
+					) {
+						fail(`${where} has an invalid numeric interval`);
+					}
+					break;
+				case "effect":
+					break;
+			}
+		}
+		const guardObligations = record.obligations.filter(
+			(obligation) => obligation.kind === "guard",
+		);
+		if (record.validity.kind === "asserted" && guardObligations.length === 0) {
+			fail(`asserted fact !${fact} is invalid without a guard obligation`);
+		}
+		if (
+			record.validity.kind === "epoch" &&
+			guardObligations.length === 0 &&
+			!record.obligations.some(({ kind }) => kind === "fallback")
+		) {
+			fail(`epoch fact !${fact} has neither a guard nor a fallback`);
+		}
+	}
+}
+
+function verifyFactUses(fn: CoreFunctionStore, cfg: CoreControlFlow): void {
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const refinement = fn.instructionEffectRefinement(instruction);
+		if (refinement === undefined) continue;
+		const fact = fn.fact(refinement.proof);
+		if (
+			fact.claims.length > 0 &&
+			!fact.claims.some(
+				(claim) =>
+					claim.kind === "effect" &&
+					claim.instruction === instruction &&
+					effectSummaryCovers(refinement.effects, claim.effects),
+			)
+		) {
+			fail(`fact !${fact.id} does not license the effect refinement on @${instruction}`);
+		}
+		const guardObligations = fact.obligations.filter(
+			(obligation) => obligation.kind === "guard",
+		);
+		if (
+			(fact.validity.kind === "asserted" || fact.validity.kind === "epoch") &&
+			guardObligations.length === 0
+		) {
+			fail(
+				`${fact.validity.kind} fact !${fact.id} refines @${instruction} without a guard`,
+			);
+		}
+		const useBlock = fn.instructionBlock(instruction);
+		for (const obligation of guardObligations) {
+			const guardBlock = fn.instructionBlock(obligation.instruction);
+			const payload = fn.terminatorPayload(obligation.instruction);
+			if (
+				payload.kind !== "guard" ||
+				!cfg.dominatesEdge(guardBlock, payload.success.block, useBlock)
+			) {
+				fail(
+					`guard @${obligation.instruction} for fact !${fact.id} does not dominate @${instruction} through its success edge`,
+				);
+			}
+		}
 	}
 }
 
@@ -738,7 +854,8 @@ function verifyFunction(program: CoreProgram, functionId: CoreFunctionId): void 
 	verifyBlockParameters(fn);
 	verifyFunctionParameters(fn);
 	verifyFacts(fn);
-	verifyControlFlow(fn, program);
+	const cfg = verifyControlFlow(fn, program);
+	verifyFactUses(fn, cfg);
 }
 
 function verifyProgramTables(program: CoreProgram): void {

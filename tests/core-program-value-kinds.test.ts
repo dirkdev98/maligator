@@ -1,0 +1,139 @@
+import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-ir-value-kinds.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import type { CoreFunctionStore, CoreProgram } from "../src/compiler/core/core-store.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
+import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
+import {
+	analysisProgram,
+	appendCaller,
+	appendLeaf,
+	programAnalysisContext,
+} from "./helpers/core-program-analysis.ts";
+
+const OBSERVATION_OPERATORS = new Set(["typeof", "!", "===", "!=="]);
+
+function observations(fn: CoreFunctionStore) {
+	return coreOperations(fn).filter(
+		({ opcode, attributes }) =>
+			opcode === "typeofCompare" ||
+			((opcode === "unary" || opcode === "binary") &&
+				typeof attributes.operator === "string" &&
+				OBSERVATION_OPERATORS.has(attributes.operator)),
+	);
+}
+
+function compileRecursiveObservation(sourceClosed: boolean): {
+	readonly program: CoreProgram;
+	readonly valueKindFolds: number;
+} {
+	const sourcePath = "core-program-value-kinds.js";
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		`function observe(text, absent, count) {
+			if (count > 0) return observe(text, absent, count - 1);
+			return typeof text === "string" && text !== 1 && !absent;
+		}
+		globalThis.result = observe("value", null, globalThis.count);`,
+		sourcePath,
+	);
+	let optimized: CoreProgram | undefined;
+	let valueKindFolds = 0;
+	compileSemanticProgramToProgramImage(semantic, {
+		...(sourceClosed
+			? {
+					facts: withProgramClosure(
+						compilerProgramFactsFromConfig(
+							resolveBuildConfig({ engine: { eval: false } }),
+						),
+						programClosureCertificate(
+							{ kind: "whole-program", entry: sourcePath },
+							[{ kind: "entry-module", module: sourcePath }],
+							[],
+						),
+					),
+				}
+			: {}),
+		afterCoreOptimization(program, _context, report) {
+			optimized = program;
+			valueKindFolds = report.transforms.valueKindFolds;
+		},
+	});
+	return { program: optimized!, valueKindFolds };
+}
+
+describe("whole-program Core value kinds", () => {
+	it("propagates closed primitive kinds through a recursive caller SCC", () => {
+		const { program: optimized, valueKindFolds } = compileRecursiveObservation(true);
+		const observe = coreFunctionNamed(optimized, "observe")!;
+		expect(coreOperations(observe).some(({ opcode }) => opcode === "call")).toBe(true);
+		expect(observations(observe)).toEqual([]);
+		expect(valueKindFolds).toBe(3);
+		expect(
+			coreOperations(observe).some(
+				({ opcode, attributes }) =>
+					opcode === "createBoolean" && attributes.value === true,
+			),
+		).toBe(true);
+	});
+
+	it("keeps parameter observations when open-world callers may add other kinds", () => {
+		const { program: optimized, valueKindFolds } = compileRecursiveObservation(false);
+		const observe = coreFunctionNamed(optimized, "observe")!;
+		expect(observations(observe).length).toBeGreaterThan(0);
+		expect(valueKindFolds).toBe(0);
+	});
+
+	it("recomputes only the edited call component", () => {
+		const program = analysisProgram();
+		const caller = appendCaller(program, 1);
+		const edited = appendLeaf(program);
+		const unrelated = appendLeaf(program, "/unrelated.js");
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const unrelatedValues = first.values(unrelated.function);
+
+		const editor = CoreEditor.open(program, edited.function);
+		editor.replaceInstruction(edited.valueInstruction, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		editor.commit();
+		const second = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+
+		expect(second.statistics).toMatchObject({
+			functionsEvaluated: 3,
+			functionsReused: 1,
+			affectedFunctions: 2,
+			callerWakeups: 0,
+			calleeWakeups: 1,
+		});
+		expect(second.values(unrelated.function)).toBe(unrelatedValues);
+		expect(second.changedFunctions).toEqual(new Set([caller.function, edited.function]));
+	});
+
+	it("solves a long return-kind chain with bounded transfers", () => {
+		const program = analysisProgram();
+		const length = 64;
+		for (let index = 0; index < length - 1; index++) appendCaller(program, index + 1);
+		appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		expect(kinds.statistics.functionsEvaluated).toBeLessThanOrEqual(length * 2);
+	});
+});
