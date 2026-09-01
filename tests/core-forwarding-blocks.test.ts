@@ -481,6 +481,47 @@ describe("Core SSA and CFG cleanup", () => {
 		expect(optimizedResult.fn.isValueLive(secondParameter!)).toBe(false);
 	});
 
+	it("materializes equivalent join constants before their first use", () => {
+		const { program, builder } = fixture(1);
+		const entry = builder.createBlock([{}]);
+		const condition = parameters(builder, entry)[0]!;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{}]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftUndefined] = builder.appendInstruction(left, "createUndefined", []);
+		const [rightUndefined] = builder.appendInstruction(right, "createUndefined", []);
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftUndefined!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightUndefined!] },
+		});
+		const parameter = parameters(builder, join)[0]!;
+		const [callResult] = builder.appendInstruction(join, "call", [parameter, parameter]);
+		builder.setTerminator(join, { kind: "return", value: callResult! });
+		const result = optimized({
+			program,
+			function: builder.finish(entry).function,
+		});
+		const call = [...result.fn.instructionIds()].find(
+			(instruction) =>
+				result.fn.instructionKind(instruction) === "operation" &&
+				result.fn.instructionOpcodeName(instruction) === "call",
+		)!;
+		const [first, second] = result.fn.instructionOperands(call);
+		expect(first).toBe(second);
+		expect(result.fn.valueDefinition(first!).kind).toBe("instruction");
+		expect(result.fn.isValueLive(parameter)).toBe(false);
+	});
+
 	it("removes unused parameters and their mismatched incoming arguments", () => {
 		const { program, builder } = fixture(1);
 		const entry = builder.createBlock([{}]);

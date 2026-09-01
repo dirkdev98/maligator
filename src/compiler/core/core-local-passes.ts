@@ -310,7 +310,12 @@ function insertConstant(
 			: constant.kind === "string"
 				? { stringIndex: constant.index }
 				: {};
-	return editor.insertInstruction(block, fn.blockTerminator(block), opcode, [], {
+	let before = fn.blockTerminator(block);
+	for (const instruction of fn.bodyInstructionIds(block)) {
+		before = instruction;
+		break;
+	}
+	return editor.insertInstruction(block, before, opcode, [], {
 		attributes,
 		outputRepresentations: [representation],
 	}).outputs[0]!;
