@@ -1,11 +1,16 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import {
+	CORE_CONTROL_FLOW_ANALYSIS,
+	buildCoreControlFlow,
+} from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
-	CORE_EFFECT_DOMAINS,
-	CORE_MEMORY_FAMILY_DOMAINS,
-} from "./core-ir.ts";
+	CORE_LOCAL_PROVENANCE_ANALYSIS,
+	analyzeCoreProvenance,
+} from "./core-ir-provenance.ts";
+import type { CoreAccessKey, CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
+import { CORE_EFFECT_DOMAINS, CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
 import type {
 	CoreAccessMode,
 	CoreBlockId,
@@ -16,14 +21,6 @@ import type {
 	CoreOpcodeAccess,
 	CoreValueId,
 } from "./core-ir.ts";
-import {
-	analyzeCoreProvenance,
-} from "./core-ir-provenance.ts";
-import type {
-	CoreAccessKey,
-	CoreOwnCell,
-	CoreProvenance,
-} from "./core-ir-provenance.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreMemoryLocation =
@@ -31,11 +28,22 @@ export type CoreMemoryLocation =
 	| { readonly kind: "local-slot"; readonly slot: number }
 	| { readonly kind: "captured-slot"; readonly owner: number; readonly index: number }
 	| { readonly kind: "activation-this" }
-	| { readonly kind: "object-slot"; readonly allocation: CoreInstructionId; readonly key: number }
-	| { readonly kind: "element"; readonly allocation: CoreInstructionId; readonly index: number }
+	| {
+			readonly kind: "object-slot";
+			readonly allocation: CoreInstructionId;
+			readonly key: number;
+	  }
+	| {
+			readonly kind: "element";
+			readonly allocation: CoreInstructionId;
+			readonly index: number;
+	  }
 	| { readonly kind: "family"; readonly family: CoreMemoryFamily };
 
-export type CoreExactMemoryLocation = Exclude<CoreMemoryLocation, { readonly kind: "family" }>;
+export type CoreExactMemoryLocation = Exclude<
+	CoreMemoryLocation,
+	{ readonly kind: "family" }
+>;
 
 export type CoreMemoryPartition = string & {
 	readonly __coreMemoryPartition: unique symbol;
@@ -55,14 +63,22 @@ export function coreMemoryLocationIsExact(
 	return location.kind !== "family";
 }
 
-export function coreMemoryPartition(location: CoreExactMemoryLocation): CoreMemoryPartition {
+export function coreMemoryPartition(
+	location: CoreExactMemoryLocation,
+): CoreMemoryPartition {
 	switch (location.kind) {
-		case "global-slot": return `slot\0global-slot\0${location.slot}` as CoreMemoryPartition;
-		case "local-slot": return `slot\0local-slot\0${location.slot}` as CoreMemoryPartition;
-		case "captured-slot": return `slot\0captured-slot\0${location.owner}\0${location.index}` as CoreMemoryPartition;
-		case "activation-this": return "slot\0activation-this" as CoreMemoryPartition;
-		case "object-slot": return `slot\0object-slot\0${location.allocation}\0${location.key}` as CoreMemoryPartition;
-		case "element": return `slot\0element\0${location.allocation}\0${location.index}` as CoreMemoryPartition;
+		case "global-slot":
+			return `slot\0global-slot\0${location.slot}` as CoreMemoryPartition;
+		case "local-slot":
+			return `slot\0local-slot\0${location.slot}` as CoreMemoryPartition;
+		case "captured-slot":
+			return `slot\0captured-slot\0${location.owner}\0${location.index}` as CoreMemoryPartition;
+		case "activation-this":
+			return "slot\0activation-this" as CoreMemoryPartition;
+		case "object-slot":
+			return `slot\0object-slot\0${location.allocation}\0${location.key}` as CoreMemoryPartition;
+		case "element":
+			return `slot\0element\0${location.allocation}\0${location.index}` as CoreMemoryPartition;
 	}
 }
 
@@ -119,7 +135,9 @@ function accessIsEffective(
 ): boolean {
 	const effects = coreInstructionEffects(fn, instruction);
 	const domains = access.mode === "read" ? effects.reads : effects.writes;
-	return CORE_MEMORY_FAMILY_DOMAINS[access.family].some((domain) => domains.includes(domain));
+	return CORE_MEMORY_FAMILY_DOMAINS[access.family].some((domain) =>
+		domains.includes(domain),
+	);
 }
 
 function exactLocation(
@@ -139,14 +157,20 @@ function exactLocation(
 			if (resolved === undefined) return undefined;
 			return resolved.cell.kind === "element"
 				? { kind: "element", allocation: resolved.allocation, index: resolved.cell.index }
-				: { kind: "object-slot", allocation: resolved.allocation, key: resolved.cell.key };
+				: {
+						kind: "object-slot",
+						allocation: resolved.allocation,
+						key: resolved.cell.key,
+					};
 		}
-		case "activation-this": return { kind: "activation-this" };
+		case "activation-this":
+			return { kind: "activation-this" };
 		case "global-slot":
 		case "local-slot": {
-			const slot = attributes.length === 1
-				? integerAttribute(fn, instruction, attributes[0]!)
-				: undefined;
+			const slot =
+				attributes.length === 1
+					? integerAttribute(fn, instruction, attributes[0]!)
+					: undefined;
 			return slot === undefined ? undefined : { kind: access.family, slot };
 		}
 		case "captured-slot": {
@@ -157,7 +181,8 @@ function exactLocation(
 				? undefined
 				: { kind: "captured-slot", owner, index };
 		}
-		default: return undefined;
+		default:
+			return undefined;
 	}
 }
 
@@ -170,15 +195,20 @@ export function coreMemoryAccesses(
 	const operands = fn.instructionOperands(instruction);
 	const outputs = fn.instructionResults(instruction);
 	const accesses: Array<CoreMemoryAccess> = [];
-	for (const access of fn.registry.byId(fn.instructionOpcode(instruction)).accesses ?? []) {
+	for (const access of fn.registry.byId(fn.instructionOpcode(instruction)).accesses ??
+		[]) {
 		if (!accessIsEffective(fn, instruction, access)) continue;
-		const base = access.baseOperand === undefined ? undefined : operands[access.baseOperand];
+		const base =
+			access.baseOperand === undefined ? undefined : operands[access.baseOperand];
 		const key = declaredKey(fn, instruction, access);
-		const value = access.valueOperand === undefined ? undefined : operands[access.valueOperand];
+		const value =
+			access.valueOperand === undefined ? undefined : operands[access.valueOperand];
 		const memoryAccess: CoreMemoryAccess = {
 			mode: access.mode,
-			location: exactLocation(fn, instruction, access, resolution) ??
-				{ kind: "family", family: access.family },
+			location: exactLocation(fn, instruction, access, resolution) ?? {
+				kind: "family",
+				family: access.family,
+			},
 			...(base === undefined ? {} : { base }),
 			...(key === undefined ? {} : { key }),
 			...(value === undefined ? {} : { value }),
@@ -198,12 +228,30 @@ export interface CoreMemoryVersions {
 		readonly blockUpdates: number;
 	};
 	readKey(instruction: CoreInstructionId): string | undefined;
-	readVersion(instruction: CoreInstructionId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
-	valueForRead(instruction: CoreInstructionId, partition: CoreMemoryPartition): CoreValueId | undefined;
-	initializationVersion(instruction: CoreInstructionId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
-	writeVersion(instruction: CoreInstructionId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
-	entryVersion(block: CoreBlockId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
-	exitVersion(block: CoreBlockId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
+	readVersion(
+		instruction: CoreInstructionId,
+		partition: CoreMemoryPartition,
+	): CoreMemoryVersion | undefined;
+	valueForRead(
+		instruction: CoreInstructionId,
+		partition: CoreMemoryPartition,
+	): CoreValueId | undefined;
+	initializationVersion(
+		instruction: CoreInstructionId,
+		partition: CoreMemoryPartition,
+	): CoreMemoryVersion | undefined;
+	writeVersion(
+		instruction: CoreInstructionId,
+		partition: CoreMemoryPartition,
+	): CoreMemoryVersion | undefined;
+	entryVersion(
+		block: CoreBlockId,
+		partition: CoreMemoryPartition,
+	): CoreMemoryVersion | undefined;
+	exitVersion(
+		block: CoreBlockId,
+		partition: CoreMemoryPartition,
+	): CoreMemoryVersion | undefined;
 	readers(partition: CoreMemoryPartition): ReadonlyArray<CoreInstructionId>;
 }
 
@@ -241,7 +289,9 @@ function memoryVersions(
 	provenance: CoreProvenance,
 ): CoreMemoryVersions {
 	const resolution = resolutionFor(provenance);
-	const accessesByInstruction = new Array<ReadonlyArray<CoreMemoryAccess> | undefined>(fn.instructionCapacity);
+	const accessesByInstruction = new Array<ReadonlyArray<CoreMemoryAccess> | undefined>(
+		fn.instructionCapacity,
+	);
 	const exactReads = new Map<CoreMemoryFamily, Set<CoreMemoryPartition>>();
 	const exactLocations = new Map<CoreMemoryPartition, CoreExactMemoryLocation>();
 	for (const instruction of fn.instructionIds()) {
@@ -276,26 +326,47 @@ function memoryVersions(
 			protectedLocalHeap: location.kind === "object-slot" || location.kind === "element",
 		});
 	}
-	const slotByPartition = new Map(partitions.map(({ partition }, slot) => [partition, slot]));
-	const domainSlot = new Map(CORE_EFFECT_DOMAINS.map((domain) => [domain, slotByPartition.get(coreMemoryDomainPartition(domain))!]));
+	const slotByPartition = new Map(
+		partitions.map(({ partition }, slot) => [partition, slot]),
+	);
+	const domainSlot = new Map(
+		CORE_EFFECT_DOMAINS.map((domain) => [
+			domain,
+			slotByPartition.get(coreMemoryDomainPartition(domain))!,
+		]),
+	);
 	const slotCount = partitions.length;
 	const entryBase = 1;
 	const phiBase = entryBase + fn.blockCapacity * slotCount;
 	const writeBase = phiBase + fn.blockCapacity * slotCount;
 	const exceptionBase = writeBase + fn.instructionCapacity * slotCount;
-	const entryIdentity = (block: CoreBlockId, slot: number): number => entryBase + block * slotCount + slot;
-	const phiIdentity = (block: CoreBlockId, slot: number): number => phiBase + block * slotCount + slot;
-	const writeIdentity = (instruction: CoreInstructionId, slot: number): number => writeBase + instruction * slotCount + slot;
-	const exceptionIdentity = (block: CoreBlockId, slot: number): number => exceptionBase + block * slotCount + slot;
+	const entryIdentity = (block: CoreBlockId, slot: number): number =>
+		entryBase + block * slotCount + slot;
+	const phiIdentity = (block: CoreBlockId, slot: number): number =>
+		phiBase + block * slotCount + slot;
+	const writeIdentity = (instruction: CoreInstructionId, slot: number): number =>
+		writeBase + instruction * slotCount + slot;
+	const exceptionIdentity = (block: CoreBlockId, slot: number): number =>
+		exceptionBase + block * slotCount + slot;
 	const entryStates = new Array<Float64Array | undefined>(fn.blockCapacity);
 	const exitStates = new Array<Float64Array | undefined>(fn.blockCapacity);
 	const readStates = new Array<Float64Array | undefined>(fn.instructionCapacity);
-	const writeVersions = new Array<Map<number, number> | undefined>(fn.instructionCapacity);
-	const initializationVersions = new Array<Map<number, number> | undefined>(fn.instructionCapacity);
+	const writeVersions = new Array<Map<number, number> | undefined>(
+		fn.instructionCapacity,
+	);
+	const initializationVersions = new Array<Map<number, number> | undefined>(
+		fn.instructionCapacity,
+	);
 	const valueByVersion = new Map<number, CoreValueId>();
-	const readersBySlot = Array.from({ length: slotCount }, () => new Array<CoreInstructionId>());
-	const layoutByInstruction = new Array<CoreProvenance["layouts"][number] | undefined>(fn.instructionCapacity);
-	for (const layout of provenance.layouts) layoutByInstruction[layout.instruction] = layout;
+	const readersBySlot = Array.from(
+		{ length: slotCount },
+		() => new Array<CoreInstructionId>(),
+	);
+	const layoutByInstruction = new Array<CoreProvenance["layouts"][number] | undefined>(
+		fn.instructionCapacity,
+	);
+	for (const layout of provenance.layouts)
+		layoutByInstruction[layout.instruction] = layout;
 	let transfers = 0;
 	let blockUpdates = 0;
 	const domainsForFamily = (family: CoreMemoryFamily): ReadonlyArray<CoreEffectDomain> =>
@@ -309,8 +380,12 @@ function memoryVersions(
 		state[domainId] = identity(domainId);
 		for (let slot = CORE_EFFECT_DOMAINS.length; slot < slotCount; slot++) {
 			const info = partitions[slot]!;
-			if (info.protectedLocalHeap || info.family === undefined ||
-				!domainsForFamily(info.family).includes(domain)) continue;
+			if (
+				info.protectedLocalHeap ||
+				info.family === undefined ||
+				!domainsForFamily(info.family).includes(domain)
+			)
+				continue;
 			state[slot] = identity(slot);
 		}
 	};
@@ -326,7 +401,11 @@ function memoryVersions(
 		if (layout?.kind !== "named-slots") return;
 		let versions: Map<number, number> | undefined;
 		for (const [index, key] of layout.keys.entries()) {
-			const partition = coreMemoryPartition({ kind: "object-slot", allocation: instruction, key });
+			const partition = coreMemoryPartition({
+				kind: "object-slot",
+				allocation: instruction,
+				key,
+			});
 			const slot = slotByPartition.get(partition);
 			const value = layout.initialValues[index];
 			if (slot === undefined || value === undefined) continue;
@@ -354,7 +433,7 @@ function memoryVersions(
 			for (const access of accesses) {
 				if (access.mode !== "write") continue;
 				const family = coreMemoryLocationFamily(access.location);
-				for (const domain of domainsForFamily(family)) coveredWrites.add(domain);
+				const exactAccess = coreMemoryLocationIsExact(access.location);
 				const exactSlot = slotForAccess(access);
 				if (exactSlot !== undefined) {
 					const version = writeIdentity(instruction, exactSlot);
@@ -364,8 +443,13 @@ function memoryVersions(
 					versions.set(exactSlot, version);
 				}
 				for (const domain of domainsForFamily(family)) {
-					const slot = domainSlot.get(domain)!;
-					state[slot] = writeIdentity(instruction, slot);
+					coveredWrites.add(domain);
+					if (!exactAccess) {
+						killDomain(state, domain, (slot) => writeIdentity(instruction, slot));
+					} else {
+						const slot = domainSlot.get(domain)!;
+						state[slot] = writeIdentity(instruction, slot);
+					}
 				}
 			}
 			if (versions !== undefined) writeVersions[instruction] = versions;
@@ -381,23 +465,29 @@ function memoryVersions(
 	const mergeEntry = (block: CoreBlockId): Float64Array => {
 		const incoming = cfg.predecessors[block] ?? [];
 		if (block === fn.entry || incoming.length === 0) {
-			return Float64Array.from({ length: slotCount }, (_, slot) => entryIdentity(block, slot));
+			return Float64Array.from({ length: slotCount }, (_, slot) =>
+				entryIdentity(block, slot),
+			);
 		}
 		const merged = new Float64Array(slotCount);
 		for (let slot = 0; slot < slotCount; slot++) {
 			let first: number | undefined;
 			let agrees = true;
 			for (const edge of incoming) {
-				const value = edge.kind === "exceptional"
-					? exceptionIdentity(edge.from, slot)
-					: exitStates[edge.from]?.[slot];
+				const value =
+					edge.kind === "exceptional"
+						? exceptionIdentity(edge.from, slot)
+						: exitStates[edge.from]?.[slot];
 				if (value === undefined) continue;
 				if (first === undefined) first = value;
 				else if (first !== value) agrees = false;
 			}
-			merged[slot] = first === undefined
-				? entryIdentity(block, slot)
-				: agrees ? first : phiIdentity(block, slot);
+			merged[slot] =
+				first === undefined
+					? entryIdentity(block, slot)
+					: agrees
+						? first
+						: phiIdentity(block, slot);
 		}
 		return merged;
 	};
@@ -408,7 +498,8 @@ function memoryVersions(
 		queued.delete(block);
 		const entry = mergeEntry(block);
 		const exit = transfer(block, entry);
-		const changed = !sameState(entryStates[block], entry) || !sameState(exitStates[block], exit);
+		const changed =
+			!sameState(entryStates[block], entry) || !sameState(exitStates[block], exit);
 		entryStates[block] = entry;
 		exitStates[block] = exit;
 		if (!changed) continue;
@@ -427,7 +518,8 @@ function memoryVersions(
 			if (slot !== undefined) readersBySlot[slot]!.push(instruction);
 		}
 	}
-	const partitionSlot = (partition: CoreMemoryPartition): number | undefined => slotByPartition.get(partition);
+	const partitionSlot = (partition: CoreMemoryPartition): number | undefined =>
+		slotByPartition.get(partition);
 	const result: CoreMemoryVersions = {
 		function: fn.id,
 		statistics: Object.freeze({
@@ -445,14 +537,20 @@ function memoryVersions(
 				if (access.mode !== "read") continue;
 				const exact = slotForAccess(access);
 				if (exact !== undefined) versions.add(state[exact]!);
-				else for (const domain of domainsForFamily(coreMemoryLocationFamily(access.location))) versions.add(state[domainSlot.get(domain)!]!);
+				else
+					for (const domain of domainsForFamily(
+						coreMemoryLocationFamily(access.location),
+					))
+						versions.add(state[domainSlot.get(domain)!]!);
 			}
-			return versions.size === 0 ? undefined : [...versions].sort((left, right) => left - right).join(",");
+			return versions.size === 0
+				? undefined
+				: [...versions].sort((left, right) => left - right).join(",");
 		},
 		readVersion(instruction, partition) {
 			const slot = partitionSlot(partition);
 			const value = slot === undefined ? undefined : readStates[instruction]?.[slot];
-			return value === undefined ? undefined : value as CoreMemoryVersion;
+			return value === undefined ? undefined : (value as CoreMemoryVersion);
 		},
 		valueForRead(instruction, partition) {
 			const version = this.readVersion(instruction, partition);
@@ -460,23 +558,25 @@ function memoryVersions(
 		},
 		initializationVersion(instruction, partition) {
 			const slot = partitionSlot(partition);
-			const value = slot === undefined ? undefined : initializationVersions[instruction]?.get(slot);
-			return value === undefined ? undefined : value as CoreMemoryVersion;
+			const value =
+				slot === undefined ? undefined : initializationVersions[instruction]?.get(slot);
+			return value === undefined ? undefined : (value as CoreMemoryVersion);
 		},
 		writeVersion(instruction, partition) {
 			const slot = partitionSlot(partition);
-			const value = slot === undefined ? undefined : writeVersions[instruction]?.get(slot);
-			return value === undefined ? undefined : value as CoreMemoryVersion;
+			const value =
+				slot === undefined ? undefined : writeVersions[instruction]?.get(slot);
+			return value === undefined ? undefined : (value as CoreMemoryVersion);
 		},
 		entryVersion(block, partition) {
 			const slot = partitionSlot(partition);
 			const value = slot === undefined ? undefined : entryStates[block]?.[slot];
-			return value === undefined ? undefined : value as CoreMemoryVersion;
+			return value === undefined ? undefined : (value as CoreMemoryVersion);
 		},
 		exitVersion(block, partition) {
 			const slot = partitionSlot(partition);
 			const value = slot === undefined ? undefined : exitStates[block]?.[slot];
-			return value === undefined ? undefined : value as CoreMemoryVersion;
+			return value === undefined ? undefined : (value as CoreMemoryVersion);
 		},
 		readers(partition) {
 			const slot = partitionSlot(partition);
@@ -497,13 +597,19 @@ export function analyzeCoreMemoryVersions(
 
 export const coreMemoryVersions = analyzeCoreMemoryVersions;
 
-export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMemoryVersions> = {
-	key: "local-memory-versions",
-	scope: "function",
-	functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
-	programDependencies: ["data"],
-	compute({ program, request }) {
-		if (request.scope !== "function") throw new Error("Expected function analysis request");
-		return analyzeCoreMemoryVersions(program, request.function);
-	},
-};
+export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMemoryVersions> =
+	{
+		key: "local-memory-versions",
+		scope: "function",
+		functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
+		programDependencies: ["data"],
+		compute({ program, request, get }) {
+			if (request.scope !== "function")
+				throw new Error("Expected function analysis request");
+			return memoryVersions(
+				program.function(request.function),
+				get(CORE_CONTROL_FLOW_ANALYSIS, request),
+				get(CORE_LOCAL_PROVENANCE_ANALYSIS, request),
+			);
+		},
+	};

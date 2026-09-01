@@ -110,9 +110,9 @@ describe("incremental Core program summaries", () => {
 			scope: "program",
 		});
 
-		expect(
-			second.sccs.find(({ functions }) => functions.includes(2 as never)),
-		).toBe(unrelated);
+		expect(second.sccs.find(({ functions }) => functions.includes(2 as never))).toBe(
+			unrelated,
+		);
 		expect(second.statistics).toMatchObject({
 			sccNodesAnalyzed: 3,
 			sccsReused: 2,
@@ -146,6 +146,36 @@ describe("incremental Core program summaries", () => {
 			sccNodesAnalyzed: 0,
 			sccsReused: 4,
 		});
+	});
+
+	it("keeps published summaries cached across a fact-only edit", () => {
+		const program = analysisProgram();
+		appendCaller(program, 1);
+		const leaf = appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		const editor = CoreEditor.open(program, leaf.function);
+		editor.addFact({
+			kind: "diagnostic-only",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "diagnostic-only" },
+			obligations: [],
+			origin: "test",
+		});
+		editor.commit();
+		const second = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(second).toBe(first);
 	});
 
 	it("solves a long chain with bounded SCC transfers", () => {

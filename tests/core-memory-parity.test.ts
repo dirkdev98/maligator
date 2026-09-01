@@ -83,6 +83,39 @@ describe("Core memory and escape parity", () => {
 		).toContainEqual({ kind: "return", value: fn.parameters[0] });
 	});
 
+	it("forwards an exact captured store until an environment edit", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const build = (edited: boolean) => {
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const stored = builder.blockParameters(entry)[0]!.value;
+			builder.appendInstruction(entry, "storeCaptured", [stored], {
+				attributes: { functionIndex: 0, index: 2 },
+			});
+			if (edited) {
+				builder.appendInstruction(entry, "envCopy", [], {
+					attributes: { scopeId: -1, slotCount: 1 },
+				});
+			}
+			const [loaded] = builder.appendInstruction(entry, "loadCaptured", [], {
+				attributes: { functionIndex: 0, index: 2 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			return builder.finish(entry).function;
+		};
+		const forwardable = build(false);
+		const invalidated = build(true);
+
+		const optimized = optimize(program);
+		expect(operationCount(optimized.function(forwardable), "loadCaptured")).toBe(0);
+		expect(operationCount(optimized.function(invalidated), "loadCaptured")).toBe(1);
+		expect(
+			optimized
+				.function(forwardable)
+				.terminatorPayload(optimized.function(forwardable).blockTerminator(0 as never)),
+		).toEqual({ kind: "return", value: optimized.function(forwardable).parameters[0] });
+	});
+
 	it("spends family precision only on exactly read slots", () => {
 		const slotCount = 300;
 		const program = new CoreProgram(coreOpcodeRegistry, {

@@ -905,7 +905,7 @@ export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgram
 		key: "program-summaries",
 		scope: "program",
 		functionDependencies: ["body", "cfg", "calls", "memoryEffects", "representations"],
-		programDependencies: ["functions", "calls", "facts", "representations"],
+		programDependencies: ["functions", "calls"],
 		contextIdentity(context) {
 			return context.facts.closure.sourceClosure.kind;
 		},
