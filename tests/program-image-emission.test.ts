@@ -3080,6 +3080,51 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("MAL_GUARDED_BUILTIN_SET_ADD");
 	});
 
+	it("does not spend expansion slots on collection helper dispatch", () => {
+		const definition = lower(`
+			function update(key, value) {
+				const map = new Map();
+				const set = new Set();
+				map.get(key);
+				map.set(key, value);
+				map.has(key);
+				map.delete(key);
+				set.add(key);
+				set.has(key);
+				set.delete(key);
+			}
+			globalThis.update = update;
+		`);
+		const operations = specializations(definition).flatMap((region) =>
+			region.kind === "builtin-collection-call-chain" ? [region.operation] : [],
+		);
+		expect(operations).toEqual([
+			"Map.prototype.get",
+			"Map.prototype.set",
+			"Map.prototype.has",
+			"Map.prototype.delete",
+			"Set.prototype.add",
+			"Set.prototype.has",
+			"Set.prototype.delete",
+		]);
+	});
+
+	it("keeps proven own methods out of collection helper dispatch", () => {
+		const definition = lower(`
+			const plain = {
+				get() {
+					return 1;
+				},
+			};
+			globalThis.value = plain.get();
+		`);
+		expect(
+			specializations(definition).filter(
+				(region) => region.kind === "builtin-collection-call-chain",
+			),
+		).toEqual([]);
+	});
+
 	it("polls only collection operations with exact-root safepoint metadata", () => {
 		const output = emitLocked(`
 			function read(key) {

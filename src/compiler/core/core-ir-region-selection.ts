@@ -869,7 +869,7 @@ function pendingLocalCandidate(
 	return {
 		selection,
 		budget: {
-			key: `1:${String(1_000_000 - selection.cost.runtimeBenefit).padStart(7, "0")}:${candidate.key}`,
+			key: `0:${String(1_000_000 - selection.cost.runtimeBenefit).padStart(7, "0")}:${candidate.key}`,
 			kind,
 			caller: candidate.function,
 			site: candidate.root,
@@ -880,7 +880,7 @@ function pendingLocalCandidate(
 			),
 			generatedCodeCost: selection.cost.generatedCode,
 			compilerWorkCost: selection.cost.compilerWork,
-			expansive: true,
+			expansive: false,
 			...(!coreTargetSupportsSpecialization(kind)
 				? { unsupportedReason: "target-support" as const }
 				: !fn.isInstructionLive(candidate.root) ||
@@ -937,7 +937,7 @@ function guardedCallCandidates(
 			candidates.push({
 				selection,
 				budget: {
-					key: `0:${selection.id}`,
+					key: `1:${selection.id}`,
 					kind: "guarded-direct-call",
 					caller,
 					site: site.instruction,
@@ -1022,11 +1022,17 @@ function conflicts(
 	const owned = claimed.get(selection.function);
 	return selection.claimedInstructions.some((instruction) => {
 		const state = owned?.get(instruction);
-		return state === undefined
-			? false
-			: selection.composition === "exclusive"
-				? state.exclusive
-				: state.overlays.has(selection.kind);
+		if (state === undefined) return false;
+		if (selection.kind === "guarded-direct-call" && state.exclusive) return true;
+		if (
+			selection.composition === "exclusive" &&
+			state.overlays.has("guarded-direct-call")
+		) {
+			return true;
+		}
+		return selection.composition === "exclusive"
+			? state.exclusive
+			: state.overlays.has(selection.kind);
 	});
 }
 

@@ -2226,6 +2226,7 @@ const canonicalizeBlockParameters: CorePass = {
 export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	annotateTerminalYieldSites,
 	foldStaticPropertyKeys,
+	rewriteExactBuiltinCalls,
 	foldConstants,
 	foldTypeofComparisons,
 	foldPrimitiveCoercions,
@@ -2239,7 +2240,6 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	eliminateForwardingBlocks,
 	mergeLinearBlocks,
 	removeUnreachableBlocks,
-	rewriteExactBuiltinCalls,
 	foldValueKindObservations,
 	lowerLocalExplicitThrows,
 	foldRedundantTdzChecks,

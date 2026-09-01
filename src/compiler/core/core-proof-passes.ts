@@ -417,6 +417,39 @@ function scalarConsumersOnly(fn: CoreFunctionStore, value: CoreValueId): boolean
 	return !appearsOnEdge(fn, value);
 }
 
+function scalarProducerInputsSupportRepresentation(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	representation: CoreRepresentation,
+	componentValues?: ReadonlySet<CoreValueId>,
+): boolean {
+	const opcode = fn.instructionOpcodeName(instruction);
+	const operands = fn.instructionOperands(instruction);
+	const belongsToComponent = (value: CoreValueId): boolean =>
+		componentValues?.has(value) === true;
+	if (opcode === "move") {
+		const source = operands[0];
+		return (
+			source !== undefined &&
+			(fn.valueRepresentation(source) === representation || belongsToComponent(source))
+		);
+	}
+	if (
+		(opcode === "unary" || opcode === "binary") &&
+		(representation === "i32" || representation === "f64")
+	) {
+		return operands.every((operand) => {
+			const operandRepresentation = fn.valueRepresentation(operand);
+			return (
+				operandRepresentation === "i32" ||
+				operandRepresentation === "f64" ||
+				belongsToComponent(operand)
+			);
+		});
+	}
+	return true;
+}
+
 function scalarCandidate(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
@@ -431,11 +464,10 @@ function scalarCandidate(
 		!scalarConsumersOnly(fn, value)
 	)
 		return undefined;
-	if (fn.instructionOpcodeName(definition.instruction) === "move") {
-		const source = fn.instructionOperands(definition.instruction)[0];
-		if (source === undefined || fn.valueRepresentation(source) !== representation)
-			return undefined;
-	}
+	if (
+		!scalarProducerInputsSupportRepresentation(fn, definition.instruction, representation)
+	)
+		return undefined;
 	return representation;
 }
 
@@ -570,16 +602,14 @@ const materializeFlowScalars: CorePass = {
 					return true;
 				if (
 					definition.kind === "instruction" &&
-					fn.instructionOpcodeName(definition.instruction) === "move"
-				) {
-					const source = fn.instructionOperands(definition.instruction)[0];
-					if (
-						source === undefined ||
-						(fn.valueRepresentation(source) !== representation &&
-							!componentValues.has(source))
+					!scalarProducerInputsSupportRepresentation(
+						fn,
+						definition.instruction,
+						representation,
+						componentValues,
 					)
-						return true;
-				}
+				)
+					return true;
 				for (const { instruction } of fn.uses(value)) {
 					if (
 						fn.instructionKind(instruction) === "operation" &&

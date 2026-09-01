@@ -1447,6 +1447,13 @@ function exactPropertyCallCandidate(
 	) {
 		return undefined;
 	}
+	const propertyAttributes = fn.instructionAttributes(property);
+	if (
+		propertyAttributes.knownOwnSlot !== undefined ||
+		propertyAttributes.exactOwnSlot !== undefined
+	) {
+		return undefined;
+	}
 	const propertyResult = fn.instructionResults(property)[0];
 	if (propertyResult === undefined) return undefined;
 	const propertyUses = index.uses.get(root(propertyResult)) ?? [];

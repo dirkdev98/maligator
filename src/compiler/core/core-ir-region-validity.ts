@@ -680,7 +680,9 @@ function verifySpecialization(
 	for (const instruction of claims) {
 		const state = owned.get(instruction) ?? { exclusive: false, overlays: new Set() };
 		if (
-			(selection.composition === "exclusive" && state.exclusive) ||
+			(selection.kind === "guarded-direct-call" && state.exclusive) ||
+			(selection.composition === "exclusive" &&
+				(state.exclusive || state.overlays.has("guarded-direct-call"))) ||
 			(selection.composition === "overlay" && state.overlays.has(selection.kind))
 		) {
 			fail(`${selection.id} conflicts on @${instruction}`);

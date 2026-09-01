@@ -155,6 +155,47 @@ describe("Core local proofs and representations", () => {
 		expect(fn.valueRepresentation(sum!)).toBe("f64");
 	});
 
+	it("keeps numeric coercion boxed when its numeric input must remain boxed", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [source] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [numeric] = builder.appendInstruction(entry, "unary", [source!], {
+			attributes: { operator: "tonumeric" },
+		});
+		const [incremented] = builder.appendInstruction(entry, "unary", [numeric!], {
+			attributes: { operator: "increment" },
+		});
+		const [divisor] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		const [remainder] = builder.appendInstruction(entry, "binary", [source!, divisor!], {
+			attributes: { operator: "%" },
+		});
+		builder.appendInstruction(entry, "rootUse", [remainder!], {
+			outputCount: 0,
+		});
+		builder.appendInstruction(entry, "storeGlobal", [source!], {
+			attributes: { index: 0 },
+			outputCount: 0,
+		});
+		builder.setTerminator(entry, { kind: "return", value: incremented! });
+		const finished = builder.finish(entry);
+		const fn = program.function(finished.function);
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		new CorePassManager(program, context, analyses, report).runStage(
+			"proofs",
+			CORE_PROOF_PASSES,
+		);
+		expect(fn.valueRepresentation(source!)).toBe("boxed");
+		expect(fn.valueRepresentation(numeric!)).toBe("boxed");
+		expect(fn.valueRepresentation(incremented!)).toBe("boxed");
+		expect(fn.valueRepresentation(remainder!)).toBe("boxed");
+	});
+
 	it("refreshes primitive effect proofs after operand kinds narrow", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
