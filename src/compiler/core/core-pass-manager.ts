@@ -200,6 +200,15 @@ export class CorePassManager {
 		switch (pass.scope) {
 			case "instruction": {
 				const instructions = new Set(changes.instructions);
+				for (const call of changes.calls) instructions.add(call);
+				for (const edge of changes.edges) {
+					for (const block of [edge.source, edge.target]) {
+						if (!fn.isBlockLive(block)) continue;
+						for (const instruction of fn.instructionIds(block)) {
+							instructions.add(instruction);
+						}
+					}
+				}
 				for (const value of changes.values) {
 					if (!fn.isValueLive(value)) continue;
 					const definition = fn.valueDefinition(value);
@@ -220,7 +229,10 @@ export class CorePassManager {
 				break;
 			}
 			case "block":
-				for (const block of changes.blocks) {
+				for (const block of new Set([
+					...changes.blocks,
+					...changes.edges.flatMap(({ source, target }) => [source, target]),
+				])) {
 					if (fn.isBlockLive(block)) {
 						enqueue(pass, { scope: "block", function: changes.function, block });
 					}

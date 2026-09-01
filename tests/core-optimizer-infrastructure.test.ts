@@ -40,6 +40,13 @@ function programWithTwoFunctions() {
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
 	});
+	registry.define({
+		opcode: "rewritten-identity",
+		inputs: coreArity(1),
+		outputs: coreArity(1),
+		effects: CORE_NO_EFFECTS,
+		discardable: true,
+	});
 	const program = new CoreProgram(registry);
 	const functions = Array.from({ length: 2 }, () => {
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
@@ -150,6 +157,71 @@ describe("Core optimizer infrastructure", () => {
 		};
 		expect(run(false)).toEqual([1, 1]);
 		expect(run(true)).toEqual([1, 1]);
+	});
+
+	it("wakes an earlier consumer after an in-place producer rewrite", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const target = functions[0]!;
+		const fn = program.function(target.id);
+		const producer = [...fn.bodyInstructionIds(target.entry)][0]!;
+		const consumer = fn.blockTerminator(target.entry);
+		let consumerRuns = 0;
+		const observer: CorePass = {
+			name: "consumer-observer",
+			stage: "canonicalize",
+			scope: "instruction",
+			requiredAnalyses: [],
+			wakesOn: ["body"],
+			preserves: [],
+			changes: { cfg: false, calls: false, facts: false, representations: false },
+			budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "error" },
+			run({ item }) {
+				if (
+					item.scope === "instruction" &&
+					item.function === target.id &&
+					item.instruction === consumer
+				) {
+					consumerRuns++;
+				}
+				return undefined;
+			},
+		};
+		const rewrite: CorePass = {
+			name: "producer-rewrite",
+			stage: "canonicalize",
+			scope: "instruction",
+			requiredAnalyses: [],
+			wakesOn: ["body"],
+			preserves: [],
+			changes: { cfg: false, calls: false, facts: false, representations: false },
+			budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "error" },
+			run({ item }) {
+				if (
+					item.scope !== "instruction" ||
+					item.function !== target.id ||
+					item.instruction !== producer ||
+					fn.instructionOpcodeName(producer) !== "identity"
+				) {
+					return undefined;
+				}
+				const editor = CoreEditor.open(program, target.id);
+				editor.replaceInstruction(
+					producer,
+					"rewritten-identity",
+					fn.instructionOperands(producer),
+				);
+				return editor.commit();
+			},
+		};
+		const { analyses, report } = analysisHarness(program);
+
+		new CorePassManager(program, context(), analyses, report).runStage(
+			"canonicalize",
+			[observer, rewrite],
+		);
+
+		expect(fn.instructionOpcodeName(producer)).toBe("rewritten-identity");
+		expect(consumerRuns).toBe(2);
 	});
 
 	it("requires whole-program analyses to name a program dependency", () => {

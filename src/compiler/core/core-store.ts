@@ -6,6 +6,7 @@ import {
 	coreOpcodeId,
 	coreValueId,
 } from "./core-ir.ts";
+import { CoreEditor } from "./core-editor.ts";
 import type {
 	CoreAttributeValue,
 	CoreBlockId,
@@ -30,8 +31,13 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 
-export const CORE_STORE_MUTATION = Symbol("Core store mutation");
-export type CoreStoreMutation = typeof CORE_STORE_MUTATION;
+export interface CoreStoreMutation {
+	readonly __coreStoreMutation: never;
+}
+
+const CORE_STORE_MUTATION = Symbol(
+	"Core store mutation",
+) as unknown as CoreStoreMutation;
 
 export type CoreChangeDomain =
 	| "body"
@@ -79,7 +85,15 @@ export interface CoreChangeSet {
 	readonly instructions: ReadonlyArray<CoreInstructionId>;
 	readonly values: ReadonlyArray<CoreValueId>;
 	readonly facts: ReadonlyArray<CoreFactId>;
+	readonly edges: ReadonlyArray<CoreChangedEdge>;
+	readonly calls: ReadonlyArray<CoreInstructionId>;
 	readonly edits: number;
+}
+
+export interface CoreChangedEdge {
+	readonly kind: "control-flow" | "exception";
+	readonly source: CoreBlockId;
+	readonly target: CoreBlockId;
 }
 
 export interface CoreUse {
@@ -1525,6 +1539,28 @@ export class CoreProgram {
 		const fn = this.#functions[id];
 		if (fn === undefined || fn.id !== id) throw new Error(`Unknown Core function ${id}`);
 		return fn;
+	}
+
+	_openEditor(functionId: CoreFunctionId): CoreEditor {
+		return CoreEditor._open(
+			CORE_STORE_MUTATION,
+			this,
+			this.function(functionId),
+			false,
+		);
+	}
+
+	_createEditor(options: CoreFunctionOptions): CoreEditor {
+		return CoreEditor._open(
+			CORE_STORE_MUTATION,
+			this,
+			this._createFunction(CORE_STORE_MUTATION, options),
+			true,
+		);
+	}
+
+	_configureProgramData(data: CoreProgramDataTables): void {
+		this._setProgramData(CORE_STORE_MUTATION, data);
 	}
 
 	seal(): SealedCoreProgram {

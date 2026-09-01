@@ -720,6 +720,7 @@ export { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 export type {
 	CoreChangeDomain,
 	CoreChangeSet,
+	CoreChangedEdge,
 	CoreBlockLayout,
 	CoreFunctionVersions,
 	CoreInstructionLayout,

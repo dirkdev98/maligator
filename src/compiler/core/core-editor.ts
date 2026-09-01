@@ -17,14 +17,15 @@ import type {
 	CoreValueId,
 	SetCoreGuardTerminatorInput,
 } from "./core-ir.ts";
-import { CORE_STORE_MUTATION, sortCoreIds } from "./core-store.ts";
 import type {
 	CoreChangeDomain,
 	CoreChangeSet,
+	CoreChangedEdge,
 	CoreFunctionStore,
 	CoreProgram,
 	CoreProgramChangeDomain,
 	CoreProgramDataTables,
+	CoreStoreMutation,
 } from "./core-store.ts";
 
 export interface CoreInsertedInstruction {
@@ -175,49 +176,129 @@ function replacePayloadValue(
 	}
 }
 
+function terminatorOperands(payload: CoreTerminatorPayload): ReadonlyArray<CoreValueId> {
+	switch (payload.kind) {
+		case "jump":
+			return payload.edge.arguments;
+		case "branch":
+			return [
+				payload.condition,
+				...payload.consequent.arguments,
+				...payload.alternate.arguments,
+			];
+		case "guard":
+			return [
+				payload.condition,
+				...payload.success.arguments,
+				...payload.fallback.arguments,
+			];
+		case "switch":
+			return [
+				payload.discriminant,
+				...payload.cases.flatMap(({ edge }) => edge.arguments),
+				...payload.default.arguments,
+			];
+		case "return":
+		case "throw":
+			return [payload.value];
+		case "unreachable":
+			return [];
+	}
+}
+
+function terminatorTargets(payload: CoreTerminatorPayload): ReadonlyArray<CoreBlockId> {
+	switch (payload.kind) {
+		case "jump":
+			return [payload.edge.block];
+		case "branch":
+			return [payload.consequent.block, payload.alternate.block];
+		case "guard":
+			return [payload.success.block, payload.fallback.block];
+		case "switch":
+			return [...payload.cases.map(({ edge }) => edge.block), payload.default.block];
+		case "return":
+		case "throw":
+		case "unreachable":
+			return [];
+	}
+}
+
+function sortedIds<Id extends number>(ids: ReadonlySet<Id>): Array<Id> {
+	return [...ids].sort((left, right) => left - right);
+}
+
+function edgeKey(edge: CoreChangedEdge): string {
+	return `${edge.kind}:${edge.source}:${edge.target}`;
+}
+
+function sortedEdges(
+	edges: ReadonlyMap<string, CoreChangedEdge>,
+): Array<CoreChangedEdge> {
+	return [...edges.values()].sort(
+		(left, right) =>
+			left.source - right.source ||
+			left.target - right.target ||
+			left.kind.localeCompare(right.kind),
+	).map((edge) => Object.freeze({ ...edge }));
+}
+
 export class CoreEditor {
 	readonly program: CoreProgram;
 	readonly function: CoreFunctionStore;
+	readonly #mutation: CoreStoreMutation;
 	readonly #domains = new Set<CoreChangeDomain>();
 	readonly #programDomains = new Set<CoreProgramChangeDomain>();
 	readonly #blocks = new Set<CoreBlockId>();
 	readonly #instructions = new Set<CoreInstructionId>();
 	readonly #values = new Set<CoreValueId>();
 	readonly #facts = new Set<CoreFactId>();
+	readonly #edges = new Map<string, CoreChangedEdge>();
+	readonly #calls = new Set<CoreInstructionId>();
 	#edits = 0;
 	#committed = false;
 
-	private constructor(program: CoreProgram, fn: CoreFunctionStore, newFunction: boolean) {
+	private constructor(
+		mutation: CoreStoreMutation,
+		program: CoreProgram,
+		fn: CoreFunctionStore,
+		newFunction: boolean,
+	) {
+		this.#mutation = mutation;
 		this.program = program;
 		this.function = fn;
-		fn._beginEdit(CORE_STORE_MUTATION);
+		fn._beginEdit(mutation);
 		if (newFunction) this.#programDomains.add("functions");
+	}
+
+	static _open(
+		mutation: CoreStoreMutation,
+		program: CoreProgram,
+		fn: CoreFunctionStore,
+		newFunction: boolean,
+	): CoreEditor {
+		return new CoreEditor(mutation, program, fn, newFunction);
 	}
 
 	static createFunction(
 		program: CoreProgram,
 		options: CoreFunctionOptions = {},
 	): CoreEditor {
-		return new CoreEditor(
-			program,
-			program._createFunction(CORE_STORE_MUTATION, options),
-			true,
-		);
+		return program._createEditor(options);
 	}
 
 	static open(program: CoreProgram, functionId: CoreFunctionId): CoreEditor {
-		return new CoreEditor(program, program.function(functionId), false);
+		return program._openEditor(functionId);
 	}
 
 	static configureProgram(program: CoreProgram, data: CoreProgramDataTables): void {
-		program._setProgramData(CORE_STORE_MUTATION, data);
+		program._configureProgramData(data);
 	}
 
 	createBlock(parameters: ReadonlyArray<CoreBlockParameterSpec> = []): CoreBlockId {
 		this.#assertActive();
-		const created = this.function._createBlock(CORE_STORE_MUTATION, parameters);
+		const created = this.function._createBlock(this.#mutation, parameters);
 		this.#touchBlock(created.block);
-		for (const value of created.values) this.#values.add(value);
+		this.#touchValues(created.values);
 		this.#mark("body", "cfg", "specializationInputs");
 		this.#edits++;
 		return created.block;
@@ -239,7 +320,7 @@ export class CoreEditor {
 
 	removeBlockParameter(block: CoreBlockId, index: number): void {
 		this.#assertActive();
-		const value = this.function._removeBlockParameter(CORE_STORE_MUTATION, block, index);
+		const value = this.function._removeBlockParameter(this.#mutation, block, index);
 		this.#touchBlock(block);
 		this.#values.add(value);
 		this.#mark("body", "cfg", "specializationInputs");
@@ -272,7 +353,7 @@ export class CoreEditor {
 			throw new Error(`${opcode} output representation count does not match outputs`);
 		}
 		const created = this.function._insertOperation(
-			CORE_STORE_MUTATION,
+			this.#mutation,
 			block,
 			before,
 			descriptor.id,
@@ -287,8 +368,9 @@ export class CoreEditor {
 		);
 		this.#touchBlock(block);
 		this.#instructions.add(created.instruction);
-		for (const output of created.results) this.#values.add(output);
-		this.#markForOperation(descriptor, options.effectRefinement);
+		this.#touchValues(inputs);
+		this.#touchValues(created.results);
+		this.#markForOperation(created.instruction, descriptor, options.effectRefinement);
 		this.#edits++;
 		return { instruction: created.instruction, outputs: created.results };
 	}
@@ -307,10 +389,12 @@ export class CoreEditor {
 			this.function.instructionOpcode(instruction),
 		);
 		const previousRefinement = this.function.instructionEffectRefinement(instruction);
-		const outputCount = this.function.instructionResults(instruction).length;
+		const previousInputs = this.function.instructionOperands(instruction);
+		const results = this.function.instructionResults(instruction);
+		const outputCount = results.length;
 		const descriptor = this.#operation(opcode, inputs.length, outputCount);
 		this.function._replaceOperation(
-			CORE_STORE_MUTATION,
+			this.#mutation,
 			instruction,
 			descriptor.id,
 			inputs,
@@ -320,8 +404,11 @@ export class CoreEditor {
 		);
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
-		this.#markForOperation(previousDescriptor, previousRefinement);
-		this.#markForOperation(descriptor, options.effectRefinement);
+		this.#touchValues(previousInputs);
+		this.#touchValues(inputs);
+		this.#touchValues(results);
+		this.#markForOperation(instruction, previousDescriptor, previousRefinement);
+		this.#markForOperation(instruction, descriptor, options.effectRefinement);
 		this.#edits++;
 	}
 
@@ -338,10 +425,16 @@ export class CoreEditor {
 				`${descriptor.opcode} expects ${descriptor.inputs.minimum}..${descriptor.inputs.maximum} inputs, received ${inputs.length}`,
 			);
 		}
-		this.function._replaceOperands(CORE_STORE_MUTATION, instruction, inputs);
+		const previousInputs = this.function.instructionOperands(instruction);
+		const results = this.function.instructionResults(instruction);
+		const refinement = this.function.instructionEffectRefinement(instruction);
+		this.function._replaceOperands(this.#mutation, instruction, inputs);
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
-		this.#markForOperation(descriptor, undefined);
+		this.#touchValues(previousInputs);
+		this.#touchValues(inputs);
+		this.#touchValues(results);
+		this.#markForOperation(instruction, descriptor, refinement);
 		this.#edits++;
 	}
 
@@ -350,20 +443,19 @@ export class CoreEditor {
 		refinement: CoreEffectRefinement,
 	): void {
 		this.#assertActive();
-		const descriptor = this.program.registry.byId(
-			this.function.instructionOpcode(instruction),
-		);
+		const previous = this.function.instructionEffectRefinement(instruction);
 		this.function._setInstructionEffectRefinement(
-			CORE_STORE_MUTATION,
+			this.#mutation,
 			instruction,
 			refinement,
 		);
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
+		this.#touchValues(this.function.instructionOperands(instruction));
+		this.#touchValues(this.function.instructionResults(instruction));
+		this.#touchRefinement(previous);
+		this.#touchRefinement(refinement);
 		this.#mark("memoryEffects", "facts", "specializationInputs");
-		if (descriptor.callTransfer !== undefined) {
-			this.#mark("calls");
-		}
 		this.#edits++;
 	}
 
@@ -371,17 +463,33 @@ export class CoreEditor {
 		this.#assertActive();
 		const block = this.function.instructionBlock(instruction);
 		const kind = this.function.instructionKind(instruction);
+		const operands = this.function.instructionOperands(instruction);
+		const results = this.function.instructionResults(instruction);
+		const payload =
+			kind === "operation" ? undefined : this.function.terminatorPayload(instruction);
 		const descriptor =
 			kind === "operation"
 				? this.program.registry.byId(this.function.instructionOpcode(instruction))
 				: undefined;
-		for (const value of this.function.instructionResults(instruction))
-			this.#values.add(value);
-		this.function._removeInstruction(CORE_STORE_MUTATION, instruction);
+		const refinement =
+			descriptor === undefined
+				? undefined
+				: this.function.instructionEffectRefinement(instruction);
+		this.#touchValues(operands);
+		this.#touchValues(results);
+		if (payload !== undefined) this.#touchTerminator(block, payload);
+		this.function._removeInstruction(this.#mutation, instruction);
 		this.#instructions.add(instruction);
 		this.#touchBlock(block);
-		if (descriptor === undefined) this.#mark("body", "cfg", "specializationInputs");
-		else this.#markForOperation(descriptor, undefined);
+		if (descriptor === undefined) {
+			this.#mark("body", "cfg", "specializationInputs");
+			if (payload?.kind === "guard") {
+				this.#facts.add(payload.fact);
+				this.#mark("facts");
+			}
+		} else {
+			this.#markForOperation(instruction, descriptor, refinement);
+		}
 		this.#edits++;
 	}
 
@@ -396,11 +504,13 @@ export class CoreEditor {
 			this.function.instructionOpcode(instruction),
 		);
 		const refinement = this.function.instructionEffectRefinement(instruction);
-		this.function._moveInstruction(CORE_STORE_MUTATION, instruction, block, before);
+		this.#touchValues(this.function.instructionOperands(instruction));
+		this.#touchValues(this.function.instructionResults(instruction));
+		this.function._moveInstruction(this.#mutation, instruction, block, before);
 		this.#instructions.add(instruction);
 		this.#touchBlock(previousBlock);
 		this.#touchBlock(block);
-		this.#markForOperation(descriptor, refinement);
+		this.#markForOperation(instruction, descriptor, refinement);
 		this.#edits++;
 	}
 
@@ -425,16 +535,26 @@ export class CoreEditor {
 			this.replaceOperands(instruction, operands);
 		}
 		for (const instruction of terminators) {
+			const before = this.function.terminatorPayload(instruction);
 			const payload = replacePayloadValue(
-				this.function.terminatorPayload(instruction),
+				before,
 				value,
 				replacement,
 			);
-			this.function._replaceTerminatorPayload(CORE_STORE_MUTATION, instruction, payload);
+			this.function._replaceTerminatorPayload(this.#mutation, instruction, payload);
 			this.#instructions.add(instruction);
-			this.#touchBlock(this.function.instructionBlock(instruction));
+			const block = this.function.instructionBlock(instruction);
+			this.#touchTerminator(block, before);
+			this.#touchTerminator(block, payload);
 			this.#mark("body", "specializationInputs");
-			if (payload.kind === "guard") this.#mark("facts");
+			if (
+				before.kind === "guard" &&
+				payload.kind === "guard" &&
+				before.condition !== payload.condition
+			) {
+				this.#facts.add(before.fact);
+				this.#mark("facts");
+			}
 			this.#edits++;
 		}
 		for (const block of this.function.blockIds()) {
@@ -455,16 +575,32 @@ export class CoreEditor {
 	removeBlock(block: CoreBlockId): void {
 		this.#assertActive();
 		const instructions = [...this.function.instructionIds(block)];
-		const values = [
-			...this.function.blockParameters(block).map(({ value }) => value),
-			...instructions.flatMap((instruction) =>
-				this.function.instructionResults(instruction),
-			),
-		];
-		this.function._removeBlock(CORE_STORE_MUTATION, block);
+		const parameters = this.function.blockParameters(block);
+		const handler = this.function.blockHandler(block);
+		this.#touchValues(parameters.map(({ value }) => value));
+		if (handler !== undefined) this.#touchHandler(block, handler);
+		for (const instruction of instructions) {
+			this.#instructions.add(instruction);
+			this.#touchValues(this.function.instructionOperands(instruction));
+			const results = this.function.instructionResults(instruction);
+			this.#touchValues(results);
+			if (this.function.instructionKind(instruction) === "operation") {
+				this.#markForOperation(
+					instruction,
+					this.program.registry.byId(this.function.instructionOpcode(instruction)),
+					this.function.instructionEffectRefinement(instruction),
+				);
+				continue;
+			}
+			const payload = this.function.terminatorPayload(instruction);
+			this.#touchTerminator(block, payload);
+			if (payload.kind === "guard") {
+				this.#facts.add(payload.fact);
+				this.#mark("facts");
+			}
+		}
+		this.function._removeBlock(this.#mutation, block);
 		this.#blocks.add(block);
-		for (const instruction of instructions) this.#instructions.add(instruction);
-		for (const value of values) this.#values.add(value);
 		this.#mark("body", "cfg", "exceptionFlow", "specializationInputs");
 		this.#edits++;
 	}
@@ -472,7 +608,7 @@ export class CoreEditor {
 	setValueRepresentation(value: CoreValueId, representation: CoreRepresentation): void {
 		this.#assertActive();
 		if (
-			!this.function._setValueRepresentation(CORE_STORE_MUTATION, value, representation)
+			!this.function._setValueRepresentation(this.#mutation, value, representation)
 		) {
 			return;
 		}
@@ -487,20 +623,23 @@ export class CoreEditor {
 		arguments_: ReadonlyArray<CoreValueId> = [],
 	): void {
 		this.#assertActive();
-		this.function._setHandler(CORE_STORE_MUTATION, block, {
+		const previous = this.function.blockHandler(block);
+		if (previous !== undefined) this.#touchHandler(block, previous);
+		this.#touchHandler(block, { block: handlerBlock, arguments: arguments_ });
+		this.function._setHandler(this.#mutation, block, {
 			block: handlerBlock,
 			arguments: [...arguments_],
 		});
-		this.#touchBlock(block);
-		this.#touchBlock(handlerBlock);
 		this.#mark("exceptionFlow", "specializationInputs");
 		this.#edits++;
 	}
 
 	clearHandler(block: CoreBlockId): void {
 		this.#assertActive();
-		this.function._setHandler(CORE_STORE_MUTATION, block, undefined);
-		this.#touchBlock(block);
+		const previous = this.function.blockHandler(block);
+		if (previous === undefined) return;
+		this.#touchHandler(block, previous);
+		this.function._setHandler(this.#mutation, block, undefined);
 		this.#mark("exceptionFlow", "specializationInputs");
 		this.#edits++;
 	}
@@ -509,15 +648,19 @@ export class CoreEditor {
 		this.#assertActive();
 		const { payload, sourcePosition } = payloadWithoutSourcePosition(input);
 		const instruction = this.function._setTerminator(
-			CORE_STORE_MUTATION,
+			this.#mutation,
 			block,
 			payload,
 			sourcePosition,
 		);
 		this.#touchBlock(block);
 		this.#instructions.add(instruction);
+		this.#touchTerminator(block, payload);
 		this.#mark("body", "cfg", "specializationInputs");
-		if (payload.kind === "guard") this.#mark("facts");
+		if (payload.kind === "guard") {
+			this.#facts.add(payload.fact);
+			this.#mark("facts");
+		}
 		this.#edits++;
 		return instruction;
 	}
@@ -526,11 +669,15 @@ export class CoreEditor {
 		this.#assertActive();
 		const { payload } = payloadWithoutSourcePosition(input);
 		const instruction = this.function.blockTerminator(block);
-		this.function._replaceTerminatorPayload(CORE_STORE_MUTATION, instruction, payload);
-		this.#touchBlock(block);
+		const previous = this.function.terminatorPayload(instruction);
+		this.function._replaceTerminatorPayload(this.#mutation, instruction, payload);
+		this.#touchTerminator(block, previous);
+		this.#touchTerminator(block, payload);
 		this.#instructions.add(instruction);
 		this.#mark("body", "cfg", "specializationInputs");
-		if (payload.kind === "guard") this.#mark("facts");
+		if (previous.kind === "guard") this.#facts.add(previous.fact);
+		if (payload.kind === "guard") this.#facts.add(payload.fact);
+		if (previous.kind === "guard" || payload.kind === "guard") this.#mark("facts");
 		this.#edits++;
 	}
 
@@ -538,7 +685,7 @@ export class CoreEditor {
 		this.#assertActive();
 		const factId = coreFactId(this.function.factCapacity);
 		const instruction = this.function._setTerminator(
-			CORE_STORE_MUTATION,
+			this.#mutation,
 			block,
 			{
 				kind: "guard",
@@ -549,7 +696,7 @@ export class CoreEditor {
 			},
 			input.sourcePosition,
 		);
-		const created = this.function._addFact(CORE_STORE_MUTATION, {
+		const created = this.function._addFact(this.#mutation, {
 			...input.fact,
 			claims: [...input.fact.claims],
 			validity: { kind: "guard", instruction },
@@ -558,6 +705,13 @@ export class CoreEditor {
 		this.#touchBlock(block);
 		this.#instructions.add(instruction);
 		this.#facts.add(created);
+		this.#touchTerminator(block, {
+			kind: "guard",
+			condition: input.condition,
+			fact: created,
+			success: input.success,
+			fallback: input.fallback,
+		});
 		this.#mark("body", "cfg", "facts", "specializationInputs");
 		this.#edits++;
 		return created;
@@ -568,18 +722,21 @@ export class CoreEditor {
 		const terminator = this.function.blockTerminator(block);
 		const before = this.function.terminatorPayload(terminator);
 		const after = redirectPayload(before, from, replacement);
-		this.function._replaceTerminatorPayload(CORE_STORE_MUTATION, terminator, after);
-		this.#touchBlock(block);
-		this.#touchBlock(from);
-		this.#touchBlock(replacement.block);
+		this.function._replaceTerminatorPayload(this.#mutation, terminator, after);
+		this.#touchTerminator(block, before);
+		this.#touchTerminator(block, after);
 		this.#instructions.add(terminator);
 		this.#mark("body", "cfg", "specializationInputs");
+		if (before.kind === "guard") {
+			this.#facts.add(before.fact);
+			this.#mark("facts");
+		}
 		this.#edits++;
 	}
 
 	addFact(fact: Omit<CoreFact, "id">): CoreFactId {
 		this.#assertActive();
-		const id = this.function._addFact(CORE_STORE_MUTATION, fact);
+		const id = this.function._addFact(this.#mutation, fact);
 		this.#facts.add(id);
 		this.#mark("facts", "specializationInputs");
 		this.#edits++;
@@ -588,7 +745,7 @@ export class CoreEditor {
 
 	replaceFact(fact: CoreFactId, replacement: Omit<CoreFact, "id">): void {
 		this.#assertActive();
-		this.function._replaceFact(CORE_STORE_MUTATION, fact, replacement);
+		this.function._replaceFact(this.#mutation, fact, replacement);
 		this.#facts.add(fact);
 		this.#mark("facts", "specializationInputs");
 		this.#edits++;
@@ -616,7 +773,7 @@ export class CoreEditor {
 				);
 			}
 		}
-		this.function._removeFact(CORE_STORE_MUTATION, fact);
+		this.function._removeFact(this.#mutation, fact);
 		this.#facts.add(fact);
 		this.#mark("facts", "specializationInputs");
 		this.#edits++;
@@ -624,14 +781,14 @@ export class CoreEditor {
 
 	configureFunction(options: CoreFunctionOptions): void {
 		this.#assertActive();
-		this.function._configureFunction(CORE_STORE_MUTATION, options);
+		this.function._configureFunction(this.#mutation, options);
 		this.#mark("body", "specializationInputs");
 		this.#edits++;
 	}
 
 	finishFunction(entry: CoreBlockId, bodyEntry?: CoreBlockId): void {
 		this.#assertActive();
-		this.function._finishFunction(CORE_STORE_MUTATION, entry, bodyEntry);
+		this.function._finishFunction(this.#mutation, entry, bodyEntry);
 		this.#touchBlock(entry);
 		if (bodyEntry !== undefined) this.#touchBlock(bodyEntry);
 		this.#mark("body", "specializationInputs");
@@ -640,7 +797,7 @@ export class CoreEditor {
 
 	commit(): CoreChangeSet {
 		this.#assertActive();
-		this.function._endEdit(CORE_STORE_MUTATION, this.#domains);
+		this.function._endEdit(this.#mutation, this.#domains);
 		for (const domain of this.#domains) {
 			switch (domain) {
 				case "calls":
@@ -662,16 +819,18 @@ export class CoreEditor {
 					break;
 			}
 		}
-		this.function._bumpProgramVersions(CORE_STORE_MUTATION, this.#programDomains);
+		this.function._bumpProgramVersions(this.#mutation, this.#programDomains);
 		this.#committed = true;
 		return Object.freeze({
 			function: this.function.id,
 			domains: Object.freeze([...this.#domains]),
 			programDomains: Object.freeze([...this.#programDomains]),
-			blocks: Object.freeze(sortCoreIds(this.#blocks)),
-			instructions: Object.freeze(sortCoreIds(this.#instructions)),
-			values: Object.freeze(sortCoreIds(this.#values)),
-			facts: Object.freeze(sortCoreIds(this.#facts)),
+			blocks: Object.freeze(sortedIds(this.#blocks)),
+			instructions: Object.freeze(sortedIds(this.#instructions)),
+			values: Object.freeze(sortedIds(this.#values)),
+			facts: Object.freeze(sortedIds(this.#facts)),
+			edges: Object.freeze(sortedEdges(this.#edges)),
+			calls: Object.freeze(sortedIds(this.#calls)),
 			edits: this.#edits,
 		});
 	}
@@ -683,7 +842,7 @@ export class CoreEditor {
 	): CoreValueId {
 		this.#assertActive();
 		const value = this.function._appendBlockParameter(
-			CORE_STORE_MUTATION,
+			this.#mutation,
 			block,
 			spec,
 			prepend,
@@ -716,12 +875,14 @@ export class CoreEditor {
 	}
 
 	#markForOperation(
+		instruction: CoreInstructionId,
 		descriptor: CoreOpcodeDescriptor,
 		refinement: CoreEffectRefinement | undefined,
 	): void {
 		this.#mark("body", "specializationInputs");
 		if (descriptor.callTransfer !== undefined) {
 			this.#mark("calls");
+			this.#calls.add(instruction);
 		}
 		if (
 			descriptor.effects.reads.length > 0 ||
@@ -729,11 +890,13 @@ export class CoreEditor {
 			descriptor.effects.mayThrow ||
 			descriptor.effects.maySuspend ||
 			descriptor.effects.mayGc ||
+			descriptor.effects.callsUserCode ||
 			refinement !== undefined
 		) {
 			this.#mark("memoryEffects");
 		}
 		if (refinement !== undefined) this.#mark("facts");
+		this.#touchRefinement(refinement);
 	}
 
 	#mark(...domains: ReadonlyArray<CoreChangeDomain>): void {
@@ -742,6 +905,34 @@ export class CoreEditor {
 
 	#touchBlock(block: CoreBlockId): void {
 		this.#blocks.add(block);
+	}
+
+	#touchValues(values: ReadonlyArray<CoreValueId>): void {
+		for (const value of values) this.#values.add(value);
+	}
+
+	#touchTerminator(block: CoreBlockId, payload: CoreTerminatorPayload): void {
+		this.#touchBlock(block);
+		this.#touchValues(terminatorOperands(payload));
+		for (const target of terminatorTargets(payload)) {
+			this.#touchBlock(target);
+			this.#touchEdge({ kind: "control-flow", source: block, target });
+		}
+	}
+
+	#touchHandler(block: CoreBlockId, handler: CoreEdge): void {
+		this.#touchBlock(block);
+		this.#touchBlock(handler.block);
+		this.#touchValues(handler.arguments);
+		this.#touchEdge({ kind: "exception", source: block, target: handler.block });
+	}
+
+	#touchRefinement(refinement: CoreEffectRefinement | undefined): void {
+		if (refinement !== undefined) this.#facts.add(refinement.proof);
+	}
+
+	#touchEdge(edge: CoreChangedEdge): void {
+		this.#edges.set(edgeKey(edge), edge);
 	}
 
 	#assertActive(): void {

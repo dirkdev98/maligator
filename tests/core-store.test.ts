@@ -7,6 +7,7 @@ import {
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
+import * as coreStore from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 
 function registry(): CoreOpcodeRegistry {
@@ -131,6 +132,26 @@ describe("Core store", () => {
 		expect(fn.valueUseCount(parameter)).toBe(1);
 	});
 
+	it("publishes old and new operands plus retained results for in-place rewrites", () => {
+		const { program, fn, constant, copied, parameter } = oneFunction();
+		const identity = [...fn.bodyInstructionIds(fn.entry)][1]!;
+		const replaceOperands = CoreEditor.open(program, fn.id);
+		replaceOperands.replaceOperands(identity, [parameter]);
+		const operandChanges = replaceOperands.commit();
+
+		expect(operandChanges.instructions).toEqual([identity]);
+		expect(operandChanges.values).toEqual([parameter, constant, copied]);
+		expect(operandChanges.edges).toEqual([]);
+		expect(operandChanges.calls).toEqual([]);
+
+		const replaceInstruction = CoreEditor.open(program, fn.id);
+		replaceInstruction.replaceInstruction(identity, "identity", [constant]);
+		const instructionChanges = replaceInstruction.commit();
+
+		expect(instructionChanges.instructions).toEqual([identity]);
+		expect(instructionChanges.values).toEqual([parameter, constant, copied]);
+	});
+
 	it("increments only selected version domains once per commit", () => {
 		const first = oneFunction();
 		const second = oneFunction(first.program);
@@ -231,6 +252,89 @@ describe("Core store", () => {
 		expect(changes.edits).toBeGreaterThan(0);
 	});
 
+	it("reports every contained domain, call site, and edge when removing a block", () => {
+		const callRegistry = registry();
+		callRegistry.define({
+			opcode: "effectful-call",
+			inputs: coreArity(1),
+			outputs: coreArity(1),
+			effects: {
+				reads: ["host"],
+				writes: ["host"],
+				mayThrow: true,
+				maySuspend: false,
+				mayGc: true,
+				callsUserCode: true,
+			},
+			discardable: false,
+			callTransfer: {
+				calleeOperand: 0,
+				result: "construct-completion",
+				invocation: "construct",
+				arguments: { kind: "positional", firstOperand: 1 },
+			},
+		});
+		const program = new CoreProgram(callRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = builder.blockParameters(entry)[0]!.value;
+		const removed = builder.createBlock([{ representation: "i32" }]);
+		const removedParameter = builder.blockParameters(removed)[0]!.value;
+		const fact = builder.addFact({
+			kind: "test-effect",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "test-effect" },
+			obligations: [],
+			origin: "test",
+		});
+		const [callResult] = builder.appendInstruction(
+			removed,
+			"effectful-call",
+			[parameter],
+			{
+				outputRepresentations: ["scalarized-object"],
+				effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact },
+			},
+		);
+		builder.setHandler(removed, entry, [parameter]);
+		builder.setTerminator(removed, { kind: "jump", edge: { block: entry, arguments: [] } });
+		builder.setTerminator(entry, { kind: "return", value: parameter });
+		const finished = builder.finish(entry);
+		const fn = program.function(finished.function);
+		const call = [...fn.bodyInstructionIds(removed)][0]!;
+
+		const editor = CoreEditor.open(program, fn.id);
+		editor.removeBlock(removed);
+		const changes = editor.commit();
+
+		expect(changes.domains).toEqual([
+			"body",
+			"specializationInputs",
+			"calls",
+			"memoryEffects",
+			"facts",
+			"cfg",
+			"exceptionFlow",
+		]);
+		expect(changes.programDomains).toEqual([
+			"specializationInputs",
+			"calls",
+			"facts",
+		]);
+		expect(changes.calls).toEqual([call]);
+		expect(changes.facts).toEqual([fact]);
+		expect(changes.values).toEqual([
+			parameter,
+			removedParameter,
+			callResult!,
+		]);
+		expect(changes.edges).toEqual([
+			{ kind: "control-flow", source: removed, target: entry },
+			{ kind: "exception", source: removed, target: entry },
+		]);
+	});
+
 	it("keeps function identities stable when another function is added", () => {
 		const first = oneFunction();
 		const second = oneFunction(first.program);
@@ -248,6 +352,10 @@ describe("Core store", () => {
 		expect(sealed).toBe(program);
 		expect(() => CoreEditor.open(program, fn.id)).toThrow("sealed");
 		expect(() => CoreEditor.createFunction(program)).toThrow("sealed");
+	});
+
+	it("does not export the store mutation capability", () => {
+		expect(coreStore).not.toHaveProperty("CORE_STORE_MUTATION");
 	});
 
 	it("does not expose mutable operand or result storage", () => {
