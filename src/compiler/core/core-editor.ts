@@ -8,6 +8,7 @@ import type {
 	CoreFact,
 	CoreFactId,
 	CoreFunctionId,
+	CoreFunctionMetadata,
 	CoreFunctionOptions,
 	CoreInstructionId,
 	CoreOpcodeDescriptor,
@@ -25,6 +26,7 @@ import type {
 	CoreProgram,
 	CoreProgramChangeDomain,
 	CoreProgramDataTables,
+	CoreSourcePosition,
 	CoreStoreMutation,
 } from "./core-store.ts";
 
@@ -234,12 +236,14 @@ function edgeKey(edge: CoreChangedEdge): string {
 function sortedEdges(
 	edges: ReadonlyMap<string, CoreChangedEdge>,
 ): Array<CoreChangedEdge> {
-	return [...edges.values()].sort(
-		(left, right) =>
-			left.source - right.source ||
-			left.target - right.target ||
-			left.kind.localeCompare(right.kind),
-	).map((edge) => Object.freeze({ ...edge }));
+	return [...edges.values()]
+		.sort(
+			(left, right) =>
+				left.source - right.source ||
+				left.target - right.target ||
+				left.kind.localeCompare(right.kind),
+		)
+		.map((edge) => Object.freeze({ ...edge }));
 }
 
 function sameEffectRefinement(
@@ -259,6 +263,28 @@ function sameEffectRefinement(
 		leftEffects.reads.every((domain, index) => domain === rightEffects.reads[index]) &&
 		leftEffects.writes.length === rightEffects.writes.length &&
 		leftEffects.writes.every((domain, index) => domain === rightEffects.writes[index])
+	);
+}
+
+function sameFunctionMetadata(
+	left: CoreFunctionMetadata,
+	right: CoreFunctionMetadata,
+): boolean {
+	return (
+		left.sourcePath === right.sourcePath &&
+		left.sourceStrict === right.sourceStrict &&
+		left.nameStringIndex === right.nameStringIndex &&
+		left.length === right.length &&
+		left.mappedArguments === right.mappedArguments &&
+		left.mappedArgumentSlots.length === right.mappedArgumentSlots.length &&
+		left.mappedArgumentSlots.every(
+			(slot, index) => slot === right.mappedArgumentSlots[index],
+		) &&
+		left.capturedCount === right.capturedCount &&
+		left.strict === right.strict &&
+		left.isClassConstructor === right.isClassConstructor &&
+		left.isDerivedConstructor === right.isDerivedConstructor &&
+		left.hasPrototype === right.hasPrototype
 	);
 }
 
@@ -312,6 +338,15 @@ export class CoreEditor {
 
 	static configureProgram(program: CoreProgram, data: CoreProgramDataTables): void {
 		program._configureProgramData(data);
+	}
+
+	appendSourcePositions(positions: ReadonlyArray<CoreSourcePosition>): number {
+		this.#assertActive();
+		if (positions.length === 0) return this.program.sourcePositions.length;
+		const start = this.program._appendSourcePositions(this.#mutation, positions);
+		this.#programDomains.add("sourcePositions");
+		this.#edits++;
+		return start;
 	}
 
 	createBlock(parameters: ReadonlyArray<CoreBlockParameterSpec> = []): CoreBlockId {
@@ -446,6 +481,12 @@ export class CoreEditor {
 			);
 		}
 		const previousInputs = this.function.instructionOperands(instruction);
+		if (
+			previousInputs.length === inputs.length &&
+			previousInputs.every((value, index) => value === inputs[index])
+		) {
+			return;
+		}
 		const results = this.function.instructionResults(instruction);
 		const refinement = this.function.instructionEffectRefinement(instruction);
 		this.function._replaceOperands(this.#mutation, instruction, inputs);
@@ -571,11 +612,7 @@ export class CoreEditor {
 		}
 		for (const instruction of terminators) {
 			const before = this.function.terminatorPayload(instruction);
-			const payload = replacePayloadValue(
-				before,
-				value,
-				replacement,
-			);
+			const payload = replacePayloadValue(before, value, replacement);
 			this.function._replaceTerminatorPayload(this.#mutation, instruction, payload);
 			this.#instructions.add(instruction);
 			const block = this.function.instructionBlock(instruction);
@@ -642,9 +679,7 @@ export class CoreEditor {
 
 	setValueRepresentation(value: CoreValueId, representation: CoreRepresentation): void {
 		this.#assertActive();
-		if (
-			!this.function._setValueRepresentation(this.#mutation, value, representation)
-		) {
+		if (!this.function._setValueRepresentation(this.#mutation, value, representation)) {
 			return;
 		}
 		this.#values.add(value);
@@ -816,6 +851,25 @@ export class CoreEditor {
 
 	configureFunction(options: CoreFunctionOptions): void {
 		this.#assertActive();
+		const metadata =
+			options.metadata === undefined
+				? this.function.metadata
+				: {
+						...this.function.metadata,
+						...options.metadata,
+						mappedArgumentSlots:
+							options.metadata.mappedArgumentSlots ??
+							this.function.metadata.mappedArgumentSlots,
+					};
+		if (
+			(options.isGenerator ?? this.function.isGenerator) === this.function.isGenerator &&
+			(options.isAsync ?? this.function.isAsync) === this.function.isAsync &&
+			(options.parameterCount ?? this.function.parameterCount) ===
+				this.function.parameterCount &&
+			sameFunctionMetadata(this.function.metadata, metadata)
+		) {
+			return;
+		}
 		this.function._configureFunction(this.#mutation, options);
 		this.#mark("body", "specializationInputs");
 		this.#edits++;
@@ -823,6 +877,17 @@ export class CoreEditor {
 
 	finishFunction(entry: CoreBlockId, bodyEntry?: CoreBlockId): void {
 		this.#assertActive();
+		if (
+			this.function.finished &&
+			this.function.entry === entry &&
+			this.function.bodyEntry === bodyEntry &&
+			this.function.parameters.length === this.function.parameterCount &&
+			this.function.parameters.every(
+				(value, index) => value === this.function.blockParameters(entry)[index]?.value,
+			)
+		) {
+			return;
+		}
 		this.function._finishFunction(this.#mutation, entry, bodyEntry);
 		this.#touchBlock(entry);
 		if (bodyEntry !== undefined) this.#touchBlock(bodyEntry);

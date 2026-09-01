@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
-import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
 import * as coreStore from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -151,6 +151,66 @@ describe("Core store", () => {
 
 		expect(instructionChanges.instructions).toEqual([identity]);
 		expect(instructionChanges.values).toEqual([parameter, constant, copied]);
+	});
+
+	it("does not publish or version semantic no-op edits", () => {
+		const { program, fn } = oneFunction();
+		const instruction = [...fn.bodyInstructionIds(fn.entry)][1]!;
+		const functionVersions = fn.versions;
+		const programVersions = program.versions;
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceOperands(instruction, fn.instructionOperands(instruction));
+		editor.configureFunction({
+			isGenerator: fn.isGenerator,
+			isAsync: fn.isAsync,
+			parameterCount: fn.parameterCount,
+			metadata: fn.metadata,
+		});
+		editor.finishFunction(fn.entry, fn.bodyEntry);
+		const changes = editor.commit();
+
+		expect(changes).toMatchObject({
+			domains: [],
+			programDomains: [],
+			blocks: [],
+			instructions: [],
+			values: [],
+			facts: [],
+			edges: [],
+			calls: [],
+			edits: 0,
+		});
+		expect(fn.versions).toEqual(functionVersions);
+		expect(program.versions).toEqual(programVersions);
+	});
+
+	it("commits appended source metadata without invalidating semantic data", () => {
+		const { program, fn } = oneFunction();
+		const functionVersions = fn.versions;
+		const programVersions = program.versions;
+		const editor = CoreEditor.open(program, fn.id);
+		const start = editor.appendSourcePositions([
+			{ line: 4, column: 2 },
+			{ line: 8, column: 3, inlinedFunctionIndex: 1, callerPosId: 0 },
+		]);
+		const changes = editor.commit();
+
+		expect(start).toBe(0);
+		expect(program.sourcePositions).toEqual([
+			{ line: 4, column: 2 },
+			{ line: 8, column: 3, inlinedFunctionIndex: 1, callerPosId: 0 },
+		]);
+		expect(changes).toMatchObject({
+			domains: [],
+			programDomains: ["sourcePositions"],
+			edits: 1,
+		});
+		expect(fn.versions).toEqual(functionVersions);
+		expect(program.versions).toEqual({
+			...programVersions,
+			sourcePositions: programVersions.sourcePositions + 1,
+		});
+		expect(program.versions.data).toBe(programVersions.data);
 	});
 
 	it("stores effect refinements out of line behind dense numeric instruction refs", () => {
@@ -459,7 +519,10 @@ describe("Core store", () => {
 			},
 		);
 		builder.setHandler(removed, entry, [parameter]);
-		builder.setTerminator(removed, { kind: "jump", edge: { block: entry, arguments: [] } });
+		builder.setTerminator(removed, {
+			kind: "jump",
+			edge: { block: entry, arguments: [] },
+		});
 		builder.setTerminator(entry, { kind: "return", value: parameter });
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
@@ -478,18 +541,10 @@ describe("Core store", () => {
 			"cfg",
 			"exceptionFlow",
 		]);
-		expect(changes.programDomains).toEqual([
-			"specializationInputs",
-			"calls",
-			"facts",
-		]);
+		expect(changes.programDomains).toEqual(["specializationInputs", "calls", "facts"]);
 		expect(changes.calls).toEqual([call]);
 		expect(changes.facts).toEqual([fact]);
-		expect(changes.values).toEqual([
-			parameter,
-			removedParameter,
-			callResult!,
-		]);
+		expect(changes.values).toEqual([parameter, removedParameter, callResult!]);
 		expect(changes.edges).toEqual([
 			{ kind: "control-flow", source: removed, target: entry },
 			{ kind: "exception", source: removed, target: entry },

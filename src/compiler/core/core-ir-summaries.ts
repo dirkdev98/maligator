@@ -105,10 +105,7 @@ interface CoreProgramSummaryState extends CoreProgramSummaries {
 	readonly local: ReadonlyMap<CoreFunctionId, CoreLocalFunctionSummary>;
 	readonly published: ReadonlyMap<CoreFunctionId, CorePublishedFunctionSummary>;
 	readonly owner: ReadonlyMap<CoreFunctionId, number>;
-	readonly rootReasons: ReadonlyMap<
-		CoreFunctionId,
-		ReadonlyArray<SummaryRootReason>
-	>;
+	readonly rootReasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>;
 }
 
 function localVersionKey(fn: CoreFunctionStore): string {
@@ -259,7 +256,8 @@ function analyzeLocalSummary(
 		}
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
-			const operand = opcode === "move" ? fn.instructionOperands(instruction)[0] : undefined;
+			const operand =
+				opcode === "move" ? fn.instructionOperands(instruction)[0] : undefined;
 			const inputs = operand === undefined ? [] : [operand];
 			for (const output of fn.instructionResults(instruction)) {
 				transfers.push({
@@ -497,12 +495,15 @@ function callGraphSccs(
 			scc.functions.every((functionId) => !affected.has(functionId)),
 		) ?? [];
 	const owner = new Map<CoreFunctionId, number>();
-	const sccs = [...preserved, ...components.map((functions) =>
-		Object.freeze({
-			id: `scc:${functions.join(",")}`,
-			functions: Object.freeze(functions),
-		}),
-	)];
+	const sccs = [
+		...preserved,
+		...components.map((functions) =>
+			Object.freeze({
+				id: `scc:${functions.join(",")}`,
+				functions: Object.freeze(functions),
+			}),
+		),
+	];
 	for (const [index, scc] of sccs.entries()) {
 		const functions = scc.functions;
 		for (const functionId of functions) owner.set(functionId, index);
@@ -904,13 +905,7 @@ export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgram
 		key: "program-summaries",
 		scope: "program",
 		functionDependencies: ["body", "cfg", "calls", "memoryEffects", "representations"],
-		programDependencies: [
-			"functions",
-			"calls",
-			"facts",
-			"representations",
-			"specializationInputs",
-		],
+		programDependencies: ["functions", "calls", "facts", "representations"],
 		contextIdentity(context) {
 			return context.facts.closure.sourceClosure.kind;
 		},

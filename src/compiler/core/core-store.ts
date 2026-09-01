@@ -1,3 +1,4 @@
+import { CoreEditor } from "./core-editor.ts";
 import {
 	coreBlockId,
 	coreFactId,
@@ -6,7 +7,6 @@ import {
 	coreOpcodeId,
 	coreValueId,
 } from "./core-ir.ts";
-import { CoreEditor } from "./core-editor.ts";
 import type {
 	CoreAttributeValue,
 	CoreBlockId,
@@ -35,9 +35,7 @@ export interface CoreStoreMutation {
 	readonly __coreStoreMutation: never;
 }
 
-const CORE_STORE_MUTATION = Symbol(
-	"Core store mutation",
-) as unknown as CoreStoreMutation;
+const CORE_STORE_MUTATION = Symbol("Core store mutation") as unknown as CoreStoreMutation;
 
 export type CoreChangeDomain =
 	| "body"
@@ -52,6 +50,7 @@ export type CoreChangeDomain =
 export type CoreProgramChangeDomain =
 	| "functions"
 	| "data"
+	| "sourcePositions"
 	| "calls"
 	| "facts"
 	| "representations"
@@ -71,6 +70,7 @@ export interface CoreFunctionVersions {
 export interface CoreProgramVersions {
 	readonly functions: number;
 	readonly data: number;
+	readonly sourcePositions: number;
 	readonly calls: number;
 	readonly facts: number;
 	readonly representations: number;
@@ -219,6 +219,7 @@ const FUNCTION_DOMAINS: ReadonlyArray<CoreChangeDomain> = [
 const PROGRAM_DOMAINS: ReadonlyArray<CoreProgramChangeDomain> = [
 	"functions",
 	"data",
+	"sourcePositions",
 	"calls",
 	"facts",
 	"representations",
@@ -577,6 +578,14 @@ export class CoreFunctionStore {
 
 	get metadata(): CoreFunctionMetadata {
 		return this.#metadata;
+	}
+
+	get parameterCount(): number {
+		return this.#parameterCount;
+	}
+
+	get finished(): boolean {
+		return this.#entry !== undefined;
 	}
 
 	get parameters(): ReadonlyArray<CoreValueId> {
@@ -1428,9 +1437,7 @@ export class CoreFunctionStore {
 		return instruction;
 	}
 
-	#appendEffectRefinement(
-		refinement: CoreEffectRefinement | undefined,
-	): number {
+	#appendEffectRefinement(refinement: CoreEffectRefinement | undefined): number {
 		if (refinement === undefined) return -1;
 		const reference = this.#effectRefinements.length;
 		this.#effectRefinements.push(freezeRefinement(refinement));
@@ -1542,6 +1549,7 @@ export class CoreProgram {
 	readonly #versions: Record<CoreProgramChangeDomain, number> = {
 		functions: 0,
 		data: 0,
+		sourcePositions: 0,
 		calls: 0,
 		facts: 0,
 		representations: 0,
@@ -1604,12 +1612,7 @@ export class CoreProgram {
 	}
 
 	_openEditor(functionId: CoreFunctionId): CoreEditor {
-		return CoreEditor._open(
-			CORE_STORE_MUTATION,
-			this,
-			this.function(functionId),
-			false,
-		);
+		return CoreEditor._open(CORE_STORE_MUTATION, this, this.function(functionId), false);
 	}
 
 	_createEditor(options: CoreFunctionOptions): CoreEditor {
@@ -1649,6 +1652,20 @@ export class CoreProgram {
 		if (this.#sealed) throw new Error("Core program is sealed");
 		this.#setData(data);
 		this.#versions.data++;
+	}
+
+	_appendSourcePositions(
+		mutation: CoreStoreMutation,
+		positions: ReadonlyArray<CoreSourcePosition>,
+	): number {
+		this.#requireMutation(mutation);
+		if (this.#sealed) throw new Error("Core program is sealed");
+		const start = this.#sourcePositions.length;
+		this.#sourcePositions = Object.freeze([
+			...this.#sourcePositions,
+			...positions.map((position) => Object.freeze({ ...position })),
+		]);
+		return start;
 	}
 
 	_bumpVersions(

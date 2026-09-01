@@ -474,10 +474,7 @@ function analyzeFunctionTargets(
 		const written = values[value] ?? CORE_CALLEE_TARGETS_OPEN;
 		cellWrites.set(
 			key,
-			joinCoreCalleeTargets(
-				cellWrites.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM,
-				written,
-			),
+			joinCoreCalleeTargets(cellWrites.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM, written),
 		);
 		if (opcode === "storeGlobal") {
 			const slot = fn.instructionAttributes(instruction).index;
@@ -530,10 +527,7 @@ interface CoreCallGraphIndexState extends CoreCallGraphIndex {
 	>;
 	readonly globalStores: ReadonlyMap<number, CoreCalleeTargets>;
 	readonly sites: ReadonlyMap<CoreCallSiteId, CoreIndexedCallSite>;
-	readonly outgoingIndex: ReadonlyMap<
-		CoreFunctionId,
-		ReadonlyArray<CoreIndexedCallSite>
-	>;
+	readonly outgoingIndex: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreIndexedCallSite>>;
 	readonly callerIndex: ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionId>>;
 }
 
@@ -605,10 +599,7 @@ export function analyzeCoreCallGraph(
 		const oldAccess = cellAccesses.get(functionId);
 		const nextAccess = collectFunctionCellAccesses(fn);
 		cellAccesses.set(functionId, nextAccess);
-		for (const key of new Set([
-			...(oldAccess?.reads ?? []),
-			...nextAccess.reads,
-		])) {
+		for (const key of new Set([...(oldAccess?.reads ?? []), ...nextAccess.reads])) {
 			const readers = new Set(cellReaders.get(key) ?? []);
 			readers.delete(functionId);
 			if (nextAccess.reads.has(key)) readers.add(functionId);
@@ -949,7 +940,7 @@ export const CORE_CALL_GRAPH_ANALYSIS: CoreAnalysisDefinition<CoreCallGraphIndex
 	key: "call-graph",
 	scope: "program",
 	functionDependencies: ["body", "cfg", "calls"],
-	programDependencies: ["functions", "calls", "specializationInputs"],
+	programDependencies: ["functions", "calls"],
 	contextIdentity(context) {
 		return context.facts.closure.sourceClosure.kind;
 	},

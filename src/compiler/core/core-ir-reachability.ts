@@ -194,10 +194,7 @@ function reachabilityRoots(
 	readonly hostInstallSlotsRead: number;
 } {
 	const roots = new Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>();
-	const enter = (
-		candidate: unknown,
-		reason: CoreFunctionReachabilityReason,
-	): void => {
+	const enter = (candidate: unknown, reason: CoreFunctionReachabilityReason): void => {
 		if (!validFunction(program, candidate)) return;
 		const reasons = roots.get(candidate) ?? new Set();
 		reasons.add(reason);
@@ -263,20 +260,14 @@ export function analyzeCoreFunctionReachability(
 	for (const functionId of changedSources) {
 		const prior =
 			outgoingEdges.get(functionId) ??
-			new Map<
-				CoreFunctionId,
-				ReadonlySet<CoreFunctionReachabilityReason>
-			>();
+			new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>();
 		const next = allSet.has(functionId)
 			? combinedEdges(
 					program,
 					targets,
 					functionId,
 					structural.get(functionId) ??
-						new Map<
-							CoreFunctionId,
-							ReadonlySet<CoreFunctionReachabilityReason>
-						>(),
+						new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>(),
 				)
 			: new Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>();
 		for (const target of new Set([...prior.keys(), ...next.keys()])) {
@@ -284,10 +275,7 @@ export function analyzeCoreFunctionReachability(
 			const newReasons = next.get(target);
 			if (sameReasons(oldReasons, newReasons)) continue;
 			affected.add(target);
-			reachabilityEdgesUpdated += Math.max(
-				oldReasons?.size ?? 0,
-				newReasons?.size ?? 0,
-			);
+			reachabilityEdgesUpdated += Math.max(oldReasons?.size ?? 0, newReasons?.size ?? 0);
 			if ((oldReasons?.size ?? 0) === 0 || (newReasons?.size ?? 0) === 0) {
 				const reverse = new Set(reverseEdges.get(target) ?? []);
 				if ((newReasons?.size ?? 0) === 0) reverse.delete(functionId);
@@ -381,10 +369,7 @@ export function analyzeCoreFunctionReachability(
 	}
 
 	let resultSetUpdates = 0;
-	for (const functionId of new Set([
-		...(previous?.executable ?? []),
-		...executable,
-	])) {
+	for (const functionId of new Set([...(previous?.executable ?? []), ...executable])) {
 		if ((previous?.executable.has(functionId) ?? false) !== executable.has(functionId)) {
 			resultSetUpdates++;
 		}
@@ -396,9 +381,10 @@ export function analyzeCoreFunctionReachability(
 		previous.functionVersions.size === all.length &&
 		all.every((functionId) => previous.functionVersions.has(functionId));
 	const finalExecutable = stableExecutable ? previous.executable : executable;
-	const dead = stableExecutable && stableUniverse
-		? previous.dead
-		: new Set(all.filter((functionId) => !executable.has(functionId)));
+	const dead =
+		stableExecutable && stableUniverse
+			? previous.dead
+			: new Set(all.filter((functionId) => !executable.has(functionId)));
 	const liveFunctions = stableExecutable
 		? previous.liveFunctions
 		: Object.freeze([...executable].sort((left, right) => left - right));
@@ -436,7 +422,7 @@ export const CORE_FUNCTION_REACHABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFun
 		key: "function-reachability",
 		scope: "program",
 		functionDependencies: ["body", "cfg", "calls"],
-		programDependencies: ["functions", "data", "calls", "specializationInputs"],
+		programDependencies: ["functions", "data", "calls"],
 		contextIdentity(context) {
 			return context.facts.closure.sourceClosure.kind;
 		},

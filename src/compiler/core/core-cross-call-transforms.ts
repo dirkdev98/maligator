@@ -66,12 +66,14 @@ interface LinearInlineTarget {
 
 function inlineSourcePositions(
 	program: CoreProgram,
+	editor: CoreEditor,
 	callee: CoreFunctionId,
 	callerPosition: number | undefined,
 	instructions: ReadonlyArray<CoreInstructionId>,
 	fn: CoreFunctionStore,
 ): ReadonlyMap<CoreInstructionId, number | undefined> {
-	const sourcePositions = [...program.sourcePositions];
+	const appended: Array<(typeof program.sourcePositions)[number]> = [];
+	const base = program.sourcePositions.length;
 	const relocated = new Map<number, number>();
 	const relocate = (positionId: number): number => {
 		const known = relocated.get(positionId);
@@ -84,8 +86,8 @@ function inlineSourcePositions(
 			position.inlinedFunctionIndex !== undefined && position.callerPosId !== undefined
 				? relocate(position.callerPosId)
 				: callerPosition;
-		const result = sourcePositions.length;
-		sourcePositions.push(
+		const result = base + appended.length;
+		appended.push(
 			Object.freeze({
 				line: position.line,
 				column: position.column,
@@ -101,15 +103,7 @@ function inlineSourcePositions(
 		const position = fn.instructionSourcePosition(instruction);
 		result.set(instruction, position === undefined ? callerPosition : relocate(position));
 	}
-	if (sourcePositions.length !== program.sourcePositions.length) {
-		CoreEditor.configureProgram(program, {
-			stringConstants: program.stringConstants,
-			bigintConstants: program.bigintConstants,
-			literalTemplateData: program.literalTemplateData,
-			sourcePositions,
-			globalCount: program.globalCount,
-		});
-	}
+	editor.appendSourcePositions(appended);
 	return result;
 }
 
@@ -404,16 +398,24 @@ function applyLinearInline(
 			: undefined;
 	if (firstArgument === undefined) return undefined;
 	const arguments_ = operands.slice(firstArgument);
+	if (
+		receiver === undefined &&
+		linear.instructions.some(
+			(instruction) => linear.function.instructionOpcodeName(instruction) === "loadThis",
+		)
+	)
+		return undefined;
 	const block = caller.instructionBlock(candidate.site);
 	const callerPosition = caller.instructionSourcePosition(candidate.site);
+	const editor = CoreEditor.open(program, candidate.caller);
 	const sourcePositions = inlineSourcePositions(
 		program,
+		editor,
 		target,
 		callerPosition,
 		linear.instructions,
 		linear.function,
 	);
-	const editor = CoreEditor.open(program, candidate.caller);
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = 0;
 	for (const [index, parameter] of linear.function.parameters.entries()) {
@@ -532,8 +534,10 @@ function applyGuardedLinearInline(
 	if (originalPayload.kind === "guard") return undefined;
 	const terminatorPosition = caller.instructionSourcePosition(originalTerminator);
 	const callerPosition = caller.instructionSourcePosition(candidate.site);
+	const editor = CoreEditor.open(program, candidate.caller);
 	const sourcePositions = inlineSourcePositions(
 		program,
+		editor,
 		target,
 		callerPosition,
 		linear.instructions,
@@ -549,7 +553,6 @@ function applyGuardedLinearInline(
 	const handler = caller.blockHandler(block);
 	const callAttributes = caller.instructionAttributes(candidate.site);
 	const callRefinement = caller.instructionEffectRefinement(candidate.site);
-	const editor = CoreEditor.open(program, candidate.caller);
 	const fast = editor.createBlock();
 	const fallback = editor.createBlock();
 	const join = editor.createBlock([
@@ -698,11 +701,8 @@ function foldProgramValueKindObservations(
 		const fn = program.function(functionId);
 		const values = kinds.values(functionId);
 		const folds = [...fn.instructionIds()].flatMap((instruction) => {
-			const result = coreValueKindObservation(
-				program,
-				fn,
-				instruction,
-				(value) => values.kindMask(value),
+			const result = coreValueKindObservation(program, fn, instruction, (value) =>
+				values.kindMask(value),
 			);
 			return result === undefined ? [] : [{ instruction, result }];
 		});

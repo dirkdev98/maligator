@@ -118,6 +118,37 @@ describe("incremental Core call graph", () => {
 		});
 	});
 
+	it("keeps the call graph cached across representation and source-only edits", () => {
+		const program = analysisProgram();
+		appendCaller(program, 1);
+		const leaf = appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+
+		const representation = CoreEditor.open(program, leaf.function);
+		const [value] = program
+			.function(leaf.function)
+			.instructionResults(leaf.valueInstruction);
+		expect(value).toBeDefined();
+		representation.setValueRepresentation(value!, "f64");
+		representation.commit();
+		const afterRepresentation = manager.get(CORE_CALL_GRAPH_ANALYSIS, {
+			scope: "program",
+		});
+
+		const source = CoreEditor.open(program, leaf.function);
+		source.appendSourcePositions([{ line: 1, column: 1 }]);
+		source.commit();
+		const afterSource = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+
+		expect(afterRepresentation).toBe(first);
+		expect(afterSource).toBe(first);
+	});
+
 	it("revisits only dependent blocks when a loop adds a callee target", () => {
 		const program = analysisProgram();
 		const builder = new CoreFunctionBuilder(program);
