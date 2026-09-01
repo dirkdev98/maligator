@@ -1605,6 +1605,11 @@ export class CoreProgram {
 		}
 	}
 
+	hasFunction(id: CoreFunctionId): boolean {
+		const fn = this.#functions[id];
+		return fn !== undefined && fn.id === id;
+	}
+
 	function(id: CoreFunctionId): CoreFunctionStore {
 		const fn = this.#functions[id];
 		if (fn === undefined || fn.id !== id) throw new Error(`Unknown Core function ${id}`);

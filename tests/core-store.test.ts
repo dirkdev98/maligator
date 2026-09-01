@@ -61,6 +61,17 @@ function oneFunction(program = new CoreProgram(registry())) {
 }
 
 describe("Core store", () => {
+	it("checks function identities without enumerating the program", () => {
+		const { program, fn } = oneFunction();
+		Object.defineProperty(program, "functionIds", {
+			value() {
+				throw new Error("function lookup enumerated the program");
+			},
+		});
+		expect(program.hasFunction(fn.id)).toBe(true);
+		expect(program.hasFunction(1 as never)).toBe(false);
+	});
+
 	it("allocates stable monotonic identities and preserves linked instruction order", () => {
 		const { fn, entry, constant, copied } = oneFunction();
 		expect(fn.id).toBe(0);

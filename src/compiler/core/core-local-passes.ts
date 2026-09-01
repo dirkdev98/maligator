@@ -704,9 +704,9 @@ function builtinSourceSite(
 	const owner =
 		position.inlinedFunctionIndex === undefined
 			? fn
-			: [...program.functionIds()]
-					.map((functionId) => program.function(functionId))
-					.find(({ id }) => id === position.inlinedFunctionIndex);
+			: program.hasFunction(position.inlinedFunctionIndex)
+				? program.function(position.inlinedFunctionIndex)
+				: undefined;
 	return owner === undefined
 		? undefined
 		: sourceSiteId(
