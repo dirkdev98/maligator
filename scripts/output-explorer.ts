@@ -5,11 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
-import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-validity.ts";
+import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import { formatCoreProgram } from "../src/compiler/core/core-ir.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
+import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
+import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { OPTIMIZATION_ABLATIONS } from "../src/compiler/shared/compiler-diagnostics.ts";
 import {
 	conservativeCompilerProgramFacts,
 	programClosureCertificate,
@@ -124,7 +126,7 @@ globalThis.answer = answer(true);`,
 					preCore: "binary",
 					optimizedCore: "createNumber",
 					malw: "CREATE_NUMBER",
-					c: "4.3e+1",
+					c: " = 43;",
 				},
 			},
 		],
@@ -616,13 +618,13 @@ function summarizeRuntime(image: RuntimeImage, wire: Uint8Array, c: string) {
 	};
 }
 
-function compileMode(sample: Sample, mode: ModeId) {
+function compileSampleCore(sample: Sample) {
 	const sourcePath = `output-explorer/${sample.id}.js`;
 	const semantic = analyzeSourceAndRunSemanticAnalysis(sample.source, sourcePath);
 	const facts = withProgramClosure(
 		{
 			...conservativeCompilerProgramFacts(),
-			compilationMode: mode === "full" ? ("full" as const) : ("development" as const),
+			compilationMode: "full" as const,
 		},
 		programClosureCertificate(
 			{ kind: "whole-program", entry: sourcePath },
@@ -632,37 +634,91 @@ function compileMode(sample: Sample, mode: ModeId) {
 	);
 	const core = lowerSemanticProgramToCore(semantic, {
 		facts,
-		collectOptimizationDiagnostics: true,
 	});
-	const result = executeCoreOptimizations(core.program, {
-		context: core.context,
-		...(mode === "ablated"
-			? { ablations: new Set(OPTIMIZATION_ABLATIONS), maxRounds: 1 }
-			: {}),
+	const preCore = formatCore(core.program);
+	const result = optimizeCore(core);
+	return { preCore, result };
+}
+
+function genericPlan(plan: CoreOptimizationPlan): CoreOptimizationPlan {
+	const discovered = Object.values(plan.statistics.discoveredByKind).reduce(
+		(total, count) => total + count,
+		0,
+	);
+	const zeroed = <Key extends string>(record: Readonly<Record<Key, number>>) =>
+		Object.fromEntries(Object.keys(record).map((key) => [key, 0])) as Record<Key, number>;
+	return Object.freeze({
+		...plan,
+		directEntries: Object.freeze([]),
+		specializations: Object.freeze([]),
+		statistics: Object.freeze({
+			considered: discovered,
+			applied: 0,
+			declined: discovered,
+			appliedByKind: Object.freeze(zeroed(plan.statistics.appliedByKind)),
+			declinedByReason: Object.freeze(zeroed(plan.statistics.declinedByReason)),
+			generatedCodeConsumed: 0,
+			compilerWorkConsumed: 0,
+			discoveredByKind: plan.statistics.discoveredByKind,
+			selectedByKind: Object.freeze({}),
+			declinedByPlanReason: Object.freeze({
+				...(discovered === 0 ? {} : { "tooling-generic-path": discovered }),
+			}),
+			verificationMs: 0,
+		}),
 	});
-	if (result.context === undefined) throw new Error("Core optimization lost context");
-	const optimized: CoreCompilation = {
-		program: result.program,
-		context: result.context,
-		...(result.targetAnalyses === undefined
-			? {}
-			: { targetAnalyses: result.targetAnalyses }),
-	};
-	const execution = lowerCoreCompilationToExecution(optimized, {
-		reuseRegisters: mode === "full",
+}
+
+function genericReport(
+	report: CoreOptimizationReport,
+	plan: CoreOptimizationPlan,
+): CoreOptimizationReport {
+	return Object.freeze({
+		...report,
+		output: Object.freeze({ ...report.output, planCandidates: 0 }),
+		plan: Object.freeze({
+			...report.plan,
+			selected: 0,
+			declined: report.plan.discovered,
+			selectedByKind: Object.freeze({}),
+			declinedByReason: Object.freeze({
+				...(report.plan.discovered === 0
+					? {}
+					: { "tooling-generic-path": report.plan.discovered }),
+			}),
+			generatedCodeConsumed: 0,
+			compilerWorkConsumed: 0,
+			verificationMs: plan.statistics.verificationMs,
+		}),
 	});
+}
+
+function compileMode(compiled: ReturnType<typeof compileSampleCore>, mode: ModeId) {
+	const plan =
+		mode === "full"
+			? compiled.result.compilation.plan
+			: genericPlan(compiled.result.compilation.plan);
+	const optimized: CoreCompilation =
+		mode === "full"
+			? compiled.result.compilation
+			: Object.freeze({ ...compiled.result.compilation, plan });
+	if (mode !== "full") verifyCoreOptimizationPlan(optimized.program, plan);
+	const execution = lowerCoreCompilationToExecution(optimized, { reuseRegisters: true });
 	const image = lowerExecutionToProgramImage(execution, false);
 	const wire = serializeRuntimeImage(image.runtime, { debugInfo: true });
 	const c = emitProgramImage(image, { compiled: true, debugInfo: true });
 	return {
-		preCore: formatCore(core.program),
+		preCore: compiled.preCore,
 		optimizedCore: formatCore(optimized.program),
 		target: formatTarget(execution, image),
 		malw: formatRuntimeImage(image.runtime),
 		hex: wireHex(wire),
 		wire,
 		c,
-		trace: optimized.context.optimizationTrace ?? [],
+		trace:
+			mode === "full"
+				? compiled.result.report
+				: genericReport(compiled.result.report, plan),
 		structure: {
 			strings: image.runtime.stringConstants.map((units, index) => ({
 				index,
@@ -777,11 +833,9 @@ function writeArtifact(relativePath: string, content: string | Uint8Array): stri
 }
 
 const samples = SAMPLES.map((sample) => {
-	const full = compileMode(sample, "full");
-	const ablated = compileMode(sample, "ablated");
-	if (full.preCore !== ablated.preCore) {
-		throw new Error(`${sample.id}: pre-optimization Core depends on output mode`);
-	}
+	const compiled = compileSampleCore(sample);
+	const full = compileMode(compiled, "full");
+	const ablated = compileMode(compiled, "ablated");
 	validateTrails(sample, ablated, full);
 	const base = sample.id;
 	const sourcePath = writeArtifact(path.join(base, "source.js"), `${sample.source}\n`);
@@ -813,8 +867,8 @@ const samples = SAMPLES.map((sample) => {
 				{
 					label:
 						mode === "full"
-							? "Full production optimization"
-							: "All public groups ablated · one round",
+							? "Selected late-specialization plan"
+							: "Canonical Core · generic target",
 					optimizedCore: result.optimizedCore,
 					target: result.target,
 					malw: result.malw,
@@ -850,11 +904,8 @@ const manifest = {
 			version: WIRE_VERSION,
 		},
 		optimizationModes: {
-			ablated: {
-				maxRounds: 1,
-				ablations: [...OPTIMIZATION_ABLATIONS],
-			},
-			full: { maxRounds: "compiler default", ablations: [] },
+			ablated: { profile: "canonical-generic-target" },
+			full: { profile: "selected-late-plan" },
 		},
 	},
 	files: manifestFiles.sort((left, right) => left.path.localeCompare(right.path)),
