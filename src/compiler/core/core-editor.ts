@@ -399,7 +399,7 @@ export class CoreEditor {
 			);
 			this.#instructions.add(instruction);
 			this.#touchBlock(this.function.instructionBlock(instruction));
-			this.#mark("body", "cfg", "specializationInputs");
+			this.#mark("body", "specializationInputs");
 			if (payload.kind === "guard") this.#mark("facts");
 			this.#edits++;
 		}

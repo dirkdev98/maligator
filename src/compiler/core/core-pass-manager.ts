@@ -88,7 +88,7 @@ export class CorePassManager {
 		initialChanges?: ReadonlyArray<CoreChangeSet>,
 	): void {
 		for (const pass of passes) this.#validatePass(stage, pass);
-		const startedAt = performance.now();
+		const startedAt = Date.now();
 		const queue: Array<QueuedPassWork> = [];
 		let queueIndex = 0;
 		const queued = new Set<string>();
@@ -137,7 +137,7 @@ export class CorePassManager {
 					coreAnalysisRequestForPass(analysis, work.item),
 				);
 			}
-			const passStartedAt = performance.now();
+			const passStartedAt = Date.now();
 			const changes = work.pass.run(
 				corePassContext(
 					this.#program,
@@ -147,7 +147,7 @@ export class CorePassManager {
 					work.item,
 				),
 			);
-			const elapsedMs = performance.now() - passStartedAt;
+			const elapsedMs = Date.now() - passStartedAt;
 			const edits = changes?.edits ?? 0;
 			used.workItems++;
 			used.edits += edits;
@@ -165,7 +165,7 @@ export class CorePassManager {
 			}
 			enqueueChanges(changes);
 		}
-		this.#report.recordStage(stage, performance.now() - startedAt);
+		this.#report.recordStage(stage, Date.now() - startedAt);
 	}
 
 	#enqueueInitialWork(

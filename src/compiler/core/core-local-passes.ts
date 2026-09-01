@@ -1,4 +1,7 @@
-import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import {
+	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+	coreTerminatorEdges,
+} from "./core-ir-control-flow.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type {
 	CoreAttributeValue,
@@ -393,17 +396,16 @@ const removeUnreachableBlocks: CorePass = {
 	name: "unreachable-block-removal",
 	stage: "canonicalize",
 	scope: "function",
-	requiredAnalyses: [],
+	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "exceptionFlow"],
 	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
-	run({ program, item }) {
+	run(context) {
+		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const control = buildCoreControlFlow(program, item.function, {
-			exceptions: true,
-		});
+		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
 		const reachable = new Set(control.reachable);
 		const pendingRoots = fn.bodyEntry === undefined ? [] : [fn.bodyEntry];
 		while (pendingRoots.length > 0) {
@@ -439,15 +441,16 @@ const eliminateForwardingBlocks: CorePass = {
 	name: "forwarding-block-elimination",
 	stage: "canonicalize",
 	scope: "function",
-	requiredAnalyses: [],
+	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body", "exceptionFlow"],
 	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
-	run({ program, item }) {
+	run(context) {
+		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const control = buildCoreControlFlow(program, item.function, { exceptions: true });
+		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
 		for (const block of fn.blockIds()) {
 			if (block === fn.entry || block === fn.bodyEntry || fn.blockHandler(block) !== undefined) {
 				continue;
@@ -491,15 +494,16 @@ const simplifyBlockParameters: CorePass = {
 	name: "block-parameter-simplification",
 	stage: "canonicalize",
 	scope: "function",
-	requiredAnalyses: [],
+	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body"],
 	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
-	run({ program, item }) {
+	run(context) {
+		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const control = buildCoreControlFlow(program, item.function, { exceptions: true });
+		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
 		let editor: CoreEditor | undefined;
 		for (const block of fn.blockIds()) {
 			const incoming = control.predecessors[block] ?? [];

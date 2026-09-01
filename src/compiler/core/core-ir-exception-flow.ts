@@ -1,11 +1,11 @@
+import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import {
+	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+	buildCoreControlFlow,
+} from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreInstructionEffects } from "./core-ir-opcodes.ts";
-import type {
-	CoreBlockId,
-	CoreExceptionHandler,
-	CoreFunction,
-	CoreValueId,
-} from "./core-ir.ts";
+import type { CoreBlockId, CoreValueId } from "./core-ir.ts";
+import type { CoreFunctionStore } from "./core-store.ts";
 
 export interface CoreLocalThrowCatchFlow {
 	readonly source: CoreBlockId;
@@ -18,58 +18,67 @@ export interface CoreLocalThrowCatchFlow {
 }
 
 function localThrowCatchFlow(
-	fn: CoreFunction,
-	blockId: CoreBlockId,
-	handler: CoreExceptionHandler,
+	fn: CoreFunctionStore,
+	block: CoreBlockId,
 ): CoreLocalThrowCatchFlow | undefined {
-	const block = fn.blocks[blockId]!;
-	if (block.terminator.kind !== "throw" || handler.block === blockId) return undefined;
-	if (
-		block.instructions.some((instruction) => {
-			const effects = coreInstructionEffects(instruction);
-			return effects.mayThrow || effects.maySuspend;
-		})
-	) {
+	const handler = fn.blockHandler(block);
+	const terminator = fn.terminatorPayload(fn.blockTerminator(block));
+	if (handler === undefined || terminator.kind !== "throw" || handler.block === block) {
 		return undefined;
 	}
-	const target = fn.blocks[handler.block];
-	const exception = target?.parameters[0];
-	if (exception?.role !== "exception") return undefined;
-	const thrown = fn.values[block.terminator.value];
-	if (thrown?.representation !== exception.representation) return undefined;
-	return {
-		source: blockId,
+	for (const instruction of fn.bodyInstructionIds(block)) {
+		const effects =
+			fn.instructionEffectRefinement(instruction)?.effects ??
+			fn.registry.byId(fn.instructionOpcode(instruction)).effects;
+		if (effects.mayThrow || effects.maySuspend) return undefined;
+	}
+	const exception = fn.blockParameters(handler.block)[0];
+	if (exception?.role !== "exception" ||
+		fn.valueRepresentation(terminator.value) !== exception.representation) {
+		return undefined;
+	}
+	return Object.freeze({
+		source: block,
 		handler: handler.block,
-		thrownValue: block.terminator.value,
-		handlerArguments: handler.arguments,
+		thrownValue: terminator.value,
+		handlerArguments: Object.freeze(handler.arguments),
 		completionOrder: "immediate-handler",
 		stackObservation: "same-thrown-value",
 		prefixEffects: "non-throwing-non-suspending",
-	};
+	});
 }
 
-/** Explicit throws whose handler is reached only by equivalent local transfers. */
 export function analyzeCoreLocalExceptionFlows(
-	fn: CoreFunction,
+	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 ): ReadonlyArray<CoreLocalThrowCatchFlow> {
 	const candidates: Array<CoreLocalThrowCatchFlow> = [];
-	for (const block of fn.blocks) {
-		if (block.handler === undefined) continue;
-		const flow = localThrowCatchFlow(fn, block.id, block.handler);
+	for (const block of fn.blockIds()) {
+		const flow = localThrowCatchFlow(fn, block);
 		if (flow !== undefined) candidates.push(flow);
 	}
 	const candidateSources = new Map(candidates.map((flow) => [flow.source, flow.handler]));
-	const mixedHandlers = new Set<CoreBlockId>();
-	for (const { handler } of candidates) {
-		if (
-			!cfg.predecessors[handler]!.every(
-				(edge) =>
-					edge.kind === "exceptional" && candidateSources.get(edge.from) === handler,
-			)
-		) {
-			mixedHandlers.add(handler);
-		}
-	}
-	return candidates.filter(({ handler }) => !mixedHandlers.has(handler));
+	return Object.freeze(candidates.filter(({ handler }) =>
+		(cfg.predecessors[handler] ?? []).every((edge) =>
+			edge.kind === "exceptional" && candidateSources.get(edge.from) === handler,
+		),
+	));
 }
+
+export const CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS: CoreAnalysisDefinition<
+	ReadonlyArray<CoreLocalThrowCatchFlow>
+> = {
+	key: "local-exception-flow",
+	scope: "function",
+	functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
+	compute({ program, request }) {
+		if (request.scope !== "function") throw new Error("Expected function analysis");
+		const fn = program.function(request.function);
+		return analyzeCoreLocalExceptionFlows(
+			fn,
+			buildCoreControlFlow(program, request.function, { exceptions: true }),
+		);
+	},
+};
+
+export { CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS };

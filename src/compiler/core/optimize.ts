@@ -3,6 +3,7 @@ import type {
 	CoreCompilation,
 } from "./core-compilation.ts";
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
@@ -65,7 +66,11 @@ export function optimizeCore(
 	for (const stage of OPTIMIZATION_STAGES) {
 		passes.runStage(
 			stage,
-			stage === "canonicalize" ? CORE_LOCAL_CANONICALIZATION_PASSES : [],
+			stage === "canonicalize"
+				? CORE_LOCAL_CANONICALIZATION_PASSES
+				: stage === "control-flow"
+					? CORE_CONTROL_FLOW_PASSES
+					: [],
 		);
 	}
 	const program = compilation.program.seal();

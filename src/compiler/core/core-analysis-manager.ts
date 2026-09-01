@@ -82,7 +82,7 @@ export class CoreAnalysisManager {
 			this.#report.recordAnalysis(definition.key, "hit", false, 0);
 			return cached.value as Result;
 		}
-		const startedAt = performance.now();
+		const startedAt = Date.now();
 		const value = definition.compute({
 			program: this.#program,
 			context: this.#context,
@@ -93,7 +93,7 @@ export class CoreAnalysisManager {
 			definition.key,
 			"recompute",
 			cached !== undefined,
-			performance.now() - startedAt,
+			Date.now() - startedAt,
 		);
 		return value;
 	}
