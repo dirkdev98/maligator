@@ -54,11 +54,19 @@ describe("compileSemanticProgramToProgramImage", () => {
 		);
 		const constructed = lowerSemanticProgramToCore(semantic);
 		const mutableProgram = constructed.program;
-		const compilation = optimizeCore(constructed);
+		const { compilation, report } = optimizeCore(constructed);
 
 		expect(compilation.program).toBe(mutableProgram);
 		expect(compilation.program.sealed).toBe(true);
 		expect(compilation.plan).toEqual({ directEntries: [], specializations: [] });
+		expect(report.input).toEqual(report.output);
+		expect(report.stages.map(({ stage }) => stage)).toEqual([
+			"canonicalize",
+			"control-flow",
+			"proofs",
+			"memory",
+			"finalize",
+		]);
 
 		const execution = lowerCoreCompilationToExecutionProgram(compilation);
 		expect(execution.functionMap.executionToCore).toEqual([

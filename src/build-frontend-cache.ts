@@ -23,6 +23,7 @@ import {
 import type { CoreCompilationContext } from "./compiler/core/core-compilation.ts";
 import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.ts";
 import type { CoreProgram } from "./compiler/core/core-ir.ts";
+import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import type {
 	BuildModuleGraphOptions,
@@ -131,6 +132,7 @@ export interface CompiledBuildFrontend {
 	runtimeArtifacts: Array<BuildFrontendArtifact>;
 	imageStats: ProgramImageStats;
 	diagnostics: Array<CompilerDiagnostic>;
+	optimizationReport?: CoreOptimizationReport;
 	/** Open on a cache hit: a restored program image is returned without a graph. */
 	closure: ProgramClosureCertificate;
 	wires?: Array<Uint8Array>;
@@ -165,7 +167,11 @@ export interface CompileBuildFrontendOptions {
 	forceCompile?: boolean;
 	/** Split stable package dependencies into a separately cached development image. */
 	relocatable?: boolean;
-	afterCoreOptimization?: (program: CoreProgram, context: CoreCompilationContext) => void;
+	afterCoreOptimization?: (
+		program: CoreProgram,
+		context: CoreCompilationContext,
+		report: CoreOptimizationReport,
+	) => void;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	/** Optional self-hosted worker command for independent dependency islands. */
 	dependencyWorker?: DependencyFragmentWorker;
@@ -596,6 +602,7 @@ export function compileBuildFrontend(
 	let loadFragmentWires: (() => Array<Uint8Array>) | undefined;
 	let fragmentArtifacts: { hits: number; misses: number } | undefined;
 	let fragmentFallback: string | undefined;
+	let optimizationReport: CoreOptimizationReport | undefined;
 	if (
 		options.relocatable === true &&
 		options.forceCompile !== true &&
@@ -657,7 +664,9 @@ export function compileBuildFrontend(
 			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 			diagnostics = diagnosticsForSemantic(semantic);
-			programImage = compileProgramImage(semantic, facts, options, phases);
+			programImage = compileProgramImage(semantic, facts, options, phases, (report) => {
+				optimizationReport = report;
+			});
 			const serializeStartedAt = Date.now();
 			compilerWire = serializeCompilerArtifact(programImage);
 			wires = [serializeRuntimeImage(programImage.runtime)];
@@ -670,7 +679,9 @@ export function compileBuildFrontend(
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 		}
 		diagnostics = diagnosticsForSemantic(semantic);
-		programImage = compileProgramImage(semantic, facts, options, phases);
+		programImage = compileProgramImage(semantic, facts, options, phases, (report) => {
+			optimizationReport = report;
+		});
 		const serializeStartedAt = Date.now();
 		compilerWire = serializeCompilerArtifact(programImage);
 		wires = [serializeRuntimeImage(programImage.runtime)];
@@ -743,6 +754,7 @@ export function compileBuildFrontend(
 		})),
 		imageStats,
 		diagnostics,
+		...(optimizationReport === undefined ? {} : { optimizationReport }),
 		fragmentArtifacts,
 		fragmentFallback,
 	};
@@ -753,6 +765,7 @@ function compileProgramImage(
 	facts: CompilerProgramFacts,
 	options: CompileBuildFrontendOptions,
 	phases: BuildFrontendPhases,
+	onOptimizationReport: (report: CoreOptimizationReport) => void,
 ): ProgramImage {
 	return compileSemanticProgramToProgramImage(semantic, {
 		facts,
@@ -760,7 +773,10 @@ function compileProgramImage(
 		optimizationAblations: options.optimizationAblations,
 		coreVerification: options.coreVerification,
 		profile: options.profile,
-		afterCoreOptimization: options.afterCoreOptimization,
+		afterCoreOptimization(program, context, report) {
+			options.afterCoreOptimization?.(program, context, report);
+			onOptimizationReport(report);
+		},
 		runPhase(phase, run) {
 			const phaseStartedAt = Date.now();
 			try {

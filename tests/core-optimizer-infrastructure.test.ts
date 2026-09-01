@@ -1,0 +1,182 @@
+import { describe, expect, it } from "vitest";
+import type { CoreAnalysisDefinition } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import {
+	CORE_NO_EFFECTS,
+	CoreOpcodeRegistry,
+	coreArity,
+} from "../src/compiler/core/core-ir.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import type { CorePass } from "../src/compiler/core/core-pass.ts";
+import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
+import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+
+function context(): CoreCompilationContext {
+	return {
+		facts: conservativeCompilerProgramFacts(),
+		data: {
+			entrypointPath: "optimizer-infrastructure.js",
+			moduleEvaluationOrder: ["optimizer-infrastructure.js"],
+			sourceFiles: [{ path: "optimizer-infrastructure.js", contents: "" }],
+			cjsModuleFunctionIndices: [],
+			hostInstallCandidates: [],
+			singleAssignmentGlobalSlots: [],
+			singleAssignmentCapturedSlots: [],
+			retainedHostInstallers: [],
+		},
+	};
+}
+
+function programWithTwoFunctions() {
+	const registry = new CoreOpcodeRegistry();
+	registry.define({
+		opcode: "identity",
+		inputs: coreArity(1),
+		outputs: coreArity(1),
+		effects: CORE_NO_EFFECTS,
+		discardable: true,
+	});
+	const program = new CoreProgram(registry);
+	const functions = Array.from({ length: 2 }, () => {
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = builder.blockParameters(entry)[0]!.value;
+		const [value] = builder.appendInstruction(entry, "identity", [parameter], {
+			outputRepresentations: ["i32"],
+		});
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const finished = builder.finish(entry);
+		return { id: finished.function, entry, value: value! };
+	});
+	return { program, functions };
+}
+
+function analysisHarness(program: CoreProgram) {
+	const report = new CoreOptimizationReportBuilder(program);
+	const analyses = new CoreAnalysisManager(program, context(), report);
+	return { analyses, report };
+}
+
+const cfgAnalysis = (recomputations: Array<number>): CoreAnalysisDefinition<number> => ({
+	key: "test-cfg",
+	scope: "function",
+	functionDependencies: ["cfg"],
+	compute({ program, request }) {
+		if (request.scope !== "function") throw new Error("expected function scope");
+		recomputations[request.function] = (recomputations[request.function] ?? 0) + 1;
+		return [...program.function(request.function).blockIds()].length;
+	},
+});
+
+function noOpPass(name: string, runs: Array<number>): CorePass {
+	return {
+		name,
+		stage: "canonicalize",
+		scope: "function",
+		requiredAnalyses: [],
+		wakesOn: ["body", "representations"],
+		preserves: [],
+		changes: { cfg: false, calls: false, facts: false, representations: false },
+		budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "stop" },
+		run({ item }) {
+			if (item.scope !== "function") throw new Error("expected function work item");
+			runs[item.function] = (runs[item.function] ?? 0) + 1;
+			return undefined;
+		},
+	};
+}
+
+describe("Core optimizer infrastructure", () => {
+	it("keys function analysis reuse to exact dependency versions", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		const recomputations: Array<number> = [];
+		const analysis = cfgAnalysis(recomputations);
+
+		expect(analyses.get(analysis, { scope: "function", function: functions[0]!.id })).toBe(
+			1,
+		);
+		analyses.get(analysis, { scope: "function", function: functions[1]!.id });
+		const representationEditor = CoreEditor.open(program, functions[0]!.id);
+		representationEditor.setValueRepresentation(functions[0]!.value, "f64");
+		representationEditor.commit();
+		analyses.get(analysis, { scope: "function", function: functions[0]!.id });
+		expect(recomputations).toEqual([1, 1]);
+
+		const cfgEditor = CoreEditor.open(program, functions[0]!.id);
+		const addedBlock = cfgEditor.createBlock();
+		cfgEditor.setTerminator(addedBlock, {
+			kind: "return",
+			value: functions[0]!.value,
+		});
+		cfgEditor.commit();
+		analyses.get(analysis, { scope: "function", function: functions[0]!.id });
+		analyses.get(analysis, { scope: "function", function: functions[1]!.id });
+		expect(recomputations).toEqual([2, 1]);
+		const finished = report.finish(program, { directEntries: [], specializations: [] });
+		expect(finished.analyses).toMatchObject([
+			{ queries: 5, hits: 2, recomputations: 3, invalidations: 1 },
+		]);
+	});
+
+	it("runs an incremental local pass only for the edited function", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		const editor = CoreEditor.open(program, functions[0]!.id);
+		editor.setValueRepresentation(functions[0]!.value, "f64");
+		const changes = editor.commit();
+		const runs: Array<number> = [];
+		const manager = new CorePassManager(program, context(), analyses, report);
+		manager.runStage("canonicalize", [noOpPass("local", runs)], [changes]);
+		expect(runs).toEqual([1]);
+	});
+
+	it("does not rerun an existing pass when a no-op pass is registered", () => {
+		const run = (withExtraPass: boolean): Array<number> => {
+			const { program } = programWithTwoFunctions();
+			const { analyses, report } = analysisHarness(program);
+			const existingRuns: Array<number> = [];
+			const passes = [noOpPass("existing", existingRuns)];
+			if (withExtraPass) passes.push(noOpPass("extra", []));
+			new CorePassManager(program, context(), analyses, report).runStage(
+				"canonicalize",
+				passes,
+			);
+			return existingRuns;
+		};
+		expect(run(false)).toEqual([1, 1]);
+		expect(run(true)).toEqual([1, 1]);
+	});
+
+	it("requires whole-program analyses to name a program dependency", () => {
+		const { program } = programWithTwoFunctions();
+		const { analyses } = analysisHarness(program);
+		expect(() =>
+			analyses.get(
+				{
+					key: "invalid-program-analysis",
+					scope: "program",
+					compute: () => 0,
+				},
+				{ scope: "program" },
+			),
+		).toThrow("explicit program dependency");
+	});
+
+	it("reports queue and budget work without a global round counter", () => {
+		const { program } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		new CorePassManager(program, context(), analyses, report).runStage(
+			"canonicalize",
+			[noOpPass("reported", [])],
+		);
+		const finished = report.finish(program, { directEntries: [], specializations: [] });
+		expect(finished.queue).toEqual({ pushes: 2, pops: 2, maximumDepth: 2 });
+		expect(finished.budget).toMatchObject({ workItems: 2, edits: 0 });
+		expect(Object.keys(finished)).not.toContain("rounds");
+	});
+});

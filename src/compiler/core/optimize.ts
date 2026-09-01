@@ -2,7 +2,15 @@ import type {
 	ConstructedCoreCompilation,
 	CoreCompilation,
 } from "./core-compilation.ts";
+import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
+import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
+import {
+	CoreOptimizationReportBuilder,
+} from "./core-optimization-report.ts";
+import type { CoreOptimizationReport } from "./core-optimization-report.ts";
+import { CorePassManager } from "./core-pass-manager.ts";
+import type { CoreOptimizationStage } from "./core-pass.ts";
 
 export interface CoreOptimizationPlan {
 	readonly directEntries: ReadonlyArray<never>;
@@ -14,19 +22,55 @@ const EMPTY_OPTIMIZATION_PLAN: CoreOptimizationPlan = Object.freeze({
 	specializations: Object.freeze([]),
 });
 
+const OPTIMIZATION_STAGES: ReadonlyArray<CoreOptimizationStage> = [
+	"canonicalize",
+	"control-flow",
+	"proofs",
+	"memory",
+	"finalize",
+];
+
+export interface OptimizeCoreOptions {
+	readonly verification?: CoreVerificationProfile;
+}
+
+export interface OptimizedCoreResult {
+	readonly compilation: CoreCompilation;
+	readonly report: CoreOptimizationReport;
+}
+
 export function optimizeCore(
 	compilation: ConstructedCoreCompilation,
-): CoreCompilation {
+	options: OptimizeCoreOptions = {},
+): OptimizedCoreResult {
 	verifyCoreProgram(
 		compilation.program,
 		{ stage: "pre-optimization" },
 		compilation.context,
 	);
+	const reportBuilder = new CoreOptimizationReportBuilder(compilation.program);
+	const analyses = new CoreAnalysisManager(
+		compilation.program,
+		compilation.context,
+		reportBuilder,
+	);
+	const passes = new CorePassManager(
+		compilation.program,
+		compilation.context,
+		analyses,
+		reportBuilder,
+		{ verification: options.verification },
+	);
+	for (const stage of OPTIMIZATION_STAGES) passes.runStage(stage, []);
 	const program = compilation.program.seal();
 	verifyCoreProgram(program, { stage: "pre-target" }, compilation.context);
-	return Object.freeze({
+	const optimized = Object.freeze({
 		program,
 		context: compilation.context,
 		plan: EMPTY_OPTIMIZATION_PLAN,
+	});
+	return Object.freeze({
+		compilation: optimized,
+		report: reportBuilder.finish(program, EMPTY_OPTIMIZATION_PLAN),
 	});
 }

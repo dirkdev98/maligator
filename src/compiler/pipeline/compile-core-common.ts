@@ -5,6 +5,7 @@ import type {
 import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
 import type { CoreVerificationProfile } from "../core/core-ir-verifier.ts";
 import type { SealedCoreProgram } from "../core/core-ir.ts";
+import type { CoreOptimizationReport } from "../core/core-optimization-report.ts";
 import { optimizeCore } from "../core/optimize.ts";
 import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
@@ -38,6 +39,7 @@ export interface CompileCoreOptions {
 	afterCoreOptimization?: (
 		program: SealedCoreProgram,
 		context: CoreCompilationContext,
+		report: CoreOptimizationReport,
 	) => void;
 	runPhase?: <T>(phase: CompileCorePhase, run: () => T) => T;
 }
@@ -56,7 +58,13 @@ export function optimizeSemanticProgramToCore(
 		},
 		runPhase,
 	});
-	const optimized = runPhase("optimize core ir", () => optimizeCore(core));
-	options.afterCoreOptimization?.(optimized.program, optimized.context);
-	return optimized;
+	const optimized = runPhase("optimize core ir", () =>
+		optimizeCore(core, { verification: options.coreVerification }),
+	);
+	options.afterCoreOptimization?.(
+		optimized.compilation.program,
+		optimized.compilation.context,
+		optimized.report,
+	);
+	return optimized.compilation;
 }

@@ -42,6 +42,7 @@ import type {
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
+import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
@@ -486,7 +487,8 @@ function compileAndBuild(
 					// Profile metadata is derived from the optimized semantic program and is
 					// not part of the portable wire schema yet. Do not accept a definition-only
 					// frontend cache hit that would discard its source-site identities.
-					forceCompile: debugEnabled || compilerDiagnostics || command.profile,
+					forceCompile:
+						debugEnabled || compilerDiagnostics || command.profile || reporter.verbose,
 					relocatable: command.kind !== "build" && !command.profile,
 					onCompilePhase: (phase, durationMs) => {
 						compilerPhases.push({ phase, durationMs });
@@ -540,6 +542,13 @@ function compileAndBuild(
 	}
 	for (const phase of compilerPhases) {
 		reporter.timing(`Compiler phase · ${phase.phase}`, phase.durationMs);
+	}
+	if (frontend.optimizationReport !== undefined) {
+		for (const { label, value } of formatCoreOptimizationReport(
+			frontend.optimizationReport,
+		)) {
+			reporter.detail(label, value);
+		}
 	}
 	const dependencies = [
 		...new Set([

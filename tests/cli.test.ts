@@ -436,6 +436,8 @@ describe("command shell", () => {
 		expect(result.stderr).toContain("File digests:");
 		expect(result.stderr).toContain("Dependencies: 1");
 		expect(result.stderr).toContain("Compiler phase · construct core ir:");
+		expect(result.stderr).toContain("Core optimizer input:");
+		expect(result.stderr).toContain("Core optimizer queue:");
 	});
 
 	it("rejects a configured cache root that is a file instead of reporting an empty cache", () => {
