@@ -142,7 +142,7 @@ recomputations, invalidations, and elapsed time for every analysis.
 `CorePassManager` owns traversal and work queues. A pass declares its scope as
 instruction, block, function, SCC, or program, together with required analyses,
 change kinds that wake it, analyses it preserves, the version domains it may change,
-an optional ablation category, and a compiler-work budget.
+and a compiler-work budget with an explicit exhaustion policy.
 
 Edits enqueue only affected instructions, users, blocks, functions, SCC members, or
 program consumers. Queue exhaustion defines convergence. There are no global
