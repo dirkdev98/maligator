@@ -436,6 +436,30 @@ describe("Core store", () => {
 		expect(() => verifyCoreProgram(program)).not.toThrow();
 	});
 
+	it("replaces several values in one dense-operand edit", () => {
+		const { program, fn, condition, first, second, instruction, expected } =
+			terminatorFixture("branch");
+		if (expected.kind !== "branch") throw new Error("expected branch fixture");
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceValueUsesMany(
+			new Map([
+				[condition, first],
+				[first, second],
+			]),
+		);
+		const changes = editor.commit();
+
+		expect(fn.terminatorPayload(instruction)).toEqual({
+			...expected,
+			condition: first,
+			consequent: { ...expected.consequent, arguments: [second] },
+			alternate: { ...expected.alternate, arguments: [second, second] },
+		});
+		expect(changes.edits).toBe(1);
+		program.seal();
+		expect(() => verifyCoreProgram(program)).not.toThrow();
+	});
+
 	it("lets the verifier reject a replacement whose dense edge arguments are invalid", () => {
 		const { program, fn, entry, instruction, expected } = terminatorFixture("jump");
 		if (expected.kind !== "jump") throw new Error("expected jump fixture");

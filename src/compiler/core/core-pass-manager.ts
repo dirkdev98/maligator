@@ -89,10 +89,13 @@ export class CorePassManager {
 	): void {
 		for (const pass of passes) this.#validatePass(stage, pass);
 		const startedAt = Date.now();
-		const queue: Array<QueuedPassWork> = [];
+		const queue: Array<QueuedPassWork | undefined> = [];
 		let queueIndex = 0;
 		const queued = new Set<string>();
-		const runs = new Map<string, number>();
+		const runs =
+			this.#optionalMaxRunsPerWorkItem === Number.MAX_SAFE_INTEGER
+				? undefined
+				: new Map<string, number>();
 		const profileExhausted = new Set<string>();
 		const consumption = new Map<string, PassConsumption>();
 		const enqueue = (pass: CorePass, item: CorePassWorkItem): void => {
@@ -100,7 +103,7 @@ export class CorePassManager {
 			if (queued.has(key)) return;
 			if (
 				pass.budget.exhaustion === "stop" &&
-				(runs.get(key) ?? 0) >= this.#optionalMaxRunsPerWorkItem
+				(runs?.get(key) ?? 0) >= this.#optionalMaxRunsPerWorkItem
 			) {
 				if (!profileExhausted.has(key)) {
 					profileExhausted.add(key);
@@ -124,11 +127,11 @@ export class CorePassManager {
 		} else {
 			for (const changes of initialChanges) enqueueChanges(changes);
 		}
-
 		while (queueIndex < queue.length) {
-			const work = queue[queueIndex++]!;
+			const work = queue[queueIndex]!;
+			queue[queueIndex++] = undefined;
 			queued.delete(work.key);
-			runs.set(work.key, (runs.get(work.key) ?? 0) + 1);
+			if (runs !== undefined) runs.set(work.key, (runs.get(work.key) ?? 0) + 1);
 			this.#report.recordQueuePop();
 			const used = consumption.get(work.pass.name) ?? {
 				workItems: 0,

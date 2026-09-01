@@ -740,41 +740,42 @@ export function runCoreCrossCallTransforms(
 	let instructionsIntroduced = 0;
 	let blocksIntroduced = 0;
 	const inlineChanges: Array<CoreChangeSet> = [];
-	for (
-		let candidate = service.next();
-		candidate !== undefined;
-		candidate = service.next()
-	) {
-		const decline = service.admit(candidate);
-		if (decline !== undefined) {
-			service.recordDeclined(decline);
-			continue;
+	while (true) {
+		const roundChanges: Array<CoreChangeSet> = [];
+		const affectedCallers = new Set<CoreFunctionId>();
+		for (
+			let candidate = service.next();
+			candidate !== undefined;
+			candidate = service.next()
+		) {
+			const decline = service.admit(candidate);
+			if (decline !== undefined) {
+				service.recordDeclined(decline);
+				continue;
+			}
+			const applied = applyCandidate(program, summaries, candidate);
+			if (applied === undefined) {
+				service.recordDeclined("unsupported-graph");
+				continue;
+			}
+			service.recordApplied(candidate);
+			instructionsIntroduced += applied.instructionsIntroduced;
+			blocksIntroduced += applied.blocksIntroduced;
+			if (candidate.kind !== "inline" && candidate.kind !== "guarded-inline") continue;
+			roundChanges.push(applied.changes);
+			affectedCallers.add(candidate.caller);
 		}
-		const applied = applyCandidate(program, summaries, candidate);
-		if (applied === undefined) {
-			service.recordDeclined("unsupported-graph");
-			continue;
-		}
-		service.recordApplied(candidate);
-		instructionsIntroduced += applied.instructionsIntroduced;
-		blocksIntroduced += applied.blocksIntroduced;
-		if (candidate.kind !== "inline" && candidate.kind !== "guarded-inline") continue;
-		inlineChanges.push(applied.changes);
-		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, [
-			applied.changes,
-		]);
+		if (roundChanges.length === 0) break;
+		inlineChanges.push(...roundChanges);
+		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, roundChanges);
 		summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
 			scope: "program",
 		});
 		callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
 		sccTransfers += summaries.statistics.sccTransfers;
 		callerWakeups += summaries.statistics.callerWakeups;
-		discoverCoreCrossCallCandidates(
-			program,
-			summaries,
-			service,
-			new Set([candidate.caller, ...summaries.changedFunctions]),
-		);
+		for (const functionId of summaries.changedFunctions) affectedCallers.add(functionId);
+		discoverCoreCrossCallCandidates(program, summaries, service, affectedCallers);
 	}
 	if (inlineChanges.length > 0) {
 		passes.runStage("control-flow", CORE_CONTROL_FLOW_PASSES, inlineChanges);

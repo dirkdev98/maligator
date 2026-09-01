@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { coreTerminatorEdges } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -69,6 +71,45 @@ function optimizedClosedModule(source: string, sourcePath: string): CoreProgram 
 }
 
 describe("Core local canonicalization", () => {
+	it("moves refined instructions across linear block merges without changing identity", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const target = builder.createBlock();
+		const parameter = builder.blockParameters(entry)[0]!.value;
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: target, arguments: [] },
+		});
+		const [result] = builder.appendInstruction(target, "call", [parameter, parameter]);
+		const [call] = builder.bodyInstructionIds(target);
+		builder.setTerminator(target, { kind: "return", value: result! });
+		const function_ = builder.finish(entry).function;
+		const editor = CoreEditor.open(program, function_);
+		const proof = editor.addFact({
+			kind: "test-call-effects",
+			value: true,
+			claims: [{ kind: "effect", instruction: call!, effects: CORE_NO_EFFECTS }],
+			validity: { kind: "summary", digest: "test-call-effects" },
+			obligations: [],
+			origin: "test",
+		});
+		editor.setInstructionEffectRefinement(call!, { effects: CORE_NO_EFFECTS, proof });
+		editor.commit();
+
+		const fn = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program.function(function_);
+		expect([...fn.blockIds()]).toEqual([entry]);
+		expect(fn.isInstructionLive(call!)).toBe(true);
+		expect(fn.instructionBlock(call!)).toBe(entry);
+		expect(fn.instructionEffectRefinement(call!)).toEqual({
+			effects: CORE_NO_EFFECTS,
+			proof,
+		});
+	});
+
 	it("removes numeric coercions exposed by late representation selection", () => {
 		const program = optimizedClosedModule(
 			`function count(limit) {

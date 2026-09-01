@@ -131,13 +131,10 @@ function redirectPayload(
 	}
 }
 
-function replacePayloadValue(
+function replacePayloadValues(
 	payload: CoreTerminatorPayload,
-	from: CoreValueId,
-	replacement: CoreValueId,
+	value: (candidate: CoreValueId) => CoreValueId,
 ): CoreTerminatorPayload {
-	const value = (candidate: CoreValueId): CoreValueId =>
-		candidate === from ? replacement : candidate;
 	const edge = (candidate: CoreEdge): CoreEdge => ({
 		block: candidate.block,
 		arguments: candidate.arguments.map(value),
@@ -591,28 +588,38 @@ export class CoreEditor {
 	}
 
 	replaceValueUses(value: CoreValueId, replacement: CoreValueId): void {
+		this.replaceValueUsesMany(new Map([[value, replacement]]));
+	}
+
+	replaceValueUsesMany(replacements: ReadonlyMap<CoreValueId, CoreValueId>): void {
 		this.#assertActive();
-		if (value === replacement) return;
-		const uses = [...this.function.uses(value)];
+		const effective = new Map(
+			[...replacements].filter(([value, replacement]) => value !== replacement),
+		);
+		if (effective.size === 0) return;
+		const replacement = (value: CoreValueId): CoreValueId =>
+			effective.get(value) ?? value;
 		const changed = new Map<CoreInstructionId, Array<CoreValueId>>();
 		const terminators = new Set<CoreInstructionId>();
-		for (const { instruction, operand } of uses) {
-			if (this.function.instructionKind(instruction) !== "operation") {
-				terminators.add(instruction);
-				continue;
+		for (const value of effective.keys()) {
+			for (const { instruction, operand } of this.function.uses(value)) {
+				if (this.function.instructionKind(instruction) !== "operation") {
+					terminators.add(instruction);
+					continue;
+				}
+				const operands = changed.get(instruction) ?? [
+					...this.function.instructionOperands(instruction),
+				];
+				operands[operand] = replacement(operands[operand]!);
+				changed.set(instruction, operands);
 			}
-			const operands = changed.get(instruction) ?? [
-				...this.function.instructionOperands(instruction),
-			];
-			operands[operand] = replacement;
-			changed.set(instruction, operands);
 		}
 		for (const [instruction, operands] of changed) {
 			this.replaceOperands(instruction, operands);
 		}
 		for (const instruction of terminators) {
 			const before = this.function.terminatorPayload(instruction);
-			const payload = replacePayloadValue(before, value, replacement);
+			const payload = replacePayloadValues(before, replacement);
 			this.function._replaceTerminatorPayload(this.#mutation, instruction, payload);
 			this.#instructions.add(instruction);
 			const block = this.function.instructionBlock(instruction);
@@ -631,17 +638,17 @@ export class CoreEditor {
 		}
 		for (const block of this.function.blockIds()) {
 			const handler = this.function.blockHandler(block);
-			if (handler === undefined || !handler.arguments.includes(value)) continue;
-			this.setHandler(
-				block,
-				handler.block,
-				handler.arguments.map((argument) =>
-					argument === value ? replacement : argument,
-				),
-			);
+			if (
+				handler === undefined ||
+				!handler.arguments.some((argument) => effective.has(argument))
+			)
+				continue;
+			this.setHandler(block, handler.block, handler.arguments.map(replacement));
 		}
-		this.#values.add(value);
-		this.#values.add(replacement);
+		for (const [value, replacementValue] of effective) {
+			this.#values.add(value);
+			this.#values.add(replacementValue);
+		}
 	}
 
 	removeBlock(block: CoreBlockId): void {
