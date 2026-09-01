@@ -7,7 +7,7 @@ test("changed source files select transparent benchmark lanes", () => {
 		"javascript",
 		"http",
 	]);
-	expect(lanesForChangedFiles(["src/compiler/core/core-ir-opt.ts"], lanes)).toEqual([
+	expect(lanesForChangedFiles(["src/compiler/core/optimize.ts"], lanes)).toEqual([
 		"javascript",
 		"http",
 		"self-compile",
