@@ -2,9 +2,9 @@ export const PROFILE_PHASE_NAMES = [
 	"graph",
 	"semantic",
 	"construct core ir",
-	"core ir optimizations",
-	"lower core ir",
-	"lower to vm",
+	"optimize core ir",
+	"core to execution",
+	"execution to image",
 	"serialize",
 ] as const;
 

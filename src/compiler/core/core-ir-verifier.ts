@@ -591,6 +591,7 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): void {
 	verifyDominance(
 		fn,
 		cfg.successors,
+		cfg.reachable,
 		(dominator, block) => cfg.dominates(dominator, block),
 		(dominator, block) => cfg.instructionDominatesBlock(dominator, block),
 	);
@@ -599,6 +600,7 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): void {
 function verifyDominance(
 	fn: CoreFunctionStore,
 	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	reachable: ReadonlySet<CoreBlockId>,
 	dominates: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
 	instructionDominatesBlock: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
 ): void {
@@ -615,7 +617,7 @@ function verifyDominance(
 		const useBlock = fn.instructionBlock(instruction);
 		const definition = fn.valueDefinition(value);
 		if (definition.kind === "block-parameter") {
-			return dominates(definition.block, useBlock);
+			return definition.block === useBlock || dominates(definition.block, useBlock);
 		}
 		const definitionBlock = fn.instructionBlock(definition.instruction);
 		return definitionBlock === useBlock
@@ -623,13 +625,22 @@ function verifyDominance(
 			: instructionDominatesBlock(definitionBlock, useBlock);
 	};
 	for (const instruction of fn.instructionIds()) {
+		if (!reachable.has(fn.instructionBlock(instruction))) continue;
 		for (const value of fn.instructionOperands(instruction)) {
 			if (!availableAtInstruction(value, instruction)) {
-				fail(`value %${value} does not dominate its use at @${instruction}`);
+				const definition = fn.valueDefinition(value);
+				const owner =
+					definition.kind === "block-parameter"
+						? `b${definition.block} parameter ${definition.index}`
+						: `@${definition.instruction} in b${fn.instructionBlock(definition.instruction)}`;
+				fail(
+					`value %${value} from ${owner} does not dominate its use at @${instruction} in b${fn.instructionBlock(instruction)}`,
+				);
 			}
 		}
 	}
 	for (const block of fn.blockIds()) {
+		if (!reachable.has(block)) continue;
 		const handler = fn.blockHandler(block);
 		if (handler === undefined) continue;
 		for (const value of handler.arguments) {
@@ -644,7 +655,7 @@ function verifyDominance(
 	}
 	for (const outgoing of successors) {
 		for (const edge of outgoing) {
-			if (edge.kind !== "ordinary") continue;
+			if (edge.kind !== "ordinary" || !reachable.has(edge.from)) continue;
 			for (const value of edge.arguments) {
 				const terminator = fn.blockTerminator(edge.from);
 				if (!availableAtInstruction(value, terminator)) {

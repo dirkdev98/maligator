@@ -1,6 +1,10 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
-import type { CoreInstructionId, CoreProgram } from "../core/core-ir.ts";
+import type {
+	CoreFunctionId,
+	CoreInstructionId,
+	SealedCoreProgram,
+} from "../core/core-ir.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 
 /**
@@ -12,9 +16,30 @@ import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
  * emitter is allowed to rediscover Core facts.
  */
 export interface ExecutionProgram {
-	readonly core: CoreProgram;
+	readonly core: SealedCoreProgram;
 	readonly context: CoreCompilationContext;
+	readonly functionMap: ExecutionFunctionMap;
 	readonly functions: ReadonlyArray<ExecutionFunction>;
+}
+
+/** Stable Core identities relocated to the dense function table used at runtime. */
+export interface ExecutionFunctionMap {
+	readonly coreToExecution: ReadonlyArray<number>;
+	readonly executionToCore: ReadonlyArray<CoreFunctionId>;
+}
+
+export function executionFunctionIndex(
+	map: ExecutionFunctionMap,
+	core: number,
+): number {
+	if (!Number.isSafeInteger(core) || core < 0) {
+		throw new Error(`Invalid Core function reference ${core}`);
+	}
+	const execution = map.coreToExecution[core];
+	if (execution === undefined || execution < 0) {
+		throw new Error(`Core function ${core} is not present in the execution plan`);
+	}
+	return execution;
 }
 
 export type ExecutionMove = Extract<CompilerInstruction, { type: "move" }>;

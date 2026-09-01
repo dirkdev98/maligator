@@ -81,10 +81,15 @@ export interface SelfCompileMetrics {
 interface SelfCompilePhases {
 	graphMs: number;
 	semanticMs: number;
-	lowerSemanticMs: number;
-	optimizeMs: number;
-	regallocMs: number;
-	lowerMs: number;
+	constructCoreMs?: number;
+	optimizeCoreMs?: number;
+	coreToExecutionMs?: number;
+	executionToImageMs?: number;
+	/** Historical schema retained only for the committed pre-replacement sample. */
+	lowerSemanticMs?: number;
+	optimizeMs?: number;
+	regallocMs?: number;
+	lowerMs?: number;
 	emitMs: number;
 	writeMs: number;
 }

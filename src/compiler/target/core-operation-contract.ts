@@ -5,7 +5,11 @@ import {
 	isCoreOpcode,
 } from "../core/core-ir-opcodes.ts";
 import type { CoreOpcode } from "../core/core-ir-opcodes.ts";
-import type { CoreInstruction, CoreOpcodeRegistry } from "../core/core-ir.ts";
+import type {
+	CoreInstructionId,
+	CoreOpcodeRegistry,
+} from "../core/core-ir.ts";
+import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 
 /** Target-only forms synthesized from Core's structural control-flow model. */
@@ -132,11 +136,11 @@ export function requireCoreTargetOperationContract(
 }
 
 export function coreInstructionNeedsOperationSafepoint(
-	instruction: CoreInstruction,
-	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
 ): boolean {
-	requireCoreTargetOperationContract(instruction.opcode);
-	return coreInstructionEffects(instruction, registry).mayGc;
+	requireCoreTargetOperationContract(fn.instructionOpcodeName(instruction));
+	return coreInstructionEffects(fn, instruction).mayGc;
 }
 
 void compilerOperationOwnershipIsExact;

@@ -52,7 +52,7 @@ import type {
 import { coreProgramDataFromSemantic } from "./core-compilation.ts";
 import type {
 	CoreCapturedSlotRef,
-	CoreCompilation,
+	ConstructedCoreCompilation,
 	CoreHostInstallCandidate,
 } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
@@ -769,7 +769,7 @@ export function constructSemanticProgramCore(
 		facts?: CompilerProgramFacts;
 		collectOptimizationDiagnostics?: boolean;
 	} = {},
-): CoreCompilation {
+): ConstructedCoreCompilation {
 	const program: CoreFrontendContext = {
 		semantic,
 		core: new CoreProgram(coreOpcodeRegistry),
@@ -890,7 +890,7 @@ export function constructSemanticProgramCore(
 	return compilation;
 }
 
-function finishCoreProgram(program: CoreFrontendContext): CoreCompilation {
+function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompilation {
 	for (const fn of program.functions) {
 		const functionId = finishDirectCoreFunction(fn);
 		if (functionId !== fn.functionIndex) {

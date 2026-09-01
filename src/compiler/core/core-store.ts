@@ -165,6 +165,7 @@ const REPRESENTATIONS = [
 const REPRESENTATION_IDS = new Map<CoreRepresentation, number>(
 	REPRESENTATIONS.map((representation, index) => [representation, index]),
 );
+type CoreValueDefinitionKind = 0 | 1;
 
 const TERMINATOR_CODES: Readonly<
 	Record<Exclude<CoreInstructionKind, "operation">, number>
@@ -1245,7 +1246,7 @@ export class CoreFunctionStore {
 
 	#createValue(
 		representation: CoreRepresentation,
-		definitionKind: 0 | 1,
+		definitionKind: CoreValueDefinitionKind,
 		definitionOwner: CoreBlockId | CoreInstructionId,
 		definitionIndex: number,
 	): CoreValueId {

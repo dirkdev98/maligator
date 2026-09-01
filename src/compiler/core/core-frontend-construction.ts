@@ -1,9 +1,4 @@
 import type { SemanticFile } from "../frontend/semantic-analysis.ts";
-import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
-import {
-	compilerFactIsWorldInvariant,
-	knownBuiltinCallProves,
-} from "../shared/compiler-facts.ts";
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
@@ -21,8 +16,6 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import type { CoreProgram } from "./core-store.ts";
-
-type ValueRepresentation = "boxed" | "f64" | "boolean";
 
 export interface CoreConstructionBlock {
 	emitter: CoreInstructionEmitter;
@@ -107,45 +100,12 @@ interface HandlerDraft {
 	readonly environment: ValueEnvironment;
 }
 
-type RepresentationRule =
-	| {
-			readonly kind: "fixed";
-			readonly output: CoreValueId;
-			readonly value: ValueRepresentation;
-	  }
-	| { readonly kind: "copy"; readonly output: CoreValueId; readonly input: CoreValueId }
-	| {
-			readonly kind: "join";
-			readonly output: CoreValueId;
-			readonly inputs: Array<CoreValueId>;
-	  }
-	| {
-			readonly kind: "number-inputs";
-			readonly output: CoreValueId;
-			readonly inputs: ReadonlyArray<CoreValueId>;
-	  };
-
 interface PendingConditional {
 	readonly instruction: Extract<CompilerInstruction, { type: "jumpIf" }>;
 	readonly state: ConstructionState;
 	readonly condition: CoreValueId;
 	readonly sourcePosition?: number;
 }
-
-const COMPARE_OPERATORS = new Set(["<", "<=", ">", ">=", "===", "==", "!==", "!="]);
-const NUMBER_FROM_NUMBERS = new Set([
-	"+",
-	"-",
-	"*",
-	"/",
-	"&",
-	"|",
-	"^",
-	"<<",
-	">>",
-	">>>",
-	"%",
-]);
 
 function destinationCount(instruction: CompilerInstruction): number {
 	if (!("registers" in instruction)) return 0;
@@ -228,32 +188,6 @@ function immediateOperand(
 	return instruction.type === "call" || instruction.type === "construct"
 		? instruction.immediateValues?.[position]
 		: undefined;
-}
-
-function fixedRepresentation(
-	instruction: CompilerInstruction,
-	outputIndex: number,
-): ValueRepresentation | undefined {
-	if (instruction.type === "createNumber" || instruction.type === "createF64")
-		return "f64";
-	if (instruction.type === "mathUnaryNumber" || instruction.type === "mathBinaryNumber") {
-		return "f64";
-	}
-	if (
-		outputIndex === 0 &&
-		(instruction.type === "createBoolean" ||
-			instruction.type === "guardFunctionIndex" ||
-			instruction.type === "hasPrivate" ||
-			instruction.type === "isEmpty" ||
-			instruction.type === "typeofCompare")
-	) {
-		return "boolean";
-	}
-	if (instruction.type === "binary" && COMPARE_OPERATORS.has(instruction.operator)) {
-		return "boolean";
-	}
-	if (instruction.type === "unary" && instruction.operator === "!") return "boolean";
-	return undefined;
 }
 
 function valueEnvironment(state: ConstructionState): ValueEnvironment {
@@ -342,7 +276,6 @@ export class DirectCoreFunctionConstruction {
 	readonly #builder: CoreFunctionBuilder;
 	readonly #states: Array<ConstructionState> = [];
 	readonly #blocks: Array<BlockEmitter> = [];
-	readonly #representationRules: Array<RepresentationRule> = [];
 	readonly #activeHandlers: Array<Extract<CompilerInstruction, { type: "tryBegin" }>> =
 		[];
 	readonly #prelude: ConstructionState;
@@ -372,11 +305,6 @@ export class DirectCoreFunctionConstruction {
 			.entries()) {
 			this.#prelude.entryValues.set(index, parameter.value);
 			this.#prelude.definitions.set(index, parameter.value);
-			this.#representationRules.push({
-				kind: "fixed",
-				output: parameter.value,
-				value: "boxed",
-			});
 		}
 		// Async generators use GENERATOR_START at their body entry. ASYNC_START is
 		// exclusively the promise-producing prologue for ordinary async functions;
@@ -535,7 +463,6 @@ export class DirectCoreFunctionConstruction {
 
 		this.#propagateEntryVariables();
 		this.#materializeControlFlow();
-		this.#solveRepresentations();
 		this.#builder.configureFunction({
 			isGenerator: this.#fn.isGenerator === true,
 			isAsync: this.#fn.isAsync === true,
@@ -688,7 +615,6 @@ export class DirectCoreFunctionConstruction {
 		for (const [index, variable] of destinations.entries()) {
 			const output = outputs[index]!;
 			state.definitions.set(variable, output);
-			this.#addRepresentationRule(instruction, index, output, inputs);
 		}
 	}
 
@@ -721,67 +647,7 @@ export class DirectCoreFunctionConstruction {
 					: { sourcePosition: this.#sourcePosition }),
 			},
 		);
-		this.#representationRules.push({
-			kind: "fixed",
-			output: output!,
-			value:
-				value.kind === "number" ? "f64" : value.kind === "boolean" ? "boolean" : "boxed",
-		});
 		return output!;
-	}
-
-	#addRepresentationRule(
-		instruction: CompilerInstruction,
-		outputIndex: number,
-		output: CoreValueId,
-		inputs: ReadonlyArray<CoreValueId>,
-	): void {
-		const fixed = fixedRepresentation(instruction, outputIndex);
-		if (fixed !== undefined) {
-			this.#representationRules.push({ kind: "fixed", output, value: fixed });
-			return;
-		}
-		if (outputIndex !== 0) {
-			this.#representationRules.push({ kind: "fixed", output, value: "boxed" });
-			return;
-		}
-		if (instruction.type === "move") {
-			this.#representationRules.push({ kind: "copy", output, input: inputs[0]! });
-			return;
-		}
-		if (instruction.type === "binary" && NUMBER_FROM_NUMBERS.has(instruction.operator)) {
-			this.#representationRules.push({ kind: "number-inputs", output, inputs });
-			return;
-		}
-		if (
-			instruction.type === "unary" &&
-			["-", "+", "~", "tonumeric", "increment", "decrement"].includes(
-				instruction.operator,
-			)
-		) {
-			this.#representationRules.push({ kind: "number-inputs", output, inputs });
-			return;
-		}
-		if (instruction.type === "call") {
-			const call = instruction.knownBuiltinCall;
-			const descriptor =
-				call === undefined ? undefined : builtinOperationDescriptor(call.operation);
-			const argumentCount = instruction.registers.length - 3;
-			if (
-				call !== undefined &&
-				descriptor?.nativeNumberArity === argumentCount &&
-				knownBuiltinCallProves(call, call.operation) &&
-				compilerFactIsWorldInvariant(call.identity)
-			) {
-				this.#representationRules.push({
-					kind: "number-inputs",
-					output,
-					inputs: inputs.slice(2),
-				});
-				return;
-			}
-		}
-		this.#representationRules.push({ kind: "fixed", output, value: "boxed" });
 	}
 
 	#read(state: ConstructionState, variable: number): CoreValueId {
@@ -799,11 +665,6 @@ export class DirectCoreFunctionConstruction {
 			);
 			state.entryValues.set(variable, undefinedValue!);
 			state.definitions.set(variable, undefinedValue!);
-			this.#representationRules.push({
-				kind: "fixed",
-				output: undefinedValue!,
-				value: "boxed",
-			});
 			return undefinedValue!;
 		}
 		const parameter = this.#builder.appendBlockParameter(state.core);
@@ -819,11 +680,6 @@ export class DirectCoreFunctionConstruction {
 			representation: "boxed",
 		});
 		state.exceptionValue = exception;
-		this.#representationRules.push({
-			kind: "fixed",
-			output: exception,
-			value: "boxed",
-		});
 		return exception;
 	}
 
@@ -937,22 +793,6 @@ export class DirectCoreFunctionConstruction {
 	}
 
 	#materializeControlFlow(): void {
-		const joinRules = new Map<
-			CoreValueId,
-			Extract<RepresentationRule, { kind: "join" }>
-		>();
-		const addEdgeRules = (target: ConstructionState, edge: CoreEdge): void => {
-			for (const [index, variable] of target.parameterVariables.entries()) {
-				const output = target.entryValues.get(variable)!;
-				let rule = joinRules.get(output);
-				if (rule === undefined) {
-					rule = { kind: "join", output, inputs: [] };
-					joinRules.set(output, rule);
-					this.#representationRules.push(rule);
-				}
-				rule.inputs.push(edge.arguments[index]!);
-			}
-		};
 		const edge = (
 			reference: TargetReference,
 			environment: ValueEnvironment,
@@ -964,7 +804,6 @@ export class DirectCoreFunctionConstruction {
 					this.#resolveEnvironment(environment, variable),
 				),
 			};
-			addEdgeRules(target, result);
 			return result;
 		};
 
@@ -1015,107 +854,6 @@ export class DirectCoreFunctionConstruction {
 					break;
 			}
 			this.#builder.setTerminator(state.core, terminator);
-		}
-	}
-
-	#solveRepresentations(): void {
-		const rules = this.#representationRules;
-		const ruleInputs = (rule: RepresentationRule): ReadonlyArray<CoreValueId> => {
-			switch (rule.kind) {
-				case "fixed":
-					return [];
-				case "copy":
-					return [rule.input];
-				case "join":
-				case "number-inputs":
-					return rule.inputs;
-			}
-		};
-		let valueCount = 0;
-		for (const rule of rules) {
-			valueCount = Math.max(valueCount, rule.output + 1);
-			for (const input of ruleInputs(rule)) valueCount = Math.max(valueCount, input + 1);
-		}
-		const values = new Array<ValueRepresentation | null | undefined>(valueCount);
-		const outputs: Array<CoreValueId> = [];
-		for (const rule of rules) {
-			if (values[rule.output] === undefined) outputs.push(rule.output);
-			values[rule.output] = null;
-		}
-		const dependents = new Array<Array<number> | undefined>(valueCount).fill(undefined);
-		for (const [ruleIndex, rule] of rules.entries()) {
-			for (const input of ruleInputs(rule)) {
-				const users = dependents[input];
-				if (users === undefined) dependents[input] = [ruleIndex];
-				else users.push(ruleIndex);
-			}
-		}
-		const candidate = (rule: RepresentationRule): ValueRepresentation | null => {
-			switch (rule.kind) {
-				case "fixed":
-					return rule.value;
-				case "copy":
-					return values[rule.input] ?? null;
-				case "number-inputs": {
-					if (rule.inputs.length === 0) return "f64";
-					let number = false;
-					for (const input of rule.inputs) {
-						const value = values[input] ?? null;
-						if (value === "boxed" || value === "boolean") return "boxed";
-						if (value === "f64") number = true;
-					}
-					return number ? "f64" : null;
-				}
-				case "join": {
-					let known: ValueRepresentation | null = null;
-					for (const input of rule.inputs) {
-						const value = values[input] ?? null;
-						if (value === "boxed") return "boxed";
-						if (value === null) continue;
-						if (known === null) known = value;
-						else if (known !== value) return "boxed";
-					}
-					return known;
-				}
-			}
-		};
-		const queue: Array<number> = [];
-		const queued = new Uint8Array(rules.length);
-		const enqueue = (rule: number): void => {
-			if (queued[rule] !== 0) return;
-			queued[rule] = 1;
-			queue.push(rule);
-		};
-		const converge = (): void => {
-			for (let next = 0; next < queue.length; next++) {
-				const ruleIndex = queue[next]!;
-				queued[ruleIndex] = 0;
-				const rule = rules[ruleIndex]!;
-				const candidateValue = candidate(rule);
-				if (candidateValue === null) continue;
-				const current = values[rule.output] ?? null;
-				const joined =
-					current === null
-						? candidateValue
-						: current === candidateValue
-							? current
-							: ("boxed" as const);
-				if (joined === current) continue;
-				values[rule.output] = joined;
-				for (const dependent of dependents[rule.output] ?? []) enqueue(dependent);
-			}
-			queue.length = 0;
-		};
-		for (let rule = 0; rule < rules.length; rule++) enqueue(rule);
-		converge();
-		for (const output of outputs) {
-			if (values[output] !== null) continue;
-			values[output] = "boxed";
-			for (const dependent of dependents[output] ?? []) enqueue(dependent);
-		}
-		converge();
-		for (const output of outputs) {
-			this.#builder.setValueRepresentation(output, values[output] ?? "boxed");
 		}
 	}
 }

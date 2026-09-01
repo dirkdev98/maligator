@@ -139,10 +139,10 @@ interface HttpMetrics {
 interface SelfCompilePhases {
 	graphMs: number;
 	semanticMs: number;
-	lowerSemanticMs: number;
-	optimizeMs: number;
-	regallocMs: number;
-	lowerMs: number;
+	constructCoreMs: number;
+	optimizeCoreMs: number;
+	coreToExecutionMs: number;
+	executionToImageMs: number;
 	emitMs: number;
 	writeMs: number;
 }
@@ -543,10 +543,10 @@ function medianPhases(values: ReadonlyArray<SelfCompilePhases>): SelfCompilePhas
 	return {
 		graphMs: field("graphMs"),
 		semanticMs: field("semanticMs"),
-		lowerSemanticMs: field("lowerSemanticMs"),
-		optimizeMs: field("optimizeMs"),
-		regallocMs: field("regallocMs"),
-		lowerMs: field("lowerMs"),
+		constructCoreMs: field("constructCoreMs"),
+		optimizeCoreMs: field("optimizeCoreMs"),
+		coreToExecutionMs: field("coreToExecutionMs"),
+		executionToImageMs: field("executionToImageMs"),
 		emitMs: field("emitMs"),
 		writeMs: field("writeMs"),
 	};
@@ -829,7 +829,10 @@ function reportSelfCompile(
 		`  Maligator ${(current.maligatorMs / 1000).toFixed(1)}s${delta(current.maligatorMs, previous?.maligatorMs)} vs Node ${(current.nodeMs / 1000).toFixed(1)}s`,
 	);
 	console.log(
-		`  optimize ${(current.maligatorPhases.optimizeMs / 1000).toFixed(1)}s, emit ${(current.maligatorPhases.emitMs / 1000).toFixed(1)}s, ${current.units} units, ${current.runs} paired samples`,
+		`  Core ${current.maligatorPhases.constructCoreMs}ms construct, ${current.maligatorPhases.optimizeCoreMs}ms optimize, ${current.maligatorPhases.coreToExecutionMs}ms execution, ${current.maligatorPhases.executionToImageMs}ms image`,
+	);
+	console.log(
+		`  emit ${(current.maligatorPhases.emitMs / 1000).toFixed(1)}s, ${current.units} units, ${current.runs} paired samples`,
 	);
 }
 

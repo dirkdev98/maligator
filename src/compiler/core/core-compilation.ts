@@ -4,7 +4,8 @@ import type {
 	OptimizationPassDelta,
 } from "../shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
-import type { CoreProgram } from "./core-ir.ts";
+import type { CoreProgram, SealedCoreProgram } from "./core-ir.ts";
+import type { CoreOptimizationPlan } from "./optimize.ts";
 
 /** A captured cell: its function index or negative per-iteration scope id, plus slot. */
 export interface CoreCapturedSlotRef {
@@ -49,10 +50,17 @@ export interface CoreCompilationContext {
 	readonly optimizationTrace?: ReadonlyArray<OptimizationPassDelta>;
 }
 
-/** Product compiler boundary: pure Core SSA plus its explicit compilation context. */
-export interface CoreCompilation {
+/** Mutable construction boundary consumed only by Core optimization. */
+export interface ConstructedCoreCompilation {
 	readonly program: CoreProgram;
 	readonly context: CoreCompilationContext;
+}
+
+/** Product compiler boundary: sealed Core SSA plus its explicit lowering plan. */
+export interface CoreCompilation {
+	readonly program: SealedCoreProgram;
+	readonly context: CoreCompilationContext;
+	readonly plan: CoreOptimizationPlan;
 }
 
 export function coreCapturedSlotKey(owner: number, index: number): string {

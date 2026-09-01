@@ -1,11 +1,4 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
-import {
-	coreKnownOwnSlotFromAttribute,
-	coreShapeCaseCandidatesFromAttribute,
-	coreShapeOriginKeys,
-} from "../core/core-ir-shape-provenance.ts";
-import { coreInstructionId } from "../core/core-ir.ts";
-import type { CoreProgram } from "../core/core-ir.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
@@ -17,6 +10,7 @@ import {
 	compactLiteralTemplateSegments,
 	remapLiteralTemplateConstants,
 } from "../shared/literal-template-data.ts";
+import { executionFunctionIndex } from "./execution-ir.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { executionSafepointRootRegisters } from "./execution-liveness.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
@@ -2257,29 +2251,19 @@ interface VmKnownShapeLayout {
 	readonly precompiledLiteralShapes: ReadonlyArray<VmPrecompiledLiteralShape>;
 }
 
-/**
- * Resolve Core shape-origin anchors to dense VM cache rows. Physical shaped
- * allocations keep their bytecode row; constructor-derived layouts reserve a
- * synthetic row after the physical prefix. Every row used by a guard receives a
- * portable descriptor, so both static and wire/interpreted output intern the
- * same live shape before the access executes.
- */
 function buildKnownShapeLayout(
-	core: CoreProgram,
 	functions: ReadonlyArray<ExecutionFunction>,
 ): VmKnownShapeLayout {
 	const origins: Array<Map<number, VmKnownShapeOrigin>> = [];
-	const layoutRows: Array<Map<string, number>> = [];
 	const literalShapeCounts: Array<number> = [];
 	for (const fn of functions) {
 		const cacheIndexByInstruction = new Map<CompilerInstruction, number>();
-		const rows = new Map<string, number>();
 		let shapeCacheIndex = 0;
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (instruction.type === "createObjectShaped") {
 					cacheIndexByInstruction.set(instruction, shapeCacheIndex);
-					rows.set(instruction.keyStringIndices.join(","), shapeCacheIndex++);
+					shapeCacheIndex++;
 				}
 			}
 		}
@@ -2300,111 +2284,12 @@ function buildKnownShapeLayout(
 			});
 		}
 		origins[fn.functionIndex] = functionOrigins;
-		layoutRows[fn.functionIndex] = rows;
 		literalShapeCounts[fn.functionIndex] = shapeCacheIndex;
-	}
-
-	const coreInstructions = core.functions.map(
-		(fn) =>
-			new Map(
-				fn.blocks.flatMap((block) =>
-					block.instructions.map((instruction) => [instruction.id, instruction] as const),
-				),
-			),
-	);
-	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
-	const coreOriginKeys = new Map<string, ReadonlyArray<number>>();
-	const ensureOrigin = (
-		functionIndex: number,
-		shapeInstruction: number,
-	): { readonly keys: ReadonlyArray<number>; readonly origin: VmKnownShapeOrigin } => {
-		const coreOriginIdentity = `${functionIndex}\0${shapeInstruction}`;
-		const originFunction = core.functions[functionIndex];
-		const originInstruction = coreInstructions[functionIndex]?.get(
-			coreInstructionId(shapeInstruction),
-		);
-		if (
-			originFunction?.functionIndex !== functionIndex ||
-			originInstruction === undefined
-		) {
-			throw new Error(`Invalid known shape origin ${functionIndex}:${shapeInstruction}`);
-		}
-		let keys = coreOriginKeys.get(coreOriginIdentity);
-		if (keys === undefined) {
-			keys = coreShapeOriginKeys(core, originFunction, originInstruction);
-			if (keys !== undefined) coreOriginKeys.set(coreOriginIdentity, keys);
-		}
-		if (keys === undefined) {
-			throw new Error(`Invalid known shape origin ${functionIndex}:${shapeInstruction}`);
-		}
-
-		let origin = origins[functionIndex]?.get(shapeInstruction);
-		if (origin !== undefined) {
-			if (
-				origin.keyStringIndices.length !== keys.length ||
-				origin.keyStringIndices.some((key, index) => key !== keys[index])
-			) {
-				throw new Error(
-					`Shape origin layout changed ${functionIndex}:${shapeInstruction}`,
-				);
-			}
-		} else {
-			const rows = layoutRows[functionIndex];
-			const functionOrigins = origins[functionIndex];
-			if (rows === undefined || functionOrigins === undefined) {
-				throw new Error(`Unknown shape-origin function ${functionIndex}`);
-			}
-			const layout = keys.join(",");
-			let shapeCacheIndex = rows.get(layout);
-			if (shapeCacheIndex === undefined) {
-				shapeCacheIndex = literalShapeCounts[functionIndex]!;
-				literalShapeCounts[functionIndex] = shapeCacheIndex + 1;
-				rows.set(layout, shapeCacheIndex);
-			}
-			origin = { keyStringIndices: keys, shapeCacheIndex };
-			functionOrigins.set(shapeInstruction, origin);
-		}
-		const identity = `${functionIndex}\0${origin.shapeCacheIndex}`;
-		descriptors.set(identity, {
-			functionIndex,
-			shapeCacheIndex: origin.shapeCacheIndex,
-			keyStringIndices: [...origin.keyStringIndices],
-		});
-		return { keys, origin };
-	};
-	for (const owner of core.functions) {
-		for (const block of owner.blocks) {
-			for (const instruction of block.instructions) {
-				const claim = coreKnownOwnSlotFromAttribute(instruction.attributes.knownOwnSlot);
-				if (claim !== undefined) {
-					for (const candidate of claim.candidates) {
-						const functionIndex = candidate.shapeFunctionIndex;
-						const { keys } = ensureOrigin(functionIndex, candidate.shapeInstruction);
-						if (
-							candidate.slot >= keys.length ||
-							keys[candidate.slot] !== instruction.attributes.stringIndex
-						) {
-							throw new Error(
-								`Invalid known shape origin ${functionIndex}:${candidate.shapeInstruction}`,
-							);
-						}
-					}
-				}
-				const shapeCases = coreShapeCaseCandidatesFromAttribute(
-					instruction.attributes.shapeCaseCandidates,
-				);
-				if (shapeCases !== undefined) {
-					for (const candidate of shapeCases) {
-						ensureOrigin(candidate.shapeFunctionIndex, candidate.shapeInstruction);
-					}
-				}
-			}
-		}
 	}
 	return {
 		origins,
 		literalShapeCounts,
-		precompiledLiteralShapes: [...descriptors.values()],
+		precompiledLiteralShapes: [],
 	};
 }
 
@@ -2456,7 +2341,7 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		fileToIndex.set(path, index);
 		return index;
 	};
-	const knownShapeLayout = buildKnownShapeLayout(core, program.functions);
+	const knownShapeLayout = buildKnownShapeLayout(program.functions);
 	const functionPlans = program.functions.map((fn, index) =>
 		lowerExecutionFunctionToBytecode(
 			fn,
@@ -2476,7 +2361,9 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		literalTemplateData: [...core.literalTemplateData],
 		precompiledLiteralShapes: [...knownShapeLayout.precompiledLiteralShapes],
 		globalCount: core.globalCount,
-		cjsModuleFunctionIndices: [...context.data.cjsModuleFunctionIndices],
+		cjsModuleFunctionIndices: context.data.cjsModuleFunctionIndices.map((coreFunction) =>
+			executionFunctionIndex(program.functionMap, coreFunction),
+		),
 		hostInstalls: buildHostInstalls(context, functions),
 		files,
 		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),

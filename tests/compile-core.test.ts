@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compileSemanticProgramToRuntimeImage } from "../src/compiler/pipeline/compile-runtime-core.ts";
+import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
 
 describe("compileSemanticProgramToProgramImage", () => {
-	it("runs phases in order and inspects optimized IR before allocation", () => {
+	it("runs phases in order and inspects optimized IR before target lowering", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis("1 + 2", "pipeline.js");
 		const events: Array<string> = [];
 
@@ -15,20 +18,23 @@ describe("compileSemanticProgramToProgramImage", () => {
 				events.push(`end:${phase}`);
 				return result;
 			},
-			afterCoreOptimization: () => events.push("after optimization"),
+			afterCoreOptimization: (program) => {
+				expect(program.sealed).toBe(true);
+				events.push("after optimization");
+			},
 		});
 
 		expect(definition.runtime.functions.length).toBeGreaterThan(0);
 		expect(events).toEqual([
 			"start:construct core ir",
 			"end:construct core ir",
-			"start:core ir optimizations",
-			"end:core ir optimizations",
+			"start:optimize core ir",
+			"end:optimize core ir",
 			"after optimization",
-			"start:lower core ir",
-			"end:lower core ir",
-			"start:lower to vm",
-			"end:lower to vm",
+			"start:core to execution",
+			"end:core to execution",
+			"start:execution to image",
+			"end:execution to image",
 		]);
 	});
 
@@ -39,6 +45,33 @@ describe("compileSemanticProgramToProgramImage", () => {
 		});
 
 		expect(definition.runtime.functions.length).toBeGreaterThan(0);
+	});
+
+	it("seals the constructed store in place and records dense function relocation", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			"function nested() { return 42; } globalThis.result = nested();",
+			"empty-optimizer.js",
+		);
+		const constructed = lowerSemanticProgramToCore(semantic);
+		const mutableProgram = constructed.program;
+		const compilation = optimizeCore(constructed);
+
+		expect(compilation.program).toBe(mutableProgram);
+		expect(compilation.program.sealed).toBe(true);
+		expect(compilation.plan).toEqual({ directEntries: [], specializations: [] });
+
+		const execution = lowerCoreCompilationToExecutionProgram(compilation);
+		expect(execution.functionMap.executionToCore).toEqual([
+			...compilation.program.functionIds(),
+		]);
+		for (const [index, core] of execution.functionMap.executionToCore.entries()) {
+			expect(execution.functionMap.coreToExecution[core]).toBe(index);
+		}
+		expect(execution.functions.every((fn) => fn.functionIndex >= 0)).toBe(true);
+		expect(execution.functions.every((fn) => fn.specializations.length === 0)).toBe(
+			true,
+		);
+		expect(execution.functions.every((fn) => fn.directEntries.length === 0)).toBe(true);
 	});
 
 	it("supports the correctness-focused development optimization profile", () => {

@@ -40,9 +40,9 @@ describe("compileEntrypoint build policy", () => {
 			"graph",
 			"semantic",
 			"construct core ir",
-			"core ir optimizations",
-			"lower core ir",
-			"lower to vm",
+			"optimize core ir",
+			"core to execution",
+			"execution to image",
 		]);
 	});
 
@@ -60,14 +60,14 @@ describe("compileEntrypoint build policy", () => {
 			"graph",
 			"semantic",
 			"construct core ir",
-			"core ir optimizations",
-			"lower core ir",
-			"lower to vm",
+			"optimize core ir",
+			"core to execution",
+			"execution to image",
 			"serialize",
 		]);
 	});
 
-	test("keeps the portable image independent of native direct-entry planning", () => {
+	test("keeps the portable image identical to generic native lowering", () => {
 		const entry = entrypoint(`
 			function format(left, right, scale) {
 				let total = 0;
@@ -80,7 +80,9 @@ describe("compileEntrypoint build policy", () => {
 		const portable = compileEntrypointToBuffer(entry, options);
 		const native = compileEntrypoint(entry, options);
 
-		expect(native.native.functions.some((fn) => fn.directEntries.length > 0)).toBe(true);
+		expect(native.native.functions.every((fn) => fn.directEntries.length === 0)).toBe(
+			true,
+		);
 		expect(portable).toEqual(serializeRuntimeImage(native.runtime));
 	});
 

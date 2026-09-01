@@ -15,12 +15,12 @@ export function compileSemanticProgramToProgramImage(
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
 	const optimized = optimizeSemanticProgramToCore(semantic, options, runPhase);
-	const lowered = runPhase("lower core ir", () =>
+	const lowered = runPhase("core to execution", () =>
 		lowerCoreCompilationToExecution(optimized, {
 			reuseRegisters: options.optimization !== "development",
 		}),
 	);
-	return runPhase("lower to vm", () =>
+	return runPhase("execution to image", () =>
 		lowerExecutionToProgramImage(lowered, options.profile === true),
 	);
 }

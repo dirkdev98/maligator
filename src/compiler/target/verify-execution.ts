@@ -1,6 +1,8 @@
 import { coreOpcodeRegistry, isCoreOpcode } from "../core/core-ir-opcodes.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
-import type { CoreFunction } from "../core/core-ir.ts";
+import { coreTerminatorEdges } from "../core/core-ir-control-flow.ts";
+import type { CoreInstructionId } from "../core/core-ir.ts";
+import type { CoreFunctionStore } from "../core/core-store.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import { coreInstructionNeedsOperationSafepoint } from "./core-operation-contract.ts";
@@ -179,15 +181,26 @@ function writes(
 
 function verifyProgramCardinality(program: ExecutionProgram): void {
 	const core = program.core;
-	if (program.functions.length !== core.functions.length) {
+	const coreFunctions = [...core.functionIds()];
+	if (program.functions.length !== coreFunctions.length) {
 		fail(
-			`target program holds ${program.functions.length} functions for a ${core.functions.length}-function Core program`,
+			`target program holds ${program.functions.length} functions for a ${coreFunctions.length}-function Core program`,
 		);
+	}
+	if (program.functionMap.executionToCore.length !== program.functions.length) {
+		fail("execution-to-Core function map does not match the target function table");
 	}
 	for (const [index, fn] of program.functions.entries()) {
 		const context: ExecutionVerificationContext = { functionIndex: index };
-		const coreFunction = core.functions[index]!;
-		if (fn.functionIndex !== index || coreFunction.functionIndex !== index) {
+		const coreFunctionId = program.functionMap.executionToCore[index];
+		if (coreFunctionId === undefined) {
+			fail("target function has no Core function identity", context);
+		}
+		const coreFunction = core.function(coreFunctionId);
+		if (
+			fn.functionIndex !== index ||
+			program.functionMap.coreToExecution[coreFunctionId] !== index
+		) {
 			fail(
 				`target function index ${fn.functionIndex} is stored at program index ${index}`,
 				context,
@@ -750,23 +763,38 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 	}
 }
 
-function verifyGcRoots(model: FunctionModel, core: CoreFunction): void {
+function verifyGcRoots(model: FunctionModel, core: CoreFunctionStore): void {
 	const { fn, functionIndex } = model;
-	const expected = new Map(
-		core.blocks.flatMap(({ instructions }) =>
-			instructions
-				.filter((instruction) => coreInstructionNeedsOperationSafepoint(instruction))
-				.map((instruction) => [instruction.id, instruction] as const),
-		),
-	);
-	const coreInstructions = new Map(
-		core.blocks.flatMap(({ instructions }) =>
-			instructions.map((instruction) => [instruction.id, instruction] as const),
-		),
-	);
-	const coreValueDefinitions = new Map(
-		core.values.map(({ id, definition }) => [id, definition] as const),
-	);
+	const reachable = new Set([core.entry]);
+	const pending = [core.entry];
+	while (pending.length > 0) {
+		const block = pending.pop()!;
+		const successors = [
+			...coreTerminatorEdges(core.terminatorPayload(core.blockTerminator(block))).map(
+				({ block }) => block,
+			),
+			...(core.blockHandler(block) === undefined
+				? []
+				: [core.blockHandler(block)!.block]),
+		];
+		for (const successor of successors) {
+			if (reachable.has(successor)) continue;
+			reachable.add(successor);
+			pending.push(successor);
+		}
+	}
+	const expected = new Set<CoreInstructionId>();
+	const coreInstructions = new Set<CoreInstructionId>();
+	for (const instruction of core.instructionIds()) {
+		if (core.instructionKind(instruction) !== "operation") continue;
+		coreInstructions.add(instruction);
+		if (
+			reachable.has(core.instructionBlock(instruction)) &&
+			coreInstructionNeedsOperationSafepoint(core, instruction)
+		) {
+			expected.add(instruction);
+		}
+	}
 	const safepoints = new Set<CompilerInstruction>();
 	const expectedBackedges = executionLoopBackedgeInstructions(fn);
 	const recordedBackedges = new Set<CompilerInstruction>();
@@ -834,23 +862,25 @@ function verifyGcRoots(model: FunctionModel, core: CoreFunction): void {
 			});
 		}
 		recordedOrigins.add(coreInstruction);
-		const origin = coreInstructions.get(coreInstruction);
-		if (origin === undefined) {
+		if (!coreInstructions.has(coreInstruction)) {
 			fail(`target safepoint names unknown Core instruction @${coreInstruction}`, {
 				functionIndex,
 			});
 		}
-		if (instruction.type !== origin.opcode) {
+		const originOpcode = core.instructionOpcodeName(coreInstruction);
+		if (instruction.type !== originOpcode) {
 			fail(
-				`Core instruction @${coreInstruction} lowered to ${instruction.type}, expected ${origin.opcode}`,
+				`Core instruction @${coreInstruction} lowered to ${instruction.type}, expected ${originOpcode}`,
 				{ functionIndex },
 			);
 		}
 		const immediates = instructionImmediates(instruction);
 		const embeddedSafepoints = new Set<number>();
-		for (const [index, input] of origin.inputs.entries()) {
-			if (immediates?.[origin.outputs.length + index] === undefined) continue;
-			const definition = coreValueDefinitions.get(input);
+		const originInputs = core.instructionOperands(coreInstruction);
+		const originOutputCount = core.instructionResults(coreInstruction).length;
+		for (const [index, input] of originInputs.entries()) {
+			if (immediates?.[originOutputCount + index] === undefined) continue;
+			const definition = core.valueDefinition(input);
 			if (definition?.kind === "instruction") {
 				embeddedSafepoints.add(definition.instruction);
 			}
@@ -996,7 +1026,7 @@ function verifyRegions(model: FunctionModel): void {
  */
 export function verifyExecutionFunctionRepresentationVariant(
 	fn: ExecutionFunction,
-	core: CoreFunction,
+	core: CoreFunctionStore,
 	functionIndex: number,
 ): void {
 	const model = buildFunctionModel(fn, functionIndex);
@@ -1015,7 +1045,11 @@ export function verifyExecutionProgram(program: ExecutionProgram): void {
 		verifyParallelCopies(model);
 		verifyExceptionEntries(model);
 		verifyTemporaryRegisters(model);
-		verifyGcRoots(model, program.core.functions[index]!);
+		const coreFunction = program.functionMap.executionToCore[index];
+		if (coreFunction === undefined) {
+			fail("target function has no Core function identity", { functionIndex: index });
+		}
+		verifyGcRoots(model, program.core.function(coreFunction));
 		verifyRegions(model);
 	}
 }

@@ -1,12 +1,11 @@
-import { attachCoreCompilerSiteFacts } from "../core/compiler-site-facts.ts";
 import type {
 	CoreCompilation,
 	CoreCompilationContext,
 } from "../core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
-import { executeCoreOptimizations } from "../core/core-ir-opt.ts";
 import type { CoreVerificationProfile } from "../core/core-ir-verifier.ts";
-import type { CoreProgram } from "../core/core-ir.ts";
+import type { SealedCoreProgram } from "../core/core-ir.ts";
+import { optimizeCore } from "../core/optimize.ts";
 import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { OptimizationAblation } from "../shared/compiler-diagnostics.ts";
@@ -15,9 +14,9 @@ import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 
 export type CompileCorePhase =
 	| "construct core ir"
-	| "core ir optimizations"
-	| "lower core ir"
-	| "lower to vm";
+	| "optimize core ir"
+	| "core to execution"
+	| "execution to image";
 
 export interface CompileCoreOptions {
 	facts?: CompilerProgramFacts;
@@ -26,9 +25,6 @@ export interface CompileCoreOptions {
 	profile?: boolean;
 	/** Bounded pass groups disabled only for controlled attribution builds. */
 	optimizationAblations?: ReadonlySet<OptimizationAblation>;
-	/** Tooling-only bound for fast analysis/attribution loops. Product builds use
-	 * the optimizer's normal convergence limit when omitted. */
-	optimizationRounds?: number;
 	/**
 	 * Core verification depth. Boundary verification is unconditional; `per-pass`
 	 * additionally attributes an invalid graph to the pass that produced it.
@@ -39,7 +35,10 @@ export interface CompileCoreOptions {
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
 	};
-	afterCoreOptimization?: (program: CoreProgram, context: CoreCompilationContext) => void;
+	afterCoreOptimization?: (
+		program: SealedCoreProgram,
+		context: CoreCompilationContext,
+	) => void;
 	runPhase?: <T>(phase: CompileCorePhase, run: () => T) => T;
 }
 
@@ -57,34 +56,7 @@ export function optimizeSemanticProgramToCore(
 		},
 		runPhase,
 	});
-	// Development images keep one semantics-preserving pass over the fixpoint;
-	// production retains full convergence for runtime and size optimization.
-	const optimizationRounds =
-		options.optimizationRounds ??
-		(options.optimization === "development" ? 1 : undefined);
-	const optimized = runPhase("core ir optimizations", () => {
-		const result = executeCoreOptimizations(core.program, {
-			context: core.context,
-			ablations: options.optimizationAblations,
-			...(optimizationRounds === undefined ? {} : { maxRounds: optimizationRounds }),
-			...(options.coreVerification === undefined
-				? {}
-				: { verification: options.coreVerification }),
-		});
-		if (result.context === undefined) {
-			throw new Error("Core optimization lost compilation context");
-		}
-		const compilation: CoreCompilation = {
-			program: result.program,
-			context: result.context,
-			...(result.targetAnalyses === undefined
-				? {}
-				: { targetAnalyses: result.targetAnalyses }),
-		};
-		return options.profile === true
-			? attachCoreCompilerSiteFacts(compilation)
-			: compilation;
-	});
+	const optimized = runPhase("optimize core ir", () => optimizeCore(core));
 	options.afterCoreOptimization?.(optimized.program, optimized.context);
 	return optimized;
 }

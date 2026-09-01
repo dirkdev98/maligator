@@ -30,10 +30,10 @@ const config: ResolvedBuildConfig = {
 const phases = {
 	graphMs: 0,
 	semanticMs: 0,
-	lowerSemanticMs: 0,
-	optimizeMs: 0,
-	regallocMs: 0,
-	lowerMs: 0,
+	constructCoreMs: 0,
+	optimizeCoreMs: 0,
+	coreToExecutionMs: 0,
+	executionToImageMs: 0,
 	emitMs: 0,
 	writeMs: 0,
 };
@@ -48,10 +48,10 @@ const measure = <T,>(phase: Phase, run: () => T): T => {
 const compilePhases = {
 	graph: "graphMs",
 	semantic: "semanticMs",
-	"construct core ir": "lowerSemanticMs",
-	"core ir optimizations": "optimizeMs",
-	"lower core ir": "optimizeMs",
-	"lower to vm": "lowerMs",
+	"construct core ir": "constructCoreMs",
+	"optimize core ir": "optimizeCoreMs",
+	"core to execution": "coreToExecutionMs",
+	"execution to image": "executionToImageMs",
 } as const;
 const image = compileEntrypoint(path.resolve(inputPath), {
 	stripTypes: (source) => source,
