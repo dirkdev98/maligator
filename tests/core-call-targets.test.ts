@@ -83,9 +83,44 @@ describe("incremental Core call graph", () => {
 		).toEqual([2]);
 	});
 
-	it("joins branch arguments without round-based program rescans", () => {
+	it("revisits only dependent blocks when a loop adds a callee target", () => {
 		const program = analysisProgram();
-		const caller = appendCaller(program, 1);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const header = builder.createBlock([{ representation: "boxed" }]);
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		const [initial] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [initial!] },
+		});
+		const callee = builder.blockParameters(header)[0]!.value;
+		const [receiver] = builder.appendInstruction(header, "createUndefined", []);
+		builder.appendInstruction(header, "call", [callee, receiver!]);
+		const [, call] = builder.bodyInstructionIds(header);
+		const [condition] = builder.appendInstruction(header, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [backedge] = builder.appendInstruction(body, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [backedge!] },
+		});
+		const [result] = builder.appendInstruction(exit, "createUndefined", []);
+		builder.setTerminator(exit, { kind: "return", value: result! });
+		const caller = builder.finish(entry).function;
+		appendLeaf(program);
 		appendLeaf(program);
 		const manager = new CoreAnalysisManager(
 			program,
@@ -95,7 +130,11 @@ describe("incremental Core call graph", () => {
 		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 		expect(second).toBe(first);
-		expect(second.outgoing(caller.function)).toHaveLength(1);
+		expect(second.site(`${caller}:${call!}`)?.targets).toMatchObject({
+			functions: [1, 2],
+			anyScript: false,
+			opaque: false,
+		});
 	});
 
 	it("propagates a closed-cell target edit only to dependent readers", () => {
