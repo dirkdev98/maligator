@@ -128,6 +128,53 @@ function redirectPayload(
 	}
 }
 
+function replacePayloadValue(
+	payload: CoreTerminatorPayload,
+	from: CoreValueId,
+	replacement: CoreValueId,
+): CoreTerminatorPayload {
+	const value = (candidate: CoreValueId): CoreValueId =>
+		candidate === from ? replacement : candidate;
+	const edge = (candidate: CoreEdge): CoreEdge => ({
+		block: candidate.block,
+		arguments: candidate.arguments.map(value),
+	});
+	switch (payload.kind) {
+		case "jump":
+			return { kind: "jump", edge: edge(payload.edge) };
+		case "branch":
+			return {
+				kind: "branch",
+				condition: value(payload.condition),
+				consequent: edge(payload.consequent),
+				alternate: edge(payload.alternate),
+			};
+		case "guard":
+			return {
+				kind: "guard",
+				condition: value(payload.condition),
+				fact: payload.fact,
+				success: edge(payload.success),
+				fallback: edge(payload.fallback),
+			};
+		case "switch":
+			return {
+				kind: "switch",
+				discriminant: value(payload.discriminant),
+				cases: payload.cases.map(({ value: immediate, edge: candidate }) => ({
+					value: immediate,
+					edge: edge(candidate),
+				})),
+				default: edge(payload.default),
+			};
+		case "return":
+		case "throw":
+			return { kind: payload.kind, value: value(payload.value) };
+		case "unreachable":
+			return payload;
+	}
+}
+
 export class CoreEditor {
 	readonly program: CoreProgram;
 	readonly function: CoreFunctionStore;
@@ -190,6 +237,19 @@ export class CoreEditor {
 		return this.#addBlockParameter(block, spec, true);
 	}
 
+	removeBlockParameter(block: CoreBlockId, index: number): void {
+		this.#assertActive();
+		const value = this.function._removeBlockParameter(
+			CORE_STORE_MUTATION,
+			block,
+			index,
+		);
+		this.#touchBlock(block);
+		this.#values.add(value);
+		this.#mark("body", "cfg", "specializationInputs");
+		this.#edits++;
+	}
+
 	appendInstruction(
 		block: CoreBlockId,
 		opcode: string,
@@ -247,6 +307,10 @@ export class CoreEditor {
 		> = {},
 	): void {
 		this.#assertActive();
+		const previousDescriptor = this.program.registry.byId(
+			this.function.instructionOpcode(instruction),
+		);
+		const previousRefinement = this.function.instructionEffectRefinement(instruction);
 		const outputCount = this.function.instructionResults(instruction).length;
 		const descriptor = this.#operation(opcode, inputs.length, outputCount);
 		this.function._replaceOperation(
@@ -260,6 +324,7 @@ export class CoreEditor {
 		);
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
+		this.#markForOperation(previousDescriptor, previousRefinement);
 		this.#markForOperation(descriptor, options.effectRefinement);
 		this.#edits++;
 	}
@@ -299,6 +364,74 @@ export class CoreEditor {
 		this.#touchBlock(block);
 		if (descriptor === undefined) this.#mark("body", "cfg", "specializationInputs");
 		else this.#markForOperation(descriptor, undefined);
+		this.#edits++;
+	}
+
+	replaceValueUses(value: CoreValueId, replacement: CoreValueId): void {
+		this.#assertActive();
+		if (value === replacement) return;
+		const uses = [...this.function.uses(value)];
+		const changed = new Map<CoreInstructionId, Array<CoreValueId>>();
+		const terminators = new Set<CoreInstructionId>();
+		for (const { instruction, operand } of uses) {
+			if (this.function.instructionKind(instruction) !== "operation") {
+				terminators.add(instruction);
+				continue;
+			}
+			const operands =
+				changed.get(instruction) ?? [...this.function.instructionOperands(instruction)];
+			operands[operand] = replacement;
+			changed.set(instruction, operands);
+		}
+		for (const [instruction, operands] of changed) {
+			this.replaceOperands(instruction, operands);
+		}
+		for (const instruction of terminators) {
+			const payload = replacePayloadValue(
+				this.function.terminatorPayload(instruction),
+				value,
+				replacement,
+			);
+			this.function._replaceTerminatorPayload(
+				CORE_STORE_MUTATION,
+				instruction,
+				payload,
+			);
+			this.#instructions.add(instruction);
+			this.#touchBlock(this.function.instructionBlock(instruction));
+			this.#mark("body", "cfg", "specializationInputs");
+			if (payload.kind === "guard") this.#mark("facts");
+			this.#edits++;
+		}
+		for (const block of this.function.blockIds()) {
+			const handler = this.function.blockHandler(block);
+			if (handler === undefined || !handler.arguments.includes(value)) continue;
+			this.setHandler(
+				block,
+				handler.block,
+				handler.arguments.map((argument) =>
+					argument === value ? replacement : argument,
+				),
+			);
+		}
+		this.#values.add(value);
+		this.#values.add(replacement);
+	}
+
+	removeBlock(block: CoreBlockId): void {
+		this.#assertActive();
+		const instructions = [...this.function.instructionIds(block)];
+		const values = [
+			...this.function.blockParameters(block).map(({ value }) => value),
+			...instructions.flatMap((instruction) =>
+				this.function.instructionResults(instruction),
+			),
+		];
+		this.function._removeBlock(CORE_STORE_MUTATION, block);
+		this.#blocks.add(block);
+		for (const instruction of instructions) this.#instructions.add(instruction);
+		for (const value of values) this.#values.add(value);
+		this.#mark("body", "cfg", "exceptionFlow", "specializationInputs");
 		this.#edits++;
 	}
 
@@ -345,6 +478,22 @@ export class CoreEditor {
 		if (payload.kind === "guard") this.#mark("facts");
 		this.#edits++;
 		return instruction;
+	}
+
+	replaceTerminator(block: CoreBlockId, input: CoreTerminatorInput): void {
+		this.#assertActive();
+		const { payload } = payloadWithoutSourcePosition(input);
+		const instruction = this.function.blockTerminator(block);
+		this.function._replaceTerminatorPayload(
+			CORE_STORE_MUTATION,
+			instruction,
+			payload,
+		);
+		this.#touchBlock(block);
+		this.#instructions.add(instruction);
+		this.#mark("body", "cfg", "specializationInputs");
+		if (payload.kind === "guard") this.#mark("facts");
+		this.#edits++;
 	}
 
 	setGuardTerminator(block: CoreBlockId, input: SetCoreGuardTerminatorInput): CoreFactId {

@@ -5,6 +5,7 @@ import type {
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
+import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
 import {
 	CoreOptimizationReportBuilder,
 } from "./core-optimization-report.ts";
@@ -61,7 +62,12 @@ export function optimizeCore(
 		reportBuilder,
 		{ verification: options.verification },
 	);
-	for (const stage of OPTIMIZATION_STAGES) passes.runStage(stage, []);
+	for (const stage of OPTIMIZATION_STAGES) {
+		passes.runStage(
+			stage,
+			stage === "canonicalize" ? CORE_LOCAL_CANONICALIZATION_PASSES : [],
+		);
+	}
 	const program = compilation.program.seal();
 	verifyCoreProgram(program, { stage: "pre-target" }, compilation.context);
 	const optimized = Object.freeze({

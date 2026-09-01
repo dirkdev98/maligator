@@ -90,6 +90,7 @@ export class CorePassManager {
 		for (const pass of passes) this.#validatePass(stage, pass);
 		const startedAt = performance.now();
 		const queue: Array<QueuedPassWork> = [];
+		let queueIndex = 0;
 		const queued = new Set<string>();
 		const consumption = new Map<string, PassConsumption>();
 		const enqueue = (pass: CorePass, item: CorePassWorkItem): void => {
@@ -97,7 +98,7 @@ export class CorePassManager {
 			if (queued.has(key)) return;
 			queued.add(key);
 			queue.push({ pass, item, key });
-			this.#report.recordQueuePush(queue.length);
+			this.#report.recordQueuePush(queue.length - queueIndex);
 		};
 		const enqueueChanges = (changes: CoreChangeSet): void => {
 			const wakeKinds = [...changes.domains, ...changes.programDomains];
@@ -112,8 +113,8 @@ export class CorePassManager {
 			for (const changes of initialChanges) enqueueChanges(changes);
 		}
 
-		while (queue.length > 0) {
-			const work = queue.shift()!;
+		while (queueIndex < queue.length) {
+			const work = queue[queueIndex++]!;
 			queued.delete(work.key);
 			this.#report.recordQueuePop();
 			const used = consumption.get(work.pass.name) ?? {

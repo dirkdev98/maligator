@@ -963,6 +963,35 @@ export class CoreFunctionStore {
 		return value;
 	}
 
+	_removeBlockParameter(
+		mutation: CoreStoreMutation,
+		block: CoreBlockId,
+		index: number,
+	): CoreValueId {
+		this.#assertEditing(mutation);
+		const parameters = this.blockParameters(block);
+		const parameter = parameters[index];
+		if (parameter === undefined) {
+			throw new Error(`Unknown Core block ${block} parameter ${index}`);
+		}
+		if (this.#valueUseCount[parameter.value] !== 0) {
+			throw new Error(
+				`Cannot remove Core block ${block} parameter ${index}; value ${parameter.value} is used`,
+			);
+		}
+		const remaining = parameters.filter((_, parameterIndex) => parameterIndex !== index);
+		for (const [parameterIndex, entry] of remaining.entries()) {
+			this.#valueDefinitionIndex[entry.value] = parameterIndex;
+		}
+		this.#valueLive[parameter.value] = 0;
+		this.#replaceBlockParameterRange(
+			block,
+			remaining.map(({ value }) => value),
+			remaining.map(({ role }) => role),
+		);
+		return parameter.value;
+	}
+
 	_insertOperation(
 		mutation: CoreStoreMutation,
 		block: CoreBlockId,
@@ -1087,6 +1116,36 @@ export class CoreFunctionStore {
 		this.#instructionLive[instruction] = 0;
 		this.#instructionPrevious[instruction] = -1;
 		this.#instructionNext[instruction] = -1;
+	}
+
+	_removeBlock(mutation: CoreStoreMutation, block: CoreBlockId): void {
+		this.#assertEditing(mutation);
+		this.#requireBlock(block);
+		if (block === this.entry || block === this.#bodyEntry) {
+			throw new Error(`Cannot remove Core entry block ${block}`);
+		}
+		for (const instruction of [...this.instructionIds(block)].reverse()) {
+			this._removeInstruction(mutation, instruction);
+		}
+		for (const parameter of this.blockParameters(block)) {
+			if (this.#valueUseCount[parameter.value] !== 0) {
+				const uses = [...this.uses(parameter.value)]
+					.map(
+						({ instruction, operand }) =>
+							`@${instruction}:${operand} in b${this.instructionBlock(instruction)}`,
+					)
+					.join(", ");
+				throw new Error(
+					`Cannot remove Core block ${block}; parameter ${parameter.value} is used by ${uses}`,
+				);
+			}
+			this.#valueLive[parameter.value] = 0;
+		}
+		this.#blockLive[block] = 0;
+		this.#blockFirstInstruction[block] = -1;
+		this.#blockLastInstruction[block] = -1;
+		this.#blockHandler[block] = undefined;
+		this.#replaceBlockParameterRange(block, [], []);
 	}
 
 	_setValueRepresentation(

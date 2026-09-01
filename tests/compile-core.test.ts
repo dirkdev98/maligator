@@ -59,7 +59,9 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(compilation.program).toBe(mutableProgram);
 		expect(compilation.program.sealed).toBe(true);
 		expect(compilation.plan).toEqual({ directEntries: [], specializations: [] });
-		expect(report.input).toEqual(report.output);
+		expect(report.output.functions).toBe(report.input.functions);
+		expect(report.output.instructions).toBeLessThanOrEqual(report.input.instructions);
+		expect(report.output.planCandidates).toBe(0);
 		expect(report.stages.map(({ stage }) => stage)).toEqual([
 			"canonicalize",
 			"control-flow",
