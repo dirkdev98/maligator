@@ -33,6 +33,7 @@ import {
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
+import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreFunctionId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
@@ -54,6 +55,11 @@ const LOCAL_BUDGET: CorePassBudget = Object.freeze({
 	maxWorkItems: 2_000_000,
 	maxEdits: 1_000_000,
 	exhaustion: "stop",
+});
+
+const CANONICAL_BLOCK_PARAMETER_BUDGET: CorePassBudget = Object.freeze({
+	...LOCAL_BUDGET,
+	maxEdits: 4_000_000,
 });
 
 const LOCAL_CHANGES = Object.freeze({
@@ -784,7 +790,7 @@ const rewriteExactBuiltinCalls: CorePass = {
 		);
 		if (calls.length === 0) return undefined;
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
-		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		let kinds: CoreValueKindAnalysis | undefined;
 		let editor: CoreEditor | undefined;
 		for (const instruction of calls) {
 			if (!fn.isInstructionLive(instruction)) continue;
@@ -857,7 +863,9 @@ const rewriteExactBuiltinCalls: CorePass = {
 					: undefined;
 			const nativeMathArgument = (value: CoreValueId): boolean => {
 				if (fn.valueRepresentation(value) === "f64") return true;
-				const scalar = kinds.exactScalar(value);
+				const scalar = (kinds ??= context.analysis(
+					CORE_LOCAL_VALUE_KIND_ANALYSIS,
+				)).exactScalar(value);
 				if (scalar !== "int32" && scalar !== "number") return false;
 				const definition = fn.valueDefinition(value);
 				return (
@@ -2172,7 +2180,7 @@ const canonicalizeBlockParameters: CorePass = {
 	wakesOn: ["cfg", "body", "representations"],
 	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
-	budget: LOCAL_BUDGET,
+	budget: CANONICAL_BLOCK_PARAMETER_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
@@ -2221,12 +2229,14 @@ const canonicalizeBlockParameters: CorePass = {
 		}
 		if (plans.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
-		for (const { block, predecessors, replacements } of plans) {
-			editor.replaceValueUsesMany(
-				new Map(
+		editor.replaceValueUsesMany(
+			new Map(
+				plans.flatMap(({ replacements }) =>
 					replacements.map(({ parameter, replacement }) => [parameter, replacement]),
 				),
-			);
+			),
+		);
+		for (const { block, predecessors, replacements } of plans) {
 			const removedIndexes = new Set(replacements.map(({ index }) => index));
 			for (const predecessor of predecessors) {
 				editor.replaceTerminator(
