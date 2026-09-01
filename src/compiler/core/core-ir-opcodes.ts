@@ -7,13 +7,14 @@ import {
 import type {
 	CoreAccessMode,
 	CoreEffectDomain,
-	CoreInstruction,
 	CoreInstructionEffects,
+	CoreInstructionId,
 	CoreMemoryFamily,
 	CoreOpcodeAccess,
 	CoreOpcodeAllocation,
 	CoreOpcodeCallTransfer,
 } from "./core-ir.ts";
+import type { CoreFunctionStore } from "./core-store.ts";
 
 /**
  * Canonical Core operations. Control flow, exception entry, and source-position
@@ -728,11 +729,13 @@ for (const opcode of CORE_OPCODES) {
  * ignored in another.
  */
 export function coreInstructionEffects(
-	instruction: CoreInstruction,
-	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	registry: CoreOpcodeRegistry = fn.registry,
 ): CoreInstructionEffects {
 	return (
-		instruction.effectRefinement?.effects ?? registry.require(instruction.opcode).effects
+		fn.instructionEffectRefinement(instruction)?.effects ??
+		registry.byId(fn.instructionOpcode(instruction)).effects
 	);
 }
 

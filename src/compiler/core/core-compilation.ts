@@ -4,7 +4,6 @@ import type {
 	OptimizationPassDelta,
 } from "../shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
-import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type { CoreProgram } from "./core-ir.ts";
 
 /** A captured cell: its function index or negative per-iteration scope id, plus slot. */
@@ -54,11 +53,6 @@ export interface CoreCompilationContext {
 export interface CoreCompilation {
 	readonly program: CoreProgram;
 	readonly context: CoreCompilationContext;
-	/** Ephemeral final-graph analyses consumed by the immediately following target
-	 * boundary. Target lowering does not retain them in the Program Image. */
-	readonly targetAnalyses?: {
-		readonly summaries: CoreProgramSummaries;
-	};
 }
 
 export function coreCapturedSlotKey(owner: number, index: number): string {
@@ -76,24 +70,25 @@ export function coreClosedCapturedValueSlots(
 		),
 	);
 	if (context?.facts.closure.sourceClosure.kind !== "known") return slots;
-	const mapped = new Set(
-		program.functions.flatMap((fn) =>
-			fn.metadata.mappedArgumentSlots.map((index) =>
-				coreCapturedSlotKey(fn.functionIndex, index),
-			),
-		),
-	);
+	const mapped = new Set<string>();
+	for (const functionId of program.functionIds()) {
+		const fn = program.function(functionId);
+		for (const index of fn.metadata.mappedArgumentSlots) {
+			mapped.add(coreCapturedSlotKey(functionId, index));
+		}
+	}
 	for (const key of mapped) slots.delete(key);
-	for (const fn of program.functions) {
-		for (const instruction of fn.blocks.flatMap(({ instructions }) => instructions)) {
-			if (
-				instruction.opcode !== "loadCaptured" &&
-				instruction.opcode !== "storeCaptured"
-			) {
+	for (const functionId of program.functionIds()) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode !== "loadCaptured" && opcode !== "storeCaptured") {
 				continue;
 			}
-			const owner = instruction.attributes.functionIndex;
-			const index = instruction.attributes.index;
+			const attributes = fn.instructionAttributes(instruction);
+			const owner = attributes.functionIndex;
+			const index = attributes.index;
 			if (typeof owner !== "number" || typeof index !== "number") continue;
 			const key = coreCapturedSlotKey(owner, index);
 			if (!mapped.has(key)) slots.add(key);

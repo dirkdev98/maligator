@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
-import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
+import { formatCoreProgram } from "../src/compiler/core/core-ir.ts";
 import type { CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { OPTIMIZATION_ABLATIONS } from "../src/compiler/shared/compiler-diagnostics.ts";
@@ -431,7 +431,7 @@ function formatConstantPools(program: CoreProgram): string {
 	);
 	const bigints = program.bigintConstants.map((value, index) => `  [${index}] ${value}n`);
 	return [
-		`CoreProgram · ${program.functions.length} functions · ${program.globalCount} globals`,
+		`CoreProgram · ${program.functionCapacity} functions · ${program.globalCount} globals`,
 		"",
 		`stringConstants (${strings.length})`,
 		...(strings.length === 0 ? ["  (empty)"] : strings),
@@ -445,11 +445,7 @@ function formatConstantPools(program: CoreProgram): string {
 }
 
 function formatCore(program: CoreProgram): string {
-	return [
-		formatConstantPools(program),
-		"",
-		...program.functions.map((fn) => formatCoreFunction(fn)),
-	].join("\n");
+	return [formatConstantPools(program), "", formatCoreProgram(program)].join("\n");
 }
 
 function functionName(image: RuntimeImage, fn: BytecodeFunction): string {

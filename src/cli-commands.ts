@@ -41,7 +41,7 @@ import type {
 } from "./cli.ts";
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
-import { formatCoreFunction } from "./compiler/core/core-ir.ts";
+import { formatCoreProgram } from "./compiler/core/core-ir.ts";
 import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
@@ -494,7 +494,7 @@ function compileAndBuild(
 					dependencyWorker: context.dependencyWorker,
 					afterCoreOptimization: (core) => {
 						if (command.kind === "build" && compilerDiagnostics) {
-							log.info(core.functions.map(formatCoreFunction).join("\n"));
+							log.info(formatCoreProgram(core));
 						}
 					},
 				});

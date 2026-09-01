@@ -55,6 +55,8 @@ import type {
 	CoreCompilation,
 	CoreHostInstallCandidate,
 } from "./core-compilation.ts";
+import { CoreEditor } from "./core-editor.ts";
+import { formatCoreProgram } from "./core-format.ts";
 import {
 	emitCoreEntryInstructions,
 	finishDirectCoreFunction,
@@ -64,18 +66,16 @@ import type {
 	CoreConstructionBlock,
 	CoreInstructionEmitter,
 } from "./core-frontend-construction.ts";
-import { coreSingleAssignmentCells } from "./core-ir-call-targets.ts";
-import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
-import { formatCoreFunction } from "./core-ir.ts";
-import type { CoreProgram } from "./core-ir.ts";
+import { CoreProgram } from "./core-store.ts";
 
 interface CoreFrontendContext {
 	/**
 	 * The semantic program that we are compiling.
 	 */
 	semantic: SemanticProgram;
+	core: CoreProgram;
 	/** Shared immutable analysis seed and program summaries. */
 	facts: CompilerProgramFacts;
 	/** Profile-only structured decisions recorded while transforms still see candidates. */
@@ -772,6 +772,7 @@ export function constructSemanticProgramCore(
 ): CoreCompilation {
 	const program: CoreFrontendContext = {
 		semantic,
+		core: new CoreProgram(coreOpcodeRegistry),
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
 		optimizationDecisions:
 			options.collectOptimizationDiagnostics === true ? [] : undefined,
@@ -884,72 +885,31 @@ export function constructSemanticProgramCore(
 	}
 
 	const compilation = finishCoreProgram(program);
-	if (debugEnabled) {
-		log.debug(
-			compilation.program.functions.map((fn) => formatCoreFunction(fn)).join("\n"),
-		);
-	}
-	verifyCoreProgram(
-		compilation.program,
-		coreOpcodeRegistry,
-		{ stage: "construction" },
-		compilation.context,
-	);
+	if (debugEnabled) log.debug(formatCoreProgram(compilation.program));
+	verifyCoreProgram(compilation.program, { stage: "construction" }, compilation.context);
 	return compilation;
 }
 
 function finishCoreProgram(program: CoreFrontendContext): CoreCompilation {
-	const core: CoreProgram = {
-		functions: program.functions.map((fn) =>
-			removeUnreachableCoreBlocks(finishDirectCoreFunction(fn)),
-		),
-		stringConstants: program.stringConstants.map((units) => [...units]),
-		bigintConstants: [...program.bigintConstants],
-		literalTemplateData: [...program.literalTemplateData],
-		sourcePositions: program.sourcePositions.map((position) => ({ ...position })),
-		globalCount: program.nextGlobalIndex,
-	};
-	const candidates = coreSingleAssignmentCellCandidates(program);
-	const hostInstallCandidates = coreHostInstallCandidates(program);
-	const provisionalCaptured = new Map(
-		[
-			...candidates.singleAssignmentCapturedSlots,
-			...candidates.capturedLetCandidates,
-		].map((slot) => [`${slot.owner}:${slot.index}`, slot] as const),
-	);
-	const provisionalContext = {
-		facts: program.facts,
-		data: coreProgramDataFromSemantic(program.semantic, {
-			cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
-			hostInstallCandidates,
-			singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
-			singleAssignmentCapturedSlots: [...provisionalCaptured.values()],
-			retainedHostInstallers: [program.hostProcess, program.hostBuffer]
-				.flatMap((host) => (host?.retained === true ? [host.installer] : []))
-				.filter(
-					(installer, index, installers) => installers.indexOf(installer) === index,
-				),
-		}),
-	};
-	const proven = coreSingleAssignmentCells(core, coreOpcodeRegistry, provisionalContext);
-	const captured = new Map(
-		candidates.singleAssignmentCapturedSlots.map(
-			(slot) => [`${slot.owner}:${slot.index}`, slot] as const,
-		),
-	);
-	for (const slot of candidates.capturedLetCandidates) {
-		if (proven.capturedSlot(slot.owner, slot.index)) {
-			captured.set(`${slot.owner}:${slot.index}`, slot);
+	for (const fn of program.functions) {
+		const functionId = finishDirectCoreFunction(fn);
+		if (functionId !== fn.functionIndex) {
+			throw new Error(
+				`Finished Core function ${functionId} does not match semantic function ${fn.functionIndex}`,
+			);
 		}
 	}
-	const singleAssignment = {
-		singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
-		singleAssignmentCapturedSlots: [...captured.values()].sort(
-			(left, right) => left.owner - right.owner || left.index - right.index,
-		),
-	};
+	CoreEditor.configureProgram(program.core, {
+		stringConstants: program.stringConstants,
+		bigintConstants: program.bigintConstants,
+		literalTemplateData: program.literalTemplateData,
+		sourcePositions: program.sourcePositions,
+		globalCount: program.nextGlobalIndex,
+	});
+	const candidates = coreSingleAssignmentCellCandidates(program);
+	const hostInstallCandidates = coreHostInstallCandidates(program);
 	return {
-		program: core,
+		program: program.core,
 		context: {
 			facts: program.facts,
 			...(program.optimizationDecisions === undefined
@@ -961,7 +921,8 @@ function finishCoreProgram(program: CoreFrontendContext): CoreCompilation {
 			data: coreProgramDataFromSemantic(program.semantic, {
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
 				hostInstallCandidates,
-				...singleAssignment,
+				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
+				singleAssignmentCapturedSlots: candidates.singleAssignmentCapturedSlots,
 				retainedHostInstallers: [program.hostProcess, program.hostBuffer]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 					.filter(
@@ -976,40 +937,22 @@ function finishCoreProgram(program: CoreFrontendContext): CoreCompilation {
  * Compiler-owned cells eligible for the whole-Core single-assignment proof.
  *
  * `const` and a named function expression's own-name binding are source-level
- * immutable candidates. In a source-closed program a captured `let` is also a
- * candidate because the whole Core graph can prove that its initialization is
- * its only non-TDZ writer. A mutable global `let`, an open-world captured cell,
- * a `var`, a script global property, and a local slot stay excluded: only
- * activation-private captured storage gets the graph-derived extension. An
- * imported name never appears here in its own right: the linker rewrites its
- * usages onto the exporting module's binding, so the exporter's cell is the one
- * considered.
- *
- * The captured-let candidates are filtered by `coreSingleAssignmentCells` before
- * they enter the Core context. That proof requires exactly one named
- * non-sentinel writer and rejects family-level writes, publication, opaque
- * values, and host-owned storage. Existing source-immutable authority is
- * preserved; consumers that need stronger closure recheck the current graph.
+ * immutable candidates. Mutable captured lets require a whole-Core writer proof,
+ * so they are published only by the later analysis layer rather than becoming a
+ * frontend fact. Imported names are already aliased to their exporting binding.
  */
 function coreSingleAssignmentCellCandidates(program: CoreFrontendContext): {
 	singleAssignmentGlobalSlots: Array<number>;
 	singleAssignmentCapturedSlots: Array<CoreCapturedSlotRef>;
-	capturedLetCandidates: Array<CoreCapturedSlotRef>;
 } {
 	const globals = new Set<number>();
 	const captured = new Map<string, CoreCapturedSlotRef>();
-	const capturedLets = new Map<string, CoreCapturedSlotRef>();
 	for (const [binding, location] of program.bindingToStorage) {
 		const sourceImmutable =
 			binding.kind === "const" || binding.immutableSelfReference === true;
-		const capturedLet =
-			binding.kind === "let" &&
-			location.type === "captured" &&
-			program.facts.closure.sourceClosure.kind === "known";
 		if (sourceImmutable && location.type === "global") globals.add(location.index);
-		else if ((sourceImmutable || capturedLet) && location.type === "captured") {
-			const slots = capturedLet ? capturedLets : captured;
-			slots.set(`${location.functionIndex}:${location.index}`, {
+		else if (sourceImmutable && location.type === "captured") {
+			captured.set(`${location.functionIndex}:${location.index}`, {
 				owner: location.functionIndex,
 				index: location.index,
 			});
@@ -1018,9 +961,6 @@ function coreSingleAssignmentCellCandidates(program: CoreFrontendContext): {
 	return {
 		singleAssignmentGlobalSlots: [...globals].sort((left, right) => left - right),
 		singleAssignmentCapturedSlots: [...captured.values()].sort(
-			(left, right) => left.owner - right.owner || left.index - right.index,
-		),
-		capturedLetCandidates: [...capturedLets.values()].sort(
 			(left, right) => left.owner - right.owner || left.index - right.index,
 		),
 	};
@@ -1051,7 +991,7 @@ function registerCoreFunction(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 ): void {
-	initializeDirectCoreFunction(fn);
+	initializeDirectCoreFunction(program.core, fn);
 	program.functions.push(fn);
 }
 

@@ -8,17 +8,19 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
-import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
-import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
+import { CoreFunctionBuilder } from "./core-builder.ts";
+import { coreOpcode, isCoreOpcode } from "./core-ir-opcodes.ts";
+import { coreBlockId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
-	CoreFunction,
+	CoreFunctionId,
 	CoreFunctionMetadata,
 	CoreInstructionAttributes,
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
+import type { CoreProgram } from "./core-store.ts";
 
 type ValueRepresentation = "boxed" | "f64" | "boolean";
 
@@ -347,13 +349,18 @@ export class DirectCoreFunctionConstruction {
 	readonly #entry: CoreBlockId;
 	#sourcePosition: number | undefined;
 
-	constructor(fn: CoreConstructionFunction) {
+	constructor(program: CoreProgram, fn: CoreConstructionFunction) {
 		this.#fn = fn;
-		this.#builder = new CoreFunctionBuilder(fn.functionIndex, coreOpcodeRegistry, {
+		this.#builder = new CoreFunctionBuilder(program, {
 			isGenerator: fn.isGenerator === true,
 			isAsync: fn.isAsync === true,
 			parameterCount: fn.parameterCount,
 		});
+		if (this.#builder.functionId !== fn.functionIndex) {
+			throw new Error(
+				`Core function id ${this.#builder.functionId} does not match semantic function ${fn.functionIndex}`,
+			);
+		}
 		this.#entry = this.#builder.createBlock(
 			Array.from({ length: fn.parameterCount }, () => ({
 				representation: "boxed" as const,
@@ -361,8 +368,8 @@ export class DirectCoreFunctionConstruction {
 		);
 		this.#prelude = this.#createState(this.#entry, true);
 		for (const [index, parameter] of this.#builder
-			.block(this.#entry)
-			.parameters.entries()) {
+			.blockParameters(this.#entry)
+			.entries()) {
 			this.#prelude.entryValues.set(index, parameter.value);
 			this.#prelude.definitions.set(index, parameter.value);
 			this.#representationRules.push({
@@ -501,7 +508,7 @@ export class DirectCoreFunctionConstruction {
 		this.#emitOrdinary(emitter, instruction);
 	}
 
-	finish(): CoreFunction {
+	finish(): CoreFunctionId {
 		if (this.#activeHandlers.length !== 0) {
 			throw new Error("Unbalanced tryBegin during Core construction");
 		}
@@ -535,11 +542,13 @@ export class DirectCoreFunctionConstruction {
 			parameterCount: this.#fn.parameterCount,
 			metadata: this.#metadata(),
 		});
-		const finished = this.#builder.finish(this.#entry);
 		const bodyEntry = this.#fn.bodyEntryBlock;
-		return bodyEntry === undefined
-			? finished
-			: { ...finished, bodyEntry: coreBlockId(this.#blocks[bodyEntry]!.entry.core) };
+		return this.#builder.finish(
+			this.#entry,
+			bodyEntry === undefined
+				? undefined
+				: coreBlockId(this.#blocks[bodyEntry]!.entry.core),
+		).function;
 	}
 
 	#metadata(): CoreFunctionMetadata {
@@ -618,7 +627,7 @@ export class DirectCoreFunctionConstruction {
 	}
 
 	#isolateThrowingState(emitter: BlockEmitter, active: boolean): ConstructionState {
-		if (!active || this.#builder.block(emitter.tail.core).instructions.length === 0) {
+		if (!active || this.#builder.bodyInstructionIds(emitter.tail.core).length === 0) {
 			return emitter.tail;
 		}
 		const isolated = this.#newInternalState();
@@ -1113,10 +1122,13 @@ export class DirectCoreFunctionConstruction {
 
 const constructions = new WeakMap<object, DirectCoreFunctionConstruction>();
 
-export function initializeDirectCoreFunction(fn: CoreConstructionFunction): void {
+export function initializeDirectCoreFunction(
+	program: CoreProgram,
+	fn: CoreConstructionFunction,
+): void {
 	if (constructions.has(fn))
 		throw new Error("Core function construction already initialized");
-	constructions.set(fn, new DirectCoreFunctionConstruction(fn));
+	constructions.set(fn, new DirectCoreFunctionConstruction(program, fn));
 }
 
 export function emitCoreEntryInstructions(
@@ -1129,7 +1141,7 @@ export function emitCoreEntryInstructions(
 	construction.emitEntryInstructions(...instructions);
 }
 
-export function finishDirectCoreFunction(fn: CoreConstructionFunction): CoreFunction {
+export function finishDirectCoreFunction(fn: CoreConstructionFunction): CoreFunctionId {
 	const construction = constructions.get(fn);
 	if (construction === undefined)
 		throw new Error("Core function construction is not initialized");
