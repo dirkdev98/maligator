@@ -71,7 +71,6 @@ export interface CorePass {
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;
 	readonly preserves: ReadonlyArray<string>;
 	readonly changes: CorePassCapabilities;
-	readonly ablation?: string;
 	readonly budget: CorePassBudget;
 	run(context: CorePassContext): CoreChangeSet | undefined;
 }
