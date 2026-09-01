@@ -12,6 +12,7 @@ import {
 } from "../src/compiler/core/core-cross-call-transforms.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
+import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -153,6 +154,32 @@ describe("bounded Core cross-call transforms", () => {
 		expect(typeof source?.callerPosId).toBe("number");
 	});
 
+	it("retains closed callee facts across nested argument relocation", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function outer() {
+					function leaf() { return 1; }
+					function middle(target) { return target(); }
+					return middle(leaf);
+				}`,
+				"core-inline-relocated-target.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		expect(coreOperations(outer).some(({ opcode }) => opcode === "call")).toBe(false);
+		expect(
+			coreOperations(outer).some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 1,
+			),
+		).toBe(true);
+	});
+
 	it("does not relocate callee activation reads into the caller", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
@@ -209,6 +236,52 @@ describe("bounded Core cross-call transforms", () => {
 		expect(optimized).toBeDefined();
 		const outer = coreFunctionNamed(optimized!, "outer")!;
 		expect(coreOperations(outer).some(({ opcode }) => opcode === "call")).toBe(false);
+	});
+
+	it("admits benchmark-sized local helpers by emitted-code cost", () => {
+		let optimized: CoreProgram | undefined;
+		let report: CoreOptimizationReport | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`const vector = (x, y, z) => ({ x, y, z });
+				const scale = (value, factor) =>
+					vector(value.x * factor, value.y * factor, value.z * factor);
+				const add = (left, right) =>
+					vector(left.x + right.x, left.y + right.y, left.z + right.z);
+				const dot = (left, right) =>
+					left.x * right.x + left.y * right.y + left.z * right.z;
+				function hot(limit) {
+					let checksum = 0;
+					for (let index = 0; index < limit; index++) {
+						const first = vector(index, index + 1, index + 2);
+						const second = scale(first, 0.5);
+						const result = add(first, second);
+						checksum += dot(result, second);
+					}
+					return checksum;
+				}
+				hot(10);`,
+				"core-guarded-inline-allocation-chain.js",
+			),
+			{
+				afterCoreOptimization(program, _context, optimizationReport) {
+					optimized = program;
+					report = optimizationReport;
+				},
+			},
+		);
+
+		const hot = coreFunctionNamed(optimized!, "hot")!;
+		const instructions = coreOperations(hot);
+		expect(instructions.some(({ opcode }) => opcode === "call")).toBe(false);
+		expect(
+			instructions.some(
+				({ opcode }) => opcode === "createObject" || opcode === "createObjectShaped",
+			),
+		).toBe(false);
+		expect(report!.transforms.appliedByKind.inline).toBe(8);
+		expect(report!.transforms.generatedCodeConsumed).toBe(39);
+		expect(report!.transforms.declinedByReason["generated-code-cost"]).toBe(0);
 	});
 
 	it("inlines the known target of an open captured callee behind a generic fallback", () => {

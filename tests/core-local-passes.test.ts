@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
+import { coreTerminatorEdges } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
@@ -881,6 +882,225 @@ describe("Core local canonicalization", () => {
 		);
 		expect(opcodes).toEqual(["createUndefined", "createObject", "call"]);
 		expect(fn.isValueLive(dead)).toBe(false);
+	});
+
+	it("removes dead phi inputs and their pure producers in one liveness update", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const condition = builder.blockParameters(entry)[0]!.value;
+		const [returned] = builder.appendInstruction(entry, "createUndefined", []);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "f64" }]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftValue] = builder.appendInstruction(left, "createF64", [], {
+			attributes: { value: 1 },
+			outputRepresentations: ["f64"],
+		});
+		const [rightValue] = builder.appendInstruction(right, "createF64", [], {
+			attributes: { value: 2 },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftValue!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightValue!] },
+		});
+		const joined = builder.blockParameters(join)[0]!.value;
+		builder.appendInstruction(join, "mathUnaryNumber", [joined], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(join, { kind: "return", value: returned! });
+		const function_ = builder.finish(entry).function;
+
+		const fn = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program.function(function_);
+		expect(
+			[...fn.instructionIds()]
+				.filter((instruction) => fn.instructionKind(instruction) === "operation")
+				.map((instruction) => fn.instructionOpcodeName(instruction)),
+		).toEqual(["createUndefined"]);
+		expect(fn.isValueLive(joined)).toBe(false);
+		for (const block of fn.blockIds()) {
+			for (const edge of coreTerminatorEdges(
+				fn.terminatorPayload(fn.blockTerminator(block)),
+			)) {
+				expect(edge.arguments).toEqual([]);
+			}
+		}
+	});
+
+	it("folds exact dynamic string keys into static property operations", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[97, 110, 115, 119, 101, 114]],
+		});
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const object = builder.blockParameters(entry)[0]!.value;
+		const [key] = builder.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [value] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.appendInstruction(entry, "storeProperty", [object, key!, value!]);
+		const [loaded] = builder.appendInstruction(entry, "loadProperty", [object, key!]);
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const function_ = builder.finish(entry).function;
+
+		const fn = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program.function(function_);
+		const properties = [...fn.instructionIds()].filter(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction).includes("Property"),
+		);
+		expect(properties.map((instruction) => fn.instructionOpcodeName(instruction))).toEqual([
+			"storePropertyStatic",
+			"loadPropertyStatic",
+		]);
+		for (const instruction of properties) {
+			expect(fn.instructionAttributes(instruction).stringIndex).toBe(0);
+		}
+		expect(fn.isValueLive(key!)).toBe(false);
+	});
+
+	it("lowers chained sole explicit throws into ordinary local flow", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const innerHandler = builder.createBlock([
+			{ role: "exception", representation: "boxed" },
+		]);
+		const outerHandler = builder.createBlock([
+			{ role: "exception", representation: "boxed" },
+		]);
+		const thrown = builder.blockParameters(entry)[0]!.value;
+		builder.setHandler(entry, innerHandler);
+		builder.setTerminator(entry, { kind: "throw", value: thrown });
+		builder.setHandler(innerHandler, outerHandler);
+		builder.setTerminator(innerHandler, {
+			kind: "throw",
+			value: builder.blockParameters(innerHandler)[0]!.value,
+		});
+		builder.setTerminator(outerHandler, {
+			kind: "return",
+			value: builder.blockParameters(outerHandler)[0]!.value,
+		});
+		const function_ = builder.finish(entry).function;
+
+		const fn = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program.function(function_);
+		expect([...fn.blockIds()].every((block) => fn.blockHandler(block) === undefined)).toBe(
+			true,
+		);
+		expect(
+			[...fn.blockIds()].map(
+				(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind,
+			),
+		).not.toContain("throw");
+	});
+
+	it("lowers shared explicit throws but retains potentially throwing prefixes", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const shared = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const sharedEntry = shared.createBlock([{ representation: "boxed" }]);
+		const left = shared.createBlock();
+		const right = shared.createBlock();
+		const sharedHandler = shared.createBlock([
+			{ role: "exception", representation: "boxed" },
+		]);
+		const sharedValue = shared.blockParameters(sharedEntry)[0]!.value;
+		shared.setTerminator(sharedEntry, {
+			kind: "branch",
+			condition: sharedValue,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		for (const block of [left, right]) {
+			shared.setHandler(block, sharedHandler);
+			shared.setTerminator(block, { kind: "throw", value: sharedValue });
+		}
+		shared.setTerminator(sharedHandler, {
+			kind: "return",
+			value: shared.blockParameters(sharedHandler)[0]!.value,
+		});
+		const sharedFunction = shared.finish(sharedEntry).function;
+
+		const throwing = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const throwingEntry = throwing.createBlock([{ representation: "boxed" }]);
+		const throwingHandler = throwing.createBlock([
+			{ role: "exception", representation: "boxed" },
+		]);
+		const callee = throwing.blockParameters(throwingEntry)[0]!.value;
+		throwing.appendInstruction(throwingEntry, "call", [callee, callee]);
+		throwing.setHandler(throwingEntry, throwingHandler);
+		throwing.setTerminator(throwingEntry, { kind: "throw", value: callee });
+		throwing.setTerminator(throwingHandler, {
+			kind: "return",
+			value: throwing.blockParameters(throwingHandler)[0]!.value,
+		});
+		const throwingFunction = throwing.finish(throwingEntry).function;
+
+		const optimized = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program;
+		const sharedResult = optimized.function(sharedFunction);
+		expect(
+			[...sharedResult.blockIds()].every(
+				(block) => sharedResult.blockHandler(block) === undefined,
+			),
+		).toBe(true);
+		expect(
+			[...sharedResult.blockIds()].map(
+				(block) =>
+					sharedResult.terminatorPayload(sharedResult.blockTerminator(block)).kind,
+			),
+		).not.toContain("throw");
+		const throwingResult = optimized.function(throwingFunction);
+		expect(throwingResult.blockHandler(throwingResult.entry)).toBeDefined();
+		expect(
+			throwingResult.terminatorPayload(throwingResult.blockTerminator(throwingResult.entry))
+				.kind,
+		).toBe("throw");
+	});
+
+	it("lowers source try/catch around an explicit local throw", () => {
+		const program = optimizedClosedModule(
+			`function local(value) {
+				try { throw value; }
+				catch (error) { return error; }
+			}
+			globalThis.local = local;`,
+			"local-exception-flow.js",
+		);
+		const fn = coreFunctionNamed(program, "local");
+		expect(fn).toBeDefined();
+		expect([...fn!.blockIds()].every((block) => fn!.blockHandler(block) === undefined)).toBe(
+			true,
+		);
+		expect(
+			[...fn!.blockIds()].map(
+				(block) => fn!.terminatorPayload(fn!.blockTerminator(block)).kind,
+			),
+		).not.toContain("throw");
 	});
 
 	it("removes reconverged guards and empty orphan facts", () => {

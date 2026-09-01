@@ -344,6 +344,43 @@ describe("Core local proofs and representations", () => {
 		expect(handlerRepresentations).toContain("string");
 	});
 
+	it("materializes exact numbers and booleans carried through exception handlers", () => {
+		for (const [sourcePath, declaration, update, representation] of [
+			["core-exception-f64.js", "let value = 1.5;", "value = 2.5;", "f64"],
+			["core-exception-boolean.js", "let value = true;", "value = false;", "boolean"],
+		] as const) {
+			let handlerRepresentations: ReadonlyArray<string> | undefined;
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`function carry(callback) {
+						${declaration}
+						try {
+							if (callback()) ${update}
+							callback();
+						} catch (error) {}
+						return value;
+					}`,
+					sourcePath,
+				),
+				{
+					afterCoreOptimization(program) {
+						const fn = coreFunctionNamed(program, "carry");
+						if (fn === undefined) throw new Error("Expected carry function");
+						const handler = [...fn.blockIds()].find(
+							(block) => fn.blockParameters(block)[0]?.role === "exception",
+						);
+						expect(handler).toBeDefined();
+						handlerRepresentations = fn
+							.blockParameters(handler!)
+							.slice(1)
+							.map(({ representation: carried }) => carried);
+					},
+				},
+			);
+			expect(handlerRepresentations).toContain(representation);
+		}
+	});
+
 	it("invalidates fact availability after replacement without discarding CFG or kind analyses", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const functions = Array.from({ length: 2 }, () => {

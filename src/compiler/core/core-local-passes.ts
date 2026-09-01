@@ -30,6 +30,7 @@ import {
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
+import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type {
 	CoreAttributeValue,
@@ -1658,6 +1659,90 @@ const localValueNumbering: CorePass = {
 	},
 };
 
+const lowerLocalExplicitThrows: CorePass = {
+	name: "local-explicit-throw-lowering",
+	stage: "canonicalize",
+	scope: "function",
+	requiredAnalyses: [CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS],
+	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
+	preserves: [],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run(context) {
+		const { program, item } = context;
+		if (item.scope !== "function") return undefined;
+		const fn = program.function(item.function);
+		const flows = context.analysis(CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS);
+		const first = flows.find(
+			(flow) => fn.terminatorPayload(fn.blockTerminator(flow.handler)).kind !== "guard",
+		);
+		if (first === undefined) return undefined;
+		const handler = first.handler;
+		const group = flows.filter((flow) => flow.handler === handler);
+		const parameters = fn.blockParameters(handler);
+		const handlerTerminator = fn.blockTerminator(handler);
+		const handlerSourcePosition = fn.instructionSourcePosition(handlerTerminator);
+		const editor = CoreEditor.open(program, item.function);
+		const continuation = editor.createBlock(
+			parameters.map(({ representation }) => ({ representation })),
+		);
+		const continuationParameters = fn
+			.blockParameters(continuation)
+			.map(({ value }) => value);
+		for (const instruction of [...fn.bodyInstructionIds(handler)]) {
+			editor.moveInstruction(instruction, continuation);
+		}
+		for (const [index, parameter] of parameters.entries()) {
+			editor.replaceValueUses(parameter.value, continuationParameters[index]!);
+		}
+		const replacements = new Map(
+			parameters.map(
+				({ value }, index) => [value, continuationParameters[index]!] as const,
+			),
+		);
+		for (const factId of fn.factIds()) {
+			const fact = fn.fact(factId);
+			let changed = false;
+			const claims = fact.claims.map((claim) => {
+				if (!("subject" in claim)) return claim;
+				const subject = replacements.get(claim.subject);
+				if (subject === undefined) return claim;
+				changed = true;
+				return { ...claim, subject };
+			});
+			if (!changed) continue;
+			editor.replaceFact(factId, {
+				kind: fact.kind,
+				value: fact.value,
+				claims,
+				validity: fact.validity,
+				obligations: fact.obligations,
+				origin: fact.origin,
+			});
+		}
+		const outerHandler = fn.blockHandler(handler);
+		if (outerHandler !== undefined) {
+			editor.setHandler(continuation, outerHandler.block, outerHandler.arguments);
+		}
+		editor.setTerminator(continuation, {
+			...fn.terminatorPayload(handlerTerminator),
+			sourcePosition: handlerSourcePosition,
+		});
+		for (const flow of group) {
+			editor.clearHandler(flow.source);
+			editor.replaceTerminator(flow.source, {
+				kind: "jump",
+				edge: {
+					block: continuation,
+					arguments: [flow.thrownValue, ...flow.handlerArguments],
+				},
+			});
+		}
+		editor.removeBlock(handler);
+		return editor.commit();
+	},
+};
+
 const removeUnreachableBlocks: CorePass = {
 	name: "unreachable-block-removal",
 	stage: "canonicalize",
@@ -2072,6 +2157,7 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	propagateMoves,
 	foldControlFlow,
 	localValueNumbering,
+	lowerLocalExplicitThrows,
 	foldRedundantTdzChecks,
 	removeDeadInstructions,
 	canonicalizeBlockParameters,
@@ -2095,6 +2181,11 @@ export const CORE_LOCAL_FINALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	{
 		...foldRedundantTdzChecks,
 		name: "post-memory-tdz-check-folding",
+		stage: "finalize",
+	},
+	{
+		...removeUnreachableBlocks,
+		name: "post-memory-unreachable-block-removal",
 		stage: "finalize",
 	},
 ];

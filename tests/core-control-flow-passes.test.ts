@@ -759,6 +759,134 @@ describe("Core control-flow analyses and passes", () => {
 		).toHaveLength(1);
 	});
 
+	it("numbers pure values through the dominator tree", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [input, condition] = builder.blockParameters(entry).map(({ value }) => value);
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		const [numeric] = builder.appendInstruction(entry, "move", [input!], {
+			outputRepresentations: ["f64"],
+		});
+		const [dominating] = builder.appendInstruction(entry, "mathUnaryNumber", [numeric!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(entry, "storeGlobal", [dominating!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [redundant] = builder.appendInstruction(body, "mathUnaryNumber", [numeric!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(body, { kind: "return", value: redundant! });
+		builder.setTerminator(exit, { kind: "return", value: dominating! });
+		const function_ = builder.finish(entry).function;
+
+		const fn = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program.function(function_);
+		const numbered = [...fn.instructionIds()].filter(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "mathUnaryNumber",
+		);
+		expect(numbered).toHaveLength(1);
+		const result = fn.instructionResults(numbered[0]!)[0];
+		expect(result).toBeDefined();
+		for (const block of fn.blockIds()) {
+			const terminator = fn.terminatorPayload(fn.blockTerminator(block));
+			if (terminator.kind === "return") expect(terminator.value).toBe(result);
+		}
+	});
+
+	it("hoists invariants after canonicalizing multiple latches", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [continueLoop, chooseLatch] = builder
+			.blockParameters(entry)
+			.map(({ value }) => value);
+		const header = builder.createBlock();
+		const body = builder.createBlock();
+		const leftLatch = builder.createBlock();
+		const rightLatch = builder.createBlock();
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: continueLoop!,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [constant] = builder.appendInstruction(body, "createF64", [], {
+			attributes: { value: 0.5 },
+			outputRepresentations: ["f64"],
+		});
+		const [sine] = builder.appendInstruction(body, "mathUnaryNumber", [constant!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(body, "storeGlobal", [sine!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(body, {
+			kind: "branch",
+			condition: chooseLatch!,
+			consequent: { block: leftLatch, arguments: [] },
+			alternate: { block: rightLatch, arguments: [] },
+		});
+		for (const latch of [leftLatch, rightLatch]) {
+			builder.setTerminator(latch, {
+				kind: "jump",
+				edge: { block: header, arguments: [] },
+			});
+		}
+		builder.setTerminator(exit, { kind: "return", value: continueLoop! });
+		const function_ = builder.finish(entry).function;
+		const before = buildCoreControlFlow(program, function_);
+		expect(before.loops[0]!.latches).toEqual(new Set([leftLatch, rightLatch]));
+
+		const optimized = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program;
+		const fn = optimized.function(function_);
+		const cfg = buildCoreControlFlow(optimized, function_);
+		expect(cfg.loops).toHaveLength(1);
+		expect(cfg.loops[0]).toMatchObject({ canonical: true });
+		expect(cfg.loops[0]!.latches.size).toBe(1);
+		expect(cfg.loops[0]!.preheader).toBeDefined();
+		const hoisted = [...fn.instructionIds()].filter(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				["createF64", "mathUnaryNumber"].includes(
+					fn.instructionOpcodeName(instruction),
+				),
+		);
+		expect(hoisted).toHaveLength(2);
+		for (const instruction of hoisted) {
+			expect(fn.instructionBlock(instruction)).toBe(cfg.loops[0]!.preheader);
+		}
+	});
+
 	it("reuses the real CFG analysis across operand-only rewrites", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
