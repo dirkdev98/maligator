@@ -621,11 +621,13 @@ describe("Core control-flow analyses and passes", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 			{ representation: "boolean" },
+			{ representation: "boolean" },
 		]);
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const merge = builder.createBlock();
-		const [first, second, condition] = builder
+		const fallback = builder.createBlock();
+		const [first, second, condition, guardCondition] = builder
 			.blockParameters(entry)
 			.map(({ value }) => value);
 		builder.setTerminator(entry, {
@@ -636,13 +638,27 @@ describe("Core control-flow analyses and passes", () => {
 		});
 		const [available] = builder.appendInstruction(left, "purePair", [first!, second!]);
 		builder.appendInstruction(left, "keep", [available!]);
-		builder.setTerminator(left, { kind: "jump", edge: { block: merge, arguments: [] } });
+		builder.setGuardTerminator(left, {
+			condition: guardCondition!,
+			success: { block: merge, arguments: [] },
+			fallback: { block: fallback, arguments: [] },
+			fact: {
+				kind: "test-identity",
+				value: true,
+				claims: [{ kind: "identity", subject: guardCondition!, identities: [true] }],
+				origin: "control-flow-passes-test",
+			},
+		});
 		builder.appendInstruction(right, "keep", [first!]);
 		builder.setTerminator(right, { kind: "jump", edge: { block: merge, arguments: [] } });
+		builder.setTerminator(fallback, { kind: "return", value: first! });
 		const [redundant] = builder.appendInstruction(merge, "purePair", [first!, second!]);
 		builder.setTerminator(merge, { kind: "return", value: redundant! });
 		const finished = builder.finish(entry);
-		const optimized = optimizeCore({ program, context });
+		const optimized = optimizeCore(
+			{ program, context },
+			{ mode: "full", verification: "per-pass" },
+		);
 		const fn = optimized.compilation.program.function(finished.function);
 		expect(fn.blockParameters(merge)).toHaveLength(1);
 		expect([...fn.bodyInstructionIds(merge)]).toEqual([]);

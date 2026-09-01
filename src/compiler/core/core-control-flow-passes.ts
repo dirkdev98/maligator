@@ -455,7 +455,7 @@ const eliminatePartialRedundancy: CorePass = {
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
 	preserves: [],
-	changes: CONTROL_FLOW_CHANGES,
+	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
