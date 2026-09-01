@@ -84,6 +84,70 @@ describe("incremental Core program summaries", () => {
 		expect(second.version(3 as never)).toBe(unrelatedVersion);
 	});
 
+	it("rebuilds SCCs only in the weak component touched by a call edit", () => {
+		const program = analysisProgram();
+		const edited = appendCaller(program, 1);
+		appendLeaf(program);
+		appendCaller(program, 3);
+		appendLeaf(program);
+		appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+		const unrelated = first.sccs.find(({ functions }) => functions.includes(2 as never));
+
+		const editor = CoreEditor.open(program, edited.function);
+		editor.replaceInstruction(edited.createFunctionInstruction, "createFunction", [], {
+			attributes: { functionIndex: 4 },
+		});
+		editor.commit();
+		const second = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(
+			second.sccs.find(({ functions }) => functions.includes(2 as never)),
+		).toBe(unrelated);
+		expect(second.statistics).toMatchObject({
+			sccNodesAnalyzed: 3,
+			sccsReused: 2,
+		});
+	});
+
+	it("skips SCC discovery when an isolated body edit leaves call edges unchanged", () => {
+		const program = analysisProgram();
+		appendCaller(program, 1);
+		const leaf = appendLeaf(program);
+		appendCaller(program, 3);
+		appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		const editor = CoreEditor.open(program, leaf.function);
+		editor.replaceInstruction(leaf.valueInstruction, "createNull", []);
+		editor.commit();
+		const second = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(second.sccs).toBe(first.sccs);
+		expect(second.statistics).toMatchObject({
+			sccNodesAnalyzed: 0,
+			sccsReused: 4,
+		});
+	});
+
 	it("solves a long chain with bounded SCC transfers", () => {
 		const program = analysisProgram();
 		const length = 64;

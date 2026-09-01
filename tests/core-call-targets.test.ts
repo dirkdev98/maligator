@@ -83,6 +83,41 @@ describe("incremental Core call graph", () => {
 		).toEqual([2]);
 	});
 
+	it("preserves unrelated call indexes across an isolated body edit", () => {
+		const program = analysisProgram();
+		const caller = appendCaller(program, 1);
+		const leaf = appendLeaf(program);
+		appendCaller(program, 3);
+		appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		const outgoing = first.outgoing(caller.function);
+		const reverse = first.callers(1 as never);
+
+		const editor = CoreEditor.open(program, leaf.function);
+		editor.replaceInstruction(leaf.valueInstruction, "createNull", []);
+		editor.commit();
+		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+
+		expect(second.outgoing(caller.function)).toBe(outgoing);
+		expect(second.callers(1 as never)).toBe(reverse);
+		expect([...second.changedCallSites]).toEqual([]);
+		expect([...second.changedEdgeCallers]).toEqual([]);
+		expect(second.statistics).toMatchObject({
+			functionsAnalyzed: 1,
+			functionsReused: 3,
+			accessFunctionsScanned: 1,
+			propertyAggregateUpdates: 0,
+			cellAggregateUpdates: 0,
+			callSiteIndexUpdates: 0,
+			reverseEdgeUpdates: 0,
+		});
+	});
+
 	it("revisits only dependent blocks when a loop adds a callee target", () => {
 		const program = analysisProgram();
 		const builder = new CoreFunctionBuilder(program);
@@ -196,6 +231,74 @@ describe("incremental Core call graph", () => {
 		).toEqual([3]);
 		expect([...second.callers(2 as never)]).toEqual([]);
 		expect([...second.callers(3 as never)]).toEqual([callerFunction]);
+	});
+
+	it("updates one global-store aggregate without rebuilding unrelated slots", () => {
+		const program = analysisProgram();
+		const firstWriter = new CoreFunctionBuilder(program);
+		const firstEntry = firstWriter.createBlock();
+		const [firstStored] = firstWriter.appendInstruction(
+			firstEntry,
+			"createFunction",
+			[],
+			{ attributes: { functionIndex: 2 } },
+		);
+		firstWriter.appendInstruction(firstEntry, "storeGlobal", [firstStored!], {
+			outputCount: 0,
+			attributes: { index: 0 },
+		});
+		const [firstResult] = firstWriter.appendInstruction(
+			firstEntry,
+			"createUndefined",
+			[],
+		);
+		const firstCreate = firstWriter.bodyInstructionIds(firstEntry)[0]!;
+		firstWriter.setTerminator(firstEntry, { kind: "return", value: firstResult! });
+		const firstFunction = firstWriter.finish(firstEntry).function;
+
+		const secondWriter = new CoreFunctionBuilder(program);
+		const secondEntry = secondWriter.createBlock();
+		const [secondStored] = secondWriter.appendInstruction(
+			secondEntry,
+			"createFunction",
+			[],
+			{ attributes: { functionIndex: 3 } },
+		);
+		secondWriter.appendInstruction(secondEntry, "storeGlobal", [secondStored!], {
+			outputCount: 0,
+			attributes: { index: 1 },
+		});
+		const [secondResult] = secondWriter.appendInstruction(
+			secondEntry,
+			"createUndefined",
+			[],
+		);
+		secondWriter.setTerminator(secondEntry, {
+			kind: "return",
+			value: secondResult!,
+		});
+		secondWriter.finish(secondEntry);
+		appendLeaf(program);
+		appendLeaf(program);
+		appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		const unrelated = first.globalStoreTargets(1);
+
+		const editor = CoreEditor.open(program, firstFunction);
+		editor.replaceInstruction(firstCreate, "createFunction", [], {
+			attributes: { functionIndex: 4 },
+		});
+		editor.commit();
+		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+
+		expect(second.globalStoreTargets(0).functions).toEqual([4]);
+		expect(second.globalStoreTargets(1)).toBe(unrelated);
+		expect(second.statistics.globalStoreAggregateUpdates).toBe(2);
 	});
 
 	it("keeps a guarded target for a known function-object property", () => {

@@ -27,7 +27,6 @@ import {
 	CORE_CALL_GRAPH_ANALYSIS,
 	analyzeCoreCallGraph,
 	coreCalleeTargetsAreOpen,
-	coreCalleeTargetsEqual,
 } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import {
@@ -86,6 +85,8 @@ export interface CoreProgramSummaryStatistics {
 	readonly summaryChanges: number;
 	readonly callerWakeups: number;
 	readonly affectedCallers: number;
+	readonly sccNodesAnalyzed: number;
+	readonly sccsReused: number;
 }
 
 export interface CoreProgramSummaries {
@@ -103,6 +104,11 @@ interface CoreProgramSummaryState extends CoreProgramSummaries {
 	readonly sourceClosed: boolean;
 	readonly local: ReadonlyMap<CoreFunctionId, CoreLocalFunctionSummary>;
 	readonly published: ReadonlyMap<CoreFunctionId, CorePublishedFunctionSummary>;
+	readonly owner: ReadonlyMap<CoreFunctionId, number>;
+	readonly rootReasons: ReadonlyMap<
+		CoreFunctionId,
+		ReadonlyArray<SummaryRootReason>
+	>;
 }
 
 function localVersionKey(fn: CoreFunctionStore): string {
@@ -392,10 +398,59 @@ function callTargets(
 function callGraphSccs(
 	program: CoreProgram,
 	targets: CoreCallGraphIndex,
+	previous?: CoreProgramSummaryState,
 ): {
 	readonly sccs: ReadonlyArray<CoreCallGraphScc>;
 	readonly owner: ReadonlyMap<CoreFunctionId, number>;
+	readonly nodesAnalyzed: number;
+	readonly sccsReused: number;
 } {
+	const all = [...program.functionIds()];
+	const affected = new Set<CoreFunctionId>();
+	for (const caller of targets.changedEdgeCallers) {
+		affected.add(caller);
+		for (const site of targets.outgoing(caller)) {
+			for (const callee of callTargets(program, site)) affected.add(callee);
+		}
+		for (const site of previous?.targets.outgoing(caller) ?? []) {
+			for (const callee of callTargets(program, site)) affected.add(callee);
+		}
+	}
+	for (const functionId of all) {
+		if (!previous?.owner.has(functionId)) affected.add(functionId);
+	}
+	if (previous !== undefined && affected.size === 0) {
+		return {
+			sccs: previous.sccs,
+			owner: previous.owner,
+			nodesAnalyzed: 0,
+			sccsReused: previous.sccs.length,
+		};
+	}
+	if (previous !== undefined) {
+		const queue = [...affected];
+		for (let cursor = 0; cursor < queue.length; cursor++) {
+			const functionId = queue[cursor]!;
+			const neighbors = new Set<CoreFunctionId>([
+				...targets.callers(functionId),
+				...previous.targets.callers(functionId),
+			]);
+			for (const site of targets.outgoing(functionId)) {
+				for (const callee of callTargets(program, site)) neighbors.add(callee);
+			}
+			for (const site of previous.targets.outgoing(functionId)) {
+				for (const callee of callTargets(program, site)) neighbors.add(callee);
+			}
+			for (const neighbor of neighbors) {
+				if (affected.has(neighbor)) continue;
+				affected.add(neighbor);
+				queue.push(neighbor);
+			}
+		}
+	} else {
+		for (const functionId of all) affected.add(functionId);
+	}
+
 	let nextIndex = 0;
 	const indices = new Map<CoreFunctionId, number>();
 	const lowlinks = new Map<CoreFunctionId, number>();
@@ -409,6 +464,7 @@ function callGraphSccs(
 		onStack.add(functionId);
 		for (const site of targets.outgoing(functionId)) {
 			for (const callee of callTargets(program, site)) {
+				if (!affected.has(callee)) continue;
 				if (!indices.has(callee)) {
 					visit(callee);
 					lowlinks.set(
@@ -433,18 +489,30 @@ function callGraphSccs(
 		}
 		components.push(component.sort((left, right) => left - right));
 	};
-	for (const functionId of program.functionIds()) {
+	for (const functionId of affected) {
 		if (!indices.has(functionId)) visit(functionId);
 	}
+	const preserved =
+		previous?.sccs.filter((scc) =>
+			scc.functions.every((functionId) => !affected.has(functionId)),
+		) ?? [];
 	const owner = new Map<CoreFunctionId, number>();
-	const sccs = components.map((functions, index) => {
-		for (const functionId of functions) owner.set(functionId, index);
-		return Object.freeze({
+	const sccs = [...preserved, ...components.map((functions) =>
+		Object.freeze({
 			id: `scc:${functions.join(",")}`,
 			functions: Object.freeze(functions),
-		});
-	});
-	return { sccs: Object.freeze(sccs), owner };
+		}),
+	)];
+	for (const [index, scc] of sccs.entries()) {
+		const functions = scc.functions;
+		for (const functionId of functions) owner.set(functionId, index);
+	}
+	return {
+		sccs: Object.freeze(sccs),
+		owner,
+		nodesAnalyzed: affected.size,
+		sccsReused: preserved.length,
+	};
 }
 
 function rootReasons(
@@ -470,21 +538,8 @@ function rootReasons(
 	}
 	for (const candidate of context.data.hostInstallCandidates) {
 		for (const { slot } of candidate.exports) {
-			for (const functionId of program.functionIds()) {
-				const fn = program.function(functionId);
-				for (const block of fn.blockIds()) {
-					for (const instruction of fn.bodyInstructionIds(block)) {
-						if (
-							fn.instructionOpcodeName(instruction) !== "storeGlobal" ||
-							fn.instructionAttributes(instruction).index !== slot
-						)
-							continue;
-						const value = fn.instructionOperands(instruction)[0];
-						if (value === undefined) continue;
-						const installed = targets.targets(functionId, value);
-						for (const target of installed.functions) add(target, "host-install");
-					}
-				}
+			for (const target of targets.globalStoreTargets(slot).functions) {
+				add(target, "host-install");
 			}
 		}
 	}
@@ -661,7 +716,12 @@ function analyzeProgramSummaries(
 			functionsAnalyzed++;
 		}
 	}
-	const { sccs, owner } = callGraphSccs(program, targets);
+	const {
+		sccs,
+		owner,
+		nodesAnalyzed: sccNodesAnalyzed,
+		sccsReused,
+	} = callGraphSccs(program, targets, previous);
 	const reasons = rootReasons(program, targets, context);
 	const current = new Map<CoreFunctionId, FunctionEffectSummary>();
 	for (const functionId of program.functionIds()) {
@@ -694,21 +754,20 @@ function analyzeProgramSummaries(
 		for (const index of sccs.keys()) enqueue(index);
 	} else {
 		for (const functionId of changedFunctions) enqueue(owner.get(functionId));
-		if (targets.statistics.updatedCallSites > 0) {
-			for (const functionId of program.functionIds()) {
-				if (
-					targets.outgoing(functionId).some(({ id }) => {
-						const prior = previous.targets.site(id)?.targets;
-						const current = targets.site(id)?.targets;
-						return (
-							prior === undefined ||
-							current === undefined ||
-							!coreCalleeTargetsEqual(prior, current)
-						);
-					})
-				) {
-					enqueue(owner.get(functionId));
-				}
+		for (const functionId of targets.changedCallers) {
+			enqueue(owner.get(functionId));
+		}
+		for (const functionId of new Set([
+			...previous.rootReasons.keys(),
+			...reasons.keys(),
+		])) {
+			const prior = previous.rootReasons.get(functionId) ?? [];
+			const next = reasons.get(functionId) ?? [];
+			if (
+				prior.length !== next.length ||
+				prior.some((reason, index) => reason !== next[index])
+			) {
+				enqueue(owner.get(functionId));
 			}
 		}
 	}
@@ -816,6 +875,8 @@ function analyzeProgramSummaries(
 		summaryChanges: changedPublished.size,
 		callerWakeups,
 		affectedCallers: affectedCallers.size,
+		sccNodesAnalyzed,
+		sccsReused,
 	});
 	return Object.freeze({
 		sourceClosed: targets.sourceClosed,
@@ -823,6 +884,8 @@ function analyzeProgramSummaries(
 		sccs,
 		local,
 		published,
+		owner,
+		rootReasons: reasons,
 		functionEffects,
 		moduleEffects: modules,
 		changedFunctions: changedPublished,
