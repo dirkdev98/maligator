@@ -58,11 +58,13 @@ describe("compileSemanticProgramToProgramImage", () => {
 
 		expect(compilation.program).toBe(mutableProgram);
 		expect(compilation.program.sealed).toBe(true);
-		expect(compilation.plan).toEqual({
+		expect(compilation.plan).toMatchObject({
 			liveFunctions: [...compilation.program.functionIds()],
 			directEntries: [],
 			specializations: [],
 		});
+		expect(compilation.plan.version.key).toMatch(/^p:/);
+		expect(compilation.plan.statistics).toMatchObject({ applied: 0, declined: 0 });
 		expect(report.output.functions).toBe(report.input.functions);
 		expect(report.output.instructions).toBeLessThanOrEqual(report.input.instructions);
 		expect(report.output.planCandidates).toBe(0);
@@ -74,6 +76,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			"finalize",
 			"interprocedural",
 			"program",
+			"specialization",
 		]);
 
 		const execution = lowerCoreCompilationToExecutionProgram(compilation);

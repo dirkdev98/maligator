@@ -1,325 +1,288 @@
-/**
- * How often a region's admission condition has to be checked.
- *
- * A guarded region names the semantic epochs its fast path depends on. Admitting
- * them is one runtime test; keeping them admitted is a proof obligation about the
- * region's interior. `per-use` says every licensed use re-tests the condition,
- * which is always correct. `stable` says the admission at the region's anchor
- * remains valid for every licensed use.
- *
- * `stable` is only claimable when the interior cannot reach a seam that invalidates
- * a named epoch. The proof is re-derived from the Core effect model and the
- * control-flow graph rather than trusted from the pass that made the claim, so a
- * later transform that drops an instruction into a licensed interior turns the
- * certificate into a verification failure instead of a miscompile.
- */
-
-import type { FactDependency } from "../shared/fact-implication.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreInstructionEffects } from "./core-ir-opcodes.ts";
+import { coreTargetSupportsSpecialization } from "./core-ir-region-strategies.ts";
 import type {
-	CoreAttributeObject,
-	CoreBlockId,
-	CoreEffectDomain,
-	CoreFunction,
-	CoreInstruction,
+	CoreOptimizationPlan,
+	CorePlanCost,
+	CorePlanRepresentation,
+	CorePlanSpecialization,
+} from "./core-ir-regions.ts";
+import type {
+	CoreFunctionId,
 	CoreInstructionId,
-	CoreOpcodeRegistry,
-	CoreRegion,
-	CoreValueId,
+	CoreRepresentation,
 } from "./core-ir.ts";
+import type {
+	CoreFunctionStore,
+	CoreProgram,
+	SealedCoreProgram,
+} from "./core-store.ts";
 
-export type CoreRegionAdmissionMode = "capture" | "stable" | "per-use";
-
-export const CORE_REGION_ADMISSION_MODES: ReadonlyArray<CoreRegionAdmissionMode> = [
-	"capture",
-	"stable",
-	"per-use",
-];
-
-/** Region-certificate admission record, in Core identities. */
-export interface CoreRegionAdmission {
-	readonly anchor: CoreInstructionId;
-	readonly mode: CoreRegionAdmissionMode;
+function stableVersionKey(program: CoreProgram): string {
+	const programPart = Object.values(program.versions).join(":");
+	const functionPart = [...program.functionIds()].map((functionId) =>
+		`${functionId}:${Object.values(program.function(functionId).versions).join(":")}`,
+	).join("|");
+	return `p:${programPart}|f:${functionPart}`;
 }
 
-/**
- * Write domains that can reach a semantic-epoch bump. The runtime bumps a family
- * only from the object metaobject-protocol seams — prototype reparenting, own
- * property define/delete/set, shaped append, and the two inline-cache transition
- * stores — so a write to activation-local memory or a global *slot* cannot
- * invalidate one. `host` and `io` stand for effects this record cannot attribute
- * and are therefore always invalidating.
- *
- * Allocation and collection are deliberately absent: no GC, finalization, or
- * allocation path bumps a semantic family, so `mayGc` says nothing about epoch
- * stability.
- */
-const EPOCH_INVALIDATING_WRITES: ReadonlySet<CoreEffectDomain> =
-	new Set<CoreEffectDomain>([
-		"object-property",
-		"array-element",
-		"global-property",
-		"host",
-		"io",
-	]);
-
-const SCALAR_REPRESENTATIONS: ReadonlySet<string> = new Set(["f64", "i32", "boolean"]);
-
-/**
- * Per-function facts the validity proof needs, computed once in O(instructions).
- *
- * Region interiors are near-disjoint and every region re-reads the same
- * instructions, so the transparency bit and the two position maps are shared
- * rather than recomputed per region.
- */
-export interface CoreRegionValidityModel {
-	readonly transparent: ReadonlySet<CoreInstructionId>;
-	readonly blockOf: ReadonlyMap<CoreInstructionId, CoreBlockId>;
-	/** Instruction order inside a block; terminators sort after every instruction. */
-	readonly orderInBlock: ReadonlyMap<CoreInstructionId, number>;
+export function corePlanVersionStamp(program: CoreProgram): CoreOptimizationPlan["version"] {
+	return Object.freeze({
+		key: stableVersionKey(program),
+		program: Object.freeze({ ...program.versions }),
+		functions: Object.freeze([...program.functionIds()].map((functionId) =>
+			Object.freeze({
+				function: functionId,
+				versions: Object.freeze({ ...program.function(functionId).versions }),
+			}),
+		)),
+	});
 }
 
-/**
- * Whether an instruction can reach a seam that invalidates a semantic epoch.
- *
- * The question is asked of effect domains, never of opcode names, so an operation
- * whose effects a landed fact has already refined — an own-data-cell access, a
- * call with an interprocedural summary — answers with its refined effects. A
- * suspension is opaque by construction: the resumed continuation runs arbitrary
- * code that this record does not describe.
- */
-export function coreInstructionEpochTransparent(
-	fn: CoreFunction,
-	instruction: CoreInstruction,
-	registry?: CoreOpcodeRegistry,
+export class CoreOptimizationPlanVerificationError extends Error {
+	constructor(message: string) {
+		super(`Invalid Core optimization plan: ${message}`);
+		this.name = "CoreOptimizationPlanVerificationError";
+	}
+}
+
+function fail(message: string): never {
+	throw new CoreOptimizationPlanVerificationError(message);
+}
+
+function sameRecord(
+	left: object,
+	right: object,
 ): boolean {
-	const effects =
-		registry === undefined
-			? coreInstructionEffects(instruction)
-			: coreInstructionEffects(instruction, registry);
-	if (effects.maySuspend) return false;
-	// `binary` and `unary` are in the user-code class because a boxed operand can
-	// carry a `valueOf`/`toString` hook. An operand already held in an unboxed
-	// scalar representation has no such hook, and this admission is what keeps
-	// ordinary interior arithmetic from making every real loop body opaque.
-	const scalarArithmetic =
-		(instruction.opcode === "binary" || instruction.opcode === "unary") &&
-		instruction.inputs.every((input) => coreValueIsScalar(fn, input));
-	if (!scalarArithmetic && effects.callsUserCode) return false;
-	return !effects.writes.some(
-		(domain) =>
-			EPOCH_INVALIDATING_WRITES.has(domain) && !(scalarArithmetic && domain === "host"),
-	);
+	const leftRecord = left as Readonly<Record<string, unknown>>;
+	const rightRecord = right as Readonly<Record<string, unknown>>;
+	const keys = new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)]);
+	return [...keys].every((key) => leftRecord[key] === rightRecord[key]);
 }
 
-function coreValueIsScalar(fn: CoreFunction, value: CoreValueId): boolean {
-	return SCALAR_REPRESENTATIONS.has(fn.values[value]?.representation ?? "boxed");
+function verifyCost(cost: CorePlanCost, id: string): void {
+	for (const [name, value] of Object.entries(cost)) {
+		if (!Number.isSafeInteger(value) || value < 0) {
+			fail(`${id} has invalid ${name} cost ${value}`);
+		}
+	}
 }
 
-export function coreRegionValidityModel(
-	fn: CoreFunction,
-	registry?: CoreOpcodeRegistry,
-): CoreRegionValidityModel {
-	const transparent = new Set<CoreInstructionId>();
-	const blockOf = new Map<CoreInstructionId, CoreBlockId>();
-	const orderInBlock = new Map<CoreInstructionId, number>();
-	for (const block of fn.blocks) {
-		for (const [order, instruction] of block.instructions.entries()) {
-			blockOf.set(instruction.id, block.id);
-			orderInBlock.set(instruction.id, order);
-			if (coreInstructionEpochTransparent(fn, instruction, registry)) {
-				transparent.add(instruction.id);
+function requireInstruction(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	role: string,
+	id: string,
+): void {
+	if (!fn.isInstructionLive(instruction)) fail(`${id} names stale ${role} @${instruction}`);
+}
+
+function verifySpecialization(
+	program: SealedCoreProgram,
+	plan: CoreOptimizationPlan,
+	selection: CorePlanSpecialization,
+	ids: Set<string>,
+	exclusiveClaims: Map<CoreFunctionId, Set<CoreInstructionId>>,
+): void {
+	if (ids.has(selection.id)) fail(`duplicate specialization id ${selection.id}`);
+	ids.add(selection.id);
+	if (!coreTargetSupportsSpecialization(selection.kind)) {
+		fail(`${selection.id} has no target implementation for ${selection.kind}`);
+	}
+	if (selection.target !== "native" || selection.fallback !== "canonical-core") {
+		fail(`${selection.id} does not retain the canonical generic fallback`);
+	}
+	if (!plan.liveFunctions.includes(selection.function)) {
+		fail(`${selection.id} belongs to dead function ${selection.function}`);
+	}
+	const fn = program.function(selection.function);
+	if (selection.anchors.length === 0 || selection.claimedInstructions.length === 0) {
+		fail(`${selection.id} has an empty anchor or claim set`);
+	}
+	const claims = new Set(selection.claimedInstructions);
+	if (claims.size !== selection.claimedInstructions.length) {
+		fail(`${selection.id} repeats a claimed instruction`);
+	}
+	for (const anchor of selection.anchors) {
+		requireInstruction(fn, anchor, "anchor", selection.id);
+		if (!claims.has(anchor)) fail(`${selection.id} anchor @${anchor} is not claimed`);
+	}
+	const ordinary = new Set(selection.ordinaryBlocks);
+	const exceptional = new Set(selection.exceptionalBlocks);
+	for (const block of [...ordinary, ...exceptional]) {
+		if (!fn.isBlockLive(block)) fail(`${selection.id} names stale block b${block}`);
+	}
+	for (const instruction of claims) {
+		requireInstruction(fn, instruction, "claim", selection.id);
+		const block = fn.instructionBlock(instruction);
+		if (!ordinary.has(block) && !exceptional.has(block)) {
+			fail(`${selection.id} claim @${instruction} is outside its control-flow envelope`);
+		}
+	}
+	const requirements = new Set<number>();
+	for (const requirement of selection.requiredRepresentations) {
+		if (requirements.has(requirement.value)) {
+			fail(`${selection.id} repeats representation requirement %${requirement.value}`);
+		}
+		requirements.add(requirement.value);
+		if (!fn.isValueLive(requirement.value) ||
+			fn.valueRepresentation(requirement.value) !== requirement.representation) {
+			fail(`${selection.id} has a stale representation requirement for %${requirement.value}`);
+		}
+	}
+	if (selection.kind === "guarded-direct-call") {
+		if (selection.anchors.length !== 1 || selection.targetFunctions.length === 0) {
+			fail(`${selection.id} has an invalid guarded-call target set`);
+		}
+		const anchor = selection.anchors[0]!;
+		if (fn.instructionKind(anchor) !== "operation" ||
+			fn.registry.byId(fn.instructionOpcode(anchor)).callTransfer === undefined) {
+			fail(`${selection.id} does not anchor a call`);
+		}
+		const attributes = fn.instructionAttributes(anchor);
+		const selectedTargets = selection.targetFunctions;
+		const encoded =
+			selectedTargets.length === 1 && attributes.directFunctionIndex === selectedTargets[0]
+				? [attributes.directFunctionIndex]
+				: attributes.guardedFunctionIndices;
+		if (!Array.isArray(encoded) || encoded.length !== selectedTargets.length ||
+			selectedTargets.some((target, index) => encoded[index] !== target)) {
+			fail(`${selection.id} does not match the canonical call guard`);
+		}
+		for (const target of selectedTargets) {
+			if (!plan.liveFunctions.includes(target)) {
+				fail(`${selection.id} targets dead function ${target}`);
 			}
 		}
-		// Terminators are structural Core concepts rather than opcodes: none of them
-		// reads or writes memory, so a terminator never invalidates an epoch. An edge
-		// that leaves the interior ends the licensed extent instead of extending it.
-		blockOf.set(block.terminator.id, block.id);
-		orderInBlock.set(block.terminator.id, block.instructions.length);
-		transparent.add(block.terminator.id);
 	}
-	return { transparent, blockOf, orderInBlock };
-}
-
-function attributeObject(value: unknown): CoreAttributeObject | undefined {
-	if (value === null || typeof value !== "object" || Array.isArray(value))
-		return undefined;
-	return value as CoreAttributeObject;
-}
-
-/** The region certificate's license, or `undefined` when it is not readable data. */
-export function coreRegionLicense(region: CoreRegion): CoreAttributeObject | undefined {
-	return attributeObject(region.data.license);
-}
-
-/**
- * The epoch families a region's license depends on, or `undefined` when the
- * license cannot be read as a requirement pair. An unreadable license is never
- * treated as an empty one: the caller degrades to `per-use`.
- *
- * A license whose guard is the literal `"structural"` names no world or epoch
- * dependency at all — its fast path is licensed by a local operand test — so it
- * reads as the empty family set.
- */
-export function coreRegionLicenseEpochFamilies(
-	region: CoreRegion,
-): ReadonlySet<string> | undefined {
-	const license = coreRegionLicense(region);
-	if (license === undefined) return undefined;
-	if (license.guard === "structural") return new Set();
-	const guard = attributeObject(license.guard);
-	const dependencies = guard?.dependencies;
-	if (!Array.isArray(dependencies)) return undefined;
-	const families = new Set<string>();
-	for (const entry of dependencies) {
-		const dependency = attributeObject(entry);
-		if (typeof dependency?.kind !== "string") return undefined;
-		if (dependency.kind !== "epoch") continue;
-		if (typeof dependency.family !== "string") return undefined;
-		families.add(dependency.family);
-	}
-	return families;
-}
-
-/** The region's admission record, or `undefined` when the certificate lacks one. */
-export function coreRegionAdmission(region: CoreRegion): CoreRegionAdmission | undefined {
-	const admission = attributeObject(coreRegionLicense(region)?.admission);
-	if (admission === undefined) return undefined;
-	const anchor = attributeObject(admission.anchor)?.$coreInstruction;
-	const mode = admission.mode;
-	if (
-		typeof anchor !== "number" ||
-		(mode !== "capture" && mode !== "stable" && mode !== "per-use")
-	) {
-		return undefined;
-	}
-	return { anchor: anchor as CoreInstructionId, mode };
-}
-
-/**
- * The interior and license facts the validity proof reads. Selection passes hold
- * these directly; the verifier reads them back out of a finished certificate.
- */
-export interface CoreRegionAdmissionQuery {
-	readonly anchor: CoreInstructionId;
-	/** `undefined` when the license could not be read as a requirement pair. */
-	readonly epochFamilies: ReadonlySet<string> | undefined;
-	readonly claimedInstructions: ReadonlyArray<CoreInstructionId>;
-	readonly ordinaryBlocks: ReadonlyArray<CoreBlockId>;
-	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
-}
-
-/** Epoch families named by a requirement pair a pass already holds unencoded. */
-export function coreEpochFamilies(
-	dependencies: ReadonlyArray<FactDependency>,
-): ReadonlySet<string> {
-	const families = new Set<string>();
-	for (const dependency of dependencies) {
-		if (dependency.kind === "epoch") families.add(dependency.family);
-	}
-	return families;
-}
-
-/** Read a finished certificate back into the facts the proof needs. */
-export function coreRegionAdmissionQuery(
-	region: CoreRegion,
-	anchor: CoreInstructionId,
-): CoreRegionAdmissionQuery {
-	return {
-		anchor,
-		epochFamilies: coreRegionLicenseEpochFamilies(region),
-		claimedInstructions: region.claimedInstructions,
-		ordinaryBlocks: region.ordinaryBlocks,
-		exceptionalBlocks: region.exceptionalBlocks,
-	};
-}
-
-/**
- * Whether the declared interior keeps its admitted epochs valid from the anchor
- * through every licensed use.
- *
- * All four conditions are needed, and each one closes a distinct escape:
- *
- * 1. The anchor is inside the interior, its block dominates every licensed
- *    instruction, and no same-block claim precedes it, so no licensed use runs
- *    before admission on any path.
- * 2. Every edge into an interior block other than the anchor's — ordinary or
- *    exceptional — comes from the interior, so control cannot re-enter after a
- *    detour through code the proof never examined. The anchor's own block may be
- *    entered from anywhere, because entering it runs the anchor.
- * 3. The anchor's block does not throw into the interior, which would otherwise
- *    reach a licensed use while skipping the anchor.
- * 4. Every interior instruction other than the anchor is epoch-transparent.
- *
- * Claimed instructions are deliberately *not* exempt from condition 4. A claim
- * says the certificate owns the instruction, not that its licensed form is total:
- * a fast operation that declines at runtime falls back to its retained generic
- * twin, which can run arbitrary user code inside the interior.
- *
- * Cost is O(|interior blocks| + |interior instructions| + |interior edges|) with
- * the shared model precomputed, and `cfg.dominates` is a constant-time query.
- */
-export function coreRegionInteriorKeepsAdmission(
-	fn: CoreFunction,
-	cfg: CoreControlFlow,
-	model: CoreRegionValidityModel,
-	query: CoreRegionAdmissionQuery,
-): boolean {
-	const interior = new Set<CoreBlockId>([
-		...query.ordinaryBlocks,
-		...query.exceptionalBlocks,
-	]);
-	const anchorBlock = model.blockOf.get(query.anchor);
-	if (anchorBlock === undefined || !interior.has(anchorBlock)) return false;
-	const anchorOrder = model.orderInBlock.get(query.anchor);
-	if (anchorOrder === undefined) return false;
-	for (const claimed of query.claimedInstructions) {
-		const claimedBlock = model.blockOf.get(claimed);
-		const claimedOrder = model.orderInBlock.get(claimed);
-		if (
-			claimedBlock === undefined ||
-			claimedOrder === undefined ||
-			!interior.has(claimedBlock) ||
-			!cfg.dominates(anchorBlock, claimedBlock) ||
-			(claimedBlock === anchorBlock && claimedOrder < anchorOrder)
-		) {
-			return false;
+	verifyCost(selection.cost, selection.id);
+	if (selection.composition === "exclusive") {
+		const owned = exclusiveClaims.get(selection.function) ?? new Set();
+		for (const instruction of claims) {
+			if (owned.has(instruction)) {
+				fail(`${selection.id} conflicts on @${instruction}`);
+			}
+			owned.add(instruction);
 		}
+		exclusiveClaims.set(selection.function, owned);
 	}
-	const anchorHandler = fn.blocks[anchorBlock]?.handler;
-	if (anchorHandler !== undefined && interior.has(anchorHandler.block)) return false;
-	for (const block of interior) {
-		if (!cfg.dominates(anchorBlock, block)) return false;
-		if (block !== anchorBlock) {
-			for (const edge of cfg.predecessors[block] ?? []) {
-				if (!interior.has(edge.from)) return false;
+}
+
+function validPlanRepresentation(value: CoreRepresentation): boolean {
+	return value === "boxed" || value === "f64" || value === "i32" ||
+		value === "boolean" || value === "string";
+}
+
+function planRepresentation(value: CoreRepresentation): CorePlanRepresentation | undefined {
+	switch (value) {
+		case "boxed":
+		case "f64":
+		case "i32":
+		case "boolean":
+		case "string": return value;
+		default: return undefined;
+	}
+}
+
+function total(counts: Readonly<Record<string, number>>): number {
+	return Object.values(counts).reduce((sum, count) => sum + count, 0);
+}
+
+/** Verify stable identities and target obligations without querying an analysis. */
+export function verifyCoreOptimizationPlan(
+	program: SealedCoreProgram,
+	plan: CoreOptimizationPlan,
+): void {
+	if (!program.sealed) fail("program is not sealed");
+	const current = corePlanVersionStamp(program);
+	if (current.key !== plan.version.key ||
+		!sameRecord(current.program, plan.version.program) ||
+		current.functions.length !== plan.version.functions.length ||
+		current.functions.some((entry, index) => {
+			const planned = plan.version.functions[index];
+			return planned === undefined || entry.function !== planned.function ||
+				!sameRecord(entry.versions, planned.versions);
+		})) {
+		fail("plan version does not match the sealed program");
+	}
+	if (new Set(plan.liveFunctions).size !== plan.liveFunctions.length ||
+		plan.liveFunctions.some((functionId, index) =>
+			functionId < 0 || functionId >= program.functionCapacity ||
+			(index > 0 && plan.liveFunctions[index - 1]! >= functionId))) {
+		fail("live function mapping is not a sorted set of stable IDs");
+	}
+	const ids = new Set<string>();
+	const exclusiveClaims = new Map<CoreFunctionId, Set<CoreInstructionId>>();
+	for (const selection of plan.specializations) {
+		verifySpecialization(program, plan, selection, ids, exclusiveClaims);
+	}
+	const entriesByFunction = new Map<CoreFunctionId, number>();
+	const callSites = new Set<string>();
+	for (const entry of plan.directEntries) {
+		if (!plan.liveFunctions.includes(entry.function)) {
+			fail(`direct entry targets dead function ${entry.function}`);
+		}
+		const fn = program.function(entry.function);
+		if (fn.isGenerator || fn.isAsync || fn.metadata.isClassConstructor) {
+			fail(`direct entry targets unsupported function ${entry.function}`);
+		}
+		const expectedId = entriesByFunction.get(entry.function) ?? 0;
+		if (entry.id !== expectedId || entry.id >= 4) {
+			fail(`direct entry ${entry.function}:${entry.id} is not densely numbered`);
+		}
+		entriesByFunction.set(entry.function, expectedId + 1);
+		if (entry.target !== "native" || entry.fallback !== "canonical-core") {
+			fail(`direct entry ${entry.function}:${entry.id} loses its generic fallback`);
+		}
+		if (entry.parameterRepresentations.length !== fn.parameters.length ||
+			entry.parameterRepresentations.some((representation) =>
+				!validPlanRepresentation(representation)) ||
+			!validPlanRepresentation(entry.resultRepresentation)) {
+			fail(`direct entry ${entry.function}:${entry.id} has an invalid ABI`);
+		}
+		if (fn.parameters.some((parameter, index) =>
+			planRepresentation(fn.valueRepresentation(parameter)) !==
+				entry.parameterRepresentations[index]) ||
+			[...fn.blockIds()].some((block) => {
+				const terminator = fn.terminatorPayload(fn.blockTerminator(block));
+				return terminator.kind === "return" &&
+					planRepresentation(fn.valueRepresentation(terminator.value)) !==
+						entry.resultRepresentation;
+			})) {
+			fail(`direct entry ${entry.function}:${entry.id} disagrees with Core representations`);
+		}
+		if (entry.callSites.length === 0) {
+			fail(`direct entry ${entry.function}:${entry.id} has no callsites`);
+		}
+		for (const site of entry.callSites) {
+			const key = `${site.caller}:${site.instruction}`;
+			if (callSites.has(key)) fail(`callsite ${key} selects multiple direct entries`);
+			callSites.add(key);
+			if (!plan.liveFunctions.includes(site.caller)) fail(`direct entry callsite ${key} is dead`);
+			const caller = program.function(site.caller);
+			requireInstruction(caller, site.instruction, "direct-entry callsite", key);
+			if (caller.instructionKind(site.instruction) !== "operation" ||
+				caller.registry.byId(caller.instructionOpcode(site.instruction)).callTransfer === undefined ||
+				caller.instructionAttributes(site.instruction).directFunctionIndex !== entry.function) {
+				fail(`direct entry callsite ${key} lacks its exact callee guard`);
 			}
 		}
-		for (const instruction of fn.blocks[block]?.instructions ?? []) {
-			if (instruction.id === query.anchor) continue;
-			if (!model.transparent.has(instruction.id)) return false;
-		}
+		verifyCost(entry.cost, `direct entry ${entry.function}:${entry.id}`);
 	}
-	return true;
-}
-
-/**
- * Classify a region's admission mode from its license and its interior.
- *
- * A license that names no epoch family has nothing an interior could invalidate,
- * so `stable` holds without an interior proof: a world dependency such as locked
- * primordials cannot change while the program runs, and a purely structural
- * license re-tests its operands at each use anyway. Everything else must earn
- * `stable`, and an unreadable license earns nothing.
- */
-export function coreRegionAdmissionMode(
-	fn: CoreFunction,
-	cfg: CoreControlFlow,
-	model: CoreRegionValidityModel,
-	query: CoreRegionAdmissionQuery,
-): CoreRegionAdmissionMode {
-	if (query.epochFamilies === undefined) return "per-use";
-	if (query.epochFamilies.size === 0) return "stable";
-	return coreRegionInteriorKeepsAdmission(fn, cfg, model, query) ? "stable" : "per-use";
+	const selected = plan.specializations.length + plan.directEntries.length;
+	const generatedCode = [
+		...plan.specializations.map(({ cost }) => cost.generatedCode),
+		...plan.directEntries.map(({ cost }) => cost.generatedCode),
+	].reduce((sum, cost) => sum + cost, 0);
+	const compilerWork = [
+		...plan.specializations.map(({ cost }) => cost.compilerWork),
+		...plan.directEntries.map(({ cost }) => cost.compilerWork),
+	].reduce((sum, cost) => sum + cost, 0);
+	if (plan.statistics.applied !== selected ||
+		total(plan.statistics.selectedByKind) !== selected ||
+		plan.statistics.considered !== plan.statistics.applied + plan.statistics.declined ||
+		total(plan.statistics.discoveredByKind) !== plan.statistics.considered ||
+		plan.statistics.generatedCodeConsumed !== generatedCode ||
+		plan.statistics.compilerWorkConsumed !== compilerWork ||
+		!Number.isFinite(plan.statistics.verificationMs) || plan.statistics.verificationMs < 0) {
+		fail("plan diagnostics do not describe the selected entries");
+	}
 }

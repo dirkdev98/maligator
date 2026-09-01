@@ -1,4 +1,7 @@
-import type { CoreOptimizationPlan } from "./optimize.ts";
+import type {
+	CoreOptimizationPlan,
+	CoreOptimizationPlanStatistics,
+} from "./core-ir-regions.ts";
 import type { CoreProgram } from "./core-store.ts";
 
 export interface CoreOptimizationCounts {
@@ -54,8 +57,21 @@ export interface CoreOptimizationReport {
 	readonly discovery: CoreCandidateDiscoveryReport;
 	readonly program: CoreProgramWorkReport;
 	readonly transforms: CoreTransformWorkReport;
+	readonly plan: CorePlanWorkReport;
 	readonly queue: CoreQueueWorkReport;
 	readonly budget: CoreBudgetWorkReport;
+}
+
+export interface CorePlanWorkReport {
+	readonly discovered: number;
+	readonly selected: number;
+	readonly declined: number;
+	readonly discoveredByKind: Readonly<Record<string, number>>;
+	readonly selectedByKind: Readonly<Record<string, number>>;
+	readonly declinedByReason: Readonly<Record<string, number>>;
+	readonly generatedCodeConsumed: number;
+	readonly compilerWorkConsumed: number;
+	readonly verificationMs: number;
 }
 
 export interface CoreTransformWorkReport {
@@ -134,7 +150,7 @@ function liveCounts(program: CoreProgram): Omit<CoreOptimizationCounts, "planCan
 
 export function coreOptimizationCounts(
 	program: CoreProgram,
-	plan?: CoreOptimizationPlan,
+	plan?: Pick<CoreOptimizationPlan, "directEntries" | "specializations">,
 ): CoreOptimizationCounts {
 	return {
 		...liveCounts(program),
@@ -184,6 +200,17 @@ export class CoreOptimizationReportBuilder {
 		callGraphFunctionsAnalyzed: 0,
 		sccTransfers: 0,
 		callerWakeups: 0,
+	});
+	#planWork: CorePlanWorkReport = Object.freeze({
+		discovered: 0,
+		selected: 0,
+		declined: 0,
+		discoveredByKind: Object.freeze({}),
+		selectedByKind: Object.freeze({}),
+		declinedByReason: Object.freeze({}),
+		generatedCodeConsumed: 0,
+		compilerWorkConsumed: 0,
+		verificationMs: 0,
 	});
 
 	constructor(program: CoreProgram) {
@@ -310,7 +337,27 @@ export class CoreOptimizationReportBuilder {
 		this.#transformWork = Object.freeze({ ...report });
 	}
 
-	finish(program: CoreProgram, plan: CoreOptimizationPlan): CoreOptimizationReport {
+	recordPlanWork(report: CoreOptimizationPlanStatistics): void {
+		this.#planWork = Object.freeze({
+			discovered: Object.values(report.discoveredByKind).reduce((sum, count) => sum + count, 0),
+			selected: report.applied,
+			declined: report.declined,
+			discoveredByKind: Object.freeze({ ...report.discoveredByKind }),
+			selectedByKind: Object.freeze({ ...report.selectedByKind }),
+			declinedByReason: Object.freeze({
+				...report.declinedByReason,
+				...report.declinedByPlanReason,
+			}),
+			generatedCodeConsumed: report.generatedCodeConsumed,
+			compilerWorkConsumed: report.compilerWorkConsumed,
+			verificationMs: report.verificationMs,
+		});
+	}
+
+	finish(
+		program: CoreProgram,
+		plan: Pick<CoreOptimizationPlan, "directEntries" | "specializations">,
+	): CoreOptimizationReport {
 		return Object.freeze({
 			input: this.input,
 			output: Object.freeze(coreOptimizationCounts(program, plan)),
@@ -337,6 +384,7 @@ export class CoreOptimizationReportBuilder {
 			}),
 			program: this.#programWork,
 			transforms: this.#transformWork,
+			plan: this.#planWork,
 			queue: Object.freeze({
 				pushes: this.#queuePushes,
 				pops: this.#queuePops,
@@ -391,11 +439,15 @@ export function formatCoreOptimizationReport(
 		},
 		{
 			label: "Core optimizer transforms",
-			value: `${report.transforms.considered} considered/${report.transforms.applied} applied/${report.transforms.declined} declined; applied ${Object.entries(report.transforms.appliedByKind).map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"}; declined ${Object.entries(report.transforms.declinedByReason).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(", ") || "none"}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, SCC transfers ${report.transforms.sccTransfers}, caller wakeups ${report.transforms.callerWakeups}`,
+			value: `${report.transforms.considered} considered/${report.transforms.applied} applied/${report.transforms.declined} declined; applied ${Object.entries(report.transforms.appliedByKind).filter(([, count]) => count > 0).map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"}; declined ${Object.entries(report.transforms.declinedByReason).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(", ") || "none"}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, SCC transfers ${report.transforms.sccTransfers}, caller wakeups ${report.transforms.callerWakeups}`,
 		},
 		{
 			label: "Core optimizer discovery",
 			value: `${report.discovery.candidates} candidates (${report.discovery.stackObjects} stack objects, ${report.discovery.denseArrays} dense arrays, ${report.discovery.numericFusions} numeric fusions), largest fan-out ${report.discovery.largestFanOut}`,
+		},
+		{
+			label: "Core optimizer specialization plan",
+			value: `${report.plan.discovered} discovered/${report.plan.selected} selected/${report.plan.declined} declined; discovered ${Object.entries(report.plan.discoveredByKind).filter(([, count]) => count > 0).map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"}; selected ${Object.entries(report.plan.selectedByKind).filter(([, count]) => count > 0).map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"}; declined ${Object.entries(report.plan.declinedByReason).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(", ") || "none"}; generated ${report.plan.generatedCodeConsumed}, compiler work ${report.plan.compilerWorkConsumed}, verified ${report.plan.verificationMs.toFixed(1)}ms`,
 		},
 		{
 			label: "Core optimizer queue",

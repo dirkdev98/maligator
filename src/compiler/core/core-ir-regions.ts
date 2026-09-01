@@ -1,5 +1,106 @@
 import type { CompilerGuardPlan } from "../shared/compiler-facts.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreRepresentation,
+	CoreValueId,
+} from "./core-ir.ts";
+import type {
+	CoreFunctionVersions,
+	CoreProgramVersions,
+} from "./core-store.ts";
+import type {
+	CoreTransformBudgetStatistics,
+	CoreTransformDeclineReason,
+} from "./core-transform-candidates.ts";
+
+export type CorePlanSpecializationKind =
+	| "guarded-direct-call"
+	| "stack-object-plan"
+	| "dense-array-plan"
+	| "numeric-fusion";
+
+export type CorePlanRepresentation = Exclude<
+	CoreRepresentation,
+	"string-span" | "projected-elements" | "dense-elements" | "scalarized-object"
+>;
+
+export interface CorePlanVersionStamp {
+	readonly key: string;
+	readonly program: CoreProgramVersions;
+	readonly functions: ReadonlyArray<{
+		readonly function: CoreFunctionId;
+		readonly versions: CoreFunctionVersions;
+	}>;
+}
+
+export interface CorePlanCost {
+	readonly generatedCode: number;
+	readonly compilerWork: number;
+	readonly runtimeBenefit: number;
+}
+
+export interface CorePlanSpecialization {
+	readonly id: string;
+	readonly kind: CorePlanSpecializationKind;
+	readonly function: CoreFunctionId;
+	readonly anchors: ReadonlyArray<CoreInstructionId>;
+	readonly claimedInstructions: ReadonlyArray<CoreInstructionId>;
+	readonly ordinaryBlocks: ReadonlyArray<CoreBlockId>;
+	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
+	readonly representation: string;
+	readonly requiredRepresentations: ReadonlyArray<{
+		readonly value: CoreValueId;
+		readonly representation: CoreRepresentation;
+	}>;
+	readonly target: "native";
+	readonly fallback: "canonical-core";
+	readonly semanticProtectors: ReadonlyArray<string>;
+	readonly targetFunctions: ReadonlyArray<CoreFunctionId>;
+	readonly composition: "exclusive" | "overlay";
+	readonly cost: CorePlanCost;
+}
+
+export interface CoreDirectEntryCallSite {
+	readonly caller: CoreFunctionId;
+	readonly instruction: CoreInstructionId;
+}
+
+export interface CoreDirectEntryPlan {
+	readonly id: number;
+	readonly function: CoreFunctionId;
+	readonly callSites: ReadonlyArray<CoreDirectEntryCallSite>;
+	readonly parameterRepresentations: ReadonlyArray<CorePlanRepresentation>;
+	readonly resultRepresentation: CorePlanRepresentation;
+	readonly target: "native";
+	readonly fallback: "canonical-core";
+	readonly cost: CorePlanCost;
+}
+
+export type CorePlanDeclineReason =
+	| CoreTransformDeclineReason
+	| "overlap"
+	| "stale-anchor"
+	| "representation"
+	| "target-support";
+
+export interface CoreOptimizationPlanStatistics extends CoreTransformBudgetStatistics {
+	readonly discoveredByKind: Readonly<Record<string, number>>;
+	readonly selectedByKind: Readonly<Record<string, number>>;
+	readonly declinedByPlanReason: Readonly<Record<string, number>>;
+	readonly verificationMs: number;
+}
+
+/** Immutable target advice. Canonical Core remains complete when every entry is ignored. */
+export interface CoreOptimizationPlan {
+	readonly version: CorePlanVersionStamp;
+	readonly liveFunctions: ReadonlyArray<CoreFunctionId>;
+	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
+	readonly specializations: ReadonlyArray<CorePlanSpecialization>;
+	readonly statistics: CoreOptimizationPlanStatistics;
+}
 
 /**
  * Post-allocation form of a Core speculative-region certificate. Core owns the

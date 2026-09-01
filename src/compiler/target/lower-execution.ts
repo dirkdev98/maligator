@@ -1,5 +1,10 @@
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import { buildCoreControlFlow } from "../core/core-ir-control-flow.ts";
+import { verifyCoreOptimizationPlan } from "../core/core-ir-region-validity.ts";
+import type {
+	CoreDirectEntryPlan,
+	CorePlanRepresentation,
+} from "../core/core-ir-regions.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
 import type {
 	CoreBlockId,
@@ -128,9 +133,7 @@ export function physicalRegisterClass(
 function createExecutionFunctionMap(
 	compilation: CoreCompilation,
 ): ExecutionFunctionMap {
-	const executionToCore = [
-		...(compilation.plan.liveFunctions ?? compilation.program.functionIds()),
-	];
+	const executionToCore = [...compilation.plan.liveFunctions];
 	const coreToExecution = Array<number>(compilation.program.functionCapacity).fill(-1);
 	for (const [execution, core] of executionToCore.entries()) {
 		coreToExecution[core] = execution;
@@ -190,11 +193,15 @@ function rebuildOperation(
 	instruction: CoreInstructionId,
 	registerForValue: (value: CoreValueId) => number,
 	functionMap: ExecutionFunctionMap,
+	directEntryId: number | undefined,
 ): CompilerInstruction {
 	const opcode = fn.instructionOpcodeName(instruction);
 	const contract = requireCoreTargetOperationContract(opcode);
 	const attributes = relocateFunctionReferences(
-		fn.instructionAttributes(instruction),
+		{
+			...fn.instructionAttributes(instruction),
+			...(directEntryId === undefined ? {} : { directEntryId }),
+		},
 		functionMap,
 	);
 	const registers = [
@@ -213,6 +220,8 @@ function lowerFunctionToTarget(
 	coreFunction: CoreFunctionStore,
 	executionFunction: number,
 	functionMap: ExecutionFunctionMap,
+	directEntryIds: ReadonlyMap<CoreInstructionId, number>,
+	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
 ): ExecutionFunction {
 	const control = buildCoreControlFlow(program, coreFunction.id, { exceptions: true });
 	const blockOrder = [...control.reversePostorder];
@@ -316,6 +325,7 @@ function lowerFunctionToTarget(
 				instruction,
 				registerForValue,
 				functionMap,
+				directEntryIds.get(instruction),
 			);
 			let resultMove: CompilerInstruction | undefined;
 			const twoAddress = COMPILER_TWO_ADDRESS_OPERANDS[lowered.type];
@@ -490,7 +500,24 @@ function lowerFunctionToTarget(
 				instructionOrder.get(left.instruction)! -
 				instructionOrder.get(right.instruction)!,
 		);
-	return { ...fnWithoutGc, gc: { safepoints } };
+	const directEntries = directEntryPlans.map((entry) => ({
+		id: entry.id,
+		parameterRepresentations: entry.parameterRepresentations.map(
+			planExecutionRepresentation,
+		),
+		resultRepresentation: planExecutionRepresentation(entry.resultRepresentation),
+		registerRepresentations: physicalRepresentations,
+		gc: { safepoints },
+	}));
+	return { ...fnWithoutGc, directEntries, gc: { safepoints } };
+}
+
+function planExecutionRepresentation(
+	representation: CorePlanRepresentation,
+): ExecutionRegisterRepresentation {
+	if (representation === "f64") return "number";
+	if (representation === "i32") return "int32";
+	return representation;
 }
 
 /** Lower sealed Core directly into the generic runtime execution contract. */
@@ -503,19 +530,29 @@ export function lowerCoreCompilationToExecutionProgram(
 		{ stage: "pre-target" },
 		compilation.context,
 	);
-	if (
-		compilation.plan.directEntries.length !== 0 ||
-		compilation.plan.specializations.length !== 0
-	) {
-		throw new Error("Generic Core lowering received a non-empty optimization plan");
-	}
+	verifyCoreOptimizationPlan(compilation.program, compilation.plan);
 	const functionMap = createExecutionFunctionMap(compilation);
+	const directEntryPlans = new Map<number, Array<CoreDirectEntryPlan>>();
+	const directEntryIds = new Map<number, Map<CoreInstructionId, number>>();
+	for (const entry of compilation.plan.directEntries) {
+		const entries = directEntryPlans.get(entry.function) ?? [];
+		entries.push(entry);
+		directEntryPlans.set(entry.function, entries);
+		for (const site of entry.callSites) {
+			const calls = directEntryIds.get(site.caller) ??
+				new Map<CoreInstructionId, number>();
+			calls.set(site.instruction, entry.id);
+			directEntryIds.set(site.caller, calls);
+		}
+	}
 	const functions = functionMap.executionToCore.map((core, execution) =>
 		lowerFunctionToTarget(
 			compilation.program,
 			compilation.program.function(core),
 			execution,
 			functionMap,
+			directEntryIds.get(core) ?? new Map(),
+			directEntryPlans.get(core) ?? [],
 		),
 	);
 	return Object.freeze({

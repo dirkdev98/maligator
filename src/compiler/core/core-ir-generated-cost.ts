@@ -1,14 +1,9 @@
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
-import type {
-	CoreBlockId,
-	CoreFunction,
-	CoreInstruction,
-	CoreInstructionId,
-} from "./core-ir.ts";
+import type { CoreBlockId, CoreInstructionId } from "./core-ir.ts";
+import type { CoreFunctionStore } from "./core-store.ts";
 
 const BOXING_OPCODES = new Set(["binary", "unary", "toPropertyKey", "requireCoercible"]);
-
 const LOWERED_HELPER_OPCODES = new Set([
 	"mathBinaryNumber",
 	"mathUnaryNumber",
@@ -35,7 +30,7 @@ export interface CoreGeneratedCodeCost {
 }
 
 export interface CoreGeneratedCodeInstructionSite {
-	readonly instruction: CoreInstruction;
+	readonly instruction: CoreInstructionId;
 	readonly loopFrequency?: number;
 }
 
@@ -50,7 +45,7 @@ export interface CoreGeneratedCodeOverhead {
 }
 
 function generatedCodeCost(
-	boxedValues: Uint8Array | undefined,
+	fn: CoreFunctionStore | undefined,
 	sites: ReadonlyArray<CoreGeneratedCodeInstructionSite>,
 	overhead: CoreGeneratedCodeOverhead,
 ): CoreGeneratedCodeCost {
@@ -62,26 +57,29 @@ function generatedCodeCost(
 	let loopFrequency = overhead.loopFrequency ?? 1;
 	let inputOperands = 0;
 	for (const { instruction, loopFrequency: siteFrequency = 1 } of sites) {
-		const effects = coreInstructionEffects(instruction);
-		const helper =
-			effects.callsUserCode ||
-			effects.mayGc ||
-			LOWERED_HELPER_OPCODES.has(instruction.opcode);
-		if (helper) helperCalls++;
-		if (instruction.opcode === "guardFunctionIndex") guards++;
-		if (BOXING_OPCODES.has(instruction.opcode)) boxingOperations++;
+		if (
+			fn === undefined ||
+			!fn.isInstructionLive(instruction) ||
+			fn.instructionKind(instruction) !== "operation"
+		) continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const effects = coreInstructionEffects(fn, instruction);
+		if (effects.callsUserCode || effects.mayGc || LOWERED_HELPER_OPCODES.has(opcode)) {
+			helperCalls++;
+		}
+		if (opcode === "guardFunctionIndex") guards++;
+		if (BOXING_OPCODES.has(opcode)) boxingOperations++;
+		const operands = fn.instructionOperands(instruction);
 		if (effects.mayGc) {
 			safepoints++;
-			if (boxedValues !== undefined) {
-				for (const [index, value] of instruction.inputs.entries()) {
-					if (boxedValues[value] === 1 && instruction.inputs.indexOf(value) === index) {
-						rootSlots++;
-					}
-				}
+			const seen = new Set<number>();
+			for (const value of operands) {
+				if (!seen.has(value) && fn.valueRepresentation(value) === "boxed") rootSlots++;
+				seen.add(value);
 			}
 		}
 		loopFrequency = Math.max(loopFrequency, siteFrequency);
-		inputOperands += instruction.inputs.length;
+		inputOperands += operands.length;
 	}
 	const instructions = sites.length;
 	const duplicatedInstructions = overhead.duplicatedInstructions ?? 0;
@@ -90,41 +88,21 @@ function generatedCodeCost(
 	const materializationPaths = overhead.materializationPaths ?? 0;
 	const stateSynchronizations = overhead.stateSynchronizations ?? 0;
 	const estimatedCStatements =
-		instructions +
-		helperCalls * 2 +
-		guards * 2 +
-		boxingOperations +
-		genericTwins +
-		admissionChecks * 2 +
-		materializationPaths * 4 +
-		stateSynchronizations * 2;
+		instructions + helperCalls * 2 + guards * 2 + boxingOperations + genericTwins +
+		admissionChecks * 2 + materializationPaths * 4 + stateSynchronizations * 2;
 	const estimatedBinaryBytes =
 		estimatedCStatements * 8 + inputOperands * 2 + duplicatedInstructions * 4;
 	const compileScore =
-		estimatedCStatements +
-		helperCalls * 3 +
-		guards * 2 +
-		boxingOperations +
-		rootSlots +
-		safepoints * 2 +
-		duplicatedInstructions +
-		genericTwins +
-		admissionChecks * 2 +
-		materializationPaths * 4 +
-		stateSynchronizations * 2 +
+		estimatedCStatements + helperCalls * 3 + guards * 2 + boxingOperations + rootSlots +
+		safepoints * 2 + duplicatedInstructions + genericTwins + admissionChecks * 2 +
+		materializationPaths * 4 + stateSynchronizations * 2 +
 		Math.ceil(estimatedBinaryBytes / 32);
 	const runtimeScore =
 		loopFrequency *
-		(instructions +
-			helperCalls * 6 +
-			guards +
-			boxingOperations * 2 +
-			rootSlots +
-			safepoints * 2 +
-			admissionChecks +
-			materializationPaths * 6 +
+		(instructions + helperCalls * 6 + guards + boxingOperations * 2 + rootSlots +
+			safepoints * 2 + admissionChecks + materializationPaths * 6 +
 			stateSynchronizations * 2);
-	return {
+	return Object.freeze({
 		instructions,
 		helperCalls,
 		guards,
@@ -141,7 +119,7 @@ function generatedCodeCost(
 		estimatedBinaryBytes,
 		compileScore,
 		runtimeScore,
-	};
+	});
 }
 
 export interface CoreGeneratedCodeCostModel {
@@ -151,41 +129,44 @@ export interface CoreGeneratedCodeCostModel {
 	): CoreGeneratedCodeCost;
 	forRegion(
 		claimedInstructions: ReadonlyArray<CoreInstructionId>,
-		overhead: CoreGeneratedCodeOverhead,
+		overhead?: CoreGeneratedCodeOverhead,
 	): CoreGeneratedCodeCost;
 }
 
 export function coreGeneratedCodeCostModel(
-	fn: CoreFunction,
+	fn: CoreFunctionStore,
 	cfg?: CoreControlFlow,
 ): CoreGeneratedCodeCostModel {
-	const valueLimit = (fn.values.at(-1)?.id ?? -1) + 1;
-	const boxedValues = new Uint8Array(valueLimit);
-	for (const value of fn.values) {
-		if (value.representation === "boxed") boxedValues[value.id] = 1;
-	}
-	const sitesByInstruction: Array<CoreGeneratedCodeInstructionSite | undefined> = [];
+	const frequency = new Map<CoreInstructionId, number>();
 	if (cfg !== undefined) {
-		for (const block of fn.blocks) {
-			const loopFrequency = coreBlockLoopFrequency(cfg, block.id);
-			for (const instruction of block.instructions) {
-				sitesByInstruction[instruction.id] = { instruction, loopFrequency };
+		for (const block of fn.blockIds()) {
+			const loopFrequency = coreBlockLoopFrequency(cfg, block);
+			for (const instruction of fn.instructionIds(block)) {
+				frequency.set(instruction, loopFrequency);
 			}
 		}
 	}
-	return {
-		forInstructions(sites, overhead = {}) {
-			return generatedCodeCost(boxedValues, sites, overhead);
+	return Object.freeze({
+		forInstructions(
+			sites: ReadonlyArray<CoreGeneratedCodeInstructionSite>,
+			overhead: CoreGeneratedCodeOverhead = {},
+		) {
+			return generatedCodeCost(fn, sites, overhead);
 		},
-		forRegion(claimedInstructions, overhead) {
-			const sites: Array<CoreGeneratedCodeInstructionSite> = [];
-			for (const instruction of claimedInstructions) {
-				const site = sitesByInstruction[instruction];
-				if (site !== undefined) sites.push(site);
-			}
-			return generatedCodeCost(boxedValues, sites, overhead);
+		forRegion(
+			claimedInstructions: ReadonlyArray<CoreInstructionId>,
+			overhead: CoreGeneratedCodeOverhead = {},
+		) {
+			return generatedCodeCost(
+				fn,
+				claimedInstructions.map((instruction) => ({
+					instruction,
+					loopFrequency: frequency.get(instruction) ?? 1,
+				})),
+				overhead,
+			);
 		},
-	};
+	});
 }
 
 export function coreBlockLoopFrequency(cfg: CoreControlFlow, block: CoreBlockId): number {
@@ -197,7 +178,7 @@ export function coreBlockLoopFrequency(cfg: CoreControlFlow, block: CoreBlockId)
 }
 
 export function coreGeneratedCodeCostForInstructions(
-	fn: CoreFunction,
+	fn: CoreFunctionStore,
 	sites: ReadonlyArray<CoreGeneratedCodeInstructionSite>,
 	overhead: CoreGeneratedCodeOverhead = {},
 ): CoreGeneratedCodeCost {
@@ -211,10 +192,10 @@ export function coreGeneratedCodeOverheadCost(
 }
 
 export function coreGeneratedCodeCostForRegion(
-	fn: CoreFunction,
+	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	claimedInstructions: ReadonlyArray<CoreInstructionId>,
-	overhead: CoreGeneratedCodeOverhead,
+	overhead: CoreGeneratedCodeOverhead = {},
 ): CoreGeneratedCodeCost {
 	return coreGeneratedCodeCostModel(fn, cfg).forRegion(claimedInstructions, overhead);
 }

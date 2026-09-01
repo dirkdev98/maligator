@@ -292,3 +292,12 @@ export function coreRegionKindFromArtifactTag(
 ): RegisteredCoreRegionKind | undefined {
 	return CORE_REGION_KIND_BY_ARTIFACT_TAG.get(tag);
 }
+
+const CORE_PLAN_ONLY_TARGET_STRATEGIES: ReadonlySet<string> = new Set([
+	"dense-array-plan",
+	"guarded-direct-call",
+]);
+
+export function coreTargetSupportsSpecialization(kind: string): boolean {
+	return kind in CORE_REGION_STRATEGIES || CORE_PLAN_ONLY_TARGET_STRATEGIES.has(kind);
+}

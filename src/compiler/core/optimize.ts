@@ -12,7 +12,11 @@ import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import { CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS } from "./core-ir-provenance.ts";
 import { analyzeCoreFunctionReachability } from "./core-ir-reachability.ts";
-import type { CoreFunctionId } from "./core-ir.ts";
+import {
+	buildCoreOptimizationPlan,
+	withCorePlanVerificationTime,
+} from "./core-ir-region-selection.ts";
+import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import {
 	CoreOptimizationReportBuilder,
 } from "./core-optimization-report.ts";
@@ -20,11 +24,7 @@ import type { CoreOptimizationReport } from "./core-optimization-report.ts";
 import { CorePassManager } from "./core-pass-manager.ts";
 import type { CoreOptimizationStage } from "./core-pass.ts";
 
-export interface CoreOptimizationPlan {
-	readonly liveFunctions?: ReadonlyArray<CoreFunctionId>;
-	readonly directEntries: ReadonlyArray<never>;
-	readonly specializations: ReadonlyArray<never>;
-}
+export type { CoreOptimizationPlan } from "./core-ir-regions.ts";
 
 const OPTIMIZATION_STAGES: ReadonlyArray<CoreOptimizationStage> = [
 	"canonicalize",
@@ -103,18 +103,25 @@ export function optimizeCore(
 		summaries.targets,
 		compilation.context,
 	);
-	const plan: CoreOptimizationPlan = Object.freeze({
-		liveFunctions: reachability.liveFunctions,
-		directEntries: Object.freeze([]),
-		specializations: Object.freeze([]),
-	});
 	reportBuilder.recordProgramWork(
 		summaries.targets.statistics,
 		summaries.statistics,
 		reachability.statistics,
 	);
 	reportBuilder.recordStage("program", Date.now() - programStartedAt);
+	const planStartedAt = Date.now();
+	let plan = buildCoreOptimizationPlan(
+		compilation.program,
+		analyses,
+		summaries,
+		reachability.liveFunctions,
+	);
 	const program = compilation.program.seal();
+	const verificationStartedAt = Date.now();
+	verifyCoreOptimizationPlan(program, plan);
+	plan = withCorePlanVerificationTime(plan, Date.now() - verificationStartedAt);
+	reportBuilder.recordPlanWork(plan.statistics);
+	reportBuilder.recordStage("specialization", Date.now() - planStartedAt);
 	verifyCoreProgram(program, { stage: "pre-target" }, compilation.context);
 	const optimized = Object.freeze({
 		program,

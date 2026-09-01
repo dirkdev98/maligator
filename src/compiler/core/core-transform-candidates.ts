@@ -6,14 +6,23 @@ import type {
 export type CoreTransformKind =
 	| "call-refresh"
 	| "finite-dispatch"
-	| "inline";
+	| "inline"
+	| "direct-entry"
+	| "guarded-direct-call"
+	| "stack-object-plan"
+	| "dense-array-plan"
+	| "numeric-fusion";
 
 export type CoreTransformDeclineReason =
 	| "expansion-limit"
 	| "generated-code-cost"
 	| "compiler-work-cost"
 	| "unsupported-graph"
-	| "recursive";
+	| "recursive"
+	| "overlap"
+	| "stale-anchor"
+	| "representation"
+	| "target-support";
 
 export interface CoreTransformCandidate {
 	readonly key: string;
@@ -63,7 +72,16 @@ interface CallerConsumption {
 }
 
 function transformKindCounts(): Record<CoreTransformKind, number> {
-	return { "call-refresh": 0, "finite-dispatch": 0, inline: 0 };
+	return {
+		"call-refresh": 0,
+		"finite-dispatch": 0,
+		inline: 0,
+		"direct-entry": 0,
+		"guarded-direct-call": 0,
+		"stack-object-plan": 0,
+		"dense-array-plan": 0,
+		"numeric-fusion": 0,
+	};
 }
 
 function declineReasonCounts(): Record<CoreTransformDeclineReason, number> {
@@ -73,6 +91,10 @@ function declineReasonCounts(): Record<CoreTransformDeclineReason, number> {
 		"compiler-work-cost": 0,
 		"unsupported-graph": 0,
 		recursive: 0,
+		overlap: 0,
+		"stale-anchor": 0,
+		representation: 0,
+		"target-support": 0,
 	};
 }
 

@@ -5,7 +5,7 @@ import type {
 } from "../shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { CoreProgram, SealedCoreProgram } from "./core-ir.ts";
-import type { CoreOptimizationPlan } from "./optimize.ts";
+import type { CoreOptimizationPlan } from "./core-ir-regions.ts";
 
 /** A captured cell: its function index or negative per-iteration scope id, plus slot. */
 export interface CoreCapturedSlotRef {
