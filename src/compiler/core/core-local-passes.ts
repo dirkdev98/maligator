@@ -1,6 +1,7 @@
 import {
 	builtinOperations,
 	exactBuiltinCallDescriptor,
+	mathUnaryOperationKeys,
 } from "../shared/builtin-registry.ts";
 import {
 	compilerFactIsWorldInvariant,
@@ -75,6 +76,10 @@ for (const operation of builtinOperations) {
 	candidates.push(operation);
 	BUILTIN_OPERATIONS_BY_KEY.set(operation.key, candidates);
 }
+
+const MATH_UNARY_OPERATIONS: ReadonlySet<string> = new Set(
+	mathUnaryOperationKeys.map(([operation]) => operation),
+);
 
 function constantForValue(
 	fn: CoreFunctionStore,
@@ -751,10 +756,10 @@ const rewriteExactBuiltinCalls: CorePass = {
 	name: "rewrite-exact-builtin-calls",
 	stage: "canonicalize",
 	scope: "instruction",
-	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS],
+	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts"],
 	preserves: ["control-flow", "exception-control-flow"],
-	changes: LOCAL_CHANGES,
+	changes: { ...LOCAL_CHANGES, representations: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, compilationContext, item } = context;
@@ -763,15 +768,18 @@ const rewriteExactBuiltinCalls: CorePass = {
 		if (
 			!fn.isInstructionLive(item.instruction) ||
 			fn.instructionKind(item.instruction) !== "operation" ||
-			fn.instructionOpcodeName(item.instruction) !== "call" ||
-			fn.instructionAttributes(item.instruction).knownBuiltinCall !== undefined
+			fn.instructionOpcodeName(item.instruction) !== "call"
 		) {
 			return undefined;
 		}
+		const existingKnownBuiltinCall = fn.instructionAttributes(
+			item.instruction,
+		).knownBuiltinCall;
 		const inputs = fn.instructionOperands(item.instruction);
 		const [callee, receiver] = inputs;
 		if (callee === undefined || receiver === undefined) return undefined;
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 		const receiverRoot = root(receiver);
 		const calleeDefinition = fn.valueDefinition(root(callee));
@@ -815,6 +823,41 @@ const rewriteExactBuiltinCalls: CorePass = {
 		const exact = exactBuiltinCallDescriptor(descriptor.id);
 		const sharedIdentity = compilationContext.facts.builtinIdentities.get(descriptor.id);
 		const propertyResults = fn.instructionResults(property);
+		const arguments_ = inputs.slice(2);
+		const receiverDefinition = fn.valueDefinition(receiverRoot);
+		const exactIntrinsicReceiver =
+			receiverDefinition.kind === "instruction" &&
+			fn.instructionOpcodeName(receiverDefinition.instruction) === "loadIntrinsic" &&
+			fn.instructionAttributes(receiverDefinition.instruction).intrinsic ===
+				descriptor.owner;
+		const numericOpcode = MATH_UNARY_OPERATIONS.has(descriptor.id)
+			? "mathUnaryNumber"
+			: descriptor.id === "Math.min" || descriptor.id === "Math.max"
+				? "mathBinaryNumber"
+				: undefined;
+		const nativeMathArgument = (value: CoreValueId): boolean => {
+			if (fn.valueRepresentation(value) === "f64") return true;
+			const scalar = kinds.exactScalar(value);
+			if (scalar !== "int32" && scalar !== "number") return false;
+			const definition = fn.valueDefinition(value);
+			return (
+				definition.kind === "instruction" &&
+				(fn.instructionOpcodeName(definition.instruction) === "createNumber" ||
+					fn.instructionOpcodeName(definition.instruction) === "createF64")
+			);
+		};
+		const numericRewrite =
+			numericOpcode !== undefined &&
+			exactIntrinsicReceiver &&
+			compilerFactIsWorldInvariant(sharedIdentity) &&
+			sharedIdentity.value === descriptor.id &&
+			descriptor.nativeNumberArity === arguments_.length &&
+			arguments_.every(nativeMathArgument) &&
+			fn.instructionResults(item.instruction).length === 1 &&
+			propertyResults.length === 1 &&
+			fn.valueUseCount(propertyResults[0]!) === 1
+				? numericOpcode
+				: undefined;
 		const exactRewrite =
 			exact !== undefined &&
 			exactBuiltinReceiver(fn, receiverRoot, descriptor.owner, exact.receiverProof) &&
@@ -887,8 +930,23 @@ const rewriteExactBuiltinCalls: CorePass = {
 					: identity,
 			...(site === undefined ? {} : { sourceSite: site }),
 		};
+		if (
+			numericRewrite === undefined &&
+			exactRewrite === undefined &&
+			existingKnownBuiltinCall !== undefined
+		) {
+			return undefined;
+		}
 		const editor = CoreEditor.open(program, item.function);
-		if (exactRewrite === undefined) {
+		if (numericRewrite !== undefined) {
+			editor.replaceInstruction(item.instruction, numericRewrite, arguments_, {
+				attributes: { operation: descriptor.id },
+				sourcePosition: fn.instructionSourcePosition(item.instruction),
+			});
+			for (const argument of arguments_) editor.setValueRepresentation(argument, "f64");
+			editor.setValueRepresentation(fn.instructionResults(item.instruction)[0]!, "f64");
+			editor.removeInstruction(property);
+		} else if (exactRewrite === undefined) {
 			editor.replaceInstruction(item.instruction, "call", inputs, {
 				attributes: {
 					...fn.instructionAttributes(item.instruction),
@@ -898,7 +956,6 @@ const rewriteExactBuiltinCalls: CorePass = {
 				effectRefinement: fn.instructionEffectRefinement(item.instruction),
 			});
 		} else {
-			const arguments_ = inputs.slice(2);
 			const forwarded =
 				exactRewrite.forwardedArgumentLimit === undefined
 					? arguments_
@@ -2025,6 +2082,16 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 ];
 
 export const CORE_LOCAL_FINALIZATION_PASSES: ReadonlyArray<CorePass> = [
+	{
+		...rewriteExactBuiltinCalls,
+		name: "post-representation-exact-builtin-calls",
+		stage: "finalize",
+	},
+	{
+		...removeDeadInstructions,
+		name: "post-representation-dead-instruction-removal",
+		stage: "finalize",
+	},
 	{
 		...foldRedundantTdzChecks,
 		name: "post-memory-tdz-check-folding",

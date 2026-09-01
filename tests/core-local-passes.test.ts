@@ -802,6 +802,57 @@ describe("Core local canonicalization", () => {
 		expect(booleans).toContain(true);
 	});
 
+	it("erases locked Math dispatch only for exact native-number calls", () => {
+		const program = optimizedClosedModule(
+			`function exact() {
+				const first = 1.25;
+				const second = -0;
+				return Math.floor(first) + Math.max(first, second);
+			}
+			function generic(value) { return Math.floor(value); }
+			globalThis.keep = [exact, generic];`,
+			"core-locked-math.js",
+		);
+		const exact = coreFunctionNamed(program, "exact");
+		const generic = coreFunctionNamed(program, "generic");
+		expect(exact).toBeDefined();
+		expect(generic).toBeDefined();
+		const exactOperations = [...exact!.instructionIds()].filter(
+			(instruction) => exact!.instructionKind(instruction) === "operation",
+		);
+		expect(
+			exactOperations.map((instruction) => ({
+				opcode: exact!.instructionOpcodeName(instruction),
+				operation: exact!.instructionAttributes(instruction).operation,
+			})),
+		).toEqual(
+			expect.arrayContaining([
+				{ opcode: "mathUnaryNumber", operation: "Math.floor" },
+				{ opcode: "mathBinaryNumber", operation: "Math.max" },
+			]),
+		);
+		expect(
+			exactOperations.some((instruction) =>
+				["call", "loadProperty", "loadPropertyStatic"].includes(
+					exact!.instructionOpcodeName(instruction),
+				),
+			),
+		).toBe(false);
+		for (const instruction of exactOperations) {
+			if (!exact!.instructionOpcodeName(instruction).startsWith("math")) continue;
+			const [result] = exact!.instructionResults(instruction);
+			expect(result).toBeDefined();
+			expect(exact!.valueRepresentation(result!)).toBe("f64");
+		}
+		expect(
+			[...generic!.instructionIds()].some(
+				(instruction) =>
+					generic!.instructionKind(instruction) === "operation" &&
+					generic!.instructionOpcodeName(instruction) === "call",
+			),
+		).toBe(true);
+	});
+
 	it("eliminates a deep pure graph while retaining unused observable effects", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
