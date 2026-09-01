@@ -142,7 +142,7 @@ export class CorePassManager {
 			this.#validateChanges(work.pass, changes);
 			if (this.#verification === "per-pass") {
 				verifyCoreChangeSet(this.#program, changes, {
-					stage: "fixpoint",
+					stage,
 					pass: work.pass.name,
 					functionIndex: changes.function,
 				});

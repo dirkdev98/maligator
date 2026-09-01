@@ -3,6 +3,7 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreOptimizationStage } from "./core-pass.ts";
 import {
 	CORE_FACT_ALTERNATIVE_LIMIT,
 	CORE_FACT_CLAIM_LIMIT,
@@ -25,18 +26,15 @@ import { coreBlockId, coreFactId, coreInstructionId, coreValueId } from "./core-
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreVerificationStage =
+	| CoreOptimizationStage
 	| "construction"
 	| "pre-optimization"
-	| "normalization"
-	| "fixpoint"
-	| "finalization"
 	| "final-region-selection"
 	| "pre-target";
 
 export interface CoreVerificationContext {
 	readonly stage: CoreVerificationStage;
 	readonly pass?: string;
-	readonly round?: number;
 	readonly functionIndex?: number;
 }
 
@@ -46,7 +44,6 @@ function formatVerificationContext(context: CoreVerificationContext | undefined)
 	if (context === undefined) return "";
 	const parts = [`stage=${context.stage}`];
 	if (context.pass !== undefined) parts.push(`pass=${context.pass}`);
-	if (context.round !== undefined) parts.push(`round=${context.round}`);
 	if (context.functionIndex !== undefined)
 		parts.push(`function=${context.functionIndex}`);
 	return ` [${parts.join(" ")}]`;

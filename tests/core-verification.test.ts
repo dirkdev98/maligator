@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-format.ts";
-import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
+import {
+	CORE_CONTROL_FLOW_ANALYSIS,
+	buildCoreControlFlow,
+} from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	verifyCoreChangeSet,
@@ -10,7 +14,9 @@ import {
 	verifyCoreProgram,
 } from "../src/compiler/core/core-ir-verifier.ts";
 import { CORE_NO_EFFECTS, coreFactId } from "../src/compiler/core/core-ir.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 function validBranchProgram() {
 	const program = new CoreProgram(coreOpcodeRegistry);
@@ -66,7 +72,11 @@ describe("Core verification", () => {
 		});
 		builder.setTerminator(target, { kind: "return", value: parameter });
 		builder.finish(entry);
-		expect(() => verifyCoreProgram(program)).toThrow(/passes 0 values to 1 parameters/);
+		expect(() =>
+			verifyCoreProgram(program, { stage: "control-flow", pass: "test-pass" }),
+		).toThrow(
+			/Core IR verification failed \[stage=control-flow pass=test-pass function=0\]:.*passes 0 values to 1 parameters/,
+		);
 	});
 
 	it("rejects exceptional flow without an exception entry parameter", () => {
@@ -125,13 +135,19 @@ describe("Core verification", () => {
 
 	it("incrementally verifies one change set and keys CFG indexes by relevant versions", () => {
 		const { program, fn, entry, consequent, alternate } = validBranchProgram();
-		const first = buildCoreControlFlow(program, fn.id);
+		const analyses = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const request = { scope: "function", function: fn.id } as const;
+		const first = analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request);
 		const representationEditor = CoreEditor.open(program, fn.id);
 		const condition = fn.instructionResults([...fn.bodyInstructionIds(entry)][0]!)[0]!;
 		representationEditor.setValueRepresentation(condition, "boolean");
 		const representationChanges = representationEditor.commit();
-		verifyCoreChangeSet(program, representationChanges, { stage: "normalization" });
-		expect(buildCoreControlFlow(program, fn.id)).toBe(first);
+		verifyCoreChangeSet(program, representationChanges, { stage: "canonicalize" });
+		expect(analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request)).toBe(first);
 
 		const cfgEditor = CoreEditor.open(program, fn.id);
 		cfgEditor.removeInstruction(fn.blockTerminator(entry));
@@ -142,8 +158,8 @@ describe("Core verification", () => {
 			alternate: { block: consequent, arguments: [] },
 		});
 		const cfgChanges = cfgEditor.commit();
-		verifyCoreChangeSet(program, cfgChanges, { stage: "normalization" });
-		expect(buildCoreControlFlow(program, fn.id)).not.toBe(first);
+		verifyCoreChangeSet(program, cfgChanges, { stage: "control-flow" });
+		expect(analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request)).not.toBe(first);
 	});
 
 	it("formats the store through read-only lookup and iteration", () => {

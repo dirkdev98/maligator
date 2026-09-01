@@ -251,6 +251,50 @@ describe("Core optimizer infrastructure", () => {
 		expect(Object.keys(finished)).not.toContain("rounds");
 	});
 
+	it("reports the active worklist stage when per-pass verification fails", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const target = functions[0]!;
+		let edited = false;
+		const invalid: CorePass = {
+			name: "invalid-rewrite",
+			stage: "control-flow",
+			scope: "function",
+			requiredAnalyses: [],
+			wakesOn: ["cfg"],
+			preserves: [],
+			changes: { cfg: true, calls: false, facts: false, representations: false },
+			budget: { maxWorkItems: 10, maxEdits: 10, exhaustion: "error" },
+			run({ item }) {
+				if (edited || item.scope !== "function" || item.function !== target.id) {
+					return undefined;
+				}
+				edited = true;
+				const editor = CoreEditor.open(program, target.id);
+				const destination = editor.createBlock([{ representation: "boxed" }]);
+				const parameter = program.function(target.id).blockParameters(destination)[0]!;
+				editor.removeInstruction(program.function(target.id).blockTerminator(target.entry));
+				editor.setTerminator(target.entry, {
+					kind: "jump",
+					edge: { block: destination, arguments: [] },
+				});
+				editor.setTerminator(destination, {
+					kind: "return",
+					value: parameter.value,
+				});
+				return editor.commit();
+			},
+		};
+		const { analyses, report } = analysisHarness(program);
+
+		expect(() =>
+			new CorePassManager(program, context(), analyses, report, {
+				verification: "per-pass",
+			}).runStage("control-flow", [invalid]),
+		).toThrow(
+			/Core IR verification failed \[stage=control-flow pass=invalid-rewrite function=0\]/,
+		);
+	});
+
 	it("counts every discovery kind in the optimizer report", () => {
 		const { program } = programWithTwoFunctions();
 		const report = new CoreOptimizationReportBuilder(program);

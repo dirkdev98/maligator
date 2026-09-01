@@ -934,19 +934,8 @@ export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgram
 
 export function analyzeCoreProgramSummaries(
 	program: CoreProgram,
-	_contextOrRegistry?: unknown,
-	legacyContext?: CoreCompilationContext,
+	context: CoreCompilationContext,
 ): CoreProgramSummaries {
-	const context =
-		legacyContext ??
-		(_contextOrRegistry !== null &&
-		typeof _contextOrRegistry === "object" &&
-		"facts" in _contextOrRegistry
-			? (_contextOrRegistry as CoreCompilationContext)
-			: undefined);
-	if (context === undefined) {
-		throw new Error("Core program summaries require a compilation context");
-	}
 	const targets = analyzeCoreCallGraph(
 		program,
 		context.facts.closure.sourceClosure.kind === "known",
