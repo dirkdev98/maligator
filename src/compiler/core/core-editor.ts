@@ -239,11 +239,7 @@ export class CoreEditor {
 
 	removeBlockParameter(block: CoreBlockId, index: number): void {
 		this.#assertActive();
-		const value = this.function._removeBlockParameter(
-			CORE_STORE_MUTATION,
-			block,
-			index,
-		);
+		const value = this.function._removeBlockParameter(CORE_STORE_MUTATION, block, index);
 		this.#touchBlock(block);
 		this.#values.add(value);
 		this.#mark("body", "cfg", "specializationInputs");
@@ -400,8 +396,9 @@ export class CoreEditor {
 				terminators.add(instruction);
 				continue;
 			}
-			const operands =
-				changed.get(instruction) ?? [...this.function.instructionOperands(instruction)];
+			const operands = changed.get(instruction) ?? [
+				...this.function.instructionOperands(instruction),
+			];
 			operands[operand] = replacement;
 			changed.set(instruction, operands);
 		}
@@ -414,11 +411,7 @@ export class CoreEditor {
 				value,
 				replacement,
 			);
-			this.function._replaceTerminatorPayload(
-				CORE_STORE_MUTATION,
-				instruction,
-				payload,
-			);
+			this.function._replaceTerminatorPayload(CORE_STORE_MUTATION, instruction, payload);
 			this.#instructions.add(instruction);
 			this.#touchBlock(this.function.instructionBlock(instruction));
 			this.#mark("body", "specializationInputs");
@@ -485,6 +478,14 @@ export class CoreEditor {
 		this.#edits++;
 	}
 
+	clearHandler(block: CoreBlockId): void {
+		this.#assertActive();
+		this.function._setHandler(CORE_STORE_MUTATION, block, undefined);
+		this.#touchBlock(block);
+		this.#mark("exceptionFlow", "specializationInputs");
+		this.#edits++;
+	}
+
 	setTerminator(block: CoreBlockId, input: CoreTerminatorInput): CoreInstructionId {
 		this.#assertActive();
 		const { payload, sourcePosition } = payloadWithoutSourcePosition(input);
@@ -506,11 +507,7 @@ export class CoreEditor {
 		this.#assertActive();
 		const { payload } = payloadWithoutSourcePosition(input);
 		const instruction = this.function.blockTerminator(block);
-		this.function._replaceTerminatorPayload(
-			CORE_STORE_MUTATION,
-			instruction,
-			payload,
-		);
+		this.function._replaceTerminatorPayload(CORE_STORE_MUTATION, instruction, payload);
 		this.#touchBlock(block);
 		this.#instructions.add(instruction);
 		this.#mark("body", "cfg", "specializationInputs");
@@ -570,17 +567,34 @@ export class CoreEditor {
 		return id;
 	}
 
+	replaceFact(fact: CoreFactId, replacement: Omit<CoreFact, "id">): void {
+		this.#assertActive();
+		this.function._replaceFact(CORE_STORE_MUTATION, fact, replacement);
+		this.#facts.add(fact);
+		this.#mark("facts", "specializationInputs");
+		this.#edits++;
+	}
+
 	removeFact(fact: CoreFactId): void {
 		this.#assertActive();
 		for (const instruction of this.function.instructionIds()) {
-			if (this.function.instructionKind(instruction) === "guard" &&
+			if (
+				this.function.instructionKind(instruction) === "guard" &&
 				this.function.terminatorPayload(instruction).kind === "guard" &&
-				(this.function.terminatorPayload(instruction) as { readonly fact: CoreFactId }).fact === fact) {
-				throw new Error(`Cannot remove Core fact ${fact} while guard @${instruction} uses it`);
+				(this.function.terminatorPayload(instruction) as { readonly fact: CoreFactId })
+					.fact === fact
+			) {
+				throw new Error(
+					`Cannot remove Core fact ${fact} while guard @${instruction} uses it`,
+				);
 			}
-			if (this.function.instructionKind(instruction) === "operation" &&
-				this.function.instructionEffectRefinement(instruction)?.proof === fact) {
-				throw new Error(`Cannot remove Core fact ${fact} while refinement @${instruction} uses it`);
+			if (
+				this.function.instructionKind(instruction) === "operation" &&
+				this.function.instructionEffectRefinement(instruction)?.proof === fact
+			) {
+				throw new Error(
+					`Cannot remove Core fact ${fact} while refinement @${instruction} uses it`,
+				);
 			}
 		}
 		this.function._removeFact(CORE_STORE_MUTATION, fact);

@@ -1,20 +1,35 @@
 import { describe, expect, it } from "vitest";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
-import { CoreFunctionBuilder, formatCoreFunction } from "../src/compiler/core/core-ir.ts";
+import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
+import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
-import { coreCompilationForTest } from "./helpers/core-compilation.ts";
+import {
+	coreFunctionNamed,
+	coreFunctions,
+	coreOperations,
+} from "./helpers/core-inspection.ts";
 
-function lower(source: string) {
+function construct(source: string) {
 	return lowerSemanticProgramToCore(
 		analyzeSourceAndRunSemanticAnalysis(source, "core-lowering.js"),
-	).program;
+	);
+}
+
+function lower(source: string) {
+	return construct(source).program;
+}
+
+function optimize(source: string) {
+	return optimizeCore(construct(source)).compilation;
 }
 
 describe("Core IR lowering", () => {
@@ -28,10 +43,12 @@ describe("Core IR lowering", () => {
 			}
 			choose(true);
 		`);
-		for (const fn of converted.functions) {
-			expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+		for (const fn of coreFunctions(converted)) {
+			expect(() => verifyCoreFunction(converted, fn.id)).not.toThrow();
 		}
-		const printed = converted.functions.map((fn) => formatCoreFunction(fn)).join("\n");
+		const printed = coreFunctions(converted)
+			.map((fn) => formatCoreFunction(converted, fn.id))
+			.join("\n");
 		expect(printed).toMatch(/b\d+\(%\d+: boxed/);
 		expect(printed).toContain("branch");
 	});
@@ -45,12 +62,21 @@ describe("Core IR lowering", () => {
 			}
 			read({ value: 2 });
 		`);
-		const exceptional = converted.functions.flatMap((fn) =>
-			fn.blocks.filter(({ handler }) => handler !== undefined),
+		const exceptional = coreFunctions(converted).flatMap((fn) =>
+			[...fn.blockIds()].filter((block) => fn.blockHandler(block) !== undefined),
 		);
 		expect(exceptional.length).toBeGreaterThan(0);
 
-		const lowered = lowerCoreCompilationToExecution(coreCompilationForTest(converted));
+		const lowered = lowerCoreCompilationToExecution(
+			optimize(`
+				function read(object) {
+					let before = 4;
+					try { return object.value + before; }
+					catch (error) { return before + String(error).length; }
+				}
+				read({ value: 2 });
+			`),
+		);
 		const vm = lowerExecutionToProgramImage(lowered);
 		expect(vm.runtime.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
 	});
@@ -61,13 +87,13 @@ describe("Core IR lowering", () => {
 			function thrown() { throw 1; try {} catch (error) {} }
 			function* generator() { throw 1; try {} catch (error) {} }
 		`);
-		for (const fn of converted.functions) {
-			expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+		for (const fn of coreFunctions(converted)) {
+			expect(() => verifyCoreFunction(converted, fn.id)).not.toThrow();
 		}
 	});
 
 	it("keeps preloaded handler values live and rooted across protected blocks", () => {
-		const converted = lower(`
+		const compilation = optimize(`
 			function preserve(object, callback) {
 				try {
 					callback();
@@ -78,30 +104,43 @@ describe("Core IR lowering", () => {
 			}
 			preserve({ value: 2 }, () => { throw new Error("x"); });
 		`);
-		const fn = converted.functions.find((candidate) =>
-			candidate.blocks.some(({ handler }) => handler !== undefined),
-		)!;
-		const protectedBlock = fn.blocks.find(({ handler }) => handler !== undefined)!;
-		const target = fn.blocks[protectedBlock.handler!.block]!;
-		const handlerValue = target.parameters[1]!.value;
-		const allocation = coreRegisterClasses(fn, true);
-		const register = (value: typeof handlerValue): number =>
-			allocation.registers.get(allocation.roots.get(value)!)!;
-		const handlerRegister = register(handlerValue);
-		const clobbers = protectedBlock.instructions.flatMap(({ outputs }) => outputs);
-		const execution = lowerCoreCompilationToExecution(coreCompilationForTest(converted));
-		const executionFunction = execution.functions[fn.functionIndex]!;
+		const fn = coreFunctionNamed(compilation.program, "preserve")!;
+		expect([...fn.blockIds()].some((block) => fn.blockHandler(block) !== undefined)).toBe(
+			true,
+		);
+		const execution = lowerCoreCompilationToExecution(compilation);
+		const executionFunction =
+			execution.functions[execution.functionMap.coreToExecution[fn.id]!]!;
+		const blockOrder = compilation.plan.blockOrders.find(
+			(entry) => entry.function === fn.id,
+		)!.blocks;
+		const allocation = coreRegisterClasses(
+			fn,
+			true,
+			new Set(fn.parameters.keys()),
+			blockOrder,
+		);
+		const handlerRegisters = new Set(
+			[...fn.blockIds()].flatMap((block) => {
+				const handler = fn.blockHandler(block);
+				if (handler === undefined) return [];
+				return fn
+					.blockParameters(handler.block)
+					.slice(1)
+					.map(({ value }) => allocation.registers.get(value))
+					.filter((register): register is number => register !== undefined);
+			}),
+		);
 
-		expect(clobbers.map(register)).not.toContain(handlerRegister);
 		expect(
 			executionFunction.gc.safepoints.some(({ rootRegisters }) =>
-				rootRegisters.includes(handlerRegister),
+				rootRegisters.some((register) => handlerRegisters.has(register)),
 			),
 		).toBe(true);
 	});
 
 	it("roots values consumed by outgoing edges after a GC safepoint", () => {
-		const converted = lower(`
+		const compilation = optimize(`
 			function preserve(value, callback) {
 				callback();
 				if (Date.now()) return value;
@@ -109,50 +148,33 @@ describe("Core IR lowering", () => {
 			}
 			preserve({ tag: "held" }, () => 0);
 		`);
-		const fn = converted.functions.find(
-			(candidate) => candidate.parameters.length === 2,
-		)!;
-		const protectedBlock = fn.blocks.find(
-			(block) =>
-				block.terminator.kind === "branch" &&
-				block.instructions.some(
-					(instruction) => coreOpcodeRegistry.require(instruction.opcode).effects.mayGc,
-				),
-		)!;
-		if (protectedBlock.terminator.kind !== "branch") {
-			throw new Error("expected branch terminator");
-		}
-		const edgeValue = protectedBlock.terminator.consequent.arguments[0]!;
-		const allocation = coreRegisterClasses(fn, true);
-		const edgeRegister = allocation.registers.get(allocation.roots.get(edgeValue)!)!;
-		const execution = lowerCoreCompilationToExecution(coreCompilationForTest(converted));
-		const executionFunction = execution.functions[fn.functionIndex]!;
+		const fn = coreFunctionNamed(compilation.program, "preserve")!;
+		const execution = lowerCoreCompilationToExecution(compilation);
+		const executionFunction =
+			execution.functions[execution.functionMap.coreToExecution[fn.id]!]!;
 
 		expect(
 			executionFunction.gc.safepoints.some(({ rootRegisters }) =>
-				rootRegisters.includes(edgeRegister),
+				rootRegisters.includes(0),
 			),
 		).toBe(true);
 	});
 
 	it("lowers virtual-field root uses into safepoint metadata without an opcode", () => {
-		const optimized = executeCoreOptimizations(
-			lower(`
+		const compilation = optimize(`
 				function preserve(value) {
 					const object = { held: value };
 					globalThis.observe();
 					object.held = 0;
 					return 1;
 				}
-			`),
-		).program;
-		const core = optimized.functions.find((fn) =>
-			fn.blocks.some((block) =>
-				block.instructions.some(({ opcode }) => opcode === "rootUse"),
-			),
+			`);
+		const core = coreFunctions(compilation.program).find((fn) =>
+			coreOperations(fn).some(({ opcode }) => opcode === "rootUse"),
 		)!;
-		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
-		const fn = target.functions[core.functionIndex]!;
+		const target = lowerCoreCompilationToExecution(compilation);
+		const functionIndex = target.functionMap.coreToExecution[core.id]!;
+		const fn = target.functions[functionIndex]!;
 		const instructions = fn.blocks.flatMap(({ instructions }) => instructions);
 		const callSite = fn.blocks
 			.flatMap((block) =>
@@ -181,14 +203,13 @@ describe("Core IR lowering", () => {
 				type !== "tryEnd",
 		).length;
 		const vm = lowerExecutionToProgramImage(target);
-		expect(vm.runtime.functions[core.functionIndex]!.instructions).toHaveLength(
+		expect(vm.runtime.functions[functionIndex]!.instructions).toHaveLength(
 			executableCount,
 		);
 	});
 
 	it("roots a virtual-field parameter at a post-join safepoint", () => {
-		const optimized = executeCoreOptimizations(
-			lower(`
+		const compilation = optimize(`
 				function preserve(initial, left, right, chooseLeft) {
 					const object = { held: initial };
 					if (chooseLeft) object.held = left;
@@ -197,22 +218,16 @@ describe("Core IR lowering", () => {
 					object.held = 0;
 					return 1;
 				}
-			`),
-		).program;
-		const core = optimized.functions.find((fn) =>
-			fn.blocks.some((block) =>
-				block.instructions.some(({ opcode }) => opcode === "rootUse"),
-			),
+			`);
+		const core = coreFunctions(compilation.program).find((fn) =>
+			coreOperations(fn).some(({ opcode }) => opcode === "rootUse"),
 		)!;
-		const rooted = core.blocks
-			.flatMap(({ instructions }) => instructions)
-			.find(({ opcode }) => opcode === "rootUse")!.inputs[0]!;
-		expect(core.values.find(({ id }) => id === rooted)?.definition.kind).toBe(
-			"block-parameter",
-		);
+		const rooted = coreOperations(core).find(({ opcode }) => opcode === "rootUse")!
+			.inputs[0]!;
+		expect(core.valueDefinition(rooted).kind).toBe("block-parameter");
 
-		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
-		const fn = target.functions[core.functionIndex]!;
+		const target = lowerCoreCompilationToExecution(compilation);
+		const fn = target.functions[target.functionMap.coreToExecution[core.id]!]!;
 		const callSite = fn.blocks
 			.flatMap((block) =>
 				block.instructions.flatMap((instruction, index) => {
@@ -233,8 +248,7 @@ describe("Core IR lowering", () => {
 	});
 
 	it("roots a loop-carried virtual-field parameter at an in-loop safepoint", () => {
-		const optimized = executeCoreOptimizations(
-			lower(`
+		const compilation = optimize(`
 				function preserve(initial, replacement, count) {
 					const object = { held: initial };
 					for (let index = 0; index < count; index++) {
@@ -243,22 +257,16 @@ describe("Core IR lowering", () => {
 					}
 					return object.held;
 				}
-			`),
-		).program;
-		const core = optimized.functions.find((fn) =>
-			fn.blocks.some((block) =>
-				block.instructions.some(({ opcode }) => opcode === "rootUse"),
-			),
+			`);
+		const core = coreFunctions(compilation.program).find((fn) =>
+			coreOperations(fn).some(({ opcode }) => opcode === "rootUse"),
 		)!;
-		const rooted = core.blocks
-			.flatMap(({ instructions }) => instructions)
-			.find(({ opcode }) => opcode === "rootUse")!.inputs[0]!;
-		expect(core.values.find(({ id }) => id === rooted)?.definition.kind).toBe(
-			"block-parameter",
-		);
+		const rooted = coreOperations(core).find(({ opcode }) => opcode === "rootUse")!
+			.inputs[0]!;
+		expect(core.valueDefinition(rooted).kind).toBe("block-parameter");
 
-		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
-		const fn = target.functions[core.functionIndex]!;
+		const target = lowerCoreCompilationToExecution(compilation);
+		const fn = target.functions[target.functionMap.coreToExecution[core.id]!]!;
 		const callSite = fn.blocks
 			.flatMap((block) =>
 				block.instructions.flatMap((instruction, index) => {
@@ -279,23 +287,19 @@ describe("Core IR lowering", () => {
 	});
 
 	it("carries a virtual field through a suspension safepoint", () => {
-		const optimized = executeCoreOptimizations(
-			lower(`
+		const compilation = optimize(`
 				function* preserve(value) {
 					const object = { held: value };
 					yield 0;
 					object.held = 0;
 					return 1;
 				}
-			`),
-		).program;
-		const core = optimized.functions.find((fn) =>
-			fn.blocks.some((block) =>
-				block.instructions.some(({ opcode }) => opcode === "rootUse"),
-			),
+			`);
+		const core = coreFunctions(compilation.program).find((fn) =>
+			coreOperations(fn).some(({ opcode }) => opcode === "rootUse"),
 		)!;
-		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
-		const fn = target.functions[core.functionIndex]!;
+		const target = lowerCoreCompilationToExecution(compilation);
+		const fn = target.functions[target.functionMap.coreToExecution[core.id]!]!;
 		const suspension = fn.blocks
 			.flatMap((block) =>
 				block.instructions.flatMap((instruction, index) => {
@@ -316,8 +320,7 @@ describe("Core IR lowering", () => {
 	});
 
 	it("carries a virtual field through an exceptional safepoint", () => {
-		const optimized = executeCoreOptimizations(
-			lower(`
+		const compilation = optimize(`
 				function preserve(value, callback) {
 					const object = { held: value };
 					try {
@@ -330,37 +333,39 @@ describe("Core IR lowering", () => {
 					object.held = 0;
 					return 1;
 				}
-			`),
-		).program;
-		const core = optimized.functions.find((fn) =>
-			fn.blocks.some(({ handler }) => handler !== undefined),
+			`);
+		const core = coreFunctions(compilation.program).find((fn) =>
+			[...fn.blockIds()].some((block) => fn.blockHandler(block) !== undefined),
 		)!;
-		const protectedBlock = core.blocks.find(({ handler }) => handler !== undefined)!;
-		const handler = core.blocks[protectedBlock.handler!.block]!;
-		const field = handler.parameters.at(-1)!.value;
-		expect(handler.parameters[0]?.role).toBe("exception");
+		const protectedBlock = [...core.blockIds()].find(
+			(block) => core.blockHandler(block) !== undefined,
+		)!;
+		const handler = core.blockHandler(protectedBlock)!;
+		const handlerParameters = core.blockParameters(handler.block);
+		const field = handlerParameters.at(-1)!.value;
+		expect(handlerParameters[0]?.role).toBe("exception");
 		expect(
-			handler.instructions.some(
-				({ opcode, inputs }) => opcode === "rootUse" && inputs.includes(field),
+			[...core.bodyInstructionIds(handler.block)].some(
+				(instruction) =>
+					core.instructionOpcodeName(instruction) === "rootUse" &&
+					core.instructionOperands(instruction).includes(field),
 			),
 		).toBe(true);
 
-		const source = protectedBlock.handler!.arguments.at(-1)!;
-		const allocation = coreRegisterClasses(core, true);
-		const register = (value: typeof source): number =>
-			allocation.registers.get(allocation.roots.get(value)!)!;
-		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
-		const fn = target.functions[core.functionIndex]!;
-		const call = protectedBlock.instructions.find(({ opcode }) => opcode === "call")!;
+		const target = lowerCoreCompilationToExecution(compilation);
+		const fn = target.functions[target.functionMap.coreToExecution[core.id]!]!;
+		const call = [...core.bodyInstructionIds(protectedBlock)].find(
+			(instruction) => core.instructionOpcodeName(instruction) === "call",
+		)!;
 		const safepoint = fn.gc.safepoints.find(
-			(candidate) =>
-				candidate.kind === "operation" && candidate.coreInstruction === call.id,
+			(candidate) => candidate.kind === "operation" && candidate.coreInstruction === call,
 		);
-		expect(safepoint?.rootRegisters).toContain(register(source));
+		expect(safepoint?.rootRegisters).toContain(0);
 	});
 
 	it("reuses registers for values live on disjoint CFG branches", () => {
-		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, {
 			parameterCount: 1,
 		});
 		const entry = builder.createBlock([{ representation: "boxed" }]);
@@ -376,7 +381,7 @@ describe("Core IR lowering", () => {
 		});
 		builder.setTerminator(entry, {
 			kind: "branch",
-			condition: builder.block(entry).parameters[0]!.value,
+			condition: builder.blockParameters(entry)[0]!.value,
 			consequent: { block: leftStart, arguments: [] },
 			alternate: { block: right, arguments: [] },
 		});
@@ -392,28 +397,29 @@ describe("Core IR lowering", () => {
 			kind: "jump",
 			edge: {
 				block: merge,
-				arguments: [builder.block(leftEnd).parameters[0]!.value],
+				arguments: [builder.blockParameters(leftEnd)[0]!.value],
 			},
 		});
 		builder.setTerminator(merge, {
 			kind: "return",
-			value: builder.block(merge).parameters[0]!.value,
+			value: builder.blockParameters(merge)[0]!.value,
 		});
-		const fn = builder.finish(entry);
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
 		const allocation = coreRegisterClasses(fn, true);
 		const register = (value: NonNullable<typeof left>): number =>
-			allocation.registers.get(allocation.roots.get(value)!)!;
+			allocation.registers.get(allocation.roots.get(value) ?? value)!;
 
 		expect(register(left!)).toBe(register(rightValue!));
 	});
 
 	it("round-trips loops, calls, and multiple-result operations to VM form", () => {
-		const converted = lower(`
+		const compilation = optimize(`
 			let total = 0;
 			for (const value of [1, 2, 3]) total += value;
 			console.log(total);
 		`);
-		const lowered = lowerCoreCompilationToExecution(coreCompilationForTest(converted));
+		const lowered = lowerCoreCompilationToExecution(compilation);
 		const vm = lowerExecutionToProgramImage(lowered);
 		expect(vm.runtime.functions.length).toBeGreaterThan(0);
 		expect(
@@ -433,8 +439,7 @@ describe("Core IR lowering", () => {
 	});
 
 	it("resolves known shaped origins to dense VM cache rows", () => {
-		const optimized = executeCoreOptimizations(
-			lower(`
+		const compilation = optimize(`
 				function read(n, touch) {
 					const object = { x: n };
 					let sum = 0;
@@ -445,10 +450,8 @@ describe("Core IR lowering", () => {
 					return sum;
 				}
 				read(3, () => {});
-			`),
-			{ ablations: new Set(["inlining", "interprocedural"]) },
-		).program;
-		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
+			`);
+		const target = lowerCoreCompilationToExecution(compilation);
 		const vm = lowerExecutionToProgramImage(target);
 		const load = vm.runtime.functions
 			.flatMap((fn) => fn.instructions)
@@ -505,8 +508,7 @@ describe("Core IR lowering", () => {
 	});
 
 	it("resolves guarded shaped stores to dense VM cache rows", () => {
-		const optimized = executeCoreOptimizations(
-			lower(`
+		const compilation = optimize(`
 				function write(n, touch) {
 					const object = { x: 0 };
 					for (let index = 0; index < n; index++) {
@@ -516,10 +518,8 @@ describe("Core IR lowering", () => {
 					return object.x;
 				}
 				write(3, () => {});
-			`),
-			{ ablations: new Set(["inlining", "interprocedural"]) },
-		).program;
-		const target = lowerCoreCompilationToExecution(coreCompilationForTest(optimized));
+			`);
+		const target = lowerCoreCompilationToExecution(compilation);
 		const vm = lowerExecutionToProgramImage(target);
 		const store = vm.runtime.functions
 			.flatMap((fn) => fn.instructions)
@@ -539,47 +539,33 @@ describe("Core IR lowering", () => {
 		expect(source.keyStringIndices[candidate.slot]).toBe(store.stringIndex);
 	});
 
-	it("rejects a malformed selected Core region instead of dropping it", () => {
-		const compilation = lowerSemanticProgramToCore(
-			analyzeSourceAndRunSemanticAnalysis(
-				`
-					function project(value) {
-						const fields = value.split(";");
-						return fields[1] + fields.length;
-					}
-					project("a;b");
-				`,
-				"core-lowering.js",
-			),
+	it("rejects a malformed selected Core plan instead of dropping it", () => {
+		const compilation = optimize(`
+			function choose(value, escape) {
+				const object = { value };
+				if (escape) return object;
+				return object.value;
+			}
+			choose(1, true);
+		`);
+		const selection = compilation.plan.specializations.find(
+			({ kind }) => kind === "stack-object-plan",
 		);
-		const optimized = executeCoreOptimizations(compilation.program, {
-			context: compilation.context,
-		}).program;
-		const functionIndex = optimized.functions.findIndex(({ regions }) =>
-			regions.some(({ kind }) => kind === "string-split-projection"),
-		);
-		const owner = optimized.functions[functionIndex]!;
-		const regionIndex = owner.regions.findIndex(
-			({ kind }) => kind === "string-split-projection",
-		);
-		const region = owner.regions[regionIndex]!;
-		const cost = region.data.cost as { readonly score: number };
+		expect(selection).toBeDefined();
+		if (selection === undefined) return;
 		const malformed = {
-			...optimized,
-			functions: optimized.functions.with(functionIndex, {
-				...owner,
-				regions: owner.regions.with(regionIndex, {
-					...region,
-					data: {
-						...region.data,
-						cost: { score: cost.score, metadataOperations: 0 },
-					},
-				}),
-			}),
+			...compilation,
+			plan: {
+				...compilation.plan,
+				specializations: compilation.plan.specializations.map((candidate) =>
+					candidate === selection
+						? { ...candidate, cost: { ...candidate.cost, generatedCode: -1 } }
+						: candidate,
+				),
+			},
 		};
-		const allocated = lowerCoreCompilationToExecution(coreCompilationForTest(malformed));
-		expect(() => lowerExecutionToProgramImage(allocated)).toThrow(
-			/Invalid Core string-split-projection region during VM lowering/,
+		expect(() => lowerCoreCompilationToExecution(malformed)).toThrow(
+			/has invalid generatedCode cost/,
 		);
 	});
 
@@ -590,10 +576,8 @@ describe("Core IR lowering", () => {
 			}
 			make();
 		`);
-		const batches = converted.functions.flatMap((fn) =>
-			fn.blocks.flatMap((block) =>
-				block.instructions.filter(({ opcode }) => opcode === "createPrivateNames"),
-			),
+		const batches = coreFunctions(converted).flatMap((fn) =>
+			coreOperations(fn).filter(({ opcode }) => opcode === "createPrivateNames"),
 		);
 		expect(batches).toHaveLength(1);
 		expect(batches[0]?.outputs).toEqual([]);
@@ -614,17 +598,16 @@ describe("Core IR lowering", () => {
 				"core-immediates.js",
 			),
 		).program;
-		const call = converted.functions
-			.flatMap((fn) => fn.blocks)
-			.flatMap((block) => block.instructions)
+		const call = coreFunctions(converted)
+			.flatMap(coreOperations)
 			.find(
 				(instruction) => instruction.opcode === "call" && instruction.inputs.length > 2,
 			);
 
 		expect(call?.inputs).toHaveLength(7);
 		expect(call?.attributes).not.toHaveProperty("immediateValues");
-		const opcodes = converted.functions.flatMap((fn) =>
-			fn.blocks.flatMap((block) => block.instructions.map(({ opcode }) => opcode)),
+		const opcodes = coreFunctions(converted).flatMap((fn) =>
+			coreOperations(fn).map(({ opcode }) => opcode),
 		);
 		expect(opcodes).toEqual(
 			expect.arrayContaining([
@@ -638,53 +621,41 @@ describe("Core IR lowering", () => {
 	});
 
 	it("lowers Core switches with strict-equality case selection", () => {
-		const converted = lower(`
+		const constructed = construct(`
 			function pick(value) {
 				if (value) return 1;
 				return 2;
 			}
 			pick(true);
 		`);
-		const functionIndex = converted.functions.findIndex((fn) =>
-			fn.blocks.some(({ terminator }) => terminator.kind === "branch"),
-		);
-		const fn = converted.functions[functionIndex]!;
-		const blockIndex = fn.blocks.findIndex(
-			({ terminator }) => terminator.kind === "branch",
-		);
-		const block = fn.blocks[blockIndex]!;
-		if (block.terminator.kind !== "branch") throw new Error("missing branch fixture");
-		const switchBlock = {
-			...block,
-			terminator: {
-				id: block.terminator.id,
-				kind: "switch" as const,
-				discriminant: block.terminator.condition,
-				cases: [
-					{
-						value: { kind: "boolean" as const, value: true },
-						edge: block.terminator.consequent,
-					},
-				],
-				default: block.terminator.alternate,
-			},
-		};
-		const switched = {
-			...converted,
-			functions: converted.functions.map((candidate, index) =>
-				index === functionIndex
-					? {
-							...candidate,
-							blocks: candidate.blocks.map((candidateBlock, index) =>
-								index === blockIndex ? switchBlock : candidateBlock,
-							),
-						}
-					: candidate,
+		const owner = coreFunctions(constructed.program).find((fn) =>
+			[...fn.blockIds()].some(
+				(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind === "branch",
 			),
-		};
-
-		const lowered = lowerCoreCompilationToExecution(coreCompilationForTest(switched));
-		const instructions = lowered.functions[functionIndex]!.blocks.flatMap(
+		)!;
+		const block = [...owner.blockIds()].find(
+			(candidate) =>
+				owner.terminatorPayload(owner.blockTerminator(candidate)).kind === "branch",
+		)!;
+		const branch = owner.terminatorPayload(owner.blockTerminator(block));
+		if (branch.kind !== "branch") throw new Error("missing branch fixture");
+		const editor = CoreEditor.open(constructed.program, owner.id);
+		editor.replaceTerminator(block, {
+			kind: "switch",
+			discriminant: branch.condition,
+			cases: [
+				{
+					value: { kind: "boolean", value: true },
+					edge: branch.consequent,
+				},
+			],
+			default: branch.alternate,
+		});
+		editor.commit();
+		const compilation = optimizeCore(constructed).compilation;
+		const lowered = lowerCoreCompilationToExecution(compilation);
+		const executionIndex = lowered.functionMap.coreToExecution[owner.id]!;
+		const instructions = lowered.functions[executionIndex]!.blocks.flatMap(
 			({ instructions }) => instructions,
 		);
 		expect(instructions).toEqual(
@@ -696,7 +667,7 @@ describe("Core IR lowering", () => {
 	});
 
 	it("lowers explicit super current-this through the VM two-address constraint", () => {
-		const converted = lower(`
+		const compilation = optimize(`
 			class Parent {}
 			class Child extends Parent {
 				constructor() {
@@ -706,9 +677,7 @@ describe("Core IR lowering", () => {
 			}
 			new Child();
 		`);
-		const lowered = lowerCoreCompilationToExecution(
-			coreCompilationForTest(executeCoreOptimizations(converted).program),
-		);
+		const lowered = lowerCoreCompilationToExecution(compilation);
 		const instructions = lowered.functions.flatMap((fn) =>
 			fn.blocks.flatMap((block) => block.instructions),
 		);

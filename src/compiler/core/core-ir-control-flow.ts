@@ -62,13 +62,18 @@ export function coreTerminatorEdges(
 	payload: CoreTerminatorPayload,
 ): ReadonlyArray<CoreEdge> {
 	switch (payload.kind) {
-		case "jump": return [payload.edge];
-		case "branch": return [payload.consequent, payload.alternate];
-		case "guard": return [payload.success, payload.fallback];
-		case "switch": return [...payload.cases.map(({ edge }) => edge), payload.default];
+		case "jump":
+			return [payload.edge];
+		case "branch":
+			return [payload.consequent, payload.alternate];
+		case "guard":
+			return [payload.success, payload.fallback];
+		case "switch":
+			return [...payload.cases.map(({ edge }) => edge), payload.default];
 		case "return":
 		case "throw":
-		case "unreachable": return [];
+		case "unreachable":
+			return [];
 	}
 }
 
@@ -99,8 +104,15 @@ function buildEdges(
 		() => new Array<CoreControlEdge>(),
 	);
 	for (const block of fn.blockIds()) {
-		for (const edge of coreTerminatorEdges(fn.terminatorPayload(fn.blockTerminator(block)))) {
-			successors[block]!.push({ from: block, to: edge.block, kind: "ordinary", arguments: edge.arguments });
+		for (const edge of coreTerminatorEdges(
+			fn.terminatorPayload(fn.blockTerminator(block)),
+		)) {
+			successors[block]!.push({
+				from: block,
+				to: edge.block,
+				kind: "ordinary",
+				arguments: edge.arguments,
+			});
 		}
 		const handler = includeExceptions ? fn.blockHandler(block) : undefined;
 		if (handler !== undefined && blockHasExceptionalExit(fn, block)) {
@@ -121,7 +133,10 @@ function buildEdges(
 function traversal(
 	entry: CoreBlockId,
 	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
-): { readonly reachable: Set<CoreBlockId>; readonly reversePostorder: Array<CoreBlockId> } {
+): {
+	readonly reachable: Set<CoreBlockId>;
+	readonly reversePostorder: Array<CoreBlockId>;
+} {
 	const reachable = new Set<CoreBlockId>([entry]);
 	const postorder: Array<CoreBlockId> = [];
 	const pending: Array<{ readonly block: CoreBlockId; next: number }> = [
@@ -168,7 +183,9 @@ function immediateDominators(
 	while (changed) {
 		changed = false;
 		for (const block of reversePostorder.slice(1)) {
-			const incoming = (predecessors[block] ?? []).filter(({ from }) => dominators[from]! >= 0);
+			const incoming = (predecessors[block] ?? []).filter(
+				({ from }) => dominators[from]! >= 0,
+			);
 			if (incoming.length === 0) continue;
 			let next = incoming[0]!.from;
 			for (const edge of incoming.slice(1)) next = intersect(next, edge.from);
@@ -215,7 +232,8 @@ function dominatorPredicate(
 		pending.pop();
 	}
 	return (dominator, block) =>
-		entries[dominator]! >= 0 && entries[block]! >= entries[dominator]! &&
+		entries[dominator]! >= 0 &&
+		entries[block]! >= entries[dominator]! &&
 		exits[block]! <= exits[dominator]!;
 }
 
@@ -229,14 +247,17 @@ function cyclicComponents(
 	for (const start of allowed) {
 		if (visited[start] !== 0) continue;
 		visited[start] = 1;
-		const pending: Array<{ readonly block: CoreBlockId; next: number }> = [{ block: start, next: 0 }];
+		const pending: Array<{ readonly block: CoreBlockId; next: number }> = [
+			{ block: start, next: 0 },
+		];
 		while (pending.length > 0) {
 			const frame = pending.at(-1)!;
 			const outgoing = successors[frame.block] ?? [];
 			let advanced = false;
 			while (frame.next < outgoing.length) {
 				const edge = outgoing[frame.next++]!;
-				if (edge.kind !== "ordinary" || !allowed.has(edge.to) || visited[edge.to] !== 0) continue;
+				if (edge.kind !== "ordinary" || !allowed.has(edge.to) || visited[edge.to] !== 0)
+					continue;
 				visited[edge.to] = 1;
 				pending.push({ block: edge.to, next: 0 });
 				advanced = true;
@@ -259,7 +280,12 @@ function cyclicComponents(
 			const block = pending.pop()!;
 			blocks.add(block);
 			for (const edge of predecessors[block] ?? []) {
-				if (edge.kind !== "ordinary" || !allowed.has(edge.from) || assigned[edge.from] !== 0) continue;
+				if (
+					edge.kind !== "ordinary" ||
+					!allowed.has(edge.from) ||
+					assigned[edge.from] !== 0
+				)
+					continue;
 				assigned[edge.from] = 1;
 				pending.push(edge.from);
 			}
@@ -277,8 +303,11 @@ function findIrreducibleCycles(
 	dominates: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
 ): ReadonlyArray<CoreIrreducibleCycle> {
 	const isCyclic = (blocks: ReadonlySet<CoreBlockId>): boolean =>
-		blocks.size > 1 || [...blocks].some((block) =>
-			(successors[block] ?? []).some((edge) => edge.kind === "ordinary" && edge.to === block),
+		blocks.size > 1 ||
+		[...blocks].some((block) =>
+			(successors[block] ?? []).some(
+				(edge) => edge.kind === "ordinary" && edge.to === block,
+			),
 		);
 	const pending = cyclicComponents(reachable, successors, predecessors).filter(isCyclic);
 	const result: Array<CoreIrreducibleCycle> = [];
@@ -288,7 +317,12 @@ function findIrreducibleCycles(
 		if (blocks.has(entry)) entries.add(entry);
 		for (const block of blocks) {
 			for (const edge of predecessors[block] ?? []) {
-				if (edge.kind === "ordinary" && reachable.has(edge.from) && !blocks.has(edge.from)) entries.add(block);
+				if (
+					edge.kind === "ordinary" &&
+					reachable.has(edge.from) &&
+					!blocks.has(edge.from)
+				)
+					entries.add(block);
 			}
 		}
 		const header = entries.size === 1 ? [...entries][0]! : undefined;
@@ -300,7 +334,9 @@ function findIrreducibleCycles(
 		nested.delete(header);
 		pending.push(...cyclicComponents(nested, successors, predecessors).filter(isCyclic));
 	}
-	return result.sort((left, right) => Math.min(...left.blocks) - Math.min(...right.blocks));
+	return result.sort(
+		(left, right) => Math.min(...left.blocks) - Math.min(...right.blocks),
+	);
 }
 
 function naturalLoops(
@@ -310,7 +346,10 @@ function naturalLoops(
 	reachable: ReadonlySet<CoreBlockId>,
 	reversePostorder: ReadonlyArray<CoreBlockId>,
 	dominates: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
-): { readonly loops: ReadonlyArray<CoreNaturalLoop>; readonly hasNonNaturalRetreatingEdge: boolean } {
+): {
+	readonly loops: ReadonlyArray<CoreNaturalLoop>;
+	readonly hasNonNaturalRetreatingEdge: boolean;
+} {
 	const reverseIndex = new Int32Array(fn.blockCapacity);
 	reverseIndex.fill(-1);
 	for (const [index, block] of reversePostorder.entries()) reverseIndex[block] = index;
@@ -335,20 +374,37 @@ function naturalLoops(
 		while (pending.length > 0) {
 			const current = pending.pop()!;
 			for (const edge of predecessors[current] ?? []) {
-				if (edge.kind !== "ordinary" || !reachable.has(edge.from) || blocks.has(edge.from)) continue;
+				if (
+					edge.kind !== "ordinary" ||
+					!reachable.has(edge.from) ||
+					blocks.has(edge.from)
+				)
+					continue;
 				blocks.add(edge.from);
 				if (edge.from !== header) pending.push(edge.from);
 			}
 		}
-		const ordinaryIncoming = (predecessors[header] ?? []).filter(({ kind }) => kind === "ordinary");
+		const ordinaryIncoming = (predecessors[header] ?? []).filter(
+			({ kind }) => kind === "ordinary",
+		);
 		const outside = ordinaryIncoming.filter(({ from }) => !blocks.has(from));
 		const outsideSource = outside.length === 1 ? outside[0]!.from : undefined;
-		const outsidePayload = outsideSource === undefined ? undefined : fn.terminatorPayload(fn.blockTerminator(outsideSource));
-		const preheader = outsideSource !== undefined &&
+		const outsidePayload =
+			outsideSource === undefined
+				? undefined
+				: fn.terminatorPayload(fn.blockTerminator(outsideSource));
+		const preheader =
+			outsideSource !== undefined &&
 			ordinaryIncoming.length === outside.length + latches.size &&
-			outsidePayload?.kind === "jump" && outsidePayload.edge.block === header &&
-			(successors[outsideSource] ?? []).length === 1 ? outsideSource : undefined;
-		const exitByEdge = new Map<string, { readonly from: CoreBlockId; readonly to: CoreBlockId }>();
+			outsidePayload?.kind === "jump" &&
+			outsidePayload.edge.block === header &&
+			(successors[outsideSource] ?? []).length === 1
+				? outsideSource
+				: undefined;
+		const exitByEdge = new Map<
+			string,
+			{ readonly from: CoreBlockId; readonly to: CoreBlockId }
+		>();
 		for (const from of blocks) {
 			for (const edge of successors[from] ?? []) {
 				if (edge.kind !== "ordinary" || blocks.has(edge.to)) continue;
@@ -358,14 +414,21 @@ function naturalLoops(
 		const exits = [...exitByEdge.values()].map(({ from, to }) => ({
 			from,
 			to,
-			dedicated: (predecessors[to] ?? []).every((edge) => edge.kind === "ordinary" && blocks.has(edge.from)),
+			dedicated: (predecessors[to] ?? []).every(
+				(edge) => edge.kind === "ordinary" && blocks.has(edge.from),
+			),
 		}));
 		const latch = latches.size === 1 ? [...latches][0]! : undefined;
-		const latchPayload = latch === undefined ? undefined : fn.terminatorPayload(fn.blockTerminator(latch));
-		const canonicalLatch = latchPayload?.kind === "jump" && latchPayload.edge.block === header &&
+		const latchPayload =
+			latch === undefined ? undefined : fn.terminatorPayload(fn.blockTerminator(latch));
+		const canonicalLatch =
+			latchPayload?.kind === "jump" &&
+			latchPayload.edge.block === header &&
 			(successors[latch!] ?? []).length === 1;
-		const hasExceptionalControl = [...blocks].some((block) =>
-			fn.blockHandler(block) !== undefined || (predecessors[block] ?? []).some(({ kind }) => kind === "exceptional"),
+		const hasExceptionalControl = [...blocks].some(
+			(block) =>
+				fn.blockHandler(block) !== undefined ||
+				(predecessors[block] ?? []).some(({ kind }) => kind === "exceptional"),
 		);
 		provisional.push({
 			header,
@@ -373,24 +436,42 @@ function naturalLoops(
 			blocks,
 			...(preheader === undefined ? {} : { preheader }),
 			exits,
-			canonical: preheader !== undefined && canonicalLatch && !hasExceptionalControl && exits.every(({ dedicated }) => dedicated),
+			canonical:
+				preheader !== undefined &&
+				canonicalLatch &&
+				!hasExceptionalControl &&
+				exits.every(({ dedicated }) => dedicated),
 		});
 	}
 	provisional.sort((left, right) => left.header - right.header);
 	const loops = provisional.map((loop): CoreNaturalLoop => {
-		const parents = provisional.filter((candidate) => candidate !== loop &&
-			candidate.blocks.size > loop.blocks.size && [...loop.blocks].every((block) => candidate.blocks.has(block)),
-		).sort((left, right) => left.blocks.size - right.blocks.size);
+		const parents = provisional
+			.filter(
+				(candidate) =>
+					candidate !== loop &&
+					candidate.blocks.size > loop.blocks.size &&
+					[...loop.blocks].every((block) => candidate.blocks.has(block)),
+			)
+			.sort((left, right) => left.blocks.size - right.blocks.size);
 		const parent = parents[0];
 		let depth = 1;
 		let current = parent;
 		while (current !== undefined) {
 			depth++;
-			current = provisional.filter((candidate) => candidate !== current &&
-				candidate.blocks.size > current!.blocks.size && [...current!.blocks].every((block) => candidate.blocks.has(block)),
-			).sort((left, right) => left.blocks.size - right.blocks.size)[0];
+			current = provisional
+				.filter(
+					(candidate) =>
+						candidate !== current &&
+						candidate.blocks.size > current!.blocks.size &&
+						[...current!.blocks].every((block) => candidate.blocks.has(block)),
+				)
+				.sort((left, right) => left.blocks.size - right.blocks.size)[0];
 		}
-		return { ...loop, ...(parent === undefined ? {} : { parentHeader: parent.header }), depth };
+		return {
+			...loop,
+			...(parent === undefined ? {} : { parentHeader: parent.header }),
+			depth,
+		};
 	});
 	return { loops, hasNonNaturalRetreatingEdge };
 }
@@ -401,35 +482,73 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 	const parents = immediateDominators(fn.entry, reversePostorder, predecessors);
 	const dominates = dominatorPredicate(fn.entry, reachable, parents);
 	let instructionDominatesBlock = dominates;
-	if (includeExceptions && successors.some((edges) => edges.some(({ kind }) => kind === "exceptional"))) {
+	if (
+		includeExceptions &&
+		successors.some((edges) => edges.some(({ kind }) => kind === "exceptional"))
+	) {
 		const entryNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2);
 		const exitNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2 + 1);
-		const splitSuccessors = Array.from({ length: fn.blockCapacity * 2 }, () => new Array<CoreControlEdge>());
+		const splitSuccessors = Array.from(
+			{ length: fn.blockCapacity * 2 },
+			() => new Array<CoreControlEdge>(),
+		);
 		for (const block of fn.blockIds()) {
-			splitSuccessors[entryNode(block)]!.push({ from: entryNode(block), to: exitNode(block), kind: "ordinary", arguments: [] });
+			splitSuccessors[entryNode(block)]!.push({
+				from: entryNode(block),
+				to: exitNode(block),
+				kind: "ordinary",
+				arguments: [],
+			});
 			for (const edge of successors[block] ?? []) {
 				const from = edge.kind === "ordinary" ? exitNode(block) : entryNode(block);
-				splitSuccessors[from]!.push({ from, to: entryNode(edge.to), kind: edge.kind, arguments: [] });
+				splitSuccessors[from]!.push({
+					from,
+					to: entryNode(edge.to),
+					kind: edge.kind,
+					arguments: [],
+				});
 			}
 		}
 		const splitPredecessors = splitSuccessors.map(() => new Array<CoreControlEdge>());
-		for (const outgoing of splitSuccessors) for (const edge of outgoing) splitPredecessors[edge.to]!.push(edge);
+		for (const outgoing of splitSuccessors)
+			for (const edge of outgoing) splitPredecessors[edge.to]!.push(edge);
 		const splitTraversal = traversal(entryNode(fn.entry), splitSuccessors);
-		const splitParents = immediateDominators(entryNode(fn.entry), splitTraversal.reversePostorder, splitPredecessors);
-		const splitDominates = dominatorPredicate(entryNode(fn.entry), splitTraversal.reachable, splitParents);
-		instructionDominatesBlock = (dominator, block) => splitDominates(exitNode(dominator), entryNode(block));
+		const splitParents = immediateDominators(
+			entryNode(fn.entry),
+			splitTraversal.reversePostorder,
+			splitPredecessors,
+		);
+		const splitDominates = dominatorPredicate(
+			entryNode(fn.entry),
+			splitTraversal.reachable,
+			splitParents,
+		);
+		instructionDominatesBlock = (dominator, block) =>
+			splitDominates(exitNode(dominator), entryNode(block));
 	}
 	const uniqueEntryEdges = new Map<string, boolean>();
 	const edgeUniquelyEnters = (from: CoreBlockId, to: CoreBlockId): boolean => {
 		const key = `${from}\0${to}`;
 		const cached = uniqueEntryEdges.get(key);
 		if (cached !== undefined) return cached;
-		const unique = reachable.has(from) && (successors[from] ?? []).filter((edge) => edge.to === to).length === 1 &&
-			(predecessors[to] ?? []).every((edge) => edge.from === from || !reachable.has(edge.from) || dominates(to, edge.from));
+		const unique =
+			reachable.has(from) &&
+			(successors[from] ?? []).filter((edge) => edge.to === to).length === 1 &&
+			(predecessors[to] ?? []).every(
+				(edge) =>
+					edge.from === from || !reachable.has(edge.from) || dominates(to, edge.from),
+			);
 		uniqueEntryEdges.set(key, unique);
 		return unique;
 	};
-	const loopProducts = naturalLoops(fn, successors, predecessors, reachable, reversePostorder, dominates);
+	const loopProducts = naturalLoops(
+		fn,
+		successors,
+		predecessors,
+		reachable,
+		reversePostorder,
+		dominates,
+	);
 	const irreducibleCycles = loopProducts.hasNonNaturalRetreatingEdge
 		? findIrreducibleCycles(fn.entry, successors, predecessors, reachable, dominates)
 		: [];
@@ -446,7 +565,8 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 		irreducibleCycles: Object.freeze(irreducibleCycles),
 		dominates,
 		instructionDominatesBlock,
-		dominatesEdge: (from: CoreBlockId, to: CoreBlockId, block: CoreBlockId) => dominates(to, block) && edgeUniquelyEnters(from, to),
+		dominatesEdge: (from: CoreBlockId, to: CoreBlockId, block: CoreBlockId) =>
+			dominates(to, block) && edgeUniquelyEnters(from, to),
 	});
 }
 
@@ -468,15 +588,27 @@ export const CORE_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow>
 	},
 };
 
-export const CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> = {
-	key: "exception-control-flow",
-	scope: "function",
-	functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
-	compute({ program, request }) {
-		if (request.scope !== "function") throw new Error("Expected function analysis");
-		return build(program.function(request.function), true);
-	},
-};
+export const CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> =
+	{
+		key: "exceptional-control-flow",
+		scope: "function",
+		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
+		compute({ program, request }) {
+			if (request.scope !== "function") throw new Error("Expected function analysis");
+			return build(program.function(request.function), true);
+		},
+	};
+
+export const CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> =
+	{
+		key: "exception-control-flow",
+		scope: "function",
+		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
+		compute({ program, request }) {
+			if (request.scope !== "function") throw new Error("Expected function analysis");
+			return build(program.function(request.function), true);
+		},
+	};
 
 class SparseCanonicalValueRoots extends Map<CoreValueId, CoreValueId> {
 	override get(value: CoreValueId): CoreValueId {
@@ -488,10 +620,16 @@ export function coreCanonicalValueRoots(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 ): ReadonlyMap<CoreValueId, CoreValueId> {
-	const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(fn.valueCapacity);
+	const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(
+		fn.valueCapacity,
+	);
 	const nodes: Array<CoreValueId> = [];
 	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation" || fn.instructionOpcodeName(instruction) !== "move") continue;
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "move"
+		)
+			continue;
 		const inputs = fn.instructionOperands(instruction);
 		const outputs = fn.instructionResults(instruction);
 		if (inputs.length !== 1 || outputs.length !== 1) continue;
@@ -503,7 +641,9 @@ export function coreCanonicalValueRoots(
 		if (incoming.length === 0) continue;
 		for (const [index, parameter] of fn.blockParameters(block).entries()) {
 			if (parameter.role === "exception") continue;
-			const sources = incoming.map((edge) => edge.arguments[edge.kind === "exceptional" ? index - 1 : index]);
+			const sources = incoming.map(
+				(edge) => edge.arguments[edge.kind === "exceptional" ? index - 1 : index],
+			);
 			if (sources.some((value) => value === undefined)) continue;
 			dependencies[parameter.value] = sources as ReadonlyArray<CoreValueId>;
 			nodes.push(parameter.value);
@@ -524,7 +664,9 @@ export function coreCanonicalValueRoots(
 	for (const start of nodes) {
 		if (visited[start] !== 0) continue;
 		visited[start] = 1;
-		const pending: Array<{ readonly value: CoreValueId; next: number }> = [{ value: start, next: 0 }];
+		const pending: Array<{ readonly value: CoreValueId; next: number }> = [
+			{ value: start, next: 0 },
+		];
 		while (pending.length > 0) {
 			const frame = pending.at(-1)!;
 			const outgoing = dependencies[frame.value]!;
@@ -593,14 +735,19 @@ export function coreCanonicalValueRoots(
 	return roots;
 }
 
-export const CORE_CANONICAL_VALUE_ROOTS_ANALYSIS: CoreAnalysisDefinition<ReadonlyMap<CoreValueId, CoreValueId>> = {
+export const CORE_CANONICAL_VALUE_ROOTS_ANALYSIS: CoreAnalysisDefinition<
+	ReadonlyMap<CoreValueId, CoreValueId>
+> = {
 	key: "canonical-value-roots",
 	scope: "function",
 	functionDependencies: ["body", "cfg", "exceptionFlow"],
-	compute({ program, request }) {
+	compute({ program, request, get }) {
 		if (request.scope !== "function") throw new Error("Expected function analysis");
 		const fn = program.function(request.function);
-		return coreCanonicalValueRoots(fn, build(fn, true));
+		return coreCanonicalValueRoots(
+			fn,
+			get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request),
+		);
 	},
 };
 

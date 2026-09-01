@@ -1,44 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import {
-	CoreAnalysisManager,
-	executeCoreOptimizations,
-} from "../src/compiler/core/core-ir-opt.ts";
-import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
-import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
+	buildCoreControlFlow,
+	coreCanonicalValueRoots,
+} from "../src/compiler/core/core-ir-control-flow.ts";
+import { analyzeCoreLoopInductions } from "../src/compiler/core/core-ir-loops.ts";
+import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import type {
 	CoreBlockId,
-	CoreFunction,
-	CoreProgram,
+	CoreFunctionId,
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
+import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
+import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
-
-function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
-	return {
-		functions,
-		stringConstants: [[]],
-		bigintConstants: [],
-		literalTemplateData: [],
-		sourcePositions: [],
-		globalCount: 0,
-	};
-}
+import { coreFunctionNamed } from "./helpers/core-inspection.ts";
+import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 interface BoundedFunction {
-	readonly fn: CoreFunction;
+	readonly program: CoreProgram;
+	readonly function: CoreFunctionId;
 	readonly value: CoreValueId;
 	readonly bounded: CoreBlockId;
 }
 
 function boundedInt32(polarity: "consequent" | "alternate"): BoundedFunction {
-	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+	const program = new CoreProgram(coreOpcodeRegistry);
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 	const entry = builder.createBlock([{}]);
 	const lower = builder.createBlock();
 	const bounded = builder.createBlock();
 	const rejected = builder.createBlock();
-	const parameter = builder.block(entry).parameters[0]!.value;
+	const parameter = builder.blockParameters(entry)[0]!.value;
 	const [value] = builder.appendInstruction(entry, "unary", [parameter], {
 		attributes: { operator: "~" },
 		outputRepresentations: ["i32"],
@@ -99,15 +94,22 @@ function boundedInt32(polarity: "consequent" | "alternate"): BoundedFunction {
 	});
 	builder.setTerminator(bounded, { kind: "return", value: remainder! });
 	builder.setTerminator(rejected, { kind: "return", value: zero! });
-	return { fn: builder.finish(entry), value: value!, bounded };
+	const finished = builder.finish(entry);
+	return { program, function: finished.function, value: value!, bounded };
 }
 
-function binaryOperators(fn: CoreFunction): ReadonlyArray<unknown> {
-	return fn.blocks.flatMap(({ instructions }) =>
-		instructions
-			.filter(({ opcode }) => opcode === "binary")
-			.map(({ attributes }) => attributes.operator),
+function binaryOperators(fn: CoreFunctionStore): ReadonlyArray<unknown> {
+	return [...fn.blockIds()].flatMap((block) =>
+		[...fn.bodyInstructionIds(block)]
+			.filter((instruction) => fn.instructionOpcodeName(instruction) === "binary")
+			.map((instruction) => fn.instructionAttributes(instruction).operator),
 	);
+}
+
+function pathRanges(source: BoundedFunction) {
+	const fn = source.program.function(source.function);
+	const cfg = buildCoreControlFlow(source.program, source.function);
+	return analyzeCoreLoopInductions(fn, cfg, coreCanonicalValueRoots(fn, cfg));
 }
 
 describe("Core path-sensitive numeric ranges", () => {
@@ -115,34 +117,30 @@ describe("Core path-sensitive numeric ranges", () => {
 		"intersects %s-edge int32 bounds and removes a dominated remainder",
 		(polarity) => {
 			const source = boundedInt32(polarity);
-			const range = new CoreAnalysisManager()
-				.loopInductions(source.fn)
-				.range(source.value, source.bounded);
-			expect(range).toEqual({
+			expect(pathRanges(source).range(source.value, source.bounded)).toEqual({
 				minimum: 0,
 				maximum: 15,
 				exactSafeIntegers: true,
 				excludesNegativeZero: true,
 			});
-
-			const program = coreProgram([source.fn]);
-			const baseline = executeCoreOptimizations(program, {
-				ablations: new Set(["fact-driven"]),
-				verification: "per-pass",
-			}).program.functions[0]!;
-			const optimized = executeCoreOptimizations(program, {
-				verification: "per-pass",
-			}).program.functions[0]!;
-			expect(binaryOperators(baseline)).toContain("%");
+			expect(binaryOperators(source.program.function(source.function))).toContain("%");
+			const outcome = optimizeCore(
+				{ program: source.program, context: programAnalysisContext() },
+				{ verification: "per-pass" },
+			);
+			const optimized = outcome.compilation.program.function(source.function);
+			expect(
+				outcome.report.passes.find(
+					({ pass }) => pass === "path-range-strength-reduction",
+				),
+			).toMatchObject({ changedItems: 1 });
 			expect(binaryOperators(optimized)).not.toContain("%");
-			expect(() =>
-				verifyCoreProgram(coreProgram([optimized]), coreOpcodeRegistry),
-			).not.toThrow();
 		},
 	);
 
 	it("consumes a branch-narrowed induction range in source Core", () => {
-		let optimized: CoreProgram | undefined;
+		let consequent: CoreFunctionStore | undefined;
+		let alternate: CoreFunctionStore | undefined;
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`function consequent() {
@@ -165,27 +163,25 @@ describe("Core path-sensitive numeric ranges", () => {
 			),
 			{
 				afterCoreOptimization(program) {
-					optimized = program;
+					consequent = coreFunctionNamed(program, "consequent");
+					alternate = coreFunctionNamed(program, "alternate");
 				},
 			},
 		);
-		const selected = optimized!.functions.filter((fn) => {
-			const name = String.fromCodePoint(
-				...(optimized!.stringConstants[fn.metadata.nameStringIndex] ?? []),
-			);
-			return name === "consequent" || name === "alternate";
-		});
-		expect(selected).toHaveLength(2);
-		for (const fn of selected) expect(binaryOperators(fn)).not.toContain("%");
+		expect(consequent).toBeDefined();
+		expect(alternate).toBeDefined();
+		expect(binaryOperators(consequent!)).not.toContain("%");
+		expect(binaryOperators(alternate!)).not.toContain("%");
 	});
 
 	it("drops edge refinements when opposite arms rejoin", () => {
-		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{}]);
 		const consequent = builder.createBlock();
 		const alternate = builder.createBlock();
 		const join = builder.createBlock();
-		const parameter = builder.block(entry).parameters[0]!.value;
+		const parameter = builder.blockParameters(entry)[0]!.value;
 		const [value] = builder.appendInstruction(entry, "unary", [parameter], {
 			attributes: { operator: "~" },
 			outputRepresentations: ["i32"],
@@ -221,33 +217,32 @@ describe("Core path-sensitive numeric ranges", () => {
 			outputRepresentations: ["i32"],
 		});
 		builder.setTerminator(join, { kind: "return", value: remainder! });
-		const fn = builder.finish(entry);
-		const analysis = new CoreAnalysisManager().loopInductions(fn);
+		const finished = builder.finish(entry);
+		const source = { program, function: finished.function, value: value!, bounded: join };
+		const analysis = pathRanges(source);
 		expect(analysis.range(value!, consequent)).toMatchObject({ minimum: 0 });
 		expect(analysis.range(value!, alternate)).toMatchObject({ maximum: -1 });
 		expect(analysis.range(value!, join)).toMatchObject({
 			minimum: -0x8000_0000,
 			maximum: 0x7fff_ffff,
 		});
-		expect(
-			binaryOperators(
-				executeCoreOptimizations(coreProgram([fn]), { verification: "per-pass" }).program
-					.functions[0]!,
-			),
-		).toContain("%");
+		const optimized = optimizeCore(
+			{ program, context: programAnalysisContext() },
+			{ verification: "per-pass" },
+		).compilation.program.function(finished.function);
+		expect(binaryOperators(optimized)).toContain("%");
 	});
 
 	it.each(["f64", "boxed"] as const)(
 		"does not turn %s comparison bounds into an exact-integer proof",
 		(representation) => {
-			const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
-				parameterCount: 1,
-			});
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{}]);
 			const lower = builder.createBlock();
 			const bounded = builder.createBlock();
 			const rejected = builder.createBlock();
-			const parameter = builder.block(entry).parameters[0]!.value;
+			const parameter = builder.blockParameters(entry)[0]!.value;
 			const value =
 				representation === "boxed"
 					? parameter
@@ -305,27 +300,26 @@ describe("Core path-sensitive numeric ranges", () => {
 			);
 			builder.setTerminator(bounded, { kind: "return", value: remainder! });
 			builder.setTerminator(rejected, { kind: "return", value: zero! });
-			const fn = builder.finish(entry);
-			expect(
-				new CoreAnalysisManager().loopInductions(fn).range(value, bounded),
-			).toBeUndefined();
-			expect(
-				binaryOperators(
-					executeCoreOptimizations(coreProgram([fn]), { verification: "per-pass" })
-						.program.functions[0]!,
-				),
-			).toContain("%");
+			const finished = builder.finish(entry);
+			const source = { program, function: finished.function, value, bounded };
+			expect(pathRanges(source).range(value, bounded)).toBeUndefined();
+			const optimized = optimizeCore(
+				{ program, context: programAnalysisContext() },
+				{ verification: "per-pass" },
+			).compilation.program.function(finished.function);
+			expect(binaryOperators(optimized)).toContain("%");
 		},
 	);
 
 	it("does not carry a successful edge through an exceptional predecessor", () => {
-		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{}]);
 		const compare = builder.createBlock([{ representation: "i32" }]);
 		const handler = builder.createBlock([{ role: "exception" }]);
 		const bounded = builder.createBlock();
 		const rejected = builder.createBlock();
-		const parameter = builder.block(entry).parameters[0]!.value;
+		const parameter = builder.blockParameters(entry)[0]!.value;
 		const [converted] = builder.appendInstruction(entry, "unary", [parameter], {
 			attributes: { operator: "~" },
 			outputRepresentations: ["i32"],
@@ -334,7 +328,7 @@ describe("Core path-sensitive numeric ranges", () => {
 			kind: "jump",
 			edge: { block: compare, arguments: [converted!] },
 		});
-		const value = builder.block(compare).parameters[0]!.value;
+		const value = builder.blockParameters(compare)[0]!.value;
 		const [zero] = builder.appendInstruction(compare, "createF64", [], {
 			attributes: { value: 0 },
 			outputRepresentations: ["i32"],
@@ -356,10 +350,9 @@ describe("Core path-sensitive numeric ranges", () => {
 		});
 		builder.setTerminator(bounded, { kind: "return", value });
 		builder.setTerminator(rejected, { kind: "return", value: zero! });
-		const range = new CoreAnalysisManager()
-			.loopInductions(builder.finish(entry))
-			.range(value, bounded);
-		expect(range).toMatchObject({
+		const finished = builder.finish(entry);
+		const source = { program, function: finished.function, value, bounded };
+		expect(pathRanges(source).range(value, bounded)).toMatchObject({
 			minimum: -0x8000_0000,
 			maximum: 0x7fff_ffff,
 		});
