@@ -181,14 +181,18 @@ function writes(
 
 function verifyProgramCardinality(program: ExecutionProgram): void {
 	const core = program.core;
-	const coreFunctions = [...core.functionIds()];
-	if (program.functions.length !== coreFunctions.length) {
-		fail(
-			`target program holds ${program.functions.length} functions for a ${coreFunctions.length}-function Core program`,
-		);
-	}
 	if (program.functionMap.executionToCore.length !== program.functions.length) {
 		fail("execution-to-Core function map does not match the target function table");
+	}
+	const mapped = new Set(program.functionMap.executionToCore);
+	if (mapped.size !== program.functionMap.executionToCore.length) {
+		fail("execution-to-Core function map contains a duplicate Core identity");
+	}
+	for (const coreFunction of core.functionIds()) {
+		const execution = program.functionMap.coreToExecution[coreFunction];
+		if ((execution === -1) !== !mapped.has(coreFunction)) {
+			fail(`Core function ${coreFunction} has an inconsistent target mapping`);
+		}
 	}
 	for (const [index, fn] of program.functions.entries()) {
 		const context: ExecutionVerificationContext = { functionIndex: index };

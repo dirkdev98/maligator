@@ -58,7 +58,11 @@ describe("compileSemanticProgramToProgramImage", () => {
 
 		expect(compilation.program).toBe(mutableProgram);
 		expect(compilation.program.sealed).toBe(true);
-		expect(compilation.plan).toEqual({ directEntries: [], specializations: [] });
+		expect(compilation.plan).toEqual({
+			liveFunctions: [...compilation.program.functionIds()],
+			directEntries: [],
+			specializations: [],
+		});
 		expect(report.output.functions).toBe(report.input.functions);
 		expect(report.output.instructions).toBeLessThanOrEqual(report.input.instructions);
 		expect(report.output.planCandidates).toBe(0);
@@ -68,12 +72,11 @@ describe("compileSemanticProgramToProgramImage", () => {
 			"proofs",
 			"memory",
 			"finalize",
+			"program",
 		]);
 
 		const execution = lowerCoreCompilationToExecutionProgram(compilation);
-		expect(execution.functionMap.executionToCore).toEqual([
-			...compilation.program.functionIds(),
-		]);
+		expect(execution.functionMap.executionToCore).toEqual(compilation.plan.liveFunctions);
 		for (const [index, core] of execution.functionMap.executionToCore.entries()) {
 			expect(execution.functionMap.coreToExecution[core]).toBe(index);
 		}

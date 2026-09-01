@@ -10,6 +10,9 @@ import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import { CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS } from "./core-ir-provenance.ts";
+import { analyzeCoreFunctionReachability } from "./core-ir-reachability.ts";
+import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "./core-ir-summaries.ts";
+import type { CoreFunctionId } from "./core-ir.ts";
 import {
 	CoreOptimizationReportBuilder,
 } from "./core-optimization-report.ts";
@@ -18,14 +21,10 @@ import { CorePassManager } from "./core-pass-manager.ts";
 import type { CoreOptimizationStage } from "./core-pass.ts";
 
 export interface CoreOptimizationPlan {
+	readonly liveFunctions?: ReadonlyArray<CoreFunctionId>;
 	readonly directEntries: ReadonlyArray<never>;
 	readonly specializations: ReadonlyArray<never>;
 }
-
-const EMPTY_OPTIMIZATION_PLAN: CoreOptimizationPlan = Object.freeze({
-	directEntries: Object.freeze([]),
-	specializations: Object.freeze([]),
-});
 
 const OPTIMIZATION_STAGES: ReadonlyArray<CoreOptimizationStage> = [
 	"canonicalize",
@@ -89,15 +88,35 @@ export function optimizeCore(
 							: [],
 		);
 	}
+	const programStartedAt = Date.now();
+	const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+		scope: "program",
+	});
+	const reachability = analyzeCoreFunctionReachability(
+		compilation.program,
+		summaries.targets,
+		compilation.context,
+	);
+	const plan: CoreOptimizationPlan = Object.freeze({
+		liveFunctions: reachability.liveFunctions,
+		directEntries: Object.freeze([]),
+		specializations: Object.freeze([]),
+	});
+	reportBuilder.recordProgramWork(
+		summaries.targets.statistics,
+		summaries.statistics,
+		reachability.statistics,
+	);
+	reportBuilder.recordStage("program", Date.now() - programStartedAt);
 	const program = compilation.program.seal();
 	verifyCoreProgram(program, { stage: "pre-target" }, compilation.context);
 	const optimized = Object.freeze({
 		program,
 		context: compilation.context,
-		plan: EMPTY_OPTIMIZATION_PLAN,
+		plan,
 	});
 	return Object.freeze({
 		compilation: optimized,
-		report: reportBuilder.finish(program, EMPTY_OPTIMIZATION_PLAN),
+		report: reportBuilder.finish(program, plan),
 	});
 }

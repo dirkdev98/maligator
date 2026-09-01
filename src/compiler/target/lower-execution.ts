@@ -128,7 +128,9 @@ export function physicalRegisterClass(
 function createExecutionFunctionMap(
 	compilation: CoreCompilation,
 ): ExecutionFunctionMap {
-	const executionToCore = [...compilation.program.functionIds()];
+	const executionToCore = [
+		...(compilation.plan.liveFunctions ?? compilation.program.functionIds()),
+	];
 	const coreToExecution = Array<number>(compilation.program.functionCapacity).fill(-1);
 	for (const [execution, core] of executionToCore.entries()) {
 		coreToExecution[core] = execution;

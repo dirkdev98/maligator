@@ -52,8 +52,23 @@ export interface CoreOptimizationReport {
 	readonly passes: ReadonlyArray<CorePassWorkReport>;
 	readonly analyses: ReadonlyArray<CoreAnalysisWorkReport>;
 	readonly discovery: CoreCandidateDiscoveryReport;
+	readonly program: CoreProgramWorkReport;
 	readonly queue: CoreQueueWorkReport;
 	readonly budget: CoreBudgetWorkReport;
+}
+
+export interface CoreProgramWorkReport {
+	readonly functionsAnalyzed: number;
+	readonly functionsReused: number;
+	readonly callSites: number;
+	readonly callEdges: number;
+	readonly openCallSites: number;
+	readonly sccs: number;
+	readonly sccTransfers: number;
+	readonly summaryChanges: number;
+	readonly callerWakeups: number;
+	readonly affectedCallers: number;
+	readonly deadFunctions: number;
 }
 
 export interface CoreCandidateDiscoveryReport {
@@ -127,6 +142,19 @@ export class CoreOptimizationReportBuilder {
 	#discoveredDenseArrays = 0;
 	#discoveredNumericFusions = 0;
 	#largestCandidateFanOut = 0;
+	#programWork: CoreProgramWorkReport = Object.freeze({
+		functionsAnalyzed: 0,
+		functionsReused: 0,
+		callSites: 0,
+		callEdges: 0,
+		openCallSites: 0,
+		sccs: 0,
+		sccTransfers: 0,
+		summaryChanges: 0,
+		callerWakeups: 0,
+		affectedCallers: 0,
+		deadFunctions: 0,
+	});
 
 	constructor(program: CoreProgram) {
 		this.input = Object.freeze(coreOptimizationCounts(program));
@@ -216,6 +244,38 @@ export class CoreOptimizationReportBuilder {
 		}
 	}
 
+	recordProgramWork(
+		callGraph: {
+			readonly functionsAnalyzed: number;
+			readonly functionsReused: number;
+			readonly callSites: number;
+			readonly callEdges: number;
+			readonly openCallSites: number;
+		},
+		summaries: {
+			readonly sccs: number;
+			readonly sccTransfers: number;
+			readonly summaryChanges: number;
+			readonly callerWakeups: number;
+			readonly affectedCallers: number;
+		},
+		reachability: { readonly deadFunctions: number },
+	): void {
+		this.#programWork = Object.freeze({
+			functionsAnalyzed: callGraph.functionsAnalyzed,
+			functionsReused: callGraph.functionsReused,
+			callSites: callGraph.callSites,
+			callEdges: callGraph.callEdges,
+			openCallSites: callGraph.openCallSites,
+			sccs: summaries.sccs,
+			sccTransfers: summaries.sccTransfers,
+			summaryChanges: summaries.summaryChanges,
+			callerWakeups: summaries.callerWakeups,
+			affectedCallers: summaries.affectedCallers,
+			deadFunctions: reachability.deadFunctions,
+		});
+	}
+
 	finish(program: CoreProgram, plan: CoreOptimizationPlan): CoreOptimizationReport {
 		return Object.freeze({
 			input: this.input,
@@ -241,6 +301,7 @@ export class CoreOptimizationReportBuilder {
 				numericFusions: this.#discoveredNumericFusions,
 				largestFanOut: this.#largestCandidateFanOut,
 			}),
+			program: this.#programWork,
 			queue: Object.freeze({
 				pushes: this.#queuePushes,
 				pops: this.#queuePops,
@@ -289,6 +350,10 @@ export function formatCoreOptimizationReport(
 		},
 		{ label: "Core optimizer passes", value: passes },
 		{ label: "Core optimizer analyses", value: analyses },
+		{
+			label: "Core optimizer program",
+			value: `${report.program.functionsAnalyzed} functions analyzed/${report.program.functionsReused} reused, ${report.program.callSites} callsites/${report.program.callEdges} edges/${report.program.openCallSites} open, ${report.program.sccs} SCCs/${report.program.sccTransfers} transfers, ${report.program.summaryChanges} summary changes/${report.program.callerWakeups} caller wakeups/${report.program.affectedCallers} callers, ${report.program.deadFunctions} dead omitted`,
+		},
 		{
 			label: "Core optimizer discovery",
 			value: `${report.discovery.candidates} candidates (${report.discovery.stackObjects} stack objects, ${report.discovery.denseArrays} dense arrays, ${report.discovery.numericFusions} numeric fusions), largest fan-out ${report.discovery.largestFanOut}`,

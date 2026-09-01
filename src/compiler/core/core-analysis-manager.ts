@@ -22,6 +22,7 @@ export interface CoreAnalysisComputation {
 	readonly program: CoreProgram;
 	readonly context: CoreCompilationContext;
 	readonly request: CoreAnalysisRequest;
+	readonly previous?: unknown;
 }
 
 export interface CoreAnalysisDefinition<Result> {
@@ -87,6 +88,7 @@ export class CoreAnalysisManager {
 			program: this.#program,
 			context: this.#context,
 			request,
+			...(cached === undefined ? {} : { previous: cached.value }),
 		});
 		this.#cache.set(cacheKey, { versionKey, value });
 		this.#report.recordAnalysis(
