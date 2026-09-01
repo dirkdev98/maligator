@@ -120,6 +120,11 @@ export interface CoreInstructionLayout {
 	readonly resultStart: number;
 	readonly resultCount: number;
 	readonly sourcePosition: number;
+	readonly effectRefinementRef: number;
+}
+
+export interface CoreEffectRefinementLayout {
+	readonly live: boolean;
 }
 
 export interface CoreValueLayout {
@@ -512,7 +517,7 @@ export class CoreFunctionStore {
 	readonly #instructionResultStart: Array<number> = [];
 	readonly #instructionResultCount: Array<number> = [];
 	readonly #instructionSourcePosition: Array<number> = [];
-	readonly #instructionEffectRefinement: Array<CoreEffectRefinement | undefined> = [];
+	readonly #instructionEffectRefinementRef: Array<number> = [];
 	readonly #instructionPayload: Array<
 		CoreInstructionAttributes | CoreTerminatorPayload | undefined
 	> = [];
@@ -535,6 +540,7 @@ export class CoreFunctionStore {
 	readonly #useNext: Array<number> = [];
 
 	readonly #facts: Array<CoreFact | undefined> = [];
+	readonly #effectRefinements: Array<CoreEffectRefinement | undefined> = [];
 	#sealedBlocks: ReadonlyArray<CoreBlockId> | undefined;
 	#sealedInstructions: ReadonlyArray<CoreInstructionId> | undefined;
 
@@ -621,6 +627,10 @@ export class CoreFunctionStore {
 
 	get useCapacity(): number {
 		return this.#useLive.length;
+	}
+
+	get effectRefinementCapacity(): number {
+		return this.#effectRefinements.length;
 	}
 
 	get sealed(): boolean {
@@ -714,7 +724,23 @@ export class CoreFunctionStore {
 			resultStart: this.#instructionResultStart[id]!,
 			resultCount: this.#instructionResultCount[id]!,
 			sourcePosition: this.#instructionSourcePosition[id]!,
+			effectRefinementRef: this.#instructionEffectRefinementRef[id]!,
 		};
+	}
+
+	effectRefinementLayout(id: number): CoreEffectRefinementLayout {
+		if (!Number.isSafeInteger(id) || id < 0 || id >= this.effectRefinementCapacity) {
+			throw new Error(`Unknown Core effect-refinement row ${id}`);
+		}
+		return { live: this.#effectRefinements[id] !== undefined };
+	}
+
+	effectRefinementRecord(id: number): CoreEffectRefinement {
+		const refinement = this.#effectRefinements[id];
+		if (refinement === undefined) {
+			throw new Error(`Unknown Core effect-refinement ${id}`);
+		}
+		return refinement;
 	}
 
 	valueLayout(id: number): CoreValueLayout {
@@ -860,7 +886,15 @@ export class CoreFunctionStore {
 
 	instructionEffectRefinement(id: CoreInstructionId): CoreEffectRefinement | undefined {
 		this.#requireInstruction(id);
-		return this.#instructionEffectRefinement[id];
+		const reference = this.#instructionEffectRefinementRef[id]!;
+		if (reference < 0) return undefined;
+		const refinement = this.#effectRefinements[reference];
+		if (refinement === undefined) {
+			throw new Error(
+				`Core instruction ${id} references deleted effect refinement ${reference}`,
+			);
+		}
+		return refinement;
 	}
 
 	instructionAttributes(id: CoreInstructionId): CoreInstructionAttributes {
@@ -1039,7 +1073,7 @@ export class CoreFunctionStore {
 			outputRepresentations,
 			freezeAttributes(attributes),
 			sourcePosition,
-			freezeRefinement(effectRefinement),
+			effectRefinement,
 			insertionPoint,
 		);
 		return { instruction, results: this.instructionResults(instruction) };
@@ -1085,20 +1119,20 @@ export class CoreFunctionStore {
 		this.#instructionOpcode[instruction] = opcode;
 		this.#instructionPayload[instruction] = freezeAttributes(attributes);
 		this.#instructionSourcePosition[instruction] = sourcePosition ?? -1;
-		this.#instructionEffectRefinement[instruction] = freezeRefinement(effectRefinement);
+		this.#replaceEffectRefinement(instruction, effectRefinement);
 		this._replaceOperands(mutation, instruction, operands);
 	}
 
 	_setInstructionEffectRefinement(
 		mutation: CoreStoreMutation,
 		instruction: CoreInstructionId,
-		refinement: CoreEffectRefinement,
+		refinement: CoreEffectRefinement | undefined,
 	): void {
 		this.#assertEditing(mutation);
 		if (this.instructionKind(instruction) !== "operation") {
 			throw new Error(`Core instruction ${instruction} is not an operation`);
 		}
-		this.#instructionEffectRefinement[instruction] = freezeRefinement(refinement);
+		this.#replaceEffectRefinement(instruction, refinement);
 	}
 
 	_replaceOperands(
@@ -1132,6 +1166,7 @@ export class CoreFunctionStore {
 		}
 		for (const result of this.instructionResults(instruction))
 			this.#valueLive[result] = 0;
+		this.#removeEffectRefinement(instruction);
 		const block = this.#instructionBlock[instruction]!;
 		const previous = this.#instructionPrevious[instruction]!;
 		const next = this.#instructionNext[instruction]!;
@@ -1378,7 +1413,9 @@ export class CoreFunctionStore {
 		this.#instructionResultStart.push(this.#results.length);
 		this.#instructionResultCount.push(outputRepresentations.length);
 		this.#instructionSourcePosition.push(sourcePosition ?? -1);
-		this.#instructionEffectRefinement.push(effectRefinement);
+		this.#instructionEffectRefinementRef.push(
+			this.#appendEffectRefinement(effectRefinement),
+		);
 		this.#instructionPayload.push(payload);
 		if (previous < 0) this.#blockFirstInstruction[block] = instruction;
 		else this.#instructionNext[previous] = instruction;
@@ -1389,6 +1426,31 @@ export class CoreFunctionStore {
 			this.#results.push(this.#createValue(representation, 1, instruction, index));
 		}
 		return instruction;
+	}
+
+	#appendEffectRefinement(
+		refinement: CoreEffectRefinement | undefined,
+	): number {
+		if (refinement === undefined) return -1;
+		const reference = this.#effectRefinements.length;
+		this.#effectRefinements.push(freezeRefinement(refinement));
+		return reference;
+	}
+
+	#replaceEffectRefinement(
+		instruction: CoreInstructionId,
+		refinement: CoreEffectRefinement | undefined,
+	): void {
+		this.#removeEffectRefinement(instruction);
+		this.#instructionEffectRefinementRef[instruction] =
+			this.#appendEffectRefinement(refinement);
+	}
+
+	#removeEffectRefinement(instruction: CoreInstructionId): void {
+		const reference = this.#instructionEffectRefinementRef[instruction]!;
+		if (reference < 0) return;
+		this.#effectRefinements[reference] = undefined;
+		this.#instructionEffectRefinementRef[instruction] = -1;
 	}
 
 	#createValue(

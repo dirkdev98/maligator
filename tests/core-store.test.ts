@@ -6,6 +6,7 @@ import {
 	CoreOpcodeRegistry,
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
 import * as coreStore from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -150,6 +151,166 @@ describe("Core store", () => {
 
 		expect(instructionChanges.instructions).toEqual([identity]);
 		expect(instructionChanges.values).toEqual([parameter, constant, copied]);
+	});
+
+	it("stores effect refinements out of line behind dense numeric instruction refs", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = builder.blockParameters(entry)[0]!.value;
+		const firstFact = builder.addFact({
+			kind: "first-refinement",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "first-refinement" },
+			obligations: [],
+			origin: "test",
+		});
+		const secondFact = builder.addFact({
+			kind: "second-refinement",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "second-refinement" },
+			obligations: [],
+			origin: "test",
+		});
+		const [returned] = builder.appendInstruction(entry, "identity", [parameter], {
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof: firstFact },
+		});
+		builder.appendInstruction(entry, "sink", [parameter], {
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof: firstFact },
+		});
+		builder.setTerminator(entry, { kind: "return", value: returned! });
+		const finished = builder.finish(entry);
+		const fn = program.function(finished.function);
+		const [stable, replaced] = [...fn.bodyInstructionIds(entry)];
+
+		expect(fn.effectRefinementCapacity).toBe(2);
+		expect(fn.instructionLayout(stable!).effectRefinementRef).toBe(0);
+		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(1);
+		expect(typeof fn.instructionLayout(stable!).effectRefinementRef).toBe("number");
+		expect(fn.effectRefinementRecord(0)).toEqual({
+			effects: CORE_NO_EFFECTS,
+			proof: firstFact,
+		});
+
+		const replace = CoreEditor.open(program, fn.id);
+		replace.replaceInstruction(replaced!, "sink", [parameter], {
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof: secondFact },
+		});
+		const replaceChanges = replace.commit();
+		expect(replaceChanges.facts).toEqual([firstFact, secondFact]);
+		expect(fn.effectRefinementCapacity).toBe(3);
+		expect(fn.effectRefinementLayout(1)).toEqual({ live: false });
+		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(2);
+
+		const clear = CoreEditor.open(program, fn.id);
+		clear.clearInstructionEffectRefinement(replaced!);
+		const clearChanges = clear.commit();
+		expect(clearChanges.domains).toEqual([
+			"memoryEffects",
+			"facts",
+			"specializationInputs",
+		]);
+		expect(clearChanges.facts).toEqual([secondFact]);
+		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(-1);
+		expect(fn.effectRefinementLayout(2)).toEqual({ live: false });
+
+		const restore = CoreEditor.open(program, fn.id);
+		restore.setInstructionEffectRefinement(replaced!, {
+			effects: CORE_NO_EFFECTS,
+			proof: firstFact,
+		});
+		restore.commit();
+		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(3);
+
+		const remove = CoreEditor.open(program, fn.id);
+		remove.removeInstruction(replaced!);
+		const removeChanges = remove.commit();
+		expect(removeChanges.facts).toEqual([firstFact]);
+		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(-1);
+		expect(fn.effectRefinementLayout(3)).toEqual({ live: false });
+		expect(fn.effectRefinementCapacity).toBe(4);
+
+		program.seal();
+		verifyCoreProgram(program);
+		expect(fn.instructionEffectRefinement(stable!)).toEqual({
+			effects: CORE_NO_EFFECTS,
+			proof: firstFact,
+		});
+		expect(fn.instructionLayout(stable!).effectRefinementRef).toBe(0);
+		expect(() => CoreEditor.open(program, fn.id)).toThrow("sealed");
+	});
+
+	it("versions only facts and memory when a retained refinement changes", () => {
+		const { program, fn, constant, copied } = oneFunction();
+		const createFact = CoreEditor.open(program, fn.id);
+		const fact = createFact.addFact({
+			kind: "versioned-refinement",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "versioned-refinement" },
+			obligations: [],
+			origin: "test",
+		});
+		createFact.commit();
+		const instruction = [...fn.bodyInstructionIds(fn.entry)][1]!;
+		const before = fn.versions;
+		const programBefore = program.versions;
+		const set = CoreEditor.open(program, fn.id);
+		set.setInstructionEffectRefinement(instruction, {
+			effects: CORE_NO_EFFECTS,
+			proof: fact,
+		});
+		const setChanges = set.commit();
+
+		expect(setChanges.domains).toEqual([
+			"memoryEffects",
+			"facts",
+			"specializationInputs",
+		]);
+		expect(setChanges.programDomains).toEqual(["facts", "specializationInputs"]);
+		expect(setChanges.instructions).toEqual([instruction]);
+		expect(setChanges.values).toEqual([constant, copied]);
+		expect(setChanges.facts).toEqual([fact]);
+		expect(fn.versions).toEqual({
+			...before,
+			memoryEffects: before.memoryEffects + 1,
+			facts: before.facts + 1,
+			specializationInputs: before.specializationInputs + 1,
+		});
+		expect(program.versions).toEqual({
+			...programBefore,
+			facts: programBefore.facts + 1,
+			specializationInputs: programBefore.specializationInputs + 1,
+		});
+
+		const unchangedBefore = fn.versions;
+		const unchanged = CoreEditor.open(program, fn.id);
+		unchanged.setInstructionEffectRefinement(
+			instruction,
+			fn.instructionEffectRefinement(instruction)!,
+		);
+		const unchangedChanges = unchanged.commit();
+		expect(unchangedChanges.edits).toBe(0);
+		expect(unchangedChanges.domains).toEqual([]);
+		expect(fn.versions).toEqual(unchangedBefore);
+
+		const clear = CoreEditor.open(program, fn.id);
+		clear.clearInstructionEffectRefinement(instruction);
+		const clearChanges = clear.commit();
+		expect(clearChanges.domains).toEqual(setChanges.domains);
+		expect(clearChanges.facts).toEqual([fact]);
+		expect(fn.instructionEffectRefinement(instruction)).toBeUndefined();
+
+		const clearedBefore = fn.versions;
+		const capacityBefore = fn.effectRefinementCapacity;
+		const clearAgain = CoreEditor.open(program, fn.id);
+		clearAgain.clearInstructionEffectRefinement(instruction);
+		const clearAgainChanges = clearAgain.commit();
+		expect(clearAgainChanges.edits).toBe(0);
+		expect(fn.effectRefinementCapacity).toBe(capacityBefore);
+		expect(fn.versions).toEqual(clearedBefore);
 	});
 
 	it("increments only selected version domains once per commit", () => {

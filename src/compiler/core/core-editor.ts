@@ -242,6 +242,26 @@ function sortedEdges(
 	).map((edge) => Object.freeze({ ...edge }));
 }
 
+function sameEffectRefinement(
+	left: CoreEffectRefinement | undefined,
+	right: CoreEffectRefinement | undefined,
+): boolean {
+	if (left === undefined || right === undefined) return left === right;
+	if (left.proof !== right.proof) return false;
+	const leftEffects = left.effects;
+	const rightEffects = right.effects;
+	return (
+		leftEffects.mayThrow === rightEffects.mayThrow &&
+		leftEffects.maySuspend === rightEffects.maySuspend &&
+		leftEffects.mayGc === rightEffects.mayGc &&
+		leftEffects.callsUserCode === rightEffects.callsUserCode &&
+		leftEffects.reads.length === rightEffects.reads.length &&
+		leftEffects.reads.every((domain, index) => domain === rightEffects.reads[index]) &&
+		leftEffects.writes.length === rightEffects.writes.length &&
+		leftEffects.writes.every((domain, index) => domain === rightEffects.writes[index])
+	);
+}
+
 export class CoreEditor {
 	readonly program: CoreProgram;
 	readonly function: CoreFunctionStore;
@@ -442,8 +462,23 @@ export class CoreEditor {
 		instruction: CoreInstructionId,
 		refinement: CoreEffectRefinement,
 	): void {
+		this.#replaceInstructionEffectRefinement(instruction, refinement);
+	}
+
+	clearInstructionEffectRefinement(instruction: CoreInstructionId): void {
+		this.#replaceInstructionEffectRefinement(instruction, undefined);
+	}
+
+	#replaceInstructionEffectRefinement(
+		instruction: CoreInstructionId,
+		refinement: CoreEffectRefinement | undefined,
+	): void {
 		this.#assertActive();
+		if (this.function.instructionKind(instruction) !== "operation") {
+			throw new Error(`Core instruction ${instruction} is not an operation`);
+		}
 		const previous = this.function.instructionEffectRefinement(instruction);
+		if (sameEffectRefinement(previous, refinement)) return;
 		this.function._setInstructionEffectRefinement(
 			this.#mutation,
 			instruction,
