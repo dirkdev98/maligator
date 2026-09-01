@@ -1,85 +1,46 @@
-/**
- * Core's memory model: abstract locations, alias partitions, and an analysis-only
- * memory-SSA versioning of those partitions.
- *
- * Locations come from the opcode registry's declared accesses, never from a
- * per-pass opcode switch. Activation and program slots are named exactly, so a
- * write to one slot leaves every other slot's version alone. A heap access is
- * named exactly only when a caller supplies a resolution that proves its base and
- * key address one allocation's own data slot; otherwise the access covers its
- * whole family, so its invalidation still flows through the shared effect
- * domains.
- *
- * Two things deliberately absent: strings, whose values are immutable so there is
- * no string cell to alias, and epochs, whose validity belongs to the fact system.
- */
-
+import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import type { CoreAccessKey, CoreOwnCell } from "./core-ir-provenance.ts";
-import {
-	CORE_CALL_SUMMARY_ATTRIBUTE,
-	coreCallSummaryClaimFromAttribute,
-	coreCallValueSummaryDigest,
-} from "./core-ir-summaries.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	CORE_EFFECT_DOMAINS,
-	CORE_MEMORY_FAMILIES,
 	CORE_MEMORY_FAMILY_DOMAINS,
 } from "./core-ir.ts";
 import type {
 	CoreAccessMode,
 	CoreBlockId,
 	CoreEffectDomain,
-	CoreFunction,
-	CoreInstruction,
-	CoreInstructionEffects,
+	CoreFunctionId,
 	CoreInstructionId,
 	CoreMemoryFamily,
 	CoreOpcodeAccess,
-	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
+import {
+	analyzeCoreProvenance,
+} from "./core-ir-provenance.ts";
+import type {
+	CoreAccessKey,
+	CoreOwnCell,
+	CoreProvenance,
+} from "./core-ir-provenance.ts";
+import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-/**
- * An exactly named cell, or a whole family when the access cannot name one. Only
- * exact locations may carry a value between two program points; a family
- * location exists so its invalidation is still modelled.
- */
 export type CoreMemoryLocation =
 	| { readonly kind: "global-slot"; readonly slot: number }
 	| { readonly kind: "local-slot"; readonly slot: number }
 	| { readonly kind: "captured-slot"; readonly owner: number; readonly index: number }
 	| { readonly kind: "activation-this" }
-	| {
-			readonly kind: "object-slot";
-			readonly allocation: CoreInstructionId;
-			readonly key: number;
-	  }
-	| {
-			readonly kind: "element";
-			readonly allocation: CoreInstructionId;
-			readonly index: number;
-	  }
+	| { readonly kind: "object-slot"; readonly allocation: CoreInstructionId; readonly key: number }
+	| { readonly kind: "element"; readonly allocation: CoreInstructionId; readonly index: number }
 	| { readonly kind: "family"; readonly family: CoreMemoryFamily };
 
-export type CoreExactMemoryLocation = Exclude<
-	CoreMemoryLocation,
-	{ readonly kind: "family" }
->;
+export type CoreExactMemoryLocation = Exclude<CoreMemoryLocation, { readonly kind: "family" }>;
 
-/** Interned alias partition. Equality is the only operation callers need. */
 export type CoreMemoryPartition = string & {
 	readonly __coreMemoryPartition: unique symbol;
 };
 
-/**
- * Analysis-only memory-SSA version identity of one partition at one point.
- *
- * Versions are dense integers private to one `coreMemoryVersions` result; two
- * versions are the same definition exactly when they are numerically equal.
- * Never compare versions taken from two different results.
- */
 export type CoreMemoryVersion = number & {
 	readonly __coreMemoryVersion: unique symbol;
 };
@@ -94,43 +55,21 @@ export function coreMemoryLocationIsExact(
 	return location.kind !== "family";
 }
 
-export function coreMemoryPartition(
-	location: CoreExactMemoryLocation,
-): CoreMemoryPartition {
+export function coreMemoryPartition(location: CoreExactMemoryLocation): CoreMemoryPartition {
 	switch (location.kind) {
-		case "global-slot":
-			return `slot\0global-slot\0${location.slot}` as CoreMemoryPartition;
-		case "local-slot":
-			return `slot\0local-slot\0${location.slot}` as CoreMemoryPartition;
-		case "captured-slot":
-			return `slot\0captured-slot\0${location.owner}\0${location.index}` as CoreMemoryPartition;
-		case "activation-this":
-			return "slot\0activation-this" as CoreMemoryPartition;
-		case "object-slot":
-			return `slot\0object-slot\0${location.allocation}\0${location.key}` as CoreMemoryPartition;
-		case "element":
-			return `slot\0element\0${location.allocation}\0${location.index}` as CoreMemoryPartition;
+		case "global-slot": return `slot\0global-slot\0${location.slot}` as CoreMemoryPartition;
+		case "local-slot": return `slot\0local-slot\0${location.slot}` as CoreMemoryPartition;
+		case "captured-slot": return `slot\0captured-slot\0${location.owner}\0${location.index}` as CoreMemoryPartition;
+		case "activation-this": return "slot\0activation-this" as CoreMemoryPartition;
+		case "object-slot": return `slot\0object-slot\0${location.allocation}\0${location.key}` as CoreMemoryPartition;
+		case "element": return `slot\0element\0${location.allocation}\0${location.index}` as CoreMemoryPartition;
 	}
 }
 
-/** Partition standing for every cell an effect domain covers. */
 export function coreMemoryDomainPartition(domain: CoreEffectDomain): CoreMemoryPartition {
 	return `domain\0${domain}` as CoreMemoryPartition;
 }
 
-/**
- * Proof supplier for heap locations. Naming an exact object slot requires knowing
- * that the base must-aliases one allocation and that the key is one of its own
- * writable data slots; that knowledge is a whole-function analysis, so the memory
- * model takes it as an argument instead of guessing.
- *
- * Contract: a resolution may only name a slot exactly when no code outside this
- * function can hold a reference to the allocation. The memory model relies on it —
- * an exactly named object slot survives effects it cannot attribute to a base,
- * because nothing an unknown call or a suspension runs can reach a reference this
- * activation never handed out. Naming a slot on a reference that escapes would
- * make every such effect silently invisible to it.
- */
 export interface CoreMemoryResolution {
 	ownCell(
 		base: CoreValueId,
@@ -142,1004 +81,429 @@ export interface CoreMemoryResolution {
 export interface CoreMemoryAccess {
 	readonly mode: CoreAccessMode;
 	readonly location: CoreMemoryLocation;
-	/** Declared heap base, when the descriptor names one. */
 	readonly base?: CoreValueId;
 	readonly key?: CoreAccessKey;
-	/** Value a write stores; the forwarding source for a later read. */
 	readonly value?: CoreValueId;
-	/** Value a read produces; the redundancy target. */
 	readonly result?: CoreValueId;
 }
 
-const DOMAIN_BIT: ReadonlyMap<CoreEffectDomain, number> = new Map(
-	CORE_EFFECT_DOMAINS.map((domain, index) => [domain, 1 << index]),
-);
-
-function domainMask(domains: ReadonlyArray<CoreEffectDomain>): number {
-	let mask = 0;
-	for (const domain of domains) mask |= DOMAIN_BIT.get(domain) ?? 0;
-	return mask;
-}
-
-const FAMILY_DOMAIN_MASK: Readonly<Record<CoreMemoryFamily, number>> = Object.freeze(
-	Object.fromEntries(
-		CORE_MEMORY_FAMILIES.map((family) => [
-			family,
-			domainMask(CORE_MEMORY_FAMILY_DOMAINS[family]),
-		]),
-	) as Record<CoreMemoryFamily, number>,
-);
-
-interface EffectMasks {
-	readonly reads: number;
-	readonly writes: number;
-}
-
-/**
- * Effect summaries are shared objects — a refinement-free instruction reuses its
- * opcode's frozen summary — so masking them once per distinct summary removes the
- * domain-name lookups from every analysis walk.
- */
-const effectMaskCache = new WeakMap<CoreInstructionEffects, EffectMasks>();
-
-function instructionEffectMasks(effects: CoreInstructionEffects): EffectMasks {
-	let masks = effectMaskCache.get(effects);
-	if (masks === undefined) {
-		masks = { reads: domainMask(effects.reads), writes: domainMask(effects.writes) };
-		effectMaskCache.set(effects, masks);
-	}
-	return masks;
-}
-
-// Summary memory effects refine ordering; exception and GC behavior stay opcode-owned.
-function coreInstructionMemoryEffects(
-	instruction: CoreInstruction,
-	relativeAccesses: ReadonlyArray<CoreMemoryAccess> | undefined,
-	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
-): CoreInstructionEffects {
-	const baseline = coreInstructionEffects(instruction, registry);
-	if (instruction.opcode !== "call") return baseline;
-	const claim = coreCallSummaryClaimFromAttribute(
-		instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE],
-	);
-	if (
-		claim === undefined ||
-		claim.digest !== coreCallValueSummaryDigest(claim) ||
-		(claim.effects.callsUserCode && relativeAccesses === undefined)
-	) {
-		return baseline;
-	}
-	return {
-		reads: claim.effects.reads,
-		writes: claim.effects.writes,
-		mayThrow: baseline.mayThrow,
-		maySuspend: baseline.maySuspend,
-		mayGc: baseline.mayGc,
-		callsUserCode: claim.effects.callsUserCode,
-	};
-}
-
-/**
- * Atomically substitute a singleton call's frame-relative cells. One missing
- * base, non-own key, or escaped allocation rejects the complete relative view;
- * the caller then observes the ordinary coarse call effects.
- */
-function coreCallRelativeMemoryAccesses(
-	instruction: CoreInstruction,
-	resolution: CoreMemoryResolution | undefined,
-): ReadonlyArray<CoreMemoryAccess> | undefined {
-	if (instruction.opcode !== "call" || resolution === undefined) return undefined;
-	const claim = coreCallSummaryClaimFromAttribute(
-		instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE],
-	);
-	if (
-		claim === undefined ||
-		claim.digest !== coreCallValueSummaryDigest(claim) ||
-		claim.targets.length !== 1 ||
-		claim.relativeOwnSlotEffects.length === 0
-	) {
-		return undefined;
-	}
-	const accesses: Array<CoreMemoryAccess> = [];
-	for (const effect of claim.relativeOwnSlotEffects) {
-		const operand = effect.base.kind === "receiver" ? 1 : effect.base.index + 2;
-		const base = instruction.inputs[operand];
-		if (base === undefined) return undefined;
-		const key = { kind: "string-constant", index: effect.key } as const;
-		const resolved = resolution.ownCell(base, key, effect.mode);
-		if (resolved === undefined || resolved.cell.kind !== "object-slot") {
-			return undefined;
-		}
-		accesses.push({
-			mode: effect.mode,
-			location: {
-				kind: "object-slot",
-				allocation: resolved.allocation,
-				key: resolved.cell.key,
-			},
-			base,
-			key,
-		});
-	}
-	return accesses;
-}
-
-const NO_ACCESSES: ReadonlyArray<CoreOpcodeAccess> = Object.freeze([]);
-
-function accessIsEffective(access: CoreOpcodeAccess, masks: EffectMasks): boolean {
-	const effective = access.mode === "read" ? masks.reads : masks.writes;
-	return (FAMILY_DOMAIN_MASK[access.family] & effective) !== 0;
-}
-
-/**
- * Declared accesses a verified effect refinement did not remove, so a refinement
- * narrows the location model in exactly the same step as it narrows the effect
- * summary. The unrefined case returns the registry's own array unchanged.
- */
-function effectiveAccesses(
-	instruction: CoreInstruction,
-	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
-): ReadonlyArray<CoreOpcodeAccess> {
-	const declared = registry.require(instruction.opcode).accesses;
-	if (declared === undefined || declared.length === 0) return NO_ACCESSES;
-	const masks = instructionEffectMasks(coreInstructionEffects(instruction, registry));
-	let kept = 0;
-	for (const access of declared) if (accessIsEffective(access, masks)) kept += 1;
-	if (kept === declared.length) return declared;
-	if (kept === 0) return NO_ACCESSES;
-	const effective: Array<CoreOpcodeAccess> = [];
-	for (const access of declared)
-		if (accessIsEffective(access, masks)) effective.push(access);
-	return effective;
-}
-
 function integerAttribute(
-	instruction: CoreInstruction,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
 	name: string,
 ): number | undefined {
-	const value = instruction.attributes[name];
+	const value = fn.instructionAttributes(instruction)[name];
 	return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
 }
 
-function declaredAccessKey(
+function declaredKey(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
 	access: CoreOpcodeAccess,
-	instruction: CoreInstruction,
 ): CoreAccessKey | undefined {
 	if (access.keyAttribute !== undefined) {
-		const index = integerAttribute(instruction, access.keyAttribute);
+		const index = integerAttribute(fn, instruction, access.keyAttribute);
 		return index === undefined ? undefined : { kind: "string-constant", index };
 	}
 	if (access.keyOperand !== undefined) {
-		const value = instruction.inputs[access.keyOperand];
+		const value = fn.instructionOperands(instruction)[access.keyOperand];
 		return value === undefined ? undefined : { kind: "operand", value };
 	}
 	return undefined;
 }
 
-/**
- * Resolve an access to an exact cell, or to nothing when the instruction does not
- * carry the attributes the descriptor promised. A malformed attribute degrades to
- * the whole family, never to a narrower guess.
- */
-function exactLocation(
+function accessIsEffective(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
 	access: CoreOpcodeAccess,
-	instruction: CoreInstruction,
+): boolean {
+	const effects = coreInstructionEffects(fn, instruction);
+	const domains = access.mode === "read" ? effects.reads : effects.writes;
+	return CORE_MEMORY_FAMILY_DOMAINS[access.family].some((domain) => domains.includes(domain));
+}
+
+function exactLocation(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	access: CoreOpcodeAccess,
 	resolution: CoreMemoryResolution | undefined,
 ): CoreExactMemoryLocation | undefined {
 	const attributes = access.attributes ?? [];
 	switch (access.family) {
 		case "object-slot": {
 			if (resolution === undefined || access.baseOperand === undefined) return undefined;
-			const base = instruction.inputs[access.baseOperand];
-			const key = declaredAccessKey(access, instruction);
+			const base = fn.instructionOperands(instruction)[access.baseOperand];
+			const key = declaredKey(fn, instruction, access);
 			if (base === undefined || key === undefined) return undefined;
 			const resolved = resolution.ownCell(base, key, access.mode);
 			if (resolved === undefined) return undefined;
 			return resolved.cell.kind === "element"
-				? {
-						kind: "element",
-						allocation: resolved.allocation,
-						index: resolved.cell.index,
-					}
-				: {
-						kind: "object-slot",
-						allocation: resolved.allocation,
-						key: resolved.cell.key,
-					};
+				? { kind: "element", allocation: resolved.allocation, index: resolved.cell.index }
+				: { kind: "object-slot", allocation: resolved.allocation, key: resolved.cell.key };
 		}
-		case "activation-this":
-			return { kind: "activation-this" };
+		case "activation-this": return { kind: "activation-this" };
 		case "global-slot":
 		case "local-slot": {
-			const slot =
-				attributes.length === 1
-					? integerAttribute(instruction, attributes[0]!)
-					: undefined;
+			const slot = attributes.length === 1
+				? integerAttribute(fn, instruction, attributes[0]!)
+				: undefined;
 			return slot === undefined ? undefined : { kind: access.family, slot };
 		}
 		case "captured-slot": {
 			if (attributes.length !== 2) return undefined;
-			const owner = integerAttribute(instruction, attributes[0]!);
-			const index = integerAttribute(instruction, attributes[1]!);
+			const owner = integerAttribute(fn, instruction, attributes[0]!);
+			const index = integerAttribute(fn, instruction, attributes[1]!);
 			return owner === undefined || index === undefined
 				? undefined
 				: { kind: "captured-slot", owner, index };
 		}
-		default:
-			return undefined;
+		default: return undefined;
 	}
 }
 
-/** Memory one instruction touches, in declaration order. */
 export function coreMemoryAccesses(
-	instruction: CoreInstruction,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
 	resolution?: CoreMemoryResolution,
-	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
 ): ReadonlyArray<CoreMemoryAccess> {
-	const declared = effectiveAccesses(instruction, registry);
-	const relative = coreCallRelativeMemoryAccesses(instruction, resolution) ?? [];
-	if (declared.length === 0) return relative;
+	if (fn.instructionKind(instruction) !== "operation") return [];
+	const operands = fn.instructionOperands(instruction);
+	const outputs = fn.instructionResults(instruction);
 	const accesses: Array<CoreMemoryAccess> = [];
-	for (const access of declared) {
-		const base =
-			access.baseOperand === undefined
-				? undefined
-				: instruction.inputs[access.baseOperand];
-		const value =
-			access.valueOperand === undefined
-				? undefined
-				: instruction.inputs[access.valueOperand];
-		const key = declaredAccessKey(access, instruction);
-		accesses.push({
+	for (const access of fn.registry.byId(fn.instructionOpcode(instruction)).accesses ?? []) {
+		if (!accessIsEffective(fn, instruction, access)) continue;
+		const base = access.baseOperand === undefined ? undefined : operands[access.baseOperand];
+		const key = declaredKey(fn, instruction, access);
+		const value = access.valueOperand === undefined ? undefined : operands[access.valueOperand];
+		const memoryAccess: CoreMemoryAccess = {
 			mode: access.mode,
-			location:
-				exactLocation(access, instruction, resolution) ??
-				({ kind: "family", family: access.family } as const),
+			location: exactLocation(fn, instruction, access, resolution) ??
+				{ kind: "family", family: access.family },
 			...(base === undefined ? {} : { base }),
 			...(key === undefined ? {} : { key }),
 			...(value === undefined ? {} : { value }),
-			...(access.mode === "read" && instruction.outputs.length === 1
-				? { result: instruction.outputs[0]! }
-				: {}),
-		});
+			...(access.mode === "read" && outputs.length === 1 ? { result: outputs[0]! } : {}),
+		};
+		accesses.push(Object.freeze(memoryAccess));
 	}
-	return relative.length === 0 ? accesses : [...accesses, ...relative];
-}
-
-/**
- * More exactly read cells than this in one family stop earning their precision, so
- * the family collapses to its domain partitions. Only read cells count: a cell no
- * instruction reads is never versioned and never appears in an invalidation set,
- * so it costs the solver nothing and must not push a family over the bound. The
- * bound keeps the per-instruction invalidation set, and therefore the whole
- * analysis, linear in the instruction count for any function.
- */
-const MAX_EXACT_PARTITIONS_PER_FAMILY = 256;
-const CONTAINED_MEMORY_FAMILIES: ReadonlySet<CoreMemoryFamily> = new Set([
-	"object-slot",
-	"element",
-]);
-
-/**
- * Families whose exactly read cells still fit under the precision bound.
- *
- * Exact locations always report their access's own family, so the cap can be
- * decided before any partition is interned.
- */
-function exactPartitionFamilies(
-	fn: CoreFunction,
-	resolution: CoreMemoryResolution | undefined,
-): ReadonlySet<CoreMemoryFamily> {
-	const counts = new Map<CoreMemoryFamily, Set<CoreMemoryPartition>>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			for (const access of effectiveAccesses(instruction)) {
-				if (access.mode !== "read") continue;
-				let partitions = counts.get(access.family);
-				if (partitions === undefined) {
-					partitions = new Set();
-					counts.set(access.family, partitions);
-				} else if (partitions.size > MAX_EXACT_PARTITIONS_PER_FAMILY) {
-					continue;
-				}
-				const location = exactLocation(access, instruction, resolution);
-				if (location !== undefined) partitions.add(coreMemoryPartition(location));
-			}
-			for (const access of coreCallRelativeMemoryAccesses(instruction, resolution) ??
-				[]) {
-				if (access.mode !== "read" || access.location.kind === "family") continue;
-				let partitions = counts.get("object-slot");
-				if (partitions === undefined) {
-					partitions = new Set();
-					counts.set("object-slot", partitions);
-				}
-				if (partitions.size <= MAX_EXACT_PARTITIONS_PER_FAMILY) {
-					partitions.add(coreMemoryPartition(access.location));
-				}
-			}
-		}
-	}
-	return new Set(
-		CORE_MEMORY_FAMILIES.filter(
-			(family) => (counts.get(family)?.size ?? 0) <= MAX_EXACT_PARTITIONS_PER_FAMILY,
-		),
-	);
+	return Object.freeze(accesses);
 }
 
 export interface CoreMemoryVersions {
-	/**
-	 * Value-numbering key over every partition the instruction reads, or nothing
-	 * when it reads no modelled memory.
-	 */
+	readonly function: CoreFunctionId;
+	readonly statistics: {
+		readonly partitions: number;
+		readonly exactPartitions: number;
+		readonly transfers: number;
+		readonly blockUpdates: number;
+	};
 	readKey(instruction: CoreInstructionId): string | undefined;
-	/**
-	 * Version of one exactly named partition the instruction reads, for
-	 * store-to-load forwarding.
-	 */
-	readVersion(
-		instruction: CoreInstructionId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
-	/**
-	 * Version an own slot of a fresh aggregate carries immediately after its
-	 * allocation, so the literal's initial value can be forwarded to a later read.
-	 */
-	initializationVersion(
-		instruction: CoreInstructionId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
-	/**
-	 * Version an instruction's exact write installs, for a following reader.
-	 * Nothing when no instruction reads that partition, so no reader can observe
-	 * the definition.
-	 */
-	writeVersion(
-		instruction: CoreInstructionId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
-	/** Solved partition version on entry to a block, including memory-phi identity. */
-	entryVersion(
-		block: CoreBlockId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
-	/** Solved partition version on the ordinary exit from a block. */
-	exitVersion(
-		block: CoreBlockId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
+	readVersion(instruction: CoreInstructionId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
+	valueForRead(instruction: CoreInstructionId, partition: CoreMemoryPartition): CoreValueId | undefined;
+	initializationVersion(instruction: CoreInstructionId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
+	writeVersion(instruction: CoreInstructionId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
+	entryVersion(block: CoreBlockId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
+	exitVersion(block: CoreBlockId, partition: CoreMemoryPartition): CoreMemoryVersion | undefined;
+	readers(partition: CoreMemoryPartition): ReadonlyArray<CoreInstructionId>;
 }
 
-const NO_MEMORY_VERSIONS: CoreMemoryVersions = Object.freeze({
-	readKey: () => undefined,
-	readVersion: () => undefined,
-	initializationVersion: () => undefined,
-	writeVersion: () => undefined,
-	entryVersion: () => undefined,
-	exitVersion: () => undefined,
-});
-
-/**
- * Where a version was defined. The kind and its owner — an instruction index for
- * a write, a block for the rest — select one stride of the version space, so
- * `(owner * VERSION_KINDS + kind) * slots + slot` is injective without an
- * interning table. Entry versions take owner and kind zero, which makes them the
- * slot numbers themselves.
- *
- * The encoding stays an exact integer because the precision bound caps a
- * function's slots at nine domains plus `MAX_EXACT_PARTITIONS_PER_FAMILY` per
- * family: a version exceeds `Number.MAX_SAFE_INTEGER` only past roughly 7e11
- * instructions, which no representable function reaches. Raising that bound
- * without re-checking this product would be the way to break it.
- */
-const VERSION_KINDS = 5;
-const VERSION_ENTRY = 0;
-const VERSION_WRITE = 1;
-const VERSION_PHI = 2;
-const VERSION_EXCEPTION = 3;
-const VERSION_UNREACHABLE = 4;
-
-/**
- * Per-instruction id lists packed into one array. A caller pushes into the
- * segment of the instruction it is building, then seals it.
- */
-class PackedLists {
-	readonly #offsets: Array<number> = [0];
-	readonly #values: Array<number> = [];
-
-	/** Append to the open segment, ignoring an id the segment already holds. */
-	push(id: number): void {
-		const start = this.#offsets[this.#offsets.length - 1]!;
-		for (let index = start; index < this.#values.length; index += 1) {
-			if (this.#values[index] === id) return;
-		}
-		this.#values.push(id);
-	}
-
-	seal(): void {
-		this.#offsets.push(this.#values.length);
-	}
-
-	/** Every id in every sealed segment, in push order. */
-	get allIds(): ReadonlyArray<number> {
-		return this.#values;
-	}
-
-	/** Rewrite ids to state slots, dropping every partition nothing tracks. */
-	toSlots(slotOf: Int32Array, sorted = false): PackedSlots {
-		const offsets = new Int32Array(this.#offsets.length);
-		const slots: Array<number> = [];
-		for (let segment = 1; segment < this.#offsets.length; segment += 1) {
-			const start = slots.length;
-			for (
-				let index = this.#offsets[segment - 1]!;
-				index < this.#offsets[segment]!;
-				index += 1
-			) {
-				const slot = slotOf[this.#values[index]!]!;
-				if (slot >= 0) slots.push(slot);
-			}
-			if (sorted) insertionSort(slots, start);
-			offsets[segment] = slots.length;
-		}
-		return { offsets, slots: Int32Array.from(slots) };
-	}
+interface PartitionInfo {
+	readonly partition: CoreMemoryPartition;
+	readonly family?: CoreMemoryFamily;
+	readonly protectedLocalHeap: boolean;
 }
 
-interface PackedSlots {
-	readonly offsets: Int32Array;
-	readonly slots: Int32Array;
+const MAX_EXACT_PARTITIONS_PER_FAMILY = 256;
+
+function resolutionFor(provenance: CoreProvenance): CoreMemoryResolution {
+	const resolution: CoreMemoryResolution = {
+		ownCell(base, key, mode) {
+			const resolved = provenance.ownCell(base, key, mode);
+			return resolved === undefined
+				? undefined
+				: { allocation: resolved.layout.instruction, cell: resolved.cell };
+		},
+	};
+	return Object.freeze(resolution);
 }
 
-function insertionSort(values: Array<number>, start: number): void {
-	for (let index = start + 1; index < values.length; index += 1) {
-		const value = values[index]!;
-		let position = index - 1;
-		while (position >= start && values[position]! > value) {
-			values[position + 1] = values[position]!;
-			position -= 1;
-		}
-		values[position + 1] = value;
-	}
-}
-
-function lowestSetBitIndex(mask: number): number {
-	return 31 - Math.clz32(mask & -mask);
-}
-
-function sameState(left: Float64Array, right: Float64Array): boolean {
-	for (let slot = 0; slot < left.length; slot += 1) {
-		if (left[slot] !== right[slot]) return false;
+function sameState(left: Float64Array | undefined, right: Float64Array): boolean {
+	if (left === undefined || left.length !== right.length) return false;
+	for (let index = 0; index < right.length; index++) {
+		if (left[index] !== right[index]) return false;
 	}
 	return true;
 }
 
-/**
- * Version every partition read anywhere in the function.
- *
- * Partitions the function reads are interned to dense state slots and each block
- * state is one `Float64Array` of version numbers, so a merge, a comparison, and a
- * block transfer are all typed-array loops rather than string-keyed map traffic.
- *
- * Each (block, partition) entry version is a point in a height-three lattice:
- * unset, one concrete version, or this block's own memory phi. Joining two
- * different concrete versions yields the phi, and a phi never becomes concrete
- * again, so the transfer functions are monotone and the fixed point is reached in
- * at most two updates per (block, partition). Blocks are revisited through a
- * reverse-postorder dirty set rather than swept unconditionally: a block whose
- * predecessors all still hold the exits it last read would recompute the same
- * state, so skipping it cannot change the fixed point. An acyclic reachable CFG
- * therefore settles in a single topological pass, and a cycle only revisits the
- * blocks a changed exit actually reaches.
- *
- * Retaining the phi's *identity* is what makes a version usable as a
- * value-equality proof. A set of reaching writes is not: two points in a loop can
- * see the same set of writes while observing different ones on a single concrete
- * iteration.
- */
-export function coreMemoryVersions(
-	fn: CoreFunction,
+function memoryVersions(
+	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-	resolution?: CoreMemoryResolution,
+	provenance: CoreProvenance,
 ): CoreMemoryVersions {
-	const exactFamilies = exactPartitionFamilies(fn, resolution);
-
-	// Domain partitions occupy the leading ids, so a domain's partition id is its
-	// index in CORE_EFFECT_DOMAINS and a set effect bit converts to an id directly.
-	const partitionIds = new Map<CoreMemoryPartition, number>(
-		CORE_EFFECT_DOMAINS.map((domain, index) => [
-			coreMemoryDomainPartition(domain),
-			index,
-		]),
-	);
-	const partitionFamilies = new Array<CoreMemoryFamily | undefined>(
-		CORE_EFFECT_DOMAINS.length,
-	).fill(undefined);
-	const internExact = (location: CoreExactMemoryLocation): number => {
-		const partition = coreMemoryPartition(location);
-		let id = partitionIds.get(partition);
-		if (id === undefined) {
-			id = partitionIds.size;
-			partitionIds.set(partition, id);
-			partitionFamilies.push(location.kind);
+	const resolution = resolutionFor(provenance);
+	const accessesByInstruction = new Array<ReadonlyArray<CoreMemoryAccess> | undefined>(fn.instructionCapacity);
+	const exactReads = new Map<CoreMemoryFamily, Set<CoreMemoryPartition>>();
+	const exactLocations = new Map<CoreMemoryPartition, CoreExactMemoryLocation>();
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const accesses = coreMemoryAccesses(fn, instruction, resolution);
+		accessesByInstruction[instruction] = accesses;
+		for (const access of accesses) {
+			if (access.mode !== "read" || !coreMemoryLocationIsExact(access.location)) continue;
+			const partition = coreMemoryPartition(access.location);
+			const family = coreMemoryLocationFamily(access.location);
+			const partitions = exactReads.get(family) ?? new Set<CoreMemoryPartition>();
+			partitions.add(partition);
+			exactReads.set(family, partitions);
+			exactLocations.set(partition, access.location);
 		}
-		return id;
+	}
+	const acceptedExact = new Set<CoreMemoryPartition>();
+	for (const partitions of exactReads.values()) {
+		if (partitions.size <= MAX_EXACT_PARTITIONS_PER_FAMILY) {
+			for (const partition of partitions) acceptedExact.add(partition);
+		}
+	}
+	const partitions: Array<PartitionInfo> = CORE_EFFECT_DOMAINS.map((domain) => ({
+		partition: coreMemoryDomainPartition(domain),
+		protectedLocalHeap: false,
+	}));
+	for (const partition of acceptedExact) {
+		const location = exactLocations.get(partition)!;
+		partitions.push({
+			partition,
+			family: coreMemoryLocationFamily(location),
+			protectedLocalHeap: location.kind === "object-slot" || location.kind === "element",
+		});
+	}
+	const slotByPartition = new Map(partitions.map(({ partition }, slot) => [partition, slot]));
+	const domainSlot = new Map(CORE_EFFECT_DOMAINS.map((domain) => [domain, slotByPartition.get(coreMemoryDomainPartition(domain))!]));
+	const slotCount = partitions.length;
+	const entryBase = 1;
+	const phiBase = entryBase + fn.blockCapacity * slotCount;
+	const writeBase = phiBase + fn.blockCapacity * slotCount;
+	const exceptionBase = writeBase + fn.instructionCapacity * slotCount;
+	const entryIdentity = (block: CoreBlockId, slot: number): number => entryBase + block * slotCount + slot;
+	const phiIdentity = (block: CoreBlockId, slot: number): number => phiBase + block * slotCount + slot;
+	const writeIdentity = (instruction: CoreInstructionId, slot: number): number => writeBase + instruction * slotCount + slot;
+	const exceptionIdentity = (block: CoreBlockId, slot: number): number => exceptionBase + block * slotCount + slot;
+	const entryStates = new Array<Float64Array | undefined>(fn.blockCapacity);
+	const exitStates = new Array<Float64Array | undefined>(fn.blockCapacity);
+	const readStates = new Array<Float64Array | undefined>(fn.instructionCapacity);
+	const writeVersions = new Array<Map<number, number> | undefined>(fn.instructionCapacity);
+	const initializationVersions = new Array<Map<number, number> | undefined>(fn.instructionCapacity);
+	const valueByVersion = new Map<number, CoreValueId>();
+	const readersBySlot = Array.from({ length: slotCount }, () => new Array<CoreInstructionId>());
+	const layoutByInstruction = new Array<CoreProvenance["layouts"][number] | undefined>(fn.instructionCapacity);
+	for (const layout of provenance.layouts) layoutByInstruction[layout.instruction] = layout;
+	let transfers = 0;
+	let blockUpdates = 0;
+	const domainsForFamily = (family: CoreMemoryFamily): ReadonlyArray<CoreEffectDomain> =>
+		CORE_MEMORY_FAMILY_DOMAINS[family];
+	const killDomain = (
+		state: Float64Array,
+		domain: CoreEffectDomain,
+		identity: (slot: number) => number,
+	): void => {
+		const domainId = domainSlot.get(domain)!;
+		state[domainId] = identity(domainId);
+		for (let slot = CORE_EFFECT_DOMAINS.length; slot < slotCount; slot++) {
+			const info = partitions[slot]!;
+			if (info.protectedLocalHeap || info.family === undefined ||
+				!domainsForFamily(info.family).includes(domain)) continue;
+			state[slot] = identity(slot);
+		}
 	};
-
-	const instructionIndices = new Map<CoreInstructionId, number>();
-	const blockInstructionStart = new Int32Array(fn.blocks.length + 1);
-	const readIds = new PackedLists();
-	const exactReadIds = new PackedLists();
-	const killSources = new PackedLists();
-	const initializedIds = new PackedLists();
-	const notifiedMasks: Array<number> = [];
-	const wholeMasks: Array<number> = [];
-	const universalEffects: Array<boolean> = [];
-	let instructionCount = 0;
-	for (let blockId = 0; blockId < fn.blocks.length; blockId += 1) {
-		blockInstructionStart[blockId] = instructionCount;
-		for (const instruction of fn.blocks[blockId]!.instructions) {
-			instructionIndices.set(instruction.id, instructionCount);
-			instructionCount += 1;
-			const relativeAccesses = coreCallRelativeMemoryAccesses(instruction, resolution);
-			const effects = coreInstructionMemoryEffects(instruction, relativeAccesses);
-			const masks = instructionEffectMasks(effects);
-			let coveredReads = 0;
-			let coveredWrites = 0;
-			let readDomains = 0;
-			let notified = 0;
-			let whole = 0;
-			for (const access of effectiveAccesses(instruction)) {
-				const familyMask = FAMILY_DOMAIN_MASK[access.family];
-				const location = exactFamilies.has(access.family)
-					? exactLocation(access, instruction, resolution)
-					: undefined;
-				if (access.mode === "read") {
-					coveredReads |= familyMask;
-					if (location === undefined) {
-						readDomains |= familyMask;
-						continue;
-					}
-					const id = internExact(location);
-					readIds.push(id);
-					exactReadIds.push(id);
-					continue;
-				}
-				coveredWrites |= familyMask;
-				if (location === undefined) {
-					whole |= familyMask;
-					continue;
-				}
-				killSources.push(internExact(location));
-				notified |= familyMask;
-			}
-			for (const access of relativeAccesses ?? []) {
-				const familyMask = FAMILY_DOMAIN_MASK["object-slot"];
-				const location = exactFamilies.has("object-slot") ? access.location : undefined;
-				if (access.mode === "read") {
-					coveredReads |= familyMask;
-					if (location === undefined || location.kind === "family") {
-						readDomains |= familyMask;
-					} else {
-						const id = internExact(location);
-						readIds.push(id);
-						exactReadIds.push(id);
-					}
-				} else {
-					coveredWrites |= familyMask;
-					if (location === undefined || location.kind === "family") {
-						whole |= familyMask;
-					} else {
-						killSources.push(internExact(location));
-						notified |= familyMask;
-					}
-				}
-			}
-			// A declared domain with no surviving access — `host`, or a family this
-			// function collapsed — invalidates or observes everything the domain covers.
-			readDomains |= masks.reads & ~coveredReads;
-			whole |= masks.writes & ~coveredWrites;
-			for (let mask = readDomains; mask !== 0; ) {
-				const bit = mask & -mask;
-				readIds.push(lowestSetBitIndex(bit));
-				mask ^= bit;
-			}
-			notifiedMasks.push(notified);
-			wholeMasks.push(whole);
-			universalEffects.push(effects.callsUserCode || effects.maySuspend);
-			collectInitializedPartitions(instruction, resolution, internExact, initializedIds);
-			readIds.seal();
-			exactReadIds.seal();
-			killSources.seal();
-			initializedIds.seal();
-		}
-	}
-	blockInstructionStart[fn.blocks.length] = instructionCount;
-
-	// Only a partition some instruction reads can carry a value between two points,
-	// so only those get a state slot.
-	const slotOf = new Int32Array(partitionIds.size).fill(-1);
-	let slots = 0;
-	for (const id of readIds.allIds) {
-		if (slotOf[id] === -1) {
-			slotOf[id] = slots;
-			slots += 1;
-		}
-	}
-	if (slots === 0) return NO_MEMORY_VERSIONS;
-	const maximumOwner = Math.max(instructionCount - 1, fn.blocks.length - 1, 0);
-	const maximumVersion =
-		(maximumOwner * VERSION_KINDS + VERSION_UNREACHABLE) * slots + (slots - 1);
-	if (!Number.isSafeInteger(maximumVersion)) {
-		throw new RangeError(
-			`Core memory-version encoding exceeds Number.MAX_SAFE_INTEGER (${instructionCount} instructions, ${fn.blocks.length} blocks, ${slots} partitions)`,
-		);
-	}
-
-	const readSlots = readIds.toSlots(slotOf, true);
-	const exactReadSlots = exactReadIds.toSlots(slotOf);
-	const initializedSlots = initializedIds.toSlots(slotOf);
-	const exactWriteSlots = killSources.toSlots(slotOf);
-
-	// Slots of an allocation this activation never handed out. Only the exact
-	// accesses this function performs on them can change their contents, so an
-	// effect the model cannot attribute to a base leaves them alone. This is the
-	// resolution contract above, and it is the difference between a coercion or a
-	// call being a barrier for one slot and being a barrier for all memory.
-	const slotFamilies = new Array<CoreMemoryFamily | undefined>(slots).fill(undefined);
-	for (const [id, slot] of slotOf.entries()) {
-		if (slot >= 0) slotFamilies[slot] = partitionFamilies[id];
-	}
-	const unattributable: Array<number> = [];
-	for (let slot = 0; slot < slots; slot += 1) {
-		const family = slotFamilies[slot];
-		if (family === undefined || !CONTAINED_MEMORY_FAMILIES.has(family)) {
-			unattributable.push(slot);
-		}
-	}
-	const domainSlots = new Int32Array(CORE_EFFECT_DOMAINS.length);
-	for (let domain = 0; domain < CORE_EFFECT_DOMAINS.length; domain += 1) {
-		domainSlots[domain] = slotOf[domain]!;
-	}
-	// Exact cells a whole-domain write invalidates. Contained allocations are
-	// absent by construction: no unattributed effect reaches them.
-	const domainExactSlots = CORE_EFFECT_DOMAINS.map((): Array<number> => []);
-	for (let slot = 0; slot < slots; slot += 1) {
-		const family = slotFamilies[slot];
-		if (family === undefined || CONTAINED_MEMORY_FAMILIES.has(family)) continue;
-		for (let mask = FAMILY_DOMAIN_MASK[family]; mask !== 0; ) {
-			const bit = mask & -mask;
-			domainExactSlots[lowestSetBitIndex(bit)]!.push(slot);
-			mask ^= bit;
-		}
-	}
-
-	// Slots each instruction invalidates. Invalidation sets repeat heavily — every
-	// universal instruction that names no exact write kills the same unattributable
-	// slots — so instructions share an interned set and the table stays proportional
-	// to the distinct effect signatures rather than to the instruction count.
-	const killLists = new Int32Array(instructionCount);
-	const listOffsets: Array<number> = [0];
-	const listed: Array<number> = [];
-	const sharedLists = new Map<number, number>();
-	const marked = new Uint8Array(slots);
-	let listStart = 0;
-	const kill = (slot: number): void => {
-		if (slot < 0 || marked[slot] === 1) return;
-		marked[slot] = 1;
-		listed.push(slot);
+	const slotForAccess = (access: CoreMemoryAccess): number | undefined => {
+		if (!coreMemoryLocationIsExact(access.location)) return undefined;
+		return slotByPartition.get(coreMemoryPartition(access.location));
 	};
-	for (let index = 0; index < instructionCount; index += 1) {
-		const exactStart = exactWriteSlots.offsets[index]!;
-		const exactEnd = exactWriteSlots.offsets[index + 1]!;
-		// Masks occupy nine bits each, so a shared signature never reaches the
-		// universal marker.
-		const signature =
-			universalEffects[index] === true
-				? -1
-				: notifiedMasks[index]! | (wholeMasks[index]! << CORE_EFFECT_DOMAINS.length);
-		if (exactStart === exactEnd) {
-			const shared = sharedLists.get(signature);
-			if (shared !== undefined) {
-				killLists[index] = shared;
-				continue;
-			}
+	const initializeAllocation = (
+		instruction: CoreInstructionId,
+		state: Float64Array,
+	): void => {
+		const layout = layoutByInstruction[instruction];
+		if (layout?.kind !== "named-slots") return;
+		let versions: Map<number, number> | undefined;
+		for (const [index, key] of layout.keys.entries()) {
+			const partition = coreMemoryPartition({ kind: "object-slot", allocation: instruction, key });
+			const slot = slotByPartition.get(partition);
+			const value = layout.initialValues[index];
+			if (slot === undefined || value === undefined) continue;
+			const version = writeIdentity(instruction, slot);
+			state[slot] = version;
+			valueByVersion.set(version, value);
+			versions ??= new Map();
+			versions.set(slot, version);
 		}
-		listStart = listed.length;
-		if (universalEffects[index] === true) {
-			// A universal effect cannot reach another instruction's contained
-			// allocation, but it must still perform its own resolved writes. This
-			// distinction matters for an access carrying a pre-existing refinement:
-			// it may remain conservatively universal while still naming the exact
-			// private slot it updates.
-			for (const slot of unattributable) kill(slot);
-		} else {
-			for (let mask = notifiedMasks[index]! | wholeMasks[index]!; mask !== 0; ) {
-				const bit = mask & -mask;
-				kill(domainSlots[lowestSetBitIndex(bit)]!);
-				mask ^= bit;
-			}
-			for (let mask = wholeMasks[index]!; mask !== 0; ) {
-				const bit = mask & -mask;
-				for (const slot of domainExactSlots[lowestSetBitIndex(bit)]!) kill(slot);
-				mask ^= bit;
-			}
-		}
-		for (let entry = exactStart; entry < exactEnd; entry += 1) {
-			kill(exactWriteSlots.slots[entry]!);
-		}
-		for (let entry = listStart; entry < listed.length; entry += 1)
-			marked[listed[entry]!] = 0;
-		const list = listOffsets.length - 1;
-		listOffsets.push(listed.length);
-		killLists[index] = list;
-		if (exactStart === exactEnd) sharedLists.set(signature, list);
-	}
-	const killOffsets = Int32Array.from(listOffsets);
-	const killSlots = Int32Array.from(listed);
-
-	// One block transfer, with only the last write to each slot retained: the
-	// solver never observes a state between two instructions of the same block.
-	const blockKillOffsets = new Int32Array(fn.blocks.length + 1);
-	const blockKilled: Array<number> = [];
-	const blockVersions: Array<number> = [];
-	const lastVersion = new Float64Array(slots);
-	for (let blockId = 0; blockId < fn.blocks.length; blockId += 1) {
-		const start = blockKilled.length;
-		// Walking backwards makes the first writer reached the last one in program
-		// order, and lets a block stop as soon as its suffix covers every slot.
-		for (
-			let index = blockInstructionStart[blockId + 1]! - 1;
-			index >= blockInstructionStart[blockId]! && blockKilled.length - start < slots;
-			index -= 1
-		) {
-			const list = killLists[index]!;
-			const writeBase = (index * VERSION_KINDS + VERSION_WRITE) * slots;
-			for (let entry = killOffsets[list]!; entry < killOffsets[list + 1]!; entry += 1) {
-				const slot = killSlots[entry]!;
-				if (marked[slot] === 1) continue;
-				marked[slot] = 1;
-				blockKilled.push(slot);
-				lastVersion[slot] = writeBase + slot;
-			}
-		}
-		for (let entry = start; entry < blockKilled.length; entry += 1) {
-			const slot = blockKilled[entry]!;
-			marked[slot] = 0;
-			blockVersions.push(lastVersion[slot]!);
-		}
-		blockKillOffsets[blockId + 1] = blockKilled.length;
-	}
-	const blockKillSlots = Int32Array.from(blockKilled);
-	const blockKillVersions = Float64Array.from(blockVersions);
-
-	const entryStates = new Array<Float64Array | undefined>(fn.blocks.length);
-	const exitStates = new Array<Float64Array | undefined>(fn.blocks.length);
-	const merged = new Float64Array(slots);
-	const outgoing = new Float64Array(slots);
-	const dirty = new Uint8Array(fn.blocks.length);
-	let dirtyCount = 0;
-	for (const blockId of cfg.reversePostorder) {
-		dirty[blockId] = 1;
-		dirtyCount += 1;
-	}
-	const solved = Uint8Array.from(dirty);
-	while (dirtyCount > 0) {
-		for (const blockId of cfg.reversePostorder) {
-			if (dirty[blockId] === 0) continue;
-			dirty[blockId] = 0;
-			dirtyCount -= 1;
-			const phiBase = (blockId * VERSION_KINDS + VERSION_PHI) * slots;
-			let joined = false;
-			if (blockId === fn.entry) {
-				for (let slot = 0; slot < slots; slot += 1) merged[slot] = VERSION_ENTRY + slot;
-				joined = true;
-			}
-			for (const predecessor of cfg.predecessors[blockId]!) {
-				const exit = exitStates[predecessor.from];
-				if (exit === undefined) continue;
-				if (predecessor.kind === "ordinary") {
-					if (!joined) {
-						merged.set(exit);
-						joined = true;
-						continue;
-					}
-					for (let slot = 0; slot < slots; slot += 1) {
-						const phi = phiBase + slot;
-						const current = merged[slot]!;
-						if (current !== phi && current !== exit[slot]) merged[slot] = phi;
-					}
-					continue;
-				}
-				// Core's exceptional edge is block-wide: any throwing instruction can
-				// transfer control after a different prefix of that block's writes.
-				// Give the edge one stable opaque version instead of pretending the
-				// ordinary exit ran.
-				const exceptionBase =
-					(predecessor.from * VERSION_KINDS + VERSION_EXCEPTION) * slots;
-				if (!joined) {
-					for (let slot = 0; slot < slots; slot += 1) merged[slot] = exceptionBase + slot;
-					joined = true;
-					continue;
-				}
-				for (let slot = 0; slot < slots; slot += 1) {
-					const phi = phiBase + slot;
-					const current = merged[slot]!;
-					if (current !== phi && current !== exceptionBase + slot) merged[slot] = phi;
-				}
-			}
-			if (!joined) continue;
-			const previousEntry = entryStates[blockId];
-			if (previousEntry === undefined) entryStates[blockId] = merged.slice();
-			else previousEntry.set(merged);
-			outgoing.set(merged);
-			for (
-				let entry = blockKillOffsets[blockId]!;
-				entry < blockKillOffsets[blockId + 1]!;
-				entry += 1
-			) {
-				outgoing[blockKillSlots[entry]!] = blockKillVersions[entry]!;
-			}
-			const previousExit = exitStates[blockId];
-			if (previousExit === undefined) exitStates[blockId] = outgoing.slice();
-			else if (sameState(previousExit, outgoing)) continue;
-			else previousExit.set(outgoing);
-			for (const successor of cfg.successors[blockId]!) {
-				if (solved[successor.to] === 1 && dirty[successor.to] === 0) {
-					dirty[successor.to] = 1;
-					dirtyCount += 1;
-				}
-			}
-		}
-	}
-
-	const readKeys = new Array<string | undefined>(instructionCount).fill(undefined);
-	const exactReadVersions = new Float64Array(exactReadSlots.slots.length);
-	const initializationVersions = new Float64Array(initializedSlots.slots.length);
-	const state = new Float64Array(slots);
-	for (let blockId = 0; blockId < fn.blocks.length; blockId += 1) {
-		const entryState = entryStates[blockId];
-		if (entryState === undefined) {
-			const base = (blockId * VERSION_KINDS + VERSION_UNREACHABLE) * slots;
-			for (let slot = 0; slot < slots; slot += 1) state[slot] = base + slot;
-		} else {
-			state.set(entryState);
-		}
-		for (
-			let index = blockInstructionStart[blockId]!;
-			index < blockInstructionStart[blockId + 1]!;
-			index += 1
-		) {
-			const readStart = readSlots.offsets[index]!;
-			const readEnd = readSlots.offsets[index + 1]!;
-			if (readEnd > readStart) {
-				let key = "";
-				for (let entry = readStart; entry < readEnd; entry += 1) {
-					const slot = readSlots.slots[entry]!;
-					key += `${slot}=${state[slot]}|`;
-				}
-				readKeys[index] = key;
-			}
-			for (
-				let entry = exactReadSlots.offsets[index]!;
-				entry < exactReadSlots.offsets[index + 1]!;
-				entry += 1
-			) {
-				exactReadVersions[entry] = state[exactReadSlots.slots[entry]!]!;
-			}
-			for (
-				let entry = initializedSlots.offsets[index]!;
-				entry < initializedSlots.offsets[index + 1]!;
-				entry += 1
-			) {
-				initializationVersions[entry] = state[initializedSlots.slots[entry]!]!;
-			}
-			const list = killLists[index]!;
-			const writeBase = (index * VERSION_KINDS + VERSION_WRITE) * slots;
-			for (let entry = killOffsets[list]!; entry < killOffsets[list + 1]!; entry += 1) {
-				const slot = killSlots[entry]!;
-				state[slot] = writeBase + slot;
-			}
-		}
-	}
-
-	const trackedSlot = (partition: CoreMemoryPartition): number => {
-		const id = partitionIds.get(partition);
-		return id === undefined ? -1 : slotOf[id]!;
+		if (versions !== undefined) initializationVersions[instruction] = versions;
 	};
-	const versionAt = (
-		packed: PackedSlots,
-		versions: Float64Array,
-		index: number,
-		slot: number,
-	): CoreMemoryVersion | undefined => {
-		for (
-			let entry = packed.offsets[index]!;
-			entry < packed.offsets[index + 1]!;
-			entry += 1
-		) {
-			if (packed.slots[entry] === slot) return versions[entry] as CoreMemoryVersion;
+	const transfer = (block: CoreBlockId, entry: Float64Array): Float64Array => {
+		transfers++;
+		const state = entry.slice();
+		for (const instruction of fn.instructionIds(block)) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const accesses = accessesByInstruction[instruction] ?? [];
+			if (accesses.some((access) => access.mode === "read")) {
+				readStates[instruction] = state.slice();
+			}
+			initializeAllocation(instruction, state);
+			const effects = coreInstructionEffects(fn, instruction);
+			const coveredWrites = new Set<CoreEffectDomain>();
+			let versions: Map<number, number> | undefined;
+			for (const access of accesses) {
+				if (access.mode !== "write") continue;
+				const family = coreMemoryLocationFamily(access.location);
+				for (const domain of domainsForFamily(family)) coveredWrites.add(domain);
+				const exactSlot = slotForAccess(access);
+				if (exactSlot !== undefined) {
+					const version = writeIdentity(instruction, exactSlot);
+					state[exactSlot] = version;
+					if (access.value !== undefined) valueByVersion.set(version, access.value);
+					versions ??= new Map();
+					versions.set(exactSlot, version);
+				}
+				for (const domain of domainsForFamily(family)) {
+					const slot = domainSlot.get(domain)!;
+					state[slot] = writeIdentity(instruction, slot);
+				}
+			}
+			if (versions !== undefined) writeVersions[instruction] = versions;
+			const universal = effects.callsUserCode || effects.maySuspend;
+			for (const domain of CORE_EFFECT_DOMAINS) {
+				if (!effects.writes.includes(domain) && !universal) continue;
+				if (coveredWrites.has(domain) && !universal) continue;
+				killDomain(state, domain, (slot) => writeIdentity(instruction, slot));
+			}
 		}
-		return undefined;
+		return state;
 	};
-	return {
+	const mergeEntry = (block: CoreBlockId): Float64Array => {
+		const incoming = cfg.predecessors[block] ?? [];
+		if (block === fn.entry || incoming.length === 0) {
+			return Float64Array.from({ length: slotCount }, (_, slot) => entryIdentity(block, slot));
+		}
+		const merged = new Float64Array(slotCount);
+		for (let slot = 0; slot < slotCount; slot++) {
+			let first: number | undefined;
+			let agrees = true;
+			for (const edge of incoming) {
+				const value = edge.kind === "exceptional"
+					? exceptionIdentity(edge.from, slot)
+					: exitStates[edge.from]?.[slot];
+				if (value === undefined) continue;
+				if (first === undefined) first = value;
+				else if (first !== value) agrees = false;
+			}
+			merged[slot] = first === undefined
+				? entryIdentity(block, slot)
+				: agrees ? first : phiIdentity(block, slot);
+		}
+		return merged;
+	};
+	const queue = [...cfg.reversePostorder];
+	const queued = new Set(queue);
+	for (let next = 0; next < queue.length; next++) {
+		const block = queue[next]!;
+		queued.delete(block);
+		const entry = mergeEntry(block);
+		const exit = transfer(block, entry);
+		const changed = !sameState(entryStates[block], entry) || !sameState(exitStates[block], exit);
+		entryStates[block] = entry;
+		exitStates[block] = exit;
+		if (!changed) continue;
+		blockUpdates++;
+		for (const edge of cfg.successors[block] ?? []) {
+			if (!queued.has(edge.to)) {
+				queued.add(edge.to);
+				queue.push(edge.to);
+			}
+		}
+	}
+	for (const instruction of fn.instructionIds()) {
+		for (const access of accessesByInstruction[instruction] ?? []) {
+			if (access.mode !== "read") continue;
+			const slot = slotForAccess(access);
+			if (slot !== undefined) readersBySlot[slot]!.push(instruction);
+		}
+	}
+	const partitionSlot = (partition: CoreMemoryPartition): number | undefined => slotByPartition.get(partition);
+	const result: CoreMemoryVersions = {
+		function: fn.id,
+		statistics: Object.freeze({
+			partitions: slotCount,
+			exactPartitions: slotCount - CORE_EFFECT_DOMAINS.length,
+			transfers,
+			blockUpdates,
+		}),
 		readKey(instruction) {
-			const index = instructionIndices.get(instruction);
-			return index === undefined ? undefined : readKeys[index];
+			const state = readStates[instruction];
+			const accesses = accessesByInstruction[instruction];
+			if (state === undefined || accesses === undefined) return undefined;
+			const versions = new Set<number>();
+			for (const access of accesses) {
+				if (access.mode !== "read") continue;
+				const exact = slotForAccess(access);
+				if (exact !== undefined) versions.add(state[exact]!);
+				else for (const domain of domainsForFamily(coreMemoryLocationFamily(access.location))) versions.add(state[domainSlot.get(domain)!]!);
+			}
+			return versions.size === 0 ? undefined : [...versions].sort((left, right) => left - right).join(",");
 		},
 		readVersion(instruction, partition) {
-			const index = instructionIndices.get(instruction);
-			const slot = trackedSlot(partition);
-			if (index === undefined || slot < 0) return undefined;
-			return versionAt(exactReadSlots, exactReadVersions, index, slot);
+			const slot = partitionSlot(partition);
+			const value = slot === undefined ? undefined : readStates[instruction]?.[slot];
+			return value === undefined ? undefined : value as CoreMemoryVersion;
+		},
+		valueForRead(instruction, partition) {
+			const version = this.readVersion(instruction, partition);
+			return version === undefined ? undefined : valueByVersion.get(version);
 		},
 		initializationVersion(instruction, partition) {
-			const index = instructionIndices.get(instruction);
-			const slot = trackedSlot(partition);
-			if (index === undefined || slot < 0) return undefined;
-			return versionAt(initializedSlots, initializationVersions, index, slot);
+			const slot = partitionSlot(partition);
+			const value = slot === undefined ? undefined : initializationVersions[instruction]?.get(slot);
+			return value === undefined ? undefined : value as CoreMemoryVersion;
 		},
 		writeVersion(instruction, partition) {
-			const index = instructionIndices.get(instruction);
-			const slot = trackedSlot(partition);
-			if (index === undefined || slot < 0) return undefined;
-			return ((index * VERSION_KINDS + VERSION_WRITE) * slots +
-				slot) as CoreMemoryVersion;
+			const slot = partitionSlot(partition);
+			const value = slot === undefined ? undefined : writeVersions[instruction]?.get(slot);
+			return value === undefined ? undefined : value as CoreMemoryVersion;
 		},
 		entryVersion(block, partition) {
-			const slot = trackedSlot(partition);
-			const state = entryStates[block];
-			return slot < 0 || state === undefined
-				? undefined
-				: (state[slot] as CoreMemoryVersion);
+			const slot = partitionSlot(partition);
+			const value = slot === undefined ? undefined : entryStates[block]?.[slot];
+			return value === undefined ? undefined : value as CoreMemoryVersion;
 		},
 		exitVersion(block, partition) {
-			const slot = trackedSlot(partition);
-			const state = exitStates[block];
-			return slot < 0 || state === undefined
-				? undefined
-				: (state[slot] as CoreMemoryVersion);
+			const slot = partitionSlot(partition);
+			const value = slot === undefined ? undefined : exitStates[block]?.[slot];
+			return value === undefined ? undefined : value as CoreMemoryVersion;
+		},
+		readers(partition) {
+			const slot = partitionSlot(partition);
+			return slot === undefined ? [] : Object.freeze([...readersBySlot[slot]!]);
 		},
 	};
+	return Object.freeze(result);
 }
 
-/**
- * Partitions a fresh aggregate's own slots occupy, when the resolution proves the
- * layout. These are not writes: the cells did not exist before, so no earlier read
- * can be observing them, and modelling them as a write to the family would make
- * every allocation a barrier for unrelated property reads.
- */
-function collectInitializedPartitions(
-	instruction: CoreInstruction,
-	resolution: CoreMemoryResolution | undefined,
-	internExact: (location: CoreExactMemoryLocation) => number,
-	into: PackedLists,
-): void {
-	const allocation = coreOpcodeRegistry.require(instruction.opcode).allocation;
-	if (
-		allocation === undefined ||
-		allocation.kind !== "named-slots" ||
-		resolution === undefined
-	) {
-		return;
-	}
-	const result = instruction.outputs[0];
-	if (result === undefined) return;
-	const keys = instruction.attributes[allocation.keysAttribute];
-	if (!Array.isArray(keys)) return;
-	for (const key of keys) {
-		if (typeof key !== "number") continue;
-		const resolved = resolution.ownCell(
-			result,
-			{ kind: "string-constant", index: key },
-			"write",
-		);
-		if (resolved === undefined || resolved.cell.kind !== "object-slot") continue;
-		into.push(
-			internExact({
-				kind: "object-slot",
-				allocation: resolved.allocation,
-				key: resolved.cell.key,
-			}),
-		);
-	}
+export function analyzeCoreMemoryVersions(
+	program: CoreProgram,
+	functionId: CoreFunctionId,
+): CoreMemoryVersions {
+	const fn = program.function(functionId);
+	const provenance = analyzeCoreProvenance(program, functionId);
+	return memoryVersions(fn, buildCoreControlFlow(program, functionId), provenance);
 }
+
+export const coreMemoryVersions = analyzeCoreMemoryVersions;
+
+export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMemoryVersions> = {
+	key: "local-memory-versions",
+	scope: "function",
+	functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
+	programDependencies: ["data"],
+	compute({ program, request }) {
+		if (request.scope !== "function") throw new Error("Expected function analysis request");
+		return analyzeCoreMemoryVersions(program, request.function);
+	},
+};

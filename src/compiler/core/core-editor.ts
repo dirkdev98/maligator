@@ -365,7 +365,7 @@ export class CoreEditor {
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
 		this.#mark("memoryEffects", "facts", "specializationInputs");
-		if (descriptor.callTransfer !== undefined || descriptor.effects.callsUserCode) {
+		if (descriptor.callTransfer !== undefined) {
 			this.#mark("calls");
 		}
 		this.#edits++;
@@ -570,6 +570,25 @@ export class CoreEditor {
 		return id;
 	}
 
+	removeFact(fact: CoreFactId): void {
+		this.#assertActive();
+		for (const instruction of this.function.instructionIds()) {
+			if (this.function.instructionKind(instruction) === "guard" &&
+				this.function.terminatorPayload(instruction).kind === "guard" &&
+				(this.function.terminatorPayload(instruction) as { readonly fact: CoreFactId }).fact === fact) {
+				throw new Error(`Cannot remove Core fact ${fact} while guard @${instruction} uses it`);
+			}
+			if (this.function.instructionKind(instruction) === "operation" &&
+				this.function.instructionEffectRefinement(instruction)?.proof === fact) {
+				throw new Error(`Cannot remove Core fact ${fact} while refinement @${instruction} uses it`);
+			}
+		}
+		this.function._removeFact(CORE_STORE_MUTATION, fact);
+		this.#facts.add(fact);
+		this.#mark("facts", "specializationInputs");
+		this.#edits++;
+	}
+
 	configureFunction(options: CoreFunctionOptions): void {
 		this.#assertActive();
 		this.function._configureFunction(CORE_STORE_MUTATION, options);
@@ -668,7 +687,7 @@ export class CoreEditor {
 		refinement: CoreEffectRefinement | undefined,
 	): void {
 		this.#mark("body", "specializationInputs");
-		if (descriptor.callTransfer !== undefined || descriptor.effects.callsUserCode) {
+		if (descriptor.callTransfer !== undefined) {
 			this.#mark("calls");
 		}
 		if (

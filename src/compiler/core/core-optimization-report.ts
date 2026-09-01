@@ -51,8 +51,17 @@ export interface CoreOptimizationReport {
 	readonly stages: ReadonlyArray<CoreOptimizationStageReport>;
 	readonly passes: ReadonlyArray<CorePassWorkReport>;
 	readonly analyses: ReadonlyArray<CoreAnalysisWorkReport>;
+	readonly discovery: CoreCandidateDiscoveryReport;
 	readonly queue: CoreQueueWorkReport;
 	readonly budget: CoreBudgetWorkReport;
+}
+
+export interface CoreCandidateDiscoveryReport {
+	readonly candidates: number;
+	readonly stackObjects: number;
+	readonly denseArrays: number;
+	readonly numericFusions: number;
+	readonly largestFanOut: number;
 }
 
 interface MutablePassWorkReport {
@@ -114,6 +123,10 @@ export class CoreOptimizationReportBuilder {
 	#queueMaximumDepth = 0;
 	#budgetWorkItems = 0;
 	#budgetEdits = 0;
+	#discoveredStackObjects = 0;
+	#discoveredDenseArrays = 0;
+	#discoveredNumericFusions = 0;
+	#largestCandidateFanOut = 0;
 
 	constructor(program: CoreProgram) {
 		this.input = Object.freeze(coreOptimizationCounts(program));
@@ -184,6 +197,25 @@ export class CoreOptimizationReportBuilder {
 		this.#exhaustedPasses.add(pass);
 	}
 
+	recordCandidateDiscovery(
+		candidates: ReadonlyArray<{
+			readonly kind: "stack-object" | "dense-array" | "numeric-fusion";
+			readonly fanOut: number;
+		}>,
+	): void {
+		for (const candidate of candidates) {
+			switch (candidate.kind) {
+				case "stack-object": this.#discoveredStackObjects++; break;
+				case "dense-array": this.#discoveredDenseArrays++; break;
+				case "numeric-fusion": this.#discoveredNumericFusions++; break;
+			}
+			this.#largestCandidateFanOut = Math.max(
+				this.#largestCandidateFanOut,
+				candidate.fanOut,
+			);
+		}
+	}
+
 	finish(program: CoreProgram, plan: CoreOptimizationPlan): CoreOptimizationReport {
 		return Object.freeze({
 			input: this.input,
@@ -199,6 +231,16 @@ export class CoreOptimizationReportBuilder {
 					Object.freeze({ analysis, ...report }),
 				),
 			),
+			discovery: Object.freeze({
+				candidates:
+					this.#discoveredStackObjects +
+					this.#discoveredDenseArrays +
+					this.#discoveredNumericFusions,
+				stackObjects: this.#discoveredStackObjects,
+				denseArrays: this.#discoveredDenseArrays,
+				numericFusions: this.#discoveredNumericFusions,
+				largestFanOut: this.#largestCandidateFanOut,
+			}),
 			queue: Object.freeze({
 				pushes: this.#queuePushes,
 				pops: this.#queuePops,
@@ -247,6 +289,10 @@ export function formatCoreOptimizationReport(
 		},
 		{ label: "Core optimizer passes", value: passes },
 		{ label: "Core optimizer analyses", value: analyses },
+		{
+			label: "Core optimizer discovery",
+			value: `${report.discovery.candidates} candidates (${report.discovery.stackObjects} stack objects, ${report.discovery.denseArrays} dense arrays, ${report.discovery.numericFusions} numeric fusions), largest fan-out ${report.discovery.largestFanOut}`,
+		},
 		{
 			label: "Core optimizer queue",
 			value: `${report.queue.pushes} pushes, ${report.queue.pops} pops, depth ${report.queue.maximumDepth}`,

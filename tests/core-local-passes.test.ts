@@ -21,6 +21,67 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local canonicalization", () => {
+	it("keeps positive and negative zero as distinct numbered constants", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [positive] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 0 },
+		});
+		const [negative] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: -0 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [positive!], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [negative!], {
+			attributes: { index: 1 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: positive! });
+		builder.finish(entry);
+
+		const fn = optimizeCore({ program, context }).compilation.program.function(0 as never);
+		const constants = [...fn.instructionIds()]
+			.filter((instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				(fn.instructionOpcodeName(instruction) === "createNumber" ||
+					fn.instructionOpcodeName(instruction) === "createF64"),
+			)
+			.map((instruction) => ({
+				opcode: fn.instructionOpcodeName(instruction),
+				value: fn.instructionAttributes(instruction).value,
+			}));
+		expect(constants).toHaveLength(2);
+		expect(constants.some(({ opcode, value }) =>
+			opcode === "createF64" && Object.is(value, 0),
+		)).toBe(true);
+		expect(constants.some(({ opcode, value }) =>
+			opcode === "createF64" && Object.is(value, -0),
+		)).toBe(true);
+	});
+
+	it("folds negative zero through the f64 constant opcode", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [zero] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [negative] = builder.appendInstruction(entry, "unary", [zero!], {
+			attributes: { operator: "-" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: negative! });
+		builder.finish(entry);
+
+		const fn = optimizeCore({ program, context }).compilation.program.function(0 as never);
+		const folded = [...fn.instructionIds()].find((instruction) =>
+			fn.instructionKind(instruction) === "operation" &&
+			fn.instructionOpcodeName(instruction) === "createF64" &&
+			Object.is(fn.instructionAttributes(instruction).value, -0),
+		);
+		expect(folded).toBeDefined();
+	});
+
 	it("folds constants and branches while removing copies, dead code, and stale blocks", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

@@ -101,8 +101,15 @@ function constantOpcode(constant: LocalConstant): {
 			return { opcode: "createNull", attributes: {} };
 		case "boolean":
 			return { opcode: "createBoolean", attributes: { value: constant.value } };
-		case "number":
-			return { opcode: "createNumber", attributes: { value: constant.value } };
+		case "number": {
+			const int32 = !Object.is(constant.value, -0) &&
+				Number.isInteger(constant.value) &&
+				constant.value >= -0x8000_0000 && constant.value <= 0x7fff_ffff;
+			return {
+				opcode: int32 ? "createNumber" : "createF64",
+				attributes: { value: constant.value },
+			};
+		}
 		case "string":
 			return { opcode: "createString", attributes: { stringIndex: constant.index } };
 	}
@@ -340,6 +347,9 @@ function stableAttribute(value: CoreAttributeValue): string {
 			.sort(([left], [right]) => left.localeCompare(right))
 			.map(([key, entry]) => `${key}:${stableAttribute(entry)}`)
 			.join(",")}}`;
+	}
+	if (typeof value === "number") {
+		return `number:${Object.is(value, -0) ? "-0" : String(value)}`;
 	}
 	return JSON.stringify(value);
 }

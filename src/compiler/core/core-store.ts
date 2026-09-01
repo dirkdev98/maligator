@@ -403,7 +403,7 @@ function freezeFact(id: CoreFactId, fact: Omit<CoreFact, "id">): CoreFact {
 	return Object.freeze({
 		...fact,
 		id,
-		value: freezeUnknown(structuredClone(fact.value)),
+		value: freezeUnknown(fact.value),
 		claims: Object.freeze(
 			fact.claims.map((claim) =>
 				Object.freeze(
@@ -1211,6 +1211,12 @@ export class CoreFunctionStore {
 		const id = coreFactId(this.#facts.length);
 		this.#facts.push(freezeFact(id, fact));
 		return id;
+	}
+
+	_removeFact(mutation: CoreStoreMutation, fact: CoreFactId): void {
+		this.#assertEditing(mutation);
+		if (!this.isFactLive(fact)) throw new Error(`Unknown Core fact ${fact}`);
+		this.#facts[fact] = undefined;
 	}
 
 	_configureFunction(mutation: CoreStoreMutation, options: CoreFunctionOptions): void {

@@ -1570,7 +1570,9 @@ export function validateVmSafepointRootMaps(definition: RuntimeImage): void {
 					register >= fn.registerCount ||
 					register <= previousRegister
 				) {
-					throw new RangeError("invalid VM safepoint root register");
+					throw new RangeError(
+						`invalid VM safepoint root register ${register} (${typeof register}, safe=${Number.isSafeInteger(register)}, negativeZero=${Object.is(register, -0)}) after ${previousRegister} at instruction ${safepoint.instructionIp} with ${fn.registerCount} registers`,
+					);
 				}
 				previousRegister = register;
 			}

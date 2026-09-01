@@ -7,7 +7,9 @@ import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
+import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
+import { CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS } from "./core-ir-provenance.ts";
 import {
 	CoreOptimizationReportBuilder,
 } from "./core-optimization-report.ts";
@@ -65,6 +67,15 @@ export function optimizeCore(
 		{ verification: options.verification },
 	);
 	for (const stage of OPTIMIZATION_STAGES) {
+		if (stage === "memory") {
+			for (const functionId of compilation.program.functionIds()) {
+				const discovery = analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
+					scope: "function",
+					function: functionId,
+				});
+				reportBuilder.recordCandidateDiscovery(discovery.candidates);
+			}
+		}
 		passes.runStage(
 			stage,
 			stage === "canonicalize"
@@ -73,7 +84,9 @@ export function optimizeCore(
 					? CORE_CONTROL_FLOW_PASSES
 					: stage === "proofs"
 						? CORE_PROOF_PASSES
-						: [],
+						: stage === "memory"
+							? CORE_MEMORY_PASSES
+							: [],
 		);
 	}
 	const program = compilation.program.seal();

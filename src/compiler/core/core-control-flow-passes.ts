@@ -35,6 +35,9 @@ function stableAttribute(value: CoreAttributeValue): string {
 		return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
 			.map(([key, entry]) => `${key}:${stableAttribute(entry)}`).join(",")}}`;
 	}
+	if (typeof value === "number") {
+		return `number:${Object.is(value, -0) ? "-0" : String(value)}`;
+	}
 	return String(value);
 }
 
