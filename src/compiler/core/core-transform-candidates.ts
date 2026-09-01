@@ -1,17 +1,19 @@
-import type {
-	CoreFunctionId,
-	CoreInstructionId,
-} from "./core-ir.ts";
+import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 
 export type CoreTransformKind =
 	| "call-refresh"
 	| "finite-dispatch"
 	| "inline"
+	| "guarded-inline"
 	| "direct-entry"
 	| "guarded-direct-call"
 	| "stack-object-plan"
 	| "dense-array-plan"
-	| "numeric-fusion";
+	| "numeric-fusion"
+	| "string-split-projection"
+	| "string-slice-number"
+	| "regexp-exec-projection"
+	| "regexp-iterator-projection";
 
 export type CoreTransformDeclineReason =
 	| "expansion-limit"
@@ -45,15 +47,14 @@ export interface CoreTransformBudgetLimits {
 	readonly programCompilerWork: number;
 }
 
-export const DEFAULT_CORE_TRANSFORM_BUDGETS: CoreTransformBudgetLimits =
-	Object.freeze({
-		perSiteExpansions: 1,
-		perCallerExpansions: 8,
-		perCallerGeneratedCode: 192,
-		perCallerCompilerWork: 768,
-		programGeneratedCode: 1_024,
-		programCompilerWork: 16_384,
-	});
+export const DEFAULT_CORE_TRANSFORM_BUDGETS: CoreTransformBudgetLimits = Object.freeze({
+	perSiteExpansions: 1,
+	perCallerExpansions: 64,
+	perCallerGeneratedCode: 192,
+	perCallerCompilerWork: 768,
+	programGeneratedCode: 1_024,
+	programCompilerWork: 16_384,
+});
 
 export interface CoreTransformBudgetStatistics {
 	readonly considered: number;
@@ -76,11 +77,16 @@ function transformKindCounts(): Record<CoreTransformKind, number> {
 		"call-refresh": 0,
 		"finite-dispatch": 0,
 		inline: 0,
+		"guarded-inline": 0,
 		"direct-entry": 0,
 		"guarded-direct-call": 0,
 		"stack-object-plan": 0,
 		"dense-array-plan": 0,
 		"numeric-fusion": 0,
+		"string-split-projection": 0,
+		"string-slice-number": 0,
+		"regexp-exec-projection": 0,
+		"regexp-iterator-projection": 0,
 	};
 }
 
@@ -141,20 +147,22 @@ export class CoreTransformCandidateService {
 			if (
 				(this.#siteExpansions.get(siteKey) ?? 0) >= this.#limits.perSiteExpansions ||
 				caller.expansions >= this.#limits.perCallerExpansions
-			) return "expansion-limit";
+			)
+				return "expansion-limit";
 		}
 		if (
 			caller.generatedCode + candidate.generatedCodeCost >
 				this.#limits.perCallerGeneratedCode ||
 			this.#generatedCode + candidate.generatedCodeCost >
 				this.#limits.programGeneratedCode
-		) return "generated-code-cost";
+		)
+			return "generated-code-cost";
 		if (
 			caller.compilerWork + candidate.compilerWorkCost >
 				this.#limits.perCallerCompilerWork ||
-			this.#compilerWork + candidate.compilerWorkCost >
-				this.#limits.programCompilerWork
-		) return "compiler-work-cost";
+			this.#compilerWork + candidate.compilerWorkCost > this.#limits.programCompilerWork
+		)
+			return "compiler-work-cost";
 		return undefined;
 	}
 

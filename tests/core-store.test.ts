@@ -88,6 +88,24 @@ describe("Core store", () => {
 		expect([...fn.instructionIds(entry)]).toEqual([1, 3, 2]);
 	});
 
+	it("moves an operation without changing its instruction or result identity", () => {
+		const { program, fn, entry, constant, copied } = oneFunction();
+		const editor = CoreEditor.open(program, fn.id);
+		const destination = editor.createBlock();
+		editor.setTerminator(destination, { kind: "return", value: copied });
+		editor.moveInstruction(1 as never, destination);
+		const changes = editor.commit();
+
+		expect([...fn.instructionIds(entry)]).toEqual([0, 2]);
+		expect([...fn.instructionIds(destination)]).toEqual([1, 3]);
+		expect(fn.instructionBlock(1 as never)).toBe(destination);
+		expect(fn.instructionResults(1 as never)).toEqual([copied]);
+		expect(fn.instructionOperands(1 as never)).toEqual([constant]);
+		expect(changes.blocks).toEqual([entry, destination]);
+		expect(changes.instructions).toContain(1);
+		expect(changes.domains).toEqual(["body", "cfg", "specializationInputs"]);
+	});
+
 	it("maintains exact definitions and uses when operand ranges are replaced", () => {
 		const { program, fn, constant, copied, parameter } = oneFunction();
 		const identity = [...fn.bodyInstructionIds(fn.entry)][1]!;
@@ -132,6 +150,75 @@ describe("Core store", () => {
 			specializationInputs: firstBefore.specializationInputs + 1,
 		});
 		expect(second.fn.versions).toEqual(secondBefore);
+	});
+
+	it("replaces a fact in place without invalidating the function body or CFG", () => {
+		const { program, fn, parameter } = oneFunction();
+		const create = CoreEditor.open(program, fn.id);
+		const fact = create.addFact({
+			kind: "test-range",
+			value: [0, 10],
+			claims: [
+				{
+					kind: "range",
+					subject: parameter,
+					minimum: 0,
+					maximum: 10,
+					integer: false,
+					mayBeNaN: false,
+					mayBeNegativeZero: false,
+				},
+			],
+			validity: { kind: "summary", digest: "test-range:wide" },
+			obligations: [],
+			origin: "test",
+		});
+		create.commit();
+		const functionBefore = fn.versions;
+		const programBefore = program.versions;
+
+		const replace = CoreEditor.open(program, fn.id);
+		replace.replaceFact(fact, {
+			kind: "test-range",
+			value: [1, 3],
+			claims: [
+				{
+					kind: "range",
+					subject: parameter,
+					minimum: 1,
+					maximum: 3,
+					integer: true,
+					mayBeNaN: false,
+					mayBeNegativeZero: false,
+				},
+			],
+			validity: { kind: "summary", digest: "test-range:narrow" },
+			obligations: [],
+			origin: "test",
+		});
+		const changes = replace.commit();
+
+		expect(fn.fact(fact)).toMatchObject({
+			id: fact,
+			value: [1, 3],
+			validity: { kind: "summary", digest: "test-range:narrow" },
+		});
+		expect(changes).toMatchObject({
+			domains: ["facts", "specializationInputs"],
+			programDomains: ["facts", "specializationInputs"],
+			facts: [fact],
+			edits: 1,
+		});
+		expect(fn.versions).toEqual({
+			...functionBefore,
+			facts: functionBefore.facts + 1,
+			specializationInputs: functionBefore.specializationInputs + 1,
+		});
+		expect(program.versions).toEqual({
+			...programBefore,
+			facts: programBefore.facts + 1,
+			specializationInputs: programBefore.specializationInputs + 1,
+		});
 	});
 
 	it("reports one precise change set for an initial construction commit", () => {

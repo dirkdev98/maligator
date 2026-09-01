@@ -385,6 +385,25 @@ export class CoreEditor {
 		this.#edits++;
 	}
 
+	moveInstruction(
+		instruction: CoreInstructionId,
+		block: CoreBlockId,
+		before?: CoreInstructionId,
+	): void {
+		this.#assertActive();
+		const previousBlock = this.function.instructionBlock(instruction);
+		const descriptor = this.program.registry.byId(
+			this.function.instructionOpcode(instruction),
+		);
+		const refinement = this.function.instructionEffectRefinement(instruction);
+		this.function._moveInstruction(CORE_STORE_MUTATION, instruction, block, before);
+		this.#instructions.add(instruction);
+		this.#touchBlock(previousBlock);
+		this.#touchBlock(block);
+		this.#markForOperation(descriptor, refinement);
+		this.#edits++;
+	}
+
 	replaceValueUses(value: CoreValueId, replacement: CoreValueId): void {
 		this.#assertActive();
 		if (value === replacement) return;

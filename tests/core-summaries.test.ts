@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
-import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-ir-summaries.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import {
 	analysisProgram,
 	appendCaller,
@@ -24,7 +24,11 @@ describe("incremental Core program summaries", () => {
 		const first = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
 			scope: "program",
 		});
-		const versions = [first.version(0 as never), first.version(1 as never), first.version(2 as never)];
+		const versions = [
+			first.version(0 as never),
+			first.version(1 as never),
+			first.version(2 as never),
+		];
 
 		const editor = CoreEditor.open(program, leaf.function);
 		editor.replaceInstruction(leaf.valueInstruction, "createUndefined", []);
@@ -39,8 +43,11 @@ describe("incremental Core program summaries", () => {
 			callerWakeups: 0,
 			affectedCallers: 0,
 		});
-		expect([second.version(0 as never), second.version(1 as never), second.version(2 as never)])
-			.toEqual(versions);
+		expect([
+			second.version(0 as never),
+			second.version(1 as never),
+			second.version(2 as never),
+		]).toEqual(versions);
 	});
 
 	it("propagates a changed leaf only through reverse callers", () => {

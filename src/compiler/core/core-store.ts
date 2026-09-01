@@ -1130,6 +1130,52 @@ export class CoreFunctionStore {
 		this.#instructionNext[instruction] = -1;
 	}
 
+	_moveInstruction(
+		mutation: CoreStoreMutation,
+		instruction: CoreInstructionId,
+		block: CoreBlockId,
+		before: CoreInstructionId | undefined,
+	): void {
+		this.#assertEditing(mutation);
+		if (this.instructionKind(instruction) !== "operation") {
+			throw new Error(`Core instruction ${instruction} is not an operation`);
+		}
+		this.#requireBlock(block);
+		if (before === instruction) {
+			throw new Error(`Core instruction ${instruction} cannot move before itself`);
+		}
+		if (before !== undefined && this.instructionBlock(before) !== block) {
+			throw new Error(`Core instruction ${before} is not in block ${block}`);
+		}
+		const oldBlock = this.#instructionBlock[instruction]!;
+		const oldPrevious = this.#instructionPrevious[instruction]!;
+		const oldNext = this.#instructionNext[instruction]!;
+		if (oldPrevious < 0) this.#blockFirstInstruction[oldBlock] = oldNext;
+		else this.#instructionNext[oldPrevious] = oldNext;
+		if (oldNext < 0) this.#blockLastInstruction[oldBlock] = oldPrevious;
+		else this.#instructionPrevious[oldNext] = oldPrevious;
+
+		let insertionPoint = before;
+		if (insertionPoint === undefined) {
+			const last = this.#blockLastInstruction[block]!;
+			if (last >= 0 && this.#instructionOpcode[last]! < 0) {
+				insertionPoint = coreInstructionId(last);
+			}
+		}
+		const beforeIndex = insertionPoint ?? -1;
+		const previous =
+			beforeIndex < 0
+				? this.#blockLastInstruction[block]!
+				: this.#instructionPrevious[beforeIndex]!;
+		this.#instructionBlock[instruction] = block;
+		this.#instructionPrevious[instruction] = previous;
+		this.#instructionNext[instruction] = beforeIndex;
+		if (previous < 0) this.#blockFirstInstruction[block] = instruction;
+		else this.#instructionNext[previous] = instruction;
+		if (beforeIndex < 0) this.#blockLastInstruction[block] = instruction;
+		else this.#instructionPrevious[beforeIndex] = instruction;
+	}
+
 	_removeBlock(mutation: CoreStoreMutation, block: CoreBlockId): void {
 		this.#assertEditing(mutation);
 		this.#requireBlock(block);
@@ -1211,6 +1257,16 @@ export class CoreFunctionStore {
 		const id = coreFactId(this.#facts.length);
 		this.#facts.push(freezeFact(id, fact));
 		return id;
+	}
+
+	_replaceFact(
+		mutation: CoreStoreMutation,
+		fact: CoreFactId,
+		replacement: Omit<CoreFact, "id">,
+	): void {
+		this.#assertEditing(mutation);
+		if (!this.isFactLive(fact)) throw new Error(`Unknown Core fact ${fact}`);
+		this.#facts[fact] = freezeFact(fact, replacement);
 	}
 
 	_removeFact(mutation: CoreStoreMutation, fact: CoreFactId): void {

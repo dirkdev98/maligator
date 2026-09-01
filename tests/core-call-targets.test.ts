@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
 	CORE_CALLEE_TARGETS_ANY_SCRIPT,
@@ -25,10 +26,7 @@ describe("Core callee-target lattice", () => {
 	it("keeps finite targets deterministic and widens at the cap", () => {
 		let targets = CORE_CALLEE_TARGETS_BOTTOM;
 		for (let index = CORE_CALLEE_TARGET_CAP - 1; index >= 0; index--) {
-			targets = joinCoreCalleeTargets(
-				targets,
-				coreCalleeTargetsFunction(index),
-			);
+			targets = joinCoreCalleeTargets(targets, coreCalleeTargetsFunction(index));
 		}
 		expect(targets.functions).toEqual([0, 1, 2, 3]);
 		expect(coreCalleeTargetsAreOpen(targets)).toBe(false);
@@ -68,12 +66,9 @@ describe("incremental Core call graph", () => {
 		expect([...first.callers(1 as never)]).toEqual([caller.function]);
 
 		const editor = CoreEditor.open(program, caller.function);
-		editor.replaceInstruction(
-			caller.createFunctionInstruction,
-			"createFunction",
-			[],
-			{ attributes: { functionIndex: 2 } },
-		);
+		editor.replaceInstruction(caller.createFunctionInstruction, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
 		editor.commit();
 		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 		expect(second.statistics).toMatchObject({
@@ -83,8 +78,9 @@ describe("incremental Core call graph", () => {
 		});
 		expect([...second.callers(1 as never)]).toEqual([]);
 		expect([...second.callers(2 as never)]).toEqual([caller.function]);
-		expect(second.site(`${caller.function}:${caller.callInstruction}`)?.targets.functions)
-			.toEqual([2]);
+		expect(
+			second.site(`${caller.function}:${caller.callInstruction}`)?.targets.functions,
+		).toEqual([2]);
 	});
 
 	it("joins branch arguments without round-based program rescans", () => {
@@ -100,5 +96,178 @@ describe("incremental Core call graph", () => {
 		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 		expect(second).toBe(first);
 		expect(second.outgoing(caller.function)).toHaveLength(1);
+	});
+
+	it("propagates a closed-cell target edit only to dependent readers", () => {
+		const program = analysisProgram();
+		const writer = new CoreFunctionBuilder(program);
+		const writerEntry = writer.createBlock();
+		const [stored] = writer.appendInstruction(writerEntry, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
+		writer.appendInstruction(writerEntry, "storeGlobal", [stored!], {
+			outputCount: 0,
+			attributes: { index: 0 },
+		});
+		const [writerResult] = writer.appendInstruction(writerEntry, "createUndefined", []);
+		const [createFunctionInstruction] = writer.bodyInstructionIds(writerEntry);
+		writer.setTerminator(writerEntry, { kind: "return", value: writerResult! });
+		const writerFunction = writer.finish(writerEntry).function;
+
+		const caller = new CoreFunctionBuilder(program);
+		const callerEntry = caller.createBlock();
+		const [callee] = caller.appendInstruction(callerEntry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [receiver] = caller.appendInstruction(callerEntry, "createUndefined", []);
+		const [result] = caller.appendInstruction(callerEntry, "call", [callee!, receiver!]);
+		const [, , callInstruction] = caller.bodyInstructionIds(callerEntry);
+		caller.setTerminator(callerEntry, { kind: "return", value: result! });
+		const callerFunction = caller.finish(callerEntry).function;
+		appendLeaf(program);
+		appendLeaf(program);
+
+		const baseContext = programAnalysisContext();
+		const manager = new CoreAnalysisManager(
+			program,
+			{
+				...baseContext,
+				data: { ...baseContext.data, singleAssignmentGlobalSlots: [0] },
+			},
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(
+			first.site(`${callerFunction}:${callInstruction!}`)?.targets.functions,
+		).toEqual([2]);
+
+		const editor = CoreEditor.open(program, writerFunction);
+		editor.replaceInstruction(createFunctionInstruction!, "createFunction", [], {
+			attributes: { functionIndex: 3 },
+		});
+		editor.commit();
+		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(second.statistics).toMatchObject({
+			functionsAnalyzed: 2,
+			functionsReused: 2,
+			updatedCallSites: 1,
+		});
+		expect(
+			second.site(`${callerFunction}:${callInstruction!}`)?.targets.functions,
+		).toEqual([3]);
+		expect([...second.callers(2 as never)]).toEqual([]);
+		expect([...second.callers(3 as never)]).toEqual([callerFunction]);
+	});
+
+	it("keeps a guarded target for a known function-object property", () => {
+		const program = analysisProgram();
+		const setup = new CoreFunctionBuilder(program);
+		const setupEntry = setup.createBlock();
+		const [receiverFunction] = setup.appendInstruction(setupEntry, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
+		const [key] = setup.appendInstruction(setupEntry, "createString", [], {
+			attributes: { stringIndex: 7 },
+		});
+		const [propertyFunction] = setup.appendInstruction(setupEntry, "createFunction", [], {
+			attributes: { functionIndex: 3 },
+		});
+		setup.appendInstruction(
+			setupEntry,
+			"defineProperty",
+			[receiverFunction!, key!, propertyFunction!],
+			{ outputCount: 0 },
+		);
+		setup.appendInstruction(setupEntry, "storeGlobal", [receiverFunction!], {
+			outputCount: 0,
+			attributes: { index: 0 },
+		});
+		const [setupResult] = setup.appendInstruction(setupEntry, "createUndefined", []);
+		const propertyCreate = setup.bodyInstructionIds(setupEntry)[2]!;
+		setup.setTerminator(setupEntry, { kind: "return", value: setupResult! });
+		const setupFunction = setup.finish(setupEntry).function;
+
+		const caller = new CoreFunctionBuilder(program);
+		const callerEntry = caller.createBlock();
+		const [receiver] = caller.appendInstruction(callerEntry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [callee] = caller.appendInstruction(
+			callerEntry,
+			"loadPropertyStatic",
+			[receiver!],
+			{ attributes: { stringIndex: 7 } },
+		);
+		const [result] = caller.appendInstruction(callerEntry, "call", [callee!, receiver!]);
+		const call = caller.bodyInstructionIds(callerEntry)[2]!;
+		caller.setTerminator(callerEntry, { kind: "return", value: result! });
+		const callerFunction = caller.finish(callerEntry).function;
+		appendLeaf(program);
+		appendLeaf(program);
+		appendLeaf(program);
+
+		const baseContext = programAnalysisContext();
+		const manager = new CoreAnalysisManager(
+			program,
+			{
+				...baseContext,
+				data: { ...baseContext.data, singleAssignmentGlobalSlots: [0] },
+			},
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		const targets = first.site(`${callerFunction}:${call}`)?.targets;
+		expect(targets).toMatchObject({
+			functions: [3],
+			anyScript: false,
+			opaque: true,
+		});
+
+		const editor = CoreEditor.open(program, setupFunction);
+		editor.replaceInstruction(propertyCreate, "createFunction", [], {
+			attributes: { functionIndex: 4 },
+		});
+		editor.commit();
+		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(second.statistics).toMatchObject({
+			functionsAnalyzed: 2,
+			functionsReused: 3,
+			updatedCallSites: 1,
+		});
+		expect(second.site(`${callerFunction}:${call}`)?.targets).toMatchObject({
+			functions: [4],
+			anyScript: false,
+			opaque: true,
+		});
+		expect([...second.callers(3 as never)]).toEqual([]);
+		expect([...second.callers(4 as never)]).toEqual([callerFunction]);
+	});
+
+	it("does not narrow an unknown static property away from script functions", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const [receiver] = caller.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 1 },
+		});
+		const [callee] = caller.appendInstruction(entry, "loadPropertyStatic", [receiver!], {
+			attributes: { stringIndex: 9 },
+		});
+		const [result] = caller.appendInstruction(entry, "call", [callee!, receiver!]);
+		const call = caller.bodyInstructionIds(entry)[2]!;
+		caller.setTerminator(entry, { kind: "return", value: result! });
+		const callerFunction = caller.finish(entry).function;
+		appendLeaf(program);
+
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		expect(
+			manager
+				.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" })
+				.site(`${callerFunction}:${call}`)?.targets,
+		).toMatchObject({ functions: [], anyScript: true, opaque: true });
 	});
 });

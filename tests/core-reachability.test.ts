@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CORE_CALL_GRAPH_ANALYSIS } from "../src/compiler/core/core-ir-call-targets.ts";
 import { analyzeCoreFunctionReachability } from "../src/compiler/core/core-ir-reachability.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
@@ -15,7 +16,17 @@ import {
 function directReachability(sourceClosed = true) {
 	const program = analysisProgram();
 	appendCaller(program, 1);
-	appendLeaf(program);
+	const retained = new CoreFunctionBuilder(program, {
+		metadata: { capturedCount: 1, sourcePath: "/entry.js" },
+	});
+	const retainedEntry = retained.createBlock();
+	const [retainedValue] = retained.appendInstruction(
+		retainedEntry,
+		"createUndefined",
+		[],
+	);
+	retained.setTerminator(retainedEntry, { kind: "return", value: retainedValue! });
+	retained.finish(retainedEntry);
 	appendLeaf(program, "/dead.js");
 	const context = programAnalysisContext(sourceClosed);
 	const manager = new CoreAnalysisManager(

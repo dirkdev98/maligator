@@ -1,10 +1,8 @@
-import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { ReturnProvenance } from "../shared/effect-summary.ts";
+import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { CoreEditor } from "./core-editor.ts";
-import type {
-	CoreCalleeTargets,
-	CoreIndexedCallSite,
-} from "./core-ir-call-targets.ts";
+import type { CoreCalleeTargets, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "./core-ir-summaries.ts";
@@ -13,14 +11,15 @@ import type {
 	CoreFunctionId,
 	CoreInstructionAttributes,
 	CoreInstructionId,
+	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
+import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import type { CorePassManager } from "./core-pass-manager.ts";
+import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
-import {
-	CoreTransformCandidateService,
-} from "./core-transform-candidates.ts";
+import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
 import type {
 	CoreTransformBudgetLimits,
 	CoreTransformBudgetStatistics,
@@ -33,9 +32,9 @@ export const CORE_CALL_PARAMETER_ESCAPE_ATTRIBUTE = "callParameterEscape";
 export const CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE = "callParameterContainment";
 export const CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE = "callReturnProvenance";
 export const CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE = "callReturnRepresentation";
+export const CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE = "guardedInlineFallback";
 
-export interface CoreCrossCallTransformStatistics
-	extends CoreTransformBudgetStatistics {
+export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetStatistics {
 	readonly instructionsIntroduced: number;
 	readonly blocksIntroduced: number;
 	readonly callGraphFunctionsAnalyzed: number;
@@ -51,9 +50,61 @@ interface AppliedTransform {
 
 interface LinearInlineTarget {
 	readonly function: CoreFunctionStore;
-	readonly block: number;
 	readonly returnValue: CoreValueId;
 	readonly instructions: ReadonlyArray<CoreInstructionId>;
+	readonly blocks: ReadonlyArray<{
+		readonly instructions: ReadonlyArray<CoreInstructionId>;
+		readonly parameters: ReadonlyArray<readonly [CoreValueId, CoreValueId]>;
+	}>;
+}
+
+function inlineSourcePositions(
+	program: CoreProgram,
+	callee: CoreFunctionId,
+	callerPosition: number | undefined,
+	instructions: ReadonlyArray<CoreInstructionId>,
+	fn: CoreFunctionStore,
+): ReadonlyMap<CoreInstructionId, number | undefined> {
+	const sourcePositions = [...program.sourcePositions];
+	const relocated = new Map<number, number>();
+	const relocate = (positionId: number): number => {
+		const known = relocated.get(positionId);
+		if (known !== undefined) return known;
+		const position = program.sourcePositions[positionId];
+		if (position === undefined) {
+			throw new Error(`Inline source position ${positionId} does not exist`);
+		}
+		const relocatedCaller =
+			position.inlinedFunctionIndex !== undefined && position.callerPosId !== undefined
+				? relocate(position.callerPosId)
+				: callerPosition;
+		const result = sourcePositions.length;
+		sourcePositions.push(
+			Object.freeze({
+				line: position.line,
+				column: position.column,
+				inlinedFunctionIndex: position.inlinedFunctionIndex ?? callee,
+				...(relocatedCaller === undefined ? {} : { callerPosId: relocatedCaller }),
+			}),
+		);
+		relocated.set(positionId, result);
+		return result;
+	};
+	const result = new Map<CoreInstructionId, number | undefined>();
+	for (const instruction of instructions) {
+		const position = fn.instructionSourcePosition(instruction);
+		result.set(instruction, position === undefined ? callerPosition : relocate(position));
+	}
+	if (sourcePositions.length !== program.sourcePositions.length) {
+		CoreEditor.configureProgram(program, {
+			stringConstants: program.stringConstants,
+			bigintConstants: program.bigintConstants,
+			literalTemplateData: program.literalTemplateData,
+			sourcePositions,
+			globalCount: program.globalCount,
+		});
+	}
+	return result;
 }
 
 const INLINE_UNSUPPORTED_OPCODES = new Set([
@@ -62,8 +113,10 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"loadArgument",
 	"loadArgumentCount",
 	"loadCallee",
+	"loadCaptured",
 	"loadNewTarget",
 	"loadStaticArgument",
+	"storeCaptured",
 ]);
 
 function stableAttribute(value: CoreAttributeValue): string {
@@ -81,9 +134,7 @@ function targetKey(targets: CoreCalleeTargets): string {
 	return `${targets.functions.join(",")}:${targets.anyScript ? "a" : "-"}:${targets.opaque ? "o" : "-"}`;
 }
 
-function returnProvenanceAttribute(
-	value: ReturnProvenance,
-): CoreAttributeValue {
+function returnProvenanceAttribute(value: ReturnProvenance): CoreAttributeValue {
 	return value.kind === "parameter"
 		? Object.freeze({ kind: value.kind, index: value.index })
 		: value.kind;
@@ -103,11 +154,13 @@ function refreshedAttributes(
 	delete attributes[CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE];
 	delete attributes[CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE];
 	delete attributes[CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE];
-	if (!(
-		site.targets.functions.length === 0 &&
-		!site.targets.anyScript &&
-		!site.targets.opaque
-	)) {
+	if (
+		!(
+			site.targets.functions.length === 0 &&
+			!site.targets.anyScript &&
+			!site.targets.opaque
+		)
+	) {
 		attributes[CORE_CALLEE_TARGETS_ATTRIBUTE] = Object.freeze({
 			functions: site.targets.functions,
 			anyScript: site.targets.anyScript,
@@ -122,8 +175,9 @@ function refreshedAttributes(
 			attributes[CORE_CALL_PARAMETER_ESCAPE_ATTRIBUTE] = summary.parameterEscape;
 			attributes[CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE] =
 				summary.parameterContainment;
-			attributes[CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE] =
-				returnProvenanceAttribute(summary.returnProvenance);
+			attributes[CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE] = returnProvenanceAttribute(
+				summary.returnProvenance,
+			);
 			attributes[CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE] =
 				summary.returnRepresentation;
 		}
@@ -140,38 +194,67 @@ function linearInlineTarget(
 		fn.isGenerator ||
 		fn.isAsync ||
 		fn.metadata.isClassConstructor ||
+		fn.metadata.capturedCount !== 0 ||
 		fn.factCapacity !== 0
-	) return undefined;
-	const blocks = [...fn.blockIds()];
-	if (blocks.length !== 1 || blocks[0] !== fn.entry || fn.blockHandler(fn.entry) !== undefined) {
+	)
 		return undefined;
-	}
-	const instructions = [...fn.bodyInstructionIds(fn.entry)];
 	const available = new Set(fn.parameters);
-	if (
-		fn.blockParameters(fn.entry).some(({ value }) => !available.has(value))
-	) return undefined;
-	for (const instruction of instructions) {
-		const opcode = fn.instructionOpcodeName(instruction);
-		if (
-			INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
-			(opcode === "loadThis" && !fn.metadata.strict) ||
-			fn.instructionEffectRefinement(instruction) !== undefined
-		) return undefined;
-		if (
-			opcode !== "loadThis" &&
-			fn.instructionOperands(instruction).some((value) => !available.has(value))
-		) return undefined;
-		for (const output of fn.instructionResults(instruction)) available.add(output);
+	if (fn.blockParameters(fn.entry).some(({ value }) => !available.has(value)))
+		return undefined;
+	const blocks: Array<{
+		readonly instructions: ReadonlyArray<CoreInstructionId>;
+		readonly parameters: ReadonlyArray<readonly [CoreValueId, CoreValueId]>;
+	}> = [];
+	const instructions: Array<CoreInstructionId> = [];
+	const visited = new Set<number>();
+	let block = fn.entry;
+	let parameters: ReadonlyArray<readonly [CoreValueId, CoreValueId]> = [];
+	for (;;) {
+		if (visited.has(block) || fn.blockHandler(block) !== undefined) return undefined;
+		visited.add(block);
+		for (const [parameter, incoming] of parameters) {
+			if (!available.has(incoming)) return undefined;
+			available.add(parameter);
+		}
+		const body = [...fn.bodyInstructionIds(block)];
+		blocks.push({ instructions: body, parameters });
+		instructions.push(...body);
+		for (const instruction of body) {
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (
+				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
+				(opcode === "loadThis" && !fn.metadata.strict) ||
+				fn.instructionEffectRefinement(instruction) !== undefined
+			)
+				return undefined;
+			if (
+				opcode !== "loadThis" &&
+				fn.instructionOperands(instruction).some((value) => !available.has(value))
+			)
+				return undefined;
+			for (const output of fn.instructionResults(instruction)) available.add(output);
+		}
+		const terminator = fn.terminatorPayload(fn.blockTerminator(block));
+		if (terminator.kind === "return") {
+			if (!available.has(terminator.value)) return undefined;
+			return {
+				function: fn,
+				returnValue: terminator.value,
+				instructions,
+				blocks,
+			};
+		}
+		if (terminator.kind !== "jump" || visited.has(terminator.edge.block)) {
+			return undefined;
+		}
+		const targetParameters = fn.blockParameters(terminator.edge.block);
+		if (targetParameters.length !== terminator.edge.arguments.length) return undefined;
+		parameters = targetParameters.map(({ value }, index) => [
+			value,
+			terminator.edge.arguments[index]!,
+		]);
+		block = terminator.edge.block;
 	}
-	const terminator = fn.terminatorPayload(fn.blockTerminator(fn.entry));
-	if (terminator.kind !== "return" || !available.has(terminator.value)) return undefined;
-	return {
-		function: fn,
-		block: fn.entry,
-		returnValue: terminator.value,
-		instructions,
-	};
 }
 
 function offerFunctionCandidates(
@@ -187,54 +270,47 @@ function offerFunctionCandidates(
 		const current = fn.instructionAttributes(site.instruction);
 		const versions = site.targets.functions.map((target) => summaries.version(target));
 		if (stableAttribute(current) !== stableAttribute(refreshed)) {
-			service.offer(Object.freeze({
-				key: `0-refresh:${site.id}:${targetKey(site.targets)}:${versions.join(",")}`,
-				kind: "call-refresh",
-				caller: functionId,
-				site: site.instruction,
-				targets: site.targets.functions,
-				generatedCodeCost: 0,
-				compilerWorkCost: 1,
-				expansive: false,
-			}));
+			service.offer(
+				Object.freeze({
+					key: `0-refresh:${site.id}:${targetKey(site.targets)}:${versions.join(",")}`,
+					kind: "call-refresh",
+					caller: functionId,
+					site: site.instruction,
+					targets: site.targets.functions,
+					generatedCodeCost: 0,
+					compilerWorkCost: 1,
+					expansive: false,
+				}),
+			);
 		}
-		if (site.targets.functions.length > 0) {
-			const guarded =
-				coreCalleeTargetsAreOpen(site.targets) || site.targets.functions.length > 1;
-			service.offer(Object.freeze({
-				key: `1-dispatch:${site.id}:${targetKey(site.targets)}`,
-				kind: "finite-dispatch",
-				caller: functionId,
-				site: site.instruction,
-				targets: site.targets.functions,
-				generatedCodeCost: guarded ? site.targets.functions.length * 2 + 1 : 0,
-				compilerWorkCost: site.targets.functions.length + 1,
-				expansive: guarded,
-			}));
-		}
-		if (site.targets.functions.length !== 1 || coreCalleeTargetsAreOpen(site.targets)) {
+		if (
+			site.targets.functions.length !== 1 ||
+			current[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true
+		)
 			continue;
-		}
 		const target = site.targets.functions[0]!;
 		const linear = linearInlineTarget(program, target);
-		service.offer(Object.freeze({
-			key: `2-inline:${site.id}:${target}:${summaries.version(target)}`,
-			kind: "inline",
-			caller: functionId,
-			site: site.instruction,
-			targets: Object.freeze([target]),
-			generatedCodeCost: linear?.instructions.length ?? 0,
-			compilerWorkCost:
-				(linear?.instructions.length ?? 0) +
-				(linear?.function.valueCapacity ?? 0) +
-				1,
-			expansive: true,
-			...(target === functionId
-				? { unsupportedReason: "recursive" as const }
-				: linear === undefined
-					? { unsupportedReason: "unsupported-graph" as const }
-					: {}),
-		}));
+		const open = coreCalleeTargetsAreOpen(site.targets);
+		service.offer(
+			Object.freeze({
+				key: `${open ? "1-guarded-inline" : "2-inline"}:${site.id}:${target}:${summaries.version(target)}`,
+				kind: open ? "guarded-inline" : "inline",
+				caller: functionId,
+				site: site.instruction,
+				targets: Object.freeze([target]),
+				generatedCodeCost: (linear?.instructions.length ?? 0) + (open ? 1 : 0),
+				compilerWorkCost:
+					(linear?.instructions.length ?? 0) +
+					(linear?.function.valueCapacity ?? 0) +
+					(open ? 4 : 1),
+				expansive: true,
+				...(target === functionId
+					? { unsupportedReason: "recursive" as const }
+					: linear === undefined
+						? { unsupportedReason: "unsupported-graph" as const }
+						: {}),
+			}),
+		);
 	}
 }
 
@@ -258,51 +334,17 @@ function applyCallRefresh(
 	if (
 		!fn.isInstructionLive(candidate.site) ||
 		fn.instructionKind(candidate.site) !== "operation"
-	) return undefined;
-	const site = summaries.targets.outgoing(candidate.caller).find(
-		({ instruction }) => instruction === candidate.site,
-	);
+	)
+		return undefined;
+	const site = summaries.targets
+		.outgoing(candidate.caller)
+		.find(({ instruction }) => instruction === candidate.site);
 	if (site === undefined) return undefined;
 	const attributes = refreshedAttributes(fn, site, summaries);
-	if (stableAttribute(attributes) === stableAttribute(fn.instructionAttributes(candidate.site))) {
-		return undefined;
-	}
-	const editor = CoreEditor.open(program, candidate.caller);
-	editor.replaceInstruction(
-		candidate.site,
-		fn.instructionOpcodeName(candidate.site),
-		fn.instructionOperands(candidate.site),
-		{
-			attributes,
-			sourcePosition: fn.instructionSourcePosition(candidate.site),
-			...(fn.instructionEffectRefinement(candidate.site) === undefined
-				? {}
-				: { effectRefinement: fn.instructionEffectRefinement(candidate.site) }),
-		},
-	);
-	return { changes: editor.commit(), instructionsIntroduced: 0, blocksIntroduced: 0 };
-}
-
-function applyFiniteDispatch(
-	program: CoreProgram,
-	candidate: CoreTransformCandidate,
-): AppliedTransform | undefined {
-	const fn = program.function(candidate.caller);
 	if (
-		!fn.isInstructionLive(candidate.site) ||
-		fn.instructionKind(candidate.site) !== "operation"
-	) return undefined;
-	const attributes: Record<string, CoreAttributeValue> = {
-		...fn.instructionAttributes(candidate.site),
-	};
-	delete attributes.directFunctionIndex;
-	delete attributes.guardedFunctionIndices;
-	if (!candidate.expansive && candidate.targets.length === 1) {
-		attributes.directFunctionIndex = candidate.targets[0];
-	} else {
-		attributes.guardedFunctionIndices = candidate.targets;
-	}
-	if (stableAttribute(attributes) === stableAttribute(fn.instructionAttributes(candidate.site))) {
+		stableAttribute(attributes) ===
+		stableAttribute(fn.instructionAttributes(candidate.site))
+	) {
 		return undefined;
 	}
 	const editor = CoreEditor.open(program, candidate.caller);
@@ -318,7 +360,11 @@ function applyFiniteDispatch(
 				: { effectRefinement: fn.instructionEffectRefinement(candidate.site) }),
 		},
 	);
-	return { changes: editor.commit(), instructionsIntroduced: 0, blocksIntroduced: 0 };
+	return {
+		changes: editor.commit(),
+		instructionsIntroduced: 0,
+		blocksIntroduced: 0,
+	};
 }
 
 function applyLinearInline(
@@ -333,12 +379,14 @@ function applyLinearInline(
 		linear === undefined ||
 		!caller.isInstructionLive(candidate.site) ||
 		caller.instructionKind(candidate.site) !== "operation"
-	) return undefined;
+	)
+		return undefined;
 	const descriptor = caller.registry.byId(caller.instructionOpcode(candidate.site));
 	if (
 		descriptor.callTransfer?.invocation !== "call" ||
 		descriptor.callTransfer.result !== "call-completion"
-	) return undefined;
+	)
+		return undefined;
 	const operands = caller.instructionOperands(candidate.site);
 	const callResults = caller.instructionResults(candidate.site);
 	if (callResults.length !== 1) return undefined;
@@ -351,6 +399,14 @@ function applyLinearInline(
 	if (firstArgument === undefined) return undefined;
 	const arguments_ = operands.slice(firstArgument);
 	const block = caller.instructionBlock(candidate.site);
+	const callerPosition = caller.instructionSourcePosition(candidate.site);
+	const sourcePositions = inlineSourcePositions(
+		program,
+		target,
+		callerPosition,
+		linear.instructions,
+		linear.function,
+	);
 	const editor = CoreEditor.open(program, candidate.caller);
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = 0;
@@ -370,38 +426,46 @@ function applyLinearInline(
 		values.set(parameter, created.outputs[0]!);
 		introduced++;
 	}
-	for (const instruction of linear.instructions) {
-		const opcode = linear.function.instructionOpcodeName(instruction);
-		if (opcode === "loadThis") {
-			const output = linear.function.instructionResults(instruction)[0];
-			if (output === undefined || receiver === undefined) return undefined;
-			values.set(output, receiver);
-			continue;
+	for (const inlineBlock of linear.blocks) {
+		for (const [parameter, incoming] of inlineBlock.parameters) {
+			const value = values.get(incoming);
+			if (value === undefined)
+				throw new Error("Validated inline edge has no caller value");
+			values.set(parameter, value);
 		}
-		const inputs = linear.function.instructionOperands(instruction).map((value) =>
-			values.get(value),
-		);
-		if (inputs.some((value) => value === undefined)) {
-			throw new Error("Validated inline input has no caller value");
-		}
-		const outputs = linear.function.instructionResults(instruction);
-		const inserted = editor.insertInstruction(
-			block,
-			candidate.site,
-			opcode,
-			inputs as ReadonlyArray<CoreValueId>,
-			{
-				outputCount: outputs.length,
-				outputRepresentations: outputs.map((value) =>
-					linear.function.valueRepresentation(value),
-				),
-				attributes: linear.function.instructionAttributes(instruction),
-				sourcePosition: linear.function.instructionSourcePosition(instruction),
-			},
-		);
-		introduced++;
-		for (const [index, output] of outputs.entries()) {
-			values.set(output, inserted.outputs[index]!);
+		for (const instruction of inlineBlock.instructions) {
+			const opcode = linear.function.instructionOpcodeName(instruction);
+			if (opcode === "loadThis") {
+				const output = linear.function.instructionResults(instruction)[0];
+				if (output === undefined || receiver === undefined) return undefined;
+				values.set(output, receiver);
+				continue;
+			}
+			const inputs = linear.function
+				.instructionOperands(instruction)
+				.map((value) => values.get(value));
+			if (inputs.some((value) => value === undefined)) {
+				throw new Error("Validated inline input has no caller value");
+			}
+			const outputs = linear.function.instructionResults(instruction);
+			const inserted = editor.insertInstruction(
+				block,
+				candidate.site,
+				opcode,
+				inputs as ReadonlyArray<CoreValueId>,
+				{
+					outputCount: outputs.length,
+					outputRepresentations: outputs.map((value) =>
+						linear.function.valueRepresentation(value),
+					),
+					attributes: linear.function.instructionAttributes(instruction),
+					sourcePosition: sourcePositions.get(instruction),
+				},
+			);
+			introduced++;
+			for (const [index, output] of outputs.entries()) {
+				values.set(output, inserted.outputs[index]!);
+			}
 		}
 	}
 	const replacement = values.get(linear.returnValue);
@@ -417,15 +481,200 @@ function applyLinearInline(
 	};
 }
 
+function applyGuardedLinearInline(
+	program: CoreProgram,
+	candidate: CoreTransformCandidate,
+): AppliedTransform | undefined {
+	const target = candidate.targets[0];
+	if (target === undefined) return undefined;
+	const linear = linearInlineTarget(program, target);
+	const caller = program.function(candidate.caller);
+	if (
+		linear === undefined ||
+		!caller.isInstructionLive(candidate.site) ||
+		caller.instructionKind(candidate.site) !== "operation"
+	)
+		return undefined;
+	const descriptor = caller.registry.byId(caller.instructionOpcode(candidate.site));
+	if (
+		descriptor.callTransfer?.invocation !== "call" ||
+		descriptor.callTransfer.result !== "call-completion"
+	)
+		return undefined;
+	const operands = caller.instructionOperands(candidate.site);
+	const callResults = caller.instructionResults(candidate.site);
+	if (callResults.length !== 1) return undefined;
+	const callResult = callResults[0]!;
+	if (
+		linear.function.valueRepresentation(linear.returnValue) !==
+		caller.valueRepresentation(callResult)
+	)
+		return undefined;
+	const receiverIndex = descriptor.callTransfer.receiverOperand;
+	const receiver = receiverIndex === undefined ? undefined : operands[receiverIndex];
+	const firstArgument =
+		descriptor.callTransfer.arguments.kind === "positional"
+			? descriptor.callTransfer.arguments.firstOperand
+			: undefined;
+	if (firstArgument === undefined) return undefined;
+	const arguments_ = operands.slice(firstArgument);
+	const callee = operands[descriptor.callTransfer.calleeOperand];
+	if (callee === undefined) return undefined;
+	const block = caller.instructionBlock(candidate.site);
+	const originalTerminator = caller.blockTerminator(block);
+	const originalPayload = caller.terminatorPayload(originalTerminator);
+	if (originalPayload.kind === "guard") return undefined;
+	const terminatorPosition = caller.instructionSourcePosition(originalTerminator);
+	const callerPosition = caller.instructionSourcePosition(candidate.site);
+	const sourcePositions = inlineSourcePositions(
+		program,
+		target,
+		callerPosition,
+		linear.instructions,
+		linear.function,
+	);
+	const tail: Array<CoreInstructionId> = [];
+	for (
+		let instruction = caller.instructionNext(candidate.site);
+		instruction !== undefined && instruction !== originalTerminator;
+		instruction = caller.instructionNext(instruction)
+	)
+		tail.push(instruction);
+	const handler = caller.blockHandler(block);
+	const callAttributes = caller.instructionAttributes(candidate.site);
+	const callRefinement = caller.instructionEffectRefinement(candidate.site);
+	const editor = CoreEditor.open(program, candidate.caller);
+	const fast = editor.createBlock();
+	const fallback = editor.createBlock();
+	const join = editor.createBlock([
+		{ representation: caller.valueRepresentation(callResult) },
+	]);
+	const joinedResult = caller.blockParameters(join)[0]!.value;
+	for (const instruction of tail) editor.moveInstruction(instruction, join);
+	editor.replaceValueUses(callResult, joinedResult);
+	const joinedTerminator = {
+		...caller.terminatorPayload(originalTerminator),
+		...(terminatorPosition === undefined ? {} : { sourcePosition: terminatorPosition }),
+	} as CoreTerminatorInput;
+	editor.setTerminator(join, joinedTerminator);
+
+	editor.moveInstruction(candidate.site, fallback);
+	editor.replaceInstruction(
+		candidate.site,
+		caller.instructionOpcodeName(candidate.site),
+		operands,
+		{
+			attributes: {
+				...callAttributes,
+				[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]: true,
+			},
+			sourcePosition: callerPosition,
+			...(callRefinement === undefined ? {} : { effectRefinement: callRefinement }),
+		},
+	);
+	editor.setTerminator(fallback, {
+		kind: "jump",
+		edge: { block: join, arguments: [callResult] },
+		sourcePosition: callerPosition,
+	});
+
+	const values = new Map<CoreValueId, CoreValueId>();
+	let introduced = 1;
+	for (const [index, parameter] of linear.function.parameters.entries()) {
+		const argument = arguments_[index];
+		if (argument !== undefined) {
+			values.set(parameter, argument);
+			continue;
+		}
+		const created = editor.appendInstruction(fast, "createUndefined", [], {
+			sourcePosition: callerPosition,
+		});
+		values.set(parameter, created.outputs[0]!);
+		introduced++;
+	}
+	for (const inlineBlock of linear.blocks) {
+		for (const [parameter, incoming] of inlineBlock.parameters) {
+			const value = values.get(incoming);
+			if (value === undefined)
+				throw new Error("Validated guarded inline edge has no caller value");
+			values.set(parameter, value);
+		}
+		for (const instruction of inlineBlock.instructions) {
+			const opcode = linear.function.instructionOpcodeName(instruction);
+			if (opcode === "loadThis") {
+				const output = linear.function.instructionResults(instruction)[0];
+				if (output === undefined || receiver === undefined)
+					throw new Error("Validated guarded inline receiver is unavailable");
+				values.set(output, receiver);
+				continue;
+			}
+			const inputs = linear.function
+				.instructionOperands(instruction)
+				.map((value) => values.get(value));
+			if (inputs.some((value) => value === undefined))
+				throw new Error("Validated guarded inline input has no caller value");
+			const outputs = linear.function.instructionResults(instruction);
+			const inserted = editor.appendInstruction(
+				fast,
+				opcode,
+				inputs as ReadonlyArray<CoreValueId>,
+				{
+					outputCount: outputs.length,
+					outputRepresentations: outputs.map((value) =>
+						linear.function.valueRepresentation(value),
+					),
+					attributes: linear.function.instructionAttributes(instruction),
+					sourcePosition: sourcePositions.get(instruction),
+				},
+			);
+			introduced++;
+			for (const [index, output] of outputs.entries())
+				values.set(output, inserted.outputs[index]!);
+		}
+	}
+	const fastResult = values.get(linear.returnValue);
+	if (fastResult === undefined)
+		throw new Error("Validated guarded inline return has no caller value");
+	editor.setTerminator(fast, {
+		kind: "jump",
+		edge: { block: join, arguments: [fastResult] },
+		sourcePosition: callerPosition,
+	});
+	const guard = editor.appendInstruction(block, "guardFunctionIndex", [callee], {
+		outputRepresentations: ["boolean"],
+		attributes: { functionIndex: target },
+		sourcePosition: callerPosition,
+	});
+	editor.replaceTerminator(block, {
+		kind: "branch",
+		condition: guard.outputs[0]!,
+		consequent: { block: fast, arguments: [] },
+		alternate: { block: fallback, arguments: [] },
+		sourcePosition: callerPosition,
+	});
+	if (handler !== undefined) {
+		for (const guardedBlock of [fast, fallback, join])
+			editor.setHandler(guardedBlock, handler.block, handler.arguments);
+	}
+	return {
+		changes: editor.commit(),
+		instructionsIntroduced: introduced,
+		blocksIntroduced: 3,
+	};
+}
+
 function applyCandidate(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	candidate: CoreTransformCandidate,
 ): AppliedTransform | undefined {
 	switch (candidate.kind) {
-		case "call-refresh": return applyCallRefresh(program, summaries, candidate);
-		case "finite-dispatch": return applyFiniteDispatch(program, candidate);
-		case "inline": return applyLinearInline(program, candidate);
+		case "call-refresh":
+			return applyCallRefresh(program, summaries, candidate);
+		case "inline":
+			return applyLinearInline(program, candidate);
+		case "guarded-inline":
+			return applyGuardedLinearInline(program, candidate);
 	}
 }
 
@@ -439,14 +688,21 @@ export function runCoreCrossCallTransforms(
 	readonly statistics: CoreCrossCallTransformStatistics;
 } {
 	const service = new CoreTransformCandidateService(limits);
-	let summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+	let summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+		scope: "program",
+	});
 	let callGraphFunctionsAnalyzed = summaries.targets.statistics.functionsAnalyzed;
 	let sccTransfers = summaries.statistics.sccTransfers;
 	let callerWakeups = summaries.statistics.callerWakeups;
 	discoverCoreCrossCallCandidates(program, summaries, service);
 	let instructionsIntroduced = 0;
 	let blocksIntroduced = 0;
-	for (let candidate = service.next(); candidate !== undefined; candidate = service.next()) {
+	const inlineChanges: Array<CoreChangeSet> = [];
+	for (
+		let candidate = service.next();
+		candidate !== undefined;
+		candidate = service.next()
+	) {
 		const decline = service.admit(candidate);
 		if (decline !== undefined) {
 			service.recordDeclined(decline);
@@ -460,13 +716,14 @@ export function runCoreCrossCallTransforms(
 		service.recordApplied(candidate);
 		instructionsIntroduced += applied.instructionsIntroduced;
 		blocksIntroduced += applied.blocksIntroduced;
-		if (candidate.kind !== "inline") continue;
-		passes.runStage(
-			"canonicalize",
-			CORE_LOCAL_CANONICALIZATION_PASSES,
-			[applied.changes],
-		);
-		summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		if (candidate.kind !== "inline" && candidate.kind !== "guarded-inline") continue;
+		inlineChanges.push(applied.changes);
+		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, [
+			applied.changes,
+		]);
+		summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
 		callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
 		sccTransfers += summaries.statistics.sccTransfers;
 		callerWakeups += summaries.statistics.callerWakeups;
@@ -477,7 +734,15 @@ export function runCoreCrossCallTransforms(
 			new Set([candidate.caller, ...summaries.changedFunctions]),
 		);
 	}
-	summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+	if (inlineChanges.length > 0) {
+		passes.runStage("control-flow", CORE_CONTROL_FLOW_PASSES, inlineChanges);
+		passes.runStage("proofs", CORE_PROOF_PASSES, inlineChanges);
+		passes.runStage("memory", CORE_MEMORY_PASSES, inlineChanges);
+		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, inlineChanges);
+	}
+	summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+		scope: "program",
+	});
 	const budget = service.statistics();
 	return Object.freeze({
 		summaries,

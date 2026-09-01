@@ -25,19 +25,18 @@ import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALL_GRAPH_ANALYSIS,
+	analyzeCoreCallGraph,
 	coreCalleeTargetsAreOpen,
+	coreCalleeTargetsEqual,
 } from "./core-ir-call-targets.ts";
-import type {
-	CoreCallGraphIndex,
-	CoreIndexedCallSite,
-} from "./core-ir-call-targets.ts";
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreCallGraphIndex, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
+import {
+	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
+	buildCoreControlFlow,
+} from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
-import type {
-	CoreFunctionId,
-	CoreRepresentation,
-	CoreValueId,
-} from "./core-ir.ts";
+import type { CoreFunctionId, CoreRepresentation, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "call-effect-summary";
@@ -155,9 +154,7 @@ function joinOrigins(left: ValueOrigin, right: ValueOrigin): ValueOrigin {
 	return originsEqual(left, right) ? left : ORIGIN_UNKNOWN;
 }
 
-function returnRepresentation(
-	representation: CoreRepresentation,
-): ReturnRepresentation {
+function returnRepresentation(representation: CoreRepresentation): ReturnRepresentation {
 	switch (representation) {
 		case "i32":
 		case "f64":
@@ -171,12 +168,18 @@ function returnRepresentation(
 
 function returnProvenance(origin: ValueOrigin): ReturnProvenance {
 	switch (origin.kind) {
-		case "none": return RETURN_PROVENANCE_NONE;
-		case "fresh": return { kind: "fresh" };
-		case "primitive": return { kind: "primitive" };
-		case "parameter": return { kind: "parameter", index: origin.index };
-		case "receiver": return { kind: "receiver" };
-		case "unknown": return { kind: "unknown" };
+		case "none":
+			return RETURN_PROVENANCE_NONE;
+		case "fresh":
+			return { kind: "fresh" };
+		case "primitive":
+			return { kind: "primitive" };
+		case "parameter":
+			return { kind: "parameter", index: origin.index };
+		case "receiver":
+			return { kind: "receiver" };
+		case "unknown":
+			return { kind: "unknown" };
 	}
 }
 
@@ -216,10 +219,9 @@ function noteEscape(
 }
 
 function analyzeLocalSummary(
-	program: CoreProgram,
 	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
 ): CoreLocalFunctionSummary {
-	const cfg = buildCoreControlFlow(program, fn.id, { exceptions: true });
 	const origins = Array<ValueOrigin>(fn.valueCapacity).fill(ORIGIN_NONE);
 	for (const [index, parameter] of fn.parameters.entries()) {
 		origins[parameter] = Object.freeze({ kind: "parameter", index });
@@ -266,7 +268,10 @@ function analyzeLocalSummary(
 	const parameterContainment = Array<ValueContainmentFact>(fn.parameters.length).fill(
 		"preserved",
 	);
-	const receiver = { escape: "none" as ValueEscapeFact, containment: "preserved" as ValueContainmentFact };
+	const receiver = {
+		escape: "none" as ValueEscapeFact,
+		containment: "preserved" as ValueContainmentFact,
+	};
 	for (const block of cfg.reachable) {
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
@@ -276,11 +281,11 @@ function analyzeLocalSummary(
 				descriptor.callTransfer === undefined
 					? instructionEffects
 					: {
-						...instructionEffects,
-						reads: instructionEffects.reads.filter((domain) => domain !== "host"),
-						writes: instructionEffects.writes.filter((domain) => domain !== "host"),
-						callsUserCode: false,
-					},
+							...instructionEffects,
+							reads: instructionEffects.reads.filter((domain) => domain !== "host"),
+							writes: instructionEffects.writes.filter((domain) => domain !== "host"),
+							callsUserCode: false,
+						},
 			);
 			for (const [operandIndex, value] of fn.instructionOperands(instruction).entries()) {
 				const origin = origins[value]!;
@@ -445,7 +450,8 @@ function rootReasons(
 						if (
 							fn.instructionOpcodeName(instruction) !== "storeGlobal" ||
 							fn.instructionAttributes(instruction).index !== slot
-						) continue;
+						)
+							continue;
 						const value = fn.instructionOperands(instruction)[0];
 						if (value === undefined) continue;
 						const installed = targets.targets(functionId, value);
@@ -539,15 +545,21 @@ function deriveSummary(
 		effects,
 		relativeOwnSlotEffects: Object.freeze([]),
 		callees: Object.freeze(
-			[...new Set(targets.outgoing(functionId).flatMap((site) =>
-				callTargets(program, site).map((callee) =>
-					functionSummaryId(program.function(callee).metadata.sourcePath, callee),
+			[
+				...new Set(
+					targets
+						.outgoing(functionId)
+						.flatMap((site) =>
+							callTargets(program, site).map((callee) =>
+								functionSummaryId(program.function(callee).metadata.sourcePath, callee),
+							),
+						),
 				),
-			))].sort(),
+			].sort(),
 		),
-		openCallEdge: targets.outgoing(functionId).some((site) =>
-			coreCalleeTargetsAreOpen(site.targets),
-		),
+		openCallEdge: targets
+			.outgoing(functionId)
+			.some((site) => coreCalleeTargetsAreOpen(site.targets)),
 		externallyReachable: roots.length > 0,
 		rootReasons: roots,
 		parameterEscape: Object.freeze(parameterEscape),
@@ -576,16 +588,25 @@ function moduleSummaries(
 	const result = new Map<string, ModuleEffectSummary>();
 	for (const [id, summaries] of grouped) {
 		let effects = NO_EFFECT_SUMMARY;
-		for (const summary of summaries) effects = joinEffectSummaries(effects, summary.effects);
-		const sourcePath = program.function(summaries[0]!.functionIndex as CoreFunctionId).metadata.sourcePath;
-		result.set(id, Object.freeze({
+		for (const summary of summaries)
+			effects = joinEffectSummaries(effects, summary.effects);
+		const sourcePath = program.function(summaries[0]!.functionIndex as CoreFunctionId)
+			.metadata.sourcePath;
+		result.set(
 			id,
-			sourcePath,
-			effects,
-			functions: Object.freeze(summaries.map(({ id: functionId }) => functionId).sort()),
-			externallyReachable: summaries.some(({ externallyReachable }) => externallyReachable),
-			evaluated: evaluated.has(sourcePath),
-		}));
+			Object.freeze({
+				id,
+				sourcePath,
+				effects,
+				functions: Object.freeze(
+					summaries.map(({ id: functionId }) => functionId).sort(),
+				),
+				externallyReachable: summaries.some(
+					({ externallyReachable }) => externallyReachable,
+				),
+				evaluated: evaluated.has(sourcePath),
+			}),
+		);
 	}
 	return result;
 }
@@ -594,6 +615,7 @@ function analyzeProgramSummaries(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	targets: CoreCallGraphIndex,
+	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
 	previous?: CoreProgramSummaryState,
 ): CoreProgramSummaryState {
 	const local = new Map<CoreFunctionId, CoreLocalFunctionSummary>();
@@ -607,7 +629,7 @@ function analyzeProgramSummaries(
 			local.set(functionId, prior);
 			functionsReused++;
 		} else {
-			local.set(functionId, analyzeLocalSummary(program, fn));
+			local.set(functionId, analyzeLocalSummary(fn, controlFlow(functionId)));
 			changedFunctions.add(functionId);
 			functionsAnalyzed++;
 		}
@@ -621,15 +643,18 @@ function analyzeProgramSummaries(
 	}
 	for (const functionId of program.functionIds()) {
 		if (current.has(functionId)) continue;
-		current.set(functionId, deriveSummary(
-			program,
+		current.set(
 			functionId,
-			local.get(functionId)!,
-			targets,
-			current,
-			reasons,
-			false,
-		));
+			deriveSummary(
+				program,
+				functionId,
+				local.get(functionId)!,
+				targets,
+				current,
+				reasons,
+				false,
+			),
+		);
 	}
 	const queue: Array<number> = [];
 	const queued = new Set<number>();
@@ -644,7 +669,17 @@ function analyzeProgramSummaries(
 		for (const functionId of changedFunctions) enqueue(owner.get(functionId));
 		if (targets.statistics.updatedCallSites > 0) {
 			for (const functionId of program.functionIds()) {
-				if (targets.outgoing(functionId).some(({ id }) => previous.targets.site(id)?.targets !== targets.site(id)?.targets)) {
+				if (
+					targets.outgoing(functionId).some(({ id }) => {
+						const prior = previous.targets.site(id)?.targets;
+						const current = targets.site(id)?.targets;
+						return (
+							prior === undefined ||
+							current === undefined ||
+							!coreCalleeTargetsEqual(prior, current)
+						);
+					})
+				) {
 					enqueue(owner.get(functionId));
 				}
 			}
@@ -659,15 +694,18 @@ function analyzeProgramSummaries(
 		queued.delete(sccIndex);
 		const scc = sccs[sccIndex]!;
 		for (const functionId of scc.functions) {
-			current.set(functionId, deriveSummary(
-				program,
+			current.set(
 				functionId,
-				local.get(functionId)!,
-				targets,
-				current,
-				reasons,
-				false,
-			));
+				deriveSummary(
+					program,
+					functionId,
+					local.get(functionId)!,
+					targets,
+					current,
+					reasons,
+					false,
+				),
+			);
 		}
 		let changed = true;
 		while (changed) {
@@ -703,14 +741,17 @@ function analyzeProgramSummaries(
 	}
 	for (const functionId of program.functionIds()) {
 		if (current.has(functionId)) continue;
-		current.set(functionId, deriveSummary(
-			program,
+		current.set(
 			functionId,
-			local.get(functionId)!,
-			targets,
-			current,
-			reasons,
-		));
+			deriveSummary(
+				program,
+				functionId,
+				local.get(functionId)!,
+				targets,
+				current,
+				reasons,
+			),
+		);
 	}
 	const published = new Map<CoreFunctionId, CorePublishedFunctionSummary>();
 	for (const [functionId, summary] of current) {
@@ -718,10 +759,13 @@ function analyzeProgramSummaries(
 		if (prior !== undefined && summaryKey(prior.summary) === summaryKey(summary)) {
 			published.set(functionId, prior);
 		} else {
-			published.set(functionId, Object.freeze({
-				version: (prior?.version ?? 0) + 1,
-				summary,
-			}));
+			published.set(
+				functionId,
+				Object.freeze({
+					version: (prior?.version ?? 0) + 1,
+					summary,
+				}),
+			);
 		}
 	}
 	const functionEffects = new Map(
@@ -757,36 +801,38 @@ function analyzeProgramSummaries(
 	});
 }
 
-export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgramSummaryState> = {
-	key: "program-summaries",
-	scope: "program",
-	functionDependencies: ["body", "cfg", "calls", "memoryEffects", "representations"],
-	programDependencies: [
-		"functions",
-		"calls",
-		"facts",
-		"representations",
-		"specializationInputs",
-	],
-	contextIdentity(context) {
-		return context.facts.closure.sourceClosure.kind;
-	},
-	compute({ program, context, request, previous }) {
-		if (request.scope !== "program") throw new Error("Expected program analysis request");
-		const targets = CORE_CALL_GRAPH_ANALYSIS.compute({
-			program,
-			context,
-			request,
-			previous: (previous as CoreProgramSummaryState | undefined)?.targets,
-		});
-		return analyzeProgramSummaries(
-			program,
-			context,
-			targets,
-			previous as CoreProgramSummaryState | undefined,
-		);
-	},
-};
+export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgramSummaryState> =
+	{
+		key: "program-summaries",
+		scope: "program",
+		functionDependencies: ["body", "cfg", "calls", "memoryEffects", "representations"],
+		programDependencies: [
+			"functions",
+			"calls",
+			"facts",
+			"representations",
+			"specializationInputs",
+		],
+		contextIdentity(context) {
+			return context.facts.closure.sourceClosure.kind;
+		},
+		compute({ program, context, request, previous, get }) {
+			if (request.scope !== "program")
+				throw new Error("Expected program analysis request");
+			const targets = get(CORE_CALL_GRAPH_ANALYSIS, request);
+			return analyzeProgramSummaries(
+				program,
+				context,
+				targets,
+				(functionId) =>
+					get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					}),
+				previous as CoreProgramSummaryState | undefined,
+			);
+		},
+	};
 
 export function analyzeCoreProgramSummaries(
 	program: CoreProgram,
@@ -803,10 +849,14 @@ export function analyzeCoreProgramSummaries(
 	if (context === undefined) {
 		throw new Error("Core program summaries require a compilation context");
 	}
-	const targets = CORE_CALL_GRAPH_ANALYSIS.compute({
+	const targets = analyzeCoreCallGraph(
 		program,
+		context.facts.closure.sourceClosure.kind === "known",
+		undefined,
+		undefined,
 		context,
-		request: { scope: "program" },
-	});
-	return analyzeProgramSummaries(program, context, targets);
+	);
+	return analyzeProgramSummaries(program, context, targets, (functionId) =>
+		buildCoreControlFlow(program, functionId, { exceptions: true }),
+	);
 }
