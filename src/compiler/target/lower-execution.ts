@@ -1,6 +1,5 @@
 import { coreCompilerSiteId } from "../core/compiler-site-facts.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
-import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
 import {
 	CORE_CALLEE_TARGETS_ATTRIBUTE,
 	CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE,
@@ -43,6 +42,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "../core/core-ir.ts";
+import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
@@ -386,7 +386,8 @@ function rebuildOperation(
 		),
 	);
 	if (directEntryId !== undefined) selectedAttributes.directEntryId = directEntryId;
-	if (knownBuiltinCall !== undefined) selectedAttributes.knownBuiltinCall = knownBuiltinCall;
+	if (knownBuiltinCall !== undefined)
+		selectedAttributes.knownBuiltinCall = knownBuiltinCall;
 	if (exactCollectionReceiver !== undefined) {
 		selectedAttributes.exactCollectionReceiver = exactCollectionReceiver;
 	}
@@ -394,8 +395,7 @@ function rebuildOperation(
 		selectedAttributes.exactArrayLength = exactArrayLength;
 	}
 	if (directStringCharCodeAtPosition !== undefined) {
-		selectedAttributes.directStringCharCodeAtPosition =
-			directStringCharCodeAtPosition;
+		selectedAttributes.directStringCharCodeAtPosition = directStringCharCodeAtPosition;
 	}
 	if (primitiveStringLength !== undefined) {
 		selectedAttributes.primitiveStringLength = primitiveStringLength;
@@ -594,9 +594,7 @@ function lowerCoreSpecializations(
 				throw new Error(`Core iterator plan ${selection.id} lost its protocol steps`);
 			}
 			const iteratorSteps = steps.filter(
-				(
-					step,
-				): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
+				(step): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
 					step.type === "iteratorStep",
 			);
 			const common = {
@@ -669,9 +667,7 @@ function lowerCoreSpecializations(
 				throw new Error(`Core iterator-result plan ${selection.id} lost its steps`);
 			}
 			const iteratorSteps = steps.filter(
-				(
-					step,
-				): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
+				(step): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
 					step.type === "iteratorStep",
 			);
 			regions.push({
@@ -714,15 +710,11 @@ function lowerCoreSpecializations(
 				throw new Error(`Core iterator-entry plan ${selection.id} lost its protocol`);
 			}
 			const loweredInnerSteps = innerSteps.filter(
-				(
-					step,
-				): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
+				(step): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
 					step.type === "iteratorStep",
 			);
 			const loweredInnerCloses = innerCloses.filter(
-				(
-					close,
-				): close is Extract<CompilerInstruction, { type: "iteratorClose" }> =>
+				(close): close is Extract<CompilerInstruction, { type: "iteratorClose" }> =>
 					close.type === "iteratorClose",
 			);
 			if (loweredInnerSteps.length !== 2) {
@@ -755,7 +747,8 @@ function lowerCoreSpecializations(
 		}
 		if (selection.kind === "string-split-cursor") {
 			const cursor = selection.stringSplitCursor;
-			const property = requireInstruction(cursor.property);
+			const property =
+				cursor.property === undefined ? undefined : requireInstruction(cursor.property);
 			const call = requireInstruction(cursor.call);
 			const length = requireInstruction(cursor.length);
 			const compare = requireInstruction(cursor.compare);
@@ -770,7 +763,7 @@ function lowerCoreSpecializations(
 			const primitiveStringLengths =
 				cursor.primitiveStringLengths.map(requireInstruction);
 			if (
-				property.type !== "loadPropertyStatic" ||
+				(property !== undefined && property.type !== "loadPropertyStatic") ||
 				(call.type !== "call" && call.type !== "callBuiltin") ||
 				length.type !== "loadPropertyStatic" ||
 				compare.type !== "binary" ||
@@ -798,7 +791,7 @@ function lowerCoreSpecializations(
 					admission: admission(selection),
 				},
 				representation: "split-cursor-spans",
-				property,
+				...(property === undefined ? {} : { property }),
 				propertyPlacement: cursor.propertyPlacement,
 				splitIdentity: cursor.splitIdentity,
 				trimIdentity: cursor.trimIdentity,
@@ -894,16 +887,14 @@ function lowerCoreSpecializations(
 					? undefined
 					: (() => {
 							const constructorIntrinsic = requireInstruction(
-								regexp.lockedLiteral!.constructorIntrinsic,
+								regexp.lockedLiteral.constructorIntrinsic,
 							);
-							const construct = requireInstruction(regexp.lockedLiteral!.construct);
+							const construct = requireInstruction(regexp.lockedLiteral.construct);
 							if (
 								constructorIntrinsic.type !== "loadIntrinsic" ||
 								construct.type !== "construct"
 							) {
-								throw new Error(
-									`Core RegExp.exec plan ${selection.id} lost its literal`,
-								);
+								throw new Error(`Core RegExp.exec plan ${selection.id} lost its literal`);
 							}
 							return { constructorIntrinsic, construct };
 						})();
@@ -950,9 +941,7 @@ function lowerCoreSpecializations(
 					const consumerProperty = requireInstruction(consumer.property);
 					const consumerCall = requireInstruction(consumer.call);
 					const zero =
-						consumer.zero === undefined
-							? undefined
-							: requireInstruction(consumer.zero);
+						consumer.zero === undefined ? undefined : requireInstruction(consumer.zero);
 					if (
 						consumerProperty.type !== "loadPropertyStatic" ||
 						consumerCall.type !== "call" ||
@@ -1353,10 +1342,7 @@ export function coreRegisterClasses(
 			for (let index = start; index < order.length; index++) {
 				const value = order[index]!;
 				liveOut[predecessor]!.add(value);
-				if (
-					definitions[predecessor]!.has(value) ||
-					liveIn[predecessor]!.has(value)
-				) {
+				if (definitions[predecessor]!.has(value) || liveIn[predecessor]!.has(value)) {
 					continue;
 				}
 				liveIn[predecessor]!.add(value);
@@ -1411,20 +1397,20 @@ export function coreRegisterClasses(
 		for (const value of liveIn[block]!) touch(value, block, blockStart, 0);
 		const instructions = [...fn.bodyInstructionIds(block)];
 		for (const [instructionIndex, instruction] of instructions.entries()) {
-			const position = nextPosition++;
+			const readPosition = nextPosition++;
+			const writePosition = nextPosition++;
 			for (const input of fn.instructionOperands(instruction))
-				touch(input, block, position, instructionIndex + 1);
+				touch(input, block, readPosition, instructionIndex * 2 + 1);
 			for (const output of fn.instructionResults(instruction))
-				touch(output, block, position, instructionIndex + 1);
+				touch(output, block, writePosition, instructionIndex * 2 + 2);
 		}
 		const blockEnd = nextPosition++;
-		const blockEndPosition = instructions.length + 1;
+		const blockEndPosition = instructions.length * 2 + 1;
 		for (const value of terminatorValues[block]!)
 			touch(value, block, blockEnd, blockEndPosition);
 		for (const argument of fn.blockHandler(block)?.arguments ?? [])
 			touch(argument, block, blockEnd, blockEndPosition);
-		for (const value of liveOut[block]!)
-			touch(value, block, blockEnd, blockEndPosition);
+		for (const value of liveOut[block]!) touch(value, block, blockEnd, blockEndPosition);
 		for (const parameter of handlerParameters(block)) {
 			touch(parameter, block, blockStart, 0);
 			touch(parameter, block, blockEnd, blockEndPosition);
@@ -1565,18 +1551,9 @@ function lowerFunctionToTarget(
 		CoreInstructionId,
 		CoreAttributeValue
 	>();
-	const plannedPrimitiveStringLengths = new Map<
-		CoreInstructionId,
-		CoreAttributeValue
-	>();
-	const plannedDirectFunctionCalls = new Map<
-		CoreInstructionId,
-		CoreAttributeValue
-	>();
-	const plannedDirectCallTargets = new Map<
-		CoreInstructionId,
-		CoreAttributeValue
-	>();
+	const plannedPrimitiveStringLengths = new Map<CoreInstructionId, CoreAttributeValue>();
+	const plannedDirectFunctionCalls = new Map<CoreInstructionId, CoreAttributeValue>();
+	const plannedDirectCallTargets = new Map<CoreInstructionId, CoreAttributeValue>();
 	for (const selection of specializationPlans) {
 		if (selection.kind === "dense-array-plan") {
 			denseReserveLengths.set(
@@ -1660,7 +1637,9 @@ function lowerFunctionToTarget(
 	const allocation = coreRegisterClasses(
 		coreFunction,
 		reuseRegisters,
-		new Set(coreSupportsDirectEntries(coreFunction) ? coreFunction.parameters.keys() : []),
+		new Set(
+			coreSupportsDirectEntries(coreFunction) ? coreFunction.parameters.keys() : [],
+		),
 		blockOrder,
 	);
 	const registerRepresentations = new Map(allocation.registerRepresentations);
@@ -1833,7 +1812,7 @@ function lowerFunctionToTarget(
 		instructions.push(
 			...sourcePositionMarker(coreFunction.instructionSourcePosition(terminatorId)),
 		);
-			switch (terminator.kind) {
+		switch (terminator.kind) {
 			case "jump": {
 				const lowered: Extract<CompilerInstruction, { type: "jump" }> = {
 					type: "jump",
@@ -1868,10 +1847,7 @@ function lowerFunctionToTarget(
 				break;
 			case "return":
 			case "throw": {
-				const lowered: Extract<
-					CompilerInstruction,
-					{ type: "return" | "throw" }
-				> = {
+				const lowered: Extract<CompilerInstruction, { type: "return" | "throw" }> = {
 					type: terminator.kind,
 					registers: [registerForValue(terminator.value)],
 				};

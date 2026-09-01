@@ -359,9 +359,7 @@ export function analyzeCoreLoopInductions(
 				(initialScalar === "number" || initialScalar === "int32");
 			const recurrenceScalar = bootstrap
 				? (value: CoreValueId): CoreExactScalarKind | undefined =>
-						root(value) === root(parameter.value)
-							? initialScalar
-							: exactScalar?.(value)
+						root(value) === root(parameter.value) ? initialScalar : exactScalar?.(value)
 				: exactScalar;
 			const recurrence = recurrenceStep(
 				fn,

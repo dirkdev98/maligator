@@ -318,7 +318,6 @@ describe("Core target construction", () => {
 			}
 		}
 	});
-
 });
 
 describe("Core target verification", () => {
@@ -428,7 +427,9 @@ describe("Core target verification", () => {
 
 	it("rejects a parallel copy whose emitted moves lose its semantics", () => {
 		const program = optimizedTarget(LOOP_SOURCE, "parallel-copies.js");
-		const functionIndex = program.functions.findIndex((fn) => fn.parallelCopies.length > 0);
+		const functionIndex = program.functions.findIndex(
+			(fn) => fn.parallelCopies.length > 0,
+		);
 		const fn = program.functions[functionIndex]!;
 		const copyIndex = 0;
 		const copy = fn.parallelCopies[copyIndex]!;

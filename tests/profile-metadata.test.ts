@@ -250,6 +250,41 @@ test("remaps stable Core function identities in inline chains and fact-flow targ
 	);
 });
 
+test("drops unused inline source rows that name dead Core functions", () => {
+	const program = new CoreProgram(coreOpcodeRegistry, {
+		stringConstants: [[]],
+		sourcePositions: [
+			{ line: 1, column: 0 },
+			{ line: 2, column: 3, inlinedFunctionIndex: 2, callerPosId: 0 },
+		],
+	});
+	const entry = new CoreFunctionBuilder(program, {
+		metadata: { sourcePath: "/entry.js" },
+	});
+	const entryBlock = entry.createBlock();
+	const [result] = entry.appendInstruction(entryBlock, "createUndefined", [], {
+		sourcePosition: 0,
+	});
+	entry.setTerminator(entryBlock, { kind: "return", value: result! });
+	entry.finish(entryBlock);
+
+	for (const sourcePath of ["/dead.js", "/unused-inline.js"]) {
+		const dead = new CoreFunctionBuilder(program, { metadata: { sourcePath } });
+		const block = dead.createBlock();
+		const [deadResult] = dead.appendInstruction(block, "createUndefined", []);
+		dead.setTerminator(block, { kind: "return", value: deadResult! });
+		dead.finish(block);
+	}
+
+	const optimized = optimizeCore({ program, context: programAnalysisContext() });
+	expect(optimized.compilation.plan.liveFunctions).toEqual([0]);
+	const definition = lowerExecutionToProgramImage(
+		lowerCoreCompilationToExecution(optimized.compilation),
+	);
+	expect(definition.runtime.sourcePositions).toEqual([{ line: 1, column: 0 }]);
+	expect(definition.runtime.functions[0]?.positions).toContain(0);
+});
+
 test("profile remarks describe the residual property path selected by lowering", () => {
 	const source = `
 		function read(n, touch) {

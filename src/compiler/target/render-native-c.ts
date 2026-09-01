@@ -572,16 +572,17 @@ function emitCompiledVariant(
 			...(elided
 				? { elided: true }
 				: scalarSlotRepresentation === undefined
-				? { slotsOffset: nextStackSlot }
-				: {
-						scalarSlot: {
-							name: `__stack_object_${site.allocationIp}_slot_0`,
-							representation: scalarSlotRepresentation,
-						},
-					}),
+					? { slotsOffset: nextStackSlot }
+					: {
+							scalarSlot: {
+								name: `__stack_object_${site.allocationIp}_slot_0`,
+								representation: scalarSlotRepresentation,
+							},
+						}),
 			slotCount: site.slotCount,
 		});
-		if (!elided && scalarSlotRepresentation === undefined) nextStackSlot += site.slotCount;
+		if (!elided && scalarSlotRepresentation === undefined)
+			nextStackSlot += site.slotCount;
 	}
 	const stackObjectMaterializations = new Map<number, StackObjectSite>();
 	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
@@ -4874,8 +4875,8 @@ function emitInstruction(
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
 			if (
 				nativeBuiltinCollectionCallChainAction?.role === "call" &&
-				nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies
-					.length === 1 &&
+				nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies.length ===
+					1 &&
 				nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies[0]
 					?.kind === "world" &&
 				nativeBuiltinCollectionCallChainAction.chain.license.guard.dependencies[0]

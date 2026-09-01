@@ -94,8 +94,7 @@ export class CoreAnalysisManager {
 			program: this.#program,
 			context: this.#context,
 			request,
-			get: (dependency, dependencyRequest) =>
-				this.get(dependency, dependencyRequest),
+			get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
 			...(cached === undefined ? {} : { previous: cached.value }),
 		});
 		this.#cache.set(cacheKey, { versionKey, value });

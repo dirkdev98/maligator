@@ -2391,6 +2391,73 @@ export interface RuntimeProgramLoweringPlan {
 	readonly functions: ReadonlyArray<RuntimeFunctionLoweringPlan>;
 }
 
+function retainExecutionSourcePositions(
+	program: ExecutionProgram,
+	functionPlans: ReadonlyArray<RuntimeFunctionLoweringPlan>,
+): RuntimeImage["sourcePositions"] {
+	const retained = new Set<number>();
+	const retain = (positionId: number): void => {
+		if (retained.has(positionId)) return;
+		const position = program.core.sourcePositions[positionId];
+		if (position === undefined) {
+			throw new RangeError(`invalid Execution source position ${positionId}`);
+		}
+		retained.add(positionId);
+		if (position.callerPosId !== undefined) retain(position.callerPosId);
+	};
+	for (const { bytecode } of functionPlans) {
+		for (const positionId of bytecode.positions) {
+			if (positionId >= 0) retain(positionId);
+		}
+	}
+	const retainedIds = [...retained].sort((left, right) => left - right);
+	const relocatedIds = new Map(
+		retainedIds.map((positionId, index) => [positionId, index]),
+	);
+	for (const { bytecode } of functionPlans) {
+		const trustedSafepoints = vmSafepointRootMapsAreTrusted(bytecode);
+		bytecode.positions = bytecode.positions.map((positionId) => {
+			if (positionId < 0) return -1;
+			const relocated = relocatedIds.get(positionId);
+			if (relocated === undefined) {
+				throw new RangeError(`unretained Execution source position ${positionId}`);
+			}
+			return relocated;
+		});
+		if (trustedSafepoints) {
+			trustedVmSafepointRootMaps.set(
+				bytecode,
+				vmSafepointRootMapTrustFingerprint(bytecode),
+			);
+		}
+	}
+	return retainedIds.map((positionId) => {
+		const position = program.core.sourcePositions[positionId]!;
+		const callerPosId =
+			position.callerPosId === undefined
+				? undefined
+				: relocatedIds.get(position.callerPosId);
+		if (position.callerPosId !== undefined && callerPosId === undefined) {
+			throw new RangeError(
+				`unretained Execution caller position ${position.callerPosId}`,
+			);
+		}
+		return {
+			line: position.line,
+			column: position.column,
+			...(position.inlinedFunctionIndex === undefined
+				? {}
+				: {
+						inlinedFunctionIndex: executionFunctionIndex(
+							program.functionMap,
+							position.inlinedFunctionIndex,
+						),
+					}),
+			...(callerPosId === undefined ? {} : { callerPosId }),
+		};
+	});
+}
+
 /** Lower an ExecutionProgram already verified by its terminal owner. */
 export function lowerVerifiedExecutionToRuntimePlan(
 	program: ExecutionProgram,
@@ -2415,6 +2482,7 @@ export function lowerVerifiedExecutionToRuntimePlan(
 			knownShapeLayout.literalShapeCounts[index]!,
 		),
 	);
+	const sourcePositions = retainExecutionSourcePositions(program, functionPlans);
 	const functions = functionPlans.map(({ bytecode }) => bytecode);
 	const runtime: RuntimeImage = {
 		entrypointPath: context.data.entrypointPath,
@@ -2430,17 +2498,7 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		),
 		hostInstalls: buildHostInstalls(context, functions),
 		files,
-		sourcePositions: core.sourcePositions.map((position) => ({
-			...position,
-			...(position.inlinedFunctionIndex === undefined
-				? {}
-				: {
-						inlinedFunctionIndex: executionFunctionIndex(
-							program.functionMap,
-							position.inlinedFunctionIndex,
-						),
-					}),
-		})),
+		sourcePositions,
 	};
 	validateRuntimeImageMetadata(runtime);
 	return { runtime, functions: functionPlans };

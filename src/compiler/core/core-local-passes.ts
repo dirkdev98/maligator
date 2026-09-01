@@ -1203,8 +1203,26 @@ const foldPrimitiveCoercions: CorePass = {
 		)
 			return undefined;
 		const opcode = fn.instructionOpcodeName(item.instruction);
-		if (opcode !== "requireCoercible" && opcode !== "toPropertyKey") return undefined;
+		if (opcode !== "requireCoercible" && opcode !== "toPropertyKey" && opcode !== "unary")
+			return undefined;
 		const operands = fn.instructionOperands(item.instruction);
+		if (opcode === "unary") {
+			const [input] = operands;
+			const [result] = fn.instructionResults(item.instruction);
+			if (
+				fn.instructionAttributes(item.instruction).operator !== "tonumeric" ||
+				input === undefined ||
+				result === undefined ||
+				(fn.valueRepresentation(input) !== "f64" &&
+					fn.valueRepresentation(input) !== "i32") ||
+				fn.valueRepresentation(result) !== fn.valueRepresentation(input)
+			)
+				return undefined;
+			const editor = CoreEditor.open(program, item.function);
+			editor.replaceValueUses(result, input);
+			editor.removeInstruction(item.instruction);
+			return editor.commit();
+		}
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const coercible = (value: CoreValueId): boolean => {
 			const mask = kinds.kindMask(value);
@@ -1579,6 +1597,9 @@ const foldRedundantTdzChecks: CorePass = {
 								"loadCaptured",
 								"loadGlobal",
 								"loadLocal",
+								"loadProperty",
+								"loadPropertyStatic",
+								"loadPropertyStaticShapeCase",
 								"loadThis",
 							].includes(opcode);
 			}
@@ -2176,6 +2197,11 @@ export const CORE_LOCAL_FINALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	{
 		...rewriteExactBuiltinCalls,
 		name: "post-representation-exact-builtin-calls",
+		stage: "finalize",
+	},
+	{
+		...foldPrimitiveCoercions,
+		name: "post-representation-primitive-coercion-folding",
 		stage: "finalize",
 	},
 	{

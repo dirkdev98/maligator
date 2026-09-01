@@ -82,7 +82,10 @@ export const CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS: CoreAnalysisDefinition<
 	compute({ program, request, get }) {
 		if (request.scope !== "function") throw new Error("Expected function analysis");
 		const fn = program.function(request.function);
-		return analyzeCoreLocalExceptionFlows(fn, get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, request));
+		return analyzeCoreLocalExceptionFlows(
+			fn,
+			get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, request),
+		);
 	},
 };
 

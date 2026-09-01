@@ -1,8 +1,6 @@
-import type {
-	CompilerGuardPlan,
-	KnownBuiltinCall,
-} from "../shared/compiler-facts.ts";
+import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -10,7 +8,6 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
-import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import type { CoreFunctionVersions, CoreProgramVersions } from "./core-store.ts";
 import type {
 	CoreTransformBudgetStatistics,
@@ -87,8 +84,7 @@ interface CorePlanSpecializationBase<Kind extends CorePlanSpecializationKind> {
 	readonly cost: CorePlanCost;
 }
 
-export interface CorePlanStackObjectSpecialization
-	extends CorePlanSpecializationBase<"stack-object-plan"> {
+export interface CorePlanStackObjectSpecialization extends CorePlanSpecializationBase<"stack-object-plan"> {
 	readonly stackObject: {
 		readonly allocation: CoreInstructionId;
 		readonly mode: "elided" | "activation-local";
@@ -104,8 +100,7 @@ export interface CorePlanStackObjectSpecialization
 	};
 }
 
-export interface CorePlanDenseArraySpecialization
-	extends CorePlanSpecializationBase<"dense-array-plan"> {
+export interface CorePlanDenseArraySpecialization extends CorePlanSpecializationBase<"dense-array-plan"> {
 	readonly denseArray: {
 		readonly allocation: CoreInstructionId;
 		readonly store: CoreInstructionId;
@@ -114,8 +109,7 @@ export interface CorePlanDenseArraySpecialization
 	};
 }
 
-export interface CorePlanStringSplitProjectionSpecialization
-	extends CorePlanSpecializationBase<"string-split-projection"> {
+export interface CorePlanStringSplitProjectionSpecialization extends CorePlanSpecializationBase<"string-split-projection"> {
 	readonly stringSplitProjection: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
@@ -141,8 +135,7 @@ export interface CorePlanStringSplitProjectionSpecialization
 	};
 }
 
-export interface CorePlanStringSliceNumberSpecialization
-	extends CorePlanSpecializationBase<"string-slice-number"> {
+export interface CorePlanStringSliceNumberSpecialization extends CorePlanSpecializationBase<"string-slice-number"> {
 	readonly stringSliceNumber: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
@@ -157,8 +150,7 @@ export interface CorePlanStringSliceNumberSpecialization
 	};
 }
 
-export interface CorePlanRegExpExecProjectionSpecialization
-	extends CorePlanSpecializationBase<"regexp-exec-projection"> {
+export interface CorePlanRegExpExecProjectionSpecialization extends CorePlanSpecializationBase<"regexp-exec-projection"> {
 	readonly regexpExecProjection: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
@@ -206,8 +198,7 @@ export interface CorePlanRegExpExecProjectionSpecialization
 	};
 }
 
-export interface CorePlanRegExpIteratorProjectionSpecialization
-	extends CorePlanSpecializationBase<"regexp-iterator-projection"> {
+export interface CorePlanRegExpIteratorProjectionSpecialization extends CorePlanSpecializationBase<"regexp-iterator-projection"> {
 	readonly regexpIteratorProjection: {
 		readonly guard: CompilerGuardPlan;
 		readonly step: CoreInstructionId;
@@ -224,8 +215,7 @@ export interface CorePlanRegExpIteratorProjectionSpecialization
 	};
 }
 
-export interface CorePlanStringCharCodeAtSpecialization
-	extends CorePlanSpecializationBase<"string-char-code-at-chain"> {
+export interface CorePlanStringCharCodeAtSpecialization extends CorePlanSpecializationBase<"string-char-code-at-chain"> {
 	readonly stringCharCodeAt: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
@@ -240,8 +230,7 @@ export interface CorePlanStringCharCodeAtSpecialization
 	};
 }
 
-export interface CorePlanBuiltinCollectionCallSpecialization
-	extends CorePlanSpecializationBase<"builtin-collection-call-chain"> {
+export interface CorePlanBuiltinCollectionCallSpecialization extends CorePlanSpecializationBase<"builtin-collection-call-chain"> {
 	readonly builtinCollectionCall: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
@@ -266,8 +255,7 @@ export type CorePlanIteratorCursorProtocol =
 	| "map"
 	| "set";
 
-export interface CorePlanIteratorCursorSpecialization
-	extends CorePlanSpecializationBase<CorePlanIteratorCursorKind> {
+export interface CorePlanIteratorCursorSpecialization extends CorePlanSpecializationBase<CorePlanIteratorCursorKind> {
 	readonly iteratorCursor: {
 		readonly initialize: CoreInstructionId;
 		readonly steps: ReadonlyArray<CoreInstructionId>;
@@ -275,16 +263,14 @@ export interface CorePlanIteratorCursorSpecialization
 	};
 }
 
-export interface CorePlanIteratorResultVirtualizationSpecialization
-	extends CorePlanSpecializationBase<"iterator-result-virtualization"> {
+export interface CorePlanIteratorResultVirtualizationSpecialization extends CorePlanSpecializationBase<"iterator-result-virtualization"> {
 	readonly iteratorResultVirtualization: {
 		readonly guard: CompilerGuardPlan;
 		readonly steps: ReadonlyArray<CoreInstructionId>;
 	};
 }
 
-export interface CorePlanIteratorEntryPairVirtualizationSpecialization
-	extends CorePlanSpecializationBase<"iterator-entry-pair-virtualization"> {
+export interface CorePlanIteratorEntryPairVirtualizationSpecialization extends CorePlanSpecializationBase<"iterator-entry-pair-virtualization"> {
 	readonly iteratorEntryPairVirtualization: {
 		readonly guard: CompilerGuardPlan;
 		readonly cursorInitialize: CoreInstructionId;
@@ -295,8 +281,7 @@ export interface CorePlanIteratorEntryPairVirtualizationSpecialization
 	};
 }
 
-export interface CorePlanFreshArrayLengthSpecialization
-	extends CorePlanSpecializationBase<"fresh-array-length"> {
+export interface CorePlanFreshArrayLengthSpecialization extends CorePlanSpecializationBase<"fresh-array-length"> {
 	readonly freshArrayLength: {
 		readonly allocation: CoreInstructionId;
 		readonly load: CoreInstructionId;
@@ -304,8 +289,7 @@ export interface CorePlanFreshArrayLengthSpecialization
 	};
 }
 
-export interface CorePlanIndexedLengthLoopSpecialization
-	extends CorePlanSpecializationBase<"indexed-length-loop"> {
+export interface CorePlanIndexedLengthLoopSpecialization extends CorePlanSpecializationBase<"indexed-length-loop"> {
 	readonly indexedLengthLoop: {
 		readonly load: CoreInstructionId;
 		readonly comparison: CoreInstructionId;
@@ -317,8 +301,7 @@ export interface CorePlanIndexedLengthLoopSpecialization
 	};
 }
 
-export interface CorePlanFunctionCallChainSpecialization
-	extends CorePlanSpecializationBase<"function-call-chain"> {
+export interface CorePlanFunctionCallChainSpecialization extends CorePlanSpecializationBase<"function-call-chain"> {
 	readonly functionCall: {
 		readonly property: CoreInstructionId;
 		readonly call: CoreInstructionId;
@@ -326,13 +309,12 @@ export interface CorePlanFunctionCallChainSpecialization
 	};
 }
 
-export interface CorePlanStringSplitCursorSpecialization
-	extends CorePlanSpecializationBase<"string-split-cursor"> {
+export interface CorePlanStringSplitCursorSpecialization extends CorePlanSpecializationBase<"string-split-cursor"> {
 	readonly stringSplitCursor: {
 		readonly guard: CompilerGuardPlan;
 		readonly splitBuiltinCall: KnownBuiltinCall;
 		readonly trimBuiltinCall: KnownBuiltinCall;
-		readonly property: CoreInstructionId;
+		readonly property?: CoreInstructionId;
 		readonly propertyPlacement: CorePropertyPlacement;
 		readonly splitIdentity: CoreBuiltinIdentityDecision;
 		readonly trimIdentity: CoreBuiltinIdentityDecision;

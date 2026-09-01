@@ -332,9 +332,29 @@ function withBytecodeFunctions(
 	image: ProgramImage,
 	functions: Array<BytecodeFunction>,
 ): ProgramImage {
+	const sourcePositions = image.runtime.sourcePositions.map((position) =>
+		position.inlinedFunctionIndex !== undefined &&
+		position.inlinedFunctionIndex >= functions.length
+			? {
+					line: position.line,
+					column: position.column,
+					...(position.callerPosId === undefined
+						? {}
+						: { callerPosId: position.callerPosId }),
+				}
+			: position,
+	);
 	return {
 		...image,
-		runtime: { ...image.runtime, functionCount: functions.length, functions },
+		runtime: {
+			...image.runtime,
+			functionCount: functions.length,
+			functions,
+			sourcePositions,
+			cjsModuleFunctionIndices: image.runtime.cjsModuleFunctionIndices.filter(
+				(index) => index < functions.length,
+			),
+		},
 		native: createConservativeNativePlan(functions),
 	};
 }
@@ -1284,17 +1304,15 @@ describe("program-image-codec", () => {
 			},
 		];
 		const cachedDefinition = withNativeFunctionPlan(
-			{
-				...withRuntime(definition, {
+			withBytecodeFunctions(
+				withRuntime(definition, {
 					stringConstants: [
 						...definition.runtime.stringConstants,
 						[..."length"].map((character) => character.charCodeAt(0)),
 					],
-					functionCount: 1,
-					functions: cachedFunctions,
 				}),
-				native: createConservativeNativePlan(cachedFunctions),
-			},
+				cachedFunctions,
+			),
 			0,
 			(plan) => ({
 				...plan,
@@ -1825,24 +1843,21 @@ describe("program-image-codec", () => {
 	])(
 		"rejects invalid shaped object operands",
 		(count, keyStringIndices, valueRegisters) => {
-			const probe = withRuntime(definition, {
-				functions: [
-					{
-						...mainFn,
-						instructions: [
-							{
-								opcode: "CREATE_OBJECT_SHAPED",
-								dst: 0,
-								count,
-								keyStringIndices,
-								valueRegisters,
-								shapeCacheIndex: 0,
-							},
-						],
-					},
-				],
-				functionCount: 1,
-			});
+			const probe = withBytecodeFunctions(definition, [
+				{
+					...mainFn,
+					instructions: [
+						{
+							opcode: "CREATE_OBJECT_SHAPED",
+							dst: 0,
+							count,
+							keyStringIndices,
+							valueRegisters,
+							shapeCacheIndex: 0,
+						},
+					],
+				},
+			]);
 			expect(() => serializeCompilerArtifact(probe)).toThrow(
 				/invalid shaped object operands/,
 			);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
@@ -23,6 +24,7 @@ import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -304,6 +306,60 @@ function admissionIntervalProgram(interiorCall: boolean) {
 }
 
 describe("late Core specialization plan", () => {
+	it("plans direct split regions from the canonical callBuiltin producer", () => {
+		for (const [kind, source] of [
+			[
+				"string-split-projection",
+				`function first() { return "alpha,beta".split(",")[0]; }
+				globalThis.first = first;`,
+			],
+			[
+				"string-split-cursor",
+				`function sum(separator) {
+					const parts = " alpha ; beta ".split(separator);
+					let total = 0;
+					for (let index = 0; index < parts.length; index++) {
+						total += parts[index].trim().length;
+					}
+					return total;
+				}
+				globalThis.sum = sum;`,
+			],
+		] as const) {
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				source,
+				`direct-${kind}.js`,
+				parseScript(source, { strict: false }),
+			);
+			const compilation = optimizeSemanticProgramToCore(
+				semantic,
+				{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+				(_phase, run) => run(),
+			);
+			const selection = compilation.plan.specializations.find(
+				(candidate) => candidate.kind === kind,
+			);
+			expect(selection).toBeDefined();
+			if (
+				selection?.kind !== "string-split-projection" &&
+				selection?.kind !== "string-split-cursor"
+			)
+				throw new Error(`missing ${kind} plan`);
+			const split =
+				selection.kind === "string-split-projection"
+					? selection.stringSplitProjection
+					: selection.stringSplitCursor;
+			expect(split.property).toBeUndefined();
+			expect(selection.admission.anchor).toBe(split.call);
+			expect(selection.claimedInstructions).toContain(split.call);
+			expect(
+				compilation.program
+					.function(selection.function)
+					.instructionOpcodeName(split.call),
+			).toBe("callBuiltin");
+		}
+	});
+
 	it("deep-freezes the certified callback plan before target lowering", () => {
 		const source = `globalThis.first = function first(value) {
 			const fields = value.split(";");
@@ -693,7 +749,8 @@ describe("late Core specialization plan", () => {
 			});
 			result = value;
 		}
-		builder.setTerminator(entry, { kind: "return", value: result! });
+		if (result === undefined) throw new Error("test program has no result");
+		builder.setTerminator(entry, { kind: "return", value: result });
 		const { function: functionId } = builder.finish(entry);
 		const prepared = planning(program, [functionId]);
 		const plan = buildCoreOptimizationPlan(

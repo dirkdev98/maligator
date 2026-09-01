@@ -7,6 +7,8 @@ import {
 	compilerConfigurationIdentity,
 	compilerProducerIdentity,
 } from "../compiler-cache-identity.ts";
+import type { CoreOptimizationPlan } from "../compiler/core/core-ir-regions.ts";
+import type { CoreOptimizationReport } from "../compiler/core/core-optimization-report.ts";
 import type {
 	BuildModuleGraphOptions,
 	ModuleGraph,
@@ -18,8 +20,6 @@ import {
 } from "../compiler/frontend/semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
-import type { CoreOptimizationPlan } from "../compiler/core/core-ir-regions.ts";
-import type { CoreOptimizationReport } from "../compiler/core/core-optimization-report.ts";
 import {
 	serializeRuntimeImage,
 	WIRE_VERSION,

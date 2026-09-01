@@ -96,10 +96,11 @@ export function joinCoreCalleeTargets(
 	const functions = [...new Set([...left.functions, ...right.functions])].sort(
 		(first, second) => first - second,
 	);
+	const anyScript =
+		left.anyScript || right.anyScript || functions.length > CORE_CALLEE_TARGET_CAP;
 	return Object.freeze({
-		functions: Object.freeze(functions.length > CORE_CALLEE_TARGET_CAP ? [] : functions),
-		anyScript:
-			left.anyScript || right.anyScript || functions.length > CORE_CALLEE_TARGET_CAP,
+		functions: Object.freeze(anyScript ? [] : functions),
+		anyScript,
 		opaque: left.opaque || right.opaque,
 	});
 }

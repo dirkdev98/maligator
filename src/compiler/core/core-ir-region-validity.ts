@@ -1,11 +1,7 @@
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { FactDependency } from "../shared/fact-implication.ts";
-import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
-import {
-	buildCoreControlFlow,
-	coreTerminatorEdges,
-} from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { discoverCoreLocalSpecializationCandidates } from "./core-ir-provenance.ts";
@@ -29,6 +25,7 @@ import type {
 	CoreInstructionId,
 	CoreRepresentation,
 } from "./core-ir.ts";
+import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
 import type { CoreFunctionStore, CoreProgram, SealedCoreProgram } from "./core-store.ts";
 
 const EPOCH_INVALIDATING_WRITES: ReadonlySet<CoreEffectDomain> = new Set([
@@ -62,8 +59,7 @@ function instructionEpochTransparent(
 	if (!scalarArithmetic && effects.callsUserCode) return false;
 	return !effects.writes.some(
 		(domain) =>
-			EPOCH_INVALIDATING_WRITES.has(domain) &&
-			!(scalarArithmetic && domain === "host"),
+			EPOCH_INVALIDATING_WRITES.has(domain) && !(scalarArithmetic && domain === "host"),
 	);
 }
 
@@ -72,10 +68,7 @@ function planInteriorKeepsAdmission(
 	cfg: CoreControlFlow,
 	query: CorePlanAdmissionQuery,
 ): boolean {
-	const interior = new Set([
-		...query.ordinaryBlocks,
-		...query.exceptionalBlocks,
-	]);
+	const interior = new Set([...query.ordinaryBlocks, ...query.exceptionalBlocks]);
 	if (!fn.isInstructionLive(query.anchor)) return false;
 	const anchorBlock = fn.instructionBlock(query.anchor);
 	if (!interior.has(anchorBlock)) return false;
@@ -136,9 +129,7 @@ function planInteriorKeepsAdmission(
 	}
 	for (const [block, end] of scanEnds) {
 		const start = block === anchorBlock ? anchorOrder + 1 : 0;
-		for (const [index, instruction] of [
-			...fn.bodyInstructionIds(block),
-		].entries()) {
+		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
 			if (index < start || index > end) continue;
 			if (!instructionEpochTransparent(fn, instruction)) return false;
 		}
@@ -452,9 +443,10 @@ function validProtectorPlanGuard(
 	if (guard.dependencies.length !== 1) return false;
 	const dependency = guard.dependencies[0];
 	if (
-		!((dependency?.kind === "world" &&
-			dependency.fact === "primordials.locked") ||
-			(dependency?.kind === "epoch" && dependency.family === "watched-methods"))
+		!(
+			(dependency?.kind === "world" && dependency.fact === "primordials.locked") ||
+			(dependency?.kind === "epoch" && dependency.family === "watched-methods")
+		)
 	)
 		return false;
 	return (
@@ -478,26 +470,26 @@ function specializationAdmissionDependencies(
 ): ReadonlyArray<FactDependency> {
 	const guard: unknown = (() => {
 		switch (selection.kind) {
-		case "string-split-cursor":
-			return selection.stringSplitCursor.guard;
-		case "string-split-projection":
-			return selection.stringSplitProjection.guard;
-		case "string-slice-number":
-			return selection.stringSliceNumber.guard;
-		case "regexp-exec-projection":
-			return selection.regexpExecProjection.guard;
-		case "regexp-iterator-projection":
-			return selection.regexpIteratorProjection.guard;
-		case "string-char-code-at-chain":
-			return selection.stringCharCodeAt.guard;
-		case "builtin-collection-call-chain":
-			return selection.builtinCollectionCall.guard;
-		case "iterator-result-virtualization":
-			return selection.iteratorResultVirtualization.guard;
-		case "iterator-entry-pair-virtualization":
-			return selection.iteratorEntryPairVirtualization.guard;
-		default:
-			return undefined;
+			case "string-split-cursor":
+				return selection.stringSplitCursor.guard;
+			case "string-split-projection":
+				return selection.stringSplitProjection.guard;
+			case "string-slice-number":
+				return selection.stringSliceNumber.guard;
+			case "regexp-exec-projection":
+				return selection.regexpExecProjection.guard;
+			case "regexp-iterator-projection":
+				return selection.regexpIteratorProjection.guard;
+			case "string-char-code-at-chain":
+				return selection.stringCharCodeAt.guard;
+			case "builtin-collection-call-chain":
+				return selection.builtinCollectionCall.guard;
+			case "iterator-result-virtualization":
+				return selection.iteratorResultVirtualization.guard;
+			case "iterator-entry-pair-virtualization":
+				return selection.iteratorEntryPairVirtualization.guard;
+			default:
+				return undefined;
 		}
 	})();
 	if (guard === undefined) return [];
@@ -509,8 +501,7 @@ function specializationAdmissionDependencies(
 	) {
 		fail(`${selection.id} has an unreadable admission guard`);
 	}
-	return (guard as { readonly dependencies: ReadonlyArray<FactDependency> })
-		.dependencies;
+	return (guard as { readonly dependencies: ReadonlyArray<FactDependency> }).dependencies;
 }
 
 function specializationAdmissionAnchor(
@@ -518,9 +509,11 @@ function specializationAdmissionAnchor(
 ): CoreInstructionId {
 	switch (selection.kind) {
 		case "string-split-cursor":
-			return selection.stringSplitCursor.property;
+			return selection.stringSplitCursor.property ?? selection.stringSplitCursor.call;
 		case "string-split-projection":
-			return selection.stringSplitProjection.property!;
+			return (
+				selection.stringSplitProjection.property ?? selection.stringSplitProjection.call
+			);
 		case "string-slice-number":
 			return selection.stringSliceNumber.property;
 		case "regexp-exec-projection":
@@ -586,17 +579,13 @@ function verifySpecializationAdmission(
 			? "capture"
 			: selection.kind === "guarded-direct-call"
 				? "per-use"
-				: corePlanAdmissionMode(
-						fn,
-						buildCoreControlFlow(program, selection.function),
-						{
-							anchor: admission.anchor,
-							dependencies,
-							claimedInstructions: selection.claimedInstructions,
-							ordinaryBlocks: selection.ordinaryBlocks,
-							exceptionalBlocks: selection.exceptionalBlocks,
-						},
-					);
+				: corePlanAdmissionMode(fn, buildCoreControlFlow(program, selection.function), {
+						anchor: admission.anchor,
+						dependencies,
+						claimedInstructions: selection.claimedInstructions,
+						ordinaryBlocks: selection.ordinaryBlocks,
+						exceptionalBlocks: selection.exceptionalBlocks,
+					});
 	if (admission.mode !== expected) {
 		fail(
 			`${selection.id} claims ${admission.mode} admission where Core proves ${expected}`,
@@ -679,7 +668,15 @@ function verifySpecialization(
 			);
 		}
 	}
-	const owned = claimedInstructions.get(selection.function) ?? new Map();
+	const owned =
+		claimedInstructions.get(selection.function) ??
+		new Map<
+			CoreInstructionId,
+			{
+				exclusive: boolean;
+				readonly overlays: Set<CorePlanSpecialization["kind"]>;
+			}
+		>();
 	for (const instruction of claims) {
 		const state = owned.get(instruction) ?? { exclusive: false, overlays: new Set() };
 		if (
@@ -970,6 +967,7 @@ function verifySpecialization(
 						),
 					].sort((left, right) => left - right);
 		const expectedPlacement =
+			cursor.property !== undefined &&
 			cursor.splitIdentity === "authority-invariant" &&
 			fn.instructionBlock(cursor.property) === fn.instructionBlock(cursor.call)
 				? "call-fallback"
@@ -995,10 +993,7 @@ function verifySpecialization(
 			cursor.exitBlock !== candidate.exitBlock ||
 			cursor.propertyPlacement !== expectedPlacement ||
 			!sameNumbers(cursor.resultValues, candidate.resultValues) ||
-			!sameNumbers(
-				cursor.primitiveStringLengths,
-				candidate.primitiveStringLengths,
-			) ||
+			!sameNumbers(cursor.primitiveStringLengths, candidate.primitiveStringLengths) ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||
 			!sameNumbers(selection.ordinaryBlocks, expectedBlocks) ||
 			!sameNumbers(selection.exceptionalBlocks, candidate.exceptionalBlocks) ||
@@ -1038,6 +1033,12 @@ function verifySpecialization(
 			selection.id,
 		);
 		const split = selection.stringSplitProjection;
+		const expectedPlacement =
+			split.property !== undefined &&
+			split.splitIdentity === "authority-invariant" &&
+			fn.instructionBlock(split.property) === fn.instructionBlock(split.call)
+				? "call-fallback"
+				: "in-place";
 		const expectedBlocks =
 			candidate?.instructions === undefined
 				? []
@@ -1078,11 +1079,7 @@ function verifySpecialization(
 							load.key !== expected.key))
 				);
 			}) ||
-			(split.propertyPlacement !== "in-place" &&
-				split.propertyPlacement !== "call-fallback") ||
-			(split.propertyPlacement === "call-fallback" &&
-				(split.splitIdentity !== "authority-invariant" ||
-					fn.instructionBlock(split.property) !== fn.instructionBlock(split.call))) ||
+			split.propertyPlacement !== expectedPlacement ||
 			!validBuiltinPlanGuard(
 				split.guard,
 				"string-split-projection",
@@ -1137,7 +1134,8 @@ function verifySpecialization(
 				slice.propertyPlacement !== "call-fallback") ||
 			(slice.propertyPlacement === "call-fallback" &&
 				(slice.builtinIdentities !== "authority-invariant" ||
-					fn.instructionBlock(slice.property) !== fn.instructionBlock(slice.sliceCall))) ||
+					fn.instructionBlock(slice.property) !==
+						fn.instructionBlock(slice.sliceCall))) ||
 			!validBuiltinPlanGuard(
 				slice.guard,
 				"string-slice-number",
@@ -1249,8 +1247,7 @@ function verifySpecialization(
 					check.comparison !== candidate.nullChecks[index]?.comparison ||
 					check.nullValue !== candidate.nullChecks[index]?.nullValue,
 			) ||
-			(regexp.lockedLiteral === undefined) !==
-				(expectedLockedLiteral === undefined) ||
+			(regexp.lockedLiteral === undefined) !== (expectedLockedLiteral === undefined) ||
 			(regexp.lockedLiteral !== undefined &&
 				expectedLockedLiteral !== undefined &&
 				(regexp.lockedLiteral.constructorIntrinsic !==
@@ -1526,8 +1523,7 @@ function verifySpecialization(
 						),
 					].sort((left, right) => left - right);
 		const expectedTargets =
-			candidate?.kind === "function-call-chain" &&
-			candidate.targetFunction !== undefined
+			candidate?.kind === "function-call-chain" && candidate.targetFunction !== undefined
 				? [candidate.targetFunction]
 				: [];
 		if (

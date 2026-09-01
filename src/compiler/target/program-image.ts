@@ -3367,6 +3367,12 @@ function lowerExecutionFunctionToNativePlan(
 				if (
 					(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_BUILTIN") ||
 					loweredCall.arguments.length !== 1 ||
+					(loweredCall.opcode === "CALL_BUILTIN" &&
+						(loweredCall.operation !== "String.prototype.split" ||
+							propertyIp !== -1 ||
+							guard.dependencies.length !== 1 ||
+							guard.dependencies[0]?.kind !== "world")) ||
+					(loweredCall.opcode === "CALL" && propertyIp < 0) ||
 					loweredHeaderBranch?.opcode !== "JUMP_IF" ||
 					loweredLength?.opcode !== "LOAD_PROPERTY_STATIC" ||
 					!resultRegisters.includes(loweredLength.object) ||

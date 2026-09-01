@@ -35,6 +35,7 @@ describe("Core callee-target lattice", () => {
 			coreCalleeTargetsFunction(CORE_CALLEE_TARGET_CAP),
 		);
 		expect(widened).toMatchObject({ functions: [], anyScript: true });
+		expect(joinCoreCalleeTargets(widened, coreCalleeTargetsFunction(0))).toEqual(widened);
 	});
 
 	it("keeps bottom, opaque, and any-script independent", () => {

@@ -3,8 +3,10 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-validity.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
+import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -413,6 +415,31 @@ describe("Core IR lowering", () => {
 		expect(register(left!)).toBe(register(rightValue!));
 	});
 
+	it("reuses a dying input register for a same-representation result", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [left] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 1 },
+			outputRepresentations: ["f64"],
+		});
+		const [right] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 2 },
+			outputRepresentations: ["f64"],
+		});
+		const [result] = builder.appendInstruction(entry, "binary", [left!, right!], {
+			attributes: { operator: "+" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const { function: functionId } = builder.finish(entry);
+		const allocation = coreRegisterClasses(program.function(functionId), true);
+		const register = (value: CoreValueId): number => allocation.registers.get(value)!;
+
+		expect(register(result!)).toBe(register(left!));
+		expect(register(right!)).not.toBe(register(left!));
+	});
+
 	it("round-trips loops, calls, and multiple-result operations to VM form", () => {
 		const compilation = optimize(`
 			let total = 0;
@@ -539,7 +566,7 @@ describe("Core IR lowering", () => {
 		expect(source.keyStringIndices[candidate.slot]).toBe(store.stringIndex);
 	});
 
-	it("rejects a malformed selected Core plan instead of dropping it", () => {
+	it("rejects a malformed selected Core plan at the optimizer boundary", () => {
 		const compilation = optimize(`
 			function choose(value, escape) {
 				const object = { value };
@@ -554,17 +581,14 @@ describe("Core IR lowering", () => {
 		expect(selection).toBeDefined();
 		if (selection === undefined) return;
 		const malformed = {
-			...compilation,
-			plan: {
-				...compilation.plan,
-				specializations: compilation.plan.specializations.map((candidate) =>
-					candidate === selection
-						? { ...candidate, cost: { ...candidate.cost, generatedCode: -1 } }
-						: candidate,
-				),
-			},
+			...compilation.plan,
+			specializations: compilation.plan.specializations.map((candidate) =>
+				candidate === selection
+					? { ...candidate, cost: { ...candidate.cost, generatedCode: -1 } }
+					: candidate,
+			),
 		};
-		expect(() => lowerCoreCompilationToExecution(malformed)).toThrow(
+		expect(() => verifyCoreOptimizationPlan(compilation.program, malformed)).toThrow(
 			/has invalid generatedCode cost/,
 		);
 	});
@@ -666,7 +690,7 @@ describe("Core IR lowering", () => {
 		);
 	});
 
-	it("lowers explicit super current-this through the VM two-address constraint", () => {
+	it("satisfies the explicit-super two-address constraint by coalescing or moves", () => {
 		const compilation = optimize(`
 			class Parent {}
 			class Child extends Parent {
@@ -678,9 +702,15 @@ describe("Core IR lowering", () => {
 			new Child();
 		`);
 		const lowered = lowerCoreCompilationToExecution(compilation);
-		const instructions = lowered.functions.flatMap((fn) =>
-			fn.blocks.flatMap((block) => block.instructions),
-		);
+		const instructions = lowered.functions
+			.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
+			.filter(
+				({ type }) =>
+					type !== "sourcePos" &&
+					type !== "rootUse" &&
+					type !== "tryBegin" &&
+					type !== "tryEnd",
+			);
 		const constructIndexes = instructions.flatMap((instruction, index) =>
 			instruction.type === "constructSuperExplicit" ? [index] : [],
 		);
@@ -696,18 +726,20 @@ describe("Core IR lowering", () => {
 			expect(construct.registers.slice(1, 4)).not.toContain(constrained);
 
 			const inputMove = instructions[constructIndex - 1]!;
-			expect(inputMove.type).toBe("move");
-			if (inputMove.type !== "move") {
-				throw new Error("missing target-constraint input move");
+			if (inputMove.type === "move") {
+				expect(inputMove.registers[0]).toBe(constrained);
+			} else if (inputMove.type === "loadPropertyStatic") {
+				expect(inputMove.registers[0]).toBe(constrained);
+			} else {
+				throw new Error("missing target-constraint input definition");
 			}
-			expect(inputMove.registers[0]).toBe(constrained);
 
 			const resultMove = instructions[constructIndex + 1]!;
-			expect(resultMove.type).toBe("move");
-			if (resultMove.type !== "move") {
-				throw new Error("missing target-constraint result move");
+			if (resultMove.type === "move") {
+				expect(resultMove.registers[1]).toBe(constrained);
+			} else {
+				expect(inputMove.type).toBe("loadPropertyStatic");
 			}
-			expect(resultMove.registers[1]).toBe(constrained);
 		}
 	});
 });

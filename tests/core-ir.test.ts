@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -14,7 +15,6 @@ import {
 	coreOpcodeRegistry,
 } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
-import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreFactClaim, CoreFunctionId } from "../src/compiler/core/core-ir.ts";
 import {
 	CORE_MEMORY_FAMILIES,
@@ -554,9 +554,9 @@ describe("Core IR", () => {
 			value: exceptional.blockParameters(protectedHandler)[1]!.value,
 		});
 		const { function: exceptionalFunction } = exceptional.finish(defining);
-		expect(() =>
-			verifyCoreFunction(exceptionalProgram, exceptionalFunction),
-		).toThrow(/unavailable on b2's exception edge/);
+		expect(() => verifyCoreFunction(exceptionalProgram, exceptionalFunction)).toThrow(
+			/unavailable on b2's exception edge/,
+		);
 	});
 
 	it("requires guarded provenance before asserted facts refine effects", () => {
@@ -659,9 +659,7 @@ describe("Core IR", () => {
 		builder.setTerminator(merge, { kind: "return", value: result! });
 		const { function: functionId } = builder.finish(entry);
 
-		expect(() => verifyCoreFunction(program, functionId)).toThrow(
-			/does not dominate/,
-		);
+		expect(() => verifyCoreFunction(program, functionId)).toThrow(/does not dominate/);
 	});
 
 	it("rejects a guarded fact in a block another predecessor also enters", () => {
@@ -700,9 +698,7 @@ describe("Core IR", () => {
 		builder.setTerminator(fallback, { kind: "return", value: input! });
 		const { function: functionId } = builder.finish(entry);
 
-		expect(() => verifyCoreFunction(program, functionId)).toThrow(
-			/does not dominate/,
-		);
+		expect(() => verifyCoreFunction(program, functionId)).toThrow(/does not dominate/);
 	});
 
 	it("rejects a range claim no value satisfies", () => {
@@ -749,15 +745,13 @@ describe("Core IR", () => {
 		expect(() => verify(range({ minimum: 5, maximum: 4 }))).toThrow(
 			/invalid numeric interval/,
 		);
-		expect(() =>
-			verify(range({ minimum: 0.2, maximum: 0.8, integer: true })),
-		).toThrow(/invalid numeric interval/);
+		expect(() => verify(range({ minimum: 0.2, maximum: 0.8, integer: true }))).toThrow(
+			/invalid numeric interval/,
+		);
 		expect(() => verify(range({ minimum: Number.NaN }))).toThrow(
 			/invalid numeric interval/,
 		);
 		// An empty interval still denotes NaN when the claim admits it.
-		expect(() =>
-			verify(range({ minimum: 5, maximum: 4, mayBeNaN: true })),
-		).not.toThrow();
+		expect(() => verify(range({ minimum: 5, maximum: 4, mayBeNaN: true }))).not.toThrow();
 	});
 });

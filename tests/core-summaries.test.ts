@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-ir-summaries.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
@@ -214,5 +215,65 @@ describe("incremental Core program summaries", () => {
 		expect(summaries.sccs).toHaveLength(1);
 		expect(summaries.sccs[0]!.functions).toHaveLength(length);
 		expect(summaries.statistics.sccTransfers).toBeLessThanOrEqual(length * 2);
+	});
+
+	it("keeps an any-script call edge compact while joining its closed-world effects", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const condition = builder.blockParameters(entry)[0]!.value;
+		const join = builder.createBlock([{ representation: "boxed" }]);
+		let decision = entry;
+		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
+			const selected = builder.createBlock();
+			const alternate = builder.createBlock();
+			const [callee] = builder.appendInstruction(selected, "createFunction", [], {
+				attributes: { functionIndex },
+			});
+			builder.setTerminator(selected, {
+				kind: "jump",
+				edge: { block: join, arguments: [callee!] },
+			});
+			builder.setTerminator(decision, {
+				kind: "branch",
+				condition,
+				consequent: { block: selected, arguments: [] },
+				alternate: { block: alternate, arguments: [] },
+			});
+			decision = alternate;
+		}
+		const [lastCallee] = builder.appendInstruction(decision, "createFunction", [], {
+			attributes: { functionIndex: 5 },
+		});
+		builder.setTerminator(decision, {
+			kind: "jump",
+			edge: { block: join, arguments: [lastCallee!] },
+		});
+		const callee = builder.blockParameters(join)[0]!.value;
+		const [receiver] = builder.appendInstruction(join, "createUndefined", []);
+		const [result] = builder.appendInstruction(join, "call", [callee, receiver!]);
+		builder.setTerminator(join, { kind: "return", value: result! });
+		builder.finish(entry);
+		const effectfulLeaf = appendLeaf(program);
+		for (let index = 1; index < 5; index++) appendLeaf(program);
+		const editor = CoreEditor.open(program, effectfulLeaf.function);
+		editor.replaceInstruction(effectfulLeaf.valueInstruction, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		editor.commit();
+
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const summaries = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+		const summary = summaries.summary(0 as never);
+		expect(summary).toBeDefined();
+		expect(summary!.callees).toEqual([]);
+		expect(summary!.openCallEdge).toBe(true);
+		expect(summary!.effects.reads).toContain("global-slot");
 	});
 });

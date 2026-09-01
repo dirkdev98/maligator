@@ -864,10 +864,8 @@ describe("Core control-flow analyses and passes", () => {
 		const before = buildCoreControlFlow(program, function_);
 		expect(before.loops[0]!.latches).toEqual(new Set([leftLatch, rightLatch]));
 
-		const optimized = optimizeCore(
-			{ program, context },
-			{ verification: "per-pass" },
-		).compilation.program;
+		const optimized = optimizeCore({ program, context }, { verification: "per-pass" })
+			.compilation.program;
 		const fn = optimized.function(function_);
 		const cfg = buildCoreControlFlow(optimized, function_);
 		expect(cfg.loops).toHaveLength(1);
@@ -877,9 +875,7 @@ describe("Core control-flow analyses and passes", () => {
 		const hoisted = [...fn.instructionIds()].filter(
 			(instruction) =>
 				fn.instructionKind(instruction) === "operation" &&
-				["createF64", "mathUnaryNumber"].includes(
-					fn.instructionOpcodeName(instruction),
-				),
+				["createF64", "mathUnaryNumber"].includes(fn.instructionOpcodeName(instruction)),
 		);
 		expect(hoisted).toHaveLength(2);
 		for (const instruction of hoisted) {

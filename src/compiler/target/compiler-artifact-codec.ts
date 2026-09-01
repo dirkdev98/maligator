@@ -2401,8 +2401,7 @@ function validateStringSplitCursorRegion(
 	const increment = fn.instructions[backedgeIp - 1];
 	const possibleAdvance = fn.instructions[backedgeIp - 2];
 	const advance =
-		possibleAdvance?.opcode === "UNARY" &&
-		possibleAdvance.operator === "tonumeric"
+		possibleAdvance?.opcode === "UNARY" && possibleAdvance.operator === "tonumeric"
 			? possibleAdvance
 			: undefined;
 	const advanceIp =
@@ -2539,8 +2538,7 @@ function validateStringSplitCursorRegion(
 		trimCallPlan?.guardedBuiltinCall?.operation !== "String.prototype.trim" ||
 		increment?.opcode !== "UNARY" ||
 		increment.operator !== "increment" ||
-		increment.src !==
-			(advanceIp === undefined ? region.index : advance!.dst) ||
+		increment.src !== (advanceIp === undefined ? region.index : advance!.dst) ||
 		increment.dst !== region.index ||
 		!backedgeReachesHeader ||
 		backedgeIp <= region.trimCallIp ||

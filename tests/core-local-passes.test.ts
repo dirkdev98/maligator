@@ -69,6 +69,34 @@ function optimizedClosedModule(source: string, sourcePath: string): CoreProgram 
 }
 
 describe("Core local canonicalization", () => {
+	it("removes numeric coercions exposed by late representation selection", () => {
+		const program = optimizedClosedModule(
+			`function count(limit) {
+				let value = 0;
+				while (value < limit) value++;
+				return value;
+			}
+			globalThis.count = count;`,
+			"late-numeric-coercion.js",
+		);
+		const fn = coreFunctionNamed(program, "count");
+		expect(fn).toBeDefined();
+		const unaries = [...fn!.instructionIds()].filter(
+			(instruction) =>
+				fn!.instructionKind(instruction) === "operation" &&
+				fn!.instructionOpcodeName(instruction) === "unary",
+		);
+		expect(
+			unaries.map((instruction) => fn!.instructionAttributes(instruction).operator),
+		).not.toContain("tonumeric");
+		const increment = unaries.find(
+			(instruction) => fn!.instructionAttributes(instruction).operator === "increment",
+		);
+		expect(increment).toBeDefined();
+		expect(fn!.valueRepresentation(fn!.instructionOperands(increment!)[0]!)).toBe("f64");
+		expect(fn!.valueRepresentation(fn!.instructionResults(increment!)[0]!)).toBe("f64");
+	});
+
 	it("keeps positive and negative zero as distinct numbered constants", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
 		const builder = new CoreFunctionBuilder(program);
@@ -969,10 +997,9 @@ describe("Core local canonicalization", () => {
 				fn.instructionKind(instruction) === "operation" &&
 				fn.instructionOpcodeName(instruction).includes("Property"),
 		);
-		expect(properties.map((instruction) => fn.instructionOpcodeName(instruction))).toEqual([
-			"storePropertyStatic",
-			"loadPropertyStatic",
-		]);
+		expect(
+			properties.map((instruction) => fn.instructionOpcodeName(instruction)),
+		).toEqual(["storePropertyStatic", "loadPropertyStatic"]);
 		for (const instruction of properties) {
 			expect(fn.instructionAttributes(instruction).stringIndex).toBe(0);
 		}
@@ -1007,9 +1034,9 @@ describe("Core local canonicalization", () => {
 			{ program, context },
 			{ verification: "per-pass" },
 		).compilation.program.function(function_);
-		expect([...fn.blockIds()].every((block) => fn.blockHandler(block) === undefined)).toBe(
-			true,
-		);
+		expect(
+			[...fn.blockIds()].every((block) => fn.blockHandler(block) === undefined),
+		).toBe(true);
 		expect(
 			[...fn.blockIds()].map(
 				(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind,
@@ -1058,10 +1085,8 @@ describe("Core local canonicalization", () => {
 		});
 		const throwingFunction = throwing.finish(throwingEntry).function;
 
-		const optimized = optimizeCore(
-			{ program, context },
-			{ verification: "per-pass" },
-		).compilation.program;
+		const optimized = optimizeCore({ program, context }, { verification: "per-pass" })
+			.compilation.program;
 		const sharedResult = optimized.function(sharedFunction);
 		expect(
 			[...sharedResult.blockIds()].every(
@@ -1077,8 +1102,9 @@ describe("Core local canonicalization", () => {
 		const throwingResult = optimized.function(throwingFunction);
 		expect(throwingResult.blockHandler(throwingResult.entry)).toBeDefined();
 		expect(
-			throwingResult.terminatorPayload(throwingResult.blockTerminator(throwingResult.entry))
-				.kind,
+			throwingResult.terminatorPayload(
+				throwingResult.blockTerminator(throwingResult.entry),
+			).kind,
 		).toBe("throw");
 	});
 
@@ -1093,9 +1119,9 @@ describe("Core local canonicalization", () => {
 		);
 		const fn = coreFunctionNamed(program, "local");
 		expect(fn).toBeDefined();
-		expect([...fn!.blockIds()].every((block) => fn!.blockHandler(block) === undefined)).toBe(
-			true,
-		);
+		expect(
+			[...fn!.blockIds()].every((block) => fn!.blockHandler(block) === undefined),
+		).toBe(true);
 		expect(
 			[...fn!.blockIds()].map(
 				(block) => fn!.terminatorPayload(fn!.blockTerminator(block)).kind,

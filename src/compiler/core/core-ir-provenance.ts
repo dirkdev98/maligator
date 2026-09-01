@@ -618,7 +618,7 @@ export type CoreDenseArrayCandidate =
 	| CoreFreshDenseArrayCandidate;
 
 export interface CoreStringSplitProjectionCandidate extends CoreLocalSpecializationCandidateBase<"string-split-projection"> {
-	readonly property: CoreInstructionId;
+	readonly property?: CoreInstructionId;
 	readonly call: CoreInstructionId;
 	readonly separator: CoreInstructionId;
 	readonly separatorStringIndex: number;
@@ -769,7 +769,7 @@ export interface CoreFunctionCallChainCandidate extends CoreLocalSpecializationC
 }
 
 export interface CoreStringSplitCursorCandidate extends CoreLocalSpecializationCandidateBase<"string-split-cursor"> {
-	readonly property: CoreInstructionId;
+	readonly property?: CoreInstructionId;
 	readonly call: CoreInstructionId;
 	readonly length: CoreInstructionId;
 	readonly compare: CoreInstructionId;
@@ -1464,6 +1464,34 @@ function exactPropertyCallCandidate(
 	};
 }
 
+function exactStringSplitCallCandidate(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	control: CoreControlFlow,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	index: CoreLocalSpecializationIndex,
+	call: CoreInstructionId,
+):
+	| {
+			readonly property?: CoreInstructionId;
+			readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
+	  }
+	| undefined {
+	if (
+		fn.instructionKind(call) === "operation" &&
+		fn.instructionOpcodeName(call) === "callBuiltin" &&
+		fn.instructionAttributes(call).operation === "String.prototype.split" &&
+		fn.instructionResults(call).length === 1 &&
+		control.reachable.has(fn.instructionBlock(call))
+	) {
+		const handler = fn.blockHandler(fn.instructionBlock(call));
+		return {
+			exceptionalBlocks: Object.freeze(handler === undefined ? [] : [handler.block]),
+		};
+	}
+	return exactPropertyCallCandidate(program, fn, control, roots, index, call, "split");
+}
+
 function stringCharCodeAtCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -1724,16 +1752,13 @@ function stringSplitCursorCandidates(
 			continue;
 		const splitResult = root(fn.instructionOperands(length)[0]!);
 		const call = specializationDefinition(fn, roots, splitResult);
-		if (call === undefined || fn.instructionOpcodeName(call) !== "call") continue;
-		const split = exactPropertyCallCandidate(
-			program,
-			fn,
-			control,
-			roots,
-			index,
-			call,
-			"split",
-		);
+		if (
+			call === undefined ||
+			(fn.instructionOpcodeName(call) !== "call" &&
+				fn.instructionOpcodeName(call) !== "callBuiltin")
+		)
+			continue;
+		const split = exactStringSplitCallCandidate(program, fn, control, roots, index, call);
 		if (
 			split === undefined ||
 			split.exceptionalBlocks.length !== 0 ||
@@ -1832,7 +1857,7 @@ function stringSplitCursorCandidates(
 		const callBlock = fn.instructionBlock(call);
 		if (canReachWithout(comparison.exit, header, callBlock)) continue;
 		const instructions = Object.freeze([
-			split.property,
+			...(split.property === undefined ? [] : [split.property]),
 			call,
 			length,
 			comparison.instruction,
@@ -1867,7 +1892,7 @@ function stringSplitCursorCandidates(
 				kind: "string-split-cursor",
 				function: fn.id,
 				root: call,
-				property: split.property,
+				...(split.property === undefined ? {} : { property: split.property }),
 				call,
 				length,
 				compare: comparison.instruction,
@@ -2104,13 +2129,13 @@ function indexedLengthLoopCandidates(
 		const uses = [...fn.uses(output)];
 		if (uses.length !== 1) continue;
 		const comparison = uses[0]!.instruction;
+		const operator = fn.instructionAttributes(comparison).operator;
 		if (
 			fn.instructionKind(comparison) !== "operation" ||
 			fn.instructionOpcodeName(comparison) !== "binary" ||
 			fn.instructionBlock(comparison) !== block ||
-			!INDEXED_LENGTH_LOOP_OPERATORS.has(
-				String(fn.instructionAttributes(comparison).operator),
-			)
+			typeof operator !== "string" ||
+			!INDEXED_LENGTH_LOOP_OPERATORS.has(operator)
 		)
 			continue;
 		const comparisonOperands = fn.instructionOperands(comparison);
@@ -2555,22 +2580,31 @@ function stringSplitProjectionCandidates(
 	const candidates: Array<CoreStringSplitProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	for (const call of fn.instructionIds()) {
+		if (fn.instructionKind(call) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(call);
+		const direct = opcode === "callBuiltin";
 		if (
-			fn.instructionKind(call) !== "operation" ||
-			fn.instructionOpcodeName(call) !== "call" ||
-			fn.instructionOperands(call).length !== 3 ||
+			(opcode !== "call" && opcode !== "callBuiltin") ||
+			(direct
+				? fn.instructionAttributes(call).operation !== "String.prototype.split" ||
+					fn.instructionOperands(call).length !== 2
+				: fn.instructionOperands(call).length !== 3) ||
 			fn.instructionResults(call).length !== 1 ||
 			!control.reachable.has(fn.instructionBlock(call))
 		)
 			continue;
 		const operands = fn.instructionOperands(call);
-		const property = specializationDefinition(fn, roots, operands[0]!);
-		const separator = specializationDefinition(fn, roots, operands[2]!);
+		const property = direct
+			? undefined
+			: specializationDefinition(fn, roots, operands[0]!);
+		const receiver = operands[direct ? 0 : 1]!;
+		const separator = specializationDefinition(fn, roots, operands[direct ? 1 : 2]!);
 		if (
-			!staticPropertyNamed(program, fn, property, "split") ||
-			fn.instructionOperands(property).length !== 1 ||
-			root(fn.instructionOperands(property)[0]!) !== root(operands[1]!) ||
-			!specializationInstructionDominates(control, index, property, call) ||
+			(property !== undefined &&
+				(!staticPropertyNamed(program, fn, property, "split") ||
+					fn.instructionOperands(property).length !== 1 ||
+					root(fn.instructionOperands(property)[0]!) !== root(receiver) ||
+					!specializationInstructionDominates(control, index, property, call))) ||
 			separator === undefined ||
 			fn.instructionOpcodeName(separator) !== "createString" ||
 			!specializationInstructionDominates(control, index, separator, call)
@@ -2582,14 +2616,16 @@ function stringSplitProjectionCandidates(
 			(decodeCoreString(program, separatorStringIndex)?.length ?? 0) === 0
 		)
 			continue;
-		const propertyResult = fn.instructionResults(property)[0]!;
-		const propertyUses = index.uses.get(root(propertyResult)) ?? [];
-		if (
-			propertyUses.length !== 1 ||
-			propertyUses[0]?.instruction !== call ||
-			propertyUses[0].position !== 0
-		)
-			continue;
+		if (property !== undefined) {
+			const propertyResult = fn.instructionResults(property)[0]!;
+			const propertyUses = index.uses.get(root(propertyResult)) ?? [];
+			if (
+				propertyUses.length !== 1 ||
+				propertyUses[0]?.instruction !== call ||
+				propertyUses[0].position !== 0
+			)
+				continue;
+		}
 		const result = fn.instructionResults(call)[0]!;
 		const resultRoot = root(result);
 		if (index.controlUses.has(resultRoot)) continue;
@@ -2662,7 +2698,7 @@ function stringSplitProjectionCandidates(
 					index.location.get(right.instruction)!.index,
 		);
 		const instructions = Object.freeze([
-			property,
+			...(property === undefined ? [] : [property]),
 			separator,
 			call,
 			...loads.flatMap((load) =>
@@ -2684,7 +2720,7 @@ function stringSplitProjectionCandidates(
 				kind: "string-split-projection",
 				function: fn.id,
 				root: call,
-				property,
+				...(property === undefined ? {} : { property }),
 				call,
 				separator,
 				separatorStringIndex,

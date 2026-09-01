@@ -56,6 +56,8 @@ interface CoreLocalFunctionSummary {
 	readonly function: CoreFunctionId;
 	readonly versionKey: string;
 	readonly sourcePath: string;
+	readonly summaryId: string;
+	readonly moduleId: string;
 	readonly effects: EffectSummary;
 	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
 	readonly receiverEscape: ValueEscapeFact;
@@ -375,6 +377,8 @@ function analyzeLocalSummary(
 		function: fn.id,
 		versionKey: localVersionKey(fn),
 		sourcePath: fn.metadata.sourcePath,
+		summaryId: functionSummaryId(fn.metadata.sourcePath, fn.id),
+		moduleId: moduleSummaryId(fn.metadata.sourcePath),
 		effects,
 		parameterEscape: Object.freeze(parameterEscape),
 		receiverEscape: receiver.escape,
@@ -562,6 +566,7 @@ function deriveSummary(
 	local: CoreLocalFunctionSummary,
 	targets: CoreCallGraphIndex,
 	current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+	summaryIds: ReadonlyMap<CoreFunctionId, string>,
 	reasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>,
 	includeCalls = true,
 ): FunctionEffectSummary {
@@ -622,21 +627,20 @@ function deriveSummary(
 	}
 	const roots = reasons.get(functionId) ?? [];
 	return Object.freeze({
-		id: functionSummaryId(local.sourcePath, functionId),
+		id: local.summaryId,
 		functionIndex: functionId,
-		module: moduleSummaryId(local.sourcePath),
+		module: local.moduleId,
 		effects,
 		relativeOwnSlotEffects: Object.freeze([]),
 		callees: Object.freeze(
 			[
 				...new Set(
-					targets
-						.outgoing(functionId)
-						.flatMap((site) =>
-							callTargets(program, site).map((callee) =>
-								functionSummaryId(program.function(callee).metadata.sourcePath, callee),
-							),
-						),
+					targets.outgoing(functionId).flatMap((site) =>
+						site.targets.functions.flatMap((callee) => {
+							const id = summaryIds.get(callee);
+							return id === undefined ? [] : [id];
+						}),
+					),
 				),
 			].sort(),
 		),
@@ -724,6 +728,9 @@ function analyzeProgramSummaries(
 		sccsReused,
 	} = callGraphSccs(program, targets, previous);
 	const reasons = rootReasons(program, targets, context);
+	const summaryIds = new Map(
+		[...local].map(([functionId, summary]) => [functionId, summary.summaryId]),
+	);
 	const current = new Map<CoreFunctionId, FunctionEffectSummary>();
 	for (const functionId of program.functionIds()) {
 		const prior = previous?.published.get(functionId)?.summary;
@@ -739,6 +746,7 @@ function analyzeProgramSummaries(
 				local.get(functionId)!,
 				targets,
 				current,
+				summaryIds,
 				reasons,
 				false,
 			),
@@ -790,6 +798,7 @@ function analyzeProgramSummaries(
 					local.get(functionId)!,
 					targets,
 					current,
+					summaryIds,
 					reasons,
 					false,
 				),
@@ -808,6 +817,7 @@ function analyzeProgramSummaries(
 				local.get(functionId)!,
 				targets,
 				current,
+				summaryIds,
 				reasons,
 			);
 			const prior = current.get(functionId);
@@ -844,6 +854,7 @@ function analyzeProgramSummaries(
 				local.get(functionId)!,
 				targets,
 				current,
+				summaryIds,
 				reasons,
 			),
 		);
