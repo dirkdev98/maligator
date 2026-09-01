@@ -32,6 +32,7 @@ import {
 } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
+import { coreFunctionId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
 	CoreBlockId,
@@ -701,11 +702,15 @@ function builtinSourceSite(
 	if (positionId === undefined) return undefined;
 	const position = program.sourcePositions[positionId];
 	if (position === undefined) return undefined;
-	const owner =
+	const inlinedFunction =
 		position.inlinedFunctionIndex === undefined
+			? undefined
+			: coreFunctionId(position.inlinedFunctionIndex);
+	const owner =
+		inlinedFunction === undefined
 			? fn
-			: program.hasFunction(position.inlinedFunctionIndex)
-				? program.function(position.inlinedFunctionIndex)
+			: program.hasFunction(inlinedFunction)
+				? program.function(inlinedFunction)
 				: undefined;
 	return owner === undefined
 		? undefined
