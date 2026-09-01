@@ -159,6 +159,35 @@ describe("Core empty forwarding blocks", () => {
 		).not.toThrow();
 	});
 
+	it("preserves a reachable self-targeting empty branch", () => {
+		const { program, builder } = fixture();
+		const entry = builder.createBlock();
+		const [truthy] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: true },
+			outputRepresentations: ["boolean"],
+		});
+		const decision = builder.createBlock([{ representation: "boolean" }]);
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: decision, arguments: [truthy!] },
+		});
+		builder.setTerminator(decision, {
+			kind: "branch",
+			condition: parameters(builder, decision)[0]!,
+			consequent: { block: decision, arguments: [truthy!] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: truthy! });
+		const finished = builder.finish(entry);
+		const result = optimized({ program, function: finished.function });
+		const cfg = buildCoreControlFlow(result.program, finished.function);
+		expect(cfg.loops).toHaveLength(1);
+		expect(() =>
+			verifyCoreProgram(result.program, { stage: "pre-target" }),
+		).not.toThrow();
+	});
+
 	it("never folds a handler entry whose parameter the unwinder binds", () => {
 		const { program, builder } = fixture(1);
 		const entry = builder.createBlock([{}]);

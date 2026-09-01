@@ -30,6 +30,7 @@ import {
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
+import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import { coreFunctionId } from "./core-ir.ts";
@@ -1866,6 +1867,13 @@ const eliminateForwardingBlocks: CorePass = {
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const candidates = new Array<{
+			readonly block: CoreBlockId;
+			readonly incoming: ReadonlyArray<CoreControlEdge>;
+			readonly parameters: ReadonlyArray<CoreValueId>;
+			readonly payload: Extract<CoreTerminatorPayload, { kind: "branch" | "jump" }>;
+			readonly condition?: number;
+		}>();
 		for (const block of fn.blockIds()) {
 			if (
 				block === fn.entry ||
@@ -1890,56 +1898,67 @@ const eliminateForwardingBlocks: CorePass = {
 			if (incoming.length === 0 || incoming.some(({ kind }) => kind === "exceptional"))
 				continue;
 			const parameters = fn.blockParameters(block).map(({ value }) => value);
-			const translate = (edge: CoreEdge, target: CoreEdge): CoreEdge => ({
-				block: target.block,
-				arguments: target.arguments.map((value) => {
-					const parameter = parameters.indexOf(value);
-					return parameter < 0 ? value : edge.arguments[parameter]!;
-				}),
-			});
 			if (payload.kind === "branch") {
 				const condition = parameters.indexOf(payload.condition);
 				if (
 					condition < 0 ||
 					incoming.some((edge) => {
 						const value = edge.arguments[condition];
-						return value === undefined || constantForValue(fn, value)?.kind !== "boolean";
+						if (value === undefined) return true;
+						const constant = constantForValue(fn, value);
+						if (constant?.kind !== "boolean") return true;
+						return (
+							(constant.value ? payload.consequent : payload.alternate).block === block
+						);
 					})
 				)
 					continue;
-				const editor = CoreEditor.open(program, item.function);
-				for (const source of new Set(incoming.map(({ from }) => from))) {
-					editor.replaceTerminator(
-						source,
-						rewriteEdges(fn.terminatorPayload(fn.blockTerminator(source)), (edge) => {
-							if (edge.block !== block) return edge;
-							const conditionValue = constantForValue(fn, edge.arguments[condition]!);
-							if (conditionValue?.kind !== "boolean") return edge;
-							return translate(
-								edge,
-								conditionValue.value ? payload.consequent : payload.alternate,
-							);
-						}),
-					);
-				}
-				editor.removeBlock(block);
-				return editor.commit();
+				candidates.push({ block, incoming, parameters, payload, condition });
+				continue;
 			}
 			if (payload.kind !== "jump" || payload.edge.block === block) continue;
-			const editor = CoreEditor.open(program, item.function);
-			for (const source of new Set(incoming.map(({ from }) => from))) {
+			candidates.push({ block, incoming, parameters, payload });
+		}
+		if (candidates.length === 0) return undefined;
+		const candidateBlocks = new Set(candidates.map(({ block }) => block));
+		const sinks = candidates.filter(({ payload }) =>
+			coreTerminatorEdges(payload).every(({ block }) => !candidateBlocks.has(block)),
+		);
+		const selected = sinks.length === 0 ? [candidates[0]!] : sinks;
+		const editor = CoreEditor.open(program, item.function);
+		for (const candidate of selected) {
+			const translate = (edge: CoreEdge, target: CoreEdge): CoreEdge => ({
+				block: target.block,
+				arguments: target.arguments.map((value) => {
+					const parameter = candidate.parameters.indexOf(value);
+					return parameter < 0 ? value : edge.arguments[parameter]!;
+				}),
+			});
+			for (const source of new Set(candidate.incoming.map(({ from }) => from))) {
 				editor.replaceTerminator(
 					source,
 					rewriteEdges(fn.terminatorPayload(fn.blockTerminator(source)), (edge) => {
-						if (edge.block !== block) return edge;
-						return translate(edge, payload.edge);
+						if (edge.block !== candidate.block) return edge;
+						if (candidate.payload.kind === "jump") {
+							return translate(edge, candidate.payload.edge);
+						}
+						const conditionValue = constantForValue(
+							fn,
+							edge.arguments[candidate.condition!]!,
+						);
+						if (conditionValue?.kind !== "boolean") return edge;
+						return translate(
+							edge,
+							conditionValue.value
+								? candidate.payload.consequent
+								: candidate.payload.alternate,
+						);
 					}),
 				);
 			}
-			editor.removeBlock(block);
-			return editor.commit();
 		}
-		return undefined;
+		for (const { block } of selected) editor.removeBlock(block);
+		return editor.commit();
 	},
 };
 
