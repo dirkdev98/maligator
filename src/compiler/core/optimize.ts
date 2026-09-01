@@ -7,6 +7,7 @@ import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
+import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import {
 	CoreOptimizationReportBuilder,
 } from "./core-optimization-report.ts";
@@ -70,7 +71,9 @@ export function optimizeCore(
 				? CORE_LOCAL_CANONICALIZATION_PASSES
 				: stage === "control-flow"
 					? CORE_CONTROL_FLOW_PASSES
-					: [],
+					: stage === "proofs"
+						? CORE_PROOF_PASSES
+						: [],
 		);
 	}
 	const program = compilation.program.seal();

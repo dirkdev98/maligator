@@ -1075,6 +1075,18 @@ export class CoreFunctionStore {
 		this._replaceOperands(mutation, instruction, operands);
 	}
 
+	_setInstructionEffectRefinement(
+		mutation: CoreStoreMutation,
+		instruction: CoreInstructionId,
+		refinement: CoreEffectRefinement,
+	): void {
+		this.#assertEditing(mutation);
+		if (this.instructionKind(instruction) !== "operation") {
+			throw new Error(`Core instruction ${instruction} is not an operation`);
+		}
+		this.#instructionEffectRefinement[instruction] = freezeRefinement(refinement);
+	}
+
 	_replaceOperands(
 		mutation: CoreStoreMutation,
 		instruction: CoreInstructionId,

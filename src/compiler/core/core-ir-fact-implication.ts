@@ -1,5 +1,16 @@
 import { effectSummaryCovers, normalizeEffectSummary } from "../shared/effect-summary.ts";
-import type { CoreFact, CoreFactClaim, CoreInstructionEffects } from "./core-ir.ts";
+import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type {
+	CoreBlockId,
+	CoreFact,
+	CoreFactClaim,
+	CoreFactId,
+	CoreInstructionEffects,
+	CoreInstructionId,
+} from "./core-ir.ts";
+import type { CoreFunctionStore } from "./core-store.ts";
 
 /** Keep finite alternatives useful to guard chains and bounded dispatch. */
 export const CORE_FACT_ALTERNATIVE_LIMIT = 32;
@@ -320,3 +331,70 @@ export function normalizeCoreFact(fact: CoreFact): CoreFact {
 		? fact
 		: { ...fact, claims };
 }
+
+export interface CoreFactAvailabilityAnalysis {
+	readonly facts: ReadonlyArray<CoreFactId>;
+	availableAtBlock(block: CoreBlockId): ReadonlyArray<CoreFactId>;
+	availableAtInstruction(instruction: CoreInstructionId): ReadonlyArray<CoreFactId>;
+	impliesAtBlock(block: CoreBlockId, required: CoreFact): CoreFactId | undefined;
+}
+
+function guardSuccess(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): { readonly from: CoreBlockId; readonly to: CoreBlockId } | undefined {
+	if (!fn.isInstructionLive(instruction) || fn.instructionKind(instruction) !== "guard") return undefined;
+	const payload = fn.terminatorPayload(instruction);
+	return payload.kind === "guard"
+		? { from: fn.instructionBlock(instruction), to: payload.success.block }
+		: undefined;
+}
+
+export function analyzeCoreFactAvailability(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+): CoreFactAvailabilityAnalysis {
+	const factIds = [...fn.factIds()];
+	const available = new Array<ReadonlyArray<CoreFactId> | undefined>(fn.blockCapacity);
+	const guardAvailable = (instruction: CoreInstructionId, block: CoreBlockId): boolean => {
+		const success = guardSuccess(fn, instruction);
+		return success !== undefined && cfg.dominatesEdge(success.from, success.to, block);
+	};
+	const factAvailable = (fact: CoreFact, block: CoreBlockId): boolean => {
+		if (fact.validity.kind === "guard" && !guardAvailable(fact.validity.instruction, block)) return false;
+		return fact.obligations.every((obligation) =>
+			obligation.kind !== "guard" || guardAvailable(obligation.instruction, block),
+		);
+	};
+	const atBlock = (block: CoreBlockId): ReadonlyArray<CoreFactId> => {
+		const cached = available[block];
+		if (cached !== undefined) return cached;
+		const result = Object.freeze(factIds.filter((fact) => factAvailable(fn.fact(fact), block)));
+		available[block] = result;
+		return result;
+	};
+	const result: CoreFactAvailabilityAnalysis = {
+		facts: Object.freeze(factIds),
+		availableAtBlock: atBlock,
+		availableAtInstruction(instruction) {
+			return atBlock(fn.instructionBlock(instruction));
+		},
+		impliesAtBlock(block, required) {
+			return atBlock(block).find((fact) => coreFactImplies(fn.fact(fact), required));
+		},
+	};
+	return Object.freeze(result);
+}
+
+export const CORE_FACT_AVAILABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFactAvailabilityAnalysis> = {
+	key: "fact-availability",
+	scope: "function",
+	functionDependencies: ["facts", "body", "cfg"],
+	compute({ program, request }) {
+		if (request.scope !== "function") throw new Error("Expected function analysis");
+		return analyzeCoreFactAvailability(
+			program.function(request.function),
+			buildCoreControlFlow(program, request.function, { exceptions: true }),
+		);
+	},
+};

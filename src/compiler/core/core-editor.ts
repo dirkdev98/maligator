@@ -349,6 +349,28 @@ export class CoreEditor {
 		this.#edits++;
 	}
 
+	setInstructionEffectRefinement(
+		instruction: CoreInstructionId,
+		refinement: CoreEffectRefinement,
+	): void {
+		this.#assertActive();
+		const descriptor = this.program.registry.byId(
+			this.function.instructionOpcode(instruction),
+		);
+		this.function._setInstructionEffectRefinement(
+			CORE_STORE_MUTATION,
+			instruction,
+			refinement,
+		);
+		this.#instructions.add(instruction);
+		this.#touchBlock(this.function.instructionBlock(instruction));
+		this.#mark("memoryEffects", "facts", "specializationInputs");
+		if (descriptor.callTransfer !== undefined || descriptor.effects.callsUserCode) {
+			this.#mark("calls");
+		}
+		this.#edits++;
+	}
+
 	removeInstruction(instruction: CoreInstructionId): void {
 		this.#assertActive();
 		const block = this.function.instructionBlock(instruction);
