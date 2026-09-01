@@ -2,8 +2,27 @@ import {
 	builtinOperations,
 	exactBuiltinCallDescriptor,
 } from "../shared/builtin-registry.ts";
-import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
+import {
+	compilerFactIsWorldInvariant,
+	knownFact,
+	sourceSiteId,
+} from "../shared/compiler-facts.ts";
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
+import {
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
+	compilerValueKindMaskIsSubset,
+} from "../shared/compiler-value-kinds.ts";
+import {
+	authorityFallback,
+	normalizeFactRequirements,
+} from "../shared/fact-implication.ts";
 import { CoreEditor } from "./core-editor.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -15,9 +34,11 @@ import type {
 	CoreAttributeValue,
 	CoreBlockId,
 	CoreEdge,
+	CoreFactId,
 	CoreImmediate,
 	CoreInstructionAttributes,
 	CoreInstructionId,
+	CoreRepresentation,
 	CoreTerminatorInput,
 	CoreTerminatorPayload,
 	CoreValueId,
@@ -212,7 +233,118 @@ function numberUnary(
 	}
 }
 
+function strictPrimitiveEquality(
+	program: CoreProgram,
+	left: LocalConstant,
+	right: LocalConstant,
+): boolean {
+	if (left.kind !== right.kind) return false;
+	switch (left.kind) {
+		case "undefined":
+		case "null":
+			return true;
+		case "boolean":
+		case "number":
+			return left.value === (right as { readonly value: unknown }).value;
+		case "string": {
+			const rightString = right as { readonly kind: "string"; readonly index: number };
+			return (
+				decodeString(program, left.index) === decodeString(program, rightString.index)
+			);
+		}
+	}
+}
+
+function constantsAreInterchangeable(
+	program: CoreProgram,
+	left: LocalConstant,
+	right: LocalConstant,
+): boolean {
+	if (left.kind !== right.kind) return false;
+	switch (left.kind) {
+		case "undefined":
+		case "null":
+			return true;
+		case "boolean":
+			return left.value === (right as { readonly value: boolean }).value;
+		case "number":
+			return Object.is(left.value, (right as { readonly value: number }).value);
+		case "string":
+			return (
+				decodeString(program, left.index) ===
+				decodeString(program, (right as { readonly index: number }).index)
+			);
+	}
+}
+
+function insertConstant(
+	editor: CoreEditor,
+	fn: CoreFunctionStore,
+	block: CoreBlockId,
+	constant: LocalConstant,
+	representation: CoreRepresentation,
+): CoreValueId {
+	const opcode =
+		constant.kind === "undefined"
+			? "createUndefined"
+			: constant.kind === "null"
+				? "createNull"
+				: constant.kind === "boolean"
+					? "createBoolean"
+					: constant.kind === "string"
+						? "createString"
+						: representation === "boxed"
+							? "createNumber"
+							: "createF64";
+	const attributes =
+		constant.kind === "boolean" || constant.kind === "number"
+			? { value: constant.value }
+			: constant.kind === "string"
+				? { stringIndex: constant.index }
+				: {};
+	return editor.insertInstruction(block, fn.blockTerminator(block), opcode, [], {
+		attributes,
+		outputRepresentations: [representation],
+	}).outputs[0]!;
+}
+
+function abstractPrimitiveEquality(
+	program: CoreProgram,
+	left: LocalConstant,
+	right: LocalConstant,
+): boolean {
+	if (left.kind === right.kind) return strictPrimitiveEquality(program, left, right);
+	if (
+		(left.kind === "null" && right.kind === "undefined") ||
+		(left.kind === "undefined" && right.kind === "null")
+	)
+		return true;
+	if (left.kind === "boolean") {
+		return abstractPrimitiveEquality(
+			program,
+			{ kind: "number", value: left.value ? 1 : 0 },
+			right,
+		);
+	}
+	if (right.kind === "boolean") {
+		return abstractPrimitiveEquality(program, left, {
+			kind: "number",
+			value: right.value ? 1 : 0,
+		});
+	}
+	if (left.kind === "number" && right.kind === "string") {
+		const value = decodeString(program, right.index);
+		return value !== undefined && left.value === Number(value);
+	}
+	if (left.kind === "string" && right.kind === "number") {
+		const value = decodeString(program, left.index);
+		return value !== undefined && Number(value) === right.value;
+	}
+	return false;
+}
+
 function foldInstruction(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): LocalConstant | undefined {
@@ -222,7 +354,24 @@ function foldInstruction(
 	if (opcode === "binary") {
 		const left = constantForValue(fn, inputs[0]!);
 		const right = constantForValue(fn, inputs[1]!);
-		return left?.kind === "number" && right?.kind === "number"
+		if (left === undefined || right === undefined) return undefined;
+		if (
+			attributes.operator === "==" ||
+			attributes.operator === "!=" ||
+			attributes.operator === "===" ||
+			attributes.operator === "!=="
+		) {
+			const loose = attributes.operator === "==" || attributes.operator === "!=";
+			const equal = loose
+				? abstractPrimitiveEquality(program, left, right)
+				: strictPrimitiveEquality(program, left, right);
+			return {
+				kind: "boolean",
+				value:
+					attributes.operator === "!=" || attributes.operator === "!==" ? !equal : equal,
+			};
+		}
+		return left.kind === "number" && right.kind === "number"
 			? numberBinary(attributes.operator, left.value, right.value)
 			: undefined;
 	}
@@ -537,6 +686,31 @@ function decodeString(program: CoreProgram, index: number): string | undefined {
 	return units === undefined ? undefined : String.fromCodePoint(...units);
 }
 
+function builtinSourceSite(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	positionId: number | undefined,
+	operation: string,
+): ReturnType<typeof sourceSiteId> | undefined {
+	if (positionId === undefined) return undefined;
+	const position = program.sourcePositions[positionId];
+	if (position === undefined) return undefined;
+	const owner =
+		position.inlinedFunctionIndex === undefined
+			? fn
+			: [...program.functionIds()]
+					.map((functionId) => program.function(functionId))
+					.find(({ id }) => id === position.inlinedFunctionIndex);
+	return owner === undefined
+		? undefined
+		: sourceSiteId(
+				owner.metadata.sourcePath,
+				position.line,
+				position.column,
+				`builtin-call:${operation}`,
+			);
+}
+
 function exactBuiltinReceiver(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
@@ -556,9 +730,13 @@ function exactBuiltinReceiver(
 				fn.instructionAttributes(instruction).intrinsic === owner
 			);
 		case "primitive-boolean":
-			return constant?.kind === "boolean";
+			return constant?.kind === "boolean" || fn.valueRepresentation(value) === "boolean";
 		case "primitive-number":
-			return constant?.kind === "number";
+			return (
+				constant?.kind === "number" ||
+				fn.valueRepresentation(value) === "f64" ||
+				fn.valueRepresentation(value) === "i32"
+			);
 		case "primitive-string":
 			return constant?.kind === "string";
 		case "fresh-array":
@@ -573,36 +751,37 @@ const rewriteExactBuiltinCalls: CorePass = {
 	name: "rewrite-exact-builtin-calls",
 	stage: "canonicalize",
 	scope: "instruction",
-	requiredAnalyses: [],
+	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS],
 	wakesOn: ["body", "facts"],
 	preserves: ["control-flow", "exception-control-flow"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
-	run({ program, compilationContext, item }) {
+	run(context) {
+		const { program, compilationContext, item } = context;
 		if (item.scope !== "instruction") return undefined;
 		const fn = program.function(item.function);
 		if (
 			!fn.isInstructionLive(item.instruction) ||
 			fn.instructionKind(item.instruction) !== "operation" ||
-			fn.instructionOpcodeName(item.instruction) !== "call"
+			fn.instructionOpcodeName(item.instruction) !== "call" ||
+			fn.instructionAttributes(item.instruction).knownBuiltinCall !== undefined
 		) {
 			return undefined;
 		}
 		const inputs = fn.instructionOperands(item.instruction);
 		const [callee, receiver] = inputs;
-		if (
-			callee === undefined ||
-			receiver === undefined ||
-			fn.valueUseCount(callee) !== 1
-		) {
-			return undefined;
-		}
-		const calleeDefinition = fn.valueDefinition(callee);
+		if (callee === undefined || receiver === undefined) return undefined;
+		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
+		const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+		const receiverRoot = root(receiver);
+		const calleeDefinition = fn.valueDefinition(root(callee));
 		if (calleeDefinition.kind !== "instruction") return undefined;
 		const property = calleeDefinition.instruction;
+		const propertyReceiver = fn.instructionOperands(property)[0];
 		if (
 			fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
-			fn.instructionOperands(property)[0] !== receiver
+			propertyReceiver === undefined ||
+			root(propertyReceiver) !== receiverRoot
 		) {
 			return undefined;
 		}
@@ -611,49 +790,133 @@ const rewriteExactBuiltinCalls: CorePass = {
 		const key = decodeString(program, stringIndex);
 		const candidates =
 			key === undefined ? [] : (BUILTIN_OPERATIONS_BY_KEY.get(key) ?? []);
-		const descriptor = candidates.find((candidate) => {
+		const ownerMatches = candidates.filter((candidate) => {
 			const exact = exactBuiltinCallDescriptor(candidate.id);
 			return (
-				exact !== undefined &&
-				exactBuiltinReceiver(fn, receiver, candidate.owner, exact.receiverProof)
+				(exact !== undefined &&
+					exactBuiltinReceiver(fn, receiverRoot, candidate.owner, exact.receiverProof)) ||
+				constructedCollectionReceiver(fn, root, receiverRoot, candidate.receiver)
 			);
 		});
+		const compatibleCollectionCollision =
+			candidates.length === 2 &&
+			(key === "has" || key === "delete") &&
+			candidates.some(({ owner }) => owner === "Map.prototype") &&
+			candidates.some(({ owner }) => owner === "Set.prototype");
+		const descriptor =
+			candidates.length === 1
+				? candidates[0]
+				: ownerMatches.length === 1
+					? ownerMatches[0]
+					: compatibleCollectionCollision
+						? candidates[0]
+						: undefined;
 		if (descriptor === undefined) return undefined;
-		const exact = exactBuiltinCallDescriptor(descriptor.id)!;
-		const identity = compilationContext.facts.builtinIdentities.get(descriptor.id);
-		if (!compilerFactIsWorldInvariant(identity) || identity.value !== descriptor.id) {
-			return undefined;
-		}
+		const exact = exactBuiltinCallDescriptor(descriptor.id);
+		const sharedIdentity = compilationContext.facts.builtinIdentities.get(descriptor.id);
+		const propertyResults = fn.instructionResults(property);
+		const exactRewrite =
+			exact !== undefined &&
+			exactBuiltinReceiver(fn, receiverRoot, descriptor.owner, exact.receiverProof) &&
+			compilerFactIsWorldInvariant(sharedIdentity) &&
+			sharedIdentity.value === descriptor.id &&
+			propertyResults.length === 1 &&
+			propertyResults[0] === callee &&
+			fn.valueUseCount(callee) === 1
+				? exact
+				: undefined;
+		const site = builtinSourceSite(
+			program,
+			fn,
+			fn.instructionSourcePosition(item.instruction),
+			descriptor.id,
+		);
+		const obligationId = `generic-call:${site ?? `${fn.id}:${item.instruction}`}`;
+		const obligations =
+			exactRewrite === undefined
+				? [
+						{
+							kind: "fallback" as const,
+							id: obligationId,
+							cause: "loaded-callee" as const,
+						},
+						...(descriptor.realm === "realm-object-identity"
+							? ([{ kind: "fallback", id: obligationId, cause: "realm" }] as const)
+							: []),
+					]
+				: [
+						authorityFallback(obligationId, {
+							kind: "world",
+							fact: "primordials.locked",
+						}),
+					];
+		const identity =
+			sharedIdentity?.kind === "known"
+				? knownFact(
+						sharedIdentity.value,
+						normalizeFactRequirements({
+							scope:
+								site === undefined
+									? { kind: "function" as const, id: fn.id }
+									: { kind: "site" as const, id: site },
+							dependencies: sharedIdentity.proof.dependencies,
+							obligations: [...sharedIdentity.proof.obligations, ...obligations],
+							origin: `guarded-builtin-site-analysis:${sharedIdentity.proof.origin}`,
+						}),
+					)
+				: (sharedIdentity ?? {
+						kind: "unknown" as const,
+						reason: "not-analyzed" as const,
+					});
 		const knownBuiltinCall: KnownBuiltinCall = {
 			operation: descriptor.id,
 			identity,
-			semantics: {
-				kind: "known",
-				value: {
-					effects: descriptor.effects,
-					result: descriptor.result,
-					lowerings: descriptor.lowerings,
-				},
-				proof: {
-					...identity.proof,
-					origin: `builtin-registry-semantics:${descriptor.id}`,
-				},
-			},
+			semantics:
+				identity.kind === "known"
+					? knownFact(
+							{
+								effects: descriptor.effects,
+								result: descriptor.result,
+								lowerings: descriptor.lowerings,
+							},
+							{
+								...identity.proof,
+								origin: `builtin-registry-semantics:${descriptor.id}`,
+							},
+						)
+					: identity,
+			...(site === undefined ? {} : { sourceSite: site }),
 		};
-		const arguments_ = inputs.slice(2);
-		const forwarded =
-			exact.forwardedArgumentLimit === undefined
-				? arguments_
-				: arguments_.slice(0, exact.forwardedArgumentLimit);
 		const editor = CoreEditor.open(program, item.function);
-		editor.replaceInstruction(item.instruction, "callBuiltin", [receiver, ...forwarded], {
-			attributes: {
-				operation: exact.id,
-				knownBuiltinCall: knownBuiltinCall as unknown as CoreAttributeValue,
-			},
-			sourcePosition: fn.instructionSourcePosition(item.instruction),
-		});
-		editor.removeInstruction(property);
+		if (exactRewrite === undefined) {
+			editor.replaceInstruction(item.instruction, "call", inputs, {
+				attributes: {
+					...fn.instructionAttributes(item.instruction),
+					knownBuiltinCall: knownBuiltinCall as unknown as CoreAttributeValue,
+				},
+				sourcePosition: fn.instructionSourcePosition(item.instruction),
+				effectRefinement: fn.instructionEffectRefinement(item.instruction),
+			});
+		} else {
+			const arguments_ = inputs.slice(2);
+			const forwarded =
+				exactRewrite.forwardedArgumentLimit === undefined
+					? arguments_
+					: arguments_.slice(0, exactRewrite.forwardedArgumentLimit);
+			editor.replaceInstruction(
+				item.instruction,
+				"callBuiltin",
+				[receiver, ...forwarded],
+				{
+					attributes: {
+						operation: exactRewrite.id,
+						knownBuiltinCall: knownBuiltinCall as unknown as CoreAttributeValue,
+					},
+					sourcePosition: fn.instructionSourcePosition(item.instruction),
+				},
+			);
+			editor.removeInstruction(property);
+		}
 		return editor.commit();
 	},
 };
@@ -676,7 +939,7 @@ const foldConstants: CorePass = {
 			fn.instructionResults(item.instruction).length !== 1
 		)
 			return undefined;
-		const folded = foldInstruction(fn, item.instruction);
+		const folded = foldInstruction(program, fn, item.instruction);
 		if (folded === undefined) return undefined;
 		const replacement = constantOpcode(folded);
 		const editor = CoreEditor.open(program, item.function);
@@ -685,6 +948,370 @@ const foldConstants: CorePass = {
 			sourcePosition: fn.instructionSourcePosition(item.instruction),
 		});
 		return editor.commit();
+	},
+};
+
+function exactPrimitiveTypeof(mask: number): string | undefined {
+	if (mask === COMPILER_VALUE_KIND_UNDEFINED) return "undefined";
+	if (mask === COMPILER_VALUE_KIND_NULL) return "object";
+	if (mask === COMPILER_VALUE_KIND_BOOLEAN) return "boolean";
+	if (mask === COMPILER_VALUE_KIND_NUMBER) return "number";
+	if (mask === COMPILER_VALUE_KIND_STRING) return "string";
+	if (mask === COMPILER_VALUE_KIND_BIGINT) return "bigint";
+	if (mask === COMPILER_VALUE_KIND_SYMBOL) return "symbol";
+	return undefined;
+}
+
+function typeofObservation(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	other: CoreValueId,
+	kindMask: (value: CoreValueId) => number,
+): boolean | undefined {
+	const definition = fn.valueDefinition(value);
+	if (
+		definition.kind !== "instruction" ||
+		fn.instructionKind(definition.instruction) !== "operation" ||
+		fn.instructionOpcodeName(definition.instruction) !== "unary" ||
+		fn.instructionAttributes(definition.instruction).operator !== "typeof"
+	)
+		return undefined;
+	const [input] = fn.instructionOperands(definition.instruction);
+	const constant = constantForValue(fn, other);
+	if (input === undefined || constant?.kind !== "string") return undefined;
+	const actual = exactPrimitiveTypeof(kindMask(input));
+	const expected = String.fromCharCode(
+		...(program.stringConstants[constant.index] ?? []),
+	);
+	return actual === undefined ? undefined : actual === expected;
+}
+
+const TYPEOF_RESULTS: ReadonlySet<string> = new Set([
+	"undefined",
+	"object",
+	"boolean",
+	"number",
+	"string",
+	"symbol",
+	"bigint",
+	"function",
+]);
+
+const foldValueKindObservations: CorePass = {
+	name: "value-kind-observation-folding",
+	stage: "canonicalize",
+	scope: "instruction",
+	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	wakesOn: ["body", "cfg", "representations"],
+	preserves: [],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run(context) {
+		const { program, item } = context;
+		if (item.scope !== "instruction") return undefined;
+		const fn = program.function(item.function);
+		if (
+			!fn.isInstructionLive(item.instruction) ||
+			fn.instructionKind(item.instruction) !== "operation"
+		)
+			return undefined;
+		const opcode = fn.instructionOpcodeName(item.instruction);
+		const operands = fn.instructionOperands(item.instruction);
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		let result: boolean | undefined;
+		if (
+			opcode === "unary" &&
+			fn.instructionAttributes(item.instruction).operator === "!"
+		) {
+			const input = operands[0];
+			if (
+				input !== undefined &&
+				compilerValueKindMaskIsSubset(
+					kinds.kindMask(input),
+					COMPILER_VALUE_KIND_UNDEFINED | COMPILER_VALUE_KIND_NULL,
+				)
+			)
+				result = true;
+		} else if (opcode === "binary" && operands.length === 2) {
+			const operator = fn.instructionAttributes(item.instruction).operator;
+			if (operator === "===" || operator === "!==") {
+				const typeofResult =
+					typeofObservation(program, fn, operands[0]!, operands[1]!, (value) =>
+						kinds.kindMask(value),
+					) ??
+					typeofObservation(program, fn, operands[1]!, operands[0]!, (value) =>
+						kinds.kindMask(value),
+					);
+				const equal =
+					typeofResult ??
+					((kinds.kindMask(operands[0]!) & kinds.kindMask(operands[1]!)) === 0
+						? false
+						: undefined);
+				result = equal === undefined ? undefined : operator === "===" ? equal : !equal;
+			}
+		}
+		if (result === undefined) return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		editor.replaceInstruction(item.instruction, "createBoolean", [], {
+			attributes: { value: result },
+			sourcePosition: fn.instructionSourcePosition(item.instruction),
+		});
+		return editor.commit();
+	},
+};
+
+const foldTypeofComparisons: CorePass = {
+	name: "typeof-comparison-canonicalization",
+	stage: "canonicalize",
+	scope: "instruction",
+	requiredAnalyses: [],
+	wakesOn: ["body"],
+	preserves: [],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run({ program, item }) {
+		if (item.scope !== "instruction") return undefined;
+		const fn = program.function(item.function);
+		if (
+			!fn.isInstructionLive(item.instruction) ||
+			fn.instructionKind(item.instruction) !== "operation" ||
+			fn.instructionOpcodeName(item.instruction) !== "binary"
+		)
+			return undefined;
+		const operator = fn.instructionAttributes(item.instruction).operator;
+		if (
+			operator !== "===" &&
+			operator !== "!==" &&
+			operator !== "==" &&
+			operator !== "!="
+		)
+			return undefined;
+		const operands = fn.instructionOperands(item.instruction);
+		if (operands.length !== 2) return undefined;
+		const typeofInput = (value: CoreValueId): CoreValueId | undefined => {
+			const definition = fn.valueDefinition(value);
+			if (
+				definition.kind !== "instruction" ||
+				fn.instructionKind(definition.instruction) !== "operation" ||
+				fn.instructionOpcodeName(definition.instruction) !== "unary" ||
+				fn.instructionAttributes(definition.instruction).operator !== "typeof"
+			)
+				return undefined;
+			return fn.instructionOperands(definition.instruction)[0];
+		};
+		const leftInput = typeofInput(operands[0]!);
+		const rightInput = typeofInput(operands[1]!);
+		const input = leftInput ?? rightInput;
+		const constant = constantForValue(
+			fn,
+			leftInput === undefined ? operands[0]! : operands[1]!,
+		);
+		if (input === undefined || constant?.kind !== "string") return undefined;
+		const expected = String.fromCharCode(
+			...(program.stringConstants[constant.index] ?? []),
+		);
+		if (!TYPEOF_RESULTS.has(expected)) return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		editor.replaceInstruction(item.instruction, "typeofCompare", [input], {
+			attributes: { expected, negated: operator === "!==" || operator === "!=" },
+			sourcePosition: fn.instructionSourcePosition(item.instruction),
+		});
+		return editor.commit();
+	},
+};
+
+const foldPrimitiveCoercions: CorePass = {
+	name: "primitive-coercion-folding",
+	stage: "canonicalize",
+	scope: "instruction",
+	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	wakesOn: ["body", "cfg", "representations"],
+	preserves: [],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run(context) {
+		const { program, item } = context;
+		if (item.scope !== "instruction") return undefined;
+		const fn = program.function(item.function);
+		if (
+			!fn.isInstructionLive(item.instruction) ||
+			fn.instructionKind(item.instruction) !== "operation"
+		)
+			return undefined;
+		const opcode = fn.instructionOpcodeName(item.instruction);
+		if (opcode !== "requireCoercible" && opcode !== "toPropertyKey") return undefined;
+		const operands = fn.instructionOperands(item.instruction);
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const coercible = (value: CoreValueId): boolean => {
+			const mask = kinds.kindMask(value);
+			return (
+				mask !== 0 &&
+				(mask & (COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_UNDEFINED)) === 0
+			);
+		};
+		if (opcode === "requireCoercible") {
+			const value = operands[0];
+			if (value === undefined || !coercible(value)) return undefined;
+			const editor = CoreEditor.open(program, item.function);
+			editor.removeInstruction(item.instruction);
+			return editor.commit();
+		}
+		const [base, key] = operands;
+		const [result] = fn.instructionResults(item.instruction);
+		if (base === undefined || key === undefined || result === undefined) return undefined;
+		if (
+			!compilerValueKindMaskIsSubset(
+				kinds.kindMask(key),
+				COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
+			)
+		)
+			return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		if (!coercible(base)) {
+			editor.insertInstruction(
+				fn.instructionBlock(item.instruction),
+				item.instruction,
+				"requireCoercible",
+				[base],
+				{
+					outputCount: 0,
+					sourcePosition: fn.instructionSourcePosition(item.instruction),
+				},
+			);
+		}
+		editor.replaceValueUses(result, key);
+		editor.removeInstruction(item.instruction);
+		return editor.commit();
+	},
+};
+
+function flippedComparison(operator: CoreAttributeValue): string | undefined {
+	switch (operator) {
+		case "<":
+			return ">";
+		case "<=":
+			return ">=";
+		case ">":
+			return "<";
+		case ">=":
+			return "<=";
+		default:
+			return undefined;
+	}
+}
+
+function constructedCollectionReceiver(
+	fn: CoreFunctionStore,
+	root: (value: CoreValueId) => CoreValueId,
+	value: CoreValueId,
+	receiver: string,
+): boolean {
+	if (receiver !== "map" && receiver !== "set") return false;
+	const definition = fn.valueDefinition(value);
+	if (definition.kind !== "instruction") return false;
+	const construction = definition.instruction;
+	if (fn.instructionOpcodeName(construction) !== "construct") return false;
+	const constructor = fn.instructionOperands(construction)[0];
+	if (constructor === undefined) return false;
+	const constructorDefinition = fn.valueDefinition(root(constructor));
+	if (constructorDefinition.kind !== "instruction") return false;
+	return (
+		fn.instructionOpcodeName(constructorDefinition.instruction) === "loadIntrinsic" &&
+		fn.instructionAttributes(constructorDefinition.instruction).intrinsic ===
+			(receiver === "map" ? "Map" : "Set")
+	);
+}
+
+const rewriteNumericIdentities: CorePass = {
+	name: "numeric-algebraic-simplification",
+	stage: "canonicalize",
+	scope: "instruction",
+	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	wakesOn: ["body", "cfg", "representations"],
+	preserves: [],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run(context) {
+		const { program, item } = context;
+		if (item.scope !== "instruction") return undefined;
+		const fn = program.function(item.function);
+		if (
+			!fn.isInstructionLive(item.instruction) ||
+			fn.instructionKind(item.instruction) !== "operation" ||
+			fn.instructionOpcodeName(item.instruction) !== "binary"
+		)
+			return undefined;
+		const [left, right] = fn.instructionOperands(item.instruction);
+		const [result] = fn.instructionResults(item.instruction);
+		if (left === undefined || right === undefined || result === undefined)
+			return undefined;
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const numeric = (value: CoreValueId): boolean => {
+			const kind = kinds.exactScalar(value);
+			return kind === "number" || kind === "int32";
+		};
+		if (!numeric(left) || !numeric(right)) return undefined;
+		const operator = fn.instructionAttributes(item.instruction).operator;
+		const leftConstant = constantForValue(fn, left);
+		const rightConstant = constantForValue(fn, right);
+		let replacement: CoreValueId | undefined;
+		if (
+			operator === "+" &&
+			rightConstant?.kind === "number" &&
+			Object.is(rightConstant.value, -0)
+		) {
+			replacement = left;
+		} else if (
+			operator === "*" &&
+			rightConstant?.kind === "number" &&
+			rightConstant.value === 1
+		) {
+			replacement = left;
+		}
+		if (
+			replacement !== undefined &&
+			fn.valueRepresentation(replacement) === fn.valueRepresentation(result)
+		) {
+			const editor = CoreEditor.open(program, item.function);
+			editor.replaceValueUses(result, replacement);
+			editor.removeInstruction(item.instruction);
+			return editor.commit();
+		}
+		if (
+			operator === "&" &&
+			((leftConstant?.kind === "number" && leftConstant.value === 0) ||
+				(rightConstant?.kind === "number" && rightConstant.value === 0))
+		) {
+			const editor = CoreEditor.open(program, item.function);
+			editor.replaceInstruction(item.instruction, "createNumber", [], {
+				attributes: { value: 0 },
+				sourcePosition: fn.instructionSourcePosition(item.instruction),
+			});
+			return editor.commit();
+		}
+		if (left === right && (operator === "<" || operator === ">")) {
+			const editor = CoreEditor.open(program, item.function);
+			editor.replaceInstruction(item.instruction, "createBoolean", [], {
+				attributes: { value: false },
+				sourcePosition: fn.instructionSourcePosition(item.instruction),
+			});
+			return editor.commit();
+		}
+		const flipped = flippedComparison(operator);
+		if (flipped !== undefined && leftConstant?.kind === "number") {
+			const editor = CoreEditor.open(program, item.function);
+			editor.replaceInstruction(item.instruction, "binary", [right, left], {
+				attributes: {
+					...fn.instructionAttributes(item.instruction),
+					operator: flipped,
+				},
+				sourcePosition: fn.instructionSourcePosition(item.instruction),
+				effectRefinement: fn.instructionEffectRefinement(item.instruction),
+			});
+			return editor.commit();
+		}
+		return undefined;
 	},
 };
 
@@ -709,6 +1336,8 @@ const propagateMoves: CorePass = {
 		const [result] = fn.instructionResults(item.instruction);
 		const [input] = fn.instructionOperands(item.instruction);
 		if (result === undefined || input === undefined) return undefined;
+		if (fn.valueRepresentation(result) !== fn.valueRepresentation(input))
+			return undefined;
 		const editor = CoreEditor.open(program, item.function);
 		editor.replaceValueUses(result, input);
 		editor.removeInstruction(item.instruction);
@@ -731,6 +1360,7 @@ const foldControlFlow: CorePass = {
 		if (!fn.isBlockLive(item.block)) return undefined;
 		const payload = fn.terminatorPayload(fn.blockTerminator(item.block));
 		let selected: CoreEdge | undefined;
+		let removedFact: CoreFactId | undefined;
 		if (payload.kind === "branch") {
 			const condition = constantForValue(fn, payload.condition);
 			if (condition?.kind === "boolean") {
@@ -745,10 +1375,27 @@ const foldControlFlow: CorePass = {
 					payload.cases.find(({ value }) => immediateEqualsConstant(value, discriminant))
 						?.edge ?? payload.default;
 			}
+		} else if (payload.kind === "guard" && sameEdge(payload.success, payload.fallback)) {
+			const terminator = fn.blockTerminator(item.block);
+			const fact = fn.fact(payload.fact);
+			const exclusivelyGuardsTerminator = fact.obligations.every(
+				(obligation) =>
+					obligation.kind === "guard" && obligation.instruction === terminator,
+			);
+			const usedByRefinement = [...fn.instructionIds()].some(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionEffectRefinement(instruction)?.proof === payload.fact,
+			);
+			if (exclusivelyGuardsTerminator && !usedByRefinement) {
+				selected = payload.success;
+				removedFact = payload.fact;
+			}
 		}
 		if (selected === undefined) return undefined;
 		const editor = CoreEditor.open(program, item.function);
 		editor.replaceTerminator(item.block, { kind: "jump", edge: selected });
+		if (removedFact !== undefined) editor.removeFact(removedFact);
 		return editor.commit();
 	},
 };
@@ -756,30 +1403,54 @@ const foldControlFlow: CorePass = {
 const removeDeadInstructions: CorePass = {
 	name: "local-dead-instruction-elimination",
 	stage: "canonicalize",
-	scope: "instruction",
+	scope: "function",
 	requiredAnalyses: [],
 	wakesOn: ["body"],
 	preserves: [],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run({ program, item }) {
-		if (item.scope !== "instruction") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (!fn.isInstructionLive(item.instruction)) return undefined;
-		if (fn.instructionKind(item.instruction) !== "operation") return undefined;
-		const descriptor = program.registry.byId(fn.instructionOpcode(item.instruction));
-		const attributes = fn.instructionAttributes(item.instruction);
-		const locallyDiscardable =
-			descriptor.discardable ||
-			(descriptor.opcode === "unary" && attributes.operator === "typeof");
-		if (!locallyDiscardable) return undefined;
-		if (
-			fn.instructionResults(item.instruction).some((value) => valueHasUses(fn, value))
-		) {
-			return undefined;
-		}
+		const removable = (instruction: CoreInstructionId): boolean => {
+			if (
+				!fn.isInstructionLive(instruction) ||
+				fn.instructionKind(instruction) !== "operation"
+			)
+				return false;
+			const descriptor = program.registry.byId(fn.instructionOpcode(instruction));
+			const attributes = fn.instructionAttributes(instruction);
+			if (
+				!descriptor.discardable &&
+				!(descriptor.opcode === "unary" && attributes.operator === "typeof")
+			)
+				return false;
+			return fn
+				.instructionResults(instruction)
+				.every((value) => !valueHasUses(fn, value));
+		};
+		const pending = [...fn.instructionIds()].filter(removable);
+		if (pending.length === 0) return undefined;
+		const queued = new Set(pending);
 		const editor = CoreEditor.open(program, item.function);
-		editor.removeInstruction(item.instruction);
+		while (pending.length > 0) {
+			const instruction = pending.pop()!;
+			queued.delete(instruction);
+			if (!removable(instruction)) continue;
+			const operands = [...fn.instructionOperands(instruction)];
+			editor.removeInstruction(instruction);
+			for (const operand of operands) {
+				const definition = fn.valueDefinition(operand);
+				if (
+					definition.kind !== "instruction" ||
+					queued.has(definition.instruction) ||
+					!removable(definition.instruction)
+				)
+					continue;
+				queued.add(definition.instruction);
+				pending.push(definition.instruction);
+			}
+		}
 		return editor.commit();
 	},
 };
@@ -788,7 +1459,10 @@ const foldRedundantTdzChecks: CorePass = {
 	name: "redundant-tdz-check-folding",
 	stage: "canonicalize",
 	scope: "instruction",
-	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	requiredAnalyses: [
+		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+		CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
 	changes: LOCAL_CHANGES,
@@ -804,9 +1478,54 @@ const foldRedundantTdzChecks: CorePass = {
 		)
 			return undefined;
 		const [input] = fn.instructionOperands(item.instruction);
+		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const known = new Map<CoreValueId, boolean>();
+		const visiting = new Set<CoreValueId>();
+		const excludesEmpty = (value: CoreValueId): boolean => {
+			const cached = known.get(value);
+			if (cached !== undefined) return cached;
+			if (visiting.has(value)) return false;
+			visiting.add(value);
+			const definition = fn.valueDefinition(value);
+			let result: boolean;
+			if (definition.kind === "block-parameter") {
+				const parameter = fn.blockParameters(definition.block)[definition.index];
+				if (parameter?.role === "exception" || fn.parameters.includes(value)) {
+					result = true;
+				} else {
+					const incoming = control.predecessors[definition.block] ?? [];
+					result =
+						incoming.length > 0 &&
+						incoming.every((edge) => {
+							const argument =
+								edge.arguments[
+									edge.kind === "exceptional" ? definition.index - 1 : definition.index
+								];
+							return argument !== undefined && excludesEmpty(argument);
+						});
+				}
+			} else {
+				const opcode = fn.instructionOpcodeName(definition.instruction);
+				const source = fn.instructionOperands(definition.instruction)[0];
+				result =
+					opcode === "move"
+						? source !== undefined && excludesEmpty(source)
+						: ![
+								"createEmpty",
+								"loadCaptured",
+								"loadGlobal",
+								"loadLocal",
+								"loadThis",
+							].includes(opcode);
+			}
+			visiting.delete(value);
+			known.set(value, result);
+			return result;
+		};
 		if (
 			input === undefined ||
-			context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS).exactScalar(input) === undefined
+			(kinds.kindMask(input) === COMPILER_VALUE_KIND_TOP && !excludesEmpty(input))
 		)
 			return undefined;
 		const editor = CoreEditor.open(program, item.function);
@@ -914,17 +1633,36 @@ const removeUnreachableBlocks: CorePass = {
 			if (handler !== undefined && removed.has(handler.block)) editor.clearHandler(block);
 		}
 		const pending = new Set(blocks.flatMap((block) => [...fn.instructionIds(block)]));
-		while (pending.size > 0) {
-			let removed = false;
-			for (const instruction of pending) {
-				if (fn.instructionResults(instruction).some((value) => valueHasUses(fn, value)))
-					continue;
-				editor.removeInstruction(instruction);
-				pending.delete(instruction);
-				removed = true;
+		const queue = new Array<CoreInstructionId>();
+		const queued = new Set<CoreInstructionId>();
+		const enqueueIfDead = (instruction: CoreInstructionId): void => {
+			if (
+				!pending.has(instruction) ||
+				queued.has(instruction) ||
+				fn.instructionResults(instruction).some((value) => valueHasUses(fn, value))
+			) {
+				return;
 			}
-			if (!removed) throw new Error("Unreachable Core instructions retain external uses");
+			queued.add(instruction);
+			queue.push(instruction);
+		};
+		for (const instruction of pending) enqueueIfDead(instruction);
+		for (let cursor = 0; cursor < queue.length; cursor++) {
+			const instruction = queue[cursor]!;
+			queued.delete(instruction);
+			if (!pending.has(instruction)) continue;
+			if (fn.instructionResults(instruction).some((value) => valueHasUses(fn, value)))
+				continue;
+			const dependencies = fn.instructionOperands(instruction).flatMap((value) => {
+				const definition = fn.valueDefinition(value);
+				return definition.kind === "instruction" ? [definition.instruction] : [];
+			});
+			editor.removeInstruction(instruction);
+			pending.delete(instruction);
+			for (const dependency of dependencies) enqueueIfDead(dependency);
 		}
+		if (pending.size > 0)
+			throw new Error("Unreachable Core instructions retain external uses");
 		for (const block of blocks) editor.removeBlock(block);
 		return editor.commit();
 	},
@@ -1046,6 +1784,13 @@ const mergeLinearBlocks: CorePass = {
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const protectedLoopBlocks = new Set(
+			control.loops.flatMap((loop) => [
+				loop.header,
+				...loop.latches,
+				...loop.exits.filter(({ dedicated }) => dedicated).map(({ to }) => to),
+			]),
+		);
 		for (const predecessor of fn.blockIds()) {
 			const predecessorTerminator = fn.terminatorPayload(fn.blockTerminator(predecessor));
 			if (predecessorTerminator.kind !== "jump") continue;
@@ -1053,6 +1798,8 @@ const mergeLinearBlocks: CorePass = {
 			if (
 				target === fn.entry ||
 				target === fn.bodyEntry ||
+				protectedLoopBlocks.has(predecessor) ||
+				protectedLoopBlocks.has(target) ||
 				!fn.isBlockLive(target) ||
 				!sameEdge(fn.blockHandler(predecessor), fn.blockHandler(target))
 			)
@@ -1135,6 +1882,19 @@ const simplifyBlockParameters: CorePass = {
 				);
 				const arguments_ = currentIncoming.map((edge) => edge.arguments[index]);
 				const replacement = arguments_[0];
+				const replacementConstant =
+					replacement === undefined ? undefined : constantForValue(fn, replacement);
+				const equivalentConstants =
+					replacementConstant !== undefined &&
+					arguments_.every((argument) => {
+						if (argument === undefined) return false;
+						const constant = constantForValue(fn, argument);
+						return (
+							constant !== undefined &&
+							constantsAreInterchangeable(program, replacementConstant, constant)
+						);
+					});
+				const sameValue = arguments_.every((argument) => argument === replacement);
 				const unused = !valueHasUses(fn, parameters[index]!.value);
 				const replacementDefinition =
 					replacement === undefined ? undefined : fn.valueDefinition(replacement);
@@ -1144,11 +1904,22 @@ const simplifyBlockParameters: CorePass = {
 						replacement === parameters[index]!.value ||
 						(replacementDefinition?.kind === "block-parameter" &&
 							replacementDefinition.block === block) ||
-						arguments_.some((argument) => argument !== replacement))
+						(!equivalentConstants && !sameValue))
 				)
 					continue;
 				editor ??= CoreEditor.open(program, item.function);
-				if (!unused) editor.replaceValueUses(parameters[index]!.value, replacement!);
+				if (!unused) {
+					const selected = sameValue
+						? replacement!
+						: insertConstant(
+								editor,
+								fn,
+								block,
+								replacementConstant!,
+								parameters[index]!.representation,
+							);
+					editor.replaceValueUses(parameters[index]!.value, selected);
+				}
 				for (const predecessor of new Set(incoming.map(({ from }) => from))) {
 					const predecessorPayload = fn.terminatorPayload(
 						fn.blockTerminator(predecessor),
@@ -1203,6 +1974,7 @@ const canonicalizeBlockParameters: CorePass = {
 				const replacement = roots.get(parameter.value) ?? parameter.value;
 				if (
 					replacement === parameter.value ||
+					!fn.isValueLive(replacement) ||
 					fn.valueRepresentation(replacement) !== parameter.representation
 				)
 					continue;
@@ -1236,6 +2008,10 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	foldStaticPropertyKeys,
 	rewriteExactBuiltinCalls,
 	foldConstants,
+	foldValueKindObservations,
+	foldTypeofComparisons,
+	foldPrimitiveCoercions,
+	rewriteNumericIdentities,
 	propagateMoves,
 	foldControlFlow,
 	localValueNumbering,
@@ -1246,4 +2022,12 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	eliminateForwardingBlocks,
 	mergeLinearBlocks,
 	removeUnreachableBlocks,
+];
+
+export const CORE_LOCAL_FINALIZATION_PASSES: ReadonlyArray<CorePass> = [
+	{
+		...foldRedundantTdzChecks,
+		name: "post-memory-tdz-check-folding",
+		stage: "finalize",
+	},
 ];

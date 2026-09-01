@@ -104,14 +104,18 @@ function buildEdges(
 		() => new Array<CoreControlEdge>(),
 	);
 	for (const block of fn.blockIds()) {
-		for (const edge of coreTerminatorEdges(
-			fn.terminatorPayload(fn.blockTerminator(block)),
-		)) {
+		const ordinary = coreTerminatorEdges(fn.terminatorPayload(fn.blockTerminator(block)));
+		for (const [index, edge] of ordinary.entries()) {
 			successors[block]!.push({
 				from: block,
 				to: edge.block,
 				kind: "ordinary",
-				arguments: edge.arguments,
+				get arguments() {
+					return (
+						coreTerminatorEdges(fn.terminatorPayload(fn.blockTerminator(block)))[index]
+							?.arguments ?? edge.arguments
+					);
+				},
 			});
 		}
 		const handler = includeExceptions ? fn.blockHandler(block) : undefined;
@@ -120,7 +124,9 @@ function buildEdges(
 				from: block,
 				to: handler.block,
 				kind: "exceptional",
-				arguments: handler.arguments,
+				get arguments() {
+					return fn.blockHandler(block)?.arguments ?? handler.arguments;
+				},
 			});
 		}
 	}
@@ -170,6 +176,13 @@ function immediateDominators(
 	const dominators = new Int32Array(predecessors.length);
 	dominators.fill(-1);
 	dominators[entry] = entry;
+	const successors = Array.from(
+		{ length: predecessors.length },
+		() => new Array<CoreBlockId>(),
+	);
+	for (const [block, incoming] of predecessors.entries()) {
+		for (const { from } of incoming) successors[from]!.push(coreBlockId(block));
+	}
 	const intersect = (left: CoreBlockId, right: CoreBlockId): CoreBlockId => {
 		let first = left;
 		let second = right;
@@ -179,20 +192,25 @@ function immediateDominators(
 		}
 		return first;
 	};
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const block of reversePostorder.slice(1)) {
-			const incoming = (predecessors[block] ?? []).filter(
-				({ from }) => dominators[from]! >= 0,
-			);
-			if (incoming.length === 0) continue;
-			let next = incoming[0]!.from;
-			for (const edge of incoming.slice(1)) next = intersect(next, edge.from);
-			if (dominators[block] !== next) {
-				dominators[block] = next;
-				changed = true;
-			}
+	const queue = reversePostorder.slice(1);
+	const queued = new Uint8Array(predecessors.length);
+	for (const block of queue) queued[block] = 1;
+	let cursor = 0;
+	while (cursor < queue.length) {
+		const block = queue[cursor++]!;
+		queued[block] = 0;
+		const incoming = (predecessors[block] ?? []).filter(
+			({ from }) => dominators[from]! >= 0,
+		);
+		if (incoming.length === 0) continue;
+		let next = incoming[0]!.from;
+		for (const edge of incoming.slice(1)) next = intersect(next, edge.from);
+		if (dominators[block] === next) continue;
+		dominators[block] = next;
+		for (const successor of successors[block]!) {
+			if (successor === entry || queued[successor] !== 0) continue;
+			queued[successor] = 1;
+			queue.push(successor);
 		}
 	}
 	return Array.from(dominators, (parent, block) =>

@@ -335,6 +335,30 @@ describe("Core empty forwarding blocks", () => {
 		expect(result.fn.isValueLive(parameter)).toBe(false);
 	});
 
+	it("substitutes a linear block parameter in every call operand", () => {
+		const { program, builder } = fixture(1);
+		const entry = builder.createBlock([{}]);
+		const value = parameters(builder, entry)[0]!;
+		const target = builder.createBlock([{}]);
+		const parameter = parameters(builder, target)[0]!;
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: target, arguments: [value] },
+		});
+		const [result] = builder.appendInstruction(target, "call", [parameter, parameter]);
+		builder.setTerminator(target, { kind: "return", value: result! });
+		const result_ = optimized({
+			program,
+			function: builder.finish(entry).function,
+		});
+		const call = [...result_.fn.bodyInstructionIds(result_.fn.entry)].find(
+			(instruction) => result_.fn.instructionOpcodeName(instruction) === "call",
+		)!;
+		expect(blocks(result_.fn)).toHaveLength(1);
+		expect(result_.fn.instructionOperands(call)).toEqual([value, value]);
+		expect(result_.fn.isValueLive(parameter)).toBe(false);
+	});
+
 	it("leaves no forwarding candidates at the optimizer boundary", () => {
 		const result = optimized(functionWithForwardedArguments());
 		const { fn } = result;
@@ -417,6 +441,8 @@ describe("Core SSA and CFG cleanup", () => {
 			kind: "return",
 			value: flag,
 		});
+		expect(result.fn.isValueLive(leftValue!)).toBe(false);
+		expect(result.fn.isValueLive(rightValue!)).toBe(false);
 	});
 
 	it("drops an exceptional edge when its protected block can no longer throw", () => {

@@ -113,6 +113,72 @@ function pathRanges(source: BoundedFunction) {
 }
 
 describe("Core path-sensitive numeric ranges", () => {
+	it("folds comparisons from reusable int32 representation ranges", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "boolean" }]);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "i32" }]);
+		const condition = builder.blockParameters(entry)[0]!.value;
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [first] = builder.appendInstruction(left, "createF64", [], {
+			attributes: { value: 1 },
+			outputRepresentations: ["i32"],
+		});
+		const [second] = builder.appendInstruction(right, "createF64", [], {
+			attributes: { value: 2 },
+			outputRepresentations: ["i32"],
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [first!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [second!] },
+		});
+		const value = builder.blockParameters(join)[0]!.value;
+		const [limit] = builder.appendInstruction(join, "createF64", [], {
+			attributes: { value: 0x8000_0000 },
+			outputRepresentations: ["f64"],
+		});
+		const [comparison] = builder.appendInstruction(join, "binary", [value, limit!], {
+			attributes: { operator: "<" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(join, { kind: "return", value: comparison! });
+		const finished = builder.finish(entry);
+		const source = { program, function: finished.function, value, bounded: join };
+		expect(pathRanges(source).range(value, join)).toEqual({
+			minimum: -0x8000_0000,
+			maximum: 0x7fff_ffff,
+			exactSafeIntegers: true,
+			excludesNegativeZero: true,
+		});
+		expect(binaryOperators(program.function(finished.function))).toContain("<");
+		const fn = optimizeCore(
+			{ program, context: programAnalysisContext() },
+			{ verification: "per-pass" },
+		).compilation.program.function(finished.function);
+		expect(binaryOperators(fn)).not.toContain("<");
+		const returnBlock = [...fn.blockIds()].find(
+			(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind === "return",
+		);
+		expect(returnBlock).toBeDefined();
+		const returned = fn.terminatorPayload(fn.blockTerminator(returnBlock!));
+		if (returned.kind !== "return") throw new Error("expected return");
+		const definition = fn.valueDefinition(returned.value);
+		if (definition.kind !== "instruction") throw new Error("expected constant result");
+		expect(fn.instructionOpcodeName(definition.instruction)).toBe("createBoolean");
+		expect(fn.instructionAttributes(definition.instruction).value).toBe(true);
+	});
+
 	it.each(["consequent", "alternate"] as const)(
 		"intersects %s-edge int32 bounds and removes a dominated remainder",
 		(polarity) => {
