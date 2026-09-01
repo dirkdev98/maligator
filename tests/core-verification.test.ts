@@ -133,6 +133,89 @@ describe("Core verification", () => {
 		expect(() => verifyCoreProgram(program)).toThrow(/references function 99/);
 	});
 
+	it("rejects negative function references except captured-scope owners", () => {
+		const invalidProgram = new CoreProgram(coreOpcodeRegistry);
+		const invalidBuilder = new CoreFunctionBuilder(invalidProgram);
+		const invalidEntry = invalidBuilder.createBlock();
+		const [invalidFunction] = invalidBuilder.appendInstruction(
+			invalidEntry,
+			"createFunction",
+			[],
+			{ attributes: { functionIndex: -1 } },
+		);
+		invalidBuilder.setTerminator(invalidEntry, {
+			kind: "return",
+			value: invalidFunction!,
+		});
+		invalidBuilder.finish(invalidEntry);
+		expect(() => verifyCoreProgram(invalidProgram)).toThrow(/references function -1/);
+
+		const capturedProgram = new CoreProgram(coreOpcodeRegistry);
+		const capturedBuilder = new CoreFunctionBuilder(capturedProgram);
+		const capturedEntry = capturedBuilder.createBlock();
+		const [captured] = capturedBuilder.appendInstruction(
+			capturedEntry,
+			"loadCaptured",
+			[],
+			{ attributes: { functionIndex: -1, index: 0 } },
+		);
+		capturedBuilder.setTerminator(capturedEntry, {
+			kind: "return",
+			value: captured!,
+		});
+		capturedBuilder.finish(capturedEntry);
+		expect(() => verifyCoreProgram(capturedProgram)).not.toThrow();
+	});
+
+	it("verifies every operation-carried cross-function reference", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [callee] = builder.appendInstruction(entry, "createUndefined", []);
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		const [result] = builder.appendInstruction(entry, "call", [callee!, receiver!], {
+			attributes: { guardedFunctionIndices: [-1] },
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		builder.finish(entry);
+		expect(() => verifyCoreProgram(program)).toThrow(/references function -1/);
+	});
+
+	it("verifies function and slot references in compilation context", () => {
+		const { program } = validBranchProgram();
+		const base = programAnalysisContext();
+		const valid = {
+			...base,
+			data: {
+				...base.data,
+				cjsModuleFunctionIndices: [0],
+				singleAssignmentCapturedSlots: [{ owner: -1, index: 3 }],
+			},
+		};
+		expect(() => verifyCoreProgram(program, undefined, valid)).not.toThrow();
+		expect(() =>
+			verifyCoreProgram(program, undefined, {
+				...base,
+				data: { ...base.data, cjsModuleFunctionIndices: [1] },
+			}),
+		).toThrow(/CJS module references function 1/);
+		expect(() =>
+			verifyCoreProgram(program, undefined, {
+				...base,
+				data: {
+					...base.data,
+					singleAssignmentCapturedSlots: [{ owner: 1, index: 0 }],
+				},
+			}),
+		).toThrow(/captured slot references function 1/);
+		expect(() =>
+			verifyCoreProgram(program, undefined, {
+				...base,
+				data: { ...base.data, singleAssignmentGlobalSlots: [0] },
+			}),
+		).toThrow(/invalid global slot 0/);
+	});
+
 	it("incrementally verifies one change set and keys CFG indexes by relevant versions", () => {
 		const { program, fn, entry, consequent, alternate } = validBranchProgram();
 		const analyses = new CoreAnalysisManager(

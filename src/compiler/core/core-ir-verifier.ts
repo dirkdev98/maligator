@@ -3,7 +3,6 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import type { CoreOptimizationStage } from "./core-pass.ts";
 import {
 	CORE_FACT_ALTERNATIVE_LIMIT,
 	CORE_FACT_CLAIM_LIMIT,
@@ -23,6 +22,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreBlockId, coreFactId, coreInstructionId, coreValueId } from "./core-ir.ts";
+import type { CoreOptimizationStage } from "./core-pass.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreVerificationStage =
@@ -896,22 +896,143 @@ function verifyProgramTables(program: CoreProgram): void {
 	}
 }
 
-function verifyCrossFunctionReferences(program: CoreProgram): void {
-	for (const functionId of program.functionIds()) {
+const FUNCTION_INDEX_ATTRIBUTES = [
+	"functionIndex",
+	"directFunctionIndex",
+	"directCallTargetFunctionIndex",
+	"directCallbackFunctionIndex",
+] as const;
+
+function verifyFunctionReference(
+	program: CoreProgram,
+	functionId: CoreFunctionId,
+	instruction: CoreInstructionId,
+	label: string,
+	target: unknown,
+	allowNegative: boolean,
+): void {
+	if (typeof target !== "number" || !Number.isSafeInteger(target)) {
+		fail(`instruction @${instruction} has non-integral ${label} ${String(target)}`);
+	}
+	if (target < 0 && allowNegative) return;
+	requireExistingFunction(
+		program,
+		target,
+		`instruction @${instruction} in function ${functionId}`,
+	);
+}
+
+function requireExistingFunction(
+	program: CoreProgram,
+	target: number,
+	owner: string,
+): void {
+	if (target < 0 || target >= program.functionCapacity) {
+		fail(`${owner} references function ${target}`);
+	}
+	try {
+		program.function(target as CoreFunctionId);
+	} catch {
+		fail(`${owner} references deleted function ${target}`);
+	}
+}
+
+function verifyCrossFunctionReferences(
+	program: CoreProgram,
+	functionIds: Iterable<CoreFunctionId> = program.functionIds(),
+): void {
+	for (const functionId of functionIds) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const attributes = fn.instructionAttributes(instruction);
-			const target = attributes.functionIndex;
-			if (typeof target === "number") {
-				if (!Number.isSafeInteger(target)) {
-					fail(`instruction @${instruction} has non-integral function index ${target}`);
+			const opcode = fn.instructionOpcodeName(instruction);
+			for (const attribute of FUNCTION_INDEX_ATTRIBUTES) {
+				const target = attributes[attribute];
+				if (target === undefined) continue;
+				verifyFunctionReference(
+					program,
+					functionId,
+					instruction,
+					attribute,
+					target,
+					attribute === "functionIndex" &&
+						(opcode === "loadCaptured" || opcode === "storeCaptured"),
+				);
+			}
+			const guarded = attributes.guardedFunctionIndices;
+			if (guarded !== undefined) {
+				if (!Array.isArray(guarded)) {
+					fail(`instruction @${instruction} has invalid guarded function indices`);
 				}
-				if (target >= program.functionCapacity) {
-					fail(
-						`instruction @${instruction} in function ${functionId} references function ${target}`,
+				for (const target of guarded) {
+					verifyFunctionReference(
+						program,
+						functionId,
+						instruction,
+						"guarded function index",
+						target,
+						false,
 					);
 				}
+			}
+			const calleeTargets = attributes.calleeTargets;
+			if (
+				calleeTargets !== undefined &&
+				calleeTargets !== null &&
+				typeof calleeTargets === "object" &&
+				!Array.isArray(calleeTargets)
+			) {
+				const functions = (calleeTargets as Readonly<Record<string, unknown>>).functions;
+				if (Array.isArray(functions)) {
+					for (const target of functions) {
+						verifyFunctionReference(
+							program,
+							functionId,
+							instruction,
+							"callee target",
+							target,
+							false,
+						);
+					}
+				}
+			}
+		}
+	}
+}
+
+function verifyCompilationContext(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+): void {
+	for (const functionId of context.data.cjsModuleFunctionIndices) {
+		if (!Number.isSafeInteger(functionId)) {
+			fail(`compilation context has non-integral CJS module function ${functionId}`);
+		}
+		requireExistingFunction(program, functionId, "compilation context CJS module");
+	}
+	for (const slot of context.data.singleAssignmentGlobalSlots) {
+		if (!Number.isSafeInteger(slot) || slot < 0 || slot >= program.globalCount) {
+			fail(`compilation context references invalid global slot ${slot}`);
+		}
+	}
+	for (const { owner, index } of context.data.singleAssignmentCapturedSlots) {
+		if (!Number.isSafeInteger(owner)) {
+			fail(`compilation context has non-integral captured owner ${owner}`);
+		}
+		if (owner >= 0) {
+			requireExistingFunction(program, owner, "compilation context captured slot");
+		}
+		if (!Number.isSafeInteger(index) || index < 0) {
+			fail(`compilation context references invalid captured slot ${owner}:${index}`);
+		}
+	}
+	for (const candidate of context.data.hostInstallCandidates) {
+		for (const { slot } of candidate.exports) {
+			if (!Number.isSafeInteger(slot) || slot < 0 || slot >= program.globalCount) {
+				fail(
+					`host installer ${candidate.installer} references invalid global slot ${slot}`,
+				);
 			}
 		}
 	}
@@ -931,7 +1052,7 @@ export function verifyCoreFunction(
 export function verifyCoreProgram(
 	program: CoreProgram,
 	context?: CoreVerificationContext,
-	_compilationContext?: CoreCompilationContext,
+	compilationContext?: CoreCompilationContext,
 ): void {
 	withContext(context, () => {
 		verifyProgramTables(program);
@@ -942,6 +1063,9 @@ export function verifyCoreProgram(
 			);
 		}
 		verifyCrossFunctionReferences(program);
+		if (compilationContext !== undefined) {
+			verifyCompilationContext(program, compilationContext);
+		}
 	});
 }
 
@@ -951,5 +1075,5 @@ export function verifyCoreChangeSet(
 	context?: CoreVerificationContext,
 ): void {
 	verifyCoreFunction(program, changes.function, context);
-	withContext(context, () => verifyCrossFunctionReferences(program));
+	withContext(context, () => verifyCrossFunctionReferences(program, [changes.function]));
 }
