@@ -46,6 +46,43 @@ function directReachability(sourceClosed = true) {
 	};
 }
 
+function appendAnyScriptCaller(program: ReturnType<typeof analysisProgram>) {
+	const functionIndex = program.functionCapacity;
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+	const entry = builder.createBlock([{ representation: "boxed" }]);
+	const condition = builder.blockParameters(entry)[0]!.value;
+	const join = builder.createBlock([{ representation: "boxed" }]);
+	let decision = entry;
+	for (let offset = 1; offset <= 5; offset++) {
+		const selected = builder.createBlock();
+		const alternate = builder.createBlock();
+		const [callee] = builder.appendInstruction(selected, "createFunction", [], {
+			attributes: { functionIndex: functionIndex + offset },
+		});
+		builder.setTerminator(selected, {
+			kind: "jump",
+			edge: { block: join, arguments: [callee!] },
+		});
+		builder.setTerminator(decision, {
+			kind: "branch",
+			condition,
+			consequent: { block: selected, arguments: [] },
+			alternate: { block: alternate, arguments: [] },
+		});
+		decision = alternate;
+	}
+	const [fallback] = builder.appendInstruction(decision, "createUndefined", []);
+	builder.setTerminator(decision, {
+		kind: "jump",
+		edge: { block: join, arguments: [fallback!] },
+	});
+	const callee = builder.blockParameters(join)[0]!.value;
+	const [receiver] = builder.appendInstruction(join, "createUndefined", []);
+	const [result] = builder.appendInstruction(join, "call", [callee, receiver!]);
+	builder.setTerminator(join, { kind: "return", value: result! });
+	return builder.finish(entry);
+}
+
 describe("Core function reachability", () => {
 	it("keeps stable identities and marks an unreferenced closed-world function dead", () => {
 		const { reachability } = directReachability();
@@ -62,6 +99,122 @@ describe("Core function reachability", () => {
 		const { reachability } = directReachability(false);
 		expect(reachability.liveFunctions).toEqual([0, 1, 2]);
 		expect(reachability.dead.size).toBe(0);
+	});
+
+	it("keeps any-script reachability compact", () => {
+		const program = analysisProgram();
+		appendAnyScriptCaller(program);
+		for (let index = 0; index < 6; index++) appendLeaf(program);
+		const context = programAnalysisContext();
+		const manager = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const reachability = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(reachability.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6]);
+		expect(reachability.reasons.get(6 as never)).toContain("any-script");
+		expect([...reachability.openSources]).toEqual([0]);
+		expect(
+			[...reachability.specificOutgoingEdges.values()].reduce(
+				(total, edges) => total + edges.size,
+				0,
+			),
+		).toBe(5);
+		expect(
+			[...reachability.specificReverseEdges.values()].reduce(
+				(total, sources) => total + sources.size,
+				0,
+			),
+		).toBe(5);
+		expect(reachability.statistics).toMatchObject({
+			reachabilityEdgesUpdated: 6,
+			logicalReachabilityEdgesUpdated: 12,
+			callEdgesFollowed: 7,
+			logicalCallEdgesFollowed: 7,
+			openSourceExpansions: 1,
+		});
+
+		const removedTarget = [...program.function(0 as never).instructionIds()].find(
+			(instruction) =>
+				program.function(0 as never).instructionKind(instruction) === "operation" &&
+				program.function(0 as never).instructionAttributes(instruction).functionIndex ===
+					5,
+		)!;
+		const editor = CoreEditor.open(program, 0 as never);
+		editor.replaceInstruction(removedTarget, "createUndefined", []);
+		editor.commit();
+		const updated = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(updated.liveFunctions).toEqual([0, 1, 2, 3, 4]);
+		expect([...updated.openSources]).toEqual([]);
+
+		const reopenedEditor = CoreEditor.open(program, 0 as never);
+		reopenedEditor.replaceInstruction(removedTarget, "createFunction", [], {
+			attributes: { functionIndex: 5 },
+		});
+		reopenedEditor.commit();
+		const reopened = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(reopened.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6]);
+		expect([...reopened.openSources]).toEqual([0]);
+
+		appendLeaf(program);
+		const extended = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(extended.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+		expect(extended.reasons.get(7 as never)).toContain("any-script");
+	});
+
+	it("recomputes the universe when a stable open source becomes dead or live", () => {
+		const program = analysisProgram();
+		const entry = appendCaller(program, 1);
+		appendAnyScriptCaller(program);
+		for (let index = 0; index < 7; index++) appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const initial = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(initial.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+		expect([...initial.openSources]).toEqual([1]);
+
+		const close = CoreEditor.open(program, entry.function);
+		close.replaceInstruction(entry.createFunctionInstruction, "createFunction", [], {
+			attributes: { functionIndex: 8 },
+		});
+		close.commit();
+		const closed = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(closed.liveFunctions).toEqual([0, 8]);
+		expect([...closed.openSources]).toEqual([1]);
+
+		const reopen = CoreEditor.open(program, entry.function);
+		reopen.replaceInstruction(entry.createFunctionInstruction, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		reopen.commit();
+		const reopened = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(reopened.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+		expect([...reopened.openSources]).toEqual([1]);
 	});
 
 	it("reads each host-install slot once from the global-store index", () => {

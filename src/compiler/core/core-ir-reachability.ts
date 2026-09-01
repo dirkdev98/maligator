@@ -19,9 +19,12 @@ export interface CoreFunctionReachabilityStatistics {
 	readonly functionsIndexed: number;
 	readonly structuralIndexEdges: number;
 	readonly reachabilityEdgesUpdated: number;
+	readonly logicalReachabilityEdgesUpdated: number;
 	readonly hostInstallSlotsRead: number;
 	readonly functionsScanned: number;
 	readonly callEdgesFollowed: number;
+	readonly logicalCallEdgesFollowed: number;
+	readonly openSourceExpansions: number;
 	readonly structuralEdgesFollowed: number;
 	readonly resultSetUpdates: number;
 	readonly deadFunctions: number;
@@ -49,8 +52,9 @@ export interface CoreFunctionReachabilityState extends CoreFunctionReachability 
 	readonly functionVersions: ReadonlyMap<CoreFunctionId, string>;
 	readonly programDataVersion: number;
 	readonly structural: ReadonlyMap<CoreFunctionId, CoreReachabilityEdges>;
-	readonly outgoingEdges: ReadonlyMap<CoreFunctionId, CoreReachabilityEdges>;
-	readonly reverseEdges: ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionId>>;
+	readonly specificOutgoingEdges: ReadonlyMap<CoreFunctionId, CoreReachabilityEdges>;
+	readonly specificReverseEdges: ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionId>>;
+	readonly openSources: ReadonlySet<CoreFunctionId>;
 	readonly roots: ReadonlyMap<
 		CoreFunctionId,
 		ReadonlySet<CoreFunctionReachabilityReason>
@@ -146,15 +150,15 @@ function structuralEdges(
 }
 
 function combinedEdges(
-	program: CoreProgram,
 	targets: CoreCallGraphIndex,
 	functionId: CoreFunctionId,
 	structural: CoreReachabilityEdges,
-): CoreReachabilityEdges {
+): { readonly edges: CoreReachabilityEdges; readonly open: boolean } {
 	const edges = new Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>();
+	let open = false;
 	for (const site of targets.outgoing(functionId)) {
 		if (site.targets.anyScript) {
-			for (const target of program.functionIds()) addEdge(edges, target, "any-script");
+			open = true;
 		} else {
 			for (const target of site.targets.functions) addEdge(edges, target, "finite-call");
 		}
@@ -162,8 +166,12 @@ function combinedEdges(
 	for (const [target, reasons] of structural) {
 		for (const reason of reasons) addEdge(edges, target, reason);
 	}
-	return edges;
+	return { edges, open };
 }
+
+const ANY_SCRIPT_REASONS: ReadonlySet<CoreFunctionReachabilityReason> = new Set([
+	"any-script",
+]);
 
 function sameReasons(
 	left: ReadonlySet<CoreFunctionReachabilityReason> | undefined,
@@ -253,39 +261,61 @@ export function analyzeCoreFunctionReachability(
 		changedSources.add(functionId);
 	}
 
-	const outgoingEdges = new Map(previous?.outgoingEdges ?? []);
-	const reverseEdges = new Map(previous?.reverseEdges ?? []);
+	const specificOutgoingEdges = new Map(previous?.specificOutgoingEdges ?? []);
+	const specificReverseEdges = new Map(previous?.specificReverseEdges ?? []);
+	const openSources = new Set(previous?.openSources ?? []);
+	const updatedReverseEdges = new Map<CoreFunctionId, Set<CoreFunctionId>>();
 	const affected = new Set<CoreFunctionId>();
 	let reachabilityEdgesUpdated = 0;
+	let logicalReachabilityEdgesUpdated = 0;
 	for (const functionId of changedSources) {
 		const prior =
-			outgoingEdges.get(functionId) ??
+			specificOutgoingEdges.get(functionId) ??
 			new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>();
-		const next = allSet.has(functionId)
+		const combined = allSet.has(functionId)
 			? combinedEdges(
-					program,
 					targets,
 					functionId,
 					structural.get(functionId) ??
 						new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>(),
 				)
-			: new Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>();
+			: {
+					edges: new Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>(),
+					open: false,
+				};
+		const next = combined.edges;
+		const priorOpen = previous?.openSources.has(functionId) ?? false;
+		if (priorOpen !== combined.open) {
+			reachabilityEdgesUpdated++;
+			logicalReachabilityEdgesUpdated += all.length;
+			for (const target of all) affected.add(target);
+		}
+		if (combined.open) openSources.add(functionId);
+		else openSources.delete(functionId);
 		for (const target of new Set([...prior.keys(), ...next.keys()])) {
 			const oldReasons = prior.get(target);
 			const newReasons = next.get(target);
 			if (sameReasons(oldReasons, newReasons)) continue;
 			affected.add(target);
-			reachabilityEdgesUpdated += Math.max(oldReasons?.size ?? 0, newReasons?.size ?? 0);
+			const updateCount = Math.max(oldReasons?.size ?? 0, newReasons?.size ?? 0);
+			reachabilityEdgesUpdated += updateCount;
+			logicalReachabilityEdgesUpdated += updateCount;
 			if ((oldReasons?.size ?? 0) === 0 || (newReasons?.size ?? 0) === 0) {
-				const reverse = new Set(reverseEdges.get(target) ?? []);
+				let reverse = updatedReverseEdges.get(target);
+				if (reverse === undefined) {
+					reverse = new Set(specificReverseEdges.get(target) ?? []);
+					updatedReverseEdges.set(target, reverse);
+				}
 				if ((newReasons?.size ?? 0) === 0) reverse.delete(functionId);
 				else reverse.add(functionId);
-				if (reverse.size === 0) reverseEdges.delete(target);
-				else reverseEdges.set(target, reverse);
 			}
 		}
-		if (allSet.has(functionId)) outgoingEdges.set(functionId, next);
-		else outgoingEdges.delete(functionId);
+		if (allSet.has(functionId)) specificOutgoingEdges.set(functionId, next);
+		else specificOutgoingEdges.delete(functionId);
+	}
+	for (const [target, reverse] of updatedReverseEdges) {
+		if (reverse.size === 0) specificReverseEdges.delete(target);
+		else specificReverseEdges.set(target, reverse);
 	}
 
 	const { roots, hostInstallSlotsRead } = reachabilityRoots(program, targets, context);
@@ -307,9 +337,19 @@ export function analyzeCoreFunctionReachability(
 		const queue = [...affected];
 		for (let cursor = 0; cursor < queue.length; cursor++) {
 			const functionId = queue[cursor]!;
+			if (
+				openSources.has(functionId) ||
+				(previous?.openSources.has(functionId) ?? false)
+			) {
+				for (const target of all) {
+					if (affected.has(target)) continue;
+					affected.add(target);
+					queue.push(target);
+				}
+			}
 			const edgeTargets = new Set([
-				...(previous.outgoingEdges.get(functionId)?.keys() ?? []),
-				...(outgoingEdges.get(functionId)?.keys() ?? []),
+				...(previous.specificOutgoingEdges.get(functionId)?.keys() ?? []),
+				...(specificOutgoingEdges.get(functionId)?.keys() ?? []),
 			]);
 			for (const target of edgeTargets) {
 				if (affected.has(target)) continue;
@@ -338,26 +378,50 @@ export function analyzeCoreFunctionReachability(
 		executable.add(functionId);
 		pending.push(functionId);
 	};
+	let anyScriptExpanded = false;
+	const stableExecutableOpenSources = [...openSources].filter(
+		(source) => !affected.has(source) && executable.has(source),
+	).length;
+	let callEdgesFollowed = 0;
+	let logicalCallEdgesFollowed = 0;
+	let openSourceExpansions = 0;
+	if (stableExecutableOpenSources > 0) {
+		anyScriptExpanded = true;
+		callEdgesFollowed += affected.size;
+		logicalCallEdgesFollowed += affected.size * stableExecutableOpenSources;
+		openSourceExpansions++;
+		for (const functionId of affected) enter(functionId, ANY_SCRIPT_REASONS);
+	}
 	for (const functionId of affected) {
 		const rootReasons = roots.get(functionId);
 		if (rootReasons !== undefined) enter(functionId, rootReasons);
-		for (const source of reverseEdges.get(functionId) ?? []) {
+		for (const source of specificReverseEdges.get(functionId) ?? []) {
 			if (affected.has(source) || !executable.has(source)) continue;
-			const edgeReasons = outgoingEdges.get(source)?.get(functionId);
+			const edgeReasons = specificOutgoingEdges.get(source)?.get(functionId);
 			if (edgeReasons !== undefined) enter(functionId, edgeReasons);
 		}
 	}
 	let functionsScanned = 0;
-	let callEdgesFollowed = 0;
 	let structuralEdgesFollowed = 0;
 	while (pending.length > 0) {
 		const functionId = pending.pop()!;
 		functionsScanned++;
-		for (const [target, edgeReasons] of outgoingEdges.get(functionId) ?? []) {
+		if (openSources.has(functionId)) {
+			logicalCallEdgesFollowed += affected.size;
+			if (!anyScriptExpanded) {
+				anyScriptExpanded = true;
+				callEdgesFollowed += affected.size;
+				openSourceExpansions++;
+				for (const target of affected) enter(target, ANY_SCRIPT_REASONS);
+			}
+		}
+		for (const [target, edgeReasons] of specificOutgoingEdges.get(functionId) ?? []) {
 			if (!affected.has(target)) continue;
 			for (const reason of edgeReasons) {
-				if (reason === "finite-call" || reason === "any-script") callEdgesFollowed++;
-				else structuralEdgesFollowed++;
+				if (reason === "finite-call") {
+					callEdgesFollowed++;
+					logicalCallEdgesFollowed++;
+				} else structuralEdgesFollowed++;
 			}
 			enter(target, edgeReasons);
 		}
@@ -398,8 +462,9 @@ export function analyzeCoreFunctionReachability(
 		functionVersions,
 		programDataVersion: program.versions.data,
 		structural,
-		outgoingEdges,
-		reverseEdges,
+		specificOutgoingEdges,
+		specificReverseEdges,
+		openSources,
 		roots,
 		targets,
 		statistics: Object.freeze({
@@ -407,9 +472,12 @@ export function analyzeCoreFunctionReachability(
 			functionsIndexed,
 			structuralIndexEdges,
 			reachabilityEdgesUpdated,
+			logicalReachabilityEdgesUpdated,
 			hostInstallSlotsRead,
 			functionsScanned,
 			callEdgesFollowed,
+			logicalCallEdgesFollowed,
+			openSourceExpansions,
 			structuralEdgesFollowed,
 			resultSetUpdates,
 			deadFunctions: dead.size,
