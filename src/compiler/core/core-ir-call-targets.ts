@@ -546,11 +546,8 @@ function callSiteEqual(left: CoreIndexedCallSite, right: CoreIndexedCallSite): b
 	);
 }
 
-function siteEdgeTargets(
-	program: CoreProgram,
-	site: CoreIndexedCallSite,
-): ReadonlyArray<CoreFunctionId> {
-	return site.targets.anyScript ? [...program.functionIds()] : site.targets.functions;
+function siteEdgeTargetCount(functionCount: number, site: CoreIndexedCallSite): number {
+	return site.targets.anyScript ? functionCount : site.targets.functions.length;
 }
 
 function outgoingEdgeTargets(
@@ -559,7 +556,8 @@ function outgoingEdgeTargets(
 ): ReadonlySet<CoreFunctionId> {
 	const edges = new Set<CoreFunctionId>();
 	for (const site of sites) {
-		for (const target of siteEdgeTargets(program, site)) edges.add(target);
+		if (site.targets.anyScript) return new Set(program.functionIds());
+		for (const target of site.targets.functions) edges.add(target);
 	}
 	return edges;
 }
@@ -821,6 +819,7 @@ export function analyzeCoreCallGraph(
 	const changedCallSites = new Set<CoreCallSiteId>();
 	const changedCallers = new Set<CoreFunctionId>();
 	const changedEdgeCallers = new Set<CoreFunctionId>();
+	const updatedReverseEdges = new Map<CoreFunctionId, Set<CoreFunctionId>>();
 	let callEdges = previous?.statistics.callEdges ?? 0;
 	let openCallSites = previous?.statistics.openCallSites ?? 0;
 	let reverseEdgeUpdates = 0;
@@ -853,20 +852,22 @@ export function analyzeCoreCallGraph(
 		}
 		for (const target of new Set([...priorEdges, ...nextEdges])) {
 			if (priorEdges.has(target) === nextEdges.has(target)) continue;
-			const reverse = new Set(callers.get(target) ?? []);
+			let reverse = updatedReverseEdges.get(target);
+			if (reverse === undefined) {
+				reverse = new Set(callers.get(target) ?? []);
+				updatedReverseEdges.set(target, reverse);
+			}
 			if (nextEdges.has(target)) reverse.add(functionId);
 			else reverse.delete(functionId);
-			if (reverse.size === 0) callers.delete(target);
-			else callers.set(target, reverse);
 			reverseEdgeUpdates++;
 		}
 		callEdges +=
 			nextOutgoing.reduce(
-				(count, site) => count + siteEdgeTargets(program, site).length,
+				(count, site) => count + siteEdgeTargetCount(functionIds.length, site),
 				0,
 			) -
 			priorOutgoing.reduce(
-				(count, site) => count + siteEdgeTargets(program, site).length,
+				(count, site) => count + siteEdgeTargetCount(functionIds.length, site),
 				0,
 			);
 		openCallSites +=
@@ -879,6 +880,10 @@ export function analyzeCoreCallGraph(
 			functionId,
 			stableOutgoing ? priorOutgoing : Object.freeze(nextOutgoing),
 		);
+	}
+	for (const [target, reverse] of updatedReverseEdges) {
+		if (reverse.size === 0) callers.delete(target);
+		else callers.set(target, reverse);
 	}
 	const updatedCallSites = changedCallSites.size;
 	const statistics = Object.freeze({
