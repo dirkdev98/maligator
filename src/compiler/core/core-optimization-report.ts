@@ -105,6 +105,7 @@ export interface CoreProgramWorkReport {
 
 export interface CoreCandidateDiscoveryReport {
 	readonly candidates: number;
+	readonly byKind: Readonly<Record<string, number>>;
 	readonly stackObjects: number;
 	readonly denseArrays: number;
 	readonly numericFusions: number;
@@ -127,7 +128,9 @@ interface MutableAnalysisWorkReport {
 	elapsedMs: number;
 }
 
-function liveCounts(program: CoreProgram): Omit<CoreOptimizationCounts, "planCandidates"> {
+function liveCounts(
+	program: CoreProgram,
+): Omit<CoreOptimizationCounts, "planCandidates"> {
 	let functions = 0;
 	let blocks = 0;
 	let instructions = 0;
@@ -173,6 +176,7 @@ export class CoreOptimizationReportBuilder {
 	#discoveredStackObjects = 0;
 	#discoveredDenseArrays = 0;
 	#discoveredNumericFusions = 0;
+	readonly #discoveredCandidatesByKind = new Map<string, number>();
 	#largestCandidateFanOut = 0;
 	#programWork: CoreProgramWorkReport = Object.freeze({
 		functionsAnalyzed: 0,
@@ -284,15 +288,30 @@ export class CoreOptimizationReportBuilder {
 
 	recordCandidateDiscovery(
 		candidates: ReadonlyArray<{
-			readonly kind: "stack-object" | "dense-array" | "numeric-fusion";
+			readonly kind: string;
 			readonly fanOut: number;
 		}>,
 	): void {
 		for (const candidate of candidates) {
+			this.#discoveredCandidatesByKind.set(
+				candidate.kind,
+				(this.#discoveredCandidatesByKind.get(candidate.kind) ?? 0) + 1,
+			);
 			switch (candidate.kind) {
-				case "stack-object": this.#discoveredStackObjects++; break;
-				case "dense-array": this.#discoveredDenseArrays++; break;
-				case "numeric-fusion": this.#discoveredNumericFusions++; break;
+				case "stack-object":
+					this.#discoveredStackObjects++;
+					break;
+				case "dense-array":
+					this.#discoveredDenseArrays++;
+					break;
+				case "numeric-fusion":
+					this.#discoveredNumericFusions++;
+					break;
+				case "string-split-projection":
+				case "string-slice-number":
+				case "regexp-exec-projection":
+				case "regexp-iterator-projection":
+					break;
 			}
 			this.#largestCandidateFanOut = Math.max(
 				this.#largestCandidateFanOut,
@@ -339,7 +358,10 @@ export class CoreOptimizationReportBuilder {
 
 	recordPlanWork(report: CoreOptimizationPlanStatistics): void {
 		this.#planWork = Object.freeze({
-			discovered: Object.values(report.discoveredByKind).reduce((sum, count) => sum + count, 0),
+			discovered: Object.values(report.discoveredByKind).reduce(
+				(sum, count) => sum + count,
+				0,
+			),
 			selected: report.applied,
 			declined: report.declined,
 			discoveredByKind: Object.freeze({ ...report.discoveredByKind }),
@@ -373,10 +395,11 @@ export class CoreOptimizationReportBuilder {
 				),
 			),
 			discovery: Object.freeze({
-				candidates:
-					this.#discoveredStackObjects +
-					this.#discoveredDenseArrays +
-					this.#discoveredNumericFusions,
+				candidates: [...this.#discoveredCandidatesByKind.values()].reduce(
+					(total, count) => total + count,
+					0,
+				),
+				byKind: Object.freeze(Object.fromEntries(this.#discoveredCandidatesByKind)),
 				stackObjects: this.#discoveredStackObjects,
 				denseArrays: this.#discoveredDenseArrays,
 				numericFusions: this.#discoveredNumericFusions,
@@ -406,22 +429,24 @@ function countsLine(counts: CoreOptimizationCounts): string {
 export function formatCoreOptimizationReport(
 	report: CoreOptimizationReport,
 ): ReadonlyArray<{ readonly label: string; readonly value: string }> {
-	const passes = report.passes.length === 0
-		? "none"
-		: report.passes
-				.map(
-					(pass) =>
-						`${pass.pass} ${pass.runs} runs/${pass.workItems} work/${pass.changedItems} changed/${pass.edits} edits/${pass.elapsedMs.toFixed(1)}ms`,
-				)
-				.join("; ");
-	const analyses = report.analyses.length === 0
-		? "none"
-		: report.analyses
-				.map(
-					(analysis) =>
-						`${analysis.analysis} ${analysis.queries} queries/${analysis.hits} hits/${analysis.recomputations} recomputes/${analysis.invalidations} invalidations/${analysis.elapsedMs.toFixed(1)}ms`,
-				)
-				.join("; ");
+	const passes =
+		report.passes.length === 0
+			? "none"
+			: report.passes
+					.map(
+						(pass) =>
+							`${pass.pass} ${pass.runs} runs/${pass.workItems} work/${pass.changedItems} changed/${pass.edits} edits/${pass.elapsedMs.toFixed(1)}ms`,
+					)
+					.join("; ");
+	const analyses =
+		report.analyses.length === 0
+			? "none"
+			: report.analyses
+					.map(
+						(analysis) =>
+							`${analysis.analysis} ${analysis.queries} queries/${analysis.hits} hits/${analysis.recomputations} recomputes/${analysis.invalidations} invalidations/${analysis.elapsedMs.toFixed(1)}ms`,
+					)
+					.join("; ");
 	return [
 		{ label: "Core optimizer input", value: countsLine(report.input) },
 		{ label: "Core optimizer output", value: countsLine(report.output) },
@@ -439,15 +464,45 @@ export function formatCoreOptimizationReport(
 		},
 		{
 			label: "Core optimizer transforms",
-			value: `${report.transforms.considered} considered/${report.transforms.applied} applied/${report.transforms.declined} declined; applied ${Object.entries(report.transforms.appliedByKind).filter(([, count]) => count > 0).map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"}; declined ${Object.entries(report.transforms.declinedByReason).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(", ") || "none"}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, SCC transfers ${report.transforms.sccTransfers}, caller wakeups ${report.transforms.callerWakeups}`,
+			value: `${report.transforms.considered} considered/${report.transforms.applied} applied/${report.transforms.declined} declined; applied ${
+				Object.entries(report.transforms.appliedByKind)
+					.filter(([, count]) => count > 0)
+					.map(([kind, count]) => `${kind}=${count}`)
+					.join(", ") || "none"
+			}; declined ${
+				Object.entries(report.transforms.declinedByReason)
+					.filter(([, count]) => count > 0)
+					.map(([reason, count]) => `${reason}=${count}`)
+					.join(", ") || "none"
+			}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, SCC transfers ${report.transforms.sccTransfers}, caller wakeups ${report.transforms.callerWakeups}`,
 		},
 		{
 			label: "Core optimizer discovery",
-			value: `${report.discovery.candidates} candidates (${report.discovery.stackObjects} stack objects, ${report.discovery.denseArrays} dense arrays, ${report.discovery.numericFusions} numeric fusions), largest fan-out ${report.discovery.largestFanOut}`,
+			value: `${report.discovery.candidates} candidates (${
+				Object.entries(report.discovery.byKind)
+					.filter(([, count]) => count > 0)
+					.map(([kind, count]) => `${kind}=${count}`)
+					.join(", ") || "none"
+			}), largest fan-out ${report.discovery.largestFanOut}`,
 		},
 		{
 			label: "Core optimizer specialization plan",
-			value: `${report.plan.discovered} discovered/${report.plan.selected} selected/${report.plan.declined} declined; discovered ${Object.entries(report.plan.discoveredByKind).filter(([, count]) => count > 0).map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"}; selected ${Object.entries(report.plan.selectedByKind).filter(([, count]) => count > 0).map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"}; declined ${Object.entries(report.plan.declinedByReason).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(", ") || "none"}; generated ${report.plan.generatedCodeConsumed}, compiler work ${report.plan.compilerWorkConsumed}, verified ${report.plan.verificationMs.toFixed(1)}ms`,
+			value: `${report.plan.discovered} discovered/${report.plan.selected} selected/${report.plan.declined} declined; discovered ${
+				Object.entries(report.plan.discoveredByKind)
+					.filter(([, count]) => count > 0)
+					.map(([kind, count]) => `${kind}=${count}`)
+					.join(", ") || "none"
+			}; selected ${
+				Object.entries(report.plan.selectedByKind)
+					.filter(([, count]) => count > 0)
+					.map(([kind, count]) => `${kind}=${count}`)
+					.join(", ") || "none"
+			}; declined ${
+				Object.entries(report.plan.declinedByReason)
+					.filter(([, count]) => count > 0)
+					.map(([reason, count]) => `${reason}=${count}`)
+					.join(", ") || "none"
+			}; generated ${report.plan.generatedCodeConsumed}, compiler work ${report.plan.compilerWorkConsumed}, verified ${report.plan.verificationMs.toFixed(1)}ms`,
 		},
 		{
 			label: "Core optimizer queue",

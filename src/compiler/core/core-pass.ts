@@ -4,11 +4,7 @@ import type {
 	CoreAnalysisRequest,
 } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import type {
-	CoreBlockId,
-	CoreFunctionId,
-	CoreInstructionId,
-} from "./core-ir.ts";
+import type { CoreBlockId, CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import type {
 	CoreChangeDomain,
 	CoreChangeSet,
@@ -87,9 +83,7 @@ export function coreAnalysisRequestForPass(
 	if (definition.scope === "program") return { scope: "program" };
 	if (definition.scope === "scc") {
 		if (item.scope !== "scc") {
-			throw new Error(
-				`Analysis ${definition.key} requires an SCC-scoped pass work item`,
-			);
+			throw new Error(`Analysis ${definition.key} requires an SCC-scoped pass work item`);
 		}
 		return { scope: "scc", id: item.id, functions: item.functions };
 	}
@@ -119,10 +113,7 @@ export function corePassContext(
 					`Core pass ${pass.name} queried undeclared analysis ${definition.key}`,
 				);
 			}
-			return analyses.get(
-				definition,
-				coreAnalysisRequestForPass(definition, item),
-			);
+			return analyses.get(definition, coreAnalysisRequestForPass(definition, item));
 		},
 	};
 }

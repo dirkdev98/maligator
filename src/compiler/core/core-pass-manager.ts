@@ -3,15 +3,8 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
-import {
-	coreAnalysisRequestForPass,
-	corePassContext,
-} from "./core-pass.ts";
-import type {
-	CoreOptimizationStage,
-	CorePass,
-	CorePassWorkItem,
-} from "./core-pass.ts";
+import { corePassContext } from "./core-pass.ts";
+import type { CoreOptimizationStage, CorePass, CorePassWorkItem } from "./core-pass.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
 interface QueuedPassWork {
@@ -49,10 +42,7 @@ function workKey(pass: CorePass, item: CorePassWorkItem): string {
 	}
 }
 
-function intersects(
-	left: ReadonlyArray<string>,
-	right: ReadonlyArray<string>,
-): boolean {
+function intersects(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
 	return left.some((entry) => right.includes(entry));
 }
 
@@ -130,12 +120,6 @@ export class CorePassManager {
 				this.#exhaust(work.pass, used);
 				consumption.set(work.pass.name, used);
 				continue;
-			}
-			for (const analysis of work.pass.requiredAnalyses) {
-				this.#analyses.get(
-					analysis,
-					coreAnalysisRequestForPass(analysis, work.item),
-				);
 			}
 			const passStartedAt = Date.now();
 			const changes = work.pass.run(

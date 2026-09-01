@@ -1,6 +1,6 @@
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
+import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import type {
 	CoreChangeDomain,
 	CoreProgram,
@@ -23,6 +23,10 @@ export interface CoreAnalysisComputation {
 	readonly context: CoreCompilationContext;
 	readonly request: CoreAnalysisRequest;
 	readonly previous?: unknown;
+	readonly get: <Result>(
+		definition: CoreAnalysisDefinition<Result>,
+		request: CoreAnalysisRequest,
+	) => Result;
 }
 
 export interface CoreAnalysisDefinition<Result> {
@@ -50,7 +54,9 @@ function selectedVersions<Domain extends string>(
 	return dependencies.map((domain) => `${domain}:${versions[domain]}`).join(",");
 }
 
-function sortedFunctions(functions: ReadonlyArray<CoreFunctionId>): Array<CoreFunctionId> {
+function sortedFunctions(
+	functions: ReadonlyArray<CoreFunctionId>,
+): Array<CoreFunctionId> {
 	return [...new Set(functions)].sort((left, right) => left - right);
 }
 
@@ -88,6 +94,8 @@ export class CoreAnalysisManager {
 			program: this.#program,
 			context: this.#context,
 			request,
+			get: (dependency, dependencyRequest) =>
+				this.get(dependency, dependencyRequest),
 			...(cached === undefined ? {} : { previous: cached.value }),
 		});
 		this.#cache.set(cacheKey, { versionKey, value });
@@ -159,6 +167,16 @@ export class CoreAnalysisManager {
 			);
 		} else if (request.scope === "scc") {
 			functionVersions = sortedFunctions(request.functions)
+				.map((functionId) => {
+					const versions = selectedVersions<CoreChangeDomain>(
+						this.#program.function(functionId).versions,
+						functionDependencies,
+					);
+					return `${functionId}[${versions}]`;
+				})
+				.join(";");
+		} else if (functionDependencies.length > 0) {
+			functionVersions = [...this.#program.functionIds()]
 				.map((functionId) => {
 					const versions = selectedVersions<CoreChangeDomain>(
 						this.#program.function(functionId).versions,

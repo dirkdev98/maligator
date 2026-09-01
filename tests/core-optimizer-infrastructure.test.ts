@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CoreAnalysisDefinition } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
-import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
 	CORE_NO_EFFECTS,
@@ -10,8 +10,8 @@ import {
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
-import type { CorePass } from "../src/compiler/core/core-pass.ts";
 import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
+import type { CorePass } from "../src/compiler/core/core-pass.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 
@@ -97,9 +97,9 @@ describe("Core optimizer infrastructure", () => {
 		const recomputations: Array<number> = [];
 		const analysis = cfgAnalysis(recomputations);
 
-		expect(analyses.get(analysis, { scope: "function", function: functions[0]!.id })).toBe(
-			1,
-		);
+		expect(
+			analyses.get(analysis, { scope: "function", function: functions[0]!.id }),
+		).toBe(1);
 		analyses.get(analysis, { scope: "function", function: functions[1]!.id });
 		const representationEditor = CoreEditor.open(program, functions[0]!.id);
 		representationEditor.setValueRepresentation(functions[0]!.value, "f64");
@@ -170,13 +170,30 @@ describe("Core optimizer infrastructure", () => {
 	it("reports queue and budget work without a global round counter", () => {
 		const { program } = programWithTwoFunctions();
 		const { analyses, report } = analysisHarness(program);
-		new CorePassManager(program, context(), analyses, report).runStage(
-			"canonicalize",
-			[noOpPass("reported", [])],
-		);
+		new CorePassManager(program, context(), analyses, report).runStage("canonicalize", [
+			noOpPass("reported", []),
+		]);
 		const finished = report.finish(program, { directEntries: [], specializations: [] });
 		expect(finished.queue).toEqual({ pushes: 2, pops: 2, maximumDepth: 2 });
 		expect(finished.budget).toMatchObject({ workItems: 2, edits: 0 });
 		expect(Object.keys(finished)).not.toContain("rounds");
+	});
+
+	it("counts every discovery kind in the optimizer report", () => {
+		const { program } = programWithTwoFunctions();
+		const report = new CoreOptimizationReportBuilder(program);
+		report.recordCandidateDiscovery([
+			{ kind: "stack-object", fanOut: 1 },
+			{ kind: "string-split-projection", fanOut: 3 },
+		]);
+		const discovery = report.finish(program, {
+			directEntries: [],
+			specializations: [],
+		}).discovery;
+		expect(discovery).toMatchObject({
+			candidates: 2,
+			byKind: { "stack-object": 1, "string-split-projection": 1 },
+			largestFanOut: 3,
+		});
 	});
 });
