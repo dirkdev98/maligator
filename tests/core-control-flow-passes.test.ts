@@ -5,6 +5,7 @@ import type { CoreCompilationContext } from "../src/compiler/core/core-compilati
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreCanonicalValueRoots } from "../src/compiler/core/core-ir-control-flow.ts";
@@ -905,6 +906,12 @@ describe("Core control-flow analyses and passes", () => {
 			scope: "function",
 			function: finished.function,
 		});
+		expect(
+			analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
+				scope: "function",
+				function: finished.function,
+			}),
+		).toBe(first);
 		const definition = program.function(finished.function).valueDefinition(copy!);
 		if (definition.kind !== "instruction") throw new Error("Expected move result");
 		const editor = CoreEditor.open(program, finished.function);
@@ -921,7 +928,7 @@ describe("Core control-flow analyses and passes", () => {
 		expect(second.predecessors[target]![0]!.arguments).toEqual([parameter]);
 		const result = report.finish(program, { directEntries: [], specializations: [] });
 		expect(result.analyses).toMatchObject([
-			{ analysis: "exception-control-flow", queries: 2, hits: 1, recomputations: 1 },
+			{ analysis: "exception-control-flow", queries: 3, hits: 2, recomputations: 1 },
 		]);
 	});
 });

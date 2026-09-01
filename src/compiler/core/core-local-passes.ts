@@ -2093,6 +2093,7 @@ const simplifyBlockParameters: CorePass = {
 			}
 			if (removable.length === 0) continue;
 			editor ??= CoreEditor.open(program, item.function);
+			const replacements = new Map<CoreValueId, CoreValueId>();
 			for (const {
 				parameter,
 				replacement,
@@ -2110,9 +2111,10 @@ const simplifyBlockParameters: CorePass = {
 								replacementConstant!,
 								parameter.representation,
 							);
-					editor.replaceValueUses(parameter.value, selected);
+					replacements.set(parameter.value, selected);
 				}
 			}
+			editor.replaceValueUsesMany(replacements);
 			const removedIndexes = new Set(removable.map(({ index }) => index));
 			for (const predecessor of predecessors) {
 				editor.replaceTerminator(

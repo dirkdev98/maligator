@@ -415,6 +415,43 @@ describe("Core SSA and CFG cleanup", () => {
 		});
 	});
 
+	it("substitutes every redundant parameter in one join", () => {
+		const { program, builder } = fixture(1);
+		const entry = builder.createBlock([{}]);
+		const flag = parameters(builder, entry)[0]!;
+		const [first] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [second] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 9 },
+		});
+		const join = builder.createBlock([{}, {}]);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: flag,
+			consequent: { block: join, arguments: [first!, second!] },
+			alternate: { block: join, arguments: [first!, second!] },
+		});
+		const [firstParameter, secondParameter] = parameters(builder, join);
+		const [result] = builder.appendInstruction(join, "call", [
+			firstParameter!,
+			secondParameter!,
+		]);
+		builder.setTerminator(join, { kind: "return", value: result! });
+		const optimizedResult = optimized({
+			program,
+			function: builder.finish(entry).function,
+		});
+		const call = [
+			...optimizedResult.fn.bodyInstructionIds(optimizedResult.fn.entry),
+		].find(
+			(instruction) => optimizedResult.fn.instructionOpcodeName(instruction) === "call",
+		)!;
+		expect(optimizedResult.fn.instructionOperands(call)).toEqual([first, second]);
+		expect(optimizedResult.fn.isValueLive(firstParameter!)).toBe(false);
+		expect(optimizedResult.fn.isValueLive(secondParameter!)).toBe(false);
+	});
+
 	it("removes unused parameters and their mismatched incoming arguments", () => {
 		const { program, builder } = fixture(1);
 		const entry = builder.createBlock([{}]);

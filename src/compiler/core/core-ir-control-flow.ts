@@ -606,17 +606,6 @@ export const CORE_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow>
 	},
 };
 
-export const CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> =
-	{
-		key: "exceptional-control-flow",
-		scope: "function",
-		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
-		compute({ program, request }) {
-			if (request.scope !== "function") throw new Error("Expected function analysis");
-			return build(program.function(request.function), true);
-		},
-	};
-
 export const CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> =
 	{
 		key: "exception-control-flow",
@@ -627,6 +616,9 @@ export const CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreCo
 			return build(program.function(request.function), true);
 		},
 	};
+
+export const CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS =
+	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS;
 
 class SparseCanonicalValueRoots extends Map<CoreValueId, CoreValueId> {
 	override get(value: CoreValueId): CoreValueId {
