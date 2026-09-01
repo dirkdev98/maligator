@@ -72,6 +72,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			"proofs",
 			"memory",
 			"finalize",
+			"interprocedural",
 			"program",
 		]);
 

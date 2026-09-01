@@ -23,6 +23,7 @@ export type CoreOptimizationStage =
 	| "control-flow"
 	| "proofs"
 	| "memory"
+	| "interprocedural"
 	| "finalize";
 
 export type CorePassWakeKind = CoreChangeDomain | CoreProgramChangeDomain;

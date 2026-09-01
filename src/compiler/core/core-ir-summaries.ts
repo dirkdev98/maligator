@@ -94,6 +94,7 @@ export interface CoreProgramSummaries {
 	readonly sccs: ReadonlyArray<CoreCallGraphScc>;
 	readonly functionEffects: ReadonlyMap<string, FunctionEffectSummary>;
 	readonly moduleEffects: ReadonlyMap<string, ModuleEffectSummary>;
+	readonly changedFunctions: ReadonlySet<CoreFunctionId>;
 	readonly statistics: CoreProgramSummaryStatistics;
 	summary(functionId: CoreFunctionId): FunctionEffectSummary | undefined;
 	version(functionId: CoreFunctionId): number;
@@ -745,6 +746,7 @@ function analyzeProgramSummaries(
 		published,
 		functionEffects,
 		moduleEffects: modules,
+		changedFunctions: changedPublished,
 		statistics,
 		summary(functionId: CoreFunctionId) {
 			return published.get(functionId)?.summary;

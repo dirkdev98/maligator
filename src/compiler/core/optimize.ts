@@ -4,6 +4,7 @@ import type {
 } from "./core-compilation.ts";
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
+import { runCoreCrossCallTransforms } from "./core-cross-call-transforms.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
@@ -11,7 +12,6 @@ import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import { CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS } from "./core-ir-provenance.ts";
 import { analyzeCoreFunctionReachability } from "./core-ir-reachability.ts";
-import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "./core-ir-summaries.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import {
 	CoreOptimizationReportBuilder,
@@ -88,10 +88,16 @@ export function optimizeCore(
 							: [],
 		);
 	}
+	const crossCallStartedAt = Date.now();
+	const crossCall = runCoreCrossCallTransforms(
+		compilation.program,
+		analyses,
+		passes,
+	);
+	reportBuilder.recordTransformWork(crossCall.statistics);
+	reportBuilder.recordStage("interprocedural", Date.now() - crossCallStartedAt);
 	const programStartedAt = Date.now();
-	const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
-		scope: "program",
-	});
+	const summaries = crossCall.summaries;
 	const reachability = analyzeCoreFunctionReachability(
 		compilation.program,
 		summaries.targets,

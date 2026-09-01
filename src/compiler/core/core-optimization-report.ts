@@ -53,8 +53,24 @@ export interface CoreOptimizationReport {
 	readonly analyses: ReadonlyArray<CoreAnalysisWorkReport>;
 	readonly discovery: CoreCandidateDiscoveryReport;
 	readonly program: CoreProgramWorkReport;
+	readonly transforms: CoreTransformWorkReport;
 	readonly queue: CoreQueueWorkReport;
 	readonly budget: CoreBudgetWorkReport;
+}
+
+export interface CoreTransformWorkReport {
+	readonly considered: number;
+	readonly applied: number;
+	readonly declined: number;
+	readonly appliedByKind: Readonly<Record<string, number>>;
+	readonly declinedByReason: Readonly<Record<string, number>>;
+	readonly generatedCodeConsumed: number;
+	readonly compilerWorkConsumed: number;
+	readonly instructionsIntroduced: number;
+	readonly blocksIntroduced: number;
+	readonly callGraphFunctionsAnalyzed: number;
+	readonly sccTransfers: number;
+	readonly callerWakeups: number;
 }
 
 export interface CoreProgramWorkReport {
@@ -154,6 +170,20 @@ export class CoreOptimizationReportBuilder {
 		callerWakeups: 0,
 		affectedCallers: 0,
 		deadFunctions: 0,
+	});
+	#transformWork: CoreTransformWorkReport = Object.freeze({
+		considered: 0,
+		applied: 0,
+		declined: 0,
+		appliedByKind: Object.freeze({}),
+		declinedByReason: Object.freeze({}),
+		generatedCodeConsumed: 0,
+		compilerWorkConsumed: 0,
+		instructionsIntroduced: 0,
+		blocksIntroduced: 0,
+		callGraphFunctionsAnalyzed: 0,
+		sccTransfers: 0,
+		callerWakeups: 0,
 	});
 
 	constructor(program: CoreProgram) {
@@ -276,6 +306,10 @@ export class CoreOptimizationReportBuilder {
 		});
 	}
 
+	recordTransformWork(report: CoreTransformWorkReport): void {
+		this.#transformWork = Object.freeze({ ...report });
+	}
+
 	finish(program: CoreProgram, plan: CoreOptimizationPlan): CoreOptimizationReport {
 		return Object.freeze({
 			input: this.input,
@@ -302,6 +336,7 @@ export class CoreOptimizationReportBuilder {
 				largestFanOut: this.#largestCandidateFanOut,
 			}),
 			program: this.#programWork,
+			transforms: this.#transformWork,
 			queue: Object.freeze({
 				pushes: this.#queuePushes,
 				pops: this.#queuePops,
@@ -353,6 +388,10 @@ export function formatCoreOptimizationReport(
 		{
 			label: "Core optimizer program",
 			value: `${report.program.functionsAnalyzed} functions analyzed/${report.program.functionsReused} reused, ${report.program.callSites} callsites/${report.program.callEdges} edges/${report.program.openCallSites} open, ${report.program.sccs} SCCs/${report.program.sccTransfers} transfers, ${report.program.summaryChanges} summary changes/${report.program.callerWakeups} caller wakeups/${report.program.affectedCallers} callers, ${report.program.deadFunctions} dead omitted`,
+		},
+		{
+			label: "Core optimizer transforms",
+			value: `${report.transforms.considered} considered/${report.transforms.applied} applied/${report.transforms.declined} declined; applied ${Object.entries(report.transforms.appliedByKind).map(([kind, count]) => `${kind}=${count}`).join(", ") || "none"}; declined ${Object.entries(report.transforms.declinedByReason).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(", ") || "none"}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, SCC transfers ${report.transforms.sccTransfers}, caller wakeups ${report.transforms.callerWakeups}`,
 		},
 		{
 			label: "Core optimizer discovery",
