@@ -880,7 +880,9 @@ function pendingLocalCandidate(
 			),
 			generatedCodeCost: selection.cost.generatedCode,
 			compilerWorkCost: selection.cost.compilerWork,
-			expansive: false,
+			expansive:
+				candidate.kind !== "builtin-collection-call-chain" &&
+				candidate.kind !== "iterator-entry-pair-virtualization",
 			...(!coreTargetSupportsSpecialization(kind)
 				? { unsupportedReason: "target-support" as const }
 				: !fn.isInstructionLive(candidate.root) ||
