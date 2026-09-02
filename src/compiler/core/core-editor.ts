@@ -585,9 +585,14 @@ export class CoreEditor {
 
 	replaceValueUsesMany(replacements: ReadonlyMap<CoreValueId, CoreValueId>): void {
 		this.#assertActive();
-		const effective = new Map(
-			[...replacements].filter(([value, replacement]) => value !== replacement),
-		);
+		let effective = replacements;
+		for (const [value, replacement] of replacements) {
+			if (value !== replacement) continue;
+			effective = new Map(
+				[...replacements].filter(([candidate, target]) => candidate !== target),
+			);
+			break;
+		}
 		if (effective.size === 0) return;
 		const replacement = (value: CoreValueId): CoreValueId =>
 			effective.get(value) ?? value;
