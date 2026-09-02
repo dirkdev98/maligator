@@ -187,6 +187,7 @@ const REPRESENTATIONS = [
 const REPRESENTATION_IDS = new Map<CoreRepresentation, number>(
 	REPRESENTATIONS.map((representation, index) => [representation, index]),
 );
+const BLOCK_PARAMETER_ROLES = ["value", "exception"] as const;
 type CoreValueDefinitionKind = 0 | 1;
 
 const TERMINATOR_CODES: Readonly<
@@ -405,10 +406,14 @@ export class CoreFunctionStore {
 	readonly #blockLastInstruction: Array<number> = [];
 	readonly #blockParameterStart: Array<number> = [];
 	readonly #blockParameterCount: Array<number> = [];
-	readonly #blockHandler: Array<CoreExceptionHandler | undefined> = [];
+	readonly #blockHandlerBlock: Array<number> = [];
+	readonly #blockHandlerArgumentStart: Array<number> = [];
+	readonly #blockHandlerArgumentCount: Array<number> = [];
 	readonly #blockParameterValues: Array<CoreValueId> = [];
-	readonly #blockParameterRoles: Array<"value" | "exception"> = [];
+	readonly #blockParameterRoles: Array<number> = [];
 	readonly #blockParameterFreeBySize: Array<Array<number> | undefined> = [];
+	readonly #handlerArguments: Array<CoreValueId> = [];
+	readonly #handlerArgumentFreeBySize: Array<Array<number> | undefined> = [];
 
 	readonly #instructionLive: Array<number> = [];
 	readonly #instructionOpcode: Array<number> = [];
@@ -488,6 +493,11 @@ export class CoreFunctionStore {
 			blockParameterStart: this.#blockParameterStart,
 			blockParameterCount: this.#blockParameterCount,
 			blockParameterValues: this.#blockParameterValues,
+			blockParameterRoles: this.#blockParameterRoles,
+			blockHandlerBlock: this.#blockHandlerBlock,
+			blockHandlerArgumentStart: this.#blockHandlerArgumentStart,
+			blockHandlerArgumentCount: this.#blockHandlerArgumentCount,
+			handlerArguments: this.#handlerArguments,
 			instructionLive: this.#instructionLive,
 			instructionOpcode: this.#instructionOpcode,
 			instructionBlock: this.#instructionBlock,
@@ -507,6 +517,7 @@ export class CoreFunctionStore {
 			terminatorEdgeArgumentCount: this.#terminatorEdgeArgumentCount,
 			terminatorEdgeCaseValue: this.#terminatorEdgeCaseValue,
 			valueLive: this.#valueLive,
+			valueRepresentation: this.#valueRepresentation,
 			valueDefinitionKind: this.#valueDefinitionKind,
 			valueDefinitionOwner: this.#valueDefinitionOwner,
 			valueDefinitionIndex: this.#valueDefinitionIndex,
@@ -750,7 +761,7 @@ export class CoreFunctionStore {
 	}
 
 	blockParameterRole(index: number): "value" | "exception" {
-		const role = this.#blockParameterRoles[index];
+		const role = BLOCK_PARAMETER_ROLES[this.#blockParameterRoles[index]!];
 		if (role === undefined) throw new Error(`Unknown Core block parameter row ${index}`);
 		return role;
 	}
@@ -779,17 +790,23 @@ export class CoreFunctionStore {
 			return {
 				value,
 				representation: this.valueRepresentation(value),
-				role: this.#blockParameterRoles[start + index]!,
+				role: BLOCK_PARAMETER_ROLES[this.#blockParameterRoles[start + index]!]!,
 			};
 		});
 	}
 
 	blockHandler(id: CoreBlockId): CoreExceptionHandler | undefined {
 		this.#requireBlock(id);
-		const handler = this.#blockHandler[id];
-		return handler === undefined
-			? undefined
-			: { block: handler.block, arguments: [...handler.arguments] };
+		const block = this.#blockHandlerBlock[id] ?? -1;
+		if (block < 0) return undefined;
+		const start = this.#blockHandlerArgumentStart[id]!;
+		return {
+			block: coreBlockId(block),
+			arguments: this.#handlerArguments.slice(
+				start,
+				start + this.#blockHandlerArgumentCount[id]!,
+			),
+		};
 	}
 
 	blockTerminator(id: CoreBlockId): CoreInstructionId {
@@ -1050,7 +1067,9 @@ export class CoreFunctionStore {
 		this.#blockLive.push(1);
 		this.#blockFirstInstruction.push(-1);
 		this.#blockLastInstruction.push(-1);
-		this.#blockHandler.push(undefined);
+		this.#blockHandlerBlock.push(-1);
+		this.#blockHandlerArgumentStart.push(0);
+		this.#blockHandlerArgumentCount.push(0);
 		const values = parameters.map((spec, index) =>
 			this.#createValue(spec.representation ?? "boxed", 0, block, index),
 		);
@@ -1335,7 +1354,13 @@ export class CoreFunctionStore {
 		this.#blockLive[block] = 0;
 		this.#blockFirstInstruction[block] = -1;
 		this.#blockLastInstruction[block] = -1;
-		this.#blockHandler[block] = undefined;
+		this.#releaseHandlerArgumentRange(
+			this.#blockHandlerArgumentStart[block]!,
+			this.#blockHandlerArgumentCount[block]!,
+		);
+		this.#blockHandlerBlock[block] = -1;
+		this.#blockHandlerArgumentStart[block] = 0;
+		this.#blockHandlerArgumentCount[block] = 0;
 		this.#replaceBlockParameterRange(block, [], []);
 	}
 
@@ -1362,13 +1387,23 @@ export class CoreFunctionStore {
 		this.#assertEditing(mutation);
 		this.#requireBlock(block);
 		if (handler !== undefined) this.#requireBlock(handler.block);
-		this.#blockHandler[block] =
-			handler === undefined
-				? undefined
-				: Object.freeze({
-						block: handler.block,
-						arguments: Object.freeze([...handler.arguments]),
-					});
+		const oldStart = this.#blockHandlerArgumentStart[block]!;
+		const oldCount = this.#blockHandlerArgumentCount[block]!;
+		const nextCount = handler?.arguments.length ?? 0;
+		let start = oldStart;
+		if (oldCount !== nextCount) {
+			this.#releaseHandlerArgumentRange(oldStart, oldCount);
+			start = this.#allocateHandlerArgumentRange(nextCount);
+		}
+		this.#blockHandlerBlock[block] = handler?.block ?? -1;
+		this.#blockHandlerArgumentStart[block] = start;
+		this.#blockHandlerArgumentCount[block] = nextCount;
+		if (handler !== undefined) {
+			for (const [index, value] of handler.arguments.entries()) {
+				this.#requireValue(value);
+				this.#handlerArguments[start + index] = value;
+			}
+		}
 	}
 
 	_replaceTerminatorPayload(
@@ -1575,7 +1610,7 @@ export class CoreFunctionStore {
 		this.#blockParameterCount[block] = values.length;
 		for (let index = 0; index < values.length; index++) {
 			this.#blockParameterValues[start + index] = values[index]!;
-			this.#blockParameterRoles[start + index] = roles[index]!;
+			this.#blockParameterRoles[start + index] = roles[index] === "exception" ? 1 : 0;
 		}
 	}
 
@@ -1782,6 +1817,22 @@ export class CoreFunctionStore {
 		const free = this.#blockParameterFreeBySize[count] ?? [];
 		free.push(start);
 		this.#blockParameterFreeBySize[count] = free;
+	}
+
+	#allocateHandlerArgumentRange(count: number): number {
+		if (count === 0) return 0;
+		const free = this.#handlerArgumentFreeBySize[count]?.pop();
+		if (free !== undefined) return free;
+		const start = this.#handlerArguments.length;
+		this.#handlerArguments.length += count;
+		return start;
+	}
+
+	#releaseHandlerArgumentRange(start: number, count: number): void {
+		if (count === 0) return;
+		const free = this.#handlerArgumentFreeBySize[count] ?? [];
+		free.push(start);
+		this.#handlerArgumentFreeBySize[count] = free;
 	}
 
 	#requireMutation(mutation: CoreStoreMutation): void {

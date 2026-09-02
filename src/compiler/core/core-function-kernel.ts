@@ -13,6 +13,11 @@ export interface CoreFunctionKernelColumns {
 	readonly blockParameterStart: ReadonlyArray<number>;
 	readonly blockParameterCount: ReadonlyArray<number>;
 	readonly blockParameterValues: ReadonlyArray<CoreValueId>;
+	readonly blockParameterRoles: ReadonlyArray<number>;
+	readonly blockHandlerBlock: ReadonlyArray<number>;
+	readonly blockHandlerArgumentStart: ReadonlyArray<number>;
+	readonly blockHandlerArgumentCount: ReadonlyArray<number>;
+	readonly handlerArguments: ReadonlyArray<CoreValueId>;
 	readonly instructionLive: ReadonlyArray<number>;
 	readonly instructionOpcode: ReadonlyArray<number>;
 	readonly instructionBlock: ReadonlyArray<number>;
@@ -32,6 +37,7 @@ export interface CoreFunctionKernelColumns {
 	readonly terminatorEdgeArgumentCount: ReadonlyArray<number>;
 	readonly terminatorEdgeCaseValue: ReadonlyArray<CoreImmediate | undefined>;
 	readonly valueLive: ReadonlyArray<number>;
+	readonly valueRepresentation: ReadonlyArray<number>;
 	readonly valueDefinitionKind: ReadonlyArray<number>;
 	readonly valueDefinitionOwner: ReadonlyArray<number>;
 	readonly valueDefinitionIndex: ReadonlyArray<number>;
@@ -74,6 +80,27 @@ export class CoreFunctionKernel {
 
 	blockParameterValue(index: number): CoreValueId {
 		return this.#columns.blockParameterValues[index]!;
+	}
+
+	blockParameterRole(index: number): number {
+		return this.#columns.blockParameterRoles[index]!;
+	}
+
+	blockHandlerBlock(block: CoreBlockId): CoreBlockId | undefined {
+		const handler = this.#columns.blockHandlerBlock[block] ?? -1;
+		return handler < 0 ? undefined : (handler as CoreBlockId);
+	}
+
+	blockHandlerArgumentStart(block: CoreBlockId): number {
+		return this.#columns.blockHandlerArgumentStart[block] ?? 0;
+	}
+
+	blockHandlerArgumentCount(block: CoreBlockId): number {
+		return this.#columns.blockHandlerArgumentCount[block] ?? 0;
+	}
+
+	handlerArgumentAt(index: number): CoreValueId {
+		return this.#columns.handlerArguments[index]!;
 	}
 
 	instructionLive(instruction: CoreInstructionId): number {
@@ -151,6 +178,10 @@ export class CoreFunctionKernel {
 
 	valueLive(value: CoreValueId): number {
 		return this.#columns.valueLive[value] ?? 0;
+	}
+
+	valueRepresentation(value: CoreValueId): number {
+		return this.#columns.valueRepresentation[value]!;
 	}
 
 	valueDefinitionKind(value: CoreValueId): number {

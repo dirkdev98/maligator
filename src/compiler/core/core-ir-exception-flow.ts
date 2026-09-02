@@ -18,9 +18,13 @@ function localThrowCatchFlow(
 	fn: CoreFunctionStore,
 	block: CoreBlockId,
 ): CoreLocalThrowCatchFlow | undefined {
-	const handler = fn.blockHandler(block);
-	const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-	if (handler === undefined || terminator.kind !== "throw" || handler.block === block) {
+	const handler = fn.kernel.blockHandlerBlock(block);
+	const terminator = fn.blockTerminator(block);
+	if (
+		handler === undefined ||
+		fn.instructionKind(terminator) !== "throw" ||
+		handler === block
+	) {
 		return undefined;
 	}
 	for (const instruction of fn.bodyInstructionIds(block)) {
@@ -29,18 +33,27 @@ function localThrowCatchFlow(
 			fn.registry.byId(fn.instructionOpcode(instruction)).effects;
 		if (effects.mayThrow || effects.maySuspend) return undefined;
 	}
-	const exception = fn.blockParameters(handler.block)[0];
+	const thrownValue = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
+	const parameterStart = fn.kernel.blockParameterStart(handler);
 	if (
-		exception?.role !== "exception" ||
-		fn.valueRepresentation(terminator.value) !== exception.representation
+		fn.kernel.blockParameterCount(handler) === 0 ||
+		fn.kernel.blockParameterRole(parameterStart) !== 1 ||
+		fn.kernel.valueRepresentation(thrownValue) !==
+			fn.kernel.valueRepresentation(fn.kernel.blockParameterValue(parameterStart))
 	) {
 		return undefined;
 	}
+	const handlerArgumentStart = fn.kernel.blockHandlerArgumentStart(block);
+	const handlerArgumentCount = fn.kernel.blockHandlerArgumentCount(block);
 	return Object.freeze({
 		source: block,
-		handler: handler.block,
-		thrownValue: terminator.value,
-		handlerArguments: Object.freeze(handler.arguments),
+		handler,
+		thrownValue,
+		handlerArguments: Object.freeze(
+			Array.from({ length: handlerArgumentCount }, (_, index) =>
+				fn.kernel.handlerArgumentAt(handlerArgumentStart + index),
+			),
+		),
 		completionOrder: "immediate-handler",
 		stackObservation: "same-thrown-value",
 		prefixEffects: "non-throwing-non-suspending",

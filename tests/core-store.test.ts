@@ -636,6 +636,37 @@ describe("Core store", () => {
 		expect(fn.useTraversalStatistics().deadSkips).toBe(0);
 	});
 
+	it("stores exception handlers in reusable scalar ranges", () => {
+		const { program, fn, entry, parameter, constant, copied } = oneFunction();
+		const setInitial = CoreEditor.open(program, fn.id);
+		setInitial.setHandler(entry, entry, [parameter]);
+		setInitial.commit();
+
+		const start = fn.kernel.blockHandlerArgumentStart(entry);
+		expect(fn.kernel.blockHandlerBlock(entry)).toBe(entry);
+		expect(fn.kernel.blockHandlerArgumentCount(entry)).toBe(1);
+		expect(fn.kernel.handlerArgumentAt(start)).toBe(parameter);
+		expect(fn.blockHandler(entry)).toEqual({ block: entry, arguments: [parameter] });
+
+		const replace = CoreEditor.open(program, fn.id);
+		replace.setHandler(entry, entry, [constant]);
+		replace.commit();
+		expect(fn.kernel.blockHandlerArgumentStart(entry)).toBe(start);
+		expect(fn.kernel.handlerArgumentAt(start)).toBe(constant);
+
+		const clear = CoreEditor.open(program, fn.id);
+		clear.clearHandler(entry);
+		clear.commit();
+		expect(fn.kernel.blockHandlerBlock(entry)).toBeUndefined();
+		expect(fn.kernel.blockHandlerArgumentCount(entry)).toBe(0);
+
+		const reuse = CoreEditor.open(program, fn.id);
+		reuse.setHandler(entry, entry, [copied]);
+		reuse.commit();
+		expect(fn.kernel.blockHandlerArgumentStart(entry)).toBe(start);
+		expect(fn.kernel.handlerArgumentAt(start)).toBe(copied);
+	});
+
 	it("publishes old and new operands plus retained results for in-place rewrites", () => {
 		const { program, fn, constant, copied, parameter } = oneFunction();
 		const identity = [...fn.bodyInstructionIds(fn.entry)][1]!;

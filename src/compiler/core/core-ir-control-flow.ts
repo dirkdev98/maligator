@@ -78,7 +78,7 @@ export function coreTerminatorEdges(
 }
 
 function blockHasExceptionalExit(fn: CoreFunctionStore, block: CoreBlockId): boolean {
-	if (fn.terminatorPayload(fn.blockTerminator(block)).kind === "throw") return true;
+	if (fn.instructionKind(fn.blockTerminator(block)) === "throw") return true;
 	for (const instruction of fn.bodyInstructionIds(block)) {
 		const effects =
 			fn.instructionEffectRefinement(instruction)?.effects ??
@@ -104,28 +104,36 @@ function buildEdges(
 		() => new Array<CoreControlEdge>(),
 	);
 	for (const block of fn.blockIds()) {
-		const ordinary = coreTerminatorEdges(fn.terminatorPayload(fn.blockTerminator(block)));
-		for (const [index, edge] of ordinary.entries()) {
+		const terminator = fn.blockTerminator(block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let offset = 0; offset < edgeCount; offset++) {
+			const edge = edgeStart + offset;
 			successors[block]!.push({
 				from: block,
-				to: edge.block,
+				to: fn.kernel.terminatorEdgeBlock(edge),
 				kind: "ordinary",
 				get arguments() {
-					return (
-						coreTerminatorEdges(fn.terminatorPayload(fn.blockTerminator(block)))[index]
-							?.arguments ?? edge.arguments
+					const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+					const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+					return Array.from({ length: argumentCount }, (_, index) =>
+						fn.kernel.operandAt(argumentStart + index),
 					);
 				},
 			});
 		}
-		const handler = includeExceptions ? fn.blockHandler(block) : undefined;
+		const handler = includeExceptions ? fn.kernel.blockHandlerBlock(block) : undefined;
 		if (handler !== undefined && blockHasExceptionalExit(fn, block)) {
 			successors[block]!.push({
 				from: block,
-				to: handler.block,
+				to: handler,
 				kind: "exceptional",
 				get arguments() {
-					return fn.blockHandler(block)?.arguments ?? handler.arguments;
+					const start = fn.kernel.blockHandlerArgumentStart(block);
+					const count = fn.kernel.blockHandlerArgumentCount(block);
+					return Array.from({ length: count }, (_, index) =>
+						fn.kernel.handlerArgumentAt(start + index),
+					);
 				},
 			});
 		}
@@ -371,6 +379,15 @@ function naturalLoops(
 	const reverseIndex = new Int32Array(fn.blockCapacity);
 	reverseIndex.fill(-1);
 	for (const [index, block] of reversePostorder.entries()) reverseIndex[block] = index;
+	const jumpsTo = (source: CoreBlockId, target: CoreBlockId): boolean => {
+		const terminator = fn.blockTerminator(source);
+		if (fn.instructionKind(terminator) !== "jump") return false;
+		const edge = fn.kernel.terminatorEdgeStart(terminator);
+		return (
+			fn.kernel.terminatorEdgeCount(terminator) === 1 &&
+			fn.kernel.terminatorEdgeBlock(edge) === target
+		);
+	};
 	const latchesByHeader = new Map<CoreBlockId, Set<CoreBlockId>>();
 	let hasNonNaturalRetreatingEdge = false;
 	for (const from of reachable) {
@@ -407,15 +424,10 @@ function naturalLoops(
 		);
 		const outside = ordinaryIncoming.filter(({ from }) => !blocks.has(from));
 		const outsideSource = outside.length === 1 ? outside[0]!.from : undefined;
-		const outsidePayload =
-			outsideSource === undefined
-				? undefined
-				: fn.terminatorPayload(fn.blockTerminator(outsideSource));
 		const preheader =
 			outsideSource !== undefined &&
 			ordinaryIncoming.length === outside.length + latches.size &&
-			outsidePayload?.kind === "jump" &&
-			outsidePayload.edge.block === header &&
+			jumpsTo(outsideSource, header) &&
 			(successors[outsideSource] ?? []).length === 1
 				? outsideSource
 				: undefined;
@@ -437,15 +449,13 @@ function naturalLoops(
 			),
 		}));
 		const latch = latches.size === 1 ? [...latches][0]! : undefined;
-		const latchPayload =
-			latch === undefined ? undefined : fn.terminatorPayload(fn.blockTerminator(latch));
 		const canonicalLatch =
-			latchPayload?.kind === "jump" &&
-			latchPayload.edge.block === header &&
-			(successors[latch!] ?? []).length === 1;
+			latch !== undefined &&
+			jumpsTo(latch, header) &&
+			(successors[latch] ?? []).length === 1;
 		const hasExceptionalControl = [...blocks].some(
 			(block) =>
-				fn.blockHandler(block) !== undefined ||
+				fn.kernel.blockHandlerBlock(block) !== undefined ||
 				(predecessors[block] ?? []).some(({ kind }) => kind === "exceptional"),
 		);
 		provisional.push({
