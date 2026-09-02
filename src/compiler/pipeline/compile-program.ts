@@ -24,6 +24,8 @@ export function compileEntrypoint(
 	const { semantic, facts } = analyzeEntrypoint(entrypointPath, options, runPhase);
 	return compileSemanticProgramToProgramImage(semantic, {
 		facts,
+		coreInstrumentation: options.coreInstrumentation,
+		afterCoreOptimization: options.afterCoreOptimization,
 		runPhase,
 	});
 }

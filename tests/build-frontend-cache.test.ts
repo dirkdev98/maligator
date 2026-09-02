@@ -68,7 +68,7 @@ describe("normal build frontend cache", () => {
 		expect(warm.imageStats).toEqual(cold.imageStats);
 	});
 
-	it("returns optimizer diagnostics beside the cached compiler artifact", () => {
+	it("keeps optimizer instrumentation off in the normal cached build", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
 		const entrypoint = path.join(root, "entry.mjs");
@@ -84,12 +84,37 @@ describe("normal build frontend cache", () => {
 			profile: true,
 		});
 
-		expect(compiled.optimizationReport?.stages.length).toBeGreaterThan(0);
+		expect(compiled.optimizationReport).toMatchObject({
+			instrumentation: "off",
+			stages: [],
+			passes: [],
+			analyses: [],
+		});
 		expect(compiled.optimizationPlan?.version.key).toMatch(/^p:/);
 		expect(compiled.programImage.diagnostics).not.toHaveProperty(
 			"coreOptimizationReport",
 		);
 		expect(compiled.programImage.diagnostics).not.toHaveProperty("coreOptimizationPlan");
+	});
+
+	it("collects full optimizer diagnostics only when requested", () => {
+		const root = temporaryDirectory();
+		const entrypoint = path.join(root, "entry.mjs");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(entrypoint, `export const answer = 42;\n`);
+		const compiled = compileBuildFrontend({
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "build-frontend-cache-instrumentation-test",
+			cacheDirectory: path.join(root, "cache"),
+			forceCompile: true,
+			coreInstrumentation: "full",
+		});
+
+		expect(compiled.optimizationReport?.instrumentation).toBe("full");
+		expect(compiled.optimizationReport?.stages.length).toBeGreaterThan(0);
+		expect(compiled.optimizationReport?.passes.length).toBeGreaterThan(0);
 	});
 
 	it("separates cache entries by module aliases", () => {

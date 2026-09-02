@@ -85,7 +85,7 @@ export class CoreAnalysisManager {
 			return cached.value as Result;
 		}
 		const versions = this.#captureVersions(definition, request);
-		const startedAt = Date.now();
+		const startedAt = this.#report.collectsDetails ? Date.now() : 0;
 		const value = definition.compute({
 			program: this.#program,
 			context: this.#context,
@@ -98,7 +98,7 @@ export class CoreAnalysisManager {
 			definition.key,
 			"recompute",
 			cached !== undefined,
-			Date.now() - startedAt,
+			this.#report.collectsDetails ? Date.now() - startedAt : 0,
 		);
 		return value;
 	}

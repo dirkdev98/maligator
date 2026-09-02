@@ -14,7 +14,10 @@ import {
 } from "./core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
-import type { CoreOptimizationReport } from "./core-optimization-report.ts";
+import type {
+	CoreInstrumentationMode,
+	CoreOptimizationReport,
+} from "./core-optimization-report.ts";
 import { CorePassManager } from "./core-pass-manager.ts";
 import type { CoreOptimizationStage } from "./core-pass.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
@@ -33,6 +36,7 @@ const OPTIMIZATION_STAGES: ReadonlyArray<CoreOptimizationStage> = [
 export interface OptimizeCoreOptions {
 	readonly verification?: CoreVerificationProfile;
 	readonly mode?: "development" | "full";
+	readonly instrumentation?: CoreInstrumentationMode;
 }
 
 interface CoreOptimizerWorkProfile {
@@ -79,7 +83,10 @@ export function optimizeCore(
 		{ stage: "pre-optimization" },
 		compilation.context,
 	);
-	const reportBuilder = new CoreOptimizationReportBuilder(compilation.program);
+	const reportBuilder = new CoreOptimizationReportBuilder(
+		compilation.program,
+		options.instrumentation ?? "full",
+	);
 	const analyses = new CoreAnalysisManager(
 		compilation.program,
 		compilation.context,
@@ -109,7 +116,7 @@ export function optimizeCore(
 							: CORE_LOCAL_FINALIZATION_PASSES,
 		);
 	}
-	const crossCallStartedAt = Date.now();
+	const crossCallStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
 	const crossCall = runCoreCrossCallTransforms(
 		compilation.program,
 		analyses,
@@ -117,8 +124,10 @@ export function optimizeCore(
 		profile.crossCallBudgets,
 	);
 	reportBuilder.recordTransformWork(crossCall.statistics);
-	reportBuilder.recordStage("interprocedural", Date.now() - crossCallStartedAt);
-	const programStartedAt = Date.now();
+	if (reportBuilder.collectsCounters) {
+		reportBuilder.recordStage("interprocedural", Date.now() - crossCallStartedAt);
+	}
+	const programStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
 	const summaries = crossCall.summaries;
 	const reachability = analyses.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
 		scope: "program",
@@ -128,8 +137,16 @@ export function optimizeCore(
 		summaries.statistics,
 		reachability.statistics,
 	);
-	reportBuilder.recordStage("program", Date.now() - programStartedAt);
-	const planStartedAt = Date.now();
+	if (reportBuilder.collectsCounters) {
+		reportBuilder.recordStage("program", Date.now() - programStartedAt);
+	}
+	const planStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
+	if (reportBuilder.collectsCounters) {
+		reportBuilder.increment(
+			"specializationFunctionsScanned",
+			reachability.liveFunctions.length,
+		);
+	}
 	for (const functionId of reachability.liveFunctions) {
 		const discovery = analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
 			scope: "function",
@@ -150,7 +167,9 @@ export function optimizeCore(
 	const program = compilation.program.seal();
 	const verifiedPlan = verifyCoreOptimizationPlan(program, plan);
 	reportBuilder.recordPlanWork(verifiedPlan.statistics);
-	reportBuilder.recordStage("specialization", Date.now() - planStartedAt);
+	if (reportBuilder.collectsCounters) {
+		reportBuilder.recordStage("specialization", Date.now() - planStartedAt);
+	}
 	verifyCoreProgram(program, { stage: "pre-target" }, compilation.context);
 	const optimized = Object.freeze({
 		program,

@@ -14,12 +14,14 @@ import {
 	compilerProgramFactsFromConfig,
 	withProgramClosure,
 } from "../shared/compiler-facts.ts";
-import type { CompileCorePhase } from "./compile-core-common.ts";
+import type { CompileCoreOptions, CompileCorePhase } from "./compile-core-common.ts";
 
 export type CompileEntrypointPhase = "graph" | "semantic" | CompileCorePhase;
 export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize";
 
 export interface CompileEntrypointOptions extends BuildModuleGraphOptions {
+	coreInstrumentation?: CompileCoreOptions["coreInstrumentation"];
+	afterCoreOptimization?: CompileCoreOptions["afterCoreOptimization"];
 	runPhase?: <T>(phase: CompileEntrypointPhase, run: () => T) => T;
 	onDiagnostic?: (diagnostic: CompilerDiagnostic) => void;
 	/** Observe the facts this compilation ran under, including its closure certificate. */

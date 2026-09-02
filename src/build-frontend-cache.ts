@@ -25,6 +25,7 @@ import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
 import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.ts";
 import type { SealedCoreProgram } from "./compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
+import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-report.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import type {
 	BuildModuleGraphOptions,
@@ -152,6 +153,7 @@ export interface CompileBuildFrontendOptions {
 	 * the compilation without changing the artifact it produces.
 	 */
 	coreVerification?: CoreVerificationProfile;
+	coreInstrumentation?: CoreInstrumentationMode;
 	/** Include source-site identities and compiler remarks in the live program image. */
 	profile?: boolean;
 	cacheDirectory?: string;
@@ -785,6 +787,9 @@ function compileProgramImage(
 		facts,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,
+		coreInstrumentation:
+			options.coreInstrumentation ??
+			(options.afterCoreOptimization === undefined ? "off" : "full"),
 		profile: options.profile,
 		afterCoreOptimization(program, context, report, plan) {
 			options.afterCoreOptimization?.(program, context, report, plan);

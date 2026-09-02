@@ -4,6 +4,8 @@ import type {
 } from "./core-ir-regions.ts";
 import type { CoreProgram } from "./core-store.ts";
 
+export type CoreInstrumentationMode = "off" | "counters" | "full";
+
 export interface CoreOptimizationCounts {
 	readonly functions: number;
 	readonly blocks: number;
@@ -49,6 +51,7 @@ export interface CoreBudgetWorkReport {
 }
 
 export interface CoreOptimizationReport {
+	readonly instrumentation: CoreInstrumentationMode;
 	readonly input: CoreOptimizationCounts;
 	readonly output: CoreOptimizationCounts;
 	readonly stages: ReadonlyArray<CoreOptimizationStageReport>;
@@ -60,6 +63,36 @@ export interface CoreOptimizationReport {
 	readonly plan: CorePlanWorkReport;
 	readonly queue: CoreQueueWorkReport;
 	readonly budget: CoreBudgetWorkReport;
+	readonly counters: CoreCompilerWorkCounters;
+}
+
+export interface CoreCompilerWorkCounters {
+	readonly analysisQueries: number;
+	readonly analysisRecomputations: number;
+	readonly localRulesConsidered: number;
+	readonly localRulesApplied: number;
+	readonly functionScans: number;
+	readonly explicitCallEdges: number;
+	readonly wildcardCallSources: number;
+	readonly wildcardAggregateRecomputations: number;
+	readonly exactReverseCallerVisits: number;
+	readonly wildcardReverseCallerVisits: number;
+	readonly sccNodes: number;
+	readonly sccEdges: number;
+	readonly sccTransfers: number;
+	readonly localFactRebuilds: number;
+	readonly provenanceRebuilds: number;
+	readonly memoryAccesses: number;
+	readonly memoryLocations: number;
+	readonly memoryStateEntries: number;
+	readonly memoryPhis: number;
+	readonly specializationFunctionsScanned: number;
+	readonly specializationCandidatesDiscovered: number;
+	readonly specializationCandidatesSelected: number;
+	readonly liveUseVisits: number;
+	readonly deadUseSkips: number;
+	readonly abandonedOperandStorage: number;
+	readonly abandonedParameterStorage: number;
 }
 
 export interface CorePlanWorkReport {
@@ -130,6 +163,48 @@ interface MutableAnalysisWorkReport {
 	elapsedMs: number;
 }
 
+const COUNTER_KEYS = [
+	"analysisQueries",
+	"analysisRecomputations",
+	"localRulesConsidered",
+	"localRulesApplied",
+	"functionScans",
+	"explicitCallEdges",
+	"wildcardCallSources",
+	"wildcardAggregateRecomputations",
+	"exactReverseCallerVisits",
+	"wildcardReverseCallerVisits",
+	"sccNodes",
+	"sccEdges",
+	"sccTransfers",
+	"localFactRebuilds",
+	"provenanceRebuilds",
+	"memoryAccesses",
+	"memoryLocations",
+	"memoryStateEntries",
+	"memoryPhis",
+	"specializationFunctionsScanned",
+	"specializationCandidatesDiscovered",
+	"specializationCandidatesSelected",
+	"liveUseVisits",
+	"deadUseSkips",
+	"abandonedOperandStorage",
+	"abandonedParameterStorage",
+] as const satisfies ReadonlyArray<keyof CoreCompilerWorkCounters>;
+
+type CoreCompilerWorkCounter = (typeof COUNTER_KEYS)[number];
+
+const COUNTER_INDEX = new Map(COUNTER_KEYS.map((key, index) => [key, index] as const));
+
+const EMPTY_COUNTS: CoreOptimizationCounts = Object.freeze({
+	functions: 0,
+	blocks: 0,
+	instructions: 0,
+	values: 0,
+	facts: 0,
+	planCandidates: 0,
+});
+
 function iterableCount(values: Iterable<unknown>): number {
 	let count = 0;
 	for (const _value of values) count++;
@@ -167,11 +242,13 @@ export function coreOptimizationCounts(
 }
 
 export class CoreOptimizationReportBuilder {
+	readonly instrumentation: CoreInstrumentationMode;
 	readonly input: CoreOptimizationCounts;
 	readonly #stages: Array<CoreOptimizationStageReport> = [];
-	readonly #passes = new Map<string, MutablePassWorkReport>();
-	readonly #analyses = new Map<string, MutableAnalysisWorkReport>();
-	readonly #exhaustedPasses = new Set<string>();
+	readonly #passes: Map<string, MutablePassWorkReport> | undefined;
+	readonly #analyses: Map<string, MutableAnalysisWorkReport> | undefined;
+	readonly #exhaustedPasses: Set<string> | undefined;
+	readonly #counters = new Float64Array(COUNTER_KEYS.length);
 	#queuePushes = 0;
 	#queuePops = 0;
 	#queueMaximumDepth = 0;
@@ -180,7 +257,7 @@ export class CoreOptimizationReportBuilder {
 	#discoveredStackObjects = 0;
 	#discoveredDenseArrays = 0;
 	#discoveredNumericFusions = 0;
-	readonly #discoveredCandidatesByKind = new Map<string, number>();
+	readonly #discoveredCandidatesByKind: Map<string, number> | undefined;
 	#largestCandidateFanOut = 0;
 	#programWork: CoreProgramWorkReport = Object.freeze({
 		functionsAnalyzed: 0,
@@ -223,11 +300,34 @@ export class CoreOptimizationReportBuilder {
 		verificationMs: 0,
 	});
 
-	constructor(program: CoreProgram) {
-		this.input = Object.freeze(coreOptimizationCounts(program));
+	constructor(program: CoreProgram, instrumentation: CoreInstrumentationMode = "full") {
+		this.instrumentation = instrumentation;
+		this.input =
+			instrumentation === "off"
+				? EMPTY_COUNTS
+				: Object.freeze(coreOptimizationCounts(program));
+		this.#passes = instrumentation === "full" ? new Map() : undefined;
+		this.#analyses = instrumentation === "full" ? new Map() : undefined;
+		this.#exhaustedPasses = instrumentation === "full" ? new Set() : undefined;
+		this.#discoveredCandidatesByKind = instrumentation === "full" ? new Map() : undefined;
+	}
+
+	get collectsCounters(): boolean {
+		return this.instrumentation !== "off";
+	}
+
+	get collectsDetails(): boolean {
+		return this.instrumentation === "full";
+	}
+
+	increment(counter: CoreCompilerWorkCounter, value = 1): void {
+		if (!this.collectsCounters) return;
+		const index = COUNTER_INDEX.get(counter)!;
+		this.#counters[index] = this.#counters[index]! + value;
 	}
 
 	recordStage(stage: string, elapsedMs: number): void {
+		if (!this.collectsCounters) return;
 		this.#stages.push(Object.freeze({ stage, elapsedMs }));
 	}
 
@@ -238,6 +338,10 @@ export class CoreOptimizationReportBuilder {
 		edits: number,
 		elapsedMs: number,
 	): void {
+		if (!this.collectsCounters) return;
+		this.increment("localRulesConsidered", workItems);
+		if (changed) this.increment("localRulesApplied");
+		if (this.#passes === undefined) return;
 		const report = this.#passes.get(pass) ?? {
 			runs: 0,
 			workItems: 0,
@@ -259,6 +363,10 @@ export class CoreOptimizationReportBuilder {
 		invalidated: boolean,
 		elapsedMs: number,
 	): void {
+		if (!this.collectsCounters) return;
+		this.increment("analysisQueries");
+		if (outcome === "recompute") this.increment("analysisRecomputations");
+		if (this.#analyses === undefined) return;
 		const report = this.#analyses.get(analysis) ?? {
 			queries: 0,
 			hits: 0,
@@ -275,21 +383,24 @@ export class CoreOptimizationReportBuilder {
 	}
 
 	recordQueuePush(depth: number): void {
+		if (!this.collectsCounters) return;
 		this.#queuePushes++;
 		this.#queueMaximumDepth = Math.max(this.#queueMaximumDepth, depth);
 	}
 
 	recordQueuePop(): void {
+		if (!this.collectsCounters) return;
 		this.#queuePops++;
 	}
 
 	recordBudget(workItems: number, edits: number): void {
+		if (!this.collectsCounters) return;
 		this.#budgetWorkItems += workItems;
 		this.#budgetEdits += edits;
 	}
 
 	recordBudgetExhaustion(pass: string): void {
-		this.#exhaustedPasses.add(pass);
+		this.#exhaustedPasses?.add(pass);
 	}
 
 	recordCandidateDiscovery(
@@ -298,8 +409,10 @@ export class CoreOptimizationReportBuilder {
 			readonly fanOut: number;
 		}>,
 	): void {
+		if (!this.collectsCounters) return;
+		this.increment("specializationCandidatesDiscovered", candidates.length);
 		for (const candidate of candidates) {
-			this.#discoveredCandidatesByKind.set(
+			this.#discoveredCandidatesByKind?.set(
 				candidate.kind,
 				(this.#discoveredCandidatesByKind.get(candidate.kind) ?? 0) + 1,
 			);
@@ -343,6 +456,12 @@ export class CoreOptimizationReportBuilder {
 		},
 		reachability: { readonly deadFunctions: number },
 	): void {
+		if (!this.collectsCounters) return;
+		this.increment("functionScans", callGraph.functionsAnalyzed);
+		this.increment("explicitCallEdges", callGraph.callEdges);
+		this.increment("wildcardCallSources", callGraph.openCallSites);
+		this.increment("sccNodes", callGraph.functionsAnalyzed);
+		this.increment("sccTransfers", summaries.sccTransfers);
 		this.#programWork = Object.freeze({
 			functionsAnalyzed: callGraph.functionsAnalyzed,
 			functionsReused: callGraph.functionsReused,
@@ -359,10 +478,21 @@ export class CoreOptimizationReportBuilder {
 	}
 
 	recordTransformWork(report: CoreTransformWorkReport): void {
-		this.#transformWork = Object.freeze({ ...report });
+		if (!this.collectsCounters) return;
+		this.increment("functionScans", report.callGraphFunctionsAnalyzed);
+		this.increment("sccTransfers", report.sccTransfers);
+		this.#transformWork = this.collectsDetails
+			? Object.freeze({ ...report })
+			: Object.freeze({
+					...report,
+					appliedByKind: Object.freeze({}),
+					declinedByReason: Object.freeze({}),
+				});
 	}
 
 	recordPlanWork(report: CoreOptimizationPlanStatistics): void {
+		if (!this.collectsCounters) return;
+		this.increment("specializationCandidatesSelected", report.applied);
 		this.#planWork = Object.freeze({
 			discovered: Object.values(report.discoveredByKind).reduce(
 				(sum, count) => sum + count,
@@ -370,12 +500,18 @@ export class CoreOptimizationReportBuilder {
 			),
 			selected: report.applied,
 			declined: report.declined,
-			discoveredByKind: Object.freeze({ ...report.discoveredByKind }),
-			selectedByKind: Object.freeze({ ...report.selectedByKind }),
-			declinedByReason: Object.freeze({
-				...report.declinedByReason,
-				...report.declinedByPlanReason,
-			}),
+			discoveredByKind: this.collectsDetails
+				? Object.freeze({ ...report.discoveredByKind })
+				: Object.freeze({}),
+			selectedByKind: this.collectsDetails
+				? Object.freeze({ ...report.selectedByKind })
+				: Object.freeze({}),
+			declinedByReason: this.collectsDetails
+				? Object.freeze({
+						...report.declinedByReason,
+						...report.declinedByPlanReason,
+					})
+				: Object.freeze({}),
 			generatedCodeConsumed: report.generatedCodeConsumed,
 			compilerWorkConsumed: report.compilerWorkConsumed,
 			verificationMs: report.verificationMs,
@@ -386,26 +522,38 @@ export class CoreOptimizationReportBuilder {
 		program: CoreProgram,
 		plan: Pick<CoreOptimizationPlan, "directEntries" | "specializations">,
 	): CoreOptimizationReport {
+		const passes = this.#passes;
+		const analyses = this.#analyses;
+		const discoveredCandidatesByKind = this.#discoveredCandidatesByKind;
+		const counters = Object.freeze(
+			Object.fromEntries(
+				COUNTER_KEYS.map((key, index) => [key, this.#counters[index]]),
+			) as unknown as CoreCompilerWorkCounters,
+		);
 		return Object.freeze({
+			instrumentation: this.instrumentation,
 			input: this.input,
-			output: Object.freeze(coreOptimizationCounts(program, plan)),
+			output:
+				this.instrumentation === "off"
+					? EMPTY_COUNTS
+					: Object.freeze(coreOptimizationCounts(program, plan)),
 			stages: Object.freeze([...this.#stages]),
 			passes: Object.freeze(
-				[...this.#passes.entries()].map(([pass, report]) =>
+				[...(passes?.entries() ?? [])].map(([pass, report]) =>
 					Object.freeze({ pass, ...report }),
 				),
 			),
 			analyses: Object.freeze(
-				[...this.#analyses.entries()].map(([analysis, report]) =>
+				[...(analyses?.entries() ?? [])].map(([analysis, report]) =>
 					Object.freeze({ analysis, ...report }),
 				),
 			),
 			discovery: Object.freeze({
-				candidates: [...this.#discoveredCandidatesByKind.values()].reduce(
+				candidates: [...(discoveredCandidatesByKind?.values() ?? [])].reduce(
 					(total, count) => total + count,
 					0,
 				),
-				byKind: Object.freeze(Object.fromEntries(this.#discoveredCandidatesByKind)),
+				byKind: Object.freeze(Object.fromEntries(discoveredCandidatesByKind ?? [])),
 				stackObjects: this.#discoveredStackObjects,
 				denseArrays: this.#discoveredDenseArrays,
 				numericFusions: this.#discoveredNumericFusions,
@@ -422,8 +570,9 @@ export class CoreOptimizationReportBuilder {
 			budget: Object.freeze({
 				workItems: this.#budgetWorkItems,
 				edits: this.#budgetEdits,
-				exhaustedPasses: Object.freeze([...this.#exhaustedPasses]),
+				exhaustedPasses: Object.freeze([...(this.#exhaustedPasses ?? [])]),
 			}),
+			counters,
 		});
 	}
 }

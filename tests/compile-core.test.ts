@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -7,6 +8,50 @@ import { compileSemanticProgramToRuntimeImage } from "../src/compiler/pipeline/c
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
 
 describe("compileSemanticProgramToProgramImage", () => {
+	it("keeps instrumentation modes output-identical", () => {
+		const source = `
+			function add(left, right) { return left + right; }
+			globalThis.answer = add(40, 2);
+		`;
+		const compile = (coreInstrumentation: "off" | "counters" | "full") => {
+			let report: CoreOptimizationReport | undefined;
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, "instrumentation.js"),
+				{
+					coreInstrumentation,
+					afterCoreOptimization(_program, _context, optimizationReport) {
+						report = optimizationReport;
+					},
+				},
+			);
+			if (report === undefined) throw new Error("missing optimization report");
+			return { image, report };
+		};
+
+		const off = compile("off");
+		const counters = compile("counters");
+		const full = compile("full");
+
+		expect(counters.image).toEqual(off.image);
+		expect(full.image).toEqual(off.image);
+		expect(off.report).toMatchObject({
+			instrumentation: "off",
+			stages: [],
+			passes: [],
+			analyses: [],
+			input: { functions: 0 },
+		});
+		expect(counters.report.instrumentation).toBe("counters");
+		expect(counters.report.stages.length).toBeGreaterThan(0);
+		expect(counters.report.passes).toEqual([]);
+		expect(counters.report.analyses).toEqual([]);
+		expect(counters.report.counters.localRulesConsidered).toBeGreaterThan(0);
+		expect(counters.report.counters.analysisQueries).toBeGreaterThan(0);
+		expect(full.report.instrumentation).toBe("full");
+		expect(full.report.passes.length).toBeGreaterThan(0);
+		expect(full.report.analyses.length).toBeGreaterThan(0);
+	});
+
 	it("runs phases in order and inspects optimized IR before target lowering", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis("1 + 2", "pipeline.js");
 		const events: Array<string> = [];

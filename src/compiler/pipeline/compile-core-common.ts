@@ -7,7 +7,10 @@ import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
 import type { CoreOptimizationPlan } from "../core/core-ir-regions.ts";
 import type { CoreVerificationProfile } from "../core/core-ir-verifier.ts";
 import type { SealedCoreProgram } from "../core/core-ir.ts";
-import type { CoreOptimizationReport } from "../core/core-optimization-report.ts";
+import type {
+	CoreInstrumentationMode,
+	CoreOptimizationReport,
+} from "../core/core-optimization-report.ts";
 import { optimizeCore } from "../core/optimize.ts";
 import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
@@ -30,6 +33,7 @@ export interface CompileCoreOptions {
 	 * additionally attributes an invalid graph to the pass that produced it.
 	 */
 	coreVerification?: CoreVerificationProfile;
+	coreInstrumentation?: CoreInstrumentationMode;
 	semanticLowering?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -61,6 +65,9 @@ export function optimizeSemanticProgramToCore(
 		optimizeCore(core, {
 			verification: options.coreVerification,
 			mode: options.optimization ?? "full",
+			instrumentation:
+				options.coreInstrumentation ??
+				(options.afterCoreOptimization === undefined ? "off" : "full"),
 		}),
 	);
 	const optimized =

@@ -75,6 +75,7 @@ try {
 		semantic,
 		{
 			facts,
+			coreInstrumentation: "full",
 			afterCoreOptimization(_program, _context, optimizationReport, optimizationPlan) {
 				report = optimizationReport;
 				plan = optimizationPlan;
