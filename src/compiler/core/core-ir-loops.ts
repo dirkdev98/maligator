@@ -7,7 +7,6 @@ import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
-import { coreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 export type CoreLoopComparison = "<" | "<=" | ">" | ">=";
@@ -458,9 +457,8 @@ export function analyzeCoreLoopInductions(
 			Math.min(left.maximum, right.maximum),
 		);
 	let hasI32 = false;
-	for (let index = 0; index < fn.valueCapacity; index++) {
-		const value = coreValueId(index);
-		if (fn.isValueLive(value) && numericRepresentation(value) === "i32") {
+	for (const value of fn.valueIds()) {
+		if (numericRepresentation(value) === "i32") {
 			hasI32 = true;
 			break;
 		}
