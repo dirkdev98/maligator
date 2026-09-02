@@ -448,6 +448,51 @@ describe("Core control-flow analyses and passes", () => {
 		expect(fn.instructionBlock(definingInstruction(fn, object!))).toBe(body);
 	});
 
+	it("batches independent loop invariants in one pass item", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "boolean" }]);
+		const header = builder.createBlock();
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		const condition = builder.blockParameters(entry)[0]!.value;
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [left] = builder.appendInstruction(body, "createF64", [], {
+			attributes: { value: 0.5 },
+			outputRepresentations: ["f64"],
+		});
+		const [right] = builder.appendInstruction(body, "createF64", [], {
+			attributes: { value: 1.5 },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(body, "storeGlobal", [left!], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(body, "storeGlobal", [right!], {
+			attributes: { index: 1 },
+		});
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: condition });
+		builder.finish(entry);
+
+		const optimized = optimizeCore({ program, context }, { verification: "per-pass" });
+		expect(
+			optimized.report.passes.find(({ pass }) => pass === "loop-invariant-code-motion"),
+		).toMatchObject({ changedItems: 1, edits: 2 });
+	});
+
 	it("canonicalizes multiple latches and shared exits", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

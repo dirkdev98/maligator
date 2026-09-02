@@ -314,10 +314,16 @@ const hoistLoopInvariants: CorePass = {
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
 		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
+		const moves: Array<{
+			readonly instruction: CoreInstructionId;
+			readonly preheader: CoreBlockId;
+		}> = [];
+		const selected = new Set<CoreInstructionId>();
 		for (const loop of [...cfg.loops].sort((left, right) => right.depth - left.depth)) {
 			if (!loop.canonical || loop.preheader === undefined) continue;
 			for (const block of loop.blocks) {
-				for (const instruction of fn.bodyInstructionIds(block)) {
+				for (const instruction of [...fn.bodyInstructionIds(block)]) {
+					if (selected.has(instruction)) continue;
 					if (fn.instructionKind(instruction) !== "operation") continue;
 					const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 					const effects = coreInstructionEffects(fn, instruction);
@@ -343,13 +349,20 @@ const hoistLoopInvariants: CorePass = {
 						(!containedArrayLength && loopWriteMayAliasRead(fn, loop.blocks, instruction))
 					)
 						continue;
-					const editor = CoreEditor.open(program, item.function);
-					editor.moveInstruction(instruction, loop.preheader);
-					return editor.commit();
+					moves.push({ instruction, preheader: loop.preheader });
+					selected.add(instruction);
+					if (moves.length >= context.remainingEdits) break;
 				}
+				if (moves.length >= context.remainingEdits) break;
 			}
+			if (moves.length >= context.remainingEdits) break;
 		}
-		return undefined;
+		if (moves.length === 0) return undefined;
+		const editor = CoreEditor.open(program, item.function);
+		for (const { instruction, preheader } of moves) {
+			editor.moveInstruction(instruction, preheader);
+		}
+		return editor.commit();
 	},
 };
 
