@@ -109,14 +109,20 @@ export function corePassContext(
 	item: CorePassWorkItem,
 	remainingEdits: number,
 ): CorePassContext {
-	const allowed = new Set(pass.requiredAnalyses.map(({ key }) => key));
+	const allowedAnalyses = pass.requiredAnalyses;
 	return {
 		program,
 		compilationContext,
 		item,
 		remainingEdits,
 		analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result {
-			if (!allowed.has(definition.key)) {
+			let declared = false;
+			for (const allowed of allowedAnalyses) {
+				if (allowed.key !== definition.key) continue;
+				declared = true;
+				break;
+			}
+			if (!declared) {
 				throw new Error(
 					`Core pass ${pass.name} queried undeclared analysis ${definition.key}`,
 				);
