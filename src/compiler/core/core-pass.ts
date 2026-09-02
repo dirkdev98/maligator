@@ -5,12 +5,7 @@ import type {
 } from "./core-analysis-manager.ts";
 import type { CoreFunctionFeatureBits } from "./core-function-features.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import type {
-	CoreBlockId,
-	CoreFunctionId,
-	CoreInstructionId,
-	CoreOpcodeId,
-} from "./core-ir.ts";
+import type { CoreFunctionId } from "./core-ir.ts";
 import type {
 	CoreChangeDomain,
 	CoreChangeSet,
@@ -18,7 +13,7 @@ import type {
 	CoreProgramChangeDomain,
 } from "./core-store.ts";
 
-export type CorePassScope = "instruction" | "block" | "function" | "scc" | "program";
+export type CorePassScope = "function" | "scc" | "program";
 
 export type CoreOptimizationStage =
 	| "canonicalize"
@@ -31,16 +26,6 @@ export type CoreOptimizationStage =
 export type CorePassWakeKind = CoreChangeDomain | CoreProgramChangeDomain;
 
 export type CorePassWorkItem =
-	| {
-			readonly scope: "instruction";
-			readonly function: CoreFunctionId;
-			readonly instruction: CoreInstructionId;
-	  }
-	| {
-			readonly scope: "block";
-			readonly function: CoreFunctionId;
-			readonly block: CoreBlockId;
-	  }
 	| { readonly scope: "function"; readonly function: CoreFunctionId }
 	| {
 			readonly scope: "scc";
@@ -74,7 +59,6 @@ export interface CorePass {
 	readonly name: string;
 	readonly stage: CoreOptimizationStage;
 	readonly scope: CorePassScope;
-	readonly instructionOpcodes?: ReadonlySet<CoreOpcodeId>;
 	readonly requiredFunctionFeatures?: CoreFunctionFeatureBits;
 	readonly requiredAnalyses: ReadonlyArray<CoreAnalysisDefinition<unknown>>;
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;

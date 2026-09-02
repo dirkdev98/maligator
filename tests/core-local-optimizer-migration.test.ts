@@ -132,8 +132,11 @@ describe("Core local optimizer migration matrix", () => {
 	});
 
 	it("has no registered instruction- or block-scoped optimizer passes", () => {
-		expect(RUNTIME_REGISTRIES.flatMap(([, passes]) => passes).filter(
-			(pass) => pass.scope === "instruction" || pass.scope === "block",
-		)).toEqual([]);
+		const source = readFileSync(
+			new URL("../src/compiler/core/core-pass.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(source).not.toMatch(/readonly scope: "(?:instruction|block)"/);
 	});
 });

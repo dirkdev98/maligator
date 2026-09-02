@@ -8,7 +8,6 @@ import {
 } from "./core-function-features.ts";
 import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
-import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
@@ -52,10 +51,6 @@ export interface CorePassManagerOptions {
 
 function workKey(pass: CorePass, item: CorePassWorkItem): string {
 	switch (item.scope) {
-		case "instruction":
-			return `${pass.name}:instruction:${item.function}:${item.instruction}`;
-		case "block":
-			return `${pass.name}:block:${item.function}:${item.block}`;
 		case "function":
 			return `${pass.name}:function:${item.function}`;
 		case "scc":
@@ -266,24 +261,6 @@ export class CorePassManager {
 		enqueue: (pass: CorePass, item: CorePassWorkItem) => void,
 	): void {
 		switch (pass.scope) {
-			case "instruction":
-				for (const functionId of this.#program.functionIds()) {
-					for (const instruction of this.#program.function(functionId).instructionIds()) {
-						enqueue(pass, {
-							scope: "instruction",
-							function: functionId,
-							instruction,
-						});
-					}
-				}
-				break;
-			case "block":
-				for (const functionId of this.#program.functionIds()) {
-					for (const block of this.#program.function(functionId).blockIds()) {
-						enqueue(pass, { scope: "block", function: functionId, block });
-					}
-				}
-				break;
 			case "function":
 				for (const functionId of this.#program.functionIds()) {
 					enqueue(pass, { scope: "function", function: functionId });
@@ -309,57 +286,7 @@ export class CorePassManager {
 		changes: CoreChangeSet,
 		enqueue: (pass: CorePass, item: CorePassWorkItem) => void,
 	): void {
-		const fn = this.#program.function(changes.function);
 		switch (pass.scope) {
-			case "instruction": {
-				const instructions = new Set(changes.instructions);
-				for (const call of changes.calls) instructions.add(call);
-				for (const edge of changes.edges) {
-					for (const block of [edge.source, edge.target]) {
-						if (!fn.isBlockLive(block)) continue;
-						for (const instruction of fn.instructionIds(block)) {
-							instructions.add(instruction);
-						}
-					}
-				}
-				for (const value of changes.values) {
-					if (!fn.isValueLive(value)) continue;
-					if (fn.kernel.valueDefinitionKind(value) === 1) {
-						instructions.add(coreInstructionId(fn.kernel.valueDefinitionOwner(value)));
-					}
-					for (
-						let use = fn.kernel.valueFirstUse(value);
-						use >= 0;
-						use = fn.kernel.useNext(use)
-					) {
-						instructions.add(fn.kernel.useInstruction(use));
-					}
-				}
-				for (const instruction of instructions) {
-					if (fn.isInstructionLive(instruction)) {
-						enqueue(pass, {
-							scope: "instruction",
-							function: changes.function,
-							instruction,
-						});
-					}
-				}
-				break;
-			}
-			case "block":
-				for (const block of new Set([
-					...changes.blocks,
-					...changes.edges.flatMap(({ source, target }) => [source, target]),
-				])) {
-					if (fn.isBlockLive(block)) {
-						enqueue(pass, {
-							scope: "block",
-							function: changes.function,
-							block,
-						});
-					}
-				}
-				break;
 			case "function":
 				enqueue(pass, { scope: "function", function: changes.function });
 				break;
@@ -384,11 +311,6 @@ export class CorePassManager {
 			throw new Error(`Core pass ${pass.name} belongs to ${pass.stage}, not ${stage}`);
 		}
 		if (pass.name.length === 0) throw new Error("Core pass name is empty");
-		if (pass.instructionOpcodes !== undefined && pass.scope !== "instruction") {
-			throw new Error(
-				`Core pass ${pass.name} declares instruction opcodes for ${pass.scope} scope`,
-			);
-		}
 		if (
 			pass.requiredFunctionFeatures !== undefined &&
 			((pass.requiredFunctionFeatures & ~CORE_FUNCTION_FEATURE_MASK) !== 0 ||
@@ -418,15 +340,7 @@ export class CorePassManager {
 		) {
 			return false;
 		}
-		if (item.scope !== "instruction" || pass.instructionOpcodes === undefined) {
-			return true;
-		}
-		const fn = this.#program.function(item.function);
-		return (
-			fn.isInstructionLive(item.instruction) &&
-			fn.instructionKind(item.instruction) === "operation" &&
-			pass.instructionOpcodes.has(fn.instructionOpcode(item.instruction))
-		);
+		return true;
 	}
 
 	#validateChanges(pass: CorePass, changes: CoreChangeSet): void {

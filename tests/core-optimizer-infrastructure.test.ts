@@ -15,10 +15,7 @@ import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
 import type { CorePass } from "../src/compiler/core/core-pass.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
-import {
-	inspectCoreBlockParameters,
-	inspectCoreInstructionOperands,
-} from "./helpers/core-inspection.ts";
+import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
 function context(): CoreCompilationContext {
 	return {
@@ -209,35 +206,6 @@ describe("Core optimizer infrastructure", () => {
 		expect(analyzed).toEqual([loopFunction]);
 	});
 
-	it("queues filtered instruction passes only for matching opcodes", () => {
-		const { program } = programWithTwoFunctions();
-		const { analyses, report } = analysisHarness(program);
-		let runs = 0;
-		const pass: CorePass = {
-			name: "identity-only",
-			stage: "canonicalize",
-			scope: "instruction",
-			instructionOpcodes: new Set([program.registry.require("identity").id]),
-			requiredAnalyses: [],
-			wakesOn: ["body"],
-			preserves: [],
-			changes: { cfg: false, calls: false, facts: false, representations: false },
-			budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "error" },
-			run({ item }) {
-				if (item.scope !== "instruction") throw new Error("expected instruction scope");
-				runs++;
-				return undefined;
-			},
-		};
-		new CorePassManager(program, context(), analyses, report).runStage("canonicalize", [
-			pass,
-		]);
-		expect(runs).toBe(2);
-		expect(
-			report.finish(program, { directEntries: [], specializations: [] }).budget.workItems,
-		).toBe(2);
-	});
-
 	it("bounds only optional development work and reports profile exhaustion", () => {
 		const run = (
 			optionalMaxRunsPerWorkItem: number | undefined,
@@ -300,71 +268,6 @@ describe("Core optimizer infrastructure", () => {
 			remaining: [10, 9, 8],
 			exhausted: [],
 		});
-	});
-
-	it("wakes an earlier consumer after an in-place producer rewrite", () => {
-		const { program, functions } = programWithTwoFunctions();
-		const target = functions[0]!;
-		const fn = program.function(target.id);
-		const producer = [...fn.bodyInstructionIds(target.entry)][0]!;
-		const consumer = fn.blockTerminator(target.entry);
-		let consumerRuns = 0;
-		const observer: CorePass = {
-			name: "consumer-observer",
-			stage: "canonicalize",
-			scope: "instruction",
-			requiredAnalyses: [],
-			wakesOn: ["body"],
-			preserves: [],
-			changes: { cfg: false, calls: false, facts: false, representations: false },
-			budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "error" },
-			run({ item }) {
-				if (
-					item.scope === "instruction" &&
-					item.function === target.id &&
-					item.instruction === consumer
-				) {
-					consumerRuns++;
-				}
-				return undefined;
-			},
-		};
-		const rewrite: CorePass = {
-			name: "producer-rewrite",
-			stage: "canonicalize",
-			scope: "instruction",
-			requiredAnalyses: [],
-			wakesOn: ["body"],
-			preserves: [],
-			changes: { cfg: false, calls: false, facts: false, representations: false },
-			budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "error" },
-			run({ item }) {
-				if (
-					item.scope !== "instruction" ||
-					item.function !== target.id ||
-					item.instruction !== producer ||
-					fn.instructionOpcodeName(producer) !== "identity"
-				) {
-					return undefined;
-				}
-				const editor = CoreEditor.open(program, target.id);
-				editor.replaceInstruction(
-					producer,
-					"rewritten-identity",
-					inspectCoreInstructionOperands(fn, producer),
-				);
-				return editor.commit();
-			},
-		};
-		const { analyses, report } = analysisHarness(program);
-
-		new CorePassManager(program, context(), analyses, report).runStage("canonicalize", [
-			observer,
-			rewrite,
-		]);
-
-		expect(fn.instructionOpcodeName(producer)).toBe("rewritten-identity");
-		expect(consumerRuns).toBe(2);
 	});
 
 	it("requires whole-program analyses to name a program dependency", () => {
