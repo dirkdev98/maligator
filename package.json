@@ -24,6 +24,7 @@
 	},
 	"scripts": {
 		"bench": "node ./scripts/bench.ts",
+		"bench:compiler-scale": "node ./scripts/bench-compiler-scale.ts",
 		"bench:core-call-graph": "node ./scripts/bench-core-call-graph.ts",
 		"bench:dx": "node ./scripts/dx-performance.ts",
 		"bench:profile-overhead": "node ./scripts/profile-overhead.ts",

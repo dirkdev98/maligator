@@ -293,6 +293,7 @@ export function compileProfiledTestImage(
 	let optimizationPlan: CoreOptimizationPlan | undefined;
 	const programImage = compileSemanticProgramToProgramImage(semantic, {
 		optimization: "full",
+		coreInstrumentation: "full",
 		profile: true,
 		afterCoreOptimization(_program, _context, report, plan) {
 			optimizationReport = report;

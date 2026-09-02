@@ -1,4 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CALL_GRAPH_ANALYSIS } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
@@ -169,6 +170,32 @@ function sameFunctionSet(
 	return left.size === right.size && [...left].every((value) => right.has(value));
 }
 
+function sameEdges(
+	left: CoreReachabilityEdges | undefined,
+	right: CoreReachabilityEdges | undefined,
+): boolean {
+	return (
+		(left?.size ?? 0) === (right?.size ?? 0) &&
+		[...(left ?? [])].every(([target, reasons]) =>
+			sameReasons(reasons, right?.get(target)),
+		)
+	);
+}
+
+function sameRoots(
+	left:
+		| ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>
+		| undefined,
+	right: ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>,
+): boolean {
+	return (
+		(left?.size ?? 0) === right.size &&
+		[...(left ?? [])].every(([functionId, reasons]) =>
+			sameReasons(reasons, right.get(functionId)),
+		)
+	);
+}
+
 function reachabilityRoots(
 	program: CoreProgram,
 	targets: CoreCallGraphIndex,
@@ -201,8 +228,12 @@ function reachabilityRoots(
 		for (const { slot } of candidate.exports) hostInstallSlots.add(slot);
 	}
 	for (const slot of hostInstallSlots) {
-		for (const target of targets.globalStoreTargets(slot).functions) {
+		const installed = targets.globalStoreTargets(slot);
+		for (const target of installed.functions) {
 			enter(target, "host-install");
+		}
+		if (installed.anyScript) {
+			for (const functionId of all) enter(functionId, "host-install");
 		}
 	}
 	return { roots, hostInstallSlotsRead: hostInstallSlots.size };
@@ -220,13 +251,20 @@ export function analyzeCoreFunctionReachability(
 	const structural = new Map(previous?.structural ?? []);
 	let functionsIndexed = 0;
 	let structuralIndexEdges = 0;
+	const structurallyChanged = new Set<CoreFunctionId>();
 	const dataChanged = previous?.programDataVersion !== program.versions.data;
 	for (const functionId of all) {
 		const fn = program.function(functionId);
 		const version = functionVersionKey(fn);
 		if (dataChanged || functionVersions.get(functionId) !== version) {
 			const edges = structuralEdges(program, fn);
-			structural.set(functionId, edges);
+			const priorEdges = structural.get(functionId);
+			if (sameEdges(priorEdges, edges)) {
+				if (priorEdges !== undefined) structural.set(functionId, priorEdges);
+			} else {
+				structural.set(functionId, edges);
+				structurallyChanged.add(functionId);
+			}
 			functionVersions.set(functionId, version);
 			functionsIndexed++;
 			for (const reasons of edges.values()) structuralIndexEdges += reasons.size;
@@ -239,6 +277,60 @@ export function analyzeCoreFunctionReachability(
 	}
 
 	const { roots, hostInstallSlotsRead } = reachabilityRoots(program, targets, context);
+	const liveGraphChanged = [...targets.changedEdgeCallers].some(
+		(functionId) => previous?.executable.has(functionId) ?? true,
+	);
+	const liveStructureChanged = [...structurallyChanged].some(
+		(functionId) => previous?.executable.has(functionId) ?? true,
+	);
+	const liveFunctionRemoved =
+		previous !== undefined &&
+		[...previous.executable].some((functionId) => !allSet.has(functionId));
+	const liveWildcardUniverseChanged =
+		previous !== undefined &&
+		targets.graph.changedNodes.has(CORE_ANY_SCRIPT_AGGREGATE) &&
+		[...previous.targets.graph.wildcardCallers, ...targets.graph.wildcardCallers].some(
+			(functionId) => previous.executable.has(functionId),
+		);
+	if (
+		previous !== undefined &&
+		previous.sourceClosed === targets.sourceClosed &&
+		sameRoots(previous.roots, roots) &&
+		!liveGraphChanged &&
+		!liveStructureChanged &&
+		!liveFunctionRemoved &&
+		!liveWildcardUniverseChanged
+	) {
+		const dead = new Set(
+			all.filter((functionId) => !previous.executable.has(functionId)),
+		);
+		return Object.freeze({
+			executable: previous.executable,
+			retained: previous.retained,
+			dead: sameFunctionSet(previous.dead, dead) ? previous.dead : dead,
+			liveFunctions: previous.liveFunctions,
+			reasons: previous.reasons,
+			sourceClosed: targets.sourceClosed,
+			functionVersions,
+			programDataVersion: program.versions.data,
+			structural,
+			roots,
+			targets,
+			statistics: Object.freeze({
+				functions: all.length,
+				functionsIndexed,
+				structuralIndexEdges,
+				hostInstallSlotsRead,
+				functionsScanned: 0,
+				exactCallEdgesFollowed: 0,
+				wildcardCallerVisits: 0,
+				aggregateDependencyVisits: 0,
+				structuralEdgesFollowed: 0,
+				resultSetUpdates: 0,
+				deadFunctions: dead.size,
+			}),
+		});
+	}
 	const executable = new Set<CoreFunctionId>();
 	const reasons = new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>();
 	const pending: Array<CoreFunctionId> = [];

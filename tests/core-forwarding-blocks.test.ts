@@ -332,7 +332,7 @@ describe("Core empty forwarding blocks", () => {
 		const function_ = builder.finish(entry).function;
 		const optimization = optimizeCore(
 			{ program, context: programAnalysisContext() },
-			{ verification: "per-pass" },
+			{ verification: "per-pass", instrumentation: "full" },
 		);
 		const result = {
 			program: optimization.compilation.program,

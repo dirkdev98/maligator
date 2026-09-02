@@ -587,6 +587,9 @@ export class CoreFunctionStore {
 	readonly #useInstruction: Array<CoreInstructionId> = [];
 	readonly #useOperand: Array<number> = [];
 	readonly #useNext: Array<number> = [];
+	#liveUseVisits = 0;
+	#deadUseSkips = 0;
+	#trackUseTraversal = false;
 
 	readonly #facts: Array<CoreFact | undefined> = [];
 	readonly #effectRefinements: Array<CoreEffectRefinement | undefined> = [];
@@ -1002,12 +1005,51 @@ export class CoreFunctionStore {
 	*uses(id: CoreValueId): Iterable<CoreUse> {
 		this.#requireValue(id);
 		for (let use = this.#valueFirstUse[id]!; use >= 0; use = this.#useNext[use]!) {
-			if (this.#useLive[use] !== 1) continue;
+			if (this.#useLive[use] !== 1) {
+				if (this.#trackUseTraversal) this.#deadUseSkips++;
+				continue;
+			}
+			if (this.#trackUseTraversal) this.#liveUseVisits++;
 			yield {
 				instruction: this.#useInstruction[use]!,
 				operand: this.#useOperand[use]!,
 			};
 		}
+	}
+
+	configureUseTraversalStatistics(enabled: boolean): void {
+		this.#liveUseVisits = 0;
+		this.#deadUseSkips = 0;
+		this.#trackUseTraversal = enabled;
+	}
+
+	useTraversalStatistics(): {
+		readonly liveVisits: number;
+		readonly deadSkips: number;
+	} {
+		return { liveVisits: this.#liveUseVisits, deadSkips: this.#deadUseSkips };
+	}
+
+	storageStatistics(): {
+		readonly abandonedOperands: number;
+		readonly abandonedParameters: number;
+	} {
+		let liveOperands = 0;
+		for (let instruction = 0; instruction < this.#instructionLive.length; instruction++) {
+			if (this.#instructionLive[instruction] === 1) {
+				liveOperands += this.#instructionOperandCount[instruction]!;
+			}
+		}
+		let liveParameters = 0;
+		for (let block = 0; block < this.#blockLive.length; block++) {
+			if (this.#blockLive[block] === 1) {
+				liveParameters += this.#blockParameterCount[block]!;
+			}
+		}
+		return {
+			abandonedOperands: this.#operands.length - liveOperands,
+			abandonedParameters: this.#blockParameterValues.length - liveParameters,
+		};
 	}
 
 	fact(id: CoreFactId): CoreFact {

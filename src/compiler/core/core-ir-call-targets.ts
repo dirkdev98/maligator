@@ -145,6 +145,7 @@ export interface CoreCallGraphStatistics {
 	readonly opaqueCallSites: number;
 	readonly aggregateDependencies: number;
 	readonly storedGraphRows: number;
+	readonly storedGraphEntries: number;
 	readonly updatedCallSites: number;
 	readonly accessFunctionsScanned: number;
 	readonly propertyAggregateUpdates: number;
@@ -876,6 +877,7 @@ export function analyzeCoreCallGraph(
 		opaqueCallSites,
 		aggregateDependencies: graph.statistics.aggregateDependencies,
 		storedGraphRows: graph.statistics.storedRows,
+		storedGraphEntries: graph.statistics.storedEntries,
 		updatedCallSites,
 		accessFunctionsScanned,
 		propertyAggregateUpdates,

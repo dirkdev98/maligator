@@ -78,9 +78,14 @@ export interface CoreCompilerWorkCounters {
 	readonly opaqueCallSites: number;
 	readonly aggregateDependencies: number;
 	readonly storedCallGraphRows: number;
+	readonly storedCallGraphEntries: number;
 	readonly wildcardAggregateRecomputations: number;
 	readonly exactReverseCallerVisits: number;
 	readonly wildcardReverseCallerVisits: number;
+	readonly callTargetMs: number;
+	readonly summaryMs: number;
+	readonly reachabilityMs: number;
+	readonly valueKindMs: number;
 	readonly sccNodes: number;
 	readonly sccEdges: number;
 	readonly sccTransfers: number;
@@ -122,6 +127,9 @@ export interface CoreTransformWorkReport {
 	readonly instructionsIntroduced: number;
 	readonly blocksIntroduced: number;
 	readonly callGraphFunctionsAnalyzed: number;
+	readonly summaryFunctionsAnalyzed: number;
+	readonly sccNodesAnalyzed: number;
+	readonly sccEdgeVisits: number;
 	readonly sccTransfers: number;
 	readonly callerWakeups: number;
 	readonly valueKindFunctionEvaluations: number;
@@ -134,6 +142,8 @@ export interface CoreTransformWorkReport {
 export interface CoreProgramWorkReport {
 	readonly functionsAnalyzed: number;
 	readonly functionsReused: number;
+	readonly summaryFunctionsAnalyzed: number;
+	readonly reachabilityFunctionsScanned: number;
 	readonly callSites: number;
 	readonly exactCallEdges: number;
 	readonly wildcardCallers: number;
@@ -141,7 +151,10 @@ export interface CoreProgramWorkReport {
 	readonly opaqueCallSites: number;
 	readonly aggregateDependencies: number;
 	readonly storedGraphRows: number;
+	readonly storedGraphEntries: number;
 	readonly sccs: number;
+	readonly sccNodesAnalyzed: number;
+	readonly sccEdgeVisits: number;
 	readonly sccTransfers: number;
 	readonly summaryChanges: number;
 	readonly callerWakeups: number;
@@ -186,9 +199,14 @@ const COUNTER_KEYS = [
 	"opaqueCallSites",
 	"aggregateDependencies",
 	"storedCallGraphRows",
+	"storedCallGraphEntries",
 	"wildcardAggregateRecomputations",
 	"exactReverseCallerVisits",
 	"wildcardReverseCallerVisits",
+	"callTargetMs",
+	"summaryMs",
+	"reachabilityMs",
+	"valueKindMs",
 	"sccNodes",
 	"sccEdges",
 	"sccTransfers",
@@ -210,6 +228,17 @@ const COUNTER_KEYS = [
 type CoreCompilerWorkCounter = (typeof COUNTER_KEYS)[number];
 
 const COUNTER_INDEX = new Map(COUNTER_KEYS.map((key, index) => [key, index] as const));
+const STAGE_KEYS = [
+	"canonicalize",
+	"control-flow",
+	"proofs",
+	"memory",
+	"finalize",
+	"interprocedural",
+	"program",
+	"specialization",
+] as const;
+const STAGE_INDEX = new Map(STAGE_KEYS.map((key, index) => [key, index] as const));
 
 const EMPTY_COUNTS: CoreOptimizationCounts = Object.freeze({
 	functions: 0,
@@ -259,7 +288,9 @@ export function coreOptimizationCounts(
 export class CoreOptimizationReportBuilder {
 	readonly instrumentation: CoreInstrumentationMode;
 	readonly input: CoreOptimizationCounts;
-	readonly #stages: Array<CoreOptimizationStageReport> = [];
+	readonly #stageTimes = new Float64Array(STAGE_KEYS.length);
+	readonly #stageSeen = new Uint8Array(STAGE_KEYS.length);
+	readonly #detailedStages: Array<CoreOptimizationStageReport> | undefined;
 	readonly #passes: Map<string, MutablePassWorkReport> | undefined;
 	readonly #analyses: Map<string, MutableAnalysisWorkReport> | undefined;
 	readonly #exhaustedPasses: Set<string> | undefined;
@@ -277,6 +308,8 @@ export class CoreOptimizationReportBuilder {
 	#programWork: CoreProgramWorkReport = Object.freeze({
 		functionsAnalyzed: 0,
 		functionsReused: 0,
+		summaryFunctionsAnalyzed: 0,
+		reachabilityFunctionsScanned: 0,
 		callSites: 0,
 		exactCallEdges: 0,
 		wildcardCallers: 0,
@@ -284,7 +317,10 @@ export class CoreOptimizationReportBuilder {
 		opaqueCallSites: 0,
 		aggregateDependencies: 0,
 		storedGraphRows: 0,
+		storedGraphEntries: 0,
 		sccs: 0,
+		sccNodesAnalyzed: 0,
+		sccEdgeVisits: 0,
 		sccTransfers: 0,
 		summaryChanges: 0,
 		callerWakeups: 0,
@@ -302,6 +338,9 @@ export class CoreOptimizationReportBuilder {
 		instructionsIntroduced: 0,
 		blocksIntroduced: 0,
 		callGraphFunctionsAnalyzed: 0,
+		summaryFunctionsAnalyzed: 0,
+		sccNodesAnalyzed: 0,
+		sccEdgeVisits: 0,
 		sccTransfers: 0,
 		callerWakeups: 0,
 		valueKindFunctionEvaluations: 0,
@@ -332,6 +371,7 @@ export class CoreOptimizationReportBuilder {
 		this.#analyses = instrumentation === "full" ? new Map() : undefined;
 		this.#exhaustedPasses = instrumentation === "full" ? new Set() : undefined;
 		this.#discoveredCandidatesByKind = instrumentation === "full" ? new Map() : undefined;
+		this.#detailedStages = instrumentation === "full" ? [] : undefined;
 	}
 
 	get collectsCounters(): boolean {
@@ -350,7 +390,11 @@ export class CoreOptimizationReportBuilder {
 
 	recordStage(stage: string, elapsedMs: number): void {
 		if (!this.collectsCounters) return;
-		this.#stages.push(Object.freeze({ stage, elapsedMs }));
+		const index = STAGE_INDEX.get(stage as (typeof STAGE_KEYS)[number]);
+		if (index === undefined) throw new Error(`Unknown Core optimization stage ${stage}`);
+		this.#stageTimes[index] = this.#stageTimes[index]! + elapsedMs;
+		this.#stageSeen[index] = 1;
+		this.#detailedStages?.push(Object.freeze({ stage, elapsedMs }));
 	}
 
 	recordPassRun(
@@ -388,6 +432,22 @@ export class CoreOptimizationReportBuilder {
 		if (!this.collectsCounters) return;
 		this.increment("analysisQueries");
 		if (outcome === "recompute") this.increment("analysisRecomputations");
+		if (outcome === "recompute") {
+			switch (analysis) {
+				case "call-graph":
+					this.increment("callTargetMs", elapsedMs);
+					break;
+				case "program-summaries":
+					this.increment("summaryMs", elapsedMs);
+					break;
+				case "function-reachability":
+					this.increment("reachabilityMs", elapsedMs);
+					break;
+				case "program-value-kinds":
+					this.increment("valueKindMs", elapsedMs);
+					break;
+			}
+		}
 		if (outcome === "recompute" && analysis === "local-provenance") {
 			this.increment("provenanceRebuilds");
 		} else if (outcome === "recompute" && analysis.startsWith("local-")) {
@@ -407,6 +467,17 @@ export class CoreOptimizationReportBuilder {
 		if (invalidated) report.invalidations++;
 		report.elapsedMs += elapsedMs;
 		this.#analyses.set(analysis, report);
+	}
+
+	timesAnalysis(analysis: string): boolean {
+		return (
+			this.collectsCounters &&
+			(this.collectsDetails ||
+				analysis === "call-graph" ||
+				analysis === "program-summaries" ||
+				analysis === "function-reachability" ||
+				analysis === "program-value-kinds")
+		);
 	}
 
 	recordAnalysisResult(analysis: string, value: unknown): void {
@@ -495,31 +566,37 @@ export class CoreOptimizationReportBuilder {
 			readonly opaqueCallSites: number;
 			readonly aggregateDependencies: number;
 			readonly storedGraphRows: number;
+			readonly storedGraphEntries: number;
 		},
 		summaries: {
+			readonly functionsAnalyzed: number;
 			readonly sccs: number;
+			readonly sccNodesAnalyzed: number;
 			readonly sccTransfers: number;
 			readonly sccEdgeVisits: number;
 			readonly summaryChanges: number;
 			readonly callerWakeups: number;
 			readonly affectedCallers: number;
 		},
-		reachability: { readonly deadFunctions: number },
+		reachability: {
+			readonly functionsScanned: number;
+			readonly deadFunctions: number;
+		},
 	): void {
 		if (!this.collectsCounters) return;
-		this.increment("functionScans", callGraph.functionsAnalyzed);
+		this.increment("functionScans", reachability.functionsScanned);
 		this.increment("explicitCallEdges", callGraph.exactCallEdges);
 		this.increment("wildcardCallSources", callGraph.wildcardCallers);
 		this.increment("wildcardCallSites", callGraph.wildcardCallSites);
 		this.increment("opaqueCallSites", callGraph.opaqueCallSites);
 		this.increment("aggregateDependencies", callGraph.aggregateDependencies);
 		this.increment("storedCallGraphRows", callGraph.storedGraphRows);
-		this.increment("sccNodes", callGraph.functionsAnalyzed);
-		this.increment("sccEdges", summaries.sccEdgeVisits);
-		this.increment("sccTransfers", summaries.sccTransfers);
+		this.increment("storedCallGraphEntries", callGraph.storedGraphEntries);
 		this.#programWork = Object.freeze({
 			functionsAnalyzed: callGraph.functionsAnalyzed,
 			functionsReused: callGraph.functionsReused,
+			summaryFunctionsAnalyzed: summaries.functionsAnalyzed,
+			reachabilityFunctionsScanned: reachability.functionsScanned,
 			callSites: callGraph.callSites,
 			exactCallEdges: callGraph.exactCallEdges,
 			wildcardCallers: callGraph.wildcardCallers,
@@ -527,7 +604,10 @@ export class CoreOptimizationReportBuilder {
 			opaqueCallSites: callGraph.opaqueCallSites,
 			aggregateDependencies: callGraph.aggregateDependencies,
 			storedGraphRows: callGraph.storedGraphRows,
+			storedGraphEntries: callGraph.storedGraphEntries,
 			sccs: summaries.sccs,
+			sccNodesAnalyzed: summaries.sccNodesAnalyzed,
+			sccEdgeVisits: summaries.sccEdgeVisits,
 			sccTransfers: summaries.sccTransfers,
 			summaryChanges: summaries.summaryChanges,
 			callerWakeups: summaries.callerWakeups,
@@ -538,7 +618,14 @@ export class CoreOptimizationReportBuilder {
 
 	recordTransformWork(report: CoreTransformWorkReport): void {
 		if (!this.collectsCounters) return;
-		this.increment("functionScans", report.callGraphFunctionsAnalyzed);
+		this.increment(
+			"functionScans",
+			report.callGraphFunctionsAnalyzed +
+				report.summaryFunctionsAnalyzed +
+				report.valueKindFunctionEvaluations,
+		);
+		this.increment("sccNodes", report.sccNodesAnalyzed);
+		this.increment("sccEdges", report.sccEdgeVisits);
 		this.increment("sccTransfers", report.sccTransfers);
 		this.increment(
 			"wildcardAggregateRecomputations",
@@ -591,22 +678,12 @@ export class CoreOptimizationReportBuilder {
 		let abandonedParameters = 0;
 		for (const functionId of program.functionIds()) {
 			const fn = program.function(functionId);
-			let liveOperands = 0;
-			for (let instruction = 0; instruction < fn.instructionCapacity; instruction++) {
-				const layout = fn.instructionLayout(instruction);
-				if (layout.live) liveOperands += layout.operandCount;
-			}
-			let liveParameters = 0;
-			for (let block = 0; block < fn.blockCapacity; block++) {
-				const layout = fn.blockLayout(block);
-				if (layout.live) liveParameters += layout.parameterCount;
-			}
-			for (let use = 0; use < fn.useCapacity; use++) {
-				if (fn.useLayout(use).live) liveUses++;
-				else deadUses++;
-			}
-			abandonedOperands += fn.operandCapacity - liveOperands;
-			abandonedParameters += fn.blockParameterCapacity - liveParameters;
+			const useTraversal = fn.useTraversalStatistics();
+			liveUses += useTraversal.liveVisits;
+			deadUses += useTraversal.deadSkips;
+			const storage = fn.storageStatistics();
+			abandonedOperands += storage.abandonedOperands;
+			abandonedParameters += storage.abandonedParameters;
 		}
 		this.increment("liveUseVisits", liveUses);
 		this.increment("deadUseSkips", deadUses);
@@ -634,7 +711,16 @@ export class CoreOptimizationReportBuilder {
 				this.instrumentation === "off"
 					? EMPTY_COUNTS
 					: Object.freeze(coreOptimizationCounts(program, plan)),
-			stages: Object.freeze([...this.#stages]),
+			stages:
+				this.#detailedStages === undefined
+					? Object.freeze(
+							STAGE_KEYS.flatMap((stage, index) =>
+								this.#stageSeen[index] === 0
+									? []
+									: [Object.freeze({ stage, elapsedMs: this.#stageTimes[index]! })],
+							),
+						)
+					: Object.freeze([...this.#detailedStages]),
 			passes: Object.freeze(
 				[...(passes?.entries() ?? [])].map(([pass, report]) =>
 					Object.freeze({ pass, ...report }),
@@ -712,7 +798,11 @@ export function formatCoreOptimizationReport(
 		{ label: "Core optimizer analyses", value: analyses },
 		{
 			label: "Core optimizer program",
-			value: `${report.program.functionsAnalyzed} functions analyzed/${report.program.functionsReused} reused, ${report.program.callSites} callsites/${report.program.exactCallEdges} exact edges/${report.program.wildcardCallers} wildcard callers/${report.program.opaqueCallSites} opaque sites, ${report.program.sccs} SCCs/${report.program.sccTransfers} transfers, ${report.program.summaryChanges} summary changes/${report.program.callerWakeups} caller wakeups/${report.program.affectedCallers} callers, ${report.program.deadFunctions} dead omitted`,
+			value: `${report.program.functionsAnalyzed} callgraph functions analyzed/${report.program.functionsReused} reused, ${report.program.summaryFunctionsAnalyzed} summary functions, ${report.program.reachabilityFunctionsScanned} reachability functions, ${report.program.callSites} callsites/${report.program.exactCallEdges} exact edges/${report.program.wildcardCallers} wildcard callers/${report.program.opaqueCallSites} opaque sites, ${report.program.storedGraphRows} stored rows/${report.program.storedGraphEntries} entries, ${report.program.sccs} SCCs/${report.program.sccNodesAnalyzed} nodes/${report.program.sccEdgeVisits} edges/${report.program.sccTransfers} transfers, ${report.program.summaryChanges} summary changes/${report.program.callerWakeups} caller wakeups/${report.program.affectedCallers} callers, ${report.program.deadFunctions} dead omitted`,
+		},
+		{
+			label: "Core optimizer program timing",
+			value: `call targets ${report.counters.callTargetMs.toFixed(1)}ms, summaries ${report.counters.summaryMs.toFixed(1)}ms, reachability ${report.counters.reachabilityMs.toFixed(1)}ms, value kinds ${report.counters.valueKindMs.toFixed(1)}ms`,
 		},
 		{
 			label: "Core optimizer transforms",
@@ -726,7 +816,7 @@ export function formatCoreOptimizationReport(
 					.filter(([, count]) => count > 0)
 					.map(([reason, count]) => `${reason}=${count}`)
 					.join(", ") || "none"
-			}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, SCC transfers ${report.transforms.sccTransfers}, caller wakeups ${report.transforms.callerWakeups}, value kinds evaluated ${report.transforms.valueKindFunctionEvaluations}/folded ${report.transforms.valueKindFolds}`,
+			}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, summaries analyzed ${report.transforms.summaryFunctionsAnalyzed}, SCC ${report.transforms.sccNodesAnalyzed} nodes/${report.transforms.sccEdgeVisits} edges/${report.transforms.sccTransfers} transfers, caller wakeups ${report.transforms.callerWakeups}, value kinds evaluated ${report.transforms.valueKindFunctionEvaluations}/folded ${report.transforms.valueKindFolds}`,
 		},
 		{
 			label: "Core optimizer discovery",

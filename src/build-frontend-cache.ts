@@ -787,9 +787,7 @@ function compileProgramImage(
 		facts,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,
-		coreInstrumentation:
-			options.coreInstrumentation ??
-			(options.afterCoreOptimization === undefined ? "off" : "full"),
+		coreInstrumentation: options.coreInstrumentation ?? "off",
 		profile: options.profile,
 		afterCoreOptimization(program, context, report, plan) {
 			options.afterCoreOptimization?.(program, context, report, plan);

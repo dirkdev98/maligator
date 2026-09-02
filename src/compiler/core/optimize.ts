@@ -74,6 +74,7 @@ export function optimizeCore(
 	compilation: ConstructedCoreCompilation,
 	options: OptimizeCoreOptions = {},
 ): OptimizedCoreResult {
+	const instrumentation = options.instrumentation ?? "off";
 	const profile =
 		CORE_OPTIMIZER_WORK_PROFILES[
 			options.mode ?? compilation.context.facts.compilationMode
@@ -83,9 +84,14 @@ export function optimizeCore(
 		{ stage: "pre-optimization" },
 		compilation.context,
 	);
+	if (instrumentation !== "off") {
+		for (const functionId of compilation.program.functionIds()) {
+			compilation.program.function(functionId).configureUseTraversalStatistics(true);
+		}
+	}
 	const reportBuilder = new CoreOptimizationReportBuilder(
 		compilation.program,
-		options.instrumentation ?? "full",
+		instrumentation,
 	);
 	const analyses = new CoreAnalysisManager(
 		compilation.program,
@@ -176,8 +182,14 @@ export function optimizeCore(
 		context: compilation.context,
 		plan: verifiedPlan,
 	});
+	const report = reportBuilder.finish(program, verifiedPlan);
+	if (instrumentation !== "off") {
+		for (const functionId of compilation.program.functionIds()) {
+			compilation.program.function(functionId).configureUseTraversalStatistics(false);
+		}
+	}
 	return Object.freeze({
 		compilation: optimized,
-		report: reportBuilder.finish(program, verifiedPlan),
+		report,
 	});
 }

@@ -117,6 +117,27 @@ describe("normal build frontend cache", () => {
 		expect(compiled.optimizationReport?.passes.length).toBeGreaterThan(0);
 	});
 
+	it("does not turn instrumentation on for an optimization callback", () => {
+		const root = temporaryDirectory();
+		const entrypoint = path.join(root, "entry.mjs");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(entrypoint, `export const answer = 42;\n`);
+		let instrumentation: string | undefined;
+		compileBuildFrontend({
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "build-frontend-cache-callback-test",
+			cacheDirectory: path.join(root, "cache"),
+			forceCompile: true,
+			afterCoreOptimization(_program, _context, report) {
+				instrumentation = report.instrumentation;
+			},
+		});
+
+		expect(instrumentation).toBe("off");
+	});
+
 	it("separates cache entries by module aliases", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

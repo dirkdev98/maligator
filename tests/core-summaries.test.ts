@@ -272,8 +272,107 @@ describe("incremental Core program summaries", () => {
 		});
 		const summary = summaries.summary(0 as never);
 		expect(summary).toBeDefined();
+		const aggregateScc = summaries.sccs.find(({ hasAnyScriptAggregate }) =>
+			Boolean(hasAnyScriptAggregate),
+		);
+		expect(aggregateScc?.functions).toContain(0);
 		expect(summary!.callees).toEqual([]);
 		expect(summary!.openCallEdge).toBe(true);
 		expect(summary!.effects.reads).toContain("global-slot");
+
+		const unchanged = CoreEditor.open(program, effectfulLeaf.function);
+		unchanged.replaceInstruction(effectfulLeaf.valueInstruction, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		unchanged.commit();
+		const repeated = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+		expect(repeated.statistics).toMatchObject({
+			sccNodesAnalyzed: 0,
+			sccsReused: summaries.sccs.length,
+		});
+	});
+
+	it("rebuilds the aggregate when wildcard call arity changes", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [condition, firstArgument, secondArgument] = builder.blockParameters(entry);
+		const join = builder.createBlock([{ representation: "boxed" }]);
+		let decision = entry;
+		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
+			const selected = builder.createBlock();
+			const alternate = builder.createBlock();
+			const [callee] = builder.appendInstruction(selected, "createFunction", [], {
+				attributes: { functionIndex },
+			});
+			builder.setTerminator(selected, {
+				kind: "jump",
+				edge: { block: join, arguments: [callee!] },
+			});
+			builder.setTerminator(decision, {
+				kind: "branch",
+				condition: condition!.value,
+				consequent: { block: selected, arguments: [] },
+				alternate: { block: alternate, arguments: [] },
+			});
+			decision = alternate;
+		}
+		const [lastCallee] = builder.appendInstruction(decision, "createFunction", [], {
+			attributes: { functionIndex: 5 },
+		});
+		builder.setTerminator(decision, {
+			kind: "jump",
+			edge: { block: join, arguments: [lastCallee!] },
+		});
+		const callee = builder.blockParameters(join)[0]!.value;
+		const [receiver] = builder.appendInstruction(join, "createUndefined", []);
+		const [result] = builder.appendInstruction(join, "call", [
+			callee,
+			receiver!,
+			firstArgument!.value,
+		]);
+		builder.setTerminator(join, { kind: "return", value: result! });
+		const caller = builder.finish(entry).function;
+		for (let index = 0; index < 5; index++) appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+		expect(first.summary(caller)?.parameterEscape).toEqual(["none", "retained", "none"]);
+
+		const fn = program.function(caller);
+		const call = [...fn.instructionIds()].find(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "call",
+		)!;
+		const editor = CoreEditor.open(program, caller);
+		editor.replaceInstruction(call, "call", [
+			callee,
+			receiver!,
+			firstArgument!.value,
+			secondArgument!.value,
+		]);
+		editor.commit();
+		const second = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(second.statistics.aggregateRecomputations).toBeGreaterThan(0);
+		expect(second.summary(caller)?.parameterEscape).toEqual([
+			"none",
+			"retained",
+			"retained",
+		]);
 	});
 });

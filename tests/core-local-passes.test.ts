@@ -260,7 +260,10 @@ describe("Core local canonicalization", () => {
 		});
 		builder.finish(entry);
 
-		const { compilation, report } = optimizeCore({ program, context });
+		const { compilation, report } = optimizeCore(
+			{ program, context },
+			{ instrumentation: "full" },
+		);
 		const fn = compilation.program.function(0 as never);
 		const opcodes = [...fn.blockIds()].flatMap((block) =>
 			[...fn.bodyInstructionIds(block)].map((instruction) =>

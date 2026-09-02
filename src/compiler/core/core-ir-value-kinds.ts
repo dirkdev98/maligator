@@ -566,15 +566,10 @@ function solveCoreProgramValueKinds(
 		functionIds.map((functionId) => [functionId, externallyReachable(functionId)]),
 	);
 	const affected = new Set<CoreFunctionId>();
-	const affectedNodes = new Set<CoreCallGraphNode>();
-	const markAffected = (node: CoreCallGraphNode): void => {
-		if (node !== CORE_ANY_SCRIPT_AGGREGATE && !live.has(node)) return;
-		affectedNodes.add(node);
-		if (node !== CORE_ANY_SCRIPT_AGGREGATE) affected.add(node);
-	};
+	let aggregateInitiallyAffected = false;
 	if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
-		for (const functionId of functionIds) markAffected(functionId);
-		if (targets.graph.hasAggregate()) markAffected(CORE_ANY_SCRIPT_AGGREGATE);
+		for (const functionId of functionIds) affected.add(functionId);
+		aggregateInitiallyAffected = targets.graph.hasAggregate();
 	} else {
 		for (const functionId of functionIds) {
 			if (
@@ -583,29 +578,55 @@ function solveCoreProgramValueKinds(
 				programValueKindTargetsKey(previous.targets, functionId) !==
 					programValueKindTargetsKey(targets, functionId)
 			)
-				markAffected(functionId);
+				affected.add(functionId);
 		}
-		for (const node of targets.graph.changedNodes) markAffected(node);
+		aggregateInitiallyAffected = targets.graph.changedNodes.has(
+			CORE_ANY_SCRIPT_AGGREGATE,
+		);
+		if (previous.targets.graph.hasAggregate() && !targets.graph.hasAggregate()) {
+			for (const functionId of functionIds) affected.add(functionId);
+		}
 	}
-	const affectedQueue = [...affectedNodes];
+	const affectedQueue = [...affected];
 	let affectedCursor = 0;
 	while (affectedCursor < affectedQueue.length) {
-		const node = affectedQueue[affectedCursor++]!;
+		const functionId = affectedQueue[affectedCursor++]!;
 		for (const index of [targets, previous?.targets]) {
 			if (index === undefined) continue;
-			const visit = (neighbor: CoreCallGraphNode): void => {
-				if (
-					(neighbor !== CORE_ANY_SCRIPT_AGGREGATE && !live.has(neighbor)) ||
-					affectedNodes.has(neighbor)
-				)
-					return;
-				markAffected(neighbor);
+			for (const neighbor of [
+				...index.graph.exactOutgoing(functionId),
+				...index.graph.exactCallers(functionId),
+			]) {
+				if (!live.has(neighbor) || affected.has(neighbor)) continue;
+				affected.add(neighbor);
 				affectedQueue.push(neighbor);
-			};
-			index.graph.visitSuccessors(node, visit);
-			index.graph.visitPredecessors(node, visit);
+			}
 		}
 	}
+	let anyScriptAggregate = targets.graph.hasAggregate()
+		? previous?.anyScriptAggregate
+		: undefined;
+	const seededSummary = (
+		functionId: CoreFunctionId,
+		aggregate: CoreProgramValueKindAggregate | undefined,
+	): CoreProgramValueKindSummary => {
+		const fn = program.function(functionId);
+		const seed = external.get(functionId) === true ? COMPILER_VALUE_KIND_TOP : 0;
+		return {
+			parameterKinds: Array.from(
+				{ length: fn.parameters.length },
+				(_, index) => seed | (aggregate?.parameterKinds[index] ?? 0),
+			),
+			receiverKind:
+				seed |
+				(aggregate === undefined
+					? 0
+					: fn.metadata.strict
+						? aggregate.strictReceiverKind
+						: COMPILER_VALUE_KIND_OBJECT),
+			returnKind: 0,
+		};
+	};
 	const summaries = new Map<CoreFunctionId, CoreProgramValueKindSummary>();
 	const valueAnalyses = new Map<CoreFunctionId, CoreValueKindAnalysis>();
 	for (const functionId of functionIds) {
@@ -619,29 +640,24 @@ function solveCoreProgramValueKinds(
 			}
 			affected.add(functionId);
 		}
-		const fn = program.function(functionId);
-		const seed = external.get(functionId) === true ? COMPILER_VALUE_KIND_TOP : 0;
-		summaries.set(functionId, {
-			parameterKinds: Array<CompilerValueKindMask>(fn.parameters.length).fill(seed),
-			receiverKind: seed,
-			returnKind: 0,
-		});
+		summaries.set(functionId, seededSummary(functionId, anyScriptAggregate));
 	}
 	const wildcardContributions = new Map<
 		CoreFunctionId,
 		CoreProgramValueKindWildcardContribution
 	>();
 	for (const [functionId, contribution] of previous?.wildcardContributions ?? []) {
-		if (!affected.has(functionId) && live.has(functionId)) {
+		if (live.has(functionId)) {
 			wildcardContributions.set(functionId, contribution);
 		}
 	}
-	let anyScriptAggregate = targets.graph.hasAggregate()
-		? previous?.anyScriptAggregate
-		: undefined;
-	if (affectedNodes.has(CORE_ANY_SCRIPT_AGGREGATE)) anyScriptAggregate = undefined;
-	const queue: Array<CoreCallGraphNode> = [...affected];
-	const queued = new Set<CoreCallGraphNode>(affected);
+	const queue: Array<CoreCallGraphNode> = [
+		...affected,
+		...(aggregateInitiallyAffected && targets.graph.hasAggregate()
+			? [CORE_ANY_SCRIPT_AGGREGATE]
+			: []),
+	];
+	const queued = new Set<CoreCallGraphNode>(queue);
 	let callerWakeups = 0;
 	let calleeWakeups = 0;
 	const enqueue = (node: CoreCallGraphNode, caller: boolean): void => {
@@ -651,6 +667,35 @@ function solveCoreProgramValueKinds(
 		queue.push(node);
 		if (caller) callerWakeups++;
 		else calleeWakeups++;
+	};
+	const activate = (functionId: CoreFunctionId, caller: boolean): void => {
+		if (affected.has(functionId)) {
+			enqueue(functionId, caller);
+			return;
+		}
+		affected.add(functionId);
+		valueAnalyses.delete(functionId);
+		summaries.set(functionId, seededSummary(functionId, anyScriptAggregate));
+		enqueue(functionId, caller);
+	};
+	const activateExactComponent = (initial: CoreFunctionId, caller: boolean): void => {
+		if (affected.has(initial)) {
+			enqueue(initial, caller);
+			return;
+		}
+		const pending = [initial];
+		const seen = new Set<CoreFunctionId>();
+		for (let index = 0; index < pending.length; index++) {
+			const functionId = pending[index]!;
+			if (!live.has(functionId) || seen.has(functionId)) continue;
+			seen.add(functionId);
+			activate(functionId, caller);
+			for (const graphIndex of [targets, previous?.targets]) {
+				if (graphIndex === undefined) continue;
+				pending.push(...graphIndex.graph.exactOutgoing(functionId));
+				pending.push(...graphIndex.graph.exactCallers(functionId));
+			}
+		}
 	};
 	let cursor = 0;
 	let functionsEvaluated = 0;
@@ -714,14 +759,16 @@ function solveCoreProgramValueKinds(
 			if (prior?.returnKind !== returnKind) {
 				for (const caller of targets.graph.wildcardCallers) {
 					wildcardReverseCallerVisits++;
-					enqueue(caller, true);
+					activateExactComponent(caller, true);
 				}
 			}
 			if (!sameWildcardContribution(prior, next)) {
+				for (const functionId of functionIds) activate(functionId, false);
 				for (const callee of functionIds) {
 					aggregateFunctionVisits++;
 					applyIncoming(callee, parameterKinds, strictReceiverKind);
 				}
+				enqueue(CORE_ANY_SCRIPT_AGGREGATE, false);
 			}
 			continue;
 		}
@@ -763,7 +810,7 @@ function solveCoreProgramValueKinds(
 			summaries.set(functionId, { ...summary, returnKind });
 			for (const caller of targets.graph.exactCallers(functionId)) {
 				exactReverseCallerVisits++;
-				enqueue(caller, true);
+				activateExactComponent(caller, true);
 			}
 			if (targets.graph.hasAggregate()) {
 				enqueue(CORE_ANY_SCRIPT_AGGREGATE, true);

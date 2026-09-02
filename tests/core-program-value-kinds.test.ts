@@ -50,6 +50,7 @@ function compileRecursiveObservation(sourceClosed: boolean): {
 	let optimized: CoreProgram | undefined;
 	let valueKindFolds = 0;
 	compileSemanticProgramToProgramImage(semantic, {
+		coreInstrumentation: "counters",
 		...(sourceClosed
 			? {
 					facts: withProgramClosure(
@@ -202,5 +203,90 @@ describe("whole-program Core value kinds", () => {
 		for (const leaf of leaves) {
 			expect(kinds.summary(leaf).parameterKinds).toEqual([COMPILER_VALUE_KIND_STRING]);
 		}
+	});
+
+	it("dirties the aggregate without invalidating every function", () => {
+		const program = analysisProgram();
+		const wildcard = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = wildcard.createBlock([{ representation: "boxed" }]);
+		const condition = wildcard.blockParameters(entry)[0]!.value;
+		const join = wildcard.createBlock([{ representation: "boxed" }]);
+		let decision = entry;
+		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
+			const selected = wildcard.createBlock();
+			const alternate = wildcard.createBlock();
+			const [callee] = wildcard.appendInstruction(selected, "createFunction", [], {
+				attributes: { functionIndex },
+			});
+			wildcard.setTerminator(selected, {
+				kind: "jump",
+				edge: { block: join, arguments: [callee!] },
+			});
+			wildcard.setTerminator(decision, {
+				kind: "branch",
+				condition,
+				consequent: { block: selected, arguments: [] },
+				alternate: { block: alternate, arguments: [] },
+			});
+			decision = alternate;
+		}
+		const [lastCallee] = wildcard.appendInstruction(decision, "createFunction", [], {
+			attributes: { functionIndex: 5 },
+		});
+		wildcard.setTerminator(decision, {
+			kind: "jump",
+			edge: { block: join, arguments: [lastCallee!] },
+		});
+		const [receiver] = wildcard.appendInstruction(join, "createUndefined", []);
+		const [argument] = wildcard.appendInstruction(join, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [result] = wildcard.appendInstruction(join, "call", [
+			wildcard.blockParameters(join)[0]!.value,
+			receiver!,
+			argument!,
+		]);
+		wildcard.setTerminator(join, { kind: "return", value: result! });
+		wildcard.finish(entry);
+		for (let index = 0; index < 5; index++) appendLeaf(program);
+		const isolatedBuilder = new CoreFunctionBuilder(program, {
+			parameterCount: 1,
+			metadata: { sourcePath: "/isolated.js" },
+		});
+		const isolatedEntry = isolatedBuilder.createBlock([{ representation: "boxed" }]);
+		isolatedBuilder.appendInstruction(isolatedEntry, "createUndefined", []);
+		const [isolatedValueInstruction] = isolatedBuilder.bodyInstructionIds(isolatedEntry);
+		isolatedBuilder.setTerminator(isolatedEntry, {
+			kind: "return",
+			value: isolatedBuilder.blockParameters(isolatedEntry)[0]!.value,
+		});
+		const isolated = isolatedBuilder.finish(isolatedEntry);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const initial = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		});
+		expect(initial.summary(isolated.function).parameterKinds).toEqual([
+			COMPILER_VALUE_KIND_STRING,
+		]);
+
+		const editor = CoreEditor.open(program, isolated.function);
+		editor.replaceInstruction(isolatedValueInstruction!, "createUndefined", []);
+		editor.commit();
+		const updated = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(updated.statistics).toMatchObject({
+			affectedFunctions: 1,
+			functionsReused: 6,
+			aggregateRecomputations: 1,
+		});
+		expect(updated.summary(isolated.function).parameterKinds).toEqual([
+			COMPILER_VALUE_KIND_STRING,
+		]);
 	});
 });

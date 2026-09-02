@@ -15,6 +15,7 @@ export interface CoreCallGraphStatistics {
 	readonly wildcardCallers: number;
 	readonly aggregateDependencies: number;
 	readonly storedRows: number;
+	readonly storedEntries: number;
 }
 
 function normalizedTargets(
@@ -76,7 +77,11 @@ export class CoreCallGraph {
 		this.#exactOutgoing = exactOutgoing;
 		this.#exactCallers = exactCallers;
 		this.wildcardCallers = Object.freeze([...wildcardCallers]);
-		this.#wildcardCallerMarks = new Uint8Array(functions.length);
+		const functionCapacity = functions.reduce(
+			(capacity, functionId) => Math.max(capacity, functionId + 1),
+			0,
+		);
+		this.#wildcardCallerMarks = new Uint8Array(functionCapacity);
 		for (const caller of wildcardCallers) this.#wildcardCallerMarks[caller] = 1;
 		this.changedNodes = changedNodes;
 		const exactCallEdges = [...exactOutgoing.values()].reduce(
@@ -90,6 +95,7 @@ export class CoreCallGraph {
 			aggregateDependencies: wildcardCallers.length === 0 ? 0 : functions.length,
 			storedRows:
 				exactOutgoing.size + exactCallers.size + (wildcardCallers.length === 0 ? 0 : 1),
+			storedEntries: functions.length * 2 + wildcardCallers.length + exactCallEdges * 2,
 		});
 	}
 
@@ -138,7 +144,7 @@ export class CoreCallGraph {
 		cursor: CoreCallerCursor,
 		visit: (caller: CoreFunctionId) => void,
 	): void {
-		cursor.begin(this.functions.length);
+		cursor.begin(this.#wildcardCallerMarks.length);
 		for (const caller of this.exactCallers(functionId)) {
 			if (cursor.mark(caller)) visit(caller);
 		}

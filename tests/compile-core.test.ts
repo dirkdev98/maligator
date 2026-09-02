@@ -41,6 +41,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			analyses: [],
 			input: { functions: 0 },
 		});
+		expect(Object.values(off.report.counters).every((value) => value === 0)).toBe(true);
 		expect(counters.report.instrumentation).toBe("counters");
 		expect(counters.report.stages.length).toBeGreaterThan(0);
 		expect(counters.report.passes).toEqual([]);
@@ -51,6 +52,13 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(counters.report.counters.provenanceRebuilds).toBeGreaterThan(0);
 		expect(counters.report.counters.memoryLocations).toBeGreaterThan(0);
 		expect(counters.report.counters.liveUseVisits).toBeGreaterThan(0);
+		expect(counters.report.counters.storedCallGraphEntries).toBeGreaterThan(0);
+		expect(counters.report.program.summaryFunctionsAnalyzed).toBeGreaterThanOrEqual(0);
+		expect(counters.report.program.reachabilityFunctionsScanned).toBeGreaterThanOrEqual(
+			0,
+		);
+		expect(counters.report.program.sccNodesAnalyzed).toBeGreaterThanOrEqual(0);
+		expect(counters.report.program.sccEdgeVisits).toBeGreaterThanOrEqual(0);
 		expect(full.report.instrumentation).toBe("full");
 		expect(full.report.passes.length).toBeGreaterThan(0);
 		expect(full.report.analyses.length).toBeGreaterThan(0);
@@ -59,6 +67,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 	it("runs phases in order and inspects optimized IR before target lowering", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis("1 + 2", "pipeline.js");
 		const events: Array<string> = [];
+		let instrumentation: string | undefined;
 
 		const definition = compileSemanticProgramToProgramImage(semantic, {
 			runPhase: (phase, run) => {
@@ -67,13 +76,15 @@ describe("compileSemanticProgramToProgramImage", () => {
 				events.push(`end:${phase}`);
 				return result;
 			},
-			afterCoreOptimization: (program) => {
+			afterCoreOptimization: (program, _context, report) => {
 				expect(program.sealed).toBe(true);
+				instrumentation = report.instrumentation;
 				events.push("after optimization");
 			},
 		});
 
 		expect(definition.runtime.functions.length).toBeGreaterThan(0);
+		expect(instrumentation).toBe("off");
 		expect(events).toEqual([
 			"start:construct core ir",
 			"end:construct core ir",
@@ -96,6 +107,14 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(definition.runtime.functions.length).toBeGreaterThan(0);
 	});
 
+	it("keeps direct optimizer instrumentation off by default", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis("1 + 2", "direct.js");
+		const result = optimizeCore(lowerSemanticProgramToCore(semantic));
+
+		expect(result.report.instrumentation).toBe("off");
+		expect(result.report.stages).toEqual([]);
+	});
+
 	it("seals the constructed store in place and records dense function relocation", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			"function nested() { return 42; } globalThis.result = nested();",
@@ -103,7 +122,9 @@ describe("compileSemanticProgramToProgramImage", () => {
 		);
 		const constructed = lowerSemanticProgramToCore(semantic);
 		const mutableProgram = constructed.program;
-		const { compilation, report } = optimizeCore(constructed);
+		const { compilation, report } = optimizeCore(constructed, {
+			instrumentation: "full",
+		});
 
 		expect(compilation.program).toBe(mutableProgram);
 		expect(compilation.program.sealed).toBe(true);

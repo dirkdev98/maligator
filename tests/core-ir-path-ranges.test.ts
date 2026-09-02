@@ -192,7 +192,7 @@ describe("Core path-sensitive numeric ranges", () => {
 			expect(binaryOperators(source.program.function(source.function))).toContain("%");
 			const outcome = optimizeCore(
 				{ program: source.program, context: programAnalysisContext() },
-				{ verification: "per-pass" },
+				{ verification: "per-pass", instrumentation: "full" },
 			);
 			const optimized = outcome.compilation.program.function(source.function);
 			expect(

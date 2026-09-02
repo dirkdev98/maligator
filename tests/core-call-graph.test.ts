@@ -92,7 +92,22 @@ describe("symbolic Core call graph", () => {
 			wildcardCallers: 2,
 			aggregateDependencies: 4,
 			storedRows: 4,
+			storedEntries: 14,
 		});
+	});
+
+	it("indexes stable sparse function identities by capacity", () => {
+		const functions = [2 as CoreFunctionId, 7 as CoreFunctionId];
+		const graph = updateCoreCallGraph(undefined, functions, [
+			{ caller: functions[1]!, exactTargets: [functions[0]!], wildcard: true },
+		]);
+		const callers: Array<CoreFunctionId> = [];
+		graph.visitLogicalCallers(functions[0]!, new CoreCallerCursor(0), (caller) =>
+			callers.push(caller),
+		);
+
+		expect(graph.isWildcardCaller(functions[1]!)).toBe(true);
+		expect(callers).toEqual([functions[1]]);
 	});
 
 	it("matches an explicitly expanded reference for randomized small graphs", () => {
@@ -144,6 +159,7 @@ describe("symbolic Core call graph", () => {
 			graph.visitSuccessors(CORE_ANY_SCRIPT_AGGREGATE, () => visits++);
 
 			expect(graph.statistics.storedRows).toBe(1);
+			expect(graph.statistics.storedEntries).toBe(functionCount * 2 + wildcardCount);
 			expect(visits).toBe(functionCount + wildcardCount);
 		},
 	);

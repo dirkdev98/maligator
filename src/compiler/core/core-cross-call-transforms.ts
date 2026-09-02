@@ -42,6 +42,9 @@ export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetSta
 	readonly instructionsIntroduced: number;
 	readonly blocksIntroduced: number;
 	readonly callGraphFunctionsAnalyzed: number;
+	readonly summaryFunctionsAnalyzed: number;
+	readonly sccNodesAnalyzed: number;
+	readonly sccEdgeVisits: number;
 	readonly sccTransfers: number;
 	readonly callerWakeups: number;
 	readonly valueKindFunctionEvaluations: number;
@@ -737,6 +740,9 @@ export function runCoreCrossCallTransforms(
 		scope: "program",
 	});
 	let callGraphFunctionsAnalyzed = summaries.targets.statistics.functionsAnalyzed;
+	let summaryFunctionsAnalyzed = summaries.statistics.functionsAnalyzed;
+	let sccNodesAnalyzed = summaries.statistics.sccNodesAnalyzed;
+	let sccEdgeVisits = summaries.statistics.sccEdgeVisits;
 	let sccTransfers = summaries.statistics.sccTransfers;
 	let callerWakeups = summaries.statistics.callerWakeups;
 	let wildcardAggregateRecomputations = summaries.statistics.aggregateRecomputations;
@@ -774,15 +780,23 @@ export function runCoreCrossCallTransforms(
 		if (roundChanges.length === 0) break;
 		inlineChanges.push(...roundChanges);
 		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, roundChanges);
+		const priorSummaries = summaries;
 		summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
 			scope: "program",
 		});
-		callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
-		sccTransfers += summaries.statistics.sccTransfers;
-		callerWakeups += summaries.statistics.callerWakeups;
-		wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
-		exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
-		wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
+		if (summaries.targets !== priorSummaries.targets) {
+			callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
+		}
+		if (summaries !== priorSummaries) {
+			summaryFunctionsAnalyzed += summaries.statistics.functionsAnalyzed;
+			sccNodesAnalyzed += summaries.statistics.sccNodesAnalyzed;
+			sccEdgeVisits += summaries.statistics.sccEdgeVisits;
+			sccTransfers += summaries.statistics.sccTransfers;
+			callerWakeups += summaries.statistics.callerWakeups;
+			wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
+			exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
+			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
+		}
 		for (const functionId of summaries.changedFunctions) affectedCallers.add(functionId);
 		discoverCoreCrossCallCandidates(program, summaries, service, affectedCallers);
 	}
@@ -803,16 +817,24 @@ export function runCoreCrossCallTransforms(
 			valueKindFolds.changes,
 		);
 	}
+	const summariesBeforeValueKindFolds = summaries;
 	summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
 		scope: "program",
 	});
 	if (valueKindFolds.changes.length > 0) {
-		callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
-		sccTransfers += summaries.statistics.sccTransfers;
-		callerWakeups += summaries.statistics.callerWakeups;
-		wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
-		exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
-		wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
+		if (summaries.targets !== summariesBeforeValueKindFolds.targets) {
+			callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
+		}
+		if (summaries !== summariesBeforeValueKindFolds) {
+			summaryFunctionsAnalyzed += summaries.statistics.functionsAnalyzed;
+			sccNodesAnalyzed += summaries.statistics.sccNodesAnalyzed;
+			sccEdgeVisits += summaries.statistics.sccEdgeVisits;
+			sccTransfers += summaries.statistics.sccTransfers;
+			callerWakeups += summaries.statistics.callerWakeups;
+			wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
+			exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
+			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
+		}
 	}
 	const budget = service.statistics();
 	return Object.freeze({
@@ -822,6 +844,9 @@ export function runCoreCrossCallTransforms(
 			instructionsIntroduced,
 			blocksIntroduced,
 			callGraphFunctionsAnalyzed,
+			summaryFunctionsAnalyzed,
+			sccNodesAnalyzed,
+			sccEdgeVisits,
 			sccTransfers,
 			callerWakeups,
 			valueKindFunctionEvaluations: valueKinds.statistics.functionsEvaluated,

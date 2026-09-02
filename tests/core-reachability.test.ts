@@ -7,6 +7,7 @@ import {
 	CORE_FUNCTION_REACHABILITY_ANALYSIS,
 	analyzeCoreFunctionReachability,
 } from "../src/compiler/core/core-ir-reachability.ts";
+import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-ir-summaries.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
@@ -81,6 +82,24 @@ function appendAnyScriptCaller(program: ReturnType<typeof analysisProgram>) {
 	const [result] = builder.appendInstruction(join, "call", [callee, receiver!]);
 	builder.setTerminator(join, { kind: "return", value: result! });
 	return builder.finish(entry);
+}
+
+function appendGlobalFunctionStore(
+	program: ReturnType<typeof analysisProgram>,
+	target: number,
+) {
+	const builder = new CoreFunctionBuilder(program);
+	const entry = builder.createBlock();
+	const [stored] = builder.appendInstruction(entry, "createFunction", [], {
+		attributes: { functionIndex: target },
+	});
+	builder.appendInstruction(entry, "storeGlobal", [stored!], {
+		outputCount: 0,
+		attributes: { index: 0 },
+	});
+	const [result] = builder.appendInstruction(entry, "createUndefined", []);
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	return builder.finish(entry).function;
 }
 
 describe("Core function reachability", () => {
@@ -251,6 +270,47 @@ describe("Core function reachability", () => {
 		expect(reachability.statistics.hostInstallSlotsRead).toBe(2);
 	});
 
+	it("roots every script function for a wildcard host install", () => {
+		const program = analysisProgram();
+		for (let index = 0; index < 5; index++) {
+			appendGlobalFunctionStore(program, 5 + index);
+		}
+		for (let index = 0; index < 5; index++) appendLeaf(program);
+		const baseContext = programAnalysisContext();
+		const context = {
+			...baseContext,
+			data: {
+				...baseContext.data,
+				hostInstallCandidates: [
+					{ installer: "test", exports: [{ name: "wildcard", slot: 0 }] },
+				],
+			},
+		};
+		const manager = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const targets = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		const reachability = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+		const summaries = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(targets.globalStoreTargets(0)).toMatchObject({
+			functions: [],
+			anyScript: true,
+			opaque: false,
+		});
+		expect(reachability.liveFunctions).toEqual([...program.functionIds()]);
+		for (const functionId of program.functionIds()) {
+			expect(reachability.reasons.get(functionId)).toContain("host-install");
+			expect(summaries.summary(functionId)?.rootReasons).toContain("host-install");
+		}
+	});
+
 	it("omits dead rows only in the target map without compacting Core", () => {
 		const { program, context } = directReachability();
 		const optimized = optimizeCore({ program, context }).compilation;
@@ -294,7 +354,7 @@ describe("Core function reachability", () => {
 		expect(second.reasons.get(0 as never)).toBe(entryReasons);
 		expect(second.statistics).toMatchObject({
 			functionsIndexed: 1,
-			functionsScanned: 2,
+			functionsScanned: 0,
 			resultSetUpdates: 0,
 		});
 	});

@@ -44,6 +44,7 @@ function compile(source: string) {
 	const definition = compileSemanticProgramToProgramImage(semantic, {
 		facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		profile: true,
+		coreInstrumentation: "full",
 		afterCoreOptimization(_program, _context, report, plan) {
 			optimization = {
 				coreOptimizationReport: report,

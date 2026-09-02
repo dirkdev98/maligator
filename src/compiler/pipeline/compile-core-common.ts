@@ -65,9 +65,7 @@ export function optimizeSemanticProgramToCore(
 		optimizeCore(core, {
 			verification: options.coreVerification,
 			mode: options.optimization ?? "full",
-			instrumentation:
-				options.coreInstrumentation ??
-				(options.afterCoreOptimization === undefined ? "off" : "full"),
+			instrumentation: options.coreInstrumentation ?? "off",
 		}),
 	);
 	const optimized =

@@ -636,7 +636,7 @@ function compileSampleCore(sample: Sample) {
 		facts,
 	});
 	const preCore = formatCore(core.program);
-	const result = optimizeCore(core);
+	const result = optimizeCore(core, { instrumentation: "full" });
 	return { preCore, result };
 }
 

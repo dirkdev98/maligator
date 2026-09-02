@@ -2,6 +2,7 @@ import {
 	EVERY_EFFECT_SUMMARY,
 	NO_EFFECT_SUMMARY,
 	RETURN_PROVENANCE_NONE,
+	effectSummariesEqual,
 	functionSummaryId,
 	joinEffectSummaries,
 	joinReturnProvenance,
@@ -413,17 +414,30 @@ function callGraphSccs(
 	readonly edgeVisits: number;
 	readonly sccsReused: number;
 } {
+	const previous = _previous;
 	const all: Array<CoreCallGraphNode> = [
 		...program.functionIds(),
 		...(targets.graph.hasAggregate() ? [CORE_ANY_SCRIPT_AGGREGATE] : []),
 	];
+	if (previous !== undefined && targets.graph.changedNodes.size === 0) {
+		return {
+			sccs: previous.sccs,
+			owner: previous.owner,
+			nodesAnalyzed: 0,
+			edgeVisits: 0,
+			sccsReused: previous.sccs.length,
+		};
+	}
 	let edgeVisits = 0;
 	const affected = new Set<CoreCallGraphNode>();
-	const previous = _previous;
 	if (
 		previous !== undefined &&
 		!targets.graph.hasAggregate() &&
-		!previous.targets.graph.hasAggregate()
+		!previous.targets.graph.hasAggregate() &&
+		targets.graph.functions.length === previous.targets.graph.functions.length &&
+		targets.graph.functions.every(
+			(functionId, index) => functionId === previous.targets.graph.functions[index],
+		)
 	) {
 		for (const caller of targets.changedEdgeCallers) {
 			affected.add(caller);
@@ -552,8 +566,12 @@ function rootReasons(
 	}
 	for (const candidate of context.data.hostInstallCandidates) {
 		for (const { slot } of candidate.exports) {
-			for (const target of targets.globalStoreTargets(slot).functions) {
+			const installed = targets.globalStoreTargets(slot);
+			for (const target of installed.functions) {
 				add(target, "host-install");
+			}
+			if (installed.anyScript) {
+				for (const functionId of program.functionIds()) add(functionId, "host-install");
 			}
 		}
 	}
@@ -619,7 +637,19 @@ function sameAnyScriptSummary(
 	right: CoreAnyScriptCallSummary | undefined,
 ): boolean {
 	if (left === undefined || right === undefined) return left === right;
-	return JSON.stringify(left) === JSON.stringify(right);
+	return (
+		effectSummariesEqual(left.effects, right.effects) &&
+		left.receiverEscape === right.receiverEscape &&
+		left.receiverContainment === right.receiverContainment &&
+		left.parameterEscape.length === right.parameterEscape.length &&
+		left.parameterEscape.every(
+			(value, index) => value === right.parameterEscape[index],
+		) &&
+		left.parameterContainment.length === right.parameterContainment.length &&
+		left.parameterContainment.every(
+			(value, index) => value === right.parameterContainment[index],
+		)
+	);
 }
 
 function deriveSummary(
@@ -849,7 +879,11 @@ function analyzeProgramSummaries(
 	let anyScriptSummary = targets.graph.hasAggregate()
 		? previous?.anyScriptSummary
 		: undefined;
-	if (targets.graph.hasAggregate() && anyScriptSummary === undefined) {
+	if (
+		targets.graph.hasAggregate() &&
+		(anyScriptSummary === undefined ||
+			anyScriptSummary.parameterEscape.length !== maximumWildcardArgumentCount)
+	) {
 		anyScriptSummary = summarizeAnyScriptCallees(current, maximumWildcardArgumentCount);
 	}
 	const queue: Array<number> = [];

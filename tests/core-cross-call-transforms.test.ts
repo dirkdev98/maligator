@@ -264,6 +264,7 @@ describe("bounded Core cross-call transforms", () => {
 				"core-guarded-inline-allocation-chain.js",
 			),
 			{
+				coreInstrumentation: "full",
 				afterCoreOptimization(program, _context, optimizationReport) {
 					optimized = program;
 					report = optimizationReport;

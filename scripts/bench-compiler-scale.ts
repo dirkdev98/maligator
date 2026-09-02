@@ -615,11 +615,12 @@ function workerSamples(
 		`${request.benchmarkCase.id}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
 	);
 	writeFileSync(requestPath, `${JSON.stringify(request)}\n`);
+	const processCount = request.sequence.length + (request.discardFirst ? 1 : 0);
 	const result = spawnSync(process.execPath, [SCRIPT_PATH, "--worker", requestPath], {
 		cwd: REPOSITORY_ROOT,
 		encoding: "utf8",
 		maxBuffer: 64 * 1024 * 1024,
-		timeout: 900_000,
+		timeout: Math.max(900_000, processCount * 240_000),
 	});
 	if (result.error !== undefined) throw result.error;
 	if (result.status !== 0) {

@@ -62,6 +62,9 @@ export class CoreAnalysisManager {
 	readonly #cache = new Map<string, CachedAnalysis>();
 	readonly #registered = new Map<string, RegisteredAnalysis>();
 	readonly #validatedDefinitions = new WeakSet<CoreAnalysisDefinition<unknown>>();
+	readonly #timingStarts: Array<number> = [];
+	readonly #timingNested: Array<number> = [];
+	#timingDepth = 0;
 
 	constructor(
 		program: CoreProgram,
@@ -85,21 +88,41 @@ export class CoreAnalysisManager {
 			return cached.value as Result;
 		}
 		const versions = this.#captureVersions(definition, request);
-		const startedAt = this.#report.collectsDetails ? Date.now() : 0;
-		const value = definition.compute({
-			program: this.#program,
-			context: this.#context,
-			request,
-			get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
-			...(cached === undefined ? {} : { previous: cached.value }),
-		});
+		const timesAnalysis = this.#report.timesAnalysis(definition.key);
+		const timingDepth = this.#timingDepth;
+		if (timesAnalysis) {
+			this.#timingDepth++;
+			this.#timingStarts[timingDepth] = Date.now();
+			this.#timingNested[timingDepth] = 0;
+		}
+		let value: Result;
+		let elapsedMs = 0;
+		try {
+			value = definition.compute({
+				program: this.#program,
+				context: this.#context,
+				request,
+				get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
+				...(cached === undefined ? {} : { previous: cached.value }),
+			});
+		} finally {
+			if (timesAnalysis) {
+				const totalMs = Date.now() - this.#timingStarts[timingDepth]!;
+				elapsedMs = Math.max(0, totalMs - this.#timingNested[timingDepth]!);
+				this.#timingDepth--;
+				if (timingDepth > 0) {
+					this.#timingNested[timingDepth - 1] =
+						this.#timingNested[timingDepth - 1]! + totalMs;
+				}
+			}
+		}
 		this.#cache.set(cacheKey, { ...versions, value });
 		this.#report.recordAnalysisResult(definition.key, value);
 		this.#report.recordAnalysis(
 			definition.key,
 			"recompute",
 			cached !== undefined,
-			this.#report.collectsDetails ? Date.now() - startedAt : 0,
+			elapsedMs,
 		);
 		return value;
 	}

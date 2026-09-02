@@ -487,7 +487,10 @@ describe("Core control-flow analyses and passes", () => {
 		builder.setTerminator(exit, { kind: "return", value: condition });
 		builder.finish(entry);
 
-		const optimized = optimizeCore({ program, context }, { verification: "per-pass" });
+		const optimized = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass", instrumentation: "full" },
+		);
 		expect(
 			optimized.report.passes.find(({ pass }) => pass === "loop-invariant-code-motion"),
 		).toMatchObject({ changedItems: 1, edits: 2 });
@@ -702,7 +705,7 @@ describe("Core control-flow analyses and passes", () => {
 		const finished = builder.finish(entry);
 		const optimized = optimizeCore(
 			{ program, context },
-			{ mode: "full", verification: "per-pass" },
+			{ mode: "full", verification: "per-pass", instrumentation: "full" },
 		);
 		const fn = optimized.compilation.program.function(finished.function);
 		expect(fn.blockParameters(merge)).toHaveLength(1);
