@@ -3,6 +3,7 @@ import type {
 	CoreAnalysisManager,
 	CoreAnalysisRequest,
 } from "./core-analysis-manager.ts";
+import type { CoreFunctionFeatureBits } from "./core-function-features.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type {
 	CoreBlockId,
@@ -74,6 +75,7 @@ export interface CorePass {
 	readonly stage: CoreOptimizationStage;
 	readonly scope: CorePassScope;
 	readonly instructionOpcodes?: ReadonlySet<CoreOpcodeId>;
+	readonly requiredFunctionFeatures?: CoreFunctionFeatureBits;
 	readonly requiredAnalyses: ReadonlyArray<CoreAnalysisDefinition<unknown>>;
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;
 	readonly preserves: ReadonlyArray<string>;

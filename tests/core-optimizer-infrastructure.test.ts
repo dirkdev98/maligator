@@ -4,6 +4,7 @@ import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { CORE_FUNCTION_HAS_BACKEDGES } from "../src/compiler/core/core-function-features.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
@@ -161,6 +162,51 @@ describe("Core optimizer infrastructure", () => {
 		};
 		expect(run(false)).toEqual([1, 1]);
 		expect(run(true)).toEqual([1, 1]);
+	});
+
+	it("does not request loop analyses for loop-free functions", () => {
+		const { program } = programWithTwoFunctions();
+		const loop = new CoreFunctionBuilder(program);
+		const header = loop.createBlock();
+		loop.setTerminator(header, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		const loopFunction = loop.finish(header).function;
+		const analyzed: Array<number> = [];
+		const loopAnalysis: CoreAnalysisDefinition<number> = {
+			key: "test-loop-analysis",
+			scope: "function",
+			functionDependencies: ["cfg"],
+			compute({ request }) {
+				if (request.scope !== "function") throw new Error("expected function scope");
+				analyzed.push(request.function);
+				return request.function;
+			},
+		};
+		const loopPass: CorePass = {
+			name: "test-loop-pass",
+			stage: "control-flow",
+			scope: "function",
+			requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
+			requiredAnalyses: [loopAnalysis],
+			wakesOn: ["cfg"],
+			preserves: [],
+			changes: { cfg: false, calls: false, facts: false, representations: false },
+			budget: { maxWorkItems: 10, maxEdits: 1, exhaustion: "error" },
+			run(passContext) {
+				passContext.analysis(loopAnalysis);
+				return undefined;
+			},
+		};
+		const { analyses, report } = analysisHarness(program);
+
+		new CorePassManager(program, context(), analyses, report).runStage(
+			"control-flow",
+			[loopPass],
+		);
+
+		expect(analyzed).toEqual([loopFunction]);
 	});
 
 	it("queues filtered instruction passes only for matching opcodes", () => {

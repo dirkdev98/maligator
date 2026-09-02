@@ -99,6 +99,7 @@
 				"src/compiler/core/core-format.ts",
 				"src/compiler/core/core-frontend-construction.ts",
 				"src/compiler/core/core-frontend.ts",
+				"src/compiler/core/core-function-features.ts",
 				"src/compiler/core/core-function-kernel.ts",
 				"src/compiler/core/core-ir-call-targets.ts",
 				"src/compiler/core/core-ir-control-flow.ts",

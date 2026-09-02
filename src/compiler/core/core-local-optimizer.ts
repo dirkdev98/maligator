@@ -1,4 +1,9 @@
 import { CoreEditor } from "./core-editor.ts";
+import {
+	CORE_FUNCTION_HAS_BRANCHES,
+	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
+	scanCoreFunctionFeatures,
+} from "./core-function-features.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
@@ -198,6 +203,7 @@ export class CoreLocalOptimizer {
 	readonly #rules: ReadonlyArray<CoreLocalInstructionRule>;
 	readonly #blockRules: ReadonlyArray<CoreLocalBlockRule>;
 	readonly #dispatch: Uint32Array;
+	readonly #features: number;
 	readonly #maxWorkItems: number;
 	readonly #maxEdits: number;
 	readonly #budgetExhaustion: "stop" | "error";
@@ -258,7 +264,6 @@ export class CoreLocalOptimizer {
 			},
 			...(options.additionalRules ?? []),
 		];
-		this.#blockRules = [CONTROL_FOLDING_RULE, VALUE_NUMBERING_RULE];
 		if (this.#rules.length > 31) {
 			throw new Error("Core local optimizer supports at most 31 opcode rules");
 		}
@@ -275,15 +280,25 @@ export class CoreLocalOptimizer {
 					(this.#dispatch[descriptor.id] ?? 0) | DEAD_CODE_RULE;
 			}
 		}
+		this.#features = scanCoreFunctionFeatures(this.#fn, this.#dispatch);
+		this.#blockRules = [CONTROL_FOLDING_RULE, VALUE_NUMBERING_RULE];
 	}
 
 	run(initialChanges?: ReadonlyArray<CoreChangeSet>): CoreLocalOptimizerResult {
 		if (initialChanges === undefined) {
-			for (let id = 0; id < this.#fn.instructionCapacity; id++) {
-				this.#enqueueInstruction(coreInstructionId(id));
+			if ((this.#features & CORE_FUNCTION_HAS_CANDIDATE_OPCODES) !== 0) {
+				for (let id = 0; id < this.#fn.instructionCapacity; id++) {
+					this.#enqueueInstruction(coreInstructionId(id));
+				}
 			}
-			for (let id = 0; id < this.#fn.blockCapacity; id++) {
-				this.#enqueueBlock(id as CoreBlockId);
+			if (
+				(this.#features &
+					(CORE_FUNCTION_HAS_BRANCHES | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) !==
+				0
+			) {
+				for (let id = 0; id < this.#fn.blockCapacity; id++) {
+					this.#enqueueBlock(id as CoreBlockId);
+				}
 			}
 		} else {
 			for (const changes of initialChanges) this.#submit(changes);

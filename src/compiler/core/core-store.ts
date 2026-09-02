@@ -397,6 +397,7 @@ export class CoreFunctionStore {
 		representations: 0,
 		specializationInputs: 0,
 	};
+	#featureVersion = 0;
 
 	readonly #blockLive: Array<number> = [];
 	readonly #blockFirstInstruction: Array<number> = [];
@@ -570,6 +571,10 @@ export class CoreFunctionStore {
 
 	get versions(): CoreFunctionVersions {
 		return { ...this.#versions };
+	}
+
+	get featureVersion(): number {
+		return this.#featureVersion;
 	}
 
 	get blockCapacity(): number {
@@ -866,6 +871,9 @@ export class CoreFunctionStore {
 		this.#requireMutation(mutation);
 		if (!this.#activeEditor) throw new Error(`Core function ${this.id} has no editor`);
 		for (const domain of domains) this.#versions[domain]++;
+		if (domains.has("body") || domains.has("cfg") || domains.has("exceptionFlow")) {
+			this.#featureVersion++;
+		}
 		this.#activeEditor = false;
 	}
 

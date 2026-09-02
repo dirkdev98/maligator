@@ -1,4 +1,5 @@
 import { CoreEditor } from "./core-editor.ts";
+import { CORE_FUNCTION_HAS_BACKEDGES } from "./core-function-features.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
@@ -257,6 +258,7 @@ const canonicalizeNaturalLoops: CorePass = {
 	name: "natural-loop-canonicalization",
 	stage: "control-flow",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "exceptionFlow"],
 	preserves: [],
@@ -458,6 +460,7 @@ const hoistLoopInvariants: CorePass = {
 	name: "loop-invariant-code-motion",
 	stage: "control-flow",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [
 		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 		CORE_LOCAL_PROVENANCE_ANALYSIS,
@@ -821,6 +824,7 @@ const foldPathComparisons: CorePass = {
 	name: "path-range-control-folding",
 	stage: "control-flow",
 	scope: "block",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
@@ -897,6 +901,7 @@ const selectLoopScalarRepresentations: CorePass = {
 	name: "loop-scalar-representation-selection",
 	stage: "control-flow",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [
 		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 		CORE_LOOP_INDUCTION_ANALYSIS,
@@ -1150,6 +1155,7 @@ const reduceBoundedRemainders: CorePass = {
 	name: "path-range-strength-reduction",
 	stage: "control-flow",
 	scope: "block",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],

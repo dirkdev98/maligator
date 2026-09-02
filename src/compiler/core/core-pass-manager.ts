@@ -1,5 +1,9 @@
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import {
+	CORE_FUNCTION_FEATURE_MASK,
+	CoreFunctionFeatureIndex,
+} from "./core-function-features.ts";
 import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -71,6 +75,7 @@ export class CorePassManager {
 	readonly #verification: CoreVerificationProfile;
 	readonly #optionalMaxRunsPerWorkItem: number;
 	readonly #localOptimization: boolean;
+	readonly #features: CoreFunctionFeatureIndex;
 	#localSeeded = false;
 	readonly #sccs: ReadonlyArray<{
 		readonly id: string;
@@ -92,6 +97,7 @@ export class CorePassManager {
 		this.#optionalMaxRunsPerWorkItem =
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
 		this.#localOptimization = options.localOptimization ?? false;
+		this.#features = new CoreFunctionFeatureIndex(program);
 		if (
 			!Number.isSafeInteger(this.#optionalMaxRunsPerWorkItem) ||
 			this.#optionalMaxRunsPerWorkItem < 1
@@ -368,6 +374,15 @@ export class CorePassManager {
 			);
 		}
 		if (
+			pass.requiredFunctionFeatures !== undefined &&
+			((pass.requiredFunctionFeatures & ~CORE_FUNCTION_FEATURE_MASK) !== 0 ||
+				pass.requiredFunctionFeatures === 0 ||
+				pass.scope === "scc" ||
+				pass.scope === "program")
+		) {
+			throw new Error(`Core pass ${pass.name} has an invalid function feature gate`);
+		}
+		if (
 			!Number.isSafeInteger(pass.budget.maxWorkItems) ||
 			pass.budget.maxWorkItems < 1 ||
 			!Number.isSafeInteger(pass.budget.maxEdits) ||
@@ -378,6 +393,15 @@ export class CorePassManager {
 	}
 
 	#accepts(pass: CorePass, item: CorePassWorkItem): boolean {
+		if (
+			pass.requiredFunctionFeatures !== undefined &&
+			item.scope !== "program" &&
+			item.scope !== "scc" &&
+			(this.#features.get(item.function) & pass.requiredFunctionFeatures) !==
+				pass.requiredFunctionFeatures
+		) {
+			return false;
+		}
 		if (item.scope !== "instruction" || pass.instructionOpcodes === undefined) {
 			return true;
 		}
