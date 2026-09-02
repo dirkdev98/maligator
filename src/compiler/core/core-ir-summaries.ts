@@ -30,7 +30,7 @@ import {
 	analyzeCoreCallGraph,
 	coreCalleeTargetsAreOpen,
 } from "./core-ir-call-targets.ts";
-import type { CoreCallGraphIndex, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
+import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import {
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
@@ -499,9 +499,10 @@ function callGraphSccs(
 		if (!indices.has(node)) visit(node);
 	}
 	const preserved =
-		previous?.sccs.filter((scc) =>
-			scc.functions.every((functionId) => !affected.has(functionId)) &&
-			!scc.hasAnyScriptAggregate,
+		previous?.sccs.filter(
+			(scc) =>
+				scc.functions.every((functionId) => !affected.has(functionId)) &&
+				!scc.hasAnyScriptAggregate,
 		) ?? [];
 	const owner = new Map<CoreCallGraphNode, number>();
 	const rebuilt = components.map((nodes) => {
@@ -849,10 +850,7 @@ function analyzeProgramSummaries(
 		? previous?.anyScriptSummary
 		: undefined;
 	if (targets.graph.hasAggregate() && anyScriptSummary === undefined) {
-		anyScriptSummary = summarizeAnyScriptCallees(
-			current,
-			maximumWildcardArgumentCount,
-		);
+		anyScriptSummary = summarizeAnyScriptCallees(current, maximumWildcardArgumentCount);
 	}
 	const queue: Array<number> = [];
 	const queued = new Set<number>();
@@ -961,10 +959,7 @@ function analyzeProgramSummaries(
 				memberQueued.add(caller);
 				memberQueue.push(caller);
 			}
-			if (
-				scc.hasAnyScriptAggregate &&
-				!memberQueued.has(CORE_ANY_SCRIPT_AGGREGATE)
-			) {
+			if (scc.hasAnyScriptAggregate && !memberQueued.has(CORE_ANY_SCRIPT_AGGREGATE)) {
 				memberQueued.add(CORE_ANY_SCRIPT_AGGREGATE);
 				memberQueue.push(CORE_ANY_SCRIPT_AGGREGATE);
 			}

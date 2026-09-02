@@ -126,6 +126,9 @@ export interface CoreTransformWorkReport {
 	readonly callerWakeups: number;
 	readonly valueKindFunctionEvaluations: number;
 	readonly valueKindFolds: number;
+	readonly wildcardAggregateRecomputations: number;
+	readonly exactReverseCallerVisits: number;
+	readonly wildcardReverseCallerVisits: number;
 }
 
 export interface CoreProgramWorkReport {
@@ -303,6 +306,9 @@ export class CoreOptimizationReportBuilder {
 		callerWakeups: 0,
 		valueKindFunctionEvaluations: 0,
 		valueKindFolds: 0,
+		wildcardAggregateRecomputations: 0,
+		exactReverseCallerVisits: 0,
+		wildcardReverseCallerVisits: 0,
 	});
 	#planWork: CorePlanWorkReport = Object.freeze({
 		discovered: 0,
@@ -534,6 +540,12 @@ export class CoreOptimizationReportBuilder {
 		if (!this.collectsCounters) return;
 		this.increment("functionScans", report.callGraphFunctionsAnalyzed);
 		this.increment("sccTransfers", report.sccTransfers);
+		this.increment(
+			"wildcardAggregateRecomputations",
+			report.wildcardAggregateRecomputations,
+		);
+		this.increment("exactReverseCallerVisits", report.exactReverseCallerVisits);
+		this.increment("wildcardReverseCallerVisits", report.wildcardReverseCallerVisits);
 		this.#transformWork = this.collectsDetails
 			? Object.freeze({ ...report })
 			: Object.freeze({

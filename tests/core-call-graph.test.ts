@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	CORE_ANY_SCRIPT_AGGREGATE,
@@ -146,4 +147,20 @@ describe("symbolic Core call graph", () => {
 			expect(visits).toBe(functionCount + wildcardCount);
 		},
 	);
+
+	it("keeps call-sensitive consumers off dense wildcard compatibility paths", () => {
+		const sources = [
+			"src/compiler/core/core-ir-call-targets.ts",
+			"src/compiler/core/core-ir-reachability.ts",
+			"src/compiler/core/core-ir-summaries.ts",
+			"src/compiler/core/core-ir-value-kinds.ts",
+		].map((path) => readFileSync(path, "utf8"));
+		for (const source of sources) {
+			expect(source).not.toMatch(/targets\.callers\(/u);
+			expect(source).not.toMatch(/programValueKindCallees/u);
+			expect(source).not.toMatch(/specific(?:Outgoing|Reverse)Edges/u);
+			expect(source).not.toMatch(/openSources/u);
+		}
+		expect(sources[0]).not.toMatch(/callers\(functionId/u);
+	});
 });

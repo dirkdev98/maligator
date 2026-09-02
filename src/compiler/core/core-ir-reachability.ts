@@ -240,10 +240,7 @@ export function analyzeCoreFunctionReachability(
 
 	const { roots, hostInstallSlotsRead } = reachabilityRoots(program, targets, context);
 	const executable = new Set<CoreFunctionId>();
-	const reasons = new Map<
-		CoreFunctionId,
-		ReadonlySet<CoreFunctionReachabilityReason>
-	>();
+	const reasons = new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>();
 	const pending: Array<CoreFunctionId> = [];
 	const enter = (
 		functionId: CoreFunctionId,

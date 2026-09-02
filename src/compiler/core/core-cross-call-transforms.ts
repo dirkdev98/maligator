@@ -46,6 +46,9 @@ export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetSta
 	readonly callerWakeups: number;
 	readonly valueKindFunctionEvaluations: number;
 	readonly valueKindFolds: number;
+	readonly wildcardAggregateRecomputations: number;
+	readonly exactReverseCallerVisits: number;
+	readonly wildcardReverseCallerVisits: number;
 }
 
 interface AppliedTransform {
@@ -736,6 +739,9 @@ export function runCoreCrossCallTransforms(
 	let callGraphFunctionsAnalyzed = summaries.targets.statistics.functionsAnalyzed;
 	let sccTransfers = summaries.statistics.sccTransfers;
 	let callerWakeups = summaries.statistics.callerWakeups;
+	let wildcardAggregateRecomputations = summaries.statistics.aggregateRecomputations;
+	let exactReverseCallerVisits = summaries.statistics.exactReverseCallerVisits;
+	let wildcardReverseCallerVisits = summaries.statistics.wildcardReverseCallerVisits;
 	discoverCoreCrossCallCandidates(program, summaries, service);
 	let instructionsIntroduced = 0;
 	let blocksIntroduced = 0;
@@ -774,6 +780,9 @@ export function runCoreCrossCallTransforms(
 		callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
 		sccTransfers += summaries.statistics.sccTransfers;
 		callerWakeups += summaries.statistics.callerWakeups;
+		wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
+		exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
+		wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
 		for (const functionId of summaries.changedFunctions) affectedCallers.add(functionId);
 		discoverCoreCrossCallCandidates(program, summaries, service, affectedCallers);
 	}
@@ -801,6 +810,9 @@ export function runCoreCrossCallTransforms(
 		callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
 		sccTransfers += summaries.statistics.sccTransfers;
 		callerWakeups += summaries.statistics.callerWakeups;
+		wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
+		exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
+		wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
 	}
 	const budget = service.statistics();
 	return Object.freeze({
@@ -814,6 +826,12 @@ export function runCoreCrossCallTransforms(
 			callerWakeups,
 			valueKindFunctionEvaluations: valueKinds.statistics.functionsEvaluated,
 			valueKindFolds: valueKindFolds.folds,
+			wildcardAggregateRecomputations:
+				wildcardAggregateRecomputations + valueKinds.statistics.aggregateRecomputations,
+			exactReverseCallerVisits:
+				exactReverseCallerVisits + valueKinds.statistics.exactReverseCallerVisits,
+			wildcardReverseCallerVisits:
+				wildcardReverseCallerVisits + valueKinds.statistics.wildcardReverseCallerVisits,
 		}),
 	});
 }

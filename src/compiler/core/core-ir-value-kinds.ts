@@ -16,7 +16,7 @@ import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
 import type { CoreCallGraphNode } from "./core-call-graph.ts";
-import type { CoreCallGraphIndex, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
+import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "./core-ir-summaries.ts";
@@ -489,8 +489,7 @@ interface CoreProgramValueKindWildcardContribution {
 	readonly strictReceiverKind: CompilerValueKindMask;
 }
 
-interface CoreProgramValueKindAggregate
-	extends CoreProgramValueKindWildcardContribution {
+interface CoreProgramValueKindAggregate extends CoreProgramValueKindWildcardContribution {
 	readonly returnKind: CompilerValueKindMask;
 }
 
@@ -527,8 +526,7 @@ function sameMasks(
 	right: ReadonlyArray<CompilerValueKindMask>,
 ): boolean {
 	return (
-		left.length === right.length &&
-		left.every((value, index) => value === right[index])
+		left.length === right.length && left.every((value, index) => value === right[index])
 	);
 }
 
@@ -647,10 +645,7 @@ function solveCoreProgramValueKinds(
 	let callerWakeups = 0;
 	let calleeWakeups = 0;
 	const enqueue = (node: CoreCallGraphNode, caller: boolean): void => {
-		if (
-			(node !== CORE_ANY_SCRIPT_AGGREGATE && !affected.has(node)) ||
-			queued.has(node)
-		)
+		if ((node !== CORE_ANY_SCRIPT_AGGREGATE && !affected.has(node)) || queued.has(node))
 			return;
 		queued.add(node);
 		queue.push(node);
@@ -692,8 +687,7 @@ function solveCoreProgramValueKinds(
 		const node = queue[cursor++]!;
 		queued.delete(node);
 		if (node === CORE_ANY_SCRIPT_AGGREGATE) {
-			const parameterKinds =
-				Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
+			const parameterKinds = Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
 			let strictReceiverKind = 0;
 			for (const caller of targets.graph.wildcardCallers) {
 				const contribution = wildcardContributions.get(caller);
@@ -824,10 +818,7 @@ function solveCoreProgramValueKinds(
 				strictReceiverKind: anyScriptStrictReceiverKind,
 			};
 			if (
-				!sameWildcardContribution(
-					wildcardContributions.get(functionId),
-					contribution,
-				)
+				!sameWildcardContribution(wildcardContributions.get(functionId), contribution)
 			) {
 				wildcardContributions.set(functionId, contribution);
 				enqueue(CORE_ANY_SCRIPT_AGGREGATE, false);
