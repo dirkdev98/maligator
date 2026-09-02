@@ -27,6 +27,7 @@ import type {
 } from "./core-ir.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
+import { projectCoreSpecializationRecipes } from "./core-specialization-recipes.ts";
 import type { CoreFunctionStore, CoreProgram, SealedCoreProgram } from "./core-store.ts";
 
 const EPOCH_INVALIDATING_WRITES: ReadonlySet<CoreEffectDomain> = new Set([
@@ -1706,6 +1707,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	const copies = new Map<object, object>();
 	const copy = (value: unknown): unknown => {
 		if (value === null || typeof value !== "object") return value;
+		if (value === plan.recipes) return value;
 		const existing = copies.get(value);
 		if (existing !== undefined) return existing;
 		if (Array.isArray(value)) {
@@ -1769,7 +1771,8 @@ export function verifyCoreOptimizationPlan(
 		CoreFunctionId,
 		ReadonlyMap<string, CoreLocalSpecializationCandidate>
 	>();
-	for (const selection of plan.specializations) {
+	const specializations = projectCoreSpecializationRecipes(plan.recipes);
+	for (const selection of specializations) {
 		verifySpecialization(
 			program,
 			plan,
@@ -1867,13 +1870,13 @@ export function verifyCoreOptimizationPlan(
 		}
 		verifyCost(entry.cost, `direct entry ${entry.function}:${entry.id}`);
 	}
-	const selected = plan.specializations.length + plan.directEntries.length;
+	const selected = plan.recipes.count + plan.directEntries.length;
 	const generatedCode = [
-		...plan.specializations.map(({ cost }) => cost.generatedCode),
+		...specializations.map(({ cost }) => cost.generatedCode),
 		...plan.directEntries.map(({ cost }) => cost.generatedCode),
 	].reduce((sum, cost) => sum + cost, 0);
 	const compilerWork = [
-		...plan.specializations.map(({ cost }) => cost.compilerWork),
+		...specializations.map(({ cost }) => cost.compilerWork),
 		...plan.directEntries.map(({ cost }) => cost.compilerWork),
 	].reduce((sum, cost) => sum + cost, 0);
 	if (

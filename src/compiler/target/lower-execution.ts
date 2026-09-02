@@ -32,6 +32,7 @@ import type {
 	CoreValueId,
 } from "../core/core-ir.ts";
 import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
+import { projectCoreSpecializationRecipes } from "../core/core-specialization-recipes.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
@@ -2107,7 +2108,9 @@ export function lowerCoreCompilationToExecutionProgram(
 			blocks,
 		]),
 	);
-	for (const specialization of compilation.plan.specializations) {
+	for (const specialization of projectCoreSpecializationRecipes(
+		compilation.plan.recipes,
+	)) {
 		const selections = specializationPlans.get(specialization.function) ?? [];
 		selections.push(specialization);
 		specializationPlans.set(specialization.function, selections);

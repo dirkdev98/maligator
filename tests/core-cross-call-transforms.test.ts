@@ -11,6 +11,7 @@ import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
+import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { CoreTransformCandidateService } from "../src/compiler/core/core-transform-candidates.ts";
 import type {
@@ -427,12 +428,15 @@ describe("bounded Core cross-call transforms", () => {
 			coreFunctionNamed(optimized!, "handler")!.id,
 			coreFunctionNamed(optimized!, "replacement")!.id,
 		].sort((left, right) => left - right);
-		const selection = plan?.specializations.find(
-			(candidate) =>
-				candidate.kind === "guarded-direct-call" &&
-				candidate.function === outer.id &&
-				candidate.targetFunctions.length === 2,
-		);
+		const selection =
+			plan === undefined
+				? undefined
+				: projectCoreSpecializationRecipes(plan.recipes).find(
+						(candidate) =>
+							candidate.kind === "guarded-direct-call" &&
+							candidate.function === outer.id &&
+							candidate.targetFunctions.length === 2,
+					);
 		expect(selection?.targetFunctions).toEqual(targets);
 		expect(selection?.fallback).toBe("canonical-core");
 	});
@@ -477,7 +481,9 @@ describe("bounded Core cross-call transforms", () => {
 					({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
 				),
 			).toBe(false);
-			expect(plan?.specializations).toContainEqual(
+			expect(
+				plan === undefined ? [] : projectCoreSpecializationRecipes(plan.recipes),
+			).toContainEqual(
 				expect.objectContaining({
 					kind: "guarded-direct-call",
 					function: caller.id,
@@ -504,7 +510,7 @@ describe("bounded Core cross-call transforms", () => {
 		expect(attributes.callReturnProvenance).toBeUndefined();
 		expect(attributes.callReturnRepresentation).toBeUndefined();
 		expect(result.statistics.declinedByReason["generated-code-cost"]).toBe(1);
-		expect(result.plan.specializations).toMatchObject([
+		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toMatchObject([
 			{ kind: "guarded-direct-call", targetFunctions: [1] },
 		]);
 	});
@@ -561,7 +567,7 @@ describe("bounded Core cross-call transforms", () => {
 		const [call] = callInstructions(program, 0);
 		expect(fn.instructionAttributes(call!).guardedFunctionIndices).toBeUndefined();
 		expect(callInstructions(program, 0)).toHaveLength(1);
-		expect(transformed.plan.specializations).toMatchObject([
+		expect(projectCoreSpecializationRecipes(transformed.plan.recipes)).toMatchObject([
 			{ kind: "guarded-direct-call", targetFunctions: [1, 2] },
 		]);
 	});

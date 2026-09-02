@@ -16,6 +16,7 @@ import type {
 	CoreInstructionAttributes,
 	CoreInstructionId,
 } from "./core-ir.ts";
+import { projectCoreSpecializationRecipes } from "./core-specialization-recipes.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const allocationOpcodes = new Set([
@@ -161,8 +162,9 @@ function knownBuiltinCall(
 }
 
 function selectedStackAllocations(compilation: CoreCompilation): ReadonlySet<string> {
+	const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
 	return new Set(
-		compilation.plan.specializations
+		specializations
 			.filter(({ kind }) => kind === "stack-object-plan")
 			.flatMap(({ function: functionId, anchors }) =>
 				anchors.map((instruction) => `${functionId}:${instruction}`),
@@ -173,6 +175,7 @@ function selectedStackAllocations(compilation: CoreCompilation): ReadonlySet<str
 function selectedCallTargets(
 	compilation: CoreCompilation,
 ): ReadonlyMap<string, CompilerCallTargetSet> {
+	const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
 	const selected = new Map<string, Set<CoreFunctionId>>();
 	const add = (
 		caller: CoreFunctionId,
@@ -184,7 +187,7 @@ function selectedCallTargets(
 		for (const target of targets) current.add(target);
 		selected.set(key, current);
 	};
-	for (const specialization of compilation.plan.specializations) {
+	for (const specialization of specializations) {
 		if (specialization.kind !== "guarded-direct-call") continue;
 		add(
 			specialization.function,

@@ -11,6 +11,7 @@ import {
 } from "../src/compiler/core/core-ir-region-validity.ts";
 import type {
 	CoreOptimizationPlan,
+	CorePlanSpecialization,
 	VerifiedCoreOptimizationPlan,
 } from "../src/compiler/core/core-ir-regions.ts";
 import type {
@@ -20,6 +21,11 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import {
+	buildCoreSpecializationRecipeTable,
+	coreSpecializationRecipeStorageStatistics,
+	projectCoreSpecializationRecipes,
+} from "../src/compiler/core/core-specialization-recipes.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -32,6 +38,19 @@ import {
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
+
+function planSpecializations(
+	plan: CoreOptimizationPlan,
+): ReadonlyArray<CorePlanSpecialization> {
+	return projectCoreSpecializationRecipes(plan.recipes);
+}
+
+function withPlanSpecializations(
+	plan: CoreOptimizationPlan,
+	specializations: ReadonlyArray<CorePlanSpecialization>,
+): CoreOptimizationPlan {
+	return { ...plan, recipes: buildCoreSpecializationRecipeTable(specializations) };
+}
 
 function planning(program: CoreProgram, liveFunctions: ReadonlyArray<CoreFunctionId>) {
 	const context = programAnalysisContext();
@@ -334,7 +353,7 @@ describe("late Core specialization plan", () => {
 				{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
 				(_phase, run) => run(),
 			);
-			const selection = compilation.plan.specializations.find(
+			const selection = planSpecializations(compilation.plan).find(
 				(candidate) => candidate.kind === kind,
 			);
 			expect(selection).toBeDefined();
@@ -358,7 +377,7 @@ describe("late Core specialization plan", () => {
 		}
 	});
 
-	it("deep-freezes the certified callback plan before target lowering", () => {
+	it("keeps compact recipe storage immutable across diagnostic projections", () => {
 		const source = `globalThis.first = function first(value) {
 			const fields = value.split(";");
 			return fields[0];
@@ -369,37 +388,39 @@ describe("late Core specialization plan", () => {
 			parseScript(source, { strict: false }),
 		);
 		let callbackPlan: CoreOptimizationPlan | undefined;
-		let mutationError: unknown;
+		let originalIndex: number | undefined;
 		const compilation = optimizeSemanticProgramToCore(
 			semantic,
 			{
 				afterCoreOptimization(_program, _context, _report, plan) {
 					callbackPlan = plan;
-					const selection = plan.specializations.find(
+					const selection = planSpecializations(plan).find(
 						(candidate) => candidate.kind === "string-split-projection",
 					);
 					if (selection?.kind !== "string-split-projection") {
 						throw new Error("missing split projection plan");
 					}
-					const load = selection.stringSplitProjection.loads[0]!;
-					try {
-						(load as { index?: number }).index = 99;
-					} catch (error) {
-						mutationError = error;
-					}
+					const load = selection.stringSplitProjection.loads[0]! as {
+						index?: number;
+					};
+					originalIndex = load.index;
+					load.index = 99;
 				},
 			},
 			(_phase, run) => run(),
 		);
 		expect(callbackPlan).toBe(compilation.plan);
-		expect(mutationError).toBeInstanceOf(TypeError);
-		const selection = compilation.plan.specializations.find(
+		expect(Object.isFrozen(compilation.plan.recipes)).toBe(true);
+		expect(Object.keys(compilation.plan.recipes)).toEqual(["count"]);
+		const selection = planSpecializations(compilation.plan).find(
 			(candidate) => candidate.kind === "string-split-projection",
 		);
 		if (selection?.kind !== "string-split-projection") {
 			throw new Error("missing split projection plan");
 		}
-		expect(Object.isFrozen(selection.stringSplitProjection.loads[0])).toBe(true);
+		expect((selection.stringSplitProjection.loads[0] as { index?: number }).index).toBe(
+			originalIndex,
+		);
 		expect(() => lowerCoreCompilationToExecution(compilation)).not.toThrow();
 	});
 
@@ -433,8 +454,10 @@ describe("late Core specialization plan", () => {
 			functionId,
 		]);
 		expect(second).toEqual(first.plan);
-		expect(first.plan.specializations).toHaveLength(1);
-		expect(first.plan.specializations[0]).toMatchObject({
+		expect(planSpecializations(second)).toEqual(planSpecializations(first.plan));
+		const selected = planSpecializations(first.plan);
+		expect(selected).toHaveLength(1);
+		expect(selected[0]).toMatchObject({
 			kind: "numeric-fusion",
 			function: functionId,
 			fallback: "canonical-core",
@@ -442,6 +465,10 @@ describe("late Core specialization plan", () => {
 		});
 		expect(first.plan.statistics.generatedCodeConsumed).toBeGreaterThan(0);
 		expect(first.plan.statistics.compilerWorkConsumed).toBeGreaterThan(0);
+		const storage = coreSpecializationRecipeStorageStatistics(first.plan.recipes);
+		expect(storage.recipes).toBe(1);
+		expect(storage.payloadCells).toBeGreaterThan(0);
+		expect(storage.numericBytes).toBeGreaterThan(0);
 
 		const declined = buildCoreOptimizationPlan(
 			program,
@@ -459,7 +486,7 @@ describe("late Core specialization plan", () => {
 				},
 			},
 		);
-		expect(declined.specializations).toEqual([]);
+		expect(planSpecializations(declined)).toEqual([]);
 		expect(declined.statistics.declinedByPlanReason["generated-code-cost"]).toBe(1);
 	});
 
@@ -484,7 +511,7 @@ describe("late Core specialization plan", () => {
 		const { plan } = planning(program, [functionId]);
 
 		expect(plan.statistics.discoveredByKind["numeric-fusion"]).toBeUndefined();
-		expect(plan.specializations).toEqual([]);
+		expect(planSpecializations(plan)).toEqual([]);
 	});
 
 	it("seals stack-object elision, direct slots, and return materialization", () => {
@@ -495,7 +522,7 @@ describe("late Core specialization plan", () => {
 		] as const) {
 			const { program, function: functionId } = stackObjectProgram(sourceMode);
 			const { context, plan } = planning(program, [functionId]);
-			const selection = plan.specializations[0];
+			const selection = planSpecializations(plan)[0];
 			expect(selection).toMatchObject({
 				kind: "stack-object-plan",
 				representation: "activation-local-fixed-shape-objects",
@@ -516,18 +543,15 @@ describe("late Core specialization plan", () => {
 				throw new Error("expected stack-object plan");
 			}
 			expect(selection.stackObject.materializations).toHaveLength(materializations);
-			const invalid: CoreOptimizationPlan = {
-				...plan,
-				specializations: [
-					{
-						...selection,
-						stackObject: {
-							...selection.stackObject,
-							slotCount: selection.stackObject.slotCount + 1,
-						},
+			const invalid = withPlanSpecializations(plan, [
+				{
+					...selection,
+					stackObject: {
+						...selection.stackObject,
+						slotCount: selection.stackObject.slotCount + 1,
 					},
-				],
-			};
+				},
+			]);
 			expect(() => verifyCoreOptimizationPlan(sealed, invalid)).toThrow(
 				/invalid stack-object certificate/,
 			);
@@ -547,30 +571,27 @@ describe("late Core specialization plan", () => {
 				finish,
 			} = numericProgram(startOperator, finishOperator);
 			const { plan } = planning(program, [functionId]);
-			expect(plan.specializations).toEqual([]);
-			const invalid: CoreOptimizationPlan = {
-				...plan,
-				specializations: [
-					{
-						id: `numeric-fusion:${functionId}:${first}:${finish}`,
-						kind: "numeric-fusion",
-						function: functionId,
-						anchors: [first],
-						claimedInstructions: [first, finish],
-						ordinaryBlocks: [block],
-						exceptionalBlocks: [],
-						representation: "binary-pairs-f64",
-						requiredRepresentations: [],
-						target: "native",
-						fallback: "canonical-core",
-						semanticProtectors: [],
-						targetFunctions: [],
-						admission: { anchor: first, mode: "stable" },
-						composition: "overlay",
-						cost: { generatedCode: 0, compilerWork: 0, runtimeBenefit: 0 },
-					},
-				],
-			};
+			expect(planSpecializations(plan)).toEqual([]);
+			const invalid = withPlanSpecializations(plan, [
+				{
+					id: `numeric-fusion:${functionId}:${first}:${finish}`,
+					kind: "numeric-fusion",
+					function: functionId,
+					anchors: [first],
+					claimedInstructions: [first, finish],
+					ordinaryBlocks: [block],
+					exceptionalBlocks: [],
+					representation: "binary-pairs-f64",
+					requiredRepresentations: [],
+					target: "native",
+					fallback: "canonical-core",
+					semanticProtectors: [],
+					targetFunctions: [],
+					admission: { anchor: first, mode: "stable" },
+					composition: "overlay",
+					cost: { generatedCode: 0, compilerWork: 0, runtimeBenefit: 0 },
+				},
+			]);
 			expect(() => verifyCoreOptimizationPlan(program.seal(), invalid)).toThrow(message);
 		}
 	});
@@ -585,11 +606,11 @@ describe("late Core specialization plan", () => {
 			version: { ...plan.version, key: `${plan.version.key}:stale` },
 		};
 		expect(() => verifyCoreOptimizationPlan(sealed, stale)).toThrow(/plan version/);
-		const selected = plan.specializations[0]!;
-		const conflict: CoreOptimizationPlan = {
-			...plan,
-			specializations: [selected, { ...selected, id: `${selected.id}:duplicate` }],
-		};
+		const selected = planSpecializations(plan)[0]!;
+		const conflict = withPlanSpecializations(plan, [
+			selected,
+			{ ...selected, id: `${selected.id}:duplicate` },
+		]);
 		expect(() => verifyCoreOptimizationPlan(sealed, conflict)).toThrow(/conflicts/);
 	});
 
@@ -616,7 +637,7 @@ describe("late Core specialization plan", () => {
 	it("seals String projection proof payloads and rejects claimed mutation", () => {
 		const { program, function: functionId, call } = stringSplitProgram();
 		const { context, plan } = planning(program, [functionId]);
-		const selection = plan.specializations.find(
+		const selection = planSpecializations(plan).find(
 			(candidate) => candidate.kind === "string-split-projection",
 		);
 		if (selection?.kind !== "string-split-projection") {
@@ -653,31 +674,24 @@ describe("late Core specialization plan", () => {
 			knownBuiltinCall: { operation: "String.prototype.split" },
 		});
 
-		const invalid: CoreOptimizationPlan = {
-			...plan,
-			specializations: [
-				{
-					...selection,
-					stringSplitProjection: {
-						...selection.stringSplitProjection,
-						separatorStringIndex:
-							selection.stringSplitProjection.separatorStringIndex + 1,
-					},
+		const invalid = withPlanSpecializations(plan, [
+			{
+				...selection,
+				stringSplitProjection: {
+					...selection.stringSplitProjection,
+					separatorStringIndex: selection.stringSplitProjection.separatorStringIndex + 1,
 				},
-			],
-		};
+			},
+		]);
 		expect(() => verifyCoreOptimizationPlan(sealed, invalid)).toThrow(
 			/invalid String\.split projection certificate/,
 		);
-		const invalidAdmission: CoreOptimizationPlan = {
-			...plan,
-			specializations: [
-				{
-					...selection,
-					admission: { ...selection.admission, mode: "stable" },
-				},
-			],
-		};
+		const invalidAdmission = withPlanSpecializations(plan, [
+			{
+				...selection,
+				admission: { ...selection.admission, mode: "stable" },
+			},
+		]);
 		expect(() => verifyCoreOptimizationPlan(sealed, invalidAdmission)).toThrow(
 			/claims stable admission where Core proves per-use/,
 		);
@@ -686,7 +700,7 @@ describe("late Core specialization plan", () => {
 	it("verifies and relocates a numeric plan without changing generic Core", () => {
 		const { program, function: functionId } = numericProgram();
 		const { context, plan } = planning(program, [functionId]);
-		const selection = plan.specializations[0]!;
+		const selection = planSpecializations(plan)[0]!;
 		const anchorOpcode = program
 			.function(functionId)
 			.instructionOpcodeName(selection.anchors[0]!);
@@ -710,15 +724,12 @@ describe("late Core specialization plan", () => {
 			program.function(functionId).instructionOpcodeName(selection.anchors[0]!),
 		).toBe(anchorOpcode);
 
-		const invalid: CoreOptimizationPlan = {
-			...plan,
-			specializations: [
-				{
-					...selection,
-					claimedInstructions: [selection.anchors[0]!],
-				},
-			],
-		};
+		const invalid = withPlanSpecializations(plan, [
+			{
+				...selection,
+				claimedInstructions: [selection.anchors[0]!],
+			},
+		]);
 		expect(() => verifyCoreOptimizationPlan(sealed, invalid)).toThrow(
 			/invalid numeric-fusion certificate/,
 		);
@@ -785,7 +796,7 @@ describe("late Core specialization plan", () => {
 			},
 		);
 		expect(
-			plan.specializations.filter(({ kind }) => kind === "stack-object-plan"),
+			planSpecializations(plan).filter(({ kind }) => kind === "stack-object-plan"),
 		).toHaveLength(41);
 		const sealed = program.seal();
 		const definition = lowerExecutionToProgramImage(
@@ -844,7 +855,7 @@ describe("late Core specialization plan", () => {
 		const genericOnly: CoreOptimizationPlan = {
 			...plan,
 			directEntries: [],
-			specializations: [],
+			recipes: buildCoreSpecializationRecipeTable([]),
 			statistics: {
 				...plan.statistics,
 				considered: 0,

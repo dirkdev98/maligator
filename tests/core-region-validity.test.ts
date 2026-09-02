@@ -13,6 +13,10 @@ import type {
 	CorePlanSpecialization,
 } from "../src/compiler/core/core-ir-regions.ts";
 import type { CoreBlockId, CoreInstructionId } from "../src/compiler/core/core-ir.ts";
+import {
+	buildCoreSpecializationRecipeTable,
+	projectCoreSpecializationRecipes,
+} from "../src/compiler/core/core-specialization-recipes.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -108,10 +112,11 @@ function splitProjection(compilation: CoreCompilation): {
 		{ kind: "string-split-projection" }
 	>;
 } {
-	const index = compilation.plan.specializations.findIndex(
+	const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
+	const index = specializations.findIndex(
 		({ kind }) => kind === "string-split-projection",
 	);
-	const selection = compilation.plan.specializations[index];
+	const selection = specializations[index];
 	if (selection?.kind !== "string-split-projection") {
 		throw new Error("missing String.split projection plan");
 	}
@@ -125,7 +130,9 @@ function withSelection(
 ): CoreOptimizationPlan {
 	return {
 		...compilation.plan,
-		specializations: compilation.plan.specializations.with(index, selection),
+		recipes: buildCoreSpecializationRecipeTable(
+			projectCoreSpecializationRecipes(compilation.plan.recipes).with(index, selection),
+		),
 	};
 }
 
@@ -166,8 +173,10 @@ function withVmRegion(
 
 describe("Core plan admission modes", () => {
 	it("keeps a locked-world license stable and re-checks an invalidatable one per use", () => {
-		const locked = compileSource(MULTI_REGION_SOURCE, "locked").plan.specializations;
-		const mutable = compileSource(MULTI_REGION_SOURCE, "mutable").plan.specializations;
+		const lockedCompilation = compileSource(MULTI_REGION_SOURCE, "locked");
+		const mutableCompilation = compileSource(MULTI_REGION_SOURCE, "mutable");
+		const locked = projectCoreSpecializationRecipes(lockedCompilation.plan.recipes);
+		const mutable = projectCoreSpecializationRecipes(mutableCompilation.plan.recipes);
 		const kinds = new Set([...locked, ...mutable].map(({ kind }) => kind));
 		for (const expected of [
 			"string-split-cursor",

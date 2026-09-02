@@ -7,6 +7,10 @@ import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
+import {
+	buildCoreSpecializationRecipeTable,
+	projectCoreSpecializationRecipes,
+} from "../src/compiler/core/core-specialization-recipes.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -588,17 +592,18 @@ describe("Core IR lowering", () => {
 			}
 			choose(1, true);
 		`);
-		const selection = compilation.plan.specializations.find(
-			({ kind }) => kind === "stack-object-plan",
-		);
+		const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
+		const selection = specializations.find(({ kind }) => kind === "stack-object-plan");
 		expect(selection).toBeDefined();
 		if (selection === undefined) return;
 		const malformed = {
 			...compilation.plan,
-			specializations: compilation.plan.specializations.map((candidate) =>
-				candidate === selection
-					? { ...candidate, cost: { ...candidate.cost, generatedCode: -1 } }
-					: candidate,
+			recipes: buildCoreSpecializationRecipeTable(
+				specializations.map((candidate) =>
+					candidate === selection
+						? { ...candidate, cost: { ...candidate.cost, generatedCode: -1 } }
+						: candidate,
+				),
 			),
 		};
 		expect(() => verifyCoreOptimizationPlan(compilation.program, malformed)).toThrow(

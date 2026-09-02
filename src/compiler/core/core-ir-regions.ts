@@ -8,6 +8,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import type { CoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgramVersions } from "./core-store.ts";
 import type {
 	CoreTransformBudgetStatistics,
@@ -392,7 +393,7 @@ export interface CoreOptimizationPlan {
 		readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
 	}>;
 	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
-	readonly specializations: ReadonlyArray<CorePlanSpecialization>;
+	readonly recipes: CoreSpecializationRecipeTable;
 	readonly statistics: CoreOptimizationPlanStatistics;
 }
 

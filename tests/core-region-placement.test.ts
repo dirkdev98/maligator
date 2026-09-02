@@ -6,6 +6,10 @@ import type {
 	CoreOptimizationPlan,
 	CorePlanSpecialization,
 } from "../src/compiler/core/core-ir-regions.ts";
+import {
+	buildCoreSpecializationRecipeTable,
+	projectCoreSpecializationRecipes,
+} from "../src/compiler/core/core-specialization-recipes.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
@@ -99,7 +103,7 @@ function propertyPlacement(
 }
 
 function semanticPlanShape(compilation: CoreCompilation) {
-	return compilation.plan.specializations
+	return projectCoreSpecializationRecipes(compilation.plan.recipes)
 		.map((selection) => {
 			const fn = compilation.program.function(selection.function);
 			return {
@@ -158,8 +162,9 @@ function withVmRegion(
 describe("Core plan property placement", () => {
 	it("records generated-code cost on every selected specialization", () => {
 		const plan = optimize(SPLIT_AND_SLICE, "region-cost.mjs").plan;
-		expect(plan.specializations.length).toBeGreaterThan(0);
-		for (const selection of plan.specializations) {
+		const specializations = projectCoreSpecializationRecipes(plan.recipes);
+		expect(specializations.length).toBeGreaterThan(0);
+		for (const selection of specializations) {
 			expect(Number.isFinite(selection.cost.generatedCode)).toBe(true);
 			expect(Number.isFinite(selection.cost.compilerWork)).toBe(true);
 			expect(Number.isFinite(selection.cost.runtimeBenefit)).toBe(true);
@@ -170,7 +175,7 @@ describe("Core plan property placement", () => {
 
 	it("certifies opposite placements for two equally adjacent property calls", () => {
 		const compilation = optimize(OPPOSITE_PLACEMENTS, "placement-opposites.js");
-		const projections = compilation.plan.specializations.filter(
+		const projections = projectCoreSpecializationRecipes(compilation.plan.recipes).filter(
 			(selection) => selection.kind === "regexp-exec-projection",
 		);
 		expect(projections).toHaveLength(2);
@@ -270,20 +275,23 @@ describe("Core plan property placement", () => {
 
 	it("rejects an invalid placement value in a Core plan", () => {
 		const compilation = optimize(SPLIT_AND_SLICE, "placement-invalid.js");
-		const index = compilation.plan.specializations.findIndex(
+		const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
+		const index = specializations.findIndex(
 			(selection) => selection.kind === "string-slice-number",
 		);
-		const selection = compilation.plan.specializations[index];
+		const selection = specializations[index];
 		if (selection?.kind !== "string-slice-number") throw new Error("missing slice plan");
 		const invalid: CoreOptimizationPlan = {
 			...compilation.plan,
-			specializations: compilation.plan.specializations.with(index, {
-				...selection,
-				stringSliceNumber: {
-					...selection.stringSliceNumber,
-					propertyPlacement: "wherever" as never,
-				},
-			}),
+			recipes: buildCoreSpecializationRecipeTable(
+				specializations.with(index, {
+					...selection,
+					stringSliceNumber: {
+						...selection.stringSliceNumber,
+						propertyPlacement: "wherever" as never,
+					},
+				}),
+			),
 		};
 		expect(() => verifyCoreOptimizationPlan(compilation.program, invalid)).toThrow(
 			/invalid String\.slice Number certificate|property placement/,
@@ -292,10 +300,11 @@ describe("Core plan property placement", () => {
 
 	it("rejects a deferred placement whose producer is not the call's only consumer", () => {
 		const compilation = optimize(SPLIT_AND_SLICE, "placement-consumer.js");
-		const index = compilation.plan.specializations.findIndex(
+		const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
+		const index = specializations.findIndex(
 			(selection) => selection.kind === "string-split-projection",
 		);
-		const selection = compilation.plan.specializations[index];
+		const selection = specializations[index];
 		if (selection?.kind !== "string-split-projection") {
 			throw new Error("missing split projection plan");
 		}
@@ -304,13 +313,15 @@ describe("Core plan property placement", () => {
 		)!;
 		const invalid: CoreOptimizationPlan = {
 			...compilation.plan,
-			specializations: compilation.plan.specializations.with(index, {
-				...selection,
-				stringSplitProjection: {
-					...selection.stringSplitProjection,
-					call: foreign,
-				},
-			}),
+			recipes: buildCoreSpecializationRecipeTable(
+				specializations.with(index, {
+					...selection,
+					stringSplitProjection: {
+						...selection.stringSplitProjection,
+						call: foreign,
+					},
+				}),
+			),
 		};
 		expect(() => verifyCoreOptimizationPlan(compilation.program, invalid)).toThrow(
 			/invalid String\.split projection certificate/,
@@ -326,22 +337,25 @@ describe("Core plan property placement", () => {
 			"placement-unlocked.js",
 			"mutable",
 		);
-		const index = compilation.plan.specializations.findIndex(
+		const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
+		const index = specializations.findIndex(
 			(selection) => selection.kind === "string-split-projection",
 		);
-		const selection = compilation.plan.specializations[index];
+		const selection = specializations[index];
 		if (selection?.kind !== "string-split-projection")
 			throw new Error("missing split plan");
 		expect(selection.stringSplitProjection.propertyPlacement).toBe("in-place");
 		const invalid: CoreOptimizationPlan = {
 			...compilation.plan,
-			specializations: compilation.plan.specializations.with(index, {
-				...selection,
-				stringSplitProjection: {
-					...selection.stringSplitProjection,
-					propertyPlacement: "call-fallback",
-				},
-			}),
+			recipes: buildCoreSpecializationRecipeTable(
+				specializations.with(index, {
+					...selection,
+					stringSplitProjection: {
+						...selection.stringSplitProjection,
+						propertyPlacement: "call-fallback",
+					},
+				}),
+			),
 		};
 		expect(() => verifyCoreOptimizationPlan(compilation.program, invalid)).toThrow(
 			/invalid String\.split projection certificate/,
@@ -395,7 +409,9 @@ describe("late plan migration gates", () => {
 			"core-one-shot-array-length.js",
 		);
 		expect(
-			compilation.plan.specializations.some(({ kind }) => kind === "indexed-length-loop"),
+			projectCoreSpecializationRecipes(compilation.plan.recipes).some(
+				({ kind }) => kind === "indexed-length-loop",
+			),
 		).toBe(false);
 	});
 
@@ -416,7 +432,7 @@ describe("late plan migration gates", () => {
 			};`,
 			"core-array-length-orientation.js",
 		);
-		const selection = compilation.plan.specializations.find(
+		const selection = projectCoreSpecializationRecipes(compilation.plan.recipes).find(
 			(candidate) => candidate.kind === "indexed-length-loop",
 		);
 		if (selection?.kind !== "indexed-length-loop") {
@@ -441,7 +457,7 @@ describe("late plan migration gates", () => {
 			};`,
 			"core-dense-fill-consecutive-loops.js",
 		);
-		const dense = compilation.plan.specializations.find(
+		const dense = projectCoreSpecializationRecipes(compilation.plan.recipes).find(
 			(selection) => selection.kind === "dense-array-plan",
 		);
 		if (dense?.kind !== "dense-array-plan") throw new Error("missing dense plan");
@@ -497,7 +513,9 @@ describe("late plan migration gates", () => {
 			"core-stack-object-mixed-join.js",
 		);
 		expect(
-			compilation.plan.specializations.some(({ kind }) => kind === "stack-object-plan"),
+			projectCoreSpecializationRecipes(compilation.plan.recipes).some(
+				({ kind }) => kind === "stack-object-plan",
+			),
 		).toBe(false);
 	});
 });

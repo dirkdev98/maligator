@@ -9,6 +9,7 @@ import {
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import type { CoreFunctionId } from "../src/compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
+import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
@@ -171,7 +172,7 @@ try {
 			version: plan.version.key,
 			liveFunctions: plan.liveFunctions.length,
 			directEntries: plan.directEntries,
-			specializations: plan.specializations,
+			specializations: projectCoreSpecializationRecipes(plan.recipes),
 			statistics: plan.statistics,
 		},
 		realization:

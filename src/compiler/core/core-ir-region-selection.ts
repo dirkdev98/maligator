@@ -42,6 +42,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreProgram } from "./core-store.ts";
 import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
 import type {
@@ -1217,7 +1218,7 @@ export function buildCoreOptimizationPlan(
 			}),
 		),
 		directEntries: Object.freeze(directEntries),
-		specializations: Object.freeze(specializations),
+		recipes: buildCoreSpecializationRecipeTable(specializations),
 		statistics,
 	});
 }

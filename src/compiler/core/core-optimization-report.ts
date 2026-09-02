@@ -301,12 +301,16 @@ function liveCounts(
 
 export function coreOptimizationCounts(
 	program: CoreProgram,
-	plan?: Pick<CoreOptimizationPlan, "directEntries" | "specializations">,
+	plan?: Pick<CoreOptimizationPlan, "directEntries"> & {
+		readonly recipes?: Pick<CoreOptimizationPlan["recipes"], "count">;
+		readonly specializations?: ReadonlyArray<unknown>;
+	},
 ): CoreOptimizationCounts {
 	return {
 		...liveCounts(program),
 		planCandidates:
-			(plan?.directEntries.length ?? 0) + (plan?.specializations.length ?? 0),
+			(plan?.directEntries.length ?? 0) +
+			(plan?.recipes?.count ?? plan?.specializations?.length ?? 0),
 	};
 }
 
@@ -752,7 +756,10 @@ export class CoreOptimizationReportBuilder {
 
 	finish(
 		program: CoreProgram,
-		plan: Pick<CoreOptimizationPlan, "directEntries" | "specializations">,
+		plan: Pick<CoreOptimizationPlan, "directEntries"> & {
+			readonly recipes?: Pick<CoreOptimizationPlan["recipes"], "count">;
+			readonly specializations?: ReadonlyArray<unknown>;
+		},
 	): CoreOptimizationReport {
 		this.#recordStorageWork(program);
 		const passes = this.#passes;

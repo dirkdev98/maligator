@@ -4,6 +4,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
+import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
@@ -982,7 +983,7 @@ describe("Core memory and escape parity", () => {
 			expect(operationCount(fn, "storePropertyStatic")).toBe(0);
 			expect(operationCount(fn, "createObjectShaped")).toBe(0);
 			expect(
-				plan.specializations.some(
+				projectCoreSpecializationRecipes(plan.recipes).some(
 					(specialization) =>
 						specialization.function === fn.id &&
 						specialization.kind === "stack-object-plan",
@@ -997,7 +998,7 @@ describe("Core memory and escape parity", () => {
 			if (flag) object.value = false;
 			return object;
 		}`);
-		const specialization = plan.specializations.find(
+		const specialization = projectCoreSpecializationRecipes(plan.recipes).find(
 			(candidate) =>
 				candidate.function === fn.id && candidate.kind === "stack-object-plan",
 		);
