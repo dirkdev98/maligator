@@ -70,6 +70,7 @@ export class CoreAnalysisManager {
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #programFlow: CoreProgramFlowEngine;
 	readonly #cache = new WeakMap<CoreAnalysisDefinition<unknown>, DefinitionCache>();
+	readonly #contextIdentities = new WeakMap<CoreAnalysisDefinition<unknown>, string>();
 	readonly #registered = new Map<string, RegisteredAnalysis>();
 	readonly #validatedDefinitions = new WeakSet<CoreAnalysisDefinition<unknown>>();
 	readonly #timingStarts: Array<number> = [];
@@ -189,7 +190,7 @@ export class CoreAnalysisManager {
 	): Omit<CachedAnalysis, "value"> {
 		const functionDependencies = definition.functionDependencies ?? [];
 		const programDependencies = definition.programDependencies ?? [];
-		const contextIdentity = definition.contextIdentity?.(this.#context) ?? "";
+		const contextIdentity = this.#contextIdentity(definition);
 		const programVersions = programDependencies.map((domain) =>
 			this.#program.programVersion(domain),
 		);
@@ -219,7 +220,7 @@ export class CoreAnalysisManager {
 		request: CoreAnalysisRequest,
 		cached: CachedAnalysis,
 	): boolean {
-		if ((definition.contextIdentity?.(this.#context) ?? "") !== cached.contextIdentity) {
+		if (this.#contextIdentity(definition) !== cached.contextIdentity) {
 			return false;
 		}
 		const programDependencies = definition.programDependencies ?? [];
@@ -253,5 +254,13 @@ export class CoreAnalysisManager {
 			}
 		}
 		return versionIndex === cached.functionVersions.length;
+	}
+
+	#contextIdentity<Result>(definition: CoreAnalysisDefinition<Result>): string {
+		const cached = this.#contextIdentities.get(definition);
+		if (cached !== undefined) return cached;
+		const identity = definition.contextIdentity?.(this.#context) ?? "";
+		this.#contextIdentities.set(definition, identity);
+		return identity;
 	}
 }
