@@ -580,7 +580,6 @@ const annotateTerminalYieldSites: CorePass = {
 	scope: "function",
 	requiredAnalyses: [],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run({ program, item }) {
@@ -757,7 +756,6 @@ const rewriteExactBuiltinCalls: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: { ...LOCAL_CHANGES, representations: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1024,7 +1022,6 @@ const foldValueKindObservations: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
-	preserves: [],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1089,7 +1086,6 @@ const foldPrimitiveCoercions: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
-	preserves: [],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1195,7 +1191,6 @@ const rewriteNumericIdentities: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
-	preserves: [],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1300,7 +1295,6 @@ const foldRedundantTdzChecks: CorePass = {
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
 	wakesOn: ["body", "cfg", "representations"],
-	preserves: [],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1400,7 +1394,6 @@ const lowerLocalExplicitThrows: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
-	preserves: [],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1490,7 +1483,6 @@ const removeUnreachableBlocks: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "exceptionFlow"],
-	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1556,7 +1548,6 @@ const eliminateForwardingBlocks: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body", "exceptionFlow"],
-	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1688,7 +1679,6 @@ const mergeLinearBlocks: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body", "exceptionFlow"],
-	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1827,7 +1817,6 @@ const simplifyBlockParameters: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body"],
-	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1963,7 +1952,6 @@ const canonicalizeBlockParameters: CorePass = {
 		CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	],
 	wakesOn: ["cfg", "body", "representations"],
-	preserves: [],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: CANONICAL_BLOCK_PARAMETER_BUDGET,
 	run(context) {

@@ -183,7 +183,6 @@ const foldExactAllocationObservations: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -263,7 +262,6 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -339,7 +337,6 @@ const annotateKnownOwnSlots: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: false, facts: false, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -409,7 +406,6 @@ const refineContainedOwnSlotAccesses: CorePass = {
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
 	wakesOn: ["body", "memoryEffects", "facts"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -584,7 +580,6 @@ const forwardExactMemoryLoads: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_CONTROL_FLOW_ANALYSIS, CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS],
 	wakesOn: ["body", "cfg", "memoryEffects"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -654,7 +649,6 @@ const refineExactCollectionAccesses: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_CLASS_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -720,7 +714,6 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -1339,7 +1332,6 @@ const scalarizeRootedContainedObjects: CorePass = {
 		CORE_LOCAL_PROVENANCE_ANALYSIS,
 	],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
-	preserves: ["local-interprocedural-flow"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -1387,7 +1379,6 @@ const refineStackObjectCellRepresentations: CorePass = {
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
 	wakesOn: ["body", "facts", "representations", "specializationInputs"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: MEMORY_BUDGET,
 	run(context) {
@@ -1517,7 +1508,6 @@ const scalarReplaceContainedAggregates: CorePass = {
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
 	wakesOn: ["body", "memoryEffects", "facts"],
-	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
 	run(context) {

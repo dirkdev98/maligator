@@ -109,7 +109,6 @@ const canonicalizeFacts: CorePass = {
 	scope: "function",
 	requiredAnalyses: [],
 	wakesOn: ["facts", "body"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run({ program, item }) {
@@ -136,7 +135,6 @@ const removeEmptyUnreferencedFacts: CorePass = {
 	scope: "function",
 	requiredAnalyses: [],
 	wakesOn: ["facts", "body"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run({ program, item }) {
@@ -164,7 +162,6 @@ const rewireSubsumedEffectProofs: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_FACT_AVAILABILITY_ANALYSIS],
 	wakesOn: ["facts", "body", "cfg", "memoryEffects"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run(context) {
@@ -226,7 +223,6 @@ const foldSubsumedGuards: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_FACT_AVAILABILITY_ANALYSIS],
 	wakesOn: ["facts", "body", "cfg"],
-	preserves: [],
 	changes: { cfg: true, calls: false, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run(context) {
@@ -308,7 +304,6 @@ const refinePrimitiveEffects: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts", "representations"],
-	preserves: [],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run(context) {
@@ -527,7 +522,6 @@ const materializeLocalScalars: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts", "representations"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: PROOF_BUDGET,
 	run(context) {
@@ -567,7 +561,6 @@ const materializeFlowScalars: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: PROOF_BUDGET,
 	run(context) {

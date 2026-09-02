@@ -88,7 +88,6 @@ function noOpPass(name: string, runs: Array<number>): CorePass {
 		scope: "function",
 		requiredAnalyses: [],
 		wakesOn: ["body", "representations"],
-		preserves: [],
 		changes: { cfg: false, calls: false, facts: false, representations: false },
 		budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "stop" },
 		run({ item }) {
@@ -188,7 +187,6 @@ describe("Core optimizer infrastructure", () => {
 			requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 			requiredAnalyses: [loopAnalysis],
 			wakesOn: ["cfg"],
-			preserves: [],
 			changes: { cfg: false, calls: false, facts: false, representations: false },
 			budget: { maxWorkItems: 10, maxEdits: 1, exhaustion: "error" },
 			run(passContext) {
@@ -221,7 +219,6 @@ describe("Core optimizer infrastructure", () => {
 				scope: "function",
 				requiredAnalyses: [],
 				wakesOn: ["representations"],
-				preserves: [],
 				changes: {
 					cfg: false,
 					calls: false,
@@ -322,7 +319,6 @@ describe("Core optimizer infrastructure", () => {
 			scope: "function",
 			requiredAnalyses: [],
 			wakesOn: ["cfg"],
-			preserves: [],
 			changes: { cfg: true, calls: false, facts: false, representations: false },
 			budget: { maxWorkItems: 10, maxEdits: 10, exhaustion: "error" },
 			run({ item }) {

@@ -261,7 +261,6 @@ const canonicalizeNaturalLoops: CorePass = {
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "exceptionFlow"],
-	preserves: [],
 	changes: CONTROL_FLOW_CHANGES,
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -466,7 +465,6 @@ const hoistLoopInvariants: CorePass = {
 		CORE_LOCAL_PROVENANCE_ANALYSIS,
 	],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -551,7 +549,6 @@ const eliminateDominatedRedundancy: CorePass = {
 		CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
-	preserves: ["exception-control-flow"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -649,7 +646,6 @@ const eliminatePartialRedundancy: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow"],
-	preserves: [],
 	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -826,7 +822,6 @@ const foldPathComparisons: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
-	preserves: [],
 	changes: CONTROL_FLOW_CHANGES,
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -909,7 +904,6 @@ const selectLoopScalarRepresentations: CorePass = {
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
 	wakesOn: ["body", "cfg", "representations"],
-	preserves: ["control-flow", "exception-control-flow"],
 	changes: { ...CONTROL_FLOW_CHANGES, representations: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -1158,7 +1152,6 @@ const reduceBoundedRemainders: CorePass = {
 	scope: "function",
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
-	preserves: [],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {

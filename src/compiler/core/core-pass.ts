@@ -62,7 +62,6 @@ export interface CorePass {
 	readonly requiredFunctionFeatures?: CoreFunctionFeatureBits;
 	readonly requiredAnalyses: ReadonlyArray<CoreAnalysisDefinition<unknown>>;
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;
-	readonly preserves: ReadonlyArray<string>;
 	readonly changes: CorePassCapabilities;
 	readonly budget: CorePassBudget;
 	run(context: CorePassContext): CoreChangeSet | undefined;
