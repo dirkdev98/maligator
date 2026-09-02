@@ -170,17 +170,14 @@ export function analyzeCoreValueClasses(
 		}
 	}
 	let propagated = 0;
-	for (let index = 0; index < fn.valueCapacity; index++) {
-		const value = index as CoreValueId;
-		if (!fn.isValueLive(value) || brands[value] !== undefined) continue;
+	for (const value of fn.valueIds()) {
+		if (brands[value] !== undefined) continue;
 		const root = roots.get(value);
 		if (root === undefined || brands[root] === undefined) continue;
 		brands[value] = brands[root];
 		propagated++;
 	}
-	for (let index = 0; index < fn.valueCapacity; index++) {
-		const value = index as CoreValueId;
-		if (!fn.isValueLive(value)) continue;
+	for (const value of fn.valueIds()) {
 		const valueRoot = roots.get(value) ?? value;
 		const brand = brands[valueRoot];
 		if (brand === undefined) continue;
