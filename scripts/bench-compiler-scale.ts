@@ -77,8 +77,18 @@ interface HeapProfileSummary {
 	readonly samplingIntervalBytes: number;
 	readonly sampledBytes: number;
 	readonly sampledOptimizeCoreBytes: number;
+	readonly allocationHotspots: ReadonlyArray<ProfileHotspot>;
+	readonly cpuSampledOptimizeMs: number;
+	readonly cpuHotspots: ReadonlyArray<ProfileHotspot>;
 	readonly gcMsDuringOptimize: number;
 	readonly gcEventsDuringOptimize: number;
+}
+
+interface ProfileHotspot {
+	readonly function: string;
+	readonly source: string;
+	readonly line: number;
+	readonly weight: number;
 }
 
 interface CompilerScaleSample {
@@ -437,19 +447,120 @@ function stopHeapSampling(
 	});
 }
 
-function sampledAllocationSummary(
+function startCpuSampling(session: inspector.Session): Promise<void> {
+	return new Promise((resolve, reject) => {
+		session.post("Profiler.enable", (enableError) => {
+			if (enableError !== null) {
+				reject(enableError);
+				return;
+			}
+			session.post("Profiler.start", (startError) =>
+				startError === null ? resolve() : reject(startError),
+			);
+		});
+	});
+}
+
+function stopCpuSampling(
+	session: inspector.Session,
+): Promise<inspector.Profiler.Profile> {
+	return new Promise((resolve, reject) => {
+		session.post("Profiler.stop", (error, result) =>
+			error === null ? resolve(result.profile) : reject(error),
+		);
+	});
+}
+
+function hotspotKey(frame: inspector.Runtime.CallFrame): string {
+	return `${frame.functionName}\u0000${frame.url}\u0000${frame.lineNumber}`;
+}
+
+function topHotspots(
+	weights: ReadonlyMap<string, number>,
+	frames: ReadonlyMap<string, inspector.Runtime.CallFrame>,
+): ReadonlyArray<ProfileHotspot> {
+	return Object.freeze(
+		[...weights]
+			.sort((left, right) => right[1] - left[1])
+			.slice(0, 20)
+			.map(([key, weight]) => {
+				const frame = frames.get(key)!;
+				return Object.freeze({
+					function: frame.functionName || "(anonymous)",
+					source: frame.url,
+					line: frame.lineNumber + 1,
+					weight,
+				});
+			}),
+	);
+}
+
+function collectSampledAllocation(
 	node: inspector.HeapProfiler.SamplingHeapProfileNode,
-	insideOptimizeCore = false,
+	insideOptimizeCore: boolean,
+	weights: Map<string, number>,
+	frames: Map<string, inspector.Runtime.CallFrame>,
 ): { sampledBytes: number; sampledOptimizeCoreBytes: number } {
 	const inside = insideOptimizeCore || node.callFrame.functionName === "optimizeCore";
 	let sampledBytes = node.selfSize;
 	let sampledOptimizeCoreBytes = inside ? node.selfSize : 0;
+	if (inside && node.selfSize > 0) {
+		const key = hotspotKey(node.callFrame);
+		weights.set(key, (weights.get(key) ?? 0) + node.selfSize);
+		frames.set(key, node.callFrame);
+	}
 	for (const child of node.children) {
-		const childSummary = sampledAllocationSummary(child, inside);
+		const childSummary = collectSampledAllocation(child, inside, weights, frames);
 		sampledBytes += childSummary.sampledBytes;
 		sampledOptimizeCoreBytes += childSummary.sampledOptimizeCoreBytes;
 	}
 	return { sampledBytes, sampledOptimizeCoreBytes };
+}
+
+function sampledAllocationSummary(node: inspector.HeapProfiler.SamplingHeapProfileNode): {
+	sampledBytes: number;
+	sampledOptimizeCoreBytes: number;
+	allocationHotspots: ReadonlyArray<ProfileHotspot>;
+} {
+	const weights = new Map<string, number>();
+	const frames = new Map<string, inspector.Runtime.CallFrame>();
+	return {
+		...collectSampledAllocation(node, false, weights, frames),
+		allocationHotspots: topHotspots(weights, frames),
+	};
+}
+
+function sampledCpuSummary(
+	profile: inspector.Profiler.Profile,
+	startedAt: number,
+	optimizeStart: number,
+	optimizeEnd: number,
+): {
+	cpuSampledOptimizeMs: number;
+	cpuHotspots: ReadonlyArray<ProfileHotspot>;
+} {
+	const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame]));
+	const weights = new Map<string, number>();
+	const frames = new Map<string, inspector.Runtime.CallFrame>();
+	const lower = optimizeStart - startedAt;
+	const upper = optimizeEnd - startedAt;
+	let elapsed = 0;
+	let sampled = 0;
+	for (let index = 0; index < (profile.samples?.length ?? 0); index++) {
+		const delta = (profile.timeDeltas?.[index] ?? 0) / 1_000;
+		elapsed += delta;
+		if (elapsed < lower || elapsed > upper) continue;
+		const frame = nodes.get(profile.samples![index]!);
+		if (frame === undefined) continue;
+		const key = hotspotKey(frame);
+		weights.set(key, (weights.get(key) ?? 0) + delta);
+		frames.set(key, frame);
+		sampled += delta;
+	}
+	return {
+		cpuSampledOptimizeMs: sampled,
+		cpuHotspots: topHotspots(weights, frames),
+	};
 }
 
 function emptyPhases(): CompilerScalePhases {
@@ -486,9 +597,12 @@ async function compileSample(
 	});
 	gcObserver.observe({ entryTypes: ["gc"] });
 	const session = profile ? new inspector.Session() : undefined;
+	let cpuStartedAt = 0;
 	if (session !== undefined) {
 		session.connect();
 		await startHeapSampling(session);
+		await startCpuSampling(session);
+		cpuStartedAt = performance.now();
 	}
 	let report: CoreOptimizationReport | undefined;
 	const compilePhaseNames: Record<string, keyof CompilerScalePhases> = {
@@ -529,6 +643,7 @@ async function compileSample(
 	const runtimeWire = serializeRuntimeImage(image.runtime, { debugInfo: false });
 	phases.serializeMs = performance.now() - serializeStartedAt;
 	const wallMs = performance.now() - wallStartedAt;
+	const cpuProfile = session === undefined ? undefined : await stopCpuSampling(session);
 	const allocationProfile =
 		session === undefined ? undefined : await stopHeapSampling(session);
 	session?.disconnect();
@@ -543,6 +658,10 @@ async function compileSample(
 		allocationProfile === undefined
 			? undefined
 			: sampledAllocationSummary(allocationProfile.head);
+	const cpu =
+		cpuProfile === undefined
+			? undefined
+			: sampledCpuSummary(cpuProfile, cpuStartedAt, optimizeStart, optimizeEnd);
 	sampleHeap();
 	const memory = process.memoryUsage();
 	const resource = process.resourceUsage();
@@ -584,6 +703,7 @@ async function compileSample(
 					profile: {
 						samplingIntervalBytes: HEAP_SAMPLING_INTERVAL,
 						...allocation,
+						...cpu!,
 						gcMsDuringOptimize: relevantGc.reduce(
 							(total, entry) => total + entry.duration,
 							0,
