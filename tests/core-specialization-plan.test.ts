@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
@@ -323,6 +324,14 @@ function admissionIntervalProgram(interiorCall: boolean) {
 }
 
 describe("late Core specialization plan", () => {
+	it("keeps rich recipe projections out of production target lowering", () => {
+		const source = readFileSync("src/compiler/target/lower-execution.ts", "utf8");
+
+		expect(source).not.toMatch(/CorePlanSpecialization|projectCoreSpecialization/u);
+		expect(source).toMatch(/coreSpecializationRecipeKindAt/u);
+		expect(source).toMatch(/coreSpecializationRecipePayloadAt/u);
+	});
+
 	it("plans direct split regions from the canonical callBuiltin producer", () => {
 		for (const [kind, source] of [
 			[

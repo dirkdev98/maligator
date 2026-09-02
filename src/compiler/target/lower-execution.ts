@@ -9,7 +9,6 @@ import type {
 	CoreAllocatedRegion,
 	CoreDirectEntryPlan,
 	CorePlanRepresentation,
-	CorePlanSpecialization,
 } from "../core/core-ir-regions.ts";
 import { CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE } from "../core/core-ir-shape-provenance.ts";
 import {
@@ -32,7 +31,19 @@ import type {
 	CoreValueId,
 } from "../core/core-ir.ts";
 import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
-import { projectCoreSpecializationRecipes } from "../core/core-specialization-recipes.ts";
+import {
+	coreSpecializationRecipeAdmissionAt,
+	coreSpecializationRecipeAnchorsAt,
+	coreSpecializationRecipeClaimsAt,
+	coreSpecializationRecipeExceptionalBlocksAt,
+	coreSpecializationRecipeFunctionAt,
+	coreSpecializationRecipeIdAt,
+	coreSpecializationRecipeKindAt,
+	coreSpecializationRecipeOrdinaryBlocksAt,
+	coreSpecializationRecipePayloadAt,
+	coreSpecializationRecipeTargetFunctionsAt,
+} from "../core/core-specialization-recipes.ts";
+import type { CoreSpecializationRecipeTable } from "../core/core-specialization-recipes.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
@@ -440,7 +451,8 @@ function rebuildOperation(
 
 function lowerCoreSpecializations(
 	fn: CoreFunctionStore,
-	selections: ReadonlyArray<CorePlanSpecialization>,
+	recipeTable: CoreSpecializationRecipeTable,
+	recipeRows: ReadonlyArray<number>,
 	instructions: ReadonlyMap<CoreInstructionId, CompilerInstruction>,
 	blocks: ReadonlyMap<CoreBlockId, number>,
 	registerForValue: (value: CoreValueId) => number,
@@ -457,44 +469,62 @@ function lowerCoreSpecializations(
 		if (lowered === undefined) throw new Error(`Core plan lowering lost block b${block}`);
 		return lowered;
 	};
-	const envelope = (selection: CorePlanSpecialization) => ({
-		anchors: selection.anchors.map(requireInstruction),
-		claimedInstructions: selection.claimedInstructions.map(requireInstruction),
-		controlFlow: {
-			ordinaryBlocks: selection.ordinaryBlocks.map(requireBlock),
-			exceptionalBlocks: selection.exceptionalBlocks.map(requireBlock),
-		},
-		cost: {
-			score: selection.claimedInstructions.length - 1,
-			metadataOperations: selection.claimedInstructions.length,
-		},
-	});
-	const admission = (selection: CorePlanSpecialization) => ({
-		anchor: requireInstruction(selection.admission.anchor),
-		mode: selection.admission.mode,
-	});
+	const envelope = (row: number) => {
+		const claims = coreSpecializationRecipeClaimsAt(recipeTable, row);
+		return {
+			anchors: coreSpecializationRecipeAnchorsAt(recipeTable, row).map(
+				requireInstruction,
+			),
+			claimedInstructions: claims.map(requireInstruction),
+			controlFlow: {
+				ordinaryBlocks: coreSpecializationRecipeOrdinaryBlocksAt(recipeTable, row).map(
+					requireBlock,
+				),
+				exceptionalBlocks: coreSpecializationRecipeExceptionalBlocksAt(
+					recipeTable,
+					row,
+				).map(requireBlock),
+			},
+			cost: {
+				score: claims.length - 1,
+				metadataOperations: claims.length,
+			},
+		};
+	};
+	const admission = (row: number) => {
+		const plan = coreSpecializationRecipeAdmissionAt(recipeTable, row);
+		if (plan === undefined)
+			throw new Error(
+				`Core recipe ${coreSpecializationRecipeIdAt(recipeTable, row)} has no admission`,
+			);
+		return { anchor: requireInstruction(plan.anchor), mode: plan.mode };
+	};
 	const regions: Array<CoreAllocatedRegion> = [];
-	for (const selection of selections) {
+	for (const row of recipeRows) {
+		const kind = coreSpecializationRecipeKindAt(recipeTable, row);
+		const id = coreSpecializationRecipeIdAt(recipeTable, row);
+		const anchors = coreSpecializationRecipeAnchorsAt(recipeTable, row);
+		const claims = coreSpecializationRecipeClaimsAt(recipeTable, row);
 		if (
-			selection.kind === "guarded-direct-call" ||
-			selection.kind === "fresh-array-length" ||
-			selection.kind === "function-call-chain"
+			kind === "guarded-direct-call" ||
+			kind === "fresh-array-length" ||
+			kind === "function-call-chain"
 		)
 			continue;
-		const anchor = selection.anchors[0]!;
+		const anchor = anchors[0]!;
 		const loweredAnchor = requireInstruction(anchor);
-		if (selection.kind === "numeric-fusion") {
+		if (kind === "numeric-fusion") {
 			if (loweredAnchor.type !== "binary") {
-				throw new Error(`Core numeric plan ${selection.id} does not lower to binary`);
+				throw new Error(`Core numeric plan ${id} does not lower to binary`);
 			}
 			const result =
 				fn.kernel.instructionResultCount(anchor) === 0
 					? undefined
 					: fn.kernel.resultAt(fn.kernel.instructionResultStart(anchor));
 			if (result === undefined) {
-				throw new Error(`Core numeric plan ${selection.id} has no result`);
+				throw new Error(`Core numeric plan ${id} has no result`);
 			}
-			const pairs = selection.claimedInstructions.slice(1).map((instruction) => {
+			const pairs = claims.slice(1).map((instruction) => {
 				const lowered = requireInstruction(instruction);
 				const operandStart = fn.kernel.instructionOperandStart(instruction);
 				const operandCount = fn.kernel.instructionOperandCount(instruction);
@@ -506,7 +536,7 @@ function lowerCoreSpecializations(
 					}
 				}
 				if (lowered.type !== "binary" || (input !== 0 && input !== 1)) {
-					throw new Error(`Core numeric plan ${selection.id} has an invalid finish`);
+					throw new Error(`Core numeric plan ${id} has an invalid finish`);
 				}
 				return {
 					first: loweredAnchor,
@@ -515,17 +545,17 @@ function lowerCoreSpecializations(
 				};
 			});
 			if (pairs.length === 0) {
-				throw new Error(`Core numeric plan ${selection.id} has no fused pair`);
+				throw new Error(`Core numeric plan ${id} has no fused pair`);
 			}
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [loweredAnchor, pairs[0]!.finish],
 				kind: "numeric-fusion",
 				license: {
 					guard: "structural",
 					genericTwin: "retained",
 					materialization: "none",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "binary-pairs-f64",
 				composition: "overlay",
@@ -534,12 +564,17 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "indexed-length-loop") {
-			const indexed = selection.indexedLengthLoop;
+		if (kind === "indexed-length-loop") {
+			const indexed = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"indexed-length-loop",
+				"indexedLengthLoop",
+			);
 			const load = requireInstruction(indexed.load);
 			const comparison = requireInstruction(indexed.comparison);
 			if (load.type !== "loadPropertyStatic" || comparison.type !== "binary") {
-				throw new Error(`Core indexed-length plan ${selection.id} lost its anchors`);
+				throw new Error(`Core indexed-length plan ${id} lost its anchors`);
 			}
 			const elements = indexed.elements.map((element) => {
 				const instruction = requireInstruction(element.instruction);
@@ -547,7 +582,7 @@ function lowerCoreSpecializations(
 					(element.kind === "load" && instruction.type !== "loadProperty") ||
 					(element.kind === "store" && instruction.type !== "storeProperty")
 				) {
-					throw new Error(`Core indexed-length plan ${selection.id} lost an element`);
+					throw new Error(`Core indexed-length plan ${id} lost an element`);
 				}
 				return {
 					instruction: instruction as Extract<
@@ -558,14 +593,14 @@ function lowerCoreSpecializations(
 				};
 			});
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [load, comparison],
 				kind: "indexed-length-loop",
 				license: {
 					guard: "structural",
 					genericTwin: "retained",
 					materialization: "none",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "live-indexed-length-loops",
 				cost: {
@@ -585,13 +620,18 @@ function lowerCoreSpecializations(
 			continue;
 		}
 		if (
-			selection.kind === "array-values-iterator-cursor" ||
-			selection.kind === "string-iterator-cursor" ||
-			selection.kind === "typed-array-iterator-cursor" ||
-			selection.kind === "map-iterator-cursor" ||
-			selection.kind === "set-iterator-cursor"
+			kind === "array-values-iterator-cursor" ||
+			kind === "string-iterator-cursor" ||
+			kind === "typed-array-iterator-cursor" ||
+			kind === "map-iterator-cursor" ||
+			kind === "set-iterator-cursor"
 		) {
-			const cursor = selection.iteratorCursor;
+			const cursor = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				kind,
+				"iteratorCursor",
+			);
 			const initialize = requireInstruction(cursor.initialize);
 			const steps = cursor.steps.map(requireInstruction);
 			if (
@@ -599,20 +639,20 @@ function lowerCoreSpecializations(
 				steps.length === 0 ||
 				steps.some((step) => step.type !== "iteratorStep")
 			) {
-				throw new Error(`Core iterator plan ${selection.id} lost its protocol steps`);
+				throw new Error(`Core iterator plan ${id} lost its protocol steps`);
 			}
 			const iteratorSteps = steps.filter(
 				(step): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
 					step.type === "iteratorStep",
 			);
 			const common = {
-				...envelope(selection),
+				...envelope(row),
 				anchors: [initialize, iteratorSteps[0]!] as const,
 				license: {
 					guard: "structural" as const,
 					genericTwin: "retained" as const,
 					materialization: "none" as const,
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				cost: {
 					score: iteratorSteps.length * 8,
@@ -624,11 +664,11 @@ function lowerCoreSpecializations(
 				stateSynchronization: "authoritative-language-object" as const,
 				suspension: "forbidden" as const,
 			};
-			switch (selection.kind) {
+			switch (kind) {
 				case "array-values-iterator-cursor":
 					regions.push({
 						...common,
-						kind: selection.kind,
+						kind: kind,
 						representation: "array-values-authoritative-cursor",
 						protocol: "array-values",
 					});
@@ -636,7 +676,7 @@ function lowerCoreSpecializations(
 				case "string-iterator-cursor":
 					regions.push({
 						...common,
-						kind: selection.kind,
+						kind: kind,
 						representation: "string-authoritative-cursor",
 						protocol: "string",
 					});
@@ -644,7 +684,7 @@ function lowerCoreSpecializations(
 				case "typed-array-iterator-cursor":
 					regions.push({
 						...common,
-						kind: selection.kind,
+						kind: kind,
 						representation: "typed-array-authoritative-cursor",
 						protocol: "typed-array-values",
 					});
@@ -652,7 +692,7 @@ function lowerCoreSpecializations(
 				case "map-iterator-cursor":
 					regions.push({
 						...common,
-						kind: selection.kind,
+						kind: kind,
 						representation: "map-authoritative-cursor",
 						protocol: "map",
 					});
@@ -660,7 +700,7 @@ function lowerCoreSpecializations(
 				case "set-iterator-cursor":
 					regions.push({
 						...common,
-						kind: selection.kind,
+						kind: kind,
 						representation: "set-authoritative-cursor",
 						protocol: "set",
 					});
@@ -668,25 +708,30 @@ function lowerCoreSpecializations(
 			}
 			continue;
 		}
-		if (selection.kind === "iterator-result-virtualization") {
-			const virtualization = selection.iteratorResultVirtualization;
+		if (kind === "iterator-result-virtualization") {
+			const virtualization = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"iterator-result-virtualization",
+				"iteratorResultVirtualization",
+			);
 			const steps = virtualization.steps.map(requireInstruction);
 			if (steps.length === 0 || steps.some((step) => step.type !== "iteratorStep")) {
-				throw new Error(`Core iterator-result plan ${selection.id} lost its steps`);
+				throw new Error(`Core iterator-result plan ${id} lost its steps`);
 			}
 			const iteratorSteps = steps.filter(
 				(step): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
 					step.type === "iteratorStep",
 			);
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [iteratorSteps[0]!] as const,
 				kind: "iterator-result-virtualization",
 				license: {
 					guard: virtualization.guard,
 					genericTwin: "retained",
 					materialization: "on-demand",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "virtual-iterator-result",
 				composition: "overlay",
@@ -701,8 +746,13 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "iterator-entry-pair-virtualization") {
-			const entry = selection.iteratorEntryPairVirtualization;
+		if (kind === "iterator-entry-pair-virtualization") {
+			const entry = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"iterator-entry-pair-virtualization",
+				"iteratorEntryPairVirtualization",
+			);
 			const cursorInitialize = requireInstruction(entry.cursorInitialize);
 			const outerStep = requireInstruction(entry.outerStep);
 			const innerInitialize = requireInstruction(entry.innerInitialize);
@@ -715,7 +765,7 @@ function lowerCoreSpecializations(
 				innerSteps.some((step) => step.type !== "iteratorStep") ||
 				innerCloses.some((close) => close.type !== "iteratorClose")
 			) {
-				throw new Error(`Core iterator-entry plan ${selection.id} lost its protocol`);
+				throw new Error(`Core iterator-entry plan ${id} lost its protocol`);
 			}
 			const loweredInnerSteps = innerSteps.filter(
 				(step): step is Extract<CompilerInstruction, { type: "iteratorStep" }> =>
@@ -726,21 +776,21 @@ function lowerCoreSpecializations(
 					close.type === "iteratorClose",
 			);
 			if (loweredInnerSteps.length !== 2) {
-				throw new Error(`Core iterator-entry plan ${selection.id} lost its pair steps`);
+				throw new Error(`Core iterator-entry plan ${id} lost its pair steps`);
 			}
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [outerStep, innerInitialize] as const,
 				kind: "iterator-entry-pair-virtualization",
 				license: {
 					guard: entry.guard,
 					genericTwin: "retained",
 					materialization: "on-demand",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "virtual-iterator-entry-pair",
 				composition: "overlay",
-				cost: { score: 32, metadataOperations: selection.claimedInstructions.length },
+				cost: { score: 32, metadataOperations: claims.length },
 				cursorInitialize,
 				outerStep,
 				innerInitialize,
@@ -753,8 +803,13 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "string-split-cursor") {
-			const cursor = selection.stringSplitCursor;
+		if (kind === "string-split-cursor") {
+			const cursor = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"string-split-cursor",
+				"stringSplitCursor",
+			);
 			const property =
 				cursor.property === undefined ? undefined : requireInstruction(cursor.property);
 			const call = requireInstruction(cursor.call);
@@ -786,17 +841,17 @@ function lowerCoreSpecializations(
 					(primitiveLength) => primitiveLength.type !== "loadPropertyStatic",
 				)
 			) {
-				throw new Error(`Core String.split cursor ${selection.id} lost its trace`);
+				throw new Error(`Core String.split cursor ${id} lost its trace`);
 			}
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [call, branch, length, backedge],
 				kind: "string-split-cursor",
 				license: {
 					guard: cursor.guard,
 					genericTwin: "retained",
 					materialization: "on-demand",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "split-cursor-spans",
 				...(property === undefined ? {} : { property }),
@@ -822,8 +877,13 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "string-split-projection") {
-			const split = selection.stringSplitProjection;
+		if (kind === "string-split-projection") {
+			const split = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"string-split-projection",
+				"stringSplitProjection",
+			);
 			const call = requireInstruction(split.call);
 			const property =
 				split.property === undefined ? undefined : requireInstruction(split.property);
@@ -833,19 +893,19 @@ function lowerCoreSpecializations(
 				(property !== undefined && property.type !== "loadPropertyStatic") ||
 				separator.type !== "createString"
 			) {
-				throw new Error(`Core String.split plan ${selection.id} lost its producers`);
+				throw new Error(`Core String.split plan ${id} lost its producers`);
 			}
 			const loads = split.loads.map((load) => {
 				const instruction = requireInstruction(load.instruction);
 				if (load.kind === "length") {
 					if (instruction.type !== "loadPropertyStatic") {
-						throw new Error(`Core String.split plan ${selection.id} lost a length load`);
+						throw new Error(`Core String.split plan ${id} lost a length load`);
 					}
 					return { instruction, kind: "length" as const };
 				}
 				const key = requireInstruction(load.key);
 				if (instruction.type !== "loadProperty" || key.type !== "createNumber") {
-					throw new Error(`Core String.split plan ${selection.id} lost an element load`);
+					throw new Error(`Core String.split plan ${id} lost an element load`);
 				}
 				return {
 					instruction,
@@ -855,14 +915,14 @@ function lowerCoreSpecializations(
 				};
 			});
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [call, loads[0]!.instruction],
 				kind: "string-split-projection",
 				license: {
 					guard: split.guard,
 					genericTwin: "retained",
 					materialization: "whole-region",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "projected-elements",
 				...(property === undefined ? {} : { property }),
@@ -875,18 +935,23 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "regexp-exec-projection") {
-			const regexp = selection.regexpExecProjection;
+		if (kind === "regexp-exec-projection") {
+			const regexp = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"regexp-exec-projection",
+				"regexpExecProjection",
+			);
 			const call = requireInstruction(regexp.call);
 			const property = requireInstruction(regexp.property);
 			if (call.type !== "call" || property.type !== "loadPropertyStatic") {
-				throw new Error(`Core RegExp.exec plan ${selection.id} lost its call`);
+				throw new Error(`Core RegExp.exec plan ${id} lost its call`);
 			}
 			const nullChecks = regexp.nullChecks.map((check) => {
 				const comparison = requireInstruction(check.comparison);
 				const nullValue = requireInstruction(check.nullValue);
 				if (comparison.type !== "binary" || nullValue.type !== "createNull") {
-					throw new Error(`Core RegExp.exec plan ${selection.id} lost a null check`);
+					throw new Error(`Core RegExp.exec plan ${id} lost a null check`);
 				}
 				return { comparison, nullValue };
 			});
@@ -902,7 +967,7 @@ function lowerCoreSpecializations(
 								constructorIntrinsic.type !== "loadIntrinsic" ||
 								construct.type !== "construct"
 							) {
-								throw new Error(`Core RegExp.exec plan ${selection.id} lost its literal`);
+								throw new Error(`Core RegExp.exec plan ${id} lost its literal`);
 							}
 							return { constructorIntrinsic, construct };
 						})();
@@ -910,7 +975,7 @@ function lowerCoreSpecializations(
 				const instruction = requireInstruction(load.instruction);
 				const key = requireInstruction(load.key);
 				if (instruction.type !== "loadProperty" || key.type !== "createNumber") {
-					throw new Error(`Core RegExp.exec plan ${selection.id} lost a capture`);
+					throw new Error(`Core RegExp.exec plan ${id} lost a capture`);
 				}
 				const consumer = load.consumer;
 				if (consumer === undefined) {
@@ -923,7 +988,7 @@ function lowerCoreSpecializations(
 				if (consumer.kind === "length") {
 					const consumerProperty = requireInstruction(consumer.property);
 					if (consumerProperty.type !== "loadPropertyStatic") {
-						throw new Error(`Core RegExp.exec plan ${selection.id} lost a length`);
+						throw new Error(`Core RegExp.exec plan ${id} lost a length`);
 					}
 					return {
 						instruction,
@@ -936,7 +1001,7 @@ function lowerCoreSpecializations(
 					const intrinsic = requireInstruction(consumer.intrinsic);
 					const consumerCall = requireInstruction(consumer.call);
 					if (intrinsic.type !== "loadIntrinsic" || consumerCall.type !== "call") {
-						throw new Error(`Core RegExp.exec plan ${selection.id} lost Number`);
+						throw new Error(`Core RegExp.exec plan ${id} lost Number`);
 					}
 					return {
 						instruction,
@@ -955,7 +1020,7 @@ function lowerCoreSpecializations(
 						consumerCall.type !== "call" ||
 						(zero !== undefined && zero.type !== "createNumber")
 					) {
-						throw new Error(`Core RegExp.exec plan ${selection.id} lost charCodeAt`);
+						throw new Error(`Core RegExp.exec plan ${id} lost charCodeAt`);
 					}
 					return {
 						instruction,
@@ -977,7 +1042,7 @@ function lowerCoreSpecializations(
 				const resultMoves = consumer.resultMoves.map((resultMove) => {
 					const move = requireInstruction(resultMove);
 					if (move.type !== "move") {
-						throw new Error(`Core RegExp.exec plan ${selection.id} lost a move`);
+						throw new Error(`Core RegExp.exec plan ${id} lost a move`);
 					}
 					return move;
 				});
@@ -989,7 +1054,7 @@ function lowerCoreSpecializations(
 					lowerCall.type !== "call" ||
 					lengthProperty.type !== "loadPropertyStatic"
 				) {
-					throw new Error(`Core RegExp.exec plan ${selection.id} lost ASCII case`);
+					throw new Error(`Core RegExp.exec plan ${id} lost ASCII case`);
 				}
 				return {
 					instruction,
@@ -1008,14 +1073,14 @@ function lowerCoreSpecializations(
 				};
 			});
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [call, loads[0]!.instruction],
 				kind: "regexp-exec-projection",
 				license: {
 					guard: regexp.guard,
 					genericTwin: "retained",
 					materialization: "whole-region",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "regexp-capture-spans",
 				property,
@@ -1028,12 +1093,17 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "regexp-iterator-projection") {
-			const regexp = selection.regexpIteratorProjection;
+		if (kind === "regexp-iterator-projection") {
+			const regexp = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"regexp-iterator-projection",
+				"regexpIteratorProjection",
+			);
 			const step = requireInstruction(regexp.step);
 			const doneBranch = requireInstruction(regexp.doneBranch);
 			if (step.type !== "iteratorStep" || doneBranch.type !== "jumpIf") {
-				throw new Error(`Core RegExp iterator plan ${selection.id} lost its step`);
+				throw new Error(`Core RegExp iterator plan ${id} lost its step`);
 			}
 			const loads = regexp.loads.map((load) => {
 				const instruction = requireInstruction(load.instruction);
@@ -1046,7 +1116,7 @@ function lowerCoreSpecializations(
 					numberIntrinsic.type !== "loadIntrinsic" ||
 					numberCall.type !== "call"
 				) {
-					throw new Error(`Core RegExp iterator plan ${selection.id} lost a capture`);
+					throw new Error(`Core RegExp iterator plan ${id} lost a capture`);
 				}
 				return {
 					instruction,
@@ -1057,14 +1127,14 @@ function lowerCoreSpecializations(
 				};
 			});
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [step, doneBranch, loads[0]!.instruction],
 				kind: "regexp-iterator-projection",
 				license: {
 					guard: regexp.guard,
 					genericTwin: "retained",
 					materialization: "on-demand",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "regexp-iterator-capture-spans",
 				doneBranch,
@@ -1076,8 +1146,13 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "string-slice-number") {
-			const slice = selection.stringSliceNumber;
+		if (kind === "string-slice-number") {
+			const slice = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"string-slice-number",
+				"stringSliceNumber",
+			);
 			const property = requireInstruction(slice.property);
 			const sliceCall = requireInstruction(slice.sliceCall);
 			const start = requireInstruction(slice.sliceStartInstruction);
@@ -1090,17 +1165,17 @@ function lowerCoreSpecializations(
 				numberIntrinsic.type !== "loadIntrinsic" ||
 				numberCall.type !== "call"
 			) {
-				throw new Error(`Core String.slice plan ${selection.id} lost its producers`);
+				throw new Error(`Core String.slice plan ${id} lost its producers`);
 			}
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [sliceCall, numberCall],
 				kind: "string-slice-number",
 				license: {
 					guard: slice.guard,
 					genericTwin: "retained",
 					materialization: "none",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "primitive-string-span-number",
 				property,
@@ -1113,22 +1188,27 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "string-char-code-at-chain") {
-			const chain = selection.stringCharCodeAt;
+		if (kind === "string-char-code-at-chain") {
+			const chain = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"string-char-code-at-chain",
+				"stringCharCodeAt",
+			);
 			const property = requireInstruction(chain.property);
 			const call = requireInstruction(chain.call);
 			if (property.type !== "loadPropertyStatic" || call.type !== "call") {
-				throw new Error(`Core String.charCodeAt plan ${selection.id} lost its call`);
+				throw new Error(`Core String.charCodeAt plan ${id} lost its call`);
 			}
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [property, call],
 				kind: "string-char-code-at-chain",
 				license: {
 					guard: chain.guard,
 					genericTwin: "retained",
 					materialization: "none",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "primitive-string-code-unit",
 				cost: { score: 12, metadataOperations: 2 },
@@ -1140,22 +1220,27 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "builtin-collection-call-chain") {
-			const chain = selection.builtinCollectionCall;
+		if (kind === "builtin-collection-call-chain") {
+			const chain = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"builtin-collection-call-chain",
+				"builtinCollectionCall",
+			);
 			const property = requireInstruction(chain.property);
 			const call = requireInstruction(chain.call);
 			if (property.type !== "loadPropertyStatic" || call.type !== "call") {
-				throw new Error(`Core collection plan ${selection.id} lost its call`);
+				throw new Error(`Core collection plan ${id} lost its call`);
 			}
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [property, call],
 				kind: "builtin-collection-call-chain",
 				license: {
 					guard: chain.guard,
 					genericTwin: "retained",
 					materialization: "none",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "captured-collection-method",
 				cost: { score: 14, metadataOperations: 2 },
@@ -1167,14 +1252,19 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "stack-object-plan") {
-			const stack = selection.stackObject;
+		if (kind === "stack-object-plan") {
+			const stack = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"stack-object-plan",
+				"stackObject",
+			);
 			const allocation = requireInstruction(stack.allocation);
 			if (
 				allocation.type !== "createObject" &&
 				allocation.type !== "createObjectShaped"
 			) {
-				throw new Error(`Core stack-object plan ${selection.id} has no allocation`);
+				throw new Error(`Core stack-object plan ${id} has no allocation`);
 			}
 			const accesses = stack.accesses.map(({ instruction, slot }) => {
 				const lowered = requireInstruction(instruction);
@@ -1184,22 +1274,20 @@ function lowerCoreSpecializations(
 					lowered.type !== "storeProperty" &&
 					lowered.type !== "storePropertyStatic"
 				) {
-					throw new Error(`Core stack-object plan ${selection.id} has an invalid access`);
+					throw new Error(`Core stack-object plan ${id} has an invalid access`);
 				}
 				return { instruction: lowered, slot };
 			});
 			const materializations = stack.materializations.map(({ instruction }) => {
 				const lowered = requireInstruction(instruction);
 				if (lowered.type !== "return") {
-					throw new Error(
-						`Core stack-object plan ${selection.id} has an invalid materialization`,
-					);
+					throw new Error(`Core stack-object plan ${id} has an invalid materialization`);
 				}
 				return { instruction: lowered, kind: "return" as const };
 			});
 			const materializes = materializations.length > 0;
 			regions.push({
-				...envelope(selection),
+				...envelope(row),
 				anchors: [allocation],
 				kind: "stack-object-plan",
 				license: {
@@ -1208,24 +1296,24 @@ function lowerCoreSpecializations(
 						obligations: [
 							{
 								kind: "fallback",
-								id: `${selection.id}:fallback`,
+								id: `${id}:fallback`,
 								cause: "escape",
 							},
 							...materializations.map((_, index) => ({
 								kind: "materialize" as const,
-								id: `${selection.id}:materialize:${index}`,
+								id: `${id}:materialize:${index}`,
 								cause: "escape" as const,
 							})),
 						],
 					},
 					genericTwin: "retained",
 					materialization: materializes ? "on-demand" : "none",
-					admission: admission(selection),
+					admission: admission(row),
 				},
 				representation: "activation-local-fixed-shape-objects",
 				cost: {
 					score: Math.max(1, stack.slotCount),
-					metadataOperations: selection.claimedInstructions.length,
+					metadataOperations: claims.length,
 				},
 				sites: [
 					{
@@ -1238,7 +1326,7 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (selection.kind === "dense-array-plan") continue;
+		if (kind === "dense-array-plan") continue;
 		throw new Error("Core target encountered an unsupported specialization plan");
 	}
 	return regions;
@@ -1564,14 +1652,15 @@ function lowerFunctionToTarget(
 	functionMap: ExecutionFunctionMap,
 	directEntryIds: ReadonlyMap<CoreInstructionId, number>,
 	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
-	specializationPlans: ReadonlyArray<CorePlanSpecialization>,
+	recipeTable: CoreSpecializationRecipeTable,
+	recipeRows: ReadonlyArray<number>,
 	blockOrder: ReadonlyArray<CoreBlockId>,
 	siteFacts: ReadonlyMap<string, CompilerSiteFacts>,
 	instructionSites: WeakMap<object, CompilerSiteFacts>,
 	reuseRegisters: boolean,
 ): ExecutionFunction {
 	const protectedInstructions = new Set(
-		specializationPlans.flatMap(({ claimedInstructions }) => claimedInstructions),
+		recipeRows.flatMap((row) => coreSpecializationRecipeClaimsAt(recipeTable, row)),
 	);
 	const omittedInstructions = immediateOnlyInstructions(
 		coreFunction,
@@ -1584,11 +1673,15 @@ function lowerFunctionToTarget(
 		() => ({ instructions: [] }),
 	);
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
-	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>(
-		specializationPlans
-			.filter(({ kind }) => kind === "guarded-direct-call")
-			.map((selection) => [selection.anchors[0]!, selection.targetFunctions]),
-	);
+	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
+	for (const row of recipeRows) {
+		if (coreSpecializationRecipeKindAt(recipeTable, row) !== "guarded-direct-call")
+			continue;
+		guardedTargets.set(
+			coreSpecializationRecipeAnchorsAt(recipeTable, row)[0]!,
+			coreSpecializationRecipeTargetFunctionsAt(recipeTable, row),
+		);
+	}
 	for (const entry of directEntryPlans) {
 		for (const site of entry.callSites)
 			guardedTargets.set(site.instruction, [entry.function]);
@@ -1607,82 +1700,122 @@ function lowerFunctionToTarget(
 	const plannedPrimitiveStringLengths = new Map<CoreInstructionId, CoreAttributeValue>();
 	const plannedDirectFunctionCalls = new Map<CoreInstructionId, CoreAttributeValue>();
 	const plannedDirectCallTargets = new Map<CoreInstructionId, CoreAttributeValue>();
-	for (const selection of specializationPlans) {
-		if (selection.kind === "dense-array-plan") {
-			denseReserveLengths.set(
-				selection.denseArray.allocation,
-				selection.denseArray.length,
+	for (const row of recipeRows) {
+		const kind = coreSpecializationRecipeKindAt(recipeTable, row);
+		if (kind === "dense-array-plan") {
+			const denseArray = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"dense-array-plan",
+				"denseArray",
+			);
+			denseReserveLengths.set(denseArray.allocation, denseArray.length);
+		}
+		if (kind === "string-split-projection") {
+			const split = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"string-split-projection",
+				"stringSplitProjection",
+			);
+			plannedBuiltinCalls.set(
+				split.call,
+				split.builtinCall as unknown as CoreAttributeValue,
 			);
 		}
-		if (selection.kind === "string-split-projection") {
-			plannedBuiltinCalls.set(
-				selection.stringSplitProjection.call,
-				selection.stringSplitProjection.builtinCall as unknown as CoreAttributeValue,
-			);
-		}
-		if (selection.kind === "string-split-cursor") {
-			plannedBuiltinCalls.set(
-				selection.stringSplitCursor.call,
-				selection.stringSplitCursor.splitBuiltinCall as unknown as CoreAttributeValue,
+		if (kind === "string-split-cursor") {
+			const cursor = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"string-split-cursor",
+				"stringSplitCursor",
 			);
 			plannedBuiltinCalls.set(
-				selection.stringSplitCursor.trimCall,
-				selection.stringSplitCursor.trimBuiltinCall as unknown as CoreAttributeValue,
+				cursor.call,
+				cursor.splitBuiltinCall as unknown as CoreAttributeValue,
 			);
-			for (const length of selection.stringSplitCursor.primitiveStringLengths) {
+			plannedBuiltinCalls.set(
+				cursor.trimCall,
+				cursor.trimBuiltinCall as unknown as CoreAttributeValue,
+			);
+			for (const length of cursor.primitiveStringLengths) {
 				plannedPrimitiveStringLengths.set(length, true);
 			}
 		}
-		if (selection.kind === "string-slice-number") {
+		if (kind === "string-slice-number") {
+			const slice = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"string-slice-number",
+				"stringSliceNumber",
+			);
 			plannedBuiltinCalls.set(
-				selection.stringSliceNumber.sliceCall,
-				selection.stringSliceNumber.builtinCall as unknown as CoreAttributeValue,
+				slice.sliceCall,
+				slice.builtinCall as unknown as CoreAttributeValue,
 			);
 		}
-		if (selection.kind === "regexp-exec-projection") {
+		if (kind === "regexp-exec-projection") {
+			const regexp = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"regexp-exec-projection",
+				"regexpExecProjection",
+			);
 			plannedBuiltinCalls.set(
-				selection.regexpExecProjection.call,
-				selection.regexpExecProjection.builtinCall as unknown as CoreAttributeValue,
+				regexp.call,
+				regexp.builtinCall as unknown as CoreAttributeValue,
 			);
 		}
-		if (selection.kind === "string-char-code-at-chain") {
-			plannedBuiltinCalls.set(
-				selection.stringCharCodeAt.call,
-				selection.stringCharCodeAt.builtinCall as unknown as CoreAttributeValue,
+		if (kind === "string-char-code-at-chain") {
+			const chain = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"string-char-code-at-chain",
+				"stringCharCodeAt",
 			);
-			if (selection.stringCharCodeAt.bounded !== undefined) {
-				plannedDirectStringCharCodeAtPositions.set(
-					selection.stringCharCodeAt.call,
-					"inBounds",
-				);
-				plannedPrimitiveStringLengths.set(
-					selection.stringCharCodeAt.bounded.length,
-					true,
-				);
+			plannedBuiltinCalls.set(
+				chain.call,
+				chain.builtinCall as unknown as CoreAttributeValue,
+			);
+			if (chain.bounded !== undefined) {
+				plannedDirectStringCharCodeAtPositions.set(chain.call, "inBounds");
+				plannedPrimitiveStringLengths.set(chain.bounded.length, true);
 			}
 		}
-		if (selection.kind === "builtin-collection-call-chain") {
-			plannedBuiltinCalls.set(
-				selection.builtinCollectionCall.call,
-				selection.builtinCollectionCall.builtinCall as unknown as CoreAttributeValue,
+		if (kind === "builtin-collection-call-chain") {
+			const chain = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"builtin-collection-call-chain",
+				"builtinCollectionCall",
 			);
-			if (selection.builtinCollectionCall.exactReceiver !== undefined) {
-				plannedExactCollectionReceivers.set(
-					selection.builtinCollectionCall.call,
-					selection.builtinCollectionCall.exactReceiver,
-				);
+			plannedBuiltinCalls.set(
+				chain.call,
+				chain.builtinCall as unknown as CoreAttributeValue,
+			);
+			if (chain.exactReceiver !== undefined) {
+				plannedExactCollectionReceivers.set(chain.call, chain.exactReceiver);
 			}
 		}
-		if (selection.kind === "fresh-array-length") {
-			plannedExactArrayLengths.set(selection.freshArrayLength.load, true);
+		if (kind === "fresh-array-length") {
+			const fresh = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"fresh-array-length",
+				"freshArrayLength",
+			);
+			plannedExactArrayLengths.set(fresh.load, true);
 		}
-		if (selection.kind === "function-call-chain") {
-			plannedDirectFunctionCalls.set(selection.functionCall.call, true);
-			if (selection.functionCall.targetFunction !== undefined) {
-				plannedDirectCallTargets.set(
-					selection.functionCall.call,
-					selection.functionCall.targetFunction,
-				);
+		if (kind === "function-call-chain") {
+			const call = coreSpecializationRecipePayloadAt(
+				recipeTable,
+				row,
+				"function-call-chain",
+				"functionCall",
+			);
+			plannedDirectFunctionCalls.set(call.call, true);
+			if (call.targetFunction !== undefined) {
+				plannedDirectCallTargets.set(call.call, call.targetFunction);
 			}
 		}
 	}
@@ -2011,7 +2144,8 @@ function lowerFunctionToTarget(
 	);
 	const specializations = lowerCoreSpecializations(
 		coreFunction,
-		specializationPlans,
+		recipeTable,
+		recipeRows,
 		loweredInstructions,
 		loweredBlockForCore,
 		registerForValue,
@@ -2101,19 +2235,18 @@ export function lowerCoreCompilationToExecutionProgram(
 	const functionMap = createExecutionFunctionMap(compilation);
 	const directEntryPlans = new Map<number, Array<CoreDirectEntryPlan>>();
 	const directEntryIds = new Map<number, Map<CoreInstructionId, number>>();
-	const specializationPlans = new Map<number, Array<CorePlanSpecialization>>();
+	const specializationRows = new Map<CoreFunctionId, Array<number>>();
 	const blockOrders = new Map(
 		compilation.plan.blockOrders.map(({ function: functionId, blocks }) => [
 			functionId,
 			blocks,
 		]),
 	);
-	for (const specialization of projectCoreSpecializationRecipes(
-		compilation.plan.recipes,
-	)) {
-		const selections = specializationPlans.get(specialization.function) ?? [];
-		selections.push(specialization);
-		specializationPlans.set(specialization.function, selections);
+	for (let row = 0; row < compilation.plan.recipes.count; row++) {
+		const functionId = coreSpecializationRecipeFunctionAt(compilation.plan.recipes, row);
+		const rows = specializationRows.get(functionId) ?? [];
+		rows.push(row);
+		specializationRows.set(functionId, rows);
 	}
 	for (const entry of compilation.plan.directEntries) {
 		const entries = directEntryPlans.get(entry.function) ?? [];
@@ -2133,7 +2266,8 @@ export function lowerCoreCompilationToExecutionProgram(
 			functionMap,
 			directEntryIds.get(core) ?? new Map(),
 			directEntryPlans.get(core) ?? [],
-			specializationPlans.get(core) ?? [],
+			compilation.plan.recipes,
+			specializationRows.get(core) ?? [],
 			blockOrders.get(core)!,
 			compilation.context.facts.sites,
 			compilation.context.facts.instructionSites,

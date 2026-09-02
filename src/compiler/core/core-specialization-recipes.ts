@@ -3,6 +3,7 @@ import type {
 	CorePlanSpecialization,
 	CorePlanSpecializationKind,
 } from "./core-ir-regions.ts";
+import type { CoreBlockId, CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 
 declare const CORE_SPECIALIZATION_RECIPE_TABLE: unique symbol;
 
@@ -374,10 +375,10 @@ export function buildCoreSpecializationRecipeTable(
 	return table;
 }
 
-export function projectCoreSpecializationRecipe(
+function decodeRecipePayload(
 	table: CoreSpecializationRecipeTable,
 	index: number,
-): CorePlanSpecialization {
+): Record<string, unknown> {
 	if (index < 0 || index >= table.count) {
 		throw new Error(`Core specialization recipe ${index} is out of range`);
 	}
@@ -423,6 +424,157 @@ export function projectCoreSpecializationRecipe(
 	const payload = decode() as Record<string, unknown>;
 	if (cursor !== limit)
 		throw new Error(`Core specialization recipe ${index} has trailing data`);
+	return payload;
+}
+
+type CoreSpecializationRecipeCommonKey =
+	| "id"
+	| "kind"
+	| "function"
+	| "anchors"
+	| "claimedInstructions"
+	| "ordinaryBlocks"
+	| "exceptionalBlocks"
+	| "representation"
+	| "requiredRepresentations"
+	| "target"
+	| "fallback"
+	| "semanticProtectors"
+	| "targetFunctions"
+	| "admission"
+	| "composition"
+	| "cost";
+
+type CoreSpecializationRecipeFor<Kind extends CorePlanSpecializationKind> = Extract<
+	CorePlanSpecialization,
+	{ readonly kind: Kind }
+>;
+
+export function coreSpecializationRecipeKindAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): CorePlanSpecializationKind {
+	if (index < 0 || index >= table.count)
+		throw new Error(`Core specialization recipe ${index} is out of range`);
+	const storage = recipeStorage(table);
+	return RECIPE_KINDS[storage.kindIds[index]!]!;
+}
+
+export function coreSpecializationRecipeFunctionAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): CoreFunctionId {
+	if (index < 0 || index >= table.count)
+		throw new Error(`Core specialization recipe ${index} is out of range`);
+	return recipeStorage(table).functions[index]! as CoreFunctionId;
+}
+
+export function coreSpecializationRecipeIdAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): string {
+	if (index < 0 || index >= table.count)
+		throw new Error(`Core specialization recipe ${index} is out of range`);
+	const storage = recipeStorage(table);
+	return storage.strings[storage.keyStringIds[index]!]!;
+}
+
+export function coreSpecializationRecipeAnchorsAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): ReadonlyArray<CoreInstructionId> {
+	const storage = recipeStorage(table);
+	return range(storage.anchorOffsets, storage.anchors, index) as Array<CoreInstructionId>;
+}
+
+export function coreSpecializationRecipeClaimsAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): ReadonlyArray<CoreInstructionId> {
+	const storage = recipeStorage(table);
+	return range(storage.claimOffsets, storage.claims, index) as Array<CoreInstructionId>;
+}
+
+export function coreSpecializationRecipeOrdinaryBlocksAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): ReadonlyArray<CoreBlockId> {
+	const storage = recipeStorage(table);
+	return range(
+		storage.ordinaryBlockOffsets,
+		storage.ordinaryBlocks,
+		index,
+	) as Array<CoreBlockId>;
+}
+
+export function coreSpecializationRecipeExceptionalBlocksAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): ReadonlyArray<CoreBlockId> {
+	const storage = recipeStorage(table);
+	return range(
+		storage.exceptionalBlockOffsets,
+		storage.exceptionalBlocks,
+		index,
+	) as Array<CoreBlockId>;
+}
+
+export function coreSpecializationRecipeTargetFunctionsAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): ReadonlyArray<CoreFunctionId> {
+	const storage = recipeStorage(table);
+	return range(
+		storage.targetFunctionOffsets,
+		storage.targetFunctions,
+		index,
+	) as Array<CoreFunctionId>;
+}
+
+export function coreSpecializationRecipeAdmissionAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): CorePlanSpecialization["admission"] {
+	const storage = recipeStorage(table);
+	const mode = storage.admissionModes[index];
+	if (mode === 255) return undefined as unknown as CorePlanSpecialization["admission"];
+	return {
+		anchor: storage.admissionAnchors[index]! as CoreInstructionId,
+		mode: mode === 0 ? "capture" : mode === 1 ? "stable" : "per-use",
+	};
+}
+
+export function coreSpecializationRecipePayloadAt<
+	Kind extends CorePlanSpecializationKind,
+	Key extends Exclude<
+		keyof CoreSpecializationRecipeFor<Kind>,
+		CoreSpecializationRecipeCommonKey
+	>,
+>(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+	kind: Kind,
+	key: Key,
+): CoreSpecializationRecipeFor<Kind>[Key] {
+	const actualKind = coreSpecializationRecipeKindAt(table, index);
+	if (actualKind !== kind) {
+		throw new Error(
+			`Core specialization recipe ${index} is ${actualKind}, expected ${kind}`,
+		);
+	}
+	const payload = decodeRecipePayload(table, index);
+	if (!(key in payload)) {
+		throw new Error(`Core specialization recipe ${index} has no ${String(key)} payload`);
+	}
+	return payload[key as string];
+}
+
+export function projectCoreSpecializationRecipe(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): CorePlanSpecialization {
+	const storage = recipeStorage(table);
+	const payload = decodeRecipePayload(table, index);
 	const requirementStart = storage.requirementOffsets[index]!;
 	const requirementEnd = storage.requirementOffsets[index + 1]!;
 	return {

@@ -16,7 +16,12 @@ import type {
 	CoreInstructionAttributes,
 	CoreInstructionId,
 } from "./core-ir.ts";
-import { projectCoreSpecializationRecipes } from "./core-specialization-recipes.ts";
+import {
+	coreSpecializationRecipeAnchorsAt,
+	coreSpecializationRecipeFunctionAt,
+	coreSpecializationRecipeKindAt,
+	coreSpecializationRecipeTargetFunctionsAt,
+} from "./core-specialization-recipes.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const allocationOpcodes = new Set([
@@ -162,20 +167,27 @@ function knownBuiltinCall(
 }
 
 function selectedStackAllocations(compilation: CoreCompilation): ReadonlySet<string> {
-	const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
-	return new Set(
-		specializations
-			.filter(({ kind }) => kind === "stack-object-plan")
-			.flatMap(({ function: functionId, anchors }) =>
-				anchors.map((instruction) => `${functionId}:${instruction}`),
-			),
-	);
+	const selected = new Set<string>();
+	for (let row = 0; row < compilation.plan.recipes.count; row++) {
+		if (
+			coreSpecializationRecipeKindAt(compilation.plan.recipes, row) !==
+			"stack-object-plan"
+		)
+			continue;
+		const functionId = coreSpecializationRecipeFunctionAt(compilation.plan.recipes, row);
+		for (const instruction of coreSpecializationRecipeAnchorsAt(
+			compilation.plan.recipes,
+			row,
+		)) {
+			selected.add(`${functionId}:${instruction}`);
+		}
+	}
+	return selected;
 }
 
 function selectedCallTargets(
 	compilation: CoreCompilation,
 ): ReadonlyMap<string, CompilerCallTargetSet> {
-	const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
 	const selected = new Map<string, Set<CoreFunctionId>>();
 	const add = (
 		caller: CoreFunctionId,
@@ -187,12 +199,16 @@ function selectedCallTargets(
 		for (const target of targets) current.add(target);
 		selected.set(key, current);
 	};
-	for (const specialization of specializations) {
-		if (specialization.kind !== "guarded-direct-call") continue;
+	for (let row = 0; row < compilation.plan.recipes.count; row++) {
+		if (
+			coreSpecializationRecipeKindAt(compilation.plan.recipes, row) !==
+			"guarded-direct-call"
+		)
+			continue;
 		add(
-			specialization.function,
-			specialization.anchors[0]!,
-			specialization.targetFunctions,
+			coreSpecializationRecipeFunctionAt(compilation.plan.recipes, row),
+			coreSpecializationRecipeAnchorsAt(compilation.plan.recipes, row)[0]!,
+			coreSpecializationRecipeTargetFunctionsAt(compilation.plan.recipes, row),
 		);
 	}
 	for (const entry of compilation.plan.directEntries) {
