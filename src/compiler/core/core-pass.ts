@@ -4,7 +4,12 @@ import type {
 	CoreAnalysisRequest,
 } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import type { CoreBlockId, CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreOpcodeId,
+} from "./core-ir.ts";
 import type {
 	CoreChangeDomain,
 	CoreChangeSet,
@@ -68,6 +73,7 @@ export interface CorePass {
 	readonly name: string;
 	readonly stage: CoreOptimizationStage;
 	readonly scope: CorePassScope;
+	readonly instructionOpcodes?: ReadonlySet<CoreOpcodeId>;
 	readonly requiredAnalyses: ReadonlyArray<CoreAnalysisDefinition<unknown>>;
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;
 	readonly preserves: ReadonlyArray<string>;

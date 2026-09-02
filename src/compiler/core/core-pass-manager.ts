@@ -99,6 +99,7 @@ export class CorePassManager {
 		const profileExhausted = new Set<string>();
 		const consumption = new Map<string, PassConsumption>();
 		const enqueue = (pass: CorePass, item: CorePassWorkItem): void => {
+			if (!this.#accepts(pass, item)) return;
 			const key = workKey(pass, item);
 			if (queued.has(key)) return;
 			if (
@@ -289,6 +290,11 @@ export class CorePassManager {
 			throw new Error(`Core pass ${pass.name} belongs to ${pass.stage}, not ${stage}`);
 		}
 		if (pass.name.length === 0) throw new Error("Core pass name is empty");
+		if (pass.instructionOpcodes !== undefined && pass.scope !== "instruction") {
+			throw new Error(
+				`Core pass ${pass.name} declares instruction opcodes for ${pass.scope} scope`,
+			);
+		}
 		if (
 			!Number.isSafeInteger(pass.budget.maxWorkItems) ||
 			pass.budget.maxWorkItems < 1 ||
@@ -297,6 +303,18 @@ export class CorePassManager {
 		) {
 			throw new Error(`Core pass ${pass.name} has an invalid work budget`);
 		}
+	}
+
+	#accepts(pass: CorePass, item: CorePassWorkItem): boolean {
+		if (item.scope !== "instruction" || pass.instructionOpcodes === undefined) {
+			return true;
+		}
+		const fn = this.#program.function(item.function);
+		return (
+			fn.isInstructionLive(item.instruction) &&
+			fn.instructionKind(item.instruction) === "operation" &&
+			pass.instructionOpcodes.has(fn.instructionOpcode(item.instruction))
+		);
 	}
 
 	#validateChanges(pass: CorePass, changes: CoreChangeSet): void {

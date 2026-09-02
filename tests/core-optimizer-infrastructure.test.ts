@@ -159,6 +159,35 @@ describe("Core optimizer infrastructure", () => {
 		expect(run(true)).toEqual([1, 1]);
 	});
 
+	it("queues filtered instruction passes only for matching opcodes", () => {
+		const { program } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		let runs = 0;
+		const pass: CorePass = {
+			name: "identity-only",
+			stage: "canonicalize",
+			scope: "instruction",
+			instructionOpcodes: new Set([program.registry.require("identity").id]),
+			requiredAnalyses: [],
+			wakesOn: ["body"],
+			preserves: [],
+			changes: { cfg: false, calls: false, facts: false, representations: false },
+			budget: { maxWorkItems: 100, maxEdits: 100, exhaustion: "error" },
+			run({ item }) {
+				if (item.scope !== "instruction") throw new Error("expected instruction scope");
+				runs++;
+				return undefined;
+			},
+		};
+		new CorePassManager(program, context(), analyses, report).runStage("canonicalize", [
+			pass,
+		]);
+		expect(runs).toBe(2);
+		expect(
+			report.finish(program, { directEntries: [], specializations: [] }).budget.workItems,
+		).toBe(2);
+	});
+
 	it("bounds only optional development work and reports profile exhaustion", () => {
 		const run = (
 			optionalMaxRunsPerWorkItem: number | undefined,
