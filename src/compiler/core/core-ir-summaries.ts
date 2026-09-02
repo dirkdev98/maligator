@@ -16,6 +16,7 @@ import type {
 	EffectSummary,
 	FunctionEffectSummary,
 	ModuleEffectSummary,
+	RelativeOwnSlotEffect,
 	ReturnProvenance,
 	ReturnRepresentation,
 	SummaryRootReason,
@@ -598,8 +599,77 @@ function rootReasons(
 	);
 }
 
-function summaryKey(summary: FunctionEffectSummary): string {
-	return JSON.stringify(summary);
+function stringSlicesEqual(
+	left: ReadonlyArray<string>,
+	right: ReadonlyArray<string>,
+): boolean {
+	if (left.length !== right.length) return false;
+	for (let index = 0; index < left.length; index++) {
+		if (left[index] !== right[index]) return false;
+	}
+	return true;
+}
+
+function relativeOwnSlotEffectsEqual(
+	left: ReadonlyArray<RelativeOwnSlotEffect>,
+	right: ReadonlyArray<RelativeOwnSlotEffect>,
+): boolean {
+	if (left.length !== right.length) return false;
+	for (let index = 0; index < left.length; index++) {
+		const leftEffect = left[index]!;
+		const rightEffect = right[index]!;
+		if (
+			leftEffect.key !== rightEffect.key ||
+			leftEffect.mode !== rightEffect.mode ||
+			leftEffect.base.kind !== rightEffect.base.kind ||
+			(leftEffect.base.kind === "parameter" &&
+				(rightEffect.base.kind !== "parameter" ||
+					leftEffect.base.index !== rightEffect.base.index))
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function returnProvenancesEqual(
+	left: ReturnProvenance,
+	right: ReturnProvenance,
+): boolean {
+	return (
+		left.kind === right.kind &&
+		(left.kind !== "parameter" ||
+			(right.kind === "parameter" && left.index === right.index))
+	);
+}
+
+function summariesEqual(
+	left: FunctionEffectSummary,
+	right: FunctionEffectSummary,
+): boolean {
+	return (
+		left === right ||
+		(left.id === right.id &&
+			left.functionIndex === right.functionIndex &&
+			left.module === right.module &&
+			effectSummariesEqual(left.effects, right.effects) &&
+			relativeOwnSlotEffectsEqual(
+				left.relativeOwnSlotEffects,
+				right.relativeOwnSlotEffects,
+			) &&
+			stringSlicesEqual(left.callees, right.callees) &&
+			left.openCallEdge === right.openCallEdge &&
+			left.externallyReachable === right.externallyReachable &&
+			stringSlicesEqual(left.rootReasons, right.rootReasons) &&
+			stringSlicesEqual(left.parameterEscape, right.parameterEscape) &&
+			left.restParameterEscape === right.restParameterEscape &&
+			left.receiverEscape === right.receiverEscape &&
+			stringSlicesEqual(left.parameterContainment, right.parameterContainment) &&
+			left.restParameterContainment === right.restParameterContainment &&
+			left.receiverContainment === right.receiverContainment &&
+			returnProvenancesEqual(left.returnProvenance, right.returnProvenance) &&
+			left.returnRepresentation === right.returnRepresentation)
+	);
 }
 
 interface CoreAnyScriptCallSummary {
@@ -1001,7 +1071,7 @@ function analyzeProgramSummaries(
 			const prior = current.get(functionId);
 			current.set(functionId, next);
 			sccTransfers++;
-			if (prior !== undefined && summaryKey(prior) === summaryKey(next)) continue;
+			if (prior !== undefined && summariesEqual(prior, next)) continue;
 			for (const caller of targets.graph.exactCallers(functionId)) {
 				exactReverseCallerVisits++;
 				if (!members.has(caller) || memberQueued.has(caller)) continue;
@@ -1016,7 +1086,7 @@ function analyzeProgramSummaries(
 		for (const functionId of scc.functions) {
 			const next = current.get(functionId)!;
 			const prior = previous?.published.get(functionId)?.summary;
-			if (prior !== undefined && summaryKey(prior) === summaryKey(next)) continue;
+			if (prior !== undefined && summariesEqual(prior, next)) continue;
 			for (const caller of targets.graph.exactCallers(functionId)) {
 				exactReverseCallerVisits++;
 				const callerScc = owner.get(caller);
@@ -1062,7 +1132,7 @@ function analyzeProgramSummaries(
 	const changedPublished = new Set<CoreFunctionId>();
 	for (const [functionId, summary] of current) {
 		const prior = previous?.published.get(functionId);
-		if (prior !== undefined && summaryKey(prior.summary) === summaryKey(summary)) {
+		if (prior !== undefined && summariesEqual(prior.summary, summary)) {
 			published.set(functionId, prior);
 		} else {
 			changedPublished.add(functionId);

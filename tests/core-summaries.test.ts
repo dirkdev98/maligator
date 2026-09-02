@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
@@ -13,6 +14,16 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("incremental Core program summaries", () => {
+	it("compares production summaries without serializing them", () => {
+		const source = readFileSync(
+			new URL("../src/compiler/core/core-ir-summaries.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(source).not.toMatch(/JSON\.stringify/);
+		expect(source).toMatch(/function summariesEqual\(/);
+	});
+
 	it("does not publish or wake a caller when an edited leaf is semantically unchanged", () => {
 		const program = analysisProgram();
 		appendCaller(program, 1);
