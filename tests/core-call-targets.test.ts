@@ -68,7 +68,7 @@ describe("incremental Core call graph", () => {
 			opaqueCallSites: 0,
 			updatedCallSites: 1,
 		});
-		expect([...first.callers(1 as never)]).toEqual([caller.function]);
+		expect(first.graph.exactCallers(1 as never)).toEqual([caller.function]);
 
 		const editor = CoreEditor.open(program, caller.function);
 		editor.replaceInstruction(caller.createFunctionInstruction, "createFunction", [], {
@@ -81,8 +81,8 @@ describe("incremental Core call graph", () => {
 			functionsReused: 2,
 			updatedCallSites: 1,
 		});
-		expect([...second.callers(1 as never)]).toEqual([]);
-		expect([...second.callers(2 as never)]).toEqual([caller.function]);
+		expect(second.graph.exactCallers(1 as never)).toEqual([]);
+		expect(second.graph.exactCallers(2 as never)).toEqual([caller.function]);
 		expect(
 			second.site(`${caller.function}:${caller.callInstruction}`)?.targets.functions,
 		).toEqual([2]);
@@ -264,8 +264,8 @@ describe("incremental Core call graph", () => {
 		expect(
 			second.site(`${callerFunction}:${callInstruction!}`)?.targets.functions,
 		).toEqual([3]);
-		expect([...second.callers(2 as never)]).toEqual([]);
-		expect([...second.callers(3 as never)]).toEqual([callerFunction]);
+		expect(second.graph.exactCallers(2 as never)).toEqual([]);
+		expect(second.graph.exactCallers(3 as never)).toEqual([callerFunction]);
 	});
 
 	it("updates one global-store aggregate without rebuilding unrelated slots", () => {
@@ -416,8 +416,8 @@ describe("incremental Core call graph", () => {
 			anyScript: false,
 			opaque: true,
 		});
-		expect([...second.callers(3 as never)]).toEqual([]);
-		expect([...second.callers(4 as never)]).toEqual([callerFunction]);
+		expect(second.graph.exactCallers(3 as never)).toEqual([]);
+		expect(second.graph.exactCallers(4 as never)).toEqual([callerFunction]);
 	});
 
 	it("does not narrow an unknown static property away from script functions", () => {

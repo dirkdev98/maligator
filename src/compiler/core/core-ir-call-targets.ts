@@ -1,8 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import {
-	CoreCallerCursor,
-	updateCoreCallGraph,
-} from "./core-call-graph.ts";
+import { updateCoreCallGraph } from "./core-call-graph.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreCapturedSlotKey, coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
@@ -168,7 +165,6 @@ export interface CoreCallGraphIndex {
 	globalStoreTargets(slot: number): CoreCalleeTargets;
 	site(id: CoreCallSiteId): CoreIndexedCallSite | undefined;
 	outgoing(functionId: CoreFunctionId): ReadonlyArray<CoreIndexedCallSite>;
-	callers(functionId: CoreFunctionId): ReadonlySet<CoreFunctionId>;
 }
 
 function functionVersionKey(fn: CoreFunctionStore): string {
@@ -921,15 +917,6 @@ export function analyzeCoreCallGraph(
 		},
 		outgoing(functionId: CoreFunctionId) {
 			return outgoing.get(functionId) ?? [];
-		},
-		callers(functionId: CoreFunctionId) {
-			const result = new Set<CoreFunctionId>();
-			graph.visitLogicalCallers(
-				functionId,
-				new CoreCallerCursor(program.functionCapacity),
-				(caller) => result.add(caller),
-			);
-			return result;
 		},
 	});
 }
