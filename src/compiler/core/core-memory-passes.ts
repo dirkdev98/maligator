@@ -179,8 +179,7 @@ function replaceTerminatorEdges(
 const foldExactAllocationObservations: CorePass = {
 	name: "fold-exact-allocation-observations",
 	stage: "memory",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("unary", "binary"),
+	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
@@ -188,64 +187,72 @@ const foldExactAllocationObservations: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "instruction") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation"
-		)
-			return undefined;
-		const opcode = fn.instructionOpcodeName(item.instruction);
-		const operator = fn.instructionAttributes(item.instruction).operator;
-		const leftOperand = instructionOperandAt(fn, item.instruction, 0);
-		const rightOperand = instructionOperandAt(fn, item.instruction, 1);
 		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
-		let replacement:
-			| {
-					readonly opcode: "createBoolean";
-					readonly attributes: { readonly value: boolean };
-			  }
-			| {
-					readonly opcode: "createString";
-					readonly attributes: { readonly stringIndex: number };
-			  }
-			| undefined;
-		if (
-			opcode === "unary" &&
-			operator === "typeof" &&
-			leftOperand !== undefined &&
-			provenance.allocationOf(leftOperand) !== undefined
-		) {
-			const stringIndex = program.stringConstants.findIndex(
-				(units) =>
-					units.length === 6 &&
-					units.every((unit, index) => unit === "object".charCodeAt(index)),
-			);
-			if (stringIndex >= 0)
-				replacement = { opcode: "createString", attributes: { stringIndex } };
-		} else if (
-			opcode === "binary" &&
-			(operator === "===" || operator === "!==") &&
-			leftOperand !== undefined &&
-			rightOperand !== undefined
-		) {
-			const left = provenance.allocationOf(leftOperand);
-			const right = provenance.allocationOf(rightOperand);
-			if (left !== undefined && right !== undefined) {
-				const same = right.instruction === left.instruction;
+		const objectStringIndex = program.stringConstants.findIndex(
+			(units) =>
+				units.length === 6 &&
+				units.every((unit, index) => unit === "object".charCodeAt(index)),
+		);
+		let editor: CoreEditor | undefined;
+		const instructionCapacity = fn.instructionCapacity;
+		for (let id = 0; id < instructionCapacity; id++) {
+			const instruction = coreInstructionId(id);
+			if (
+				!fn.isInstructionLive(instruction) ||
+				fn.instructionKind(instruction) !== "operation"
+			)
+				continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			const operator = fn.instructionAttributes(instruction).operator;
+			const leftOperand = instructionOperandAt(fn, instruction, 0);
+			const rightOperand = instructionOperandAt(fn, instruction, 1);
+			let replacement:
+				| {
+						readonly opcode: "createBoolean";
+						readonly attributes: { readonly value: boolean };
+				  }
+				| {
+						readonly opcode: "createString";
+						readonly attributes: { readonly stringIndex: number };
+				  }
+				| undefined;
+			if (
+				opcode === "unary" &&
+				operator === "typeof" &&
+				leftOperand !== undefined &&
+				provenance.allocationOf(leftOperand) !== undefined &&
+				objectStringIndex >= 0
+			) {
 				replacement = {
-					opcode: "createBoolean",
-					attributes: { value: operator === "===" ? same : !same },
+					opcode: "createString",
+					attributes: { stringIndex: objectStringIndex },
 				};
+			} else if (
+				opcode === "binary" &&
+				(operator === "===" || operator === "!==") &&
+				leftOperand !== undefined &&
+				rightOperand !== undefined
+			) {
+				const left = provenance.allocationOf(leftOperand);
+				const right = provenance.allocationOf(rightOperand);
+				if (left !== undefined && right !== undefined) {
+					const same = right.instruction === left.instruction;
+					replacement = {
+						opcode: "createBoolean",
+						attributes: { value: operator === "===" ? same : !same },
+					};
+				}
 			}
+			if (replacement === undefined) continue;
+			editor ??= CoreEditor.open(program, item.function);
+			editor.replaceInstruction(instruction, replacement.opcode, [], {
+				attributes: replacement.attributes,
+				sourcePosition: fn.instructionSourcePosition(instruction),
+			});
 		}
-		if (replacement === undefined) return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		editor.replaceInstruction(item.instruction, replacement.opcode, [], {
-			attributes: replacement.attributes,
-			sourcePosition: fn.instructionSourcePosition(item.instruction),
-		});
-		return editor.commit();
+		return editor?.commit();
 	},
 };
 
@@ -328,8 +335,7 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 const annotateKnownOwnSlots: CorePass = {
 	name: "annotate-known-own-slots",
 	stage: "memory",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("loadPropertyStatic", "storePropertyStatic"),
+	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
 	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
@@ -337,52 +343,58 @@ const annotateKnownOwnSlots: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "instruction") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation"
-		)
-			return undefined;
-		const opcode = fn.instructionOpcodeName(item.instruction);
-		if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic")
-			return undefined;
-		const attributes = fn.instructionAttributes(item.instruction);
-		if (coreKnownOwnSlotFromAttribute(attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]))
-			return undefined;
-		const stringIndex = attributes.stringIndex;
-		const base = instructionOperandAt(fn, item.instruction, 0);
-		if (typeof stringIndex !== "number" || base === undefined) return undefined;
-		const shape = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS).candidates(base);
-		if (shape.opaque || shape.origins.length === 0) return undefined;
-		const candidates = shape.origins.flatMap((origin) => {
-			const slot = origin.keys.indexOf(stringIndex);
-			return slot < 0
-				? []
-				: [
-						{
-							shapeFunctionIndex: origin.function,
-							shapeInstruction: origin.instruction,
-							slot,
-						},
-					];
-		});
-		if (candidates.length !== shape.origins.length) return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		editor.replaceInstruction(
-			item.instruction,
-			opcode,
-			materializeInstructionOperands(fn, item.instruction),
-			{
-				attributes: {
-					...attributes,
-					[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: { candidates },
+		const shapes = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS);
+		let editor: CoreEditor | undefined;
+		const instructionCapacity = fn.instructionCapacity;
+		for (let id = 0; id < instructionCapacity; id++) {
+			const instruction = coreInstructionId(id);
+			if (
+				!fn.isInstructionLive(instruction) ||
+				fn.instructionKind(instruction) !== "operation"
+			)
+				continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
+			const attributes = fn.instructionAttributes(instruction);
+			if (coreKnownOwnSlotFromAttribute(attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE])) {
+				continue;
+			}
+			const stringIndex = attributes.stringIndex;
+			const base = instructionOperandAt(fn, instruction, 0);
+			if (typeof stringIndex !== "number" || base === undefined) continue;
+			const shape = shapes.candidates(base);
+			if (shape.opaque || shape.origins.length === 0) continue;
+			const candidates = shape.origins.flatMap((origin) => {
+				const slot = origin.keys.indexOf(stringIndex);
+				return slot < 0
+					? []
+					: [
+							{
+								shapeFunctionIndex: origin.function,
+								shapeInstruction: origin.instruction,
+								slot,
+							},
+						];
+			});
+			if (candidates.length !== shape.origins.length) continue;
+			editor ??= CoreEditor.open(program, item.function);
+			editor.replaceInstruction(
+				instruction,
+				opcode,
+				materializeInstructionOperands(fn, instruction),
+				{
+					attributes: {
+						...attributes,
+						[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: { candidates },
+					},
+					sourcePosition: fn.instructionSourcePosition(instruction),
+					effectRefinement: fn.instructionEffectRefinement(instruction),
 				},
-				sourcePosition: fn.instructionSourcePosition(item.instruction),
-				effectRefinement: fn.instructionEffectRefinement(item.instruction),
-			},
-		);
-		return editor.commit();
+			);
+		}
+		return editor?.commit();
 	},
 };
 
@@ -614,8 +626,7 @@ const forwardExactMemoryLoads: CorePass = {
 const refineExactCollectionAccesses: CorePass = {
 	name: "refine-exact-collection-accesses",
 	stage: "memory",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("callBuiltin"),
+	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_CLASS_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
@@ -623,53 +634,58 @@ const refineExactCollectionAccesses: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "instruction") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation" ||
-			fn.instructionEffectRefinement(item.instruction) !== undefined
-		)
-			return undefined;
-		if (fn.instructionOpcodeName(item.instruction) !== "callBuiltin") return undefined;
-		const operation = fn.instructionAttributes(item.instruction).operation;
-		if (typeof operation !== "string") return undefined;
-		const expected = coreCollectionReceiverBrandForOperation(operation);
-		const receiver = instructionOperandAt(fn, item.instruction, 0);
 		const classes = context.analysis(CORE_LOCAL_VALUE_CLASS_ANALYSIS);
-		const exact =
-			receiver === undefined
-				? undefined
-				: classes.containedCollection(receiver, item.instruction);
-		if (exact === undefined || exact !== expected) return undefined;
-		const effects = coreExactCollectionBuiltinEffects(fn, item.instruction, exact);
-		if (effects === undefined) return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		const proof = editor.addFact({
-			kind: CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
-			value: operation,
-			claims: [{ kind: "effect", instruction: item.instruction, effects }],
-			validity: {
-				kind: "summary",
-				digest: `exact-collection-builtin:${operation}`,
-			},
-			obligations: [],
-			origin: "local-value-classes",
-		});
-		editor.replaceInstruction(
-			item.instruction,
-			"callBuiltin",
-			materializeInstructionOperands(fn, item.instruction),
-			{
-				attributes: {
-					...fn.instructionAttributes(item.instruction),
-					[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE]: exact,
+		let editor: CoreEditor | undefined;
+		const instructionCapacity = fn.instructionCapacity;
+		for (let id = 0; id < instructionCapacity; id++) {
+			const instruction = coreInstructionId(id);
+			if (
+				!fn.isInstructionLive(instruction) ||
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionEffectRefinement(instruction) !== undefined ||
+				fn.instructionOpcodeName(instruction) !== "callBuiltin"
+			)
+				continue;
+			const operation = fn.instructionAttributes(instruction).operation;
+			if (typeof operation !== "string") continue;
+			const expected = coreCollectionReceiverBrandForOperation(operation);
+			const receiver = instructionOperandAt(fn, instruction, 0);
+			const exact =
+				receiver === undefined
+					? undefined
+					: classes.containedCollection(receiver, instruction);
+			if (exact === undefined || exact !== expected) continue;
+			const effects = coreExactCollectionBuiltinEffects(fn, instruction, exact);
+			if (effects === undefined) continue;
+			editor ??= CoreEditor.open(program, item.function);
+			const proof = editor.addFact({
+				kind: CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
+				value: operation,
+				claims: [{ kind: "effect", instruction, effects }],
+				validity: {
+					kind: "summary",
+					digest: `exact-collection-builtin:${operation}`,
 				},
-				sourcePosition: fn.instructionSourcePosition(item.instruction),
-				effectRefinement: { effects, proof },
-			},
-		);
-		return editor.commit();
+				obligations: [],
+				origin: "local-value-classes",
+			});
+			editor.replaceInstruction(
+				instruction,
+				"callBuiltin",
+				materializeInstructionOperands(fn, instruction),
+				{
+					attributes: {
+						...fn.instructionAttributes(instruction),
+						[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE]: exact,
+					},
+					sourcePosition: fn.instructionSourcePosition(instruction),
+					effectRefinement: { effects, proof },
+				},
+			);
+		}
+		return editor?.commit();
 	},
 };
 
