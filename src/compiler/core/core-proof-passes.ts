@@ -491,9 +491,7 @@ const materializeLocalScalars: CorePass = {
 			readonly value: CoreValueId;
 			readonly representation: CoreRepresentation;
 		}> = [];
-		for (let index = 0; index < fn.valueCapacity; index++) {
-			const value = index as CoreValueId;
-			if (!fn.isValueLive(value)) continue;
+		for (const value of fn.valueIds()) {
 			const representation = scalarCandidate(fn, value, kinds.exactScalar(value));
 			if (representation !== undefined) candidates.push({ value, representation });
 		}
