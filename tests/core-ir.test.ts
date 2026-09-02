@@ -237,9 +237,7 @@ describe("Core IR", () => {
 		expect(memory.statistics.partitions).toBe(
 			CORE_EFFECT_DOMAINS.length + exactReadCount,
 		);
-		expect(memory.statistics.stateEntries).toBe(
-			2 * memory.statistics.partitions + exactReadCount,
-		);
+		expect(memory.statistics.stateEntries).toBe(exactReadCount);
 	});
 
 	it("declares a fresh aggregate's layout and which results cannot be held weakly", () => {

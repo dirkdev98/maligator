@@ -263,14 +263,6 @@ export interface CoreMemoryVersions {
 		instruction: CoreInstructionId,
 		partition: CoreMemoryPartition,
 	): CoreMemoryVersion | undefined;
-	entryVersion(
-		block: CoreBlockId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
-	exitVersion(
-		block: CoreBlockId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
 	readers(partition: CoreMemoryPartition): ReadonlyArray<CoreInstructionId>;
 }
 
@@ -292,14 +284,6 @@ function resolutionFor(provenance: CoreProvenance): CoreMemoryResolution {
 		},
 	};
 	return Object.freeze(resolution);
-}
-
-function sameState(left: Float64Array | undefined, right: Float64Array): boolean {
-	if (left === undefined || left.length !== right.length) return false;
-	for (let index = 0; index < right.length; index++) {
-		if (left[index] !== right[index]) return false;
-	}
-	return true;
 }
 
 function memoryVersions(
@@ -369,13 +353,14 @@ function memoryVersions(
 		writeBase + instruction * slotCount + slot;
 	const exceptionIdentity = (block: CoreBlockId, slot: number): number =>
 		exceptionBase + block * slotCount + slot;
-	const entryStates = new Array<Float64Array | undefined>(fn.blockCapacity);
-	const exitStates = new Array<Float64Array | undefined>(fn.blockCapacity);
 	const readStateStart = new Int32Array(fn.instructionCapacity);
 	readStateStart.fill(-1);
 	const readStateCount = new Uint32Array(fn.instructionCapacity);
 	const readStateSlots: Array<number> = [];
 	const readStateVersions: Array<number> = [];
+	const pendingReadVersions = new Array<Map<number, number> | undefined>(
+		fn.instructionCapacity,
+	);
 	const writeVersions = new Array<Map<number, number> | undefined>(
 		fn.instructionCapacity,
 	);
@@ -392,17 +377,11 @@ function memoryVersions(
 	);
 	for (const layout of provenance.layouts)
 		layoutByInstruction[layout.instruction] = layout;
-	let transfers = 0;
-	let blockUpdates = 0;
 	const domainsForFamily = (family: CoreMemoryFamily): ReadonlyArray<CoreEffectDomain> =>
 		CORE_MEMORY_FAMILY_DOMAINS[family];
-	const killDomain = (
-		state: Float64Array,
-		domain: CoreEffectDomain,
-		identity: (slot: number) => number,
-	): void => {
-		const domainId = domainSlot.get(domain)!;
-		state[domainId] = identity(domainId);
+	const slotsKilledByDomain = new Map<CoreEffectDomain, ReadonlyArray<number>>();
+	for (const domain of CORE_EFFECT_DOMAINS) {
+		const slots = [domainSlot.get(domain)!];
 		for (let slot = CORE_EFFECT_DOMAINS.length; slot < slotCount; slot++) {
 			const info = partitions[slot]!;
 			if (
@@ -411,38 +390,37 @@ function memoryVersions(
 				!domainsForFamily(info.family).includes(domain)
 			)
 				continue;
-			state[slot] = identity(slot);
+			slots.push(slot);
 		}
-	};
+		slotsKilledByDomain.set(domain, Object.freeze(slots));
+	}
 	const slotForAccess = (access: CoreMemoryAccess): number | undefined => {
 		if (!coreMemoryLocationIsExact(access.location)) return undefined;
 		return slotByPartition.get(coreMemoryPartition(access.location));
 	};
-	const recordReadState = (
+	interface SparseMemoryEvent {
+		readonly instruction: CoreInstructionId;
+		readonly reads: ReadonlySet<number>;
+		readonly definitions: ReadonlyMap<number, number>;
+	}
+	const eventsByBlock = new Array<ReadonlyArray<SparseMemoryEvent> | undefined>(
+		fn.blockCapacity,
+	);
+	const definitionBlocksBySlot = Array.from(
+		{ length: slotCount },
+		() => new Set<CoreBlockId>(),
+	);
+	const readBlocksBySlot = Array.from(
+		{ length: slotCount },
+		() => new Set<CoreBlockId>(),
+	);
+	const upwardExposedReadBlocksBySlot = Array.from(
+		{ length: slotCount },
+		() => new Set<CoreBlockId>(),
+	);
+	const initializationDefinitions = (
 		instruction: CoreInstructionId,
-		accesses: ReadonlyArray<CoreMemoryAccess>,
-		state: Float64Array,
-	): void => {
-		const slots = new Set<number>();
-		for (const access of accesses) {
-			if (access.mode !== "read") continue;
-			const exact = slotForAccess(access);
-			if (exact !== undefined) slots.add(exact);
-			else
-				for (const domain of domainsForFamily(coreMemoryLocationFamily(access.location)))
-					slots.add(domainSlot.get(domain)!);
-		}
-		if (slots.size === 0) return;
-		readStateStart[instruction] = readStateSlots.length;
-		readStateCount[instruction] = slots.size;
-		for (const slot of slots) {
-			readStateSlots.push(slot);
-			readStateVersions.push(state[slot]!);
-		}
-	};
-	const initializeAllocation = (
-		instruction: CoreInstructionId,
-		state: Float64Array,
+		definitions: Map<number, number>,
 	): void => {
 		const layout = layoutByInstruction[instruction];
 		if (layout?.kind !== "named-slots") return;
@@ -457,25 +435,32 @@ function memoryVersions(
 			const value = layout.initialValues[index];
 			if (slot === undefined || value === undefined) continue;
 			const version = writeIdentity(instruction, slot);
-			state[slot] = version;
+			definitions.set(slot, version);
 			valueByVersion.set(version, value);
 			versions ??= new Map();
 			versions.set(slot, version);
 		}
 		if (versions !== undefined) initializationVersions[instruction] = versions;
 	};
-	const transfer = (
-		block: CoreBlockId,
-		entry: Float64Array,
-		recordReads = false,
-	): Float64Array => {
-		if (!recordReads) transfers++;
-		const state = entry.slice();
+	for (const block of cfg.reversePostorder) {
+		const events: Array<SparseMemoryEvent> = [];
+		const definedInBlock = new Set<number>();
 		for (const instruction of fn.instructionIds(block)) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const accesses = accessesByInstruction[instruction] ?? [];
-			if (recordReads) recordReadState(instruction, accesses, state);
-			initializeAllocation(instruction, state);
+			const reads = new Set<number>();
+			for (const access of accesses) {
+				if (access.mode !== "read") continue;
+				const exact = slotForAccess(access);
+				if (exact !== undefined) reads.add(exact);
+				else
+					for (const domain of domainsForFamily(
+						coreMemoryLocationFamily(access.location),
+					))
+						reads.add(domainSlot.get(domain)!);
+			}
+			const definitions = new Map<number, number>();
+			initializationDefinitions(instruction, definitions);
 			const effects = coreInstructionEffects(fn, instruction);
 			const coveredWrites = new Set<CoreEffectDomain>();
 			let versions: Map<number, number> | undefined;
@@ -486,7 +471,7 @@ function memoryVersions(
 				const exactSlot = slotForAccess(access);
 				if (exactSlot !== undefined) {
 					const version = writeIdentity(instruction, exactSlot);
-					state[exactSlot] = version;
+					definitions.set(exactSlot, version);
 					if (access.value !== undefined) valueByVersion.set(version, access.value);
 					versions ??= new Map();
 					versions.set(exactSlot, version);
@@ -494,10 +479,11 @@ function memoryVersions(
 				for (const domain of domainsForFamily(family)) {
 					coveredWrites.add(domain);
 					if (!exactAccess) {
-						killDomain(state, domain, (slot) => writeIdentity(instruction, slot));
+						for (const slot of slotsKilledByDomain.get(domain)!)
+							definitions.set(slot, writeIdentity(instruction, slot));
 					} else {
 						const slot = domainSlot.get(domain)!;
-						state[slot] = writeIdentity(instruction, slot);
+						definitions.set(slot, writeIdentity(instruction, slot));
 					}
 				}
 			}
@@ -506,77 +492,267 @@ function memoryVersions(
 			for (const domain of CORE_EFFECT_DOMAINS) {
 				if (!effects.writes.includes(domain) && !universal) continue;
 				if (coveredWrites.has(domain) && !universal) continue;
-				killDomain(state, domain, (slot) => writeIdentity(instruction, slot));
+				for (const slot of slotsKilledByDomain.get(domain)!)
+					definitions.set(slot, writeIdentity(instruction, slot));
 			}
-		}
-		return state;
-	};
-	const mergeEntry = (block: CoreBlockId): Float64Array => {
-		const incoming = cfg.predecessors[block] ?? [];
-		if (block === fn.entry || incoming.length === 0) {
-			return Float64Array.from({ length: slotCount }, (_, slot) =>
-				entryIdentity(block, slot),
+			if (reads.size === 0 && definitions.size === 0) continue;
+			for (const slot of reads) {
+				readersBySlot[slot]!.push(instruction);
+				readBlocksBySlot[slot]!.add(block);
+				if (!definedInBlock.has(slot)) upwardExposedReadBlocksBySlot[slot]!.add(block);
+			}
+			for (const slot of definitions.keys()) {
+				definedInBlock.add(slot);
+				definitionBlocksBySlot[slot]!.add(block);
+			}
+			events.push(
+				Object.freeze({
+					instruction,
+					reads,
+					definitions,
+				}),
 			);
 		}
-		const merged = new Float64Array(slotCount);
-		for (let slot = 0; slot < slotCount; slot++) {
-			let first: number | undefined;
-			let agrees = true;
-			for (const edge of incoming) {
-				const value =
-					edge.kind === "exceptional"
-						? exceptionIdentity(edge.from, slot)
-						: exitStates[edge.from]?.[slot];
-				if (value === undefined) continue;
-				if (first === undefined) first = value;
-				else if (first !== value) agrees = false;
-			}
-			merged[slot] =
-				first === undefined
-					? entryIdentity(block, slot)
-					: agrees
-						? first
-						: phiIdentity(block, slot);
-		}
-		return merged;
+		eventsByBlock[block] = Object.freeze(events);
+	}
+	const dominatorChildren = Array.from(
+		{ length: fn.blockCapacity },
+		() => new Array<CoreBlockId>(),
+	);
+	for (const block of cfg.reversePostorder) {
+		const parent = cfg.immediateDominators[block];
+		if (parent !== null && parent !== undefined) dominatorChildren[parent]!.push(block);
+	}
+	const dominanceOrder: Array<CoreBlockId> = [];
+	const dominancePending = [fn.entry];
+	while (dominancePending.length > 0) {
+		const block = dominancePending.pop()!;
+		dominanceOrder.push(block);
+		const children = dominatorChildren[block]!;
+		for (let index = children.length - 1; index >= 0; index--)
+			dominancePending.push(children[index]!);
+	}
+	const phiOperands = new Map<number, Array<number>>();
+	let transfers = 0;
+	const recordReadVersion = (
+		instruction: CoreInstructionId,
+		slot: number,
+		version: number,
+	): void => {
+		const versions = pendingReadVersions[instruction] ?? new Map();
+		versions.set(slot, version);
+		pendingReadVersions[instruction] = versions;
 	};
-	const queue = [...cfg.reversePostorder];
-	const queued = new Set(queue);
-	for (let next = 0; next < queue.length; next++) {
-		const block = queue[next]!;
-		queued.delete(block);
-		const entry = mergeEntry(block);
-		const exit = transfer(block, entry);
-		const changed =
-			!sameState(entryStates[block], entry) || !sameState(exitStates[block], exit);
-		entryStates[block] = entry;
-		exitStates[block] = exit;
-		if (!changed) continue;
-		blockUpdates++;
-		for (const edge of cfg.successors[block] ?? []) {
-			if (!queued.has(edge.to)) {
-				queued.add(edge.to);
-				queue.push(edge.to);
+	const hasSinglePredecessorFlow = cfg.reversePostorder.every((block) => {
+		if (block === fn.entry) return true;
+		const incoming = (cfg.predecessors[block] ?? []).filter(({ from }) =>
+			cfg.reachable.has(from),
+		);
+		return incoming.length === 1 && incoming[0]!.kind === "ordinary";
+	});
+	if (hasSinglePredecessorFlow) {
+		const versions = new Map<number, number>();
+		type Frame =
+			| { readonly kind: "enter"; readonly block: CoreBlockId }
+			| {
+					readonly kind: "exit";
+					readonly changes: ReadonlyArray<{
+						readonly slot: number;
+						readonly previous: number | undefined;
+					}>;
+			  };
+		const pending: Array<Frame> = [{ kind: "enter", block: fn.entry }];
+		while (pending.length > 0) {
+			const frame = pending.pop()!;
+			if (frame.kind === "exit") {
+				for (let index = frame.changes.length - 1; index >= 0; index--) {
+					const { slot, previous } = frame.changes[index]!;
+					if (previous === undefined) versions.delete(slot);
+					else versions.set(slot, previous);
+				}
+				continue;
+			}
+			const changes: Array<{
+				readonly slot: number;
+				readonly previous: number | undefined;
+			}> = [];
+			const changed = new Set<number>();
+			for (const event of eventsByBlock[frame.block] ?? []) {
+				for (const slot of event.reads)
+					recordReadVersion(
+						event.instruction,
+						slot,
+						versions.get(slot) ?? entryIdentity(fn.entry, slot),
+					);
+				for (const [slot, version] of event.definitions) {
+					if (!changed.has(slot)) {
+						changed.add(slot);
+						changes.push({ slot, previous: versions.get(slot) });
+					}
+					versions.set(slot, version);
+				}
+			}
+			transfers++;
+			pending.push({ kind: "exit", changes });
+			const children = dominatorChildren[frame.block]!;
+			for (let index = children.length - 1; index >= 0; index--)
+				pending.push({ kind: "enter", block: children[index]! });
+		}
+	} else {
+		const dominancePosition = new Int32Array(fn.blockCapacity);
+		dominancePosition.fill(-1);
+		for (const [position, block] of dominanceOrder.entries())
+			dominancePosition[block] = position;
+		const dominanceFrontiers = Array.from(
+			{ length: fn.blockCapacity },
+			() => new Set<CoreBlockId>(),
+		);
+		for (let index = dominanceOrder.length - 1; index >= 0; index--) {
+			const block = dominanceOrder[index]!;
+			for (const edge of cfg.successors[block] ?? []) {
+				if (cfg.immediateDominators[edge.to] !== block)
+					dominanceFrontiers[block]!.add(edge.to);
+			}
+			for (const child of dominatorChildren[block]!) {
+				for (const frontier of dominanceFrontiers[child]!) {
+					if (cfg.immediateDominators[frontier] !== block)
+						dominanceFrontiers[block]!.add(frontier);
+				}
+			}
+		}
+		const hasExceptionalEdges = cfg.successors.some((edges) =>
+			edges.some(({ kind }) => kind === "exceptional"),
+		);
+		for (let slot = 0; slot < slotCount; slot++) {
+			const readBlocks = readBlocksBySlot[slot]!;
+			if (readBlocks.size === 0) continue;
+			const definitions = definitionBlocksBySlot[slot]!;
+			if (definitions.size === 0 && !hasExceptionalEdges) {
+				for (const instruction of readersBySlot[slot]!)
+					recordReadVersion(instruction, slot, entryIdentity(fn.entry, slot));
+				transfers += readBlocks.size;
+				continue;
+			}
+			const liveIn = new Set<CoreBlockId>();
+			const livePending = [...upwardExposedReadBlocksBySlot[slot]!];
+			while (livePending.length > 0) {
+				const block = livePending.pop()!;
+				if (liveIn.has(block)) continue;
+				liveIn.add(block);
+				for (const edge of cfg.predecessors[block] ?? []) {
+					if (edge.kind === "exceptional" || definitions.has(edge.from)) continue;
+					livePending.push(edge.from);
+				}
+			}
+			const phiBlocks = new Set<CoreBlockId>();
+			const phiPending = [...definitions];
+			for (const block of liveIn) {
+				if ((cfg.predecessors[block] ?? []).some(({ kind }) => kind === "exceptional")) {
+					phiBlocks.add(block);
+					phiPending.push(block);
+				}
+			}
+			for (let next = 0; next < phiPending.length; next++) {
+				for (const frontier of dominanceFrontiers[phiPending[next]!]!) {
+					if (!liveIn.has(frontier) || phiBlocks.has(frontier)) continue;
+					phiBlocks.add(frontier);
+					if (!definitions.has(frontier)) phiPending.push(frontier);
+				}
+			}
+			const relevantBlocks = new Set<CoreBlockId>([
+				...readBlocks,
+				...definitions,
+				...phiBlocks,
+			]);
+			for (const block of phiBlocks) {
+				const phi = phiIdentity(block, slot);
+				phiOperands.set(phi, []);
+				for (const edge of cfg.predecessors[block] ?? []) relevantBlocks.add(edge.from);
+			}
+			const orderedBlocks = [...relevantBlocks]
+				.filter((block) => dominancePosition[block]! >= 0)
+				.sort((left, right) => dominancePosition[left]! - dominancePosition[right]!);
+			const active: Array<{ readonly block: CoreBlockId; readonly version: number }> = [];
+			for (const block of orderedBlocks) {
+				while (active.length > 0 && !cfg.dominates(active.at(-1)!.block, block))
+					active.pop();
+				let version = active.at(-1)?.version ?? entryIdentity(fn.entry, slot);
+				if (phiBlocks.has(block)) version = phiIdentity(block, slot);
+				for (const event of eventsByBlock[block] ?? []) {
+					if (event.reads.has(slot)) {
+						recordReadVersion(event.instruction, slot, version);
+					}
+					version = event.definitions.get(slot) ?? version;
+				}
+				for (const edge of cfg.successors[block] ?? []) {
+					if (!phiBlocks.has(edge.to)) continue;
+					phiOperands
+						.get(phiIdentity(edge.to, slot))!
+						.push(edge.kind === "exceptional" ? exceptionIdentity(block, slot) : version);
+				}
+				active.push({ block, version });
+				transfers++;
 			}
 		}
 	}
-	for (const block of cfg.reversePostorder) {
-		const entry = entryStates[block];
-		if (entry !== undefined) transfer(block, entry, true);
+	const aliases = new Map<number, number>();
+	const resolveVersion = (version: number): number => {
+		let resolved = version;
+		while (aliases.has(resolved)) resolved = aliases.get(resolved)!;
+		let current = version;
+		while (aliases.has(current) && aliases.get(current) !== resolved) {
+			const next = aliases.get(current)!;
+			aliases.set(current, resolved);
+			current = next;
+		}
+		return resolved;
+	};
+	const dependentPhis = new Map<number, Set<number>>();
+	for (const [phi, operands] of phiOperands) {
+		for (const operand of operands) {
+			const dependents = dependentPhis.get(operand) ?? new Set<number>();
+			dependents.add(phi);
+			dependentPhis.set(operand, dependents);
+		}
+	}
+	const trivialPhiPending = [...phiOperands.keys()];
+	for (let next = 0; next < trivialPhiPending.length; next++) {
+		const phi = trivialPhiPending[next]!;
+		if (aliases.has(phi)) continue;
+		let replacement: number | undefined;
+		let conflicting = false;
+		for (const operand of phiOperands.get(phi)!) {
+			const resolved = resolveVersion(operand);
+			if (resolved === phi) continue;
+			if (replacement === undefined) replacement = resolved;
+			else if (replacement !== resolved) {
+				conflicting = true;
+				break;
+			}
+		}
+		if (replacement === undefined || conflicting) continue;
+		aliases.set(phi, replacement);
+		trivialPhiPending.push(...(dependentPhis.get(phi) ?? []));
 	}
 	for (const instruction of fn.instructionIds()) {
-		for (const access of accessesByInstruction[instruction] ?? []) {
-			if (access.mode !== "read") continue;
-			const slot = slotForAccess(access);
-			if (slot !== undefined) readersBySlot[slot]!.push(instruction);
+		const versions = pendingReadVersions[instruction];
+		if (versions === undefined || versions.size === 0) continue;
+		readStateStart[instruction] = readStateSlots.length;
+		readStateCount[instruction] = versions.size;
+		for (const [slot, version] of versions) {
+			readStateSlots.push(slot);
+			readStateVersions.push(resolveVersion(version));
 		}
 	}
 	const partitionSlot = (partition: CoreMemoryPartition): number | undefined =>
 		slotByPartition.get(partition);
-	const stateEntries = [...entryStates, ...exitStates].reduce(
-		(total, state) => total + (state?.length ?? 0),
-		readStateVersions.length,
-	);
+	const mappedEntries = (rows: ReadonlyArray<Map<number, number> | undefined>): number =>
+		rows.reduce((total, row) => total + (row?.size ?? 0), 0);
+	const stateEntries =
+		readStateVersions.length +
+		mappedEntries(writeVersions) +
+		mappedEntries(initializationVersions) +
+		[...phiOperands.values()].reduce((total, operands) => total + operands.length, 0);
 	const readStateVersion = (
 		instruction: CoreInstructionId,
 		slot: number,
@@ -589,14 +765,8 @@ function memoryVersions(
 		}
 		return undefined;
 	};
-	let phis = 0;
-	for (const block of fn.blockIds()) {
-		const state = entryStates[block];
-		if (state === undefined) continue;
-		for (let slot = 0; slot < state.length; slot++) {
-			if (state[slot] === phiIdentity(block, slot)) phis++;
-		}
-	}
+	const phis = phiOperands.size - aliases.size;
+	const blockUpdates = phiOperands.size;
 	const result: CoreMemoryVersions = {
 		function: fn.id,
 		statistics: Object.freeze({
@@ -638,16 +808,6 @@ function memoryVersions(
 			const slot = partitionSlot(partition);
 			const value =
 				slot === undefined ? undefined : writeVersions[instruction]?.get(slot);
-			return value === undefined ? undefined : (value as CoreMemoryVersion);
-		},
-		entryVersion(block, partition) {
-			const slot = partitionSlot(partition);
-			const value = slot === undefined ? undefined : entryStates[block]?.[slot];
-			return value === undefined ? undefined : (value as CoreMemoryVersion);
-		},
-		exitVersion(block, partition) {
-			const slot = partitionSlot(partition);
-			const value = slot === undefined ? undefined : exitStates[block]?.[slot];
 			return value === undefined ? undefined : (value as CoreMemoryVersion);
 		},
 		readers(partition) {
