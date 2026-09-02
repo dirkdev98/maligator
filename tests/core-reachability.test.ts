@@ -117,25 +117,12 @@ describe("Core function reachability", () => {
 
 		expect(reachability.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6]);
 		expect(reachability.reasons.get(6 as never)).toContain("any-script");
-		expect([...reachability.openSources]).toEqual([0]);
-		expect(
-			[...reachability.specificOutgoingEdges.values()].reduce(
-				(total, edges) => total + edges.size,
-				0,
-			),
-		).toBe(5);
-		expect(
-			[...reachability.specificReverseEdges.values()].reduce(
-				(total, sources) => total + sources.size,
-				0,
-			),
-		).toBe(5);
+		expect(reachability.targets.graph.wildcardCallers).toEqual([0]);
+		expect(reachability.targets.graph.exactOutgoing(0 as never)).toEqual([]);
 		expect(reachability.statistics).toMatchObject({
-			reachabilityEdgesUpdated: 6,
-			logicalReachabilityEdgesUpdated: 12,
-			callEdgesFollowed: 7,
-			logicalCallEdgesFollowed: 7,
-			openSourceExpansions: 1,
+			exactCallEdgesFollowed: 0,
+			wildcardCallerVisits: 1,
+			aggregateDependencyVisits: 7,
 		});
 
 		const removedTarget = [...program.function(0 as never).instructionIds()].find(
@@ -152,7 +139,7 @@ describe("Core function reachability", () => {
 		});
 
 		expect(updated.liveFunctions).toEqual([0, 1, 2, 3, 4]);
-		expect([...updated.openSources]).toEqual([]);
+		expect(updated.targets.graph.wildcardCallers).toEqual([]);
 
 		const reopenedEditor = CoreEditor.open(program, 0 as never);
 		reopenedEditor.replaceInstruction(removedTarget, "createFunction", [], {
@@ -164,7 +151,7 @@ describe("Core function reachability", () => {
 		});
 
 		expect(reopened.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6]);
-		expect([...reopened.openSources]).toEqual([0]);
+		expect(reopened.targets.graph.wildcardCallers).toEqual([0]);
 
 		appendLeaf(program);
 		const extended = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
@@ -190,7 +177,7 @@ describe("Core function reachability", () => {
 		});
 
 		expect(initial.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
-		expect([...initial.openSources]).toEqual([1]);
+		expect(initial.targets.graph.wildcardCallers).toEqual([1]);
 
 		const close = CoreEditor.open(program, entry.function);
 		close.replaceInstruction(entry.createFunctionInstruction, "createFunction", [], {
@@ -202,7 +189,7 @@ describe("Core function reachability", () => {
 		});
 
 		expect(closed.liveFunctions).toEqual([0, 8]);
-		expect([...closed.openSources]).toEqual([1]);
+		expect(closed.targets.graph.wildcardCallers).toEqual([1]);
 
 		const reopen = CoreEditor.open(program, entry.function);
 		reopen.replaceInstruction(entry.createFunctionInstruction, "createFunction", [], {
@@ -214,7 +201,7 @@ describe("Core function reachability", () => {
 		});
 
 		expect(reopened.liveFunctions).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
-		expect([...reopened.openSources]).toEqual([1]);
+		expect(reopened.targets.graph.wildcardCallers).toEqual([1]);
 	});
 
 	it("reads each host-install slot once from the global-store index", () => {
@@ -307,7 +294,7 @@ describe("Core function reachability", () => {
 		expect(second.reasons.get(0 as never)).toBe(entryReasons);
 		expect(second.statistics).toMatchObject({
 			functionsIndexed: 1,
-			functionsScanned: 0,
+			functionsScanned: 2,
 			resultSetUpdates: 0,
 		});
 	});
@@ -343,7 +330,7 @@ describe("Core function reachability", () => {
 		expect(second.reasons.get(3 as never)).toBe(unrelatedReasons);
 		expect(second.statistics).toMatchObject({
 			functionsIndexed: 1,
-			functionsScanned: 1,
+			functionsScanned: 3,
 			resultSetUpdates: 2,
 		});
 	});

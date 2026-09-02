@@ -63,6 +63,7 @@ export class CoreCallGraph {
 	readonly statistics: CoreCallGraphStatistics;
 	readonly #exactOutgoing: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreFunctionId>>;
 	readonly #exactCallers: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreFunctionId>>;
+	readonly #wildcardCallerMarks: Uint8Array;
 
 	constructor(
 		functions: ReadonlyArray<CoreFunctionId>,
@@ -75,6 +76,8 @@ export class CoreCallGraph {
 		this.#exactOutgoing = exactOutgoing;
 		this.#exactCallers = exactCallers;
 		this.wildcardCallers = Object.freeze([...wildcardCallers]);
+		this.#wildcardCallerMarks = new Uint8Array(functions.length);
+		for (const caller of wildcardCallers) this.#wildcardCallerMarks[caller] = 1;
 		this.changedNodes = changedNodes;
 		const exactCallEdges = [...exactOutgoing.values()].reduce(
 			(total, row) => total + row.length,
@@ -103,7 +106,7 @@ export class CoreCallGraph {
 	}
 
 	isWildcardCaller(functionId: CoreFunctionId): boolean {
-		return this.wildcardCallers.includes(functionId);
+		return this.#wildcardCallerMarks[functionId] === 1;
 	}
 
 	visitSuccessors(

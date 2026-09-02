@@ -9,6 +9,7 @@ export type CoreFunctionReachabilityReason =
 	| "program-entry"
 	| "commonjs-module"
 	| "host-install"
+	| "open-world"
 	| "finite-call"
 	| "any-script"
 	| "runtime-identity"
@@ -18,13 +19,11 @@ export interface CoreFunctionReachabilityStatistics {
 	readonly functions: number;
 	readonly functionsIndexed: number;
 	readonly structuralIndexEdges: number;
-	readonly reachabilityEdgesUpdated: number;
-	readonly logicalReachabilityEdgesUpdated: number;
 	readonly hostInstallSlotsRead: number;
 	readonly functionsScanned: number;
-	readonly callEdgesFollowed: number;
-	readonly logicalCallEdgesFollowed: number;
-	readonly openSourceExpansions: number;
+	readonly exactCallEdgesFollowed: number;
+	readonly wildcardCallerVisits: number;
+	readonly aggregateDependencyVisits: number;
 	readonly structuralEdgesFollowed: number;
 	readonly resultSetUpdates: number;
 	readonly deadFunctions: number;
@@ -52,9 +51,6 @@ export interface CoreFunctionReachabilityState extends CoreFunctionReachability 
 	readonly functionVersions: ReadonlyMap<CoreFunctionId, string>;
 	readonly programDataVersion: number;
 	readonly structural: ReadonlyMap<CoreFunctionId, CoreReachabilityEdges>;
-	readonly specificOutgoingEdges: ReadonlyMap<CoreFunctionId, CoreReachabilityEdges>;
-	readonly specificReverseEdges: ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionId>>;
-	readonly openSources: ReadonlySet<CoreFunctionId>;
 	readonly roots: ReadonlyMap<
 		CoreFunctionId,
 		ReadonlySet<CoreFunctionReachabilityReason>
@@ -67,6 +63,13 @@ const FUNCTION_INDEX_ATTRIBUTES = new Set([
 	"directFunctionIndex",
 	"directCallTargetFunctionIndex",
 	"directCallbackFunctionIndex",
+]);
+
+const FINITE_CALL_REASONS: ReadonlySet<CoreFunctionReachabilityReason> = new Set([
+	"finite-call",
+]);
+const ANY_SCRIPT_REASONS: ReadonlySet<CoreFunctionReachabilityReason> = new Set([
+	"any-script",
 ]);
 
 function validFunction(program: CoreProgram, value: unknown): value is CoreFunctionId {
@@ -149,30 +152,6 @@ function structuralEdges(
 	return edges;
 }
 
-function combinedEdges(
-	targets: CoreCallGraphIndex,
-	functionId: CoreFunctionId,
-	structural: CoreReachabilityEdges,
-): { readonly edges: CoreReachabilityEdges; readonly open: boolean } {
-	const edges = new Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>();
-	let open = false;
-	for (const site of targets.outgoing(functionId)) {
-		if (site.targets.anyScript) {
-			open = true;
-		} else {
-			for (const target of site.targets.functions) addEdge(edges, target, "finite-call");
-		}
-	}
-	for (const [target, reasons] of structural) {
-		for (const reason of reasons) addEdge(edges, target, reason);
-	}
-	return { edges, open };
-}
-
-const ANY_SCRIPT_REASONS: ReadonlySet<CoreFunctionReachabilityReason> = new Set([
-	"any-script",
-]);
-
 function sameReasons(
 	left: ReadonlySet<CoreFunctionReachabilityReason> | undefined,
 	right: ReadonlySet<CoreFunctionReachabilityReason> | undefined,
@@ -210,7 +189,7 @@ function reachabilityRoots(
 	};
 	const all = [...program.functionIds()];
 	if (!targets.sourceClosed) {
-		for (const functionId of all) enter(functionId, "any-script");
+		for (const functionId of all) enter(functionId, "open-world");
 	} else {
 		enter(all[0], "program-entry");
 		for (const functionId of context.data.cjsModuleFunctionIndices) {
@@ -239,138 +218,37 @@ export function analyzeCoreFunctionReachability(
 	const allSet = new Set(all);
 	const functionVersions = new Map(previous?.functionVersions ?? []);
 	const structural = new Map(previous?.structural ?? []);
-	const changedSources = new Set(targets.changedCallers);
 	let functionsIndexed = 0;
 	let structuralIndexEdges = 0;
 	const dataChanged = previous?.programDataVersion !== program.versions.data;
 	for (const functionId of all) {
 		const fn = program.function(functionId);
 		const version = functionVersionKey(fn);
-		if (!dataChanged && functionVersions.get(functionId) === version) continue;
-		const edges = structuralEdges(program, fn);
-		structural.set(functionId, edges);
-		functionVersions.set(functionId, version);
-		changedSources.add(functionId);
-		functionsIndexed++;
-		for (const reasons of edges.values()) structuralIndexEdges += reasons.size;
+		if (dataChanged || functionVersions.get(functionId) !== version) {
+			const edges = structuralEdges(program, fn);
+			structural.set(functionId, edges);
+			functionVersions.set(functionId, version);
+			functionsIndexed++;
+			for (const reasons of edges.values()) structuralIndexEdges += reasons.size;
+		}
 	}
 	for (const functionId of previous?.functionVersions.keys() ?? []) {
 		if (allSet.has(functionId)) continue;
 		functionVersions.delete(functionId);
 		structural.delete(functionId);
-		changedSources.add(functionId);
-	}
-
-	const specificOutgoingEdges = new Map(previous?.specificOutgoingEdges ?? []);
-	const specificReverseEdges = new Map(previous?.specificReverseEdges ?? []);
-	const openSources = new Set(previous?.openSources ?? []);
-	const updatedReverseEdges = new Map<CoreFunctionId, Set<CoreFunctionId>>();
-	const affected = new Set<CoreFunctionId>();
-	let reachabilityEdgesUpdated = 0;
-	let logicalReachabilityEdgesUpdated = 0;
-	for (const functionId of changedSources) {
-		const prior =
-			specificOutgoingEdges.get(functionId) ??
-			new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>();
-		const combined = allSet.has(functionId)
-			? combinedEdges(
-					targets,
-					functionId,
-					structural.get(functionId) ??
-						new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>(),
-				)
-			: {
-					edges: new Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>(),
-					open: false,
-				};
-		const next = combined.edges;
-		const priorOpen = previous?.openSources.has(functionId) ?? false;
-		if (priorOpen !== combined.open) {
-			reachabilityEdgesUpdated++;
-			logicalReachabilityEdgesUpdated += all.length;
-			for (const target of all) affected.add(target);
-		}
-		if (combined.open) openSources.add(functionId);
-		else openSources.delete(functionId);
-		for (const target of new Set([...prior.keys(), ...next.keys()])) {
-			const oldReasons = prior.get(target);
-			const newReasons = next.get(target);
-			if (sameReasons(oldReasons, newReasons)) continue;
-			affected.add(target);
-			const updateCount = Math.max(oldReasons?.size ?? 0, newReasons?.size ?? 0);
-			reachabilityEdgesUpdated += updateCount;
-			logicalReachabilityEdgesUpdated += updateCount;
-			if ((oldReasons?.size ?? 0) === 0 || (newReasons?.size ?? 0) === 0) {
-				let reverse = updatedReverseEdges.get(target);
-				if (reverse === undefined) {
-					reverse = new Set(specificReverseEdges.get(target) ?? []);
-					updatedReverseEdges.set(target, reverse);
-				}
-				if ((newReasons?.size ?? 0) === 0) reverse.delete(functionId);
-				else reverse.add(functionId);
-			}
-		}
-		if (allSet.has(functionId)) specificOutgoingEdges.set(functionId, next);
-		else specificOutgoingEdges.delete(functionId);
-	}
-	for (const [target, reverse] of updatedReverseEdges) {
-		if (reverse.size === 0) specificReverseEdges.delete(target);
-		else specificReverseEdges.set(target, reverse);
 	}
 
 	const { roots, hostInstallSlotsRead } = reachabilityRoots(program, targets, context);
-	for (const functionId of new Set([
-		...(previous?.roots.keys() ?? []),
-		...roots.keys(),
-	])) {
-		if (!sameReasons(previous?.roots.get(functionId), roots.get(functionId))) {
-			affected.add(functionId);
-		}
-	}
-	for (const functionId of all) {
-		if (!previous?.functionVersions.has(functionId)) affected.add(functionId);
-	}
-
-	if (previous === undefined) {
-		for (const functionId of all) affected.add(functionId);
-	} else {
-		const queue = [...affected];
-		for (let cursor = 0; cursor < queue.length; cursor++) {
-			const functionId = queue[cursor]!;
-			if (
-				openSources.has(functionId) ||
-				(previous?.openSources.has(functionId) ?? false)
-			) {
-				for (const target of all) {
-					if (affected.has(target)) continue;
-					affected.add(target);
-					queue.push(target);
-				}
-			}
-			const edgeTargets = new Set([
-				...(previous.specificOutgoingEdges.get(functionId)?.keys() ?? []),
-				...(specificOutgoingEdges.get(functionId)?.keys() ?? []),
-			]);
-			for (const target of edgeTargets) {
-				if (affected.has(target)) continue;
-				affected.add(target);
-				queue.push(target);
-			}
-		}
-	}
-
-	const executable = new Set(previous?.executable ?? []);
-	const reasons = new Map(previous?.reasons ?? []);
-	for (const functionId of affected) {
-		executable.delete(functionId);
-		reasons.delete(functionId);
-	}
+	const executable = new Set<CoreFunctionId>();
+	const reasons = new Map<
+		CoreFunctionId,
+		ReadonlySet<CoreFunctionReachabilityReason>
+	>();
 	const pending: Array<CoreFunctionId> = [];
 	const enter = (
 		functionId: CoreFunctionId,
 		incoming: ReadonlySet<CoreFunctionReachabilityReason>,
 	): void => {
-		if (!affected.has(functionId)) return;
 		const current = new Set(reasons.get(functionId) ?? []);
 		for (const reason of incoming) current.add(reason);
 		reasons.set(functionId, current);
@@ -378,60 +256,42 @@ export function analyzeCoreFunctionReachability(
 		executable.add(functionId);
 		pending.push(functionId);
 	};
-	let anyScriptExpanded = false;
-	const stableExecutableOpenSources = [...openSources].filter(
-		(source) => !affected.has(source) && executable.has(source),
-	).length;
-	let callEdgesFollowed = 0;
-	let logicalCallEdgesFollowed = 0;
-	let openSourceExpansions = 0;
-	if (stableExecutableOpenSources > 0) {
-		anyScriptExpanded = true;
-		callEdgesFollowed += affected.size;
-		logicalCallEdgesFollowed += affected.size * stableExecutableOpenSources;
-		openSourceExpansions++;
-		for (const functionId of affected) enter(functionId, ANY_SCRIPT_REASONS);
-	}
-	for (const functionId of affected) {
-		const rootReasons = roots.get(functionId);
-		if (rootReasons !== undefined) enter(functionId, rootReasons);
-		for (const source of specificReverseEdges.get(functionId) ?? []) {
-			if (affected.has(source) || !executable.has(source)) continue;
-			const edgeReasons = specificOutgoingEdges.get(source)?.get(functionId);
-			if (edgeReasons !== undefined) enter(functionId, edgeReasons);
-		}
-	}
+	for (const [functionId, rootReasons] of roots) enter(functionId, rootReasons);
+
+	let aggregateReached = false;
 	let functionsScanned = 0;
+	let exactCallEdgesFollowed = 0;
+	let wildcardCallerVisits = 0;
+	let aggregateDependencyVisits = 0;
 	let structuralEdgesFollowed = 0;
 	while (pending.length > 0) {
 		const functionId = pending.pop()!;
 		functionsScanned++;
-		if (openSources.has(functionId)) {
-			logicalCallEdgesFollowed += affected.size;
-			if (!anyScriptExpanded) {
-				anyScriptExpanded = true;
-				callEdgesFollowed += affected.size;
-				openSourceExpansions++;
-				for (const target of affected) enter(target, ANY_SCRIPT_REASONS);
+		for (const callee of targets.graph.exactOutgoing(functionId)) {
+			exactCallEdgesFollowed++;
+			enter(callee, FINITE_CALL_REASONS);
+		}
+		if (targets.graph.isWildcardCaller(functionId)) {
+			wildcardCallerVisits++;
+			if (!aggregateReached) {
+				aggregateReached = true;
+				for (const callee of targets.graph.functions) {
+					aggregateDependencyVisits++;
+					enter(callee, ANY_SCRIPT_REASONS);
+				}
 			}
 		}
-		for (const [target, edgeReasons] of specificOutgoingEdges.get(functionId) ?? []) {
-			if (!affected.has(target)) continue;
-			for (const reason of edgeReasons) {
-				if (reason === "finite-call") {
-					callEdgesFollowed++;
-					logicalCallEdgesFollowed++;
-				} else structuralEdgesFollowed++;
-			}
+		for (const [target, edgeReasons] of structural.get(functionId) ?? []) {
+			structuralEdgesFollowed += edgeReasons.size;
 			enter(target, edgeReasons);
 		}
 	}
-	for (const functionId of affected) {
+
+	for (const functionId of executable) {
 		const prior = previous?.reasons.get(functionId);
 		const next = reasons.get(functionId);
 		if (prior !== undefined && sameReasons(prior, next)) reasons.set(functionId, prior);
 	}
-
 	let resultSetUpdates = 0;
 	for (const functionId of new Set([...(previous?.executable ?? []), ...executable])) {
 		if ((previous?.executable.has(functionId) ?? false) !== executable.has(functionId)) {
@@ -440,15 +300,12 @@ export function analyzeCoreFunctionReachability(
 	}
 	const stableExecutable =
 		previous !== undefined && sameFunctionSet(previous.executable, executable);
-	const stableUniverse =
-		previous !== undefined &&
-		previous.functionVersions.size === all.length &&
-		all.every((functionId) => previous.functionVersions.has(functionId));
 	const finalExecutable = stableExecutable ? previous.executable : executable;
+	const computedDead = new Set(all.filter((functionId) => !executable.has(functionId)));
 	const dead =
-		stableExecutable && stableUniverse
+		previous !== undefined && sameFunctionSet(previous.dead, computedDead)
 			? previous.dead
-			: new Set(all.filter((functionId) => !executable.has(functionId)));
+			: computedDead;
 	const liveFunctions = stableExecutable
 		? previous.liveFunctions
 		: Object.freeze([...executable].sort((left, right) => left - right));
@@ -462,22 +319,17 @@ export function analyzeCoreFunctionReachability(
 		functionVersions,
 		programDataVersion: program.versions.data,
 		structural,
-		specificOutgoingEdges,
-		specificReverseEdges,
-		openSources,
 		roots,
 		targets,
 		statistics: Object.freeze({
 			functions: all.length,
 			functionsIndexed,
 			structuralIndexEdges,
-			reachabilityEdgesUpdated,
-			logicalReachabilityEdgesUpdated,
 			hostInstallSlotsRead,
 			functionsScanned,
-			callEdgesFollowed,
-			logicalCallEdgesFollowed,
-			openSourceExpansions,
+			exactCallEdgesFollowed,
+			wildcardCallerVisits,
+			aggregateDependencyVisits,
 			structuralEdgesFollowed,
 			resultSetUpdates,
 			deadFunctions: dead.size,
@@ -495,8 +347,9 @@ export const CORE_FUNCTION_REACHABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFun
 			return context.facts.closure.sourceClosure.kind;
 		},
 		compute({ program, context, request, previous, get }) {
-			if (request.scope !== "program")
+			if (request.scope !== "program") {
 				throw new Error("Expected program analysis request");
+			}
 			const targets = get(CORE_CALL_GRAPH_ANALYSIS, request);
 			return analyzeCoreFunctionReachability(
 				program,
