@@ -1067,6 +1067,10 @@ function claim(
 export interface BuildCoreOptimizationPlanOptions {
 	readonly budgets?: CoreTransformBudgetLimits;
 	readonly context?: CoreCompilationContext;
+	readonly onLocalCandidates?: (
+		functionId: CoreFunctionId,
+		candidates: ReadonlyArray<CoreLocalSpecializationCandidate>,
+	) => void;
 }
 
 export function buildCoreOptimizationPlan(
@@ -1079,11 +1083,13 @@ export function buildCoreOptimizationPlan(
 	const live = new Set(liveFunctions);
 	const pending: Array<PendingCandidate> = [];
 	for (const functionId of liveFunctions) {
-		const cfg = analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
+		const discovered = analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
 			scope: "function",
 			function: functionId,
 		});
-		const discovered = analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
+		options.onLocalCandidates?.(functionId, discovered.candidates);
+		if (discovered.candidates.length === 0) continue;
+		const cfg = analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
 			scope: "function",
 			function: functionId,
 		});

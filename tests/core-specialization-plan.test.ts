@@ -465,6 +465,22 @@ describe("late Core specialization plan", () => {
 		expect(declined.statistics.declinedByPlanReason["generated-code-cost"]).toBe(1);
 	});
 
+	it("reports local discovery from the planner's single query", () => {
+		const { program, function: functionId } = numericProgram();
+		const first = planning(program, [functionId]);
+		let functions = 0;
+		let candidates = 0;
+		buildCoreOptimizationPlan(program, first.analyses, first.summaries, [functionId], {
+			onLocalCandidates(_functionId, discovered) {
+				functions++;
+				candidates += discovered.length;
+			},
+		});
+
+		expect(functions).toBe(1);
+		expect(candidates).toBeGreaterThan(0);
+	});
+
 	it("rejects numeric fusion when the intermediate has multiple uses", () => {
 		const { program, function: functionId } = numericFanOutProgram();
 		const { plan } = planning(program, [functionId]);

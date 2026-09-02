@@ -2,7 +2,6 @@ import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
 import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { runCoreCrossCallTransforms } from "./core-cross-call-transforms.ts";
-import { CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS } from "./core-ir-provenance.ts";
 import { CORE_FUNCTION_REACHABILITY_ANALYSIS } from "./core-ir-reachability.ts";
 import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
@@ -157,19 +156,6 @@ export function optimizeCore(
 		reportBuilder.recordStage("program", Date.now() - programStartedAt);
 	}
 	const planStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
-	if (reportBuilder.collectsCounters) {
-		reportBuilder.increment(
-			"specializationFunctionsScanned",
-			reachability.liveFunctions.length,
-		);
-	}
-	for (const functionId of reachability.liveFunctions) {
-		const discovery = analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
-			scope: "function",
-			function: functionId,
-		});
-		reportBuilder.recordCandidateDiscovery(discovery.candidates);
-	}
 	const plan = buildCoreOptimizationPlan(
 		compilation.program,
 		analyses,
@@ -178,6 +164,10 @@ export function optimizeCore(
 		{
 			context: compilation.context,
 			budgets: profile.specializationBudgets,
+			onLocalCandidates(_functionId, candidates) {
+				reportBuilder.increment("specializationFunctionsScanned");
+				reportBuilder.recordCandidateDiscovery(candidates);
+			},
 		},
 	);
 	const program = compilation.program.seal();
