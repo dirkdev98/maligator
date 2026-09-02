@@ -6,6 +6,7 @@ import {
 	coreFactImplies,
 	normalizeCoreFact,
 } from "./core-ir-fact-implication.ts";
+import { coreOpcodeSet } from "./core-ir-opcodes.ts";
 import {
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_OWN_DATA_CELL_FACT,
@@ -278,6 +279,7 @@ const refinePrimitiveEffects: CorePass = {
 	name: "primitive-effect-refinement",
 	stage: "proofs",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("unary", "binary"),
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts", "representations"],
 	preserves: [],
