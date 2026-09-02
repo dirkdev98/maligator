@@ -823,8 +823,7 @@ function proveRangedInstruction(
 const foldPathComparisons: CorePass = {
 	name: "path-range-control-folding",
 	stage: "control-flow",
-	scope: "block",
-	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
+	scope: "function",
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
@@ -832,45 +831,47 @@ const foldPathComparisons: CorePass = {
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "block") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (!fn.isBlockLive(item.block)) return undefined;
 		const ranges = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS);
-		const terminator = fn.blockTerminator(item.block);
-		if (fn.instructionKind(terminator) === "branch") {
-			const condition = definitionInstruction(
-				fn,
-				fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-			);
-			const result =
-				condition === undefined
-					? undefined
-					: proveRangedInstruction(fn, ranges, condition, item.block);
-			if (result !== undefined) {
-				const editor = CoreEditor.open(program, item.function);
-				editor.replaceTerminator(item.block, {
-					kind: "jump",
-					edge: copyTerminatorEdge(fn, terminator, result ? 0 : 1),
+		let editor: CoreEditor | undefined;
+		for (const block of fn.blockIds()) {
+			const terminator = fn.blockTerminator(block);
+			if (fn.instructionKind(terminator) === "branch") {
+				const condition = definitionInstruction(
+					fn,
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+				);
+				const result =
+					condition === undefined
+						? undefined
+						: proveRangedInstruction(fn, ranges, condition, block);
+				if (result !== undefined) {
+					editor ??= CoreEditor.open(program, item.function);
+					editor.replaceTerminator(block, {
+						kind: "jump",
+						edge: copyTerminatorEdge(fn, terminator, result ? 0 : 1),
+					});
+					continue;
+				}
+			}
+			for (
+				let cursor = fn.kernel.blockFirstInstruction(block);
+				cursor >= 0 && cursor !== terminator;
+				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+			) {
+				const instruction = coreInstructionId(cursor);
+				const result = proveRangedInstruction(fn, ranges, instruction, block);
+				if (result === undefined) continue;
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceInstruction(instruction, "createBoolean", [], {
+					attributes: { value: result },
+					sourcePosition: fn.instructionSourcePosition(instruction),
 				});
-				return editor.commit();
+				break;
 			}
 		}
-		for (
-			let cursor = fn.kernel.blockFirstInstruction(item.block);
-			cursor >= 0 && cursor !== terminator;
-			cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
-		) {
-			const instruction = coreInstructionId(cursor);
-			const result = proveRangedInstruction(fn, ranges, instruction, item.block);
-			if (result === undefined) continue;
-			const editor = CoreEditor.open(program, item.function);
-			editor.replaceInstruction(instruction, "createBoolean", [], {
-				attributes: { value: result },
-				sourcePosition: fn.instructionSourcePosition(instruction),
-			});
-			return editor.commit();
-		}
-		return undefined;
+		return editor?.commit();
 	},
 };
 
@@ -1154,8 +1155,7 @@ const selectLoopScalarRepresentations: CorePass = {
 const reduceBoundedRemainders: CorePass = {
 	name: "path-range-strength-reduction",
 	stage: "control-flow",
-	scope: "block",
-	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
+	scope: "function",
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
@@ -1163,9 +1163,8 @@ const reduceBoundedRemainders: CorePass = {
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "block") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (!fn.isBlockLive(item.block)) return undefined;
 		const ranges = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const numericRepresentation = (value: CoreValueId): "f64" | "i32" | undefined => {
@@ -1174,13 +1173,15 @@ const reduceBoundedRemainders: CorePass = {
 			const scalar = kinds.exactScalar(value);
 			return scalar === "int32" ? "i32" : scalar === "number" ? "f64" : undefined;
 		};
-		const terminator = fn.blockTerminator(item.block);
-		for (
-			let cursor = fn.kernel.blockFirstInstruction(item.block);
-			cursor >= 0 && cursor !== terminator;
-			cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
-		) {
-			const instruction = coreInstructionId(cursor);
+		let editor: CoreEditor | undefined;
+		for (const block of fn.blockIds()) {
+			const terminator = fn.blockTerminator(block);
+			for (
+				let cursor = fn.kernel.blockFirstInstruction(block);
+				cursor >= 0 && cursor !== terminator;
+				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+			) {
+				const instruction = coreInstructionId(cursor);
 			if (
 				fn.instructionOpcodeName(instruction) !== "binary" ||
 				fn.instructionAttributes(instruction).operator !== "%"
@@ -1201,8 +1202,8 @@ const reduceBoundedRemainders: CorePass = {
 				numericRepresentation(output) !== dividendRepresentation
 			)
 				continue;
-			const dividend = ranges.range(dividendValue, item.block);
-			const divisor = ranges.range(divisorValue, item.block);
+			const dividend = ranges.range(dividendValue, block);
+			const divisor = ranges.range(divisorValue, block);
 			if (
 				dividend === undefined ||
 				divisor === undefined ||
@@ -1210,13 +1211,13 @@ const reduceBoundedRemainders: CorePass = {
 				!Number.isSafeInteger(divisor.minimum) ||
 				divisor.minimum <= dividend.maximum ||
 				dividend.minimum < 0
-			)
+				)
 				continue;
-			const editor = CoreEditor.open(program, item.function);
+			editor ??= CoreEditor.open(program, item.function);
 			editor.replaceInstruction(instruction, "move", [dividendValue]);
-			return editor.commit();
+			}
 		}
-		return undefined;
+		return editor?.commit();
 	},
 };
 
