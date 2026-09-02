@@ -5,6 +5,7 @@ import {
 	coreCanonicalValueRoots,
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import {
+	analyzeCoreMemoryVersions,
 	coreMemoryAccesses,
 	coreMemoryLocationFamily,
 	coreMemoryLocationIsExact,
@@ -15,8 +16,13 @@ import {
 	coreOpcodeRegistry,
 } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
-import type { CoreFactClaim, CoreFunctionId } from "../src/compiler/core/core-ir.ts";
+import type {
+	CoreFactClaim,
+	CoreFunctionId,
+	CoreValueId,
+} from "../src/compiler/core/core-ir.ts";
 import {
+	CORE_EFFECT_DOMAINS,
 	CORE_MEMORY_FAMILIES,
 	CORE_MEMORY_FAMILY_DOMAINS,
 	CORE_NO_EFFECTS,
@@ -207,6 +213,32 @@ describe("Core IR", () => {
 		);
 		expect(coreMemoryPartition({ kind: "local-slot", slot: 4 })).not.toBe(
 			coreMemoryPartition({ kind: "global-slot", slot: 4 }),
+		);
+	});
+
+	it("stores only observed memory versions at read checkpoints", () => {
+		const exactReadCount = 32;
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			globalCount: exactReadCount,
+		});
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		let returned: CoreValueId | undefined;
+		for (let index = 0; index < exactReadCount; index++) {
+			[returned] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index },
+			});
+		}
+		builder.setTerminator(entry, { kind: "return", value: returned! });
+		const { function: functionId } = builder.finish(entry);
+
+		const memory = analyzeCoreMemoryVersions(program, functionId);
+
+		expect(memory.statistics.partitions).toBe(
+			CORE_EFFECT_DOMAINS.length + exactReadCount,
+		);
+		expect(memory.statistics.stateEntries).toBe(
+			2 * memory.statistics.partitions + exactReadCount,
 		);
 	});
 

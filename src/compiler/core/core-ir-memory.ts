@@ -371,7 +371,11 @@ function memoryVersions(
 		exceptionBase + block * slotCount + slot;
 	const entryStates = new Array<Float64Array | undefined>(fn.blockCapacity);
 	const exitStates = new Array<Float64Array | undefined>(fn.blockCapacity);
-	const readStates = new Array<Float64Array | undefined>(fn.instructionCapacity);
+	const readStateStart = new Int32Array(fn.instructionCapacity);
+	readStateStart.fill(-1);
+	const readStateCount = new Uint32Array(fn.instructionCapacity);
+	const readStateSlots: Array<number> = [];
+	const readStateVersions: Array<number> = [];
 	const writeVersions = new Array<Map<number, number> | undefined>(
 		fn.instructionCapacity,
 	);
@@ -414,6 +418,28 @@ function memoryVersions(
 		if (!coreMemoryLocationIsExact(access.location)) return undefined;
 		return slotByPartition.get(coreMemoryPartition(access.location));
 	};
+	const recordReadState = (
+		instruction: CoreInstructionId,
+		accesses: ReadonlyArray<CoreMemoryAccess>,
+		state: Float64Array,
+	): void => {
+		const slots = new Set<number>();
+		for (const access of accesses) {
+			if (access.mode !== "read") continue;
+			const exact = slotForAccess(access);
+			if (exact !== undefined) slots.add(exact);
+			else
+				for (const domain of domainsForFamily(coreMemoryLocationFamily(access.location)))
+					slots.add(domainSlot.get(domain)!);
+		}
+		if (slots.size === 0) return;
+		readStateStart[instruction] = readStateSlots.length;
+		readStateCount[instruction] = slots.size;
+		for (const slot of slots) {
+			readStateSlots.push(slot);
+			readStateVersions.push(state[slot]!);
+		}
+	};
 	const initializeAllocation = (
 		instruction: CoreInstructionId,
 		state: Float64Array,
@@ -438,15 +464,17 @@ function memoryVersions(
 		}
 		if (versions !== undefined) initializationVersions[instruction] = versions;
 	};
-	const transfer = (block: CoreBlockId, entry: Float64Array): Float64Array => {
-		transfers++;
+	const transfer = (
+		block: CoreBlockId,
+		entry: Float64Array,
+		recordReads = false,
+	): Float64Array => {
+		if (!recordReads) transfers++;
 		const state = entry.slice();
 		for (const instruction of fn.instructionIds(block)) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const accesses = accessesByInstruction[instruction] ?? [];
-			if (accesses.some((access) => access.mode === "read")) {
-				readStates[instruction] = state.slice();
-			}
+			if (recordReads) recordReadState(instruction, accesses, state);
 			initializeAllocation(instruction, state);
 			const effects = coreInstructionEffects(fn, instruction);
 			const coveredWrites = new Set<CoreEffectDomain>();
@@ -532,6 +560,10 @@ function memoryVersions(
 			}
 		}
 	}
+	for (const block of cfg.reversePostorder) {
+		const entry = entryStates[block];
+		if (entry !== undefined) transfer(block, entry, true);
+	}
 	for (const instruction of fn.instructionIds()) {
 		for (const access of accessesByInstruction[instruction] ?? []) {
 			if (access.mode !== "read") continue;
@@ -541,10 +573,22 @@ function memoryVersions(
 	}
 	const partitionSlot = (partition: CoreMemoryPartition): number | undefined =>
 		slotByPartition.get(partition);
-	const stateEntries = [...entryStates, ...exitStates, ...readStates].reduce(
+	const stateEntries = [...entryStates, ...exitStates].reduce(
 		(total, state) => total + (state?.length ?? 0),
-		0,
+		readStateVersions.length,
 	);
+	const readStateVersion = (
+		instruction: CoreInstructionId,
+		slot: number,
+	): number | undefined => {
+		const start = readStateStart[instruction]!;
+		if (start < 0) return undefined;
+		const end = start + readStateCount[instruction]!;
+		for (let index = start; index < end; index++) {
+			if (readStateSlots[index] === slot) return readStateVersions[index];
+		}
+		return undefined;
+	};
 	let phis = 0;
 	for (const block of fn.blockIds()) {
 		const state = entryStates[block];
@@ -565,27 +609,19 @@ function memoryVersions(
 			blockUpdates,
 		}),
 		readKey(instruction) {
-			const state = readStates[instruction];
-			const accesses = accessesByInstruction[instruction];
-			if (state === undefined || accesses === undefined) return undefined;
+			const start = readStateStart[instruction]!;
+			if (start < 0) return undefined;
+			const end = start + readStateCount[instruction]!;
 			const versions = new Set<number>();
-			for (const access of accesses) {
-				if (access.mode !== "read") continue;
-				const exact = slotForAccess(access);
-				if (exact !== undefined) versions.add(state[exact]!);
-				else
-					for (const domain of domainsForFamily(
-						coreMemoryLocationFamily(access.location),
-					))
-						versions.add(state[domainSlot.get(domain)!]!);
-			}
+			for (let index = start; index < end; index++)
+				versions.add(readStateVersions[index]!);
 			return versions.size === 0
 				? undefined
 				: [...versions].sort((left, right) => left - right).join(",");
 		},
 		readVersion(instruction, partition) {
 			const slot = partitionSlot(partition);
-			const value = slot === undefined ? undefined : readStates[instruction]?.[slot];
+			const value = slot === undefined ? undefined : readStateVersion(instruction, slot);
 			return value === undefined ? undefined : (value as CoreMemoryVersion);
 		},
 		valueForRead(instruction, partition) {
