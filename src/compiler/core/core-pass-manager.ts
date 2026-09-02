@@ -1,5 +1,7 @@
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
+import type { CoreEditor } from "./core-editor.ts";
 import {
 	CORE_FUNCTION_HAS_BRANCHES,
 	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
@@ -10,9 +12,12 @@ import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
+import type { CoreLocalOptimizerResult } from "./core-local-optimizer.ts";
+import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import { CorePassContextDriver } from "./core-pass.ts";
 import type { CoreOptimizationStage, CorePass } from "./core-pass.ts";
+import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
 interface PendingLocalWork {
@@ -87,6 +92,40 @@ export class CorePassManager {
 			throw new Error("Core pass work-item run limit must be a positive integer");
 		}
 		this.#sccs = options.sccs ?? [];
+	}
+
+	finishCrossCallCaller(editor: CoreEditor): CoreLocalOptimizerResult {
+		if (editor.program !== this.#program) {
+			throw new Error("Cross-call editor belongs to another Core program");
+		}
+		const result = new CoreLocalOptimizer(this.#program, editor.function.id, {
+			ruleRegistry: this.#localRules ?? new CoreLocalRuleRegistry(this.#program),
+			editor,
+		}).run();
+		this.#report.recordLocalOptimizerWork(
+			"cross-call-local-optimizer",
+			result.statistics,
+		);
+		if (result.changes !== undefined && this.#verification === "per-pass") {
+			verifyCoreChangeSet(this.#program, result.changes, {
+				stage: "interprocedural",
+				pass: "cross-call-local-optimizer",
+				functionIndex: result.changes.function,
+			});
+		}
+		return result;
+	}
+
+	finishCrossCallWave(changes: ReadonlyArray<CoreChangeSet>): void {
+		this.runStage(
+			"control-flow",
+			CORE_CONTROL_FLOW_PASSES,
+			changes,
+			"control-flow",
+			false,
+		);
+		this.runStage("proofs", CORE_PROOF_PASSES, changes, "proofs", false);
+		this.runStage("memory", CORE_MEMORY_PASSES, changes, "memory", false);
 	}
 
 	runStage(

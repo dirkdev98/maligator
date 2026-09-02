@@ -1,11 +1,11 @@
 import type { ReturnProvenance } from "../shared/effect-summary.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
-import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreCalleeTargets, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { coreValueKindObservation } from "./core-ir-value-kinds.ts";
+import type { CoreProgramValueKinds } from "./core-ir-value-kinds.ts";
 import type {
 	CoreAttributeValue,
 	CoreEdge,
@@ -15,11 +15,8 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
-import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
-import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import type { CorePassManager } from "./core-pass-manager.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
-import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
 import type {
@@ -37,6 +34,10 @@ export const CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE = "callReturnRepresentati
 export const CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE = "guardedInlineFallback";
 
 export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetStatistics {
+	readonly waves: number;
+	readonly callerEditSessions: number;
+	readonly callerLocalOptimizations: number;
+	readonly programFlowResolves: number;
 	readonly instructionsIntroduced: number;
 	readonly blocksIntroduced: number;
 	readonly callGraphFunctionsAnalyzed: number;
@@ -53,7 +54,6 @@ export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetSta
 }
 
 interface AppliedTransform {
-	readonly changes: CoreChangeSet;
 	readonly instructionsIntroduced: number;
 	readonly blocksIntroduced: number;
 }
@@ -451,6 +451,7 @@ function applyCallRefresh(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	candidate: CoreTransformCandidate,
+	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	const fn = program.function(candidate.caller);
 	if (
@@ -469,7 +470,6 @@ function applyCallRefresh(
 	) {
 		return undefined;
 	}
-	const editor = CoreEditor.open(program, candidate.caller);
 	editor.replaceInstruction(
 		candidate.site,
 		fn.instructionOpcodeName(candidate.site),
@@ -483,7 +483,6 @@ function applyCallRefresh(
 		},
 	);
 	return {
-		changes: editor.commit(),
 		instructionsIntroduced: 0,
 		blocksIntroduced: 0,
 	};
@@ -492,6 +491,7 @@ function applyCallRefresh(
 function applyLinearInline(
 	program: CoreProgram,
 	candidate: CoreTransformCandidate,
+	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	const target = candidate.targets[0];
 	if (target === undefined) return undefined;
@@ -529,7 +529,6 @@ function applyLinearInline(
 		return undefined;
 	const block = caller.instructionBlock(candidate.site);
 	const callerPosition = caller.instructionSourcePosition(candidate.site);
-	const editor = CoreEditor.open(program, candidate.caller);
 	const sourcePositions = inlineSourcePositions(
 		program,
 		editor,
@@ -613,7 +612,6 @@ function applyLinearInline(
 	editor.replaceValueUses(callResults[0]!, replacement);
 	editor.removeInstruction(candidate.site);
 	return {
-		changes: editor.commit(),
 		instructionsIntroduced: introduced,
 		blocksIntroduced: 0,
 	};
@@ -622,6 +620,7 @@ function applyLinearInline(
 function applyGuardedLinearInline(
 	program: CoreProgram,
 	candidate: CoreTransformCandidate,
+	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	const target = candidate.targets[0];
 	if (target === undefined) return undefined;
@@ -663,7 +662,6 @@ function applyGuardedLinearInline(
 	if (caller.instructionKind(originalTerminator) === "guard") return undefined;
 	const terminatorPosition = caller.instructionSourcePosition(originalTerminator);
 	const callerPosition = caller.instructionSourcePosition(candidate.site);
-	const editor = CoreEditor.open(program, candidate.caller);
 	const sourcePositions = inlineSourcePositions(
 		program,
 		editor,
@@ -810,7 +808,6 @@ function applyGuardedLinearInline(
 			editor.setHandler(guardedBlock, handlerBlock, handlerArguments);
 	}
 	return {
-		changes: editor.commit(),
 		instructionsIntroduced: introduced,
 		blocksIntroduced: 3,
 	};
@@ -820,27 +817,30 @@ function applyCandidate(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	candidate: CoreTransformCandidate,
+	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	switch (candidate.kind) {
 		case "call-refresh":
-			return applyCallRefresh(program, summaries, candidate);
+			return applyCallRefresh(program, summaries, candidate, editor);
 		case "inline":
-			return applyLinearInline(program, candidate);
+			return applyLinearInline(program, candidate, editor);
 		case "guarded-inline":
-			return applyGuardedLinearInline(program, candidate);
+			return applyGuardedLinearInline(program, candidate, editor);
 	}
 }
 
 function foldProgramValueKindObservations(
 	program: CoreProgram,
-	analyses: CoreAnalysisManager,
+	kinds: CoreProgramValueKinds,
+	passes: CorePassManager,
 ): {
 	readonly changes: ReadonlyArray<CoreChangeSet>;
 	readonly folds: number;
+	readonly callers: number;
 } {
-	const kinds = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }).valueKinds;
 	const changes: Array<CoreChangeSet> = [];
 	let foldCount = 0;
+	let callers = 0;
 	for (const functionId of kinds.changedFunctions) {
 		const fn = program.function(functionId);
 		const values = kinds.values(functionId);
@@ -858,10 +858,12 @@ function foldProgramValueKindObservations(
 				sourcePosition: fn.instructionSourcePosition(instruction),
 			});
 		}
-		changes.push(editor.commit());
+		const optimized = passes.finishCrossCallCaller(editor);
+		if (optimized.changes !== undefined) changes.push(optimized.changes);
 		foldCount += folds.length;
+		callers++;
 	}
-	return { changes, folds: foldCount };
+	return { changes, folds: foldCount, callers };
 }
 
 export function runCoreCrossCallTransforms(
@@ -874,9 +876,8 @@ export function runCoreCrossCallTransforms(
 	readonly statistics: CoreCrossCallTransformStatistics;
 } {
 	const service = new CoreTransformCandidateService(limits);
-	let summaries = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
-		scope: "program",
-	}).summaries;
+	let flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+	let summaries = flow.summaries;
 	let callGraphFunctionsAnalyzed = summaries.targets.statistics.functionsAnalyzed;
 	let summaryFunctionsAnalyzed = summaries.statistics.functionsAnalyzed;
 	let sccNodesAnalyzed = summaries.statistics.sccNodesAnalyzed;
@@ -886,13 +887,18 @@ export function runCoreCrossCallTransforms(
 	let wildcardAggregateRecomputations = summaries.statistics.aggregateRecomputations;
 	let exactReverseCallerVisits = summaries.statistics.exactReverseCallerVisits;
 	let wildcardReverseCallerVisits = summaries.statistics.wildcardReverseCallerVisits;
-	discoverCoreCrossCallCandidates(program, summaries, service);
+	let valueKindFunctionEvaluations = flow.valueKinds.statistics.functionsEvaluated;
 	let instructionsIntroduced = 0;
 	let blocksIntroduced = 0;
-	const inlineChanges: Array<CoreChangeSet> = [];
-	while (true) {
-		const roundChanges: Array<CoreChangeSet> = [];
-		const affectedCallers = new Set<CoreFunctionId>();
+	let waves = 0;
+	let callerEditSessions = 0;
+	let callerLocalOptimizations = 0;
+	let programFlowResolves = 1;
+	for (let wave = 0; wave < 2; wave++) {
+		discoverCoreCrossCallCandidates(program, summaries, service);
+		const editors = new Map<CoreFunctionId, CoreEditor>();
+		const appliedCallers = new Set<CoreFunctionId>();
+		let expanded = false;
 		for (
 			let candidate = service.next();
 			candidate !== undefined;
@@ -903,29 +909,48 @@ export function runCoreCrossCallTransforms(
 				service.recordDeclined(decline);
 				continue;
 			}
-			const applied = applyCandidate(program, summaries, candidate);
+			const editor =
+				editors.get(candidate.caller) ?? CoreEditor.open(program, candidate.caller);
+			editors.set(candidate.caller, editor);
+			const applied = applyCandidate(program, summaries, candidate, editor);
 			if (applied === undefined) {
 				service.recordDeclined("unsupported-graph");
 				continue;
 			}
 			service.recordApplied(candidate);
+			appliedCallers.add(candidate.caller);
 			instructionsIntroduced += applied.instructionsIntroduced;
 			blocksIntroduced += applied.blocksIntroduced;
-			if (candidate.kind !== "inline" && candidate.kind !== "guarded-inline") continue;
-			roundChanges.push(applied.changes);
-			affectedCallers.add(candidate.caller);
+			if (candidate.kind === "inline" || candidate.kind === "guarded-inline") {
+				expanded = true;
+			}
 		}
-		if (roundChanges.length === 0) break;
-		inlineChanges.push(...roundChanges);
-		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, roundChanges);
-		const priorSummaries = summaries;
-		summaries = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
-			scope: "program",
-		}).summaries;
-		if (summaries.targets !== priorSummaries.targets) {
+		const waveChanges: Array<CoreChangeSet> = [];
+		for (const [functionId, editor] of [...editors].sort(
+			([left], [right]) => left - right,
+		)) {
+			callerEditSessions++;
+			if (!appliedCallers.has(functionId)) {
+				editor.commit();
+				continue;
+			}
+			const optimized = passes.finishCrossCallCaller(editor);
+			callerLocalOptimizations++;
+			if (optimized.changes !== undefined && optimized.changes.edits > 0) {
+				waveChanges.push(optimized.changes);
+			}
+		}
+		if (waveChanges.length === 0 || !expanded) break;
+		passes.finishCrossCallWave(waveChanges);
+		waves++;
+		const priorFlow = flow;
+		flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		programFlowResolves++;
+		summaries = flow.summaries;
+		if (flow.targets !== priorFlow.targets) {
 			callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
 		}
-		if (summaries !== priorSummaries) {
+		if (summaries !== priorFlow.summaries) {
 			summaryFunctionsAnalyzed += summaries.statistics.functionsAnalyzed;
 			sccNodesAnalyzed += summaries.statistics.sccNodesAnalyzed;
 			sccEdgeVisits += summaries.statistics.sccEdgeVisits;
@@ -935,50 +960,29 @@ export function runCoreCrossCallTransforms(
 			exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
 			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
 		}
-		for (const functionId of summaries.changedFunctions) affectedCallers.add(functionId);
-		discoverCoreCrossCallCandidates(program, summaries, service, affectedCallers);
-	}
-	if (inlineChanges.length > 0) {
-		passes.runStage("control-flow", CORE_CONTROL_FLOW_PASSES, inlineChanges);
-		passes.runStage("proofs", CORE_PROOF_PASSES, inlineChanges);
-		passes.runStage("memory", CORE_MEMORY_PASSES, inlineChanges);
-		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, inlineChanges);
-	}
-	const valueKinds = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
-		scope: "program",
-	}).valueKinds;
-	const valueKindFolds = foldProgramValueKindObservations(program, analyses);
-	if (valueKindFolds.changes.length > 0) {
-		passes.runStage(
-			"canonicalize",
-			CORE_LOCAL_CANONICALIZATION_PASSES,
-			valueKindFolds.changes,
-		);
-	}
-	const summariesBeforeValueKindFolds = summaries;
-	summaries = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
-		scope: "program",
-	}).summaries;
-	if (valueKindFolds.changes.length > 0) {
-		if (summaries.targets !== summariesBeforeValueKindFolds.targets) {
-			callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
+		if (flow.valueKinds !== priorFlow.valueKinds) {
+			valueKindFunctionEvaluations += flow.valueKinds.statistics.functionsEvaluated;
 		}
-		if (summaries !== summariesBeforeValueKindFolds) {
-			summaryFunctionsAnalyzed += summaries.statistics.functionsAnalyzed;
-			sccNodesAnalyzed += summaries.statistics.sccNodesAnalyzed;
-			sccEdgeVisits += summaries.statistics.sccEdgeVisits;
-			sccTransfers += summaries.statistics.sccTransfers;
-			callerWakeups += summaries.statistics.callerWakeups;
-			wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
-			exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
-			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
-		}
+		const publishedChanged =
+			flow.targets.changedCallers.size > 0 ||
+			flow.summaries.changedFunctions.size > 0 ||
+			flow.valueKinds.changedFunctions.size > 0 ||
+			flow.reachability.statistics.resultSetUpdates > 0;
+		if (!publishedChanged) break;
 	}
+	const valueKinds = flow.valueKinds;
+	const valueKindFolds = foldProgramValueKindObservations(program, valueKinds, passes);
+	callerEditSessions += valueKindFolds.callers;
+	callerLocalOptimizations += valueKindFolds.callers;
 	const budget = service.statistics();
 	return Object.freeze({
 		summaries,
 		statistics: Object.freeze({
 			...budget,
+			waves,
+			callerEditSessions,
+			callerLocalOptimizations,
+			programFlowResolves,
 			instructionsIntroduced,
 			blocksIntroduced,
 			callGraphFunctionsAnalyzed,
@@ -987,7 +991,7 @@ export function runCoreCrossCallTransforms(
 			sccEdgeVisits,
 			sccTransfers,
 			callerWakeups,
-			valueKindFunctionEvaluations: valueKinds.statistics.functionsEvaluated,
+			valueKindFunctionEvaluations,
 			valueKindFolds: valueKindFolds.folds,
 			wildcardAggregateRecomputations:
 				wildcardAggregateRecomputations + valueKinds.statistics.aggregateRecomputations,

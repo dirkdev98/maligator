@@ -135,6 +135,10 @@ export interface CoreTransformWorkReport {
 	readonly declinedByReason: Readonly<Record<string, number>>;
 	readonly generatedCodeConsumed: number;
 	readonly compilerWorkConsumed: number;
+	readonly waves: number;
+	readonly callerEditSessions: number;
+	readonly callerLocalOptimizations: number;
+	readonly programFlowResolves: number;
 	readonly instructionsIntroduced: number;
 	readonly blocksIntroduced: number;
 	readonly callGraphFunctionsAnalyzed: number;
@@ -356,6 +360,10 @@ export class CoreOptimizationReportBuilder {
 		declinedByReason: Object.freeze({}),
 		generatedCodeConsumed: 0,
 		compilerWorkConsumed: 0,
+		waves: 0,
+		callerEditSessions: 0,
+		callerLocalOptimizations: 0,
+		programFlowResolves: 0,
 		instructionsIntroduced: 0,
 		blocksIntroduced: 0,
 		callGraphFunctionsAnalyzed: 0,
@@ -867,7 +875,7 @@ export function formatCoreOptimizationReport(
 					.filter(([, count]) => count > 0)
 					.map(([reason, count]) => `${reason}=${count}`)
 					.join(", ") || "none"
-			}; generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, summaries analyzed ${report.transforms.summaryFunctionsAnalyzed}, SCC ${report.transforms.sccNodesAnalyzed} nodes/${report.transforms.sccEdgeVisits} edges/${report.transforms.sccTransfers} transfers, caller wakeups ${report.transforms.callerWakeups}, value kinds evaluated ${report.transforms.valueKindFunctionEvaluations}/folded ${report.transforms.valueKindFolds}`,
+			}; ${report.transforms.waves} waves/${report.transforms.programFlowResolves} flow solves, ${report.transforms.callerEditSessions} caller editors/${report.transforms.callerLocalOptimizations} local optimizations, generated ${report.transforms.generatedCodeConsumed}, compiler work ${report.transforms.compilerWorkConsumed}, introduced ${report.transforms.instructionsIntroduced} instructions/${report.transforms.blocksIntroduced} blocks, callgraph analyzed ${report.transforms.callGraphFunctionsAnalyzed}, summaries analyzed ${report.transforms.summaryFunctionsAnalyzed}, SCC ${report.transforms.sccNodesAnalyzed} nodes/${report.transforms.sccEdgeVisits} edges/${report.transforms.sccTransfers} transfers, caller wakeups ${report.transforms.callerWakeups}, value kinds evaluated ${report.transforms.valueKindFunctionEvaluations}/folded ${report.transforms.valueKindFolds}`,
 		},
 		{
 			label: "Core optimizer discovery",

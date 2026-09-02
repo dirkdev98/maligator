@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
@@ -69,6 +70,17 @@ const TINY_CODE_BUDGET: CoreTransformBudgetLimits = {
 };
 
 describe("bounded Core cross-call transforms", () => {
+	it("owns exactly two deliberate waves without driving pass stages", () => {
+		const source = readFileSync(
+			new URL("../src/compiler/core/core-cross-call-transforms.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(source).toMatch(/wave < 2/);
+		expect(source).not.toMatch(/while\s*\(true\)/);
+		expect(source).not.toMatch(/passes\.runStage/);
+	});
+
 	it("deduplicates semantic keys and enforces site, caller, and compiler-work limits", () => {
 		const service = new CoreTransformCandidateService({
 			perSiteExpansions: 1,
@@ -130,6 +142,11 @@ describe("bounded Core cross-call transforms", () => {
 		expect(result.statistics.instructionsIntroduced).toBe(1);
 		expect(result.statistics.generatedCodeConsumed).toBe(1);
 		expect(result.statistics.callGraphFunctionsAnalyzed).toBeGreaterThan(2);
+		expect(result.statistics.waves).toBeLessThanOrEqual(2);
+		expect(result.statistics.programFlowResolves).toBe(result.statistics.waves + 1);
+		expect(result.statistics.callerEditSessions).toBe(
+			result.statistics.callerLocalOptimizations,
+		);
 	});
 
 	it("retains the callee source chain when inlining", () => {

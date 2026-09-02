@@ -128,6 +128,7 @@ export interface CoreLocalOptimizerOptions {
 	readonly budgetExhaustion?: "stop" | "error";
 	readonly additionalRules?: ReadonlyArray<CoreLocalInstructionRule>;
 	readonly ruleRegistry?: CoreLocalRuleRegistry;
+	readonly editor?: CoreEditor;
 }
 
 const COPY_PROPAGATION_RULE: CoreLocalInstructionRule = {
@@ -372,6 +373,13 @@ export class CoreLocalOptimizer {
 	) {
 		this.#program = program;
 		this.#fn = program.function(functionId);
+		if (
+			options.editor !== undefined &&
+			(options.editor.program !== program || options.editor.function !== this.#fn)
+		) {
+			throw new Error("Core local optimizer editor belongs to another function");
+		}
+		this.#editor = options.editor;
 		this.#instructionQueue = new SparseNumericQueue(this.#fn.instructionCapacity);
 		this.#blockQueue = new SparseNumericQueue(this.#fn.blockCapacity);
 		this.#maxWorkItems = options.maxWorkItems ?? 2_000_000;
