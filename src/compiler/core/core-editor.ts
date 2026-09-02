@@ -289,6 +289,8 @@ export class CoreEditor {
 	readonly #values = new Set<CoreValueId>();
 	readonly #facts = new Set<CoreFactId>();
 	readonly #edges: Array<CoreChangedEdge> = [];
+	readonly #controlEdgeTargets: Array<Set<CoreBlockId> | undefined> = [];
+	readonly #exceptionEdgeTargets: Array<Set<CoreBlockId> | undefined> = [];
 	readonly #calls = new Set<CoreInstructionId>();
 	#replacementInstructionEpochs = new Uint32Array(0);
 	#replacementEpoch = 0;
@@ -1177,15 +1179,14 @@ export class CoreEditor {
 	}
 
 	#touchEdge(edge: CoreChangedEdge): void {
-		if (
-			this.#edges.some(
-				(known) =>
-					known.kind === edge.kind &&
-					known.source === edge.source &&
-					known.target === edge.target,
-			)
-		)
-			return;
+		const index =
+			edge.kind === "control-flow"
+				? this.#controlEdgeTargets
+				: this.#exceptionEdgeTargets;
+		const targets = index[edge.source] ?? new Set<CoreBlockId>();
+		if (targets.has(edge.target)) return;
+		targets.add(edge.target);
+		index[edge.source] = targets;
 		this.#edges.push(edge);
 	}
 
