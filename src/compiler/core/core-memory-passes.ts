@@ -1224,7 +1224,7 @@ function scalarizeRootedLayout(
 	for (const block of blocks) {
 		const terminator = fn.blockTerminator(block);
 		const exit = exitFields.get(block)!;
-		const edgeValues = new Map<string, CoreValueId>();
+		const edgeValues = new Map<CoreValueId, Map<CoreRepresentation, CoreValueId>>();
 		const edgeValue = (
 			value: CoreValueId,
 			representation: CoreRepresentation,
@@ -1233,13 +1233,15 @@ function scalarizeRootedLayout(
 			if (representation !== "boxed") {
 				throw new Error("Virtual object field edge requires an unsupported conversion");
 			}
-			const key = `${value}:${representation}`;
-			const existing = edgeValues.get(key);
+			const representations = edgeValues.get(value);
+			const existing = representations?.get(representation);
 			if (existing !== undefined) return existing;
 			const converted = editor.appendInstruction(block, "move", [value], {
 				outputRepresentations: [representation],
 			}).outputs[0]!;
-			edgeValues.set(key, converted);
+			const cached = representations ?? new Map<CoreRepresentation, CoreValueId>();
+			cached.set(representation, converted);
+			edgeValues.set(value, cached);
 			return converted;
 		};
 		editor.replaceTerminator(

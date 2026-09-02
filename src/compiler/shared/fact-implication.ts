@@ -155,7 +155,7 @@ export function factObligationKey(obligation: FactObligation): string {
 }
 
 /**
- * Directly implied, strictly weaker dependencies.
+ * Whether `strong` establishes everything `weak` asserts.
  *
  * `authority.closed` is the stronger statement that no host authority can reach
  * the primordial graph at all, so it subsumes the lock. `source.closed` means no
@@ -165,76 +165,49 @@ export function factObligationKey(obligation: FactObligation): string {
  * `global-bindings` or `object-shapes`, which ordinary user code mutates without
  * touching a primordial.
  */
-const DIRECT_IMPLICATIONS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
-	["world:authority.closed", ["world:primordials.locked"]],
-	["world:source.closed", ["world:eval.disabled"]],
-	[
-		"world:primordials.locked",
-		["epoch:primitive-methods", "epoch:watched-methods", "epoch:array-elements"],
-	],
-];
-
-/**
- * Transitive closure of `DIRECT_IMPLICATIONS`, computed once. The relation is a
- * fixed, acyclic, three-edge-set DAG over a closed vocabulary, so the closure is
- * a constant and every later query is a set lookup.
- */
-const STRICTLY_IMPLIED: ReadonlyMap<string, ReadonlySet<string>> = (() => {
-	const direct = new Map(DIRECT_IMPLICATIONS);
-	const closure = new Map<string, Set<string>>();
-	const visit = (key: string): ReadonlySet<string> => {
-		const cached = closure.get(key);
-		if (cached !== undefined) return cached;
-		const reached = new Set<string>();
-		closure.set(key, reached);
-		for (const weaker of direct.get(key) ?? []) {
-			reached.add(weaker);
-			for (const transitive of visit(weaker)) reached.add(transitive);
-		}
-		return reached;
-	};
-	for (const [key] of DIRECT_IMPLICATIONS) visit(key);
-	return closure;
-})();
-
-/** Whether holding `strong` already establishes everything `weak` asserts. */
 export function factDependencyImplies(
 	strong: FactDependency,
 	weak: FactDependency,
 ): boolean {
-	const strongKey = factDependencyKey(strong);
-	const weakKey = factDependencyKey(weak);
+	if (factDependencyEquals(strong, weak)) return true;
+	if (strong.kind !== "world") return false;
+	if (strong.fact === "source.closed") {
+		return weak.kind === "world" && weak.fact === "eval.disabled";
+	}
+	if (strong.fact !== "primordials.locked" && strong.fact !== "authority.closed")
+		return false;
+	if (weak.kind === "world") return weak.fact === "primordials.locked";
 	return (
-		strongKey === weakKey || (STRICTLY_IMPLIED.get(strongKey)?.has(weakKey) ?? false)
+		weak.kind === "epoch" &&
+		(weak.family === "primitive-methods" ||
+			weak.family === "watched-methods" ||
+			weak.family === "array-elements")
 	);
 }
 
 /**
- * Deterministic canonical form: deduplicate by key, drop every dependency some
- * retained dependency strictly implies, and sort by key.
- *
- * Cost is O(n log n) for the sort plus O(n) implication work, because the
- * strictly-implied set of any dependency is a constant of size at most three.
- * Removal is safe in one pass without a fixpoint: the implication table is
- * transitively closed, so a dependency implied only by a removed one is also
- * implied by whatever removed it.
+ * Deterministic canonical form: compare fields directly, discard dependencies
+ * implied by another retained dependency, then sort for stable artifacts.
  */
 export function normalizeFactDependencies(
 	dependencies: ReadonlyArray<FactDependency>,
 ): ReadonlyArray<FactDependency> {
-	const byKey = new Map<string, FactDependency>();
+	const unique: Array<FactDependency> = [];
 	for (const dependency of dependencies) {
-		const key = factDependencyKey(dependency);
-		if (!byKey.has(key)) byKey.set(key, dependency);
+		if (!unique.some((candidate) => factDependencyEquals(candidate, dependency)))
+			unique.push(dependency);
 	}
-	const subsumed = new Set<string>();
-	for (const key of byKey.keys()) {
-		for (const weaker of STRICTLY_IMPLIED.get(key) ?? []) subsumed.add(weaker);
-	}
-	return [...byKey]
-		.filter(([key]) => !subsumed.has(key))
-		.sort(([left], [right]) => left.localeCompare(right))
-		.map(([, dependency]) => dependency);
+	return unique
+		.filter(
+			(dependency, index) =>
+				!unique.some(
+					(candidate, candidateIndex) =>
+						candidateIndex !== index && factDependencyImplies(candidate, dependency),
+				),
+		)
+		.sort((left, right) =>
+			factDependencyKey(left).localeCompare(factDependencyKey(right)),
+		);
 }
 
 /**
@@ -282,15 +255,16 @@ export function normalizeFactObligations(
 	obligations: ReadonlyArray<FactObligation>,
 	dependencies: ReadonlyArray<FactDependency>,
 ): ReadonlyArray<FactObligation> {
-	const byKey = new Map<string, FactObligation>();
+	const unique: Array<FactObligation> = [];
 	for (const obligation of obligations) {
-		const key = factObligationKey(obligation);
-		if (!byKey.has(key)) byKey.set(key, obligation);
+		if (!unique.some((candidate) => factObligationEquals(candidate, obligation)))
+			unique.push(obligation);
 	}
-	return [...byKey]
-		.filter(([, obligation]) => !factObligationIsDischarged(obligation, dependencies))
-		.sort(([left], [right]) => left.localeCompare(right))
-		.map(([, obligation]) => obligation);
+	return unique
+		.filter((obligation) => !factObligationIsDischarged(obligation, dependencies))
+		.sort((left, right) =>
+			factObligationKey(left).localeCompare(factObligationKey(right)),
+		);
 }
 
 /**
