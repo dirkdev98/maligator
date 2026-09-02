@@ -899,6 +899,7 @@ function stackObjectCandidate(
 	layout: CoreNamedAllocationLayout,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	index: CoreLocalSpecializationIndex,
 ): CoreStackObjectCandidate | undefined {
 	if (
 		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
@@ -942,48 +943,37 @@ function stackObjectCandidate(
 		{ readonly instruction: CoreInstructionId; readonly slot: number }
 	>();
 	let requiresObjectIdentity = false;
-	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			!control.reachable.has(fn.instructionBlock(instruction))
-		)
-			continue;
+	for (const { instruction, position } of index.uses.get(allocationRoot) ?? []) {
+		if (!control.reachable.has(fn.instructionBlock(instruction))) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const operator = fn.instructionAttributes(instruction).operator;
-		const operandCount = instructionOperandCount(fn, instruction);
-		for (let position = 0; position < operandCount; position++) {
-			const operand = instructionOperand(fn, instruction, position)!;
-			if (!aliasesAllocation(operand)) continue;
-			if (
-				(opcode === "move" && position === 0) ||
-				(opcode === "throwIfTdz" && position === 0) ||
-				opcode === "rootUse"
-			) {
-				continue;
-			}
-			if (
-				(opcode === "binary" && (operator === "===" || operator === "!==")) ||
-				((opcode === "loadPrototype" || opcode === "typeofCompare") && position === 0) ||
-				(opcode === "unary" && operator === "typeof" && position === 0)
-			) {
-				requiresObjectIdentity = true;
-				continue;
-			}
-			if (
-				(opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") &&
-				position === 0
-			) {
-				const stringIndex = fn.instructionAttributes(instruction).stringIndex;
-				const slot =
-					typeof stringIndex === "number"
-						? slotByStringIndex.get(stringIndex)
-						: undefined;
-				if (slot === undefined) return undefined;
-				accesses.set(instruction, { instruction, slot });
-				continue;
-			}
-			return undefined;
+		if (
+			(opcode === "move" && position === 0) ||
+			(opcode === "throwIfTdz" && position === 0) ||
+			opcode === "rootUse"
+		) {
+			continue;
 		}
+		if (
+			(opcode === "binary" && (operator === "===" || operator === "!==")) ||
+			((opcode === "loadPrototype" || opcode === "typeofCompare") && position === 0) ||
+			(opcode === "unary" && operator === "typeof" && position === 0)
+		) {
+			requiresObjectIdentity = true;
+			continue;
+		}
+		if (
+			(opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") &&
+			position === 0
+		) {
+			const stringIndex = fn.instructionAttributes(instruction).stringIndex;
+			const slot =
+				typeof stringIndex === "number" ? slotByStringIndex.get(stringIndex) : undefined;
+			if (slot === undefined) return undefined;
+			accesses.set(instruction, { instruction, slot });
+			continue;
+		}
+		return undefined;
 	}
 
 	const materializations: Array<{
@@ -1079,9 +1069,10 @@ export const CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS: CoreAnalysisDefinition<Cor
 			const provenanceAnalysis = get(CORE_LOCAL_PROVENANCE_ANALYSIS, request);
 			const control = get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request);
 			const roots = get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request);
+			const index = localSpecializationIndex(fn, roots);
 			const proofs = provenanceAnalysis.layouts.flatMap((layout) => {
 				if (layout.kind !== "named-slots") return [];
-				const candidate = stackObjectCandidate(fn, layout, control, roots);
+				const candidate = stackObjectCandidate(fn, layout, control, roots, index);
 				return candidate === undefined
 					? []
 					: [
@@ -1399,6 +1390,7 @@ interface CoreLocalSpecializationIndex {
 	readonly controlUses: ReadonlySet<CoreValueId>;
 	readonly handlerTargets: ReadonlySet<CoreBlockId>;
 	readonly valuesByRoot: ReadonlyMap<CoreValueId, ReadonlyArray<CoreValueId>>;
+	readonly opcodes: ReadonlyMap<string, ReadonlyArray<CoreInstructionId>>;
 }
 
 function decodeCoreString(program: CoreProgram, index: number): string | undefined {
@@ -1422,6 +1414,7 @@ function localSpecializationIndex(
 	const controlUses = new Set<CoreValueId>();
 	const handlerTargets = new Set<CoreBlockId>();
 	const mutableValuesByRoot = new Map<CoreValueId, Array<CoreValueId>>();
+	const mutableOpcodes = new Map<string, Array<CoreInstructionId>>();
 	for (const value of fn.valueIds()) {
 		const resolved = root(value);
 		const values = mutableValuesByRoot.get(resolved);
@@ -1431,6 +1424,12 @@ function localSpecializationIndex(
 	for (const block of fn.blockIds()) {
 		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
 			location.set(instruction, { block, index });
+			if (fn.instructionKind(instruction) === "operation") {
+				const opcode = fn.instructionOpcodeName(instruction);
+				const instructions = mutableOpcodes.get(opcode) ?? [];
+				instructions.push(instruction);
+				mutableOpcodes.set(opcode, instructions);
+			}
 			const operandCount = instructionOperandCount(fn, instruction);
 			for (let position = 0; position < operandCount; position++) {
 				const operand = instructionOperand(fn, instruction, position)!;
@@ -1464,7 +1463,10 @@ function localSpecializationIndex(
 	for (const [value, aliases] of mutableValuesByRoot) {
 		valuesByRoot.set(value, Object.freeze(aliases));
 	}
-	return { location, uses, controlUses, handlerTargets, valuesByRoot };
+	const opcodes = new Map<string, ReadonlyArray<CoreInstructionId>>();
+	for (const [opcode, instructions] of mutableOpcodes)
+		opcodes.set(opcode, Object.freeze(instructions));
+	return { location, uses, controlUses, handlerTargets, valuesByRoot, opcodes };
 }
 
 function specializationInstructionDominates(
@@ -2420,17 +2422,13 @@ function iteratorCursorCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	index: CoreLocalSpecializationIndex,
 ): ReadonlyArray<CoreIteratorCursorCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const stepsByIterator = new Map<CoreValueId, Array<CoreInstructionId>>();
-	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "iteratorStep" ||
-			!control.reachable.has(fn.instructionBlock(instruction))
-		)
-			continue;
+	for (const instruction of index.opcodes.get("iteratorStep") ?? []) {
+		if (!control.reachable.has(fn.instructionBlock(instruction))) continue;
 		const iterator = instructionOperand(fn, instruction, 0);
 		if (iterator === undefined) continue;
 		const steps = stepsByIterator.get(root(iterator)) ?? [];
@@ -2438,10 +2436,8 @@ function iteratorCursorCandidates(
 		stepsByIterator.set(root(iterator), steps);
 	}
 	const candidates: Array<CoreIteratorCursorCandidate> = [];
-	for (const initialize of fn.instructionIds()) {
+	for (const initialize of index.opcodes.get("getIterator") ?? []) {
 		if (
-			fn.instructionKind(initialize) !== "operation" ||
-			fn.instructionOpcodeName(initialize) !== "getIterator" ||
 			instructionOperandCount(fn, initialize) !== 1 ||
 			instructionResultCount(fn, initialize) !== 2 ||
 			!control.reachable.has(fn.instructionBlock(initialize))
@@ -2488,12 +2484,10 @@ function iteratorCursorCandidates(
 function iteratorResultVirtualizationCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
+	index: CoreLocalSpecializationIndex,
 ): ReadonlyArray<CoreIteratorResultVirtualizationCandidate> {
-	const steps = [...fn.instructionIds()].filter(
-		(instruction) =>
-			fn.instructionKind(instruction) === "operation" &&
-			fn.instructionOpcodeName(instruction) === "iteratorStep" &&
-			control.reachable.has(fn.instructionBlock(instruction)),
+	const steps = (index.opcodes.get("iteratorStep") ?? []).filter((instruction) =>
+		control.reachable.has(fn.instructionBlock(instruction)),
 	);
 	const candidates: Array<CoreIteratorResultVirtualizationCandidate> = [];
 	for (let offset = 0; offset < steps.length; offset += 64) {
@@ -3530,7 +3524,7 @@ function discoverCandidates(
 	};
 	for (const layout of provenanceAnalysis.layouts) {
 		if (layout.kind === "named-slots") {
-			const candidate = stackObjectCandidate(fn, layout, control, roots);
+			const candidate = stackObjectCandidate(fn, layout, control, roots, index);
 			if (candidate !== undefined) candidates.set(candidate.key, candidate);
 		} else {
 			const dense = denseArrayCandidates(fn, layout, control, roots);
@@ -3567,8 +3561,8 @@ function discoverCandidates(
 	for (const candidate of [
 		...freshArrayLengthCandidates(program, fn, provenanceAnalysis, control, roots, index),
 		...indexedLengthLoopCandidates(program, fn, control, roots, index),
-		...iteratorCursorCandidates(fn, control, roots),
-		...iteratorResultVirtualizationCandidates(fn, control),
+		...iteratorCursorCandidates(fn, control, roots, index),
+		...iteratorResultVirtualizationCandidates(fn, control, index),
 		...iteratorEntryPairVirtualizationCandidates(fn, control, roots, index),
 		...stringCharCodeAtCandidates(program, fn, control, loops, roots, index),
 		...functionCallChainCandidates(program, fn, control, roots, index),
@@ -3581,11 +3575,8 @@ function discoverCandidates(
 	]) {
 		candidates.set(candidate.key, candidate);
 	}
-	const numericOpcodes = new Set(["binary"]);
-	for (const instruction of fn.instructionIds()) {
+	for (const instruction of index.opcodes.get("binary") ?? []) {
 		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			!numericOpcodes.has(fn.instructionOpcodeName(instruction)) ||
 			!control.reachable.has(fn.instructionBlock(instruction)) ||
 			!coreTargetSupportsNumericFusionOperator(
 				fn.instructionAttributes(instruction).operator,
@@ -3616,7 +3607,7 @@ function discoverCandidates(
 		}
 		if (
 			fn.instructionKind(user) !== "operation" ||
-			!numericOpcodes.has(fn.instructionOpcodeName(user)) ||
+			fn.instructionOpcodeName(user) !== "binary" ||
 			!control.reachable.has(fn.instructionBlock(user)) ||
 			matchingOperands !== 1 ||
 			startLocation === undefined ||
