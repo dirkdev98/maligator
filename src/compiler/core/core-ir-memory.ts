@@ -222,8 +222,11 @@ export function coreMemoryAccesses(
 export interface CoreMemoryVersions {
 	readonly function: CoreFunctionId;
 	readonly statistics: {
+		readonly accesses: number;
 		readonly partitions: number;
 		readonly exactPartitions: number;
+		readonly stateEntries: number;
+		readonly phis: number;
 		readonly transfers: number;
 		readonly blockUpdates: number;
 	};
@@ -294,9 +297,11 @@ function memoryVersions(
 	);
 	const exactReads = new Map<CoreMemoryFamily, Set<CoreMemoryPartition>>();
 	const exactLocations = new Map<CoreMemoryPartition, CoreExactMemoryLocation>();
+	let accessCount = 0;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const accesses = coreMemoryAccesses(fn, instruction, resolution);
+		accessCount += accesses.length;
 		accessesByInstruction[instruction] = accesses;
 		for (const access of accesses) {
 			if (access.mode !== "read" || !coreMemoryLocationIsExact(access.location)) continue;
@@ -520,11 +525,26 @@ function memoryVersions(
 	}
 	const partitionSlot = (partition: CoreMemoryPartition): number | undefined =>
 		slotByPartition.get(partition);
+	const stateEntries = [...entryStates, ...exitStates, ...readStates].reduce(
+		(total, state) => total + (state?.length ?? 0),
+		0,
+	);
+	let phis = 0;
+	for (const block of fn.blockIds()) {
+		const state = entryStates[block];
+		if (state === undefined) continue;
+		for (let slot = 0; slot < state.length; slot++) {
+			if (state[slot] === phiIdentity(block, slot)) phis++;
+		}
+	}
 	const result: CoreMemoryVersions = {
 		function: fn.id,
 		statistics: Object.freeze({
+			accesses: accessCount,
 			partitions: slotCount,
 			exactPartitions: slotCount - CORE_EFFECT_DOMAINS.length,
+			stateEntries,
+			phis,
 			transfers,
 			blockUpdates,
 		}),

@@ -84,6 +84,7 @@ export interface CoreProgramSummaryStatistics {
 	readonly functionsReused: number;
 	readonly sccs: number;
 	readonly sccTransfers: number;
+	readonly sccEdgeVisits: number;
 	readonly summaryChanges: number;
 	readonly callerWakeups: number;
 	readonly affectedCallers: number;
@@ -409,17 +410,25 @@ function callGraphSccs(
 	readonly sccs: ReadonlyArray<CoreCallGraphScc>;
 	readonly owner: ReadonlyMap<CoreFunctionId, number>;
 	readonly nodesAnalyzed: number;
+	readonly edgeVisits: number;
 	readonly sccsReused: number;
 } {
 	const all = [...program.functionIds()];
+	let edgeVisits = 0;
 	const affected = new Set<CoreFunctionId>();
 	for (const caller of targets.changedEdgeCallers) {
 		affected.add(caller);
 		for (const site of targets.outgoing(caller)) {
-			for (const callee of callTargets(program, site)) affected.add(callee);
+			for (const callee of callTargets(program, site)) {
+				edgeVisits++;
+				affected.add(callee);
+			}
 		}
 		for (const site of previous?.targets.outgoing(caller) ?? []) {
-			for (const callee of callTargets(program, site)) affected.add(callee);
+			for (const callee of callTargets(program, site)) {
+				edgeVisits++;
+				affected.add(callee);
+			}
 		}
 	}
 	for (const functionId of all) {
@@ -430,6 +439,7 @@ function callGraphSccs(
 			sccs: previous.sccs,
 			owner: previous.owner,
 			nodesAnalyzed: 0,
+			edgeVisits: 0,
 			sccsReused: previous.sccs.length,
 		};
 	}
@@ -441,11 +451,19 @@ function callGraphSccs(
 				...targets.callers(functionId),
 				...previous.targets.callers(functionId),
 			]);
+			edgeVisits +=
+				targets.callers(functionId).size + previous.targets.callers(functionId).size;
 			for (const site of targets.outgoing(functionId)) {
-				for (const callee of callTargets(program, site)) neighbors.add(callee);
+				for (const callee of callTargets(program, site)) {
+					edgeVisits++;
+					neighbors.add(callee);
+				}
 			}
 			for (const site of previous.targets.outgoing(functionId)) {
-				for (const callee of callTargets(program, site)) neighbors.add(callee);
+				for (const callee of callTargets(program, site)) {
+					edgeVisits++;
+					neighbors.add(callee);
+				}
 			}
 			for (const neighbor of neighbors) {
 				if (affected.has(neighbor)) continue;
@@ -470,6 +488,7 @@ function callGraphSccs(
 		onStack.add(functionId);
 		for (const site of targets.outgoing(functionId)) {
 			for (const callee of callTargets(program, site)) {
+				edgeVisits++;
 				if (!affected.has(callee)) continue;
 				if (!indices.has(callee)) {
 					visit(callee);
@@ -520,6 +539,7 @@ function callGraphSccs(
 		sccs: Object.freeze(sccs),
 		owner,
 		nodesAnalyzed: affected.size,
+		edgeVisits,
 		sccsReused: preserved.length,
 	};
 }
@@ -798,6 +818,7 @@ function analyzeProgramSummaries(
 		sccs,
 		owner,
 		nodesAnalyzed: sccNodesAnalyzed,
+		edgeVisits: sccEdgeVisits,
 		sccsReused,
 	} = callGraphSccs(program, targets, previous);
 	const reasons = rootReasons(program, targets, context);
@@ -957,6 +978,7 @@ function analyzeProgramSummaries(
 		functionsReused,
 		sccs: sccs.length,
 		sccTransfers,
+		sccEdgeVisits,
 		summaryChanges: changedPublished.size,
 		callerWakeups,
 		affectedCallers: affectedCallers.size,

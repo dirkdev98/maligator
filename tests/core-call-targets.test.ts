@@ -62,6 +62,10 @@ describe("incremental Core call graph", () => {
 			functionsAnalyzed: 3,
 			functionsReused: 0,
 			callSites: 1,
+			exactCallEdges: 1,
+			wildcardCallSites: 0,
+			wildcardCallers: 0,
+			opaqueCallSites: 0,
 			updatedCallSites: 1,
 		});
 		expect([...first.callers(1 as never)]).toEqual([caller.function]);
@@ -438,10 +442,18 @@ describe("incremental Core call graph", () => {
 			programAnalysisContext(),
 			new CoreOptimizationReportBuilder(program),
 		);
-		expect(
-			manager
-				.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" })
-				.site(`${callerFunction}:${call}`)?.targets,
-		).toMatchObject({ functions: [], anyScript: true, opaque: true });
+		const graph = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(graph.site(`${callerFunction}:${call}`)?.targets).toMatchObject({
+			functions: [],
+			anyScript: true,
+			opaque: true,
+		});
+		expect(graph.statistics).toMatchObject({
+			callEdges: 2,
+			exactCallEdges: 0,
+			wildcardCallSites: 1,
+			wildcardCallers: 1,
+			opaqueCallSites: 1,
+		});
 	});
 });

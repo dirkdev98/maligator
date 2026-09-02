@@ -47,6 +47,10 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(counters.report.analyses).toEqual([]);
 		expect(counters.report.counters.localRulesConsidered).toBeGreaterThan(0);
 		expect(counters.report.counters.analysisQueries).toBeGreaterThan(0);
+		expect(counters.report.counters.localFactRebuilds).toBeGreaterThan(0);
+		expect(counters.report.counters.provenanceRebuilds).toBeGreaterThan(0);
+		expect(counters.report.counters.memoryLocations).toBeGreaterThan(0);
+		expect(counters.report.counters.liveUseVisits).toBeGreaterThan(0);
 		expect(full.report.instrumentation).toBe("full");
 		expect(full.report.passes.length).toBeGreaterThan(0);
 		expect(full.report.analyses.length).toBeGreaterThan(0);

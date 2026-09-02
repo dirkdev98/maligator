@@ -139,6 +139,10 @@ export interface CoreCallGraphStatistics {
 	readonly callSites: number;
 	readonly callEdges: number;
 	readonly openCallSites: number;
+	readonly exactCallEdges: number;
+	readonly wildcardCallSites: number;
+	readonly wildcardCallers: number;
+	readonly opaqueCallSites: number;
 	readonly updatedCallSites: number;
 	readonly accessFunctionsScanned: number;
 	readonly propertyAggregateUpdates: number;
@@ -822,6 +826,10 @@ export function analyzeCoreCallGraph(
 	const updatedReverseEdges = new Map<CoreFunctionId, Set<CoreFunctionId>>();
 	let callEdges = previous?.statistics.callEdges ?? 0;
 	let openCallSites = previous?.statistics.openCallSites ?? 0;
+	let exactCallEdges = previous?.statistics.exactCallEdges ?? 0;
+	let wildcardCallSites = previous?.statistics.wildcardCallSites ?? 0;
+	let wildcardCallers = previous?.statistics.wildcardCallers ?? 0;
+	let opaqueCallSites = previous?.statistics.opaqueCallSites ?? 0;
 	let reverseEdgeUpdates = 0;
 	for (const functionId of analyzed) {
 		const priorOutgoing = previous?.outgoingIndex.get(functionId) ?? [];
@@ -873,6 +881,18 @@ export function analyzeCoreCallGraph(
 		openCallSites +=
 			nextOutgoing.filter((site) => site.open).length -
 			priorOutgoing.filter((site) => site.open).length;
+		exactCallEdges +=
+			nextOutgoing.reduce((count, site) => count + site.targets.functions.length, 0) -
+			priorOutgoing.reduce((count, site) => count + site.targets.functions.length, 0);
+		wildcardCallSites +=
+			nextOutgoing.filter((site) => site.targets.anyScript).length -
+			priorOutgoing.filter((site) => site.targets.anyScript).length;
+		wildcardCallers +=
+			Number(nextOutgoing.some((site) => site.targets.anyScript)) -
+			Number(priorOutgoing.some((site) => site.targets.anyScript));
+		opaqueCallSites +=
+			nextOutgoing.filter((site) => site.targets.opaque).length -
+			priorOutgoing.filter((site) => site.targets.opaque).length;
 		const stableOutgoing =
 			priorOutgoing.length === nextOutgoing.length &&
 			priorOutgoing.every((site, index) => site === nextOutgoing[index]);
@@ -893,6 +913,10 @@ export function analyzeCoreCallGraph(
 		callSites: sites.size,
 		callEdges,
 		openCallSites,
+		exactCallEdges,
+		wildcardCallSites,
+		wildcardCallers,
+		opaqueCallSites,
 		updatedCallSites,
 		accessFunctionsScanned,
 		propertyAggregateUpdates,

@@ -94,6 +94,7 @@ export class CoreAnalysisManager {
 			...(cached === undefined ? {} : { previous: cached.value }),
 		});
 		this.#cache.set(cacheKey, { ...versions, value });
+		this.#report.recordAnalysisResult(definition.key, value);
 		this.#report.recordAnalysis(
 			definition.key,
 			"recompute",

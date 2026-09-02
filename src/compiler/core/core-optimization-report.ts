@@ -74,6 +74,8 @@ export interface CoreCompilerWorkCounters {
 	readonly functionScans: number;
 	readonly explicitCallEdges: number;
 	readonly wildcardCallSources: number;
+	readonly wildcardCallSites: number;
+	readonly opaqueCallSites: number;
 	readonly wildcardAggregateRecomputations: number;
 	readonly exactReverseCallerVisits: number;
 	readonly wildcardReverseCallerVisits: number;
@@ -171,6 +173,8 @@ const COUNTER_KEYS = [
 	"functionScans",
 	"explicitCallEdges",
 	"wildcardCallSources",
+	"wildcardCallSites",
+	"opaqueCallSites",
 	"wildcardAggregateRecomputations",
 	"exactReverseCallerVisits",
 	"wildcardReverseCallerVisits",
@@ -366,6 +370,11 @@ export class CoreOptimizationReportBuilder {
 		if (!this.collectsCounters) return;
 		this.increment("analysisQueries");
 		if (outcome === "recompute") this.increment("analysisRecomputations");
+		if (outcome === "recompute" && analysis === "local-provenance") {
+			this.increment("provenanceRebuilds");
+		} else if (outcome === "recompute" && analysis.startsWith("local-")) {
+			this.increment("localFactRebuilds");
+		}
 		if (this.#analyses === undefined) return;
 		const report = this.#analyses.get(analysis) ?? {
 			queries: 0,
@@ -380,6 +389,24 @@ export class CoreOptimizationReportBuilder {
 		if (invalidated) report.invalidations++;
 		report.elapsedMs += elapsedMs;
 		this.#analyses.set(analysis, report);
+	}
+
+	recordAnalysisResult(analysis: string, value: unknown): void {
+		if (!this.collectsCounters || analysis !== "local-memory-versions") return;
+		const statistics = (
+			value as {
+				readonly statistics?: {
+					readonly accesses?: number;
+					readonly partitions?: number;
+					readonly stateEntries?: number;
+					readonly phis?: number;
+				};
+			}
+		).statistics;
+		this.increment("memoryAccesses", statistics?.accesses ?? 0);
+		this.increment("memoryLocations", statistics?.partitions ?? 0);
+		this.increment("memoryStateEntries", statistics?.stateEntries ?? 0);
+		this.increment("memoryPhis", statistics?.phis ?? 0);
 	}
 
 	recordQueuePush(depth: number): void {
@@ -446,10 +473,15 @@ export class CoreOptimizationReportBuilder {
 			readonly callSites: number;
 			readonly callEdges: number;
 			readonly openCallSites: number;
+			readonly exactCallEdges: number;
+			readonly wildcardCallSites: number;
+			readonly wildcardCallers: number;
+			readonly opaqueCallSites: number;
 		},
 		summaries: {
 			readonly sccs: number;
 			readonly sccTransfers: number;
+			readonly sccEdgeVisits: number;
 			readonly summaryChanges: number;
 			readonly callerWakeups: number;
 			readonly affectedCallers: number;
@@ -458,9 +490,12 @@ export class CoreOptimizationReportBuilder {
 	): void {
 		if (!this.collectsCounters) return;
 		this.increment("functionScans", callGraph.functionsAnalyzed);
-		this.increment("explicitCallEdges", callGraph.callEdges);
-		this.increment("wildcardCallSources", callGraph.openCallSites);
+		this.increment("explicitCallEdges", callGraph.exactCallEdges);
+		this.increment("wildcardCallSources", callGraph.wildcardCallers);
+		this.increment("wildcardCallSites", callGraph.wildcardCallSites);
+		this.increment("opaqueCallSites", callGraph.opaqueCallSites);
 		this.increment("sccNodes", callGraph.functionsAnalyzed);
+		this.increment("sccEdges", summaries.sccEdgeVisits);
 		this.increment("sccTransfers", summaries.sccTransfers);
 		this.#programWork = Object.freeze({
 			functionsAnalyzed: callGraph.functionsAnalyzed,
@@ -518,10 +553,42 @@ export class CoreOptimizationReportBuilder {
 		});
 	}
 
+	#recordStorageWork(program: CoreProgram): void {
+		if (!this.collectsCounters) return;
+		let liveUses = 0;
+		let deadUses = 0;
+		let abandonedOperands = 0;
+		let abandonedParameters = 0;
+		for (const functionId of program.functionIds()) {
+			const fn = program.function(functionId);
+			let liveOperands = 0;
+			for (let instruction = 0; instruction < fn.instructionCapacity; instruction++) {
+				const layout = fn.instructionLayout(instruction);
+				if (layout.live) liveOperands += layout.operandCount;
+			}
+			let liveParameters = 0;
+			for (let block = 0; block < fn.blockCapacity; block++) {
+				const layout = fn.blockLayout(block);
+				if (layout.live) liveParameters += layout.parameterCount;
+			}
+			for (let use = 0; use < fn.useCapacity; use++) {
+				if (fn.useLayout(use).live) liveUses++;
+				else deadUses++;
+			}
+			abandonedOperands += fn.operandCapacity - liveOperands;
+			abandonedParameters += fn.blockParameterCapacity - liveParameters;
+		}
+		this.increment("liveUseVisits", liveUses);
+		this.increment("deadUseSkips", deadUses);
+		this.increment("abandonedOperandStorage", abandonedOperands);
+		this.increment("abandonedParameterStorage", abandonedParameters);
+	}
+
 	finish(
 		program: CoreProgram,
 		plan: Pick<CoreOptimizationPlan, "directEntries" | "specializations">,
 	): CoreOptimizationReport {
+		this.#recordStorageWork(program);
 		const passes = this.#passes;
 		const analyses = this.#analyses;
 		const discoveredCandidatesByKind = this.#discoveredCandidatesByKind;
