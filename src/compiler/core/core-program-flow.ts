@@ -52,7 +52,7 @@ export const CORE_PROGRAM_FLOW_SUMMARIES =
 	CORE_PROGRAM_FLOW_RETURN_PROVENANCE |
 	CORE_PROGRAM_FLOW_RETURN_REPRESENTATION;
 
-const ALL_PROGRAM_FLOW_DIMENSIONS =
+export const CORE_PROGRAM_FLOW_ALL_DIMENSIONS =
 	CORE_PROGRAM_FLOW_TARGETS |
 	CORE_PROGRAM_FLOW_EFFECTS |
 	CORE_PROGRAM_FLOW_ESCAPE |
@@ -210,10 +210,8 @@ export function extractCoreProgramFlowLocalTransfers(
 	const propertyDefinitions: Array<CoreInstructionId> = [];
 	const structural = new Map<CoreFunctionId, number>();
 	let instructionVisits = 0;
-	for (let raw = 0; raw < fn.instructionCapacity; raw++) {
+	for (const instruction of fn.instructionIds()) {
 		instructionVisits++;
-		const instruction = coreInstructionId(raw);
-		if (fn.kernel.instructionLive(instruction) === 0) continue;
 		const sourcePosition = fn.kernel.instructionSourcePosition(instruction);
 		if (sourcePosition >= 0) addSourceTargets(structural, program, sourcePosition);
 		if (fn.kernel.instructionOpcode(instruction) < 0) continue;
@@ -426,7 +424,7 @@ export function coreProgramFlowDimensionsForDomains(
 				CORE_PROGRAM_FLOW_FACTS)) !==
 		0
 	)
-		dimensions |= ALL_PROGRAM_FLOW_DIMENSIONS;
+		dimensions |= CORE_PROGRAM_FLOW_ALL_DIMENSIONS;
 	if ((domains & CORE_PROGRAM_FLOW_MEMORY) !== 0) {
 		dimensions |=
 			CORE_PROGRAM_FLOW_EFFECTS |

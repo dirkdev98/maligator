@@ -2,7 +2,6 @@ import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
 import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { runCoreCrossCallTransforms } from "./core-cross-call-transforms.ts";
-import { CORE_FUNCTION_REACHABILITY_ANALYSIS } from "./core-ir-reachability.ts";
 import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
@@ -19,6 +18,7 @@ import type {
 } from "./core-optimization-report.ts";
 import { CorePassManager } from "./core-pass-manager.ts";
 import type { CoreOptimizationStage } from "./core-pass.ts";
+import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import type { CoreChangeSet } from "./core-store.ts";
 import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
@@ -144,9 +144,9 @@ export function optimizeCore(
 	}
 	const programStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
 	const summaries = crossCall.summaries;
-	const reachability = analyses.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+	const reachability = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 		scope: "program",
-	});
+	}).reachability;
 	reportBuilder.recordProgramWork(
 		summaries.targets.statistics,
 		summaries.statistics,

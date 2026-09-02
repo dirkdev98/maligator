@@ -804,7 +804,7 @@ function moduleSummaries(
 	return result;
 }
 
-function analyzeProgramSummaries(
+export function analyzeProgramSummaries(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	targets: CoreCallGraphIndex,

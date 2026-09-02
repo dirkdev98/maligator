@@ -634,7 +634,7 @@ function sameWildcardContribution(
 	);
 }
 
-function solveCoreProgramValueKinds(
+export function solveCoreProgramValueKinds(
 	program: CoreProgram,
 	targets: CoreCallGraphIndex,
 	externallyReachable: (functionId: CoreFunctionId) => boolean,

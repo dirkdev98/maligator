@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import {
@@ -9,6 +10,7 @@ import {
 	CORE_PROGRAM_FLOW_TARGETS,
 	CoreProgramFlowEngine,
 	coreProgramFlowDimensionsForDomains,
+	extractCoreProgramFlowLocalTransfers,
 } from "../src/compiler/core/core-program-flow.ts";
 import { CORE_PROGRAM_FLOW_MEMORY } from "../src/compiler/core/core-store.ts";
 import {
@@ -94,5 +96,27 @@ describe("Core program flow", () => {
 			programFlowTransferRecords: 10,
 			programFlowTransferReuses: 2,
 		});
+	});
+
+	it("extracts local transfers from live instructions only", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program, {
+			metadata: { sourcePath: "/entry.js" },
+		});
+		const entry = builder.createBlock();
+		const [result] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.appendInstruction(entry, "createUndefined", []);
+		const [, unused] = builder.bodyInstructionIds(entry);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
+		const editor = CoreEditor.open(program, functionId);
+		editor.removeInstruction(unused!);
+		editor.commit();
+
+		const transfers = extractCoreProgramFlowLocalTransfers(program, fn);
+
+		expect(transfers.instructionVisits).toBe([...fn.instructionIds()].length);
+		expect(transfers.instructionVisits).toBeLessThan(fn.instructionCapacity);
 	});
 });

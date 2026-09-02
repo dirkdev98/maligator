@@ -5,11 +5,7 @@ import { CoreEditor } from "./core-editor.ts";
 import type { CoreCalleeTargets, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
-import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "./core-ir-summaries.ts";
-import {
-	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
-	coreValueKindObservation,
-} from "./core-ir-value-kinds.ts";
+import { coreValueKindObservation } from "./core-ir-value-kinds.ts";
 import type {
 	CoreAttributeValue,
 	CoreEdge,
@@ -22,6 +18,7 @@ import type {
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "./core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import type { CorePassManager } from "./core-pass-manager.ts";
+import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
@@ -841,9 +838,7 @@ function foldProgramValueKindObservations(
 	readonly changes: ReadonlyArray<CoreChangeSet>;
 	readonly folds: number;
 } {
-	const kinds = analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
-		scope: "program",
-	});
+	const kinds = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }).valueKinds;
 	const changes: Array<CoreChangeSet> = [];
 	let foldCount = 0;
 	for (const functionId of kinds.changedFunctions) {
@@ -879,9 +874,9 @@ export function runCoreCrossCallTransforms(
 	readonly statistics: CoreCrossCallTransformStatistics;
 } {
 	const service = new CoreTransformCandidateService(limits);
-	let summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+	let summaries = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 		scope: "program",
-	});
+	}).summaries;
 	let callGraphFunctionsAnalyzed = summaries.targets.statistics.functionsAnalyzed;
 	let summaryFunctionsAnalyzed = summaries.statistics.functionsAnalyzed;
 	let sccNodesAnalyzed = summaries.statistics.sccNodesAnalyzed;
@@ -924,9 +919,9 @@ export function runCoreCrossCallTransforms(
 		inlineChanges.push(...roundChanges);
 		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, roundChanges);
 		const priorSummaries = summaries;
-		summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+		summaries = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 			scope: "program",
-		});
+		}).summaries;
 		if (summaries.targets !== priorSummaries.targets) {
 			callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
 		}
@@ -949,9 +944,9 @@ export function runCoreCrossCallTransforms(
 		passes.runStage("memory", CORE_MEMORY_PASSES, inlineChanges);
 		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES, inlineChanges);
 	}
-	const valueKinds = analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+	const valueKinds = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 		scope: "program",
-	});
+	}).valueKinds;
 	const valueKindFolds = foldProgramValueKindObservations(program, analyses);
 	if (valueKindFolds.changes.length > 0) {
 		passes.runStage(
@@ -961,9 +956,9 @@ export function runCoreCrossCallTransforms(
 		);
 	}
 	const summariesBeforeValueKindFolds = summaries;
-	summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+	summaries = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 		scope: "program",
-	});
+	}).summaries;
 	if (valueKindFolds.changes.length > 0) {
 		if (summaries.targets !== summariesBeforeValueKindFolds.targets) {
 			callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
