@@ -147,6 +147,14 @@ const TYPEOF_COMPARISON_RULE: CoreLocalInstructionRule = {
 	},
 };
 
+const STATIC_PROPERTY_KEY_RULE: CoreLocalInstructionRule = {
+	name: "fold-static-property-keys",
+	opcodes: [],
+	run(optimizer, instruction) {
+		return optimizer.foldStaticPropertyKey(instruction);
+	},
+};
+
 const CONTROL_FOLDING_RULE: CoreLocalBlockRule = {
 	name: "local-control-folding",
 	run(optimizer, block) {
@@ -220,6 +228,13 @@ export class CoreLocalOptimizer {
 							opcodes: [program.registry.require("binary").id],
 						},
 					]),
+			{
+				...STATIC_PROPERTY_KEY_RULE,
+				opcodes: ["loadProperty", "storeProperty"].flatMap((opcode) => {
+					const id = program.registry.get(opcode)?.id;
+					return id === undefined ? [] : [id];
+				}),
+			},
 			...(options.additionalRules ?? []),
 		];
 		this.#blockRules = [CONTROL_FOLDING_RULE];
@@ -401,6 +416,43 @@ export class CoreLocalOptimizer {
 		this.#wakeValueDefinition(right);
 		this.#wakeValueUsers(result);
 		this.#enqueueInstruction(instruction);
+		return true;
+	}
+
+	foldStaticPropertyKey(instruction: CoreInstructionId): boolean {
+		if (
+			this.#fn.kernel.instructionLive(instruction) === 0 ||
+			this.#fn.kernel.instructionOpcode(instruction) < 0
+		) {
+			return false;
+		}
+		const opcode = this.#fn.instructionOpcodeName(instruction);
+		if (opcode !== "loadProperty" && opcode !== "storeProperty") return false;
+		const replacement =
+			opcode === "loadProperty" ? "loadPropertyStatic" : "storePropertyStatic";
+		if (this.#program.registry.get(replacement) === undefined) return false;
+		const key = this.#instructionOperand(instruction, 1);
+		if (key === undefined) return false;
+		const constant = this.#constantForValue(key);
+		if (constant?.kind !== "string") return false;
+		const operandStart = this.#fn.kernel.instructionOperandStart(instruction);
+		const operandCount = this.#fn.kernel.instructionOperandCount(instruction);
+		const inputs = Array.from({ length: operandCount }, (_, index) =>
+			this.#fn.kernel.operandAt(operandStart + index),
+		).filter((_, index) => index !== 1);
+		const resultStart = this.#fn.kernel.instructionResultStart(instruction);
+		const resultCount = this.#fn.kernel.instructionResultCount(instruction);
+		this.#edit().replaceInstruction(instruction, replacement, inputs, {
+			attributes: {
+				...this.#fn.instructionAttributes(instruction),
+				stringIndex: constant.index,
+			},
+			sourcePosition: this.#fn.instructionSourcePosition(instruction),
+		});
+		this.#wakeValueDefinition(key);
+		for (let index = 0; index < resultCount; index++) {
+			this.#wakeValueUsers(this.#fn.kernel.resultAt(resultStart + index));
+		}
 		return true;
 	}
 

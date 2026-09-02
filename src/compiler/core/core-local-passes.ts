@@ -683,48 +683,6 @@ const annotateTerminalYieldSites: CorePass = {
 	},
 };
 
-const foldStaticPropertyKeys: CorePass = {
-	name: "fold-static-property-keys",
-	stage: "canonicalize",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("loadProperty", "storeProperty"),
-	requiredAnalyses: [],
-	wakesOn: ["body"],
-	preserves: ["control-flow", "exception-control-flow"],
-	changes: LOCAL_CHANGES,
-	budget: LOCAL_BUDGET,
-	run({ program, item }) {
-		if (item.scope !== "instruction") return undefined;
-		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation"
-		) {
-			return undefined;
-		}
-		const opcode = fn.instructionOpcodeName(item.instruction);
-		if (opcode !== "loadProperty" && opcode !== "storeProperty") return undefined;
-		const key = instructionOperand(fn, item.instruction, 1);
-		if (key === undefined) return undefined;
-		const constant = constantForValue(fn, key);
-		if (constant?.kind !== "string") return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		editor.replaceInstruction(
-			item.instruction,
-			opcode === "loadProperty" ? "loadPropertyStatic" : "storePropertyStatic",
-			copyInstructionOperands(fn, item.instruction).filter((_, index) => index !== 1),
-			{
-				attributes: {
-					...fn.instructionAttributes(item.instruction),
-					stringIndex: constant.index,
-				},
-				sourcePosition: fn.instructionSourcePosition(item.instruction),
-			},
-		);
-		return editor.commit();
-	},
-};
-
 function decodeString(program: CoreProgram, index: number): string | undefined {
 	const units = program.stringConstants[index];
 	return units === undefined ? undefined : String.fromCodePoint(...units);
@@ -2168,7 +2126,6 @@ const canonicalizeBlockParameters: CorePass = {
 
 export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	annotateTerminalYieldSites,
-	foldStaticPropertyKeys,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,

@@ -31,6 +31,7 @@ const DELETED_ALIASES = new Set([
 
 const MIGRATED_NAMES = new Set([
 	"local-copy-propagation",
+	"fold-static-property-keys",
 	"local-constant-folding",
 	"local-control-folding",
 	"local-dead-instruction-elimination",
@@ -87,7 +88,7 @@ describe("Core local optimizer migration matrix", () => {
 		const rows = migrationRows();
 		const matrixByName = new Map(rows.map((row) => [row.name, row]));
 
-		expect(runtimeEntries).toHaveLength(42);
+		expect(runtimeEntries).toHaveLength(41);
 		expect(runtimeByName.size).toBe(runtimeEntries.length);
 		expect(rows).toHaveLength(48);
 		expect(matrixByName.size).toBe(rows.length);
