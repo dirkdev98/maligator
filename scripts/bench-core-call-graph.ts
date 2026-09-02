@@ -22,6 +22,11 @@ const rows: ReadonlyArray<CoreCallGraphRow> = functions.map((caller, index) => (
 	exactTargets: [],
 	wildcard: index < WILDCARD_COUNT,
 }));
+const graph = updateCoreCallGraph(undefined, functions, rows);
+const functionStates = Uint16Array.from(
+	functions,
+	(functionId) => 1 << (functionId % 12),
+);
 let blackhole = 0;
 
 function symbolic(): number {
@@ -71,6 +76,26 @@ function expanded(): number {
 	return queue.length;
 }
 
+function symbolicReversePropagation(): number {
+	let aggregate = 0;
+	for (const functionId of functions) aggregate |= functionStates[functionId]!;
+	let checksum = 0;
+	for (const caller of graph.wildcardCallers) checksum += aggregate ^ caller;
+	return checksum;
+}
+
+function expandedReversePropagation(): number {
+	const callerStates = new Uint16Array(WILDCARD_COUNT);
+	for (const functionId of functions) {
+		for (const caller of graph.wildcardCallers) {
+			callerStates[caller] = callerStates[caller]! | functionStates[functionId]!;
+		}
+	}
+	let checksum = 0;
+	for (const caller of graph.wildcardCallers) checksum += callerStates[caller]! ^ caller;
+	return checksum;
+}
+
 function measure(run: () => number): number {
 	const startedAt = performance.now();
 	for (let iteration = 0; iteration < ITERATIONS; iteration++) blackhole ^= run();
@@ -85,24 +110,38 @@ function median(values: ReadonlyArray<number>): number {
 for (let index = 0; index < 20; index++) {
 	blackhole ^= symbolic();
 	blackhole ^= expanded();
+	blackhole ^= symbolicReversePropagation();
+	blackhole ^= expandedReversePropagation();
 }
 const symbolicSamples: Array<number> = [];
 const expandedSamples: Array<number> = [];
+const symbolicReverseSamples: Array<number> = [];
+const expandedReverseSamples: Array<number> = [];
 for (let sample = 0; sample < SAMPLES; sample++) {
 	if (sample % 2 === 0) {
 		symbolicSamples.push(measure(symbolic));
 		expandedSamples.push(measure(expanded));
+		symbolicReverseSamples.push(measure(symbolicReversePropagation));
+		expandedReverseSamples.push(measure(expandedReversePropagation));
 	} else {
 		expandedSamples.push(measure(expanded));
 		symbolicSamples.push(measure(symbolic));
+		expandedReverseSamples.push(measure(expandedReversePropagation));
+		symbolicReverseSamples.push(measure(symbolicReversePropagation));
 	}
 }
 if (symbolic() !== expanded()) throw new Error("Reachability checksum mismatch");
+if (symbolicReversePropagation() !== expandedReversePropagation()) {
+	throw new Error("Reverse-propagation checksum mismatch");
+}
 const symbolicMedianMs = median(symbolicSamples);
 const expandedMedianMs = median(expandedSamples);
 const speedup = expandedMedianMs / symbolicMedianMs;
+const symbolicReverseMedianMs = median(symbolicReverseSamples);
+const expandedReverseMedianMs = median(expandedReverseSamples);
+const reverseSpeedup = expandedReverseMedianMs / symbolicReverseMedianMs;
 const report = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	recordedAt: new Date().toISOString(),
 	commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
 	node: process.version,
@@ -122,6 +161,14 @@ const report = {
 		expandedSamples,
 		checksum: FUNCTION_COUNT,
 		blackhole,
+		reversePropagation: {
+			symbolicMedianMs: symbolicReverseMedianMs,
+			expandedMedianMs: expandedReverseMedianMs,
+			speedup: reverseSpeedup,
+			symbolicSamples: symbolicReverseSamples,
+			expandedSamples: expandedReverseSamples,
+			checksum: symbolicReversePropagation(),
+		},
 	},
 };
 const outputIndex = process.argv.indexOf("--output");
@@ -131,4 +178,4 @@ if (outputIndex >= 0) {
 	writeFileSync(output, `${JSON.stringify(report, undefined, "\t")}\n`);
 }
 console.log(JSON.stringify(report, undefined, "\t"));
-if (speedup < 4) process.exitCode = 1;
+if (speedup < 4 || reverseSpeedup < 4) process.exitCode = 1;
