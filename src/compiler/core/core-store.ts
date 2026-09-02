@@ -493,6 +493,7 @@ export class CoreFunctionStore {
 	readonly #effectRefinements: Array<CoreEffectRefinement | undefined> = [];
 	#sealedBlocks: ReadonlyArray<CoreBlockId> | undefined;
 	#sealedInstructions: ReadonlyArray<CoreInstructionId> | undefined;
+	#blockSnapshot: ReadonlyArray<CoreBlockId> | undefined;
 	#instructionSnapshot: ReadonlyArray<CoreInstructionId> | undefined;
 	readonly kernel: CoreFunctionKernel;
 
@@ -662,11 +663,22 @@ export class CoreFunctionStore {
 		return this.#sealed;
 	}
 
-	*blockIds(): Iterable<CoreBlockId> {
-		if (this.#sealedBlocks !== undefined) {
-			yield* this.#sealedBlocks;
-			return;
+	blockIds(): Iterable<CoreBlockId> {
+		if (this.#sealedBlocks !== undefined) return this.#sealedBlocks;
+		if (!this.#activeEditor) {
+			if (this.#blockSnapshot === undefined) {
+				const blocks: Array<CoreBlockId> = [];
+				for (let id = 0; id < this.#blockLive.length; id++) {
+					if (this.#blockLive[id] === 1) blocks.push(coreBlockId(id));
+				}
+				this.#blockSnapshot = Object.freeze(blocks);
+			}
+			return this.#blockSnapshot;
 		}
+		return this.#liveBlockIds();
+	}
+
+	*#liveBlockIds(): Iterable<CoreBlockId> {
 		for (let id = 0; id < this.#blockLive.length; id++) {
 			if (this.#blockLive[id] === 1) yield coreBlockId(id);
 		}
@@ -913,6 +925,7 @@ export class CoreFunctionStore {
 		}
 		if (this.#activeEditor)
 			throw new Error(`Core function ${this.id} already has an editor`);
+		this.#blockSnapshot = undefined;
 		this.#instructionSnapshot = undefined;
 		this.#activeEditor = true;
 	}

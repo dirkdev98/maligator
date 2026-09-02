@@ -336,6 +336,24 @@ describe("Core store", () => {
 		expect(fn.instructionNext(1 as never)).toBe(2);
 	});
 
+	it("reuses stable function traversal snapshots between edits", () => {
+		const { program, fn } = oneFunction();
+		const blocks = fn.blockIds();
+		const instructions = fn.instructionIds();
+
+		expect(fn.blockIds()).toBe(blocks);
+		expect(fn.instructionIds()).toBe(instructions);
+
+		const editor = CoreEditor.open(program, fn.id);
+		const added = editor.createBlock();
+		editor.setTerminator(added, { kind: "unreachable" });
+		editor.commit();
+
+		expect(fn.blockIds()).not.toBe(blocks);
+		expect(fn.instructionIds()).not.toBe(instructions);
+		expect([...fn.blockIds()]).toContain(added);
+	});
+
 	it.each([
 		"jump",
 		"branch",
