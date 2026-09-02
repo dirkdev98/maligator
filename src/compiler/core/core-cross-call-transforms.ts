@@ -696,25 +696,20 @@ function applyCandidate(
 	}
 }
 
-function foldProgramValueKindObservations(
+interface CoreValueKindFold {
+	readonly instruction: CoreInstructionId;
+	readonly result: boolean;
+}
+
+function discoverProgramValueKindObservations(
 	program: CoreProgram,
 	kinds: CoreProgramValueKinds,
-	passes: CorePassManager,
-): {
-	readonly changes: ReadonlyArray<CoreChangeSet>;
-	readonly folds: number;
-	readonly callers: number;
-} {
-	const changes: Array<CoreChangeSet> = [];
-	let foldCount = 0;
-	let callers = 0;
+): ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreValueKindFold>> {
+	const foldsByCaller = new Map<CoreFunctionId, ReadonlyArray<CoreValueKindFold>>();
 	for (const functionId of kinds.changedFunctions) {
 		const fn = program.function(functionId);
 		const values = kinds.values(functionId);
-		const folds: Array<{
-			readonly instruction: CoreInstructionId;
-			readonly result: boolean;
-		}> = [];
+		const folds: Array<CoreValueKindFold> = [];
 		for (let index = 0; index < fn.instructionCapacity; index++) {
 			const instruction = index as CoreInstructionId;
 			if (fn.kernel.instructionLive(instruction) === 0) continue;
@@ -723,20 +718,9 @@ function foldProgramValueKindObservations(
 			);
 			if (result !== undefined) folds.push({ instruction, result });
 		}
-		if (folds.length === 0) continue;
-		const editor = CoreEditor.open(program, functionId);
-		for (const { instruction, result } of folds) {
-			editor.replaceInstruction(instruction, "createBoolean", [], {
-				attributes: { value: result },
-				sourcePosition: fn.instructionSourcePosition(instruction),
-			});
-		}
-		const optimized = passes.finishCrossCallCaller(editor);
-		if (optimized.changes !== undefined) changes.push(optimized.changes);
-		foldCount += folds.length;
-		callers++;
+		if (folds.length > 0) foldsByCaller.set(functionId, Object.freeze(folds));
 	}
-	return { changes, folds: foldCount, callers };
+	return foldsByCaller;
 }
 
 export function runCoreCrossCallTransforms(
@@ -767,11 +751,13 @@ export function runCoreCrossCallTransforms(
 	let callerEditSessions = 0;
 	let callerLocalOptimizations = 0;
 	let programFlowResolves = 1;
+	let valueKindFolds = 0;
 	for (let wave = 0; wave < 2; wave++) {
 		discoverCoreCrossCallCandidates(program, summaries, service);
+		const foldsByCaller = discoverProgramValueKindObservations(program, flow.valueKinds);
 		const editors = new Map<CoreFunctionId, CoreEditor>();
 		const appliedCallers = new Set<CoreFunctionId>();
-		let expanded = false;
+		let published = false;
 		for (
 			let candidate = service.next();
 			candidate !== undefined;
@@ -795,7 +781,22 @@ export function runCoreCrossCallTransforms(
 			instructionsIntroduced += applied.instructionsIntroduced;
 			blocksIntroduced += applied.blocksIntroduced;
 			if (candidate.kind === "inline" || candidate.kind === "guarded-inline") {
-				expanded = true;
+				published = true;
+			}
+		}
+		for (const [functionId, folds] of foldsByCaller) {
+			const fn = program.function(functionId);
+			const editor = editors.get(functionId) ?? CoreEditor.open(program, functionId);
+			editors.set(functionId, editor);
+			for (const { instruction, result } of folds) {
+				if (!fn.isInstructionLive(instruction)) continue;
+				editor.replaceInstruction(instruction, "createBoolean", [], {
+					attributes: { value: result },
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				});
+				valueKindFolds++;
+				published = true;
+				appliedCallers.add(functionId);
 			}
 		}
 		const waveChanges: Array<CoreChangeSet> = [];
@@ -813,7 +814,7 @@ export function runCoreCrossCallTransforms(
 				waveChanges.push(optimized.changes);
 			}
 		}
-		if (waveChanges.length === 0 || !expanded) break;
+		if (waveChanges.length === 0 || !published) break;
 		passes.finishCrossCallWave(waveChanges);
 		waves++;
 		const priorFlow = flow;
@@ -844,9 +845,6 @@ export function runCoreCrossCallTransforms(
 		if (!publishedChanged) break;
 	}
 	const valueKinds = flow.valueKinds;
-	const valueKindFolds = foldProgramValueKindObservations(program, valueKinds, passes);
-	callerEditSessions += valueKindFolds.callers;
-	callerLocalOptimizations += valueKindFolds.callers;
 	const budget = service.statistics();
 	return Object.freeze({
 		summaries,
@@ -865,7 +863,7 @@ export function runCoreCrossCallTransforms(
 			sccTransfers,
 			callerWakeups,
 			valueKindFunctionEvaluations,
-			valueKindFolds: valueKindFolds.folds,
+			valueKindFolds,
 			wildcardAggregateRecomputations:
 				wildcardAggregateRecomputations + valueKinds.statistics.aggregateRecomputations,
 			exactReverseCallerVisits:

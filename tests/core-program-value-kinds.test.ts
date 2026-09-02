@@ -61,6 +61,10 @@ function observations(fn: CoreFunctionStore) {
 function compileRecursiveObservation(sourceClosed: boolean): {
 	readonly program: CoreProgram;
 	readonly valueKindFolds: number;
+	readonly waves: number;
+	readonly programFlowResolves: number;
+	readonly callerEditSessions: number;
+	readonly callerLocalOptimizations: number;
 } {
 	const sourcePath = "core-program-value-kinds.js";
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
@@ -73,6 +77,10 @@ function compileRecursiveObservation(sourceClosed: boolean): {
 	);
 	let optimized: CoreProgram | undefined;
 	let valueKindFolds = 0;
+	let waves = 0;
+	let programFlowResolves = 0;
+	let callerEditSessions = 0;
+	let callerLocalOptimizations = 0;
 	compileSemanticProgramToProgramImage(semantic, {
 		coreInstrumentation: "counters",
 		...(sourceClosed
@@ -92,18 +100,32 @@ function compileRecursiveObservation(sourceClosed: boolean): {
 		afterCoreOptimization(program, _context, report) {
 			optimized = program;
 			valueKindFolds = report.transforms.valueKindFolds;
+			waves = report.transforms.waves;
+			programFlowResolves = report.transforms.programFlowResolves;
+			callerEditSessions = report.transforms.callerEditSessions;
+			callerLocalOptimizations = report.transforms.callerLocalOptimizations;
 		},
 	});
-	return { program: optimized!, valueKindFolds };
+	return {
+		program: optimized!,
+		valueKindFolds,
+		waves,
+		programFlowResolves,
+		callerEditSessions,
+		callerLocalOptimizations,
+	};
 }
 
 describe("whole-program Core value kinds", () => {
 	it("propagates closed primitive kinds through a recursive caller SCC", () => {
-		const { program: optimized, valueKindFolds } = compileRecursiveObservation(true);
+		const result = compileRecursiveObservation(true);
+		const optimized = result.program;
 		const observe = coreFunctionNamed(optimized, "observe")!;
 		expect(coreOperations(observe).some(({ opcode }) => opcode === "call")).toBe(true);
 		expect(observations(observe)).toEqual([]);
-		expect(valueKindFolds).toBe(3);
+		expect(result.valueKindFolds).toBe(3);
+		expect(result.callerEditSessions).toBe(result.callerLocalOptimizations);
+		expect(result.programFlowResolves).toBe(result.waves + 1);
 		expect(
 			coreOperations(observe).some(
 				({ opcode, attributes }) =>
