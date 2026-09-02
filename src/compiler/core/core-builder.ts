@@ -39,7 +39,36 @@ export class CoreFunctionBuilder {
 	}
 
 	blockParameters(block: CoreBlockId): ReadonlyArray<CoreBlockParameter> {
-		return this.editor.function.blockParameters(block);
+		if (this.editor.function.kernel.blockLive(block) === 0) {
+			throw new Error(`Unknown Core block ${block}`);
+		}
+		const start = this.editor.function.kernel.blockParameterStart(block);
+		const count = this.editor.function.kernel.blockParameterCount(block);
+		return Array.from({ length: count }, (_, index) => {
+			const row = start + index;
+			const value = this.editor.function.kernel.blockParameterValue(row);
+			return {
+				value,
+				representation: this.editor.function.valueRepresentation(value),
+				role:
+					this.editor.function.kernel.blockParameterRole(row) === 1
+						? "exception"
+						: "value",
+			};
+		});
+	}
+
+	blockParameterValue(block: CoreBlockId, index: number): CoreValueId {
+		if (this.editor.function.kernel.blockLive(block) === 0) {
+			throw new Error(`Unknown Core block ${block}`);
+		}
+		const count = this.editor.function.kernel.blockParameterCount(block);
+		if (!Number.isInteger(index) || index < 0 || index >= count) {
+			throw new Error(`Unknown Core block ${block} parameter ${index}`);
+		}
+		return this.editor.function.kernel.blockParameterValue(
+			this.editor.function.kernel.blockParameterStart(block) + index,
+		);
 	}
 
 	bodyInstructionIds(block: CoreBlockId): ReadonlyArray<CoreInstructionId> {

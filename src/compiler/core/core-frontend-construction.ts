@@ -300,11 +300,10 @@ export class DirectCoreFunctionConstruction {
 			})),
 		);
 		this.#prelude = this.#createState(this.#entry, true);
-		for (const [index, parameter] of this.#builder
-			.blockParameters(this.#entry)
-			.entries()) {
-			this.#prelude.entryValues.set(index, parameter.value);
-			this.#prelude.definitions.set(index, parameter.value);
+		for (let index = 0; index < fn.parameterCount; index++) {
+			const parameter = this.#builder.blockParameterValue(this.#entry, index);
+			this.#prelude.entryValues.set(index, parameter);
+			this.#prelude.definitions.set(index, parameter);
 		}
 		// Async generators use GENERATOR_START at their body entry. ASYNC_START is
 		// exclusively the promise-producing prologue for ordinary async functions;

@@ -89,89 +89,88 @@ function payloadWithoutSourcePosition(input: CoreTerminatorInput): {
 	}
 }
 
-function redirectPayload(
-	payload: CoreTerminatorPayload,
-	from: CoreBlockId,
-	replacement: CoreEdge,
+function terminatorPayloadFromKernel(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	value: (candidate: CoreValueId) => CoreValueId = (candidate) => candidate,
+	redirect?: { readonly from: CoreBlockId; readonly replacement: CoreEdge },
 ): CoreTerminatorPayload {
-	const edge = (candidate: CoreEdge): CoreEdge =>
-		candidate.block === from ? replacement : candidate;
-	switch (payload.kind) {
-		case "jump":
-			return { kind: "jump", edge: edge(payload.edge) };
-		case "branch":
-			return {
-				kind: "branch",
-				condition: payload.condition,
-				consequent: edge(payload.consequent),
-				alternate: edge(payload.alternate),
-			};
-		case "guard":
-			return {
-				kind: "guard",
-				condition: payload.condition,
-				fact: payload.fact,
-				success: edge(payload.success),
-				fallback: edge(payload.fallback),
-			};
-		case "switch":
-			return {
-				kind: "switch",
-				discriminant: payload.discriminant,
-				cases: payload.cases.map(({ value, edge: candidate }) => ({
-					value,
-					edge: edge(candidate),
-				})),
-				default: edge(payload.default),
-			};
-		case "return":
-		case "throw":
-		case "unreachable":
-			return payload;
+	const kind = fn.instructionKind(instruction);
+	if (kind === "operation") {
+		throw new Error(`Core instruction ${instruction} is not a terminator`);
 	}
-}
-
-function replacePayloadValues(
-	payload: CoreTerminatorPayload,
-	value: (candidate: CoreValueId) => CoreValueId,
-): CoreTerminatorPayload {
-	const edge = (candidate: CoreEdge): CoreEdge => ({
-		block: candidate.block,
-		arguments: candidate.arguments.map(value),
-	});
-	switch (payload.kind) {
+	const kernel = fn.kernel;
+	const operandStart = kernel.instructionOperandStart(instruction);
+	const operandCount = kernel.instructionOperandCount(instruction);
+	const edgeStart = kernel.terminatorEdgeStart(instruction);
+	const edgeCount = kernel.terminatorEdgeCount(instruction);
+	const operand = (offset: number): CoreValueId => {
+		if (offset < 0 || offset >= operandCount) {
+			throw new Error(`Malformed Core ${kind} operands`);
+		}
+		return value(kernel.operandAt(operandStart + offset));
+	};
+	const edge = (offset: number): CoreEdge => {
+		if (offset < 0 || offset >= edgeCount) {
+			throw new Error(`Malformed Core ${kind} edges`);
+		}
+		const row = edgeStart + offset;
+		const block = kernel.terminatorEdgeBlock(row);
+		if (redirect?.from === block) return redirect.replacement;
+		const argumentStart = kernel.terminatorEdgeArgumentStart(row);
+		const argumentCount = kernel.terminatorEdgeArgumentCount(row);
+		if (
+			argumentStart < operandStart ||
+			argumentStart + argumentCount > operandStart + operandCount
+		) {
+			throw new Error(`Malformed Core ${kind} edge arguments`);
+		}
+		return {
+			block,
+			arguments: Array.from({ length: argumentCount }, (_, index) =>
+				value(kernel.operandAt(argumentStart + index)),
+			),
+		};
+	};
+	switch (kind) {
 		case "jump":
-			return { kind: "jump", edge: edge(payload.edge) };
+			return { kind, edge: edge(0) };
 		case "branch":
 			return {
-				kind: "branch",
-				condition: value(payload.condition),
-				consequent: edge(payload.consequent),
-				alternate: edge(payload.alternate),
+				kind,
+				condition: operand(0),
+				consequent: edge(0),
+				alternate: edge(1),
 			};
-		case "guard":
+		case "guard": {
+			const fact = kernel.terminatorFact(instruction);
+			if (fact === undefined) throw new Error("Malformed Core guard fact");
 			return {
-				kind: "guard",
-				condition: value(payload.condition),
-				fact: payload.fact,
-				success: edge(payload.success),
-				fallback: edge(payload.fallback),
+				kind,
+				condition: operand(0),
+				fact,
+				success: edge(0),
+				fallback: edge(1),
 			};
+		}
 		case "switch":
 			return {
-				kind: "switch",
-				discriminant: value(payload.discriminant),
-				cases: payload.cases.map(({ value: immediate, edge: candidate }) => ({
-					value: immediate,
-					edge: edge(candidate),
-				})),
-				default: edge(payload.default),
+				kind,
+				discriminant: operand(0),
+				cases: Array.from({ length: edgeCount - 1 }, (_, offset) => {
+					const immediate = kernel.terminatorEdgeCaseValue(edgeStart + offset);
+					if (immediate === undefined) {
+						throw new Error(`Malformed Core switch case ${offset}`);
+					}
+					return { value: immediate, edge: edge(offset) };
+				}),
+				default: edge(edgeCount - 1),
 			};
 		case "return":
 		case "throw":
-			return { kind: payload.kind, value: value(payload.value) };
+			return { kind, value: operand(0) };
 		case "unreachable":
-			return payload;
+			return { kind };
 	}
 }
 
@@ -441,10 +440,10 @@ export class CoreEditor {
 			this.function.instructionOpcode(instruction),
 		);
 		const previousRefinement = this.function.instructionEffectRefinement(instruction);
-		const previousInputs = this.function.instructionOperands(instruction);
-		const results = this.function.instructionResults(instruction);
-		const outputCount = results.length;
+		const outputCount = this.function.kernel.instructionResultCount(instruction);
 		const descriptor = this.#operation(opcode, inputs.length, outputCount);
+		this.#touchInstructionOperands(instruction);
+		this.#touchInstructionResults(instruction);
 		this.function._replaceOperation(
 			this.#mutation,
 			instruction,
@@ -456,9 +455,7 @@ export class CoreEditor {
 		);
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
-		this.#touchValues(previousInputs);
 		this.#touchValues(inputs);
-		this.#touchValues(results);
 		this.#markForOperation(instruction, previousDescriptor, previousRefinement);
 		this.#markForOperation(instruction, descriptor, options.effectRefinement);
 		this.#edits++;
@@ -477,21 +474,14 @@ export class CoreEditor {
 				`${descriptor.opcode} expects ${descriptor.inputs.minimum}..${descriptor.inputs.maximum} inputs, received ${inputs.length}`,
 			);
 		}
-		const previousInputs = this.function.instructionOperands(instruction);
-		if (
-			previousInputs.length === inputs.length &&
-			previousInputs.every((value, index) => value === inputs[index])
-		) {
-			return;
-		}
-		const results = this.function.instructionResults(instruction);
+		if (this.#instructionOperandsEqual(instruction, inputs)) return;
 		const refinement = this.function.instructionEffectRefinement(instruction);
+		this.#touchInstructionOperands(instruction);
+		this.#touchInstructionResults(instruction);
 		this.function._replaceOperands(this.#mutation, instruction, inputs);
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
-		this.#touchValues(previousInputs);
 		this.#touchValues(inputs);
-		this.#touchValues(results);
 		this.#markForOperation(instruction, descriptor, refinement);
 		this.#edits++;
 	}
@@ -524,8 +514,8 @@ export class CoreEditor {
 		);
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
-		this.#touchValues(this.function.instructionOperands(instruction));
-		this.#touchValues(this.function.instructionResults(instruction));
+		this.#touchInstructionOperands(instruction);
+		this.#touchInstructionResults(instruction);
 		this.#touchRefinement(previous);
 		this.#touchRefinement(refinement);
 		this.#mark("memoryEffects", "facts", "specializationInputs");
@@ -536,10 +526,6 @@ export class CoreEditor {
 		this.#assertActive();
 		const block = this.function.instructionBlock(instruction);
 		const kind = this.function.instructionKind(instruction);
-		const operands = this.function.instructionOperands(instruction);
-		const results = this.function.instructionResults(instruction);
-		const payload =
-			kind === "operation" ? undefined : this.function.terminatorPayload(instruction);
 		const descriptor =
 			kind === "operation"
 				? this.program.registry.byId(this.function.instructionOpcode(instruction))
@@ -548,16 +534,18 @@ export class CoreEditor {
 			descriptor === undefined
 				? undefined
 				: this.function.instructionEffectRefinement(instruction);
-		this.#touchValues(operands);
-		this.#touchValues(results);
-		if (payload !== undefined) this.#touchTerminator(block, payload);
+		const guardFact =
+			kind === "guard" ? this.function.kernel.terminatorFact(instruction) : undefined;
+		this.#touchInstructionOperands(instruction);
+		this.#touchInstructionResults(instruction);
+		if (kind !== "operation") this.#touchStoredTerminator(block, instruction);
 		this.function._removeInstruction(this.#mutation, instruction);
 		this.#instructions.add(instruction);
 		this.#touchBlock(block);
 		if (descriptor === undefined) {
 			this.#mark("body", "cfg", "specializationInputs");
-			if (payload?.kind === "guard") {
-				this.#facts.add(payload.fact);
+			if (guardFact !== undefined) {
+				this.#facts.add(guardFact);
 				this.#mark("facts");
 			}
 		} else {
@@ -577,8 +565,8 @@ export class CoreEditor {
 			this.function.instructionOpcode(instruction),
 		);
 		const refinement = this.function.instructionEffectRefinement(instruction);
-		this.#touchValues(this.function.instructionOperands(instruction));
-		this.#touchValues(this.function.instructionResults(instruction));
+		this.#touchInstructionOperands(instruction);
+		this.#touchInstructionResults(instruction);
 		this.function._moveInstruction(this.#mutation, instruction, block, before);
 		this.#instructions.add(instruction);
 		this.#touchBlock(previousBlock);
@@ -602,48 +590,74 @@ export class CoreEditor {
 		const changed = new Map<CoreInstructionId, Array<CoreValueId>>();
 		const terminators = new Set<CoreInstructionId>();
 		for (const value of effective.keys()) {
-			for (const { instruction, operand } of this.function.uses(value)) {
-				if (this.function.instructionKind(instruction) !== "operation") {
-					terminators.add(instruction);
-					continue;
+			let use = this.function.kernel.valueFirstUse(value);
+			while (use >= 0) {
+				const next = this.function.kernel.useNext(use);
+				if (this.function.kernel.useLive(use) !== 0) {
+					const instruction = this.function.kernel.useInstruction(use);
+					if (this.function.kernel.instructionOpcode(instruction) < 0) {
+						terminators.add(instruction);
+					} else {
+						const operand = this.function.kernel.useOperand(use);
+						const operands =
+							changed.get(instruction) ?? this.#copyInstructionOperands(instruction);
+						operands[operand] = replacement(operands[operand]!);
+						changed.set(instruction, operands);
+					}
 				}
-				const operands = changed.get(instruction) ?? [
-					...this.function.instructionOperands(instruction),
-				];
-				operands[operand] = replacement(operands[operand]!);
-				changed.set(instruction, operands);
+				use = next;
 			}
 		}
 		for (const [instruction, operands] of changed) {
 			this.replaceOperands(instruction, operands);
 		}
 		for (const instruction of terminators) {
-			const before = this.function.terminatorPayload(instruction);
-			const payload = replacePayloadValues(before, replacement);
+			const kind = this.function.instructionKind(instruction);
+			const previousCondition =
+				kind === "guard"
+					? this.function.kernel.operandAt(
+							this.function.kernel.instructionOperandStart(instruction),
+						)
+					: undefined;
+			const fact =
+				kind === "guard" ? this.function.kernel.terminatorFact(instruction) : undefined;
+			const payload = terminatorPayloadFromKernel(
+				this.function,
+				instruction,
+				replacement,
+			);
+			const block = this.function.instructionBlock(instruction);
+			this.#touchStoredTerminator(block, instruction);
 			this.function._replaceTerminatorPayload(this.#mutation, instruction, payload);
 			this.#instructions.add(instruction);
-			const block = this.function.instructionBlock(instruction);
-			this.#touchTerminator(block, before);
 			this.#touchTerminator(block, payload);
 			this.#mark("body", "specializationInputs");
 			if (
-				before.kind === "guard" &&
+				fact !== undefined &&
 				payload.kind === "guard" &&
-				before.condition !== payload.condition
+				previousCondition !== payload.condition
 			) {
-				this.#facts.add(before.fact);
+				this.#facts.add(fact);
 				this.#mark("facts");
 			}
 			this.#edits++;
 		}
 		for (const block of this.function.blockIds()) {
-			const handler = this.function.blockHandler(block);
-			if (
-				handler === undefined ||
-				!handler.arguments.some((argument) => effective.has(argument))
-			)
-				continue;
-			this.setHandler(block, handler.block, handler.arguments.map(replacement));
+			const handlerBlock = this.function.kernel.blockHandlerBlock(block);
+			if (handlerBlock === undefined) continue;
+			const argumentStart = this.function.kernel.blockHandlerArgumentStart(block);
+			const argumentCount = this.function.kernel.blockHandlerArgumentCount(block);
+			let arguments_: Array<CoreValueId> | undefined;
+			for (let index = 0; index < argumentCount; index++) {
+				const argument = this.function.kernel.handlerArgumentAt(argumentStart + index);
+				const replacementValue = replacement(argument);
+				if (arguments_ === undefined && replacementValue === argument) continue;
+				arguments_ ??= Array.from({ length: argumentCount }, (_, argumentIndex) =>
+					this.function.kernel.handlerArgumentAt(argumentStart + argumentIndex),
+				);
+				arguments_[index] = replacementValue;
+			}
+			if (arguments_ !== undefined) this.setHandler(block, handlerBlock, arguments_);
 		}
 		for (const [value, replacementValue] of effective) {
 			this.#values.add(value);
@@ -653,16 +667,17 @@ export class CoreEditor {
 
 	removeBlock(block: CoreBlockId): void {
 		this.#assertActive();
-		const instructions = [...this.function.instructionIds(block)];
-		const parameters = this.function.blockParameters(block);
-		const handler = this.function.blockHandler(block);
-		this.#touchValues(parameters.map(({ value }) => value));
-		if (handler !== undefined) this.#touchHandler(block, handler);
-		for (const instruction of instructions) {
+		this.#assertLiveBlock(block);
+		const parameterStart = this.function.kernel.blockParameterStart(block);
+		const parameterCount = this.function.kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			this.#values.add(this.function.kernel.blockParameterValue(parameterStart + index));
+		}
+		this.#touchStoredHandler(block);
+		for (const instruction of this.function.instructionIds(block)) {
 			this.#instructions.add(instruction);
-			this.#touchValues(this.function.instructionOperands(instruction));
-			const results = this.function.instructionResults(instruction);
-			this.#touchValues(results);
+			this.#touchInstructionOperands(instruction);
+			this.#touchInstructionResults(instruction);
 			if (this.function.instructionKind(instruction) === "operation") {
 				this.#markForOperation(
 					instruction,
@@ -671,10 +686,10 @@ export class CoreEditor {
 				);
 				continue;
 			}
-			const payload = this.function.terminatorPayload(instruction);
-			this.#touchTerminator(block, payload);
-			if (payload.kind === "guard") {
-				this.#facts.add(payload.fact);
+			this.#touchStoredTerminator(block, instruction);
+			const fact = this.function.kernel.terminatorFact(instruction);
+			if (fact !== undefined) {
+				this.#facts.add(fact);
 				this.#mark("facts");
 			}
 		}
@@ -700,8 +715,8 @@ export class CoreEditor {
 		arguments_: ReadonlyArray<CoreValueId> = [],
 	): void {
 		this.#assertActive();
-		const previous = this.function.blockHandler(block);
-		if (previous !== undefined) this.#touchHandler(block, previous);
+		this.#assertLiveBlock(block);
+		this.#touchStoredHandler(block);
 		this.#touchHandler(block, { block: handlerBlock, arguments: arguments_ });
 		this.function._setHandler(this.#mutation, block, {
 			block: handlerBlock,
@@ -713,9 +728,8 @@ export class CoreEditor {
 
 	clearHandler(block: CoreBlockId): void {
 		this.#assertActive();
-		const previous = this.function.blockHandler(block);
-		if (previous === undefined) return;
-		this.#touchHandler(block, previous);
+		this.#assertLiveBlock(block);
+		if (!this.#touchStoredHandler(block)) return;
 		this.function._setHandler(this.#mutation, block, undefined);
 		this.#mark("exceptionFlow", "specializationInputs");
 		this.#edits++;
@@ -746,15 +760,16 @@ export class CoreEditor {
 		this.#assertActive();
 		const { payload } = payloadWithoutSourcePosition(input);
 		const instruction = this.function.blockTerminator(block);
-		const previous = this.function.terminatorPayload(instruction);
+		const previousKind = this.function.instructionKind(instruction);
+		const previousFact = this.function.kernel.terminatorFact(instruction);
+		this.#touchStoredTerminator(block, instruction);
 		this.function._replaceTerminatorPayload(this.#mutation, instruction, payload);
-		this.#touchTerminator(block, previous);
 		this.#touchTerminator(block, payload);
 		this.#instructions.add(instruction);
 		this.#mark("body", "cfg", "specializationInputs");
-		if (previous.kind === "guard") this.#facts.add(previous.fact);
+		if (previousFact !== undefined) this.#facts.add(previousFact);
 		if (payload.kind === "guard") this.#facts.add(payload.fact);
-		if (previous.kind === "guard" || payload.kind === "guard") this.#mark("facts");
+		if (previousKind === "guard" || payload.kind === "guard") this.#mark("facts");
 		this.#edits++;
 	}
 
@@ -797,15 +812,18 @@ export class CoreEditor {
 	redirectEdge(block: CoreBlockId, from: CoreBlockId, replacement: CoreEdge): void {
 		this.#assertActive();
 		const terminator = this.function.blockTerminator(block);
-		const before = this.function.terminatorPayload(terminator);
-		const after = redirectPayload(before, from, replacement);
+		const fact = this.function.kernel.terminatorFact(terminator);
+		const after = terminatorPayloadFromKernel(this.function, terminator, undefined, {
+			from,
+			replacement,
+		});
+		this.#touchStoredTerminator(block, terminator);
 		this.function._replaceTerminatorPayload(this.#mutation, terminator, after);
-		this.#touchTerminator(block, before);
 		this.#touchTerminator(block, after);
 		this.#instructions.add(terminator);
 		this.#mark("body", "cfg", "specializationInputs");
-		if (before.kind === "guard") {
-			this.#facts.add(before.fact);
+		if (fact !== undefined) {
+			this.#facts.add(fact);
 			this.#mark("facts");
 		}
 		this.#edits++;
@@ -833,9 +851,7 @@ export class CoreEditor {
 		for (const instruction of this.function.instructionIds()) {
 			if (
 				this.function.instructionKind(instruction) === "guard" &&
-				this.function.terminatorPayload(instruction).kind === "guard" &&
-				(this.function.terminatorPayload(instruction) as { readonly fact: CoreFactId })
-					.fact === fact
+				this.function.kernel.terminatorFact(instruction) === fact
 			) {
 				throw new Error(
 					`Cannot remove Core fact ${fact} while guard @${instruction} uses it`,
@@ -884,14 +900,20 @@ export class CoreEditor {
 
 	finishFunction(entry: CoreBlockId, bodyEntry?: CoreBlockId): void {
 		this.#assertActive();
+		const parameterCount = this.function.parameterCount;
+		const entryParameterStart = this.function.kernel.blockParameterStart(entry);
+		const entryParameterCount = this.function.kernel.blockParameterCount(entry);
+		let parametersMatch = entryParameterCount === parameterCount;
+		for (let index = 0; parametersMatch && index < parameterCount; index++) {
+			parametersMatch =
+				this.function.kernel.functionParameter(index) ===
+				this.function.kernel.blockParameterValue(entryParameterStart + index);
+		}
 		if (
 			this.function.finished &&
 			this.function.entry === entry &&
 			this.function.bodyEntry === bodyEntry &&
-			this.function.parameters.length === this.function.parameterCount &&
-			this.function.parameters.every(
-				(value, index) => value === this.function.blockParameters(entry)[index]?.value,
-			)
+			parametersMatch
 		) {
 			return;
 		}
@@ -1018,6 +1040,71 @@ export class CoreEditor {
 		for (const value of values) this.#values.add(value);
 	}
 
+	#copyInstructionOperands(instruction: CoreInstructionId): Array<CoreValueId> {
+		const start = this.function.kernel.instructionOperandStart(instruction);
+		const count = this.function.kernel.instructionOperandCount(instruction);
+		return Array.from({ length: count }, (_, index) =>
+			this.function.kernel.operandAt(start + index),
+		);
+	}
+
+	#instructionOperandsEqual(
+		instruction: CoreInstructionId,
+		inputs: ReadonlyArray<CoreValueId>,
+	): boolean {
+		const count = this.function.kernel.instructionOperandCount(instruction);
+		if (count !== inputs.length) return false;
+		const start = this.function.kernel.instructionOperandStart(instruction);
+		for (let index = 0; index < count; index++) {
+			if (this.function.kernel.operandAt(start + index) !== inputs[index]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	#touchInstructionOperands(instruction: CoreInstructionId): void {
+		const start = this.function.kernel.instructionOperandStart(instruction);
+		const count = this.function.kernel.instructionOperandCount(instruction);
+		for (let index = 0; index < count; index++) {
+			this.#values.add(this.function.kernel.operandAt(start + index));
+		}
+	}
+
+	#touchInstructionResults(instruction: CoreInstructionId): void {
+		const start = this.function.kernel.instructionResultStart(instruction);
+		const count = this.function.kernel.instructionResultCount(instruction);
+		for (let index = 0; index < count; index++) {
+			this.#values.add(this.function.kernel.resultAt(start + index));
+		}
+	}
+
+	#touchStoredTerminator(block: CoreBlockId, instruction: CoreInstructionId): void {
+		this.#touchBlock(block);
+		this.#touchInstructionOperands(instruction);
+		const edgeStart = this.function.kernel.terminatorEdgeStart(instruction);
+		const edgeCount = this.function.kernel.terminatorEdgeCount(instruction);
+		for (let index = 0; index < edgeCount; index++) {
+			const target = this.function.kernel.terminatorEdgeBlock(edgeStart + index);
+			this.#touchBlock(target);
+			this.#touchEdge({ kind: "control-flow", source: block, target });
+		}
+	}
+
+	#touchStoredHandler(block: CoreBlockId): boolean {
+		const handlerBlock = this.function.kernel.blockHandlerBlock(block);
+		if (handlerBlock === undefined) return false;
+		this.#touchBlock(block);
+		this.#touchBlock(handlerBlock);
+		const argumentStart = this.function.kernel.blockHandlerArgumentStart(block);
+		const argumentCount = this.function.kernel.blockHandlerArgumentCount(block);
+		for (let index = 0; index < argumentCount; index++) {
+			this.#values.add(this.function.kernel.handlerArgumentAt(argumentStart + index));
+		}
+		this.#touchEdge({ kind: "exception", source: block, target: handlerBlock });
+		return true;
+	}
+
 	#touchTerminator(block: CoreBlockId, payload: CoreTerminatorPayload): void {
 		this.#touchBlock(block);
 		this.#touchValues(terminatorOperands(payload));
@@ -1040,6 +1127,12 @@ export class CoreEditor {
 
 	#touchEdge(edge: CoreChangedEdge): void {
 		this.#edges.set(edgeKey(edge), edge);
+	}
+
+	#assertLiveBlock(block: CoreBlockId): void {
+		if (this.function.kernel.blockLive(block) === 0) {
+			throw new Error(`Unknown Core block ${block}`);
+		}
 	}
 
 	#assertActive(): void {
