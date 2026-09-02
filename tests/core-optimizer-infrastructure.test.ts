@@ -13,7 +13,10 @@ import {
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
 import type { CorePass } from "../src/compiler/core/core-pass.ts";
-import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import {
+	CORE_PROGRAM_FLOW_REPRESENTATIONS,
+	CoreProgram,
+} from "../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
@@ -99,6 +102,23 @@ function noOpPass(name: string, runs: Array<number>): CorePass {
 }
 
 describe("Core optimizer infrastructure", () => {
+	it("journals function edits as compact program-flow changes", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const revision = program.programFlowRevision;
+		const editor = CoreEditor.open(program, functions[0]!.id);
+		editor.setValueRepresentation(functions[0]!.value, "f64");
+		editor.commit();
+
+		expect(program.programFlowRevision).toBe(revision + 1);
+		expect(program.programFlowFunctionAt(revision)).toBe(functions[0]!.id);
+		expect(
+			program.programFlowDomainMaskAt(revision) & CORE_PROGRAM_FLOW_REPRESENTATIONS,
+		).toBe(CORE_PROGRAM_FLOW_REPRESENTATIONS);
+
+		CoreEditor.open(program, functions[1]!.id).commit();
+		expect(program.programFlowRevision).toBe(revision + 1);
+	});
+
 	it("keys function analysis reuse to exact dependency versions", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const { analyses, report } = analysisHarness(program);
@@ -129,6 +149,38 @@ describe("Core optimizer infrastructure", () => {
 		expect(finished.analyses).toMatchObject([
 			{ queries: 5, hits: 2, recomputations: 3, invalidations: 1 },
 		]);
+	});
+
+	it("checks program analysis function dependencies without scanning functions", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses } = analysisHarness(program);
+		let recomputations = 0;
+		const analysis: CoreAnalysisDefinition<number> = {
+			key: "test-program-body",
+			scope: "program",
+			functionDependencies: ["body"],
+			programDependencies: ["functions"],
+			compute() {
+				return ++recomputations;
+			},
+		};
+
+		expect(analyses.get(analysis, { scope: "program" })).toBe(1);
+		expect(analyses.get(analysis, { scope: "program" })).toBe(1);
+		Object.defineProperty(program.function(functions[1]!.id), "version", {
+			value() {
+				throw new Error("stable function was scanned");
+			},
+		});
+		const representationEditor = CoreEditor.open(program, functions[0]!.id);
+		representationEditor.setValueRepresentation(functions[0]!.value, "f64");
+		representationEditor.commit();
+		expect(analyses.get(analysis, { scope: "program" })).toBe(1);
+
+		const bodyEditor = CoreEditor.open(program, functions[0]!.id);
+		bodyEditor.configureFunction({ isAsync: true });
+		bodyEditor.commit();
+		expect(analyses.get(analysis, { scope: "program" })).toBe(2);
 	});
 
 	it("runs an incremental local pass only for the edited function", () => {

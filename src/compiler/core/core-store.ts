@@ -55,6 +55,38 @@ export type CoreProgramChangeDomain =
 	| "representations"
 	| "specializationInputs";
 
+export type CoreProgramFlowDomainMask = number;
+
+export const CORE_PROGRAM_FLOW_BODY = 1 << 0;
+export const CORE_PROGRAM_FLOW_CFG = 1 << 1;
+export const CORE_PROGRAM_FLOW_EXCEPTION = 1 << 2;
+export const CORE_PROGRAM_FLOW_CALLS = 1 << 3;
+export const CORE_PROGRAM_FLOW_MEMORY = 1 << 4;
+export const CORE_PROGRAM_FLOW_FACTS = 1 << 5;
+export const CORE_PROGRAM_FLOW_REPRESENTATIONS = 1 << 6;
+export const CORE_PROGRAM_FLOW_SPECIALIZATION = 1 << 7;
+
+function programFlowDomainBit(domain: CoreChangeDomain): CoreProgramFlowDomainMask {
+	switch (domain) {
+		case "body":
+			return CORE_PROGRAM_FLOW_BODY;
+		case "cfg":
+			return CORE_PROGRAM_FLOW_CFG;
+		case "exceptionFlow":
+			return CORE_PROGRAM_FLOW_EXCEPTION;
+		case "calls":
+			return CORE_PROGRAM_FLOW_CALLS;
+		case "memoryEffects":
+			return CORE_PROGRAM_FLOW_MEMORY;
+		case "facts":
+			return CORE_PROGRAM_FLOW_FACTS;
+		case "representations":
+			return CORE_PROGRAM_FLOW_REPRESENTATIONS;
+		case "specializationInputs":
+			return CORE_PROGRAM_FLOW_SPECIALIZATION;
+	}
+}
+
 export interface CoreFunctionVersions {
 	readonly body: number;
 	readonly cfg: number;
@@ -573,6 +605,10 @@ export class CoreFunctionStore {
 		return { ...this.#versions };
 	}
 
+	version(domain: CoreChangeDomain): number {
+		return this.#versions[domain];
+	}
+
 	get featureVersion(): number {
 		return this.#featureVersion;
 	}
@@ -874,6 +910,7 @@ export class CoreFunctionStore {
 		if (domains.has("body") || domains.has("cfg") || domains.has("exceptionFlow")) {
 			this.#featureVersion++;
 		}
+		this.#program._recordFunctionChange(mutation, this.id, domains);
 		this.#activeEditor = false;
 	}
 
@@ -1726,6 +1763,18 @@ export class CoreProgram {
 		representations: 0,
 		specializationInputs: 0,
 	};
+	readonly #functionVersions: Record<CoreChangeDomain, number> = {
+		body: 0,
+		cfg: 0,
+		exceptionFlow: 0,
+		calls: 0,
+		memoryEffects: 0,
+		facts: 0,
+		representations: 0,
+		specializationInputs: 0,
+	};
+	readonly #programFlowFunctions: Array<number> = [];
+	readonly #programFlowDomainMasks: Array<number> = [];
 	#stringConstants: ReadonlyArray<ReadonlyArray<number>> = [];
 	#bigintConstants: ReadonlyArray<bigint> = [];
 	#literalTemplateData: ReadonlyArray<number> = [];
@@ -1744,6 +1793,30 @@ export class CoreProgram {
 
 	get versions(): CoreProgramVersions {
 		return { ...this.#versions };
+	}
+
+	programVersion(domain: CoreProgramChangeDomain): number {
+		return this.#versions[domain];
+	}
+
+	functionVersion(domain: CoreChangeDomain): number {
+		return this.#functionVersions[domain];
+	}
+
+	get programFlowRevision(): number {
+		return this.#programFlowFunctions.length;
+	}
+
+	programFlowFunctionAt(revision: number): CoreFunctionId {
+		const functionId = this.#programFlowFunctions[revision];
+		if (functionId === undefined) throw new Error(`Unknown Core program-flow revision ${revision}`);
+		return coreFunctionId(functionId);
+	}
+
+	programFlowDomainMaskAt(revision: number): CoreProgramFlowDomainMask {
+		const domains = this.#programFlowDomainMasks[revision];
+		if (domains === undefined) throw new Error(`Unknown Core program-flow revision ${revision}`);
+		return domains;
 	}
 
 	get functionCapacity(): number {
@@ -1850,6 +1923,22 @@ export class CoreProgram {
 	): void {
 		this.#requireMutation(mutation);
 		for (const domain of domains) this.#versions[domain]++;
+	}
+
+	_recordFunctionChange(
+		mutation: CoreStoreMutation,
+		functionId: CoreFunctionId,
+		domains: ReadonlySet<CoreChangeDomain>,
+	): void {
+		this.#requireMutation(mutation);
+		if (domains.size === 0) return;
+		let mask = 0;
+		for (const domain of domains) {
+			this.#functionVersions[domain]++;
+			mask |= programFlowDomainBit(domain);
+		}
+		this.#programFlowFunctions.push(functionId);
+		this.#programFlowDomainMasks.push(mask);
 	}
 
 	#wireData(data: CoreProgramDataTables): void {

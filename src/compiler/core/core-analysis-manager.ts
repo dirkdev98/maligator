@@ -177,13 +177,13 @@ export class CoreAnalysisManager {
 		const programDependencies = definition.programDependencies ?? [];
 		const contextIdentity = definition.contextIdentity?.(this.#context) ?? "";
 		const programVersions = programDependencies.map(
-			(domain) => this.#program.versions[domain],
+			(domain) => this.#program.programVersion(domain),
 		);
 		const functionVersions: Array<number> = [];
 		const captureFunction = (functionId: CoreFunctionId): void => {
-			const versions = this.#program.function(functionId).versions;
+			const fn = this.#program.function(functionId);
 			for (const domain of functionDependencies) {
-				functionVersions.push(versions[domain]);
+				functionVersions.push(fn.version(domain));
 			}
 		};
 		if (request.scope === "function") {
@@ -192,8 +192,10 @@ export class CoreAnalysisManager {
 			for (const functionId of sortedFunctions(request.functions)) {
 				captureFunction(functionId);
 			}
-		} else if (functionDependencies.length > 0) {
-			for (const functionId of this.#program.functionIds()) captureFunction(functionId);
+		} else {
+			for (const domain of functionDependencies) {
+				functionVersions.push(this.#program.functionVersion(domain));
+			}
 		}
 		return { contextIdentity, programVersions, functionVersions };
 	}
@@ -209,14 +211,14 @@ export class CoreAnalysisManager {
 		const programDependencies = definition.programDependencies ?? [];
 		if (programDependencies.length !== cached.programVersions.length) return false;
 		for (const [index, domain] of programDependencies.entries()) {
-			if (this.#program.versions[domain] !== cached.programVersions[index]) return false;
+			if (this.#program.programVersion(domain) !== cached.programVersions[index]) return false;
 		}
 		const functionDependencies = definition.functionDependencies ?? [];
 		let versionIndex = 0;
 		const functionMatches = (functionId: CoreFunctionId): boolean => {
-			const versions = this.#program.function(functionId).versions;
+			const fn = this.#program.function(functionId);
 			for (const domain of functionDependencies) {
-				if (versions[domain] !== cached.functionVersions[versionIndex++]) return false;
+				if (fn.version(domain) !== cached.functionVersions[versionIndex++]) return false;
 			}
 			return true;
 		};
@@ -226,9 +228,13 @@ export class CoreAnalysisManager {
 			for (const functionId of sortedFunctions(request.functions)) {
 				if (!functionMatches(functionId)) return false;
 			}
-		} else if (functionDependencies.length > 0) {
-			for (const functionId of this.#program.functionIds()) {
-				if (!functionMatches(functionId)) return false;
+		} else {
+			for (const domain of functionDependencies) {
+				if (
+					this.#program.functionVersion(domain) !==
+					cached.functionVersions[versionIndex++]
+				)
+					return false;
 			}
 		}
 		return versionIndex === cached.functionVersions.length;
