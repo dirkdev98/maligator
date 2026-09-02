@@ -32,6 +32,7 @@ import {
 } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
+import { coreOpcodeSet } from "./core-ir-opcodes.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreFunctionId } from "./core-ir.ts";
@@ -662,6 +663,7 @@ const foldStaticPropertyKeys: CorePass = {
 	name: "fold-static-property-keys",
 	stage: "canonicalize",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("loadProperty", "storeProperty"),
 	requiredAnalyses: [],
 	wakesOn: ["body"],
 	preserves: ["control-flow", "exception-control-flow"],
@@ -1006,6 +1008,7 @@ const foldConstants: CorePass = {
 	name: "local-constant-folding",
 	stage: "canonicalize",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("binary", "unary", "typeofCompare"),
 	requiredAnalyses: [],
 	wakesOn: ["body"],
 	preserves: [],
@@ -1148,6 +1151,7 @@ const foldTypeofComparisons: CorePass = {
 	name: "typeof-comparison-canonicalization",
 	stage: "canonicalize",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("binary"),
 	requiredAnalyses: [],
 	wakesOn: ["body"],
 	preserves: [],
@@ -1208,6 +1212,7 @@ const foldPrimitiveCoercions: CorePass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("requireCoercible", "toPropertyKey", "unary"),
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
@@ -1328,6 +1333,7 @@ const rewriteNumericIdentities: CorePass = {
 	name: "numeric-algebraic-simplification",
 	stage: "canonicalize",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("binary"),
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
@@ -1420,6 +1426,7 @@ const propagateMoves: CorePass = {
 	name: "local-copy-propagation",
 	stage: "canonicalize",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("move"),
 	requiredAnalyses: [],
 	wakesOn: ["body"],
 	preserves: [],

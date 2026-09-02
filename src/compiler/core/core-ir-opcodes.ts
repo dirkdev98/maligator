@@ -13,6 +13,7 @@ import type {
 	CoreOpcodeAccess,
 	CoreOpcodeAllocation,
 	CoreOpcodeCallTransfer,
+	CoreOpcodeId,
 } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -747,4 +748,10 @@ export function isCoreOpcode(type: string): type is CoreOpcode {
 
 export function coreOpcode(type: CoreOpcode) {
 	return coreOpcodeRegistry.require(type);
+}
+
+export function coreOpcodeSet(
+	...opcodes: ReadonlyArray<CoreOpcode>
+): ReadonlySet<CoreOpcodeId> {
+	return new Set(opcodes.map((opcode) => coreOpcode(opcode).id));
 }
