@@ -265,7 +265,10 @@ function coreImmediateValue(
 	value: CoreValueId,
 ): CompilerImmediateValue | undefined {
 	const kernel = fn.kernel;
-	if (kernel.valueDefinitionKind(value) !== 1 || kernel.valueDefinitionIndex(value) !== 0) {
+	if (
+		kernel.valueDefinitionKind(value) !== 1 ||
+		kernel.valueDefinitionIndex(value) !== 0
+	) {
 		return undefined;
 	}
 	const instruction = kernel.valueDefinitionOwner(value) as CoreInstructionId;
@@ -424,7 +427,9 @@ function rebuildOperation(
 		registers[index] = registerForValue(kernel.resultAt(outputStart + index));
 	}
 	for (let index = 0; index < inputCount; index++) {
-		registers[outputCount + index] = registerForValue(kernel.operandAt(inputStart + index));
+		registers[outputCount + index] = registerForValue(
+			kernel.operandAt(inputStart + index),
+		);
 	}
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	if (
@@ -1741,7 +1746,9 @@ function lowerFunctionToTarget(
 				`Core edge b${target} expects ${parameterCount} arguments, received ${argumentCount}`,
 			);
 		}
-		const assignments = new Array<{ destination: number; source: number }>(parameterCount);
+		const assignments = new Array<{ destination: number; source: number }>(
+			parameterCount,
+		);
 		for (let index = 0; index < parameterCount; index++) {
 			assignments[index] = {
 				destination: registerForValue(kernel.blockParameterValue(parameterStart + index)),
@@ -1790,7 +1797,9 @@ function lowerFunctionToTarget(
 					`Core handler b${handler} expects ${parameterCount - 1} explicit arguments, received ${argumentCount}`,
 				);
 			}
-			const assignments = new Array<{ destination: number; source: number }>(argumentCount);
+			const assignments = new Array<{ destination: number; source: number }>(
+				argumentCount,
+			);
 			for (let index = 0; index < argumentCount; index++) {
 				assignments[index] = {
 					destination: registerForValue(
@@ -1808,10 +1817,7 @@ function lowerFunctionToTarget(
 		}
 		const blockParameterStart = kernel.blockParameterStart(blockId);
 		const blockParameterCount = kernel.blockParameterCount(blockId);
-		if (
-			blockParameterCount > 0 &&
-			kernel.blockParameterRole(blockParameterStart) === 1
-		) {
+		if (blockParameterCount > 0 && kernel.blockParameterRole(blockParameterStart) === 1) {
 			instructions.push({
 				type: "catch",
 				registers: [registerForValue(kernel.blockParameterValue(blockParameterStart))],
@@ -1997,9 +2003,7 @@ function lowerFunctionToTarget(
 				}
 				instructions.push({
 					type: "jump",
-					blocks: [
-						lowerTerminatorEdge(terminatorEdgeStart + terminatorEdgeCount - 1),
-					],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart + terminatorEdgeCount - 1)],
 				});
 				break;
 			case "unreachable":
