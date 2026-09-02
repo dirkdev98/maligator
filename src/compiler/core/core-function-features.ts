@@ -1,5 +1,5 @@
 import { coreOpcodeId } from "./core-ir.ts";
-import type { CoreBlockId, CoreFunctionId } from "./core-ir.ts";
+import type { CoreBlockId, CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_FUNCTION_HAS_BRANCHES = 1 << 0;
@@ -24,7 +24,9 @@ function hasControlCycle(fn: CoreFunctionStore): boolean {
 	const colors = new Map<CoreBlockId, number>();
 	const blocks: Array<CoreBlockId> = [];
 	const edges: Array<number> = [];
-	for (const rootBlock of fn.blockIds()) {
+	for (let rootIndex = 0; rootIndex < fn.blockCapacity; rootIndex++) {
+		const rootBlock = rootIndex as CoreBlockId;
+		if (fn.kernel.blockLive(rootBlock) === 0) continue;
 		if ((colors.get(rootBlock) ?? 0) !== 0) continue;
 		let depth = 0;
 		blocks[0] = rootBlock;
@@ -66,7 +68,9 @@ function scanFeatures(
 	opcodeOffset: number,
 ): CoreFunctionFeatureBits {
 	let bits = 0;
-	for (const block of fn.blockIds()) {
+	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const block = blockIndex as CoreBlockId;
+		if (fn.kernel.blockLive(block) === 0) continue;
 		if (fn.kernel.blockHandlerBlock(block) !== undefined) {
 			bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
 		}
@@ -76,7 +80,13 @@ function scanFeatures(
 			bits |= CORE_FUNCTION_HAS_BRANCHES;
 		}
 		if (kind === "throw") bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
-		for (const instruction of fn.bodyInstructionIds(block)) {
+		for (
+			let instructionIndex = fn.kernel.blockFirstInstruction(block);
+			instructionIndex >= 0;
+			instructionIndex = fn.kernel.instructionNext(instructionIndex as CoreInstructionId)
+		) {
+			const instruction = instructionIndex as CoreInstructionId;
+			if (fn.kernel.instructionOpcode(instruction) < 0) continue;
 			const opcode = fn.kernel.instructionOpcode(instruction);
 			if (opcode < 0) continue;
 			if (opcodePresence !== undefined) {

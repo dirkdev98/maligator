@@ -227,18 +227,50 @@ const ownCellResolvers = new WeakMap<
 	{ readonly length: number; readonly resolve: CoreOwnCellResolve }
 >();
 
+function codeUnitsEqual(
+	left: ReadonlyArray<number>,
+	right: ReadonlyArray<number>,
+): boolean {
+	if (left.length !== right.length) return false;
+	for (let index = 0; index < left.length; index++) {
+		if (left[index] !== right[index]) return false;
+	}
+	return true;
+}
+
 export function coreOwnCellResolver(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 ): CoreOwnCellResolve {
 	const cached = ownCellResolvers.get(stringConstants);
 	if (cached?.length === stringConstants.length) return cached.resolve;
-	const canonicalBySpelling = new Map<string, number>();
+	const canonicalByHash = new Map<number, number | Array<number>>();
 	const canonicalByIndex = new Int32Array(stringConstants.length);
 	canonicalByIndex.fill(-1);
 	for (const [index, units] of stringConstants.entries()) {
-		const spelling = units.join(",");
-		const canonical = canonicalBySpelling.get(spelling) ?? index;
-		canonicalBySpelling.set(spelling, canonical);
+		let hash = 2_166_136_261;
+		for (const unit of units) hash = Math.imul(hash ^ unit, 16_777_619) >>> 0;
+		hash = Math.imul(hash ^ units.length, 16_777_619) >>> 0;
+		const bucket = canonicalByHash.get(hash);
+		let canonical = index;
+		if (typeof bucket === "number" && codeUnitsEqual(stringConstants[bucket]!, units)) {
+			canonical = bucket;
+		} else if (Array.isArray(bucket)) {
+			for (const candidate of bucket) {
+				if (!codeUnitsEqual(stringConstants[candidate]!, units)) continue;
+				canonical = candidate;
+				break;
+			}
+		}
+		if (canonical === index) {
+			canonicalByHash.set(
+				hash,
+				bucket === undefined
+					? index
+					: Array.isArray(bucket)
+						? [...bucket, index]
+						: [bucket, index],
+			);
+		}
 		canonicalByIndex[index] = canonical;
 	}
 	const resolve = (index: number): CoreOwnCell | undefined => {
@@ -1485,32 +1517,42 @@ export function buildCoreLocalFactIndex(
 	const mutableOpcodes: Array<Array<CoreInstructionId> | undefined> = [];
 	const operations: Array<CoreInstructionId> = [];
 	const memoryOperations: Array<CoreInstructionId> = [];
-	for (const value of fn.valueIds()) {
+	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
+		const value = valueIndex as CoreValueId;
+		if (fn.kernel.valueLive(value) === 0) continue;
 		const resolved = root(value);
 		const values = mutableValuesByRoot.get(resolved);
 		if (values === undefined) mutableValuesByRoot.set(resolved, [value]);
 		else values.push(value);
 	}
-	for (const block of fn.blockIds()) {
-		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
+	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const block = blockIndex as CoreBlockId;
+		if (fn.kernel.blockLive(block) === 0) continue;
+		let bodyIndex = 0;
+		for (
+			let instructionIndex = fn.kernel.blockFirstInstruction(block);
+			instructionIndex >= 0;
+			instructionIndex = fn.kernel.instructionNext(instructionIndex as CoreInstructionId)
+		) {
+			const instruction = instructionIndex as CoreInstructionId;
+			if (fn.kernel.instructionOpcode(instruction) < 0) continue;
+			const index = bodyIndex++;
 			location.set(instruction, { block, index });
-			if (fn.instructionKind(instruction) === "operation") {
-				const opcode = fn.instructionOpcode(instruction);
-				const descriptor = fn.registry.byId(opcode);
-				const instructions = mutableOpcodes[opcode] ?? [];
-				instructions.push(instruction);
-				mutableOpcodes[opcode] = instructions;
-				operations.push(instruction);
-				if (
-					(descriptor.accesses?.length ?? 0) > 0 ||
-					descriptor.effects.reads.length > 0 ||
-					descriptor.effects.writes.length > 0 ||
-					descriptor.effects.callsUserCode ||
-					descriptor.effects.maySuspend ||
-					descriptor.allocation !== undefined
-				) {
-					memoryOperations.push(instruction);
-				}
+			const opcode = fn.instructionOpcode(instruction);
+			const descriptor = fn.registry.byId(opcode);
+			const instructions = mutableOpcodes[opcode] ?? [];
+			instructions.push(instruction);
+			mutableOpcodes[opcode] = instructions;
+			operations.push(instruction);
+			if (
+				(descriptor.accesses?.length ?? 0) > 0 ||
+				descriptor.effects.reads.length > 0 ||
+				descriptor.effects.writes.length > 0 ||
+				descriptor.effects.callsUserCode ||
+				descriptor.effects.maySuspend ||
+				descriptor.allocation !== undefined
+			) {
+				memoryOperations.push(instruction);
 			}
 			const operandCount = instructionOperandCount(fn, instruction);
 			for (let position = 0; position < operandCount; position++) {
@@ -1524,7 +1566,7 @@ export function buildCoreLocalFactIndex(
 		const terminator = fn.blockTerminator(block);
 		location.set(terminator, {
 			block,
-			index: [...fn.bodyInstructionIds(block)].length,
+			index: bodyIndex,
 		});
 		const terminatorOperandStart = fn.kernel.instructionOperandStart(terminator);
 		const terminatorOperandCount = fn.kernel.instructionOperandCount(terminator);

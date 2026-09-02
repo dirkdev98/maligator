@@ -404,15 +404,21 @@ export class CoreLocalOptimizer {
 	run(initialChanges?: ReadonlyArray<CoreChangeSet>): CoreLocalOptimizerResult {
 		if (initialChanges === undefined) {
 			if ((this.#features & CORE_FUNCTION_HAS_CANDIDATE_OPCODES) !== 0) {
-				for (const instruction of this.#fn.instructionIds())
-					this.#enqueueInstruction(instruction);
+				for (let index = 0; index < this.#fn.instructionCapacity; index++) {
+					const instruction = coreInstructionId(index);
+					if (this.#fn.kernel.instructionLive(instruction) !== 0)
+						this.#enqueueInstruction(instruction);
+				}
 			}
 			if (
 				(this.#features &
 					(CORE_FUNCTION_HAS_BRANCHES | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) !==
 				0
 			) {
-				for (const block of this.#fn.blockIds()) this.#enqueueBlock(block);
+				for (let index = 0; index < this.#fn.blockCapacity; index++) {
+					const block = index as CoreBlockId;
+					if (this.#fn.kernel.blockLive(block) !== 0) this.#enqueueBlock(block);
+				}
 			}
 		} else {
 			for (const changes of initialChanges) this.#submit(changes);
@@ -671,8 +677,10 @@ export class CoreLocalOptimizer {
 					obligation.kind === "guard" && obligation.instruction === terminator,
 			);
 			let usedByRefinement = false;
-			for (const instruction of this.#fn.instructionIds()) {
+			for (let index = 0; index < this.#fn.instructionCapacity; index++) {
+				const instruction = coreInstructionId(index);
 				if (
+					this.#fn.kernel.instructionLive(instruction) !== 0 &&
 					this.#fn.kernel.instructionOpcode(instruction) >= 0 &&
 					this.#fn.instructionEffectRefinement(instruction)?.proof === factId
 				) {
@@ -700,7 +708,15 @@ export class CoreLocalOptimizer {
 			readonly instruction: CoreInstructionId;
 			readonly replacement: CoreValueId;
 		}> = [];
-		for (const instruction of this.#fn.bodyInstructionIds(block)) {
+		for (
+			let instructionIndex = this.#fn.kernel.blockFirstInstruction(block);
+			instructionIndex >= 0;
+			instructionIndex = this.#fn.kernel.instructionNext(
+				coreInstructionId(instructionIndex),
+			)
+		) {
+			const instruction = coreInstructionId(instructionIndex);
+			if (this.#fn.kernel.instructionOpcode(instruction) < 0) continue;
 			const descriptor = this.#program.registry.byId(
 				this.#fn.instructionOpcode(instruction),
 			);

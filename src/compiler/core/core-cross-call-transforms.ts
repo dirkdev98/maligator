@@ -711,12 +711,18 @@ function foldProgramValueKindObservations(
 	for (const functionId of kinds.changedFunctions) {
 		const fn = program.function(functionId);
 		const values = kinds.values(functionId);
-		const folds = [...fn.instructionIds()].flatMap((instruction) => {
+		const folds: Array<{
+			readonly instruction: CoreInstructionId;
+			readonly result: boolean;
+		}> = [];
+		for (let index = 0; index < fn.instructionCapacity; index++) {
+			const instruction = index as CoreInstructionId;
+			if (fn.kernel.instructionLive(instruction) === 0) continue;
 			const result = coreValueKindObservation(program, fn, instruction, (value) =>
 				values.kindMask(value),
 			);
-			return result === undefined ? [] : [{ instruction, result }];
-		});
+			if (result !== undefined) folds.push({ instruction, result });
+		}
 		if (folds.length === 0) continue;
 		const editor = CoreEditor.open(program, functionId);
 		for (const { instruction, result } of folds) {
