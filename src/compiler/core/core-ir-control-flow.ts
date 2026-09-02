@@ -117,10 +117,8 @@ function buildEdges(
 			const edge = edgeStart + offset;
 			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
 			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
-			let argumentVersion = fn.version("body");
-			let argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
-				fn.kernel.operandAt(argumentStart + index),
-			);
+			let argumentVersion = -1;
+			let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
 			if (successors[block] === empty) successors[block] = [];
 			successors[block].push({
 				from: block,
@@ -128,7 +126,7 @@ function buildEdges(
 				kind: "ordinary",
 				get arguments() {
 					const version = fn.version("body");
-					if (version !== argumentVersion) {
+					if (argumentsCache === undefined || version !== argumentVersion) {
 						argumentVersion = version;
 						argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
 							fn.kernel.operandAt(argumentStart + index),
@@ -142,10 +140,8 @@ function buildEdges(
 		if (handler !== undefined && blockHasExceptionalExit(fn, block)) {
 			const start = fn.kernel.blockHandlerArgumentStart(block);
 			const count = fn.kernel.blockHandlerArgumentCount(block);
-			let argumentVersion = fn.version("body");
-			let argumentsCache = Array.from({ length: count }, (_, index) =>
-				fn.kernel.handlerArgumentAt(start + index),
-			);
+			let argumentVersion = -1;
+			let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
 			if (successors[block] === empty) successors[block] = [];
 			successors[block].push({
 				from: block,
@@ -153,7 +149,7 @@ function buildEdges(
 				kind: "exceptional",
 				get arguments() {
 					const version = fn.version("body");
-					if (version !== argumentVersion) {
+					if (argumentsCache === undefined || version !== argumentVersion) {
 						argumentVersion = version;
 						argumentsCache = Array.from({ length: count }, (_, index) =>
 							fn.kernel.handlerArgumentAt(start + index),
