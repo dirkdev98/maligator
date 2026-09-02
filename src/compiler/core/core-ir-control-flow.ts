@@ -631,7 +631,8 @@ export function buildCoreControlFlow(
 	functionId: CoreFunctionId,
 	options: BuildCoreControlFlowOptions = {},
 ): CoreControlFlow {
-	return build(program.function(functionId), options.exceptions !== false);
+	const fn = program.function(functionId);
+	return build(fn, options.exceptions !== false && fn.handlerBlockCount > 0);
 }
 
 export const CORE_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> = {
@@ -649,9 +650,12 @@ export const CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreCo
 		key: "exception-control-flow",
 		scope: "function",
 		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
-		compute({ program, request }) {
+		compute({ program, request, get }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
-			return build(program.function(request.function), true);
+			const fn = program.function(request.function);
+			return fn.handlerBlockCount === 0
+				? get(CORE_CONTROL_FLOW_ANALYSIS, request)
+				: build(fn, true);
 		},
 	};
 

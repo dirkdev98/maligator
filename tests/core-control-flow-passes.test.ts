@@ -4,6 +4,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
+	CORE_CONTROL_FLOW_ANALYSIS,
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
@@ -976,10 +977,15 @@ describe("Core control-flow analyses and passes", () => {
 		const finished = builder.finish(entry);
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
+		const ordinary = analyses.get(CORE_CONTROL_FLOW_ANALYSIS, {
+			scope: "function",
+			function: finished.function,
+		});
 		const first = analyses.get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, {
 			scope: "function",
 			function: finished.function,
 		});
+		expect(first).toBe(ordinary);
 		expect(
 			analyses.get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
 				scope: "function",
@@ -1005,6 +1011,7 @@ describe("Core control-flow analyses and passes", () => {
 		expect(second.predecessors[target]![0]!.arguments).toEqual([parameter]);
 		const result = report.finish(program, { directEntries: [], specializations: [] });
 		expect(result.analyses).toMatchObject([
+			{ analysis: "control-flow", queries: 2, hits: 1, recomputations: 1 },
 			{ analysis: "exception-control-flow", queries: 3, hits: 2, recomputations: 1 },
 		]);
 	});
