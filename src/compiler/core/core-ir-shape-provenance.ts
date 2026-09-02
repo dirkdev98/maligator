@@ -1,5 +1,4 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	analyzeCoreProvenance,

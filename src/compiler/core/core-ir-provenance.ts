@@ -1,9 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
-	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
-	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
-} from "./core-internal-attributes.ts";
-import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
