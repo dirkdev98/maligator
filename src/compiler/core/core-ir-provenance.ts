@@ -19,7 +19,7 @@ import type {
 } from "./core-ir-regions.ts";
 import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
-import { coreFunctionId, coreValueId } from "./core-ir.ts";
+import { coreFunctionId } from "./core-ir.ts";
 import type {
 	CoreAccessMode,
 	CoreBlockId,
@@ -1263,6 +1263,7 @@ interface CoreLocalSpecializationIndex {
 	>;
 	readonly controlUses: ReadonlySet<CoreValueId>;
 	readonly handlerTargets: ReadonlySet<CoreBlockId>;
+	readonly valuesByRoot: ReadonlyMap<CoreValueId, ReadonlyArray<CoreValueId>>;
 }
 
 function decodeCoreString(program: CoreProgram, index: number): string | undefined {
@@ -1285,6 +1286,13 @@ function localSpecializationIndex(
 	>();
 	const controlUses = new Set<CoreValueId>();
 	const handlerTargets = new Set<CoreBlockId>();
+	const mutableValuesByRoot = new Map<CoreValueId, Array<CoreValueId>>();
+	for (const value of fn.valueIds()) {
+		const resolved = root(value);
+		const values = mutableValuesByRoot.get(resolved);
+		if (values === undefined) mutableValuesByRoot.set(resolved, [value]);
+		else values.push(value);
+	}
 	for (const block of fn.blockIds()) {
 		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
 			location.set(instruction, { block, index });
@@ -1336,7 +1344,11 @@ function localSpecializationIndex(
 			for (const value of handler.arguments) controlUses.add(root(value));
 		}
 	}
-	return { location, uses, controlUses, handlerTargets };
+	const valuesByRoot = new Map<CoreValueId, ReadonlyArray<CoreValueId>>();
+	for (const [value, aliases] of mutableValuesByRoot) {
+		valuesByRoot.set(value, Object.freeze(aliases));
+	}
+	return { location, uses, controlUses, handlerTargets, valuesByRoot };
 }
 
 function specializationInstructionDominates(
@@ -1366,19 +1378,12 @@ function specializationDefinition(
 }
 
 function specializationResultValues(
-	fn: CoreFunctionStore,
+	index: CoreLocalSpecializationIndex,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	value: CoreValueId,
 ): ReadonlyArray<CoreValueId> {
 	const expected = roots.get(value) ?? value;
-	const values: Array<CoreValueId> = [];
-	for (let raw = 0; raw < fn.valueCapacity; raw++) {
-		const candidate = coreValueId(raw);
-		if (fn.isValueLive(candidate) && (roots.get(candidate) ?? candidate) === expected) {
-			values.push(candidate);
-		}
-	}
-	return Object.freeze(values);
+	return index.valuesByRoot.get(expected) ?? Object.freeze([]);
 }
 
 function staticPropertyNamed(
@@ -1886,11 +1891,7 @@ function stringSplitCursorCandidates(
 			)
 		)
 			continue;
-		const resultValues = Object.freeze(
-			Array.from({ length: fn.valueCapacity }, (_, value) => coreValueId(value)).filter(
-				(value) => fn.isValueLive(value) && root(value) === splitResult,
-			),
-		);
+		const resultValues = index.valuesByRoot.get(splitResult) ?? Object.freeze([]);
 		candidates.push(
 			Object.freeze({
 				key: `string-split-cursor:${fn.id}:${call}:${header}`,
@@ -2729,7 +2730,7 @@ function stringSplitProjectionCandidates(
 				call,
 				separator,
 				separatorStringIndex,
-				resultValues: specializationResultValues(fn, roots, result),
+				resultValues: specializationResultValues(index, roots, result),
 				loads: Object.freeze(loads),
 				instructions,
 				fanOut: loads.length,
@@ -3195,7 +3196,7 @@ function regexpExecProjectionCandidates(
 				root: call,
 				property,
 				call,
-				resultValues: specializationResultValues(fn, roots, result),
+				resultValues: specializationResultValues(index, roots, result),
 				nullChecks: Object.freeze(nullChecks),
 				...(lockedLiteral === undefined ? {} : { lockedLiteral }),
 				loads: Object.freeze(loads),
@@ -3341,7 +3342,7 @@ function regexpIteratorProjectionCandidates(
 				step,
 				doneBranch,
 				exitBlock: branch.consequent.block,
-				resultValues: specializationResultValues(fn, roots, result),
+				resultValues: specializationResultValues(index, roots, result),
 				exceptionalBlocks,
 				loads: Object.freeze(loads),
 				instructions: claimedInstructions,
