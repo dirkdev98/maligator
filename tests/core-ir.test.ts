@@ -267,7 +267,36 @@ describe("Core IR", () => {
 			operations: 2_001,
 			memoryOperations: 1,
 		});
-		expect(memory.statistics).toMatchObject({ accesses: 1, stateEntries: 1 });
+		expect(memory.statistics).toMatchObject({
+			accesses: 1,
+			touchedBlocks: 1,
+			stateRows: 1,
+			stateEntries: 1,
+			familyWidenings: 0,
+		});
+	});
+
+	it("counts exact locations widened by unknown calls", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [stored!], {
+			attributes: { index: 0 },
+		});
+		const [callee] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.appendInstruction(entry, "call", [callee!, callee!]);
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const { function: functionId } = builder.finish(entry);
+
+		const memory = analyzeCoreMemoryVersions(program, functionId);
+
+		expect(memory.statistics.familyWidenings).toBeGreaterThan(0);
 	});
 
 	it("declares a fresh aggregate's layout and which results cannot be held weakly", () => {

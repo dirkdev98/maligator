@@ -275,9 +275,12 @@ export interface CoreMemoryVersions {
 		readonly accesses: number;
 		readonly partitions: number;
 		readonly exactPartitions: number;
+		readonly touchedBlocks: number;
+		readonly stateRows: number;
 		readonly stateEntries: number;
 		readonly phis: number;
 		readonly transfers: number;
+		readonly familyWidenings: number;
 		readonly blockUpdates: number;
 	};
 	readKey(instruction: CoreInstructionId): string | undefined;
@@ -471,6 +474,19 @@ function memoryVersions(
 	};
 	const mutableEventsByBlock = new Map<CoreBlockId, Array<SparseMemoryEvent>>();
 	const definedByBlock = new Map<CoreBlockId, Set<number>>();
+	let familyWidenings = 0;
+	const killDomain = (
+		domain: CoreEffectDomain,
+		instruction: CoreInstructionId,
+		definitions: Map<number, number>,
+	): void => {
+		for (const slot of slotsKilledByDomain.get(domain)!) {
+			if (slot >= CORE_EFFECT_DOMAINS.length && !definitions.has(slot)) {
+				familyWidenings++;
+			}
+			definitions.set(slot, writeIdentity(instruction, slot));
+		}
+	};
 	for (const instruction of relevantInstructions) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const block = fn.instructionBlock(instruction);
@@ -504,8 +520,7 @@ function memoryVersions(
 			for (const domain of domainsForFamily(family)) {
 				coveredWrites.add(domain);
 				if (!exactAccess) {
-					for (const slot of slotsKilledByDomain.get(domain)!)
-						definitions.set(slot, writeIdentity(instruction, slot));
+					killDomain(domain, instruction, definitions);
 				} else {
 					const slot = domainSlot.get(domain)!;
 					definitions.set(slot, writeIdentity(instruction, slot));
@@ -516,8 +531,7 @@ function memoryVersions(
 		for (const domain of CORE_EFFECT_DOMAINS) {
 			if (!effects.writes.includes(domain) && !universal) continue;
 			if (coveredWrites.has(domain) && !universal) continue;
-			for (const slot of slotsKilledByDomain.get(domain)!)
-				definitions.set(slot, writeIdentity(instruction, slot));
+			killDomain(domain, instruction, definitions);
 		}
 		if (reads.size === 0 && definitions.size === 0) continue;
 		for (const slot of reads) {
@@ -793,9 +807,12 @@ function memoryVersions(
 			accesses: accessCount,
 			partitions: slotCount,
 			exactPartitions: slotCount - CORE_EFFECT_DOMAINS.length,
+			touchedBlocks: eventsByBlock.size,
+			stateRows: readStateRows.size + phiOperands.size,
 			stateEntries,
 			phis,
 			transfers,
+			familyWidenings,
 			blockUpdates,
 		}),
 		readKey(instruction) {

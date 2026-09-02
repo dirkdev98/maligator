@@ -104,8 +104,12 @@ export interface CoreCompilerWorkCounters {
 	readonly provenanceRebuilds: number;
 	readonly memoryAccesses: number;
 	readonly memoryLocations: number;
+	readonly memoryTouchedBlocks: number;
+	readonly memoryStateRows: number;
 	readonly memoryStateEntries: number;
 	readonly memoryPhis: number;
+	readonly memoryTransfers: number;
+	readonly memoryFamilyWidens: number;
 	readonly specializationFunctionsScanned: number;
 	readonly specializationCandidatesDiscovered: number;
 	readonly specializationCandidatesSelected: number;
@@ -239,8 +243,12 @@ const COUNTER_KEYS = [
 	"provenanceRebuilds",
 	"memoryAccesses",
 	"memoryLocations",
+	"memoryTouchedBlocks",
+	"memoryStateRows",
 	"memoryStateEntries",
 	"memoryPhis",
+	"memoryTransfers",
+	"memoryFamilyWidens",
 	"specializationFunctionsScanned",
 	"specializationCandidatesDiscovered",
 	"specializationCandidatesSelected",
@@ -550,15 +558,23 @@ export class CoreOptimizationReportBuilder {
 				readonly statistics?: {
 					readonly accesses?: number;
 					readonly partitions?: number;
+					readonly touchedBlocks?: number;
+					readonly stateRows?: number;
 					readonly stateEntries?: number;
 					readonly phis?: number;
+					readonly transfers?: number;
+					readonly familyWidenings?: number;
 				};
 			}
 		).statistics;
 		this.increment("memoryAccesses", statistics?.accesses ?? 0);
 		this.increment("memoryLocations", statistics?.partitions ?? 0);
+		this.increment("memoryTouchedBlocks", statistics?.touchedBlocks ?? 0);
+		this.increment("memoryStateRows", statistics?.stateRows ?? 0);
 		this.increment("memoryStateEntries", statistics?.stateEntries ?? 0);
 		this.increment("memoryPhis", statistics?.phis ?? 0);
+		this.increment("memoryTransfers", statistics?.transfers ?? 0);
+		this.increment("memoryFamilyWidens", statistics?.familyWidenings ?? 0);
 	}
 
 	recordQueuePush(depth: number): void {
