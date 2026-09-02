@@ -14,6 +14,7 @@ export type CoreAnalysisRequest =
 	| { readonly scope: "function"; readonly function: CoreFunctionId }
 	| {
 			readonly scope: "scc";
+			readonly index: number;
 			readonly id: string;
 			readonly functions: ReadonlyArray<CoreFunctionId>;
 	  }
@@ -47,6 +48,12 @@ interface CachedAnalysis {
 	readonly value: unknown;
 }
 
+interface DefinitionCache {
+	program?: CachedAnalysis;
+	readonly functions: Array<CachedAnalysis | undefined>;
+	readonly sccs: Array<CachedAnalysis | undefined>;
+}
+
 interface RegisteredAnalysis {
 	readonly signature: string;
 }
@@ -62,7 +69,7 @@ export class CoreAnalysisManager {
 	readonly #context: CoreCompilationContext;
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #programFlow: CoreProgramFlowEngine;
-	readonly #cache = new Map<string, CachedAnalysis>();
+	readonly #cache = new WeakMap<CoreAnalysisDefinition<unknown>, DefinitionCache>();
 	readonly #registered = new Map<string, RegisteredAnalysis>();
 	readonly #validatedDefinitions = new WeakSet<CoreAnalysisDefinition<unknown>>();
 	readonly #timingStarts: Array<number> = [];
@@ -85,8 +92,17 @@ export class CoreAnalysisManager {
 		request: CoreAnalysisRequest,
 	): Result {
 		this.#validateDefinition(definition, request);
-		const cacheKey = `${definition.key}\0${this.#scopeKey(request)}`;
-		const cached = this.#cache.get(cacheKey);
+		const definitionCache = this.#cache.get(definition) ?? {
+			functions: [],
+			sccs: [],
+		};
+		this.#cache.set(definition, definitionCache);
+		const cached =
+			request.scope === "program"
+				? definitionCache.program
+				: request.scope === "function"
+					? definitionCache.functions[request.function]
+					: definitionCache.sccs[request.index];
 		if (cached !== undefined && this.#versionsMatch(definition, request, cached)) {
 			this.#report.recordAnalysis(definition.key, "hit", false, 0);
 			return cached.value as Result;
@@ -121,7 +137,11 @@ export class CoreAnalysisManager {
 				}
 			}
 		}
-		this.#cache.set(cacheKey, { ...versions, value });
+		const next = { ...versions, value };
+		if (request.scope === "program") definitionCache.program = next;
+		else if (request.scope === "function") {
+			definitionCache.functions[request.function] = next;
+		} else definitionCache.sccs[request.index] = next;
 		this.#report.recordAnalysisResult(definition.key, value);
 		this.#report.recordAnalysis(
 			definition.key,
@@ -161,17 +181,6 @@ export class CoreAnalysisManager {
 		}
 		this.#registered.set(definition.key, { signature });
 		this.#validatedDefinitions.add(definition);
-	}
-
-	#scopeKey(request: CoreAnalysisRequest): string {
-		switch (request.scope) {
-			case "function":
-				return `function:${request.function}`;
-			case "scc":
-				return `scc:${request.id}:${sortedFunctions(request.functions).join(",")}`;
-			case "program":
-				return "program";
-		}
 	}
 
 	#captureVersions<Result>(

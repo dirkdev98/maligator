@@ -77,7 +77,12 @@ export function coreAnalysisRequestForPass(
 		if (item.scope !== "scc") {
 			throw new Error(`Analysis ${definition.key} requires an SCC-scoped pass work item`);
 		}
-		return { scope: "scc", id: item.id, functions: item.functions };
+		return {
+			scope: "scc",
+			index: item.index,
+			id: item.id,
+			functions: item.functions,
+		};
 	}
 	if (item.scope === "program" || item.scope === "scc") {
 		throw new Error(

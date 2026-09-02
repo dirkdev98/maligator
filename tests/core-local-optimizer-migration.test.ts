@@ -164,6 +164,16 @@ describe("Core local optimizer migration matrix", () => {
 		expect(source).not.toMatch(/new Set<number>\(\)/);
 	});
 
+	it("uses definition identity and numeric slots for analysis caching", () => {
+		const source = readFileSync(
+			new URL("../src/compiler/core/core-analysis-manager.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(source).toMatch(/#cache = new WeakMap/);
+		expect(source).not.toMatch(/cacheKey|#scopeKey/);
+	});
+
 	it("reuses pass contexts across work items", () => {
 		const source = readFileSync(
 			new URL("../src/compiler/core/core-pass-manager.ts", import.meta.url),
