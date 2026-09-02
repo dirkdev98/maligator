@@ -516,6 +516,11 @@ function solveCoreProgramValueKinds(
 	previous?: CoreProgramValueKindState,
 ): CoreProgramValueKindState {
 	const functionIds = [...program.functionIds()];
+	const maximumParameterCount = functionIds.reduce(
+		(largest, functionId) =>
+			Math.max(largest, program.function(functionId).parameters.length),
+		0,
+	);
 	const live = new Set(functionIds);
 	const versionKeys = new Map(
 		functionIds.map((functionId) => [
@@ -549,7 +554,7 @@ function solveCoreProgramValueKinds(
 	}
 	const affectedQueue = [...affected];
 	let affectedCursor = 0;
-	while (affectedCursor < affectedQueue.length) {
+	while (affectedCursor < affectedQueue.length && affected.size < functionIds.length) {
 		const functionId = affectedQueue[affectedCursor++]!;
 		for (const index of [targets, previous?.targets]) {
 			if (index === undefined) continue;
@@ -608,6 +613,7 @@ function solveCoreProgramValueKinds(
 		const summary = summaries.get(functionId)!;
 		const sites = targets.outgoing(functionId);
 		const byInstruction = new Map(sites.map((site) => [site.instruction, site]));
+		let anyScriptReturnKind: CompilerValueKindMask | undefined;
 		const values = analyzeCoreValueKinds(fn, controlFlow(functionId), {
 			parameterMasks: summary.parameterKinds,
 			receiverMask: summary.receiverKind,
@@ -617,7 +623,16 @@ function solveCoreProgramValueKinds(
 				if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
 					return COMPILER_VALUE_KIND_TOP;
 				}
-				const callees = programValueKindCallees(program, site);
+				if (site.targets.anyScript) {
+					if (anyScriptReturnKind === undefined) {
+						anyScriptReturnKind = 0;
+						for (const calleeSummary of summaries.values()) {
+							anyScriptReturnKind |= calleeSummary.returnKind;
+						}
+					}
+					return anyScriptReturnKind;
+				}
+				const callees = site.targets.functions;
 				if (callees.length === 0) return COMPILER_VALUE_KIND_TOP;
 				return callees.reduce(
 					(mask, callee) => mask | summaries.get(callee)!.returnKind,
@@ -638,36 +653,77 @@ function solveCoreProgramValueKinds(
 			summaries.set(functionId, { ...summary, returnKind });
 			for (const caller of targets.callers(functionId)) enqueue(caller, true);
 		}
+		const anyScriptParameterKinds =
+			Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
+		let anyScriptStrictReceiverKind = 0;
+		let hasAnyScriptSite = false;
+		const applyIncoming = (
+			callee: CoreFunctionId,
+			incomingParameterKinds: ReadonlyArray<CompilerValueKindMask>,
+			strictReceiverKind: CompilerValueKindMask,
+		): void => {
+			if (!live.has(callee)) return;
+			const calleeFn = program.function(callee);
+			const prior = summaries.get(callee)!;
+			const parameterKinds = [...prior.parameterKinds];
+			for (const index of calleeFn.parameters.keys()) {
+				const incoming = incomingParameterKinds[index]!;
+				parameterKinds[index] = parameterKinds[index]! | incoming;
+			}
+			const incomingReceiver = calleeFn.metadata.strict
+				? strictReceiverKind
+				: COMPILER_VALUE_KIND_OBJECT;
+			const receiverKind = prior.receiverKind | incomingReceiver;
+			if (
+				receiverKind === prior.receiverKind &&
+				parameterKinds.every((kind, index) => kind === prior.parameterKinds[index])
+			)
+				return;
+			summaries.set(callee, { ...prior, parameterKinds, receiverKind });
+			enqueue(callee, false);
+		};
 		for (const site of sites) {
-			const callees = programValueKindCallees(program, site);
-			for (const callee of callees) {
-				if (!live.has(callee)) continue;
-				const calleeFn = program.function(callee);
-				const prior = summaries.get(callee)!;
-				const parameterKinds = [...prior.parameterKinds];
-				for (const index of calleeFn.parameters.keys()) {
+			if (site.targets.anyScript) {
+				hasAnyScriptSite = true;
+				for (let index = 0; index < maximumParameterCount; index++) {
 					const argument = site.arguments?.[index];
-					const incoming =
-						site.arguments === undefined
+					anyScriptParameterKinds[index] =
+						anyScriptParameterKinds[index]! |
+						(site.arguments === undefined
 							? COMPILER_VALUE_KIND_TOP
 							: argument === undefined
 								? COMPILER_VALUE_KIND_UNDEFINED
-								: values.latticeMask(argument);
-					parameterKinds[index] = parameterKinds[index]! | incoming;
+								: values.latticeMask(argument));
 				}
-				const incomingReceiver = calleeFn.metadata.strict
-					? site.receiver === undefined
+				anyScriptStrictReceiverKind |=
+					site.receiver === undefined
 						? COMPILER_VALUE_KIND_TOP
-						: values.latticeMask(site.receiver)
-					: COMPILER_VALUE_KIND_OBJECT;
-				const receiverKind = prior.receiverKind | incomingReceiver;
-				if (
-					receiverKind === prior.receiverKind &&
-					parameterKinds.every((kind, index) => kind === prior.parameterKinds[index])
-				)
-					continue;
-				summaries.set(callee, { ...prior, parameterKinds, receiverKind });
-				enqueue(callee, false);
+						: values.latticeMask(site.receiver);
+				continue;
+			}
+			const incomingParameterKinds = Array<CompilerValueKindMask>(maximumParameterCount);
+			for (let index = 0; index < maximumParameterCount; index++) {
+				const argument = site.arguments?.[index];
+				incomingParameterKinds[index] =
+					site.arguments === undefined
+						? COMPILER_VALUE_KIND_TOP
+						: argument === undefined
+							? COMPILER_VALUE_KIND_UNDEFINED
+							: values.latticeMask(argument);
+			}
+			for (const callee of site.targets.functions) {
+				applyIncoming(
+					callee,
+					incomingParameterKinds,
+					site.receiver === undefined
+						? COMPILER_VALUE_KIND_TOP
+						: values.latticeMask(site.receiver),
+				);
+			}
+		}
+		if (hasAnyScriptSite) {
+			for (const callee of functionIds) {
+				applyIncoming(callee, anyScriptParameterKinds, anyScriptStrictReceiverKind);
 			}
 		}
 	}

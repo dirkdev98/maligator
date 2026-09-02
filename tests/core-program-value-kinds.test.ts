@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
@@ -12,6 +13,7 @@ import {
 	programClosureCertificate,
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
+import { COMPILER_VALUE_KIND_STRING } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 import {
 	analysisProgram,
@@ -135,5 +137,70 @@ describe("whole-program Core value kinds", () => {
 		);
 		const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
 		expect(kinds.statistics.functionsEvaluated).toBeLessThanOrEqual(length * 2);
+	});
+
+	it("joins any-script arguments and returns once across the closed program", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = caller.createBlock([{ representation: "boxed" }]);
+		const condition = caller.blockParameters(entry)[0]!.value;
+		const join = caller.createBlock([{ representation: "boxed" }]);
+		let decision = entry;
+		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
+			const selected = caller.createBlock();
+			const alternate = caller.createBlock();
+			const [callee] = caller.appendInstruction(selected, "createFunction", [], {
+				attributes: { functionIndex },
+			});
+			caller.setTerminator(selected, {
+				kind: "jump",
+				edge: { block: join, arguments: [callee!] },
+			});
+			caller.setTerminator(decision, {
+				kind: "branch",
+				condition,
+				consequent: { block: selected, arguments: [] },
+				alternate: { block: alternate, arguments: [] },
+			});
+			decision = alternate;
+		}
+		const [lastCallee] = caller.appendInstruction(decision, "createFunction", [], {
+			attributes: { functionIndex: 5 },
+		});
+		caller.setTerminator(decision, {
+			kind: "jump",
+			edge: { block: join, arguments: [lastCallee!] },
+		});
+		const [receiver] = caller.appendInstruction(join, "createUndefined", []);
+		const [argument] = caller.appendInstruction(join, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [result] = caller.appendInstruction(join, "call", [
+			caller.blockParameters(join)[0]!.value,
+			receiver!,
+			argument!,
+		]);
+		caller.setTerminator(join, { kind: "return", value: result! });
+		const callerId = caller.finish(entry).function;
+		const leaves = Array.from({ length: 5 }, () => {
+			const leaf = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const leafEntry = leaf.createBlock([{ representation: "boxed" }]);
+			leaf.setTerminator(leafEntry, {
+				kind: "return",
+				value: leaf.blockParameters(leafEntry)[0]!.value,
+			});
+			return leaf.finish(leafEntry).function;
+		});
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const kinds = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+
+		expect(kinds.values(callerId).kindMask(result!)).toBe(COMPILER_VALUE_KIND_STRING);
+		for (const leaf of leaves) {
+			expect(kinds.summary(leaf).parameterKinds).toEqual([COMPILER_VALUE_KIND_STRING]);
+		}
 	});
 });
