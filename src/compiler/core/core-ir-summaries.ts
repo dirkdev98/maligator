@@ -63,7 +63,17 @@ type ValueOrigin =
 	| { readonly kind: "unknown" };
 
 const ORIGIN_NONE: ValueOrigin = Object.freeze({ kind: "none" });
+const ORIGIN_FRESH: ValueOrigin = Object.freeze({ kind: "fresh" });
+const ORIGIN_PRIMITIVE: ValueOrigin = Object.freeze({ kind: "primitive" });
+const ORIGIN_RECEIVER: ValueOrigin = Object.freeze({ kind: "receiver" });
 const ORIGIN_UNKNOWN: ValueOrigin = Object.freeze({ kind: "unknown" });
+
+const ORIGIN_TRANSFER_JOIN = 0;
+const ORIGIN_TRANSFER_COPY = 1;
+const ORIGIN_TRANSFER_RECEIVER = 2;
+const ORIGIN_TRANSFER_FRESH = 3;
+const ORIGIN_TRANSFER_PRIMITIVE = 4;
+const ORIGIN_TRANSFER_UNKNOWN = 5;
 
 interface CoreLocalFunctionSummary {
 	readonly function: CoreFunctionId;
@@ -261,32 +271,35 @@ function analyzeLocalSummary(
 			index,
 		});
 	}
-	type OriginTransfer = {
-		readonly output: CoreValueId;
-		readonly inputs: ReadonlyArray<CoreValueId>;
-		readonly evaluate: () => ValueOrigin;
+	const transferKinds: Array<number> = [];
+	const transferOutputs: Array<CoreValueId> = [];
+	const transferInputStarts: Array<number> = [];
+	const transferInputCounts: Array<number> = [];
+	const transferInputs: Array<CoreValueId> = [];
+	const addTransfer = (
+		kind: number,
+		output: CoreValueId,
+		inputs: ReadonlyArray<CoreValueId> = [],
+	): void => {
+		transferKinds.push(kind);
+		transferOutputs.push(output);
+		transferInputStarts.push(transferInputs.length);
+		transferInputCounts.push(inputs.length);
+		for (const input of inputs) transferInputs.push(input);
 	};
-	const transfers: Array<OriginTransfer> = [];
 	for (const block of cfg.reversePostorder) {
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const parameterCount = fn.kernel.blockParameterCount(block);
 		for (let index = 0; index < parameterCount; index++) {
 			const parameter = fn.kernel.blockParameterValue(parameterStart + index);
-			const incoming = (cfg.predecessors[block] ?? []).flatMap((edge) => {
-				if (edge.kind !== "ordinary") return [];
+			const incoming: Array<CoreValueId> = [];
+			for (const edge of cfg.predecessors[block] ?? []) {
+				if (edge.kind !== "ordinary") continue;
 				const argument = edge.arguments[index];
-				return argument === undefined ? [] : [argument];
-			});
+				if (argument !== undefined) incoming.push(argument);
+			}
 			if (incoming.length === 0) continue;
-			transfers.push({
-				output: parameter,
-				inputs: incoming,
-				evaluate: () =>
-					incoming.reduce(
-						(origin, value) => joinOrigins(origin, origins[value]!),
-						ORIGIN_NONE,
-					),
-			});
+			addTransfer(ORIGIN_TRANSFER_JOIN, parameter, incoming);
 		}
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
@@ -294,43 +307,62 @@ function analyzeLocalSummary(
 				opcode === "move" && fn.kernel.instructionOperandCount(instruction) > 0
 					? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
 					: undefined;
-			const inputs = operand === undefined ? [] : [operand];
+			const kind =
+				operand !== undefined
+					? ORIGIN_TRANSFER_COPY
+					: opcode === "loadThis"
+						? ORIGIN_TRANSFER_RECEIVER
+						: FRESH_RESULTS.has(opcode)
+							? ORIGIN_TRANSFER_FRESH
+							: PRIMITIVE_RESULTS.has(opcode)
+								? ORIGIN_TRANSFER_PRIMITIVE
+								: ORIGIN_TRANSFER_UNKNOWN;
 			const resultStart = fn.kernel.instructionResultStart(instruction);
 			const resultCount = fn.kernel.instructionResultCount(instruction);
 			for (let index = 0; index < resultCount; index++) {
 				const output = fn.kernel.resultAt(resultStart + index);
-				transfers.push({
-					output,
-					inputs,
-					evaluate: () => {
-						if (operand !== undefined) return origins[operand]!;
-						if (opcode === "loadThis") return { kind: "receiver" };
-						if (FRESH_RESULTS.has(opcode)) return { kind: "fresh" };
-						if (PRIMITIVE_RESULTS.has(opcode)) return { kind: "primitive" };
-						return ORIGIN_UNKNOWN;
-					},
-				});
+				addTransfer(kind, output, operand === undefined ? [] : [operand]);
 			}
 		}
 	}
 	const dependents = new Array<Array<number> | undefined>(fn.valueCapacity);
-	for (const [index, transfer] of transfers.entries()) {
-		for (const input of transfer.inputs) {
+	for (let index = 0; index < transferOutputs.length; index++) {
+		const inputStart = transferInputStarts[index]!;
+		const inputCount = transferInputCounts[index]!;
+		for (let offset = 0; offset < inputCount; offset++) {
+			const input = transferInputs[inputStart + offset]!;
 			const users = dependents[input] ?? [];
 			users.push(index);
 			dependents[input] = users;
 		}
 	}
-	const queue = transfers.map((_, index) => index);
-	const queued = new Uint8Array(transfers.length);
+	const kinds = Uint8Array.from(transferKinds);
+	const outputs = Uint32Array.from(transferOutputs);
+	const inputStarts = Uint32Array.from(transferInputStarts);
+	const inputCounts = Uint32Array.from(transferInputCounts);
+	const inputs = Uint32Array.from(transferInputs);
+	const queue = Array.from({ length: outputs.length }, (_, index) => index);
+	const queued = new Uint8Array(outputs.length);
 	queued.fill(1);
 	let cursor = 0;
 	while (cursor < queue.length) {
 		const index = queue[cursor++]!;
 		queued[index] = 0;
-		const transfer = transfers[index]!;
-		if (!raiseOrigin(origins, transfer.output, transfer.evaluate())) continue;
-		for (const dependent of dependents[transfer.output] ?? []) {
+		const kind = kinds[index]!;
+		const inputStart = inputStarts[index]!;
+		const inputCount = inputCounts[index]!;
+		let incoming = ORIGIN_NONE;
+		if (kind === ORIGIN_TRANSFER_JOIN || kind === ORIGIN_TRANSFER_COPY) {
+			for (let offset = 0; offset < inputCount; offset++) {
+				incoming = joinOrigins(incoming, origins[inputs[inputStart + offset]!]!);
+			}
+		} else if (kind === ORIGIN_TRANSFER_RECEIVER) incoming = ORIGIN_RECEIVER;
+		else if (kind === ORIGIN_TRANSFER_FRESH) incoming = ORIGIN_FRESH;
+		else if (kind === ORIGIN_TRANSFER_PRIMITIVE) incoming = ORIGIN_PRIMITIVE;
+		else incoming = ORIGIN_UNKNOWN;
+		const output = outputs[index]! as CoreValueId;
+		if (!raiseOrigin(origins, output, incoming)) continue;
+		for (const dependent of dependents[output] ?? []) {
 			if (queued[dependent] !== 0) continue;
 			queued[dependent] = 1;
 			queue.push(dependent);
