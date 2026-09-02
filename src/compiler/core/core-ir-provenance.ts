@@ -180,6 +180,7 @@ export interface CoreContainedAggregateProvenance {
 
 export interface CoreProvenanceOptions {
 	readonly canonicalRoots?: ReadonlyMap<CoreValueId, CoreValueId>;
+	readonly index?: CoreLocalFactIndex;
 }
 
 function numberArray(value: unknown): ReadonlyArray<number> | undefined {
@@ -422,32 +423,30 @@ export function buildCoreProvenance(
 	options: CoreProvenanceOptions = {},
 ): CoreProvenance {
 	const roots = options.canonicalRoots ?? coreCanonicalValueRoots(fn, cfg);
+	const index = options.index ?? buildCoreLocalFactIndex(fn, roots);
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	const layouts = [...fn.instructionIds()]
-		.filter((instruction) => fn.instructionKind(instruction) === "operation")
+	const layouts = index.operations
 		.map((instruction) => allocationLayout(fn, instruction))
 		.filter((layout): layout is CoreAllocationLayout => layout !== undefined);
-	const layoutByRoot = new Array<CoreAllocationLayout | null | undefined>(
-		fn.valueCapacity,
-	);
+	const layoutByRoot = new Map<CoreValueId, CoreAllocationLayout | null>();
 	for (const layout of layouts) {
 		const valueRoot = root(layout.result);
-		layoutByRoot[valueRoot] = layoutByRoot[valueRoot] === undefined ? layout : null;
+		layoutByRoot.set(valueRoot, layoutByRoot.has(valueRoot) ? null : layout);
 	}
 	let valueQueries = 0;
 	const allocationOf = (value: CoreValueId): CoreAllocationLayout | undefined => {
 		valueQueries++;
-		return layoutByRoot[root(value)] ?? undefined;
+		return layoutByRoot.get(root(value)) ?? undefined;
 	};
 	const cellForString = coreOwnCellResolver(program.stringConstants);
-	const keyCells = new Array<CoreOwnCell | null | undefined>(fn.valueCapacity);
+	const keyCells = new Map<CoreValueId, CoreOwnCell | null>();
 	const cellForValue = (value: CoreValueId): CoreOwnCell | undefined => {
 		const valueRoot = root(value);
-		const cached = keyCells[valueRoot];
-		if (cached !== undefined) return cached ?? undefined;
+		const cached = keyCells.get(valueRoot);
+		if (cached !== undefined || keyCells.has(valueRoot)) return cached ?? undefined;
 		const definition = definingInstruction(fn, valueRoot);
 		if (definition === undefined || fn.instructionKind(definition) !== "operation") {
-			keyCells[valueRoot] = null;
+			keyCells.set(valueRoot, null);
 			return undefined;
 		}
 		const opcode = fn.instructionOpcodeName(definition);
@@ -467,7 +466,7 @@ export function buildCoreProvenance(
 				index: Object.is(immediate.value, -0) ? 0 : immediate.value,
 			};
 		}
-		keyCells[valueRoot] = cell ?? null;
+		keyCells.set(valueRoot, cell ?? null);
 		return cell;
 	};
 	const cellForKey = (key: CoreAccessKey): CoreOwnCell | undefined =>
@@ -482,14 +481,15 @@ export function buildCoreProvenance(
 			: (isLengthCell(cell, program.stringConstants) && mode === "read") ||
 				(cell.kind === "element" && layout.elements.has(cell.index));
 
-	const escaped = new Uint8Array(fn.instructionCapacity);
-	for (const value of fn.valueIds()) {
-		const layout = allocationOf(value);
-		if (layout === undefined) continue;
-		forEachValueUse(fn, value, (instruction, operand) => {
+	const escaped = new Set<CoreInstructionId>();
+	for (const layout of layouts) {
+		const valueRoot = root(layout.result);
+		if (layoutByRoot.get(valueRoot) !== layout) continue;
+		if (index.controlUses.has(valueRoot)) escaped.add(layout.instruction);
+		for (const { instruction, position: operand } of index.uses.get(valueRoot) ?? []) {
 			if (fn.instructionKind(instruction) !== "operation") {
-				escaped[layout.instruction] = 1;
-				return;
+				escaped.add(layout.instruction);
+				continue;
 			}
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (
@@ -498,7 +498,7 @@ export function buildCoreProvenance(
 				opcode === "rootUse" ||
 				observesWithoutRetention(fn, instruction)
 			) {
-				return;
+				continue;
 			}
 			const access = baseAccessForOperand(fn, instruction, operand);
 			const key = access === undefined ? undefined : accessKey(fn, instruction, access);
@@ -508,12 +508,12 @@ export function buildCoreProvenance(
 				cell === undefined ||
 				!cellBelongs(layout, cell, access.mode)
 			) {
-				escaped[layout.instruction] = 1;
+				escaped.add(layout.instruction);
 			}
-		});
+		}
 	}
 	const escape = (allocation: CoreInstructionId): CoreAllocationEscape =>
-		escaped[allocation] === 0 ? "contained" : "escaped";
+		escaped.has(allocation) ? "escaped" : "contained";
 	const ownCell = (
 		base: CoreValueId,
 		key: CoreAccessKey,
@@ -581,6 +581,7 @@ export interface CoreLocalFactBundle {
 	readonly function: CoreFunctionId;
 	readonly control: CoreControlFlow;
 	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
+	readonly index: CoreLocalFactIndex;
 	readonly valueKinds: CoreValueKindAnalysis;
 	readonly provenance: CoreProvenance;
 	readonly valueClasses: CoreValueClassAnalysis;
@@ -608,6 +609,7 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 			const fn = program.function(functionId);
 			const control = get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request);
 			const roots = get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request);
+			let localIndex: CoreLocalFactIndex | undefined;
 			let valueKindAnalysis: CoreValueKindAnalysis | undefined;
 			let provenanceAnalysis: CoreProvenance | undefined;
 			let valueClassAnalysis: CoreValueClassAnalysis | undefined;
@@ -615,12 +617,16 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 				function: functionId,
 				control,
 				roots,
+				get index() {
+					return (localIndex ??= buildCoreLocalFactIndex(fn, roots));
+				},
 				get valueKinds() {
 					return (valueKindAnalysis ??= get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request));
 				},
 				get provenance() {
 					return (provenanceAnalysis ??= buildCoreProvenance(program, fn, control, {
 						canonicalRoots: roots,
+						index: (localIndex ??= buildCoreLocalFactIndex(fn, roots)),
 					}));
 				},
 				get valueClasses() {
@@ -629,6 +635,7 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 						functionId,
 						context,
 						roots,
+						(localIndex ??= buildCoreLocalFactIndex(fn, roots)),
 					));
 				},
 			});
@@ -948,7 +955,7 @@ function stackObjectCandidate(
 	layout: CoreNamedAllocationLayout,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): CoreStackObjectCandidate | undefined {
 	if (
 		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
@@ -1119,7 +1126,7 @@ export const CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS: CoreAnalysisDefinition<Cor
 			const provenanceAnalysis = bundle.provenance;
 			const control = bundle.control;
 			const roots = bundle.roots;
-			const index = localSpecializationIndex(fn, roots);
+			const index = bundle.index;
 			const proofs = provenanceAnalysis.layouts.flatMap((layout) => {
 				if (layout.kind !== "named-slots") return [];
 				const candidate = stackObjectCandidate(fn, layout, control, roots, index);
@@ -1428,7 +1435,12 @@ function denseArrayCandidates(
 	return candidates;
 }
 
-interface CoreLocalSpecializationIndex {
+export interface CoreLocalFactIndex {
+	readonly statistics: {
+		readonly instructionVisits: number;
+		readonly operations: number;
+		readonly memoryOperations: number;
+	};
 	readonly location: ReadonlyMap<
 		CoreInstructionId,
 		{ readonly block: CoreBlockId; readonly index: number }
@@ -1441,6 +1453,8 @@ interface CoreLocalSpecializationIndex {
 	readonly handlerTargets: ReadonlySet<CoreBlockId>;
 	readonly valuesByRoot: ReadonlyMap<CoreValueId, ReadonlyArray<CoreValueId>>;
 	readonly opcodes: ReadonlyMap<string, ReadonlyArray<CoreInstructionId>>;
+	readonly operations: ReadonlyArray<CoreInstructionId>;
+	readonly memoryOperations: ReadonlyArray<CoreInstructionId>;
 }
 
 function decodeCoreString(program: CoreProgram, index: number): string | undefined {
@@ -1448,10 +1462,10 @@ function decodeCoreString(program: CoreProgram, index: number): string | undefin
 	return units === undefined ? undefined : String.fromCodePoint(...units);
 }
 
-function localSpecializationIndex(
+export function buildCoreLocalFactIndex(
 	fn: CoreFunctionStore,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-): CoreLocalSpecializationIndex {
+): CoreLocalFactIndex {
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const location = new Map<
 		CoreInstructionId,
@@ -1465,6 +1479,8 @@ function localSpecializationIndex(
 	const handlerTargets = new Set<CoreBlockId>();
 	const mutableValuesByRoot = new Map<CoreValueId, Array<CoreValueId>>();
 	const mutableOpcodes = new Map<string, Array<CoreInstructionId>>();
+	const operations: Array<CoreInstructionId> = [];
+	const memoryOperations: Array<CoreInstructionId> = [];
 	for (const value of fn.valueIds()) {
 		const resolved = root(value);
 		const values = mutableValuesByRoot.get(resolved);
@@ -1476,9 +1492,21 @@ function localSpecializationIndex(
 			location.set(instruction, { block, index });
 			if (fn.instructionKind(instruction) === "operation") {
 				const opcode = fn.instructionOpcodeName(instruction);
+				const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 				const instructions = mutableOpcodes.get(opcode) ?? [];
 				instructions.push(instruction);
 				mutableOpcodes.set(opcode, instructions);
+				operations.push(instruction);
+				if (
+					(descriptor.accesses?.length ?? 0) > 0 ||
+					descriptor.effects.reads.length > 0 ||
+					descriptor.effects.writes.length > 0 ||
+					descriptor.effects.callsUserCode ||
+					descriptor.effects.maySuspend ||
+					descriptor.allocation !== undefined
+				) {
+					memoryOperations.push(instruction);
+				}
 			}
 			const operandCount = instructionOperandCount(fn, instruction);
 			for (let position = 0; position < operandCount; position++) {
@@ -1516,12 +1544,26 @@ function localSpecializationIndex(
 	const opcodes = new Map<string, ReadonlyArray<CoreInstructionId>>();
 	for (const [opcode, instructions] of mutableOpcodes)
 		opcodes.set(opcode, Object.freeze(instructions));
-	return { location, uses, controlUses, handlerTargets, valuesByRoot, opcodes };
+	return Object.freeze({
+		statistics: Object.freeze({
+			instructionVisits: location.size,
+			operations: operations.length,
+			memoryOperations: memoryOperations.length,
+		}),
+		location,
+		uses,
+		controlUses,
+		handlerTargets,
+		valuesByRoot,
+		opcodes,
+		operations: Object.freeze(operations),
+		memoryOperations: Object.freeze(memoryOperations),
+	});
 }
 
 function specializationInstructionDominates(
 	control: CoreControlFlow,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 	producer: CoreInstructionId,
 	consumer: CoreInstructionId,
 ): boolean {
@@ -1545,7 +1587,7 @@ function specializationDefinition(
 }
 
 function specializationResultValues(
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	value: CoreValueId,
 ): ReadonlyArray<CoreValueId> {
@@ -1587,7 +1629,7 @@ function exactPropertyCallCandidate(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 	call: CoreInstructionId,
 	propertyName: string,
 ):
@@ -1646,7 +1688,7 @@ function exactStringSplitCallCandidate(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 	call: CoreInstructionId,
 ):
 	| {
@@ -1675,7 +1717,7 @@ function stringCharCodeAtCandidates(
 	control: CoreControlFlow,
 	loops: CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreStringCharCodeAtCandidate> {
 	const candidates: Array<CoreStringCharCodeAtCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -1793,7 +1835,7 @@ function functionCallChainCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreFunctionCallChainCandidate> {
 	const candidates: Array<CoreFunctionCallChainCandidate> = [];
 	for (const call of fn.instructionIds()) {
@@ -1840,7 +1882,7 @@ function stringSplitCursorCandidates(
 	control: CoreControlFlow,
 	loops: CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreStringSplitCursorCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -2102,7 +2144,7 @@ const COLLECTION_CALL_CHAIN_OPERATIONS: ReadonlySet<string> = new Set([
 function exactFreshCollectionReceiver(
 	fn: CoreFunctionStore,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 	property: CoreInstructionId,
 	call: CoreInstructionId,
 	operation: string,
@@ -2146,7 +2188,7 @@ function builtinCollectionCallCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreBuiltinCollectionCallCandidate> {
 	const candidates: Array<CoreBuiltinCollectionCallCandidate> = [];
 	for (const call of fn.instructionIds()) {
@@ -2200,7 +2242,7 @@ function freshArrayLengthCandidates(
 	provenanceAnalysis: CoreProvenance,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreFreshArrayLengthCandidate> {
 	const candidates: Array<CoreFreshArrayLengthCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -2276,7 +2318,7 @@ function indexedLengthLoopCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreIndexedLengthLoopCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreIndexedLengthLoopCandidate> = [];
@@ -2472,7 +2514,7 @@ function iteratorCursorCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreIteratorCursorCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -2534,7 +2576,7 @@ function iteratorCursorCandidates(
 function iteratorResultVirtualizationCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreIteratorResultVirtualizationCandidate> {
 	const steps = (index.opcodes.get("iteratorStep") ?? []).filter((instruction) =>
 		control.reachable.has(fn.instructionBlock(instruction)),
@@ -2571,7 +2613,7 @@ function iteratorEntryPairVirtualizationCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreIteratorEntryPairVirtualizationCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -2749,7 +2791,7 @@ function stringSplitProjectionCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreStringSplitProjectionCandidate> {
 	const candidates: Array<CoreStringSplitProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -2916,7 +2958,7 @@ function stringSliceNumberCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreStringSliceNumberCandidate> {
 	const candidates: Array<CoreStringSliceNumberCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -3032,7 +3074,7 @@ function regexpExecProjectionCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreRegExpExecProjectionCandidate> {
 	const candidates: Array<CoreRegExpExecProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -3399,7 +3441,7 @@ function regexpIteratorProjectionCandidates(
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
-	index: CoreLocalSpecializationIndex,
+	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreRegExpIteratorProjectionCandidate> {
 	const candidates: Array<CoreRegExpIteratorProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
@@ -3549,10 +3591,10 @@ function discoverCandidates(
 	control: CoreControlFlow,
 	loops: CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	index: CoreLocalFactIndex,
 ): CoreLocalSpecializationCandidates {
 	const fn = program.function(functionId);
 	const candidates = new Map<string, CoreLocalSpecializationCandidate>();
-	const index = localSpecializationIndex(fn, roots);
 	const addNumeric = (
 		root: CoreInstructionId,
 		instructions: ReadonlyArray<CoreInstructionId>,
@@ -3689,16 +3731,18 @@ export function discoverCoreLocalSpecializationCandidates(
 	const fn = program.function(functionId);
 	const control = buildCoreControlFlow(program, functionId, { exceptions: true });
 	const roots = coreCanonicalValueRoots(fn, control);
+	const index = buildCoreLocalFactIndex(fn, roots);
 	const valueKinds = analyzeCoreValueKinds(fn, control);
 	return discoverCandidates(
 		program,
 		functionId,
-		buildCoreProvenance(program, fn, control, { canonicalRoots: roots }),
+		buildCoreProvenance(program, fn, control, { canonicalRoots: roots, index }),
 		control,
 		analyzeCoreLoopInductions(fn, control, roots, (value) =>
 			valueKinds.exactScalar(value),
 		),
 		roots,
+		index,
 	);
 }
 
@@ -3726,6 +3770,7 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 				bundle.control,
 				get(CORE_LOOP_INDUCTION_ANALYSIS, request),
 				bundle.roots,
+				bundle.index,
 			);
 		},
 	};

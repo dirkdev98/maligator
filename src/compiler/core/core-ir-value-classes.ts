@@ -1,6 +1,7 @@
 import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
+import type { CoreLocalFactIndex } from "./core-ir-provenance.ts";
 import type {
 	CoreFunctionId,
 	CoreInstructionEffects,
@@ -114,21 +115,27 @@ export function analyzeCoreValueClasses(
 	functionId: CoreFunctionId,
 	context?: CoreCompilationContext,
 	canonicalRoots?: ReadonlyMap<CoreValueId, CoreValueId>,
+	index?: CoreLocalFactIndex,
 ): CoreValueClassAnalysis {
 	const fn = program.function(functionId);
 	const roots =
 		canonicalRoots ??
 		coreCanonicalValueRoots(fn, buildCoreControlFlow(program, functionId));
-	const brands = new Array<CoreExactHeapBrand | undefined>(fn.valueCapacity);
-	const unsafe = new Uint8Array(fn.valueCapacity);
+	const brands = new Map<CoreValueId, CoreExactHeapBrand>();
+	const unsafe = new Set<CoreValueId>();
+	const operations =
+		index?.operations ??
+		[...fn.instructionIds()].filter(
+			(instruction) => fn.instructionKind(instruction) === "operation",
+		);
 	let seeded = 0;
 	if (context?.facts.world.primordialPolicy === "locked") {
-		for (const instruction of fn.instructionIds()) {
-			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "construct"
-			)
-				continue;
+		const constructs =
+			index?.opcodes.get("construct") ??
+			operations.filter(
+				(instruction) => fn.instructionOpcodeName(instruction) === "construct",
+			);
+		for (const instruction of constructs) {
 			if (
 				fn.kernel.instructionOperandCount(instruction) === 0 ||
 				fn.kernel.instructionResultCount(instruction) === 0
@@ -148,13 +155,12 @@ export function analyzeCoreValueClasses(
 				coreNumericTypedArrayKind(fn.instructionAttributes(definition).intrinsic) ??
 				coreExactCollectionBrand(fn.instructionAttributes(definition).intrinsic);
 			if (brand !== undefined) {
-				brands[roots.get(output) ?? output] = brand;
+				brands.set(roots.get(output) ?? output, brand);
 				seeded++;
 			}
 		}
 	}
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
+	for (const instruction of operations) {
 		const attributes = fn.instructionAttributes(instruction);
 		const brand =
 			coreNumericTypedArrayKind(attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]) ??
@@ -164,61 +170,84 @@ export function analyzeCoreValueClasses(
 		const resultCount = fn.kernel.instructionResultCount(instruction);
 		for (let offset = 0; offset < resultCount; offset++) {
 			const output = fn.kernel.resultAt(resultStart + offset);
-			brands[roots.get(output) ?? output] = brand;
+			brands.set(roots.get(output) ?? output, brand);
 			seeded++;
 		}
 	}
 	let propagated = 0;
-	for (const value of fn.valueIds()) {
-		if (brands[value] !== undefined) continue;
-		const root = roots.get(value);
-		if (root === undefined || brands[root] === undefined) continue;
-		brands[value] = brands[root];
-		propagated++;
+	if (index === undefined) {
+		for (const value of fn.valueIds()) {
+			const root = roots.get(value);
+			if (root !== undefined && root !== value && brands.has(root)) propagated++;
+		}
+	} else {
+		for (const [root, values] of index.valuesByRoot) {
+			if (!brands.has(root)) continue;
+			for (const value of values) if (value !== root) propagated++;
+		}
 	}
-	for (const value of fn.valueIds()) {
-		const valueRoot = roots.get(value) ?? value;
-		const brand = brands[valueRoot];
-		if (brand === undefined) continue;
-		for (
-			let use = fn.kernel.valueFirstUse(value);
-			use >= 0;
-			use = fn.kernel.useNext(use)
-		) {
-			const instruction = fn.kernel.useInstruction(use);
-			if (fn.instructionKind(instruction) !== "operation") {
-				unsafe[valueRoot] = 1;
-				continue;
+	const inspectUse = (
+		valueRoot: CoreValueId,
+		brand: CoreExactHeapBrand,
+		instruction: CoreInstructionId,
+		operand: number,
+	): void => {
+		if (fn.instructionKind(instruction) !== "operation") {
+			unsafe.add(valueRoot);
+			return;
+		}
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "move" || opcode === "rootUse") return;
+		if (opcode === "callBuiltin" && operand === 0) {
+			const operation = fn.instructionAttributes(instruction).operation;
+			const expected = coreCollectionReceiverBrandForOperation(operation);
+			if (expected === brand) {
+				let retainedResult = false;
+				const resultStart = fn.kernel.instructionResultStart(instruction);
+				const resultCount = fn.kernel.instructionResultCount(instruction);
+				for (let index = 0; index < resultCount; index++) {
+					if (fn.valueUseCount(fn.kernel.resultAt(resultStart + index)) > 0) {
+						retainedResult = true;
+						break;
+					}
+				}
+				if (
+					(operation === "Map.prototype.set" || operation === "Set.prototype.add") &&
+					retainedResult
+				) {
+					unsafe.add(valueRoot);
+				}
+				return;
 			}
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode === "move" || opcode === "rootUse") continue;
-			if (opcode === "callBuiltin" && fn.kernel.useOperand(use) === 0) {
-				const operation = fn.instructionAttributes(instruction).operation;
-				const expected = coreCollectionReceiverBrandForOperation(operation);
-				if (expected === brand) {
-					let retainedResult = false;
-					const resultStart = fn.kernel.instructionResultStart(instruction);
-					const resultCount = fn.kernel.instructionResultCount(instruction);
-					for (let index = 0; index < resultCount; index++) {
-						if (fn.valueUseCount(fn.kernel.resultAt(resultStart + index)) > 0) {
-							retainedResult = true;
-							break;
-						}
-					}
-					if (
-						(operation === "Map.prototype.set" || operation === "Set.prototype.add") &&
-						retainedResult
-					) {
-						unsafe[valueRoot] = 1;
-					}
-					continue;
+		}
+		unsafe.add(valueRoot);
+	};
+	for (const [valueRoot, brand] of brands) {
+		if (index === undefined) {
+			for (const value of fn.valueIds()) {
+				if ((roots.get(value) ?? value) !== valueRoot) continue;
+				for (
+					let use = fn.kernel.valueFirstUse(value);
+					use >= 0;
+					use = fn.kernel.useNext(use)
+				) {
+					inspectUse(
+						valueRoot,
+						brand,
+						fn.kernel.useInstruction(use),
+						fn.kernel.useOperand(use),
+					);
 				}
 			}
-			unsafe[valueRoot] = 1;
+		} else {
+			if (index.controlUses.has(valueRoot)) unsafe.add(valueRoot);
+			for (const use of index.uses.get(valueRoot) ?? []) {
+				inspectUse(valueRoot, brand, use.instruction, use.position);
+			}
 		}
 	}
 	const exactHeapBrand = (value: CoreValueId): CoreExactHeapBrand | undefined =>
-		brands[roots.get(value) ?? value];
+		brands.get(roots.get(value) ?? value);
 	const result: CoreValueClassAnalysis = {
 		function: functionId,
 		statistics: Object.freeze({ seeded, propagated }),
@@ -228,8 +257,8 @@ export function analyzeCoreValueClasses(
 		},
 		containedCollection(value) {
 			const valueRoot = roots.get(value) ?? value;
-			return unsafe[valueRoot] === 0
-				? coreExactCollectionBrand(brands[valueRoot])
+			return !unsafe.has(valueRoot)
+				? coreExactCollectionBrand(brands.get(valueRoot))
 				: undefined;
 		},
 	};

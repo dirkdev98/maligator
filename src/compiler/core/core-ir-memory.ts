@@ -2,12 +2,14 @@ import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
 	CORE_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
+	coreCanonicalValueRoots,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
-	analyzeCoreProvenance,
+	buildCoreLocalFactIndex,
+	buildCoreProvenance,
 } from "./core-ir-provenance.ts";
 import type { CoreAccessKey, CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
 import { CORE_EFFECT_DOMAINS, CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
@@ -308,6 +310,7 @@ function memoryVersions(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	provenance: CoreProvenance,
+	memoryInstructions: Iterable<CoreInstructionId> = fn.instructionIds(),
 ): CoreMemoryVersions {
 	const resolution = resolutionFor(provenance);
 	const accessesByInstruction = new Map<
@@ -318,7 +321,8 @@ function memoryVersions(
 	const exactReads = new Map<CoreMemoryFamily, Set<CoreMemoryLocationId>>();
 	const exactLocations = new Map<CoreMemoryLocationId, CoreExactMemoryLocation>();
 	let accessCount = 0;
-	for (const instruction of fn.instructionIds()) {
+	const relevantInstructions = [...memoryInstructions];
+	for (const instruction of relevantInstructions) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const accesses = coreMemoryAccesses(fn, instruction, resolution);
 		accessCount += accesses.length;
@@ -465,75 +469,78 @@ function memoryVersions(
 			valueByVersion.set(version, value);
 		}
 	};
-	for (const block of cfg.reversePostorder) {
-		const events: Array<SparseMemoryEvent> = [];
-		const definedInBlock = new Set<number>();
-		for (const instruction of fn.instructionIds(block)) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const accesses = accessesByInstruction.get(instruction) ?? [];
-			const reads = new Set<number>();
-			for (const access of accesses) {
-				if (access.mode !== "read") continue;
-				const exact = slotForAccess(access);
-				if (exact !== undefined) reads.add(exact);
-				else
-					for (const domain of domainsForFamily(
-						coreMemoryLocationFamily(access.location),
-					))
-						reads.add(domainSlot.get(domain)!);
-			}
-			const definitions = new Map<number, number>();
-			initializationDefinitions(instruction, definitions);
-			const effects = coreInstructionEffects(fn, instruction);
-			const coveredWrites = new Set<CoreEffectDomain>();
-			for (const access of accesses) {
-				if (access.mode !== "write") continue;
-				const family = coreMemoryLocationFamily(access.location);
-				const exactAccess = coreMemoryLocationIsExact(access.location);
-				const exactSlot = slotForAccess(access);
-				if (exactSlot !== undefined) {
-					const version = writeIdentity(instruction, exactSlot);
-					definitions.set(exactSlot, version);
-					if (access.value !== undefined) valueByVersion.set(version, access.value);
-				}
-				for (const domain of domainsForFamily(family)) {
-					coveredWrites.add(domain);
-					if (!exactAccess) {
-						for (const slot of slotsKilledByDomain.get(domain)!)
-							definitions.set(slot, writeIdentity(instruction, slot));
-					} else {
-						const slot = domainSlot.get(domain)!;
-						definitions.set(slot, writeIdentity(instruction, slot));
-					}
-				}
-			}
-			const universal = effects.callsUserCode || effects.maySuspend;
-			for (const domain of CORE_EFFECT_DOMAINS) {
-				if (!effects.writes.includes(domain) && !universal) continue;
-				if (coveredWrites.has(domain) && !universal) continue;
-				for (const slot of slotsKilledByDomain.get(domain)!)
-					definitions.set(slot, writeIdentity(instruction, slot));
-			}
-			if (reads.size === 0 && definitions.size === 0) continue;
-			for (const slot of reads) {
-				readersBySlot[slot]!.push(instruction);
-				readBlocksBySlot[slot]!.add(block);
-				if (!definedInBlock.has(slot)) upwardExposedReadBlocksBySlot[slot]!.add(block);
-			}
-			for (const slot of definitions.keys()) {
-				definedInBlock.add(slot);
-				definitionBlocksBySlot[slot]!.add(block);
-			}
-			events.push(
-				Object.freeze({
-					instruction,
-					reads,
-					definitions,
-				}),
-			);
+	const mutableEventsByBlock = new Map<CoreBlockId, Array<SparseMemoryEvent>>();
+	const definedByBlock = new Map<CoreBlockId, Set<number>>();
+	for (const instruction of relevantInstructions) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const block = fn.instructionBlock(instruction);
+		if (!cfg.reachable.has(block)) continue;
+		const events = mutableEventsByBlock.get(block) ?? [];
+		const definedInBlock = definedByBlock.get(block) ?? new Set<number>();
+		const accesses = accessesByInstruction.get(instruction) ?? [];
+		const reads = new Set<number>();
+		for (const access of accesses) {
+			if (access.mode !== "read") continue;
+			const exact = slotForAccess(access);
+			if (exact !== undefined) reads.add(exact);
+			else
+				for (const domain of domainsForFamily(coreMemoryLocationFamily(access.location)))
+					reads.add(domainSlot.get(domain)!);
 		}
-		if (events.length > 0) eventsByBlock.set(block, Object.freeze(events));
+		const definitions = new Map<number, number>();
+		initializationDefinitions(instruction, definitions);
+		const effects = coreInstructionEffects(fn, instruction);
+		const coveredWrites = new Set<CoreEffectDomain>();
+		for (const access of accesses) {
+			if (access.mode !== "write") continue;
+			const family = coreMemoryLocationFamily(access.location);
+			const exactAccess = coreMemoryLocationIsExact(access.location);
+			const exactSlot = slotForAccess(access);
+			if (exactSlot !== undefined) {
+				const version = writeIdentity(instruction, exactSlot);
+				definitions.set(exactSlot, version);
+				if (access.value !== undefined) valueByVersion.set(version, access.value);
+			}
+			for (const domain of domainsForFamily(family)) {
+				coveredWrites.add(domain);
+				if (!exactAccess) {
+					for (const slot of slotsKilledByDomain.get(domain)!)
+						definitions.set(slot, writeIdentity(instruction, slot));
+				} else {
+					const slot = domainSlot.get(domain)!;
+					definitions.set(slot, writeIdentity(instruction, slot));
+				}
+			}
+		}
+		const universal = effects.callsUserCode || effects.maySuspend;
+		for (const domain of CORE_EFFECT_DOMAINS) {
+			if (!effects.writes.includes(domain) && !universal) continue;
+			if (coveredWrites.has(domain) && !universal) continue;
+			for (const slot of slotsKilledByDomain.get(domain)!)
+				definitions.set(slot, writeIdentity(instruction, slot));
+		}
+		if (reads.size === 0 && definitions.size === 0) continue;
+		for (const slot of reads) {
+			readersBySlot[slot]!.push(instruction);
+			readBlocksBySlot[slot]!.add(block);
+			if (!definedInBlock.has(slot)) upwardExposedReadBlocksBySlot[slot]!.add(block);
+		}
+		for (const slot of definitions.keys()) {
+			definedInBlock.add(slot);
+			definitionBlocksBySlot[slot]!.add(block);
+		}
+		events.push(
+			Object.freeze({
+				instruction,
+				reads,
+				definitions,
+			}),
+		);
+		mutableEventsByBlock.set(block, events);
+		definedByBlock.set(block, definedInBlock);
 	}
+	for (const [block, events] of mutableEventsByBlock)
+		eventsByBlock.set(block, Object.freeze(events));
 	const dominatorChildren = new Map<CoreBlockId, Array<CoreBlockId>>();
 	for (const block of cfg.reversePostorder) {
 		const parent = cfg.immediateDominators[block];
@@ -817,8 +824,14 @@ export function analyzeCoreMemoryVersions(
 	functionId: CoreFunctionId,
 ): CoreMemoryVersions {
 	const fn = program.function(functionId);
-	const provenance = analyzeCoreProvenance(program, functionId);
-	return memoryVersions(fn, buildCoreControlFlow(program, functionId), provenance);
+	const control = buildCoreControlFlow(program, functionId);
+	const roots = coreCanonicalValueRoots(fn, control);
+	const index = buildCoreLocalFactIndex(fn, roots);
+	const provenance = buildCoreProvenance(program, fn, control, {
+		canonicalRoots: roots,
+		index,
+	});
+	return memoryVersions(fn, control, provenance, index.memoryOperations);
 }
 
 export const coreMemoryVersions = analyzeCoreMemoryVersions;
@@ -832,10 +845,12 @@ export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMem
 		compute({ program, request, get }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
+			const bundle = get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
 			return memoryVersions(
 				program.function(request.function),
 				get(CORE_CONTROL_FLOW_ANALYSIS, request),
-				get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request).provenance,
+				bundle.provenance,
+				bundle.index.memoryOperations,
 			);
 		},
 	};

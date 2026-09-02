@@ -15,6 +15,7 @@ import {
 	CORE_OPCODES,
 	coreOpcodeRegistry,
 } from "../src/compiler/core/core-ir-opcodes.ts";
+import { buildCoreLocalFactIndex } from "../src/compiler/core/core-ir-provenance.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import type {
 	CoreFactClaim,
@@ -239,6 +240,34 @@ describe("Core IR", () => {
 			CORE_EFFECT_DOMAINS.length + exactReadCount,
 		);
 		expect(memory.statistics.stateEntries).toBe(exactReadCount);
+	});
+
+	it("indexes memory work independently of unrelated operations", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		for (let index = 0; index < 2_000; index++) {
+			builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: index },
+			});
+		}
+		const [returned] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: returned! });
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
+		const control = buildCoreControlFlow(program, functionId);
+		const roots = coreCanonicalValueRoots(fn, control);
+
+		const index = buildCoreLocalFactIndex(fn, roots);
+		const memory = analyzeCoreMemoryVersions(program, functionId);
+
+		expect(index.statistics).toMatchObject({
+			operations: 2_001,
+			memoryOperations: 1,
+		});
+		expect(memory.statistics).toMatchObject({ accesses: 1, stateEntries: 1 });
 	});
 
 	it("declares a fresh aggregate's layout and which results cannot be held weakly", () => {
