@@ -75,6 +75,10 @@ export interface CoreCompilerWorkCounters {
 	readonly functionScans: number;
 	readonly programFlowJournalEntries: number;
 	readonly programFlowDirtyFunctions: number;
+	readonly programFlowLocalScans: number;
+	readonly programFlowLocalInstructionVisits: number;
+	readonly programFlowTransferRecords: number;
+	readonly programFlowTransferReuses: number;
 	readonly programFlowTargetWakeups: number;
 	readonly programFlowSummaryWakeups: number;
 	readonly programFlowValueKindWakeups: number;
@@ -202,6 +206,10 @@ const COUNTER_KEYS = [
 	"functionScans",
 	"programFlowJournalEntries",
 	"programFlowDirtyFunctions",
+	"programFlowLocalScans",
+	"programFlowLocalInstructionVisits",
+	"programFlowTransferRecords",
+	"programFlowTransferReuses",
 	"programFlowTargetWakeups",
 	"programFlowSummaryWakeups",
 	"programFlowValueKindWakeups",

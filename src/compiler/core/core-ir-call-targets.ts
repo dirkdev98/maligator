@@ -21,7 +21,9 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import {
 	CORE_PROGRAM_FLOW_TARGET_CONSUMER,
 	CORE_PROGRAM_FLOW_TARGETS,
+	extractCoreProgramFlowLocalTransfers,
 } from "./core-program-flow.ts";
+import type { CoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
 
 export const CORE_CALLEE_TARGET_CAP = 4;
 
@@ -266,11 +268,11 @@ function directStringIndex(
 function collectKnownFunctionProperties(
 	fn: CoreFunctionStore,
 	functionCapacity: number,
+	localTransfers: CoreProgramFlowLocalTransfers,
 ): ReadonlyMap<string, CoreCalleeTargets> {
 	const properties = new Map<string, CoreCalleeTargets>();
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		if (fn.instructionOpcodeName(instruction) !== "defineProperty") continue;
+	for (let index = 0; index < localTransfers.propertyDefinitionCount; index++) {
+		const instruction = localTransfers.propertyDefinitionAt(index);
 		const receiver = instructionOperand(fn, instruction, 0);
 		const key = instructionOperand(fn, instruction, 1);
 		const value = instructionOperand(fn, instruction, 2);
@@ -323,11 +325,14 @@ interface CoreFunctionCellAccesses {
 	readonly writes: ReadonlySet<string>;
 }
 
-function collectFunctionCellAccesses(fn: CoreFunctionStore): CoreFunctionCellAccesses {
+function collectFunctionCellAccesses(
+	fn: CoreFunctionStore,
+	localTransfers: CoreProgramFlowLocalTransfers,
+): CoreFunctionCellAccesses {
 	const reads = new Set<string>();
 	const writes = new Set<string>();
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
+	for (let index = 0; index < localTransfers.cellAccessCount; index++) {
+		const instruction = localTransfers.cellAccessAt(index);
 		const key = rawInstructionCellKey(fn, instruction);
 		if (key === undefined) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
@@ -353,6 +358,7 @@ function analyzeFunctionTargets(
 	cells: ReadonlyMap<string, CoreCalleeTargets>,
 	trackedCells: ReadonlySet<string>,
 	knownFunctionProperties: ReadonlyMap<string, CoreCalleeTargets>,
+	localTransfers: CoreProgramFlowLocalTransfers,
 ): CoreLocalCallTargets {
 	const values = Array<CoreCalleeTargets>(fn.valueCapacity).fill(
 		CORE_CALLEE_TARGETS_BOTTOM,
@@ -475,7 +481,7 @@ function analyzeFunctionTargets(
 			);
 		}
 	}
-	const flow = analyzeCoreInterproceduralValueFlow(fn);
+	const flow = analyzeCoreInterproceduralValueFlow(fn, localTransfers);
 	const sites = flow.calls.map((call) => {
 		const targets = coreCalleeTargetsIsBottom(values[call.callee]!)
 			? CORE_CALLEE_TARGETS_OPEN
@@ -491,8 +497,8 @@ function analyzeFunctionTargets(
 	const cellWrites = new Map<string, CoreCalleeTargets>();
 	const propertyInputs = new Map<string, CoreCalleeTargets>();
 	const globalWrites = new Map<number, CoreCalleeTargets>();
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
+	for (let index = 0; index < localTransfers.operationCount; index++) {
+		const instruction = localTransfers.operationAt(index);
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (opcode === "loadPropertyStatic") {
 			const receiver = instructionOperand(fn, instruction, 0);
@@ -608,6 +614,9 @@ export function analyzeCoreCallGraph(
 		buildCoreControlFlow(program, functionId),
 	context?: CoreCompilationContext,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
+	localTransfers: (functionId: CoreFunctionId) => CoreProgramFlowLocalTransfers =
+		(functionId) =>
+			extractCoreProgramFlowLocalTransfers(program, program.function(functionId)),
 ): CoreCallGraphIndexState {
 	const functionIds = [...program.functionIds()];
 	const functionSet = new Set(functionIds);
@@ -626,7 +635,8 @@ export function analyzeCoreCallGraph(
 		changedFunctions.add(functionId);
 		accessFunctionsScanned++;
 		const oldAccess = cellAccesses.get(functionId);
-		const nextAccess = collectFunctionCellAccesses(fn);
+		const transfers = localTransfers(functionId);
+		const nextAccess = collectFunctionCellAccesses(fn, transfers);
 		cellAccesses.set(functionId, nextAccess);
 		for (const key of new Set([...(oldAccess?.reads ?? []), ...nextAccess.reads])) {
 			const readers = new Set(cellReaders.get(key) ?? []);
@@ -638,7 +648,11 @@ export function analyzeCoreCallGraph(
 
 		const oldWrites =
 			propertyWrites.get(functionId) ?? new Map<string, CoreCalleeTargets>();
-		const nextWrites = collectKnownFunctionProperties(fn, program.functionCapacity);
+		const nextWrites = collectKnownFunctionProperties(
+			fn,
+			program.functionCapacity,
+			transfers,
+		);
 		propertyWrites.set(functionId, nextWrites);
 		for (const key of new Set([...oldWrites.keys(), ...nextWrites.keys()])) {
 			propertyKeys.add(key);
@@ -806,6 +820,7 @@ export function analyzeCoreCallGraph(
 			cells,
 			trackedCells,
 			knownFunctionProperties,
+			localTransfers(functionId),
 		);
 		for (const [key, targets] of next.cellWrites) {
 			cellKeys.add(key);
@@ -995,6 +1010,7 @@ export const CORE_CALL_GRAPH_ANALYSIS: CoreAnalysisDefinition<CoreCallGraphIndex
 				}),
 			context,
 			dirtyFunctions,
+			(functionId) => programFlow.local(functionId),
 		);
 	},
 };

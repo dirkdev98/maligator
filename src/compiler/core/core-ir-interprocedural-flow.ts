@@ -5,6 +5,8 @@ import type {
 	CoreOpcodeCallTransfer,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
+import type { CoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 export interface CoreLocalCallSite {
@@ -42,13 +44,22 @@ export function coreCallReceiver(call: CoreLocalCallSite): CoreValueId | undefin
 
 export function analyzeCoreInterproceduralValueFlow(
 	fn: CoreFunctionStore,
+	localTransfers?: CoreProgramFlowLocalTransfers,
 ): CoreLocalInterproceduralFlow {
 	const calls: Array<CoreLocalCallSite> = [];
 	let positionalCalls = 0;
 	let aggregateCalls = 0;
 	let constructs = 0;
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
+	const candidateCount = localTransfers?.callCount ?? fn.instructionCapacity;
+	for (let index = 0; index < candidateCount; index++) {
+		const instruction =
+			localTransfers?.callAt(index) ?? coreInstructionId(index);
+		if (
+			localTransfers === undefined &&
+			(fn.kernel.instructionLive(instruction) === 0 ||
+				fn.kernel.instructionOpcode(instruction) < 0)
+		)
+			continue;
 		const transfer = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer;
 		if (transfer === undefined) continue;
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
@@ -110,9 +121,12 @@ export const CORE_LOCAL_INTERPROCEDURAL_FLOW_ANALYSIS: CoreAnalysisDefinition<Co
 		key: "local-interprocedural-flow",
 		scope: "function",
 		functionDependencies: ["body", "calls"],
-		compute({ program, request }) {
+		compute({ program, request, programFlow }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
-			return analyzeCoreInterproceduralValueFlow(program.function(request.function));
+			return analyzeCoreInterproceduralValueFlow(
+				program.function(request.function),
+				programFlow.local(request.function),
+			);
 		},
 	};

@@ -1,4 +1,5 @@
-import type { CoreFunctionId } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
+import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import {
 	CORE_PROGRAM_FLOW_BODY,
@@ -11,6 +12,7 @@ import {
 	CORE_PROGRAM_FLOW_SPECIALIZATION,
 } from "./core-store.ts";
 import type {
+	CoreFunctionStore,
 	CoreProgram,
 	CoreProgramFlowDomainMask,
 } from "./core-store.ts";
@@ -25,6 +27,16 @@ export const CORE_PROGRAM_FLOW_RETURN_PROVENANCE = 1 << 4;
 export const CORE_PROGRAM_FLOW_RETURN_KIND = 1 << 5;
 export const CORE_PROGRAM_FLOW_RETURN_REPRESENTATION = 1 << 6;
 export const CORE_PROGRAM_FLOW_REACHABILITY = 1 << 7;
+
+export const CORE_PROGRAM_FLOW_RUNTIME_IDENTITY = 1 << 0;
+export const CORE_PROGRAM_FLOW_INLINE_SOURCE = 1 << 1;
+
+const FUNCTION_INDEX_ATTRIBUTES = [
+	"functionIndex",
+	"directFunctionIndex",
+	"directCallTargetFunctionIndex",
+	"directCallbackFunctionIndex",
+] as const;
 
 export const CORE_PROGRAM_FLOW_TARGET_CONSUMER = 0;
 export const CORE_PROGRAM_FLOW_SUMMARY_CONSUMER = 1;
@@ -47,6 +59,206 @@ const ALL_PROGRAM_FLOW_DIMENSIONS =
 	CORE_PROGRAM_FLOW_RETURN_KIND |
 	CORE_PROGRAM_FLOW_RETURN_REPRESENTATION |
 	CORE_PROGRAM_FLOW_REACHABILITY;
+
+export class CoreProgramFlowLocalTransfers {
+	readonly instructionVisits: number;
+	readonly #operations: Uint32Array;
+	readonly #calls: Uint32Array;
+	readonly #cellAccesses: Uint32Array;
+	readonly #propertyDefinitions: Uint32Array;
+	readonly #structuralTargets: Uint32Array;
+	readonly #structuralReasons: Uint8Array;
+
+	constructor(
+		instructionVisits: number,
+		operations: ReadonlyArray<CoreInstructionId>,
+		calls: ReadonlyArray<CoreInstructionId>,
+		cellAccesses: ReadonlyArray<CoreInstructionId>,
+		propertyDefinitions: ReadonlyArray<CoreInstructionId>,
+		structuralTargets: ReadonlyArray<CoreFunctionId>,
+		structuralReasons: ReadonlyArray<number>,
+	) {
+		this.instructionVisits = instructionVisits;
+		this.#operations = Uint32Array.from(operations);
+		this.#calls = Uint32Array.from(calls);
+		this.#cellAccesses = Uint32Array.from(cellAccesses);
+		this.#propertyDefinitions = Uint32Array.from(propertyDefinitions);
+		this.#structuralTargets = Uint32Array.from(structuralTargets);
+		this.#structuralReasons = Uint8Array.from(structuralReasons);
+	}
+
+	get operationCount(): number {
+		return this.#operations.length;
+	}
+
+	operationAt(index: number): CoreInstructionId {
+		return this.#instructionAt(this.#operations, index, "operation");
+	}
+
+	get callCount(): number {
+		return this.#calls.length;
+	}
+
+	callAt(index: number): CoreInstructionId {
+		return this.#instructionAt(this.#calls, index, "call");
+	}
+
+	get cellAccessCount(): number {
+		return this.#cellAccesses.length;
+	}
+
+	cellAccessAt(index: number): CoreInstructionId {
+		return this.#instructionAt(this.#cellAccesses, index, "cell access");
+	}
+
+	get propertyDefinitionCount(): number {
+		return this.#propertyDefinitions.length;
+	}
+
+	propertyDefinitionAt(index: number): CoreInstructionId {
+		return this.#instructionAt(this.#propertyDefinitions, index, "property definition");
+	}
+
+	get structuralTargetCount(): number {
+		return this.#structuralTargets.length;
+	}
+
+	structuralTargetAt(index: number): CoreFunctionId {
+		const target = this.#structuralTargets[index];
+		if (target === undefined) throw new Error(`Unknown structural target ${index}`);
+		return target as CoreFunctionId;
+	}
+
+	structuralReasonMaskAt(index: number): number {
+		const reasons = this.#structuralReasons[index];
+		if (reasons === undefined) throw new Error(`Unknown structural target ${index}`);
+		return reasons;
+	}
+
+	get recordCount(): number {
+		return (
+			this.#operations.length +
+			this.#calls.length +
+			this.#cellAccesses.length +
+			this.#propertyDefinitions.length +
+			this.#structuralTargets.length
+		);
+	}
+
+	#instructionAt(
+		instructions: Uint32Array,
+		index: number,
+		kind: string,
+	): CoreInstructionId {
+		const instruction = instructions[index];
+		if (instruction === undefined) throw new Error(`Unknown ${kind} transfer ${index}`);
+		return coreInstructionId(instruction);
+	}
+}
+
+function addStructuralTarget(
+	targets: Map<CoreFunctionId, number>,
+	program: CoreProgram,
+	candidate: unknown,
+	reason: number,
+): void {
+	if (
+		typeof candidate !== "number" ||
+		!Number.isSafeInteger(candidate) ||
+		candidate < 0 ||
+		candidate >= program.functionCapacity
+	)
+		return;
+	const target = candidate as CoreFunctionId;
+	if (!program.hasFunction(target)) return;
+	targets.set(target, (targets.get(target) ?? 0) | reason);
+}
+
+function addSourceTargets(
+	targets: Map<CoreFunctionId, number>,
+	program: CoreProgram,
+	initial: number,
+): void {
+	const seen = new Set<number>();
+	let position = initial;
+	while (
+		position >= 0 &&
+		position < program.sourcePositions.length &&
+		!seen.has(position)
+	) {
+		seen.add(position);
+		const source = program.sourcePositions[position]!;
+		addStructuralTarget(
+			targets,
+			program,
+			source.inlinedFunctionIndex,
+			CORE_PROGRAM_FLOW_INLINE_SOURCE,
+		);
+		position = source.callerPosId ?? -1;
+	}
+}
+
+export function extractCoreProgramFlowLocalTransfers(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+): CoreProgramFlowLocalTransfers {
+	const operations: Array<CoreInstructionId> = [];
+	const calls: Array<CoreInstructionId> = [];
+	const cellAccesses: Array<CoreInstructionId> = [];
+	const propertyDefinitions: Array<CoreInstructionId> = [];
+	const structural = new Map<CoreFunctionId, number>();
+	let instructionVisits = 0;
+	for (let raw = 0; raw < fn.instructionCapacity; raw++) {
+		instructionVisits++;
+		const instruction = coreInstructionId(raw);
+		if (fn.kernel.instructionLive(instruction) === 0) continue;
+		const sourcePosition = fn.kernel.instructionSourcePosition(instruction);
+		if (sourcePosition >= 0) addSourceTargets(structural, program, sourcePosition);
+		if (fn.kernel.instructionOpcode(instruction) < 0) continue;
+		operations.push(instruction);
+		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+		if (descriptor.callTransfer !== undefined) calls.push(instruction);
+		const opcode = descriptor.opcode;
+		if (
+			opcode === "loadGlobal" ||
+			opcode === "storeGlobal" ||
+			opcode === "loadCaptured" ||
+			opcode === "storeCaptured"
+		) {
+			cellAccesses.push(instruction);
+		}
+		if (opcode === "defineProperty") propertyDefinitions.push(instruction);
+		const attributes = fn.instructionAttributes(instruction);
+		for (const key of FUNCTION_INDEX_ATTRIBUTES) {
+			addStructuralTarget(
+				structural,
+				program,
+				attributes[key],
+				CORE_PROGRAM_FLOW_RUNTIME_IDENTITY,
+			);
+		}
+		const guarded = attributes.guardedFunctionIndices;
+		if (!Array.isArray(guarded)) continue;
+		for (const target of guarded) {
+			addStructuralTarget(
+				structural,
+				program,
+				target,
+				CORE_PROGRAM_FLOW_RUNTIME_IDENTITY,
+			);
+		}
+	}
+	const structuralTargets = [...structural.keys()].sort((left, right) => left - right);
+	return new CoreProgramFlowLocalTransfers(
+		instructionVisits,
+		operations,
+		calls,
+		cellAccesses,
+		propertyDefinitions,
+		structuralTargets,
+		structuralTargets.map((target) => structural.get(target)!),
+	);
+}
 
 export function coreProgramFlowDimensionsForDomains(
 	domains: CoreProgramFlowDomainMask,
@@ -164,7 +376,11 @@ export class CoreProgramFlowEngine {
 	readonly #program: CoreProgram;
 	readonly #report: CoreOptimizationReportBuilder | undefined;
 	readonly #consumers: Array<CoreProgramFlowEpoch | undefined> = [];
+	readonly #localTransfers: Array<CoreProgramFlowLocalTransfers | undefined> = [];
 	#reportedRevision = 0;
+	#localRevision = 0;
+	#localDataVersion = 0;
+	#localSourcePositionsVersion = 0;
 
 	constructor(program: CoreProgram, report?: CoreOptimizationReportBuilder) {
 		this.#program = program;
@@ -195,5 +411,50 @@ export class CoreProgramFlowEngine {
 			this.#report?.increment("programFlowReachabilityWakeups", count);
 		}
 		return epoch;
+	}
+
+	local(functionId: CoreFunctionId): CoreProgramFlowLocalTransfers {
+		this.#invalidateLocalTransfers();
+		const current = this.#localTransfers[functionId];
+		if (current !== undefined) {
+			this.#report?.increment("programFlowTransferReuses");
+			return current;
+		}
+		const next = extractCoreProgramFlowLocalTransfers(
+			this.#program,
+			this.#program.function(functionId),
+		);
+		this.#localTransfers[functionId] = next;
+		this.#report?.increment("programFlowLocalScans");
+		this.#report?.increment(
+			"programFlowLocalInstructionVisits",
+			next.instructionVisits,
+		);
+		this.#report?.increment("programFlowTransferRecords", next.recordCount);
+		return next;
+	}
+
+	#invalidateLocalTransfers(): void {
+		const dataVersion = this.#program.programVersion("data");
+		const sourcePositionsVersion = this.#program.programVersion("sourcePositions");
+		if (
+			dataVersion !== this.#localDataVersion ||
+			sourcePositionsVersion !== this.#localSourcePositionsVersion
+		) {
+			this.#localTransfers.length = 0;
+			this.#localDataVersion = dataVersion;
+			this.#localSourcePositionsVersion = sourcePositionsVersion;
+		}
+		const revision = this.#program.programFlowRevision;
+		for (let cursor = this.#localRevision; cursor < revision; cursor++) {
+			if (
+				(this.#program.programFlowDomainMaskAt(cursor) &
+					(CORE_PROGRAM_FLOW_BODY | CORE_PROGRAM_FLOW_CALLS)) ===
+				0
+			)
+				continue;
+			this.#localTransfers[this.#program.programFlowFunctionAt(cursor)] = undefined;
+		}
+		this.#localRevision = revision;
 	}
 }

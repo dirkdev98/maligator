@@ -5,10 +5,14 @@ import { CORE_CALL_GRAPH_ANALYSIS } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import {
+	CORE_PROGRAM_FLOW_INLINE_SOURCE,
 	CORE_PROGRAM_FLOW_REACHABILITY,
 	CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER,
+	CORE_PROGRAM_FLOW_RUNTIME_IDENTITY,
+	extractCoreProgramFlowLocalTransfers,
 } from "./core-program-flow.ts";
-import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import type { CoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
+import type { CoreProgram } from "./core-store.ts";
 
 export type CoreFunctionReachabilityReason =
 	| "program-entry"
@@ -64,13 +68,6 @@ export interface CoreFunctionReachabilityState extends CoreFunctionReachability 
 	readonly targets: CoreCallGraphIndex;
 }
 
-const FUNCTION_INDEX_ATTRIBUTES = new Set([
-	"functionIndex",
-	"directFunctionIndex",
-	"directCallTargetFunctionIndex",
-	"directCallbackFunctionIndex",
-]);
-
 const FINITE_CALL_REASONS: ReadonlySet<CoreFunctionReachabilityReason> = new Set([
 	"finite-call",
 ]);
@@ -94,29 +91,6 @@ function validFunction(program: CoreProgram, value: unknown): value is CoreFunct
 	}
 }
 
-function sourceFunctionIndices(
-	program: CoreProgram,
-	initial: number | undefined,
-): ReadonlyArray<CoreFunctionId> {
-	const functions = new Set<CoreFunctionId>();
-	const seen = new Set<number>();
-	let position = initial;
-	while (
-		position !== undefined &&
-		position >= 0 &&
-		position < program.sourcePositions.length &&
-		!seen.has(position)
-	) {
-		seen.add(position);
-		const source = program.sourcePositions[position]!;
-		if (validFunction(program, source.inlinedFunctionIndex)) {
-			functions.add(source.inlinedFunctionIndex);
-		}
-		position = source.callerPosId;
-	}
-	return [...functions];
-}
-
 function addEdge(
 	edges: Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>,
 	target: CoreFunctionId,
@@ -128,27 +102,17 @@ function addEdge(
 }
 
 function structuralEdges(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
+	localTransfers: CoreProgramFlowLocalTransfers,
 ): CoreReachabilityEdges {
 	const edges = new Map<CoreFunctionId, Set<CoreFunctionReachabilityReason>>();
-	for (const instruction of fn.instructionIds()) {
-		for (const sourceFunction of sourceFunctionIndices(
-			program,
-			fn.instructionSourcePosition(instruction),
-		)) {
-			addEdge(edges, sourceFunction, "inline-source");
+	for (let index = 0; index < localTransfers.structuralTargetCount; index++) {
+		const target = localTransfers.structuralTargetAt(index);
+		const reasons = localTransfers.structuralReasonMaskAt(index);
+		if ((reasons & CORE_PROGRAM_FLOW_RUNTIME_IDENTITY) !== 0) {
+			addEdge(edges, target, "runtime-identity");
 		}
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const attributes = fn.instructionAttributes(instruction);
-		for (const key of FUNCTION_INDEX_ATTRIBUTES) {
-			const target = attributes[key];
-			if (validFunction(program, target)) addEdge(edges, target, "runtime-identity");
-		}
-		const guarded = attributes.guardedFunctionIndices;
-		if (!Array.isArray(guarded)) continue;
-		for (const target of guarded) {
-			if (validFunction(program, target)) addEdge(edges, target, "runtime-identity");
+		if ((reasons & CORE_PROGRAM_FLOW_INLINE_SOURCE) !== 0) {
+			addEdge(edges, target, "inline-source");
 		}
 	}
 	return edges;
@@ -246,6 +210,9 @@ export function analyzeCoreFunctionReachability(
 	context: CoreCompilationContext,
 	previous?: CoreFunctionReachabilityState,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
+	localTransfers: (functionId: CoreFunctionId) => CoreProgramFlowLocalTransfers =
+		(functionId) =>
+			extractCoreProgramFlowLocalTransfers(program, program.function(functionId)),
 ): CoreFunctionReachabilityState {
 	const all = [...program.functionIds()];
 	const allSet = new Set(all);
@@ -275,7 +242,7 @@ export function analyzeCoreFunctionReachability(
 			bodyVersions[functionId] !== bodyVersion ||
 			cfgVersions[functionId] !== cfgVersion
 		) {
-			const edges = structuralEdges(program, fn);
+			const edges = structuralEdges(localTransfers(functionId));
 			const priorEdges = structural.get(functionId);
 			if (sameEdges(priorEdges, edges)) {
 				if (priorEdges !== undefined) structural.set(functionId, priorEdges);
@@ -476,6 +443,7 @@ export const CORE_FUNCTION_REACHABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFun
 				context,
 				previous as CoreFunctionReachabilityState | undefined,
 				dirtyFunctions,
+				(functionId) => programFlow.local(functionId),
 			);
 		},
 	};

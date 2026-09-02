@@ -184,5 +184,15 @@ describe("symbolic Core call graph", () => {
 		expect(sources[1]).not.toMatch(/ReadonlyMap<CoreFunctionId, string>|functionVersionKey/u);
 		expect(sources[1]).toMatch(/programFlow\.refresh/);
 		expect(sources[1]).toMatch(/flow\.dirtyFunctionAt/);
+		for (const path of [
+			"src/compiler/core/core-ir-call-targets.ts",
+			"src/compiler/core/core-ir-interprocedural-flow.ts",
+			"src/compiler/core/core-ir-reachability.ts",
+		]) {
+			const source = readFileSync(path, "utf8");
+			expect(source).not.toMatch(/\.instructionIds\(/u);
+		}
+		expect(sources[0]).toMatch(/programFlow\.local/);
+		expect(sources[1]).toMatch(/programFlow\.local/);
 	});
 });
