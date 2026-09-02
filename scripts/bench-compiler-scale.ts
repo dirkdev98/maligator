@@ -100,6 +100,8 @@ interface CompilerScaleSample {
 		| "input"
 		| "output"
 		| "stages"
+		| "passes"
+		| "analyses"
 		| "counters"
 		| "program"
 		| "transforms"
@@ -676,6 +678,8 @@ async function compileSample(
 			input: report.input,
 			output: report.output,
 			stages: report.stages,
+			passes: report.passes,
+			analyses: report.analyses,
 			counters: report.counters,
 			program: report.program,
 			transforms: report.transforms,
