@@ -1,3 +1,5 @@
+import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
+import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
@@ -260,6 +262,157 @@ export function extractCoreProgramFlowLocalTransfers(
 	);
 }
 
+export interface CoreProgramFlowScc {
+	readonly id: string;
+	readonly functions: ReadonlyArray<CoreFunctionId>;
+	readonly hasAnyScriptAggregate: boolean;
+}
+
+export interface CoreProgramFlowTopology {
+	readonly graph: CoreCallGraph;
+	readonly sccs: ReadonlyArray<CoreProgramFlowScc>;
+	readonly owner: ReadonlyMap<CoreCallGraphNode, number>;
+	readonly nodesAnalyzed: number;
+	readonly edgeVisits: number;
+	readonly sccsReused: number;
+}
+
+export function buildCoreProgramFlowTopology(
+	graph: CoreCallGraph,
+	previous?: CoreProgramFlowTopology,
+): CoreProgramFlowTopology {
+	if (previous !== undefined && graph.changedNodes.size === 0) {
+		return Object.freeze({
+			graph,
+			sccs: previous.sccs,
+			owner: previous.owner,
+			nodesAnalyzed: 0,
+			edgeVisits: 0,
+			sccsReused: previous.sccs.length,
+		});
+	}
+	const all: Array<CoreCallGraphNode> = [
+		...graph.functions,
+		...(graph.hasAggregate() ? [CORE_ANY_SCRIPT_AGGREGATE] : []),
+	];
+	let edgeVisits = 0;
+	let fullRebuild =
+		previous === undefined ||
+		graph.hasAggregate() ||
+		previous.graph.hasAggregate() ||
+		graph.functions.length !== previous.graph.functions.length ||
+		graph.functions.some(
+			(functionId, index) => functionId !== previous.graph.functions[index],
+		);
+	const affected = new Set<CoreCallGraphNode>();
+	if (fullRebuild) {
+		for (const node of all) affected.add(node);
+	} else {
+		for (const node of graph.changedNodes) affected.add(node);
+		const queue = [...affected];
+		for (let cursor = 0; cursor < queue.length; cursor++) {
+			const node = queue[cursor]!;
+			if (node === CORE_ANY_SCRIPT_AGGREGATE) {
+				fullRebuild = true;
+				break;
+			}
+			const functionId = node;
+			const neighbors = [
+				...graph.exactCallers(functionId),
+				...previous!.graph.exactCallers(functionId),
+				...graph.exactOutgoing(functionId),
+				...previous!.graph.exactOutgoing(functionId),
+			];
+			edgeVisits += neighbors.length;
+			for (const neighbor of neighbors) {
+				if (affected.has(neighbor)) continue;
+				affected.add(neighbor);
+				queue.push(neighbor);
+			}
+		}
+		if (fullRebuild) {
+			affected.clear();
+			for (const node of all) affected.add(node);
+		}
+	}
+	if (previous !== undefined && affected.size === 0) {
+		return Object.freeze({
+			graph,
+			sccs: previous.sccs,
+			owner: previous.owner,
+			nodesAnalyzed: 0,
+			edgeVisits,
+			sccsReused: previous.sccs.length,
+		});
+	}
+
+	let nextIndex = 0;
+	const indices = new Map<CoreCallGraphNode, number>();
+	const lowlinks = new Map<CoreCallGraphNode, number>();
+	const stack: Array<CoreCallGraphNode> = [];
+	const onStack = new Set<CoreCallGraphNode>();
+	const components: Array<Array<CoreCallGraphNode>> = [];
+	const visit = (node: CoreCallGraphNode): void => {
+		indices.set(node, nextIndex);
+		lowlinks.set(node, nextIndex++);
+		stack.push(node);
+		onStack.add(node);
+		graph.visitSuccessors(node, (successor) => {
+			edgeVisits++;
+			if (!affected.has(successor)) return;
+			if (!indices.has(successor)) {
+				visit(successor);
+				lowlinks.set(node, Math.min(lowlinks.get(node)!, lowlinks.get(successor)!));
+			} else if (onStack.has(successor)) {
+				lowlinks.set(node, Math.min(lowlinks.get(node)!, indices.get(successor)!));
+			}
+		});
+		if (lowlinks.get(node) !== indices.get(node)) return;
+		const component: Array<CoreCallGraphNode> = [];
+		while (stack.length > 0) {
+			const member = stack.pop()!;
+			onStack.delete(member);
+			component.push(member);
+			if (member === node) break;
+		}
+		components.push(component.sort((left, right) => left - right));
+	};
+	for (const node of affected) {
+		if (!indices.has(node)) visit(node);
+	}
+	const preserved = fullRebuild
+		? []
+		: (previous?.sccs.filter(
+				(scc) =>
+					scc.functions.every((functionId) => !affected.has(functionId)) &&
+					!scc.hasAnyScriptAggregate,
+			) ?? []);
+	const rebuilt = components.map((nodes) => {
+		const functions = nodes.filter(
+			(node): node is CoreFunctionId => node !== CORE_ANY_SCRIPT_AGGREGATE,
+		);
+		return Object.freeze({
+			id: `scc:${nodes.map((node) => (node === CORE_ANY_SCRIPT_AGGREGATE ? "any" : node)).join(",")}`,
+			functions: Object.freeze(functions),
+			hasAnyScriptAggregate: nodes.includes(CORE_ANY_SCRIPT_AGGREGATE),
+		});
+	});
+	const sccs = Object.freeze([...preserved, ...rebuilt]);
+	const owner = new Map<CoreCallGraphNode, number>();
+	for (const [index, scc] of sccs.entries()) {
+		for (const functionId of scc.functions) owner.set(functionId, index);
+		if (scc.hasAnyScriptAggregate) owner.set(CORE_ANY_SCRIPT_AGGREGATE, index);
+	}
+	return Object.freeze({
+		graph,
+		sccs,
+		owner,
+		nodesAnalyzed: affected.size,
+		edgeVisits,
+		sccsReused: preserved.length,
+	});
+}
+
 export function coreProgramFlowDimensionsForDomains(
 	domains: CoreProgramFlowDomainMask,
 ): CoreProgramFlowDimensionMask {
@@ -377,6 +530,7 @@ export class CoreProgramFlowEngine {
 	readonly #report: CoreOptimizationReportBuilder | undefined;
 	readonly #consumers: Array<CoreProgramFlowEpoch | undefined> = [];
 	readonly #localTransfers: Array<CoreProgramFlowLocalTransfers | undefined> = [];
+	#topology: CoreProgramFlowTopology | undefined;
 	#reportedRevision = 0;
 	#localRevision = 0;
 	#localDataVersion = 0;
@@ -431,6 +585,15 @@ export class CoreProgramFlowEngine {
 			next.instructionVisits,
 		);
 		this.#report?.increment("programFlowTransferRecords", next.recordCount);
+		return next;
+	}
+
+	topology(graph: CoreCallGraph): CoreProgramFlowTopology {
+		if (this.#topology?.graph === graph) return this.#topology;
+		const next = buildCoreProgramFlowTopology(graph, this.#topology);
+		this.#topology = next;
+		this.#report?.increment("sccNodes", next.nodesAnalyzed);
+		this.#report?.increment("sccEdges", next.edgeVisits);
 		return next;
 	}
 

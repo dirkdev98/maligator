@@ -25,6 +25,8 @@ describe("incremental Core program summaries", () => {
 		expect(source).toMatch(/function summariesEqual\(/);
 		expect(source).toMatch(/programFlow\.refresh/);
 		expect(source).toMatch(/flow\.dirtyFunctionAt/);
+		expect(source).toMatch(/programFlow\.topology/);
+		expect(source).not.toMatch(/function callGraphSccs\(/);
 	});
 
 	it("does not publish or wake a caller when an edited leaf is semantically unchanged", () => {

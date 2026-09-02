@@ -43,6 +43,11 @@ import type { CoreFunctionId, CoreRepresentation, CoreValueId } from "./core-ir.
 import {
 	CORE_PROGRAM_FLOW_SUMMARIES,
 	CORE_PROGRAM_FLOW_SUMMARY_CONSUMER,
+	buildCoreProgramFlowTopology,
+} from "./core-program-flow.ts";
+import type {
+	CoreProgramFlowScc,
+	CoreProgramFlowTopology,
 } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
@@ -85,11 +90,7 @@ export interface CorePublishedFunctionSummary {
 	readonly summary: FunctionEffectSummary;
 }
 
-export interface CoreCallGraphScc {
-	readonly id: string;
-	readonly functions: ReadonlyArray<CoreFunctionId>;
-	readonly hasAnyScriptAggregate: boolean;
-}
+export type CoreCallGraphScc = CoreProgramFlowScc;
 
 export interface CoreProgramSummaryStatistics {
 	readonly functions: number;
@@ -123,7 +124,6 @@ interface CoreProgramSummaryState extends CoreProgramSummaries {
 	readonly sourceClosed: boolean;
 	readonly local: ReadonlyMap<CoreFunctionId, CoreLocalFunctionSummary>;
 	readonly published: ReadonlyMap<CoreFunctionId, CorePublishedFunctionSummary>;
-	readonly owner: ReadonlyMap<CoreCallGraphNode, number>;
 	readonly rootReasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>;
 	readonly anyScriptSummary: CoreAnyScriptCallSummary | undefined;
 }
@@ -438,146 +438,6 @@ function analyzeLocalSummary(
 		returnRepresentation: representation,
 		origins: Object.freeze(origins),
 	});
-}
-
-function callGraphSccs(
-	program: CoreProgram,
-	targets: CoreCallGraphIndex,
-	_previous?: CoreProgramSummaryState,
-): {
-	readonly sccs: ReadonlyArray<CoreCallGraphScc>;
-	readonly owner: ReadonlyMap<CoreCallGraphNode, number>;
-	readonly nodesAnalyzed: number;
-	readonly edgeVisits: number;
-	readonly sccsReused: number;
-} {
-	const previous = _previous;
-	const all: Array<CoreCallGraphNode> = [
-		...program.functionIds(),
-		...(targets.graph.hasAggregate() ? [CORE_ANY_SCRIPT_AGGREGATE] : []),
-	];
-	if (previous !== undefined && targets.graph.changedNodes.size === 0) {
-		return {
-			sccs: previous.sccs,
-			owner: previous.owner,
-			nodesAnalyzed: 0,
-			edgeVisits: 0,
-			sccsReused: previous.sccs.length,
-		};
-	}
-	let edgeVisits = 0;
-	const affected = new Set<CoreCallGraphNode>();
-	if (
-		previous !== undefined &&
-		!targets.graph.hasAggregate() &&
-		!previous.targets.graph.hasAggregate() &&
-		targets.graph.functions.length === previous.targets.graph.functions.length &&
-		targets.graph.functions.every(
-			(functionId, index) => functionId === previous.targets.graph.functions[index],
-		)
-	) {
-		for (const caller of targets.changedEdgeCallers) {
-			affected.add(caller);
-			for (const callee of targets.graph.exactOutgoing(caller)) affected.add(callee);
-			for (const callee of previous.targets.graph.exactOutgoing(caller)) {
-				affected.add(callee);
-			}
-		}
-		for (const functionId of program.functionIds()) {
-			if (!previous.owner.has(functionId)) affected.add(functionId);
-		}
-		const queue = [...affected];
-		for (let cursor = 0; cursor < queue.length; cursor++) {
-			const functionId = queue[cursor]! as CoreFunctionId;
-			const neighbors = [
-				...targets.graph.exactCallers(functionId),
-				...previous.targets.graph.exactCallers(functionId),
-				...targets.graph.exactOutgoing(functionId),
-				...previous.targets.graph.exactOutgoing(functionId),
-			];
-			edgeVisits += neighbors.length;
-			for (const neighbor of neighbors) {
-				if (affected.has(neighbor)) continue;
-				affected.add(neighbor);
-				queue.push(neighbor);
-			}
-		}
-	} else {
-		for (const node of all) affected.add(node);
-	}
-	if (previous !== undefined && affected.size === 0) {
-		return {
-			sccs: previous.sccs,
-			owner: previous.owner,
-			nodesAnalyzed: 0,
-			edgeVisits: 0,
-			sccsReused: previous.sccs.length,
-		};
-	}
-
-	let nextIndex = 0;
-	const indices = new Map<CoreCallGraphNode, number>();
-	const lowlinks = new Map<CoreCallGraphNode, number>();
-	const stack: Array<CoreCallGraphNode> = [];
-	const onStack = new Set<CoreCallGraphNode>();
-	const components: Array<Array<CoreCallGraphNode>> = [];
-	const visit = (node: CoreCallGraphNode): void => {
-		indices.set(node, nextIndex);
-		lowlinks.set(node, nextIndex++);
-		stack.push(node);
-		onStack.add(node);
-		targets.graph.visitSuccessors(node, (successor) => {
-			edgeVisits++;
-			if (!affected.has(successor)) return;
-			if (!indices.has(successor)) {
-				visit(successor);
-				lowlinks.set(node, Math.min(lowlinks.get(node)!, lowlinks.get(successor)!));
-			} else if (onStack.has(successor)) {
-				lowlinks.set(node, Math.min(lowlinks.get(node)!, indices.get(successor)!));
-			}
-		});
-		if (lowlinks.get(node) !== indices.get(node)) return;
-		const component: Array<CoreCallGraphNode> = [];
-		while (stack.length > 0) {
-			const member = stack.pop()!;
-			onStack.delete(member);
-			component.push(member);
-			if (member === node) break;
-		}
-		components.push(component.sort((left, right) => left - right));
-	};
-	for (const node of affected) {
-		if (!indices.has(node)) visit(node);
-	}
-	const preserved =
-		previous?.sccs.filter(
-			(scc) =>
-				scc.functions.every((functionId) => !affected.has(functionId)) &&
-				!scc.hasAnyScriptAggregate,
-		) ?? [];
-	const owner = new Map<CoreCallGraphNode, number>();
-	const rebuilt = components.map((nodes) => {
-		const functions = nodes.filter(
-			(node): node is CoreFunctionId => node !== CORE_ANY_SCRIPT_AGGREGATE,
-		);
-		return Object.freeze({
-			id: `scc:${nodes.map((node) => (node === CORE_ANY_SCRIPT_AGGREGATE ? "any" : node)).join(",")}`,
-			functions: Object.freeze(functions),
-			hasAnyScriptAggregate: nodes.includes(CORE_ANY_SCRIPT_AGGREGATE),
-		});
-	});
-	const sccs = [...preserved, ...rebuilt];
-	for (const [index, scc] of sccs.entries()) {
-		for (const functionId of scc.functions) owner.set(functionId, index);
-		if (scc.hasAnyScriptAggregate) owner.set(CORE_ANY_SCRIPT_AGGREGATE, index);
-	}
-	return {
-		sccs: Object.freeze(sccs),
-		owner,
-		nodesAnalyzed: affected.size,
-		edgeVisits,
-		sccsReused: preserved.length,
-	};
 }
 
 function rootReasons(
@@ -920,6 +780,7 @@ function analyzeProgramSummaries(
 	context: CoreCompilationContext,
 	targets: CoreCallGraphIndex,
 	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
+	topology: CoreProgramFlowTopology,
 	previous?: CoreProgramSummaryState,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 ): CoreProgramSummaryState {
@@ -949,7 +810,7 @@ function analyzeProgramSummaries(
 		nodesAnalyzed: sccNodesAnalyzed,
 		edgeVisits: sccEdgeVisits,
 		sccsReused,
-	} = callGraphSccs(program, targets, previous);
+	} = topology;
 	const reasons = rootReasons(program, targets, context);
 	const summaryIds = new Map(
 		[...local].map(([functionId, summary]) => [functionId, summary.summaryId]),
@@ -1197,7 +1058,6 @@ function analyzeProgramSummaries(
 		sccs,
 		local,
 		published,
-		owner,
 		rootReasons: reasons,
 		anyScriptSummary,
 		functionEffects,
@@ -1245,6 +1105,7 @@ export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgram
 						scope: "function",
 						function: functionId,
 					}),
+				programFlow.topology(targets.graph),
 				previous as CoreProgramSummaryState | undefined,
 				dirtyFunctions,
 			);
@@ -1262,7 +1123,11 @@ export function analyzeCoreProgramSummaries(
 		undefined,
 		context,
 	);
-	return analyzeProgramSummaries(program, context, targets, (functionId) =>
-		buildCoreControlFlow(program, functionId, { exceptions: true }),
+	return analyzeProgramSummaries(
+		program,
+		context,
+		targets,
+		(functionId) => buildCoreControlFlow(program, functionId, { exceptions: true }),
+		buildCoreProgramFlowTopology(targets.graph),
 	);
 }
