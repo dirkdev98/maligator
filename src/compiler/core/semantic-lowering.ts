@@ -10708,7 +10708,9 @@ function compileLiteralTemplate(
 	if (encoded.length < MIN_LITERAL_TEMPLATE_WORDS) return null;
 
 	const templateOffset = program.literalTemplateData.length;
-	for (const word of encoded) program.literalTemplateData.push(word);
+	for (let index = 0; index < encoded.length; index++) {
+		program.literalTemplateData.push(encoded[index]!);
+	}
 	const destination = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
 		type: "instantiateLiteralTemplate",

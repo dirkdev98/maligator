@@ -547,7 +547,9 @@ export function writeRuntimeImage(
 
 	// Packed static-data literal templates. Tags and operands are all u32 words.
 	w.u32(def.literalTemplateData.length);
-	for (const word of def.literalTemplateData) w.fixedU32(word);
+	for (let index = 0; index < def.literalTemplateData.length; index++) {
+		w.fixedU32(def.literalTemplateData[index]!);
+	}
 
 	w.i32Array(def.cjsModuleFunctionIndices);
 

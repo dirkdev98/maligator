@@ -7,6 +7,7 @@ import type {
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
 import {
+	copyLiteralTemplateData,
 	compactLiteralTemplateSegments,
 	remapLiteralTemplateConstants,
 } from "../shared/literal-template-data.ts";
@@ -2243,17 +2244,15 @@ export function compactRuntimeImageConstants(
 		functions,
 		stringConstants: stringPool.values.map((value) => [...value]),
 		bigintConstants: [...bigintPool.values],
-		literalTemplateData: [
-			...remapLiteralTemplateConstants(
-				templates.data,
-				[...new Set(templates.oldToNew.values())],
-				"RuntimeImage literal-template",
-				(index) =>
-					remapRuntimeConstantRequired(stringOldToNew, index, "literal-template string"),
-				(index) =>
-					remapRuntimeConstantRequired(bigintOldToNew, index, "literal-template bigint"),
-			),
-		],
+		literalTemplateData: remapLiteralTemplateConstants(
+			templates.data,
+			[...new Set(templates.oldToNew.values())],
+			"RuntimeImage literal-template",
+			(index) =>
+				remapRuntimeConstantRequired(stringOldToNew, index, "literal-template string"),
+			(index) =>
+				remapRuntimeConstantRequired(bigintOldToNew, index, "literal-template bigint"),
+		),
 		precompiledLiteralShapes: definition.precompiledLiteralShapes.map((shape) => ({
 			...shape,
 			keyStringIndices: shape.keyStringIndices.map((index) =>
@@ -2490,7 +2489,7 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		functions,
 		stringConstants: core.stringConstants.map((units) => [...units]),
 		bigintConstants: [...core.bigintConstants],
-		literalTemplateData: [...core.literalTemplateData],
+		literalTemplateData: copyLiteralTemplateData(core.literalTemplateData),
 		precompiledLiteralShapes: [...knownShapeLayout.precompiledLiteralShapes],
 		globalCount: core.globalCount,
 		cjsModuleFunctionIndices: context.data.cjsModuleFunctionIndices.map((coreFunction) =>

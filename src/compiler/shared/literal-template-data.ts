@@ -9,6 +9,12 @@ export interface LiteralTemplateSegment {
 	readonly bigintReferences: ReadonlyArray<LiteralTemplateReference>;
 }
 
+export function copyLiteralTemplateData(data: ReadonlyArray<number>): Array<number> {
+	const copy = new Array<number>(data.length);
+	for (let index = 0; index < data.length; index++) copy[index] = data[index]!;
+	return copy;
+}
+
 /** Scan one encoded literal-template root and return its exact pool references. */
 export function scanLiteralTemplateSegment(
 	data: ReadonlyArray<number>,
@@ -125,7 +131,7 @@ export function compactLiteralTemplateSegments(
 		}
 		oldToNew.set(offset, compacted.length);
 		canonicalOffsets.set(key, compacted.length);
-		compacted.push(...words);
+		for (let index = 0; index < words.length; index++) compacted.push(words[index]!);
 	}
 	return { data: compacted, oldToNew };
 }
@@ -136,8 +142,8 @@ export function remapLiteralTemplateConstants(
 	owner: string,
 	remapString: (index: number) => number,
 	remapBigint: (index: number) => number,
-): ReadonlyArray<number> {
-	const remapped = [...data];
+): Array<number> {
+	const remapped = copyLiteralTemplateData(data);
 	for (const offset of segmentOffsets) {
 		const segment = scanLiteralTemplateSegment(data, offset, owner);
 		for (const reference of segment.stringReferences) {
