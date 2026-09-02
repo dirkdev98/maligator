@@ -39,10 +39,12 @@ export type CoreTransformDeclineReason =
 	| "target-support";
 
 export interface CoreTransformCandidate {
-	readonly key: string;
 	readonly kind: CoreTransformKind;
 	readonly caller: CoreFunctionId;
 	readonly site: CoreInstructionId;
+	readonly revision: number;
+	readonly priorityClass: number;
+	readonly priorityScore: number;
 	readonly targets: ReadonlyArray<CoreFunctionId>;
 	readonly generatedCodeCost: number;
 	readonly compilerWorkCost: number;
@@ -132,7 +134,31 @@ function candidatePrecedes(
 	left: CoreTransformCandidate,
 	right: CoreTransformCandidate,
 ): boolean {
-	return left.key < right.key;
+	if (left.priorityClass !== right.priorityClass)
+		return left.priorityClass < right.priorityClass;
+	if (left.priorityScore !== right.priorityScore)
+		return left.priorityScore < right.priorityScore;
+	if (left.caller !== right.caller) return left.caller < right.caller;
+	if (left.site !== right.site) return left.site < right.site;
+	if (left.kind !== right.kind) return left.kind < right.kind;
+	const count = Math.min(left.targets.length, right.targets.length);
+	for (let index = 0; index < count; index++) {
+		if (left.targets[index] !== right.targets[index])
+			return left.targets[index]! < right.targets[index]!;
+	}
+	return left.targets.length < right.targets.length;
+}
+
+function sameCandidateIdentity(
+	left: CoreTransformCandidate,
+	right: CoreTransformCandidate,
+): boolean {
+	return (
+		left.kind === right.kind &&
+		left.revision === right.revision &&
+		left.targets.length === right.targets.length &&
+		left.targets.every((target, index) => target === right.targets[index])
+	);
 }
 
 function pushCandidate(
@@ -173,11 +199,14 @@ function popCandidate(
 
 export class CoreTransformCandidateService {
 	readonly #limits: CoreTransformBudgetLimits;
-	readonly #known = new Set<string>();
+	readonly #known = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, Array<CoreTransformCandidate>>
+	>();
 	readonly #queue: Array<CoreTransformCandidate> = [];
 	readonly #appliedByKind = transformKindCounts();
 	readonly #declinedByReason = declineReasonCounts();
-	readonly #siteExpansions = new Map<string, number>();
+	readonly #siteExpansions = new Map<CoreFunctionId, Map<CoreInstructionId, number>>();
 	readonly #caller = new Map<CoreFunctionId, CallerConsumption>();
 	#considered = 0;
 	#applied = 0;
@@ -190,8 +219,14 @@ export class CoreTransformCandidateService {
 	}
 
 	offer(candidate: CoreTransformCandidate): boolean {
-		if (this.#known.has(candidate.key)) return false;
-		this.#known.add(candidate.key);
+		const caller =
+			this.#known.get(candidate.caller) ??
+			new Map<CoreInstructionId, Array<CoreTransformCandidate>>();
+		const known = caller.get(candidate.site) ?? [];
+		if (known.some((prior) => sameCandidateIdentity(prior, candidate))) return false;
+		known.push(candidate);
+		caller.set(candidate.site, known);
+		this.#known.set(candidate.caller, caller);
 		pushCandidate(this.#queue, candidate);
 		this.#considered++;
 		return true;
@@ -209,9 +244,9 @@ export class CoreTransformCandidateService {
 			compilerWork: 0,
 		};
 		if (candidate.expansive) {
-			const siteKey = `${candidate.caller}:${candidate.site}`;
+			const siteExpansions = this.#siteExpansions.get(candidate.caller);
 			if (
-				(this.#siteExpansions.get(siteKey) ?? 0) >= this.#limits.perSiteExpansions ||
+				(siteExpansions?.get(candidate.site) ?? 0) >= this.#limits.perSiteExpansions ||
 				caller.expansions >= this.#limits.perCallerExpansions
 			)
 				return "expansion-limit";
@@ -240,8 +275,11 @@ export class CoreTransformCandidateService {
 		};
 		if (candidate.expansive) {
 			caller.expansions++;
-			const siteKey = `${candidate.caller}:${candidate.site}`;
-			this.#siteExpansions.set(siteKey, (this.#siteExpansions.get(siteKey) ?? 0) + 1);
+			const siteExpansions =
+				this.#siteExpansions.get(candidate.caller) ??
+				new Map<CoreInstructionId, number>();
+			siteExpansions.set(candidate.site, (siteExpansions.get(candidate.site) ?? 0) + 1);
+			this.#siteExpansions.set(candidate.caller, siteExpansions);
 		}
 		caller.generatedCode += candidate.generatedCodeCost;
 		caller.compilerWork += candidate.compilerWorkCost;

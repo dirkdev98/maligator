@@ -77,7 +77,7 @@ describe("bounded Core cross-call transforms", () => {
 		expect(source).not.toMatch(/passes\.runStage/);
 	});
 
-	it("deduplicates semantic keys and enforces site, caller, and compiler-work limits", () => {
+	it("deduplicates candidates and enforces site, caller, and compiler-work limits", () => {
 		const service = new CoreTransformCandidateService({
 			perSiteExpansions: 1,
 			perCallerExpansions: 1,
@@ -86,23 +86,29 @@ describe("bounded Core cross-call transforms", () => {
 			programGeneratedCode: 10,
 			programCompilerWork: 3,
 		});
-		const candidate = (key: string, site: number, work = 1): CoreTransformCandidate => ({
-			key,
+		const candidate = (
+			priorityScore: number,
+			site: number,
+			work = 1,
+		): CoreTransformCandidate => ({
 			kind: "inline",
 			caller: 0 as never,
 			site: site as never,
+			revision: 0,
+			priorityClass: 0,
+			priorityScore,
 			targets: [1 as never],
 			generatedCodeCost: 1,
 			compilerWorkCost: work,
 			expansive: true,
 		});
-		expect(service.offer(candidate("same", 1))).toBe(true);
-		expect(service.offer(candidate("same", 1))).toBe(false);
+		expect(service.offer(candidate(1, 1))).toBe(true);
+		expect(service.offer(candidate(1, 1))).toBe(false);
 		const first = service.next()!;
 		expect(service.admit(first)).toBeUndefined();
 		service.recordApplied(first);
-		expect(service.admit(candidate("same-site", 1))).toBe("expansion-limit");
-		expect(service.admit(candidate("same-caller", 2))).toBe("expansion-limit");
+		expect(service.admit(candidate(2, 1))).toBe("expansion-limit");
+		expect(service.admit(candidate(2, 2))).toBe("expansion-limit");
 
 		const compilerLimited = new CoreTransformCandidateService({
 			perSiteExpansions: 2,
@@ -112,17 +118,17 @@ describe("bounded Core cross-call transforms", () => {
 			programGeneratedCode: 10,
 			programCompilerWork: 1,
 		});
-		expect(compilerLimited.admit(candidate("work", 1, 2))).toBe("compiler-work-cost");
+		expect(compilerLimited.admit(candidate(1, 1, 2))).toBe("compiler-work-cost");
 
 		const ordered = new CoreTransformCandidateService();
-		for (const key of ["c", "a", "b"]) ordered.offer(candidate(key, 1));
-		expect(ordered.next()?.key).toBe("a");
-		ordered.offer(candidate("aa", 1));
-		expect([ordered.next()?.key, ordered.next()?.key, ordered.next()?.key]).toEqual([
-			"aa",
-			"b",
-			"c",
-		]);
+		for (const priority of [3, 1, 2]) ordered.offer(candidate(priority, priority));
+		expect(ordered.next()?.priorityScore).toBe(1);
+		ordered.offer(candidate(0, 4));
+		expect([
+			ordered.next()?.priorityScore,
+			ordered.next()?.priorityScore,
+			ordered.next()?.priorityScore,
+		]).toEqual([0, 2, 3]);
 	});
 
 	it("discovers inline candidates without mutating analysis metadata into Core", () => {

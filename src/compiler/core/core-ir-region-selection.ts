@@ -887,10 +887,12 @@ function pendingLocalCandidate(
 	return {
 		selection,
 		budget: {
-			key: `0:${String(1_000_000 - selection.cost.runtimeBenefit).padStart(7, "0")}:${candidate.key}`,
 			kind,
 			caller: candidate.function,
 			site: candidate.root,
+			revision: 0,
+			priorityClass: 0,
+			priorityScore: -selection.cost.runtimeBenefit,
 			targets: Object.freeze(
 				candidate.kind === "function-call-chain" && candidate.targetFunction !== undefined
 					? [candidate.targetFunction]
@@ -957,10 +959,12 @@ function guardedCallCandidates(
 			candidates.push({
 				selection,
 				budget: {
-					key: `1:${selection.id}`,
 					kind: "guarded-direct-call",
 					caller,
 					site: site.instruction,
+					revision: 0,
+					priorityClass: 1,
+					priorityScore: 0,
 					targets: targetFunctions,
 					generatedCodeCost: selection.cost.generatedCode,
 					compilerWorkCost: selection.cost.compilerWork,
@@ -1021,10 +1025,12 @@ function directEntryCandidates(
 			parameterRepresentations,
 			resultRepresentation,
 			budget: {
-				key: `2:direct-entry:${target}:${resultRepresentation}`,
 				kind: "direct-entry",
 				caller: target,
 				site: callSites[0]!.instruction,
+				revision: 0,
+				priorityClass: 2,
+				priorityScore: 0,
 				targets: Object.freeze([target]),
 				generatedCodeCost: generatedCode,
 				compilerWorkCost: compilerWork,
@@ -1135,11 +1141,11 @@ export function buildCoreOptimizationPlan(
 	const service = new CoreTransformCandidateService(
 		options.budgets ?? DEFAULT_CORE_SPECIALIZATION_BUDGETS,
 	);
-	const byBudgetKey = new Map<string, PendingCandidate>();
+	const byBudget = new WeakMap<CoreTransformCandidate, PendingCandidate>();
 	const discoveredByKind: Record<string, number> = {};
 	for (const candidate of pending) {
 		increment(discoveredByKind, candidate.budget.kind);
-		if (service.offer(candidate.budget)) byBudgetKey.set(candidate.budget.key, candidate);
+		if (service.offer(candidate.budget)) byBudget.set(candidate.budget, candidate);
 	}
 	const selectedByKind: Record<string, number> = {};
 	const declinedByPlanReason: Record<string, number> = {};
@@ -1147,7 +1153,7 @@ export function buildCoreOptimizationPlan(
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
 	for (let budget = service.next(); budget !== undefined; budget = service.next()) {
-		const candidate = byBudgetKey.get(budget.key)!;
+		const candidate = byBudget.get(budget)!;
 		let reason: CoreTransformDeclineReason | undefined = service.admit(budget);
 		if (
 			reason === undefined &&

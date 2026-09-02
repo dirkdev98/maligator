@@ -323,10 +323,12 @@ function offerFunctionCandidates(
 		const open = coreCalleeTargetsAreOpen(site.targets);
 		service.offer(
 			Object.freeze({
-				key: `${open ? "1-guarded-inline" : "2-inline"}:${site.id}:${target}:${summaries.version(target)}`,
 				kind: open ? "guarded-inline" : "inline",
 				caller: functionId,
 				site: site.instruction,
+				revision: summaries.version(target),
+				priorityClass: open ? 1 : 2,
+				priorityScore: 0,
 				targets: Object.freeze([target]),
 				generatedCodeCost: (linear?.instructions.length ?? 0) + (open ? 1 : 0),
 				compilerWorkCost:
