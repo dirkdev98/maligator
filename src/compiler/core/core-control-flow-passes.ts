@@ -12,12 +12,12 @@ import type {
 	CoreNumericRange,
 } from "./core-ir-loops.ts";
 import {
+	CoreMemoryLocationTable,
 	coreMemoryAccesses,
 	coreMemoryLocationFamily,
 	coreMemoryLocationIsExact,
-	coreMemoryPartition,
 } from "./core-ir-memory.ts";
-import type { CoreMemoryPartition } from "./core-ir-memory.ts";
+import type { CoreMemoryLocationId } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { CORE_LOCAL_PROVENANCE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreProvenance } from "./core-ir-provenance.ts";
@@ -367,7 +367,8 @@ const canonicalizeNaturalLoops: CorePass = {
 interface CoreLoopWriteSummary {
 	readonly opaque: ReadonlySet<CoreMemoryFamily>;
 	readonly inexact: ReadonlySet<CoreMemoryFamily>;
-	readonly partitions: ReadonlyMap<CoreMemoryFamily, ReadonlySet<CoreMemoryPartition>>;
+	readonly locations: CoreMemoryLocationTable;
+	readonly partitions: ReadonlyMap<CoreMemoryFamily, ReadonlySet<CoreMemoryLocationId>>;
 }
 
 function summarizeLoopWrites(
@@ -376,7 +377,8 @@ function summarizeLoopWrites(
 ): CoreLoopWriteSummary {
 	const opaque = new Set<CoreMemoryFamily>();
 	const inexact = new Set<CoreMemoryFamily>();
-	const partitions = new Map<CoreMemoryFamily, Set<CoreMemoryPartition>>();
+	const locations = new CoreMemoryLocationTable();
+	const partitions = new Map<CoreMemoryFamily, Set<CoreMemoryLocationId>>();
 	for (const block of loopBlocks) {
 		const terminator = fn.blockTerminator(block);
 		for (
@@ -407,13 +409,13 @@ function summarizeLoopWrites(
 						continue;
 					}
 					const familyPartitions = partitions.get(family) ?? new Set();
-					familyPartitions.add(coreMemoryPartition(write.location));
+					familyPartitions.add(locations.id(write.location));
 					partitions.set(family, familyPartitions);
 				}
 			}
 		}
 	}
-	return { opaque, inexact, partitions };
+	return { opaque, inexact, locations, partitions };
 }
 
 function loopWriteMayAliasRead(
@@ -431,7 +433,7 @@ function loopWriteMayAliasRead(
 		if (!coreMemoryLocationIsExact(read.location)) return true;
 		const family = coreMemoryLocationFamily(read.location);
 		if (writes.opaque.has(family) || writes.inexact.has(family)) return true;
-		if (writes.partitions.get(family)?.has(coreMemoryPartition(read.location))) {
+		if (writes.partitions.get(family)?.has(writes.locations.id(read.location))) {
 			return true;
 		}
 	}

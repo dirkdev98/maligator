@@ -5,11 +5,11 @@ import {
 	coreCanonicalValueRoots,
 } from "../src/compiler/core/core-ir-control-flow.ts";
 import {
+	CoreMemoryLocationTable,
 	analyzeCoreMemoryVersions,
 	coreMemoryAccesses,
 	coreMemoryLocationFamily,
 	coreMemoryLocationIsExact,
-	coreMemoryPartition,
 } from "../src/compiler/core/core-ir-memory.ts";
 import {
 	CORE_OPCODES,
@@ -208,11 +208,12 @@ describe("Core IR", () => {
 			base: self,
 			key: { kind: "string-constant", index: 0 },
 		});
-		expect(coreMemoryPartition({ kind: "global-slot", slot: 4 })).not.toBe(
-			coreMemoryPartition({ kind: "global-slot", slot: 5 }),
+		const locations = new CoreMemoryLocationTable();
+		expect(locations.id({ kind: "global-slot", slot: 4 })).not.toBe(
+			locations.id({ kind: "global-slot", slot: 5 }),
 		);
-		expect(coreMemoryPartition({ kind: "local-slot", slot: 4 })).not.toBe(
-			coreMemoryPartition({ kind: "global-slot", slot: 4 }),
+		expect(locations.id({ kind: "local-slot", slot: 4 })).not.toBe(
+			locations.id({ kind: "global-slot", slot: 4 }),
 		);
 	});
 

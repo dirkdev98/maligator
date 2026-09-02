@@ -8,7 +8,6 @@ import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
 	coreMemoryAccesses,
 	coreMemoryLocationIsExact,
-	coreMemoryPartition,
 } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
@@ -1544,10 +1543,7 @@ const scalarReplaceContainedAggregates: CorePass = {
 			})) {
 				if (access.mode !== "read" || !coreMemoryLocationIsExact(access.location))
 					continue;
-				const value = memory.valueForRead(
-					instruction,
-					coreMemoryPartition(access.location),
-				);
+				const value = memory.valueForRead(instruction, access.location);
 				if (value === undefined || value === output) continue;
 				const sourceRepresentation = fn.valueRepresentation(value);
 				const destinationRepresentation = fn.valueRepresentation(output);

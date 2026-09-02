@@ -45,12 +45,8 @@ export type CoreExactMemoryLocation = Exclude<
 	{ readonly kind: "family" }
 >;
 
-export type CoreMemoryPartition = string & {
-	readonly __coreMemoryPartition: unique symbol;
-};
-
-export type CoreMemoryVersion = number & {
-	readonly __coreMemoryVersion: unique symbol;
+export type CoreMemoryLocationId = number & {
+	readonly __coreMemoryLocationId: unique symbol;
 };
 
 export function coreMemoryLocationFamily(location: CoreMemoryLocation): CoreMemoryFamily {
@@ -63,27 +59,63 @@ export function coreMemoryLocationIsExact(
 	return location.kind !== "family";
 }
 
-export function coreMemoryPartition(
-	location: CoreExactMemoryLocation,
-): CoreMemoryPartition {
-	switch (location.kind) {
-		case "global-slot":
-			return `slot\0global-slot\0${location.slot}` as CoreMemoryPartition;
-		case "local-slot":
-			return `slot\0local-slot\0${location.slot}` as CoreMemoryPartition;
-		case "captured-slot":
-			return `slot\0captured-slot\0${location.owner}\0${location.index}` as CoreMemoryPartition;
-		case "activation-this":
-			return "slot\0activation-this" as CoreMemoryPartition;
-		case "object-slot":
-			return `slot\0object-slot\0${location.allocation}\0${location.key}` as CoreMemoryPartition;
-		case "element":
-			return `slot\0element\0${location.allocation}\0${location.index}` as CoreMemoryPartition;
-	}
-}
+export class CoreMemoryLocationTable {
+	#next: number;
+	#activationThis: CoreMemoryLocationId | undefined;
+	readonly #globalSlots = new Map<number, CoreMemoryLocationId>();
+	readonly #localSlots = new Map<number, CoreMemoryLocationId>();
+	readonly #capturedSlots = new Map<number, Map<number, CoreMemoryLocationId>>();
+	readonly #objectSlots = new Map<number, Map<number, CoreMemoryLocationId>>();
+	readonly #elements = new Map<number, Map<number, CoreMemoryLocationId>>();
 
-export function coreMemoryDomainPartition(domain: CoreEffectDomain): CoreMemoryPartition {
-	return `domain\0${domain}` as CoreMemoryPartition;
+	constructor(firstId = 0) {
+		this.#next = firstId;
+	}
+
+	get size(): number {
+		return this.#next;
+	}
+
+	#allocate(): CoreMemoryLocationId {
+		const allocated = this.#next as CoreMemoryLocationId;
+		this.#next++;
+		return allocated;
+	}
+
+	#single(entries: Map<number, CoreMemoryLocationId>, key: number): CoreMemoryLocationId {
+		const existing = entries.get(key);
+		if (existing !== undefined) return existing;
+		const created = this.#allocate();
+		entries.set(key, created);
+		return created;
+	}
+
+	#pair(
+		entries: Map<number, Map<number, CoreMemoryLocationId>>,
+		first: number,
+		second: number,
+	): CoreMemoryLocationId {
+		const nested = entries.get(first) ?? new Map<number, CoreMemoryLocationId>();
+		entries.set(first, nested);
+		return this.#single(nested, second);
+	}
+
+	id(location: CoreExactMemoryLocation): CoreMemoryLocationId {
+		switch (location.kind) {
+			case "global-slot":
+				return this.#single(this.#globalSlots, location.slot);
+			case "local-slot":
+				return this.#single(this.#localSlots, location.slot);
+			case "captured-slot":
+				return this.#pair(this.#capturedSlots, location.owner, location.index);
+			case "activation-this":
+				return (this.#activationThis ??= this.#allocate());
+			case "object-slot":
+				return this.#pair(this.#objectSlots, location.allocation, location.key);
+			case "element":
+				return this.#pair(this.#elements, location.allocation, location.index);
+		}
+	}
 }
 
 export interface CoreMemoryResolution {
@@ -247,27 +279,13 @@ export interface CoreMemoryVersions {
 		readonly blockUpdates: number;
 	};
 	readKey(instruction: CoreInstructionId): string | undefined;
-	readVersion(
-		instruction: CoreInstructionId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
 	valueForRead(
 		instruction: CoreInstructionId,
-		partition: CoreMemoryPartition,
+		location: CoreExactMemoryLocation,
 	): CoreValueId | undefined;
-	initializationVersion(
-		instruction: CoreInstructionId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
-	writeVersion(
-		instruction: CoreInstructionId,
-		partition: CoreMemoryPartition,
-	): CoreMemoryVersion | undefined;
-	readers(partition: CoreMemoryPartition): ReadonlyArray<CoreInstructionId>;
 }
 
 interface PartitionInfo {
-	readonly partition: CoreMemoryPartition;
 	readonly family?: CoreMemoryFamily;
 	readonly protectedLocalHeap: boolean;
 }
@@ -295,8 +313,9 @@ function memoryVersions(
 	const accessesByInstruction = new Array<ReadonlyArray<CoreMemoryAccess> | undefined>(
 		fn.instructionCapacity,
 	);
-	const exactReads = new Map<CoreMemoryFamily, Set<CoreMemoryPartition>>();
-	const exactLocations = new Map<CoreMemoryPartition, CoreExactMemoryLocation>();
+	const locationTable = new CoreMemoryLocationTable(CORE_EFFECT_DOMAINS.length);
+	const exactReads = new Map<CoreMemoryFamily, Set<CoreMemoryLocationId>>();
+	const exactLocations = new Map<CoreMemoryLocationId, CoreExactMemoryLocation>();
 	let accessCount = 0;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
@@ -305,41 +324,33 @@ function memoryVersions(
 		accessesByInstruction[instruction] = accesses;
 		for (const access of accesses) {
 			if (access.mode !== "read" || !coreMemoryLocationIsExact(access.location)) continue;
-			const partition = coreMemoryPartition(access.location);
+			const locationId = locationTable.id(access.location);
 			const family = coreMemoryLocationFamily(access.location);
-			const partitions = exactReads.get(family) ?? new Set<CoreMemoryPartition>();
-			partitions.add(partition);
-			exactReads.set(family, partitions);
-			exactLocations.set(partition, access.location);
+			const locations = exactReads.get(family) ?? new Set<CoreMemoryLocationId>();
+			locations.add(locationId);
+			exactReads.set(family, locations);
+			exactLocations.set(locationId, access.location);
 		}
 	}
-	const acceptedExact = new Set<CoreMemoryPartition>();
-	for (const partitions of exactReads.values()) {
-		if (partitions.size <= MAX_EXACT_PARTITIONS_PER_FAMILY) {
-			for (const partition of partitions) acceptedExact.add(partition);
+	const acceptedExact = new Set<CoreMemoryLocationId>();
+	for (const locations of exactReads.values()) {
+		if (locations.size <= MAX_EXACT_PARTITIONS_PER_FAMILY) {
+			for (const location of locations) acceptedExact.add(location);
 		}
 	}
-	const partitions: Array<PartitionInfo> = CORE_EFFECT_DOMAINS.map((domain) => ({
-		partition: coreMemoryDomainPartition(domain),
+	const partitions: Array<PartitionInfo> = CORE_EFFECT_DOMAINS.map(() => ({
 		protectedLocalHeap: false,
 	}));
-	for (const partition of acceptedExact) {
-		const location = exactLocations.get(partition)!;
+	const slotByLocation = new Map<CoreMemoryLocationId, number>();
+	for (const locationId of acceptedExact) {
+		const location = exactLocations.get(locationId)!;
+		slotByLocation.set(locationId, partitions.length);
 		partitions.push({
-			partition,
 			family: coreMemoryLocationFamily(location),
 			protectedLocalHeap: location.kind === "object-slot" || location.kind === "element",
 		});
 	}
-	const slotByPartition = new Map(
-		partitions.map(({ partition }, slot) => [partition, slot]),
-	);
-	const domainSlot = new Map(
-		CORE_EFFECT_DOMAINS.map((domain) => [
-			domain,
-			slotByPartition.get(coreMemoryDomainPartition(domain))!,
-		]),
-	);
+	const domainSlot = new Map(CORE_EFFECT_DOMAINS.map((domain, slot) => [domain, slot]));
 	const slotCount = partitions.length;
 	const entryBase = 1;
 	const phiBase = entryBase + fn.blockCapacity * slotCount;
@@ -359,12 +370,6 @@ function memoryVersions(
 	const readStateSlots: Array<number> = [];
 	const readStateVersions: Array<number> = [];
 	const pendingReadVersions = new Array<Map<number, number> | undefined>(
-		fn.instructionCapacity,
-	);
-	const writeVersions = new Array<Map<number, number> | undefined>(
-		fn.instructionCapacity,
-	);
-	const initializationVersions = new Array<Map<number, number> | undefined>(
 		fn.instructionCapacity,
 	);
 	const valueByVersion = new Map<number, CoreValueId>();
@@ -396,7 +401,7 @@ function memoryVersions(
 	}
 	const slotForAccess = (access: CoreMemoryAccess): number | undefined => {
 		if (!coreMemoryLocationIsExact(access.location)) return undefined;
-		return slotByPartition.get(coreMemoryPartition(access.location));
+		return slotByLocation.get(locationTable.id(access.location));
 	};
 	interface SparseMemoryEvent {
 		readonly instruction: CoreInstructionId;
@@ -424,23 +429,19 @@ function memoryVersions(
 	): void => {
 		const layout = layoutByInstruction[instruction];
 		if (layout?.kind !== "named-slots") return;
-		let versions: Map<number, number> | undefined;
 		for (const [index, key] of layout.keys.entries()) {
-			const partition = coreMemoryPartition({
+			const location = locationTable.id({
 				kind: "object-slot",
 				allocation: instruction,
 				key,
 			});
-			const slot = slotByPartition.get(partition);
+			const slot = slotByLocation.get(location);
 			const value = layout.initialValues[index];
 			if (slot === undefined || value === undefined) continue;
 			const version = writeIdentity(instruction, slot);
 			definitions.set(slot, version);
 			valueByVersion.set(version, value);
-			versions ??= new Map();
-			versions.set(slot, version);
 		}
-		if (versions !== undefined) initializationVersions[instruction] = versions;
 	};
 	for (const block of cfg.reversePostorder) {
 		const events: Array<SparseMemoryEvent> = [];
@@ -463,7 +464,6 @@ function memoryVersions(
 			initializationDefinitions(instruction, definitions);
 			const effects = coreInstructionEffects(fn, instruction);
 			const coveredWrites = new Set<CoreEffectDomain>();
-			let versions: Map<number, number> | undefined;
 			for (const access of accesses) {
 				if (access.mode !== "write") continue;
 				const family = coreMemoryLocationFamily(access.location);
@@ -473,8 +473,6 @@ function memoryVersions(
 					const version = writeIdentity(instruction, exactSlot);
 					definitions.set(exactSlot, version);
 					if (access.value !== undefined) valueByVersion.set(version, access.value);
-					versions ??= new Map();
-					versions.set(exactSlot, version);
 				}
 				for (const domain of domainsForFamily(family)) {
 					coveredWrites.add(domain);
@@ -487,7 +485,6 @@ function memoryVersions(
 					}
 				}
 			}
-			if (versions !== undefined) writeVersions[instruction] = versions;
 			const universal = effects.callsUserCode || effects.maySuspend;
 			for (const domain of CORE_EFFECT_DOMAINS) {
 				if (!effects.writes.includes(domain) && !universal) continue;
@@ -744,14 +741,8 @@ function memoryVersions(
 			readStateVersions.push(resolveVersion(version));
 		}
 	}
-	const partitionSlot = (partition: CoreMemoryPartition): number | undefined =>
-		slotByPartition.get(partition);
-	const mappedEntries = (rows: ReadonlyArray<Map<number, number> | undefined>): number =>
-		rows.reduce((total, row) => total + (row?.size ?? 0), 0);
 	const stateEntries =
 		readStateVersions.length +
-		mappedEntries(writeVersions) +
-		mappedEntries(initializationVersions) +
 		[...phiOperands.values()].reduce((total, operands) => total + operands.length, 0);
 	const readStateVersion = (
 		instruction: CoreInstructionId,
@@ -789,30 +780,11 @@ function memoryVersions(
 				? undefined
 				: [...versions].sort((left, right) => left - right).join(",");
 		},
-		readVersion(instruction, partition) {
-			const slot = partitionSlot(partition);
-			const value = slot === undefined ? undefined : readStateVersion(instruction, slot);
-			return value === undefined ? undefined : (value as CoreMemoryVersion);
-		},
-		valueForRead(instruction, partition) {
-			const version = this.readVersion(instruction, partition);
+		valueForRead(instruction, location) {
+			const slot = slotByLocation.get(locationTable.id(location));
+			const version =
+				slot === undefined ? undefined : readStateVersion(instruction, slot);
 			return version === undefined ? undefined : valueByVersion.get(version);
-		},
-		initializationVersion(instruction, partition) {
-			const slot = partitionSlot(partition);
-			const value =
-				slot === undefined ? undefined : initializationVersions[instruction]?.get(slot);
-			return value === undefined ? undefined : (value as CoreMemoryVersion);
-		},
-		writeVersion(instruction, partition) {
-			const slot = partitionSlot(partition);
-			const value =
-				slot === undefined ? undefined : writeVersions[instruction]?.get(slot);
-			return value === undefined ? undefined : (value as CoreMemoryVersion);
-		},
-		readers(partition) {
-			const slot = partitionSlot(partition);
-			return slot === undefined ? [] : Object.freeze([...readersBySlot[slot]!]);
 		},
 	};
 	return Object.freeze(result);
