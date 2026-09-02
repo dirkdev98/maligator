@@ -220,9 +220,18 @@ export function coreOwnCellsEqual(left: CoreOwnCell, right: CoreOwnCell): boolea
 	);
 }
 
+type CoreOwnCellResolve = (index: number) => CoreOwnCell | undefined;
+
+const ownCellResolvers = new WeakMap<
+	ReadonlyArray<ReadonlyArray<number>>,
+	{ readonly length: number; readonly resolve: CoreOwnCellResolve }
+>();
+
 export function coreOwnCellResolver(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-): (index: number) => CoreOwnCell | undefined {
+): CoreOwnCellResolve {
+	const cached = ownCellResolvers.get(stringConstants);
+	if (cached?.length === stringConstants.length) return cached.resolve;
 	const canonicalBySpelling = new Map<string, number>();
 	const canonicalByIndex = new Int32Array(stringConstants.length);
 	canonicalByIndex.fill(-1);
@@ -232,7 +241,7 @@ export function coreOwnCellResolver(
 		canonicalBySpelling.set(spelling, canonical);
 		canonicalByIndex[index] = canonical;
 	}
-	return (index): CoreOwnCell | undefined => {
+	const resolve = (index: number): CoreOwnCell | undefined => {
 		if (!Number.isSafeInteger(index) || index < 0) return undefined;
 		const canonical = canonicalByIndex[index] ?? -1;
 		const normalized = canonical < 0 ? index : canonical;
@@ -241,6 +250,8 @@ export function coreOwnCellResolver(
 			? { kind: "object-slot", key: normalized }
 			: { kind: "element", index: element };
 	};
+	ownCellResolvers.set(stringConstants, { length: stringConstants.length, resolve });
+	return resolve;
 }
 
 function accessKey(

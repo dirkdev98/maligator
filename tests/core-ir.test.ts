@@ -15,7 +15,10 @@ import {
 	CORE_OPCODES,
 	coreOpcodeRegistry,
 } from "../src/compiler/core/core-ir-opcodes.ts";
-import { buildCoreLocalFactIndex } from "../src/compiler/core/core-ir-provenance.ts";
+import {
+	buildCoreLocalFactIndex,
+	coreOwnCellResolver,
+} from "../src/compiler/core/core-ir-provenance.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import type {
 	CoreFactClaim,
@@ -76,6 +79,20 @@ function registry(): CoreOpcodeRegistry {
 }
 
 describe("Core IR", () => {
+	it("reuses own-cell canonicalization until the string table grows", () => {
+		const constants = [[0x6b], [0x6b]];
+		const first = coreOwnCellResolver(constants);
+
+		expect(first(0)).toEqual({ kind: "object-slot", key: 0 });
+		expect(first(1)).toEqual({ kind: "object-slot", key: 0 });
+		expect(coreOwnCellResolver(constants)).toBe(first);
+
+		constants.push([0x31]);
+		const grown = coreOwnCellResolver(constants);
+		expect(grown).not.toBe(first);
+		expect(grown(2)).toEqual({ kind: "element", index: 1 });
+	});
+
 	it("keeps structural control out of opcodes and enforces exact arities", () => {
 		expect(CORE_OPCODES).not.toEqual(
 			expect.arrayContaining([
