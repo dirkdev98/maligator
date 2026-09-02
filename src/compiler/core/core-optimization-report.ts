@@ -130,6 +130,12 @@ interface MutableAnalysisWorkReport {
 	elapsedMs: number;
 }
 
+function iterableCount(values: Iterable<unknown>): number {
+	let count = 0;
+	for (const _value of values) count++;
+	return count;
+}
+
 function liveCounts(
 	program: CoreProgram,
 ): Omit<CoreOptimizationCounts, "planCandidates"> {
@@ -141,14 +147,10 @@ function liveCounts(
 	for (const functionId of program.functionIds()) {
 		functions++;
 		const fn = program.function(functionId);
-		blocks += [...fn.blockIds()].length;
-		instructions += [...fn.instructionIds()].length;
-		for (let value = 0; value < fn.valueCapacity; value++) {
-			if (fn.isValueLive(value as never)) values++;
-		}
-		for (let fact = 0; fact < fn.factCapacity; fact++) {
-			if (fn.isFactLive(fact as never)) facts++;
-		}
+		blocks += iterableCount(fn.blockIds());
+		instructions += iterableCount(fn.instructionIds());
+		values += iterableCount(fn.valueIds());
+		facts += iterableCount(fn.factIds());
 	}
 	return { functions, blocks, instructions, values, facts };
 }
