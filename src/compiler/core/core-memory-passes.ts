@@ -11,7 +11,7 @@ import {
 	coreMemoryLocationIsExact,
 	coreMemoryPartition,
 } from "./core-ir-memory.ts";
-import { coreInstructionEffects } from "./core-ir-opcodes.ts";
+import { coreInstructionEffects, coreOpcodeSet } from "./core-ir-opcodes.ts";
 import {
 	CORE_LOCAL_PROVENANCE_ANALYSIS,
 	CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS,
@@ -123,6 +123,7 @@ const foldExactAllocationObservations: CorePass = {
 	name: "fold-exact-allocation-observations",
 	stage: "memory",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("unary", "binary"),
 	requiredAnalyses: [CORE_LOCAL_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
@@ -264,6 +265,7 @@ const annotateKnownOwnSlots: CorePass = {
 	name: "annotate-known-own-slots",
 	stage: "memory",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("loadPropertyStatic", "storePropertyStatic"),
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
 	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
@@ -324,6 +326,13 @@ const refineContainedOwnSlotAccesses: CorePass = {
 	name: "refine-contained-own-slot-accesses",
 	stage: "memory",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet(
+		"loadProperty",
+		"loadPropertyStatic",
+		"storeProperty",
+		"storePropertyStatic",
+		"defineProperty",
+	),
 	requiredAnalyses: [
 		CORE_LOCAL_PROVENANCE_ANALYSIS,
 		CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
@@ -538,6 +547,7 @@ const refineExactCollectionAccesses: CorePass = {
 	name: "refine-exact-collection-accesses",
 	stage: "memory",
 	scope: "instruction",
+	instructionOpcodes: coreOpcodeSet("callBuiltin"),
 	requiredAnalyses: [CORE_LOCAL_VALUE_CLASS_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	preserves: ["control-flow", "exception-control-flow", "local-interprocedural-flow"],
