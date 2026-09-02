@@ -18,6 +18,7 @@ import type {
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import { CORE_PROGRAM_FLOW_TARGETS } from "./core-program-flow.ts";
 
 export const CORE_CALLEE_TARGET_CAP = 4;
 
@@ -603,6 +604,7 @@ export function analyzeCoreCallGraph(
 	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow = (functionId) =>
 		buildCoreControlFlow(program, functionId),
 	context?: CoreCompilationContext,
+	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 ): CoreCallGraphIndexState {
 	const functionIds = [...program.functionIds()];
 	const functionSet = new Set(functionIds);
@@ -613,7 +615,8 @@ export function analyzeCoreCallGraph(
 	const changedFunctions = new Set<CoreFunctionId>();
 	const propertyKeys = new Set<string>();
 	let accessFunctionsScanned = 0;
-	for (const functionId of functionIds) {
+	for (const functionId of previous === undefined ? functionIds : (dirtyFunctions ?? functionIds)) {
+		if (!functionSet.has(functionId)) continue;
 		const fn = program.function(functionId);
 		const prior = previous?.local.get(functionId);
 		if (localTargetsAreCurrent(prior, fn)) continue;
@@ -966,8 +969,17 @@ export const CORE_CALL_GRAPH_ANALYSIS: CoreAnalysisDefinition<CoreCallGraphIndex
 	contextIdentity(context) {
 		return context.facts.closure.sourceClosure.kind;
 	},
-	compute({ program, context, request, previous, get }) {
+	compute({ program, context, request, previous, get, programFlow }) {
 		if (request.scope !== "program") throw new Error("Expected program analysis request");
+		const dirtyFunctions = new Array<CoreFunctionId>();
+		if (previous !== undefined) {
+			for (let index = 0; index < programFlow.dirtyFunctionCount; index++) {
+				const functionId = programFlow.dirtyFunctionAt(index);
+				if ((programFlow.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_TARGETS) !== 0) {
+					dirtyFunctions.push(functionId);
+				}
+			}
+		}
 		return analyzeCoreCallGraph(
 			program,
 			context.facts.closure.sourceClosure.kind === "known",
@@ -978,6 +990,7 @@ export const CORE_CALL_GRAPH_ANALYSIS: CoreAnalysisDefinition<CoreCallGraphIndex
 					function: functionId,
 				}),
 			context,
+			dirtyFunctions,
 		);
 	},
 };

@@ -1,6 +1,7 @@
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
+import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreChangeDomain,
 	CoreProgram,
@@ -23,6 +24,7 @@ export interface CoreAnalysisComputation {
 	readonly context: CoreCompilationContext;
 	readonly request: CoreAnalysisRequest;
 	readonly previous?: unknown;
+	readonly programFlow: CoreProgramFlowEngine;
 	readonly get: <Result>(
 		definition: CoreAnalysisDefinition<Result>,
 		request: CoreAnalysisRequest,
@@ -59,6 +61,7 @@ export class CoreAnalysisManager {
 	readonly #program: CoreProgram;
 	readonly #context: CoreCompilationContext;
 	readonly #report: CoreOptimizationReportBuilder;
+	readonly #programFlow: CoreProgramFlowEngine;
 	readonly #cache = new Map<string, CachedAnalysis>();
 	readonly #registered = new Map<string, RegisteredAnalysis>();
 	readonly #validatedDefinitions = new WeakSet<CoreAnalysisDefinition<unknown>>();
@@ -74,6 +77,7 @@ export class CoreAnalysisManager {
 		this.#program = program;
 		this.#context = context;
 		this.#report = report;
+		this.#programFlow = new CoreProgramFlowEngine(program);
 	}
 
 	get<Result>(
@@ -102,6 +106,7 @@ export class CoreAnalysisManager {
 				program: this.#program,
 				context: this.#context,
 				request,
+				programFlow: this.#programFlow.refresh(),
 				get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
 				...(cached === undefined ? {} : { previous: cached.value }),
 			});
