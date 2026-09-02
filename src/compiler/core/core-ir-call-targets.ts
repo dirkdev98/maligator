@@ -125,7 +125,9 @@ export interface CoreIndexedCallSite extends CoreLocalCallSite {
 
 interface CoreLocalCallTargets {
 	readonly function: CoreFunctionId;
-	readonly versionKey: string;
+	readonly bodyVersion: number;
+	readonly cfgVersion: number;
+	readonly callsVersion: number;
 	readonly values: ReadonlyArray<CoreCalleeTargets>;
 	readonly returnTargets: CoreCalleeTargets;
 	readonly sites: ReadonlyArray<CoreIndexedCallSite>;
@@ -169,9 +171,16 @@ export interface CoreCallGraphIndex {
 	outgoing(functionId: CoreFunctionId): ReadonlyArray<CoreIndexedCallSite>;
 }
 
-function functionVersionKey(fn: CoreFunctionStore): string {
-	const { body, cfg, calls } = fn.versions;
-	return `${body}:${cfg}:${calls}`;
+function localTargetsAreCurrent(
+	local: CoreLocalCallTargets | undefined,
+	fn: CoreFunctionStore,
+): boolean {
+	return (
+		local !== undefined &&
+		local.bodyVersion === fn.version("body") &&
+		local.cfgVersion === fn.version("cfg") &&
+		local.callsVersion === fn.version("calls")
+	);
 }
 
 const DEFINITELY_NON_CALLABLE_RESULTS = new Set([
@@ -522,7 +531,9 @@ function analyzeFunctionTargets(
 	}
 	return Object.freeze({
 		function: fn.id,
-		versionKey: functionVersionKey(fn),
+		bodyVersion: fn.version("body"),
+		cfgVersion: fn.version("cfg"),
+		callsVersion: fn.version("calls"),
 		values: Object.freeze(values),
 		returnTargets,
 		sites: Object.freeze(sites),
@@ -605,7 +616,7 @@ export function analyzeCoreCallGraph(
 	for (const functionId of functionIds) {
 		const fn = program.function(functionId);
 		const prior = previous?.local.get(functionId);
-		if (prior?.versionKey === functionVersionKey(fn)) continue;
+		if (localTargetsAreCurrent(prior, fn)) continue;
 		changedFunctions.add(functionId);
 		accessFunctionsScanned++;
 		const oldAccess = cellAccesses.get(functionId);
@@ -665,7 +676,7 @@ export function analyzeCoreCallGraph(
 	for (const functionId of functionIds) {
 		const fn = program.function(functionId);
 		const prior = previous?.local.get(functionId);
-		if (prior?.versionKey === functionVersionKey(fn)) local.set(functionId, prior);
+		if (localTargetsAreCurrent(prior, fn)) local.set(functionId, prior!);
 	}
 	const propertyReaders = new Map(previous?.propertyReaders ?? []);
 	for (const key of propertyKeys) {

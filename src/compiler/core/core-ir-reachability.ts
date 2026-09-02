@@ -49,7 +49,8 @@ type CoreReachabilityEdges = ReadonlyMap<
 >;
 
 export interface CoreFunctionReachabilityState extends CoreFunctionReachability {
-	readonly functionVersions: ReadonlyMap<CoreFunctionId, string>;
+	readonly bodyVersions: Uint32Array;
+	readonly cfgVersions: Uint32Array;
 	readonly programDataVersion: number;
 	readonly structural: ReadonlyMap<CoreFunctionId, CoreReachabilityEdges>;
 	readonly roots: ReadonlyMap<
@@ -110,10 +111,6 @@ function sourceFunctionIndices(
 		position = source.callerPosId;
 	}
 	return [...functions];
-}
-
-function functionVersionKey(fn: CoreFunctionStore): string {
-	return `${fn.versions.body}:${fn.versions.cfg}`;
 }
 
 function addEdge(
@@ -247,16 +244,30 @@ export function analyzeCoreFunctionReachability(
 ): CoreFunctionReachabilityState {
 	const all = [...program.functionIds()];
 	const allSet = new Set(all);
-	const functionVersions = new Map(previous?.functionVersions ?? []);
+	const bodyVersions = new Uint32Array(program.functionCapacity);
+	const cfgVersions = new Uint32Array(program.functionCapacity);
+	if (previous !== undefined) {
+		bodyVersions.set(
+			previous.bodyVersions.subarray(0, Math.min(bodyVersions.length, previous.bodyVersions.length)),
+		);
+		cfgVersions.set(
+			previous.cfgVersions.subarray(0, Math.min(cfgVersions.length, previous.cfgVersions.length)),
+		);
+	}
 	const structural = new Map(previous?.structural ?? []);
 	let functionsIndexed = 0;
 	let structuralIndexEdges = 0;
 	const structurallyChanged = new Set<CoreFunctionId>();
-	const dataChanged = previous?.programDataVersion !== program.versions.data;
+	const dataChanged = previous?.programDataVersion !== program.programVersion("data");
 	for (const functionId of all) {
 		const fn = program.function(functionId);
-		const version = functionVersionKey(fn);
-		if (dataChanged || functionVersions.get(functionId) !== version) {
+		const bodyVersion = fn.version("body") + 1;
+		const cfgVersion = fn.version("cfg") + 1;
+		if (
+			dataChanged ||
+			bodyVersions[functionId] !== bodyVersion ||
+			cfgVersions[functionId] !== cfgVersion
+		) {
 			const edges = structuralEdges(program, fn);
 			const priorEdges = structural.get(functionId);
 			if (sameEdges(priorEdges, edges)) {
@@ -265,14 +276,14 @@ export function analyzeCoreFunctionReachability(
 				structural.set(functionId, edges);
 				structurallyChanged.add(functionId);
 			}
-			functionVersions.set(functionId, version);
+			bodyVersions[functionId] = bodyVersion;
+			cfgVersions[functionId] = cfgVersion;
 			functionsIndexed++;
 			for (const reasons of edges.values()) structuralIndexEdges += reasons.size;
 		}
 	}
-	for (const functionId of previous?.functionVersions.keys() ?? []) {
+	for (const functionId of previous?.structural.keys() ?? []) {
 		if (allSet.has(functionId)) continue;
-		functionVersions.delete(functionId);
 		structural.delete(functionId);
 	}
 
@@ -311,8 +322,9 @@ export function analyzeCoreFunctionReachability(
 			liveFunctions: previous.liveFunctions,
 			reasons: previous.reasons,
 			sourceClosed: targets.sourceClosed,
-			functionVersions,
-			programDataVersion: program.versions.data,
+			bodyVersions,
+			cfgVersions,
+			programDataVersion: program.programVersion("data"),
 			structural,
 			roots,
 			targets,
@@ -405,8 +417,9 @@ export function analyzeCoreFunctionReachability(
 		liveFunctions,
 		reasons,
 		sourceClosed: targets.sourceClosed,
-		functionVersions,
-		programDataVersion: program.versions.data,
+		bodyVersions,
+		cfgVersions,
+		programDataVersion: program.programVersion("data"),
 		structural,
 		roots,
 		targets,
