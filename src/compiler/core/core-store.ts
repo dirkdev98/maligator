@@ -655,10 +655,18 @@ export class CoreFunctionStore {
 
 	*valueIds(): Iterable<CoreValueId> {
 		for (const block of this.blockIds()) {
-			for (const { value } of this.blockParameters(block)) yield value;
+			const start = this.#blockParameterStart[block]!;
+			const count = this.#blockParameterCount[block]!;
+			for (let index = 0; index < count; index++) {
+				yield this.#blockParameterValues[start + index]!;
+			}
 		}
 		for (const instruction of this.instructionIds()) {
-			for (const value of this.instructionResults(instruction)) yield value;
+			const start = this.#instructionResultStart[instruction]!;
+			const count = this.#instructionResultCount[instruction]!;
+			for (let index = 0; index < count; index++) {
+				yield this.#results[start + index]!;
+			}
 		}
 	}
 
@@ -1100,11 +1108,18 @@ export class CoreFunctionStore {
 		prepend: boolean,
 	): CoreValueId {
 		this.#assertEditing(mutation);
-		const existing = this.blockParameters(block);
-		const index = prepend ? 0 : existing.length;
+		this.#requireBlock(block);
+		const start = this.#blockParameterStart[block]!;
+		const count = this.#blockParameterCount[block]!;
+		const index = prepend ? 0 : count;
 		const value = this.#createValue(spec.representation ?? "boxed", 0, block, index);
-		const values = existing.map((parameter) => parameter.value);
-		const roles = existing.map((parameter) => parameter.role);
+		const values = new Array<CoreValueId>(count);
+		const roles = new Array<"value" | "exception">(count);
+		for (let parameter = 0; parameter < count; parameter++) {
+			values[parameter] = this.#blockParameterValues[start + parameter]!;
+			roles[parameter] =
+				BLOCK_PARAMETER_ROLES[this.#blockParameterRoles[start + parameter]!]!;
+		}
 		if (prepend) {
 			values.unshift(value);
 			roles.unshift(spec.role ?? "value");
@@ -1125,27 +1140,33 @@ export class CoreFunctionStore {
 		index: number,
 	): CoreValueId {
 		this.#assertEditing(mutation);
-		const parameters = this.blockParameters(block);
-		const parameter = parameters[index];
-		if (parameter === undefined) {
+		this.#requireBlock(block);
+		const start = this.#blockParameterStart[block]!;
+		const count = this.#blockParameterCount[block]!;
+		if (!Number.isSafeInteger(index) || index < 0 || index >= count) {
 			throw new Error(`Unknown Core block ${block} parameter ${index}`);
 		}
-		if (this.#valueUseCount[parameter.value] !== 0) {
+		const value = this.#blockParameterValues[start + index]!;
+		if (this.#valueUseCount[value] !== 0) {
 			throw new Error(
-				`Cannot remove Core block ${block} parameter ${index}; value ${parameter.value} is used`,
+				`Cannot remove Core block ${block} parameter ${index}; value ${value} is used`,
 			);
 		}
-		const remaining = parameters.filter((_, parameterIndex) => parameterIndex !== index);
-		for (const [parameterIndex, entry] of remaining.entries()) {
-			this.#valueDefinitionIndex[entry.value] = parameterIndex;
+		const values = new Array<CoreValueId>(count - 1);
+		const roles = new Array<"value" | "exception">(count - 1);
+		let destination = 0;
+		for (let source = 0; source < count; source++) {
+			if (source === index) continue;
+			const parameterValue = this.#blockParameterValues[start + source]!;
+			values[destination] = parameterValue;
+			roles[destination] =
+				BLOCK_PARAMETER_ROLES[this.#blockParameterRoles[start + source]!]!;
+			this.#valueDefinitionIndex[parameterValue] = destination;
+			destination++;
 		}
-		this.#valueLive[parameter.value] = 0;
-		this.#replaceBlockParameterRange(
-			block,
-			remaining.map(({ value }) => value),
-			remaining.map(({ role }) => role),
-		);
-		return parameter.value;
+		this.#valueLive[value] = 0;
+		this.#replaceBlockParameterRange(block, values, roles);
+		return value;
 	}
 
 	_insertOperation(
@@ -1184,7 +1205,9 @@ export class CoreFunctionStore {
 			effectRefinement,
 			insertionPoint,
 		);
-		return { instruction, results: this.instructionResults(instruction) };
+		const start = this.#instructionResultStart[instruction]!;
+		const count = this.#instructionResultCount[instruction]!;
+		return { instruction, results: this.#results.slice(start, start + count) };
 	}
 
 	_setTerminator(
@@ -1258,7 +1281,10 @@ export class CoreFunctionStore {
 	_removeInstruction(mutation: CoreStoreMutation, instruction: CoreInstructionId): void {
 		this.#assertEditing(mutation);
 		this.#requireInstruction(instruction);
-		for (const result of this.instructionResults(instruction)) {
+		const resultStart = this.#instructionResultStart[instruction]!;
+		const resultCount = this.#instructionResultCount[instruction]!;
+		for (let index = 0; index < resultCount; index++) {
+			const result = this.#results[resultStart + index]!;
 			if (this.#valueUseCount[result] !== 0) {
 				throw new Error(
 					`Cannot remove Core instruction ${instruction}; value ${result} is used`,
@@ -1279,8 +1305,9 @@ export class CoreFunctionStore {
 		this.#instructionTerminatorEdgeStart[instruction] = 0;
 		this.#instructionTerminatorEdgeCount[instruction] = 0;
 		this.#instructionTerminatorFact[instruction] = -1;
-		for (const result of this.instructionResults(instruction))
-			this.#valueLive[result] = 0;
+		for (let index = 0; index < resultCount; index++) {
+			this.#valueLive[this.#results[resultStart + index]!] = 0;
+		}
 		this.#removeEffectRefinement(instruction);
 		const block = this.#instructionBlock[instruction]!;
 		const previous = this.#instructionPrevious[instruction]!;
@@ -1349,19 +1376,24 @@ export class CoreFunctionStore {
 		for (const instruction of [...this.instructionIds(block)].reverse()) {
 			this._removeInstruction(mutation, instruction);
 		}
-		for (const parameter of this.blockParameters(block)) {
-			if (this.#valueUseCount[parameter.value] !== 0) {
-				const uses = [...this.uses(parameter.value)]
-					.map(
-						({ instruction, operand }) =>
-							`@${instruction}:${operand} in b${this.instructionBlock(instruction)}`,
-					)
-					.join(", ");
+		const parameterStart = this.#blockParameterStart[block]!;
+		const parameterCount = this.#blockParameterCount[block]!;
+		for (let index = 0; index < parameterCount; index++) {
+			const parameter = this.#blockParameterValues[parameterStart + index]!;
+			if (this.#valueUseCount[parameter] !== 0) {
+				const descriptions: Array<string> = [];
+				for (let use = this.#valueFirstUse[parameter]!; use >= 0; use = this.#useNext[use]!) {
+					if (this.#trackUseTraversal) this.#liveUseVisits++;
+					const instruction = this.#useInstruction[use]!;
+					descriptions.push(
+						`@${instruction}:${this.#useOperand[use]} in b${this.instructionBlock(instruction)}`,
+					);
+				}
 				throw new Error(
-					`Cannot remove Core block ${block}; parameter ${parameter.value} is used by ${uses}`,
+					`Cannot remove Core block ${block}; parameter ${parameter} is used by ${descriptions.join(", ")}`,
 				);
 			}
-			this.#valueLive[parameter.value] = 0;
+			this.#valueLive[parameter] = 0;
 		}
 		this.#blockLive[block] = 0;
 		this.#blockFirstInstruction[block] = -1;
@@ -1486,18 +1518,26 @@ export class CoreFunctionStore {
 		bodyEntry: CoreBlockId | undefined,
 	): void {
 		this.#assertEditing(mutation);
-		const parameters = this.blockParameters(entry);
-		if (parameters.length < this.#parameterCount) {
+		this.#requireBlock(entry);
+		const start = this.#blockParameterStart[entry]!;
+		const count = this.#blockParameterCount[entry]!;
+		if (count < this.#parameterCount) {
 			throw new Error(
-				`Core entry block has ${parameters.length} parameters for a ${this.#parameterCount}-parameter ABI`,
+				`Core entry block has ${count} parameters for a ${this.#parameterCount}-parameter ABI`,
 			);
 		}
-		const values = parameters.slice(0, this.#parameterCount).map((parameter) => {
-			if (parameter.role !== "value" || parameter.representation !== "boxed") {
+		const values = new Array<CoreValueId>(this.#parameterCount);
+		for (let index = 0; index < this.#parameterCount; index++) {
+			const value = this.#blockParameterValues[start + index]!;
+			this.#requireValue(value);
+			if (
+				this.#blockParameterRoles[start + index] !== 0 ||
+				REPRESENTATIONS[this.#valueRepresentation[value]!] !== "boxed"
+			) {
 				throw new Error("Core ABI parameters must be boxed value parameters");
 			}
-			return parameter.value;
-		});
+			values[index] = value;
+		}
 		this.#parameters.splice(0, this.#parameters.length, ...values);
 		this.#entry = entry;
 		this.#bodyEntry = bodyEntry;
