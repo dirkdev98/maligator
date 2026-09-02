@@ -256,7 +256,7 @@ describe("Core IR", () => {
 		expect(memory.statistics.partitions).toBe(
 			CORE_EFFECT_DOMAINS.length + exactReadCount,
 		);
-		expect(memory.statistics.stateEntries).toBe(exactReadCount);
+		expect(memory.statistics.stateEntries).toBe(exactReadCount * 2);
 	});
 
 	it("indexes memory work independently of unrelated operations", () => {
@@ -288,7 +288,7 @@ describe("Core IR", () => {
 			accesses: 1,
 			touchedBlocks: 1,
 			stateRows: 1,
-			stateEntries: 1,
+			stateEntries: 2,
 			familyWidenings: 0,
 		});
 	});
@@ -313,7 +313,7 @@ describe("Core IR", () => {
 
 		const memory = analyzeCoreMemoryVersions(program, functionId);
 
-		expect(memory.statistics.familyWidenings).toBeGreaterThan(0);
+		expect(memory.statistics.familyWidenings).toBe(1);
 	});
 
 	it("declares a fresh aggregate's layout and which results cannot be held weakly", () => {

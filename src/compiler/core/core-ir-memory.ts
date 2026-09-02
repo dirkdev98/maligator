@@ -12,7 +12,11 @@ import {
 	buildCoreProvenance,
 } from "./core-ir-provenance.ts";
 import type { CoreAccessKey, CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
-import { CORE_EFFECT_DOMAINS, CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
+import {
+	CORE_EFFECT_DOMAINS,
+	CORE_MEMORY_FAMILIES,
+	CORE_MEMORY_FAMILY_DOMAINS,
+} from "./core-ir.ts";
 import type {
 	CoreAccessMode,
 	CoreBlockId,
@@ -359,7 +363,11 @@ function memoryVersions(
 		});
 	}
 	const domainSlot = new Map(CORE_EFFECT_DOMAINS.map((domain, slot) => [domain, slot]));
-	const slotCount = partitions.length;
+	const locationSlotCount = partitions.length;
+	const killSlotByFamily = new Map(
+		CORE_MEMORY_FAMILIES.map((family, index) => [family, locationSlotCount + index]),
+	);
+	const slotCount = locationSlotCount + CORE_MEMORY_FAMILIES.length;
 	let nextVersion = 1;
 	const internVersion = (
 		table: Map<number, Map<number, number>>,
@@ -415,21 +423,22 @@ function memoryVersions(
 		layoutByInstruction.set(layout.instruction, layout);
 	const domainsForFamily = (family: CoreMemoryFamily): ReadonlyArray<CoreEffectDomain> =>
 		CORE_MEMORY_FAMILY_DOMAINS[family];
-	const slotsKilledByDomain = new Map<CoreEffectDomain, ReadonlyArray<number>>();
-	for (const domain of CORE_EFFECT_DOMAINS) {
-		const slots = [domainSlot.get(domain)!];
-		for (let slot = CORE_EFFECT_DOMAINS.length; slot < slotCount; slot++) {
-			const info = partitions[slot]!;
-			if (
-				info.protectedLocalHeap ||
-				info.family === undefined ||
-				!domainsForFamily(info.family).includes(domain)
-			)
-				continue;
-			slots.push(slot);
-		}
-		slotsKilledByDomain.set(domain, Object.freeze(slots));
-	}
+	const familiesWithExactState = new Set(
+		partitions.flatMap((partition) =>
+			partition.family === undefined || partition.protectedLocalHeap
+				? []
+				: [partition.family],
+		),
+	);
+	const familiesKilledByDomain = new Map(
+		CORE_EFFECT_DOMAINS.map((domain) => [
+			domain,
+			CORE_MEMORY_FAMILIES.filter(
+				(family) =>
+					familiesWithExactState.has(family) && domainsForFamily(family).includes(domain),
+			),
+		]),
+	);
 	const slotForAccess = (access: CoreMemoryAccess): number | undefined => {
 		if (!coreMemoryLocationIsExact(access.location)) return undefined;
 		return slotByLocation.get(locationTable.id(access.location));
@@ -474,16 +483,22 @@ function memoryVersions(
 	};
 	const mutableEventsByBlock = new Map<CoreBlockId, Array<SparseMemoryEvent>>();
 	const definedByBlock = new Map<CoreBlockId, Set<number>>();
+	const exactWriteKillRequirements = new Map<
+		number,
+		{ readonly instruction: CoreInstructionId; readonly slot: number }
+	>();
 	let familyWidenings = 0;
 	const killDomain = (
 		domain: CoreEffectDomain,
 		instruction: CoreInstructionId,
 		definitions: Map<number, number>,
 	): void => {
-		for (const slot of slotsKilledByDomain.get(domain)!) {
-			if (slot >= CORE_EFFECT_DOMAINS.length && !definitions.has(slot)) {
-				familyWidenings++;
-			}
+		const fallbackSlot = domainSlot.get(domain)!;
+		definitions.set(fallbackSlot, writeIdentity(instruction, fallbackSlot));
+		for (const family of familiesKilledByDomain.get(domain)!) {
+			const slot = killSlotByFamily.get(family)!;
+			if (definitions.has(slot)) continue;
+			familyWidenings++;
 			definitions.set(slot, writeIdentity(instruction, slot));
 		}
 	};
@@ -498,8 +513,12 @@ function memoryVersions(
 		for (const access of accesses) {
 			if (access.mode !== "read") continue;
 			const exact = slotForAccess(access);
-			if (exact !== undefined) reads.add(exact);
-			else
+			if (exact !== undefined) {
+				reads.add(exact);
+				if (!partitions[exact]!.protectedLocalHeap) {
+					reads.add(killSlotByFamily.get(coreMemoryLocationFamily(access.location))!);
+				}
+			} else
 				for (const domain of domainsForFamily(coreMemoryLocationFamily(access.location)))
 					reads.add(domainSlot.get(domain)!);
 		}
@@ -516,6 +535,11 @@ function memoryVersions(
 				const version = writeIdentity(instruction, exactSlot);
 				definitions.set(exactSlot, version);
 				if (access.value !== undefined) valueByVersion.set(version, access.value);
+				if (!partitions[exactSlot]!.protectedLocalHeap) {
+					const slot = killSlotByFamily.get(family)!;
+					reads.add(slot);
+					exactWriteKillRequirements.set(version, { instruction, slot });
+				}
 			}
 			for (const domain of domainsForFamily(family)) {
 				coveredWrites.add(domain);
@@ -805,8 +829,8 @@ function memoryVersions(
 		function: fn.id,
 		statistics: Object.freeze({
 			accesses: accessCount,
-			partitions: slotCount,
-			exactPartitions: slotCount - CORE_EFFECT_DOMAINS.length,
+			partitions: locationSlotCount,
+			exactPartitions: locationSlotCount - CORE_EFFECT_DOMAINS.length,
 			touchedBlocks: eventsByBlock.size,
 			stateRows: readStateRows.size + phiOperands.size,
 			stateEntries,
@@ -830,7 +854,15 @@ function memoryVersions(
 			const slot = slotByLocation.get(locationTable.id(location));
 			const version =
 				slot === undefined ? undefined : readStateVersion(instruction, slot);
-			return version === undefined ? undefined : valueByVersion.get(version);
+			if (version === undefined) return undefined;
+			const requirement = exactWriteKillRequirements.get(version);
+			if (
+				requirement !== undefined &&
+				readStateVersion(instruction, requirement.slot) !==
+					readStateVersion(requirement.instruction, requirement.slot)
+			)
+				return undefined;
+			return valueByVersion.get(version);
 		},
 	};
 	return Object.freeze(result);
