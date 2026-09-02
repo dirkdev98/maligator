@@ -34,16 +34,14 @@ const TYPEOF_RESULTS: ReadonlySet<string> = new Set([
 
 class SparseNumericQueue {
 	#items: Int32Array;
-	#membership: Uint32Array;
+	readonly #membershipPages = new Map<number, Uint8Array>();
 	#head = 0;
 	#tail = 0;
-	#epoch = 1;
 	#pushes = 0;
 	#maximumDepth = 0;
 
-	constructor(capacity: number) {
-		this.#items = new Int32Array(Math.max(16, capacity));
-		this.#membership = new Uint32Array(Math.max(16, capacity));
+	constructor() {
+		this.#items = new Int32Array(16);
 	}
 
 	get pushes(): number {
@@ -59,9 +57,15 @@ class SparseNumericQueue {
 	}
 
 	push(value: number): boolean {
-		this.#growMembership(value + 1);
-		if (this.#membership[value] === this.#epoch) return false;
-		this.#membership[value] = this.#epoch;
+		const pageId = value >>> 10;
+		let page = this.#membershipPages.get(pageId);
+		if (page === undefined) {
+			page = new Uint8Array(1 << 10);
+			this.#membershipPages.set(pageId, page);
+		}
+		const offset = value & ((1 << 10) - 1);
+		if (page[offset] !== 0) return false;
+		page[offset] = 1;
 		this.#growItems(this.#tail + 1);
 		this.#items[this.#tail++] = value;
 		this.#pushes++;
@@ -72,7 +76,7 @@ class SparseNumericQueue {
 	pop(): number | undefined {
 		if (this.#head === this.#tail) return undefined;
 		const value = this.#items[this.#head++]!;
-		this.#membership[value] = 0;
+		this.#membershipPages.get(value >>> 10)![value & ((1 << 10) - 1)] = 0;
 		return value;
 	}
 
@@ -81,13 +85,6 @@ class SparseNumericQueue {
 		const next = new Int32Array(Math.max(required, this.#items.length * 2));
 		next.set(this.#items);
 		this.#items = next;
-	}
-
-	#growMembership(required: number): void {
-		if (required <= this.#membership.length) return;
-		const next = new Uint32Array(Math.max(required, this.#membership.length * 2));
-		next.set(this.#membership);
-		this.#membership = next;
 	}
 }
 
@@ -380,8 +377,8 @@ export class CoreLocalOptimizer {
 			throw new Error("Core local optimizer editor belongs to another function");
 		}
 		this.#editor = options.editor;
-		this.#instructionQueue = new SparseNumericQueue(this.#fn.instructionCapacity);
-		this.#blockQueue = new SparseNumericQueue(this.#fn.blockCapacity);
+		this.#instructionQueue = new SparseNumericQueue();
+		this.#blockQueue = new SparseNumericQueue();
 		this.#maxWorkItems = options.maxWorkItems ?? 2_000_000;
 		this.#maxEdits = options.maxEdits ?? 1_000_000;
 		this.#budgetExhaustion = options.budgetExhaustion ?? "stop";
@@ -407,18 +404,15 @@ export class CoreLocalOptimizer {
 	run(initialChanges?: ReadonlyArray<CoreChangeSet>): CoreLocalOptimizerResult {
 		if (initialChanges === undefined) {
 			if ((this.#features & CORE_FUNCTION_HAS_CANDIDATE_OPCODES) !== 0) {
-				for (let id = 0; id < this.#fn.instructionCapacity; id++) {
-					this.#enqueueInstruction(coreInstructionId(id));
-				}
+				for (const instruction of this.#fn.instructionIds())
+					this.#enqueueInstruction(instruction);
 			}
 			if (
 				(this.#features &
 					(CORE_FUNCTION_HAS_BRANCHES | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) !==
 				0
 			) {
-				for (let id = 0; id < this.#fn.blockCapacity; id++) {
-					this.#enqueueBlock(id as CoreBlockId);
-				}
+				for (const block of this.#fn.blockIds()) this.#enqueueBlock(block);
 			}
 		} else {
 			for (const changes of initialChanges) this.#submit(changes);
@@ -677,10 +671,8 @@ export class CoreLocalOptimizer {
 					obligation.kind === "guard" && obligation.instruction === terminator,
 			);
 			let usedByRefinement = false;
-			for (let id = 0; id < this.#fn.instructionCapacity; id++) {
-				const instruction = coreInstructionId(id);
+			for (const instruction of this.#fn.instructionIds()) {
 				if (
-					this.#fn.kernel.instructionLive(instruction) !== 0 &&
 					this.#fn.kernel.instructionOpcode(instruction) >= 0 &&
 					this.#fn.instructionEffectRefinement(instruction)?.proof === factId
 				) {
@@ -870,9 +862,7 @@ export class CoreLocalOptimizer {
 
 	#buildHandlerUseCounts(): Uint32Array {
 		const counts = new Uint32Array(this.#fn.valueCapacity);
-		for (let id = 0; id < this.#fn.blockCapacity; id++) {
-			const block = id as CoreBlockId;
-			if (this.#fn.kernel.blockLive(block) === 0) continue;
+		for (const block of this.#fn.blockIds()) {
 			const start = this.#fn.kernel.blockHandlerArgumentStart(block);
 			const count = this.#fn.kernel.blockHandlerArgumentCount(block);
 			for (let index = 0; index < count; index++) {

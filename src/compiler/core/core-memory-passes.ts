@@ -194,14 +194,8 @@ const foldExactAllocationObservations: CorePass = {
 				units.every((unit, index) => unit === "object".charCodeAt(index)),
 		);
 		let editor: CoreEditor | undefined;
-		const instructionCapacity = fn.instructionCapacity;
-		for (let id = 0; id < instructionCapacity; id++) {
-			const instruction = coreInstructionId(id);
-			if (
-				!fn.isInstructionLive(instruction) ||
-				fn.instructionKind(instruction) !== "operation"
-			)
-				continue;
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
 			const operator = fn.instructionAttributes(instruction).operator;
 			const leftOperand = instructionOperandAt(fn, instruction, 0);
@@ -343,14 +337,8 @@ const annotateKnownOwnSlots: CorePass = {
 		const fn = program.function(item.function);
 		const shapes = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS);
 		let editor: CoreEditor | undefined;
-		const instructionCapacity = fn.instructionCapacity;
-		for (let id = 0; id < instructionCapacity; id++) {
-			const instruction = coreInstructionId(id);
-			if (
-				!fn.isInstructionLive(instruction) ||
-				fn.instructionKind(instruction) !== "operation"
-			)
-				continue;
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
 			const attributes = fn.instructionAttributes(instruction);
@@ -422,11 +410,8 @@ const refineContainedOwnSlotAccesses: CorePass = {
 			readonly named: boolean;
 			readonly effects: CoreInstructionEffects;
 		}> = [];
-		const instructionCapacity = fn.instructionCapacity;
-		for (let id = 0; id < instructionCapacity; id++) {
-			const instruction = coreInstructionId(id);
+		for (const instruction of fn.instructionIds()) {
 			if (
-				!fn.isInstructionLive(instruction) ||
 				fn.instructionKind(instruction) !== "operation" ||
 				fn.instructionEffectRefinement(instruction) !== undefined
 			)
@@ -654,11 +639,8 @@ const refineExactCollectionAccesses: CorePass = {
 		const fn = program.function(item.function);
 		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
 		let editor: CoreEditor | undefined;
-		const instructionCapacity = fn.instructionCapacity;
-		for (let id = 0; id < instructionCapacity; id++) {
-			const instruction = coreInstructionId(id);
+		for (const instruction of fn.instructionIds()) {
 			if (
-				!fn.isInstructionLive(instruction) ||
 				fn.instructionKind(instruction) !== "operation" ||
 				fn.instructionEffectRefinement(instruction) !== undefined ||
 				fn.instructionOpcodeName(instruction) !== "callBuiltin"

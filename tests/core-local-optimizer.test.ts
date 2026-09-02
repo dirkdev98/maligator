@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { CoreLocalOptimizer } from "../src/compiler/core/core-local-optimizer.ts";
 import type { CoreLocalInstructionRule } from "../src/compiler/core/core-local-optimizer.ts";
@@ -73,6 +74,33 @@ describe("CoreLocalOptimizer", () => {
 		expect(withRule.statistics.instructionQueuePops).toBe(
 			baseline.statistics.instructionQueuePops,
 		);
+	});
+
+	it("seeds queues from live IDs rather than tombstoned capacity", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [source] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 42 },
+		});
+		for (let index = 0; index < 2_000; index++) {
+			builder.appendInstruction(entry, "move", [source!]);
+		}
+		builder.setTerminator(entry, { kind: "return", value: source! });
+		const fn = program.function(builder.finish(entry).function);
+		const removed = [...fn.bodyInstructionIds(entry)].filter(
+			(instruction) => fn.instructionOpcodeName(instruction) === "move",
+		);
+		const editor = CoreEditor.open(program, fn.id);
+		for (const instruction of removed) editor.removeInstruction(instruction);
+		editor.commit();
+		const liveInstructions = [...fn.instructionIds()].length;
+		expect(fn.instructionCapacity).toBeGreaterThan(liveInstructions * 100);
+
+		const result = new CoreLocalOptimizer(program, fn.id).run();
+
+		expect(result.statistics.instructionQueuePushes).toBe(1);
+		expect(result.statistics.blockQueuePushes).toBe([...fn.blockIds()].length);
 	});
 
 	it("retains values referenced only by exception-handler arguments", () => {
