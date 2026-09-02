@@ -1989,9 +1989,18 @@ const canonicalizeBlockParameters: CorePass = {
 				if (fn.kernel.blockParameterRole(row) !== 0) continue;
 				const parameter = fn.kernel.blockParameterValue(row);
 				const replacement = roots.get(parameter) ?? parameter;
+				const replacementOwner = fn.kernel.valueDefinitionOwner(replacement);
+				const replacementDominates =
+					fn.kernel.valueDefinitionKind(replacement) === 0
+						? control.dominates(coreBlockId(replacementOwner), block)
+						: control.instructionDominatesBlock(
+								fn.instructionBlock(coreInstructionId(replacementOwner)),
+								block,
+							);
 				if (
 					replacement === parameter ||
 					!fn.isValueLive(replacement) ||
+					!replacementDominates ||
 					fn.valueRepresentation(replacement) !== fn.valueRepresentation(parameter)
 				)
 					continue;
