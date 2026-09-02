@@ -270,9 +270,13 @@ export function analyzeCoreValueKinds(
 			}
 		}
 	}
-	const dependents = Array.from({ length: fn.valueCapacity }, () => new Array<number>());
+	const dependents = new Array<Array<number> | undefined>(fn.valueCapacity);
 	for (const [index, transfer] of transfers.entries()) {
-		for (const input of transfer.inputs) dependents[input]!.push(index);
+		for (const input of transfer.inputs) {
+			const users = dependents[input] ?? [];
+			users.push(index);
+			dependents[input] = users;
+		}
 	}
 	const masks = new Uint16Array(fn.valueCapacity);
 	const queue = transfers.map((_, index) => index);
@@ -286,7 +290,7 @@ export function analyzeCoreValueKinds(
 		const next = masks[transfer.output]! | transfer.evaluate(masks);
 		if (next === masks[transfer.output]) continue;
 		masks[transfer.output] = next;
-		for (const dependent of dependents[transfer.output]!) {
+		for (const dependent of dependents[transfer.output] ?? []) {
 			if (queued[dependent] !== 0) continue;
 			queued[dependent] = 1;
 			queue.push(dependent);
@@ -332,7 +336,7 @@ export function analyzeCoreValueKinds(
 				fn.instructionOpcodeName(definition.instruction) === "move");
 		if (!forwardsInteger) continue;
 		exactInt32[transfer.output] = 1;
-		for (const dependent of dependents[transfer.output]!) {
+		for (const dependent of dependents[transfer.output] ?? []) {
 			if (exactQueued[dependent] !== 0) continue;
 			exactQueued[dependent] = 1;
 			exactQueue.push(dependent);
