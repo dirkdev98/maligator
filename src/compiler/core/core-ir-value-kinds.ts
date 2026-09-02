@@ -16,11 +16,6 @@ import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
 import type { CoreCallGraphNode } from "./core-call-graph.ts";
-import {
-	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
-	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
-	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
-} from "./core-internal-attributes.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -491,7 +486,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		key: "local-value-kinds",
 		scope: "function",
 		functionDependencies: ["body", "cfg", "representations"],
-		contextIdentity: (context) => context.data.singleAssignmentGlobalSlots.join(","),
+		contextIdentity: (context) => context.data.singleAssignmentGlobalSlots,
 		compute({ program, context, request, get }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			const fn = program.function(request.function);

@@ -39,6 +39,7 @@ it("uses program-flow dirtiness without serialized version or target keys", () =
 	expect(source).not.toMatch(
 		/versionKeys|programValueKindVersionKey|programValueKindTargetsKey/,
 	);
+	expect(source).not.toMatch(/singleAssignmentGlobalSlots\.join/);
 	expect(source).not.toMatch(/CORE_PROGRAM_VALUE_KIND_ANALYSIS|programFlow\.refresh/);
 	expect(flowSource).toMatch(/programFlow\.refresh/);
 	expect(flowSource).toMatch(/epoch\.dirtyFunctionAt/);
