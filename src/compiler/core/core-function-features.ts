@@ -1,5 +1,5 @@
-import { coreBlockId, coreInstructionId, coreOpcodeId } from "./core-ir.ts";
-import type { CoreFunctionId } from "./core-ir.ts";
+import { coreOpcodeId } from "./core-ir.ts";
+import type { CoreBlockId, CoreFunctionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_FUNCTION_HAS_BRANCHES = 1 << 0;
@@ -21,25 +21,24 @@ export const CORE_FUNCTION_FEATURE_MASK =
 export type CoreFunctionFeatureBits = number;
 
 function hasControlCycle(fn: CoreFunctionStore): boolean {
-	const colors = new Uint8Array(fn.blockCapacity);
-	const blocks = new Int32Array(fn.blockCapacity);
-	const edges = new Int32Array(fn.blockCapacity);
-	for (let root = 0; root < fn.blockCapacity; root++) {
-		const rootBlock = coreBlockId(root);
-		if (fn.kernel.blockLive(rootBlock) === 0 || colors[root] !== 0) continue;
+	const colors = new Map<CoreBlockId, number>();
+	const blocks: Array<CoreBlockId> = [];
+	const edges: Array<number> = [];
+	for (const rootBlock of fn.blockIds()) {
+		if ((colors.get(rootBlock) ?? 0) !== 0) continue;
 		let depth = 0;
-		blocks[0] = root;
+		blocks[0] = rootBlock;
 		edges[0] = 0;
-		colors[root] = 1;
+		colors.set(rootBlock, 1);
 		while (depth >= 0) {
-			const block = coreBlockId(blocks[depth]!);
+			const block = blocks[depth]!;
 			const terminator = fn.blockTerminator(block);
 			const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
 			const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
 			const handler = fn.kernel.blockHandlerBlock(block);
 			const edgeIndex = edges[depth]!;
 			if (edgeIndex >= edgeCount + (handler === undefined ? 0 : 1)) {
-				colors[block] = 2;
+				colors.set(block, 2);
 				depth--;
 				continue;
 			}
@@ -48,13 +47,13 @@ function hasControlCycle(fn: CoreFunctionStore): boolean {
 				edgeIndex < edgeCount
 					? fn.kernel.terminatorEdgeBlock(edgeStart + edgeIndex)
 					: handler!;
-			if (fn.kernel.blockLive(target) === 0) continue;
-			if (colors[target] === 1) return true;
-			if (colors[target] !== 0) continue;
+			if (!fn.isBlockLive(target)) continue;
+			if (colors.get(target) === 1) return true;
+			if ((colors.get(target) ?? 0) !== 0) continue;
 			depth++;
 			blocks[depth] = target;
 			edges[depth] = 0;
-			colors[target] = 1;
+			colors.set(target, 1);
 		}
 	}
 	return false;
@@ -65,9 +64,7 @@ export function scanCoreFunctionFeatures(
 	candidateOpcodes?: ArrayLike<number>,
 ): CoreFunctionFeatureBits {
 	let bits = 0;
-	for (let blockId = 0; blockId < fn.blockCapacity; blockId++) {
-		const block = coreBlockId(blockId);
-		if (fn.kernel.blockLive(block) === 0) continue;
+	for (const block of fn.blockIds()) {
 		if (fn.kernel.blockHandlerBlock(block) !== undefined) {
 			bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
 		}
@@ -77,12 +74,7 @@ export function scanCoreFunctionFeatures(
 			bits |= CORE_FUNCTION_HAS_BRANCHES;
 		}
 		if (kind === "throw") bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
-		for (
-			let instructionId = fn.kernel.blockFirstInstruction(block);
-			instructionId >= 0 && instructionId !== terminator;
-			instructionId = fn.kernel.instructionNext(coreInstructionId(instructionId))
-		) {
-			const instruction = coreInstructionId(instructionId);
+		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.kernel.instructionOpcode(instruction);
 			if (opcode < 0) continue;
 			const descriptor = fn.registry.byId(coreOpcodeId(opcode));

@@ -90,21 +90,6 @@ function handlerBlock(
 	return fn.kernel.blockHandlerBlock(block);
 }
 
-function forEachValueUse(
-	fn: CoreFunctionStore,
-	value: CoreValueId,
-	visit: (instruction: CoreInstructionId, operand: number) => void,
-): void {
-	const kernel = fn.kernel;
-	for (let use = kernel.valueFirstUse(value); use >= 0; ) {
-		const next = kernel.useNext(use);
-		if (kernel.useLive(use) === 1) {
-			visit(kernel.useInstruction(use), kernel.useOperand(use));
-		}
-		use = next;
-	}
-}
-
 export const CORE_OWN_DATA_CELL_FACT = "own-data-cell";
 export const CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT = "contained-aggregate-own-slot";
 export const CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE = "freshArrayLengthNumber";
@@ -1721,7 +1706,7 @@ function stringCharCodeAtCandidates(
 ): ReadonlyArray<CoreStringCharCodeAtCandidate> {
 	const candidates: Array<CoreStringCharCodeAtCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const call of fn.instructionIds()) {
+	for (const call of index.opcodes.get("call") ?? []) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
 			(instructionOperandCount(fn, call) !== 2 && instructionOperandCount(fn, call) !== 3)
@@ -1838,7 +1823,7 @@ function functionCallChainCandidates(
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreFunctionCallChainCandidate> {
 	const candidates: Array<CoreFunctionCallChainCandidate> = [];
-	for (const call of fn.instructionIds()) {
+	for (const call of index.opcodes.get("call") ?? []) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
 			fn.instructionOpcodeName(call) !== "call" ||
@@ -2191,7 +2176,7 @@ function builtinCollectionCallCandidates(
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreBuiltinCollectionCallCandidate> {
 	const candidates: Array<CoreBuiltinCollectionCallCandidate> = [];
-	for (const call of fn.instructionIds()) {
+	for (const call of index.opcodes.get("call") ?? []) {
 		if (fn.instructionKind(call) !== "operation") continue;
 		const operation = knownBuiltinOperation(fn, call);
 		if (operation === undefined || !COLLECTION_CALL_CHAIN_OPERATIONS.has(operation)) {
@@ -2246,7 +2231,7 @@ function freshArrayLengthCandidates(
 ): ReadonlyArray<CoreFreshArrayLengthCandidate> {
 	const candidates: Array<CoreFreshArrayLengthCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const load of fn.instructionIds()) {
+	for (const load of index.opcodes.get("loadPropertyStatic") ?? []) {
 		if (
 			fn.instructionKind(load) !== "operation" ||
 			!staticPropertyNamed(program, fn, load, "length") ||
@@ -2322,7 +2307,7 @@ function indexedLengthLoopCandidates(
 ): ReadonlyArray<CoreIndexedLengthLoopCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreIndexedLengthLoopCandidate> = [];
-	for (const load of fn.instructionIds()) {
+	for (const load of index.opcodes.get("loadPropertyStatic") ?? []) {
 		if (
 			fn.instructionKind(load) !== "operation" ||
 			!staticPropertyNamed(program, fn, load, "length") ||
@@ -2338,13 +2323,9 @@ function indexedLengthLoopCandidates(
 		if (loop === undefined) continue;
 		const output = instructionResult(fn, load, 0)!;
 		if (index.controlUses.has(roots.get(output) ?? output)) continue;
-		let useCount = 0;
-		let comparison: CoreInstructionId | undefined;
-		forEachValueUse(fn, output, (instruction) => {
-			useCount++;
-			if (useCount === 1) comparison = instruction;
-		});
-		if (useCount !== 1 || comparison === undefined) continue;
+		const uses = index.uses.get(roots.get(output) ?? output) ?? [];
+		const comparison = uses.length === 1 ? uses[0]!.instruction : undefined;
+		if (comparison === undefined) continue;
 		const operator = fn.instructionAttributes(comparison).operator;
 		if (
 			fn.instructionKind(comparison) !== "operation" ||
@@ -2381,33 +2362,31 @@ function indexedLengthLoopCandidates(
 			readonly instruction: CoreInstructionId;
 			readonly kind: "load" | "store";
 		}> = [];
-		for (const candidateBlock of fn.blockIds()) {
-			if (!loop.blocks.has(candidateBlock) || !control.dominates(block, candidateBlock)) {
+		const indexedAccesses = [
+			...(index.opcodes.get("loadProperty") ?? []),
+			...(index.opcodes.get("storeProperty") ?? []),
+		].sort((left, right) => {
+			const leftLocation = index.location.get(left)!;
+			const rightLocation = index.location.get(right)!;
+			return (
+				leftLocation.block - rightLocation.block ||
+				leftLocation.index - rightLocation.index
+			);
+		});
+		for (const instruction of indexedAccesses) {
+			const location = index.location.get(instruction)!;
+			if (
+				!loop.blocks.has(location.block) ||
+				!control.dominates(block, location.block) ||
+				(location.block === block && location.index <= comparisonLocation.index) ||
+				instructionOperand(fn, instruction, 0) !== receiver ||
+				instructionOperand(fn, instruction, 1) !== induction
+			)
 				continue;
-			}
-			for (const instruction of fn.bodyInstructionIds(candidateBlock)) {
-				const opcode = fn.instructionOpcodeName(instruction);
-				const kind =
-					opcode === "loadProperty"
-						? ("load" as const)
-						: opcode === "storeProperty"
-							? ("store" as const)
-							: undefined;
-				if (
-					kind === undefined ||
-					instructionOperand(fn, instruction, 0) !== receiver ||
-					instructionOperand(fn, instruction, 1) !== induction
-				)
-					continue;
-				const location = index.location.get(instruction);
-				if (
-					location === undefined ||
-					(location.block === block && location.index <= comparisonLocation.index)
-				)
-					continue;
-				elements.push({ instruction, kind });
-				if (elements.length >= 8) break;
-			}
+			elements.push({
+				instruction,
+				kind: fn.instructionOpcodeName(instruction) === "loadProperty" ? "load" : "store",
+			});
 			if (elements.length >= 8) break;
 		}
 		const instructions = Object.freeze([
@@ -2618,7 +2597,7 @@ function iteratorEntryPairVirtualizationCandidates(
 	if (fn.isGenerator || fn.isAsync) return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const candidates: Array<CoreIteratorEntryPairVirtualizationCandidate> = [];
-	for (const outerStep of fn.instructionIds()) {
+	for (const outerStep of index.opcodes.get("iteratorStep") ?? []) {
 		if (
 			fn.instructionKind(outerStep) !== "operation" ||
 			fn.instructionOpcodeName(outerStep) !== "iteratorStep" ||
@@ -2795,7 +2774,10 @@ function stringSplitProjectionCandidates(
 ): ReadonlyArray<CoreStringSplitProjectionCandidate> {
 	const candidates: Array<CoreStringSplitProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const call of fn.instructionIds()) {
+	for (const call of [
+		...(index.opcodes.get("call") ?? []),
+		...(index.opcodes.get("callBuiltin") ?? []),
+	]) {
 		if (fn.instructionKind(call) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(call);
 		const direct = opcode === "callBuiltin";
@@ -2962,7 +2944,7 @@ function stringSliceNumberCandidates(
 ): ReadonlyArray<CoreStringSliceNumberCandidate> {
 	const candidates: Array<CoreStringSliceNumberCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const sliceCall of fn.instructionIds()) {
+	for (const sliceCall of index.opcodes.get("call") ?? []) {
 		if (
 			fn.instructionKind(sliceCall) !== "operation" ||
 			fn.instructionOpcodeName(sliceCall) !== "call" ||
@@ -3095,7 +3077,7 @@ function regexpExecProjectionCandidates(
 						root(instructionResult(fn, instruction, 0)!) === root(value)))
 			);
 		});
-	for (const call of fn.instructionIds()) {
+	for (const call of index.opcodes.get("call") ?? []) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
 			fn.instructionOpcodeName(call) !== "call" ||
@@ -3445,14 +3427,12 @@ function regexpIteratorProjectionCandidates(
 ): ReadonlyArray<CoreRegExpIteratorProjectionCandidate> {
 	const candidates: Array<CoreRegExpIteratorProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const block of fn.blockIds()) {
+	for (const step of index.opcodes.get("iteratorStep") ?? []) {
+		const block = fn.instructionBlock(step);
 		if (!control.reachable.has(block)) continue;
-		const instructions = [...fn.bodyInstructionIds(block)];
-		const step = instructions.at(-1);
 		const doneBranch = fn.blockTerminator(block);
 		if (
-			step === undefined ||
-			fn.instructionOpcodeName(step) !== "iteratorStep" ||
+			index.location.get(step)!.index + 1 !== index.location.get(doneBranch)!.index ||
 			instructionOperandCount(fn, step) !== 2 ||
 			instructionResultCount(fn, step) !== 2 ||
 			fn.instructionKind(doneBranch) !== "branch" ||
@@ -3627,10 +3607,9 @@ function discoverCandidates(
 				dense.length === 0 &&
 				provenanceAnalysis.escape(layout.instruction) === "contained"
 			) {
-				const useInstructions: Array<CoreInstructionId> = [];
-				forEachValueUse(fn, layout.result, (instruction) => {
-					useInstructions.push(instruction);
-				});
+				const useInstructions = (
+					index.uses.get(roots.get(layout.result) ?? layout.result) ?? []
+				).map(({ instruction }) => instruction);
 				const instructions = Object.freeze(
 					[layout.instruction, ...useInstructions].filter(
 						(instruction, index, all) => all.indexOf(instruction) === index,
@@ -3683,13 +3662,9 @@ function discoverCandidates(
 			index.controlUses.has(roots.get(output) ?? output)
 		)
 			continue;
-		let useCount = 0;
-		let user: CoreInstructionId | undefined;
-		forEachValueUse(fn, output, (instruction) => {
-			useCount++;
-			if (useCount === 1) user = instruction;
-		});
-		if (useCount !== 1 || user === undefined) continue;
+		const uses = index.uses.get(roots.get(output) ?? output) ?? [];
+		const user = uses.length === 1 ? uses[0]!.instruction : undefined;
+		if (user === undefined) continue;
 		const startLocation = index.location.get(instruction);
 		const finishLocation = index.location.get(user);
 		let matchingOperands = 0;
