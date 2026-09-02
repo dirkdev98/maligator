@@ -232,18 +232,18 @@ export function coreFactFamilyKeys(fact: CoreFact): ReadonlyArray<string> {
 function normalizeIdentities(
 	identities: ReadonlyArray<Identity>,
 ): ReadonlyArray<Identity> {
-	const byKey = new Map<string, Identity>();
+	const unique: Array<Identity> = [];
 	for (const identity of identities) {
-		const key = identityKey(identity);
-		if (!byKey.has(key)) byKey.set(key, identity);
+		if (!unique.some((candidate) => Object.is(candidate, identity)))
+			unique.push(identity);
 	}
-	return [...byKey]
-		.sort(([left], [right]) => compareKeys(left, right))
-		.map(([, value]) => value);
+	return unique.sort((left, right) => compareKeys(identityKey(left), identityKey(right)));
 }
 
 function normalizeStrings(values: ReadonlyArray<string>): ReadonlyArray<string> {
-	return [...new Set(values)].sort(compareKeys);
+	const unique: Array<string> = [];
+	for (const value of values) if (!unique.includes(value)) unique.push(value);
+	return unique.sort(compareKeys);
 }
 
 function normalizeClaim(claim: CoreFactClaim): CoreFactClaim {
@@ -295,26 +295,79 @@ function claimKey(claim: CoreFactClaim): string {
 	}
 }
 
+function arraysEqual<Value>(
+	left: ReadonlyArray<Value>,
+	right: ReadonlyArray<Value>,
+	equals: (left: Value, right: Value) => boolean = Object.is,
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every((value, index) => equals(value, right[index]!))
+	);
+}
+
+function coreFactClaimsEqual(left: CoreFactClaim, right: CoreFactClaim): boolean {
+	if (left.kind !== right.kind) return false;
+	switch (left.kind) {
+		case "identity": {
+			const candidate = right as typeof left;
+			return (
+				left.subject === candidate.subject &&
+				arraysEqual(left.identities, candidate.identities)
+			);
+		}
+		case "shape": {
+			const candidate = right as typeof left;
+			return (
+				left.subject === candidate.subject && arraysEqual(left.shapes, candidate.shapes)
+			);
+		}
+		case "range": {
+			const candidate = right as typeof left;
+			const leftBounds = canonicalRangeBounds(left);
+			const rightBounds = canonicalRangeBounds(candidate);
+			return (
+				left.subject === candidate.subject &&
+				Object.is(leftBounds.minimum, rightBounds.minimum) &&
+				Object.is(leftBounds.maximum, rightBounds.maximum) &&
+				left.integer === candidate.integer &&
+				left.mayBeNaN === candidate.mayBeNaN &&
+				left.mayBeNegativeZero === candidate.mayBeNegativeZero
+			);
+		}
+		case "effect": {
+			const candidate = right as typeof left;
+			return (
+				left.instruction === candidate.instruction &&
+				arraysEqual(left.effects.reads, candidate.effects.reads) &&
+				arraysEqual(left.effects.writes, candidate.effects.writes) &&
+				left.effects.mayThrow === candidate.effects.mayThrow &&
+				left.effects.maySuspend === candidate.effects.maySuspend &&
+				left.effects.mayGc === candidate.effects.mayGc &&
+				left.effects.callsUserCode === candidate.effects.callsUserCode
+			);
+		}
+	}
+}
+
 /** Canonicalize, deduplicate, and discard weaker conjuncts in one fact. */
 export function normalizeCoreFactClaims(
 	claims: ReadonlyArray<CoreFactClaim>,
 ): ReadonlyArray<CoreFactClaim> {
-	const byKey = new Map<string, CoreFactClaim>();
+	const unique: Array<CoreFactClaim> = [];
 	for (const claim of claims.map(normalizeClaim)) {
-		const key = claimKey(claim);
-		if (!byKey.has(key)) byKey.set(key, claim);
+		if (!unique.some((candidate) => coreFactClaimsEqual(candidate, claim)))
+			unique.push(claim);
 	}
-	const entries = [...byKey].sort(([left], [right]) => compareKeys(left, right));
-	return entries
-		.filter(([, claim], index) =>
-			entries.every(
-				([, candidate], candidateIndex) =>
-					candidateIndex === index ||
-					!coreFactClaimImplies(candidate, claim) ||
-					coreFactClaimImplies(claim, candidate),
-			),
-		)
-		.map(([, claim]) => claim);
+	unique.sort((left, right) => compareKeys(claimKey(left), claimKey(right)));
+	return unique.filter((claim, index) =>
+		unique.every(
+			(candidate, candidateIndex) =>
+				candidateIndex === index ||
+				!coreFactClaimImplies(candidate, claim) ||
+				coreFactClaimImplies(claim, candidate),
+		),
+	);
 }
 
 export function normalizeCoreFact(fact: CoreFact): CoreFact {
@@ -322,7 +375,7 @@ export function normalizeCoreFact(fact: CoreFact): CoreFact {
 	return claims.length === fact.claims.length &&
 		claims.every((claim, index) => {
 			const original = fact.claims[index]!;
-			if (claimKey(claim) !== claimKey(original)) return false;
+			if (!coreFactClaimsEqual(claim, original)) return false;
 			if (original.kind !== "range") return true;
 			const canonical = canonicalRangeBounds(original);
 			return (
