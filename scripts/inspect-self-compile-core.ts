@@ -2,6 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
+import {
+	coreInstructionOperands,
+	coreInstructionResults,
+} from "../src/compiler/core/core-debug-view.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import type { CoreFunctionId } from "../src/compiler/core/core-ir.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
@@ -121,8 +125,8 @@ try {
 							block,
 							instruction,
 							opcode: fn.instructionOpcodeName(instruction),
-							operands: fn.instructionOperands(instruction),
-							results: fn.instructionResults(instruction),
+							operands: coreInstructionOperands(fn, instruction),
+							results: coreInstructionResults(fn, instruction),
 							attributes: fn.instructionAttributes(instruction),
 							sourcePath,
 							line: position?.line ?? 0,
