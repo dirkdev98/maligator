@@ -929,12 +929,52 @@ export function analyzeProgramSummaries(
 		})),
 		(sccIndex, dimensions, enqueue) => {
 			if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) === 0) return;
-		const scc = sccs[sccIndex]!;
-		const aggregateBefore = anyScriptSummary;
-		for (const functionId of scc.functions) {
-			current.set(
-				functionId,
-				deriveSummary(
+			const scc = sccs[sccIndex]!;
+			const aggregateBefore = anyScriptSummary;
+			for (const functionId of scc.functions) {
+				current.set(
+					functionId,
+					deriveSummary(
+						program,
+						functionId,
+						local.get(functionId)!,
+						targets,
+						current,
+						anyScriptSummary,
+						summaryIds,
+						reasons,
+						false,
+					),
+				);
+			}
+			const members = new Set(scc.functions);
+			const memberQueue: Array<CoreCallGraphNode> = [
+				...(scc.hasAnyScriptAggregate ? [CORE_ANY_SCRIPT_AGGREGATE] : []),
+				...scc.functions,
+			];
+			const memberQueued = new Set(memberQueue);
+			let memberCursor = 0;
+			while (memberCursor < memberQueue.length) {
+				const node = memberQueue[memberCursor++]!;
+				memberQueued.delete(node);
+				if (node === CORE_ANY_SCRIPT_AGGREGATE) {
+					const nextAggregate = summarizeAnyScriptCallees(
+						current,
+						maximumWildcardArgumentCount,
+					);
+					aggregateRecomputations++;
+					if (sameAnyScriptSummary(anyScriptSummary, nextAggregate)) continue;
+					anyScriptSummary = nextAggregate;
+					for (const caller of targets.graph.wildcardCallers) {
+						wildcardReverseCallerVisits++;
+						if (!members.has(caller) || memberQueued.has(caller)) continue;
+						memberQueued.add(caller);
+						memberQueue.push(caller);
+					}
+					continue;
+				}
+				const functionId = node;
+				const next = deriveSummary(
 					program,
 					functionId,
 					local.get(functionId)!,
@@ -943,94 +983,54 @@ export function analyzeProgramSummaries(
 					anyScriptSummary,
 					summaryIds,
 					reasons,
-					false,
-				),
-			);
-		}
-		const members = new Set(scc.functions);
-		const memberQueue: Array<CoreCallGraphNode> = [
-			...(scc.hasAnyScriptAggregate ? [CORE_ANY_SCRIPT_AGGREGATE] : []),
-			...scc.functions,
-		];
-		const memberQueued = new Set(memberQueue);
-		let memberCursor = 0;
-		while (memberCursor < memberQueue.length) {
-			const node = memberQueue[memberCursor++]!;
-			memberQueued.delete(node);
-			if (node === CORE_ANY_SCRIPT_AGGREGATE) {
-				const nextAggregate = summarizeAnyScriptCallees(
-					current,
-					maximumWildcardArgumentCount,
 				);
-				aggregateRecomputations++;
-				if (sameAnyScriptSummary(anyScriptSummary, nextAggregate)) continue;
-				anyScriptSummary = nextAggregate;
-				for (const caller of targets.graph.wildcardCallers) {
-					wildcardReverseCallerVisits++;
+				const prior = current.get(functionId);
+				current.set(functionId, next);
+				sccTransfers++;
+				if (prior !== undefined && summariesEqual(prior, next)) continue;
+				for (const caller of targets.graph.exactCallers(functionId)) {
+					exactReverseCallerVisits++;
 					if (!members.has(caller) || memberQueued.has(caller)) continue;
 					memberQueued.add(caller);
 					memberQueue.push(caller);
 				}
-				continue;
+				if (scc.hasAnyScriptAggregate && !memberQueued.has(CORE_ANY_SCRIPT_AGGREGATE)) {
+					memberQueued.add(CORE_ANY_SCRIPT_AGGREGATE);
+					memberQueue.push(CORE_ANY_SCRIPT_AGGREGATE);
+				}
 			}
-			const functionId = node;
-			const next = deriveSummary(
-				program,
-				functionId,
-				local.get(functionId)!,
-				targets,
-				current,
-				anyScriptSummary,
-				summaryIds,
-				reasons,
-			);
-			const prior = current.get(functionId);
-			current.set(functionId, next);
-			sccTransfers++;
-			if (prior !== undefined && summariesEqual(prior, next)) continue;
-			for (const caller of targets.graph.exactCallers(functionId)) {
-				exactReverseCallerVisits++;
-				if (!members.has(caller) || memberQueued.has(caller)) continue;
-				memberQueued.add(caller);
-				memberQueue.push(caller);
+			for (const functionId of scc.functions) {
+				const next = current.get(functionId)!;
+				const prior = previous?.published.get(functionId)?.summary;
+				if (prior !== undefined && summariesEqual(prior, next)) continue;
+				for (const caller of targets.graph.exactCallers(functionId)) {
+					exactReverseCallerVisits++;
+					const callerScc = owner.get(caller);
+					if (callerScc === sccIndex) continue;
+					if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
+					affectedCallers.add(caller);
+				}
+				if (targets.graph.hasAggregate()) {
+					const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
+					if (
+						aggregateScc !== sccIndex &&
+						enqueue(aggregateScc, CORE_PROGRAM_FLOW_SUMMARIES)
+					)
+						callerWakeups++;
+				}
 			}
-			if (scc.hasAnyScriptAggregate && !memberQueued.has(CORE_ANY_SCRIPT_AGGREGATE)) {
-				memberQueued.add(CORE_ANY_SCRIPT_AGGREGATE);
-				memberQueue.push(CORE_ANY_SCRIPT_AGGREGATE);
+			if (
+				scc.hasAnyScriptAggregate &&
+				!sameAnyScriptSummary(aggregateBefore, anyScriptSummary)
+			) {
+				for (const caller of targets.graph.wildcardCallers) {
+					wildcardReverseCallerVisits++;
+					const callerScc = owner.get(caller);
+					if (callerScc === sccIndex) continue;
+					if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
+					affectedCallers.add(caller);
+				}
 			}
-		}
-		for (const functionId of scc.functions) {
-			const next = current.get(functionId)!;
-			const prior = previous?.published.get(functionId)?.summary;
-			if (prior !== undefined && summariesEqual(prior, next)) continue;
-			for (const caller of targets.graph.exactCallers(functionId)) {
-				exactReverseCallerVisits++;
-				const callerScc = owner.get(caller);
-				if (callerScc === sccIndex) continue;
-				if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
-				affectedCallers.add(caller);
-			}
-			if (targets.graph.hasAggregate()) {
-				const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
-				if (
-					aggregateScc !== sccIndex &&
-					enqueue(aggregateScc, CORE_PROGRAM_FLOW_SUMMARIES)
-				)
-					callerWakeups++;
-			}
-		}
-		if (
-			scc.hasAnyScriptAggregate &&
-			!sameAnyScriptSummary(aggregateBefore, anyScriptSummary)
-		) {
-			for (const caller of targets.graph.wildcardCallers) {
-				wildcardReverseCallerVisits++;
-				const callerScc = owner.get(caller);
-				if (callerScc === sccIndex) continue;
-				if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
-				affectedCallers.add(caller);
-			}
-		}
 		},
 	);
 	for (const functionId of program.functionIds()) {
