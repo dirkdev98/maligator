@@ -694,6 +694,8 @@ describe("Core store", () => {
 		setInitial.commit();
 
 		const start = fn.kernel.blockHandlerArgumentStart(entry);
+		expect(fn.handlerBlockCount).toBe(1);
+		expect(fn.handlerBlockAt(0)).toBe(entry);
 		expect(fn.kernel.blockHandlerBlock(entry)).toBe(entry);
 		expect(fn.kernel.blockHandlerArgumentCount(entry)).toBe(1);
 		expect(fn.kernel.handlerArgumentAt(start)).toBe(parameter);
@@ -711,12 +713,15 @@ describe("Core store", () => {
 		const clear = CoreEditor.open(program, fn.id);
 		clear.clearHandler(entry);
 		clear.commit();
+		expect(fn.handlerBlockCount).toBe(0);
 		expect(fn.kernel.blockHandlerBlock(entry)).toBeUndefined();
 		expect(fn.kernel.blockHandlerArgumentCount(entry)).toBe(0);
 
 		const reuse = CoreEditor.open(program, fn.id);
 		reuse.setHandler(entry, entry, [copied]);
 		reuse.commit();
+		expect(fn.handlerBlockCount).toBe(1);
+		expect(fn.handlerBlockAt(0)).toBe(entry);
 		expect(fn.kernel.blockHandlerArgumentStart(entry)).toBe(start);
 		expect(fn.kernel.handlerArgumentAt(start)).toBe(copied);
 	});
@@ -1117,6 +1122,7 @@ describe("Core store", () => {
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
 		const call = [...fn.bodyInstructionIds(removed)][0]!;
+		expect(fn.handlerBlockCount).toBe(1);
 
 		const editor = CoreEditor.open(program, fn.id);
 		editor.removeBlock(removed);
@@ -1139,6 +1145,7 @@ describe("Core store", () => {
 			{ kind: "control-flow", source: removed, target: entry },
 			{ kind: "exception", source: removed, target: entry },
 		]);
+		expect(fn.handlerBlockCount).toBe(0);
 	});
 
 	it("keeps function identities stable when another function is added", () => {

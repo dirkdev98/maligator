@@ -1,4 +1,4 @@
-import { coreBlockId, coreFactId } from "./core-ir.ts";
+import { coreFactId } from "./core-ir.ts";
 import type {
 	AppendCoreInstructionOptions,
 	CoreBlockId,
@@ -1077,11 +1077,12 @@ export class CoreEditor {
 	}
 
 	#replaceHandlerArguments(replacement: (value: CoreValueId) => CoreValueId): void {
-		for (let blockIndex = 0; blockIndex < this.function.blockCapacity; blockIndex++) {
-			const block = coreBlockId(blockIndex);
-			if (!this.function.isBlockLive(block)) continue;
+		for (let blockIndex = 0; blockIndex < this.function.handlerBlockCount; blockIndex++) {
+			const block = this.function.handlerBlockAt(blockIndex);
 			const handlerBlock = this.function.kernel.blockHandlerBlock(block);
-			if (handlerBlock === undefined) continue;
+			if (handlerBlock === undefined) {
+				throw new Error(`Core handler index references block ${block} without a handler`);
+			}
 			const argumentStart = this.function.kernel.blockHandlerArgumentStart(block);
 			const argumentCount = this.function.kernel.blockHandlerArgumentCount(block);
 			let arguments_: Array<CoreValueId> | undefined;

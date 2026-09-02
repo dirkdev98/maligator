@@ -439,6 +439,8 @@ export class CoreFunctionStore {
 	readonly #blockHandlerBlock: Array<number> = [];
 	readonly #blockHandlerArgumentStart: Array<number> = [];
 	readonly #blockHandlerArgumentCount: Array<number> = [];
+	readonly #handlerBlocks: Array<CoreBlockId> = [];
+	readonly #handlerBlockIndexes: Array<number> = [];
 	readonly #blockParameterValues: Array<CoreValueId> = [];
 	readonly #blockParameterRoles: Array<number> = [];
 	readonly #blockParameterFreeBySize: Array<Array<number> | undefined> = [];
@@ -649,6 +651,16 @@ export class CoreFunctionStore {
 
 	get handlerArgumentCapacity(): number {
 		return this.#handlerArguments.length;
+	}
+
+	get handlerBlockCount(): number {
+		return this.#handlerBlocks.length;
+	}
+
+	handlerBlockAt(index: number): CoreBlockId {
+		const block = this.#handlerBlocks[index];
+		if (block === undefined) throw new Error(`Unknown Core handler block index ${index}`);
+		return block;
 	}
 
 	get useCapacity(): number {
@@ -953,6 +965,7 @@ export class CoreFunctionStore {
 		this.#blockHandlerBlock.push(-1);
 		this.#blockHandlerArgumentStart.push(0);
 		this.#blockHandlerArgumentCount.push(0);
+		this.#handlerBlockIndexes.push(-1);
 		const values = parameters.map((spec, index) =>
 			this.#createValue(spec.representation ?? "boxed", 0, block, index),
 		);
@@ -1318,6 +1331,7 @@ export class CoreFunctionStore {
 			this.#blockHandlerArgumentStart[block]!,
 			this.#blockHandlerArgumentCount[block]!,
 		);
+		if (this.#blockHandlerBlock[block]! >= 0) this.#removeHandlerBlock(block);
 		this.#blockHandlerBlock[block] = -1;
 		this.#blockHandlerArgumentStart[block] = 0;
 		this.#blockHandlerArgumentCount[block] = 0;
@@ -1355,6 +1369,13 @@ export class CoreFunctionStore {
 			this.#releaseHandlerArgumentRange(oldStart, oldCount);
 			start = this.#allocateHandlerArgumentRange(nextCount);
 		}
+		const hadHandler = this.#blockHandlerBlock[block]! >= 0;
+		if (!hadHandler && handler !== undefined) {
+			this.#handlerBlockIndexes[block] = this.#handlerBlocks.length;
+			this.#handlerBlocks.push(block);
+		} else if (hadHandler && handler === undefined) {
+			this.#removeHandlerBlock(block);
+		}
 		this.#blockHandlerBlock[block] = handler?.block ?? -1;
 		this.#blockHandlerArgumentStart[block] = start;
 		this.#blockHandlerArgumentCount[block] = nextCount;
@@ -1364,6 +1385,17 @@ export class CoreFunctionStore {
 				this.#handlerArguments[start + index] = value;
 			}
 		}
+	}
+
+	#removeHandlerBlock(block: CoreBlockId): void {
+		const index = this.#handlerBlockIndexes[block]!;
+		if (index < 0) throw new Error(`Core block ${block} has no handler index`);
+		const last = this.#handlerBlocks.pop()!;
+		if (index < this.#handlerBlocks.length) {
+			this.#handlerBlocks[index] = last;
+			this.#handlerBlockIndexes[last] = index;
+		}
+		this.#handlerBlockIndexes[block] = -1;
 	}
 
 	_replaceTerminatorPayload(

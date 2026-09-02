@@ -555,6 +555,20 @@ function verifyEdge(
 }
 
 function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreControlFlow {
+	const indexedHandlers = new Uint8Array(fn.blockCapacity);
+	for (let index = 0; index < fn.handlerBlockCount; index++) {
+		const block = fn.handlerBlockAt(index);
+		if (fn.kernel.blockLive(block) === 0) {
+			fail(`handler index references deleted block b${block}`);
+		}
+		if (indexedHandlers[block] !== 0) {
+			fail(`handler index repeats block b${block}`);
+		}
+		if (fn.kernel.blockHandlerBlock(block) === undefined) {
+			fail(`handler index references block b${block} without a handler`);
+		}
+		indexedHandlers[block] = 1;
+	}
 	for (const block of fn.blockIds()) {
 		const instruction = fn.blockTerminator(block);
 		const kind = fn.instructionKind(instruction);
@@ -612,6 +626,9 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 			fail(`terminator @${instruction} carries an unexpected guard fact`);
 		}
 		const handler = fn.kernel.blockHandlerBlock(block);
+		if ((handler === undefined) === (indexedHandlers[block] !== 0)) {
+			fail(`block b${block} handler index is inconsistent`);
+		}
 		if (handler !== undefined) {
 			checkRange(
 				`block b${block} handler argument`,
