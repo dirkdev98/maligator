@@ -316,7 +316,7 @@ function memoryVersions(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	provenance: CoreProvenance,
-	memoryInstructions: Iterable<CoreInstructionId> = fn.instructionIds(),
+	memoryInstructions?: ReadonlyArray<CoreInstructionId>,
 ): CoreMemoryVersions {
 	const resolution = resolutionFor(provenance);
 	const accessesByInstruction = new Map<
@@ -327,7 +327,7 @@ function memoryVersions(
 	const exactReads = new Map<CoreMemoryFamily, Set<CoreMemoryLocationId>>();
 	const exactLocations = new Map<CoreMemoryLocationId, CoreExactMemoryLocation>();
 	let accessCount = 0;
-	const relevantInstructions = [...memoryInstructions];
+	const relevantInstructions = memoryInstructions ?? [...fn.instructionIds()];
 	for (const instruction of relevantInstructions) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const accesses = coreMemoryAccesses(fn, instruction, resolution);
