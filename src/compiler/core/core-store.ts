@@ -256,157 +256,8 @@ function sortedIds<Id extends number>(ids: ReadonlySet<Id>): Array<Id> {
 	return [...ids].sort((left, right) => left - right);
 }
 
-type CoreTerminatorShape =
-	| {
-			readonly kind: "jump";
-			readonly block: CoreBlockId;
-			readonly argumentCount: number;
-	  }
-	| {
-			readonly kind: "branch";
-			readonly consequentBlock: CoreBlockId;
-			readonly consequentArgumentCount: number;
-			readonly alternateBlock: CoreBlockId;
-			readonly alternateArgumentCount: number;
-	  }
-	| {
-			readonly kind: "guard";
-			readonly fact: CoreFactId;
-			readonly successBlock: CoreBlockId;
-			readonly successArgumentCount: number;
-			readonly fallbackBlock: CoreBlockId;
-			readonly fallbackArgumentCount: number;
-	  }
-	| {
-			readonly kind: "switch";
-			readonly cases: ReadonlyArray<{
-				readonly value: CoreImmediate;
-				readonly block: CoreBlockId;
-				readonly argumentCount: number;
-			}>;
-			readonly defaultBlock: CoreBlockId;
-			readonly defaultArgumentCount: number;
-	  }
-	| { readonly kind: "return" }
-	| { readonly kind: "throw" }
-	| { readonly kind: "unreachable" };
-
 function freezeImmediate(value: CoreImmediate): CoreImmediate {
 	return Object.freeze({ ...value });
-}
-
-function terminatorShape(payload: CoreTerminatorPayload): CoreTerminatorShape {
-	switch (payload.kind) {
-		case "jump":
-			return Object.freeze({
-				kind: "jump",
-				block: payload.edge.block,
-				argumentCount: payload.edge.arguments.length,
-			});
-		case "branch":
-			return Object.freeze({
-				kind: "branch",
-				consequentBlock: payload.consequent.block,
-				consequentArgumentCount: payload.consequent.arguments.length,
-				alternateBlock: payload.alternate.block,
-				alternateArgumentCount: payload.alternate.arguments.length,
-			});
-		case "guard":
-			return Object.freeze({
-				kind: "guard",
-				fact: payload.fact,
-				successBlock: payload.success.block,
-				successArgumentCount: payload.success.arguments.length,
-				fallbackBlock: payload.fallback.block,
-				fallbackArgumentCount: payload.fallback.arguments.length,
-			});
-		case "switch":
-			return Object.freeze({
-				kind: "switch",
-				cases: Object.freeze(
-					payload.cases.map(({ value, edge }) =>
-						Object.freeze({
-							value: freezeImmediate(value),
-							block: edge.block,
-							argumentCount: edge.arguments.length,
-						}),
-					),
-				),
-				defaultBlock: payload.default.block,
-				defaultArgumentCount: payload.default.arguments.length,
-			});
-		case "return":
-		case "throw":
-			return Object.freeze({ kind: payload.kind });
-		case "unreachable":
-			return Object.freeze({ kind: "unreachable" });
-	}
-}
-
-function terminatorPayloadFromShape(
-	shape: CoreTerminatorShape,
-	operands: ReadonlyArray<CoreValueId>,
-): CoreTerminatorPayload {
-	let cursor = 0;
-	const takeValue = (): CoreValueId => {
-		const value = operands[cursor++];
-		if (value === undefined) throw new Error(`Malformed Core ${shape.kind} operands`);
-		return value;
-	};
-	const takeEdge = (block: CoreBlockId, count: number): CoreEdge => {
-		const end = cursor + count;
-		if (end > operands.length) throw new Error(`Malformed Core ${shape.kind} operands`);
-		const edge = { block, arguments: operands.slice(cursor, end) };
-		cursor = end;
-		return edge;
-	};
-	let payload: CoreTerminatorPayload;
-	switch (shape.kind) {
-		case "jump":
-			payload = {
-				kind: "jump",
-				edge: takeEdge(shape.block, shape.argumentCount),
-			};
-			break;
-		case "branch":
-			payload = {
-				kind: "branch",
-				condition: takeValue(),
-				consequent: takeEdge(shape.consequentBlock, shape.consequentArgumentCount),
-				alternate: takeEdge(shape.alternateBlock, shape.alternateArgumentCount),
-			};
-			break;
-		case "guard":
-			payload = {
-				kind: "guard",
-				condition: takeValue(),
-				fact: shape.fact,
-				success: takeEdge(shape.successBlock, shape.successArgumentCount),
-				fallback: takeEdge(shape.fallbackBlock, shape.fallbackArgumentCount),
-			};
-			break;
-		case "switch":
-			payload = {
-				kind: "switch",
-				discriminant: takeValue(),
-				cases: shape.cases.map(({ value, block, argumentCount }) => ({
-					value: { ...value },
-					edge: takeEdge(block, argumentCount),
-				})),
-				default: takeEdge(shape.defaultBlock, shape.defaultArgumentCount),
-			};
-			break;
-		case "return":
-		case "throw":
-			payload = { kind: shape.kind, value: takeValue() };
-			break;
-		case "unreachable":
-			payload = { kind: "unreachable" };
-			break;
-	}
-	if (cursor !== operands.length)
-		throw new Error(`Malformed Core ${shape.kind} operands`);
-	return payload;
 }
 
 function freezeAttribute(value: CoreAttributeValue): CoreAttributeValue {
@@ -570,13 +421,19 @@ export class CoreFunctionStore {
 	readonly #instructionResultCount: Array<number> = [];
 	readonly #instructionSourcePosition: Array<number> = [];
 	readonly #instructionEffectRefinementRef: Array<number> = [];
-	readonly #instructionPayload: Array<
-		CoreInstructionAttributes | CoreTerminatorShape | undefined
-	> = [];
+	readonly #instructionTerminatorEdgeStart: Array<number> = [];
+	readonly #instructionTerminatorEdgeCount: Array<number> = [];
+	readonly #instructionTerminatorFact: Array<number> = [];
+	readonly #instructionPayload: Array<CoreInstructionAttributes | undefined> = [];
 	readonly #operands: Array<CoreValueId> = [];
 	readonly #operandUses: Array<number> = [];
 	readonly #operandFreeBySize: Array<Array<number> | undefined> = [];
 	readonly #results: Array<CoreValueId> = [];
+	readonly #terminatorEdgeBlock: Array<CoreBlockId> = [];
+	readonly #terminatorEdgeArgumentStart: Array<number> = [];
+	readonly #terminatorEdgeArgumentCount: Array<number> = [];
+	readonly #terminatorEdgeCaseValue: Array<CoreImmediate | undefined> = [];
+	readonly #terminatorEdgeFreeBySize: Array<Array<number> | undefined> = [];
 
 	readonly #valueLive: Array<number> = [];
 	readonly #valueRepresentation: Array<number> = [];
@@ -640,8 +497,15 @@ export class CoreFunctionStore {
 			instructionOperandCount: this.#instructionOperandCount,
 			instructionResultStart: this.#instructionResultStart,
 			instructionResultCount: this.#instructionResultCount,
+			instructionTerminatorEdgeStart: this.#instructionTerminatorEdgeStart,
+			instructionTerminatorEdgeCount: this.#instructionTerminatorEdgeCount,
+			instructionTerminatorFact: this.#instructionTerminatorFact,
 			operands: this.#operands,
 			results: this.#results,
+			terminatorEdgeBlock: this.#terminatorEdgeBlock,
+			terminatorEdgeArgumentStart: this.#terminatorEdgeArgumentStart,
+			terminatorEdgeArgumentCount: this.#terminatorEdgeArgumentCount,
+			terminatorEdgeCaseValue: this.#terminatorEdgeCaseValue,
 			valueLive: this.#valueLive,
 			valueDefinitionKind: this.#valueDefinitionKind,
 			valueDefinitionOwner: this.#valueDefinitionOwner,
@@ -1013,13 +877,80 @@ export class CoreFunctionStore {
 	}
 
 	terminatorPayload(id: CoreInstructionId): CoreTerminatorPayload {
-		if (this.instructionKind(id) === "operation") {
+		const kind = this.instructionKind(id);
+		if (kind === "operation") {
 			throw new Error(`Core instruction ${id} is not a terminator`);
 		}
-		return terminatorPayloadFromShape(
-			this.#instructionPayload[id] as CoreTerminatorShape,
-			this.instructionOperands(id),
-		);
+		const operandStart = this.#instructionOperandStart[id]!;
+		const operandCount = this.#instructionOperandCount[id]!;
+		const edgeStart = this.#instructionTerminatorEdgeStart[id]!;
+		const edgeCount = this.#instructionTerminatorEdgeCount[id]!;
+		const operand = (offset: number): CoreValueId => {
+			if (offset < 0 || offset >= operandCount) {
+				throw new Error(`Malformed Core ${kind} operands`);
+			}
+			return this.#operands[operandStart + offset]!;
+		};
+		const edge = (offset: number): CoreEdge => {
+			if (offset < 0 || offset >= edgeCount) {
+				throw new Error(`Malformed Core ${kind} edges`);
+			}
+			const row = edgeStart + offset;
+			const argumentStart = this.#terminatorEdgeArgumentStart[row]!;
+			const argumentCount = this.#terminatorEdgeArgumentCount[row]!;
+			if (
+				argumentStart < operandStart ||
+				argumentStart + argumentCount > operandStart + operandCount
+			) {
+				throw new Error(`Malformed Core ${kind} edge arguments`);
+			}
+			return {
+				block: this.#terminatorEdgeBlock[row]!,
+				arguments: this.#operands.slice(argumentStart, argumentStart + argumentCount),
+			};
+		};
+		switch (kind) {
+			case "jump":
+				return { kind, edge: edge(0) };
+			case "branch":
+				return {
+					kind,
+					condition: operand(0),
+					consequent: edge(0),
+					alternate: edge(1),
+				};
+			case "guard": {
+				const fact = this.#instructionTerminatorFact[id]!;
+				if (fact < 0) throw new Error(`Malformed Core guard fact`);
+				return {
+					kind,
+					condition: operand(0),
+					fact: coreFactId(fact),
+					success: edge(0),
+					fallback: edge(1),
+				};
+			}
+			case "switch": {
+				const cases = Array.from({ length: edgeCount - 1 }, (_, offset) => {
+					const value = this.#terminatorEdgeCaseValue[edgeStart + offset];
+					if (value === undefined) {
+						throw new Error(`Malformed Core switch case ${offset}`);
+					}
+					return { value: { ...value }, edge: edge(offset) };
+				});
+				return {
+					kind,
+					discriminant: operand(0),
+					cases,
+					default: edge(edgeCount - 1),
+				};
+			}
+			case "return":
+			case "throw":
+				return { kind, value: operand(0) };
+			case "unreachable":
+				return { kind };
+		}
 	}
 
 	valueRepresentation(id: CoreValueId): CoreRepresentation {
@@ -1237,16 +1168,18 @@ export class CoreFunctionStore {
 		if (last >= 0 && this.#instructionOpcode[last]! < 0) {
 			throw new Error(`Core block ${block} already has a terminator`);
 		}
-		return this.#allocateInstruction(
+		const instruction = this.#allocateInstruction(
 			block,
 			TERMINATOR_CODES[payload.kind],
 			terminatorOperands(payload),
 			[],
-			terminatorShape(payload),
+			undefined,
 			sourcePosition,
 			undefined,
 			undefined,
 		);
+		this.#writeTerminatorMetadata(instruction, payload);
+		return instruction;
 	}
 
 	_replaceOperation(
@@ -1308,6 +1241,13 @@ export class CoreFunctionStore {
 		this.#releaseOperandRange(operandStart, this.#instructionOperandCount[instruction]!);
 		this.#instructionOperandStart[instruction] = 0;
 		this.#instructionOperandCount[instruction] = 0;
+		this.#releaseTerminatorEdgeRange(
+			this.#instructionTerminatorEdgeStart[instruction]!,
+			this.#instructionTerminatorEdgeCount[instruction]!,
+		);
+		this.#instructionTerminatorEdgeStart[instruction] = 0;
+		this.#instructionTerminatorEdgeCount[instruction] = 0;
+		this.#instructionTerminatorFact[instruction] = -1;
 		for (const result of this.instructionResults(instruction))
 			this.#valueLive[result] = 0;
 		this.#removeEffectRefinement(instruction);
@@ -1441,8 +1381,9 @@ export class CoreFunctionStore {
 			throw new Error(`Core instruction ${instruction} is not a terminator`);
 		}
 		this.#instructionOpcode[instruction] = TERMINATOR_CODES[payload.kind];
-		this.#instructionPayload[instruction] = terminatorShape(payload);
+		this.#instructionPayload[instruction] = undefined;
 		this._replaceOperands(mutation, instruction, terminatorOperands(payload));
+		this.#writeTerminatorMetadata(instruction, payload);
 	}
 
 	_addFact(mutation: CoreStoreMutation, fact: Omit<CoreFact, "id">): CoreFactId {
@@ -1536,7 +1477,7 @@ export class CoreFunctionStore {
 		opcode: CoreOpcodeId | number,
 		operands: ReadonlyArray<CoreValueId>,
 		outputRepresentations: ReadonlyArray<CoreRepresentation>,
-		payload: CoreInstructionAttributes | CoreTerminatorShape,
+		payload: CoreInstructionAttributes | undefined,
 		sourcePosition: number | undefined,
 		effectRefinement: CoreEffectRefinement | undefined,
 		before: CoreInstructionId | undefined,
@@ -1560,6 +1501,9 @@ export class CoreFunctionStore {
 		this.#instructionEffectRefinementRef.push(
 			this.#appendEffectRefinement(effectRefinement),
 		);
+		this.#instructionTerminatorEdgeStart.push(0);
+		this.#instructionTerminatorEdgeCount.push(0);
+		this.#instructionTerminatorFact.push(-1);
 		this.#instructionPayload.push(payload);
 		if (previous < 0) this.#blockFirstInstruction[block] = instruction;
 		else this.#instructionNext[previous] = instruction;
@@ -1632,6 +1576,81 @@ export class CoreFunctionStore {
 		for (let index = 0; index < values.length; index++) {
 			this.#blockParameterValues[start + index] = values[index]!;
 			this.#blockParameterRoles[start + index] = roles[index]!;
+		}
+	}
+
+	#writeTerminatorMetadata(
+		instruction: CoreInstructionId,
+		payload: CoreTerminatorPayload,
+	): void {
+		const edgeCount =
+			payload.kind === "jump"
+				? 1
+				: payload.kind === "branch" || payload.kind === "guard"
+					? 2
+					: payload.kind === "switch"
+						? payload.cases.length + 1
+						: 0;
+		const oldStart = this.#instructionTerminatorEdgeStart[instruction] ?? 0;
+		const oldCount = this.#instructionTerminatorEdgeCount[instruction] ?? 0;
+		let start = oldStart;
+		if (oldCount !== edgeCount) {
+			this.#releaseTerminatorEdgeRange(oldStart, oldCount);
+			start = this.#allocateTerminatorEdgeRange(edgeCount);
+		}
+		this.#instructionTerminatorEdgeStart[instruction] = start;
+		this.#instructionTerminatorEdgeCount[instruction] = edgeCount;
+		this.#instructionTerminatorFact[instruction] =
+			payload.kind === "guard" ? payload.fact : -1;
+		const operandStart = this.#instructionOperandStart[instruction]!;
+		const operandCount = this.#instructionOperandCount[instruction]!;
+		let operandOffset =
+			payload.kind === "branch" ||
+			payload.kind === "guard" ||
+			payload.kind === "switch" ||
+			payload.kind === "return" ||
+			payload.kind === "throw"
+				? 1
+				: 0;
+		let edgeOffset = 0;
+		const writeEdge = (
+			block: CoreBlockId,
+			argumentCount: number,
+			caseValue?: CoreImmediate,
+		): void => {
+			const row = start + edgeOffset++;
+			this.#terminatorEdgeBlock[row] = block;
+			this.#terminatorEdgeArgumentStart[row] = operandStart + operandOffset;
+			this.#terminatorEdgeArgumentCount[row] = argumentCount;
+			this.#terminatorEdgeCaseValue[row] =
+				caseValue === undefined ? undefined : freezeImmediate(caseValue);
+			operandOffset += argumentCount;
+		};
+		switch (payload.kind) {
+			case "jump":
+				writeEdge(payload.edge.block, payload.edge.arguments.length);
+				break;
+			case "branch":
+				writeEdge(payload.consequent.block, payload.consequent.arguments.length);
+				writeEdge(payload.alternate.block, payload.alternate.arguments.length);
+				break;
+			case "guard":
+				writeEdge(payload.success.block, payload.success.arguments.length);
+				writeEdge(payload.fallback.block, payload.fallback.arguments.length);
+				break;
+			case "switch":
+				for (const branch of payload.cases) {
+					writeEdge(branch.edge.block, branch.edge.arguments.length, branch.value);
+				}
+				writeEdge(payload.default.block, payload.default.arguments.length);
+				break;
+			case "return":
+			case "throw":
+			case "unreachable":
+				break;
+		}
+		if (edgeOffset !== edgeCount || operandOffset !== operandCount) {
+			throw new Error(`Malformed Core ${payload.kind} storage`);
 		}
 	}
 
@@ -1724,6 +1743,28 @@ export class CoreFunctionStore {
 		const free = this.#operandFreeBySize[count] ?? [];
 		free.push(start);
 		this.#operandFreeBySize[count] = free;
+	}
+
+	#allocateTerminatorEdgeRange(count: number): number {
+		if (count === 0) return 0;
+		const free = this.#terminatorEdgeFreeBySize[count]?.pop();
+		if (free !== undefined) return free;
+		const start = this.#terminatorEdgeBlock.length;
+		this.#terminatorEdgeBlock.length += count;
+		this.#terminatorEdgeArgumentStart.length += count;
+		this.#terminatorEdgeArgumentCount.length += count;
+		this.#terminatorEdgeCaseValue.length += count;
+		return start;
+	}
+
+	#releaseTerminatorEdgeRange(start: number, count: number): void {
+		if (count === 0) return;
+		for (let offset = 0; offset < count; offset++) {
+			this.#terminatorEdgeCaseValue[start + offset] = undefined;
+		}
+		const free = this.#terminatorEdgeFreeBySize[count] ?? [];
+		free.push(start);
+		this.#terminatorEdgeFreeBySize[count] = free;
 	}
 
 	#allocateBlockParameterRange(count: number): number {

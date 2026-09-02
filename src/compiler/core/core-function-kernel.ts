@@ -1,4 +1,10 @@
-import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFactId,
+	CoreImmediate,
+	CoreInstructionId,
+	CoreValueId,
+} from "./core-ir.ts";
 
 export interface CoreFunctionKernelColumns {
 	readonly blockLive: ReadonlyArray<number>;
@@ -16,8 +22,15 @@ export interface CoreFunctionKernelColumns {
 	readonly instructionOperandCount: ReadonlyArray<number>;
 	readonly instructionResultStart: ReadonlyArray<number>;
 	readonly instructionResultCount: ReadonlyArray<number>;
+	readonly instructionTerminatorEdgeStart: ReadonlyArray<number>;
+	readonly instructionTerminatorEdgeCount: ReadonlyArray<number>;
+	readonly instructionTerminatorFact: ReadonlyArray<number>;
 	readonly operands: ReadonlyArray<CoreValueId>;
 	readonly results: ReadonlyArray<CoreValueId>;
+	readonly terminatorEdgeBlock: ReadonlyArray<CoreBlockId>;
+	readonly terminatorEdgeArgumentStart: ReadonlyArray<number>;
+	readonly terminatorEdgeArgumentCount: ReadonlyArray<number>;
+	readonly terminatorEdgeCaseValue: ReadonlyArray<CoreImmediate | undefined>;
 	readonly valueLive: ReadonlyArray<number>;
 	readonly valueDefinitionKind: ReadonlyArray<number>;
 	readonly valueDefinitionOwner: ReadonlyArray<number>;
@@ -105,6 +118,35 @@ export class CoreFunctionKernel {
 
 	resultAt(index: number): CoreValueId {
 		return this.#columns.results[index]!;
+	}
+
+	terminatorEdgeStart(instruction: CoreInstructionId): number {
+		return this.#columns.instructionTerminatorEdgeStart[instruction] ?? 0;
+	}
+
+	terminatorEdgeCount(instruction: CoreInstructionId): number {
+		return this.#columns.instructionTerminatorEdgeCount[instruction] ?? 0;
+	}
+
+	terminatorFact(instruction: CoreInstructionId): CoreFactId | undefined {
+		const fact = this.#columns.instructionTerminatorFact[instruction] ?? -1;
+		return fact < 0 ? undefined : (fact as CoreFactId);
+	}
+
+	terminatorEdgeBlock(edge: number): CoreBlockId {
+		return this.#columns.terminatorEdgeBlock[edge]!;
+	}
+
+	terminatorEdgeArgumentStart(edge: number): number {
+		return this.#columns.terminatorEdgeArgumentStart[edge] ?? 0;
+	}
+
+	terminatorEdgeArgumentCount(edge: number): number {
+		return this.#columns.terminatorEdgeArgumentCount[edge] ?? 0;
+	}
+
+	terminatorEdgeCaseValue(edge: number): CoreImmediate | undefined {
+		return this.#columns.terminatorEdgeCaseValue[edge];
 	}
 
 	valueLive(value: CoreValueId): number {

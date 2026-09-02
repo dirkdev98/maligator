@@ -10,6 +10,7 @@ import {
 import type {
 	CoreBlockId,
 	CoreEdge,
+	CoreImmediate,
 	CoreTerminatorPayload,
 	CoreValueId,
 } from "../src/compiler/core/core-ir.ts";
@@ -238,6 +239,29 @@ function payloadOperands(payload: CoreTerminatorPayload): ReadonlyArray<CoreValu
 	}
 }
 
+function payloadEdges(payload: CoreTerminatorPayload): ReadonlyArray<{
+	readonly edge: CoreEdge;
+	readonly caseValue?: CoreImmediate;
+}> {
+	switch (payload.kind) {
+		case "jump":
+			return [{ edge: payload.edge }];
+		case "branch":
+			return [{ edge: payload.consequent }, { edge: payload.alternate }];
+		case "guard":
+			return [{ edge: payload.success }, { edge: payload.fallback }];
+		case "switch":
+			return [
+				...payload.cases.map(({ value, edge }) => ({ caseValue: value, edge })),
+				{ edge: payload.default },
+			];
+		case "return":
+		case "throw":
+		case "unreachable":
+			return [];
+	}
+}
+
 function mutateTerminatorSnapshot(payload: CoreTerminatorPayload): void {
 	const mutateEdge = (edge: CoreEdge) => {
 		(edge as { block: CoreBlockId }).block = 99 as CoreBlockId;
@@ -311,9 +335,33 @@ describe("Core store", () => {
 	] as const)("reconstructs %s inputs from one dense operand range", (kind) => {
 		const { program, fn, instruction, expected } = terminatorFixture(kind);
 		const operands = payloadOperands(expected);
+		const edges = payloadEdges(expected);
 
 		expect(fn.terminatorPayload(instruction)).toEqual(expected);
 		expect(fn.instructionOperands(instruction)).toEqual(operands);
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+		expect(fn.kernel.terminatorEdgeCount(instruction)).toBe(edges.length);
+		expect(fn.kernel.terminatorFact(instruction)).toBe(
+			expected.kind === "guard" ? expected.fact : undefined,
+		);
+		let argumentStart =
+			expected.kind === "branch" ||
+			expected.kind === "guard" ||
+			expected.kind === "switch"
+				? operandStart + 1
+				: operandStart;
+		for (const [offset, { edge, caseValue }] of edges.entries()) {
+			const row = edgeStart + offset;
+			expect(fn.kernel.terminatorEdgeBlock(row)).toBe(edge.block);
+			expect(fn.kernel.terminatorEdgeArgumentStart(row)).toBe(argumentStart);
+			expect(fn.kernel.terminatorEdgeArgumentCount(row)).toBe(edge.arguments.length);
+			expect(fn.kernel.terminatorEdgeCaseValue(row)).toEqual(caseValue);
+			for (const [argument, value] of edge.arguments.entries()) {
+				expect(fn.kernel.operandAt(argumentStart + argument)).toBe(value);
+			}
+			argumentStart += edge.arguments.length;
+		}
 		for (const value of new Set(operands)) {
 			const expectedUses = operands
 				.flatMap((candidate, operand) =>
