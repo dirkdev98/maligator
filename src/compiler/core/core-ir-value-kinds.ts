@@ -316,15 +316,15 @@ export function analyzeCoreValueKinds(
 			}
 		}
 	}
-	const dependents = new Array<Array<number> | undefined>(fn.valueCapacity);
+	const dependents = new Map<CoreValueId, Array<number>>();
 	for (let index = 0; index < transfers.outputs.length; index++) {
 		const inputStart = transfers.inputStarts[index]!;
 		const inputCount = transfers.inputCounts[index]!;
 		for (let offset = 0; offset < inputCount; offset++) {
 			const input = transfers.inputs[inputStart + offset]!;
-			const users = dependents[input] ?? [];
+			const users = dependents.get(input) ?? [];
 			users.push(index);
-			dependents[input] = users;
+			dependents.set(input, users);
 		}
 	}
 	const transferKinds = Uint8Array.from(transfers.kinds);
@@ -333,7 +333,13 @@ export function analyzeCoreValueKinds(
 	const transferInputStarts = Uint32Array.from(transfers.inputStarts);
 	const transferInputCounts = Uint32Array.from(transfers.inputCounts);
 	const transferInputs = Uint32Array.from(transfers.inputs);
-	const masks = new Uint16Array(fn.valueCapacity);
+	const liveValues = [...fn.valueIds()];
+	const valueRows = new Map(liveValues.map((value, row) => [value, row]));
+	const masks = new Uint16Array(liveValues.length);
+	const mask = (value: CoreValueId): number => {
+		const row = valueRows.get(value);
+		return row === undefined ? 0 : masks[row]!;
+	};
 	const queue = Array.from({ length: transferOutputs.length }, (_, index) => index);
 	const queued = new Uint8Array(transferOutputs.length);
 	queued.fill(1);
@@ -347,20 +353,20 @@ export function analyzeCoreValueKinds(
 		let incoming = transferConstants[index]!;
 		if (kind === KIND_TRANSFER_JOIN) {
 			for (let offset = 0; offset < inputCount; offset++) {
-				incoming |= masks[transferInputs[inputStart + offset]!]!;
+				incoming |= mask(transferInputs[inputStart + offset]! as CoreValueId);
 			}
 		} else if (kind === KIND_TRANSFER_COPY) {
-			incoming = masks[transferInputs[inputStart]!]!;
+			incoming = mask(transferInputs[inputStart]! as CoreValueId);
 		} else if (kind === KIND_TRANSFER_NUMERIC_UNARY) {
 			incoming = compilerValueKindMaskIsSubset(
-				masks[transferInputs[inputStart]!]!,
+				mask(transferInputs[inputStart]! as CoreValueId),
 				COMPILER_VALUE_KIND_NUMBER,
 			)
 				? COMPILER_VALUE_KIND_NUMBER
 				: COMPILER_VALUE_KIND_TOP;
 		} else if (kind === KIND_TRANSFER_BINARY || kind === KIND_TRANSFER_ADD) {
-			const left = masks[transferInputs[inputStart]!]!;
-			const right = masks[transferInputs[inputStart + 1]!]!;
+			const left = mask(transferInputs[inputStart]! as CoreValueId);
+			const right = mask(transferInputs[inputStart + 1]! as CoreValueId);
 			if (left === 0 || right === 0) incoming = 0;
 			else if (
 				kind === KIND_TRANSFER_ADD &&
@@ -377,18 +383,20 @@ export function analyzeCoreValueKinds(
 			}
 		}
 		const output = transferOutputs[index]! as CoreValueId;
-		const next = masks[output]! | incoming;
-		if (next === masks[output]) continue;
-		masks[output] = next;
-		for (const dependent of dependents[output] ?? []) {
+		const outputRow = valueRows.get(output)!;
+		const next = masks[outputRow]! | incoming;
+		if (next === masks[outputRow]) continue;
+		masks[outputRow] = next;
+		for (const dependent of dependents.get(output) ?? []) {
 			if (queued[dependent] !== 0) continue;
 			queued[dependent] = 1;
 			queue.push(dependent);
 		}
 	}
-	const exactInt32 = new Uint8Array(fn.valueCapacity);
-	for (const value of fn.valueIds()) {
-		if (fn.valueRepresentation(value) === "i32") exactInt32[value] = 1;
+	const exactInt32 = new Uint8Array(liveValues.length);
+	for (const value of liveValues) {
+		const row = valueRows.get(value)!;
+		if (fn.valueRepresentation(value) === "i32") exactInt32[row] = 1;
 		if (fn.kernel.valueDefinitionKind(value) !== 1) continue;
 		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 		if (fn.instructionKind(definition) !== "operation") continue;
@@ -397,7 +405,7 @@ export function analyzeCoreValueKinds(
 			(opcode === "createNumber" || opcode === "createF64") &&
 			numberIsExactInt32(fn.instructionAttributes(definition).value)
 		)
-			exactInt32[value] = 1;
+			exactInt32[row] = 1;
 	}
 	const exactQueue = Array.from({ length: transferOutputs.length }, (_, index) => index);
 	const exactQueued = new Uint8Array(transferOutputs.length);
@@ -407,17 +415,20 @@ export function analyzeCoreValueKinds(
 		const index = exactQueue[exactCursor++]!;
 		exactQueued[index] = 0;
 		const output = transferOutputs[index]! as CoreValueId;
+		const outputRow = valueRows.get(output)!;
 		const inputStart = transferInputStarts[index]!;
 		const inputCount = transferInputCounts[index]!;
 		let allInputsExact = inputCount > 0;
 		for (let offset = 0; offset < inputCount; offset++) {
-			if (exactInt32[transferInputs[inputStart + offset]!] !== 0) continue;
+			const input = transferInputs[inputStart + offset]! as CoreValueId;
+			const inputRow = valueRows.get(input);
+			if (inputRow !== undefined && exactInt32[inputRow] !== 0) continue;
 			allInputsExact = false;
 			break;
 		}
 		if (
-			exactInt32[output] !== 0 ||
-			masks[output] !== COMPILER_VALUE_KIND_NUMBER ||
+			exactInt32[outputRow] !== 0 ||
+			masks[outputRow] !== COMPILER_VALUE_KIND_NUMBER ||
 			!allInputsExact
 		)
 			continue;
@@ -429,8 +440,8 @@ export function analyzeCoreValueKinds(
 					coreInstructionId(fn.kernel.valueDefinitionOwner(output)),
 				) === "move");
 		if (!forwardsInteger) continue;
-		exactInt32[output] = 1;
-		for (const dependent of dependents[output] ?? []) {
+		exactInt32[outputRow] = 1;
+		for (const dependent of dependents.get(output) ?? []) {
 			if (exactQueued[dependent] !== 0) continue;
 			exactQueued[dependent] = 1;
 			exactQueue.push(dependent);
@@ -438,17 +449,20 @@ export function analyzeCoreValueKinds(
 	}
 	const result: CoreValueKindAnalysis = {
 		kindMask(value) {
-			return masks[value] === 0 ? COMPILER_VALUE_KIND_TOP : masks[value]!;
+			const valueMask = mask(value);
+			return valueMask === 0 ? COMPILER_VALUE_KIND_TOP : valueMask;
 		},
 		latticeMask(value) {
-			return masks[value]!;
+			return mask(value);
 		},
 		exactScalar(value) {
-			const mask = masks[value] === 0 ? COMPILER_VALUE_KIND_TOP : masks[value]!;
-			if (mask === COMPILER_VALUE_KIND_NUMBER)
-				return exactInt32[value] === 1 ? "int32" : "number";
-			if (mask === COMPILER_VALUE_KIND_BOOLEAN) return "boolean";
-			if (mask === COMPILER_VALUE_KIND_STRING) return "string";
+			const valueMask = mask(value) || COMPILER_VALUE_KIND_TOP;
+			if (valueMask === COMPILER_VALUE_KIND_NUMBER) {
+				const row = valueRows.get(value);
+				return row !== undefined && exactInt32[row] === 1 ? "int32" : "number";
+			}
+			if (valueMask === COMPILER_VALUE_KIND_BOOLEAN) return "boolean";
+			if (valueMask === COMPILER_VALUE_KIND_STRING) return "string";
 			return undefined;
 		},
 	};
@@ -504,11 +518,10 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					continue;
 				stores.set(index, stores.has(index) ? null : { instruction, value });
 			}
-			const instructionOrder = new Int32Array(fn.instructionCapacity);
-			instructionOrder.fill(-1);
+			const instructionOrder = new Map<CoreInstructionId, number>();
 			for (const block of fn.blockIds()) {
 				for (const [index, instruction] of [...fn.instructionIds(block)].entries()) {
-					instructionOrder[instruction] = index;
+					instructionOrder.set(instruction, index);
 				}
 			}
 			const storedKind = (value: CoreValueId): CompilerValueKindMask | undefined => {
@@ -538,7 +551,8 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 				const loadBlock = fn.instructionBlock(instruction);
 				const dominates =
 					storeBlock === loadBlock
-						? instructionOrder[store.instruction]! < instructionOrder[instruction]!
+						? instructionOrder.get(store.instruction)! <
+							instructionOrder.get(instruction)!
 						: cfg.instructionDominatesBlock(storeBlock, loadBlock);
 				return dominates ? storedKind(store.value) : undefined;
 			};
