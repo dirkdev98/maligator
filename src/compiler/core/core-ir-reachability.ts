@@ -53,8 +53,8 @@ type CoreReachabilityEdges = ReadonlyMap<
 >;
 
 export interface CoreFunctionReachabilityState extends CoreFunctionReachability {
-	readonly bodyVersions: Uint32Array;
-	readonly cfgVersions: Uint32Array;
+	readonly bodyVersions: ReadonlyMap<CoreFunctionId, number>;
+	readonly cfgVersions: ReadonlyMap<CoreFunctionId, number>;
 	readonly programDataVersion: number;
 	readonly structural: ReadonlyMap<CoreFunctionId, CoreReachabilityEdges>;
 	readonly roots: ReadonlyMap<
@@ -212,22 +212,8 @@ export function analyzeCoreFunctionReachability(
 ): CoreFunctionReachabilityState {
 	const all = [...program.functionIds()];
 	const allSet = new Set(all);
-	const bodyVersions = new Uint32Array(program.functionCapacity);
-	const cfgVersions = new Uint32Array(program.functionCapacity);
-	if (previous !== undefined) {
-		bodyVersions.set(
-			previous.bodyVersions.subarray(
-				0,
-				Math.min(bodyVersions.length, previous.bodyVersions.length),
-			),
-		);
-		cfgVersions.set(
-			previous.cfgVersions.subarray(
-				0,
-				Math.min(cfgVersions.length, previous.cfgVersions.length),
-			),
-		);
-	}
+	const bodyVersions = new Map(previous?.bodyVersions ?? []);
+	const cfgVersions = new Map(previous?.cfgVersions ?? []);
 	const structural = new Map(previous?.structural ?? []);
 	let functionsIndexed = 0;
 	let structuralIndexEdges = 0;
@@ -242,8 +228,8 @@ export function analyzeCoreFunctionReachability(
 		const cfgVersion = fn.version("cfg") + 1;
 		if (
 			dataChanged ||
-			bodyVersions[functionId] !== bodyVersion ||
-			cfgVersions[functionId] !== cfgVersion
+			bodyVersions.get(functionId) !== bodyVersion ||
+			cfgVersions.get(functionId) !== cfgVersion
 		) {
 			const edges = structuralEdges(localTransfers(functionId));
 			const priorEdges = structural.get(functionId);
@@ -253,8 +239,8 @@ export function analyzeCoreFunctionReachability(
 				structural.set(functionId, edges);
 				structurallyChanged.add(functionId);
 			}
-			bodyVersions[functionId] = bodyVersion;
-			cfgVersions[functionId] = cfgVersion;
+			bodyVersions.set(functionId, bodyVersion);
+			cfgVersions.set(functionId, cfgVersion);
 			functionsIndexed++;
 			for (const reasons of edges.values()) structuralIndexEdges += reasons.size;
 		}
@@ -262,6 +248,8 @@ export function analyzeCoreFunctionReachability(
 	for (const functionId of previous?.structural.keys() ?? []) {
 		if (allSet.has(functionId)) continue;
 		structural.delete(functionId);
+		bodyVersions.delete(functionId);
+		cfgVersions.delete(functionId);
 	}
 
 	const { roots, hostInstallSlotsRead } = reachabilityRoots(program, targets, context);
