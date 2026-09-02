@@ -23,8 +23,6 @@ import type {
 	ValueContainmentFact,
 	ValueEscapeFact,
 } from "../shared/effect-summary.ts";
-import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
-import type { CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	analyzeCoreCallGraph,
@@ -35,15 +33,14 @@ import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreFunctionId, CoreRepresentation, CoreValueId } from "./core-ir.ts";
-import {
-	CORE_PROGRAM_FLOW_SUMMARIES,
-	buildCoreProgramFlowTopology,
-	solveCoreProgramFlowSccs,
-} from "./core-program-flow.ts";
+import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
-	CoreProgramFlowScc,
-	CoreProgramFlowSccSolver,
-	CoreProgramFlowTopology,
+	CoreProgramFlowLocalTransfers,
+	CoreProgramFlowPublishedFunctionSummary,
+	CoreProgramFlowSummaries,
+	CoreProgramFlowSummarySemantics,
+	CoreProgramFlowSummaryState,
+	CoreProgramFlowSummaryStatistics,
 } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
@@ -69,7 +66,7 @@ const ORIGIN_TRANSFER_FRESH = 3;
 const ORIGIN_TRANSFER_PRIMITIVE = 4;
 const ORIGIN_TRANSFER_UNKNOWN = 5;
 
-interface CoreLocalFunctionSummary {
+export interface CoreLocalFunctionSummary {
 	readonly function: CoreFunctionId;
 	readonly bodyVersion: number;
 	readonly cfgVersion: number;
@@ -89,48 +86,14 @@ interface CoreLocalFunctionSummary {
 	readonly origins: ReadonlyArray<ValueOrigin>;
 }
 
-export interface CorePublishedFunctionSummary {
-	readonly version: number;
-	readonly summary: FunctionEffectSummary;
-}
-
-export type CoreCallGraphScc = CoreProgramFlowScc;
-
-export interface CoreProgramSummaryStatistics {
-	readonly functions: number;
-	readonly functionsAnalyzed: number;
-	readonly functionsReused: number;
-	readonly sccs: number;
-	readonly sccTransfers: number;
-	readonly sccEdgeVisits: number;
-	readonly summaryChanges: number;
-	readonly callerWakeups: number;
-	readonly affectedCallers: number;
-	readonly sccNodesAnalyzed: number;
-	readonly sccsReused: number;
-	readonly aggregateRecomputations: number;
-	readonly exactReverseCallerVisits: number;
-	readonly wildcardReverseCallerVisits: number;
-}
-
-export interface CoreProgramSummaries {
-	readonly targets: CoreCallGraphIndex;
-	readonly sccs: ReadonlyArray<CoreCallGraphScc>;
-	readonly functionEffects: ReadonlyMap<string, FunctionEffectSummary>;
-	readonly moduleEffects: ReadonlyMap<string, ModuleEffectSummary>;
-	readonly changedFunctions: ReadonlySet<CoreFunctionId>;
-	readonly statistics: CoreProgramSummaryStatistics;
-	summary(functionId: CoreFunctionId): FunctionEffectSummary | undefined;
-	version(functionId: CoreFunctionId): number;
-}
-
-interface CoreProgramSummaryState extends CoreProgramSummaries {
-	readonly sourceClosed: boolean;
-	readonly local: ReadonlyMap<CoreFunctionId, CoreLocalFunctionSummary>;
-	readonly published: ReadonlyMap<CoreFunctionId, CorePublishedFunctionSummary>;
-	readonly rootReasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>;
-	readonly anyScriptSummary: CoreAnyScriptCallSummary | undefined;
-}
+export type CorePublishedFunctionSummary = CoreProgramFlowPublishedFunctionSummary;
+export type CoreProgramSummaryStatistics = CoreProgramFlowSummaryStatistics;
+export type CoreProgramSummaries = CoreProgramFlowSummaries<CoreCallGraphIndex>;
+export type CoreProgramSummaryState = CoreProgramFlowSummaryState<
+	CoreLocalFunctionSummary,
+	CoreAnyScriptCallSummary,
+	CoreCallGraphIndex
+>;
 
 function localSummaryIsCurrent(
 	local: CoreLocalFunctionSummary | undefined,
@@ -257,6 +220,7 @@ function noteEscape(
 function analyzeLocalSummary(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
+	localTransfers: CoreProgramFlowLocalTransfers,
 ): CoreLocalFunctionSummary {
 	const origins = Array<ValueOrigin>(fn.valueCapacity).fill(ORIGIN_NONE);
 	for (let index = 0; index < fn.parameterCount; index++) {
@@ -281,6 +245,8 @@ function analyzeLocalSummary(
 		transferInputCounts.push(inputs.length);
 		for (const input of inputs) transferInputs.push(input);
 	};
+	const reachableBlocks = new Uint8Array(fn.blockCapacity);
+	for (const block of cfg.reachable) reachableBlocks[block] = 1;
 	for (const block of cfg.reversePostorder) {
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const parameterCount = fn.kernel.blockParameterCount(block);
@@ -295,28 +261,30 @@ function analyzeLocalSummary(
 			if (incoming.length === 0) continue;
 			addTransfer(ORIGIN_TRANSFER_JOIN, parameter, incoming);
 		}
-		for (const instruction of fn.bodyInstructionIds(block)) {
-			const opcode = fn.instructionOpcodeName(instruction);
-			const operand =
-				opcode === "move" && fn.kernel.instructionOperandCount(instruction) > 0
-					? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
-					: undefined;
-			const kind =
-				operand !== undefined
-					? ORIGIN_TRANSFER_COPY
-					: opcode === "loadThis"
-						? ORIGIN_TRANSFER_RECEIVER
-						: FRESH_RESULTS.has(opcode)
-							? ORIGIN_TRANSFER_FRESH
-							: PRIMITIVE_RESULTS.has(opcode)
-								? ORIGIN_TRANSFER_PRIMITIVE
-								: ORIGIN_TRANSFER_UNKNOWN;
-			const resultStart = fn.kernel.instructionResultStart(instruction);
-			const resultCount = fn.kernel.instructionResultCount(instruction);
-			for (let index = 0; index < resultCount; index++) {
-				const output = fn.kernel.resultAt(resultStart + index);
-				addTransfer(kind, output, operand === undefined ? [] : [operand]);
-			}
+	}
+	for (let transfer = 0; transfer < localTransfers.operationCount; transfer++) {
+		const instruction = localTransfers.operationAt(transfer);
+		if (reachableBlocks[fn.instructionBlock(instruction)] === 0) continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const operand =
+			opcode === "move" && fn.kernel.instructionOperandCount(instruction) > 0
+				? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
+				: undefined;
+		const kind =
+			operand !== undefined
+				? ORIGIN_TRANSFER_COPY
+				: opcode === "loadThis"
+					? ORIGIN_TRANSFER_RECEIVER
+					: FRESH_RESULTS.has(opcode)
+						? ORIGIN_TRANSFER_FRESH
+						: PRIMITIVE_RESULTS.has(opcode)
+							? ORIGIN_TRANSFER_PRIMITIVE
+							: ORIGIN_TRANSFER_UNKNOWN;
+		const resultStart = fn.kernel.instructionResultStart(instruction);
+		const resultCount = fn.kernel.instructionResultCount(instruction);
+		for (let index = 0; index < resultCount; index++) {
+			const output = fn.kernel.resultAt(resultStart + index);
+			addTransfer(kind, output, operand === undefined ? [] : [operand]);
 		}
 	}
 	const dependents = new Array<Array<number> | undefined>(fn.valueCapacity);
@@ -372,48 +340,48 @@ function analyzeLocalSummary(
 		escape: "none" as ValueEscapeFact,
 		containment: "preserved" as ValueContainmentFact,
 	};
-	for (const block of cfg.reachable) {
-		for (const instruction of fn.bodyInstructionIds(block)) {
-			const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
-			const instructionEffects = coreInstructionEffects(fn, instruction);
-			effects = joinEffectSummaries(
-				effects,
-				descriptor.callTransfer === undefined
-					? instructionEffects
-					: {
-							...instructionEffects,
-							reads: instructionEffects.reads.filter((domain) => domain !== "host"),
-							writes: instructionEffects.writes.filter((domain) => domain !== "host"),
-							callsUserCode: false,
-						},
-			);
-			const operandStart = fn.kernel.instructionOperandStart(instruction);
-			const operandCount = fn.kernel.instructionOperandCount(instruction);
-			for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
-				const value = fn.kernel.operandAt(operandStart + operandIndex);
-				const origin = origins[value]!;
-				if (descriptor.observesOperands || descriptor.opcode === "move") continue;
-				if (descriptor.callTransfer?.calleeOperand === operandIndex) {
-					noteEscape(
-						origin,
-						"invoked",
-						"unknown",
-						parameterEscape,
-						parameterContainment,
-						receiver,
-					);
-					continue;
-				}
-				if (descriptor.callTransfer !== undefined) continue;
+	for (let transfer = 0; transfer < localTransfers.operationCount; transfer++) {
+		const instruction = localTransfers.operationAt(transfer);
+		if (reachableBlocks[fn.instructionBlock(instruction)] === 0) continue;
+		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+		const instructionEffects = coreInstructionEffects(fn, instruction);
+		effects = joinEffectSummaries(
+			effects,
+			descriptor.callTransfer === undefined
+				? instructionEffects
+				: {
+						...instructionEffects,
+						reads: instructionEffects.reads.filter((domain) => domain !== "host"),
+						writes: instructionEffects.writes.filter((domain) => domain !== "host"),
+						callsUserCode: false,
+					},
+		);
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
+			const value = fn.kernel.operandAt(operandStart + operandIndex);
+			const origin = origins[value]!;
+			if (descriptor.observesOperands || descriptor.opcode === "move") continue;
+			if (descriptor.callTransfer?.calleeOperand === operandIndex) {
 				noteEscape(
 					origin,
-					"retained",
+					"invoked",
 					"unknown",
 					parameterEscape,
 					parameterContainment,
 					receiver,
 				);
+				continue;
 			}
+			if (descriptor.callTransfer !== undefined) continue;
+			noteEscape(
+				origin,
+				"retained",
+				"unknown",
+				parameterEscape,
+				parameterContainment,
+				receiver,
+			);
 		}
 	}
 
@@ -579,7 +547,7 @@ function summariesEqual(
 	);
 }
 
-interface CoreAnyScriptCallSummary {
+export interface CoreAnyScriptCallSummary {
 	readonly effects: EffectSummary;
 	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
 	readonly parameterContainment: ReadonlyArray<ValueContainmentFact>;
@@ -801,310 +769,43 @@ function moduleSummaries(
 	return result;
 }
 
+export const CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS: CoreProgramFlowSummarySemantics<
+	CoreLocalFunctionSummary,
+	CoreAnyScriptCallSummary,
+	CoreCallGraphIndex
+> = Object.freeze({
+	localIsCurrent: localSummaryIsCurrent,
+	analyzeLocal: analyzeLocalSummary,
+	summaryId(local: CoreLocalFunctionSummary) {
+		return local.summaryId;
+	},
+	rootReasons,
+	derive: deriveSummary,
+	summarizeAggregate: summarizeAnyScriptCallees,
+	aggregateParameterCount(aggregate: CoreAnyScriptCallSummary) {
+		return aggregate.parameterEscape.length;
+	},
+	sameAggregate: sameAnyScriptSummary,
+	summariesEqual,
+	moduleSummaries,
+});
+
 export function analyzeProgramSummaries(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	targets: CoreCallGraphIndex,
 	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
-	topology: CoreProgramFlowTopology,
-	scheduler: CoreProgramFlowSccSolver = { solveSccs: solveCoreProgramFlowSccs },
 	previous?: CoreProgramSummaryState,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 ): CoreProgramSummaryState {
-	const local = new Map<CoreFunctionId, CoreLocalFunctionSummary>();
-	const changedFunctions = new Set<CoreFunctionId>();
-	const dirty = new Set(
-		previous === undefined
-			? program.functionIds()
-			: (dirtyFunctions ?? program.functionIds()),
-	);
-	let functionsAnalyzed = 0;
-	let functionsReused = 0;
-	for (const functionId of program.functionIds()) {
-		const fn = program.function(functionId);
-		const prior = previous?.local.get(functionId);
-		if (!dirty.has(functionId) || localSummaryIsCurrent(prior, fn)) {
-			if (prior === undefined) throw new Error(`Missing local summary for ${functionId}`);
-			local.set(functionId, prior);
-			functionsReused++;
-		} else {
-			local.set(functionId, analyzeLocalSummary(fn, controlFlow(functionId)));
-			changedFunctions.add(functionId);
-			functionsAnalyzed++;
-		}
-	}
-	const {
-		sccs,
-		owner,
-		nodesAnalyzed: sccNodesAnalyzed,
-		edgeVisits: sccEdgeVisits,
-		sccsReused,
-	} = topology;
-	const reasons = rootReasons(program, targets, context);
-	const summaryIds = new Map(
-		[...local].map(([functionId, summary]) => [functionId, summary.summaryId]),
-	);
-	const current = new Map<CoreFunctionId, FunctionEffectSummary>();
-	for (const functionId of program.functionIds()) {
-		const prior = previous?.published.get(functionId)?.summary;
-		if (prior !== undefined) current.set(functionId, prior);
-	}
-	for (const functionId of program.functionIds()) {
-		if (current.has(functionId)) continue;
-		current.set(
-			functionId,
-			deriveSummary(
-				program,
-				functionId,
-				local.get(functionId)!,
-				targets,
-				current,
-				undefined,
-				summaryIds,
-				reasons,
-				false,
-			),
-		);
-	}
-	const maximumWildcardArgumentCount = [...program.functionIds()].reduce(
-		(largest, functionId) =>
-			Math.max(
-				largest,
-				...targets
-					.outgoing(functionId)
-					.filter((site) => site.targets.anyScript)
-					.map((site) => site.arguments?.length ?? 0),
-			),
-		0,
-	);
-	let anyScriptSummary = targets.graph.hasAggregate()
-		? previous?.anyScriptSummary
-		: undefined;
-	if (
-		targets.graph.hasAggregate() &&
-		(anyScriptSummary === undefined ||
-			anyScriptSummary.parameterEscape.length !== maximumWildcardArgumentCount)
-	) {
-		anyScriptSummary = summarizeAnyScriptCallees(current, maximumWildcardArgumentCount);
-	}
-	const initialSccs = new Set<number>();
-	const seed = (scc: number | undefined): void => {
-		if (scc !== undefined) initialSccs.add(scc);
-	};
-	if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
-		for (const index of sccs.keys()) seed(index);
-	} else {
-		for (const functionId of changedFunctions) seed(owner.get(functionId));
-		for (const functionId of targets.changedCallers) {
-			seed(owner.get(functionId));
-		}
-		if (targets.graph.changedNodes.has(CORE_ANY_SCRIPT_AGGREGATE)) {
-			seed(owner.get(CORE_ANY_SCRIPT_AGGREGATE));
-		}
-		for (const functionId of new Set([
-			...previous.rootReasons.keys(),
-			...reasons.keys(),
-		])) {
-			const prior = previous.rootReasons.get(functionId) ?? [];
-			const next = reasons.get(functionId) ?? [];
-			if (
-				prior.length !== next.length ||
-				prior.some((reason, index) => reason !== next[index])
-			) {
-				seed(owner.get(functionId));
-			}
-		}
-	}
-	let sccTransfers = 0;
-	let callerWakeups = 0;
-	let aggregateRecomputations = 0;
-	let exactReverseCallerVisits = 0;
-	let wildcardReverseCallerVisits = 0;
-	const affectedCallers = new Set<CoreFunctionId>();
-	scheduler.solveSccs(
-		topology,
-		[...initialSccs].map((scc) => ({
-			scc,
-			dimensions: CORE_PROGRAM_FLOW_SUMMARIES,
-		})),
-		(sccIndex, dimensions, enqueue) => {
-			if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) === 0) return;
-			const scc = sccs[sccIndex]!;
-			const aggregateBefore = anyScriptSummary;
-			for (const functionId of scc.functions) {
-				current.set(
-					functionId,
-					deriveSummary(
-						program,
-						functionId,
-						local.get(functionId)!,
-						targets,
-						current,
-						anyScriptSummary,
-						summaryIds,
-						reasons,
-						false,
-					),
-				);
-			}
-			const members = new Set(scc.functions);
-			const memberQueue: Array<CoreCallGraphNode> = [
-				...(scc.hasAnyScriptAggregate ? [CORE_ANY_SCRIPT_AGGREGATE] : []),
-				...scc.functions,
-			];
-			const memberQueued = new Set(memberQueue);
-			let memberCursor = 0;
-			while (memberCursor < memberQueue.length) {
-				const node = memberQueue[memberCursor++]!;
-				memberQueued.delete(node);
-				if (node === CORE_ANY_SCRIPT_AGGREGATE) {
-					const nextAggregate = summarizeAnyScriptCallees(
-						current,
-						maximumWildcardArgumentCount,
-					);
-					aggregateRecomputations++;
-					if (sameAnyScriptSummary(anyScriptSummary, nextAggregate)) continue;
-					anyScriptSummary = nextAggregate;
-					for (const caller of targets.graph.wildcardCallers) {
-						wildcardReverseCallerVisits++;
-						if (!members.has(caller) || memberQueued.has(caller)) continue;
-						memberQueued.add(caller);
-						memberQueue.push(caller);
-					}
-					continue;
-				}
-				const functionId = node;
-				const next = deriveSummary(
-					program,
-					functionId,
-					local.get(functionId)!,
-					targets,
-					current,
-					anyScriptSummary,
-					summaryIds,
-					reasons,
-				);
-				const prior = current.get(functionId);
-				current.set(functionId, next);
-				sccTransfers++;
-				if (prior !== undefined && summariesEqual(prior, next)) continue;
-				for (const caller of targets.graph.exactCallers(functionId)) {
-					exactReverseCallerVisits++;
-					if (!members.has(caller) || memberQueued.has(caller)) continue;
-					memberQueued.add(caller);
-					memberQueue.push(caller);
-				}
-				if (scc.hasAnyScriptAggregate && !memberQueued.has(CORE_ANY_SCRIPT_AGGREGATE)) {
-					memberQueued.add(CORE_ANY_SCRIPT_AGGREGATE);
-					memberQueue.push(CORE_ANY_SCRIPT_AGGREGATE);
-				}
-			}
-			for (const functionId of scc.functions) {
-				const next = current.get(functionId)!;
-				const prior = previous?.published.get(functionId)?.summary;
-				if (prior !== undefined && summariesEqual(prior, next)) continue;
-				for (const caller of targets.graph.exactCallers(functionId)) {
-					exactReverseCallerVisits++;
-					const callerScc = owner.get(caller);
-					if (callerScc === sccIndex) continue;
-					if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
-					affectedCallers.add(caller);
-				}
-				if (targets.graph.hasAggregate()) {
-					const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
-					if (
-						aggregateScc !== sccIndex &&
-						enqueue(aggregateScc, CORE_PROGRAM_FLOW_SUMMARIES)
-					)
-						callerWakeups++;
-				}
-			}
-			if (
-				scc.hasAnyScriptAggregate &&
-				!sameAnyScriptSummary(aggregateBefore, anyScriptSummary)
-			) {
-				for (const caller of targets.graph.wildcardCallers) {
-					wildcardReverseCallerVisits++;
-					const callerScc = owner.get(caller);
-					if (callerScc === sccIndex) continue;
-					if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
-					affectedCallers.add(caller);
-				}
-			}
-		},
-	);
-	for (const functionId of program.functionIds()) {
-		if (current.has(functionId)) continue;
-		current.set(
-			functionId,
-			deriveSummary(
-				program,
-				functionId,
-				local.get(functionId)!,
-				targets,
-				current,
-				anyScriptSummary,
-				summaryIds,
-				reasons,
-			),
-		);
-	}
-	const published = new Map<CoreFunctionId, CorePublishedFunctionSummary>();
-	const changedPublished = new Set<CoreFunctionId>();
-	for (const [functionId, summary] of current) {
-		const prior = previous?.published.get(functionId);
-		if (prior !== undefined && summariesEqual(prior.summary, summary)) {
-			published.set(functionId, prior);
-		} else {
-			changedPublished.add(functionId);
-			published.set(
-				functionId,
-				Object.freeze({
-					version: (prior?.version ?? 0) + 1,
-					summary,
-				}),
-			);
-		}
-	}
-	const functionEffects = new Map(
-		[...published.values()].map(({ summary }) => [summary.id, summary]),
-	);
-	const modules = moduleSummaries(program, published, context);
-	const statistics = Object.freeze({
-		functions: local.size,
-		functionsAnalyzed,
-		functionsReused,
-		sccs: sccs.length,
-		sccTransfers,
-		sccEdgeVisits,
-		summaryChanges: changedPublished.size,
-		callerWakeups,
-		affectedCallers: affectedCallers.size,
-		sccNodesAnalyzed,
-		sccsReused,
-		aggregateRecomputations,
-		exactReverseCallerVisits,
-		wildcardReverseCallerVisits,
-	});
-	return Object.freeze({
-		sourceClosed: targets.sourceClosed,
+	return new CoreProgramFlowEngine(program).solveSummaries(
+		context,
 		targets,
-		sccs,
-		local,
-		published,
-		rootReasons: reasons,
-		anyScriptSummary,
-		functionEffects,
-		moduleEffects: modules,
-		changedFunctions: changedPublished,
-		statistics,
-		summary(functionId: CoreFunctionId) {
-			return published.get(functionId)?.summary;
-		},
-		version(functionId: CoreFunctionId) {
-			return published.get(functionId)?.version ?? 0;
-		},
-	});
+		controlFlow,
+		CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS,
+		previous,
+		dirtyFunctions,
+	);
 }
 
 export function analyzeCoreProgramSummaries(
@@ -1118,11 +819,7 @@ export function analyzeCoreProgramSummaries(
 		undefined,
 		context,
 	);
-	return analyzeProgramSummaries(
-		program,
-		context,
-		targets,
-		(functionId) => buildCoreControlFlow(program, functionId, { exceptions: true }),
-		buildCoreProgramFlowTopology(targets.graph),
+	return analyzeProgramSummaries(program, context, targets, (functionId) =>
+		buildCoreControlFlow(program, functionId, { exceptions: true }),
 	);
 }

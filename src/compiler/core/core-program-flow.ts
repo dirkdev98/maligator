@@ -1,8 +1,14 @@
+import type {
+	FunctionEffectSummary,
+	ModuleEffectSummary,
+	SummaryRootReason,
+} from "../shared/effect-summary.ts";
 import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
 import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import {
 	CORE_PROGRAM_FLOW_BODY,
@@ -59,11 +65,113 @@ export interface CoreProgramFlowReachabilityStatistics {
 export interface CoreProgramFlowTargetIndex {
 	readonly sourceClosed: boolean;
 	readonly graph: CoreCallGraph;
+	readonly changedCallers: ReadonlySet<CoreFunctionId>;
 	readonly changedEdgeCallers: ReadonlySet<CoreFunctionId>;
 	globalStoreTargets(slot: number): {
 		readonly functions: ReadonlyArray<CoreFunctionId>;
 		readonly anyScript: boolean;
 	};
+	outgoing(functionId: CoreFunctionId): ReadonlyArray<{
+		readonly receiver?: CoreValueId;
+		readonly arguments?: ReadonlyArray<CoreValueId>;
+		readonly targets: {
+			readonly functions: ReadonlyArray<CoreFunctionId>;
+			readonly anyScript: boolean;
+			readonly opaque: boolean;
+		};
+	}>;
+}
+
+export interface CoreProgramFlowPublishedFunctionSummary {
+	readonly version: number;
+	readonly summary: FunctionEffectSummary;
+}
+
+export interface CoreProgramFlowSummaryStatistics {
+	readonly functions: number;
+	readonly functionsAnalyzed: number;
+	readonly functionsReused: number;
+	readonly sccs: number;
+	readonly sccTransfers: number;
+	readonly sccEdgeVisits: number;
+	readonly summaryChanges: number;
+	readonly callerWakeups: number;
+	readonly affectedCallers: number;
+	readonly sccNodesAnalyzed: number;
+	readonly sccsReused: number;
+	readonly aggregateRecomputations: number;
+	readonly exactReverseCallerVisits: number;
+	readonly wildcardReverseCallerVisits: number;
+}
+
+export interface CoreProgramFlowSummaries<
+	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
+> {
+	readonly targets: Targets;
+	readonly sccs: ReadonlyArray<CoreProgramFlowScc>;
+	readonly functionEffects: ReadonlyMap<string, FunctionEffectSummary>;
+	readonly moduleEffects: ReadonlyMap<string, ModuleEffectSummary>;
+	readonly changedFunctions: ReadonlySet<CoreFunctionId>;
+	readonly statistics: CoreProgramFlowSummaryStatistics;
+	summary(functionId: CoreFunctionId): FunctionEffectSummary | undefined;
+	version(functionId: CoreFunctionId): number;
+}
+
+export interface CoreProgramFlowSummaryState<
+	Local,
+	Aggregate,
+	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
+> extends CoreProgramFlowSummaries<Targets> {
+	readonly sourceClosed: boolean;
+	readonly local: ReadonlyMap<CoreFunctionId, Local>;
+	readonly published: ReadonlyMap<
+		CoreFunctionId,
+		CoreProgramFlowPublishedFunctionSummary
+	>;
+	readonly rootReasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>;
+	readonly anyScriptSummary: Aggregate | undefined;
+}
+
+export interface CoreProgramFlowSummarySemantics<
+	Local,
+	Aggregate,
+	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
+> {
+	localIsCurrent(local: Local | undefined, fn: CoreFunctionStore): boolean;
+	analyzeLocal(
+		fn: CoreFunctionStore,
+		controlFlow: CoreControlFlow,
+		transfers: CoreProgramFlowLocalTransfers,
+	): Local;
+	summaryId(local: Local): string;
+	rootReasons(
+		program: CoreProgram,
+		targets: Targets,
+		context: CoreCompilationContext,
+	): ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>;
+	derive(
+		program: CoreProgram,
+		functionId: CoreFunctionId,
+		local: Local,
+		targets: Targets,
+		current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+		aggregate: Aggregate | undefined,
+		summaryIds: ReadonlyMap<CoreFunctionId, string>,
+		reasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>,
+		includeCalls?: boolean,
+	): FunctionEffectSummary;
+	summarizeAggregate(
+		current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+		parameterCount: number,
+	): Aggregate;
+	aggregateParameterCount(aggregate: Aggregate): number;
+	sameAggregate(left: Aggregate | undefined, right: Aggregate | undefined): boolean;
+	summariesEqual(left: FunctionEffectSummary, right: FunctionEffectSummary): boolean;
+	moduleSummaries(
+		program: CoreProgram,
+		functions: ReadonlyMap<CoreFunctionId, CoreProgramFlowPublishedFunctionSummary>,
+		context: CoreCompilationContext,
+	): ReadonlyMap<string, ModuleEffectSummary>;
 }
 
 type CoreProgramFlowReachabilityEdges = ReadonlyMap<
@@ -978,6 +1086,300 @@ export class CoreProgramFlowEngine {
 		this.#report?.increment("programFlowFunctionPops", statistics.pops);
 		this.#report?.increment("programFlowFunctionWakeups", statistics.wakeups);
 		return statistics;
+	}
+
+	solveSummaries<Local, Aggregate, Targets extends CoreProgramFlowTargetIndex>(
+		context: CoreCompilationContext,
+		targets: Targets,
+		controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
+		semantics: CoreProgramFlowSummarySemantics<Local, Aggregate, Targets>,
+		previous?: CoreProgramFlowSummaryState<Local, Aggregate, Targets>,
+		dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
+	): CoreProgramFlowSummaryState<Local, Aggregate, Targets> {
+		const functions = targets.graph.functions;
+		const dirty = new Uint8Array(this.#program.functionCapacity);
+		if (previous === undefined) {
+			for (const functionId of functions) dirty[functionId] = 1;
+		} else {
+			for (const functionId of dirtyFunctions ?? functions) dirty[functionId] = 1;
+		}
+		const local = new Map<CoreFunctionId, Local>();
+		const changedFunctions = new Set<CoreFunctionId>();
+		let functionsAnalyzed = 0;
+		let functionsReused = 0;
+		for (const functionId of functions) {
+			const fn = this.#program.function(functionId);
+			const prior = previous?.local.get(functionId);
+			if (dirty[functionId] === 0 || semantics.localIsCurrent(prior, fn)) {
+				if (prior === undefined)
+					throw new Error(`Missing local summary for ${functionId}`);
+				local.set(functionId, prior);
+				functionsReused++;
+			} else {
+				local.set(
+					functionId,
+					semantics.analyzeLocal(fn, controlFlow(functionId), this.local(functionId)),
+				);
+				changedFunctions.add(functionId);
+				functionsAnalyzed++;
+			}
+		}
+		const topology = this.topology(targets.graph);
+		const {
+			sccs,
+			owner,
+			nodesAnalyzed: sccNodesAnalyzed,
+			edgeVisits: sccEdgeVisits,
+			sccsReused,
+		} = topology;
+		const reasons = semantics.rootReasons(this.#program, targets, context);
+		const summaryIds = new Map(
+			[...local].map(([functionId, summary]) => [
+				functionId,
+				semantics.summaryId(summary),
+			]),
+		);
+		const current = new Map<CoreFunctionId, FunctionEffectSummary>();
+		for (const functionId of functions) {
+			const prior = previous?.published.get(functionId)?.summary;
+			if (prior !== undefined) current.set(functionId, prior);
+		}
+		for (const functionId of functions) {
+			if (current.has(functionId)) continue;
+			current.set(
+				functionId,
+				semantics.derive(
+					this.#program,
+					functionId,
+					local.get(functionId)!,
+					targets,
+					current,
+					undefined,
+					summaryIds,
+					reasons,
+					false,
+				),
+			);
+		}
+		let maximumWildcardArgumentCount = 0;
+		for (const functionId of functions) {
+			for (const site of targets.outgoing(functionId)) {
+				if (!site.targets.anyScript) continue;
+				maximumWildcardArgumentCount = Math.max(
+					maximumWildcardArgumentCount,
+					site.arguments?.length ?? 0,
+				);
+			}
+		}
+		let anyScriptSummary = targets.graph.hasAggregate()
+			? previous?.anyScriptSummary
+			: undefined;
+		if (
+			targets.graph.hasAggregate() &&
+			(anyScriptSummary === undefined ||
+				semantics.aggregateParameterCount(anyScriptSummary) !==
+					maximumWildcardArgumentCount)
+		) {
+			anyScriptSummary = semantics.summarizeAggregate(
+				current,
+				maximumWildcardArgumentCount,
+			);
+		}
+		const initialSccMembership = new Uint8Array(sccs.length);
+		const initialSccs: Array<CoreProgramFlowSccSeed> = [];
+		const seed = (scc: number | undefined): void => {
+			if (scc === undefined || initialSccMembership[scc] !== 0) return;
+			initialSccMembership[scc] = 1;
+			initialSccs.push({ scc, dimensions: CORE_PROGRAM_FLOW_SUMMARIES });
+		};
+		if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
+			for (const index of sccs.keys()) seed(index);
+		} else {
+			for (const functionId of changedFunctions) seed(owner.get(functionId));
+			for (const functionId of targets.changedCallers) seed(owner.get(functionId));
+			if (targets.graph.changedNodes.has(CORE_ANY_SCRIPT_AGGREGATE)) {
+				seed(owner.get(CORE_ANY_SCRIPT_AGGREGATE));
+			}
+			for (const functionId of functions) {
+				const prior = previous.rootReasons.get(functionId) ?? [];
+				const next = reasons.get(functionId) ?? [];
+				if (
+					prior.length !== next.length ||
+					prior.some((reason, index) => reason !== next[index])
+				) {
+					seed(owner.get(functionId));
+				}
+			}
+		}
+		let sccTransfers = 0;
+		let callerWakeups = 0;
+		let aggregateRecomputations = 0;
+		let exactReverseCallerVisits = 0;
+		let wildcardReverseCallerVisits = 0;
+		const affectedCallers = new Set<CoreFunctionId>();
+		this.solveSccs(topology, initialSccs, (sccIndex, dimensions, enqueue) => {
+			if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) === 0) return;
+			const scc = sccs[sccIndex]!;
+			const aggregateBefore = anyScriptSummary;
+			for (const functionId of scc.functions) {
+				current.set(
+					functionId,
+					semantics.derive(
+						this.#program,
+						functionId,
+						local.get(functionId)!,
+						targets,
+						current,
+						anyScriptSummary,
+						summaryIds,
+						reasons,
+						false,
+					),
+				);
+			}
+			const memberQueue: Array<CoreCallGraphNode> = [];
+			const memberQueued = new Uint8Array(this.#program.functionCapacity);
+			let aggregateQueued = false;
+			const enqueueMember = (node: CoreCallGraphNode): void => {
+				if (node === CORE_ANY_SCRIPT_AGGREGATE) {
+					if (aggregateQueued) return;
+					aggregateQueued = true;
+				} else {
+					if (memberQueued[node] !== 0) return;
+					memberQueued[node] = 1;
+				}
+				memberQueue.push(node);
+			};
+			if (scc.hasAnyScriptAggregate) enqueueMember(CORE_ANY_SCRIPT_AGGREGATE);
+			for (const functionId of scc.functions) enqueueMember(functionId);
+			for (let cursor = 0; cursor < memberQueue.length; cursor++) {
+				const node = memberQueue[cursor]!;
+				if (node === CORE_ANY_SCRIPT_AGGREGATE) {
+					aggregateQueued = false;
+					const nextAggregate = semantics.summarizeAggregate(
+						current,
+						maximumWildcardArgumentCount,
+					);
+					aggregateRecomputations++;
+					if (semantics.sameAggregate(anyScriptSummary, nextAggregate)) continue;
+					anyScriptSummary = nextAggregate;
+					for (const caller of targets.graph.wildcardCallers) {
+						wildcardReverseCallerVisits++;
+						if (owner.get(caller) === sccIndex) enqueueMember(caller);
+					}
+					continue;
+				}
+				memberQueued[node] = 0;
+				const next = semantics.derive(
+					this.#program,
+					node,
+					local.get(node)!,
+					targets,
+					current,
+					anyScriptSummary,
+					summaryIds,
+					reasons,
+				);
+				const prior = current.get(node);
+				current.set(node, next);
+				sccTransfers++;
+				if (prior !== undefined && semantics.summariesEqual(prior, next)) continue;
+				for (const caller of targets.graph.exactCallers(node)) {
+					exactReverseCallerVisits++;
+					if (owner.get(caller) === sccIndex) enqueueMember(caller);
+				}
+				if (scc.hasAnyScriptAggregate) enqueueMember(CORE_ANY_SCRIPT_AGGREGATE);
+			}
+			for (const functionId of scc.functions) {
+				const next = current.get(functionId)!;
+				const prior = previous?.published.get(functionId)?.summary;
+				if (prior !== undefined && semantics.summariesEqual(prior, next)) continue;
+				for (const caller of targets.graph.exactCallers(functionId)) {
+					exactReverseCallerVisits++;
+					const callerScc = owner.get(caller);
+					if (callerScc === sccIndex) continue;
+					if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
+					affectedCallers.add(caller);
+				}
+				if (targets.graph.hasAggregate()) {
+					const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
+					if (
+						aggregateScc !== sccIndex &&
+						enqueue(aggregateScc, CORE_PROGRAM_FLOW_SUMMARIES)
+					) {
+						callerWakeups++;
+					}
+				}
+			}
+			if (
+				scc.hasAnyScriptAggregate &&
+				!semantics.sameAggregate(aggregateBefore, anyScriptSummary)
+			) {
+				for (const caller of targets.graph.wildcardCallers) {
+					wildcardReverseCallerVisits++;
+					const callerScc = owner.get(caller);
+					if (callerScc === sccIndex) continue;
+					if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
+					affectedCallers.add(caller);
+				}
+			}
+		});
+		const published = new Map<CoreFunctionId, CoreProgramFlowPublishedFunctionSummary>();
+		const changedPublished = new Set<CoreFunctionId>();
+		for (const [functionId, summary] of current) {
+			const prior = previous?.published.get(functionId);
+			if (prior !== undefined && semantics.summariesEqual(prior.summary, summary)) {
+				published.set(functionId, prior);
+			} else {
+				changedPublished.add(functionId);
+				published.set(
+					functionId,
+					Object.freeze({
+						version: (prior?.version ?? 0) + 1,
+						summary,
+					}),
+				);
+			}
+		}
+		const functionEffects = new Map(
+			[...published.values()].map(({ summary }) => [summary.id, summary]),
+		);
+		const modules = semantics.moduleSummaries(this.#program, published, context);
+		const statistics = Object.freeze({
+			functions: local.size,
+			functionsAnalyzed,
+			functionsReused,
+			sccs: sccs.length,
+			sccTransfers,
+			sccEdgeVisits,
+			summaryChanges: changedPublished.size,
+			callerWakeups,
+			affectedCallers: affectedCallers.size,
+			sccNodesAnalyzed,
+			sccsReused,
+			aggregateRecomputations,
+			exactReverseCallerVisits,
+			wildcardReverseCallerVisits,
+		});
+		return Object.freeze({
+			sourceClosed: targets.sourceClosed,
+			targets,
+			sccs,
+			local,
+			published,
+			rootReasons: reasons,
+			anyScriptSummary,
+			functionEffects,
+			moduleEffects: modules,
+			changedFunctions: changedPublished,
+			statistics,
+			summary(functionId: CoreFunctionId) {
+				return published.get(functionId)?.summary;
+			},
+			version(functionId: CoreFunctionId) {
+				return published.get(functionId)?.version ?? 0;
+			},
+		});
 	}
 
 	solveReachability<Targets extends CoreProgramFlowTargetIndex>(

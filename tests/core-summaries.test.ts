@@ -23,6 +23,10 @@ describe("incremental Core program summaries", () => {
 			new URL("../src/compiler/core/core-program-flow-analysis.ts", import.meta.url),
 			"utf8",
 		);
+		const engineSource = readFileSync(
+			new URL("../src/compiler/core/core-program-flow.ts", import.meta.url),
+			"utf8",
+		);
 
 		expect(source).not.toMatch(/JSON\.stringify/);
 		expect(source).not.toMatch(/versionKey:\s*string|localVersionKey/);
@@ -30,7 +34,10 @@ describe("incremental Core program summaries", () => {
 		expect(source).not.toMatch(/CORE_PROGRAM_SUMMARIES_ANALYSIS|programFlow\.refresh/);
 		expect(flowSource).toMatch(/programFlow\.refresh/);
 		expect(flowSource).toMatch(/epoch\.dirtyFunctionAt/);
-		expect(flowSource).toMatch(/programFlow\.topology/);
+		expect(flowSource).toMatch(/programFlow\.solveSummaries\(/);
+		expect(engineSource).toMatch(/solveSummaries<.*CoreProgramFlowTargetIndex/s);
+		expect(source).toMatch(/new CoreProgramFlowEngine\(program\)\.solveSummaries\(/);
+		expect(source).not.toMatch(/solveCoreProgramFlowSccs|\.solveSccs\(|memberQueue/);
 		expect(source).not.toMatch(/function callGraphSccs\(/);
 		expect(source).not.toMatch(/readonly evaluate|evaluate:\s*\(/);
 		expect(source).toMatch(/Uint8Array\.from\(transferKinds\)/);
@@ -220,6 +227,50 @@ describe("incremental Core program summaries", () => {
 		});
 		expect(summaries.sccs).toHaveLength(length);
 		expect(summaries.statistics.sccTransfers).toBeLessThanOrEqual(length * 2);
+	});
+
+	it("keeps unrelated SCCs out of an incremental summary wave", () => {
+		const program = analysisProgram();
+		const chainLength = 24;
+		for (let index = 0; index < chainLength - 1; index++) {
+			appendCaller(program, index + 1);
+		}
+		const leaf = appendLeaf(program);
+		const unrelated: Array<number> = [];
+		for (let index = 0; index < 64; index++) {
+			unrelated.push(appendLeaf(program, `/unrelated-${index}.js`).function);
+		}
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+		const unrelatedVersions = unrelated.map((functionId) =>
+			first.version(functionId as never),
+		);
+
+		const editor = CoreEditor.open(program, leaf.function);
+		editor.replaceInstruction(leaf.valueInstruction, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		editor.commit();
+		const second = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(second.statistics).toMatchObject({
+			functionsAnalyzed: 1,
+			functionsReused: chainLength + unrelated.length - 1,
+			summaryChanges: chainLength,
+			affectedCallers: chainLength - 1,
+		});
+		expect(second.statistics.sccTransfers).toBeLessThanOrEqual(chainLength * 2);
+		expect(unrelated.map((functionId) => second.version(functionId as never))).toEqual(
+			unrelatedVersions,
+		);
 	});
 
 	it("condenses a large recursive component into one SCC", () => {

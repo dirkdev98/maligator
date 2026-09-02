@@ -5,7 +5,8 @@ import {
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 } from "./core-ir-control-flow.ts";
 import type { CoreFunctionReachabilityState } from "./core-ir-reachability.ts";
-import { analyzeProgramSummaries } from "./core-ir-summaries.ts";
+import { CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS } from "./core-ir-summaries.ts";
+import type { CoreProgramSummaryState } from "./core-ir-summaries.ts";
 import { solveCoreProgramValueKinds } from "./core-ir-value-kinds.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import {
@@ -19,7 +20,7 @@ import {
 export interface CoreProgramFlowState {
 	readonly flowRevision: number;
 	readonly targets: ReturnType<typeof analyzeCoreCallGraph>;
-	readonly summaries: ReturnType<typeof analyzeProgramSummaries>;
+	readonly summaries: CoreProgramSummaryState;
 	readonly valueKinds: ReturnType<typeof solveCoreProgramValueKinds>;
 	readonly reachability: CoreFunctionReachabilityState;
 }
@@ -86,13 +87,11 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 			summaryDirty.length === 0 &&
 			!targetsChanged
 				? prior.summaries
-				: analyzeProgramSummaries(
-						program,
+				: programFlow.solveSummaries(
 						context,
 						targets,
 						exceptionalControl,
-						programFlow.topology(targets.graph),
-						programFlow,
+						CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS,
 						prior?.summaries,
 						summaryDirty,
 					);
