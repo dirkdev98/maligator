@@ -39,19 +39,14 @@ export interface CoreAnalysisDefinition<Result> {
 }
 
 interface CachedAnalysis {
-	readonly versionKey: string;
+	readonly contextIdentity: string;
+	readonly programVersions: ReadonlyArray<number>;
+	readonly functionVersions: ReadonlyArray<number>;
 	readonly value: unknown;
 }
 
 interface RegisteredAnalysis {
 	readonly signature: string;
-}
-
-function selectedVersions<Domain extends string>(
-	versions: Readonly<Record<Domain, number>>,
-	dependencies: ReadonlyArray<Domain>,
-): string {
-	return dependencies.map((domain) => `${domain}:${versions[domain]}`).join(",");
 }
 
 function sortedFunctions(
@@ -84,12 +79,12 @@ export class CoreAnalysisManager {
 	): Result {
 		this.#validateDefinition(definition, request);
 		const cacheKey = `${definition.key}\0${this.#scopeKey(request)}`;
-		const versionKey = this.#versionKey(definition, request);
 		const cached = this.#cache.get(cacheKey);
-		if (cached?.versionKey === versionKey) {
+		if (cached !== undefined && this.#versionsMatch(definition, request, cached)) {
 			this.#report.recordAnalysis(definition.key, "hit", false, 0);
 			return cached.value as Result;
 		}
+		const versions = this.#captureVersions(definition, request);
 		const startedAt = Date.now();
 		const value = definition.compute({
 			program: this.#program,
@@ -98,7 +93,7 @@ export class CoreAnalysisManager {
 			get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
 			...(cached === undefined ? {} : { previous: cached.value }),
 		});
-		this.#cache.set(cacheKey, { versionKey, value });
+		this.#cache.set(cacheKey, { ...versions, value });
 		this.#report.recordAnalysis(
 			definition.key,
 			"recompute",
@@ -150,44 +145,68 @@ export class CoreAnalysisManager {
 		}
 	}
 
-	#versionKey<Result>(
+	#captureVersions<Result>(
 		definition: CoreAnalysisDefinition<Result>,
 		request: CoreAnalysisRequest,
-	): string {
+	): Omit<CachedAnalysis, "value"> {
 		const functionDependencies = definition.functionDependencies ?? [];
 		const programDependencies = definition.programDependencies ?? [];
 		const contextIdentity = definition.contextIdentity?.(this.#context) ?? "";
-		const programVersions = selectedVersions<CoreProgramChangeDomain>(
-			this.#program.versions,
-			programDependencies,
+		const programVersions = programDependencies.map(
+			(domain) => this.#program.versions[domain],
 		);
-		let functionVersions = "";
+		const functionVersions: Array<number> = [];
+		const captureFunction = (functionId: CoreFunctionId): void => {
+			const versions = this.#program.function(functionId).versions;
+			for (const domain of functionDependencies) {
+				functionVersions.push(versions[domain]);
+			}
+		};
 		if (request.scope === "function") {
-			functionVersions = selectedVersions<CoreChangeDomain>(
-				this.#program.function(request.function).versions,
-				functionDependencies,
-			);
+			captureFunction(request.function);
 		} else if (request.scope === "scc") {
-			functionVersions = sortedFunctions(request.functions)
-				.map((functionId) => {
-					const versions = selectedVersions<CoreChangeDomain>(
-						this.#program.function(functionId).versions,
-						functionDependencies,
-					);
-					return `${functionId}[${versions}]`;
-				})
-				.join(";");
+			for (const functionId of sortedFunctions(request.functions)) {
+				captureFunction(functionId);
+			}
 		} else if (functionDependencies.length > 0) {
-			functionVersions = [...this.#program.functionIds()]
-				.map((functionId) => {
-					const versions = selectedVersions<CoreChangeDomain>(
-						this.#program.function(functionId).versions,
-						functionDependencies,
-					);
-					return `${functionId}[${versions}]`;
-				})
-				.join(";");
+			for (const functionId of this.#program.functionIds()) captureFunction(functionId);
 		}
-		return `${contextIdentity}\0${programVersions}\0${functionVersions}`;
+		return { contextIdentity, programVersions, functionVersions };
+	}
+
+	#versionsMatch<Result>(
+		definition: CoreAnalysisDefinition<Result>,
+		request: CoreAnalysisRequest,
+		cached: CachedAnalysis,
+	): boolean {
+		if ((definition.contextIdentity?.(this.#context) ?? "") !== cached.contextIdentity) {
+			return false;
+		}
+		const programDependencies = definition.programDependencies ?? [];
+		if (programDependencies.length !== cached.programVersions.length) return false;
+		for (const [index, domain] of programDependencies.entries()) {
+			if (this.#program.versions[domain] !== cached.programVersions[index]) return false;
+		}
+		const functionDependencies = definition.functionDependencies ?? [];
+		let versionIndex = 0;
+		const functionMatches = (functionId: CoreFunctionId): boolean => {
+			const versions = this.#program.function(functionId).versions;
+			for (const domain of functionDependencies) {
+				if (versions[domain] !== cached.functionVersions[versionIndex++]) return false;
+			}
+			return true;
+		};
+		if (request.scope === "function") {
+			if (!functionMatches(request.function)) return false;
+		} else if (request.scope === "scc") {
+			for (const functionId of sortedFunctions(request.functions)) {
+				if (!functionMatches(functionId)) return false;
+			}
+		} else if (functionDependencies.length > 0) {
+			for (const functionId of this.#program.functionIds()) {
+				if (!functionMatches(functionId)) return false;
+			}
+		}
+		return versionIndex === cached.functionVersions.length;
 	}
 }
