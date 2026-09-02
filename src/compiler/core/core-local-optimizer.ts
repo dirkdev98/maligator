@@ -1,11 +1,13 @@
 import { CoreEditor } from "./core-editor.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
+	CoreAttributeValue,
 	CoreBlockId,
 	CoreEdge,
 	CoreFactId,
 	CoreFunctionId,
 	CoreImmediate,
+	CoreInstructionAttributes,
 	CoreInstructionId,
 	CoreOpcodeId,
 	CoreValueId,
@@ -119,6 +121,14 @@ const COPY_PROPAGATION_RULE: CoreLocalInstructionRule = {
 	},
 };
 
+const CONSTANT_FOLDING_RULE: CoreLocalInstructionRule = {
+	name: "local-constant-folding",
+	opcodes: [],
+	run(optimizer, instruction) {
+		return optimizer.foldConstant(instruction);
+	},
+};
+
 const CONTROL_FOLDING_RULE: CoreLocalBlockRule = {
 	name: "local-control-folding",
 	run(optimizer, block) {
@@ -177,6 +187,13 @@ export class CoreLocalOptimizer {
 			...(this.#moveOpcode === undefined
 				? []
 				: [{ ...COPY_PROPAGATION_RULE, opcodes: [this.#moveOpcode] }]),
+			{
+				...CONSTANT_FOLDING_RULE,
+				opcodes: ["binary", "unary", "typeofCompare"].flatMap((opcode) => {
+					const id = program.registry.get(opcode)?.id;
+					return id === undefined ? [] : [id];
+				}),
+			},
 			...(options.additionalRules ?? []),
 		];
 		this.#blockRules = [CONTROL_FOLDING_RULE];
@@ -270,6 +287,36 @@ export class CoreLocalOptimizer {
 		}
 		editor.removeInstruction(instruction);
 		this.#wakeValueDefinition(input);
+		return true;
+	}
+
+	foldConstant(instruction: CoreInstructionId): boolean {
+		if (
+			this.#fn.kernel.instructionLive(instruction) === 0 ||
+			this.#fn.kernel.instructionOpcode(instruction) < 0 ||
+			this.#fn.kernel.instructionResultCount(instruction) !== 1
+		) {
+			return false;
+		}
+		const folded = this.#foldInstruction(instruction);
+		if (folded === undefined) return false;
+		const replacement = this.#constantOpcode(folded);
+		if (this.#program.registry.get(replacement.opcode) === undefined) return false;
+		const operandStart = this.#fn.kernel.instructionOperandStart(instruction);
+		const operandCount = this.#fn.kernel.instructionOperandCount(instruction);
+		const operands = Array.from({ length: operandCount }, (_, index) =>
+			this.#fn.kernel.operandAt(operandStart + index),
+		);
+		const result = this.#fn.kernel.resultAt(
+			this.#fn.kernel.instructionResultStart(instruction),
+		);
+		this.#edit().replaceInstruction(instruction, replacement.opcode, [], {
+			attributes: replacement.attributes,
+			sourcePosition: this.#fn.instructionSourcePosition(instruction),
+		});
+		for (const operand of operands) this.#wakeValueDefinition(operand);
+		this.#wakeValueUsers(result);
+		this.#enqueueInstruction(instruction);
 		return true;
 	}
 
@@ -562,6 +609,218 @@ export class CoreLocalOptimizer {
 			default:
 				return undefined;
 		}
+	}
+
+	#foldInstruction(instruction: CoreInstructionId): LocalConstant | undefined {
+		const opcode = this.#fn.instructionOpcodeName(instruction);
+		const attributes = this.#fn.instructionAttributes(instruction);
+		if (opcode === "binary") {
+			const leftValue = this.#instructionOperand(instruction, 0);
+			const rightValue = this.#instructionOperand(instruction, 1);
+			if (leftValue === undefined || rightValue === undefined) return undefined;
+			const left = this.#constantForValue(leftValue);
+			const right = this.#constantForValue(rightValue);
+			if (left === undefined || right === undefined) return undefined;
+			if (
+				attributes.operator === "==" ||
+				attributes.operator === "!=" ||
+				attributes.operator === "===" ||
+				attributes.operator === "!=="
+			) {
+				const loose = attributes.operator === "==" || attributes.operator === "!=";
+				const equal = loose
+					? this.#abstractPrimitiveEquality(left, right)
+					: this.#strictPrimitiveEquality(left, right);
+				return {
+					kind: "boolean",
+					value:
+						attributes.operator === "!=" || attributes.operator === "!=="
+							? !equal
+							: equal,
+				};
+			}
+			return left.kind === "number" && right.kind === "number"
+				? this.#numberBinary(attributes.operator, left.value, right.value)
+				: undefined;
+		}
+		if (opcode === "unary") {
+			const inputValue = this.#instructionOperand(instruction, 0);
+			const input =
+				inputValue === undefined ? undefined : this.#constantForValue(inputValue);
+			return input?.kind === "number"
+				? this.#numberUnary(attributes.operator, input.value)
+				: input?.kind === "boolean" && attributes.operator === "!"
+					? { kind: "boolean", value: !input.value }
+					: undefined;
+		}
+		if (opcode === "typeofCompare") {
+			const inputValue = this.#instructionOperand(instruction, 0);
+			const input =
+				inputValue === undefined ? undefined : this.#constantForValue(inputValue);
+			if (input === undefined || typeof attributes.expected !== "string") {
+				return undefined;
+			}
+			const actual = input.kind === "null" ? "object" : input.kind;
+			const matches = actual === attributes.expected;
+			return {
+				kind: "boolean",
+				value: attributes.negated === true ? !matches : matches,
+			};
+		}
+		return undefined;
+	}
+
+	#constantOpcode(constant: LocalConstant): {
+		readonly opcode: string;
+		readonly attributes: CoreInstructionAttributes;
+	} {
+		switch (constant.kind) {
+			case "undefined":
+				return { opcode: "createUndefined", attributes: {} };
+			case "null":
+				return { opcode: "createNull", attributes: {} };
+			case "boolean":
+				return { opcode: "createBoolean", attributes: { value: constant.value } };
+			case "number": {
+				const int32 =
+					!Object.is(constant.value, -0) &&
+					Number.isInteger(constant.value) &&
+					constant.value >= -0x8000_0000 &&
+					constant.value <= 0x7fff_ffff;
+				return {
+					opcode: int32 ? "createNumber" : "createF64",
+					attributes: { value: constant.value },
+				};
+			}
+			case "string":
+				return {
+					opcode: "createString",
+					attributes: { stringIndex: constant.index },
+				};
+		}
+	}
+
+	#numberBinary(
+		operator: CoreAttributeValue,
+		left: number,
+		right: number,
+	): LocalConstant | undefined {
+		switch (operator) {
+			case "+":
+				return { kind: "number", value: left + right };
+			case "-":
+				return { kind: "number", value: left - right };
+			case "*":
+				return { kind: "number", value: left * right };
+			case "/":
+				return { kind: "number", value: left / right };
+			case "%":
+				return { kind: "number", value: left % right };
+			case "**":
+				return { kind: "number", value: left ** right };
+			case "&":
+				return { kind: "number", value: left & right };
+			case "|":
+				return { kind: "number", value: left | right };
+			case "^":
+				return { kind: "number", value: left ^ right };
+			case "<<":
+				return { kind: "number", value: left << right };
+			case ">>":
+				return { kind: "number", value: left >> right };
+			case ">>>":
+				return { kind: "number", value: left >>> right };
+			case "<":
+				return { kind: "boolean", value: left < right };
+			case "<=":
+				return { kind: "boolean", value: left <= right };
+			case ">":
+				return { kind: "boolean", value: left > right };
+			case ">=":
+				return { kind: "boolean", value: left >= right };
+			case "==":
+			case "===":
+				return { kind: "boolean", value: left === right };
+			case "!=":
+			case "!==":
+				return { kind: "boolean", value: left !== right };
+			default:
+				return undefined;
+		}
+	}
+
+	#numberUnary(operator: CoreAttributeValue, value: number): LocalConstant | undefined {
+		switch (operator) {
+			case "!":
+				return { kind: "boolean", value: !value };
+			case "-":
+				return { kind: "number", value: -value };
+			case "+":
+				return { kind: "number", value };
+			case "~":
+				return { kind: "number", value: ~value };
+			case "tonumeric":
+				return { kind: "number", value };
+			case "increment":
+				return { kind: "number", value: value + 1 };
+			case "decrement":
+				return { kind: "number", value: value - 1 };
+			default:
+				return undefined;
+		}
+	}
+
+	#strictPrimitiveEquality(left: LocalConstant, right: LocalConstant): boolean {
+		if (left.kind !== right.kind) return false;
+		switch (left.kind) {
+			case "undefined":
+			case "null":
+				return true;
+			case "boolean":
+			case "number":
+				return left.value === (right as { readonly value: unknown }).value;
+			case "string":
+				return (
+					this.#decodeString(left.index) ===
+					this.#decodeString((right as { readonly index: number }).index)
+				);
+		}
+	}
+
+	#abstractPrimitiveEquality(left: LocalConstant, right: LocalConstant): boolean {
+		if (left.kind === right.kind) return this.#strictPrimitiveEquality(left, right);
+		if (
+			(left.kind === "null" && right.kind === "undefined") ||
+			(left.kind === "undefined" && right.kind === "null")
+		) {
+			return true;
+		}
+		if (left.kind === "boolean") {
+			return this.#abstractPrimitiveEquality(
+				{ kind: "number", value: left.value ? 1 : 0 },
+				right,
+			);
+		}
+		if (right.kind === "boolean") {
+			return this.#abstractPrimitiveEquality(left, {
+				kind: "number",
+				value: right.value ? 1 : 0,
+			});
+		}
+		if (left.kind === "number" && right.kind === "string") {
+			const value = this.#decodeString(right.index);
+			return value !== undefined && left.value === Number(value);
+		}
+		if (left.kind === "string" && right.kind === "number") {
+			const value = this.#decodeString(left.index);
+			return value !== undefined && Number(value) === right.value;
+		}
+		return false;
+	}
+
+	#decodeString(index: number): string | undefined {
+		const units = this.#program.stringConstants[index];
+		return units === undefined ? undefined : String.fromCodePoint(...units);
 	}
 
 	#immediateEqualsConstant(immediate: CoreImmediate, constant: LocalConstant): boolean {

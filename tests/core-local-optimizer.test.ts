@@ -140,6 +140,54 @@ describe("CoreLocalOptimizer", () => {
 		expect(result.statistics.editSessions).toBe(1);
 	});
 
+	it("folds a constant producer-consumer chain before folding its branch", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const taken = builder.createBlock();
+		const skipped = builder.createBlock();
+		const [one] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [two] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		const [sum] = builder.appendInstruction(entry, "binary", [one!, two!], {
+			attributes: { operator: "+" },
+		});
+		const [three] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 3 },
+		});
+		const [condition] = builder.appendInstruction(entry, "binary", [sum!, three!], {
+			attributes: { operator: "===" },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: taken, arguments: [] },
+			alternate: { block: skipped, arguments: [] },
+		});
+		const [answer] = builder.appendInstruction(taken, "createNumber", [], {
+			attributes: { value: 42 },
+		});
+		const [fallback] = builder.appendInstruction(skipped, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		builder.setTerminator(taken, { kind: "return", value: answer! });
+		builder.setTerminator(skipped, { kind: "return", value: fallback! });
+		const fn = program.function(builder.finish(entry).function);
+
+		const result = new CoreLocalOptimizer(program, fn.id).run();
+
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry))).toEqual({
+			kind: "jump",
+			edge: { block: taken, arguments: [] },
+		});
+		expect([...fn.bodyInstructionIds(entry)]).toEqual([]);
+		expect(result.statistics.editSessions).toBe(1);
+		expect(result.statistics.rulesApplied).toBeGreaterThanOrEqual(7);
+	});
+
 	it("reports work-budget exhaustion without opening another edit session", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

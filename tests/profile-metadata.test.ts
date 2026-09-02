@@ -378,7 +378,7 @@ test("profile reports retain applied transformations after an instruction disapp
 	`);
 	expect(
 		optimization(definition).coreOptimizationReport.passes.find(
-			({ pass }) => pass === "local-constant-folding",
+			({ pass }) => pass === "fused-local-optimizer",
 		)?.changedItems,
 	).toBeGreaterThan(0);
 	expect(

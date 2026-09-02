@@ -39,7 +39,6 @@ import type {
 	CoreAttributeValue,
 	CoreBlockId,
 	CoreEdge,
-	CoreInstructionAttributes,
 	CoreInstructionId,
 	CoreRepresentation,
 	CoreTerminatorInput,
@@ -371,128 +370,6 @@ function valueHasUses(fn: CoreFunctionStore, value: CoreValueId): boolean {
 	return false;
 }
 
-function constantOpcode(constant: LocalConstant): {
-	readonly opcode: string;
-	readonly attributes: CoreInstructionAttributes;
-} {
-	switch (constant.kind) {
-		case "undefined":
-			return { opcode: "createUndefined", attributes: {} };
-		case "null":
-			return { opcode: "createNull", attributes: {} };
-		case "boolean":
-			return { opcode: "createBoolean", attributes: { value: constant.value } };
-		case "number": {
-			const int32 =
-				!Object.is(constant.value, -0) &&
-				Number.isInteger(constant.value) &&
-				constant.value >= -0x8000_0000 &&
-				constant.value <= 0x7fff_ffff;
-			return {
-				opcode: int32 ? "createNumber" : "createF64",
-				attributes: { value: constant.value },
-			};
-		}
-		case "string":
-			return { opcode: "createString", attributes: { stringIndex: constant.index } };
-	}
-}
-
-function numberBinary(
-	operator: CoreAttributeValue,
-	left: number,
-	right: number,
-): LocalConstant | undefined {
-	switch (operator) {
-		case "+":
-			return { kind: "number", value: left + right };
-		case "-":
-			return { kind: "number", value: left - right };
-		case "*":
-			return { kind: "number", value: left * right };
-		case "/":
-			return { kind: "number", value: left / right };
-		case "%":
-			return { kind: "number", value: left % right };
-		case "**":
-			return { kind: "number", value: left ** right };
-		case "&":
-			return { kind: "number", value: left & right };
-		case "|":
-			return { kind: "number", value: left | right };
-		case "^":
-			return { kind: "number", value: left ^ right };
-		case "<<":
-			return { kind: "number", value: left << right };
-		case ">>":
-			return { kind: "number", value: left >> right };
-		case ">>>":
-			return { kind: "number", value: left >>> right };
-		case "<":
-			return { kind: "boolean", value: left < right };
-		case "<=":
-			return { kind: "boolean", value: left <= right };
-		case ">":
-			return { kind: "boolean", value: left > right };
-		case ">=":
-			return { kind: "boolean", value: left >= right };
-		case "==":
-		case "===":
-			return { kind: "boolean", value: left === right };
-		case "!=":
-		case "!==":
-			return { kind: "boolean", value: left !== right };
-		default:
-			return undefined;
-	}
-}
-
-function numberUnary(
-	operator: CoreAttributeValue,
-	value: number,
-): LocalConstant | undefined {
-	switch (operator) {
-		case "!":
-			return { kind: "boolean", value: !value };
-		case "-":
-			return { kind: "number", value: -value };
-		case "+":
-			return { kind: "number", value };
-		case "~":
-			return { kind: "number", value: ~value };
-		case "tonumeric":
-			return { kind: "number", value };
-		case "increment":
-			return { kind: "number", value: value + 1 };
-		case "decrement":
-			return { kind: "number", value: value - 1 };
-		default:
-			return undefined;
-	}
-}
-
-function strictPrimitiveEquality(
-	program: CoreProgram,
-	left: LocalConstant,
-	right: LocalConstant,
-): boolean {
-	if (left.kind !== right.kind) return false;
-	switch (left.kind) {
-		case "undefined":
-		case "null":
-			return true;
-		case "boolean":
-		case "number":
-			return left.value === (right as { readonly value: unknown }).value;
-		case "string": {
-			const rightString = right as { readonly kind: "string"; readonly index: number };
-			return (
-				decodeString(program, left.index) === decodeString(program, rightString.index)
-			);
-		}
-	}
-}
-
 function constantsAreInterchangeable(
 	program: CoreProgram,
 	left: LocalConstant,
@@ -549,98 +426,6 @@ function insertConstant(
 		attributes,
 		outputRepresentations: [representation],
 	}).outputs[0]!;
-}
-
-function abstractPrimitiveEquality(
-	program: CoreProgram,
-	left: LocalConstant,
-	right: LocalConstant,
-): boolean {
-	if (left.kind === right.kind) return strictPrimitiveEquality(program, left, right);
-	if (
-		(left.kind === "null" && right.kind === "undefined") ||
-		(left.kind === "undefined" && right.kind === "null")
-	)
-		return true;
-	if (left.kind === "boolean") {
-		return abstractPrimitiveEquality(
-			program,
-			{ kind: "number", value: left.value ? 1 : 0 },
-			right,
-		);
-	}
-	if (right.kind === "boolean") {
-		return abstractPrimitiveEquality(program, left, {
-			kind: "number",
-			value: right.value ? 1 : 0,
-		});
-	}
-	if (left.kind === "number" && right.kind === "string") {
-		const value = decodeString(program, right.index);
-		return value !== undefined && left.value === Number(value);
-	}
-	if (left.kind === "string" && right.kind === "number") {
-		const value = decodeString(program, left.index);
-		return value !== undefined && Number(value) === right.value;
-	}
-	return false;
-}
-
-function foldInstruction(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): LocalConstant | undefined {
-	const opcode = fn.instructionOpcodeName(instruction);
-	const attributes = fn.instructionAttributes(instruction);
-	if (opcode === "binary") {
-		const leftValue = instructionOperand(fn, instruction, 0);
-		const rightValue = instructionOperand(fn, instruction, 1);
-		if (leftValue === undefined || rightValue === undefined) return undefined;
-		const left = constantForValue(fn, leftValue);
-		const right = constantForValue(fn, rightValue);
-		if (left === undefined || right === undefined) return undefined;
-		if (
-			attributes.operator === "==" ||
-			attributes.operator === "!=" ||
-			attributes.operator === "===" ||
-			attributes.operator === "!=="
-		) {
-			const loose = attributes.operator === "==" || attributes.operator === "!=";
-			const equal = loose
-				? abstractPrimitiveEquality(program, left, right)
-				: strictPrimitiveEquality(program, left, right);
-			return {
-				kind: "boolean",
-				value:
-					attributes.operator === "!=" || attributes.operator === "!==" ? !equal : equal,
-			};
-		}
-		return left.kind === "number" && right.kind === "number"
-			? numberBinary(attributes.operator, left.value, right.value)
-			: undefined;
-	}
-	if (opcode === "unary") {
-		const inputValue = instructionOperand(fn, instruction, 0);
-		const input = inputValue === undefined ? undefined : constantForValue(fn, inputValue);
-		return input?.kind === "number"
-			? numberUnary(attributes.operator, input.value)
-			: input?.kind === "boolean" && attributes.operator === "!"
-				? { kind: "boolean", value: !input.value }
-				: undefined;
-	}
-	if (opcode === "typeofCompare") {
-		const inputValue = instructionOperand(fn, instruction, 0);
-		const input = inputValue === undefined ? undefined : constantForValue(fn, inputValue);
-		if (input === undefined || typeof attributes.expected !== "string") return undefined;
-		const actual = input.kind === "null" ? "object" : input.kind;
-		const matches = actual === attributes.expected;
-		return {
-			kind: "boolean",
-			value: attributes.negated === true ? !matches : matches,
-		};
-	}
-	return undefined;
 }
 
 function rewriteEdges(
@@ -1237,37 +1022,6 @@ const rewriteExactBuiltinCalls: CorePass = {
 			}
 		}
 		return editor?.commit();
-	},
-};
-
-const foldConstants: CorePass = {
-	name: "local-constant-folding",
-	stage: "canonicalize",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("binary", "unary", "typeofCompare"),
-	requiredAnalyses: [],
-	wakesOn: ["body"],
-	preserves: [],
-	changes: LOCAL_CHANGES,
-	budget: LOCAL_BUDGET,
-	run({ program, item }) {
-		if (item.scope !== "instruction") return undefined;
-		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation" ||
-			fn.kernel.instructionResultCount(item.instruction) !== 1
-		)
-			return undefined;
-		const folded = foldInstruction(program, fn, item.instruction);
-		if (folded === undefined) return undefined;
-		const replacement = constantOpcode(folded);
-		const editor = CoreEditor.open(program, item.function);
-		editor.replaceInstruction(item.instruction, replacement.opcode, [], {
-			attributes: replacement.attributes,
-			sourcePosition: fn.instructionSourcePosition(item.instruction),
-		});
-		return editor.commit();
 	},
 };
 
@@ -2486,7 +2240,6 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	annotateTerminalYieldSites,
 	foldStaticPropertyKeys,
 	rewriteExactBuiltinCalls,
-	foldConstants,
 	foldTypeofComparisons,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,

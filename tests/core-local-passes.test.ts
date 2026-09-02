@@ -288,8 +288,8 @@ describe("Core local canonicalization", () => {
 		expect([...fn.blockIds()].length).toBeLessThan(5);
 		expect(report.output.instructions).toBeLessThan(report.input.instructions);
 		expect(
-			report.passes.find(({ pass }) => pass === "local-constant-folding"),
-		).toMatchObject({ changedItems: 1 });
+			report.passes.find(({ pass }) => pass === "fused-local-optimizer")?.changedItems,
+		).toBeGreaterThanOrEqual(1);
 		expect(
 			report.passes.find(({ pass }) => pass === "unreachable-block-removal"),
 		).toMatchObject({ changedItems: 1 });
