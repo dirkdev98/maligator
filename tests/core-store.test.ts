@@ -725,6 +725,7 @@ describe("Core store", () => {
 		expect(fn.kernel.blockHandlerArgumentStart(entry)).toBe(start);
 		expect(fn.kernel.handlerArgumentAt(start)).toBe(copied);
 		expect(fn.kernel.valueFirstHandlerUse(copied)).toBe(start);
+		expect(fn.kernel.valueHandlerUseCount(copied)).toBe(1);
 		expect(fn.kernel.handlerArgumentBlock(start)).toBe(entry);
 		expect(fn.kernel.handlerArgumentPreviousUse(start)).toBe(-1);
 		expect(fn.kernel.handlerArgumentNextUse(start)).toBe(-1);
@@ -734,7 +735,9 @@ describe("Core store", () => {
 		replaceUse.commit();
 		expect(fn.kernel.handlerArgumentAt(start)).toBe(parameter);
 		expect(fn.kernel.valueFirstHandlerUse(copied)).toBe(-1);
+		expect(fn.kernel.valueHandlerUseCount(copied)).toBe(0);
 		expect(fn.kernel.valueFirstHandlerUse(parameter)).toBe(start);
+		expect(fn.kernel.valueHandlerUseCount(parameter)).toBe(1);
 
 		const replaceMany = CoreEditor.open(program, fn.id);
 		replaceMany.replaceValueUsesMany(
@@ -746,12 +749,15 @@ describe("Core store", () => {
 		replaceMany.commit();
 		expect(fn.kernel.handlerArgumentAt(start)).toBe(constant);
 		expect(fn.kernel.valueFirstHandlerUse(parameter)).toBe(-1);
+		expect(fn.kernel.valueHandlerUseCount(parameter)).toBe(0);
 		expect(fn.kernel.valueFirstHandlerUse(constant)).toBe(start);
+		expect(fn.kernel.valueHandlerUseCount(constant)).toBe(1);
 
 		const clearReuse = CoreEditor.open(program, fn.id);
 		clearReuse.clearHandler(entry);
 		clearReuse.commit();
 		expect(fn.kernel.valueFirstHandlerUse(constant)).toBe(-1);
+		expect(fn.kernel.valueHandlerUseCount(constant)).toBe(0);
 	});
 
 	it("publishes old and new operands plus retained results for in-place rewrites", () => {

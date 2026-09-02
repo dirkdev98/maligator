@@ -672,6 +672,7 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 	const indexedHandlerUses = new Uint8Array(fn.handlerArgumentCapacity);
 	for (const value of fn.valueIds()) {
 		let previous = -1;
+		let count = 0;
 		for (
 			let use = fn.kernel.valueFirstHandlerUse(value);
 			use >= 0;
@@ -692,6 +693,10 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 			}
 			indexedHandlerUses[use] = 1;
 			previous = use;
+			count++;
+		}
+		if (count !== fn.kernel.valueHandlerUseCount(value)) {
+			fail(`handler argument use count for %${value} is inconsistent`);
 		}
 	}
 	for (let use = 0; use < handlerArgumentOwners.length; use++) {

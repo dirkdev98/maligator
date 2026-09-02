@@ -483,6 +483,7 @@ export class CoreFunctionStore {
 	readonly #valueFirstUse: Array<number> = [];
 	readonly #valueUseCount: Array<number> = [];
 	readonly #valueFirstHandlerUse: Array<number> = [];
+	readonly #valueHandlerUseCount: Array<number> = [];
 
 	readonly #useLive: Array<number> = [];
 	readonly #useValue: Array<CoreValueId> = [];
@@ -570,6 +571,7 @@ export class CoreFunctionStore {
 				valueFirstUse: this.#valueFirstUse,
 				valueUseCount: this.#valueUseCount,
 				valueFirstHandlerUse: this.#valueFirstHandlerUse,
+				valueHandlerUseCount: this.#valueHandlerUseCount,
 				useLive: this.#useLive,
 				useValue: this.#useValue,
 				useInstruction: this.#useInstruction,
@@ -1235,7 +1237,7 @@ export class CoreFunctionStore {
 		const resultCount = this.#instructionResultCount[instruction]!;
 		for (let index = 0; index < resultCount; index++) {
 			const result = this.#results[resultStart + index]!;
-			if (this.#valueUseCount[result] !== 0) {
+			if (this.#valueUseCount[result] !== 0 || this.#valueHandlerUseCount[result] !== 0) {
 				throw new Error(
 					`Cannot remove Core instruction ${instruction}; value ${result} is used`,
 				);
@@ -1330,7 +1332,10 @@ export class CoreFunctionStore {
 		const parameterCount = this.#blockParameterCount[block]!;
 		for (let index = 0; index < parameterCount; index++) {
 			const parameter = this.#blockParameterValues[parameterStart + index]!;
-			if (this.#valueUseCount[parameter] !== 0) {
+			if (
+				this.#valueUseCount[parameter] !== 0 ||
+				this.#valueHandlerUseCount[parameter] !== 0
+			) {
 				const descriptions: Array<string> = [];
 				for (
 					let use = this.#valueFirstUse[parameter]!;
@@ -1342,6 +1347,13 @@ export class CoreFunctionStore {
 					descriptions.push(
 						`@${instruction}:${this.#useOperand[use]} in b${this.instructionBlock(instruction)}`,
 					);
+				}
+				for (
+					let use = this.#valueFirstHandlerUse[parameter]!;
+					use >= 0;
+					use = this.#handlerArgumentNextUse[use]!
+				) {
+					descriptions.push(`exception edge from b${this.#handlerArgumentBlock[use]}`);
 				}
 				throw new Error(
 					`Cannot remove Core block ${block}; parameter ${parameter} is used by ${descriptions.join(", ")}`,
@@ -1623,6 +1635,7 @@ export class CoreFunctionStore {
 		this.#valueFirstUse.push(-1);
 		this.#valueUseCount.push(0);
 		this.#valueFirstHandlerUse.push(-1);
+		this.#valueHandlerUseCount.push(0);
 		return value;
 	}
 
@@ -1890,6 +1903,7 @@ export class CoreFunctionStore {
 		this.#handlerArgumentNextUse[use] = next;
 		if (next >= 0) this.#handlerArgumentPreviousUse[next] = use;
 		this.#valueFirstHandlerUse[value] = use;
+		this.#valueHandlerUseCount[value] = this.#valueHandlerUseCount[value]! + 1;
 	}
 
 	#unlinkHandlerArgumentUse(use: number, value: CoreValueId): void {
@@ -1900,6 +1914,7 @@ export class CoreFunctionStore {
 		if (next >= 0) this.#handlerArgumentPreviousUse[next] = previous;
 		this.#handlerArgumentPreviousUse[use] = -1;
 		this.#handlerArgumentNextUse[use] = -1;
+		this.#valueHandlerUseCount[value] = this.#valueHandlerUseCount[value]! - 1;
 	}
 
 	#requireMutation(mutation: CoreStoreMutation): void {

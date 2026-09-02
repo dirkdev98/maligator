@@ -208,7 +208,8 @@ export function analyzeCoreValueClasses(
 				const resultStart = fn.kernel.instructionResultStart(instruction);
 				const resultCount = fn.kernel.instructionResultCount(instruction);
 				for (let index = 0; index < resultCount; index++) {
-					if (fn.valueUseCount(fn.kernel.resultAt(resultStart + index)) > 0) {
+					const result = fn.kernel.resultAt(resultStart + index);
+					if (fn.valueUseCount(result) + fn.kernel.valueHandlerUseCount(result) > 0) {
 						retainedResult = true;
 						break;
 					}

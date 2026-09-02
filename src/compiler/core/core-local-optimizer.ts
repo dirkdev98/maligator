@@ -355,7 +355,6 @@ export class CoreLocalOptimizer {
 	readonly #budgetExhaustion: "stop" | "error";
 	readonly #moveOpcode: CoreOpcodeId | undefined;
 	#editor: CoreEditor | undefined;
-	#handlerUseCounts: Uint32Array | undefined;
 	#instructionQueuePops = 0;
 	#blockQueuePops = 0;
 	#rulesConsidered = 0;
@@ -871,22 +870,10 @@ export class CoreLocalOptimizer {
 	}
 
 	#valueHasUses(value: CoreValueId): boolean {
-		if (this.#fn.kernel.valueUseCount(value) > 0) return true;
-		this.#handlerUseCounts ??= this.#buildHandlerUseCounts();
-		return (this.#handlerUseCounts[value] ?? 0) > 0;
-	}
-
-	#buildHandlerUseCounts(): Uint32Array {
-		const counts = new Uint32Array(this.#fn.valueCapacity);
-		for (const block of this.#fn.blockIds()) {
-			const start = this.#fn.kernel.blockHandlerArgumentStart(block);
-			const count = this.#fn.kernel.blockHandlerArgumentCount(block);
-			for (let index = 0; index < count; index++) {
-				const value = this.#fn.kernel.handlerArgumentAt(start + index);
-				counts[value] = (counts[value] ?? 0) + 1;
-			}
-		}
-		return counts;
+		return (
+			this.#fn.kernel.valueUseCount(value) > 0 ||
+			this.#fn.kernel.valueHandlerUseCount(value) > 0
+		);
 	}
 
 	#wakeValueUsers(value: CoreValueId): void {
@@ -1270,12 +1257,6 @@ export class CoreLocalOptimizer {
 		this.#wakeValueUsers(result);
 		const editor = this.#edit();
 		editor.replaceValueUses(result, replacement);
-		if (this.#handlerUseCounts !== undefined && replacement !== result) {
-			this.#handlerUseCounts[replacement] =
-				(this.#handlerUseCounts[replacement] ?? 0) +
-				(this.#handlerUseCounts[result] ?? 0);
-			this.#handlerUseCounts[result] = 0;
-		}
 		editor.removeInstruction(instruction);
 		this.#wakeValueDefinition(replacement);
 	}

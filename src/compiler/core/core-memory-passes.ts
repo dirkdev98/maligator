@@ -743,7 +743,7 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 			if (
 				fn.instructionKind(property) !== "operation" ||
 				fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
-				fn.valueUseCount(callee) !== 1
+				fn.valueUseCount(callee) + fn.kernel.valueHandlerUseCount(callee) !== 1
 			)
 				continue;
 			const layout = provenance.allocationOf(receiver);
@@ -1667,7 +1667,8 @@ const scalarReplaceContainedAggregates: CorePass = {
 			const resultStart = fn.kernel.instructionResultStart(instruction);
 			const resultCount = fn.kernel.instructionResultCount(instruction);
 			for (let index = 0; index < resultCount; index++) {
-				if (fn.valueUseCount(fn.kernel.resultAt(resultStart + index)) !== 0) {
+				const result = fn.kernel.resultAt(resultStart + index);
+				if (fn.valueUseCount(result) + fn.kernel.valueHandlerUseCount(result) !== 0) {
 					hasUses = true;
 					break;
 				}

@@ -233,6 +233,60 @@ describe("Core empty forwarding blocks", () => {
 		expect([...result.fn.bodyInstructionIds(handlerEntry)]).toHaveLength(0);
 	});
 
+	it("retains a forwarding phi referenced by an exception edge", () => {
+		const { program, builder } = fixture(1);
+		const entry = builder.createBlock([{}]);
+		const flag = parameters(builder, entry)[0]!;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const forward = builder.createBlock([{}]);
+		const protectedBlock = builder.createBlock();
+		const handler = builder.createBlock([
+			{ role: "exception" },
+			{ representation: "boxed" },
+		]);
+		const [one] = builder.appendInstruction(left, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [two] = builder.appendInstruction(right, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		const [returned] = builder.appendInstruction(protectedBlock, "createUndefined", []);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: flag,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: forward, arguments: [one!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: forward, arguments: [two!] },
+		});
+		builder.setTerminator(forward, {
+			kind: "jump",
+			edge: { block: protectedBlock, arguments: [] },
+		});
+		builder.setHandler(protectedBlock, handler, [parameters(builder, forward)[0]!]);
+		builder.setTerminator(protectedBlock, { kind: "return", value: returned! });
+		builder.setTerminator(handler, {
+			kind: "return",
+			value: parameters(builder, handler)[1]!,
+		});
+		const result = optimized({ program, function: builder.finish(entry).function });
+		const retained = blocks(result.fn).find(
+			(block) => inspectCoreBlockParameters(result.fn, block).length === 1,
+		);
+
+		expect(retained).toBeDefined();
+		expect(() =>
+			verifyCoreProgram(result.program, { stage: "pre-target" }),
+		).not.toThrow();
+	});
+
 	it("retains a forwarding phi used by a dominated block", () => {
 		const { program, builder } = fixture(1);
 		const entry = builder.createBlock([{}]);

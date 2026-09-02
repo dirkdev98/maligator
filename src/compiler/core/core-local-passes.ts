@@ -186,6 +186,7 @@ function useOutsideBlock(
 	value: CoreValueId,
 	block: CoreBlockId,
 ): boolean {
+	if (fn.kernel.valueHandlerUseCount(value) > 0) return true;
 	let use = fn.kernel.valueFirstUse(value);
 	while (use >= 0) {
 		const next = fn.kernel.useNext(use);
@@ -362,11 +363,7 @@ function constantForValue(
 }
 
 function valueHasUses(fn: CoreFunctionStore, value: CoreValueId): boolean {
-	if (fn.valueUseCount(value) > 0) return true;
-	for (const block of fn.blockIds()) {
-		if (handlerContainsValue(fn, block, value)) return true;
-	}
-	return false;
+	return fn.valueUseCount(value) + fn.kernel.valueHandlerUseCount(value) > 0;
 }
 
 function constantsAreInterchangeable(
@@ -862,7 +859,9 @@ const rewriteExactBuiltinCalls: CorePass = {
 				fn.kernel.instructionResultCount(instruction) === 1 &&
 				fn.kernel.instructionResultCount(property) === 1 &&
 				propertyResult !== undefined &&
-				fn.valueUseCount(propertyResult) === 1
+				fn.valueUseCount(propertyResult) +
+					fn.kernel.valueHandlerUseCount(propertyResult) ===
+					1
 					? numericOpcode
 					: undefined;
 			const exactRewrite =
@@ -872,7 +871,7 @@ const rewriteExactBuiltinCalls: CorePass = {
 				sharedIdentity.value === descriptor.id &&
 				fn.kernel.instructionResultCount(property) === 1 &&
 				propertyResult === callee &&
-				fn.valueUseCount(callee) === 1
+				fn.valueUseCount(callee) + fn.kernel.valueHandlerUseCount(callee) === 1
 					? exact
 					: undefined;
 			const site = builtinSourceSite(
@@ -1506,9 +1505,10 @@ const removeUnreachableBlocks: CorePass = {
 		const editor = CoreEditor.open(program, item.function);
 		const removed = new Set(blocks);
 		for (const block of fn.blockIds()) {
-			if (removed.has(block)) continue;
 			const handler = fn.kernel.blockHandlerBlock(block);
-			if (handler !== undefined && removed.has(handler)) editor.clearHandler(block);
+			if (handler !== undefined && (removed.has(block) || removed.has(handler))) {
+				editor.clearHandler(block);
+			}
 		}
 		const pending = new Set(blocks.flatMap((block) => [...fn.instructionIds(block)]));
 		const queue = new Array<CoreInstructionId>();

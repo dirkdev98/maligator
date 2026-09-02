@@ -5,6 +5,7 @@ import type { CoreCompilationContext } from "../src/compiler/core/core-compilati
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { coreTerminatorEdges } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
@@ -293,6 +294,35 @@ describe("Core local canonicalization", () => {
 		expect(
 			report.passes.find(({ pass }) => pass === "unreachable-block-removal"),
 		).toMatchObject({ changedItems: 1 });
+	});
+
+	it("drops exceptional uses before deleting unreachable blocks", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const deadDefinition = builder.createBlock([{ representation: "boxed" }]);
+		const deadProtected = builder.createBlock();
+		const deadHandler = builder.createBlock([
+			{ role: "exception", representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [returned] = builder.appendInstruction(entry, "createUndefined", []);
+		const deadValue = inspectCoreBlockParameters(builder, deadDefinition)[0]!.value;
+		builder.setTerminator(entry, { kind: "return", value: returned! });
+		builder.setTerminator(deadDefinition, { kind: "return", value: deadValue });
+		builder.setHandler(deadProtected, deadHandler, [deadValue]);
+		builder.setTerminator(deadProtected, { kind: "return", value: returned! });
+		builder.setTerminator(deadHandler, {
+			kind: "return",
+			value: inspectCoreBlockParameters(builder, deadHandler)[1]!.value,
+		});
+		builder.finish(entry);
+
+		const optimized = optimizeCore({ program, context }, { verification: "per-pass" })
+			.compilation.program;
+
+		expect([...optimized.function(0 as never).blockIds()]).toEqual([entry]);
+		expect(() => verifyCoreProgram(optimized)).not.toThrow();
 	});
 
 	it("propagates one constant across joins without conflating differing inputs", () => {

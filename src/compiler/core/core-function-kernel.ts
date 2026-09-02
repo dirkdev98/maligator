@@ -48,6 +48,7 @@ export interface CoreFunctionKernelColumns {
 	readonly valueFirstUse: ReadonlyArray<number>;
 	readonly valueUseCount: ReadonlyArray<number>;
 	readonly valueFirstHandlerUse: ReadonlyArray<number>;
+	readonly valueHandlerUseCount: ReadonlyArray<number>;
 	readonly useLive: ReadonlyArray<number>;
 	readonly useValue: ReadonlyArray<CoreValueId>;
 	readonly useInstruction: ReadonlyArray<CoreInstructionId>;
@@ -232,6 +233,10 @@ export class CoreFunctionKernel {
 
 	valueFirstHandlerUse(value: CoreValueId): number {
 		return this.#columns.valueFirstHandlerUse[value] ?? -1;
+	}
+
+	valueHandlerUseCount(value: CoreValueId): number {
+		return this.#columns.valueHandlerUseCount[value] ?? 0;
 	}
 
 	useLive(use: number): number {
