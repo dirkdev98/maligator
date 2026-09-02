@@ -4,6 +4,7 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CALL_GRAPH_ANALYSIS } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
+import { CORE_PROGRAM_FLOW_REACHABILITY } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreFunctionReachabilityReason =
@@ -241,6 +242,7 @@ export function analyzeCoreFunctionReachability(
 	targets: CoreCallGraphIndex,
 	context: CoreCompilationContext,
 	previous?: CoreFunctionReachabilityState,
+	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 ): CoreFunctionReachabilityState {
 	const all = [...program.functionIds()];
 	const allSet = new Set(all);
@@ -259,7 +261,9 @@ export function analyzeCoreFunctionReachability(
 	let structuralIndexEdges = 0;
 	const structurallyChanged = new Set<CoreFunctionId>();
 	const dataChanged = previous?.programDataVersion !== program.programVersion("data");
-	for (const functionId of all) {
+	for (const functionId of
+		previous === undefined || dataChanged ? all : (dirtyFunctions ?? all)) {
+		if (!allSet.has(functionId)) continue;
 		const fn = program.function(functionId);
 		const bodyVersion = fn.version("body") + 1;
 		const cfgVersion = fn.version("cfg") + 1;
@@ -448,16 +452,29 @@ export const CORE_FUNCTION_REACHABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFun
 		contextIdentity(context) {
 			return context.facts.closure.sourceClosure.kind;
 		},
-		compute({ program, context, request, previous, get }) {
+		compute({ program, context, request, previous, get, programFlow }) {
 			if (request.scope !== "program") {
 				throw new Error("Expected program analysis request");
 			}
 			const targets = get(CORE_CALL_GRAPH_ANALYSIS, request);
+			const dirtyFunctions = new Array<CoreFunctionId>();
+			if (previous !== undefined) {
+				for (let index = 0; index < programFlow.dirtyFunctionCount; index++) {
+					const functionId = programFlow.dirtyFunctionAt(index);
+					if (
+						(programFlow.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_REACHABILITY) !==
+						0
+					) {
+						dirtyFunctions.push(functionId);
+					}
+				}
+			}
 			return analyzeCoreFunctionReachability(
 				program,
 				targets,
 				context,
 				previous as CoreFunctionReachabilityState | undefined,
+				dirtyFunctions,
 			);
 		},
 	};

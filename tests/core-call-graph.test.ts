@@ -181,5 +181,6 @@ describe("symbolic Core call graph", () => {
 		expect(sources[0]).not.toMatch(/versionKey:\s*string|functionVersionKey/u);
 		expect(sources[0]).toMatch(/programFlow\.dirtyFunctionAt/);
 		expect(sources[1]).not.toMatch(/ReadonlyMap<CoreFunctionId, string>|functionVersionKey/u);
+		expect(sources[1]).toMatch(/programFlow\.dirtyFunctionAt/);
 	});
 });
