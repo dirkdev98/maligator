@@ -1,5 +1,6 @@
 import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
 import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
@@ -30,6 +31,99 @@ export const CORE_PROGRAM_FLOW_REACHABILITY = 1 << 7;
 
 export const CORE_PROGRAM_FLOW_RUNTIME_IDENTITY = 1 << 0;
 export const CORE_PROGRAM_FLOW_INLINE_SOURCE = 1 << 1;
+
+export type CoreProgramFlowReachabilityReason =
+	| "program-entry"
+	| "commonjs-module"
+	| "host-install"
+	| "open-world"
+	| "finite-call"
+	| "any-script"
+	| "runtime-identity"
+	| "inline-source";
+
+export interface CoreProgramFlowReachabilityStatistics {
+	readonly functions: number;
+	readonly functionsIndexed: number;
+	readonly structuralIndexEdges: number;
+	readonly hostInstallSlotsRead: number;
+	readonly functionsScanned: number;
+	readonly exactCallEdgesFollowed: number;
+	readonly wildcardCallerVisits: number;
+	readonly aggregateDependencyVisits: number;
+	readonly structuralEdgesFollowed: number;
+	readonly resultSetUpdates: number;
+	readonly deadFunctions: number;
+}
+
+export interface CoreProgramFlowTargetIndex {
+	readonly sourceClosed: boolean;
+	readonly graph: CoreCallGraph;
+	readonly changedEdgeCallers: ReadonlySet<CoreFunctionId>;
+	globalStoreTargets(slot: number): {
+		readonly functions: ReadonlyArray<CoreFunctionId>;
+		readonly anyScript: boolean;
+	};
+}
+
+type CoreProgramFlowReachabilityEdges = ReadonlyMap<
+	CoreFunctionId,
+	ReadonlySet<CoreProgramFlowReachabilityReason>
+>;
+
+type CoreProgramFlowReachabilityMasks = ReadonlyMap<CoreFunctionId, number>;
+
+export interface CoreProgramFlowReachabilityState<
+	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
+> {
+	readonly executable: ReadonlySet<CoreFunctionId>;
+	readonly retained: ReadonlySet<CoreFunctionId>;
+	readonly dead: ReadonlySet<CoreFunctionId>;
+	readonly liveFunctions: ReadonlyArray<CoreFunctionId>;
+	readonly reasons: ReadonlyMap<
+		CoreFunctionId,
+		ReadonlySet<CoreProgramFlowReachabilityReason>
+	>;
+	readonly sourceClosed: boolean;
+	readonly statistics: CoreProgramFlowReachabilityStatistics;
+	readonly bodyVersions: ReadonlyMap<CoreFunctionId, number>;
+	readonly cfgVersions: ReadonlyMap<CoreFunctionId, number>;
+	readonly programDataVersion: number;
+	readonly structural: ReadonlyMap<CoreFunctionId, CoreProgramFlowReachabilityEdges>;
+	readonly structuralMasks: ReadonlyMap<CoreFunctionId, CoreProgramFlowReachabilityMasks>;
+	readonly structuralCallers: ReadonlyMap<
+		CoreFunctionId,
+		CoreProgramFlowReachabilityMasks
+	>;
+	readonly roots: ReadonlyMap<
+		CoreFunctionId,
+		ReadonlySet<CoreProgramFlowReachabilityReason>
+	>;
+	readonly rootMasks: CoreProgramFlowReachabilityMasks;
+	readonly targets: Targets;
+}
+
+const REACHABILITY_PROGRAM_ENTRY = 1 << 0;
+const REACHABILITY_COMMONJS_MODULE = 1 << 1;
+const REACHABILITY_HOST_INSTALL = 1 << 2;
+const REACHABILITY_OPEN_WORLD = 1 << 3;
+const REACHABILITY_FINITE_CALL = 1 << 4;
+const REACHABILITY_ANY_SCRIPT = 1 << 5;
+const REACHABILITY_RUNTIME_IDENTITY = 1 << 6;
+const REACHABILITY_INLINE_SOURCE = 1 << 7;
+
+const REACHABILITY_REASON_BITS: ReadonlyArray<
+	readonly [number, CoreProgramFlowReachabilityReason]
+> = [
+	[REACHABILITY_PROGRAM_ENTRY, "program-entry"],
+	[REACHABILITY_COMMONJS_MODULE, "commonjs-module"],
+	[REACHABILITY_HOST_INSTALL, "host-install"],
+	[REACHABILITY_OPEN_WORLD, "open-world"],
+	[REACHABILITY_FINITE_CALL, "finite-call"],
+	[REACHABILITY_ANY_SCRIPT, "any-script"],
+	[REACHABILITY_RUNTIME_IDENTITY, "runtime-identity"],
+	[REACHABILITY_INLINE_SOURCE, "inline-source"],
+];
 
 const FUNCTION_INDEX_ATTRIBUTES = [
 	"functionIndex",
@@ -251,6 +345,145 @@ export function extractCoreProgramFlowLocalTransfers(
 		structuralTargets,
 		structuralTargets.map((target) => structural.get(target)!),
 	);
+}
+
+function reachabilityReasonMask(
+	reasons: ReadonlySet<CoreProgramFlowReachabilityReason> | undefined,
+): number {
+	let mask = 0;
+	for (const [bit, reason] of REACHABILITY_REASON_BITS) {
+		if (reasons?.has(reason)) mask |= bit;
+	}
+	return mask;
+}
+
+function reachabilityReasonSet(
+	mask: number,
+	previous?: ReadonlySet<CoreProgramFlowReachabilityReason>,
+): ReadonlySet<CoreProgramFlowReachabilityReason> {
+	if (previous !== undefined && reachabilityReasonMask(previous) === mask)
+		return previous;
+	const reasons = new Set<CoreProgramFlowReachabilityReason>();
+	for (const [bit, reason] of REACHABILITY_REASON_BITS) {
+		if ((mask & bit) !== 0) reasons.add(reason);
+	}
+	return reasons;
+}
+
+function sameFunctionIds(
+	left: ReadonlySet<CoreFunctionId>,
+	right: ReadonlySet<CoreFunctionId>,
+): boolean {
+	return (
+		left.size === right.size && [...left].every((functionId) => right.has(functionId))
+	);
+}
+
+function sameNumericRows(
+	left: CoreProgramFlowReachabilityMasks | undefined,
+	right: CoreProgramFlowReachabilityMasks | undefined,
+): boolean {
+	return (
+		(left?.size ?? 0) === (right?.size ?? 0) &&
+		[...(left ?? [])].every(([functionId, mask]) => right?.get(functionId) === mask)
+	);
+}
+
+function structuralReachabilityMasks(
+	transfers: CoreProgramFlowLocalTransfers,
+): ReadonlyMap<CoreFunctionId, number> {
+	const result = new Map<CoreFunctionId, number>();
+	for (let index = 0; index < transfers.structuralTargetCount; index++) {
+		const target = transfers.structuralTargetAt(index);
+		const localReasons = transfers.structuralReasonMaskAt(index);
+		let reasons = 0;
+		if ((localReasons & CORE_PROGRAM_FLOW_RUNTIME_IDENTITY) !== 0) {
+			reasons |= REACHABILITY_RUNTIME_IDENTITY;
+		}
+		if ((localReasons & CORE_PROGRAM_FLOW_INLINE_SOURCE) !== 0) {
+			reasons |= REACHABILITY_INLINE_SOURCE;
+		}
+		if (reasons !== 0) result.set(target, reasons);
+	}
+	return result;
+}
+
+function publicStructuralReachabilityEdges(
+	masks: CoreProgramFlowReachabilityMasks,
+	previous?: CoreProgramFlowReachabilityEdges,
+): CoreProgramFlowReachabilityEdges {
+	if (
+		(previous?.size ?? 0) === masks.size &&
+		[...masks].every(
+			([functionId, reasons]) =>
+				reachabilityReasonMask(previous?.get(functionId)) === reasons,
+		)
+	) {
+		return previous ?? new Map();
+	}
+	return new Map(
+		[...masks].map(([functionId, reasons]) => [
+			functionId,
+			reachabilityReasonSet(reasons),
+		]),
+	);
+}
+
+function coreProgramFlowReachabilityRoots(
+	program: CoreProgram,
+	targets: CoreProgramFlowTargetIndex,
+	context: CoreCompilationContext,
+): {
+	readonly masks: ReadonlyMap<CoreFunctionId, number>;
+	readonly roots: ReadonlyMap<
+		CoreFunctionId,
+		ReadonlySet<CoreProgramFlowReachabilityReason>
+	>;
+	readonly hostInstallSlotsRead: number;
+} {
+	const masks = new Map<CoreFunctionId, number>();
+	const enter = (candidate: unknown, reason: number): void => {
+		if (
+			typeof candidate !== "number" ||
+			!Number.isSafeInteger(candidate) ||
+			candidate < 0 ||
+			candidate >= program.functionCapacity
+		)
+			return;
+		const functionId = candidate as CoreFunctionId;
+		if (!program.hasFunction(functionId)) return;
+		masks.set(functionId, (masks.get(functionId) ?? 0) | reason);
+	};
+	const functions = targets.graph.functions;
+	if (!targets.sourceClosed) {
+		for (const functionId of functions) enter(functionId, REACHABILITY_OPEN_WORLD);
+	} else {
+		enter(functions[0], REACHABILITY_PROGRAM_ENTRY);
+		for (const functionId of context.data.cjsModuleFunctionIndices) {
+			enter(functionId, REACHABILITY_COMMONJS_MODULE);
+		}
+	}
+	const hostInstallSlots = new Set<number>();
+	for (const candidate of context.data.hostInstallCandidates) {
+		for (const { slot } of candidate.exports) hostInstallSlots.add(slot);
+	}
+	for (const slot of hostInstallSlots) {
+		const installed = targets.globalStoreTargets(slot);
+		for (const target of installed.functions) enter(target, REACHABILITY_HOST_INSTALL);
+		if (installed.anyScript) {
+			for (const functionId of functions) enter(functionId, REACHABILITY_HOST_INSTALL);
+		}
+	}
+	return {
+		masks,
+		roots: new Map(
+			[...masks].map(([functionId, reasons]) => [
+				functionId,
+				reachabilityReasonSet(reasons),
+			]),
+		),
+		hostInstallSlotsRead: hostInstallSlots.size,
+	};
 }
 
 export interface CoreProgramFlowScc {
@@ -745,6 +978,337 @@ export class CoreProgramFlowEngine {
 		this.#report?.increment("programFlowFunctionPops", statistics.pops);
 		this.#report?.increment("programFlowFunctionWakeups", statistics.wakeups);
 		return statistics;
+	}
+
+	solveReachability<Targets extends CoreProgramFlowTargetIndex>(
+		targets: Targets,
+		context: CoreCompilationContext,
+		previous?: CoreProgramFlowReachabilityState<Targets>,
+		dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
+	): CoreProgramFlowReachabilityState<Targets> {
+		const functions = targets.graph.functions;
+		const functionMembership = new Uint8Array(this.#program.functionCapacity);
+		for (const functionId of functions) functionMembership[functionId] = 1;
+		const bodyVersions = new Map(previous?.bodyVersions ?? []);
+		const cfgVersions = new Map(previous?.cfgVersions ?? []);
+		const structuralMasks = new Map(previous?.structuralMasks ?? []);
+		const structural = new Map(previous?.structural ?? []);
+		const structuralCallers = new Map(previous?.structuralCallers ?? []);
+		const structurallyChanged: Array<CoreFunctionId> = [];
+		const dataChanged =
+			previous?.programDataVersion !== this.#program.programVersion("data");
+		const dirtyMembership = new Uint8Array(this.#program.functionCapacity);
+		if (previous === undefined || dataChanged) {
+			for (const functionId of functions) dirtyMembership[functionId] = 1;
+		} else {
+			for (const functionId of dirtyFunctions ?? functions) {
+				if (functionMembership[functionId] !== 0) dirtyMembership[functionId] = 1;
+			}
+			for (const functionId of functions) {
+				if (!structuralMasks.has(functionId)) dirtyMembership[functionId] = 1;
+			}
+		}
+		let functionsIndexed = 0;
+		let structuralIndexEdges = 0;
+		for (const functionId of functions) {
+			if (dirtyMembership[functionId] === 0) continue;
+			const fn = this.#program.function(functionId);
+			const bodyVersion = fn.version("body") + 1;
+			const cfgVersion = fn.version("cfg") + 1;
+			if (
+				!dataChanged &&
+				bodyVersions.get(functionId) === bodyVersion &&
+				cfgVersions.get(functionId) === cfgVersion
+			)
+				continue;
+			const priorMasks = structuralMasks.get(functionId);
+			const nextMasks = structuralReachabilityMasks(this.local(functionId));
+			if (!sameNumericRows(priorMasks, nextMasks)) {
+				for (const target of priorMasks?.keys() ?? []) {
+					const callers = new Map(structuralCallers.get(target) ?? []);
+					callers.delete(functionId);
+					if (callers.size === 0) structuralCallers.delete(target);
+					else structuralCallers.set(target, callers);
+				}
+				for (const [target, reasons] of nextMasks) {
+					const callers = new Map(structuralCallers.get(target) ?? []);
+					callers.set(functionId, reasons);
+					structuralCallers.set(target, callers);
+				}
+				structuralMasks.set(functionId, nextMasks);
+				structural.set(
+					functionId,
+					publicStructuralReachabilityEdges(nextMasks, structural.get(functionId)),
+				);
+				structurallyChanged.push(functionId);
+			}
+			bodyVersions.set(functionId, bodyVersion);
+			cfgVersions.set(functionId, cfgVersion);
+			functionsIndexed++;
+			for (const reasons of nextMasks.values()) {
+				if ((reasons & REACHABILITY_RUNTIME_IDENTITY) !== 0) structuralIndexEdges++;
+				if ((reasons & REACHABILITY_INLINE_SOURCE) !== 0) structuralIndexEdges++;
+			}
+		}
+		for (const functionId of previous?.structuralMasks.keys() ?? []) {
+			if (functionMembership[functionId] !== 0) continue;
+			for (const target of structuralMasks.get(functionId)?.keys() ?? []) {
+				const callers = new Map(structuralCallers.get(target) ?? []);
+				callers.delete(functionId);
+				if (callers.size === 0) structuralCallers.delete(target);
+				else structuralCallers.set(target, callers);
+			}
+			structuralMasks.delete(functionId);
+			structural.delete(functionId);
+			bodyVersions.delete(functionId);
+			cfgVersions.delete(functionId);
+		}
+
+		const rootState = coreProgramFlowReachabilityRoots(this.#program, targets, context);
+		const roots = new Map(
+			[...rootState.masks].map(([functionId, reasons]) => [
+				functionId,
+				reachabilityReasonSet(reasons, previous?.roots.get(functionId)),
+			]),
+		);
+		const affected = new Uint8Array(this.#program.functionCapacity);
+		const closureQueue: Array<CoreFunctionId> = [];
+		const markAffected = (functionId: CoreFunctionId): void => {
+			if (functionMembership[functionId] === 0 || affected[functionId] !== 0) return;
+			affected[functionId] = 1;
+			closureQueue.push(functionId);
+		};
+		if (previous === undefined) {
+			for (const functionId of functions) markAffected(functionId);
+		} else {
+			const previousFunctionMembership = new Uint8Array(this.#program.functionCapacity);
+			for (const functionId of previous.targets.graph.functions) {
+				previousFunctionMembership[functionId] = 1;
+			}
+			const previousAggregateReached = previous.targets.graph.wildcardCallers.some(
+				(functionId) => previous.executable.has(functionId),
+			);
+			for (const functionId of functions) {
+				if (
+					(previous.rootMasks.get(functionId) ?? 0) !==
+					(rootState.masks.get(functionId) ?? 0)
+				) {
+					markAffected(functionId);
+				}
+				if (previousAggregateReached && previousFunctionMembership[functionId] === 0) {
+					markAffected(functionId);
+				}
+			}
+			for (const functionId of targets.changedEdgeCallers) {
+				if (previous.executable.has(functionId) || rootState.masks.has(functionId)) {
+					markAffected(functionId);
+				}
+			}
+			for (const functionId of structurallyChanged) {
+				if (previous.executable.has(functionId) || rootState.masks.has(functionId)) {
+					markAffected(functionId);
+				}
+			}
+			for (const functionId of previous.executable) {
+				if (functionMembership[functionId] !== 0) continue;
+				for (const callee of previous.targets.graph.exactOutgoing(functionId)) {
+					markAffected(callee);
+				}
+				for (const target of previous.structuralMasks.get(functionId)?.keys() ?? []) {
+					markAffected(target);
+				}
+			}
+		}
+		for (let cursor = 0; cursor < closureQueue.length; cursor++) {
+			const functionId = closureQueue[cursor]!;
+			for (const graph of [targets.graph, previous?.targets.graph]) {
+				if (graph === undefined) continue;
+				for (const callee of graph.exactOutgoing(functionId)) markAffected(callee);
+				if (graph.isWildcardCaller(functionId)) {
+					for (const callee of graph.functions) markAffected(callee);
+				}
+			}
+			for (const rows of [
+				structuralMasks.get(functionId),
+				previous?.structuralMasks.get(functionId),
+			]) {
+				for (const target of rows?.keys() ?? []) markAffected(target);
+			}
+		}
+
+		const executableMarks = new Uint8Array(this.#program.functionCapacity);
+		const reasonMasks = new Uint16Array(this.#program.functionCapacity);
+		if (previous !== undefined) {
+			for (const functionId of previous.executable) {
+				if (functionMembership[functionId] === 0 || affected[functionId] !== 0) continue;
+				executableMarks[functionId] = 1;
+				reasonMasks[functionId] = reachabilityReasonMask(
+					previous.reasons.get(functionId),
+				);
+			}
+		}
+		const topology = this.topology(targets.graph);
+		const pendingFunctions = new Uint8Array(this.#program.functionCapacity);
+		const seedSccMembership = new Uint8Array(topology.sccs.length);
+		const seedSccs: Array<CoreProgramFlowSccSeed> = [];
+		const seed = (functionId: CoreFunctionId, reasons: number): void => {
+			if (affected[functionId] === 0 || reasons === 0) return;
+			reasonMasks[functionId] = reasonMasks[functionId]! | reasons;
+			if (executableMarks[functionId] !== 0) return;
+			executableMarks[functionId] = 1;
+			pendingFunctions[functionId] = 1;
+			const scc = topology.owner.get(functionId);
+			if (scc === undefined || seedSccMembership[scc] !== 0) return;
+			seedSccMembership[scc] = 1;
+			seedSccs.push({ scc, dimensions: CORE_PROGRAM_FLOW_REACHABILITY });
+		};
+		let outsideWildcardReached = false;
+		for (const caller of targets.graph.wildcardCallers) {
+			if (affected[caller] === 0 && executableMarks[caller] !== 0) {
+				outsideWildcardReached = true;
+				break;
+			}
+		}
+		for (const functionId of functions) {
+			if (affected[functionId] === 0) continue;
+			let reasons = rootState.masks.get(functionId) ?? 0;
+			for (const caller of targets.graph.exactCallers(functionId)) {
+				if (affected[caller] === 0 && executableMarks[caller] !== 0) {
+					reasons |= REACHABILITY_FINITE_CALL;
+				}
+			}
+			for (const [caller, edgeReasons] of structuralCallers.get(functionId) ?? []) {
+				if (affected[caller] === 0 && executableMarks[caller] !== 0) {
+					reasons |= edgeReasons;
+				}
+			}
+			if (outsideWildcardReached) reasons |= REACHABILITY_ANY_SCRIPT;
+			seed(functionId, reasons);
+		}
+
+		let aggregateReached = outsideWildcardReached;
+		let functionsScanned = 0;
+		let exactCallEdgesFollowed = 0;
+		let wildcardCallerVisits = 0;
+		let aggregateDependencyVisits = 0;
+		let structuralEdgesFollowed = 0;
+		this.solveSccs(topology, seedSccs, (sccIndex, dimensions, enqueueScc) => {
+			if ((dimensions & CORE_PROGRAM_FLOW_REACHABILITY) === 0) return;
+			const queue: Array<CoreFunctionId> = [];
+			for (const functionId of topology.sccs[sccIndex]!.functions) {
+				if (pendingFunctions[functionId] === 0) continue;
+				pendingFunctions[functionId] = 0;
+				queue.push(functionId);
+			}
+			const enter = (functionId: CoreFunctionId, reasons: number): void => {
+				if (affected[functionId] === 0) return;
+				reasonMasks[functionId] = reasonMasks[functionId]! | reasons;
+				if (executableMarks[functionId] !== 0) return;
+				executableMarks[functionId] = 1;
+				const targetScc = topology.owner.get(functionId);
+				if (targetScc === undefined) return;
+				if (targetScc === sccIndex) queue.push(functionId);
+				else {
+					pendingFunctions[functionId] = 1;
+					enqueueScc(targetScc, CORE_PROGRAM_FLOW_REACHABILITY);
+				}
+			};
+			for (let cursor = 0; cursor < queue.length; cursor++) {
+				const functionId = queue[cursor]!;
+				functionsScanned++;
+				for (const callee of targets.graph.exactOutgoing(functionId)) {
+					exactCallEdgesFollowed++;
+					enter(callee, REACHABILITY_FINITE_CALL);
+				}
+				if (targets.graph.isWildcardCaller(functionId)) {
+					wildcardCallerVisits++;
+					if (!aggregateReached) {
+						aggregateReached = true;
+						for (const callee of functions) {
+							aggregateDependencyVisits++;
+							enter(callee, REACHABILITY_ANY_SCRIPT);
+						}
+					}
+				}
+				for (const [target, edgeReasons] of structuralMasks.get(functionId) ?? []) {
+					structuralEdgesFollowed +=
+						((edgeReasons & REACHABILITY_RUNTIME_IDENTITY) !== 0 ? 1 : 0) +
+						((edgeReasons & REACHABILITY_INLINE_SOURCE) !== 0 ? 1 : 0);
+					enter(target, edgeReasons);
+				}
+			}
+		});
+
+		const executable = new Set<CoreFunctionId>();
+		const reasons = new Map<
+			CoreFunctionId,
+			ReadonlySet<CoreProgramFlowReachabilityReason>
+		>();
+		for (const functionId of functions) {
+			if (executableMarks[functionId] === 0) continue;
+			executable.add(functionId);
+			reasons.set(
+				functionId,
+				reachabilityReasonSet(
+					reasonMasks[functionId]!,
+					previous?.reasons.get(functionId),
+				),
+			);
+		}
+		let resultSetUpdates = 0;
+		for (const functionId of functions) {
+			if (
+				(previous?.executable.has(functionId) ?? false) !== executable.has(functionId)
+			) {
+				resultSetUpdates++;
+			}
+		}
+		for (const functionId of previous?.executable ?? []) {
+			if (functionMembership[functionId] === 0) resultSetUpdates++;
+		}
+		const stableExecutable =
+			previous !== undefined && sameFunctionIds(previous.executable, executable);
+		const finalExecutable = stableExecutable ? previous.executable : executable;
+		const computedDead = new Set(
+			functions.filter((functionId) => !executable.has(functionId)),
+		);
+		const dead =
+			previous !== undefined && sameFunctionIds(previous.dead, computedDead)
+				? previous.dead
+				: computedDead;
+		const liveFunctions = stableExecutable
+			? previous.liveFunctions
+			: Object.freeze([...executable].sort((left, right) => left - right));
+		return Object.freeze({
+			executable: finalExecutable,
+			retained: finalExecutable,
+			dead,
+			liveFunctions,
+			reasons,
+			sourceClosed: targets.sourceClosed,
+			bodyVersions,
+			cfgVersions,
+			programDataVersion: this.#program.programVersion("data"),
+			structural,
+			structuralMasks,
+			structuralCallers,
+			roots,
+			rootMasks: rootState.masks,
+			targets,
+			statistics: Object.freeze({
+				functions: functions.length,
+				functionsIndexed,
+				structuralIndexEdges,
+				hostInstallSlotsRead: rootState.hostInstallSlotsRead,
+				functionsScanned,
+				exactCallEdgesFollowed,
+				wildcardCallerVisits,
+				aggregateDependencyVisits,
+				structuralEdgesFollowed,
+				resultSetUpdates,
+				deadFunctions: dead.size,
+			}),
+		});
 	}
 
 	#invalidateLocalTransfers(): void {

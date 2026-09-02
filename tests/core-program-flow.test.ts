@@ -30,6 +30,10 @@ describe("Core program flow", () => {
 			new URL("../src/compiler/core/core-program-flow-analysis.ts", import.meta.url),
 			"utf8",
 		);
+		const engine = readFileSync(
+			new URL("../src/compiler/core/core-program-flow.ts", import.meta.url),
+			"utf8",
+		);
 		for (const module of [
 			"core-ir-call-targets.ts",
 			"core-ir-summaries.ts",
@@ -47,6 +51,16 @@ describe("Core program flow", () => {
 		}
 		expect(owner.match(/programFlow\.refresh/g)).toHaveLength(1);
 		expect(owner.match(/programFlowView\(/g)).toHaveLength(4);
+		const reachability = readFileSync(
+			new URL("../src/compiler/core/core-ir-reachability.ts", import.meta.url),
+			"utf8",
+		);
+		expect(owner).toMatch(/programFlow\.solveReachability\(/);
+		expect(engine).toMatch(/solveReachability<.*CoreProgramFlowTargetIndex/s);
+		expect(reachability).toMatch(
+			/new CoreProgramFlowEngine\(program\)\.solveReachability\(/,
+		);
+		expect(reachability).not.toMatch(/solveCoreProgramFlowSccs|while\s*\(|pending/);
 	});
 
 	it("deduplicates dirty functions within an immutable journal epoch", () => {

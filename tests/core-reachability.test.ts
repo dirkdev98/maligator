@@ -443,8 +443,69 @@ describe("Core function reachability", () => {
 		expect(second.reasons.get(3 as never)).toBe(unrelatedReasons);
 		expect(second.statistics).toMatchObject({
 			functionsIndexed: 1,
-			functionsScanned: 3,
+			functionsScanned: 2,
 			resultSetUpdates: 2,
+		});
+	});
+
+	it("keeps an unrelated live chain outside an affected SCC closure", () => {
+		const program = analysisProgram();
+		const chainLength = 20;
+		const secondHead = chainLength + 2;
+		const entry = new CoreFunctionBuilder(program);
+		const entryBlock = entry.createBlock();
+		entry.appendInstruction(entryBlock, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		entry.appendInstruction(entryBlock, "createFunction", [], {
+			attributes: { functionIndex: secondHead },
+		});
+		const [entryResult] = entry.appendInstruction(entryBlock, "createUndefined", []);
+		entry.setTerminator(entryBlock, { kind: "return", value: entryResult! });
+		entry.finish(entryBlock);
+
+		const edited = appendCaller(program, 2);
+		for (let functionId = 2; functionId <= chainLength; functionId++) {
+			appendCaller(program, functionId + 1);
+		}
+		const firstLeaf = appendLeaf(program);
+		const unrelatedHead = appendCaller(program, secondHead + 1);
+		for (
+			let functionId = secondHead + 1;
+			functionId < secondHead + chainLength;
+			functionId++
+		) {
+			appendCaller(program, functionId + 1);
+		}
+		const unrelatedLeaf = appendLeaf(program);
+		const replacement = appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+		const unrelatedReasons = first.reasons.get(unrelatedHead.function);
+
+		const editor = CoreEditor.open(program, edited.function);
+		editor.replaceInstruction(edited.createFunctionInstruction, "createFunction", [], {
+			attributes: { functionIndex: replacement.function },
+		});
+		editor.commit();
+		const second = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(second.executable.has(firstLeaf.function)).toBe(false);
+		expect(second.executable.has(replacement.function)).toBe(true);
+		expect(second.executable.has(unrelatedLeaf.function)).toBe(true);
+		expect(second.reasons.get(unrelatedHead.function)).toBe(unrelatedReasons);
+		expect(second.statistics).toMatchObject({
+			functionsIndexed: 1,
+			functionsScanned: 2,
+			resultSetUpdates: chainLength + 1,
 		});
 	});
 });

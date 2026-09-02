@@ -4,7 +4,6 @@ import {
 	CORE_CONTROL_FLOW_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 } from "./core-ir-control-flow.ts";
-import { analyzeCoreFunctionReachability } from "./core-ir-reachability.ts";
 import type { CoreFunctionReachabilityState } from "./core-ir-reachability.ts";
 import { analyzeProgramSummaries } from "./core-ir-summaries.ts";
 import { solveCoreProgramValueKinds } from "./core-ir-value-kinds.ts";
@@ -130,15 +129,11 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 			reachabilityDirty.length === 0 &&
 			!targetsChanged
 				? prior.reachability
-				: analyzeCoreFunctionReachability(
-						program,
+				: programFlow.solveReachability(
 						targets,
 						context,
 						prior?.reachability,
 						reachabilityDirty,
-						(functionId) => programFlow.local(functionId),
-						programFlow.topology(targets.graph),
-						programFlow,
 					);
 		return Object.freeze({
 			flowRevision: epoch.revision,
