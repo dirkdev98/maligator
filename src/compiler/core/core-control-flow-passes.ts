@@ -5,6 +5,7 @@ import {
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type {
 	CoreLoopComparison,
@@ -23,7 +24,6 @@ import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreProvenance } from "./core-ir-provenance.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type {
-	CoreAttributeValue,
 	CoreBlockId,
 	CoreEdge,
 	CoreInstructionId,
@@ -53,20 +53,6 @@ const CONTROL_FLOW_CHANGES = Object.freeze({
 	facts: false,
 	representations: false,
 });
-
-function stableAttribute(value: CoreAttributeValue): string {
-	if (Array.isArray(value)) return `[${value.map(stableAttribute).join(",")}]`;
-	if (value !== null && typeof value === "object") {
-		return `{${Object.entries(value)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([key, entry]) => `${key}:${stableAttribute(entry)}`)
-			.join(",")}}`;
-	}
-	if (typeof value === "number") {
-		return `number:${Object.is(value, -0) ? "-0" : String(value)}`;
-	}
-	return String(value);
-}
 
 function copyTerminatorEdge(
 	fn: CoreFunctionStore,
@@ -200,13 +186,13 @@ function blockParameterValues(
 	return values;
 }
 
-function expressionKey(
+function pureExpressionOpcode(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-	inputs?: ReadonlyArray<CoreValueId>,
-): string | undefined {
+): number | undefined {
 	if (fn.instructionKind(instruction) !== "operation") return undefined;
-	const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+	const opcode = fn.instructionOpcode(instruction);
+	const descriptor = fn.registry.byId(opcode);
 	const effects =
 		fn.instructionEffectRefinement(instruction)?.effects ?? descriptor.effects;
 	const resultCount = fn.kernel.instructionResultCount(instruction);
@@ -222,19 +208,25 @@ function expressionKey(
 		effects.writes.length > 0
 	)
 		return undefined;
-	let inputKey = "";
-	if (inputs === undefined) {
-		const start = fn.kernel.instructionOperandStart(instruction);
-		const count = fn.kernel.instructionOperandCount(instruction);
-		for (let index = 0; index < count; index++) {
-			if (index > 0) inputKey += ",";
-			inputKey += fn.kernel.operandAt(start + index);
-		}
-	} else {
-		inputKey = inputs.join(",");
-	}
-	const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-	return `${descriptor.opcode}|${inputKey}|${stableAttribute(fn.instructionAttributes(instruction))}|${fn.valueRepresentation(output)}`;
+	return opcode;
+}
+
+function expressionsEqual(
+	fn: CoreFunctionStore,
+	left: CoreInstructionId,
+	right: CoreInstructionId,
+	leftInputs?: ReadonlyArray<CoreValueId>,
+	rightInputs?: ReadonlyArray<CoreValueId>,
+): boolean {
+	if (
+		pureExpressionOpcode(fn, left) === undefined ||
+		pureExpressionOpcode(fn, right) === undefined ||
+		!coreInstructionInputsEqual(fn, left, right, leftInputs, rightInputs)
+	)
+		return false;
+	const leftOutput = fn.kernel.resultAt(fn.kernel.instructionResultStart(left));
+	const rightOutput = fn.kernel.resultAt(fn.kernel.instructionResultStart(right));
+	return fn.valueRepresentation(leftOutput) === fn.valueRepresentation(rightOutput);
 }
 
 function blockParameterSpecs(fn: CoreFunctionStore, block: CoreBlockId) {
@@ -559,7 +551,14 @@ const eliminateDominatedRedundancy: CorePass = {
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
-		const available = new Array<Map<string, CoreValueId>>(fn.blockCapacity);
+		type AvailableExpression = {
+			readonly instruction: CoreInstructionId;
+			readonly inputs: ReadonlyArray<CoreValueId>;
+			readonly value: CoreValueId;
+		};
+		const available = new Array<Map<number, Array<AvailableExpression>>>(
+			fn.blockCapacity,
+		);
 		const replacements = new Map<CoreInstructionId, CoreValueId>();
 		for (const block of cfg.reversePostorder) {
 			const parent = cfg.immediateDominators[block];
@@ -580,19 +579,37 @@ const eliminateDominatedRedundancy: CorePass = {
 					const value = fn.kernel.operandAt(inputStart + index);
 					rooted[index] = roots.get(value) ?? value;
 				}
-				const key = expressionKey(fn, instruction, rooted);
-				if (key === undefined) continue;
-				const existing = current.get(key);
+				const opcode = pureExpressionOpcode(fn, instruction);
+				if (opcode === undefined) continue;
+				const bucket = current.get(opcode) ?? [];
+				const existingIndex = bucket.findIndex((candidate) =>
+					expressionsEqual(
+						fn,
+						instruction,
+						candidate.instruction,
+						rooted,
+						candidate.inputs,
+					),
+				);
+				const existing = bucket[existingIndex];
 				const existingBlock =
-					existing === undefined ? undefined : definitionBlock(fn, existing);
+					existing === undefined ? undefined : definitionBlock(fn, existing.value);
 				if (
 					existing === undefined ||
 					existingBlock === undefined ||
 					(existingBlock !== block &&
 						!cfg.instructionDominatesBlock(existingBlock, block))
-				)
-					current.set(key, instructionResult(fn, instruction, 0)!);
-				else replacements.set(instruction, existing);
+				) {
+					const next = [...bucket];
+					const entry = {
+						instruction,
+						inputs: rooted,
+						value: instructionResult(fn, instruction, 0)!,
+					};
+					if (existingIndex < 0) next.push(entry);
+					else next[existingIndex] = entry;
+					current.set(opcode, next);
+				} else replacements.set(instruction, existing.value);
 			}
 			available[block] = current;
 		}
@@ -677,8 +694,8 @@ const eliminatePartialRedundancy: CorePass = {
 				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
 			) {
 				const instruction = coreInstructionId(cursor);
-				const key = expressionKey(fn, instruction);
-				if (key === undefined) continue;
+				const opcode = pureExpressionOpcode(fn, instruction);
+				if (opcode === undefined) continue;
 				const output = instructionResult(fn, instruction, 0)!;
 				const inputs = copyInstructionOperands(fn, instruction);
 				const translated = incoming.map((edge) =>
@@ -693,7 +710,6 @@ const eliminatePartialRedundancy: CorePass = {
 				);
 				if (translated.some((inputs) => inputs === undefined)) continue;
 				const available = incoming.map((edge, index) => {
-					const expected = expressionKey(fn, instruction, translated[index]);
 					const candidateTerminator = fn.blockTerminator(edge.from);
 					for (
 						let candidateCursor = fn.kernel.blockFirstInstruction(edge.from);
@@ -703,7 +719,10 @@ const eliminatePartialRedundancy: CorePass = {
 						)
 					) {
 						const candidate = coreInstructionId(candidateCursor);
-						if (expressionKey(fn, candidate) === expected)
+						if (
+							fn.instructionOpcode(candidate) === opcode &&
+							expressionsEqual(fn, instruction, candidate, translated[index])
+						)
 							return instructionResult(fn, candidate, 0);
 					}
 					return undefined;
