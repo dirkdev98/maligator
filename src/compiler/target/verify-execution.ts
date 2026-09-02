@@ -222,7 +222,7 @@ function verifyProgramCardinality(program: ExecutionProgram): void {
 			["nameStringIndex", fn.nameStringIndex, coreFunction.metadata.nameStringIndex],
 			["isGenerator", fn.isGenerator, coreFunction.isGenerator],
 			["isAsync", fn.isAsync, coreFunction.isAsync],
-			["parameterCount", fn.parameterCount, coreFunction.parameters.length],
+			["parameterCount", fn.parameterCount, coreFunction.parameterCount],
 			["length", fn.length, coreFunction.metadata.length],
 			["capturedCount", fn.capturedCount, coreFunction.metadata.capturedCount],
 			["strict", fn.strict, coreFunction.metadata.strict],
@@ -870,13 +870,15 @@ function verifyGcRoots(model: FunctionModel, core: CoreFunctionStore): void {
 		}
 		const immediates = instructionImmediates(instruction);
 		const embeddedSafepoints = new Set<number>();
-		const originInputs = core.instructionOperands(coreInstruction);
-		const originOutputCount = core.instructionResults(coreInstruction).length;
-		for (const [index, input] of originInputs.entries()) {
+		const kernel = core.kernel;
+		const originInputStart = kernel.instructionOperandStart(coreInstruction);
+		const originInputCount = kernel.instructionOperandCount(coreInstruction);
+		const originOutputCount = kernel.instructionResultCount(coreInstruction);
+		for (let index = 0; index < originInputCount; index++) {
 			if (immediates?.[originOutputCount + index] === undefined) continue;
-			const definition = core.valueDefinition(input);
-			if (definition?.kind === "instruction") {
-				embeddedSafepoints.add(definition.instruction);
+			const input = kernel.operandAt(originInputStart + index);
+			if (kernel.valueDefinitionKind(input) === 1) {
+				embeddedSafepoints.add(kernel.valueDefinitionOwner(input));
 			}
 		}
 		if (realizedCoreInstructions.length === 0) {

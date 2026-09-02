@@ -9,7 +9,6 @@ import {
 	CORE_CALL_SUMMARY_VERSION_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 } from "../core/core-cross-call-transforms.ts";
-import { coreTerminatorEdges } from "../core/core-ir-control-flow.ts";
 import {
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
@@ -33,7 +32,6 @@ import {
 } from "../core/core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
-	CoreEdge,
 	CoreAttributeValue,
 	CoreFunctionId,
 	CoreImmediate,
@@ -266,9 +264,11 @@ function coreImmediateValue(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
 ): CompilerImmediateValue | undefined {
-	const definition = fn.valueDefinition(value);
-	if (definition.kind !== "instruction" || definition.index !== 0) return undefined;
-	const instruction = definition.instruction;
+	const kernel = fn.kernel;
+	if (kernel.valueDefinitionKind(value) !== 1 || kernel.valueDefinitionIndex(value) !== 0) {
+		return undefined;
+	}
+	const instruction = kernel.valueDefinitionOwner(value) as CoreInstructionId;
 	if (fn.instructionKind(instruction) !== "operation") return undefined;
 	const attributes = fn.instructionAttributes(instruction);
 	switch (fn.instructionOpcodeName(instruction)) {
@@ -306,6 +306,7 @@ function immediateOnlyInstructions(
 	fn: CoreFunctionStore,
 	protectedInstructions: ReadonlySet<CoreInstructionId>,
 ): ReadonlySet<CoreInstructionId> {
+	const kernel = fn.kernel;
 	const embedded = new Set<CoreValueId>();
 	const ordinary = new Set<CoreValueId>();
 	for (const block of fn.blockIds()) {
@@ -315,7 +316,10 @@ function immediateOnlyInstructions(
 				["call", "callBuiltin", "construct"].includes(
 					fn.instructionOpcodeName(instruction),
 				);
-			for (const input of fn.instructionOperands(instruction)) {
+			const inputStart = kernel.instructionOperandStart(instruction);
+			const inputCount = kernel.instructionOperandCount(instruction);
+			for (let index = 0; index < inputCount; index++) {
+				const input = kernel.operandAt(inputStart + index);
 				if (embeddable && coreImmediateValue(fn, input) !== undefined) {
 					embedded.add(input);
 				} else {
@@ -323,40 +327,34 @@ function immediateOnlyInstructions(
 				}
 			}
 		}
-		const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-		switch (terminator.kind) {
-			case "branch":
-			case "guard":
-				ordinary.add(terminator.condition);
-				break;
-			case "switch":
-				ordinary.add(terminator.discriminant);
-				break;
-			case "return":
-			case "throw":
-				ordinary.add(terminator.value);
-				break;
-			case "jump":
-			case "unreachable":
-				break;
+		const terminator = fn.blockTerminator(block);
+		const terminatorOperandStart = kernel.instructionOperandStart(terminator);
+		const terminatorOperandCount = kernel.instructionOperandCount(terminator);
+		for (let index = 0; index < terminatorOperandCount; index++) {
+			ordinary.add(kernel.operandAt(terminatorOperandStart + index));
 		}
-		for (const edge of coreTerminatorEdges(terminator)) {
-			for (const argument of edge.arguments) ordinary.add(argument);
+		const handlerArgumentStart = kernel.blockHandlerArgumentStart(block);
+		const handlerArgumentCount = kernel.blockHandlerArgumentCount(block);
+		for (let index = 0; index < handlerArgumentCount; index++) {
+			ordinary.add(kernel.handlerArgumentAt(handlerArgumentStart + index));
 		}
-		for (const argument of fn.blockHandler(block)?.arguments ?? [])
-			ordinary.add(argument);
 	}
 	const omitted = new Set<CoreInstructionId>();
 	for (const block of fn.blockIds()) {
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			if (protectedInstructions.has(instruction)) continue;
-			const results = fn.instructionResults(instruction);
-			if (
-				results.length > 0 &&
-				results.every((result) => embedded.has(result) && !ordinary.has(result))
-			) {
-				omitted.add(instruction);
+			const resultStart = kernel.instructionResultStart(instruction);
+			const resultCount = kernel.instructionResultCount(instruction);
+			if (resultCount === 0) continue;
+			let allEmbedded = true;
+			for (let index = 0; index < resultCount; index++) {
+				const result = kernel.resultAt(resultStart + index);
+				if (!embedded.has(result) || ordinary.has(result)) {
+					allEmbedded = false;
+					break;
+				}
 			}
+			if (allEmbedded) omitted.add(instruction);
 		}
 	}
 	return omitted;
@@ -416,18 +414,28 @@ function rebuildOperation(
 		}
 	}
 	const attributes = relocateFunctionReferences(selectedAttributes, functionMap);
-	const outputs = fn.instructionResults(instruction);
-	const inputs = fn.instructionOperands(instruction);
-	const registers = [...outputs, ...inputs].map(registerForValue);
+	const kernel = fn.kernel;
+	const outputStart = kernel.instructionResultStart(instruction);
+	const outputCount = kernel.instructionResultCount(instruction);
+	const inputStart = kernel.instructionOperandStart(instruction);
+	const inputCount = kernel.instructionOperandCount(instruction);
+	const registers = new Array<number>(outputCount + inputCount);
+	for (let index = 0; index < outputCount; index++) {
+		registers[index] = registerForValue(kernel.resultAt(outputStart + index));
+	}
+	for (let index = 0; index < inputCount; index++) {
+		registers[outputCount + index] = registerForValue(kernel.operandAt(inputStart + index));
+	}
 	const immediateValues: Array<CompilerImmediateValue | undefined> = [];
 	if (
 		allowImmediateOperands &&
 		(opcode === "call" || opcode === "callBuiltin" || opcode === "construct")
 	) {
-		for (const [index, input] of inputs.entries()) {
+		for (let index = 0; index < inputCount; index++) {
+			const input = kernel.operandAt(inputStart + index);
 			const immediate = coreImmediateValue(fn, input);
 			if (immediate === undefined) continue;
-			const position = outputs.length + index;
+			const position = outputCount + index;
 			registers[position] = -1;
 			immediateValues[position] = immediate;
 		}
@@ -489,14 +497,24 @@ function lowerCoreSpecializations(
 			if (loweredAnchor.type !== "binary") {
 				throw new Error(`Core numeric plan ${selection.id} does not lower to binary`);
 			}
-			const result = fn.instructionResults(anchor)[0];
+			const result =
+				fn.kernel.instructionResultCount(anchor) === 0
+					? undefined
+					: fn.kernel.resultAt(fn.kernel.instructionResultStart(anchor));
 			if (result === undefined) {
 				throw new Error(`Core numeric plan ${selection.id} has no result`);
 			}
 			const pairs = selection.claimedInstructions.slice(1).map((instruction) => {
 				const lowered = requireInstruction(instruction);
-				const operands = fn.instructionOperands(instruction);
-				const input = operands.indexOf(result);
+				const operandStart = fn.kernel.instructionOperandStart(instruction);
+				const operandCount = fn.kernel.instructionOperandCount(instruction);
+				let input = -1;
+				for (let index = 0; index < operandCount; index++) {
+					if (fn.kernel.operandAt(operandStart + index) === result) {
+						input = index;
+						break;
+					}
+				}
 				if (lowered.type !== "binary" || (input !== 0 && input !== 1)) {
 					throw new Error(`Core numeric plan ${selection.id} has an invalid finish`);
 				}
@@ -1246,6 +1264,7 @@ export function coreRegisterClasses(
 	readonly registers: ReadonlyMap<CoreValueId, number>;
 	readonly registerRepresentations: ReadonlyMap<number, CoreRepresentation>;
 } {
+	const kernel = fn.kernel;
 	const included = new Set(blockOrder);
 	const uses = new Array<Set<CoreValueId>>(fn.blockCapacity);
 	const definitions = new Array<Set<CoreValueId>>(fn.blockCapacity);
@@ -1253,17 +1272,23 @@ export function coreRegisterClasses(
 	const predecessors = new Array<Array<CoreBlockId>>(fn.blockCapacity);
 	const terminatorValues = new Array<ReadonlyArray<CoreValueId>>(fn.blockCapacity);
 	const handlerParameters = (block: CoreBlockId): ReadonlyArray<CoreValueId> => {
-		const handler = fn.blockHandler(block);
-		if (handler === undefined || !included.has(handler.block)) return [];
-		const parameters = fn.blockParameters(handler.block);
-		if (parameters[0]?.role !== "exception") {
-			throw new Error(`Core handler b${handler.block} has no exception parameter`);
+		const handler = kernel.blockHandlerBlock(block);
+		if (handler === undefined || !included.has(handler)) return [];
+		const parameterStart = kernel.blockParameterStart(handler);
+		const parameterCount = kernel.blockParameterCount(handler);
+		if (parameterCount === 0 || kernel.blockParameterRole(parameterStart) !== 1) {
+			throw new Error(`Core handler b${handler} has no exception parameter`);
 		}
-		const explicit = parameters.slice(1).map(({ value }) => value);
-		if (explicit.length !== handler.arguments.length) {
+		const explicitCount = parameterCount - 1;
+		const argumentCount = kernel.blockHandlerArgumentCount(block);
+		if (explicitCount !== argumentCount) {
 			throw new Error(
-				`Core handler b${handler.block} expects ${explicit.length} explicit arguments, received ${handler.arguments.length}`,
+				`Core handler b${handler} expects ${explicitCount} explicit arguments, received ${argumentCount}`,
 			);
+		}
+		const explicit = new Array<CoreValueId>(explicitCount);
+		for (let index = 0; index < explicitCount; index++) {
+			explicit[index] = kernel.blockParameterValue(parameterStart + index + 1);
 		}
 		return explicit;
 	};
@@ -1276,44 +1301,49 @@ export function coreRegisterClasses(
 	for (const block of blockOrder) {
 		const blockUses = uses[block]!;
 		const blockDefinitions = definitions[block]!;
-		for (const { value } of fn.blockParameters(block)) blockDefinitions.add(value);
+		const parameterStart = kernel.blockParameterStart(block);
+		const parameterCount = kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			blockDefinitions.add(kernel.blockParameterValue(parameterStart + index));
+		}
 		const addUse = (value: CoreValueId): void => {
 			if (!blockDefinitions.has(value)) blockUses.add(value);
 		};
 		for (const instruction of fn.bodyInstructionIds(block)) {
-			for (const input of fn.instructionOperands(instruction)) addUse(input);
-			for (const output of fn.instructionResults(instruction))
-				blockDefinitions.add(output);
+			const operandStart = kernel.instructionOperandStart(instruction);
+			const operandCount = kernel.instructionOperandCount(instruction);
+			for (let index = 0; index < operandCount; index++) {
+				addUse(kernel.operandAt(operandStart + index));
+			}
+			const resultStart = kernel.instructionResultStart(instruction);
+			const resultCount = kernel.instructionResultCount(instruction);
+			for (let index = 0; index < resultCount; index++) {
+				blockDefinitions.add(kernel.resultAt(resultStart + index));
+			}
 		}
-		const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-		const values: Array<CoreValueId> = coreTerminatorEdges(terminator).flatMap(
-			({ arguments: edgeArguments }) => edgeArguments,
-		);
-		switch (terminator.kind) {
-			case "branch":
-			case "guard":
-				values.unshift(terminator.condition);
-				break;
-			case "switch":
-				values.unshift(terminator.discriminant);
-				break;
-			case "return":
-			case "throw":
-				values.unshift(terminator.value);
-				break;
-			case "jump":
-			case "unreachable":
-				break;
+		const terminator = fn.blockTerminator(block);
+		const terminatorOperandStart = kernel.instructionOperandStart(terminator);
+		const terminatorOperandCount = kernel.instructionOperandCount(terminator);
+		const values = new Array<CoreValueId>(terminatorOperandCount);
+		for (let index = 0; index < terminatorOperandCount; index++) {
+			values[index] = kernel.operandAt(terminatorOperandStart + index);
 		}
 		terminatorValues[block] = values;
 		for (const value of values) addUse(value);
-		for (const argument of fn.blockHandler(block)?.arguments ?? []) addUse(argument);
-		for (const edge of coreTerminatorEdges(terminator)) {
-			if (included.has(edge.block)) successors[block]!.add(edge.block);
+		const handlerArgumentStart = kernel.blockHandlerArgumentStart(block);
+		const handlerArgumentCount = kernel.blockHandlerArgumentCount(block);
+		for (let index = 0; index < handlerArgumentCount; index++) {
+			addUse(kernel.handlerArgumentAt(handlerArgumentStart + index));
 		}
-		const handler = fn.blockHandler(block);
-		if (handler !== undefined && included.has(handler.block)) {
-			successors[block]!.add(handler.block);
+		const edgeStart = kernel.terminatorEdgeStart(terminator);
+		const edgeCount = kernel.terminatorEdgeCount(terminator);
+		for (let index = 0; index < edgeCount; index++) {
+			const target = kernel.terminatorEdgeBlock(edgeStart + index);
+			if (included.has(target)) successors[block]!.add(target);
+		}
+		const handler = kernel.blockHandlerBlock(block);
+		if (handler !== undefined && included.has(handler)) {
+			successors[block]!.add(handler);
 		}
 	}
 	for (const block of blockOrder) {
@@ -1393,23 +1423,51 @@ export function coreRegisterClasses(
 	let nextPosition = 0;
 	for (const block of blockOrder) {
 		const blockStart = nextPosition++;
-		for (const { value } of fn.blockParameters(block)) touch(value, block, blockStart, 0);
+		const parameterStart = kernel.blockParameterStart(block);
+		const parameterCount = kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			touch(kernel.blockParameterValue(parameterStart + index), block, blockStart, 0);
+		}
 		for (const value of liveIn[block]!) touch(value, block, blockStart, 0);
 		const instructions = [...fn.bodyInstructionIds(block)];
 		for (const [instructionIndex, instruction] of instructions.entries()) {
 			const readPosition = nextPosition++;
 			const writePosition = nextPosition++;
-			for (const input of fn.instructionOperands(instruction))
-				touch(input, block, readPosition, instructionIndex * 2 + 1);
-			for (const output of fn.instructionResults(instruction))
-				touch(output, block, writePosition, instructionIndex * 2 + 2);
+			const operandStart = kernel.instructionOperandStart(instruction);
+			const operandCount = kernel.instructionOperandCount(instruction);
+			for (let index = 0; index < operandCount; index++) {
+				touch(
+					kernel.operandAt(operandStart + index),
+					block,
+					readPosition,
+					instructionIndex * 2 + 1,
+				);
+			}
+			const resultStart = kernel.instructionResultStart(instruction);
+			const resultCount = kernel.instructionResultCount(instruction);
+			for (let index = 0; index < resultCount; index++) {
+				touch(
+					kernel.resultAt(resultStart + index),
+					block,
+					writePosition,
+					instructionIndex * 2 + 2,
+				);
+			}
 		}
 		const blockEnd = nextPosition++;
 		const blockEndPosition = instructions.length * 2 + 1;
 		for (const value of terminatorValues[block]!)
 			touch(value, block, blockEnd, blockEndPosition);
-		for (const argument of fn.blockHandler(block)?.arguments ?? [])
-			touch(argument, block, blockEnd, blockEndPosition);
+		const handlerArgumentStart = kernel.blockHandlerArgumentStart(block);
+		const handlerArgumentCount = kernel.blockHandlerArgumentCount(block);
+		for (let index = 0; index < handlerArgumentCount; index++) {
+			touch(
+				kernel.handlerArgumentAt(handlerArgumentStart + index),
+				block,
+				blockEnd,
+				blockEndPosition,
+			);
+		}
 		for (const value of liveOut[block]!) touch(value, block, blockEnd, blockEndPosition);
 		for (const parameter of handlerParameters(block)) {
 			touch(parameter, block, blockStart, 0);
@@ -1426,20 +1484,25 @@ export function coreRegisterClasses(
 	for (const block of blockOrder) {
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			if (fn.instructionOpcodeName(instruction) === "selectShapeCase") {
-				for (const output of fn.instructionResults(instruction))
-					shapeCaseValues.add(output);
+				const resultStart = kernel.instructionResultStart(instruction);
+				const resultCount = kernel.instructionResultCount(instruction);
+				for (let index = 0; index < resultCount; index++) {
+					shapeCaseValues.add(kernel.resultAt(resultStart + index));
+				}
 			}
 		}
 	}
-	const abi = new Map<CoreValueId, number>(
-		fn.parameters.map((value, index) => [value, index]),
-	);
+	const abi = new Map<CoreValueId, number>();
+	for (let index = 0; index < fn.parameterCount; index++) {
+		abi.set(kernel.functionParameter(index), index);
+	}
 	let snapshotIndex = 0;
 	for (const instruction of fn.bodyInstructionIds(fn.entry)) {
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (opcode !== "loadArgumentCount" && opcode !== "loadArgument") break;
-		const output = fn.instructionResults(instruction)[0];
-		if (output !== undefined) abi.set(output, fn.parameters.length + snapshotIndex++);
+		if (kernel.instructionResultCount(instruction) === 0) continue;
+		const output = kernel.resultAt(kernel.instructionResultStart(instruction));
+		abi.set(output, fn.parameterCount + snapshotIndex++);
 	}
 	const registers = new Map<CoreValueId, number>();
 	const registerRepresentations = new Map<number, CoreRepresentation>();
@@ -1634,12 +1697,16 @@ function lowerFunctionToTarget(
 		}
 	}
 
+	const reservedAbiColors = new Set<number>();
+	if (coreSupportsDirectEntries(coreFunction)) {
+		for (let index = 0; index < coreFunction.parameterCount; index++) {
+			reservedAbiColors.add(index);
+		}
+	}
 	const allocation = coreRegisterClasses(
 		coreFunction,
 		reuseRegisters,
-		new Set(
-			coreSupportsDirectEntries(coreFunction) ? coreFunction.parameters.keys() : [],
-		),
+		reservedAbiColors,
 		blockOrder,
 	);
 	const registerRepresentations = new Map(allocation.registerRepresentations);
@@ -1654,19 +1721,33 @@ function lowerFunctionToTarget(
 
 	const parallelCopies: Array<ExecutionParallelCopy> = [];
 	const temporaryRegisters: Array<number> = [];
-	const edgeBlock = (edge: CoreEdge): number => {
-		const targetBlock = loweredBlockForCore.get(edge.block);
+	const kernel = coreFunction.kernel;
+	const edgeBlock = (
+		target: CoreBlockId,
+		argumentStart: number,
+		argumentCount: number,
+	): number => {
+		const targetBlock = loweredBlockForCore.get(target);
 		if (targetBlock === undefined) {
-			throw new Error(`Core edge targets unreachable block b${edge.block}`);
+			throw new Error(`Core edge targets unreachable block b${target}`);
 		}
-		const parameters = coreFunction.blockParameters(edge.block);
-		if (parameters[0]?.role === "exception") {
-			throw new Error(`Ordinary Core edge targets exception block b${edge.block}`);
+		const parameterStart = kernel.blockParameterStart(target);
+		const parameterCount = kernel.blockParameterCount(target);
+		if (parameterCount > 0 && kernel.blockParameterRole(parameterStart) === 1) {
+			throw new Error(`Ordinary Core edge targets exception block b${target}`);
 		}
-		const assignments = parameters.map((parameter, index) => ({
-			destination: registerForValue(parameter.value),
-			source: registerForValue(edge.arguments[index]!),
-		}));
+		if (argumentCount !== parameterCount) {
+			throw new Error(
+				`Core edge b${target} expects ${parameterCount} arguments, received ${argumentCount}`,
+			);
+		}
+		const assignments = new Array<{ destination: number; source: number }>(parameterCount);
+		for (let index = 0; index < parameterCount; index++) {
+			assignments[index] = {
+				destination: registerForValue(kernel.blockParameterValue(parameterStart + index)),
+				source: registerForValue(kernel.operandAt(argumentStart + index)),
+			};
+		}
 		const copy = parallelMoves(assignments, nextRegister, registerRepresentations);
 		if (copy.moves.length === 0) return targetBlock;
 		parallelCopies.push({ kind: "edge", assignments, ...copy });
@@ -1677,6 +1758,12 @@ function lowerFunctionToTarget(
 		});
 		return block;
 	};
+	const lowerTerminatorEdge = (edge: number): number =>
+		edgeBlock(
+			kernel.terminatorEdgeBlock(edge),
+			kernel.terminatorEdgeArgumentStart(edge),
+			kernel.terminatorEdgeArgumentCount(edge),
+		);
 
 	const pendingOperationSafepoints: Array<
 		Omit<Extract<ExecutionSafepoint, { kind: "operation" }>, "rootRegisters">
@@ -1684,21 +1771,34 @@ function lowerFunctionToTarget(
 	for (const blockId of blockOrder) {
 		const loweredBlock = loweredBlockForCore.get(blockId)!;
 		const instructions = blocks[loweredBlock]!.instructions;
-		const handler = coreFunction.blockHandler(blockId);
+		const handler = kernel.blockHandlerBlock(blockId);
 		if (handler !== undefined) {
-			const targetBlock = loweredBlockForCore.get(handler.block);
+			const targetBlock = loweredBlockForCore.get(handler);
 			if (targetBlock === undefined) {
-				throw new Error(`Core handler targets unreachable block b${handler.block}`);
+				throw new Error(`Core handler targets unreachable block b${handler}`);
 			}
-			const parameters = coreFunction.blockParameters(handler.block);
-			if (parameters[0]?.role !== "exception") {
-				throw new Error(`Core handler b${handler.block} has no exception parameter`);
+			const parameterStart = kernel.blockParameterStart(handler);
+			const parameterCount = kernel.blockParameterCount(handler);
+			if (parameterCount === 0 || kernel.blockParameterRole(parameterStart) !== 1) {
+				throw new Error(`Core handler b${handler} has no exception parameter`);
 			}
 			instructions.push({ type: "tryBegin", blocks: [targetBlock, loweredBlock] });
-			const assignments = parameters.slice(1).map((parameter, index) => ({
-				destination: registerForValue(parameter.value),
-				source: registerForValue(handler.arguments[index]!),
-			}));
+			const argumentStart = kernel.blockHandlerArgumentStart(blockId);
+			const argumentCount = kernel.blockHandlerArgumentCount(blockId);
+			if (argumentCount !== parameterCount - 1) {
+				throw new Error(
+					`Core handler b${handler} expects ${parameterCount - 1} explicit arguments, received ${argumentCount}`,
+				);
+			}
+			const assignments = new Array<{ destination: number; source: number }>(argumentCount);
+			for (let index = 0; index < argumentCount; index++) {
+				assignments[index] = {
+					destination: registerForValue(
+						kernel.blockParameterValue(parameterStart + index + 1),
+					),
+					source: registerForValue(kernel.handlerArgumentAt(argumentStart + index)),
+				};
+			}
 			const copy = parallelMoves(assignments, nextRegister, registerRepresentations);
 			if (copy.moves.length > 0) {
 				parallelCopies.push({ kind: "handler-input", assignments, ...copy });
@@ -1706,11 +1806,15 @@ function lowerFunctionToTarget(
 			}
 			instructions.push(...copy.moves);
 		}
-		const parameters = coreFunction.blockParameters(blockId);
-		if (parameters[0]?.role === "exception") {
+		const blockParameterStart = kernel.blockParameterStart(blockId);
+		const blockParameterCount = kernel.blockParameterCount(blockId);
+		if (
+			blockParameterCount > 0 &&
+			kernel.blockParameterRole(blockParameterStart) === 1
+		) {
 			instructions.push({
 				type: "catch",
-				registers: [registerForValue(parameters[0].value)],
+				registers: [registerForValue(kernel.blockParameterValue(blockParameterStart))],
 			});
 		}
 
@@ -1778,23 +1882,19 @@ function lowerFunctionToTarget(
 			const immediateValues = (
 				lowered as { readonly immediateValues?: ReadonlyArray<unknown> }
 			).immediateValues;
-			for (const [index, input] of coreFunction
-				.instructionOperands(instruction)
-				.entries()) {
+			const operandStart = kernel.instructionOperandStart(instruction);
+			const operandCount = kernel.instructionOperandCount(instruction);
+			const resultCount = kernel.instructionResultCount(instruction);
+			for (let index = 0; index < operandCount; index++) {
+				if (immediateValues?.[resultCount + index] === undefined) continue;
+				const input = kernel.operandAt(operandStart + index);
+				if (kernel.valueDefinitionKind(input) !== 1) continue;
+				const origin = kernel.valueDefinitionOwner(input) as CoreInstructionId;
 				if (
-					immediateValues?.[
-						coreFunction.instructionResults(instruction).length + index
-					] === undefined
+					omittedInstructions.has(origin) &&
+					coreInstructionNeedsOperationSafepoint(coreFunction, origin)
 				) {
-					continue;
-				}
-				const definition = coreFunction.valueDefinition(input);
-				if (
-					definition.kind === "instruction" &&
-					omittedInstructions.has(definition.instruction) &&
-					coreInstructionNeedsOperationSafepoint(coreFunction, definition.instruction)
-				) {
-					realizedCoreInstructions.add(definition.instruction);
+					realizedCoreInstructions.add(origin);
 				}
 			}
 			if (realizedCoreInstructions.size > 0) {
@@ -1808,15 +1908,18 @@ function lowerFunctionToTarget(
 		}
 
 		const terminatorId = coreFunction.blockTerminator(blockId);
-		const terminator = coreFunction.terminatorPayload(terminatorId);
+		const terminatorKind = coreFunction.instructionKind(terminatorId);
+		const terminatorOperandStart = kernel.instructionOperandStart(terminatorId);
+		const terminatorEdgeStart = kernel.terminatorEdgeStart(terminatorId);
+		const terminatorEdgeCount = kernel.terminatorEdgeCount(terminatorId);
 		instructions.push(
 			...sourcePositionMarker(coreFunction.instructionSourcePosition(terminatorId)),
 		);
-		switch (terminator.kind) {
+		switch (terminatorKind) {
 			case "jump": {
 				const lowered: Extract<CompilerInstruction, { type: "jump" }> = {
 					type: "jump",
-					blocks: [edgeBlock(terminator.edge)],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart)],
 				};
 				instructions.push(lowered);
 				loweredInstructions.set(terminatorId, lowered);
@@ -1825,12 +1928,12 @@ function lowerFunctionToTarget(
 			case "branch": {
 				const lowered: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 					type: "jumpIf",
-					registers: [registerForValue(terminator.condition)],
-					blocks: [edgeBlock(terminator.consequent)],
+					registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart)],
 				};
 				instructions.push(lowered, {
 					type: "jump",
-					blocks: [edgeBlock(terminator.alternate)],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1)],
 				});
 				loweredInstructions.set(terminatorId, lowered);
 				break;
@@ -1839,53 +1942,64 @@ function lowerFunctionToTarget(
 				instructions.push(
 					{
 						type: "jumpIf",
-						registers: [registerForValue(terminator.condition)],
-						blocks: [edgeBlock(terminator.success)],
+						registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
+						blocks: [lowerTerminatorEdge(terminatorEdgeStart)],
 					},
-					{ type: "jump", blocks: [edgeBlock(terminator.fallback)] },
+					{ type: "jump", blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1)] },
 				);
 				break;
 			case "return":
 			case "throw": {
 				const lowered: Extract<CompilerInstruction, { type: "return" | "throw" }> = {
-					type: terminator.kind,
-					registers: [registerForValue(terminator.value)],
+					type: terminatorKind,
+					registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
 				};
 				instructions.push(lowered);
 				loweredInstructions.set(terminatorId, lowered);
 				break;
 			}
 			case "switch":
-				for (const switchCase of terminator.cases) {
+				for (let index = 0; index < terminatorEdgeCount - 1; index++) {
+					const edge = terminatorEdgeStart + index;
+					const caseValue = kernel.terminatorEdgeCaseValue(edge);
+					if (caseValue === undefined) {
+						throw new Error(`Core switch in b${blockId} has no case value`);
+					}
 					const immediate = nextRegister.value++;
 					const matches = nextRegister.value++;
 					temporaryRegisters.push(immediate, matches);
 					registerRepresentations.set(
 						immediate,
-						switchCase.value.kind === "number"
+						caseValue.kind === "number"
 							? "f64"
-							: switchCase.value.kind === "boolean"
+							: caseValue.kind === "boolean"
 								? "boolean"
 								: "boxed",
 					);
 					registerRepresentations.set(matches, "boolean");
 					instructions.push(
-						lowerCoreImmediate(switchCase.value, immediate),
+						lowerCoreImmediate(caseValue, immediate),
 						{
 							type: "binary",
-							registers: [matches, registerForValue(terminator.discriminant), immediate],
+							registers: [
+								matches,
+								registerForValue(kernel.operandAt(terminatorOperandStart)),
+								immediate,
+							],
 							operator: "===",
 						},
 						{
 							type: "jumpIf",
 							registers: [matches],
-							blocks: [edgeBlock(switchCase.edge)],
+							blocks: [lowerTerminatorEdge(edge)],
 						},
 					);
 				}
 				instructions.push({
 					type: "jump",
-					blocks: [edgeBlock(terminator.default)],
+					blocks: [
+						lowerTerminatorEdge(terminatorEdgeStart + terminatorEdgeCount - 1),
+					],
 				});
 				break;
 			case "unreachable":
@@ -1922,7 +2036,7 @@ function lowerFunctionToTarget(
 		specializations,
 		isGenerator: coreFunction.isGenerator,
 		isAsync: coreFunction.isAsync,
-		parameterCount: coreFunction.parameters.length,
+		parameterCount: coreFunction.parameterCount,
 		mappedArgumentSlots: [...coreFunction.metadata.mappedArgumentSlots],
 		mappedArguments: coreFunction.metadata.mappedArguments,
 		length: coreFunction.metadata.length,
