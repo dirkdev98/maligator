@@ -8,7 +8,8 @@ import {
 import type { CoreFunctionReachabilityState } from "./core-ir-reachability.ts";
 import { CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS } from "./core-ir-summaries.ts";
 import type { CoreProgramSummaryState } from "./core-ir-summaries.ts";
-import { solveCoreProgramValueKinds } from "./core-ir-value-kinds.ts";
+import { CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS } from "./core-ir-value-kinds.ts";
+import type { CoreProgramValueKindState } from "./core-ir-value-kinds.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import {
 	CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
@@ -22,7 +23,7 @@ export interface CoreProgramFlowState {
 	readonly flowRevision: number;
 	readonly targets: CoreCallGraphIndexState;
 	readonly summaries: CoreProgramSummaryState;
-	readonly valueKinds: ReturnType<typeof solveCoreProgramValueKinds>;
+	readonly valueKinds: CoreProgramValueKindState;
 	readonly reachability: CoreFunctionReachabilityState;
 }
 
@@ -42,7 +43,7 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 	contextIdentity(context) {
 		return context.facts.closure.sourceClosure.kind;
 	},
-	compute({ program, context, request, previous, get, programFlow }) {
+	compute({ context, request, previous, get, programFlow }) {
 		if (request.scope !== "program") throw new Error("Expected program analysis");
 		const prior = previous as CoreProgramFlowState | undefined;
 		const epoch = programFlow.refresh(CORE_PROGRAM_FLOW_ALL_DIMENSIONS);
@@ -109,13 +110,11 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 			!targetsChanged &&
 			externallyReachableChanges.size === 0
 				? prior.valueKinds
-				: solveCoreProgramValueKinds(
-						program,
+				: programFlow.solveValueKinds(
 						targets,
 						(functionId) => summaries.summary(functionId)?.externallyReachable === true,
 						exceptionalControl,
-						programFlow.topology(targets.graph),
-						programFlow,
+						CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS,
 						prior?.valueKinds,
 						valueKindDirty,
 						externallyReachableChanges,

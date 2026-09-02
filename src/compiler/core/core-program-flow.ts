@@ -72,6 +72,7 @@ export interface CoreProgramFlowTargetIndex {
 		readonly anyScript: boolean;
 	};
 	outgoing(functionId: CoreFunctionId): ReadonlyArray<{
+		readonly instruction: CoreInstructionId;
 		readonly receiver?: CoreValueId;
 		readonly arguments?: ReadonlyArray<CoreValueId>;
 		readonly targets: {
@@ -80,6 +81,78 @@ export interface CoreProgramFlowTargetIndex {
 			readonly opaque: boolean;
 		};
 	}>;
+}
+
+export interface CoreProgramFlowValueKindSummary {
+	readonly parameterKinds: ReadonlyArray<number>;
+	readonly receiverKind: number;
+	readonly returnKind: number;
+}
+
+export interface CoreProgramFlowValueKindStatistics {
+	readonly functions: number;
+	readonly functionsEvaluated: number;
+	readonly functionsReused: number;
+	readonly affectedFunctions: number;
+	readonly callerWakeups: number;
+	readonly calleeWakeups: number;
+	readonly aggregateRecomputations: number;
+	readonly exactReverseCallerVisits: number;
+	readonly wildcardReverseCallerVisits: number;
+	readonly aggregateFunctionVisits: number;
+}
+
+export interface CoreProgramFlowValueKinds<Analysis> {
+	readonly changedFunctions: ReadonlySet<CoreFunctionId>;
+	readonly statistics: CoreProgramFlowValueKindStatistics;
+	values(functionId: CoreFunctionId): Analysis;
+	summary(functionId: CoreFunctionId): CoreProgramFlowValueKindSummary;
+}
+
+export interface CoreProgramFlowValueKindWildcardContribution {
+	readonly parameterKinds: ReadonlyArray<number>;
+	readonly strictReceiverKind: number;
+}
+
+export interface CoreProgramFlowValueKindAggregate extends CoreProgramFlowValueKindWildcardContribution {
+	readonly returnKind: number;
+}
+
+export interface CoreProgramFlowValueKindState<
+	Analysis,
+	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
+> extends CoreProgramFlowValueKinds<Analysis> {
+	readonly sourceClosed: boolean;
+	readonly targets: Targets;
+	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
+	readonly valueAnalyses: ReadonlyMap<CoreFunctionId, Analysis>;
+	readonly summaries: ReadonlyMap<CoreFunctionId, CoreProgramFlowValueKindSummary>;
+	readonly wildcardContributions: ReadonlyMap<
+		CoreFunctionId,
+		CoreProgramFlowValueKindWildcardContribution
+	>;
+	readonly anyScriptAggregate: CoreProgramFlowValueKindAggregate | undefined;
+}
+
+export interface CoreProgramFlowValueKindInputs {
+	readonly parameterMasks?: ReadonlyArray<number>;
+	readonly receiverMask?: number;
+	readonly operationResultMask?: (
+		instruction: CoreInstructionId,
+		result: CoreValueId,
+	) => number | undefined;
+}
+
+export interface CoreProgramFlowValueKindSemantics<Analysis> {
+	analyze(
+		fn: CoreFunctionStore,
+		controlFlow: CoreControlFlow,
+		inputs?: CoreProgramFlowValueKindInputs,
+	): Analysis;
+	latticeMask(analysis: Analysis, value: CoreValueId): number;
+	readonly top: number;
+	readonly object: number;
+	readonly undefined: number;
 }
 
 export interface CoreProgramFlowCallTargets {
@@ -147,30 +220,15 @@ export interface CoreProgramFlowCallTargetState<
 	readonly local: ReadonlyMap<CoreFunctionId, Local>;
 	readonly cells: ReadonlyMap<number, Targets>;
 	readonly cellAccesses: ReadonlyMap<CoreFunctionId, CoreProgramFlowFunctionCellAccesses>;
-	readonly propertyWrites: ReadonlyMap<
-		CoreFunctionId,
-		ReadonlyMap<number, Targets>
-	>;
-	readonly propertyWriters: ReadonlyMap<
-		number,
-		ReadonlyMap<CoreFunctionId, Targets>
-	>;
+	readonly propertyWrites: ReadonlyMap<CoreFunctionId, ReadonlyMap<number, Targets>>;
+	readonly propertyWriters: ReadonlyMap<number, ReadonlyMap<CoreFunctionId, Targets>>;
 	readonly properties: ReadonlyMap<number, Targets>;
 	readonly propertyReaders: ReadonlyMap<number, ReadonlySet<CoreFunctionId>>;
 	readonly cellReaders: ReadonlyMap<number, ReadonlySet<CoreFunctionId>>;
-	readonly cellWriters: ReadonlyMap<
-		number,
-		ReadonlyMap<CoreFunctionId, Targets>
-	>;
-	readonly globalStoreWriters: ReadonlyMap<
-		number,
-		ReadonlyMap<CoreFunctionId, Targets>
-	>;
+	readonly cellWriters: ReadonlyMap<number, ReadonlyMap<CoreFunctionId, Targets>>;
+	readonly globalStoreWriters: ReadonlyMap<number, ReadonlyMap<CoreFunctionId, Targets>>;
 	readonly globalStores: ReadonlyMap<number, Targets>;
-	readonly sites: ReadonlyMap<
-		CoreFunctionId,
-		ReadonlyMap<CoreInstructionId, Site>
-	>;
+	readonly sites: ReadonlyMap<CoreFunctionId, ReadonlyMap<CoreInstructionId, Site>>;
 	readonly outgoingIndex: ReadonlyMap<CoreFunctionId, ReadonlyArray<Site>>;
 	targets(functionId: CoreFunctionId, value: CoreValueId): Targets;
 	returnTargets(functionId: CoreFunctionId): Targets;
@@ -1906,6 +1964,442 @@ export class CoreProgramFlowEngine {
 			},
 			version(functionId: CoreFunctionId) {
 				return published.get(functionId)?.version ?? 0;
+			},
+		});
+	}
+
+	solveValueKinds<Analysis, Targets extends CoreProgramFlowTargetIndex>(
+		targets: Targets,
+		externallyReachable: (functionId: CoreFunctionId) => boolean,
+		controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
+		semantics: CoreProgramFlowValueKindSemantics<Analysis>,
+		previous?: CoreProgramFlowValueKindState<Analysis, Targets>,
+		dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
+		externallyChangedFunctions?: ReadonlySet<CoreFunctionId>,
+	): CoreProgramFlowValueKindState<Analysis, Targets> {
+		const sameMasks = (
+			left: ReadonlyArray<number>,
+			right: ReadonlyArray<number>,
+		): boolean =>
+			left.length === right.length &&
+			left.every((value, index) => value === right[index]);
+		const sameWildcardContribution = (
+			left: CoreProgramFlowValueKindWildcardContribution | undefined,
+			right: CoreProgramFlowValueKindWildcardContribution | undefined,
+		): boolean =>
+			left !== undefined &&
+			right !== undefined &&
+			left.strictReceiverKind === right.strictReceiverKind &&
+			sameMasks(left.parameterKinds, right.parameterKinds);
+		const freezeSummary = (
+			summary: CoreProgramFlowValueKindSummary,
+		): CoreProgramFlowValueKindSummary =>
+			Object.freeze({
+				parameterKinds: Object.freeze([...summary.parameterKinds]),
+				receiverKind: summary.receiverKind,
+				returnKind: summary.returnKind,
+			});
+		const topology = this.topology(targets.graph);
+		const functionIds = [...this.#program.functionIds()];
+		const maximumParameterCount = functionIds.reduce(
+			(largest, functionId) =>
+				Math.max(largest, this.#program.function(functionId).parameterCount),
+			0,
+		);
+		const live = new Set(functionIds);
+		const external = new Map(
+			functionIds.map((functionId) => [functionId, externallyReachable(functionId)]),
+		);
+		const affected = new Set<CoreFunctionId>();
+		let aggregateInitiallyAffected = false;
+		if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
+			for (const functionId of functionIds) affected.add(functionId);
+			aggregateInitiallyAffected = targets.graph.hasAggregate();
+		} else {
+			for (const functionId of dirtyFunctions ?? functionIds) affected.add(functionId);
+			for (const functionId of targets.changedCallers) affected.add(functionId);
+			for (const functionId of externallyChangedFunctions ?? functionIds) {
+				if (previous.external.get(functionId) !== external.get(functionId)) {
+					affected.add(functionId);
+				}
+			}
+			aggregateInitiallyAffected = targets.graph.changedNodes.has(
+				CORE_ANY_SCRIPT_AGGREGATE,
+			);
+			if (previous.targets.graph.hasAggregate() && !targets.graph.hasAggregate()) {
+				for (const functionId of functionIds) affected.add(functionId);
+			}
+		}
+		let anyScriptAggregate = targets.graph.hasAggregate()
+			? previous?.anyScriptAggregate
+			: undefined;
+		const seededSummary = (
+			functionId: CoreFunctionId,
+			aggregate: CoreProgramFlowValueKindAggregate | undefined,
+		): CoreProgramFlowValueKindSummary => {
+			const fn = this.#program.function(functionId);
+			const seed = external.get(functionId) === true ? semantics.top : 0;
+			return {
+				parameterKinds: Array.from(
+					{ length: fn.parameterCount },
+					(_, index) => seed | (aggregate?.parameterKinds[index] ?? 0),
+				),
+				receiverKind:
+					seed |
+					(aggregate === undefined
+						? 0
+						: fn.metadata.strict
+							? aggregate.strictReceiverKind
+							: semantics.object),
+				returnKind: 0,
+			};
+		};
+		const summaries = new Map<CoreFunctionId, CoreProgramFlowValueKindSummary>();
+		const valueAnalyses = new Map<CoreFunctionId, Analysis>();
+		for (const functionId of functionIds) {
+			if (!affected.has(functionId)) {
+				const summary = previous?.summaries.get(functionId);
+				const analysis = previous?.valueAnalyses.get(functionId);
+				if (summary !== undefined && analysis !== undefined) {
+					summaries.set(functionId, summary);
+					valueAnalyses.set(functionId, analysis);
+					continue;
+				}
+				affected.add(functionId);
+			}
+			summaries.set(functionId, seededSummary(functionId, anyScriptAggregate));
+		}
+		const wildcardContributions = new Map<
+			CoreFunctionId,
+			CoreProgramFlowValueKindWildcardContribution
+		>();
+		for (const [functionId, contribution] of previous?.wildcardContributions ?? []) {
+			if (live.has(functionId)) {
+				wildcardContributions.set(functionId, contribution);
+			}
+		}
+		let callerWakeups = 0;
+		let calleeWakeups = 0;
+		let functionsEvaluated = 0;
+		let aggregateRecomputations = 0;
+		let exactReverseCallerVisits = 0;
+		let wildcardReverseCallerVisits = 0;
+		let aggregateFunctionVisits = 0;
+		const activeSccs = new Set<number>();
+		const initialSccs = new Set<number>();
+		const pendingFunctionSccs = new Set<number>();
+		const pendingAggregateSccs = new Set<number>();
+		for (const functionId of affected) {
+			const scc = topology.owner.get(functionId);
+			if (scc !== undefined) {
+				initialSccs.add(scc);
+				pendingFunctionSccs.add(scc);
+			}
+		}
+		if (aggregateInitiallyAffected && targets.graph.hasAggregate()) {
+			const scc = topology.owner.get(CORE_ANY_SCRIPT_AGGREGATE);
+			if (scc !== undefined) {
+				initialSccs.add(scc);
+				pendingAggregateSccs.add(scc);
+			}
+		}
+		this.solveSccs(
+			topology,
+			[...initialSccs].map((scc) => ({
+				scc,
+				dimensions: CORE_PROGRAM_FLOW_RETURN_KIND,
+			})),
+			(sccIndex, dimensions, enqueueScc) => {
+				if ((dimensions & CORE_PROGRAM_FLOW_RETURN_KIND) === 0) return;
+				const runFunctions = pendingFunctionSccs.delete(sccIndex);
+				const runAggregate = pendingAggregateSccs.delete(sccIndex);
+				const activateScc = (scc: number): void => {
+					if (activeSccs.has(scc)) return;
+					activeSccs.add(scc);
+					const component = topology.sccs[scc]!;
+					for (const functionId of component.functions) {
+						affected.add(functionId);
+						valueAnalyses.delete(functionId);
+						summaries.set(functionId, seededSummary(functionId, anyScriptAggregate));
+					}
+					for (const functionId of component.functions) {
+						for (const graphIndex of [targets, previous?.targets]) {
+							if (graphIndex === undefined) continue;
+							for (const neighbor of [
+								...graphIndex.graph.exactOutgoing(functionId),
+								...graphIndex.graph.exactCallers(functionId),
+							]) {
+								if (!live.has(neighbor)) continue;
+								const neighborScc = topology.owner.get(neighbor);
+								if (
+									neighborScc !== undefined &&
+									neighborScc !== scc &&
+									!activeSccs.has(neighborScc)
+								) {
+									pendingFunctionSccs.add(neighborScc);
+									enqueueScc(neighborScc, CORE_PROGRAM_FLOW_RETURN_KIND);
+								}
+							}
+						}
+					}
+				};
+				if (runFunctions) activateScc(sccIndex);
+				const component = topology.sccs[sccIndex]!;
+				const queue: Array<CoreCallGraphNode> = [
+					...(runAggregate && component.hasAnyScriptAggregate
+						? [CORE_ANY_SCRIPT_AGGREGATE]
+						: []),
+					...(runFunctions ? component.functions : []),
+				];
+				const queued = new Set<CoreCallGraphNode>(queue);
+				const enqueueNode = (node: CoreCallGraphNode, caller: boolean): void => {
+					const scc = topology.owner.get(node);
+					if (scc === undefined) return;
+					if (node === CORE_ANY_SCRIPT_AGGREGATE) pendingAggregateSccs.add(scc);
+					else {
+						pendingFunctionSccs.add(scc);
+						activateScc(scc);
+					}
+					if (scc === sccIndex) {
+						if (queued.has(node)) return;
+						queued.add(node);
+						queue.push(node);
+						if (node === CORE_ANY_SCRIPT_AGGREGATE) pendingAggregateSccs.delete(scc);
+						else pendingFunctionSccs.delete(scc);
+					} else if (!enqueueScc(scc, CORE_PROGRAM_FLOW_RETURN_KIND)) {
+						return;
+					}
+					if (caller) callerWakeups++;
+					else calleeWakeups++;
+				};
+				const applyIncoming = (
+					callee: CoreFunctionId,
+					incomingParameterKinds: ReadonlyArray<number>,
+					strictReceiverKind: number,
+				): void => {
+					if (!live.has(callee)) return;
+					const calleeScc = topology.owner.get(callee);
+					if (calleeScc === undefined) return;
+					pendingFunctionSccs.add(calleeScc);
+					activateScc(calleeScc);
+					const calleeFn = this.#program.function(callee);
+					const prior = summaries.get(callee)!;
+					const parameterKinds = [...prior.parameterKinds];
+					for (let index = 0; index < calleeFn.parameterCount; index++) {
+						parameterKinds[index] =
+							parameterKinds[index]! | (incomingParameterKinds[index] ?? 0);
+					}
+					const incomingReceiver = calleeFn.metadata.strict
+						? strictReceiverKind
+						: semantics.object;
+					const receiverKind = prior.receiverKind | incomingReceiver;
+					if (
+						receiverKind === prior.receiverKind &&
+						parameterKinds.every((kind, index) => kind === prior.parameterKinds[index])
+					)
+						return;
+					summaries.set(callee, { ...prior, parameterKinds, receiverKind });
+					enqueueNode(callee, false);
+				};
+				let cursor = 0;
+				while (cursor < queue.length) {
+					const node = queue[cursor++]!;
+					queued.delete(node);
+					if (node === CORE_ANY_SCRIPT_AGGREGATE) {
+						const parameterKinds = Array<number>(maximumParameterCount).fill(0);
+						let strictReceiverKind = 0;
+						for (const caller of targets.graph.wildcardCallers) {
+							const contribution = wildcardContributions.get(caller);
+							if (contribution === undefined) continue;
+							for (let index = 0; index < maximumParameterCount; index++) {
+								parameterKinds[index] =
+									parameterKinds[index]! | (contribution.parameterKinds[index] ?? 0);
+							}
+							strictReceiverKind |= contribution.strictReceiverKind;
+						}
+						let returnKind = 0;
+						for (const summary of summaries.values()) {
+							aggregateFunctionVisits++;
+							returnKind |= summary.returnKind;
+						}
+						const prior = anyScriptAggregate;
+						const next: CoreProgramFlowValueKindAggregate = {
+							parameterKinds,
+							strictReceiverKind,
+							returnKind,
+						};
+						aggregateRecomputations++;
+						anyScriptAggregate = next;
+						if (prior?.returnKind !== returnKind) {
+							for (const caller of targets.graph.wildcardCallers) {
+								wildcardReverseCallerVisits++;
+								enqueueNode(caller, true);
+							}
+						}
+						if (!sameWildcardContribution(prior, next)) {
+							for (const functionId of functionIds) enqueueNode(functionId, false);
+							for (const callee of functionIds) {
+								aggregateFunctionVisits++;
+								applyIncoming(callee, parameterKinds, strictReceiverKind);
+							}
+							enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
+						}
+						continue;
+					}
+					const functionId = node;
+					const fn = this.#program.function(functionId);
+					const summary = summaries.get(functionId)!;
+					const sites = targets.outgoing(functionId);
+					const byInstruction = new Map(sites.map((site) => [site.instruction, site]));
+					const values = semantics.analyze(fn, controlFlow(functionId), {
+						parameterMasks: summary.parameterKinds,
+						receiverMask: summary.receiverKind,
+						operationResultMask(instruction) {
+							const site = byInstruction.get(instruction);
+							if (site === undefined) return undefined;
+							if (
+								site.targets.opaque ||
+								(!targets.sourceClosed && site.targets.anyScript)
+							) {
+								return semantics.top;
+							}
+							if (site.targets.anyScript) {
+								return anyScriptAggregate?.returnKind ?? 0;
+							}
+							const callees = site.targets.functions;
+							if (callees.length === 0) return semantics.top;
+							return callees.reduce(
+								(mask, callee) => mask | summaries.get(callee)!.returnKind,
+								0,
+							);
+						},
+					});
+					valueAnalyses.set(functionId, values);
+					functionsEvaluated++;
+					let returnKind = 0;
+					const cfg = controlFlow(functionId);
+					for (const block of cfg.reachable) {
+						const terminator = fn.blockTerminator(block);
+						if (fn.instructionKind(terminator) === "return") {
+							returnKind |= semantics.latticeMask(
+								values,
+								fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+							);
+						}
+					}
+					if (returnKind !== summary.returnKind) {
+						summaries.set(functionId, { ...summary, returnKind });
+						for (const caller of targets.graph.exactCallers(functionId)) {
+							exactReverseCallerVisits++;
+							enqueueNode(caller, true);
+						}
+						if (targets.graph.hasAggregate()) {
+							enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, true);
+						}
+					}
+					const anyScriptParameterKinds = Array<number>(maximumParameterCount).fill(0);
+					let anyScriptStrictReceiverKind = 0;
+					let hasAnyScriptSite = false;
+					for (const site of sites) {
+						if (site.targets.anyScript) {
+							hasAnyScriptSite = true;
+							for (let index = 0; index < maximumParameterCount; index++) {
+								const argument = site.arguments?.[index];
+								anyScriptParameterKinds[index] =
+									anyScriptParameterKinds[index]! |
+									(site.arguments === undefined
+										? semantics.top
+										: argument === undefined
+											? semantics.undefined
+											: semantics.latticeMask(values, argument));
+							}
+							anyScriptStrictReceiverKind |=
+								site.receiver === undefined
+									? semantics.top
+									: semantics.latticeMask(values, site.receiver);
+							continue;
+						}
+						const incomingParameterKinds = Array<number>(maximumParameterCount);
+						for (let index = 0; index < maximumParameterCount; index++) {
+							const argument = site.arguments?.[index];
+							incomingParameterKinds[index] =
+								site.arguments === undefined
+									? semantics.top
+									: argument === undefined
+										? semantics.undefined
+										: semantics.latticeMask(values, argument);
+						}
+						for (const callee of site.targets.functions) {
+							applyIncoming(
+								callee,
+								incomingParameterKinds,
+								site.receiver === undefined
+									? semantics.top
+									: semantics.latticeMask(values, site.receiver),
+							);
+						}
+					}
+					if (hasAnyScriptSite) {
+						const contribution: CoreProgramFlowValueKindWildcardContribution = {
+							parameterKinds: anyScriptParameterKinds,
+							strictReceiverKind: anyScriptStrictReceiverKind,
+						};
+						if (
+							!sameWildcardContribution(
+								wildcardContributions.get(functionId),
+								contribution,
+							)
+						) {
+							wildcardContributions.set(functionId, contribution);
+							enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
+						}
+					} else if (
+						wildcardContributions.delete(functionId) &&
+						targets.graph.hasAggregate()
+					) {
+						enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
+					}
+				}
+			},
+		);
+		const changedFunctions = new Set(affected);
+		for (const functionId of functionIds) {
+			const frozen = freezeSummary(summaries.get(functionId)!);
+			summaries.set(functionId, frozen);
+		}
+		const statistics = Object.freeze({
+			functions: functionIds.length,
+			functionsEvaluated,
+			functionsReused: functionIds.length - affected.size,
+			affectedFunctions: affected.size,
+			callerWakeups,
+			calleeWakeups,
+			aggregateRecomputations,
+			exactReverseCallerVisits,
+			wildcardReverseCallerVisits,
+			aggregateFunctionVisits,
+		});
+		return Object.freeze({
+			sourceClosed: targets.sourceClosed,
+			targets,
+			external,
+			valueAnalyses,
+			summaries,
+			wildcardContributions,
+			anyScriptAggregate,
+			changedFunctions,
+			statistics,
+			values(functionId: CoreFunctionId) {
+				const result = valueAnalyses.get(functionId);
+				if (result === undefined)
+					throw new Error(`No value-kind analysis for ${functionId}`);
+				return result;
+			},
+			summary(functionId: CoreFunctionId) {
+				const result = summaries.get(functionId);
+				if (result === undefined)
+					throw new Error(`No value-kind summary for ${functionId}`);
+				return result;
 			},
 		});
 	}

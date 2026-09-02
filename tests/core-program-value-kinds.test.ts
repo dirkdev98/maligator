@@ -35,6 +35,10 @@ it("uses program-flow dirtiness without serialized version or target keys", () =
 		new URL("../src/compiler/core/core-program-flow-analysis.ts", import.meta.url),
 		"utf8",
 	);
+	const engineSource = readFileSync(
+		new URL("../src/compiler/core/core-program-flow.ts", import.meta.url),
+		"utf8",
+	);
 
 	expect(source).not.toMatch(
 		/versionKeys|programValueKindVersionKey|programValueKindTargetsKey/,
@@ -43,6 +47,12 @@ it("uses program-flow dirtiness without serialized version or target keys", () =
 	expect(source).not.toMatch(/CORE_PROGRAM_VALUE_KIND_ANALYSIS|programFlow\.refresh/);
 	expect(flowSource).toMatch(/programFlow\.refresh/);
 	expect(flowSource).toMatch(/epoch\.dirtyFunctionAt/);
+	expect(flowSource).toMatch(/programFlow\.solveValueKinds\(/);
+	expect(engineSource).toMatch(/solveValueKinds<.*CoreProgramFlowTargetIndex/s);
+	expect(source).toMatch(/new CoreProgramFlowEngine\(program\)\.solveValueKinds\(/);
+	expect(source).not.toMatch(
+		/solveCoreProgramFlowSccs|\.solveSccs\(|activeSccs|pendingFunctionSccs/,
+	);
 	expect(source).not.toMatch(
 		/interface KindTransfer\s*\{|readonly evaluate|evaluate:\s*\(/,
 	);
@@ -170,6 +180,38 @@ describe("whole-program Core value kinds", () => {
 			calleeWakeups: 1,
 		});
 		expect(second.values(unrelated.function)).toBe(unrelatedValues);
+		expect(second.changedFunctions).toEqual(new Set([caller.function, edited.function]));
+	});
+
+	it("keeps the dirty value-kind component small as unrelated functions grow", () => {
+		const program = analysisProgram();
+		const caller = appendCaller(program, 1);
+		const edited = appendLeaf(program);
+		const unrelated = Array.from({ length: 64 }, () =>
+			appendLeaf(program, "/unrelated.js"),
+		);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+		const unrelatedValues = first.values(unrelated.at(-1)!.function);
+
+		const editor = CoreEditor.open(program, edited.function);
+		editor.replaceInstruction(edited.valueInstruction, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		editor.commit();
+		const second = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+
+		expect(second.statistics).toMatchObject({
+			functions: 66,
+			functionsEvaluated: 3,
+			functionsReused: 64,
+			affectedFunctions: 2,
+		});
+		expect(second.values(unrelated.at(-1)!.function)).toBe(unrelatedValues);
 		expect(second.changedFunctions).toEqual(new Set([caller.function, edited.function]));
 	});
 

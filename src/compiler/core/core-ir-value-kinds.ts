@@ -14,8 +14,6 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
-import type { CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -27,10 +25,13 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import { CORE_PROGRAM_FLOW_RETURN_KIND } from "./core-program-flow.ts";
+import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
-	CoreProgramFlowSccSolver,
-	CoreProgramFlowTopology,
+	CoreProgramFlowValueKinds,
+	CoreProgramFlowValueKindSemantics,
+	CoreProgramFlowValueKindState,
+	CoreProgramFlowValueKindStatistics,
+	CoreProgramFlowValueKindSummary,
 } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
@@ -591,497 +592,43 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		},
 	};
 
-export interface CoreProgramValueKindSummary {
-	readonly parameterKinds: ReadonlyArray<CompilerValueKindMask>;
-	readonly receiverKind: CompilerValueKindMask;
-	readonly returnKind: CompilerValueKindMask;
-}
+export type CoreProgramValueKindSummary = CoreProgramFlowValueKindSummary;
+export type CoreProgramValueKindStatistics = CoreProgramFlowValueKindStatistics;
+export type CoreProgramValueKinds = CoreProgramFlowValueKinds<CoreValueKindAnalysis>;
+export type CoreProgramValueKindState = CoreProgramFlowValueKindState<
+	CoreValueKindAnalysis,
+	CoreCallGraphIndex
+>;
 
-export interface CoreProgramValueKindStatistics {
-	readonly functions: number;
-	readonly functionsEvaluated: number;
-	readonly functionsReused: number;
-	readonly affectedFunctions: number;
-	readonly callerWakeups: number;
-	readonly calleeWakeups: number;
-	readonly aggregateRecomputations: number;
-	readonly exactReverseCallerVisits: number;
-	readonly wildcardReverseCallerVisits: number;
-	readonly aggregateFunctionVisits: number;
-}
-
-export interface CoreProgramValueKinds {
-	readonly changedFunctions: ReadonlySet<CoreFunctionId>;
-	readonly statistics: CoreProgramValueKindStatistics;
-	values(functionId: CoreFunctionId): CoreValueKindAnalysis;
-	summary(functionId: CoreFunctionId): CoreProgramValueKindSummary;
-}
-
-interface CoreProgramValueKindState extends CoreProgramValueKinds {
-	readonly sourceClosed: boolean;
-	readonly targets: CoreCallGraphIndex;
-	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
-	readonly valueAnalyses: ReadonlyMap<CoreFunctionId, CoreValueKindAnalysis>;
-	readonly summaries: ReadonlyMap<CoreFunctionId, CoreProgramValueKindSummary>;
-	readonly wildcardContributions: ReadonlyMap<
-		CoreFunctionId,
-		CoreProgramValueKindWildcardContribution
-	>;
-	readonly anyScriptAggregate: CoreProgramValueKindAggregate | undefined;
-}
-
-interface CoreProgramValueKindWildcardContribution {
-	readonly parameterKinds: ReadonlyArray<CompilerValueKindMask>;
-	readonly strictReceiverKind: CompilerValueKindMask;
-}
-
-interface CoreProgramValueKindAggregate extends CoreProgramValueKindWildcardContribution {
-	readonly returnKind: CompilerValueKindMask;
-}
-
-function freezeProgramValueKindSummary(
-	summary: CoreProgramValueKindSummary,
-): CoreProgramValueKindSummary {
-	return Object.freeze({
-		parameterKinds: Object.freeze([...summary.parameterKinds]),
-		receiverKind: summary.receiverKind,
-		returnKind: summary.returnKind,
+export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSemantics<CoreValueKindAnalysis> =
+	Object.freeze({
+		analyze: analyzeCoreValueKinds,
+		latticeMask(analysis: CoreValueKindAnalysis, value: CoreValueId) {
+			return analysis.latticeMask(value);
+		},
+		top: COMPILER_VALUE_KIND_TOP,
+		object: COMPILER_VALUE_KIND_OBJECT,
+		undefined: COMPILER_VALUE_KIND_UNDEFINED,
 	});
-}
-
-function sameMasks(
-	left: ReadonlyArray<CompilerValueKindMask>,
-	right: ReadonlyArray<CompilerValueKindMask>,
-): boolean {
-	return (
-		left.length === right.length && left.every((value, index) => value === right[index])
-	);
-}
-
-function sameWildcardContribution(
-	left: CoreProgramValueKindWildcardContribution | undefined,
-	right: CoreProgramValueKindWildcardContribution | undefined,
-): boolean {
-	return (
-		left !== undefined &&
-		right !== undefined &&
-		left.strictReceiverKind === right.strictReceiverKind &&
-		sameMasks(left.parameterKinds, right.parameterKinds)
-	);
-}
 
 export function solveCoreProgramValueKinds(
 	program: CoreProgram,
 	targets: CoreCallGraphIndex,
 	externallyReachable: (functionId: CoreFunctionId) => boolean,
 	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
-	topology: CoreProgramFlowTopology,
-	scheduler: CoreProgramFlowSccSolver,
 	previous?: CoreProgramValueKindState,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 	externallyChangedFunctions?: ReadonlySet<CoreFunctionId>,
 ): CoreProgramValueKindState {
-	const functionIds = [...program.functionIds()];
-	const maximumParameterCount = functionIds.reduce(
-		(largest, functionId) =>
-			Math.max(largest, program.function(functionId).parameterCount),
-		0,
-	);
-	const live = new Set(functionIds);
-	const external = new Map(
-		functionIds.map((functionId) => [functionId, externallyReachable(functionId)]),
-	);
-	const affected = new Set<CoreFunctionId>();
-	let aggregateInitiallyAffected = false;
-	if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
-		for (const functionId of functionIds) affected.add(functionId);
-		aggregateInitiallyAffected = targets.graph.hasAggregate();
-	} else {
-		for (const functionId of dirtyFunctions ?? functionIds) affected.add(functionId);
-		for (const functionId of targets.changedCallers) affected.add(functionId);
-		for (const functionId of externallyChangedFunctions ?? functionIds) {
-			if (previous.external.get(functionId) !== external.get(functionId)) {
-				affected.add(functionId);
-			}
-		}
-		aggregateInitiallyAffected = targets.graph.changedNodes.has(
-			CORE_ANY_SCRIPT_AGGREGATE,
-		);
-		if (previous.targets.graph.hasAggregate() && !targets.graph.hasAggregate()) {
-			for (const functionId of functionIds) affected.add(functionId);
-		}
-	}
-	let anyScriptAggregate = targets.graph.hasAggregate()
-		? previous?.anyScriptAggregate
-		: undefined;
-	const seededSummary = (
-		functionId: CoreFunctionId,
-		aggregate: CoreProgramValueKindAggregate | undefined,
-	): CoreProgramValueKindSummary => {
-		const fn = program.function(functionId);
-		const seed = external.get(functionId) === true ? COMPILER_VALUE_KIND_TOP : 0;
-		return {
-			parameterKinds: Array.from(
-				{ length: fn.parameterCount },
-				(_, index) => seed | (aggregate?.parameterKinds[index] ?? 0),
-			),
-			receiverKind:
-				seed |
-				(aggregate === undefined
-					? 0
-					: fn.metadata.strict
-						? aggregate.strictReceiverKind
-						: COMPILER_VALUE_KIND_OBJECT),
-			returnKind: 0,
-		};
-	};
-	const summaries = new Map<CoreFunctionId, CoreProgramValueKindSummary>();
-	const valueAnalyses = new Map<CoreFunctionId, CoreValueKindAnalysis>();
-	for (const functionId of functionIds) {
-		if (!affected.has(functionId)) {
-			const summary = previous?.summaries.get(functionId);
-			const analysis = previous?.valueAnalyses.get(functionId);
-			if (summary !== undefined && analysis !== undefined) {
-				summaries.set(functionId, summary);
-				valueAnalyses.set(functionId, analysis);
-				continue;
-			}
-			affected.add(functionId);
-		}
-		summaries.set(functionId, seededSummary(functionId, anyScriptAggregate));
-	}
-	const wildcardContributions = new Map<
-		CoreFunctionId,
-		CoreProgramValueKindWildcardContribution
-	>();
-	for (const [functionId, contribution] of previous?.wildcardContributions ?? []) {
-		if (live.has(functionId)) {
-			wildcardContributions.set(functionId, contribution);
-		}
-	}
-	let callerWakeups = 0;
-	let calleeWakeups = 0;
-	let functionsEvaluated = 0;
-	let aggregateRecomputations = 0;
-	let exactReverseCallerVisits = 0;
-	let wildcardReverseCallerVisits = 0;
-	let aggregateFunctionVisits = 0;
-	const activeSccs = new Set<number>();
-	const initialSccs = new Set<number>();
-	const pendingFunctionSccs = new Set<number>();
-	const pendingAggregateSccs = new Set<number>();
-	for (const functionId of affected) {
-		const scc = topology.owner.get(functionId);
-		if (scc !== undefined) {
-			initialSccs.add(scc);
-			pendingFunctionSccs.add(scc);
-		}
-	}
-	if (aggregateInitiallyAffected && targets.graph.hasAggregate()) {
-		const scc = topology.owner.get(CORE_ANY_SCRIPT_AGGREGATE);
-		if (scc !== undefined) {
-			initialSccs.add(scc);
-			pendingAggregateSccs.add(scc);
-		}
-	}
-	scheduler.solveSccs(
-		topology,
-		[...initialSccs].map((scc) => ({
-			scc,
-			dimensions: CORE_PROGRAM_FLOW_RETURN_KIND,
-		})),
-		(sccIndex, dimensions, enqueueScc) => {
-			if ((dimensions & CORE_PROGRAM_FLOW_RETURN_KIND) === 0) return;
-			const runFunctions = pendingFunctionSccs.delete(sccIndex);
-			const runAggregate = pendingAggregateSccs.delete(sccIndex);
-			const activateScc = (scc: number): void => {
-				if (activeSccs.has(scc)) return;
-				activeSccs.add(scc);
-				const component = topology.sccs[scc]!;
-				for (const functionId of component.functions) {
-					affected.add(functionId);
-					valueAnalyses.delete(functionId);
-					summaries.set(functionId, seededSummary(functionId, anyScriptAggregate));
-				}
-				for (const functionId of component.functions) {
-					for (const graphIndex of [targets, previous?.targets]) {
-						if (graphIndex === undefined) continue;
-						for (const neighbor of [
-							...graphIndex.graph.exactOutgoing(functionId),
-							...graphIndex.graph.exactCallers(functionId),
-						]) {
-							if (!live.has(neighbor)) continue;
-							const neighborScc = topology.owner.get(neighbor);
-							if (
-								neighborScc !== undefined &&
-								neighborScc !== scc &&
-								!activeSccs.has(neighborScc)
-							) {
-								pendingFunctionSccs.add(neighborScc);
-								enqueueScc(neighborScc, CORE_PROGRAM_FLOW_RETURN_KIND);
-							}
-						}
-					}
-				}
-			};
-			if (runFunctions) activateScc(sccIndex);
-			const component = topology.sccs[sccIndex]!;
-			const queue: Array<CoreCallGraphNode> = [
-				...(runAggregate && component.hasAnyScriptAggregate
-					? [CORE_ANY_SCRIPT_AGGREGATE]
-					: []),
-				...(runFunctions ? component.functions : []),
-			];
-			const queued = new Set<CoreCallGraphNode>(queue);
-			const enqueueNode = (node: CoreCallGraphNode, caller: boolean): void => {
-				const scc = topology.owner.get(node);
-				if (scc === undefined) return;
-				if (node === CORE_ANY_SCRIPT_AGGREGATE) pendingAggregateSccs.add(scc);
-				else {
-					pendingFunctionSccs.add(scc);
-					activateScc(scc);
-				}
-				if (scc === sccIndex) {
-					if (queued.has(node)) return;
-					queued.add(node);
-					queue.push(node);
-					if (node === CORE_ANY_SCRIPT_AGGREGATE) pendingAggregateSccs.delete(scc);
-					else pendingFunctionSccs.delete(scc);
-				} else if (!enqueueScc(scc, CORE_PROGRAM_FLOW_RETURN_KIND)) {
-					return;
-				}
-				if (caller) callerWakeups++;
-				else calleeWakeups++;
-			};
-			const applyIncoming = (
-				callee: CoreFunctionId,
-				incomingParameterKinds: ReadonlyArray<CompilerValueKindMask>,
-				strictReceiverKind: CompilerValueKindMask,
-			): void => {
-				if (!live.has(callee)) return;
-				const calleeScc = topology.owner.get(callee);
-				if (calleeScc === undefined) return;
-				pendingFunctionSccs.add(calleeScc);
-				activateScc(calleeScc);
-				const calleeFn = program.function(callee);
-				const prior = summaries.get(callee)!;
-				const parameterKinds = [...prior.parameterKinds];
-				for (let index = 0; index < calleeFn.parameterCount; index++) {
-					parameterKinds[index] =
-						parameterKinds[index]! | (incomingParameterKinds[index] ?? 0);
-				}
-				const incomingReceiver = calleeFn.metadata.strict
-					? strictReceiverKind
-					: COMPILER_VALUE_KIND_OBJECT;
-				const receiverKind = prior.receiverKind | incomingReceiver;
-				if (
-					receiverKind === prior.receiverKind &&
-					parameterKinds.every((kind, index) => kind === prior.parameterKinds[index])
-				)
-					return;
-				summaries.set(callee, { ...prior, parameterKinds, receiverKind });
-				enqueueNode(callee, false);
-			};
-			let cursor = 0;
-			while (cursor < queue.length) {
-				const node = queue[cursor++]!;
-				queued.delete(node);
-				if (node === CORE_ANY_SCRIPT_AGGREGATE) {
-					const parameterKinds =
-						Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
-					let strictReceiverKind = 0;
-					for (const caller of targets.graph.wildcardCallers) {
-						const contribution = wildcardContributions.get(caller);
-						if (contribution === undefined) continue;
-						for (let index = 0; index < maximumParameterCount; index++) {
-							parameterKinds[index] =
-								parameterKinds[index]! | (contribution.parameterKinds[index] ?? 0);
-						}
-						strictReceiverKind |= contribution.strictReceiverKind;
-					}
-					let returnKind = 0;
-					for (const summary of summaries.values()) {
-						aggregateFunctionVisits++;
-						returnKind |= summary.returnKind;
-					}
-					const prior = anyScriptAggregate;
-					const next: CoreProgramValueKindAggregate = {
-						parameterKinds,
-						strictReceiverKind,
-						returnKind,
-					};
-					aggregateRecomputations++;
-					anyScriptAggregate = next;
-					if (prior?.returnKind !== returnKind) {
-						for (const caller of targets.graph.wildcardCallers) {
-							wildcardReverseCallerVisits++;
-							enqueueNode(caller, true);
-						}
-					}
-					if (!sameWildcardContribution(prior, next)) {
-						for (const functionId of functionIds) enqueueNode(functionId, false);
-						for (const callee of functionIds) {
-							aggregateFunctionVisits++;
-							applyIncoming(callee, parameterKinds, strictReceiverKind);
-						}
-						enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
-					}
-					continue;
-				}
-				const functionId = node;
-				const fn = program.function(functionId);
-				const summary = summaries.get(functionId)!;
-				const sites = targets.outgoing(functionId);
-				const byInstruction = new Map(sites.map((site) => [site.instruction, site]));
-				const values = analyzeCoreValueKinds(fn, controlFlow(functionId), {
-					parameterMasks: summary.parameterKinds,
-					receiverMask: summary.receiverKind,
-					operationResultMask(instruction) {
-						const site = byInstruction.get(instruction);
-						if (site === undefined) return undefined;
-						if (
-							site.targets.opaque ||
-							(!targets.sourceClosed && site.targets.anyScript)
-						) {
-							return COMPILER_VALUE_KIND_TOP;
-						}
-						if (site.targets.anyScript) {
-							return anyScriptAggregate?.returnKind ?? 0;
-						}
-						const callees = site.targets.functions;
-						if (callees.length === 0) return COMPILER_VALUE_KIND_TOP;
-						return callees.reduce(
-							(mask, callee) => mask | summaries.get(callee)!.returnKind,
-							0,
-						);
-					},
-				});
-				valueAnalyses.set(functionId, values);
-				functionsEvaluated++;
-				let returnKind = 0;
-				const cfg = controlFlow(functionId);
-				for (const block of cfg.reachable) {
-					const terminator = fn.blockTerminator(block);
-					if (fn.instructionKind(terminator) === "return") {
-						returnKind |= values.latticeMask(
-							fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-						);
-					}
-				}
-				if (returnKind !== summary.returnKind) {
-					summaries.set(functionId, { ...summary, returnKind });
-					for (const caller of targets.graph.exactCallers(functionId)) {
-						exactReverseCallerVisits++;
-						enqueueNode(caller, true);
-					}
-					if (targets.graph.hasAggregate()) {
-						enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, true);
-					}
-				}
-				const anyScriptParameterKinds =
-					Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
-				let anyScriptStrictReceiverKind = 0;
-				let hasAnyScriptSite = false;
-				for (const site of sites) {
-					if (site.targets.anyScript) {
-						hasAnyScriptSite = true;
-						for (let index = 0; index < maximumParameterCount; index++) {
-							const argument = site.arguments?.[index];
-							anyScriptParameterKinds[index] =
-								anyScriptParameterKinds[index]! |
-								(site.arguments === undefined
-									? COMPILER_VALUE_KIND_TOP
-									: argument === undefined
-										? COMPILER_VALUE_KIND_UNDEFINED
-										: values.latticeMask(argument));
-						}
-						anyScriptStrictReceiverKind |=
-							site.receiver === undefined
-								? COMPILER_VALUE_KIND_TOP
-								: values.latticeMask(site.receiver);
-						continue;
-					}
-					const incomingParameterKinds =
-						Array<CompilerValueKindMask>(maximumParameterCount);
-					for (let index = 0; index < maximumParameterCount; index++) {
-						const argument = site.arguments?.[index];
-						incomingParameterKinds[index] =
-							site.arguments === undefined
-								? COMPILER_VALUE_KIND_TOP
-								: argument === undefined
-									? COMPILER_VALUE_KIND_UNDEFINED
-									: values.latticeMask(argument);
-					}
-					for (const callee of site.targets.functions) {
-						applyIncoming(
-							callee,
-							incomingParameterKinds,
-							site.receiver === undefined
-								? COMPILER_VALUE_KIND_TOP
-								: values.latticeMask(site.receiver),
-						);
-					}
-				}
-				if (hasAnyScriptSite) {
-					const contribution: CoreProgramValueKindWildcardContribution = {
-						parameterKinds: anyScriptParameterKinds,
-						strictReceiverKind: anyScriptStrictReceiverKind,
-					};
-					if (
-						!sameWildcardContribution(wildcardContributions.get(functionId), contribution)
-					) {
-						wildcardContributions.set(functionId, contribution);
-						enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
-					}
-				} else if (
-					wildcardContributions.delete(functionId) &&
-					targets.graph.hasAggregate()
-				) {
-					enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
-				}
-			}
-		},
-	);
-	const changedFunctions = new Set(affected);
-	for (const functionId of functionIds) {
-		const frozen = freezeProgramValueKindSummary(summaries.get(functionId)!);
-		summaries.set(functionId, frozen);
-	}
-	const statistics = Object.freeze({
-		functions: functionIds.length,
-		functionsEvaluated,
-		functionsReused: functionIds.length - affected.size,
-		affectedFunctions: affected.size,
-		callerWakeups,
-		calleeWakeups,
-		aggregateRecomputations,
-		exactReverseCallerVisits,
-		wildcardReverseCallerVisits,
-		aggregateFunctionVisits,
-	});
-	return Object.freeze({
-		sourceClosed: targets.sourceClosed,
+	return new CoreProgramFlowEngine(program).solveValueKinds(
 		targets,
-		external,
-		valueAnalyses,
-		summaries,
-		wildcardContributions,
-		anyScriptAggregate,
-		changedFunctions,
-		statistics,
-		values(functionId: CoreFunctionId) {
-			const result = valueAnalyses.get(functionId);
-			if (result === undefined)
-				throw new Error(`No value-kind analysis for ${functionId}`);
-			return result;
-		},
-		summary(functionId: CoreFunctionId) {
-			const result = summaries.get(functionId);
-			if (result === undefined)
-				throw new Error(`No value-kind summary for ${functionId}`);
-			return result;
-		},
-	});
+		externallyReachable,
+		controlFlow,
+		CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS,
+		previous,
+		dirtyFunctions,
+		externallyChangedFunctions,
+	);
 }
 
 function exactPrimitiveTypeof(mask: number): string | undefined {
