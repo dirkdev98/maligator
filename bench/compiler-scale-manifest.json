@@ -103,6 +103,7 @@
 				"src/compiler/core/core-function-kernel.ts",
 				"src/compiler/core/core-ir-call-targets.ts",
 				"src/compiler/core/core-ir-control-flow.ts",
+				"src/compiler/core/core-ir-equality.ts",
 				"src/compiler/core/core-ir-exception-flow.ts",
 				"src/compiler/core/core-ir-fact-implication.ts",
 				"src/compiler/core/core-ir-generated-cost.ts",
