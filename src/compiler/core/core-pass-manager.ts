@@ -1,6 +1,8 @@
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
+	CORE_FUNCTION_HAS_BRANCHES,
+	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
 	CORE_FUNCTION_FEATURE_MASK,
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
@@ -8,7 +10,7 @@ import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
-import { CoreLocalOptimizer } from "./core-local-optimizer.ts";
+import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import { corePassContext } from "./core-pass.ts";
 import type { CoreOptimizationStage, CorePass, CorePassWorkItem } from "./core-pass.ts";
@@ -75,6 +77,7 @@ export class CorePassManager {
 	readonly #verification: CoreVerificationProfile;
 	readonly #optionalMaxRunsPerWorkItem: number;
 	readonly #localOptimization: boolean;
+	readonly #localRules: CoreLocalRuleRegistry | undefined;
 	readonly #features: CoreFunctionFeatureIndex;
 	#localSeeded = false;
 	readonly #sccs: ReadonlyArray<{
@@ -97,7 +100,13 @@ export class CorePassManager {
 		this.#optionalMaxRunsPerWorkItem =
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
 		this.#localOptimization = options.localOptimization ?? false;
-		this.#features = new CoreFunctionFeatureIndex(program);
+		this.#localRules = this.#localOptimization
+			? new CoreLocalRuleRegistry(program)
+			: undefined;
+		this.#features = new CoreFunctionFeatureIndex(
+			program,
+			this.#localRules?.dispatch,
+		);
 		if (
 			!Number.isSafeInteger(this.#optionalMaxRunsPerWorkItem) ||
 			this.#optionalMaxRunsPerWorkItem < 1
@@ -144,6 +153,13 @@ export class CorePassManager {
 		};
 		const enqueueLocal = (functionId: CoreFunctionId, changes?: CoreChangeSet): void => {
 			if (!this.#localOptimization) return;
+			if (
+				(this.#features.get(functionId) &
+					(CORE_FUNCTION_HAS_BRANCHES | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) ===
+				0
+			) {
+				return;
+			}
 			const pending = pendingLocal.get(functionId) ?? { full: false, changes: [] };
 			if (changes === undefined) pending.full = true;
 			else pending.changes.push(changes);
@@ -180,9 +196,9 @@ export class CorePassManager {
 				const pending = pendingLocal.get(work.function);
 				pendingLocal.delete(work.function);
 				if (pending === undefined) continue;
-				const result = new CoreLocalOptimizer(this.#program, work.function).run(
-					pending.full ? undefined : pending.changes,
-				);
+				const result = new CoreLocalOptimizer(this.#program, work.function, {
+					ruleRegistry: this.#localRules!,
+				}).run(pending.full ? undefined : pending.changes);
 				this.#report.recordLocalOptimizerWork("fused-local-optimizer", result.statistics);
 				const changes = result.changes;
 				if (changes === undefined || changes.edits === 0) continue;

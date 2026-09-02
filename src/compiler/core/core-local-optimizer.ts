@@ -15,6 +15,7 @@ import type {
 	CoreInstructionAttributes,
 	CoreInstructionId,
 	CoreOpcodeId,
+	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -126,6 +127,7 @@ export interface CoreLocalOptimizerOptions {
 	readonly maxEdits?: number;
 	readonly budgetExhaustion?: "stop" | "error";
 	readonly additionalRules?: ReadonlyArray<CoreLocalInstructionRule>;
+	readonly ruleRegistry?: CoreLocalRuleRegistry;
 }
 
 const COPY_PROPAGATION_RULE: CoreLocalInstructionRule = {
@@ -195,6 +197,73 @@ type LocalConstant =
 	| { readonly kind: "number"; readonly value: number }
 	| { readonly kind: "string"; readonly index: number };
 
+export class CoreLocalRuleRegistry {
+	readonly #opcodeRegistry: CoreOpcodeRegistry;
+	readonly rules: ReadonlyArray<CoreLocalInstructionRule>;
+	readonly blockRules: ReadonlyArray<CoreLocalBlockRule>;
+	readonly dispatch: Uint32Array;
+	readonly moveOpcode: CoreOpcodeId | undefined;
+
+	constructor(
+		program: CoreProgram,
+		additionalRules: ReadonlyArray<CoreLocalInstructionRule> = [],
+	) {
+		this.#opcodeRegistry = program.registry;
+		this.moveOpcode = program.registry.get("move")?.id;
+		this.rules = [
+			...(this.moveOpcode === undefined
+				? []
+				: [{ ...COPY_PROPAGATION_RULE, opcodes: [this.moveOpcode] }]),
+			{
+				...CONSTANT_FOLDING_RULE,
+				opcodes: ["binary", "unary", "typeofCompare"].flatMap((opcode) => {
+					const id = program.registry.get(opcode)?.id;
+					return id === undefined ? [] : [id];
+				}),
+			},
+			...(program.registry.get("binary") === undefined
+				? []
+				: [
+						{
+							...TYPEOF_COMPARISON_RULE,
+							opcodes: [program.registry.require("binary").id],
+						},
+					]),
+			{
+				...STATIC_PROPERTY_KEY_RULE,
+				opcodes: ["loadProperty", "storeProperty"].flatMap((opcode) => {
+					const id = program.registry.get(opcode)?.id;
+					return id === undefined ? [] : [id];
+				}),
+			},
+			...additionalRules,
+		];
+		this.blockRules = [CONTROL_FOLDING_RULE, VALUE_NUMBERING_RULE];
+		if (this.rules.length > 31) {
+			throw new Error("Core local optimizer supports at most 31 opcode rules");
+		}
+		this.dispatch = new Uint32Array(program.registry.entries().length);
+		for (let ruleIndex = 0; ruleIndex < this.rules.length; ruleIndex++) {
+			const bit = 1 << ruleIndex;
+			for (const opcode of this.rules[ruleIndex]!.opcodes) {
+				this.dispatch[opcode] = (this.dispatch[opcode] ?? 0) | bit;
+			}
+		}
+		for (const descriptor of program.registry.entries()) {
+			if (descriptor.discardable || descriptor.opcode === "unary") {
+				this.dispatch[descriptor.id] =
+					(this.dispatch[descriptor.id] ?? 0) | DEAD_CODE_RULE;
+			}
+		}
+	}
+
+	assertProgram(program: CoreProgram): void {
+		if (program.registry !== this.#opcodeRegistry) {
+			throw new Error("Core local rule registry belongs to another opcode registry");
+		}
+	}
+}
+
 export class CoreLocalOptimizer {
 	readonly #program: CoreProgram;
 	readonly #fn: CoreFunctionStore;
@@ -235,53 +304,17 @@ export class CoreLocalOptimizer {
 		if (!Number.isSafeInteger(this.#maxEdits) || this.#maxEdits < 0) {
 			throw new Error("Core local optimizer edit budget must be a non-negative integer");
 		}
-		this.#moveOpcode = program.registry.get("move")?.id;
-		this.#rules = [
-			...(this.#moveOpcode === undefined
-				? []
-				: [{ ...COPY_PROPAGATION_RULE, opcodes: [this.#moveOpcode] }]),
-			{
-				...CONSTANT_FOLDING_RULE,
-				opcodes: ["binary", "unary", "typeofCompare"].flatMap((opcode) => {
-					const id = program.registry.get(opcode)?.id;
-					return id === undefined ? [] : [id];
-				}),
-			},
-			...(program.registry.get("binary") === undefined
-				? []
-				: [
-						{
-							...TYPEOF_COMPARISON_RULE,
-							opcodes: [program.registry.require("binary").id],
-						},
-					]),
-			{
-				...STATIC_PROPERTY_KEY_RULE,
-				opcodes: ["loadProperty", "storeProperty"].flatMap((opcode) => {
-					const id = program.registry.get(opcode)?.id;
-					return id === undefined ? [] : [id];
-				}),
-			},
-			...(options.additionalRules ?? []),
-		];
-		if (this.#rules.length > 31) {
-			throw new Error("Core local optimizer supports at most 31 opcode rules");
+		if (options.ruleRegistry !== undefined && options.additionalRules !== undefined) {
+			throw new Error("Core local optimizer cannot extend a shared rule registry");
 		}
-		this.#dispatch = new Uint32Array(program.registry.entries().length);
-		for (let ruleIndex = 0; ruleIndex < this.#rules.length; ruleIndex++) {
-			const bit = 1 << ruleIndex;
-			for (const opcode of this.#rules[ruleIndex]!.opcodes) {
-				this.#dispatch[opcode] = (this.#dispatch[opcode] ?? 0) | bit;
-			}
-		}
-		for (const descriptor of program.registry.entries()) {
-			if (descriptor.discardable || descriptor.opcode === "unary") {
-				this.#dispatch[descriptor.id] =
-					(this.#dispatch[descriptor.id] ?? 0) | DEAD_CODE_RULE;
-			}
-		}
+		const ruleRegistry =
+			options.ruleRegistry ?? new CoreLocalRuleRegistry(program, options.additionalRules);
+		ruleRegistry.assertProgram(program);
+		this.#moveOpcode = ruleRegistry.moveOpcode;
+		this.#rules = ruleRegistry.rules;
+		this.#blockRules = ruleRegistry.blockRules;
+		this.#dispatch = ruleRegistry.dispatch;
 		this.#features = scanCoreFunctionFeatures(this.#fn, this.#dispatch);
-		this.#blockRules = [CONTROL_FOLDING_RULE, VALUE_NUMBERING_RULE];
 	}
 
 	run(initialChanges?: ReadonlyArray<CoreChangeSet>): CoreLocalOptimizerResult {
