@@ -1,6 +1,6 @@
 import { updateCoreCallGraph } from "./core-call-graph.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
-import { coreCapturedSlotKey, coreClosedCapturedValueSlots } from "./core-compilation.ts";
+import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -24,6 +24,42 @@ import type {
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALLEE_TARGET_CAP = 4;
+
+type CoreCellId = number;
+type CoreFunctionPropertyId = number;
+
+class CoreGraphIdentityTable {
+	readonly #ids: Map<number, Map<number, Map<number, number>>>;
+	#next: number;
+
+	constructor(previous?: CoreGraphIdentityTable) {
+		const previousIds = previous === undefined ? [] : [...previous.#ids];
+		this.#ids = new Map(
+			previousIds.map(
+				([kind, byLeft]) =>
+					[
+						kind,
+						new Map(
+							[...byLeft].map(([left, byRight]) => [left, new Map(byRight)] as const),
+						),
+					] as const,
+			),
+		);
+		this.#next = previous === undefined ? 0 : previous.#next;
+	}
+
+	intern(kind: number, left: number, right: number): number {
+		const byLeft = this.#ids.get(kind) ?? new Map<number, Map<number, number>>();
+		const byRight = byLeft.get(left) ?? new Map<number, number>();
+		const existing = byRight.get(right);
+		if (existing !== undefined) return existing;
+		const id = this.#next++;
+		byRight.set(right, id);
+		byLeft.set(left, byRight);
+		this.#ids.set(kind, byLeft);
+		return id;
+	}
+}
 
 export interface CoreCalleeTargets {
 	readonly functions: ReadonlyArray<CoreFunctionId>;
@@ -135,9 +171,9 @@ interface CoreLocalCallTargets {
 	readonly values: ReadonlyArray<CoreCalleeTargets>;
 	readonly returnTargets: CoreCalleeTargets;
 	readonly sites: ReadonlyArray<CoreIndexedCallSite>;
-	readonly cellInputs: ReadonlyMap<string, CoreCalleeTargets>;
-	readonly cellWrites: ReadonlyMap<string, CoreCalleeTargets>;
-	readonly propertyInputs: ReadonlyMap<string, CoreCalleeTargets>;
+	readonly cellInputs: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
+	readonly cellWrites: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
+	readonly propertyInputs: ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>;
 	readonly globalWrites: ReadonlyMap<number, CoreCalleeTargets>;
 }
 
@@ -207,16 +243,24 @@ const DEFINITELY_NON_CALLABLE_RESULTS = new Set([
 	"createUndefined",
 ]);
 
-function globalCellKey(index: number): string {
-	return `global:${index}`;
+function globalCellId(identities: CoreGraphIdentityTable, index: number): CoreCellId {
+	return identities.intern(0, 0, index);
 }
 
-function capturedCellKey(owner: number, index: number): string {
-	return `captured:${coreCapturedSlotKey(owner, index)}`;
+function capturedCellId(
+	identities: CoreGraphIdentityTable,
+	owner: number,
+	index: number,
+): CoreCellId {
+	return identities.intern(1, owner, index);
 }
 
-function functionPropertyKey(functionId: CoreFunctionId, stringIndex: number): string {
-	return `function-property:${functionId}:${stringIndex}`;
+function functionPropertyId(
+	identities: CoreGraphIdentityTable,
+	functionId: CoreFunctionId,
+	stringIndex: number,
+): CoreFunctionPropertyId {
+	return identities.intern(2, functionId, stringIndex);
 }
 
 function instructionOperand(
@@ -267,8 +311,9 @@ function collectKnownFunctionProperties(
 	fn: CoreFunctionStore,
 	functionCapacity: number,
 	localTransfers: CoreProgramFlowLocalTransfers,
-): ReadonlyMap<string, CoreCalleeTargets> {
-	const properties = new Map<string, CoreCalleeTargets>();
+	identities: CoreGraphIdentityTable,
+): ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets> {
+	const properties = new Map<CoreFunctionPropertyId, CoreCalleeTargets>();
 	for (let index = 0; index < localTransfers.propertyDefinitionCount; index++) {
 		const instruction = localTransfers.propertyDefinitionAt(index);
 		const receiver = instructionOperand(fn, instruction, 0);
@@ -286,7 +331,7 @@ function collectKnownFunctionProperties(
 			valueFunction >= functionCapacity
 		)
 			continue;
-		const property = functionPropertyKey(receiverFunction, stringIndex);
+		const property = functionPropertyId(identities, receiverFunction, stringIndex);
 		properties.set(
 			property,
 			joinCoreCalleeTargets(
@@ -298,65 +343,69 @@ function collectKnownFunctionProperties(
 	return properties;
 }
 
-function rawInstructionCellKey(
+function rawInstructionCellId(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-): string | undefined {
+	identities: CoreGraphIdentityTable,
+): CoreCellId | undefined {
 	const opcode = fn.instructionOpcodeName(instruction);
 	const attributes = fn.instructionAttributes(instruction);
-	let key: string | undefined;
+	let id: CoreCellId | undefined;
 	if (opcode === "loadGlobal" || opcode === "storeGlobal") {
 		const index = attributes.index;
-		if (typeof index === "number") key = globalCellKey(index);
+		if (typeof index === "number") id = globalCellId(identities, index);
 	} else if (opcode === "loadCaptured" || opcode === "storeCaptured") {
 		const owner = attributes.functionIndex;
 		const index = attributes.index;
 		if (typeof owner === "number" && typeof index === "number") {
-			key = capturedCellKey(owner, index);
+			id = capturedCellId(identities, owner, index);
 		}
 	}
-	return key;
+	return id;
 }
 
 interface CoreFunctionCellAccesses {
-	readonly reads: ReadonlySet<string>;
-	readonly writes: ReadonlySet<string>;
+	readonly reads: ReadonlySet<CoreCellId>;
+	readonly writes: ReadonlySet<CoreCellId>;
 }
 
 function collectFunctionCellAccesses(
 	fn: CoreFunctionStore,
 	localTransfers: CoreProgramFlowLocalTransfers,
+	identities: CoreGraphIdentityTable,
 ): CoreFunctionCellAccesses {
-	const reads = new Set<string>();
-	const writes = new Set<string>();
+	const reads = new Set<CoreCellId>();
+	const writes = new Set<CoreCellId>();
 	for (let index = 0; index < localTransfers.cellAccessCount; index++) {
 		const instruction = localTransfers.cellAccessAt(index);
-		const key = rawInstructionCellKey(fn, instruction);
-		if (key === undefined) continue;
+		const id = rawInstructionCellId(fn, instruction, identities);
+		if (id === undefined) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode === "loadGlobal" || opcode === "loadCaptured") reads.add(key);
-		else writes.add(key);
+		if (opcode === "loadGlobal" || opcode === "loadCaptured") reads.add(id);
+		else writes.add(id);
 	}
 	return Object.freeze({ reads, writes });
 }
 
-function instructionCellKey(
+function instructionCellId(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-	trackedCells: ReadonlySet<string>,
-): string | undefined {
-	const key = rawInstructionCellKey(fn, instruction);
-	return key !== undefined && trackedCells.has(key) ? key : undefined;
+	trackedCells: ReadonlySet<CoreCellId>,
+	identities: CoreGraphIdentityTable,
+): CoreCellId | undefined {
+	const id = rawInstructionCellId(fn, instruction, identities);
+	return id !== undefined && trackedCells.has(id) ? id : undefined;
 }
 
 function analyzeFunctionTargets(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-	cells: ReadonlyMap<string, CoreCalleeTargets>,
-	trackedCells: ReadonlySet<string>,
-	knownFunctionProperties: ReadonlyMap<string, CoreCalleeTargets>,
+	cells: ReadonlyMap<CoreCellId, CoreCalleeTargets>,
+	trackedCells: ReadonlySet<CoreCellId>,
+	knownFunctionProperties: ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>,
 	localTransfers: CoreProgramFlowLocalTransfers,
+	identities: CoreGraphIdentityTable,
 ): CoreLocalCallTargets {
 	const values = Array<CoreCalleeTargets>(fn.valueCapacity).fill(
 		CORE_CALLEE_TARGETS_BOTTOM,
@@ -428,7 +477,7 @@ function analyzeFunctionTargets(
 				resultTargets =
 					operand === undefined ? CORE_CALLEE_TARGETS_OPEN : values[operand]!;
 			} else if (opcode === "loadGlobal" || opcode === "loadCaptured") {
-				const key = instructionCellKey(fn, instruction, trackedCells);
+				const key = instructionCellId(fn, instruction, trackedCells, identities);
 				resultTargets =
 					key === undefined
 						? CORE_CALLEE_TARGETS_OPEN
@@ -444,7 +493,7 @@ function analyzeFunctionTargets(
 						knownTargets = joinCoreCalleeTargets(
 							knownTargets,
 							knownFunctionProperties.get(
-								functionPropertyKey(receiverFunction, stringIndex),
+								functionPropertyId(identities, receiverFunction, stringIndex),
 							) ?? CORE_CALLEE_TARGETS_BOTTOM,
 						);
 					}
@@ -491,9 +540,9 @@ function analyzeFunctionTargets(
 			open: coreCalleeTargetsAreOpen(targets),
 		});
 	});
-	const cellInputs = new Map<string, CoreCalleeTargets>();
-	const cellWrites = new Map<string, CoreCalleeTargets>();
-	const propertyInputs = new Map<string, CoreCalleeTargets>();
+	const cellInputs = new Map<CoreCellId, CoreCalleeTargets>();
+	const cellWrites = new Map<CoreCellId, CoreCalleeTargets>();
+	const propertyInputs = new Map<CoreFunctionPropertyId, CoreCalleeTargets>();
 	const globalWrites = new Map<number, CoreCalleeTargets>();
 	for (let index = 0; index < localTransfers.operationCount; index++) {
 		const instruction = localTransfers.operationAt(index);
@@ -503,7 +552,7 @@ function analyzeFunctionTargets(
 			const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 			if (receiver !== undefined && typeof stringIndex === "number") {
 				for (const receiverFunction of values[receiver]?.functions ?? []) {
-					const property = functionPropertyKey(receiverFunction, stringIndex);
+					const property = functionPropertyId(identities, receiverFunction, stringIndex);
 					propertyInputs.set(
 						property,
 						knownFunctionProperties.get(property) ?? CORE_CALLEE_TARGETS_BOTTOM,
@@ -511,7 +560,7 @@ function analyzeFunctionTargets(
 				}
 			}
 		}
-		const key = instructionCellKey(fn, instruction, trackedCells);
+		const key = instructionCellId(fn, instruction, trackedCells, identities);
 		if (key === undefined) continue;
 		if (opcode === "loadGlobal" || opcode === "loadCaptured") {
 			cellInputs.set(key, cells.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM);
@@ -553,22 +602,26 @@ function analyzeFunctionTargets(
 }
 
 interface CoreCallGraphIndexState extends CoreCallGraphIndex {
+	readonly identities: CoreGraphIdentityTable;
 	readonly local: ReadonlyMap<CoreFunctionId, CoreLocalCallTargets>;
-	readonly cells: ReadonlyMap<string, CoreCalleeTargets>;
+	readonly cells: ReadonlyMap<CoreCellId, CoreCalleeTargets>;
 	readonly cellAccesses: ReadonlyMap<CoreFunctionId, CoreFunctionCellAccesses>;
 	readonly propertyWrites: ReadonlyMap<
 		CoreFunctionId,
-		ReadonlyMap<string, CoreCalleeTargets>
+		ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>
 	>;
 	readonly propertyWriters: ReadonlyMap<
-		string,
+		CoreFunctionPropertyId,
 		ReadonlyMap<CoreFunctionId, CoreCalleeTargets>
 	>;
-	readonly properties: ReadonlyMap<string, CoreCalleeTargets>;
-	readonly propertyReaders: ReadonlyMap<string, ReadonlySet<CoreFunctionId>>;
-	readonly cellReaders: ReadonlyMap<string, ReadonlySet<CoreFunctionId>>;
+	readonly properties: ReadonlyMap<CoreFunctionPropertyId, CoreCalleeTargets>;
+	readonly propertyReaders: ReadonlyMap<
+		CoreFunctionPropertyId,
+		ReadonlySet<CoreFunctionId>
+	>;
+	readonly cellReaders: ReadonlyMap<CoreCellId, ReadonlySet<CoreFunctionId>>;
 	readonly cellWriters: ReadonlyMap<
-		string,
+		CoreCellId,
 		ReadonlyMap<CoreFunctionId, CoreCalleeTargets>
 	>;
 	readonly globalStoreWriters: ReadonlyMap<
@@ -621,12 +674,13 @@ export function analyzeCoreCallGraph(
 ): CoreCallGraphIndexState {
 	const functionIds = [...program.functionIds()];
 	const functionSet = new Set(functionIds);
+	const identities = new CoreGraphIdentityTable(previous?.identities);
 	const cellAccesses = new Map(previous?.cellAccesses ?? []);
 	const propertyWrites = new Map(previous?.propertyWrites ?? []);
 	const propertyWriters = new Map(previous?.propertyWriters ?? []);
 	const cellReaders = new Map(previous?.cellReaders ?? []);
 	const changedFunctions = new Set<CoreFunctionId>();
-	const propertyKeys = new Set<string>();
+	const propertyKeys = new Set<CoreFunctionPropertyId>();
 	let accessFunctionsScanned = 0;
 	for (const functionId of previous === undefined
 		? functionIds
@@ -639,7 +693,7 @@ export function analyzeCoreCallGraph(
 		accessFunctionsScanned++;
 		const oldAccess = cellAccesses.get(functionId);
 		const transfers = localTransfers(functionId);
-		const nextAccess = collectFunctionCellAccesses(fn, transfers);
+		const nextAccess = collectFunctionCellAccesses(fn, transfers, identities);
 		cellAccesses.set(functionId, nextAccess);
 		for (const key of new Set([...(oldAccess?.reads ?? []), ...nextAccess.reads])) {
 			const readers = new Set(cellReaders.get(key) ?? []);
@@ -650,11 +704,13 @@ export function analyzeCoreCallGraph(
 		}
 
 		const oldWrites =
-			propertyWrites.get(functionId) ?? new Map<string, CoreCalleeTargets>();
+			propertyWrites.get(functionId) ??
+			new Map<CoreFunctionPropertyId, CoreCalleeTargets>();
 		const nextWrites = collectKnownFunctionProperties(
 			fn,
 			program.functionCapacity,
 			transfers,
+			identities,
 		);
 		propertyWrites.set(functionId, nextWrites);
 		for (const key of new Set([...oldWrites.keys(), ...nextWrites.keys()])) {
@@ -705,12 +761,12 @@ export function analyzeCoreCallGraph(
 	for (const key of propertyKeys) {
 		for (const reader of propertyReaders.get(key) ?? []) changedFunctions.add(reader);
 	}
-	const closedCells = new Set<string>();
+	const closedCells = new Set<CoreCellId>();
 	for (const index of context?.data.singleAssignmentGlobalSlots ?? []) {
-		closedCells.add(globalCellKey(index));
+		closedCells.add(globalCellId(identities, index));
 	}
-	for (const key of coreClosedCapturedValueSlots(program, context)) {
-		closedCells.add(`captured:${key}`);
+	for (const { owner, index } of coreClosedCapturedValueSlots(program, context)) {
+		closedCells.add(capturedCellId(identities, owner, index));
 	}
 	const trackedCells = new Set(closedCells);
 	for (const access of cellAccesses.values()) {
@@ -738,7 +794,7 @@ export function analyzeCoreCallGraph(
 	const globalStoreWriters = new Map(previous?.globalStoreWriters ?? []);
 	const cells = new Map(previous?.cells ?? []);
 	const globalStores = new Map(previous?.globalStores ?? []);
-	const cellKeys = new Set<string>();
+	const cellKeys = new Set<CoreCellId>();
 	const globalSlots = new Set<number>();
 	const removeLocalContributions = (
 		functionId: CoreFunctionId,
@@ -780,7 +836,7 @@ export function analyzeCoreCallGraph(
 		if (!trackedCells.has(key)) cellKeys.add(key);
 	}
 	let cellAggregateUpdates = 0;
-	const recomputeCell = (key: string): boolean => {
+	const recomputeCell = (key: CoreCellId): boolean => {
 		cellAggregateUpdates++;
 		let next = closedCells.has(key)
 			? CORE_CALLEE_TARGETS_BOTTOM
@@ -817,6 +873,7 @@ export function analyzeCoreCallGraph(
 				trackedCells,
 				knownFunctionProperties,
 				localTransfers(functionId),
+				identities,
 			);
 			for (const [key, targets] of next.cellWrites) {
 				cellKeys.add(key);
@@ -940,6 +997,7 @@ export function analyzeCoreCallGraph(
 	});
 	return Object.freeze({
 		sourceClosed,
+		identities,
 		statistics,
 		changedCallSites,
 		changedCallers,

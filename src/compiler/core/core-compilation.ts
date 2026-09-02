@@ -57,29 +57,28 @@ export interface CoreCompilation {
 	readonly plan: VerifiedCoreOptimizationPlan;
 }
 
-export function coreCapturedSlotKey(owner: number, index: number): string {
-	return `${owner}:${index}`;
-}
-
 /** Captured cells whose complete write graph is visible to Core. */
 export function coreClosedCapturedValueSlots(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
-): ReadonlySet<string> {
-	const slots = new Set(
-		(context?.data.singleAssignmentCapturedSlots ?? []).map(({ owner, index }) =>
-			coreCapturedSlotKey(owner, index),
-		),
-	);
+): ReadonlyArray<CoreCapturedSlotRef> {
+	const slots = (context?.data.singleAssignmentCapturedSlots ?? []).map((slot) => ({
+		...slot,
+	}));
 	if (context?.facts.closure.sourceClosure.kind !== "known") return slots;
-	const mapped = new Set<string>();
+	const mapped = new Map<number, Set<number>>();
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const index of fn.metadata.mappedArgumentSlots) {
-			mapped.add(coreCapturedSlotKey(functionId, index));
+			const indices = mapped.get(functionId) ?? new Set<number>();
+			indices.add(index);
+			mapped.set(functionId, indices);
 		}
 	}
-	for (const key of mapped) slots.delete(key);
+	for (let index = slots.length - 1; index >= 0; index--) {
+		const slot = slots[index]!;
+		if (mapped.get(slot.owner)?.has(slot.index)) slots.splice(index, 1);
+	}
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
@@ -92,8 +91,11 @@ export function coreClosedCapturedValueSlots(
 			const owner = attributes.functionIndex;
 			const index = attributes.index;
 			if (typeof owner !== "number" || typeof index !== "number") continue;
-			const key = coreCapturedSlotKey(owner, index);
-			if (!mapped.has(key)) slots.add(key);
+			if (
+				!mapped.get(owner)?.has(index) &&
+				!slots.some((slot) => slot.owner === owner && slot.index === index)
+			)
+				slots.push({ owner, index });
 		}
 	}
 	return slots;
