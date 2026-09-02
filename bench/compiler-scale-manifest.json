@@ -90,6 +90,7 @@
 				"src/compiler/core/compiler-site-facts.ts",
 				"src/compiler/core/core-analysis-manager.ts",
 				"src/compiler/core/core-builder.ts",
+				"src/compiler/core/core-call-graph.ts",
 				"src/compiler/core/core-compilation.ts",
 				"src/compiler/core/core-control-flow-passes.ts",
 				"src/compiler/core/core-cross-call-transforms.ts",

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -147,6 +148,8 @@ tier 14 requires --include-test-check.
   --include-test-check         include tier 14 (npm run test:check)
   --quick                      one warm and one cold sample per case
   --output PATH                baseline JSON destination
+
+Completed cases are checkpointed beside the output and resumed automatically.
 `;
 
 function readManifest(): CompilerScaleManifest {
@@ -703,7 +706,43 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 	const options = parseOptions(args, manifest);
 	const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "mal-compiler-scale-"));
 	const requestRoot = path.join(temporaryRoot, "requests");
-	const results: Array<unknown> = [];
+	const checkpointPath = `${options.output}.partial`;
+	const checkpointSignature = hashBytes(
+		JSON.stringify({
+			commit: gitOutput(["rev-parse", "HEAD"]),
+			manifest: hashBytes(readFileSync(MANIFEST_PATH)),
+			driver: hashBytes(readFileSync(SCRIPT_PATH)),
+			tiers: [...options.tiers],
+			warmRuns: options.warmRuns,
+			coldRuns: options.coldRuns,
+			instrumentation: options.instrumentation,
+			compareInstrumentation: options.compareInstrumentation,
+			profile: options.profile,
+			includeTestCheck: options.includeTestCheck,
+			quick: options.quick,
+		}),
+	);
+	const checkpoint = existsSync(checkpointPath)
+		? (JSON.parse(readFileSync(checkpointPath, "utf8")) as {
+				signature?: string;
+				results?: Array<unknown>;
+			})
+		: undefined;
+	const results: Array<unknown> =
+		checkpoint?.signature === checkpointSignature ? (checkpoint.results ?? []) : [];
+	const completed = new Set(
+		results.map((result) => {
+			const entry = result as { tier: number; id: string };
+			return `${entry.tier}:${entry.id}`;
+		}),
+	);
+	const saveCheckpoint = (): void => {
+		writeJsonAtomic(checkpointPath, {
+			schemaVersion: 1,
+			signature: checkpointSignature,
+			results,
+		});
+	};
 	try {
 		const warmCases = prepareCases(
 			path.join(temporaryRoot, "w000000000000000"),
@@ -713,17 +752,32 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 		for (const tier of manifest.tiers) {
 			if (!options.tiers.has(tier.tier)) continue;
 			if (tier.kind === "command") {
-				results.push(
-					options.includeTestCheck
-						? { tier: tier.tier, id: tier.id, gate: commandOutput(tier.command ?? []) }
-						: { tier: tier.tier, id: tier.id, omitted: "requires --include-test-check" },
-				);
+				const resultKey = `${tier.tier}:${tier.id}`;
+				if (!completed.has(resultKey)) {
+					results.push(
+						options.includeTestCheck
+							? {
+									tier: tier.tier,
+									id: tier.id,
+									gate: commandOutput(tier.command ?? []),
+								}
+							: {
+									tier: tier.tier,
+									id: tier.id,
+									omitted: "requires --include-test-check",
+								},
+					);
+					completed.add(resultKey);
+					saveCheckpoint();
+				}
 				continue;
 			}
 			const selectedCases = [...warmCases.values()].filter(
 				(benchmarkCase) => benchmarkCase.tier === tier.tier,
 			);
 			for (const benchmarkCase of selectedCases) {
+				const resultKey = `${tier.tier}:${benchmarkCase.id}`;
+				if (completed.has(resultKey)) continue;
 				const warmRuns = options.quick
 					? 1
 					: (options.warmRuns ?? (tier.tier === 13 ? 5 : 1));
@@ -819,12 +873,14 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 								},
 							}),
 				});
+				completed.add(resultKey);
+				saveCheckpoint();
 			}
 		}
 		const packageJson = JSON.parse(
 			readFileSync(path.join(REPOSITORY_ROOT, "package.json"), "utf8"),
 		) as { name: string; version: string };
-		const dirtyState = gitOutput(["status", "--porcelain=v1"]);
+		const dirtyState = gitOutput(["status", "--porcelain=v1", "--untracked-files=no"]);
 		const baseline = {
 			schemaVersion: 1,
 			generatedAt: new Date().toISOString(),
@@ -865,6 +921,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 			results,
 		};
 		writeJsonAtomic(options.output, baseline);
+		rmSync(checkpointPath, { force: true });
 		console.error(
 			`[compiler-scale] wrote ${path.relative(REPOSITORY_ROOT, options.output)}`,
 		);
