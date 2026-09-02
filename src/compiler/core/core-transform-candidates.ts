@@ -1,7 +1,6 @@
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 
 export type CoreTransformKind =
-	| "call-refresh"
 	| "finite-dispatch"
 	| "inline"
 	| "guarded-inline"
@@ -87,7 +86,6 @@ interface CallerConsumption {
 
 function transformKindCounts(): Record<CoreTransformKind, number> {
 	return {
-		"call-refresh": 0,
 		"finite-dispatch": 0,
 		inline: 0,
 		"guarded-inline": 0,

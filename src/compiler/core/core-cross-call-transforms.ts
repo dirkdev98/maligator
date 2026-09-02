@@ -1,16 +1,12 @@
-import type { ReturnProvenance } from "../shared/effect-summary.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CoreEditor } from "./core-editor.ts";
-import type { CoreCalleeTargets, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { coreValueKindObservation } from "./core-ir-value-kinds.ts";
 import type { CoreProgramValueKinds } from "./core-ir-value-kinds.ts";
 import type {
-	CoreAttributeValue,
 	CoreEdge,
 	CoreFunctionId,
-	CoreInstructionAttributes,
 	CoreInstructionId,
 	CoreTerminatorInput,
 	CoreValueId,
@@ -25,12 +21,6 @@ import type {
 	CoreTransformCandidate,
 } from "./core-transform-candidates.ts";
 
-export const CORE_CALLEE_TARGETS_ATTRIBUTE = "calleeTargets";
-export const CORE_CALL_SUMMARY_VERSION_ATTRIBUTE = "callSummaryVersion";
-export const CORE_CALL_PARAMETER_ESCAPE_ATTRIBUTE = "callParameterEscape";
-export const CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE = "callParameterContainment";
-export const CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE = "callReturnProvenance";
-export const CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE = "callReturnRepresentation";
 export const CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE = "guardedInlineFallback";
 
 export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetStatistics {
@@ -215,72 +205,6 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"storeCaptured",
 ]);
 
-function stableAttribute(value: CoreAttributeValue): string {
-	if (Array.isArray(value)) return `[${value.map(stableAttribute).join(",")}]`;
-	if (value !== null && typeof value === "object") {
-		return `{${Object.entries(value)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([key, entry]) => `${key}:${stableAttribute(entry)}`)
-			.join(",")}}`;
-	}
-	return JSON.stringify(value) ?? "undefined";
-}
-
-function targetKey(targets: CoreCalleeTargets): string {
-	return `${targets.functions.join(",")}:${targets.anyScript ? "a" : "-"}:${targets.opaque ? "o" : "-"}`;
-}
-
-function returnProvenanceAttribute(value: ReturnProvenance): CoreAttributeValue {
-	return value.kind === "parameter"
-		? Object.freeze({ kind: value.kind, index: value.index })
-		: value.kind;
-}
-
-function refreshedAttributes(
-	fn: CoreFunctionStore,
-	site: CoreIndexedCallSite,
-	summaries: CoreProgramSummaries,
-): CoreInstructionAttributes {
-	const attributes: Record<string, CoreAttributeValue> = {
-		...fn.instructionAttributes(site.instruction),
-	};
-	delete attributes[CORE_CALLEE_TARGETS_ATTRIBUTE];
-	delete attributes[CORE_CALL_SUMMARY_VERSION_ATTRIBUTE];
-	delete attributes[CORE_CALL_PARAMETER_ESCAPE_ATTRIBUTE];
-	delete attributes[CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE];
-	delete attributes[CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE];
-	delete attributes[CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE];
-	if (
-		!(
-			site.targets.functions.length === 0 &&
-			!site.targets.anyScript &&
-			!site.targets.opaque
-		)
-	) {
-		attributes[CORE_CALLEE_TARGETS_ATTRIBUTE] = Object.freeze({
-			functions: site.targets.functions,
-			anyScript: site.targets.anyScript,
-			opaque: site.targets.opaque,
-		});
-	}
-	if (site.targets.functions.length === 1) {
-		const target = site.targets.functions[0]!;
-		const summary = summaries.summary(target);
-		if (summary !== undefined) {
-			attributes[CORE_CALL_SUMMARY_VERSION_ATTRIBUTE] = summaries.version(target);
-			attributes[CORE_CALL_PARAMETER_ESCAPE_ATTRIBUTE] = summary.parameterEscape;
-			attributes[CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE] =
-				summary.parameterContainment;
-			attributes[CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE] = returnProvenanceAttribute(
-				summary.returnProvenance,
-			);
-			attributes[CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE] =
-				summary.returnRepresentation;
-		}
-	}
-	return Object.freeze(attributes);
-}
-
 function linearInlineTarget(
 	program: CoreProgram,
 	target: CoreFunctionId,
@@ -388,23 +312,7 @@ function offerFunctionCandidates(
 	const fn = program.function(functionId);
 	for (const site of summaries.targets.outgoing(functionId)) {
 		if (!fn.isInstructionLive(site.instruction)) continue;
-		const refreshed = refreshedAttributes(fn, site, summaries);
 		const current = fn.instructionAttributes(site.instruction);
-		const versions = site.targets.functions.map((target) => summaries.version(target));
-		if (stableAttribute(current) !== stableAttribute(refreshed)) {
-			service.offer(
-				Object.freeze({
-					key: `0-refresh:${site.id}:${targetKey(site.targets)}:${versions.join(",")}`,
-					kind: "call-refresh",
-					caller: functionId,
-					site: site.instruction,
-					targets: site.targets.functions,
-					generatedCodeCost: 0,
-					compilerWorkCost: 1,
-					expansive: false,
-				}),
-			);
-		}
 		if (
 			site.targets.functions.length !== 1 ||
 			current[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true
@@ -445,47 +353,6 @@ export function discoverCoreCrossCallCandidates(
 	for (const functionId of functions) {
 		offerFunctionCandidates(program, summaries, service, functionId);
 	}
-}
-
-function applyCallRefresh(
-	program: CoreProgram,
-	summaries: CoreProgramSummaries,
-	candidate: CoreTransformCandidate,
-	editor: CoreEditor,
-): AppliedTransform | undefined {
-	const fn = program.function(candidate.caller);
-	if (
-		!fn.isInstructionLive(candidate.site) ||
-		fn.instructionKind(candidate.site) !== "operation"
-	)
-		return undefined;
-	const site = summaries.targets
-		.outgoing(candidate.caller)
-		.find(({ instruction }) => instruction === candidate.site);
-	if (site === undefined) return undefined;
-	const attributes = refreshedAttributes(fn, site, summaries);
-	if (
-		stableAttribute(attributes) ===
-		stableAttribute(fn.instructionAttributes(candidate.site))
-	) {
-		return undefined;
-	}
-	editor.replaceInstruction(
-		candidate.site,
-		fn.instructionOpcodeName(candidate.site),
-		materializeInstructionOperands(fn, candidate.site),
-		{
-			attributes,
-			sourcePosition: fn.instructionSourcePosition(candidate.site),
-			...(fn.instructionEffectRefinement(candidate.site) === undefined
-				? {}
-				: { effectRefinement: fn.instructionEffectRefinement(candidate.site) }),
-		},
-	);
-	return {
-		instructionsIntroduced: 0,
-		blocksIntroduced: 0,
-	};
 }
 
 function applyLinearInline(
@@ -820,8 +687,6 @@ function applyCandidate(
 	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	switch (candidate.kind) {
-		case "call-refresh":
-			return applyCallRefresh(program, summaries, candidate, editor);
 		case "inline":
 			return applyLinearInline(program, candidate, editor);
 		case "guarded-inline":

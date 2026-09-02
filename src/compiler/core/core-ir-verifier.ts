@@ -1065,27 +1065,6 @@ function verifyCrossFunctionReferences(
 					);
 				}
 			}
-			const calleeTargets = attributes.calleeTargets;
-			if (
-				calleeTargets !== undefined &&
-				calleeTargets !== null &&
-				typeof calleeTargets === "object" &&
-				!Array.isArray(calleeTargets)
-			) {
-				const functions = (calleeTargets as Readonly<Record<string, unknown>>).functions;
-				if (Array.isArray(functions)) {
-					for (const target of functions) {
-						verifyFunctionReference(
-							program,
-							functionId,
-							instruction,
-							"callee target",
-							target,
-							false,
-						);
-					}
-				}
-			}
 		}
 	}
 }

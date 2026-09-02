@@ -3,11 +3,6 @@ import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import {
-	CORE_CALLEE_TARGETS_ATTRIBUTE,
-	CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE,
-	CORE_CALL_PARAMETER_ESCAPE_ATTRIBUTE,
-	CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE,
-	CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 	runCoreCrossCallTransforms,
 } from "../src/compiler/core/core-cross-call-transforms.ts";
@@ -129,14 +124,13 @@ describe("bounded Core cross-call transforms", () => {
 		]);
 	});
 
-	it("separately discovers metadata and inline candidates", () => {
+	it("discovers inline candidates without mutating analysis metadata into Core", () => {
 		const program = analysisProgram();
 		appendCaller(program, 1);
 		appendLeaf(program);
 		const result = runTransforms(program);
 		expect(callInstructions(program, 0)).toEqual([]);
 		expect(result.statistics.appliedByKind).toMatchObject({
-			"call-refresh": 1,
 			inline: 1,
 		});
 		expect(result.statistics.instructionsIntroduced).toBe(1);
@@ -332,11 +326,7 @@ describe("bounded Core cross-call transforms", () => {
 		const calls = coreOperations(outer).filter(({ opcode }) => opcode === "call");
 		expect(calls).toHaveLength(1);
 		expect(calls[0]!.attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]).toBe(true);
-		expect(calls[0]!.attributes[CORE_CALLEE_TARGETS_ATTRIBUTE]).toMatchObject({
-			functions: [handler.id],
-			anyScript: false,
-			opaque: true,
-		});
+		expect(calls[0]!.attributes.calleeTargets).toBeUndefined();
 		const guard = coreOperations(outer).find(
 			({ opcode }) => opcode === "guardFunctionIndex",
 		)!;
@@ -402,11 +392,7 @@ describe("bounded Core cross-call transforms", () => {
 		const fallback = operations.find(({ opcode }) => opcode === "call");
 		expect(guard?.attributes.functionIndex).toBe(target.id);
 		expect(fallback?.attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]).toBe(true);
-		expect(fallback?.attributes[CORE_CALLEE_TARGETS_ATTRIBUTE]).toMatchObject({
-			functions: [target.id],
-			anyScript: false,
-			opaque: true,
-		});
+		expect(fallback?.attributes.calleeTargets).toBeUndefined();
 		expect(
 			operations.some(
 				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
@@ -502,7 +488,7 @@ describe("bounded Core cross-call transforms", () => {
 		}
 	});
 
-	it("retains call facts and a generic call when generated-code budget declines inline", () => {
+	it("keeps the generic call and records its decision only in the plan", () => {
 		const program = analysisProgram();
 		const caller = appendCaller(program, 1);
 		appendLeaf(program);
@@ -512,15 +498,11 @@ describe("bounded Core cross-call transforms", () => {
 		expect(call).toBeDefined();
 		const attributes = fn.instructionAttributes(call!);
 		expect(attributes.directFunctionIndex).toBeUndefined();
-		expect(attributes[CORE_CALLEE_TARGETS_ATTRIBUTE]).toMatchObject({
-			functions: [1],
-			anyScript: false,
-			opaque: false,
-		});
-		expect(attributes[CORE_CALL_PARAMETER_ESCAPE_ATTRIBUTE]).toEqual([]);
-		expect(attributes[CORE_CALL_PARAMETER_CONTAINMENT_ATTRIBUTE]).toEqual([]);
-		expect(attributes[CORE_CALL_RETURN_PROVENANCE_ATTRIBUTE]).toBe("primitive");
-		expect(attributes[CORE_CALL_RETURN_REPRESENTATION_ATTRIBUTE]).toBe("boxed");
+		expect(attributes.calleeTargets).toBeUndefined();
+		expect(attributes.callParameterEscape).toBeUndefined();
+		expect(attributes.callParameterContainment).toBeUndefined();
+		expect(attributes.callReturnProvenance).toBeUndefined();
+		expect(attributes.callReturnRepresentation).toBeUndefined();
 		expect(result.statistics.declinedByReason["generated-code-cost"]).toBe(1);
 		expect(result.plan.specializations).toMatchObject([
 			{ kind: "guarded-direct-call", targetFunctions: [1] },

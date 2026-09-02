@@ -223,7 +223,6 @@ function directEntryProgram(): {
 		{
 			attributes: {
 				directFunctionIndex: 1,
-				calleeTargets: { functions: [1], anyScript: false, opaque: false },
 			},
 		},
 	);
@@ -244,7 +243,6 @@ function directEntryProgram(): {
 		{
 			attributes: {
 				directFunctionIndex: 1,
-				calleeTargets: { functions: [1], anyScript: false, opaque: false },
 			},
 		},
 	);

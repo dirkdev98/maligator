@@ -160,37 +160,6 @@ function knownBuiltinCall(
 		: undefined;
 }
 
-function attributeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
-	return value !== null && typeof value === "object" && !Array.isArray(value)
-		? (value as Readonly<Record<string, unknown>>)
-		: undefined;
-}
-
-function callTargetFact(
-	fn: CoreFunctionStore,
-	opcode: string,
-	attributes: CoreInstructionAttributes,
-	sourceSite: SourceSiteId | undefined,
-): CompilerFact<CompilerCallTargetSet> | undefined {
-	if (opcode !== "call" && opcode !== "construct") return undefined;
-	const attribute = attributeObject(attributes.calleeTargets);
-	const functions = numberArray(attribute?.functions);
-	const anyScript = attribute?.anyScript;
-	const opaque = attribute?.opaque;
-	if (
-		functions === undefined ||
-		typeof anyScript !== "boolean" ||
-		typeof opaque !== "boolean" ||
-		(functions.length === 0 && !anyScript && !opaque)
-	) {
-		return undefined;
-	}
-	return knownFact(
-		{ functions: [...functions], anyScript, opaque },
-		siteProof(fn, sourceSite, "core-call-target-summary"),
-	);
-}
-
 function selectedStackAllocations(compilation: CoreCompilation): ReadonlySet<string> {
 	return new Set(
 		compilation.plan.specializations
@@ -201,6 +170,45 @@ function selectedStackAllocations(compilation: CoreCompilation): ReadonlySet<str
 	);
 }
 
+function selectedCallTargets(
+	compilation: CoreCompilation,
+): ReadonlyMap<string, CompilerCallTargetSet> {
+	const selected = new Map<string, Set<CoreFunctionId>>();
+	const add = (
+		caller: CoreFunctionId,
+		instruction: CoreInstructionId,
+		targets: ReadonlyArray<CoreFunctionId>,
+	): void => {
+		const key = `${caller}:${instruction}`;
+		const current = selected.get(key) ?? new Set<CoreFunctionId>();
+		for (const target of targets) current.add(target);
+		selected.set(key, current);
+	};
+	for (const specialization of compilation.plan.specializations) {
+		if (specialization.kind !== "guarded-direct-call") continue;
+		add(
+			specialization.function,
+			specialization.anchors[0]!,
+			specialization.targetFunctions,
+		);
+	}
+	for (const entry of compilation.plan.directEntries) {
+		for (const site of entry.callSites) {
+			add(site.caller, site.instruction, [entry.function]);
+		}
+	}
+	return new Map(
+		[...selected].map(([key, targets]) => [
+			key,
+			{
+				functions: [...targets].sort((left, right) => left - right),
+				anyScript: false,
+				opaque: false,
+			},
+		]),
+	);
+}
+
 /** Derive residual site facts from sealed Core and its selected plan without analysis. */
 export function attachCoreCompilerSiteFacts(
 	compilation: CoreCompilation,
@@ -208,6 +216,7 @@ export function attachCoreCompilerSiteFacts(
 	const { program, context } = compilation;
 	const sites = new Map<string, CompilerSiteFacts>();
 	const stackAllocations = selectedStackAllocations(compilation);
+	const callTargets = selectedCallTargets(compilation);
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		for (const block of fn.blockIds()) {
@@ -229,7 +238,14 @@ export function attachCoreCompilerSiteFacts(
 					context,
 				);
 				const builtin = knownBuiltinCall(attributes);
-				const callTargets = callTargetFact(fn, opcode, attributes, sourceSite);
+				const selectedTargets = callTargets.get(`${functionId}:${instruction}`);
+				const callTarget =
+					selectedTargets === undefined
+						? undefined
+						: knownFact(
+								selectedTargets,
+								siteProof(fn, sourceSite, "core-specialization-plan"),
+							);
 				const isAllocation = allocationOpcodes.has(opcode);
 				const isStack = stackAllocations.has(`${functionId}:${instruction}`);
 				const representation = isAllocation
@@ -263,7 +279,7 @@ export function attachCoreCompilerSiteFacts(
 								builtinSemantics: builtin.semantics,
 							}),
 					...(immutableBinding === undefined ? {} : { immutableBinding }),
-					...(callTargets === undefined ? {} : { callTargets }),
+					...(callTarget === undefined ? {} : { callTargets: callTarget }),
 				};
 				if (
 					facts.shape !== undefined ||

@@ -40,8 +40,6 @@ import type { CoreProgramFlowScc, CoreProgramFlowTopology } from "./core-program
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "call-effect-summary";
-export const CORE_CALL_SUMMARY_ATTRIBUTE = "callSummary";
-
 type ValueOrigin =
 	| { readonly kind: "none" }
 	| { readonly kind: "fresh" }

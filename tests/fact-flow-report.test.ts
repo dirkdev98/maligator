@@ -17,7 +17,7 @@ test("ordinary compilation does not collect fact flow", () => {
 	expect(definition.diagnostics.factFlow).toBeUndefined();
 });
 
-test("fact flow names the boundary where unsupported targets are dropped", () => {
+test("fact flow does not publish residual targets without a selected consumer", () => {
 	const definition = compile(`
 		function recursive(value) {
 			if (value <= 0) return 1;
@@ -26,32 +26,28 @@ test("fact flow names the boundary where unsupported targets are dropped", () =>
 		globalThis.result = recursive(3) + globalThis.callback(1);
 	`);
 	const report = definition.diagnostics.factFlow!;
-	const unsupported = report.entries.find(({ events }) =>
-		events.some(
-			(event) =>
-				event.phase === "core-to-execution" &&
-				event.disposition === "dropped" &&
-				event.reason === "unsupported-consumer",
-		),
-	);
-
 	expect(report.schema).toBe(1);
-	expect(unsupported?.events).toEqual(
-		expect.arrayContaining([
-			expect.objectContaining({
-				phase: "core-optimization",
-				disposition: "produced",
-				artifact: "callee-target-set",
-			}),
-			expect.objectContaining({
-				phase: "core-to-execution",
-				disposition: "dropped",
-				reason: "unsupported-consumer",
-			}),
-		]),
-	);
+	expect(
+		report.entries
+			.flatMap(({ events }) => events)
+			.some(
+				(event) =>
+					event.phase === "core-to-execution" &&
+					event.disposition === "dropped" &&
+					event.reason === "unsupported-consumer",
+			),
+	).toBe(false);
+	expect(
+		report.entries.every(({ events }) =>
+			events.some(
+				(event) =>
+					event.phase === "core-optimization" &&
+					event.artifact === "callee-target-set" &&
+					event.disposition === "produced",
+			),
+		),
+	).toBe(true);
 	expect(report.summary.produced).toBe(report.entries.length);
-	expect(report.summary.dropped).toBeGreaterThanOrEqual(1);
 });
 
 test("fact flow records finite guarded target sets in both outputs", () => {

@@ -360,37 +360,6 @@ function verifyBlockOrders(
 	return proofs;
 }
 
-interface CoreCalleeTargetProof {
-	readonly functions: ReadonlyArray<CoreFunctionId>;
-	readonly anyScript: boolean;
-	readonly opaque: boolean;
-}
-
-function calleeTargetProof(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): CoreCalleeTargetProof | undefined {
-	const value = fn.instructionAttributes(instruction).calleeTargets;
-	if (value === null || typeof value !== "object" || Array.isArray(value))
-		return undefined;
-	const record = value as Readonly<Record<string, unknown>>;
-	if (
-		!Array.isArray(record.functions) ||
-		record.functions.some(
-			(target) => !Number.isSafeInteger(target) || (target as number) < 0,
-		) ||
-		typeof record.anyScript !== "boolean" ||
-		typeof record.opaque !== "boolean"
-	) {
-		return undefined;
-	}
-	return {
-		functions: record.functions as ReadonlyArray<CoreFunctionId>,
-		anyScript: record.anyScript,
-		opaque: record.opaque,
-	};
-}
-
 function localCandidate(
 	program: SealedCoreProgram,
 	cache: Map<CoreFunctionId, ReadonlyMap<string, CoreLocalSpecializationCandidate>>,
@@ -752,16 +721,7 @@ function verifySpecialization(
 		) {
 			fail(`${selection.id} does not anchor a call`);
 		}
-		const selectedTargets = selection.targetFunctions;
-		const proof = calleeTargetProof(fn, anchor);
-		if (
-			proof === undefined ||
-			proof.functions.length !== selectedTargets.length ||
-			selectedTargets.some((target, index) => proof.functions[index] !== target)
-		) {
-			fail(`${selection.id} does not match the canonical callee-target proof`);
-		}
-		for (const target of selectedTargets) {
+		for (const target of selection.targetFunctions) {
 			if (!plan.liveFunctions.includes(target)) {
 				fail(`${selection.id} targets dead function ${target}`);
 			}
@@ -1897,18 +1857,12 @@ export function verifyCoreOptimizationPlan(
 			) {
 				fail(`direct entry callsite ${key} is omitted from target lowering`);
 			}
-			const proof = calleeTargetProof(caller, site.instruction);
 			if (
 				caller.instructionKind(site.instruction) !== "operation" ||
 				caller.registry.byId(caller.instructionOpcode(site.instruction)).callTransfer ===
-					undefined ||
-				proof === undefined ||
-				proof.anyScript ||
-				proof.opaque ||
-				proof.functions.length !== 1 ||
-				proof.functions[0] !== entry.function
+					undefined
 			) {
-				fail(`direct entry callsite ${key} lacks its exact callee-target proof`);
+				fail(`direct entry callsite ${key} is not a call`);
 			}
 		}
 		verifyCost(entry.cost, `direct entry ${entry.function}:${entry.id}`);
