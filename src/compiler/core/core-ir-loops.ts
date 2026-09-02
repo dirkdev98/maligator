@@ -6,6 +6,7 @@ import {
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
+import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -61,6 +62,21 @@ const I32_RANGE: CoreNumericRange = Object.freeze({
 	excludesNegativeZero: true,
 });
 
+function definitionInstruction(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+): CoreInstructionId | undefined {
+	return fn.kernel.valueDefinitionKind(value) === 1
+		? coreInstructionId(fn.kernel.valueDefinitionOwner(value))
+		: undefined;
+}
+
+function operand(fn: CoreFunctionStore, instruction: CoreInstructionId, index: number) {
+	return index < fn.kernel.instructionOperandCount(instruction)
+		? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index)
+		: undefined;
+}
+
 function numericRange(minimum: number, maximum = minimum): CoreNumericRange | undefined {
 	return Number.isSafeInteger(minimum) &&
 		Number.isSafeInteger(maximum) &&
@@ -108,23 +124,20 @@ function exactNumber(
 	value: CoreValueId,
 	root: (value: CoreValueId) => CoreValueId,
 ): number | undefined {
-	const definition = fn.valueDefinition(root(value));
-	if (
-		definition.kind !== "instruction" ||
-		fn.instructionKind(definition.instruction) !== "operation"
-	)
+	const instruction = definitionInstruction(fn, root(value));
+	if (instruction === undefined || fn.instructionKind(instruction) !== "operation")
 		return undefined;
-	const opcode = fn.instructionOpcodeName(definition.instruction);
+	const opcode = fn.instructionOpcodeName(instruction);
 	if (opcode !== "createNumber" && opcode !== "createF64") return undefined;
-	const valueAttribute = fn.instructionAttributes(definition.instruction).value;
+	const valueAttribute = fn.instructionAttributes(instruction).value;
 	return typeof valueAttribute === "number" ? valueAttribute : undefined;
 }
 
 function definitionBlock(fn: CoreFunctionStore, value: CoreValueId): CoreBlockId {
-	const definition = fn.valueDefinition(value);
-	return definition.kind === "instruction"
-		? fn.instructionBlock(definition.instruction)
-		: definition.block;
+	const owner = fn.kernel.valueDefinitionOwner(value);
+	return fn.kernel.valueDefinitionKind(value) === 1
+		? coreBlockId(fn.kernel.instructionBlock(coreInstructionId(owner)))
+		: coreBlockId(owner);
 }
 
 function concreteRange(
@@ -193,21 +206,25 @@ function numericIdentityRoot(
 	exactScalar?: (value: CoreValueId) => CoreExactScalarKind | undefined,
 ): CoreValueId {
 	const resolved = root(value);
-	const definition = fn.valueDefinition(resolved);
+	const instruction = definitionInstruction(fn, resolved);
 	if (
-		definition.kind !== "instruction" ||
-		fn.instructionKind(definition.instruction) !== "operation" ||
-		fn.instructionOpcodeName(definition.instruction) !== "unary"
+		instruction === undefined ||
+		fn.instructionKind(instruction) !== "operation" ||
+		fn.instructionOpcodeName(instruction) !== "unary"
 	)
 		return resolved;
-	const inputs = fn.instructionOperands(definition.instruction);
-	const operator = fn.instructionAttributes(definition.instruction).operator;
-	if (inputs.length !== 1 || (operator !== "tonumeric" && operator !== "+")) {
+	const operator = fn.instructionAttributes(instruction).operator;
+	const input = operand(fn, instruction, 0);
+	if (
+		fn.kernel.instructionOperandCount(instruction) !== 1 ||
+		input === undefined ||
+		(operator !== "tonumeric" && operator !== "+")
+	) {
 		return resolved;
 	}
-	const scalar = exactScalar?.(inputs[0]!);
+	const scalar = exactScalar?.(input);
 	return scalar === "number" || scalar === "int32"
-		? numericIdentityRoot(fn, inputs[0]!, root, exactScalar)
+		? numericIdentityRoot(fn, input, root, exactScalar)
 		: resolved;
 }
 
@@ -218,43 +235,45 @@ function recurrenceStep(
 	root: (value: CoreValueId) => CoreValueId,
 	exactScalar?: (value: CoreValueId) => CoreExactScalarKind | undefined,
 ): { readonly instruction: CoreInstructionId; readonly step: number } | undefined {
-	const definition = fn.valueDefinition(root(update));
-	if (
-		definition.kind !== "instruction" ||
-		fn.instructionKind(definition.instruction) !== "operation"
-	)
+	const instruction = definitionInstruction(fn, root(update));
+	if (instruction === undefined || fn.instructionKind(instruction) !== "operation")
 		return undefined;
-	const opcode = fn.instructionOpcodeName(definition.instruction);
-	const inputs = fn.instructionOperands(definition.instruction);
-	const attributes = fn.instructionAttributes(definition.instruction);
+	const opcode = fn.instructionOpcodeName(instruction);
+	const inputCount = fn.kernel.instructionOperandCount(instruction);
+	const first = operand(fn, instruction, 0);
+	const second = operand(fn, instruction, 1);
+	const attributes = fn.instructionAttributes(instruction);
 	if (
 		opcode === "unary" &&
-		inputs.length === 1 &&
-		numericIdentityRoot(fn, inputs[0]!, root, exactScalar) === root(parameter)
+		inputCount === 1 &&
+		first !== undefined &&
+		numericIdentityRoot(fn, first, root, exactScalar) === root(parameter)
 	) {
 		if (attributes.operator === "increment")
-			return { instruction: definition.instruction, step: 1 };
+			return { instruction, step: 1 };
 		if (attributes.operator === "decrement")
-			return { instruction: definition.instruction, step: -1 };
+			return { instruction, step: -1 };
 	}
 	if (
 		opcode !== "binary" ||
-		inputs.length !== 2 ||
+		inputCount !== 2 ||
+		first === undefined ||
+		second === undefined ||
 		(attributes.operator !== "+" && attributes.operator !== "-")
 	)
 		return undefined;
-	if (root(inputs[0]!) === root(parameter)) {
-		const amount = exactNumber(fn, inputs[1]!, root);
+	if (root(first) === root(parameter)) {
+		const amount = exactNumber(fn, second, root);
 		if (amount !== undefined)
 			return {
-				instruction: definition.instruction,
+				instruction,
 				step: attributes.operator === "+" ? amount : -amount,
 			};
 	}
-	if (attributes.operator === "+" && root(inputs[1]!) === root(parameter)) {
-		const amount = exactNumber(fn, inputs[0]!, root);
+	if (attributes.operator === "+" && root(second) === root(parameter)) {
+		const amount = exactNumber(fn, first, root);
 		if (amount !== undefined)
-			return { instruction: definition.instruction, step: amount };
+			return { instruction, step: amount };
 	}
 	return undefined;
 }
@@ -266,38 +285,46 @@ function loopComparison(
 	root: (value: CoreValueId) => CoreValueId,
 	exactScalar?: (value: CoreValueId) => CoreExactScalarKind | undefined,
 ): CoreInductionVariable["comparison"] | undefined {
-	const terminator = fn.terminatorPayload(fn.blockTerminator(loop.header));
-	if (terminator.kind !== "branch") return undefined;
-	const condition = fn.valueDefinition(root(terminator.condition));
+	const terminator = fn.blockTerminator(loop.header);
+	if (fn.instructionKind(terminator) !== "branch") return undefined;
+	const terminatorOperandStart = fn.kernel.instructionOperandStart(terminator);
+	const conditionValue = fn.kernel.operandAt(terminatorOperandStart);
+	const condition = definitionInstruction(fn, root(conditionValue));
 	if (
-		condition.kind !== "instruction" ||
-		fn.instructionKind(condition.instruction) !== "operation" ||
-		fn.instructionOpcodeName(condition.instruction) !== "binary"
+		condition === undefined ||
+		fn.instructionKind(condition) !== "operation" ||
+		fn.instructionOpcodeName(condition) !== "binary"
 	)
 		return undefined;
-	const inputs = fn.instructionOperands(condition.instruction);
-	let operator = comparison(fn.instructionAttributes(condition.instruction).operator);
-	if (operator === undefined || inputs.length !== 2) return undefined;
+	const inputCount = fn.kernel.instructionOperandCount(condition);
+	const first = operand(fn, condition, 0);
+	const second = operand(fn, condition, 1);
+	let operator = comparison(fn.instructionAttributes(condition).operator);
+	if (operator === undefined || inputCount !== 2 || first === undefined || second === undefined)
+		return undefined;
 	let bound: CoreValueId;
-	if (numericIdentityRoot(fn, inputs[0]!, root, exactScalar) === root(parameter))
-		bound = inputs[1]!;
-	else if (numericIdentityRoot(fn, inputs[1]!, root, exactScalar) === root(parameter)) {
-		bound = inputs[0]!;
+	if (numericIdentityRoot(fn, first, root, exactScalar) === root(parameter))
+		bound = second;
+	else if (numericIdentityRoot(fn, second, root, exactScalar) === root(parameter)) {
+		bound = first;
 		operator = flip(operator);
 	} else return undefined;
-	const consequentInside = loop.blocks.has(terminator.consequent.block);
-	const alternateInside = loop.blocks.has(terminator.alternate.block);
+	const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+	const consequent = fn.kernel.terminatorEdgeBlock(edgeStart);
+	const alternate = fn.kernel.terminatorEdgeBlock(edgeStart + 1);
+	const consequentInside = loop.blocks.has(consequent);
+	const alternateInside = loop.blocks.has(alternate);
 	if (consequentInside === alternateInside) return undefined;
 	if (!consequentInside) operator = negate(operator);
 	return {
-		instruction: condition.instruction,
+		instruction: condition,
 		operator,
 		bound,
 		boundLoopInvariant:
 			exactNumber(fn, bound, root) !== undefined ||
 			!loop.blocks.has(definitionBlock(fn, root(bound))),
-		body: consequentInside ? terminator.consequent.block : terminator.alternate.block,
-		exit: consequentInside ? terminator.alternate.block : terminator.consequent.block,
+		body: consequentInside ? consequent : alternate,
+		exit: consequentInside ? alternate : consequent,
 	};
 }
 
@@ -347,29 +374,32 @@ export function analyzeCoreLoopInductions(
 		const initialEdge = incoming.find(({ from }) => from === loop.preheader);
 		const updateEdge = incoming.find(({ from }) => from === latch);
 		if (initialEdge === undefined || updateEdge === undefined) continue;
-		for (const [parameterIndex, parameter] of fn.blockParameters(loop.header).entries()) {
+		const parameterStart = fn.kernel.blockParameterStart(loop.header);
+		const parameterCount = fn.kernel.blockParameterCount(loop.header);
+		for (let parameterIndex = 0; parameterIndex < parameterCount; parameterIndex++) {
+			const parameter = fn.kernel.blockParameterValue(parameterStart + parameterIndex);
 			const initial = initialEdge.arguments[parameterIndex];
 			const update = updateEdge.arguments[parameterIndex];
 			if (initial === undefined || update === undefined) continue;
 			const initialScalar = exactScalar?.(initial);
-			let representation = numericRepresentation(parameter.value);
+			let representation = numericRepresentation(parameter);
 			const bootstrap =
 				representation === undefined &&
 				(initialScalar === "number" || initialScalar === "int32");
 			const recurrenceScalar = bootstrap
 				? (value: CoreValueId): CoreExactScalarKind | undefined =>
-						root(value) === root(parameter.value) ? initialScalar : exactScalar?.(value)
+						root(value) === root(parameter) ? initialScalar : exactScalar?.(value)
 				: exactScalar;
 			const recurrence = recurrenceStep(
 				fn,
 				update,
-				parameter.value,
+				parameter,
 				root,
 				recurrenceScalar,
 			);
 			if (
 				recurrence === undefined ||
-				fn.instructionBlock(recurrence.instruction) !== latch ||
+				coreBlockId(fn.kernel.instructionBlock(recurrence.instruction)) !== latch ||
 				!Number.isSafeInteger(recurrence.step) ||
 				recurrence.step === 0
 			)
@@ -383,7 +413,7 @@ export function analyzeCoreLoopInductions(
 			const controlling = loopComparison(
 				fn,
 				loop,
-				parameter.value,
+				parameter,
 				root,
 				recurrenceScalar,
 			);
@@ -399,7 +429,7 @@ export function analyzeCoreLoopInductions(
 					: undefined;
 			inductions.push({
 				loop,
-				value: parameter.value,
+				value: parameter,
 				parameterIndex,
 				initial,
 				update,
@@ -418,34 +448,43 @@ export function analyzeCoreLoopInductions(
 		inductions.map((induction) => [root(induction.update), induction]),
 	);
 	const refinements: Array<PathRefinement> = [];
-	for (const block of fn.blockIds()) {
-		const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-		if (terminator.kind !== "branch") continue;
-		const definition = fn.valueDefinition(root(terminator.condition));
+	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const block = coreBlockId(blockIndex);
+		if (fn.kernel.blockLive(block) === 0) continue;
+		const terminator = fn.blockTerminator(block);
+		if (fn.instructionKind(terminator) !== "branch") continue;
+		const conditionValue = fn.kernel.operandAt(
+			fn.kernel.instructionOperandStart(terminator),
+		);
+		const definition = definitionInstruction(fn, root(conditionValue));
 		if (
-			definition.kind !== "instruction" ||
-			fn.instructionKind(definition.instruction) !== "operation" ||
-			fn.instructionOpcodeName(definition.instruction) !== "binary"
+			definition === undefined ||
+			fn.instructionKind(definition) !== "operation" ||
+			fn.instructionOpcodeName(definition) !== "binary"
 		)
 			continue;
-		const inputs = fn.instructionOperands(definition.instruction);
-		let operator = comparison(fn.instructionAttributes(definition.instruction).operator);
-		if (operator === undefined || inputs.length !== 2) continue;
-		let subject = inputs[0]!;
-		let bound = exactNumber(fn, inputs[1]!, root);
+		const inputCount = fn.kernel.instructionOperandCount(definition);
+		const first = operand(fn, definition, 0);
+		const second = operand(fn, definition, 1);
+		let operator = comparison(fn.instructionAttributes(definition).operator);
+		if (operator === undefined || inputCount !== 2 || first === undefined || second === undefined)
+			continue;
+		let subject = first;
+		let bound = exactNumber(fn, second, root);
 		if (bound === undefined) {
-			bound = exactNumber(fn, inputs[0]!, root);
-			subject = inputs[1]!;
+			bound = exactNumber(fn, first, root);
+			subject = second;
 			operator = flip(operator);
 		}
 		if (bound === undefined || exactNumber(fn, subject, root) !== undefined) continue;
-		for (const [edge, relation] of [
-			[terminator.consequent, operator],
-			[terminator.alternate, negate(operator)],
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		for (const [target, relation] of [
+			[fn.kernel.terminatorEdgeBlock(edgeStart), operator],
+			[fn.kernel.terminatorEdgeBlock(edgeStart + 1), negate(operator)],
 		] as const) {
 			const range = branchRange(relation, bound);
-			if (range !== undefined && cfg.dominatesEdge(block, edge.block, edge.block))
-				refinements.push({ block: edge.block, subject: root(subject), range });
+			if (range !== undefined && cfg.dominatesEdge(block, target, target))
+				refinements.push({ block: target, subject: root(subject), range });
 		}
 	}
 	const intersect = (
@@ -457,7 +496,9 @@ export function analyzeCoreLoopInductions(
 			Math.min(left.maximum, right.maximum),
 		);
 	let hasI32 = false;
-	for (const value of fn.valueIds()) {
+	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
+		const value = valueIndex as CoreValueId;
+		if (fn.kernel.valueLive(value) === 0) continue;
 		if (numericRepresentation(value) === "i32") {
 			hasI32 = true;
 			break;

@@ -1,7 +1,7 @@
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { FactDependency } from "../shared/fact-implication.ts";
-import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { discoverCoreLocalSpecializationCandidates } from "./core-ir-provenance.ts";
@@ -25,6 +25,7 @@ import type {
 	CoreInstructionId,
 	CoreRepresentation,
 } from "./core-ir.ts";
+import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
 import type { CoreFunctionStore, CoreProgram, SealedCoreProgram } from "./core-store.ts";
 
@@ -35,6 +36,19 @@ const EPOCH_INVALIDATING_WRITES: ReadonlySet<CoreEffectDomain> = new Set([
 	"host",
 	"io",
 ]);
+
+function bodyInstructionCount(fn: CoreFunctionStore, block: CoreBlockId): number {
+	const terminator = fn.blockTerminator(block);
+	let count = 0;
+	for (
+		let cursor = fn.kernel.blockFirstInstruction(block);
+		cursor >= 0 && cursor !== terminator;
+		cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+	) {
+		count++;
+	}
+	return count;
+}
 
 export interface CorePlanAdmissionQuery {
 	readonly anchor: CoreInstructionId;
@@ -51,11 +65,13 @@ function instructionEpochTransparent(
 	const effects = coreInstructionEffects(fn, instruction);
 	if (effects.maySuspend) return false;
 	const opcode = fn.instructionOpcodeName(instruction);
-	const scalarArithmetic =
-		(opcode === "binary" || opcode === "unary") &&
-		fn
-			.instructionOperands(instruction)
-			.every((value) => fn.valueRepresentation(value) !== "boxed");
+	let scalarArithmetic = opcode === "binary" || opcode === "unary";
+	const operandStart = fn.kernel.instructionOperandStart(instruction);
+	const operandCount = fn.kernel.instructionOperandCount(instruction);
+	for (let index = 0; scalarArithmetic && index < operandCount; index++) {
+		scalarArithmetic =
+			fn.valueRepresentation(fn.kernel.operandAt(operandStart + index)) !== "boxed";
+	}
 	if (!scalarArithmetic && effects.callsUserCode) return false;
 	return !effects.writes.some(
 		(domain) =>
@@ -75,10 +91,16 @@ function planInteriorKeepsAdmission(
 	const order = new Map<CoreInstructionId, number>();
 	for (const block of interior) {
 		let index = 0;
-		for (const instruction of fn.bodyInstructionIds(block)) {
+		const terminator = fn.blockTerminator(block);
+		for (
+			let cursor = fn.kernel.blockFirstInstruction(block);
+			cursor >= 0 && cursor !== terminator;
+			cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+		) {
+			const instruction = coreInstructionId(cursor);
 			order.set(instruction, index++);
 		}
-		order.set(fn.blockTerminator(block), index);
+		order.set(terminator, index);
 	}
 	const anchorOrder = order.get(query.anchor);
 	if (anchorOrder === undefined) return false;
@@ -95,8 +117,8 @@ function planInteriorKeepsAdmission(
 			return false;
 		}
 	}
-	const handler = fn.blockHandler(anchorBlock);
-	if (handler !== undefined && interior.has(handler.block)) return false;
+	const handler = fn.kernel.blockHandlerBlock(anchorBlock);
+	if (handler !== undefined && interior.has(handler)) return false;
 	for (const block of interior) {
 		if (!cfg.dominates(anchorBlock, block)) return false;
 		if (
@@ -120,7 +142,7 @@ function planInteriorKeepsAdmission(
 			const block = pending.pop()!;
 			for (const { from } of cfg.predecessors[block] ?? []) {
 				if (!interior.has(from)) continue;
-				markEnd(from, [...fn.bodyInstructionIds(from)].length);
+				markEnd(from, bodyInstructionCount(fn, from));
 				if (from === anchorBlock || visited.has(from)) continue;
 				visited.add(from);
 				pending.push(from);
@@ -129,7 +151,14 @@ function planInteriorKeepsAdmission(
 	}
 	for (const [block, end] of scanEnds) {
 		const start = block === anchorBlock ? anchorOrder + 1 : 0;
-		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
+		const terminator = fn.blockTerminator(block);
+		let index = 0;
+		for (
+			let cursor = fn.kernel.blockFirstInstruction(block);
+			cursor >= 0 && cursor !== terminator;
+			cursor = fn.kernel.instructionNext(coreInstructionId(cursor)), index++
+		) {
+			const instruction = coreInstructionId(cursor);
 			if (index < start || index > end) continue;
 			if (!instructionEpochTransparent(fn, instruction)) return false;
 		}
@@ -217,8 +246,14 @@ function requireInstruction(
 }
 
 function blockHasExceptionalExit(fn: CoreFunctionStore, block: CoreBlockId): boolean {
-	if (fn.terminatorPayload(fn.blockTerminator(block)).kind === "throw") return true;
-	for (const instruction of fn.bodyInstructionIds(block)) {
+	const terminator = fn.blockTerminator(block);
+	if (fn.instructionKind(terminator) === "throw") return true;
+	for (
+		let cursor = fn.kernel.blockFirstInstruction(block);
+		cursor >= 0 && cursor !== terminator;
+		cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+	) {
+		const instruction = coreInstructionId(cursor);
 		const effects =
 			fn.instructionEffectRefinement(instruction)?.effects ??
 			fn.registry.byId(fn.instructionOpcode(instruction)).effects;
@@ -228,15 +263,6 @@ function blockHasExceptionalExit(fn: CoreFunctionStore, block: CoreBlockId): boo
 }
 
 function exceptionalReversePostorder(fn: CoreFunctionStore): ReadonlyArray<CoreBlockId> {
-	const successors = (block: CoreBlockId): ReadonlyArray<CoreBlockId> => {
-		const ordinary = coreTerminatorEdges(
-			fn.terminatorPayload(fn.blockTerminator(block)),
-		).map(({ block: target }) => target);
-		const handler = fn.blockHandler(block);
-		return handler === undefined || !blockHasExceptionalExit(fn, block)
-			? ordinary
-			: [...ordinary, handler.block];
-	};
 	const reached = new Set<CoreBlockId>([fn.entry]);
 	const postorder: Array<CoreBlockId> = [];
 	const pending: Array<{ readonly block: CoreBlockId; next: number }> = [
@@ -244,9 +270,20 @@ function exceptionalReversePostorder(fn: CoreFunctionStore): ReadonlyArray<CoreB
 	];
 	while (pending.length > 0) {
 		const frame = pending.at(-1)!;
-		const outgoing = successors(frame.block);
-		if (frame.next < outgoing.length) {
-			const target = outgoing[frame.next++]!;
+		const terminator = fn.blockTerminator(frame.block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		let target: CoreBlockId | undefined;
+		if (frame.next < edgeCount) {
+			target = fn.kernel.terminatorEdgeBlock(edgeStart + frame.next++);
+		} else if (frame.next === edgeCount) {
+			frame.next++;
+			const handler = fn.kernel.blockHandlerBlock(frame.block);
+			if (handler !== undefined && blockHasExceptionalExit(fn, frame.block)) {
+				target = handler;
+			}
+		}
+		if (target !== undefined) {
 			if (!reached.has(target)) {
 				reached.add(target);
 				pending.push({ block: target, next: 0 });
@@ -288,7 +325,13 @@ function verifyBlockOrders(
 			);
 		}
 		const included = new Set(entry.blocks);
-		const expectedOmitted = [...fn.blockIds()].filter((block) => !included.has(block));
+			const expectedOmitted: Array<CoreBlockId> = [];
+			for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+				const block = coreBlockId(blockIndex);
+				if (fn.kernel.blockLive(block) !== 0 && !included.has(block)) {
+					expectedOmitted.push(block);
+				}
+			}
 		if (
 			entry.omittedBlocks.length !== expectedOmitted.length ||
 			entry.omittedBlocks.some(
@@ -300,10 +343,16 @@ function verifyBlockOrders(
 			);
 		}
 		const instructionOrder = new Map<CoreInstructionId, number>();
-		let instructionIndex = 0;
-		for (const block of entry.blocks) {
-			for (const instruction of fn.bodyInstructionIds(block)) {
-				instructionOrder.set(instruction, instructionIndex++);
+			let instructionIndex = 0;
+			for (const block of entry.blocks) {
+				const terminator = fn.blockTerminator(block);
+				for (
+					let cursor = fn.kernel.blockFirstInstruction(block);
+					cursor >= 0 && cursor !== terminator;
+					cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+				) {
+					const instruction = coreInstructionId(cursor);
+					instructionOrder.set(instruction, instructionIndex++);
 			}
 		}
 		proofs.set(entry.function, { included, instructionOrder });
@@ -756,11 +805,20 @@ function verifySpecialization(
 		) {
 			fail(`${selection.id} does not anchor a supported generic binary operation`);
 		}
-		const result = fn.instructionResults(anchor)[0];
+		const result =
+			fn.kernel.instructionResultCount(anchor) === 0
+				? undefined
+				: fn.kernel.resultAt(fn.kernel.instructionResultStart(anchor));
 		if (result === undefined || selection.claimedInstructions[0] !== anchor) {
 			fail(`${selection.id} has no numeric-fusion continuation`);
 		}
 		const finish = selection.claimedInstructions[1]!;
+		let finishResultUses = 0;
+		const finishOperandStart = fn.kernel.instructionOperandStart(finish);
+		const finishOperandCount = fn.kernel.instructionOperandCount(finish);
+		for (let index = 0; index < finishOperandCount; index++) {
+			if (fn.kernel.operandAt(finishOperandStart + index) === result) finishResultUses++;
+		}
 		if (
 			fn.instructionKind(finish) !== "operation" ||
 			fn.instructionOpcodeName(finish) !== "binary" ||
@@ -768,8 +826,7 @@ function verifySpecialization(
 				fn.instructionAttributes(finish).operator,
 				"finish",
 			) ||
-			fn.instructionOperands(finish).filter((operand) => operand === result).length !==
-				1 ||
+			finishResultUses !== 1 ||
 			blocks.instructionOrder.get(anchor)! >= blocks.instructionOrder.get(finish)!
 		) {
 			fail(`${selection.id} has an invalid numeric-fusion continuation @${finish}`);
@@ -1782,7 +1839,7 @@ export function verifyCoreOptimizationPlan(
 			fail(`direct entry ${entry.function}:${entry.id} loses its generic fallback`);
 		}
 		if (
-			entry.parameterRepresentations.length !== fn.parameters.length ||
+			entry.parameterRepresentations.length !== fn.parameterCount ||
 			entry.parameterRepresentations.some(
 				(representation) => !validPlanRepresentation(representation),
 			) ||
@@ -1790,21 +1847,34 @@ export function verifyCoreOptimizationPlan(
 		) {
 			fail(`direct entry ${entry.function}:${entry.id} has an invalid ABI`);
 		}
-		if (
-			fn.parameters.some(
-				(parameter, index) =>
-					planRepresentation(fn.valueRepresentation(parameter)) !==
-					entry.parameterRepresentations[index],
-			) ||
-			[...fn.blockIds()].some((block) => {
-				const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-				return (
-					terminator.kind === "return" &&
-					planRepresentation(fn.valueRepresentation(terminator.value)) !==
-						entry.resultRepresentation
-				);
-			})
-		) {
+		let parameterRepresentationMismatch = false;
+		for (let index = 0; index < fn.parameterCount; index++) {
+			if (
+				planRepresentation(fn.valueRepresentation(fn.kernel.functionParameter(index))) !==
+				entry.parameterRepresentations[index]
+			) {
+				parameterRepresentationMismatch = true;
+				break;
+			}
+		}
+		let resultRepresentationMismatch = false;
+		for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+			const block = coreBlockId(blockIndex);
+			if (fn.kernel.blockLive(block) === 0) continue;
+			const terminator = fn.blockTerminator(block);
+			if (
+				fn.instructionKind(terminator) === "return" &&
+				planRepresentation(
+					fn.valueRepresentation(
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+					),
+				) !== entry.resultRepresentation
+			) {
+				resultRepresentationMismatch = true;
+				break;
+			}
+		}
+		if (parameterRepresentationMismatch || resultRepresentationMismatch) {
 			fail(
 				`direct entry ${entry.function}:${entry.id} disagrees with Core representations`,
 			);
