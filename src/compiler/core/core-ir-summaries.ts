@@ -237,8 +237,11 @@ function analyzeLocalSummary(
 	cfg: CoreControlFlow,
 ): CoreLocalFunctionSummary {
 	const origins = Array<ValueOrigin>(fn.valueCapacity).fill(ORIGIN_NONE);
-	for (const [index, parameter] of fn.parameters.entries()) {
-		origins[parameter] = Object.freeze({ kind: "parameter", index });
+	for (let index = 0; index < fn.parameterCount; index++) {
+		origins[fn.kernel.functionParameter(index)] = Object.freeze({
+			kind: "parameter",
+			index,
+		});
 	}
 	type OriginTransfer = {
 		readonly output: CoreValueId;
@@ -247,8 +250,10 @@ function analyzeLocalSummary(
 	};
 	const transfers: Array<OriginTransfer> = [];
 	for (const block of cfg.reversePostorder) {
-		const parameters = fn.blockParameters(block);
-		for (const [index, parameter] of parameters.entries()) {
+		const parameterStart = fn.kernel.blockParameterStart(block);
+		const parameterCount = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			const parameter = fn.kernel.blockParameterValue(parameterStart + index);
 			const incoming = (cfg.predecessors[block] ?? []).flatMap((edge) => {
 				if (edge.kind !== "ordinary") return [];
 				const argument = edge.arguments[index];
@@ -256,7 +261,7 @@ function analyzeLocalSummary(
 			});
 			if (incoming.length === 0) continue;
 			transfers.push({
-				output: parameter.value,
+				output: parameter,
 				inputs: incoming,
 				evaluate: () =>
 					incoming.reduce(
@@ -268,9 +273,14 @@ function analyzeLocalSummary(
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
 			const operand =
-				opcode === "move" ? fn.instructionOperands(instruction)[0] : undefined;
+				opcode === "move" && fn.kernel.instructionOperandCount(instruction) > 0
+					? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
+					: undefined;
 			const inputs = operand === undefined ? [] : [operand];
-			for (const output of fn.instructionResults(instruction)) {
+			const resultStart = fn.kernel.instructionResultStart(instruction);
+			const resultCount = fn.kernel.instructionResultCount(instruction);
+			for (let index = 0; index < resultCount; index++) {
+				const output = fn.kernel.resultAt(resultStart + index);
 				transfers.push({
 					output,
 					inputs,
@@ -310,8 +320,8 @@ function analyzeLocalSummary(
 	}
 
 	let effects = NO_EFFECT_SUMMARY;
-	const parameterEscape = Array<ValueEscapeFact>(fn.parameters.length).fill("none");
-	const parameterContainment = Array<ValueContainmentFact>(fn.parameters.length).fill(
+	const parameterEscape = Array<ValueEscapeFact>(fn.parameterCount).fill("none");
+	const parameterContainment = Array<ValueContainmentFact>(fn.parameterCount).fill(
 		"preserved",
 	);
 	const receiver = {
@@ -333,7 +343,10 @@ function analyzeLocalSummary(
 							callsUserCode: false,
 						},
 			);
-			for (const [operandIndex, value] of fn.instructionOperands(instruction).entries()) {
+			const operandStart = fn.kernel.instructionOperandStart(instruction);
+			const operandCount = fn.kernel.instructionOperandCount(instruction);
+			for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
+				const value = fn.kernel.operandAt(operandStart + operandIndex);
 				const origin = origins[value]!;
 				if (descriptor.observesOperands || descriptor.opcode === "move") continue;
 				if (descriptor.callTransfer?.calleeOperand === operandIndex) {
@@ -363,19 +376,21 @@ function analyzeLocalSummary(
 	let provenance: ReturnProvenance = RETURN_PROVENANCE_NONE;
 	let representation: ReturnRepresentation = "none";
 	for (const block of cfg.reachable) {
-		const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-		if (terminator.kind === "throw") {
+		const terminator = fn.blockTerminator(block);
+		const kind = fn.instructionKind(terminator);
+		if (kind === "throw") {
 			effects = joinEffectSummaries(effects, {
 				...NO_EFFECT_SUMMARY,
 				mayThrow: true,
 			});
 		}
-		if (terminator.kind !== "return") continue;
-		const origin = origins[terminator.value]!;
+		if (kind !== "return") continue;
+		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
+		const origin = origins[value]!;
 		provenance = joinReturnProvenance(provenance, returnProvenance(origin));
 		representation = joinReturnRepresentation(
 			representation,
-			returnRepresentation(fn.valueRepresentation(terminator.value)),
+			returnRepresentation(fn.valueRepresentation(value)),
 		);
 		noteEscape(
 			origin,

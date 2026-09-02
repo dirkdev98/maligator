@@ -12,6 +12,7 @@ import {
 } from "./core-ir-value-kinds.ts";
 import type {
 	CoreAttributeValue,
+	CoreEdge,
 	CoreFunctionId,
 	CoreInstructionAttributes,
 	CoreInstructionId,
@@ -68,6 +69,98 @@ interface LinearInlineTarget {
 		readonly instructions: ReadonlyArray<CoreInstructionId>;
 		readonly parameters: ReadonlyArray<readonly [CoreValueId, CoreValueId]>;
 	}>;
+}
+
+function materializeInstructionOperands(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): Array<CoreValueId> {
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const count = fn.kernel.instructionOperandCount(instruction);
+	const values: Array<CoreValueId> = [];
+	for (let index = 0; index < count; index++)
+		values.push(fn.kernel.operandAt(start + index));
+	return values;
+}
+
+function materializeInstructionResults(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): Array<CoreValueId> {
+	const start = fn.kernel.instructionResultStart(instruction);
+	const count = fn.kernel.instructionResultCount(instruction);
+	const values: Array<CoreValueId> = [];
+	for (let index = 0; index < count; index++)
+		values.push(fn.kernel.resultAt(start + index));
+	return values;
+}
+
+function materializeTerminatorEdge(fn: CoreFunctionStore, edge: number): CoreEdge {
+	const start = fn.kernel.terminatorEdgeArgumentStart(edge);
+	const count = fn.kernel.terminatorEdgeArgumentCount(edge);
+	const arguments_: Array<CoreValueId> = [];
+	for (let index = 0; index < count; index++)
+		arguments_.push(fn.kernel.operandAt(start + index));
+	return { block: fn.kernel.terminatorEdgeBlock(edge), arguments: arguments_ };
+}
+
+function materializeTerminatorInput(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreTerminatorInput {
+	const kind = fn.instructionKind(instruction);
+	const operandStart = fn.kernel.instructionOperandStart(instruction);
+	const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+	switch (kind) {
+		case "jump":
+			return { kind, edge: materializeTerminatorEdge(fn, edgeStart) };
+		case "branch":
+			return {
+				kind,
+				condition: fn.kernel.operandAt(operandStart),
+				consequent: materializeTerminatorEdge(fn, edgeStart),
+				alternate: materializeTerminatorEdge(fn, edgeStart + 1),
+			};
+		case "guard": {
+			const fact = fn.kernel.terminatorFact(instruction);
+			if (fact === undefined) throw new Error(`Core guard ${instruction} has no fact`);
+			return {
+				kind,
+				condition: fn.kernel.operandAt(operandStart),
+				fact,
+				success: materializeTerminatorEdge(fn, edgeStart),
+				fallback: materializeTerminatorEdge(fn, edgeStart + 1),
+			};
+		}
+		case "switch": {
+			const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
+			const cases: Array<
+				Extract<CoreTerminatorInput, { kind: "switch" }>["cases"][number]
+			> = [];
+			for (let index = 0; index < edgeCount - 1; index++) {
+				const value = fn.kernel.terminatorEdgeCaseValue(edgeStart + index);
+				if (value === undefined)
+					throw new Error(`Core switch ${instruction} has no case`);
+				cases.push({
+					value,
+					edge: materializeTerminatorEdge(fn, edgeStart + index),
+				});
+			}
+			return {
+				kind,
+				discriminant: fn.kernel.operandAt(operandStart),
+				cases,
+				default: materializeTerminatorEdge(fn, edgeStart + edgeCount - 1),
+			};
+		}
+		case "return":
+		case "throw":
+			return { kind, value: fn.kernel.operandAt(operandStart) };
+		case "unreachable":
+			return { kind };
+		case "operation":
+			throw new Error(`Core instruction ${instruction} is not a terminator`);
+	}
 }
 
 function inlineSourcePositions(
@@ -204,9 +297,15 @@ function linearInlineTarget(
 		fn.factCapacity !== 0
 	)
 		return undefined;
-	const available = new Set(fn.parameters);
-	if (fn.blockParameters(fn.entry).some(({ value }) => !available.has(value)))
-		return undefined;
+	const available = new Set<CoreValueId>();
+	for (let index = 0; index < fn.parameterCount; index++)
+		available.add(fn.kernel.functionParameter(index));
+	const entryParameterStart = fn.kernel.blockParameterStart(fn.entry);
+	const entryParameterCount = fn.kernel.blockParameterCount(fn.entry);
+	for (let index = 0; index < entryParameterCount; index++) {
+		if (!available.has(fn.kernel.blockParameterValue(entryParameterStart + index)))
+			return undefined;
+	}
 	const blocks: Array<{
 		readonly instructions: ReadonlyArray<CoreInstructionId>;
 		readonly parameters: ReadonlyArray<readonly [CoreValueId, CoreValueId]>;
@@ -216,7 +315,8 @@ function linearInlineTarget(
 	let block = fn.entry;
 	let parameters: ReadonlyArray<readonly [CoreValueId, CoreValueId]> = [];
 	for (;;) {
-		if (visited.has(block) || fn.blockHandler(block) !== undefined) return undefined;
+		if (visited.has(block) || fn.kernel.blockHandlerBlock(block) !== undefined)
+			return undefined;
 		visited.add(block);
 		for (const [parameter, incoming] of parameters) {
 			if (!available.has(incoming)) return undefined;
@@ -233,33 +333,52 @@ function linearInlineTarget(
 				fn.instructionEffectRefinement(instruction) !== undefined
 			)
 				return undefined;
-			if (
-				opcode !== "loadThis" &&
-				fn.instructionOperands(instruction).some((value) => !available.has(value))
-			)
-				return undefined;
-			for (const output of fn.instructionResults(instruction)) available.add(output);
+			if (opcode !== "loadThis") {
+				const operandStart = fn.kernel.instructionOperandStart(instruction);
+				const operandCount = fn.kernel.instructionOperandCount(instruction);
+				for (let index = 0; index < operandCount; index++) {
+					if (!available.has(fn.kernel.operandAt(operandStart + index))) return undefined;
+				}
+			}
+			const resultStart = fn.kernel.instructionResultStart(instruction);
+			const resultCount = fn.kernel.instructionResultCount(instruction);
+			for (let index = 0; index < resultCount; index++)
+				available.add(fn.kernel.resultAt(resultStart + index));
 		}
-		const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-		if (terminator.kind === "return") {
-			if (!available.has(terminator.value)) return undefined;
+		const terminator = fn.blockTerminator(block);
+		const terminatorKind = fn.instructionKind(terminator);
+		if (terminatorKind === "return") {
+			const returnValue = fn.kernel.operandAt(
+				fn.kernel.instructionOperandStart(terminator),
+			);
+			if (!available.has(returnValue)) return undefined;
 			return {
 				function: fn,
-				returnValue: terminator.value,
+				returnValue,
 				instructions,
 				blocks,
 			};
 		}
-		if (terminator.kind !== "jump" || visited.has(terminator.edge.block)) {
+		if (terminatorKind !== "jump") return undefined;
+		const edge = fn.kernel.terminatorEdgeStart(terminator);
+		const targetBlock = fn.kernel.terminatorEdgeBlock(edge);
+		if (visited.has(targetBlock)) {
 			return undefined;
 		}
-		const targetParameters = fn.blockParameters(terminator.edge.block);
-		if (targetParameters.length !== terminator.edge.arguments.length) return undefined;
-		parameters = targetParameters.map(({ value }, index) => [
-			value,
-			terminator.edge.arguments[index]!,
-		]);
-		block = terminator.edge.block;
+		const parameterStart = fn.kernel.blockParameterStart(targetBlock);
+		const parameterCount = fn.kernel.blockParameterCount(targetBlock);
+		const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+		const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+		if (parameterCount !== argumentCount) return undefined;
+		const nextParameters: Array<readonly [CoreValueId, CoreValueId]> = [];
+		for (let index = 0; index < parameterCount; index++) {
+			nextParameters.push([
+				fn.kernel.blockParameterValue(parameterStart + index),
+				fn.kernel.operandAt(argumentStart + index),
+			]);
+		}
+		parameters = nextParameters;
+		block = targetBlock;
 	}
 }
 
@@ -357,7 +476,7 @@ function applyCallRefresh(
 	editor.replaceInstruction(
 		candidate.site,
 		fn.instructionOpcodeName(candidate.site),
-		fn.instructionOperands(candidate.site),
+		materializeInstructionOperands(fn, candidate.site),
 		{
 			attributes,
 			sourcePosition: fn.instructionSourcePosition(candidate.site),
@@ -393,8 +512,8 @@ function applyLinearInline(
 		descriptor.callTransfer.result !== "call-completion"
 	)
 		return undefined;
-	const operands = caller.instructionOperands(candidate.site);
-	const callResults = caller.instructionResults(candidate.site);
+	const operands = materializeInstructionOperands(caller, candidate.site);
+	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
 	const receiverIndex = descriptor.callTransfer.receiverOperand;
 	const receiver = receiverIndex === undefined ? undefined : operands[receiverIndex];
@@ -424,7 +543,8 @@ function applyLinearInline(
 	);
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = 0;
-	for (const [index, parameter] of linear.function.parameters.entries()) {
+	for (let index = 0; index < linear.function.parameterCount; index++) {
+		const parameter = linear.function.kernel.functionParameter(index);
 		const argument = arguments_[index];
 		if (argument !== undefined) {
 			values.set(parameter, argument);
@@ -450,18 +570,25 @@ function applyLinearInline(
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = linear.function.instructionOpcodeName(instruction);
 			if (opcode === "loadThis") {
-				const output = linear.function.instructionResults(instruction)[0];
+				const output =
+					linear.function.kernel.instructionResultCount(instruction) === 0
+						? undefined
+						: linear.function.kernel.resultAt(
+								linear.function.kernel.instructionResultStart(instruction),
+							);
 				if (output === undefined || receiver === undefined) return undefined;
 				values.set(output, receiver);
 				continue;
 			}
-			const inputs = linear.function
-				.instructionOperands(instruction)
-				.map((value) => values.get(value));
+			const inputStart = linear.function.kernel.instructionOperandStart(instruction);
+			const inputCount = linear.function.kernel.instructionOperandCount(instruction);
+			const inputs: Array<CoreValueId | undefined> = [];
+			for (let index = 0; index < inputCount; index++)
+				inputs.push(values.get(linear.function.kernel.operandAt(inputStart + index)));
 			if (inputs.some((value) => value === undefined)) {
 				throw new Error("Validated inline input has no caller value");
 			}
-			const outputs = linear.function.instructionResults(instruction);
+			const outputs = materializeInstructionResults(linear.function, instruction);
 			const inserted = editor.insertInstruction(
 				block,
 				candidate.site,
@@ -515,8 +642,8 @@ function applyGuardedLinearInline(
 		descriptor.callTransfer.result !== "call-completion"
 	)
 		return undefined;
-	const operands = caller.instructionOperands(candidate.site);
-	const callResults = caller.instructionResults(candidate.site);
+	const operands = materializeInstructionOperands(caller, candidate.site);
+	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
 	const callResult = callResults[0]!;
 	if (
@@ -536,8 +663,7 @@ function applyGuardedLinearInline(
 	if (callee === undefined) return undefined;
 	const block = caller.instructionBlock(candidate.site);
 	const originalTerminator = caller.blockTerminator(block);
-	const originalPayload = caller.terminatorPayload(originalTerminator);
-	if (originalPayload.kind === "guard") return undefined;
+	if (caller.instructionKind(originalTerminator) === "guard") return undefined;
 	const terminatorPosition = caller.instructionSourcePosition(originalTerminator);
 	const callerPosition = caller.instructionSourcePosition(candidate.site);
 	const editor = CoreEditor.open(program, candidate.caller);
@@ -556,7 +682,12 @@ function applyGuardedLinearInline(
 		instruction = caller.instructionNext(instruction)
 	)
 		tail.push(instruction);
-	const handler = caller.blockHandler(block);
+	const handlerBlock = caller.kernel.blockHandlerBlock(block);
+	const handlerArguments: Array<CoreValueId> = [];
+	const handlerArgumentStart = caller.kernel.blockHandlerArgumentStart(block);
+	const handlerArgumentCount = caller.kernel.blockHandlerArgumentCount(block);
+	for (let index = 0; index < handlerArgumentCount; index++)
+		handlerArguments.push(caller.kernel.handlerArgumentAt(handlerArgumentStart + index));
 	const callAttributes = caller.instructionAttributes(candidate.site);
 	const callRefinement = caller.instructionEffectRefinement(candidate.site);
 	const fast = editor.createBlock();
@@ -564,13 +695,15 @@ function applyGuardedLinearInline(
 	const join = editor.createBlock([
 		{ representation: caller.valueRepresentation(callResult) },
 	]);
-	const joinedResult = caller.blockParameters(join)[0]!.value;
+	const joinedResult = caller.kernel.blockParameterValue(
+		caller.kernel.blockParameterStart(join),
+	);
 	for (const instruction of tail) editor.moveInstruction(instruction, join);
 	editor.replaceValueUses(callResult, joinedResult);
 	const joinedTerminator = {
-		...caller.terminatorPayload(originalTerminator),
+		...materializeTerminatorInput(caller, originalTerminator),
 		...(terminatorPosition === undefined ? {} : { sourcePosition: terminatorPosition }),
-	} as CoreTerminatorInput;
+	};
 	editor.setTerminator(join, joinedTerminator);
 
 	editor.moveInstruction(candidate.site, fallback);
@@ -595,7 +728,8 @@ function applyGuardedLinearInline(
 
 	const values = new Map<CoreValueId, CoreValueId>();
 	let introduced = 1;
-	for (const [index, parameter] of linear.function.parameters.entries()) {
+	for (let index = 0; index < linear.function.parameterCount; index++) {
+		const parameter = linear.function.kernel.functionParameter(index);
 		const argument = arguments_[index];
 		if (argument !== undefined) {
 			values.set(parameter, argument);
@@ -617,18 +751,25 @@ function applyGuardedLinearInline(
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = linear.function.instructionOpcodeName(instruction);
 			if (opcode === "loadThis") {
-				const output = linear.function.instructionResults(instruction)[0];
+				const output =
+					linear.function.kernel.instructionResultCount(instruction) === 0
+						? undefined
+						: linear.function.kernel.resultAt(
+								linear.function.kernel.instructionResultStart(instruction),
+							);
 				if (output === undefined || receiver === undefined)
 					throw new Error("Validated guarded inline receiver is unavailable");
 				values.set(output, receiver);
 				continue;
 			}
-			const inputs = linear.function
-				.instructionOperands(instruction)
-				.map((value) => values.get(value));
+			const inputStart = linear.function.kernel.instructionOperandStart(instruction);
+			const inputCount = linear.function.kernel.instructionOperandCount(instruction);
+			const inputs: Array<CoreValueId | undefined> = [];
+			for (let index = 0; index < inputCount; index++)
+				inputs.push(values.get(linear.function.kernel.operandAt(inputStart + index)));
 			if (inputs.some((value) => value === undefined))
 				throw new Error("Validated guarded inline input has no caller value");
-			const outputs = linear.function.instructionResults(instruction);
+			const outputs = materializeInstructionResults(linear.function, instruction);
 			const inserted = editor.appendInstruction(
 				fast,
 				opcode,
@@ -667,9 +808,9 @@ function applyGuardedLinearInline(
 		alternate: { block: fallback, arguments: [] },
 		sourcePosition: callerPosition,
 	});
-	if (handler !== undefined) {
+	if (handlerBlock !== undefined) {
 		for (const guardedBlock of [fast, fallback, join])
-			editor.setHandler(guardedBlock, handler.block, handler.arguments);
+			editor.setHandler(guardedBlock, handlerBlock, handlerArguments);
 	}
 	return {
 		changes: editor.commit(),
@@ -700,7 +841,9 @@ function foldProgramValueKindObservations(
 	readonly changes: ReadonlyArray<CoreChangeSet>;
 	readonly folds: number;
 } {
-	const kinds = analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" });
+	const kinds = analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
+		scope: "program",
+	});
 	const changes: Array<CoreChangeSet> = [];
 	let foldCount = 0;
 	for (const functionId of kinds.changedFunctions) {

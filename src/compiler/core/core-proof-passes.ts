@@ -1,6 +1,5 @@
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import { CoreEditor } from "./core-editor.ts";
-import { coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import {
 	CORE_FACT_AVAILABILITY_ANALYSIS,
 	coreFactImplies,
@@ -29,6 +28,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CorePass, CorePassBudget } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -46,6 +46,27 @@ const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 ]);
+
+function materializeInstructionOperands(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): Array<CoreValueId> {
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const count = fn.kernel.instructionOperandCount(instruction);
+	const operands: Array<CoreValueId> = [];
+	for (let index = 0; index < count; index++)
+		operands.push(fn.kernel.operandAt(start + index));
+	return operands;
+}
+
+function materializeTerminatorEdge(fn: CoreFunctionStore, edge: number): CoreEdge {
+	const start = fn.kernel.terminatorEdgeArgumentStart(edge);
+	const count = fn.kernel.terminatorEdgeArgumentCount(edge);
+	const arguments_: Array<CoreValueId> = [];
+	for (let index = 0; index < count; index++)
+		arguments_.push(fn.kernel.operandAt(start + index));
+	return { block: fn.kernel.terminatorEdgeBlock(edge), arguments: arguments_ };
+}
 
 function factValidityRank(fact: CoreFact): number {
 	switch (fact.validity.kind) {
@@ -75,8 +96,7 @@ function preferFact(candidate: CoreFact, incumbent: CoreFact): boolean {
 function factIsReferenced(fn: CoreFunctionStore, fact: CoreFactId): boolean {
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) === "guard") {
-			const payload = fn.terminatorPayload(instruction);
-			if (payload.kind === "guard" && payload.fact === fact) return true;
+			if (fn.kernel.terminatorFact(instruction) === fact) return true;
 		} else if (fn.instructionEffectRefinement(instruction)?.proof === fact) {
 			return true;
 		}
@@ -242,9 +262,10 @@ const foldSubsumedGuards: CorePass = {
 		}> = [];
 		for (const block of fn.blockIds()) {
 			const instruction = fn.blockTerminator(block);
-			const payload = fn.terminatorPayload(instruction);
-			if (payload.kind !== "guard") continue;
-			const weak = fn.fact(payload.fact);
+			if (fn.instructionKind(instruction) !== "guard") continue;
+			const guardFact = fn.kernel.terminatorFact(instruction);
+			if (guardFact === undefined) continue;
+			const weak = fn.fact(guardFact);
 			if (
 				weak.obligations.some(({ kind }) => kind !== "guard") ||
 				refinementUses.has(weak.id) ||
@@ -260,7 +281,14 @@ const foldSubsumedGuards: CorePass = {
 			}
 			if (best === undefined) continue;
 			removed.add(weak.id);
-			folds.push({ block, fact: weak.id, success: payload.success });
+			folds.push({
+				block,
+				fact: weak.id,
+				success: materializeTerminatorEdge(
+					fn,
+					fn.kernel.terminatorEdgeStart(instruction),
+				),
+			});
 		}
 		if (folds.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
@@ -297,9 +325,11 @@ const refinePrimitiveEffects: CorePass = {
 		const opcode = fn.instructionOpcodeName(item.instruction);
 		if (opcode !== "unary" && opcode !== "binary") return undefined;
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		const masks = fn
-			.instructionOperands(item.instruction)
-			.map((value) => kinds.kindMask(value));
+		const operandStart = fn.kernel.instructionOperandStart(item.instruction);
+		const operandCount = fn.kernel.instructionOperandCount(item.instruction);
+		const masks: Array<number> = [];
+		for (let index = 0; index < operandCount; index++)
+			masks.push(kinds.kindMask(fn.kernel.operandAt(operandStart + index)));
 		const effects = corePrimitiveOperatorEffectRefinement(fn, item.instruction, masks);
 		const baseline = fn.registry.byId(fn.instructionOpcode(item.instruction)).effects;
 		const existing = fn.instructionEffectRefinement(item.instruction);
@@ -313,7 +343,7 @@ const refinePrimitiveEffects: CorePass = {
 			editor.replaceInstruction(
 				item.instruction,
 				opcode,
-				fn.instructionOperands(item.instruction),
+				materializeInstructionOperands(fn, item.instruction),
 				{
 					attributes: fn.instructionAttributes(item.instruction),
 					sourcePosition: fn.instructionSourcePosition(item.instruction),
@@ -398,23 +428,35 @@ const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 
 function appearsOnEdge(fn: CoreFunctionStore, value: CoreValueId): boolean {
 	for (const block of fn.blockIds()) {
-		if (fn.blockHandler(block)?.arguments.includes(value) === true) return true;
-		for (const edge of coreTerminatorEdges(
-			fn.terminatorPayload(fn.blockTerminator(block)),
-		)) {
-			if (edge.arguments.includes(value)) return true;
+		const handlerStart = fn.kernel.blockHandlerArgumentStart(block);
+		const handlerCount = fn.kernel.blockHandlerArgumentCount(block);
+		for (let index = 0; index < handlerCount; index++) {
+			if (fn.kernel.handlerArgumentAt(handlerStart + index) === value) return true;
+		}
+		const terminator = fn.blockTerminator(block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
+			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edgeStart + edgeOffset);
+			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edgeStart + edgeOffset);
+			for (let index = 0; index < argumentCount; index++) {
+				if (fn.kernel.operandAt(argumentStart + index) === value) return true;
+			}
 		}
 	}
 	return false;
 }
 
 function scalarConsumersOnly(fn: CoreFunctionStore, value: CoreValueId): boolean {
-	for (const { instruction } of fn.uses(value)) {
+	let use = fn.kernel.valueFirstUse(value);
+	while (use >= 0) {
+		const instruction = fn.kernel.useInstruction(use);
 		if (
 			fn.instructionKind(instruction) === "operation" &&
 			!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))
 		)
 			return false;
+		use = fn.kernel.useNext(use);
 	}
 	return !appearsOnEdge(fn, value);
 }
@@ -426,11 +468,12 @@ function scalarProducerInputsSupportRepresentation(
 	componentValues?: ReadonlySet<CoreValueId>,
 ): boolean {
 	const opcode = fn.instructionOpcodeName(instruction);
-	const operands = fn.instructionOperands(instruction);
+	const operandStart = fn.kernel.instructionOperandStart(instruction);
+	const operandCount = fn.kernel.instructionOperandCount(instruction);
 	const belongsToComponent = (value: CoreValueId): boolean =>
 		componentValues?.has(value) === true;
 	if (opcode === "move") {
-		const source = operands[0];
+		const source = operandCount === 0 ? undefined : fn.kernel.operandAt(operandStart);
 		return (
 			source !== undefined &&
 			(fn.valueRepresentation(source) === representation || belongsToComponent(source))
@@ -440,14 +483,19 @@ function scalarProducerInputsSupportRepresentation(
 		(opcode === "unary" || opcode === "binary") &&
 		(representation === "i32" || representation === "f64")
 	) {
-		return operands.every((operand) => {
+		for (let index = 0; index < operandCount; index++) {
+			const operand = fn.kernel.operandAt(operandStart + index);
 			const operandRepresentation = fn.valueRepresentation(operand);
-			return (
-				operandRepresentation === "i32" ||
-				operandRepresentation === "f64" ||
-				belongsToComponent(operand)
-			);
-		});
+			if (
+				!(
+					operandRepresentation === "i32" ||
+					operandRepresentation === "f64" ||
+					belongsToComponent(operand)
+				)
+			)
+				return false;
+		}
+		return true;
 	}
 	return true;
 }
@@ -459,16 +507,16 @@ function scalarCandidate(
 ): CoreRepresentation | undefined {
 	if (kind === undefined || fn.valueRepresentation(value) !== "boxed") return undefined;
 	const representation = scalarRepresentation(kind);
-	const definition = fn.valueDefinition(value);
 	if (
-		definition.kind !== "instruction" ||
-		!SCALAR_PRODUCERS.has(fn.instructionOpcodeName(definition.instruction)) ||
+		fn.kernel.valueDefinitionKind(value) !== 1 ||
+		!SCALAR_PRODUCERS.has(
+			fn.instructionOpcodeName(coreInstructionId(fn.kernel.valueDefinitionOwner(value))),
+		) ||
 		!scalarConsumersOnly(fn, value)
 	)
 		return undefined;
-	if (
-		!scalarProducerInputsSupportRepresentation(fn, definition.instruction, representation)
-	)
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (!scalarProducerInputsSupportRepresentation(fn, definition, representation))
 		return undefined;
 	return representation;
 }
@@ -537,36 +585,60 @@ const materializeFlowScalars: CorePass = {
 			neighbors.set(right, rightNeighbors);
 		};
 		for (const block of fn.blockIds()) {
-			for (const edge of coreTerminatorEdges(
-				fn.terminatorPayload(fn.blockTerminator(block)),
-			)) {
-				for (const [index, argument] of edge.arguments.entries()) {
-					const parameter = fn.blockParameters(edge.block)[index];
-					if (parameter !== undefined) connect(argument, parameter.value);
+			const terminator = fn.blockTerminator(block);
+			const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+			const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+			for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
+				const edge = edgeStart + edgeOffset;
+				const target = fn.kernel.terminatorEdgeBlock(edge);
+				const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+				const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+				const parameterStart = fn.kernel.blockParameterStart(target);
+				const parameterCount = fn.kernel.blockParameterCount(target);
+				const count = Math.min(argumentCount, parameterCount);
+				for (let index = 0; index < count; index++) {
+					connect(
+						fn.kernel.operandAt(argumentStart + index),
+						fn.kernel.blockParameterValue(parameterStart + index),
+					);
 				}
 			}
-			const handler = fn.blockHandler(block);
-			if (handler !== undefined) {
-				const parameters = fn.blockParameters(handler.block).slice(1);
-				for (const [index, argument] of handler.arguments.entries()) {
-					const parameter = parameters[index];
-					if (parameter !== undefined) connect(argument, parameter.value);
+			const handlerBlock = fn.kernel.blockHandlerBlock(block);
+			if (handlerBlock !== undefined) {
+				const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
+				const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
+				const parameterStart = fn.kernel.blockParameterStart(handlerBlock);
+				const parameterCount = Math.max(
+					0,
+					fn.kernel.blockParameterCount(handlerBlock) - 1,
+				);
+				const count = Math.min(argumentCount, parameterCount);
+				for (let index = 0; index < count; index++) {
+					connect(
+						fn.kernel.handlerArgumentAt(argumentStart + index),
+						fn.kernel.blockParameterValue(parameterStart + 1 + index),
+					);
 				}
 			}
 			for (const instruction of fn.bodyInstructionIds(block)) {
 				if (!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))) continue;
 				const byFamily = new Map<string, Array<CoreValueId>>();
-				for (const value of [
-					...fn.instructionOperands(instruction),
-					...fn.instructionResults(instruction),
-				]) {
+				const includeValue = (value: CoreValueId): void => {
 					const scalar = kinds.exactScalar(value);
-					if (scalar === undefined) continue;
+					if (scalar === undefined) return;
 					const family = scalar === "int32" || scalar === "number" ? "number" : scalar;
 					const values = byFamily.get(family) ?? [];
 					values.push(value);
 					byFamily.set(family, values);
-				}
+				};
+				const operandStart = fn.kernel.instructionOperandStart(instruction);
+				const operandCount = fn.kernel.instructionOperandCount(instruction);
+				for (let index = 0; index < operandCount; index++)
+					includeValue(fn.kernel.operandAt(operandStart + index));
+				const resultStart = fn.kernel.instructionResultStart(instruction);
+				const resultCount = fn.kernel.instructionResultCount(instruction);
+				for (let index = 0; index < resultCount; index++)
+					includeValue(fn.kernel.resultAt(resultStart + index));
 				for (const values of byFamily.values()) {
 					for (let index = 1; index < values.length; index++) {
 						connect(values[0]!, values[index]!);
@@ -594,28 +666,32 @@ const materializeFlowScalars: CorePass = {
 			if (representation === undefined) continue;
 			const componentValues = new Set(component);
 			const rejected = component.some((value) => {
-				const definition = fn.valueDefinition(value);
+				const definitionKind = fn.kernel.valueDefinitionKind(value);
+				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 				if (
-					definition.kind === "instruction" &&
-					!SCALAR_PRODUCERS.has(fn.instructionOpcodeName(definition.instruction))
+					definitionKind === 1 &&
+					!SCALAR_PRODUCERS.has(fn.instructionOpcodeName(definition))
 				)
 					return true;
 				if (
-					definition.kind === "instruction" &&
+					definitionKind === 1 &&
 					!scalarProducerInputsSupportRepresentation(
 						fn,
-						definition.instruction,
+						definition,
 						representation,
 						componentValues,
 					)
 				)
 					return true;
-				for (const { instruction } of fn.uses(value)) {
+				let use = fn.kernel.valueFirstUse(value);
+				while (use >= 0) {
+					const instruction = fn.kernel.useInstruction(use);
 					if (
 						fn.instructionKind(instruction) === "operation" &&
 						!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))
 					)
 						return true;
+					use = fn.kernel.useNext(use);
 				}
 				return false;
 			});

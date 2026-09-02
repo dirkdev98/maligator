@@ -2,6 +2,7 @@ import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import { corePassContext } from "./core-pass.ts";
 import type { CoreOptimizationStage, CorePass, CorePassWorkItem } from "./core-pass.ts";
@@ -190,7 +191,11 @@ export class CorePassManager {
 			case "instruction":
 				for (const functionId of this.#program.functionIds()) {
 					for (const instruction of this.#program.function(functionId).instructionIds()) {
-						enqueue(pass, { scope: "instruction", function: functionId, instruction });
+						enqueue(pass, {
+							scope: "instruction",
+							function: functionId,
+							instruction,
+						});
 					}
 				}
 				break;
@@ -241,11 +246,16 @@ export class CorePassManager {
 				}
 				for (const value of changes.values) {
 					if (!fn.isValueLive(value)) continue;
-					const definition = fn.valueDefinition(value);
-					if (definition.kind === "instruction") {
-						instructions.add(definition.instruction);
+					if (fn.kernel.valueDefinitionKind(value) === 1) {
+						instructions.add(coreInstructionId(fn.kernel.valueDefinitionOwner(value)));
 					}
-					for (const use of fn.uses(value)) instructions.add(use.instruction);
+					for (
+						let use = fn.kernel.valueFirstUse(value);
+						use >= 0;
+						use = fn.kernel.useNext(use)
+					) {
+						instructions.add(fn.kernel.useInstruction(use));
+					}
 				}
 				for (const instruction of instructions) {
 					if (fn.isInstructionLive(instruction)) {
@@ -264,7 +274,11 @@ export class CorePassManager {
 					...changes.edges.flatMap(({ source, target }) => [source, target]),
 				])) {
 					if (fn.isBlockLive(block)) {
-						enqueue(pass, { scope: "block", function: changes.function, block });
+						enqueue(pass, {
+							scope: "block",
+							function: changes.function,
+							block,
+						});
 					}
 				}
 				break;

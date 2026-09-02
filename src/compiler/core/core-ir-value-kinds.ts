@@ -26,6 +26,7 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
@@ -171,7 +172,11 @@ function operationTransfer(
 	output: CoreValueId,
 	inputs?: CoreValueKindInputs,
 ): KindTransfer {
-	const operands = fn.instructionOperands(instruction);
+	const operandStart = fn.kernel.instructionOperandStart(instruction);
+	const operandCount = fn.kernel.instructionOperandCount(instruction);
+	const operands = Array.from({ length: operandCount }, (_, index) =>
+		fn.kernel.operandAt(operandStart + index),
+	);
 	const staticKind = representationKind(fn, output) ?? staticOpcodeKind(fn, instruction);
 	if (staticKind !== undefined) return { output, inputs: [], evaluate: () => staticKind };
 	const opcode = fn.instructionOpcodeName(instruction);
@@ -182,7 +187,11 @@ function operationTransfer(
 	if (supplied !== undefined) return { output, inputs: [], evaluate: () => supplied };
 	const operator = fn.instructionAttributes(instruction).operator;
 	if (opcode === "move" && operands.length === 1) {
-		return { output, inputs: operands, evaluate: (masks) => masks[operands[0]!]! };
+		return {
+			output,
+			inputs: operands,
+			evaluate: (masks) => masks[operands[0]!]!,
+		};
 	}
 	if (opcode === "unary" && operands.length === 1 && typeof operator === "string") {
 		return {
@@ -232,18 +241,23 @@ export function analyzeCoreValueKinds(
 	inputs?: CoreValueKindInputs,
 ): CoreValueKindAnalysis {
 	const transfers: Array<KindTransfer> = [];
-	const formalParameter = new Map(
-		fn.parameters.map((value, index) => [value, index] as const),
-	);
+	const formalParameter = new Map<CoreValueId, number>();
+	for (let index = 0; index < fn.parameterCount; index++) {
+		formalParameter.set(fn.kernel.functionParameter(index), index);
+	}
 	for (const block of fn.blockIds()) {
 		const incoming = cfg.predecessors[block] ?? [];
-		for (const [index, parameter] of fn.blockParameters(block).entries()) {
-			const representation = representationKind(fn, parameter.value);
-			const formal = formalParameter.get(parameter.value);
+		const parameterStart = fn.kernel.blockParameterStart(block);
+		const parameterCount = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			const row = parameterStart + index;
+			const parameter = fn.kernel.blockParameterValue(row);
+			const representation = representationKind(fn, parameter);
+			const formal = formalParameter.get(parameter);
 			if (
 				representation !== undefined ||
 				formal !== undefined ||
-				parameter.role === "exception" ||
+				fn.kernel.blockParameterRole(row) === 1 ||
 				incoming.length === 0
 			) {
 				const kind =
@@ -251,7 +265,7 @@ export function analyzeCoreValueKinds(
 					(formal === undefined
 						? COMPILER_VALUE_KIND_TOP
 						: (inputs?.parameterMasks?.[formal] ?? COMPILER_VALUE_KIND_TOP));
-				transfers.push({ output: parameter.value, inputs: [], evaluate: () => kind });
+				transfers.push({ output: parameter, inputs: [], evaluate: () => kind });
 				continue;
 			}
 			const incomingValues = incoming.flatMap((edge) => {
@@ -259,14 +273,17 @@ export function analyzeCoreValueKinds(
 				return value === undefined ? [] : [value];
 			});
 			transfers.push({
-				output: parameter.value,
+				output: parameter,
 				inputs: incomingValues,
 				evaluate: (masks) =>
 					incomingValues.reduce((mask, value) => mask | masks[value]!, 0),
 			});
 		}
 		for (const instruction of fn.bodyInstructionIds(block)) {
-			for (const output of fn.instructionResults(instruction)) {
+			const resultStart = fn.kernel.instructionResultStart(instruction);
+			const resultCount = fn.kernel.instructionResultCount(instruction);
+			for (let index = 0; index < resultCount; index++) {
+				const output = fn.kernel.resultAt(resultStart + index);
 				transfers.push(operationTransfer(fn, instruction, output, inputs));
 			}
 		}
@@ -300,16 +317,13 @@ export function analyzeCoreValueKinds(
 	const exactInt32 = new Uint8Array(fn.valueCapacity);
 	for (const value of fn.valueIds()) {
 		if (fn.valueRepresentation(value) === "i32") exactInt32[value] = 1;
-		const definition = fn.valueDefinition(value);
-		if (
-			definition.kind !== "instruction" ||
-			fn.instructionKind(definition.instruction) !== "operation"
-		)
-			continue;
-		const opcode = fn.instructionOpcodeName(definition.instruction);
+		if (fn.kernel.valueDefinitionKind(value) !== 1) continue;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (fn.instructionKind(definition) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(definition);
 		if (
 			(opcode === "createNumber" || opcode === "createF64") &&
-			numberIsExactInt32(fn.instructionAttributes(definition.instruction).value)
+			numberIsExactInt32(fn.instructionAttributes(definition).value)
 		)
 			exactInt32[value] = 1;
 	}
@@ -328,11 +342,13 @@ export function analyzeCoreValueKinds(
 			transfer.inputs.some((input) => exactInt32[input] === 0)
 		)
 			continue;
-		const definition = fn.valueDefinition(transfer.output);
+		const definitionKind = fn.kernel.valueDefinitionKind(transfer.output);
 		const forwardsInteger =
-			definition.kind === "block-parameter" ||
-			(definition.kind === "instruction" &&
-				fn.instructionOpcodeName(definition.instruction) === "move");
+			definitionKind === 0 ||
+			(definitionKind === 1 &&
+				fn.instructionOpcodeName(
+					coreInstructionId(fn.kernel.valueDefinitionOwner(transfer.output)),
+				) === "move");
 		if (!forwardsInteger) continue;
 		exactInt32[transfer.output] = 1;
 		for (const dependent of dependents[transfer.output] ?? []) {
@@ -373,14 +389,20 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			const closedGlobals = new Set(context.data.singleAssignmentGlobalSlots);
 			const stores = new Map<
 				number,
-				{ readonly instruction: CoreInstructionId; readonly value: CoreValueId } | null
+				{
+					readonly instruction: CoreInstructionId;
+					readonly value: CoreValueId;
+				} | null
 			>();
 			const emptyInitialization = (value: CoreValueId): boolean => {
-				const definition = fn.valueDefinition(value);
-				if (definition.kind !== "instruction") return false;
-				const opcode = fn.instructionOpcodeName(definition.instruction);
+				if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
+				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+				const opcode = fn.instructionOpcodeName(definition);
 				if (opcode === "createEmpty") return true;
-				const source = fn.instructionOperands(definition.instruction)[0];
+				const source =
+					fn.kernel.instructionOperandCount(definition) === 0
+						? undefined
+						: fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
 				return opcode === "move" && source !== undefined && emptyInitialization(source);
 			};
 			for (const instruction of fn.instructionIds()) {
@@ -390,7 +412,10 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 				)
 					continue;
 				const index = fn.instructionAttributes(instruction).index;
-				const value = fn.instructionOperands(instruction)[0];
+				const value =
+					fn.kernel.instructionOperandCount(instruction) === 0
+						? undefined
+						: fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
 				if (
 					typeof index !== "number" ||
 					value === undefined ||
@@ -410,13 +435,15 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			const storedKind = (value: CoreValueId): CompilerValueKindMask | undefined => {
 				const representation = representationKind(fn, value);
 				if (representation !== undefined) return representation;
-				const definition = fn.valueDefinition(value);
-				if (definition.kind !== "instruction") return undefined;
-				const kind = staticOpcodeKind(fn, definition.instruction);
+				if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+				const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+				const kind = staticOpcodeKind(fn, definition);
 				if (kind !== undefined) return kind;
-				const source = fn.instructionOperands(definition.instruction)[0];
-				return fn.instructionOpcodeName(definition.instruction) === "move" &&
-					source !== undefined
+				const source =
+					fn.kernel.instructionOperandCount(definition) === 0
+						? undefined
+						: fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
+				return fn.instructionOpcodeName(definition) === "move" && source !== undefined
 					? storedKind(source)
 					: undefined;
 			};
@@ -802,9 +829,12 @@ function solveCoreProgramValueKinds(
 		let returnKind = 0;
 		const cfg = controlFlow(functionId);
 		for (const block of cfg.reachable) {
-			const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-			if (terminator.kind === "return")
-				returnKind |= values.latticeMask(terminator.value);
+			const terminator = fn.blockTerminator(block);
+			if (fn.instructionKind(terminator) === "return") {
+				returnKind |= values.latticeMask(
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+				);
+			}
 		}
 		if (returnKind !== summary.returnKind) {
 			summaries.set(functionId, { ...summary, returnKind });
@@ -959,14 +989,14 @@ function coreStringConstant(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
 ): string | undefined {
-	const definition = fn.valueDefinition(value);
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 	if (
-		definition.kind !== "instruction" ||
-		fn.instructionKind(definition.instruction) !== "operation" ||
-		fn.instructionOpcodeName(definition.instruction) !== "createString"
+		fn.instructionKind(definition) !== "operation" ||
+		fn.instructionOpcodeName(definition) !== "createString"
 	)
 		return undefined;
-	const stringIndex = fn.instructionAttributes(definition.instruction).stringIndex;
+	const stringIndex = fn.instructionAttributes(definition).stringIndex;
 	if (typeof stringIndex !== "number") return undefined;
 	const units = program.stringConstants[stringIndex];
 	return units === undefined ? undefined : String.fromCodePoint(...units);
@@ -980,13 +1010,16 @@ export function coreValueKindObservation(
 ): boolean | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
-		fn.instructionResults(instruction).length !== 1
+		fn.kernel.instructionResultCount(instruction) !== 1
 	)
 		return undefined;
 	const opcode = fn.instructionOpcodeName(instruction);
-	const operands = fn.instructionOperands(instruction);
+	const operandStart = fn.kernel.instructionOperandStart(instruction);
+	const operandCount = fn.kernel.instructionOperandCount(instruction);
+	const operand = (index: number): CoreValueId | undefined =>
+		index < operandCount ? fn.kernel.operandAt(operandStart + index) : undefined;
 	if (opcode === "typeofCompare") {
-		const input = operands[0];
+		const input = operand(0);
 		const expected = fn.instructionAttributes(instruction).expected;
 		if (input === undefined || typeof expected !== "string") return undefined;
 		const actual = exactPrimitiveTypeof(kindMask(input));
@@ -995,7 +1028,7 @@ export function coreValueKindObservation(
 		return fn.instructionAttributes(instruction).negated === true ? !equal : equal;
 	}
 	if (opcode === "unary" && fn.instructionAttributes(instruction).operator === "!") {
-		const input = operands[0];
+		const input = operand(0);
 		return input !== undefined &&
 			compilerValueKindMaskIsSubset(
 				kindMask(input),
@@ -1004,28 +1037,33 @@ export function coreValueKindObservation(
 			? true
 			: undefined;
 	}
-	if (opcode !== "binary" || operands.length !== 2) return undefined;
+	if (opcode !== "binary" || operandCount !== 2) return undefined;
 	const operator = fn.instructionAttributes(instruction).operator;
 	if (operator !== "===" && operator !== "!==") return undefined;
 	const typeofResult = (value: CoreValueId, other: CoreValueId): boolean | undefined => {
-		const definition = fn.valueDefinition(value);
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 		if (
-			definition.kind !== "instruction" ||
-			fn.instructionKind(definition.instruction) !== "operation" ||
-			fn.instructionOpcodeName(definition.instruction) !== "unary" ||
-			fn.instructionAttributes(definition.instruction).operator !== "typeof"
+			fn.instructionKind(definition) !== "operation" ||
+			fn.instructionOpcodeName(definition) !== "unary" ||
+			fn.instructionAttributes(definition).operator !== "typeof"
 		)
 			return undefined;
-		const input = fn.instructionOperands(definition.instruction)[0];
+		const input =
+			fn.kernel.instructionOperandCount(definition) === 0
+				? undefined
+				: fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
 		const expected = coreStringConstant(program, fn, other);
 		if (input === undefined || expected === undefined) return undefined;
 		const actual = exactPrimitiveTypeof(kindMask(input));
 		return actual === undefined ? undefined : actual === expected;
 	};
+	const left = operand(0)!;
+	const right = operand(1)!;
 	const equal =
-		typeofResult(operands[0]!, operands[1]!) ??
-		typeofResult(operands[1]!, operands[0]!) ??
-		((kindMask(operands[0]!) & kindMask(operands[1]!)) === 0 ? false : undefined);
+		typeofResult(left, right) ??
+		typeofResult(right, left) ??
+		((kindMask(left) & kindMask(right)) === 0 ? false : undefined);
 	return equal === undefined ? undefined : operator === "===" ? equal : !equal;
 }
 
