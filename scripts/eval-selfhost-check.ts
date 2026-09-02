@@ -5,6 +5,8 @@ import {
 	compileSourceToBuffer,
 	runtimeEvalOptimizationForSource,
 } from "../src/compiler/pipeline/compile.ts";
+import { scanLiteralTemplateSegment } from "../src/compiler/shared/literal-template-data.ts";
+import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 
 /**
  * Self-host validation (eval Phase 3). maligator compiles its own trimmed
@@ -16,8 +18,19 @@ import {
  * functions), so this is a milestone gate, not a unit test.
  */
 
-const SRC =
-	"const x = 1 + 2 * 3; function add(a, b) { return a + b; } const y = add(x, 4); y;";
+const SRC = `$cfg={
+entry: "tests/fixtures/express-5/assets-smoke.cjs",
+outputName: "express-assets-real-world",
+assets: {
+public: {
+type: "directory",
+path: "tests/fixtures/express-5/public",
+include: ["**/*"],
+},
+},
+engine: { primordials: "mutable", intl: { enabled: false } },
+surface: { webPlatform: true, node: true, maligator: true },
+};`;
 
 function digest(buf: Uint8Array | Array<number>): string {
 	let a = 1;
@@ -29,11 +42,15 @@ function digest(buf: Uint8Array | Array<number>): string {
 	return `${buf.length} ${a} ${b} ${buf[0]} ${buf[buf.length - 1]}`;
 }
 
-// Reference: the Node-hosted compiler.
-const reference = digest(
-	compileSourceToBuffer(SRC, {
-		optimization: runtimeEvalOptimizationForSource(SRC),
-	}),
+const referenceBuffer = compileSourceToBuffer(SRC, {
+	optimization: runtimeEvalOptimizationForSource(SRC),
+});
+const reference = digest(referenceBuffer);
+const referenceTemplate = JSON.stringify(
+	deserializeRuntimeImage(referenceBuffer).literalTemplateData,
+);
+const referenceScan = JSON.stringify(
+	scanLiteralTemplateSegment([9, 2, 10, 7, 0, 10, 8, 1], 0, "probe"),
 );
 
 // Self-hosted: an entry that compiles SRC and prints the same digest, built by
@@ -47,11 +64,15 @@ try {
 	writeFileSync(
 		entry,
 		`import { compileSourceToBuffer, runtimeEvalOptimizationForSource } from "../src/compiler/pipeline/compile.ts";
+import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
+import { scanLiteralTemplateSegment } from "../src/compiler/shared/literal-template-data.ts";
 const source = ${JSON.stringify(SRC)};
+console.log(JSON.stringify(scanLiteralTemplateSegment([9, 2, 10, 7, 0, 10, 8, 1], 0, "probe")));
 const buf = compileSourceToBuffer(source, { optimization: runtimeEvalOptimizationForSource(source) });
 let a = 1, b = 0;
 for (let i = 0; i < buf.length; i++) { a = (a + buf[i]) % 65521; b = (b + a) % 65521; }
 console.log(buf.length + " " + a + " " + b + " " + buf[0] + " " + buf[buf.length - 1]);
+console.log(JSON.stringify(deserializeRuntimeImage(buf).literalTemplateData));
 `,
 	);
 	writeFileSync(
@@ -71,7 +92,7 @@ export default defineBuild({
 	const buildOutput = execFileSync(
 		"node",
 		["src/index.ts", "build", entry, "--name", "selfhost_check", "--config", config],
-		{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+		{ encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
 	);
 	const binaryPath = buildOutput.trim();
 	if (binaryPath === "") {
@@ -83,11 +104,11 @@ export default defineBuild({
 	rmSync(tempDir, { force: true, recursive: true });
 }
 
-if (out === reference) {
+if (out === `${referenceScan}\n${reference}\n${referenceTemplate}`) {
 	console.log(`ok   self-hosted compiler matches Node: ${out}`);
 } else {
 	console.log(
-		`FAIL self-hosted ${JSON.stringify(out)} != node ${JSON.stringify(reference)}`,
+		`FAIL self-hosted ${JSON.stringify(out)} != node ${JSON.stringify(`${referenceScan}\n${reference}\n${referenceTemplate}`)}`,
 	);
 	process.exit(1);
 }
