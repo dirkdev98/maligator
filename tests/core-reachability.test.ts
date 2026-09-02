@@ -102,6 +102,19 @@ function appendGlobalFunctionStore(
 	return builder.finish(entry).function;
 }
 
+function appendOpaqueGlobalStore(program: ReturnType<typeof analysisProgram>) {
+	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+	const entry = builder.createBlock([{ representation: "boxed" }]);
+	const stored = builder.blockParameters(entry)[0]!.value;
+	builder.appendInstruction(entry, "storeGlobal", [stored], {
+		outputCount: 0,
+		attributes: { index: 0 },
+	});
+	const [result] = builder.appendInstruction(entry, "createUndefined", []);
+	builder.setTerminator(entry, { kind: "return", value: result! });
+	return builder.finish(entry).function;
+}
+
 describe("Core function reachability", () => {
 	it("keeps stable identities and marks an unreferenced closed-world function dead", () => {
 		const { reachability } = directReachability();
@@ -308,6 +321,45 @@ describe("Core function reachability", () => {
 		for (const functionId of program.functionIds()) {
 			expect(reachability.reasons.get(functionId)).toContain("host-install");
 			expect(summaries.summary(functionId)?.rootReasons).toContain("host-install");
+		}
+	});
+
+	it("does not invent script roots for an opaque-only host install", () => {
+		const program = analysisProgram();
+		const entry = appendOpaqueGlobalStore(program);
+		const dead = appendLeaf(program).function;
+		const baseContext = programAnalysisContext();
+		const context = {
+			...baseContext,
+			data: {
+				...baseContext.data,
+				hostInstallCandidates: [
+					{ installer: "test", exports: [{ name: "opaque", slot: 0 }] },
+				],
+			},
+		};
+		const manager = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const targets = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		const reachability = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+		const summaries = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+			scope: "program",
+		});
+
+		expect(targets.globalStoreTargets(0)).toMatchObject({
+			functions: [],
+			anyScript: false,
+			opaque: true,
+		});
+		expect(reachability.liveFunctions).toEqual([entry]);
+		expect(reachability.dead).toEqual(new Set([dead]));
+		for (const functionId of program.functionIds()) {
+			expect(summaries.summary(functionId)?.rootReasons).not.toContain("host-install");
 		}
 	});
 

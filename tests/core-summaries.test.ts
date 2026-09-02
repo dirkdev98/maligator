@@ -349,6 +349,11 @@ describe("incremental Core program summaries", () => {
 			scope: "program",
 		});
 		expect(first.summary(caller)?.parameterEscape).toEqual(["none", "retained", "none"]);
+		expect(first.summary(caller)?.parameterContainment).toEqual([
+			"preserved",
+			"unknown",
+			"preserved",
+		]);
 
 		const fn = program.function(caller);
 		const call = [...fn.instructionIds()].find(
@@ -373,6 +378,11 @@ describe("incremental Core program summaries", () => {
 			"none",
 			"retained",
 			"retained",
+		]);
+		expect(second.summary(caller)?.parameterContainment).toEqual([
+			"preserved",
+			"unknown",
+			"unknown",
 		]);
 	});
 });

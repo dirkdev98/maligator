@@ -703,8 +703,8 @@ function deriveSummary(
 			for (const [index, argument] of (site.arguments ?? []).entries()) {
 				noteCallFact(
 					argument,
-					anyScriptSummary.parameterEscape[index]!,
-					anyScriptSummary.parameterContainment[index]!,
+					anyScriptSummary.parameterEscape[index] ?? "retained",
+					anyScriptSummary.parameterContainment[index] ?? "unknown",
 				);
 			}
 			noteCallFact(
