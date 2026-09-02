@@ -55,7 +55,18 @@ interface DefinitionCache {
 }
 
 interface RegisteredAnalysis {
-	readonly signature: string;
+	readonly scope: CoreAnalysisScope;
+	readonly functionDependencies: ReadonlyArray<CoreChangeDomain>;
+	readonly programDependencies: ReadonlyArray<CoreProgramChangeDomain>;
+}
+
+function sameValues<Value>(
+	left: ReadonlyArray<Value>,
+	right: ReadonlyArray<Value>,
+): boolean {
+	return (
+		left.length === right.length && left.every((value, index) => value === right[index])
+	);
 }
 
 function sortedFunctions(
@@ -171,16 +182,20 @@ export class CoreAnalysisManager {
 				`Program analysis ${definition.key} must declare an explicit program dependency`,
 			);
 		}
-		const signature = JSON.stringify({
-			scope: definition.scope,
-			functionDependencies,
-			programDependencies,
-		});
 		const registered = this.#registered.get(definition.key);
-		if (registered !== undefined && registered.signature !== signature) {
+		if (
+			registered !== undefined &&
+			(registered.scope !== definition.scope ||
+				!sameValues(registered.functionDependencies, functionDependencies) ||
+				!sameValues(registered.programDependencies, programDependencies))
+		) {
 			throw new Error(`Core analysis key ${definition.key} has conflicting dependencies`);
 		}
-		this.#registered.set(definition.key, { signature });
+		this.#registered.set(definition.key, {
+			scope: definition.scope,
+			functionDependencies: [...functionDependencies],
+			programDependencies: [...programDependencies],
+		});
 		this.#validatedDefinitions.add(definition);
 	}
 

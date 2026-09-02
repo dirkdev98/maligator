@@ -48,6 +48,11 @@ function productionSources(): ReadonlyArray<string> {
 	return [...core, ...target].sort();
 }
 
+const COMPILER_STATE_SOURCES = [
+	"src/compiler/shared/compiler-facts.ts",
+	"src/compiler/shared/fact-implication.ts",
+];
+
 function sourcePosition(source: ts.SourceFile, node: ts.Node): string {
 	const location = source.getLineAndCharacterOfPosition(node.getStart(source));
 	return `${path.relative(process.cwd(), source.fileName)}:${location.line + 1}:${location.character + 1}`;
@@ -66,6 +71,33 @@ function namedAccess(
 }
 
 describe("Core kernel source structure", () => {
+	it("keeps serialization out of optimizer state identity", () => {
+		const violations: Array<string> = [];
+		for (const sourcePath of [...productionSources(), ...COMPILER_STATE_SOURCES]) {
+			const source = ts.createSourceFile(
+				sourcePath,
+				ts.sys.readFile(sourcePath) ?? "",
+				ts.ScriptTarget.Latest,
+				true,
+			);
+			const visit = (node: ts.Node): void => {
+				if (
+					ts.isCallExpression(node) &&
+					ts.isPropertyAccessExpression(node.expression) &&
+					ts.isIdentifier(node.expression.expression) &&
+					node.expression.expression.text === "JSON" &&
+					node.expression.name.text === "stringify"
+				) {
+					violations.push(sourcePosition(source, node));
+				}
+				ts.forEachChild(node, visit);
+			};
+			visit(source);
+		}
+
+		expect(violations).toEqual([]);
+	});
+
 	it("keeps allocating Core snapshots out of production optimization and lowering", () => {
 		const config = ts.readConfigFile("tsconfig.json", (file) => ts.sys.readFile(file));
 		if (config.error !== undefined) {

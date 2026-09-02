@@ -76,6 +76,63 @@ export interface FactRequirements {
 	readonly obligations: ReadonlyArray<FactObligation>;
 }
 
+export function factDependencyEquals(
+	left: FactDependency,
+	right: FactDependency,
+): boolean {
+	if (left.kind !== right.kind) return false;
+	switch (left.kind) {
+		case "world":
+			return right.kind === "world" && left.fact === right.fact;
+		case "epoch":
+			return right.kind === "epoch" && left.family === right.family;
+		case "guard":
+			return right.kind === "guard" && left.id === right.id;
+		case "summary":
+			return right.kind === "summary" && left.id === right.id;
+	}
+}
+
+export function factObligationEquals(
+	left: FactObligation,
+	right: FactObligation,
+): boolean {
+	return (
+		left.kind === right.kind &&
+		left.id === right.id &&
+		left.cause === right.cause &&
+		(left.kind !== "fallback" ||
+			(right.kind === "fallback" &&
+				(left.dischargedBy === undefined
+					? right.dischargedBy === undefined
+					: right.dischargedBy !== undefined &&
+						factDependencyEquals(left.dischargedBy, right.dischargedBy))))
+	);
+}
+
+export function factDependencyArraysEqual(
+	left: ReadonlyArray<FactDependency>,
+	right: ReadonlyArray<FactDependency>,
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every((dependency, index) => factDependencyEquals(dependency, right[index]!))
+	);
+}
+
+export function factRequirementsEqual(
+	left: FactRequirements,
+	right: FactRequirements,
+): boolean {
+	return (
+		factDependencyArraysEqual(left.dependencies, right.dependencies) &&
+		left.obligations.length === right.obligations.length &&
+		left.obligations.every((obligation, index) =>
+			factObligationEquals(obligation, right.obligations[index]!),
+		)
+	);
+}
+
 export function factDependencyKey(dependency: FactDependency): string {
 	switch (dependency.kind) {
 		case "world":

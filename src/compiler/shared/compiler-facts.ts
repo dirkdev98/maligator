@@ -49,6 +49,22 @@ export type FactScope =
 	| { kind: "function"; id: number }
 	| { kind: "site"; id: SourceSiteId };
 
+function factScopesEqual(left: FactScope, right: FactScope): boolean {
+	if (left.kind !== right.kind) return false;
+	switch (left.kind) {
+		case "world":
+			return true;
+		case "program":
+			return right.kind === "program" && left.entrypoint === right.entrypoint;
+		case "module":
+			return right.kind === "module" && left.path === right.path;
+		case "function":
+			return right.kind === "function" && left.id === right.id;
+		case "site":
+			return right.kind === "site" && left.id === right.id;
+	}
+}
+
 export interface FactProof {
 	readonly scope: FactScope;
 	readonly dependencies: ReadonlyArray<FactDependency>;
@@ -94,9 +110,7 @@ export function unknownFact<T>(reason: UnknownFactReason): CompilerFact<T> {
  * rather than carrying both plus the epoch's invalidation fallback.
  */
 function mergedProof(left: FactProof, right: FactProof): FactProof | undefined {
-	if (JSON.stringify(left.scope) !== JSON.stringify(right.scope)) {
-		return undefined;
-	}
+	if (!factScopesEqual(left.scope, right.scope)) return undefined;
 	return normalizeFactRequirements({
 		scope: left.scope,
 		dependencies: [...left.dependencies, ...right.dependencies],

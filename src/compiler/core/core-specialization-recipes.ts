@@ -143,10 +143,6 @@ const PayloadTag = Object.freeze({
 	Proof: 8,
 });
 
-function jsonKey(value: unknown): string {
-	return JSON.stringify(value);
-}
-
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
@@ -186,25 +182,23 @@ export function buildCoreSpecializationRecipeTable(
 		return id;
 	};
 	const guards: Array<CompilerGuardPlan> = [];
-	const guardIds = new Map<string, number>();
+	const guardIds = new WeakMap<CompilerGuardPlan, number>();
 	const internGuard = (value: CompilerGuardPlan): number => {
-		const key = jsonKey(value);
-		const existing = guardIds.get(key);
+		const existing = guardIds.get(value);
 		if (existing !== undefined) return existing;
 		const id = guards.length;
 		guards.push(value);
-		guardIds.set(key, id);
+		guardIds.set(value, id);
 		return id;
 	};
 	const proofs: Array<KnownBuiltinCall> = [];
-	const proofIds = new Map<string, number>();
+	const proofIds = new WeakMap<KnownBuiltinCall, number>();
 	const internProof = (value: KnownBuiltinCall): number => {
-		const key = jsonKey(value);
-		const existing = proofIds.get(key);
+		const existing = proofIds.get(value);
 		if (existing !== undefined) return existing;
 		const id = proofs.length;
 		proofs.push(value);
-		proofIds.set(key, id);
+		proofIds.set(value, id);
 		return id;
 	};
 	const payload: Array<number> = [];

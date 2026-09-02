@@ -5,6 +5,7 @@ import {
 	compilerGuardPlan,
 } from "../shared/compiler-facts.ts";
 import type { ReturnRepresentation } from "../shared/effect-summary.ts";
+import { factDependencyKey, factObligationKey } from "../shared/fact-implication.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-cross-call-transforms.ts";
@@ -225,20 +226,23 @@ function mergePlanGuards(
 	left: CompilerGuardPlan,
 	right: CompilerGuardPlan,
 ): CompilerGuardPlan {
-	const unique = <Value>(values: ReadonlyArray<Value>): ReadonlyArray<Value> => {
-		const seen = new Set<string>();
-		return Object.freeze(
-			values.filter((value) => {
-				const key = JSON.stringify(value);
-				if (seen.has(key)) return false;
-				seen.add(key);
-				return true;
-			}),
-		);
+	const unique = <Value>(
+		values: ReadonlyArray<Value>,
+		keyFor: (value: Value) => string,
+	): ReadonlyArray<Value> => {
+		const result = new Map<string, Value>();
+		for (const value of values) {
+			const key = keyFor(value);
+			if (!result.has(key)) result.set(key, value);
+		}
+		return Object.freeze([...result.values()]);
 	};
 	return Object.freeze({
-		dependencies: unique([...left.dependencies, ...right.dependencies]),
-		obligations: unique([...left.obligations, ...right.obligations]),
+		dependencies: unique(
+			[...left.dependencies, ...right.dependencies],
+			factDependencyKey,
+		),
+		obligations: unique([...left.obligations, ...right.obligations], factObligationKey),
 	});
 }
 

@@ -287,7 +287,8 @@ export interface CoreMemoryVersions {
 		readonly familyWidenings: number;
 		readonly blockUpdates: number;
 	};
-	readKey(instruction: CoreInstructionId): string | undefined;
+	readHash(instruction: CoreInstructionId): number | undefined;
+	readsEquivalent(left: CoreInstructionId, right: CoreInstructionId): boolean;
 	valueForRead(
 		instruction: CoreInstructionId,
 		location: CoreExactMemoryLocation,
@@ -825,6 +826,56 @@ function memoryVersions(
 	};
 	const phis = phiOperands.size - aliases.size;
 	const blockUpdates = phiOperands.size;
+	const readHashes = new Map<CoreInstructionId, number>();
+	const readVersionHash = (instruction: CoreInstructionId): number | undefined => {
+		const cached = readHashes.get(instruction);
+		if (cached !== undefined) return cached;
+		const row = readStateRows.get(instruction);
+		if (row === undefined) return undefined;
+		const end = row.start + row.count;
+		const versions = new Set<number>();
+		let sum = 0;
+		let xor = 0;
+		for (let index = row.start; index < end; index++) {
+			const version = readStateVersions[index]!;
+			if (versions.has(version)) continue;
+			versions.add(version);
+			const mixed = Math.imul(version ^ 2_166_136_261, 16_777_619) >>> 0;
+			sum = (sum + mixed) >>> 0;
+			xor ^= mixed;
+		}
+		if (versions.size === 0) return undefined;
+		const hash = Math.imul(sum ^ xor ^ versions.size, 16_777_619) >>> 0;
+		readHashes.set(instruction, hash);
+		return hash;
+	};
+	const readContainsVersion = (
+		row: { readonly start: number; readonly count: number },
+		version: number,
+	): boolean => {
+		const end = row.start + row.count;
+		for (let index = row.start; index < end; index++) {
+			if (readStateVersions[index] === version) return true;
+		}
+		return false;
+	};
+	const equivalentReadVersions = (
+		left: CoreInstructionId,
+		right: CoreInstructionId,
+	): boolean => {
+		const leftRow = readStateRows.get(left);
+		const rightRow = readStateRows.get(right);
+		if (leftRow === undefined || rightRow === undefined) return leftRow === rightRow;
+		const leftEnd = leftRow.start + leftRow.count;
+		for (let index = leftRow.start; index < leftEnd; index++) {
+			if (!readContainsVersion(rightRow, readStateVersions[index]!)) return false;
+		}
+		const rightEnd = rightRow.start + rightRow.count;
+		for (let index = rightRow.start; index < rightEnd; index++) {
+			if (!readContainsVersion(leftRow, readStateVersions[index]!)) return false;
+		}
+		return true;
+	};
 	const result: CoreMemoryVersions = {
 		function: fn.id,
 		statistics: Object.freeze({
@@ -839,16 +890,11 @@ function memoryVersions(
 			familyWidenings,
 			blockUpdates,
 		}),
-		readKey(instruction) {
-			const row = readStateRows.get(instruction);
-			if (row === undefined) return undefined;
-			const end = row.start + row.count;
-			const versions = new Set<number>();
-			for (let index = row.start; index < end; index++)
-				versions.add(readStateVersions[index]!);
-			return versions.size === 0
-				? undefined
-				: [...versions].sort((left, right) => left - right).join(",");
+		readHash(instruction) {
+			return readVersionHash(instruction);
+		},
+		readsEquivalent(left, right) {
+			return equivalentReadVersions(left, right);
 		},
 		valueForRead(instruction, location) {
 			const slot = slotByLocation.get(locationTable.id(location));

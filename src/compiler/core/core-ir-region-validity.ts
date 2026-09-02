@@ -1,6 +1,7 @@
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
-import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
+import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { FactDependency } from "../shared/fact-implication.ts";
+import { factDependencyArraysEqual } from "../shared/fact-implication.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -380,18 +381,7 @@ function localCandidate(
 }
 
 function validBuiltinPlanGuard(
-	guard: {
-		readonly dependencies: ReadonlyArray<{
-			readonly kind: string;
-			readonly fact?: string;
-			readonly family?: string;
-		}>;
-		readonly obligations: ReadonlyArray<{
-			readonly kind: string;
-			readonly id: string;
-			readonly cause: string;
-		}>;
-	},
+	guard: CompilerGuardPlan,
 	kind:
 		| "string-split-projection"
 		| "string-slice-number"
@@ -409,8 +399,10 @@ function validBuiltinPlanGuard(
 	if (
 		!knownBuiltinCallProves(builtinCall, operation) ||
 		builtinCall.identity.kind !== "known" ||
-		JSON.stringify(builtinCall.identity.proof.dependencies) !==
-			JSON.stringify(guard.dependencies)
+		!factDependencyArraysEqual(
+			builtinCall.identity.proof.dependencies,
+			guard.dependencies,
+		)
 	)
 		return false;
 	if (guard.dependencies.length !== 1) return false;

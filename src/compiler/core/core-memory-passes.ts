@@ -88,6 +88,70 @@ function instructionOperandAt(
 	return fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + offset);
 }
 
+function coreAttributeValuesEqual(
+	left: CoreAttributeValue,
+	right: CoreAttributeValue,
+): boolean {
+	if (Object.is(left, right)) return true;
+	if (
+		left === null ||
+		right === null ||
+		typeof left !== "object" ||
+		typeof right !== "object"
+	)
+		return false;
+	if (Array.isArray(left)) {
+		if (!Array.isArray(right)) return false;
+		const leftArray = left as ReadonlyArray<CoreAttributeValue>;
+		const rightArray = right as ReadonlyArray<CoreAttributeValue>;
+		return (
+			leftArray.length === rightArray.length &&
+			leftArray.every((value, index) =>
+				coreAttributeValuesEqual(value, rightArray[index]),
+			)
+		);
+	}
+	if (Array.isArray(right)) return false;
+	const leftObject = left as Readonly<Record<string, CoreAttributeValue>>;
+	const rightObject = right as Readonly<Record<string, CoreAttributeValue>>;
+	const leftKeys = Object.keys(leftObject);
+	const rightKeys = Object.keys(rightObject);
+	return (
+		leftKeys.length === rightKeys.length &&
+		leftKeys.every(
+			(key) =>
+				Object.prototype.hasOwnProperty.call(rightObject, key) &&
+				coreAttributeValuesEqual(leftObject[key], rightObject[key]),
+		)
+	);
+}
+
+function instructionsHaveEqualInputs(
+	fn: CoreFunctionStore,
+	left: CoreInstructionId,
+	right: CoreInstructionId,
+): boolean {
+	if (
+		fn.instructionOpcode(left) !== fn.instructionOpcode(right) ||
+		!coreAttributeValuesEqual(
+			fn.instructionAttributes(left),
+			fn.instructionAttributes(right),
+		)
+	)
+		return false;
+	const leftStart = fn.kernel.instructionOperandStart(left);
+	const rightStart = fn.kernel.instructionOperandStart(right);
+	const count = fn.kernel.instructionOperandCount(left);
+	if (count !== fn.kernel.instructionOperandCount(right)) return false;
+	for (let index = 0; index < count; index++) {
+		if (
+			fn.kernel.operandAt(leftStart + index) !== fn.kernel.operandAt(rightStart + index)
+		)
+			return false;
+	}
+	return true;
+}
+
 function instructionResultAt(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -576,7 +640,7 @@ const forwardExactMemoryLoads: CorePass = {
 		const control = context.analysis(CORE_CONTROL_FLOW_ANALYSIS);
 		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
 		const available = new Map<
-			string,
+			number,
 			Array<{ readonly instruction: CoreInstructionId; readonly value: CoreValueId }>
 		>();
 		for (const block of control.reversePostorder) {
@@ -595,35 +659,28 @@ const forwardExactMemoryLoads: CorePass = {
 				)
 					continue;
 				const result = instructionResultAt(fn, instruction, 0);
-				const readKey = memory.readKey(instruction);
-				if (result === undefined || readKey === undefined) continue;
-				const key = [
-					opcode,
-					JSON.stringify(fn.instructionAttributes(instruction)),
-					materializeInstructionOperands(fn, instruction).join(","),
-					readKey,
-					fn.valueRepresentation(result),
-				].join("\0");
-				const prior = (available.get(key) ?? []).findLast(
+				const readHash = memory.readHash(instruction);
+				if (result === undefined || readHash === undefined) continue;
+				const prior = (available.get(readHash) ?? []).findLast(
 					(candidate) =>
-						fn.instructionBlock(candidate.instruction) === block ||
-						control.instructionDominatesBlock(
-							fn.instructionBlock(candidate.instruction),
-							block,
-						),
+						fn.valueRepresentation(candidate.value) === fn.valueRepresentation(result) &&
+						memory.readsEquivalent(candidate.instruction, instruction) &&
+						instructionsHaveEqualInputs(fn, candidate.instruction, instruction) &&
+						(fn.instructionBlock(candidate.instruction) === block ||
+							control.instructionDominatesBlock(
+								fn.instructionBlock(candidate.instruction),
+								block,
+							)),
 				);
-				if (
-					prior !== undefined &&
-					fn.valueRepresentation(prior.value) === fn.valueRepresentation(result)
-				) {
+				if (prior !== undefined) {
 					const editor = CoreEditor.open(program, item.function);
 					editor.replaceValueUses(result, prior.value);
 					removeInstructionAndOwnedProof(editor, fn, instruction);
 					return editor.commit();
 				}
-				const candidates = available.get(key) ?? [];
+				const candidates = available.get(readHash) ?? [];
 				candidates.push({ instruction, value: result });
-				available.set(key, candidates);
+				available.set(readHash, candidates);
 			}
 		}
 		return undefined;
