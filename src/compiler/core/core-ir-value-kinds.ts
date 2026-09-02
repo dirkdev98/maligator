@@ -21,6 +21,7 @@ import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.t
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type {
 	CoreFunctionId,
+	CoreBlockId,
 	CoreInstructionEffects,
 	CoreInstructionId,
 	CoreValueId,
@@ -283,7 +284,9 @@ export function analyzeCoreValueKinds(
 	for (let index = 0; index < fn.parameterCount; index++) {
 		formalParameters[fn.kernel.functionParameter(index)] = index;
 	}
-	for (const block of fn.blockIds()) {
+	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const block = blockIndex as CoreBlockId;
+		if (fn.kernel.blockLive(block) === 0) continue;
 		const incoming = cfg.predecessors[block] ?? [];
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const parameterCount = fn.kernel.blockParameterCount(block);
@@ -313,7 +316,13 @@ export function analyzeCoreValueKinds(
 			}
 			addKindTransfer(transfers, KIND_TRANSFER_JOIN, parameter, 0, incomingValues);
 		}
-		for (const instruction of fn.bodyInstructionIds(block)) {
+		for (
+			let instructionIndex = fn.kernel.blockFirstInstruction(block);
+			instructionIndex >= 0;
+			instructionIndex = fn.kernel.instructionNext(instructionIndex as CoreInstructionId)
+		) {
+			const instruction = instructionIndex as CoreInstructionId;
+			if (fn.kernel.instructionOpcode(instruction) < 0) continue;
 			const resultStart = fn.kernel.instructionResultStart(instruction);
 			const resultCount = fn.kernel.instructionResultCount(instruction);
 			for (let index = 0; index < resultCount; index++) {
@@ -407,7 +416,9 @@ export function analyzeCoreValueKinds(
 		wakeDependents(output, queued, queue);
 	}
 	const exactInt32 = new Uint8Array(fn.valueCapacity);
-	for (const value of fn.valueIds()) {
+	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
+		const value = valueIndex as CoreValueId;
+		if (fn.kernel.valueLive(value) === 0) continue;
 		if (fn.valueRepresentation(value) === "i32") exactInt32[value] = 1;
 		if (fn.kernel.valueDefinitionKind(value) !== 1) continue;
 		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
@@ -503,10 +514,16 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 						: fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
 				return opcode === "move" && source !== undefined && emptyInitialization(source);
 			};
-			for (const instruction of fn.instructionIds()) {
+			const storeGlobalOpcode = fn.registry.get("storeGlobal")?.id;
+			for (
+				let instructionIndex = 0;
+				storeGlobalOpcode !== undefined && instructionIndex < fn.instructionCapacity;
+				instructionIndex++
+			) {
+				const instruction = instructionIndex as CoreInstructionId;
 				if (
-					fn.instructionKind(instruction) !== "operation" ||
-					fn.instructionOpcodeName(instruction) !== "storeGlobal"
+					fn.kernel.instructionLive(instruction) === 0 ||
+					fn.kernel.instructionOpcode(instruction) !== storeGlobalOpcode
 				)
 					continue;
 				const index = fn.instructionAttributes(instruction).index;
@@ -523,10 +540,20 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 					continue;
 				stores.set(index, stores.has(index) ? null : { instruction, value });
 			}
-			const instructionOrder = new Map<CoreInstructionId, number>();
-			for (const block of fn.blockIds()) {
-				for (const [index, instruction] of [...fn.instructionIds(block)].entries()) {
-					instructionOrder.set(instruction, index);
+			const instructionOrder = new Int32Array(fn.instructionCapacity);
+			instructionOrder.fill(-1);
+			for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+				const block = blockIndex as CoreBlockId;
+				if (fn.kernel.blockLive(block) === 0) continue;
+				let order = 0;
+				for (
+					let instructionIndex = fn.kernel.blockFirstInstruction(block);
+					instructionIndex >= 0;
+					instructionIndex = fn.kernel.instructionNext(
+						instructionIndex as CoreInstructionId,
+					)
+				) {
+					instructionOrder[instructionIndex] = order++;
 				}
 			}
 			const storedKind = (value: CoreValueId): CompilerValueKindMask | undefined => {
@@ -556,8 +583,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 				const loadBlock = fn.instructionBlock(instruction);
 				const dominates =
 					storeBlock === loadBlock
-						? instructionOrder.get(store.instruction)! <
-							instructionOrder.get(instruction)!
+						? instructionOrder[store.instruction]! < instructionOrder[instruction]!
 						: cfg.instructionDominatesBlock(storeBlock, loadBlock);
 				return dominates ? storedKind(store.value) : undefined;
 			};
