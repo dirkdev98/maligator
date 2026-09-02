@@ -13,6 +13,7 @@ import {
 	scanCoreFunctionFeatures,
 } from "../src/compiler/core/core-function-features.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
@@ -90,6 +91,32 @@ describe("Core function features", () => {
 
 		expect(features.get(functionId) & CORE_FUNCTION_HAS_BACKEDGES).not.toBe(0);
 		expect(features.scans).toBe(3);
+	});
+
+	it("refreshes opcode candidates after same-feature replacements", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const functionId = builder.finish(entry).function;
+		const features = new CoreFunctionFeatureIndex(program);
+		const undefinedOpcode = coreOpcodeRegistry.require("createUndefined").id;
+		const nullOpcode = coreOpcodeRegistry.require("createNull").id;
+
+		expect(features.hasAnyOpcode(functionId, [undefinedOpcode])).toBe(true);
+		const fn = program.function(functionId);
+		const editor = CoreEditor.open(program, functionId);
+		editor.replaceInstruction(
+			coreInstructionId(fn.kernel.valueDefinitionOwner(value!)),
+			"createNull",
+			[],
+		);
+		editor.commit();
+
+		expect(features.hasAnyOpcode(functionId, [undefinedOpcode])).toBe(false);
+		expect(features.hasAnyOpcode(functionId, [nullOpcode])).toBe(true);
+		expect(features.scans).toBe(2);
 	});
 
 	it("does not infer cycles from block identity order", () => {

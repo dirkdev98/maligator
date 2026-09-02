@@ -276,6 +276,45 @@ describe("Core optimizer infrastructure", () => {
 		expect(analyzed).toEqual([loopFunction]);
 	});
 
+	it("skips function passes without a matching candidate opcode", () => {
+		const run = (requiredFunctionOpcodesAny: ReadonlyArray<string>) => {
+			const { program } = programWithTwoFunctions();
+			const analyzed: Array<number> = [];
+			const candidateAnalysis: CoreAnalysisDefinition<number> = {
+				key: "test-candidate-analysis",
+				scope: "function",
+				functionDependencies: ["body"],
+				compute({ request }) {
+					if (request.scope !== "function") throw new Error("expected function scope");
+					analyzed.push(request.function);
+					return request.function;
+				},
+			};
+			const pass: CorePass = {
+				name: "test-candidate-pass",
+				stage: "canonicalize",
+				scope: "function",
+				requiredFunctionOpcodesAny,
+				requiredAnalyses: [candidateAnalysis],
+				wakesOn: ["body"],
+				changes: { cfg: false, calls: false, facts: false, representations: false },
+				budget: { maxWorkItems: 10, maxEdits: 1, exhaustion: "error" },
+				run(passContext) {
+					passContext.analysis(candidateAnalysis);
+					return undefined;
+				},
+			};
+			const { analyses, report } = analysisHarness(program);
+			new CorePassManager(program, context(), analyses, report).runStage("canonicalize", [
+				pass,
+			]);
+			return analyzed;
+		};
+
+		expect(run(["identity"])).toEqual([0, 1]);
+		expect(run(["rewritten-identity"])).toEqual([]);
+	});
+
 	it("bounds only optional development work and reports profile exhaustion", () => {
 		const run = (
 			optionalMaxRunsPerWorkItem: number | undefined,

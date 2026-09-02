@@ -59,9 +59,11 @@ function hasControlCycle(fn: CoreFunctionStore): boolean {
 	return false;
 }
 
-export function scanCoreFunctionFeatures(
+function scanFeatures(
 	fn: CoreFunctionStore,
-	candidateOpcodes?: ArrayLike<number>,
+	candidateOpcodes: ArrayLike<number> | undefined,
+	opcodePresence: Uint32Array | undefined,
+	opcodeOffset: number,
 ): CoreFunctionFeatureBits {
 	let bits = 0;
 	for (const block of fn.blockIds()) {
@@ -77,6 +79,9 @@ export function scanCoreFunctionFeatures(
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.kernel.instructionOpcode(instruction);
 			if (opcode < 0) continue;
+			if (opcodePresence !== undefined) {
+				opcodePresence[opcodeOffset + (opcode >>> 5)]! |= 1 << (opcode & 31);
+			}
 			const descriptor = fn.registry.byId(coreOpcodeId(opcode));
 			if (descriptor.effects.mayThrow) bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
 			if (descriptor.effects.reads.length > 0 || descriptor.effects.writes.length > 0) {
@@ -95,19 +100,33 @@ export function scanCoreFunctionFeatures(
 	return bits;
 }
 
+export function scanCoreFunctionFeatures(
+	fn: CoreFunctionStore,
+	candidateOpcodes?: ArrayLike<number>,
+): CoreFunctionFeatureBits {
+	return scanFeatures(fn, candidateOpcodes, undefined, 0);
+}
+
 export class CoreFunctionFeatureIndex {
 	readonly #program: CoreProgram;
 	readonly #candidateOpcodes: ArrayLike<number> | undefined;
+	readonly #opcodeWords: number;
 	#bits: Uint32Array;
 	#versions: Float64Array;
+	#opcodeVersions: Float64Array;
+	#opcodePresence: Uint32Array;
 	#scans = 0;
 
 	constructor(program: CoreProgram, candidateOpcodes?: ArrayLike<number>) {
 		this.#program = program;
 		this.#candidateOpcodes = candidateOpcodes;
+		this.#opcodeWords = Math.ceil(program.registry.entries().length / 32);
 		this.#bits = new Uint32Array(program.functionCapacity);
 		this.#versions = new Float64Array(program.functionCapacity);
+		this.#opcodeVersions = new Float64Array(program.functionCapacity);
+		this.#opcodePresence = new Uint32Array(program.functionCapacity * this.#opcodeWords);
 		this.#versions.fill(-1);
+		this.#opcodeVersions.fill(-1);
 	}
 
 	get scans(): number {
@@ -118,11 +137,41 @@ export class CoreFunctionFeatureIndex {
 		this.#grow(functionId + 1);
 		const fn = this.#program.function(functionId);
 		if (this.#versions[functionId] !== fn.featureVersion) {
-			this.#bits[functionId] = scanCoreFunctionFeatures(fn, this.#candidateOpcodes);
-			this.#versions[functionId] = fn.featureVersion;
-			this.#scans++;
+			this.#scan(functionId, fn);
 		}
 		return this.#bits[functionId]!;
+	}
+
+	hasAnyOpcode(functionId: CoreFunctionId, opcodes: ArrayLike<number>): boolean {
+		this.#grow(functionId + 1);
+		const fn = this.#program.function(functionId);
+		if (this.#opcodeVersions[functionId] !== fn.version("body")) {
+			this.#scan(functionId, fn);
+		}
+		const opcodeOffset = functionId * this.#opcodeWords;
+		for (let index = 0; index < opcodes.length; index++) {
+			const opcode = opcodes[index]!;
+			if (
+				(this.#opcodePresence[opcodeOffset + (opcode >>> 5)]! & (1 << (opcode & 31))) !==
+				0
+			)
+				return true;
+		}
+		return false;
+	}
+
+	#scan(functionId: CoreFunctionId, fn: CoreFunctionStore): void {
+		const opcodeOffset = functionId * this.#opcodeWords;
+		this.#opcodePresence.fill(0, opcodeOffset, opcodeOffset + this.#opcodeWords);
+		this.#bits[functionId] = scanFeatures(
+			fn,
+			this.#candidateOpcodes,
+			this.#opcodePresence,
+			opcodeOffset,
+		);
+		this.#versions[functionId] = fn.featureVersion;
+		this.#opcodeVersions[functionId] = fn.version("body");
+		this.#scans++;
 	}
 
 	#grow(required: number): void {
@@ -130,10 +179,17 @@ export class CoreFunctionFeatureIndex {
 		const capacity = Math.max(required, this.#bits.length * 2, 16);
 		const bits = new Uint32Array(capacity);
 		const versions = new Float64Array(capacity);
+		const opcodeVersions = new Float64Array(capacity);
+		const opcodePresence = new Uint32Array(capacity * this.#opcodeWords);
 		versions.fill(-1);
+		opcodeVersions.fill(-1);
 		bits.set(this.#bits);
 		versions.set(this.#versions);
+		opcodeVersions.set(this.#opcodeVersions);
+		opcodePresence.set(this.#opcodePresence);
 		this.#bits = bits;
 		this.#versions = versions;
+		this.#opcodeVersions = opcodeVersions;
+		this.#opcodePresence = opcodePresence;
 	}
 }

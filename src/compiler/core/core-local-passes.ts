@@ -754,6 +754,7 @@ const rewriteExactBuiltinCalls: CorePass = {
 	name: "rewrite-exact-builtin-calls",
 	stage: "canonicalize",
 	scope: "function",
+	requiredFunctionOpcodesAny: ["call"],
 	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { ...LOCAL_CHANGES, representations: true },
@@ -1084,6 +1085,7 @@ const foldPrimitiveCoercions: CorePass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
 	scope: "function",
+	requiredFunctionOpcodesAny: ["requireCoercible", "toPropertyKey"],
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,
@@ -1290,6 +1292,7 @@ const foldRedundantTdzChecks: CorePass = {
 	name: "redundant-tdz-check-folding",
 	stage: "canonicalize",
 	scope: "function",
+	requiredFunctionOpcodesAny: ["throwIfTdz"],
 	requiredAnalyses: [
 		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,

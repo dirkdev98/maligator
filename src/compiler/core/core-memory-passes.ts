@@ -1,4 +1,5 @@
 import { CoreEditor } from "./core-editor.ts";
+import { CORE_FUNCTION_HAS_ALLOCATIONS } from "./core-function-features.ts";
 import {
 	CORE_CONTROL_FLOW_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
@@ -179,6 +180,7 @@ const foldExactAllocationObservations: CorePass = {
 	name: "fold-exact-allocation-observations",
 	stage: "memory",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -252,6 +254,8 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 	name: "forward-fresh-own-slot-prefix",
 	stage: "memory",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
+	requiredFunctionOpcodesAny: ["createObjectShaped"],
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -386,6 +390,7 @@ const refineContainedOwnSlotAccesses: CorePass = {
 	name: "refine-contained-own-slot-accesses",
 	stage: "memory",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredAnalyses: [
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 		CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
@@ -691,6 +696,8 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 	name: "rewrite-contained-fresh-array-builtins",
 	stage: "memory",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
+	requiredFunctionOpcodesAny: ["createArray"],
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
@@ -1306,6 +1313,8 @@ const scalarizeRootedContainedObjects: CorePass = {
 	name: "scalarize-rooted-contained-objects",
 	stage: "memory",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
+	requiredFunctionOpcodesAny: ["createObjectShaped"],
 	requiredAnalyses: [
 		CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
@@ -1353,6 +1362,8 @@ const refineStackObjectCellRepresentations: CorePass = {
 	name: "refine-stack-object-cell-representations",
 	stage: "memory",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
+	requiredFunctionOpcodesAny: ["createObjectShaped"],
 	requiredAnalyses: [
 		CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,

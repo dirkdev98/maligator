@@ -10,7 +10,7 @@ import {
 } from "./core-function-features.ts";
 import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
-import type { CoreFunctionId } from "./core-ir.ts";
+import type { CoreFunctionId, CoreOpcodeId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
 import type { CoreLocalOptimizerResult } from "./core-local-optimizer.ts";
 import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
@@ -59,6 +59,7 @@ export class CorePassManager {
 	readonly #localOptimization: boolean;
 	readonly #localRules: CoreLocalRuleRegistry | undefined;
 	readonly #features: CoreFunctionFeatureIndex;
+	readonly #passOpcodeIds = new WeakMap<CorePass, ReadonlyArray<CoreOpcodeId>>();
 	readonly #passContexts = new WeakMap<CorePass, CorePassContextDriver>();
 	#localSeeded = false;
 	readonly #sccs: ReadonlyArray<{
@@ -178,6 +179,11 @@ export class CorePassManager {
 				pass.requiredFunctionFeatures !== undefined &&
 				(this.#features.get(functionId) & pass.requiredFunctionFeatures) !==
 					pass.requiredFunctionFeatures
+			)
+				return;
+			if (
+				pass.requiredFunctionOpcodesAny !== undefined &&
+				!this.#features.hasAnyOpcode(functionId, this.#opcodeIds(pass))
 			)
 				return;
 			enqueuePass(passIndex, passIndex * functionStride + functionId);
@@ -374,6 +380,12 @@ export class CorePassManager {
 			throw new Error(`Core pass ${pass.name} has an invalid function feature gate`);
 		}
 		if (
+			pass.requiredFunctionOpcodesAny !== undefined &&
+			(pass.scope !== "function" || pass.requiredFunctionOpcodesAny.length === 0)
+		) {
+			throw new Error(`Core pass ${pass.name} has an invalid function opcode gate`);
+		}
+		if (
 			!Number.isSafeInteger(pass.budget.maxWorkItems) ||
 			pass.budget.maxWorkItems < 1 ||
 			!Number.isSafeInteger(pass.budget.maxEdits) ||
@@ -381,6 +393,17 @@ export class CorePassManager {
 		) {
 			throw new Error(`Core pass ${pass.name} has an invalid work budget`);
 		}
+	}
+
+	#opcodeIds(pass: CorePass): ReadonlyArray<CoreOpcodeId> {
+		let ids = this.#passOpcodeIds.get(pass);
+		if (ids !== undefined) return ids;
+		ids = pass.requiredFunctionOpcodesAny!.flatMap((opcode) => {
+			const descriptor = this.#program.registry.get(opcode);
+			return descriptor === undefined ? [] : [descriptor.id];
+		});
+		this.#passOpcodeIds.set(pass, ids);
+		return ids;
 	}
 
 	#validateChanges(pass: CorePass, changes: CoreChangeSet): void {

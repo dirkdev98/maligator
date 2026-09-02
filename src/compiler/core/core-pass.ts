@@ -61,6 +61,7 @@ export interface CorePass {
 	readonly stage: CoreOptimizationStage;
 	readonly scope: CorePassScope;
 	readonly requiredFunctionFeatures?: CoreFunctionFeatureBits;
+	readonly requiredFunctionOpcodesAny?: ReadonlyArray<string>;
 	readonly requiredAnalyses: ReadonlyArray<CoreAnalysisDefinition<unknown>>;
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;
 	readonly changes: CorePassCapabilities;
