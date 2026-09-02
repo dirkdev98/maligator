@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
@@ -24,6 +25,16 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 const OBSERVATION_OPERATORS = new Set(["typeof", "!", "===", "!=="]);
+
+it("uses program-flow dirtiness without serialized version or target keys", () => {
+	const source = readFileSync(
+		new URL("../src/compiler/core/core-ir-value-kinds.ts", import.meta.url),
+		"utf8",
+	);
+
+	expect(source).not.toMatch(/versionKeys|programValueKindVersionKey|programValueKindTargetsKey/);
+	expect(source).toMatch(/programFlow\.dirtyFunctionAt/);
+});
 
 function observations(fn: CoreFunctionStore) {
 	return coreOperations(fn).filter(

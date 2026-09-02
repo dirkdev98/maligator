@@ -27,6 +27,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { CORE_PROGRAM_FLOW_RETURN_KIND } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
@@ -500,7 +501,6 @@ export interface CoreProgramValueKinds {
 interface CoreProgramValueKindState extends CoreProgramValueKinds {
 	readonly sourceClosed: boolean;
 	readonly targets: CoreCallGraphIndex;
-	readonly versionKeys: ReadonlyMap<CoreFunctionId, string>;
 	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
 	readonly valueAnalyses: ReadonlyMap<CoreFunctionId, CoreValueKindAnalysis>;
 	readonly summaries: ReadonlyMap<CoreFunctionId, CoreProgramValueKindSummary>;
@@ -518,24 +518,6 @@ interface CoreProgramValueKindWildcardContribution {
 
 interface CoreProgramValueKindAggregate extends CoreProgramValueKindWildcardContribution {
 	readonly returnKind: CompilerValueKindMask;
-}
-
-function programValueKindVersionKey(fn: CoreFunctionStore): string {
-	const { body, cfg, calls, representations } = fn.versions;
-	return `${body}:${cfg}:${calls}:${representations}`;
-}
-
-function programValueKindTargetsKey(
-	targets: CoreCallGraphIndex,
-	functionId: CoreFunctionId,
-): string {
-	return targets
-		.outgoing(functionId)
-		.map(
-			(site) =>
-				`${site.id}:${site.targets.functions.join(",")}:${site.targets.anyScript ? "a" : "-"}:${site.targets.opaque ? "o" : "-"}`,
-		)
-		.join("|");
 }
 
 function freezeProgramValueKindSummary(
@@ -575,6 +557,8 @@ function solveCoreProgramValueKinds(
 	externallyReachable: (functionId: CoreFunctionId) => boolean,
 	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
 	previous?: CoreProgramValueKindState,
+	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
+	externallyChangedFunctions?: ReadonlySet<CoreFunctionId>,
 ): CoreProgramValueKindState {
 	const functionIds = [...program.functionIds()];
 	const maximumParameterCount = functionIds.reduce(
@@ -583,12 +567,6 @@ function solveCoreProgramValueKinds(
 		0,
 	);
 	const live = new Set(functionIds);
-	const versionKeys = new Map(
-		functionIds.map((functionId) => [
-			functionId,
-			programValueKindVersionKey(program.function(functionId)),
-		]),
-	);
 	const external = new Map(
 		functionIds.map((functionId) => [functionId, externallyReachable(functionId)]),
 	);
@@ -598,14 +576,12 @@ function solveCoreProgramValueKinds(
 		for (const functionId of functionIds) affected.add(functionId);
 		aggregateInitiallyAffected = targets.graph.hasAggregate();
 	} else {
-		for (const functionId of functionIds) {
-			if (
-				previous.versionKeys.get(functionId) !== versionKeys.get(functionId) ||
-				previous.external.get(functionId) !== external.get(functionId) ||
-				programValueKindTargetsKey(previous.targets, functionId) !==
-					programValueKindTargetsKey(targets, functionId)
-			)
+		for (const functionId of dirtyFunctions ?? functionIds) affected.add(functionId);
+		for (const functionId of targets.changedCallers) affected.add(functionId);
+		for (const functionId of externallyChangedFunctions ?? functionIds) {
+			if (previous.external.get(functionId) !== external.get(functionId)) {
 				affected.add(functionId);
+			}
 		}
 		aggregateInitiallyAffected = targets.graph.changedNodes.has(
 			CORE_ANY_SCRIPT_AGGREGATE,
@@ -924,7 +900,6 @@ function solveCoreProgramValueKinds(
 	return Object.freeze({
 		sourceClosed: targets.sourceClosed,
 		targets,
-		versionKeys,
 		external,
 		valueAnalyses,
 		summaries,
@@ -956,9 +931,20 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 		contextIdentity(context) {
 			return context.facts.closure.sourceClosure.kind;
 		},
-		compute({ program, request, previous, get }) {
+		compute({ program, request, previous, get, programFlow }) {
 			if (request.scope !== "program") throw new Error("Expected program analysis");
 			const summaries = get(CORE_PROGRAM_SUMMARIES_ANALYSIS, request);
+			const dirtyFunctions = new Array<CoreFunctionId>();
+			if (previous !== undefined) {
+				for (let index = 0; index < programFlow.dirtyFunctionCount; index++) {
+					const functionId = programFlow.dirtyFunctionAt(index);
+					if (
+						(programFlow.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_RETURN_KIND) !== 0
+					) {
+						dirtyFunctions.push(functionId);
+					}
+				}
+			}
 			return solveCoreProgramValueKinds(
 				program,
 				summaries.targets,
@@ -969,6 +955,8 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 						function: functionId,
 					}),
 				previous as CoreProgramValueKindState | undefined,
+				dirtyFunctions,
+				summaries.changedFunctions,
 			);
 		},
 	};
