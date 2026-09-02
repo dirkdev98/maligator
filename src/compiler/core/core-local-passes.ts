@@ -31,7 +31,6 @@ import {
 } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
-import { coreOpcodeSet } from "./core-ir-opcodes.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreFunctionId, coreInstructionId } from "./core-ir.ts";
@@ -1087,8 +1086,7 @@ const foldValueKindObservations: CorePass = {
 const foldPrimitiveCoercions: CorePass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("requireCoercible", "toPropertyKey"),
+	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
@@ -1096,16 +1094,8 @@ const foldPrimitiveCoercions: CorePass = {
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "instruction") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation"
-		)
-			return undefined;
-		const opcode = fn.instructionOpcodeName(item.instruction);
-		if (opcode !== "requireCoercible" && opcode !== "toPropertyKey")
-			return undefined;
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const coercible = (value: CoreValueId): boolean => {
 			const mask = kinds.kindMask(value);
@@ -1114,40 +1104,52 @@ const foldPrimitiveCoercions: CorePass = {
 				(mask & (COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_UNDEFINED)) === 0
 			);
 		};
-		if (opcode === "requireCoercible") {
-			const value = instructionOperand(fn, item.instruction, 0);
-			if (value === undefined || !coercible(value)) return undefined;
-			const editor = CoreEditor.open(program, item.function);
-			editor.removeInstruction(item.instruction);
-			return editor.commit();
-		}
-		const base = instructionOperand(fn, item.instruction, 0);
-		const key = instructionOperand(fn, item.instruction, 1);
-		const result = instructionResult(fn, item.instruction, 0);
-		if (base === undefined || key === undefined || result === undefined) return undefined;
-		if (
-			!compilerValueKindMaskIsSubset(
-				kinds.kindMask(key),
-				COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
+		let editor: CoreEditor | undefined;
+		const instructionCapacity = fn.instructionCapacity;
+		for (let id = 0; id < instructionCapacity; id++) {
+			const instruction = coreInstructionId(id);
+			if (
+				!fn.isInstructionLive(instruction) ||
+				fn.instructionKind(instruction) !== "operation"
 			)
-		)
-			return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		if (!coercible(base)) {
-			editor.insertInstruction(
-				fn.instructionBlock(item.instruction),
-				item.instruction,
-				"requireCoercible",
-				[base],
-				{
-					outputCount: 0,
-					sourcePosition: fn.instructionSourcePosition(item.instruction),
-				},
-			);
+				continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "requireCoercible") {
+				const value = instructionOperand(fn, instruction, 0);
+				if (value === undefined || !coercible(value)) continue;
+				editor ??= CoreEditor.open(program, item.function);
+				editor.removeInstruction(instruction);
+				continue;
+			}
+			if (opcode !== "toPropertyKey") continue;
+			const base = instructionOperand(fn, instruction, 0);
+			const key = instructionOperand(fn, instruction, 1);
+			const result = instructionResult(fn, instruction, 0);
+			if (base === undefined || key === undefined || result === undefined) continue;
+			if (
+				!compilerValueKindMaskIsSubset(
+					kinds.kindMask(key),
+					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
+				)
+			)
+				continue;
+			editor ??= CoreEditor.open(program, item.function);
+			if (!coercible(base)) {
+				editor.insertInstruction(
+					fn.instructionBlock(instruction),
+					instruction,
+					"requireCoercible",
+					[base],
+					{
+						outputCount: 0,
+						sourcePosition: fn.instructionSourcePosition(instruction),
+					},
+				);
+			}
+			editor.replaceValueUses(result, key);
+			editor.removeInstruction(instruction);
 		}
-		editor.replaceValueUses(result, key);
-		editor.removeInstruction(item.instruction);
-		return editor.commit();
+		return editor?.commit();
 	},
 };
 
@@ -1190,8 +1192,7 @@ function constructedCollectionReceiver(
 const rewriteNumericIdentities: CorePass = {
 	name: "numeric-algebraic-simplification",
 	stage: "canonicalize",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("binary"),
+	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
@@ -1199,85 +1200,94 @@ const rewriteNumericIdentities: CorePass = {
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "instruction") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation" ||
-			fn.instructionOpcodeName(item.instruction) !== "binary"
-		)
-			return undefined;
-		const left = instructionOperand(fn, item.instruction, 0);
-		const right = instructionOperand(fn, item.instruction, 1);
-		const result = instructionResult(fn, item.instruction, 0);
-		if (left === undefined || right === undefined || result === undefined)
-			return undefined;
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const numeric = (value: CoreValueId): boolean => {
 			const kind = kinds.exactScalar(value);
 			return kind === "number" || kind === "int32";
 		};
-		if (!numeric(left) || !numeric(right)) return undefined;
-		const operator = fn.instructionAttributes(item.instruction).operator;
-		const leftConstant = constantForValue(fn, left);
-		const rightConstant = constantForValue(fn, right);
-		let replacement: CoreValueId | undefined;
-		if (
-			operator === "+" &&
-			rightConstant?.kind === "number" &&
-			Object.is(rightConstant.value, -0)
-		) {
-			replacement = left;
-		} else if (
-			operator === "*" &&
-			rightConstant?.kind === "number" &&
-			rightConstant.value === 1
-		) {
-			replacement = left;
+		let editor: CoreEditor | undefined;
+		const instructionCapacity = fn.instructionCapacity;
+		for (let id = 0; id < instructionCapacity; id++) {
+			const instruction = coreInstructionId(id);
+			if (
+				!fn.isInstructionLive(instruction) ||
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "binary"
+			)
+				continue;
+			const left = instructionOperand(fn, instruction, 0);
+			const right = instructionOperand(fn, instruction, 1);
+			const result = instructionResult(fn, instruction, 0);
+			if (
+				left === undefined ||
+				right === undefined ||
+				result === undefined ||
+				!numeric(left) ||
+				!numeric(right)
+			)
+				continue;
+			const operator = fn.instructionAttributes(instruction).operator;
+			const leftConstant = constantForValue(fn, left);
+			const rightConstant = constantForValue(fn, right);
+			let replacement: CoreValueId | undefined;
+			if (
+				operator === "+" &&
+				rightConstant?.kind === "number" &&
+				Object.is(rightConstant.value, -0)
+			) {
+				replacement = left;
+			} else if (
+				operator === "*" &&
+				rightConstant?.kind === "number" &&
+				rightConstant.value === 1
+			) {
+				replacement = left;
+			}
+			if (
+				replacement !== undefined &&
+				fn.valueRepresentation(replacement) === fn.valueRepresentation(result)
+			) {
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceValueUses(result, replacement);
+				editor.removeInstruction(instruction);
+				continue;
+			}
+			if (
+				operator === "&" &&
+				((leftConstant?.kind === "number" && leftConstant.value === 0) ||
+					(rightConstant?.kind === "number" && rightConstant.value === 0))
+			) {
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceInstruction(instruction, "createNumber", [], {
+					attributes: { value: 0 },
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				});
+				continue;
+			}
+			if (left === right && (operator === "<" || operator === ">")) {
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceInstruction(instruction, "createBoolean", [], {
+					attributes: { value: false },
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				});
+				continue;
+			}
+			const flipped = flippedComparison(operator);
+			if (flipped !== undefined && leftConstant?.kind === "number") {
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceInstruction(instruction, "binary", [right, left], {
+					attributes: {
+						...fn.instructionAttributes(instruction),
+						operator: flipped,
+					},
+					sourcePosition: fn.instructionSourcePosition(instruction),
+					effectRefinement: fn.instructionEffectRefinement(instruction),
+				});
+			}
 		}
-		if (
-			replacement !== undefined &&
-			fn.valueRepresentation(replacement) === fn.valueRepresentation(result)
-		) {
-			const editor = CoreEditor.open(program, item.function);
-			editor.replaceValueUses(result, replacement);
-			editor.removeInstruction(item.instruction);
-			return editor.commit();
-		}
-		if (
-			operator === "&" &&
-			((leftConstant?.kind === "number" && leftConstant.value === 0) ||
-				(rightConstant?.kind === "number" && rightConstant.value === 0))
-		) {
-			const editor = CoreEditor.open(program, item.function);
-			editor.replaceInstruction(item.instruction, "createNumber", [], {
-				attributes: { value: 0 },
-				sourcePosition: fn.instructionSourcePosition(item.instruction),
-			});
-			return editor.commit();
-		}
-		if (left === right && (operator === "<" || operator === ">")) {
-			const editor = CoreEditor.open(program, item.function);
-			editor.replaceInstruction(item.instruction, "createBoolean", [], {
-				attributes: { value: false },
-				sourcePosition: fn.instructionSourcePosition(item.instruction),
-			});
-			return editor.commit();
-		}
-		const flipped = flippedComparison(operator);
-		if (flipped !== undefined && leftConstant?.kind === "number") {
-			const editor = CoreEditor.open(program, item.function);
-			editor.replaceInstruction(item.instruction, "binary", [right, left], {
-				attributes: {
-					...fn.instructionAttributes(item.instruction),
-					operator: flipped,
-				},
-				sourcePosition: fn.instructionSourcePosition(item.instruction),
-				effectRefinement: fn.instructionEffectRefinement(item.instruction),
-			});
-			return editor.commit();
-		}
-		return undefined;
+		return editor?.commit();
 	},
 };
 
