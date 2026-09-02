@@ -136,6 +136,8 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 						prior?.reachability,
 						reachabilityDirty,
 						(functionId) => programFlow.local(functionId),
+						programFlow.topology(targets.graph),
+						programFlow,
 					);
 		return Object.freeze({
 			flowRevision: epoch.revision,

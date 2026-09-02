@@ -3,11 +3,18 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import {
+	CORE_PROGRAM_FLOW_REACHABILITY,
 	CORE_PROGRAM_FLOW_INLINE_SOURCE,
 	CORE_PROGRAM_FLOW_RUNTIME_IDENTITY,
+	buildCoreProgramFlowTopology,
 	extractCoreProgramFlowLocalTransfers,
+	solveCoreProgramFlowSccs,
 } from "./core-program-flow.ts";
-import type { CoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
+import type {
+	CoreProgramFlowLocalTransfers,
+	CoreProgramFlowSccSolver,
+	CoreProgramFlowTopology,
+} from "./core-program-flow.ts";
 import type { CoreProgram } from "./core-store.ts";
 
 export type CoreFunctionReachabilityReason =
@@ -209,6 +216,8 @@ export function analyzeCoreFunctionReachability(
 	localTransfers: (functionId: CoreFunctionId) => CoreProgramFlowLocalTransfers = (
 		functionId,
 	) => extractCoreProgramFlowLocalTransfers(program, program.function(functionId)),
+	topology: CoreProgramFlowTopology = buildCoreProgramFlowTopology(targets.graph),
+	scheduler: CoreProgramFlowSccSolver = { solveSccs: solveCoreProgramFlowSccs },
 ): CoreFunctionReachabilityState {
 	const all = [...program.functionIds()];
 	const allSet = new Set(all);
@@ -310,8 +319,9 @@ export function analyzeCoreFunctionReachability(
 	}
 	const executable = new Set<CoreFunctionId>();
 	const reasons = new Map<CoreFunctionId, ReadonlySet<CoreFunctionReachabilityReason>>();
-	const pending: Array<CoreFunctionId> = [];
-	const enter = (
+	const pending = new Map<number, Set<CoreFunctionId>>();
+	const seedSccs = new Set<number>();
+	const seed = (
 		functionId: CoreFunctionId,
 		incoming: ReadonlySet<CoreFunctionReachabilityReason>,
 	): void => {
@@ -320,9 +330,14 @@ export function analyzeCoreFunctionReachability(
 		reasons.set(functionId, current);
 		if (executable.has(functionId)) return;
 		executable.add(functionId);
-		pending.push(functionId);
+		const scc = topology.owner.get(functionId);
+		if (scc === undefined) return;
+		const functions = pending.get(scc) ?? new Set();
+		functions.add(functionId);
+		pending.set(scc, functions);
+		seedSccs.add(scc);
 	};
-	for (const [functionId, rootReasons] of roots) enter(functionId, rootReasons);
+	for (const [functionId, rootReasons] of roots) seed(functionId, rootReasons);
 
 	let aggregateReached = false;
 	let functionsScanned = 0;
@@ -330,28 +345,59 @@ export function analyzeCoreFunctionReachability(
 	let wildcardCallerVisits = 0;
 	let aggregateDependencyVisits = 0;
 	let structuralEdgesFollowed = 0;
-	while (pending.length > 0) {
-		const functionId = pending.pop()!;
-		functionsScanned++;
-		for (const callee of targets.graph.exactOutgoing(functionId)) {
-			exactCallEdgesFollowed++;
-			enter(callee, FINITE_CALL_REASONS);
-		}
-		if (targets.graph.isWildcardCaller(functionId)) {
-			wildcardCallerVisits++;
-			if (!aggregateReached) {
-				aggregateReached = true;
-				for (const callee of targets.graph.functions) {
-					aggregateDependencyVisits++;
-					enter(callee, ANY_SCRIPT_REASONS);
+	scheduler.solveSccs(
+		topology,
+		[...seedSccs].map((scc) => ({
+			scc,
+			dimensions: CORE_PROGRAM_FLOW_REACHABILITY,
+		})),
+		(sccIndex, dimensions, enqueueScc) => {
+			if ((dimensions & CORE_PROGRAM_FLOW_REACHABILITY) === 0) return;
+			const queue = [...(pending.get(sccIndex) ?? [])];
+			pending.delete(sccIndex);
+			const enter = (
+				functionId: CoreFunctionId,
+				incoming: ReadonlySet<CoreFunctionReachabilityReason>,
+			): void => {
+				const current = new Set(reasons.get(functionId) ?? []);
+				for (const reason of incoming) current.add(reason);
+				reasons.set(functionId, current);
+				if (executable.has(functionId)) return;
+				executable.add(functionId);
+				const targetScc = topology.owner.get(functionId);
+				if (targetScc === undefined) return;
+				if (targetScc === sccIndex) queue.push(functionId);
+				else {
+					const functions = pending.get(targetScc) ?? new Set();
+					functions.add(functionId);
+					pending.set(targetScc, functions);
+					enqueueScc(targetScc, CORE_PROGRAM_FLOW_REACHABILITY);
+				}
+			};
+			for (let cursor = 0; cursor < queue.length; cursor++) {
+				const functionId = queue[cursor]!;
+				functionsScanned++;
+				for (const callee of targets.graph.exactOutgoing(functionId)) {
+					exactCallEdgesFollowed++;
+					enter(callee, FINITE_CALL_REASONS);
+				}
+				if (targets.graph.isWildcardCaller(functionId)) {
+					wildcardCallerVisits++;
+					if (!aggregateReached) {
+						aggregateReached = true;
+						for (const callee of targets.graph.functions) {
+							aggregateDependencyVisits++;
+							enter(callee, ANY_SCRIPT_REASONS);
+						}
+					}
+				}
+				for (const [target, edgeReasons] of structural.get(functionId) ?? []) {
+					structuralEdgesFollowed += edgeReasons.size;
+					enter(target, edgeReasons);
 				}
 			}
-		}
-		for (const [target, edgeReasons] of structural.get(functionId) ?? []) {
-			structuralEdgesFollowed += edgeReasons.size;
-			enter(target, edgeReasons);
-		}
-	}
+		},
+	);
 
 	for (const functionId of executable) {
 		const prior = previous?.reasons.get(functionId);
