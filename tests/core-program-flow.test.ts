@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import {
 	CORE_PROGRAM_FLOW_EFFECTS,
 	CORE_PROGRAM_FLOW_RETURN_KIND,
@@ -9,7 +10,6 @@ import {
 	CoreProgramFlowEngine,
 	coreProgramFlowDimensionsForDomains,
 } from "../src/compiler/core/core-program-flow.ts";
-import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_FLOW_MEMORY } from "../src/compiler/core/core-store.ts";
 import {
 	analysisProgram,
@@ -71,9 +71,7 @@ describe("Core program flow", () => {
 		expect(first.callCount).toBe(1);
 		expect(first.structuralTargetCount).toBe(1);
 		expect(first.structuralTargetAt(0)).toBe(target.function);
-		expect(first.structuralReasonMaskAt(0)).toBe(
-			CORE_PROGRAM_FLOW_RUNTIME_IDENTITY,
-		);
+		expect(first.structuralReasonMaskAt(0)).toBe(CORE_PROGRAM_FLOW_RUNTIME_IDENTITY);
 
 		const targetFunction = program.function(target.function);
 		const value = targetFunction.kernel.resultAt(

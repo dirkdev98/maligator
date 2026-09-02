@@ -247,7 +247,12 @@ function addOperationTransfer(
 	}
 	if (opcode === "binary" && operands.length === 2 && typeof operator === "string") {
 		if (COMPARISON_OPERATORS.has(operator)) {
-			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_BOOLEAN);
+			addKindTransfer(
+				buffer,
+				KIND_TRANSFER_CONSTANT,
+				output,
+				COMPILER_VALUE_KIND_BOOLEAN,
+			);
 		} else if (operator === "+") {
 			addKindTransfer(buffer, KIND_TRANSFER_ADD, output, 0, operands);
 		} else if (NUMERIC_BINARY_OPERATORS.has(operator)) {

@@ -52,8 +52,7 @@ export function analyzeCoreInterproceduralValueFlow(
 	let constructs = 0;
 	const candidateCount = localTransfers?.callCount ?? fn.instructionCapacity;
 	for (let index = 0; index < candidateCount; index++) {
-		const instruction =
-			localTransfers?.callAt(index) ?? coreInstructionId(index);
+		const instruction = localTransfers?.callAt(index) ?? coreInstructionId(index);
 		if (
 			localTransfers === undefined &&
 			(fn.kernel.instructionLive(instruction) === 0 ||

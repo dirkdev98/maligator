@@ -3,8 +3,8 @@ import type {
 	CoreAnalysisManager,
 	CoreAnalysisRequest,
 } from "./core-analysis-manager.ts";
-import type { CoreFunctionFeatureBits } from "./core-function-features.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import type { CoreFunctionFeatureBits } from "./core-function-features.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import type {
 	CoreChangeDomain,
@@ -127,7 +127,8 @@ export class CorePassContextDriver implements CorePassContext {
 	}
 
 	prepareFunction(functionId: CoreFunctionId, remainingEdits: number): CorePassContext {
-		if (this.#item.scope !== "function") throw new Error("Expected function pass context");
+		if (this.#item.scope !== "function")
+			throw new Error("Expected function pass context");
 		(this.#item as { function: CoreFunctionId }).function = functionId;
 		this.#remainingEdits = remainingEdits;
 		return this;

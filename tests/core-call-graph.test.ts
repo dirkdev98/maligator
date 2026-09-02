@@ -181,7 +181,9 @@ describe("symbolic Core call graph", () => {
 		expect(sources[0]).not.toMatch(/versionKey:\s*string|functionVersionKey/u);
 		expect(sources[0]).toMatch(/programFlow\.refresh/);
 		expect(sources[0]).toMatch(/flow\.dirtyFunctionAt/);
-		expect(sources[1]).not.toMatch(/ReadonlyMap<CoreFunctionId, string>|functionVersionKey/u);
+		expect(sources[1]).not.toMatch(
+			/ReadonlyMap<CoreFunctionId, string>|functionVersionKey/u,
+		);
 		expect(sources[1]).toMatch(/programFlow\.refresh/);
 		expect(sources[1]).toMatch(/flow\.dirtyFunctionAt/);
 		for (const path of [

@@ -32,10 +32,14 @@ it("uses program-flow dirtiness without serialized version or target keys", () =
 		"utf8",
 	);
 
-	expect(source).not.toMatch(/versionKeys|programValueKindVersionKey|programValueKindTargetsKey/);
+	expect(source).not.toMatch(
+		/versionKeys|programValueKindVersionKey|programValueKindTargetsKey/,
+	);
 	expect(source).toMatch(/programFlow\.refresh/);
 	expect(source).toMatch(/flow\.dirtyFunctionAt/);
-	expect(source).not.toMatch(/interface KindTransfer\s*\{|readonly evaluate|evaluate:\s*\(/);
+	expect(source).not.toMatch(
+		/interface KindTransfer\s*\{|readonly evaluate|evaluate:\s*\(/,
+	);
 	expect(source).toMatch(/Uint8Array\.from\(transfers\.kinds\)/);
 });
 

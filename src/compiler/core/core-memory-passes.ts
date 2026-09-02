@@ -494,8 +494,7 @@ const refineContainedOwnSlotAccesses: CorePass = {
 			if (mode === "write") {
 				kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 				const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
-					provenance.cannotBeHeldWeakly(value) ||
-					kinds!.exactScalar(value) !== undefined;
+					provenance.cannotBeHeldWeakly(value) || kinds!.exactScalar(value) !== undefined;
 				const initial =
 					exact.layout.kind === "named-slots"
 						? exact.layout.initialValues[exact.slot]
@@ -505,26 +504,26 @@ const refineContainedOwnSlotAccesses: CorePass = {
 				for (const candidate of fn.instructionIds()) {
 					if (fn.instructionKind(candidate) !== "operation") continue;
 					const access = coreMemoryAccesses(fn, candidate, {
-					ownCell(candidateBase, key, accessMode) {
-						const resolved = provenance.ownCell(candidateBase, key, accessMode);
-						return resolved === undefined
-							? undefined
-							: { allocation: resolved.layout.instruction, cell: resolved.cell };
-					},
+						ownCell(candidateBase, key, accessMode) {
+							const resolved = provenance.ownCell(candidateBase, key, accessMode);
+							return resolved === undefined
+								? undefined
+								: { allocation: resolved.layout.instruction, cell: resolved.cell };
+						},
 					}).find(
-					(candidateAccess) =>
-						candidateAccess.mode === "write" &&
-						candidateAccess.value !== undefined &&
-						coreMemoryLocationIsExact(candidateAccess.location) &&
-						candidateAccess.location.kind ===
-							(indexedExact === undefined ? "object-slot" : "element") &&
-						candidateAccess.location.allocation === exact.layout.instruction &&
-						(indexedExact === undefined
-							? namedExact !== undefined &&
-								candidateAccess.location.kind === "object-slot" &&
-								candidateAccess.location.key === namedExact.layout.keys[namedExact.slot]
-							: candidateAccess.location.kind === "element" &&
-								candidateAccess.location.index === exact.slot),
+						(candidateAccess) =>
+							candidateAccess.mode === "write" &&
+							candidateAccess.value !== undefined &&
+							coreMemoryLocationIsExact(candidateAccess.location) &&
+							candidateAccess.location.kind ===
+								(indexedExact === undefined ? "object-slot" : "element") &&
+							candidateAccess.location.allocation === exact.layout.instruction &&
+							(indexedExact === undefined
+								? namedExact !== undefined &&
+									candidateAccess.location.kind === "object-slot" &&
+									candidateAccess.location.key === namedExact.layout.keys[namedExact.slot]
+								: candidateAccess.location.kind === "element" &&
+									candidateAccess.location.index === exact.slot),
 					);
 					if (access?.value !== undefined) occupants.push(access.value);
 				}
@@ -546,7 +545,9 @@ const refineContainedOwnSlotAccesses: CorePass = {
 			const proof = editor.addFact({
 				kind: CORE_OWN_DATA_CELL_FACT,
 				value: Object.freeze({ allocation: plan.allocation, slot: plan.slot }),
-				claims: [{ kind: "effect", instruction: plan.instruction, effects: plan.effects }],
+				claims: [
+					{ kind: "effect", instruction: plan.instruction, effects: plan.effects },
+				],
 				validity: {
 					kind: "summary",
 					digest: `contained-allocation:${plan.allocation}`,
@@ -561,9 +562,7 @@ const refineContainedOwnSlotAccesses: CorePass = {
 				{
 					attributes: {
 						...plan.attributes,
-						...(plan.named
-							? { [CORE_EXACT_OWN_SLOT_ATTRIBUTE]: plan.slot }
-							: {}),
+						...(plan.named ? { [CORE_EXACT_OWN_SLOT_ATTRIBUTE]: plan.slot } : {}),
 					},
 					sourcePosition: fn.instructionSourcePosition(plan.instruction),
 					effectRefinement: { effects: plan.effects, proof },

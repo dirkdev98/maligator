@@ -172,9 +172,7 @@ describe("CoreLocalOptimizer", () => {
 		const comparisonOperands = Array.from(
 			{ length: fn.kernel.instructionOperandCount(instructions[2]!) },
 			(_, index) =>
-				fn.kernel.operandAt(
-					fn.kernel.instructionOperandStart(instructions[2]!) + index,
-				),
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instructions[2]!) + index),
 		);
 		expect(comparisonOperands).toEqual([first, first]);
 		expect(optimized.statistics.editSessions).toBe(1);

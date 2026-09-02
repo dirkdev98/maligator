@@ -1809,13 +1809,15 @@ export class CoreProgram {
 
 	programFlowFunctionAt(revision: number): CoreFunctionId {
 		const functionId = this.#programFlowFunctions[revision];
-		if (functionId === undefined) throw new Error(`Unknown Core program-flow revision ${revision}`);
+		if (functionId === undefined)
+			throw new Error(`Unknown Core program-flow revision ${revision}`);
 		return coreFunctionId(functionId);
 	}
 
 	programFlowDomainMaskAt(revision: number): CoreProgramFlowDomainMask {
 		const domains = this.#programFlowDomainMasks[revision];
-		if (domains === undefined) throw new Error(`Unknown Core program-flow revision ${revision}`);
+		if (domains === undefined)
+			throw new Error(`Unknown Core program-flow revision ${revision}`);
 		return domains;
 	}
 

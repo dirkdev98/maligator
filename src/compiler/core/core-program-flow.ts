@@ -435,8 +435,7 @@ export function coreProgramFlowDimensionsForDomains(
 			CORE_PROGRAM_FLOW_RETURN_PROVENANCE;
 	}
 	if ((domains & CORE_PROGRAM_FLOW_REPRESENTATIONS) !== 0) {
-		dimensions |=
-			CORE_PROGRAM_FLOW_RETURN_KIND | CORE_PROGRAM_FLOW_RETURN_REPRESENTATION;
+		dimensions |= CORE_PROGRAM_FLOW_RETURN_KIND | CORE_PROGRAM_FLOW_RETURN_REPRESENTATION;
 	}
 	if ((domains & CORE_PROGRAM_FLOW_SPECIALIZATION) !== 0) {
 		dimensions |= CORE_PROGRAM_FLOW_RETURN_PROVENANCE;
@@ -497,7 +496,8 @@ export class CoreProgramFlowEpoch {
 
 	dirtyFunctionAt(index: number): CoreFunctionId {
 		const functionId = this.#dirtyFunctions[index];
-		if (functionId === undefined) throw new Error(`Unknown dirty function index ${index}`);
+		if (functionId === undefined)
+			throw new Error(`Unknown dirty function index ${index}`);
 		return functionId;
 	}
 
@@ -580,10 +580,7 @@ export class CoreProgramFlowEngine {
 		);
 		this.#localTransfers[functionId] = next;
 		this.#report?.increment("programFlowLocalScans");
-		this.#report?.increment(
-			"programFlowLocalInstructionVisits",
-			next.instructionVisits,
-		);
+		this.#report?.increment("programFlowLocalInstructionVisits", next.instructionVisits);
 		this.#report?.increment("programFlowTransferRecords", next.recordCount);
 		return next;
 	}

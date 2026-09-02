@@ -45,10 +45,7 @@ import {
 	CORE_PROGRAM_FLOW_SUMMARY_CONSUMER,
 	buildCoreProgramFlowTopology,
 } from "./core-program-flow.ts";
-import type {
-	CoreProgramFlowScc,
-	CoreProgramFlowTopology,
-} from "./core-program-flow.ts";
+import type { CoreProgramFlowScc, CoreProgramFlowTopology } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "call-effect-summary";
@@ -819,7 +816,9 @@ function analyzeProgramSummaries(
 	const local = new Map<CoreFunctionId, CoreLocalFunctionSummary>();
 	const changedFunctions = new Set<CoreFunctionId>();
 	const dirty = new Set(
-		previous === undefined ? program.functionIds() : (dirtyFunctions ?? program.functionIds()),
+		previous === undefined
+			? program.functionIds()
+			: (dirtyFunctions ?? program.functionIds()),
 	);
 	let functionsAnalyzed = 0;
 	let functionsReused = 0;

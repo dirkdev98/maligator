@@ -1,9 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow-passes.ts";
-import {
-	CORE_LOCAL_CANONICALIZATION_PASSES,
-} from "../src/compiler/core/core-local-passes.ts";
+import { CORE_LOCAL_CANONICALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import type { CorePass } from "../src/compiler/core/core-pass.ts";
 import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";

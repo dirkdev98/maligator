@@ -210,9 +210,9 @@ export function analyzeCoreFunctionReachability(
 	context: CoreCompilationContext,
 	previous?: CoreFunctionReachabilityState,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
-	localTransfers: (functionId: CoreFunctionId) => CoreProgramFlowLocalTransfers =
-		(functionId) =>
-			extractCoreProgramFlowLocalTransfers(program, program.function(functionId)),
+	localTransfers: (functionId: CoreFunctionId) => CoreProgramFlowLocalTransfers = (
+		functionId,
+	) => extractCoreProgramFlowLocalTransfers(program, program.function(functionId)),
 ): CoreFunctionReachabilityState {
 	const all = [...program.functionIds()];
 	const allSet = new Set(all);
@@ -220,10 +220,16 @@ export function analyzeCoreFunctionReachability(
 	const cfgVersions = new Uint32Array(program.functionCapacity);
 	if (previous !== undefined) {
 		bodyVersions.set(
-			previous.bodyVersions.subarray(0, Math.min(bodyVersions.length, previous.bodyVersions.length)),
+			previous.bodyVersions.subarray(
+				0,
+				Math.min(bodyVersions.length, previous.bodyVersions.length),
+			),
 		);
 		cfgVersions.set(
-			previous.cfgVersions.subarray(0, Math.min(cfgVersions.length, previous.cfgVersions.length)),
+			previous.cfgVersions.subarray(
+				0,
+				Math.min(cfgVersions.length, previous.cfgVersions.length),
+			),
 		);
 	}
 	const structural = new Map(previous?.structural ?? []);
@@ -231,8 +237,9 @@ export function analyzeCoreFunctionReachability(
 	let structuralIndexEdges = 0;
 	const structurallyChanged = new Set<CoreFunctionId>();
 	const dataChanged = previous?.programDataVersion !== program.programVersion("data");
-	for (const functionId of
-		previous === undefined || dataChanged ? all : (dirtyFunctions ?? all)) {
+	for (const functionId of previous === undefined || dataChanged
+		? all
+		: (dirtyFunctions ?? all)) {
 		if (!allSet.has(functionId)) continue;
 		const fn = program.function(functionId);
 		const bodyVersion = fn.version("body") + 1;

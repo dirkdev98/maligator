@@ -17,13 +17,13 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import {
 	CORE_PROGRAM_FLOW_TARGET_CONSUMER,
 	CORE_PROGRAM_FLOW_TARGETS,
 	extractCoreProgramFlowLocalTransfers,
 } from "./core-program-flow.ts";
 import type { CoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
+import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALLEE_TARGET_CAP = 4;
 
@@ -614,9 +614,9 @@ export function analyzeCoreCallGraph(
 		buildCoreControlFlow(program, functionId),
 	context?: CoreCompilationContext,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
-	localTransfers: (functionId: CoreFunctionId) => CoreProgramFlowLocalTransfers =
-		(functionId) =>
-			extractCoreProgramFlowLocalTransfers(program, program.function(functionId)),
+	localTransfers: (functionId: CoreFunctionId) => CoreProgramFlowLocalTransfers = (
+		functionId,
+	) => extractCoreProgramFlowLocalTransfers(program, program.function(functionId)),
 ): CoreCallGraphIndexState {
 	const functionIds = [...program.functionIds()];
 	const functionSet = new Set(functionIds);
@@ -627,7 +627,9 @@ export function analyzeCoreCallGraph(
 	const changedFunctions = new Set<CoreFunctionId>();
 	const propertyKeys = new Set<string>();
 	let accessFunctionsScanned = 0;
-	for (const functionId of previous === undefined ? functionIds : (dirtyFunctions ?? functionIds)) {
+	for (const functionId of previous === undefined
+		? functionIds
+		: (dirtyFunctions ?? functionIds)) {
 		if (!functionSet.has(functionId)) continue;
 		const fn = program.function(functionId);
 		const prior = previous?.local.get(functionId);

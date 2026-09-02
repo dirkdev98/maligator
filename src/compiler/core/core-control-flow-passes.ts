@@ -1175,39 +1175,39 @@ const reduceBoundedRemainders: CorePass = {
 				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
 			) {
 				const instruction = coreInstructionId(cursor);
-			if (
-				fn.instructionOpcodeName(instruction) !== "binary" ||
-				fn.instructionAttributes(instruction).operator !== "%"
-			)
-				continue;
-			if (
-				fn.kernel.instructionOperandCount(instruction) !== 2 ||
-				fn.kernel.instructionResultCount(instruction) !== 1
-			)
-				continue;
-			const dividendValue = instructionOperand(fn, instruction, 0)!;
-			const divisorValue = instructionOperand(fn, instruction, 1)!;
-			const output = instructionResult(fn, instruction, 0)!;
-			const dividendRepresentation = numericRepresentation(dividendValue);
-			if (
-				dividendRepresentation === undefined ||
-				numericRepresentation(divisorValue) === undefined ||
-				numericRepresentation(output) !== dividendRepresentation
-			)
-				continue;
-			const dividend = ranges.range(dividendValue, block);
-			const divisor = ranges.range(divisorValue, block);
-			if (
-				dividend === undefined ||
-				divisor === undefined ||
-				divisor.minimum !== divisor.maximum ||
-				!Number.isSafeInteger(divisor.minimum) ||
-				divisor.minimum <= dividend.maximum ||
-				dividend.minimum < 0
+				if (
+					fn.instructionOpcodeName(instruction) !== "binary" ||
+					fn.instructionAttributes(instruction).operator !== "%"
 				)
-				continue;
-			editor ??= CoreEditor.open(program, item.function);
-			editor.replaceInstruction(instruction, "move", [dividendValue]);
+					continue;
+				if (
+					fn.kernel.instructionOperandCount(instruction) !== 2 ||
+					fn.kernel.instructionResultCount(instruction) !== 1
+				)
+					continue;
+				const dividendValue = instructionOperand(fn, instruction, 0)!;
+				const divisorValue = instructionOperand(fn, instruction, 1)!;
+				const output = instructionResult(fn, instruction, 0)!;
+				const dividendRepresentation = numericRepresentation(dividendValue);
+				if (
+					dividendRepresentation === undefined ||
+					numericRepresentation(divisorValue) === undefined ||
+					numericRepresentation(output) !== dividendRepresentation
+				)
+					continue;
+				const dividend = ranges.range(dividendValue, block);
+				const divisor = ranges.range(divisorValue, block);
+				if (
+					dividend === undefined ||
+					divisor === undefined ||
+					divisor.minimum !== divisor.maximum ||
+					!Number.isSafeInteger(divisor.minimum) ||
+					divisor.minimum <= dividend.maximum ||
+					dividend.minimum < 0
+				)
+					continue;
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceInstruction(instruction, "move", [dividendValue]);
 			}
 		}
 		return editor?.commit();

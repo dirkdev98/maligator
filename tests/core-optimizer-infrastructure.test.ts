@@ -206,13 +206,7 @@ describe("Core optimizer infrastructure", () => {
 
 		new CorePassManager(program, context(), analyses, report, {
 			localOptimization: true,
-		}).runStage(
-			"canonicalize",
-			[noOpPass("late", runs)],
-			[changes],
-			"finalize",
-			false,
-		);
+		}).runStage("canonicalize", [noOpPass("late", runs)], [changes], "finalize", false);
 
 		expect(runs).toEqual([1]);
 		expect(
@@ -275,10 +269,9 @@ describe("Core optimizer infrastructure", () => {
 		};
 		const { analyses, report } = analysisHarness(program);
 
-		new CorePassManager(program, context(), analyses, report).runStage(
-			"control-flow",
-			[loopPass],
-		);
+		new CorePassManager(program, context(), analyses, report).runStage("control-flow", [
+			loopPass,
+		]);
 
 		expect(analyzed).toEqual([loopFunction]);
 	});

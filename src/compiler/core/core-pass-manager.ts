@@ -79,10 +79,7 @@ export class CorePassManager {
 		this.#localRules = this.#localOptimization
 			? new CoreLocalRuleRegistry(program)
 			: undefined;
-		this.#features = new CoreFunctionFeatureIndex(
-			program,
-			this.#localRules?.dispatch,
-		);
+		this.#features = new CoreFunctionFeatureIndex(program, this.#localRules?.dispatch);
 		if (
 			!Number.isSafeInteger(this.#optionalMaxRunsPerWorkItem) ||
 			this.#optionalMaxRunsPerWorkItem < 1
@@ -122,7 +119,8 @@ export class CorePassManager {
 			const pass = passes[passIndex]!;
 			if (queued[key] !== 0) return;
 			if (
-				pass.budget.exhaustion === "stop" && runs !== undefined &&
+				pass.budget.exhaustion === "stop" &&
+				runs !== undefined &&
 				runs[key]! >= this.#optionalMaxRunsPerWorkItem
 			) {
 				if (profileExhausted[key] === 0) {

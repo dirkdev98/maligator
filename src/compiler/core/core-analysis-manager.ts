@@ -190,8 +190,8 @@ export class CoreAnalysisManager {
 		const functionDependencies = definition.functionDependencies ?? [];
 		const programDependencies = definition.programDependencies ?? [];
 		const contextIdentity = definition.contextIdentity?.(this.#context) ?? "";
-		const programVersions = programDependencies.map(
-			(domain) => this.#program.programVersion(domain),
+		const programVersions = programDependencies.map((domain) =>
+			this.#program.programVersion(domain),
 		);
 		const functionVersions: Array<number> = [];
 		const captureFunction = (functionId: CoreFunctionId): void => {
@@ -225,7 +225,8 @@ export class CoreAnalysisManager {
 		const programDependencies = definition.programDependencies ?? [];
 		if (programDependencies.length !== cached.programVersions.length) return false;
 		for (const [index, domain] of programDependencies.entries()) {
-			if (this.#program.programVersion(domain) !== cached.programVersions[index]) return false;
+			if (this.#program.programVersion(domain) !== cached.programVersions[index])
+				return false;
 		}
 		const functionDependencies = definition.functionDependencies ?? [];
 		let versionIndex = 0;

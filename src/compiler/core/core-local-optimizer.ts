@@ -256,8 +256,7 @@ function attributesEqual(left: CoreAttributeValue, right: CoreAttributeValue): b
 		leftKeys.length === rightKeys.length &&
 		leftKeys.every(
 			(key, index) =>
-				key === rightKeys[index] &&
-				attributesEqual(leftObject[key], rightObject[key]),
+				key === rightKeys[index] && attributesEqual(leftObject[key], rightObject[key]),
 		)
 	);
 }
@@ -696,10 +695,7 @@ export class CoreLocalOptimizer {
 
 	eliminateLocalDuplicates(block: CoreBlockId): boolean {
 		if (this.#fn.kernel.blockLive(block) === 0) return false;
-		const available = new Map<
-			number,
-			CoreInstructionId | Array<CoreInstructionId>
-		>();
+		const available = new Map<number, CoreInstructionId | Array<CoreInstructionId>>();
 		const replacements: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly replacement: CoreValueId;
