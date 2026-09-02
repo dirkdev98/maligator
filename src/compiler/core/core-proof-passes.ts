@@ -27,7 +27,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import { coreBlockId, coreInstructionId, coreValueId } from "./core-ir.ts";
 import type { CorePass, CorePassBudget } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -421,28 +421,33 @@ const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 	"rootUse",
 ]);
 
-function appearsOnEdge(fn: CoreFunctionStore, value: CoreValueId): boolean {
-	for (const block of fn.blockIds()) {
+function buildEdgeUseMask(fn: CoreFunctionStore): Uint8Array {
+	const appearsOnEdge = new Uint8Array(fn.valueCapacity);
+	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const block = coreBlockId(blockIndex);
+		if (!fn.isBlockLive(block)) continue;
 		const handlerStart = fn.kernel.blockHandlerArgumentStart(block);
 		const handlerCount = fn.kernel.blockHandlerArgumentCount(block);
-		for (let index = 0; index < handlerCount; index++) {
-			if (fn.kernel.handlerArgumentAt(handlerStart + index) === value) return true;
-		}
+		for (let index = 0; index < handlerCount; index++)
+			appearsOnEdge[fn.kernel.handlerArgumentAt(handlerStart + index)] = 1;
 		const terminator = fn.blockTerminator(block);
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
 		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
 		for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
 			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edgeStart + edgeOffset);
 			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edgeStart + edgeOffset);
-			for (let index = 0; index < argumentCount; index++) {
-				if (fn.kernel.operandAt(argumentStart + index) === value) return true;
-			}
+			for (let index = 0; index < argumentCount; index++)
+				appearsOnEdge[fn.kernel.operandAt(argumentStart + index)] = 1;
 		}
 	}
-	return false;
+	return appearsOnEdge;
 }
 
-function scalarConsumersOnly(fn: CoreFunctionStore, value: CoreValueId): boolean {
+function scalarConsumersOnly(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	edgeUses: Uint8Array,
+): boolean {
 	let use = fn.kernel.valueFirstUse(value);
 	while (use >= 0) {
 		const instruction = fn.kernel.useInstruction(use);
@@ -453,7 +458,7 @@ function scalarConsumersOnly(fn: CoreFunctionStore, value: CoreValueId): boolean
 			return false;
 		use = fn.kernel.useNext(use);
 	}
-	return !appearsOnEdge(fn, value);
+	return edgeUses[value] === 0;
 }
 
 function scalarProducerInputsSupportRepresentation(
@@ -499,6 +504,7 @@ function scalarCandidate(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
 	kind: CoreExactScalarKind | undefined,
+	edgeUses: Uint8Array,
 ): CoreRepresentation | undefined {
 	if (kind === undefined || fn.valueRepresentation(value) !== "boxed") return undefined;
 	const representation = scalarRepresentation(kind);
@@ -507,7 +513,7 @@ function scalarCandidate(
 		!SCALAR_PRODUCERS.has(
 			fn.instructionOpcodeName(coreInstructionId(fn.kernel.valueDefinitionOwner(value))),
 		) ||
-		!scalarConsumersOnly(fn, value)
+		!scalarConsumersOnly(fn, value, edgeUses)
 	)
 		return undefined;
 	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
@@ -529,12 +535,20 @@ const materializeLocalScalars: CorePass = {
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		const edgeUses = buildEdgeUseMask(fn);
 		const candidates: Array<{
 			readonly value: CoreValueId;
 			readonly representation: CoreRepresentation;
 		}> = [];
-		for (const value of fn.valueIds()) {
-			const representation = scalarCandidate(fn, value, kinds.exactScalar(value));
+		for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
+			const value = coreValueId(valueIndex);
+			if (!fn.isValueLive(value)) continue;
+			const representation = scalarCandidate(
+				fn,
+				value,
+				kinds.exactScalar(value),
+				edgeUses,
+			);
 			if (representation !== undefined) candidates.push({ value, representation });
 		}
 		if (candidates.length === 0) return undefined;
