@@ -76,6 +76,8 @@ export interface CoreCompilerWorkCounters {
 	readonly wildcardCallSources: number;
 	readonly wildcardCallSites: number;
 	readonly opaqueCallSites: number;
+	readonly aggregateDependencies: number;
+	readonly storedCallGraphRows: number;
 	readonly wildcardAggregateRecomputations: number;
 	readonly exactReverseCallerVisits: number;
 	readonly wildcardReverseCallerVisits: number;
@@ -130,8 +132,12 @@ export interface CoreProgramWorkReport {
 	readonly functionsAnalyzed: number;
 	readonly functionsReused: number;
 	readonly callSites: number;
-	readonly callEdges: number;
-	readonly openCallSites: number;
+	readonly exactCallEdges: number;
+	readonly wildcardCallers: number;
+	readonly wildcardCallSites: number;
+	readonly opaqueCallSites: number;
+	readonly aggregateDependencies: number;
+	readonly storedGraphRows: number;
 	readonly sccs: number;
 	readonly sccTransfers: number;
 	readonly summaryChanges: number;
@@ -175,6 +181,8 @@ const COUNTER_KEYS = [
 	"wildcardCallSources",
 	"wildcardCallSites",
 	"opaqueCallSites",
+	"aggregateDependencies",
+	"storedCallGraphRows",
 	"wildcardAggregateRecomputations",
 	"exactReverseCallerVisits",
 	"wildcardReverseCallerVisits",
@@ -267,8 +275,12 @@ export class CoreOptimizationReportBuilder {
 		functionsAnalyzed: 0,
 		functionsReused: 0,
 		callSites: 0,
-		callEdges: 0,
-		openCallSites: 0,
+		exactCallEdges: 0,
+		wildcardCallers: 0,
+		wildcardCallSites: 0,
+		opaqueCallSites: 0,
+		aggregateDependencies: 0,
+		storedGraphRows: 0,
 		sccs: 0,
 		sccTransfers: 0,
 		summaryChanges: 0,
@@ -471,12 +483,12 @@ export class CoreOptimizationReportBuilder {
 			readonly functionsAnalyzed: number;
 			readonly functionsReused: number;
 			readonly callSites: number;
-			readonly callEdges: number;
-			readonly openCallSites: number;
 			readonly exactCallEdges: number;
 			readonly wildcardCallSites: number;
 			readonly wildcardCallers: number;
 			readonly opaqueCallSites: number;
+			readonly aggregateDependencies: number;
+			readonly storedGraphRows: number;
 		},
 		summaries: {
 			readonly sccs: number;
@@ -494,6 +506,8 @@ export class CoreOptimizationReportBuilder {
 		this.increment("wildcardCallSources", callGraph.wildcardCallers);
 		this.increment("wildcardCallSites", callGraph.wildcardCallSites);
 		this.increment("opaqueCallSites", callGraph.opaqueCallSites);
+		this.increment("aggregateDependencies", callGraph.aggregateDependencies);
+		this.increment("storedCallGraphRows", callGraph.storedGraphRows);
 		this.increment("sccNodes", callGraph.functionsAnalyzed);
 		this.increment("sccEdges", summaries.sccEdgeVisits);
 		this.increment("sccTransfers", summaries.sccTransfers);
@@ -501,8 +515,12 @@ export class CoreOptimizationReportBuilder {
 			functionsAnalyzed: callGraph.functionsAnalyzed,
 			functionsReused: callGraph.functionsReused,
 			callSites: callGraph.callSites,
-			callEdges: callGraph.callEdges,
-			openCallSites: callGraph.openCallSites,
+			exactCallEdges: callGraph.exactCallEdges,
+			wildcardCallers: callGraph.wildcardCallers,
+			wildcardCallSites: callGraph.wildcardCallSites,
+			opaqueCallSites: callGraph.opaqueCallSites,
+			aggregateDependencies: callGraph.aggregateDependencies,
+			storedGraphRows: callGraph.storedGraphRows,
 			sccs: summaries.sccs,
 			sccTransfers: summaries.sccTransfers,
 			summaryChanges: summaries.summaryChanges,
@@ -682,7 +700,7 @@ export function formatCoreOptimizationReport(
 		{ label: "Core optimizer analyses", value: analyses },
 		{
 			label: "Core optimizer program",
-			value: `${report.program.functionsAnalyzed} functions analyzed/${report.program.functionsReused} reused, ${report.program.callSites} callsites/${report.program.callEdges} edges/${report.program.openCallSites} open, ${report.program.sccs} SCCs/${report.program.sccTransfers} transfers, ${report.program.summaryChanges} summary changes/${report.program.callerWakeups} caller wakeups/${report.program.affectedCallers} callers, ${report.program.deadFunctions} dead omitted`,
+			value: `${report.program.functionsAnalyzed} functions analyzed/${report.program.functionsReused} reused, ${report.program.callSites} callsites/${report.program.exactCallEdges} exact edges/${report.program.wildcardCallers} wildcard callers/${report.program.opaqueCallSites} opaque sites, ${report.program.sccs} SCCs/${report.program.sccTransfers} transfers, ${report.program.summaryChanges} summary changes/${report.program.callerWakeups} caller wakeups/${report.program.affectedCallers} callers, ${report.program.deadFunctions} dead omitted`,
 		},
 		{
 			label: "Core optimizer transforms",

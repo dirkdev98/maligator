@@ -1,4 +1,9 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import {
+	CoreCallerCursor,
+	updateCoreCallGraph,
+} from "./core-call-graph.ts";
+import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreCapturedSlotKey, coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
@@ -137,19 +142,18 @@ export interface CoreCallGraphStatistics {
 	readonly functionsAnalyzed: number;
 	readonly functionsReused: number;
 	readonly callSites: number;
-	readonly callEdges: number;
-	readonly openCallSites: number;
 	readonly exactCallEdges: number;
 	readonly wildcardCallSites: number;
 	readonly wildcardCallers: number;
 	readonly opaqueCallSites: number;
+	readonly aggregateDependencies: number;
+	readonly storedGraphRows: number;
 	readonly updatedCallSites: number;
 	readonly accessFunctionsScanned: number;
 	readonly propertyAggregateUpdates: number;
 	readonly cellAggregateUpdates: number;
 	readonly globalStoreAggregateUpdates: number;
 	readonly callSiteIndexUpdates: number;
-	readonly reverseEdgeUpdates: number;
 }
 
 export interface CoreCallGraphIndex {
@@ -158,6 +162,7 @@ export interface CoreCallGraphIndex {
 	readonly changedCallSites: ReadonlySet<CoreCallSiteId>;
 	readonly changedCallers: ReadonlySet<CoreFunctionId>;
 	readonly changedEdgeCallers: ReadonlySet<CoreFunctionId>;
+	readonly graph: CoreCallGraph;
 	targets(functionId: CoreFunctionId, value: CoreValueId): CoreCalleeTargets;
 	returnTargets(functionId: CoreFunctionId): CoreCalleeTargets;
 	globalStoreTargets(slot: number): CoreCalleeTargets;
@@ -533,7 +538,6 @@ interface CoreCallGraphIndexState extends CoreCallGraphIndex {
 	readonly globalStores: ReadonlyMap<number, CoreCalleeTargets>;
 	readonly sites: ReadonlyMap<CoreCallSiteId, CoreIndexedCallSite>;
 	readonly outgoingIndex: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreIndexedCallSite>>;
-	readonly callerIndex: ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionId>>;
 }
 
 function callSiteEqual(left: CoreIndexedCallSite, right: CoreIndexedCallSite): boolean {
@@ -548,22 +552,6 @@ function callSiteEqual(left: CoreIndexedCallSite, right: CoreIndexedCallSite): b
 		) &&
 		coreCalleeTargetsEqual(left.targets, right.targets)
 	);
-}
-
-function siteEdgeTargetCount(functionCount: number, site: CoreIndexedCallSite): number {
-	return site.targets.anyScript ? functionCount : site.targets.functions.length;
-}
-
-function outgoingEdgeTargets(
-	program: CoreProgram,
-	sites: ReadonlyArray<CoreIndexedCallSite>,
-): ReadonlySet<CoreFunctionId> {
-	const edges = new Set<CoreFunctionId>();
-	for (const site of sites) {
-		if (site.targets.anyScript) return new Set(program.functionIds());
-		for (const target of site.targets.functions) edges.add(target);
-	}
-	return edges;
 }
 
 function joinContributions<Key>(
@@ -819,18 +807,11 @@ export function analyzeCoreCallGraph(
 	const functionsReused = local.size - functionsAnalyzed;
 	const sites = new Map(previous?.sites ?? []);
 	const outgoing = new Map(previous?.outgoingIndex ?? []);
-	const callers = new Map(previous?.callerIndex ?? []);
 	const changedCallSites = new Set<CoreCallSiteId>();
 	const changedCallers = new Set<CoreFunctionId>();
 	const changedEdgeCallers = new Set<CoreFunctionId>();
-	const updatedReverseEdges = new Map<CoreFunctionId, Set<CoreFunctionId>>();
-	let callEdges = previous?.statistics.callEdges ?? 0;
-	let openCallSites = previous?.statistics.openCallSites ?? 0;
-	let exactCallEdges = previous?.statistics.exactCallEdges ?? 0;
 	let wildcardCallSites = previous?.statistics.wildcardCallSites ?? 0;
-	let wildcardCallers = previous?.statistics.wildcardCallers ?? 0;
 	let opaqueCallSites = previous?.statistics.opaqueCallSites ?? 0;
-	let reverseEdgeUpdates = 0;
 	for (const functionId of analyzed) {
 		const priorOutgoing = previous?.outgoingIndex.get(functionId) ?? [];
 		const nextRaw = local.get(functionId)?.sites ?? [];
@@ -850,46 +831,23 @@ export function analyzeCoreCallGraph(
 			if (prior !== undefined) sites.delete(id);
 			if (next !== undefined) sites.set(id, next);
 		}
-		const priorEdges = outgoingEdgeTargets(program, priorOutgoing);
-		const nextEdges = outgoingEdgeTargets(program, nextOutgoing);
+		const priorExact = [
+			...new Set(priorOutgoing.flatMap((site) => site.targets.functions)),
+		].sort((left, right) => left - right);
+		const nextExact = [
+			...new Set(nextOutgoing.flatMap((site) => site.targets.functions)),
+		].sort((left, right) => left - right);
 		if (
-			priorEdges.size !== nextEdges.size ||
-			[...priorEdges].some((target) => !nextEdges.has(target))
+			priorExact.length !== nextExact.length ||
+			priorExact.some((target, index) => target !== nextExact[index]) ||
+			priorOutgoing.some((site) => site.targets.anyScript) !==
+				nextOutgoing.some((site) => site.targets.anyScript)
 		) {
 			changedEdgeCallers.add(functionId);
 		}
-		for (const target of new Set([...priorEdges, ...nextEdges])) {
-			if (priorEdges.has(target) === nextEdges.has(target)) continue;
-			let reverse = updatedReverseEdges.get(target);
-			if (reverse === undefined) {
-				reverse = new Set(callers.get(target) ?? []);
-				updatedReverseEdges.set(target, reverse);
-			}
-			if (nextEdges.has(target)) reverse.add(functionId);
-			else reverse.delete(functionId);
-			reverseEdgeUpdates++;
-		}
-		callEdges +=
-			nextOutgoing.reduce(
-				(count, site) => count + siteEdgeTargetCount(functionIds.length, site),
-				0,
-			) -
-			priorOutgoing.reduce(
-				(count, site) => count + siteEdgeTargetCount(functionIds.length, site),
-				0,
-			);
-		openCallSites +=
-			nextOutgoing.filter((site) => site.open).length -
-			priorOutgoing.filter((site) => site.open).length;
-		exactCallEdges +=
-			nextOutgoing.reduce((count, site) => count + site.targets.functions.length, 0) -
-			priorOutgoing.reduce((count, site) => count + site.targets.functions.length, 0);
 		wildcardCallSites +=
 			nextOutgoing.filter((site) => site.targets.anyScript).length -
 			priorOutgoing.filter((site) => site.targets.anyScript).length;
-		wildcardCallers +=
-			Number(nextOutgoing.some((site) => site.targets.anyScript)) -
-			Number(priorOutgoing.some((site) => site.targets.anyScript));
 		opaqueCallSites +=
 			nextOutgoing.filter((site) => site.targets.opaque).length -
 			priorOutgoing.filter((site) => site.targets.opaque).length;
@@ -901,29 +859,33 @@ export function analyzeCoreCallGraph(
 			stableOutgoing ? priorOutgoing : Object.freeze(nextOutgoing),
 		);
 	}
-	for (const [target, reverse] of updatedReverseEdges) {
-		if (reverse.size === 0) callers.delete(target);
-		else callers.set(target, reverse);
-	}
+	const graph = updateCoreCallGraph(
+		previous?.graph,
+		functionIds,
+		[...outgoing].map(([caller, callSites]) => ({
+			caller,
+			exactTargets: callSites.flatMap((site) => site.targets.functions),
+			wildcard: callSites.some((site) => site.targets.anyScript),
+		})),
+	);
 	const updatedCallSites = changedCallSites.size;
 	const statistics = Object.freeze({
 		functions: local.size,
 		functionsAnalyzed,
 		functionsReused,
 		callSites: sites.size,
-		callEdges,
-		openCallSites,
-		exactCallEdges,
+		exactCallEdges: graph.statistics.exactCallEdges,
 		wildcardCallSites,
-		wildcardCallers,
+		wildcardCallers: graph.statistics.wildcardCallers,
 		opaqueCallSites,
+		aggregateDependencies: graph.statistics.aggregateDependencies,
+		storedGraphRows: graph.statistics.storedRows,
 		updatedCallSites,
 		accessFunctionsScanned,
 		propertyAggregateUpdates,
 		cellAggregateUpdates,
 		globalStoreAggregateUpdates,
 		callSiteIndexUpdates: changedCallSites.size,
-		reverseEdgeUpdates,
 	});
 	return Object.freeze({
 		sourceClosed,
@@ -931,6 +893,7 @@ export function analyzeCoreCallGraph(
 		changedCallSites,
 		changedCallers,
 		changedEdgeCallers,
+		graph,
 		local,
 		cells,
 		cellAccesses,
@@ -944,7 +907,6 @@ export function analyzeCoreCallGraph(
 		globalStores,
 		sites,
 		outgoingIndex: outgoing,
-		callerIndex: callers,
 		targets(functionId: CoreFunctionId, value: CoreValueId) {
 			return local.get(functionId)?.values[value] ?? CORE_CALLEE_TARGETS_OPEN;
 		},
@@ -961,7 +923,13 @@ export function analyzeCoreCallGraph(
 			return outgoing.get(functionId) ?? [];
 		},
 		callers(functionId: CoreFunctionId) {
-			return callers.get(functionId) ?? new Set();
+			const result = new Set<CoreFunctionId>();
+			graph.visitLogicalCallers(
+				functionId,
+				new CoreCallerCursor(program.functionCapacity),
+				(caller) => result.add(caller),
+			);
+			return result;
 		},
 	});
 }

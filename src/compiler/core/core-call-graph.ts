@@ -154,7 +154,9 @@ export function updateCoreCallGraph(
 	const reverse = new Map<CoreFunctionId, Array<CoreFunctionId>>();
 	const wildcardCallers: Array<CoreFunctionId> = [];
 	for (const row of rows) {
-		const targets = normalizedTargets(row.exactTargets);
+		const normalized = normalizedTargets(row.exactTargets);
+		const priorTargets = previous?.exactOutgoing(row.caller) ?? [];
+		const targets = sameNumbers(priorTargets, normalized) ? priorTargets : normalized;
 		if (targets.length > 0) outgoing.set(row.caller, targets);
 		for (const target of targets) {
 			const callers = reverse.get(target) ?? [];
@@ -165,10 +167,13 @@ export function updateCoreCallGraph(
 	}
 	wildcardCallers.sort((left, right) => left - right);
 	const exactCallers = new Map(
-		[...reverse].map(([target, callers]) => [
-			target,
-			Object.freeze([...new Set(callers)].sort((left, right) => left - right)),
-		]),
+		[...reverse].map(([target, callers]) => {
+			const normalized = Object.freeze(
+				[...new Set(callers)].sort((left, right) => left - right),
+			);
+			const priorCallers = previous?.exactCallers(target) ?? [];
+			return [target, sameNumbers(priorCallers, normalized) ? priorCallers : normalized];
+		}),
 	);
 	const changed = new Set<CoreCallGraphNode>();
 	for (const functionId of functions) {

@@ -101,7 +101,7 @@ describe("incremental Core call graph", () => {
 		);
 		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 		const outgoing = first.outgoing(caller.function);
-		const reverse = first.callers(1 as never);
+		const reverse = first.graph.exactCallers(1 as never);
 
 		const editor = CoreEditor.open(program, leaf.function);
 		editor.replaceInstruction(leaf.valueInstruction, "createNull", []);
@@ -109,7 +109,7 @@ describe("incremental Core call graph", () => {
 		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 
 		expect(second.outgoing(caller.function)).toBe(outgoing);
-		expect(second.callers(1 as never)).toBe(reverse);
+		expect(second.graph.exactCallers(1 as never)).toBe(reverse);
 		expect([...second.changedCallSites]).toEqual([]);
 		expect([...second.changedEdgeCallers]).toEqual([]);
 		expect(second.statistics).toMatchObject({
@@ -119,7 +119,6 @@ describe("incremental Core call graph", () => {
 			propertyAggregateUpdates: 0,
 			cellAggregateUpdates: 0,
 			callSiteIndexUpdates: 0,
-			reverseEdgeUpdates: 0,
 		});
 	});
 
@@ -449,7 +448,6 @@ describe("incremental Core call graph", () => {
 			opaque: true,
 		});
 		expect(graph.statistics).toMatchObject({
-			callEdges: 2,
 			exactCallEdges: 0,
 			wildcardCallSites: 1,
 			wildcardCallers: 1,
