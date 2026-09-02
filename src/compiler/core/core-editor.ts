@@ -293,6 +293,7 @@ export class CoreEditor {
 	readonly #exceptionEdgeTargets: Array<Set<CoreBlockId> | undefined> = [];
 	readonly #calls = new Set<CoreInstructionId>();
 	#replacementInstructionEpochs = new Uint32Array(0);
+	#replacementBlockEpochs = new Uint32Array(0);
 	#replacementEpoch = 0;
 	#edits = 0;
 	#committed = false;
@@ -594,9 +595,14 @@ export class CoreEditor {
 			this.#replaceUse(uses[index]!, replacement, changedInstructions, epoch);
 		}
 		this.#finishUseReplacement(changedInstructions);
-		this.#replaceHandlerArguments((candidate) =>
-			candidate === value ? replacement : candidate,
-		);
+		const changedHandlerBlocks: Array<CoreBlockId> = [];
+		let handlerUse = this.function.kernel.valueFirstHandlerUse(value);
+		while (handlerUse >= 0) {
+			const next = this.function.kernel.handlerArgumentNextUse(handlerUse);
+			this.#replaceHandlerUse(handlerUse, replacement, changedHandlerBlocks, epoch);
+			handlerUse = next;
+		}
+		this.#finishHandlerUseReplacement(changedHandlerBlocks);
 		this.#values.add(value);
 		this.#values.add(replacement);
 	}
@@ -611,8 +617,6 @@ export class CoreEditor {
 			targets.push(replacement);
 		}
 		if (values.length === 0) return;
-		const replacement = (value: CoreValueId): CoreValueId =>
-			replacements.get(value) ?? value;
 		const uses: Array<number> = [];
 		const useTargets: Array<CoreValueId> = [];
 		for (let index = 0; index < values.length; index++) {
@@ -629,7 +633,28 @@ export class CoreEditor {
 			this.#replaceUse(uses[index]!, useTargets[index]!, changedInstructions, epoch);
 		}
 		this.#finishUseReplacement(changedInstructions);
-		this.#replaceHandlerArguments(replacement);
+		const handlerUses: Array<number> = [];
+		const handlerTargets: Array<CoreValueId> = [];
+		for (let index = 0; index < values.length; index++) {
+			for (
+				let use = this.function.kernel.valueFirstHandlerUse(values[index]!);
+				use >= 0;
+				use = this.function.kernel.handlerArgumentNextUse(use)
+			) {
+				handlerUses.push(use);
+				handlerTargets.push(targets[index]!);
+			}
+		}
+		const changedHandlerBlocks: Array<CoreBlockId> = [];
+		for (let index = 0; index < handlerUses.length; index++) {
+			this.#replaceHandlerUse(
+				handlerUses[index]!,
+				handlerTargets[index]!,
+				changedHandlerBlocks,
+				epoch,
+			);
+		}
+		this.#finishHandlerUseReplacement(changedHandlerBlocks);
 		for (let index = 0; index < values.length; index++) {
 			this.#values.add(values[index]!);
 			this.#values.add(targets[index]!);
@@ -1017,8 +1042,14 @@ export class CoreEditor {
 			epochs.set(this.#replacementInstructionEpochs);
 			this.#replacementInstructionEpochs = epochs;
 		}
+		if (this.#replacementBlockEpochs.length < this.function.blockCapacity) {
+			const epochs = new Uint32Array(this.function.blockCapacity);
+			epochs.set(this.#replacementBlockEpochs);
+			this.#replacementBlockEpochs = epochs;
+		}
 		if (this.#replacementEpoch === 0xffff_ffff) {
 			this.#replacementInstructionEpochs.fill(0);
+			this.#replacementBlockEpochs.fill(0);
 			this.#replacementEpoch = 1;
 		} else {
 			this.#replacementEpoch++;
@@ -1078,27 +1109,25 @@ export class CoreEditor {
 		}
 	}
 
-	#replaceHandlerArguments(replacement: (value: CoreValueId) => CoreValueId): void {
-		for (let blockIndex = 0; blockIndex < this.function.handlerBlockCount; blockIndex++) {
-			const block = this.function.handlerBlockAt(blockIndex);
-			const handlerBlock = this.function.kernel.blockHandlerBlock(block);
-			if (handlerBlock === undefined) {
-				throw new Error(`Core handler index references block ${block} without a handler`);
-			}
-			const argumentStart = this.function.kernel.blockHandlerArgumentStart(block);
-			const argumentCount = this.function.kernel.blockHandlerArgumentCount(block);
-			let arguments_: Array<CoreValueId> | undefined;
-			for (let index = 0; index < argumentCount; index++) {
-				const argument = this.function.kernel.handlerArgumentAt(argumentStart + index);
-				const replacementValue = replacement(argument);
-				if (arguments_ === undefined && replacementValue === argument) continue;
-				arguments_ ??= Array.from({ length: argumentCount }, (_, argumentIndex) =>
-					this.function.kernel.handlerArgumentAt(argumentStart + argumentIndex),
-				);
-				arguments_[index] = replacementValue;
-			}
-			if (arguments_ !== undefined) this.setHandler(block, handlerBlock, arguments_);
+	#replaceHandlerUse(
+		use: number,
+		replacement: CoreValueId,
+		changedBlocks: Array<CoreBlockId>,
+		epoch: number,
+	): void {
+		const block = this.function.kernel.handlerArgumentBlock(use);
+		if (this.#replacementBlockEpochs[block] !== epoch) {
+			this.#replacementBlockEpochs[block] = epoch;
+			this.#touchStoredHandler(block);
+			changedBlocks.push(block);
 		}
+		this.function._replaceHandlerArgumentUse(this.#mutation, use, replacement);
+	}
+
+	#finishHandlerUseReplacement(changedBlocks: ReadonlyArray<CoreBlockId>): void {
+		if (changedBlocks.length === 0) return;
+		this.#mark("exceptionFlow", "specializationInputs");
+		this.#edits += changedBlocks.length;
 	}
 
 	#instructionOperandsEqual(

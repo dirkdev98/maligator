@@ -556,6 +556,8 @@ function verifyEdge(
 
 function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreControlFlow {
 	const indexedHandlers = new Uint8Array(fn.blockCapacity);
+	const handlerArgumentOwners = new Int32Array(fn.handlerArgumentCapacity);
+	handlerArgumentOwners.fill(-1);
 	for (let index = 0; index < fn.handlerBlockCount; index++) {
 		const block = fn.handlerBlockAt(index);
 		if (fn.kernel.blockLive(block) === 0) {
@@ -630,20 +632,22 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 			fail(`block b${block} handler index is inconsistent`);
 		}
 		if (handler !== undefined) {
+			const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
+			const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
 			checkRange(
 				`block b${block} handler argument`,
-				fn.kernel.blockHandlerArgumentStart(block),
-				fn.kernel.blockHandlerArgumentCount(block),
+				argumentStart,
+				argumentCount,
 				fn.handlerArgumentCapacity,
 			);
-			verifyEdge(
-				fn,
-				block,
-				handler,
-				fn.kernel.blockHandlerArgumentStart(block),
-				fn.kernel.blockHandlerArgumentCount(block),
-				"exceptional",
-			);
+			for (let offset = 0; offset < argumentCount; offset++) {
+				const use = argumentStart + offset;
+				if (handlerArgumentOwners[use] !== -1) {
+					fail(`handler argument use ${use} belongs to multiple blocks`);
+				}
+				handlerArgumentOwners[use] = block;
+			}
+			verifyEdge(fn, block, handler, argumentStart, argumentCount, "exceptional");
 		} else if (fn.kernel.blockHandlerArgumentCount(block) !== 0) {
 			fail(`block b${block} has handler arguments without a handler`);
 		}
@@ -663,6 +667,36 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 			) {
 				fail(`guard fact !${factId} is not anchored to @${instruction}`);
 			}
+		}
+	}
+	const indexedHandlerUses = new Uint8Array(fn.handlerArgumentCapacity);
+	for (const value of fn.valueIds()) {
+		let previous = -1;
+		for (
+			let use = fn.kernel.valueFirstHandlerUse(value);
+			use >= 0;
+			use = fn.kernel.handlerArgumentNextUse(use)
+		) {
+			if (use >= fn.handlerArgumentCapacity || indexedHandlerUses[use] !== 0) {
+				fail(`handler argument use list for %${value} is invalid at ${use}`);
+			}
+			const block = handlerArgumentOwners[use] ?? -1;
+			if (block < 0 || fn.kernel.handlerArgumentBlock(use) !== block) {
+				fail(`handler argument use ${use} has an invalid owning block`);
+			}
+			if (fn.kernel.handlerArgumentAt(use) !== value) {
+				fail(`handler argument use ${use} is linked to the wrong value`);
+			}
+			if (fn.kernel.handlerArgumentPreviousUse(use) !== previous) {
+				fail(`handler argument use ${use} has an invalid previous link`);
+			}
+			indexedHandlerUses[use] = 1;
+			previous = use;
+		}
+	}
+	for (let use = 0; use < handlerArgumentOwners.length; use++) {
+		if (handlerArgumentOwners[use]! >= 0 && indexedHandlerUses[use] === 0) {
+			fail(`handler argument use ${use} is missing from its value index`);
 		}
 	}
 	const cfg = buildCoreControlFlow(program, fn.id);

@@ -47,12 +47,16 @@ export interface CoreFunctionKernelColumns {
 	readonly valueDefinitionIndex: ReadonlyArray<number>;
 	readonly valueFirstUse: ReadonlyArray<number>;
 	readonly valueUseCount: ReadonlyArray<number>;
+	readonly valueFirstHandlerUse: ReadonlyArray<number>;
 	readonly useLive: ReadonlyArray<number>;
 	readonly useValue: ReadonlyArray<CoreValueId>;
 	readonly useInstruction: ReadonlyArray<CoreInstructionId>;
 	readonly useOperand: ReadonlyArray<number>;
 	readonly usePrevious: ReadonlyArray<number>;
 	readonly useNext: ReadonlyArray<number>;
+	readonly handlerArgumentBlock: ReadonlyArray<number>;
+	readonly handlerArgumentPreviousUse: ReadonlyArray<number>;
+	readonly handlerArgumentNextUse: ReadonlyArray<number>;
 }
 
 export class CoreFunctionKernel {
@@ -226,6 +230,10 @@ export class CoreFunctionKernel {
 		return this.#columns.valueUseCount[value] ?? 0;
 	}
 
+	valueFirstHandlerUse(value: CoreValueId): number {
+		return this.#columns.valueFirstHandlerUse[value] ?? -1;
+	}
+
 	useLive(use: number): number {
 		return this.#columns.useLive[use] ?? 0;
 	}
@@ -249,5 +257,17 @@ export class CoreFunctionKernel {
 	useNext(use: number): number {
 		this.#onUseVisit();
 		return this.#columns.useNext[use] ?? -1;
+	}
+
+	handlerArgumentBlock(use: number): CoreBlockId {
+		return this.#columns.handlerArgumentBlock[use]! as CoreBlockId;
+	}
+
+	handlerArgumentPreviousUse(use: number): number {
+		return this.#columns.handlerArgumentPreviousUse[use] ?? -1;
+	}
+
+	handlerArgumentNextUse(use: number): number {
+		return this.#columns.handlerArgumentNextUse[use] ?? -1;
 	}
 }

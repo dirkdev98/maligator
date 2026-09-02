@@ -445,6 +445,9 @@ export class CoreFunctionStore {
 	readonly #blockParameterRoles: Array<number> = [];
 	readonly #blockParameterFreeBySize: Array<Array<number> | undefined> = [];
 	readonly #handlerArguments: Array<CoreValueId> = [];
+	readonly #handlerArgumentBlock: Array<number> = [];
+	readonly #handlerArgumentPreviousUse: Array<number> = [];
+	readonly #handlerArgumentNextUse: Array<number> = [];
 	readonly #handlerArgumentFreeBySize: Array<Array<number> | undefined> = [];
 
 	readonly #instructionLive: Array<number> = [];
@@ -479,6 +482,7 @@ export class CoreFunctionStore {
 	readonly #valueDefinitionIndex: Array<number> = [];
 	readonly #valueFirstUse: Array<number> = [];
 	readonly #valueUseCount: Array<number> = [];
+	readonly #valueFirstHandlerUse: Array<number> = [];
 
 	readonly #useLive: Array<number> = [];
 	readonly #useValue: Array<CoreValueId> = [];
@@ -533,6 +537,9 @@ export class CoreFunctionStore {
 				blockHandlerArgumentStart: this.#blockHandlerArgumentStart,
 				blockHandlerArgumentCount: this.#blockHandlerArgumentCount,
 				handlerArguments: this.#handlerArguments,
+				handlerArgumentBlock: this.#handlerArgumentBlock,
+				handlerArgumentPreviousUse: this.#handlerArgumentPreviousUse,
+				handlerArgumentNextUse: this.#handlerArgumentNextUse,
 				instructionLive: this.#instructionLive,
 				instructionOpcode: this.#instructionOpcode,
 				instructionBlock: this.#instructionBlock,
@@ -562,6 +569,7 @@ export class CoreFunctionStore {
 				valueDefinitionIndex: this.#valueDefinitionIndex,
 				valueFirstUse: this.#valueFirstUse,
 				valueUseCount: this.#valueUseCount,
+				valueFirstHandlerUse: this.#valueFirstHandlerUse,
 				useLive: this.#useLive,
 				useValue: this.#useValue,
 				useInstruction: this.#useInstruction,
@@ -1186,6 +1194,23 @@ export class CoreFunctionStore {
 		this.#operands[operandIndex] = replacement;
 	}
 
+	_replaceHandlerArgumentUse(
+		mutation: CoreStoreMutation,
+		use: number,
+		replacement: CoreValueId,
+	): void {
+		this.#assertEditing(mutation);
+		this.#requireValue(replacement);
+		if ((this.#handlerArgumentBlock[use] ?? -1) < 0) {
+			throw new Error(`Core handler argument use ${use} is not live`);
+		}
+		const value = this.#handlerArguments[use]!;
+		if (value === replacement) return;
+		this.#unlinkHandlerArgumentUse(use, value);
+		this.#handlerArguments[use] = replacement;
+		this.#linkHandlerArgumentUse(use, replacement);
+	}
+
 	_refreshOperandUses(mutation: CoreStoreMutation, instruction: CoreInstructionId): void {
 		this.#assertEditing(mutation);
 		this.#requireInstruction(instruction);
@@ -1368,6 +1393,8 @@ export class CoreFunctionStore {
 		if (oldCount !== nextCount) {
 			this.#releaseHandlerArgumentRange(oldStart, oldCount);
 			start = this.#allocateHandlerArgumentRange(nextCount);
+		} else {
+			this.#deactivateHandlerArgumentRange(oldStart, oldCount);
 		}
 		const hadHandler = this.#blockHandlerBlock[block]! >= 0;
 		if (!hadHandler && handler !== undefined) {
@@ -1382,7 +1409,10 @@ export class CoreFunctionStore {
 		if (handler !== undefined) {
 			for (const [index, value] of handler.arguments.entries()) {
 				this.#requireValue(value);
-				this.#handlerArguments[start + index] = value;
+				const use = start + index;
+				this.#handlerArguments[use] = value;
+				this.#handlerArgumentBlock[use] = block;
+				this.#linkHandlerArgumentUse(use, value);
 			}
 		}
 	}
@@ -1592,6 +1622,7 @@ export class CoreFunctionStore {
 		this.#valueDefinitionIndex.push(definitionIndex);
 		this.#valueFirstUse.push(-1);
 		this.#valueUseCount.push(0);
+		this.#valueFirstHandlerUse.push(-1);
 		return value;
 	}
 
@@ -1826,14 +1857,49 @@ export class CoreFunctionStore {
 		if (free !== undefined) return free;
 		const start = this.#handlerArguments.length;
 		this.#handlerArguments.length += count;
+		this.#handlerArgumentBlock.length += count;
+		this.#handlerArgumentPreviousUse.length += count;
+		this.#handlerArgumentNextUse.length += count;
 		return start;
 	}
 
 	#releaseHandlerArgumentRange(start: number, count: number): void {
 		if (count === 0) return;
+		this.#deactivateHandlerArgumentRange(start, count);
 		const free = this.#handlerArgumentFreeBySize[count] ?? [];
 		free.push(start);
 		this.#handlerArgumentFreeBySize[count] = free;
+	}
+
+	#deactivateHandlerArgumentRange(start: number, count: number): void {
+		for (let offset = 0; offset < count; offset++) {
+			const use = start + offset;
+			const value = this.#handlerArguments[use];
+			if (value !== undefined && (this.#handlerArgumentBlock[use] ?? -1) >= 0) {
+				this.#unlinkHandlerArgumentUse(use, value);
+			}
+			this.#handlerArgumentBlock[use] = -1;
+			this.#handlerArgumentPreviousUse[use] = -1;
+			this.#handlerArgumentNextUse[use] = -1;
+		}
+	}
+
+	#linkHandlerArgumentUse(use: number, value: CoreValueId): void {
+		const next = this.#valueFirstHandlerUse[value]!;
+		this.#handlerArgumentPreviousUse[use] = -1;
+		this.#handlerArgumentNextUse[use] = next;
+		if (next >= 0) this.#handlerArgumentPreviousUse[next] = use;
+		this.#valueFirstHandlerUse[value] = use;
+	}
+
+	#unlinkHandlerArgumentUse(use: number, value: CoreValueId): void {
+		const previous = this.#handlerArgumentPreviousUse[use] ?? -1;
+		const next = this.#handlerArgumentNextUse[use] ?? -1;
+		if (previous < 0) this.#valueFirstHandlerUse[value] = next;
+		else this.#handlerArgumentNextUse[previous] = next;
+		if (next >= 0) this.#handlerArgumentPreviousUse[next] = previous;
+		this.#handlerArgumentPreviousUse[use] = -1;
+		this.#handlerArgumentNextUse[use] = -1;
 	}
 
 	#requireMutation(mutation: CoreStoreMutation): void {
