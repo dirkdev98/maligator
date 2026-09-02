@@ -131,9 +131,9 @@ describe("Core local optimizer migration matrix", () => {
 		expect(source).not.toMatch(/core-analysis-manager|core-ir-loops/);
 	});
 
-	it("has no registered block-scoped optimizer passes", () => {
+	it("has no registered instruction- or block-scoped optimizer passes", () => {
 		expect(RUNTIME_REGISTRIES.flatMap(([, passes]) => passes).filter(
-			(pass) => pass.scope === "block",
+			(pass) => pass.scope === "instruction" || pass.scope === "block",
 		)).toEqual([]);
 	});
 });

@@ -10,7 +10,7 @@ import {
 	coreMemoryLocationIsExact,
 	coreMemoryPartition,
 } from "./core-ir-memory.ts";
-import { coreInstructionEffects, coreOpcodeSet } from "./core-ir-opcodes.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	CORE_LOCAL_PROVENANCE_ANALYSIS,
 	CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS,
@@ -31,6 +31,7 @@ import {
 	coreExactCollectionBuiltinEffects,
 } from "./core-ir-value-classes.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
+import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import type {
 	CoreAttributeValue,
 	CoreBlockId,
@@ -401,14 +402,7 @@ const annotateKnownOwnSlots: CorePass = {
 const refineContainedOwnSlotAccesses: CorePass = {
 	name: "refine-contained-own-slot-accesses",
 	stage: "memory",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet(
-		"loadProperty",
-		"loadPropertyStatic",
-		"storeProperty",
-		"storePropertyStatic",
-		"defineProperty",
-	),
+	scope: "function",
 	requiredAnalyses: [
 		CORE_LOCAL_PROVENANCE_ANALYSIS,
 		CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
@@ -420,89 +414,108 @@ const refineContainedOwnSlotAccesses: CorePass = {
 	budget: MEMORY_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "instruction") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation" ||
-			fn.instructionEffectRefinement(item.instruction) !== undefined
-		)
-			return undefined;
-		const opcode = fn.instructionOpcodeName(item.instruction);
-		const mode =
-			opcode === "loadProperty" || opcode === "loadPropertyStatic"
-				? "read"
-				: opcode === "storeProperty" ||
-					  opcode === "storePropertyStatic" ||
-					  opcode === "defineProperty"
-					? "write"
-					: undefined;
-		if (mode === undefined) return undefined;
-		const base = instructionOperandAt(fn, item.instruction, 0);
-		if (base === undefined) return undefined;
-		const attributes = fn.instructionAttributes(item.instruction);
-		const stringIndex = attributes.stringIndex;
 		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
 		const shape = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS);
-		const namedExact =
-			typeof stringIndex === "number" && Number.isSafeInteger(stringIndex)
-				? shape.exactOwnSlot(base, { kind: "string-constant", index: stringIndex }, mode)
-				: undefined;
-		const indexedLayout = provenance.allocationOf(base);
-		const indexedAccess = coreMemoryAccesses(fn, item.instruction, {
-			ownCell(candidateBase, key, accessMode) {
-				const resolved = provenance.ownCell(candidateBase, key, accessMode);
-				return resolved === undefined
-					? undefined
-					: { allocation: resolved.layout.instruction, cell: resolved.cell };
-			},
-		}).find(
-			(access) =>
-				access.base === base &&
-				coreMemoryLocationIsExact(access.location) &&
+		let kinds: CoreValueKindAnalysis | undefined;
+		const plans: Array<{
+			readonly instruction: CoreInstructionId;
+			readonly opcode: string;
+			readonly attributes: Readonly<Record<string, CoreAttributeValue>>;
+			readonly allocation: CoreInstructionId;
+			readonly slot: number;
+			readonly named: boolean;
+			readonly effects: CoreInstructionEffects;
+		}> = [];
+		const instructionCapacity = fn.instructionCapacity;
+		for (let id = 0; id < instructionCapacity; id++) {
+			const instruction = coreInstructionId(id);
+			if (
+				!fn.isInstructionLive(instruction) ||
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionEffectRefinement(instruction) !== undefined
+			)
+				continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			const mode =
+				opcode === "loadProperty" || opcode === "loadPropertyStatic"
+					? "read"
+					: opcode === "storeProperty" ||
+						  opcode === "storePropertyStatic" ||
+						  opcode === "defineProperty"
+						? "write"
+						: undefined;
+			if (mode === undefined) continue;
+			const base = instructionOperandAt(fn, instruction, 0);
+			if (base === undefined) continue;
+			const attributes = fn.instructionAttributes(instruction);
+			const stringIndex = attributes.stringIndex;
+			const namedExact =
+				typeof stringIndex === "number" && Number.isSafeInteger(stringIndex)
+					? shape.exactOwnSlot(
+							base,
+							{ kind: "string-constant", index: stringIndex },
+							mode,
+						)
+					: undefined;
+			const indexedLayout = provenance.allocationOf(base);
+			const indexedAccess = coreMemoryAccesses(fn, instruction, {
+				ownCell(candidateBase, key, accessMode) {
+					const resolved = provenance.ownCell(candidateBase, key, accessMode);
+					return resolved === undefined
+						? undefined
+						: { allocation: resolved.layout.instruction, cell: resolved.cell };
+				},
+			}).find(
+				(access) =>
+					access.base === base &&
+					coreMemoryLocationIsExact(access.location) &&
+					indexedLayout?.kind === "indexed" &&
+					(access.location.kind === "element" ||
+						access.location.kind === "object-slot") &&
+					access.location.allocation === indexedLayout.instruction &&
+					(access.location.kind === "element" ||
+						(access.location.kind === "object-slot" &&
+							isLengthString(program, access.location.key))),
+			);
+			const indexedExact =
 				indexedLayout?.kind === "indexed" &&
-				(access.location.kind === "element" || access.location.kind === "object-slot") &&
-				access.location.allocation === indexedLayout.instruction &&
-				(access.location.kind === "element" ||
-					(access.location.kind === "object-slot" &&
-						isLengthString(program, access.location.key))),
-		);
-		const indexedExact =
-			indexedLayout?.kind === "indexed" &&
-			indexedAccess !== undefined &&
-			coreMemoryLocationIsExact(indexedAccess.location) &&
-			(indexedAccess.location.kind === "element" ||
-				indexedAccess.location.kind === "object-slot")
-				? {
-						layout: indexedLayout,
-						slot:
-							indexedAccess.location.kind === "element"
-								? indexedAccess.location.index
-								: 0,
-					}
-				: undefined;
-		const exact = namedExact ?? indexedExact;
-		if (exact === undefined) return undefined;
-		if (mode === "write") {
-			const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-			const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
-				provenance.cannotBeHeldWeakly(value) || kinds.exactScalar(value) !== undefined;
-			const initial =
-				exact.layout.kind === "named-slots"
-					? exact.layout.initialValues[exact.slot]
-					: exact.layout.elements.get(exact.slot)?.value;
-			if (initial === undefined) return undefined;
-			const occupants = [initial];
-			for (const candidate of fn.instructionIds()) {
-				if (fn.instructionKind(candidate) !== "operation") continue;
-				const access = coreMemoryAccesses(fn, candidate, {
+				indexedAccess !== undefined &&
+				coreMemoryLocationIsExact(indexedAccess.location) &&
+				(indexedAccess.location.kind === "element" ||
+					indexedAccess.location.kind === "object-slot")
+					? {
+							layout: indexedLayout,
+							slot:
+								indexedAccess.location.kind === "element"
+									? indexedAccess.location.index
+									: 0,
+						}
+					: undefined;
+			const exact = namedExact ?? indexedExact;
+			if (exact === undefined) continue;
+			if (mode === "write") {
+				kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+				const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
+					provenance.cannotBeHeldWeakly(value) ||
+					kinds!.exactScalar(value) !== undefined;
+				const initial =
+					exact.layout.kind === "named-slots"
+						? exact.layout.initialValues[exact.slot]
+						: exact.layout.elements.get(exact.slot)?.value;
+				if (initial === undefined) continue;
+				const occupants = [initial];
+				for (const candidate of fn.instructionIds()) {
+					if (fn.instructionKind(candidate) !== "operation") continue;
+					const access = coreMemoryAccesses(fn, candidate, {
 					ownCell(candidateBase, key, accessMode) {
 						const resolved = provenance.ownCell(candidateBase, key, accessMode);
 						return resolved === undefined
 							? undefined
 							: { allocation: resolved.layout.instruction, cell: resolved.cell };
 					},
-				}).find(
+					}).find(
 					(candidateAccess) =>
 						candidateAccess.mode === "write" &&
 						candidateAccess.value !== undefined &&
@@ -516,39 +529,51 @@ const refineContainedOwnSlotAccesses: CorePass = {
 								candidateAccess.location.key === namedExact.layout.keys[namedExact.slot]
 							: candidateAccess.location.kind === "element" &&
 								candidateAccess.location.index === exact.slot),
-				);
-				if (access?.value !== undefined) occupants.push(access.value);
+					);
+					if (access?.value !== undefined) occupants.push(access.value);
+				}
+				if (occupants.some((value) => !cannotBeHeldWeakly(value))) continue;
 			}
-			if (occupants.some((value) => !cannotBeHeldWeakly(value))) return undefined;
+			plans.push({
+				instruction,
+				opcode,
+				attributes,
+				allocation: exact.layout.instruction,
+				slot: exact.slot,
+				named: namedExact !== undefined,
+				effects: exactAccessEffects(mode),
+			});
 		}
-		const effects = exactAccessEffects(mode);
+		if (plans.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
-		const proof = editor.addFact({
-			kind: CORE_OWN_DATA_CELL_FACT,
-			value: Object.freeze({ allocation: exact.layout.instruction, slot: exact.slot }),
-			claims: [{ kind: "effect", instruction: item.instruction, effects }],
-			validity: {
-				kind: "summary",
-				digest: `contained-allocation:${exact.layout.instruction}`,
-			},
-			obligations: [],
-			origin: "local-shape-provenance",
-		});
-		editor.replaceInstruction(
-			item.instruction,
-			opcode,
-			materializeInstructionOperands(fn, item.instruction),
-			{
-				attributes: {
-					...attributes,
-					...(namedExact === undefined
-						? {}
-						: { [CORE_EXACT_OWN_SLOT_ATTRIBUTE]: exact.slot }),
+		for (const plan of plans) {
+			const proof = editor.addFact({
+				kind: CORE_OWN_DATA_CELL_FACT,
+				value: Object.freeze({ allocation: plan.allocation, slot: plan.slot }),
+				claims: [{ kind: "effect", instruction: plan.instruction, effects: plan.effects }],
+				validity: {
+					kind: "summary",
+					digest: `contained-allocation:${plan.allocation}`,
 				},
-				sourcePosition: fn.instructionSourcePosition(item.instruction),
-				effectRefinement: { effects, proof },
-			},
-		);
+				obligations: [],
+				origin: "local-shape-provenance",
+			});
+			editor.replaceInstruction(
+				plan.instruction,
+				plan.opcode,
+				materializeInstructionOperands(fn, plan.instruction),
+				{
+					attributes: {
+						...plan.attributes,
+						...(plan.named
+							? { [CORE_EXACT_OWN_SLOT_ATTRIBUTE]: plan.slot }
+							: {}),
+					},
+					sourcePosition: fn.instructionSourcePosition(plan.instruction),
+					effectRefinement: { effects: plan.effects, proof },
+				},
+			);
+		}
 		return editor.commit();
 	},
 };
