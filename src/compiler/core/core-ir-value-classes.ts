@@ -1,11 +1,6 @@
 import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
-import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import {
-	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
-	buildCoreControlFlow,
-	coreCanonicalValueRoots,
-} from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
 import type {
 	CoreFunctionId,
 	CoreInstructionEffects,
@@ -240,24 +235,6 @@ export function analyzeCoreValueClasses(
 	};
 	return Object.freeze(result);
 }
-
-export const CORE_LOCAL_VALUE_CLASS_ANALYSIS: CoreAnalysisDefinition<CoreValueClassAnalysis> =
-	{
-		key: "local-value-classes",
-		scope: "function",
-		functionDependencies: ["body", "cfg", "exceptionFlow", "facts", "representations"],
-		contextIdentity: (context) => context.facts.world.primordialPolicy,
-		compute({ program, context, request, get }) {
-			if (request.scope !== "function")
-				throw new Error("Expected function analysis request");
-			return analyzeCoreValueClasses(
-				program,
-				request.function,
-				context,
-				get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request),
-			);
-		},
-	};
 
 export interface CoreExactHeapSelection {
 	readonly program: CoreProgram;

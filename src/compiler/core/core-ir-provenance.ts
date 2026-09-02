@@ -17,8 +17,16 @@ import type {
 	CorePlanIteratorCursorKind,
 	CorePlanIteratorCursorProtocol,
 } from "./core-ir-regions.ts";
-import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
-import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
+import { analyzeCoreValueClasses } from "./core-ir-value-classes.ts";
+import type {
+	CoreExactCollectionBrand,
+	CoreValueClassAnalysis,
+} from "./core-ir-value-classes.ts";
+import {
+	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	analyzeCoreValueKinds,
+} from "./core-ir-value-kinds.ts";
+import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreFunctionId } from "./core-ir.ts";
 import type {
 	CoreAccessMode,
@@ -407,7 +415,7 @@ function baseAccessForOperand(
 	return matched;
 }
 
-function provenance(
+export function buildCoreProvenance(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
@@ -559,32 +567,73 @@ export function analyzeCoreProvenance(
 	options: CoreProvenanceOptions = {},
 ): CoreProvenance {
 	const fn = program.function(functionId);
-	return provenance(program, fn, buildCoreControlFlow(program, functionId), options);
+	return buildCoreProvenance(
+		program,
+		fn,
+		buildCoreControlFlow(program, functionId),
+		options,
+	);
 }
 
 export const coreProvenance = analyzeCoreProvenance;
 
-export const CORE_LOCAL_PROVENANCE_ANALYSIS: CoreAnalysisDefinition<CoreProvenance> = {
-	key: "local-provenance",
-	scope: "function",
-	functionDependencies: [
-		"body",
-		"cfg",
-		"exceptionFlow",
-		"memoryEffects",
-		"representations",
-	],
-	programDependencies: ["data"],
-	compute({ program, request, get }) {
-		if (request.scope !== "function")
-			throw new Error("Expected function analysis request");
-		return provenance(
-			program,
-			program.function(request.function),
-			get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request),
-		);
-	},
-};
+export interface CoreLocalFactBundle {
+	readonly function: CoreFunctionId;
+	readonly control: CoreControlFlow;
+	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
+	readonly valueKinds: CoreValueKindAnalysis;
+	readonly provenance: CoreProvenance;
+	readonly valueClasses: CoreValueClassAnalysis;
+}
+
+export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFactBundle> =
+	{
+		key: "local-fact-bundle",
+		scope: "function",
+		functionDependencies: [
+			"body",
+			"cfg",
+			"exceptionFlow",
+			"facts",
+			"memoryEffects",
+			"representations",
+			"specializationInputs",
+		],
+		programDependencies: ["data"],
+		contextIdentity: (context) => context.facts.world.primordialPolicy,
+		compute({ program, context, request, get }) {
+			if (request.scope !== "function")
+				throw new Error("Expected function analysis request");
+			const functionId = request.function;
+			const fn = program.function(functionId);
+			const control = get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request);
+			const roots = get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request);
+			let valueKindAnalysis: CoreValueKindAnalysis | undefined;
+			let provenanceAnalysis: CoreProvenance | undefined;
+			let valueClassAnalysis: CoreValueClassAnalysis | undefined;
+			return Object.freeze({
+				function: functionId,
+				control,
+				roots,
+				get valueKinds() {
+					return (valueKindAnalysis ??= get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request));
+				},
+				get provenance() {
+					return (provenanceAnalysis ??= buildCoreProvenance(program, fn, control, {
+						canonicalRoots: roots,
+					}));
+				},
+				get valueClasses() {
+					return (valueClassAnalysis ??= analyzeCoreValueClasses(
+						program,
+						functionId,
+						context,
+						roots,
+					));
+				},
+			});
+		},
+	};
 
 export function coreContainedAggregateProvenance(
 	program: CoreProgram,
@@ -1066,9 +1115,10 @@ export const CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS: CoreAnalysisDefinition<Cor
 				throw new Error("Expected function analysis request");
 			}
 			const fn = program.function(request.function);
-			const provenanceAnalysis = get(CORE_LOCAL_PROVENANCE_ANALYSIS, request);
-			const control = get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request);
-			const roots = get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request);
+			const bundle = get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
+			const provenanceAnalysis = bundle.provenance;
+			const control = bundle.control;
+			const roots = bundle.roots;
 			const index = localSpecializationIndex(fn, roots);
 			const proofs = provenanceAnalysis.layouts.flatMap((layout) => {
 				if (layout.kind !== "named-slots") return [];
@@ -3643,7 +3693,7 @@ export function discoverCoreLocalSpecializationCandidates(
 	return discoverCandidates(
 		program,
 		functionId,
-		provenance(program, fn, control, { canonicalRoots: roots }),
+		buildCoreProvenance(program, fn, control, { canonicalRoots: roots }),
 		control,
 		analyzeCoreLoopInductions(fn, control, roots, (value) =>
 			valueKinds.exactScalar(value),
@@ -3668,13 +3718,14 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 		compute({ program, request, get }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
+			const bundle = get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
 			return discoverCandidates(
 				program,
 				request.function,
-				get(CORE_LOCAL_PROVENANCE_ANALYSIS, request),
-				get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, request),
+				bundle.provenance,
+				bundle.control,
 				get(CORE_LOOP_INDUCTION_ANALYSIS, request),
-				get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request),
+				bundle.roots,
 			);
 		},
 	};

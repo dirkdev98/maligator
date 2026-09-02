@@ -11,7 +11,7 @@ import {
 } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
-	CORE_LOCAL_PROVENANCE_ANALYSIS,
+	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS,
 	CORE_OWN_DATA_CELL_FACT,
 } from "./core-ir-provenance.ts";
@@ -25,7 +25,6 @@ import {
 import {
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
-	CORE_LOCAL_VALUE_CLASS_ANALYSIS,
 	coreCollectionReceiverBrandForOperation,
 	coreExactCollectionBuiltinEffects,
 } from "./core-ir-value-classes.ts";
@@ -180,7 +179,7 @@ const foldExactAllocationObservations: CorePass = {
 	name: "fold-exact-allocation-observations",
 	stage: "memory",
 	scope: "function",
-	requiredAnalyses: [CORE_LOCAL_PROVENANCE_ANALYSIS],
+	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
@@ -188,7 +187,7 @@ const foldExactAllocationObservations: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
+		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		const objectStringIndex = program.stringConstants.findIndex(
 			(units) =>
 				units.length === 6 &&
@@ -259,7 +258,7 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 	name: "forward-fresh-own-slot-prefix",
 	stage: "memory",
 	scope: "function",
-	requiredAnalyses: [CORE_LOCAL_PROVENANCE_ANALYSIS],
+	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
@@ -267,7 +266,7 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
+		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		for (const layout of provenance.layouts) {
 			if (layout.kind !== "named-slots") continue;
 			const block = fn.instructionBlock(layout.instruction);
@@ -400,7 +399,7 @@ const refineContainedOwnSlotAccesses: CorePass = {
 	stage: "memory",
 	scope: "function",
 	requiredAnalyses: [
-		CORE_LOCAL_PROVENANCE_ANALYSIS,
+		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 		CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
@@ -411,7 +410,7 @@ const refineContainedOwnSlotAccesses: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
+		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		const shape = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS);
 		let kinds: CoreValueKindAnalysis | undefined;
 		const plans: Array<{
@@ -645,7 +644,7 @@ const refineExactCollectionAccesses: CorePass = {
 	name: "refine-exact-collection-accesses",
 	stage: "memory",
 	scope: "function",
-	requiredAnalyses: [CORE_LOCAL_VALUE_CLASS_ANALYSIS],
+	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects", "facts"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
@@ -653,7 +652,7 @@ const refineExactCollectionAccesses: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const classes = context.analysis(CORE_LOCAL_VALUE_CLASS_ANALYSIS);
+		const classes = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).valueClasses;
 		let editor: CoreEditor | undefined;
 		const instructionCapacity = fn.instructionCapacity;
 		for (let id = 0; id < instructionCapacity; id++) {
@@ -710,7 +709,7 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 	name: "rewrite-contained-fresh-array-builtins",
 	stage: "memory",
 	scope: "function",
-	requiredAnalyses: [CORE_LOCAL_PROVENANCE_ANALYSIS],
+	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: MEMORY_BUDGET,
@@ -722,7 +721,7 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 		)
 			return undefined;
 		const fn = program.function(item.function);
-		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
+		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		interface Candidate {
 			readonly call: CoreInstructionId;
 			readonly property: CoreInstructionId;
@@ -1327,7 +1326,7 @@ const scalarizeRootedContainedObjects: CorePass = {
 	scope: "function",
 	requiredAnalyses: [
 		CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
-		CORE_LOCAL_PROVENANCE_ANALYSIS,
+		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
@@ -1336,7 +1335,7 @@ const scalarizeRootedContainedObjects: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
+		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		const control = context.analysis(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS);
 		for (const layout of provenance.layouts) {
 			if (layout.kind !== "named-slots") continue;
@@ -1502,7 +1501,7 @@ const scalarReplaceContainedAggregates: CorePass = {
 	scope: "function",
 	requiredAnalyses: [
 		CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
-		CORE_LOCAL_PROVENANCE_ANALYSIS,
+		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
 	wakesOn: ["body", "memoryEffects", "facts"],
@@ -1513,7 +1512,7 @@ const scalarReplaceContainedAggregates: CorePass = {
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
-		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
+		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
 			provenance.cannotBeHeldWeakly(value) || kinds.exactScalar(value) !== undefined;

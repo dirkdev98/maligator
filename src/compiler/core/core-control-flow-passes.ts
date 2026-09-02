@@ -19,7 +19,7 @@ import {
 } from "./core-ir-memory.ts";
 import type { CoreMemoryLocationId } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
-import { CORE_LOCAL_PROVENANCE_ANALYSIS } from "./core-ir-provenance.ts";
+import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreProvenance } from "./core-ir-provenance.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type {
@@ -464,7 +464,7 @@ const hoistLoopInvariants: CorePass = {
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredAnalyses: [
 		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
-		CORE_LOCAL_PROVENANCE_ANALYSIS,
+		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
@@ -474,7 +474,7 @@ const hoistLoopInvariants: CorePass = {
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
-		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
+		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
 		const moves: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly preheader: CoreBlockId;

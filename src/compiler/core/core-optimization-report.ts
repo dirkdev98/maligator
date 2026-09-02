@@ -500,9 +500,8 @@ export class CoreOptimizationReportBuilder {
 					break;
 			}
 		}
-		if (outcome === "recompute" && analysis === "local-provenance") {
+		if (outcome === "recompute" && analysis === "local-fact-bundle") {
 			this.increment("provenanceRebuilds");
-		} else if (outcome === "recompute" && analysis.startsWith("local-")) {
 			this.increment("localFactRebuilds");
 		}
 		if (this.#analyses === undefined) return;

@@ -6,7 +6,7 @@ import {
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
-	CORE_LOCAL_PROVENANCE_ANALYSIS,
+	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	analyzeCoreProvenance,
 } from "./core-ir-provenance.ts";
 import type { CoreAccessKey, CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
@@ -813,7 +813,7 @@ export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMem
 			return memoryVersions(
 				program.function(request.function),
 				get(CORE_CONTROL_FLOW_ANALYSIS, request),
-				get(CORE_LOCAL_PROVENANCE_ANALYSIS, request),
+				get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request).provenance,
 			);
 		},
 	};

@@ -1,6 +1,6 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
-	CORE_LOCAL_PROVENANCE_ANALYSIS,
+	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	analyzeCoreProvenance,
 } from "./core-ir-provenance.ts";
 import type {
@@ -262,7 +262,7 @@ export const CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS: CoreAnalysisDefinition<CoreSh
 			return analyzeCoreShapeProvenance(
 				program,
 				request.function,
-				get(CORE_LOCAL_PROVENANCE_ANALYSIS, request),
+				get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request).provenance,
 			);
 		},
 	};
