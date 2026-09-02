@@ -88,7 +88,7 @@ describe("incremental Core call graph", () => {
 		expect(second.graph.exactCallers(1 as never)).toEqual([]);
 		expect(second.graph.exactCallers(2 as never)).toEqual([caller.function]);
 		expect(
-			second.site(`${caller.function}:${caller.callInstruction}`)?.targets.functions,
+			second.site(caller.function, caller.callInstruction)?.targets.functions,
 		).toEqual([2]);
 	});
 
@@ -205,7 +205,7 @@ describe("incremental Core call graph", () => {
 		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 		expect(second).toBe(first);
-		expect(second.site(`${caller}:${call!}`)?.targets).toMatchObject({
+		expect(second.site(caller, call!)?.targets).toMatchObject({
 			functions: [1, 2],
 			anyScript: false,
 			opaque: false,
@@ -251,9 +251,7 @@ describe("incremental Core call graph", () => {
 			new CoreOptimizationReportBuilder(program),
 		);
 		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
-		expect(
-			first.site(`${callerFunction}:${callInstruction!}`)?.targets.functions,
-		).toEqual([2]);
+		expect(first.site(callerFunction, callInstruction!)?.targets.functions).toEqual([2]);
 
 		const editor = CoreEditor.open(program, writerFunction);
 		editor.replaceInstruction(createFunctionInstruction!, "createFunction", [], {
@@ -266,9 +264,7 @@ describe("incremental Core call graph", () => {
 			functionsReused: 2,
 			updatedCallSites: 1,
 		});
-		expect(
-			second.site(`${callerFunction}:${callInstruction!}`)?.targets.functions,
-		).toEqual([3]);
+		expect(second.site(callerFunction, callInstruction!)?.targets.functions).toEqual([3]);
 		expect(second.graph.exactCallers(2 as never)).toEqual([]);
 		expect(second.graph.exactCallers(3 as never)).toEqual([callerFunction]);
 	});
@@ -398,7 +394,7 @@ describe("incremental Core call graph", () => {
 			new CoreOptimizationReportBuilder(program),
 		);
 		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
-		const targets = first.site(`${callerFunction}:${call}`)?.targets;
+		const targets = first.site(callerFunction, call)?.targets;
 		expect(targets).toMatchObject({
 			functions: [3],
 			anyScript: false,
@@ -416,7 +412,7 @@ describe("incremental Core call graph", () => {
 			functionsReused: 3,
 			updatedCallSites: 1,
 		});
-		expect(second.site(`${callerFunction}:${call}`)?.targets).toMatchObject({
+		expect(second.site(callerFunction, call)?.targets).toMatchObject({
 			functions: [4],
 			anyScript: false,
 			opaque: true,
@@ -447,7 +443,7 @@ describe("incremental Core call graph", () => {
 			new CoreOptimizationReportBuilder(program),
 		);
 		const graph = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
-		expect(graph.site(`${callerFunction}:${call}`)?.targets).toMatchObject({
+		expect(graph.site(callerFunction, call)?.targets).toMatchObject({
 			functions: [],
 			anyScript: true,
 			opaque: true,

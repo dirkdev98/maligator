@@ -936,7 +936,7 @@ function guardedCallCandidates(
 				continue;
 			const targetFunctions = Object.freeze([...site.targets.functions]);
 			const selection: CorePlanSpecialization = Object.freeze({
-				id: `guarded-direct-call:${site.id}:${targetFunctions.join(",")}`,
+				id: `guarded-direct-call:${site.caller}:${site.instruction}:${targetFunctions.join(",")}`,
 				kind: "guarded-direct-call",
 				function: caller,
 				anchors: Object.freeze([site.instruction]),
