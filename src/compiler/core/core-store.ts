@@ -1141,6 +1141,55 @@ export class CoreFunctionStore {
 		this.#writeOperandRange(instruction, operands);
 	}
 
+	_replaceUseValue(
+		mutation: CoreStoreMutation,
+		use: number,
+		replacement: CoreValueId,
+	): void {
+		this.#assertEditing(mutation);
+		this.#requireValue(replacement);
+		if (this.#useLive[use] !== 1) throw new Error(`Core use ${use} is not live`);
+		const value = this.#useValue[use]!;
+		if (value === replacement) return;
+		const instruction = this.#useInstruction[use]!;
+		const operand = this.#useOperand[use]!;
+		const operandIndex = this.#instructionOperandStart[instruction]! + operand;
+		if (this.#operandUses[operandIndex] !== use) {
+			throw new Error(`Core use ${use} does not own its operand`);
+		}
+		const previous = this.#usePrevious[use]!;
+		const next = this.#useNext[use]!;
+		if (previous < 0) this.#valueFirstUse[value] = next;
+		else this.#useNext[previous] = next;
+		if (next >= 0) this.#usePrevious[next] = previous;
+		this.#valueUseCount[value] = this.#valueUseCount[value]! - 1;
+		const replacementFirstUse = this.#valueFirstUse[replacement]!;
+		this.#useValue[use] = replacement;
+		this.#usePrevious[use] = -1;
+		this.#useNext[use] = replacementFirstUse;
+		if (replacementFirstUse >= 0) this.#usePrevious[replacementFirstUse] = use;
+		this.#valueFirstUse[replacement] = use;
+		this.#valueUseCount[replacement] = this.#valueUseCount[replacement]! + 1;
+		this.#operands[operandIndex] = replacement;
+	}
+
+	_refreshOperandUses(mutation: CoreStoreMutation, instruction: CoreInstructionId): void {
+		this.#assertEditing(mutation);
+		this.#requireInstruction(instruction);
+		const start = this.#instructionOperandStart[instruction]!;
+		const count = this.#instructionOperandCount[instruction]!;
+		for (let operand = 0; operand < count; operand++) {
+			this.#deactivateUse(this.#operandUses[start + operand]!);
+		}
+		for (let operand = 0; operand < count; operand++) {
+			this.#operandUses[start + operand] = this.#allocateUse(
+				this.#operands[start + operand]!,
+				instruction,
+				operand,
+			);
+		}
+	}
+
 	_removeInstruction(mutation: CoreStoreMutation, instruction: CoreInstructionId): void {
 		this.#assertEditing(mutation);
 		this.#requireInstruction(instruction);

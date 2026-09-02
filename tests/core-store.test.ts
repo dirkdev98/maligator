@@ -525,6 +525,9 @@ describe("Core store", () => {
 		const { program, fn, condition, first, second, instruction, expected } =
 			terminatorFixture("branch");
 		if (expected.kind !== "branch") throw new Error("expected branch fixture");
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCapacity = fn.operandCapacity;
+		const useCapacity = fn.useCapacity;
 		const editor = CoreEditor.open(program, fn.id);
 		editor.replaceValueUsesMany(
 			new Map([
@@ -541,6 +544,9 @@ describe("Core store", () => {
 			alternate: { ...expected.alternate, arguments: [second, second] },
 		});
 		expect(changes.edits).toBe(1);
+		expect(fn.kernel.instructionOperandStart(instruction)).toBe(operandStart);
+		expect(fn.operandCapacity).toBe(operandCapacity);
+		expect(fn.useCapacity).toBe(useCapacity);
 		program.seal();
 		expect(() => verifyCoreProgram(program)).not.toThrow();
 	});

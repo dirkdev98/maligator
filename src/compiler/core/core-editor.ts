@@ -290,6 +290,8 @@ export class CoreEditor {
 	readonly #facts = new Set<CoreFactId>();
 	readonly #edges: Array<CoreChangedEdge> = [];
 	readonly #calls = new Set<CoreInstructionId>();
+	#replacementInstructionEpochs = new Uint32Array(0);
+	#replacementEpoch = 0;
 	#edits = 0;
 	#committed = false;
 
@@ -574,108 +576,61 @@ export class CoreEditor {
 	}
 
 	replaceValueUses(value: CoreValueId, replacement: CoreValueId): void {
-		this.replaceValueUsesMany(new Map([[value, replacement]]));
+		this.#assertActive();
+		if (value === replacement) return;
+		const uses: Array<number> = [];
+		for (
+			let use = this.function.kernel.valueFirstUse(value);
+			use >= 0;
+			use = this.function.kernel.useNext(use)
+		) {
+			uses.push(use);
+		}
+		const changedInstructions: Array<CoreInstructionId> = [];
+		const epoch = this.#nextReplacementEpoch();
+		for (let index = uses.length - 1; index >= 0; index--) {
+			this.#replaceUse(uses[index]!, replacement, changedInstructions, epoch);
+		}
+		this.#finishUseReplacement(changedInstructions);
+		this.#replaceHandlerArguments((candidate) =>
+			candidate === value ? replacement : candidate,
+		);
+		this.#values.add(value);
+		this.#values.add(replacement);
 	}
 
 	replaceValueUsesMany(replacements: ReadonlyMap<CoreValueId, CoreValueId>): void {
 		this.#assertActive();
-		let effective = replacements;
+		const values: Array<CoreValueId> = [];
+		const targets: Array<CoreValueId> = [];
 		for (const [value, replacement] of replacements) {
-			if (value !== replacement) continue;
-			effective = new Map(
-				[...replacements].filter(([candidate, target]) => candidate !== target),
-			);
-			break;
+			if (value === replacement) continue;
+			values.push(value);
+			targets.push(replacement);
 		}
-		if (effective.size === 0) return;
+		if (values.length === 0) return;
 		const replacement = (value: CoreValueId): CoreValueId =>
-			effective.get(value) ?? value;
-		const changed = new Array<Array<CoreValueId> | undefined>(
-			this.function.instructionCapacity,
-		);
-		const changedInstructions: Array<CoreInstructionId> = [];
-		const terminatorSeen = new Uint8Array(this.function.instructionCapacity);
-		const terminators: Array<CoreInstructionId> = [];
-		for (const value of effective.keys()) {
-			let use = this.function.kernel.valueFirstUse(value);
+			replacements.get(value) ?? value;
+		const uses: Array<number> = [];
+		const useTargets: Array<CoreValueId> = [];
+		for (let index = 0; index < values.length; index++) {
+			let use = this.function.kernel.valueFirstUse(values[index]!);
 			while (use >= 0) {
-				const next = this.function.kernel.useNext(use);
-				if (this.function.kernel.useLive(use) !== 0) {
-					const instruction = this.function.kernel.useInstruction(use);
-					if (this.function.kernel.instructionOpcode(instruction) < 0) {
-						if (terminatorSeen[instruction] === 0) {
-							terminatorSeen[instruction] = 1;
-							terminators.push(instruction);
-						}
-					} else {
-						const operand = this.function.kernel.useOperand(use);
-						let operands = changed[instruction];
-						if (operands === undefined) {
-							operands = this.#copyInstructionOperands(instruction);
-							changed[instruction] = operands;
-							changedInstructions.push(instruction);
-						}
-						operands[operand] = replacement(operands[operand]!);
-					}
-				}
-				use = next;
+				uses.push(use);
+				useTargets.push(targets[index]!);
+				use = this.function.kernel.useNext(use);
 			}
 		}
-		for (const instruction of changedInstructions)
-			this.replaceOperands(instruction, changed[instruction]!);
-		for (const instruction of terminators) {
-			const kind = this.function.instructionKind(instruction);
-			const previousCondition =
-				kind === "guard"
-					? this.function.kernel.operandAt(
-							this.function.kernel.instructionOperandStart(instruction),
-						)
-					: undefined;
-			const fact =
-				kind === "guard" ? this.function.kernel.terminatorFact(instruction) : undefined;
-			const payload = terminatorPayloadFromKernel(
-				this.function,
-				instruction,
-				replacement,
-			);
-			const block = this.function.instructionBlock(instruction);
-			this.#touchStoredTerminator(block, instruction);
-			this.function._replaceTerminatorPayload(this.#mutation, instruction, payload);
-			this.#instructions.add(instruction);
-			this.#touchTerminator(block, payload);
-			this.#mark("body", "specializationInputs");
-			if (
-				fact !== undefined &&
-				payload.kind === "guard" &&
-				previousCondition !== payload.condition
-			) {
-				this.#facts.add(fact);
-				this.#mark("facts");
-			}
-			this.#edits++;
+		const changedInstructions: Array<CoreInstructionId> = [];
+		const epoch = this.#nextReplacementEpoch();
+		for (let index = 0; index < uses.length; index++) {
+			this.#replaceUse(uses[index]!, useTargets[index]!, changedInstructions, epoch);
 		}
-		for (let blockIndex = 0; blockIndex < this.function.blockCapacity; blockIndex++) {
-			const block = coreBlockId(blockIndex);
-			if (!this.function.isBlockLive(block)) continue;
-			const handlerBlock = this.function.kernel.blockHandlerBlock(block);
-			if (handlerBlock === undefined) continue;
-			const argumentStart = this.function.kernel.blockHandlerArgumentStart(block);
-			const argumentCount = this.function.kernel.blockHandlerArgumentCount(block);
-			let arguments_: Array<CoreValueId> | undefined;
-			for (let index = 0; index < argumentCount; index++) {
-				const argument = this.function.kernel.handlerArgumentAt(argumentStart + index);
-				const replacementValue = replacement(argument);
-				if (arguments_ === undefined && replacementValue === argument) continue;
-				arguments_ ??= Array.from({ length: argumentCount }, (_, argumentIndex) =>
-					this.function.kernel.handlerArgumentAt(argumentStart + argumentIndex),
-				);
-				arguments_[index] = replacementValue;
-			}
-			if (arguments_ !== undefined) this.setHandler(block, handlerBlock, arguments_);
-		}
-		for (const [value, replacementValue] of effective) {
-			this.#values.add(value);
-			this.#values.add(replacementValue);
+		this.#finishUseReplacement(changedInstructions);
+		this.#replaceHandlerArguments(replacement);
+		for (let index = 0; index < values.length; index++) {
+			this.#values.add(values[index]!);
+			this.#values.add(targets[index]!);
 		}
 	}
 
@@ -1054,12 +1009,93 @@ export class CoreEditor {
 		for (const value of values) this.#values.add(value);
 	}
 
-	#copyInstructionOperands(instruction: CoreInstructionId): Array<CoreValueId> {
-		const start = this.function.kernel.instructionOperandStart(instruction);
-		const count = this.function.kernel.instructionOperandCount(instruction);
-		return Array.from({ length: count }, (_, index) =>
-			this.function.kernel.operandAt(start + index),
-		);
+	#nextReplacementEpoch(): number {
+		if (this.#replacementInstructionEpochs.length < this.function.instructionCapacity) {
+			const epochs = new Uint32Array(this.function.instructionCapacity);
+			epochs.set(this.#replacementInstructionEpochs);
+			this.#replacementInstructionEpochs = epochs;
+		}
+		if (this.#replacementEpoch === 0xffff_ffff) {
+			this.#replacementInstructionEpochs.fill(0);
+			this.#replacementEpoch = 1;
+		} else {
+			this.#replacementEpoch++;
+		}
+		return this.#replacementEpoch;
+	}
+
+	#replaceUse(
+		use: number,
+		replacement: CoreValueId,
+		changedInstructions: Array<CoreInstructionId>,
+		epoch: number,
+	): void {
+		const instruction = this.function.kernel.useInstruction(use);
+		if (this.#replacementInstructionEpochs[instruction] !== epoch) {
+			this.#replacementInstructionEpochs[instruction] = epoch;
+			changedInstructions.push(instruction);
+			if (this.function.kernel.instructionOpcode(instruction) < 0) {
+				this.#touchStoredTerminator(
+					this.function.instructionBlock(instruction),
+					instruction,
+				);
+			} else {
+				this.#touchInstructionOperands(instruction);
+				this.#touchInstructionResults(instruction);
+			}
+		}
+		if (
+			this.function.instructionKind(instruction) === "guard" &&
+			this.function.kernel.useOperand(use) === 0
+		) {
+			const fact = this.function.kernel.terminatorFact(instruction);
+			if (fact !== undefined) this.#facts.add(fact);
+			this.#mark("facts");
+		}
+		this.function._replaceUseValue(this.#mutation, use, replacement);
+	}
+
+	#finishUseReplacement(changedInstructions: ReadonlyArray<CoreInstructionId>): void {
+		for (const instruction of changedInstructions) {
+			this.function._refreshOperandUses(this.#mutation, instruction);
+			const block = this.function.instructionBlock(instruction);
+			if (this.function.kernel.instructionOpcode(instruction) < 0) {
+				this.#touchStoredTerminator(block, instruction);
+				this.#mark("body", "specializationInputs");
+			} else {
+				const descriptor = this.program.registry.byId(
+					this.function.instructionOpcode(instruction),
+				);
+				const refinement = this.function.instructionEffectRefinement(instruction);
+				this.#touchInstructionOperands(instruction);
+				this.#markForOperation(instruction, descriptor, refinement);
+			}
+			this.#instructions.add(instruction);
+			this.#touchBlock(block);
+			this.#edits++;
+		}
+	}
+
+	#replaceHandlerArguments(replacement: (value: CoreValueId) => CoreValueId): void {
+		for (let blockIndex = 0; blockIndex < this.function.blockCapacity; blockIndex++) {
+			const block = coreBlockId(blockIndex);
+			if (!this.function.isBlockLive(block)) continue;
+			const handlerBlock = this.function.kernel.blockHandlerBlock(block);
+			if (handlerBlock === undefined) continue;
+			const argumentStart = this.function.kernel.blockHandlerArgumentStart(block);
+			const argumentCount = this.function.kernel.blockHandlerArgumentCount(block);
+			let arguments_: Array<CoreValueId> | undefined;
+			for (let index = 0; index < argumentCount; index++) {
+				const argument = this.function.kernel.handlerArgumentAt(argumentStart + index);
+				const replacementValue = replacement(argument);
+				if (arguments_ === undefined && replacementValue === argument) continue;
+				arguments_ ??= Array.from({ length: argumentCount }, (_, argumentIndex) =>
+					this.function.kernel.handlerArgumentAt(argumentStart + argumentIndex),
+				);
+				arguments_[index] = replacementValue;
+			}
+			if (arguments_ !== undefined) this.setHandler(block, handlerBlock, arguments_);
+		}
 	}
 
 	#instructionOperandsEqual(
