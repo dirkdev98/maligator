@@ -301,11 +301,18 @@ function syntheticSource(id: string, scale: number): string {
 			globalThis.compilerScaleResult = cfg(12345);\n`;
 	}
 	if (id === "nested-loops") {
+		const innerLoops = Array.from(
+			{ length: count },
+			(_, index) => `
+				for (let inner${index} = 0; inner${index} < ${index + 3}; inner${index}++) {
+					total += invariant + inner${index};
+				}`,
+		).join("\n");
 		return `function loops(limit) {
 			let total = 0;
 			for (let outer = 0; outer < limit; outer++) {
 				const invariant = outer * 7 + 3;
-				for (let inner = 0; inner < ${count}; inner++) total += invariant + inner;
+				${innerLoops}
 			}
 			return total;
 		}
