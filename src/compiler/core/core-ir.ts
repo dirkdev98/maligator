@@ -279,7 +279,7 @@ function validateEffectDomains(
 
 function validateAccesses(descriptor: CoreOpcodeDefinition): void {
 	const opcode = descriptor.opcode;
-	const seen = new Set<string>();
+	const seen: Array<readonly [CoreMemoryFamily, "read" | "write"]> = [];
 	for (const access of descriptor.accesses ?? []) {
 		if (!CORE_MEMORY_FAMILIES.includes(access.family)) {
 			throw new Error(`Unknown memory family ${access.family} for ${opcode}`);
@@ -287,13 +287,12 @@ function validateAccesses(descriptor: CoreOpcodeDefinition): void {
 		if (access.mode !== "read" && access.mode !== "write") {
 			throw new Error(`Unknown access mode ${String(access.mode)} for ${opcode}`);
 		}
-		const signature = `${access.family}\0${access.mode}`;
-		if (seen.has(signature)) {
+		if (seen.some(([family, mode]) => family === access.family && mode === access.mode)) {
 			throw new Error(
 				`Duplicate ${access.mode} access to ${access.family} for ${opcode}`,
 			);
 		}
-		seen.add(signature);
+		seen.push([access.family, access.mode]);
 		const declared =
 			access.mode === "read" ? descriptor.effects.reads : descriptor.effects.writes;
 		for (const domain of CORE_MEMORY_FAMILY_DOMAINS[access.family]) {

@@ -3591,16 +3591,28 @@ function discoverCandidates(
 	index: CoreLocalFactIndex,
 ): CoreLocalSpecializationCandidates {
 	const fn = program.function(functionId);
-	const candidates = new Map<string, CoreLocalSpecializationCandidate>();
+	const candidates: Array<CoreLocalSpecializationCandidate> = [];
+	const candidateBuckets = new Map<number, Array<CoreLocalSpecializationCandidate>>();
+	const addCandidate = (candidate: CoreLocalSpecializationCandidate): void => {
+		let hash = 2_166_136_261;
+		for (let index = 0; index < candidate.key.length; index++) {
+			hash ^= candidate.key.charCodeAt(index);
+			hash = Math.imul(hash, 16_777_619);
+		}
+		const numericHash = hash >>> 0;
+		const bucket = candidateBuckets.get(numericHash) ?? [];
+		if (bucket.some((known) => known.key === candidate.key)) return;
+		bucket.push(candidate);
+		candidateBuckets.set(numericHash, bucket);
+		candidates.push(candidate);
+	};
 	const addNumeric = (
 		root: CoreInstructionId,
 		instructions: ReadonlyArray<CoreInstructionId>,
 	): void => {
 		const stableInstructions = Object.freeze([...new Set(instructions)]);
 		const key = `numeric-fusion:${functionId}:${root}:${stableInstructions.join(",")}`;
-		if (candidates.has(key)) return;
-		candidates.set(
-			key,
+		addCandidate(
 			Object.freeze({
 				key,
 				kind: "numeric-fusion",
@@ -3614,11 +3626,11 @@ function discoverCandidates(
 	for (const layout of provenanceAnalysis.layouts) {
 		if (layout.kind === "named-slots") {
 			const candidate = stackObjectCandidate(fn, layout, control, roots, index);
-			if (candidate !== undefined) candidates.set(candidate.key, candidate);
+			if (candidate !== undefined) addCandidate(candidate);
 		} else {
 			const dense = denseArrayCandidates(fn, layout, control, roots);
 			for (const candidate of dense) {
-				candidates.set(candidate.key, candidate);
+				addCandidate(candidate);
 			}
 			if (
 				dense.length === 0 &&
@@ -3642,7 +3654,7 @@ function discoverCandidates(
 					instructions,
 					fanOut: Math.max(0, instructions.length - 1),
 				});
-				candidates.set(candidate.key, candidate);
+				addCandidate(candidate);
 			}
 		}
 	}
@@ -3661,7 +3673,7 @@ function discoverCandidates(
 		...regexpExecProjectionCandidates(program, fn, control, roots, index),
 		...regexpIteratorProjectionCandidates(fn, control, roots, index),
 	]) {
-		candidates.set(candidate.key, candidate);
+		addCandidate(candidate);
 	}
 	for (const instruction of indexedOpcodeInstructions(fn, index, "binary")) {
 		if (
@@ -3706,7 +3718,7 @@ function discoverCandidates(
 			continue;
 		addNumeric(instruction, [instruction, user]);
 	}
-	const values = Object.freeze([...candidates.values()]);
+	const values = Object.freeze(candidates);
 	return Object.freeze({
 		candidates: values,
 		largestFanOut: values.reduce(

@@ -58,7 +58,6 @@ export function coreShapeCaseCandidatesFromAttribute(
 ): ReadonlyArray<CoreShapeCaseCandidate> | undefined {
 	if (!Array.isArray(value) || value.length < 1 || value.length > CORE_SHAPE_ORIGIN_CAP)
 		return undefined;
-	const identities = new Set<string>();
 	const candidates: Array<CoreShapeCaseCandidate> = [];
 	for (const entry of value as ReadonlyArray<unknown>) {
 		if (entry === null || typeof entry !== "object" || Array.isArray(entry))
@@ -70,9 +69,14 @@ export function coreShapeCaseCandidatesFromAttribute(
 			!nonnegativeInteger(candidate.shapeInstruction)
 		)
 			return undefined;
-		const identity = `${candidate.shapeFunctionIndex}:${candidate.shapeInstruction}`;
-		if (identities.has(identity)) return undefined;
-		identities.add(identity);
+		if (
+			candidates.some(
+				(existing) =>
+					existing.shapeFunctionIndex === candidate.shapeFunctionIndex &&
+					existing.shapeInstruction === candidate.shapeInstruction,
+			)
+		)
+			return undefined;
 		candidates.push(
 			Object.freeze({
 				shapeFunctionIndex: candidate.shapeFunctionIndex,
@@ -109,7 +113,6 @@ export function coreKnownOwnSlotFromAttribute(
 		record.candidates.length > CORE_SHAPE_ORIGIN_CAP
 	)
 		return undefined;
-	const identities = new Set<string>();
 	const candidates: Array<CoreKnownOwnSlotCandidate> = [];
 	for (const entry of record.candidates as ReadonlyArray<unknown>) {
 		if (entry === null || typeof entry !== "object" || Array.isArray(entry))
@@ -122,9 +125,14 @@ export function coreKnownOwnSlotFromAttribute(
 			!nonnegativeInteger(candidate.slot)
 		)
 			return undefined;
-		const identity = `${candidate.shapeFunctionIndex}:${candidate.shapeInstruction}`;
-		if (identities.has(identity)) return undefined;
-		identities.add(identity);
+		if (
+			candidates.some(
+				(existing) =>
+					existing.shapeFunctionIndex === candidate.shapeFunctionIndex &&
+					existing.shapeInstruction === candidate.shapeInstruction,
+			)
+		)
+			return undefined;
 		candidates.push(
 			Object.freeze({
 				shapeFunctionIndex: candidate.shapeFunctionIndex,
