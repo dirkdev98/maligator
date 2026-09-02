@@ -55,6 +55,18 @@ describe("Core program flow", () => {
 			new URL("../src/compiler/core/core-ir-reachability.ts", import.meta.url),
 			"utf8",
 		);
+		const callTargets = readFileSync(
+			new URL("../src/compiler/core/core-ir-call-targets.ts", import.meta.url),
+			"utf8",
+		);
+		expect(owner).toMatch(/programFlow\.solveCallTargets\(/);
+		expect(engine).toMatch(/solveCallTargets<.*CoreProgramFlowCallTargets/s);
+		expect(callTargets).toMatch(
+			/new CoreProgramFlowEngine\(program\)\.solveCallTargets\(/,
+		);
+		expect(callTargets).not.toMatch(
+			/solveCoreProgramFlowFunctions|dependencyQueue|updateCoreCallGraph/,
+		);
 		expect(owner).toMatch(/programFlow\.solveReachability\(/);
 		expect(engine).toMatch(/solveReachability<.*CoreProgramFlowTargetIndex/s);
 		expect(reachability).toMatch(

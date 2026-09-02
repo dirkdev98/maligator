@@ -1,5 +1,6 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { analyzeCoreCallGraph } from "./core-ir-call-targets.ts";
+import { CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS } from "./core-ir-call-targets.ts";
+import type { CoreCallGraphIndexState } from "./core-ir-call-targets.ts";
 import {
 	CORE_CONTROL_FLOW_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
@@ -19,7 +20,7 @@ import {
 
 export interface CoreProgramFlowState {
 	readonly flowRevision: number;
-	readonly targets: ReturnType<typeof analyzeCoreCallGraph>;
+	readonly targets: CoreCallGraphIndexState;
 	readonly summaries: CoreProgramSummaryState;
 	readonly valueKinds: ReturnType<typeof solveCoreProgramValueKinds>;
 	readonly reachability: CoreFunctionReachabilityState;
@@ -60,19 +61,17 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 		const targets =
 			prior !== undefined && !unjournaledInvalidation && targetDirty.length === 0
 				? prior.targets
-				: analyzeCoreCallGraph(
-						program,
+				: programFlow.solveCallTargets(
 						context.facts.closure.sourceClosure.kind === "known",
-						prior?.targets,
 						(functionId) =>
 							get(CORE_CONTROL_FLOW_ANALYSIS, {
 								scope: "function",
 								function: functionId,
 							}),
+						CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS,
+						prior?.targets,
 						context,
 						targetDirty,
-						(functionId) => programFlow.local(functionId),
-						programFlow,
 					);
 		const exceptionalControl = (functionId: CoreFunctionId) =>
 			get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {

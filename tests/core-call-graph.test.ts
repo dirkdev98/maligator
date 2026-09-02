@@ -188,7 +188,7 @@ describe("symbolic Core call graph", () => {
 		);
 		expect(facade).toMatch(/programFlow\.refresh/);
 		expect(facade).toMatch(/epoch\.dirtyFunctionAt/);
-		expect(facade).toMatch(/programFlow\.local/);
+		expect(facade).toMatch(/programFlow\.solveCallTargets/);
 		for (const path of [
 			"src/compiler/core/core-ir-call-targets.ts",
 			"src/compiler/core/core-ir-interprocedural-flow.ts",

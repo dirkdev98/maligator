@@ -126,6 +126,36 @@ describe("incremental Core call graph", () => {
 		});
 	});
 
+	it("keeps isolated target rebuild work constant as unrelated functions grow", () => {
+		const program = analysisProgram();
+		const caller = appendCaller(program, 1);
+		appendLeaf(program);
+		const unrelated = Array.from({ length: 63 }, () => appendLeaf(program));
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		const outgoing = first.outgoing(caller.function);
+
+		const edited = unrelated.at(-1)!;
+		const editor = CoreEditor.open(program, edited.function);
+		editor.replaceInstruction(edited.valueInstruction, "createNull", []);
+		editor.commit();
+		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+
+		expect(second.outgoing(caller.function)).toBe(outgoing);
+		expect(second.statistics).toMatchObject({
+			functions: 65,
+			functionsAnalyzed: 1,
+			functionsReused: 64,
+			accessFunctionsScanned: 1,
+			propertyAggregateUpdates: 0,
+			callSiteIndexUpdates: 0,
+		});
+	});
+
 	it("keeps the call graph cached across representation and source-only edits", () => {
 		const program = analysisProgram();
 		appendCaller(program, 1);

@@ -3,7 +3,7 @@ import type {
 	ModuleEffectSummary,
 	SummaryRootReason,
 } from "../shared/effect-summary.ts";
-import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
+import { CORE_ANY_SCRIPT_AGGREGATE, updateCoreCallGraph } from "./core-call-graph.ts";
 import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -80,6 +80,146 @@ export interface CoreProgramFlowTargetIndex {
 			readonly opaque: boolean;
 		};
 	}>;
+}
+
+export interface CoreProgramFlowCallTargets {
+	readonly functions: ReadonlyArray<CoreFunctionId>;
+	readonly anyScript: boolean;
+	readonly opaque: boolean;
+}
+
+export interface CoreProgramFlowIndexedCallSite<
+	Targets extends CoreProgramFlowCallTargets = CoreProgramFlowCallTargets,
+> {
+	readonly instruction: CoreInstructionId;
+	readonly receiver?: CoreValueId;
+	readonly arguments?: ReadonlyArray<CoreValueId>;
+	readonly targets: Targets;
+}
+
+export interface CoreProgramFlowFunctionCellAccesses {
+	readonly reads: ReadonlySet<number>;
+	readonly writes: ReadonlySet<number>;
+}
+
+export interface CoreProgramFlowLocalCallTargets<
+	Targets extends CoreProgramFlowCallTargets,
+	Site extends CoreProgramFlowIndexedCallSite<Targets>,
+> {
+	readonly function: CoreFunctionId;
+	readonly values: ReadonlyArray<Targets>;
+	readonly returnTargets: Targets;
+	readonly sites: ReadonlyArray<Site>;
+	readonly cellWrites: ReadonlyMap<number, Targets>;
+	readonly propertyInputs: ReadonlyMap<number, Targets>;
+	readonly globalWrites: ReadonlyMap<number, Targets>;
+}
+
+export interface CoreProgramFlowCallTargetStatistics {
+	readonly functions: number;
+	readonly functionsAnalyzed: number;
+	readonly functionsReused: number;
+	readonly callSites: number;
+	readonly exactCallEdges: number;
+	readonly wildcardCallSites: number;
+	readonly wildcardCallers: number;
+	readonly opaqueCallSites: number;
+	readonly aggregateDependencies: number;
+	readonly storedGraphRows: number;
+	readonly storedGraphEntries: number;
+	readonly updatedCallSites: number;
+	readonly accessFunctionsScanned: number;
+	readonly propertyAggregateUpdates: number;
+	readonly cellAggregateUpdates: number;
+	readonly globalStoreAggregateUpdates: number;
+	readonly callSiteIndexUpdates: number;
+}
+
+export interface CoreProgramFlowCallTargetState<
+	Local extends CoreProgramFlowLocalCallTargets<Targets, Site>,
+	Targets extends CoreProgramFlowCallTargets,
+	Site extends CoreProgramFlowIndexedCallSite<Targets>,
+	Identities,
+> extends CoreProgramFlowTargetIndex {
+	readonly identities: Identities;
+	readonly statistics: CoreProgramFlowCallTargetStatistics;
+	readonly changedCallSites: ReadonlyArray<Site>;
+	readonly local: ReadonlyMap<CoreFunctionId, Local>;
+	readonly cells: ReadonlyMap<number, Targets>;
+	readonly cellAccesses: ReadonlyMap<CoreFunctionId, CoreProgramFlowFunctionCellAccesses>;
+	readonly propertyWrites: ReadonlyMap<
+		CoreFunctionId,
+		ReadonlyMap<number, Targets>
+	>;
+	readonly propertyWriters: ReadonlyMap<
+		number,
+		ReadonlyMap<CoreFunctionId, Targets>
+	>;
+	readonly properties: ReadonlyMap<number, Targets>;
+	readonly propertyReaders: ReadonlyMap<number, ReadonlySet<CoreFunctionId>>;
+	readonly cellReaders: ReadonlyMap<number, ReadonlySet<CoreFunctionId>>;
+	readonly cellWriters: ReadonlyMap<
+		number,
+		ReadonlyMap<CoreFunctionId, Targets>
+	>;
+	readonly globalStoreWriters: ReadonlyMap<
+		number,
+		ReadonlyMap<CoreFunctionId, Targets>
+	>;
+	readonly globalStores: ReadonlyMap<number, Targets>;
+	readonly sites: ReadonlyMap<
+		CoreFunctionId,
+		ReadonlyMap<CoreInstructionId, Site>
+	>;
+	readonly outgoingIndex: ReadonlyMap<CoreFunctionId, ReadonlyArray<Site>>;
+	targets(functionId: CoreFunctionId, value: CoreValueId): Targets;
+	returnTargets(functionId: CoreFunctionId): Targets;
+	globalStoreTargets(slot: number): Targets;
+	site(functionId: CoreFunctionId, instruction: CoreInstructionId): Site | undefined;
+	outgoing(functionId: CoreFunctionId): ReadonlyArray<Site>;
+}
+
+export interface CoreProgramFlowCallTargetSemantics<
+	Local extends CoreProgramFlowLocalCallTargets<Targets, Site>,
+	Targets extends CoreProgramFlowCallTargets,
+	Site extends CoreProgramFlowIndexedCallSite<Targets>,
+	Identities,
+> {
+	createIdentities(previous?: Identities): Identities;
+	localIsCurrent(local: Local | undefined, fn: CoreFunctionStore): boolean;
+	collectCellAccesses(
+		fn: CoreFunctionStore,
+		transfers: CoreProgramFlowLocalTransfers,
+		identities: Identities,
+	): CoreProgramFlowFunctionCellAccesses;
+	collectPropertyWrites(
+		fn: CoreFunctionStore,
+		functionCapacity: number,
+		transfers: CoreProgramFlowLocalTransfers,
+		identities: Identities,
+	): ReadonlyMap<number, Targets>;
+	closedCells(
+		program: CoreProgram,
+		context: CoreCompilationContext | undefined,
+		identities: Identities,
+	): ReadonlySet<number>;
+	analyzeLocal(
+		program: CoreProgram,
+		fn: CoreFunctionStore,
+		controlFlow: CoreControlFlow,
+		cells: ReadonlyMap<number, Targets>,
+		trackedCells: ReadonlySet<number>,
+		properties: ReadonlyMap<number, Targets>,
+		transfers: CoreProgramFlowLocalTransfers,
+		identities: Identities,
+	): Local;
+	callSiteEqual(left: Site, right: Site): boolean;
+	join(left: Targets, right: Targets): Targets;
+	equal(left: Targets, right: Targets): boolean;
+	isBottom(targets: Targets): boolean;
+	readonly bottom: Targets;
+	readonly opaque: Targets;
+	readonly open: Targets;
 }
 
 export interface CoreProgramFlowPublishedFunctionSummary {
@@ -1086,6 +1226,394 @@ export class CoreProgramFlowEngine {
 		this.#report?.increment("programFlowFunctionPops", statistics.pops);
 		this.#report?.increment("programFlowFunctionWakeups", statistics.wakeups);
 		return statistics;
+	}
+
+	solveCallTargets<
+		Local extends CoreProgramFlowLocalCallTargets<Targets, Site>,
+		Targets extends CoreProgramFlowCallTargets,
+		Site extends CoreProgramFlowIndexedCallSite<Targets>,
+		Identities,
+	>(
+		sourceClosed: boolean,
+		controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
+		semantics: CoreProgramFlowCallTargetSemantics<Local, Targets, Site, Identities>,
+		previous?: CoreProgramFlowCallTargetState<Local, Targets, Site, Identities>,
+		context?: CoreCompilationContext,
+		dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
+	): CoreProgramFlowCallTargetState<Local, Targets, Site, Identities> {
+		const functionIds = [...this.#program.functionIds()];
+		const functionSet = new Set(functionIds);
+		const identities = semantics.createIdentities(previous?.identities);
+		const cellAccesses = new Map(previous?.cellAccesses ?? []);
+		const propertyWrites = new Map(previous?.propertyWrites ?? []);
+		const propertyWriters = new Map(previous?.propertyWriters ?? []);
+		const cellReaders = new Map(previous?.cellReaders ?? []);
+		const changedFunctions = new Set<CoreFunctionId>();
+		const propertyKeys = new Set<number>();
+		let accessFunctionsScanned = 0;
+		for (const functionId of previous === undefined
+			? functionIds
+			: (dirtyFunctions ?? functionIds)) {
+			if (!functionSet.has(functionId)) continue;
+			const fn = this.#program.function(functionId);
+			const prior = previous?.local.get(functionId);
+			if (semantics.localIsCurrent(prior, fn)) continue;
+			changedFunctions.add(functionId);
+			accessFunctionsScanned++;
+			const oldAccess = cellAccesses.get(functionId);
+			const transfers = this.local(functionId);
+			const nextAccess = semantics.collectCellAccesses(fn, transfers, identities);
+			cellAccesses.set(functionId, nextAccess);
+			for (const key of new Set([...(oldAccess?.reads ?? []), ...nextAccess.reads])) {
+				const readers = new Set(cellReaders.get(key) ?? []);
+				readers.delete(functionId);
+				if (nextAccess.reads.has(key)) readers.add(functionId);
+				if (readers.size === 0) cellReaders.delete(key);
+				else cellReaders.set(key, readers);
+			}
+
+			const oldWrites = propertyWrites.get(functionId) ?? new Map<number, Targets>();
+			const nextWrites = semantics.collectPropertyWrites(
+				fn,
+				this.#program.functionCapacity,
+				transfers,
+				identities,
+			);
+			propertyWrites.set(functionId, nextWrites);
+			for (const key of new Set([...oldWrites.keys(), ...nextWrites.keys()])) {
+				propertyKeys.add(key);
+				const writers = new Map(propertyWriters.get(key) ?? []);
+				writers.delete(functionId);
+				const next = nextWrites.get(key);
+				if (next !== undefined) writers.set(functionId, next);
+				if (writers.size === 0) propertyWriters.delete(key);
+				else propertyWriters.set(key, writers);
+			}
+		}
+		for (const functionId of previous?.local.keys() ?? []) {
+			if (functionSet.has(functionId)) continue;
+			const access = cellAccesses.get(functionId);
+			for (const key of access?.reads ?? []) {
+				const readers = new Set(cellReaders.get(key) ?? []);
+				readers.delete(functionId);
+				if (readers.size === 0) cellReaders.delete(key);
+				else cellReaders.set(key, readers);
+			}
+			for (const key of propertyWrites.get(functionId)?.keys() ?? []) {
+				propertyKeys.add(key);
+				const writers = new Map(propertyWriters.get(key) ?? []);
+				writers.delete(functionId);
+				if (writers.size === 0) propertyWriters.delete(key);
+				else propertyWriters.set(key, writers);
+			}
+			cellAccesses.delete(functionId);
+			propertyWrites.delete(functionId);
+		}
+		const joinContributions = <Key>(
+			contributions: ReadonlyMap<Key, Targets> | undefined,
+		): Targets => {
+			let result = semantics.bottom;
+			for (const targets of contributions?.values() ?? []) {
+				result = semantics.join(result, targets);
+			}
+			return result;
+		};
+		const knownFunctionProperties = new Map(previous?.properties ?? []);
+		let propertyAggregateUpdates = 0;
+		for (const key of propertyKeys) {
+			propertyAggregateUpdates++;
+			const next = joinContributions(propertyWriters.get(key));
+			if (semantics.isBottom(next)) knownFunctionProperties.delete(key);
+			else knownFunctionProperties.set(key, next);
+		}
+
+		const local = new Map<CoreFunctionId, Local>();
+		for (const functionId of functionIds) {
+			const fn = this.#program.function(functionId);
+			const prior = previous?.local.get(functionId);
+			if (semantics.localIsCurrent(prior, fn)) local.set(functionId, prior!);
+		}
+		const propertyReaders = new Map(previous?.propertyReaders ?? []);
+		for (const key of propertyKeys) {
+			for (const reader of propertyReaders.get(key) ?? []) changedFunctions.add(reader);
+		}
+		const closedCells = semantics.closedCells(this.#program, context, identities);
+		const trackedCells = new Set(closedCells);
+		for (const access of cellAccesses.values()) {
+			for (const key of access.reads) trackedCells.add(key);
+			for (const key of access.writes) trackedCells.add(key);
+		}
+		const affectedFunctions = new Set(changedFunctions);
+		const dependencyQueue = [...affectedFunctions];
+		for (let cursor = 0; cursor < dependencyQueue.length; cursor++) {
+			const functionId = dependencyQueue[cursor]!;
+			const writeKeys = new Set([
+				...(previous?.local.get(functionId)?.cellWrites.keys() ?? []),
+				...(cellAccesses.get(functionId)?.writes ?? []),
+			]);
+			for (const key of writeKeys) {
+				for (const reader of cellReaders.get(key) ?? []) {
+					if (affectedFunctions.has(reader)) continue;
+					affectedFunctions.add(reader);
+					dependencyQueue.push(reader);
+				}
+			}
+		}
+
+		const cellWriters = new Map(previous?.cellWriters ?? []);
+		const globalStoreWriters = new Map(previous?.globalStoreWriters ?? []);
+		const cells = new Map(previous?.cells ?? []);
+		const globalStores = new Map(previous?.globalStores ?? []);
+		const cellKeys = new Set<number>();
+		const globalSlots = new Set<number>();
+		const removeLocalContributions = (
+			functionId: CoreFunctionId,
+			entry: Local | undefined,
+		): void => {
+			if (entry === undefined) return;
+			for (const key of entry.cellWrites.keys()) {
+				cellKeys.add(key);
+				const writers = new Map(cellWriters.get(key) ?? []);
+				writers.delete(functionId);
+				if (writers.size === 0) cellWriters.delete(key);
+				else cellWriters.set(key, writers);
+			}
+			for (const slot of entry.globalWrites.keys()) {
+				globalSlots.add(slot);
+				const writers = new Map(globalStoreWriters.get(slot) ?? []);
+				writers.delete(functionId);
+				if (writers.size === 0) globalStoreWriters.delete(slot);
+				else globalStoreWriters.set(slot, writers);
+			}
+			for (const key of entry.propertyInputs.keys()) {
+				const readers = new Set(propertyReaders.get(key) ?? []);
+				readers.delete(functionId);
+				if (readers.size === 0) propertyReaders.delete(key);
+				else propertyReaders.set(key, readers);
+			}
+		};
+		for (const functionId of affectedFunctions) {
+			removeLocalContributions(
+				functionId,
+				local.get(functionId) ?? previous?.local.get(functionId),
+			);
+			local.delete(functionId);
+		}
+		for (const key of trackedCells) {
+			if (!previous?.cells.has(key)) cellKeys.add(key);
+		}
+		for (const key of previous?.cells.keys() ?? []) {
+			if (!trackedCells.has(key)) cellKeys.add(key);
+		}
+		let cellAggregateUpdates = 0;
+		const recomputeCell = (key: number): boolean => {
+			cellAggregateUpdates++;
+			let next = closedCells.has(key) ? semantics.bottom : semantics.opaque;
+			next = semantics.join(next, joinContributions(cellWriters.get(key)));
+			const prior = cells.get(key) ?? semantics.bottom;
+			if (!trackedCells.has(key) || semantics.isBottom(next)) cells.delete(key);
+			else cells.set(key, next);
+			return !semantics.equal(prior, next);
+		};
+		for (const key of cellKeys) recomputeCell(key);
+		let globalStoreAggregateUpdates = 0;
+		const recomputeGlobalStore = (slot: number): void => {
+			globalStoreAggregateUpdates++;
+			const next = joinContributions(globalStoreWriters.get(slot));
+			if (semantics.isBottom(next)) globalStores.delete(slot);
+			else globalStores.set(slot, next);
+		};
+		for (const slot of globalSlots) recomputeGlobalStore(slot);
+
+		const analyzed = new Set<CoreFunctionId>();
+		this.solveFunctions(
+			[...affectedFunctions].sort((left, right) => left - right),
+			(functionId, enqueue) => {
+				const previousLocal =
+					local.get(functionId) ??
+					(analyzed.has(functionId) ? undefined : previous?.local.get(functionId));
+				removeLocalContributions(functionId, previousLocal);
+				const next = semantics.analyzeLocal(
+					this.#program,
+					this.#program.function(functionId),
+					controlFlow(functionId),
+					cells,
+					trackedCells,
+					knownFunctionProperties,
+					this.local(functionId),
+					identities,
+				);
+				for (const [key, targets] of next.cellWrites) {
+					cellKeys.add(key);
+					const writers = new Map(cellWriters.get(key) ?? []);
+					writers.set(functionId, targets);
+					cellWriters.set(key, writers);
+				}
+				for (const [slot, targets] of next.globalWrites) {
+					globalSlots.add(slot);
+					const writers = new Map(globalStoreWriters.get(slot) ?? []);
+					writers.set(functionId, targets);
+					globalStoreWriters.set(slot, writers);
+				}
+				for (const key of next.propertyInputs.keys()) {
+					const readers = new Set(propertyReaders.get(key) ?? []);
+					readers.add(functionId);
+					propertyReaders.set(key, readers);
+				}
+				local.set(functionId, next);
+				analyzed.add(functionId);
+				const writeKeys = new Set([
+					...(previousLocal?.cellWrites.keys() ?? []),
+					...next.cellWrites.keys(),
+				]);
+				for (const key of writeKeys) {
+					if (!recomputeCell(key)) continue;
+					for (const reader of cellReaders.get(key) ?? []) enqueue(reader);
+				}
+				for (const slot of new Set([
+					...(previousLocal?.globalWrites.keys() ?? []),
+					...next.globalWrites.keys(),
+				])) {
+					recomputeGlobalStore(slot);
+				}
+			},
+		);
+		const functionsAnalyzed = analyzed.size;
+		const functionsReused = local.size - functionsAnalyzed;
+		const sites = new Map(previous?.sites ?? []);
+		const outgoing = new Map(previous?.outgoingIndex ?? []);
+		const changedCallSites: Array<Site> = [];
+		const changedCallers = new Set<CoreFunctionId>();
+		const changedEdgeCallers = new Set<CoreFunctionId>();
+		let wildcardCallSites = previous?.statistics.wildcardCallSites ?? 0;
+		let opaqueCallSites = previous?.statistics.opaqueCallSites ?? 0;
+		for (const functionId of analyzed) {
+			const priorOutgoing = previous?.outgoingIndex.get(functionId) ?? [];
+			const priorSites = previous?.sites.get(functionId);
+			const nextRaw = local.get(functionId)?.sites ?? [];
+			const nextOutgoing = nextRaw.map((site) => {
+				const prior = priorSites?.get(site.instruction);
+				return prior !== undefined && semantics.callSiteEqual(prior, site) ? prior : site;
+			});
+			const oldByInstruction = new Map(
+				priorOutgoing.map((site) => [site.instruction, site] as const),
+			);
+			const nextByInstruction = new Map(
+				nextOutgoing.map((site) => [site.instruction, site] as const),
+			);
+			for (const instruction of new Set([
+				...oldByInstruction.keys(),
+				...nextByInstruction.keys(),
+			])) {
+				const prior = oldByInstruction.get(instruction);
+				const next = nextByInstruction.get(instruction);
+				if (
+					prior !== undefined &&
+					next !== undefined &&
+					semantics.callSiteEqual(prior, next)
+				)
+					continue;
+				changedCallSites.push(next ?? prior!);
+				changedCallers.add(functionId);
+			}
+			if (nextByInstruction.size === 0) sites.delete(functionId);
+			else sites.set(functionId, nextByInstruction);
+			const priorExact = [
+				...new Set(priorOutgoing.flatMap((site) => site.targets.functions)),
+			].sort((left, right) => left - right);
+			const nextExact = [
+				...new Set(nextOutgoing.flatMap((site) => site.targets.functions)),
+			].sort((left, right) => left - right);
+			if (
+				priorExact.length !== nextExact.length ||
+				priorExact.some((target, index) => target !== nextExact[index]) ||
+				priorOutgoing.some((site) => site.targets.anyScript) !==
+					nextOutgoing.some((site) => site.targets.anyScript)
+			) {
+				changedEdgeCallers.add(functionId);
+			}
+			wildcardCallSites +=
+				nextOutgoing.filter((site) => site.targets.anyScript).length -
+				priorOutgoing.filter((site) => site.targets.anyScript).length;
+			opaqueCallSites +=
+				nextOutgoing.filter((site) => site.targets.opaque).length -
+				priorOutgoing.filter((site) => site.targets.opaque).length;
+			const stableOutgoing =
+				priorOutgoing.length === nextOutgoing.length &&
+				priorOutgoing.every((site, index) => site === nextOutgoing[index]);
+			outgoing.set(
+				functionId,
+				stableOutgoing ? priorOutgoing : Object.freeze(nextOutgoing),
+			);
+		}
+		const graph = updateCoreCallGraph(
+			previous?.graph,
+			functionIds,
+			[...outgoing].map(([caller, callSites]) => ({
+				caller,
+				exactTargets: callSites.flatMap((site) => site.targets.functions),
+				wildcard: callSites.some((site) => site.targets.anyScript),
+			})),
+		);
+		const updatedCallSites = changedCallSites.length;
+		let callSites = 0;
+		for (const indexed of sites.values()) callSites += indexed.size;
+		const statistics = Object.freeze({
+			functions: local.size,
+			functionsAnalyzed,
+			functionsReused,
+			callSites,
+			exactCallEdges: graph.statistics.exactCallEdges,
+			wildcardCallSites,
+			wildcardCallers: graph.statistics.wildcardCallers,
+			opaqueCallSites,
+			aggregateDependencies: graph.statistics.aggregateDependencies,
+			storedGraphRows: graph.statistics.storedRows,
+			storedGraphEntries: graph.statistics.storedEntries,
+			updatedCallSites,
+			accessFunctionsScanned,
+			propertyAggregateUpdates,
+			cellAggregateUpdates,
+			globalStoreAggregateUpdates,
+			callSiteIndexUpdates: changedCallSites.length,
+		});
+		return Object.freeze({
+			sourceClosed,
+			identities,
+			statistics,
+			changedCallSites,
+			changedCallers,
+			changedEdgeCallers,
+			graph,
+			local,
+			cells,
+			cellAccesses,
+			propertyWrites,
+			propertyWriters,
+			properties: knownFunctionProperties,
+			propertyReaders,
+			cellReaders,
+			cellWriters,
+			globalStoreWriters,
+			globalStores,
+			sites,
+			outgoingIndex: outgoing,
+			targets(functionId: CoreFunctionId, value: CoreValueId) {
+				return local.get(functionId)?.values[value] ?? semantics.open;
+			},
+			returnTargets(functionId: CoreFunctionId) {
+				return local.get(functionId)?.returnTargets ?? semantics.open;
+			},
+			globalStoreTargets(slot: number) {
+				return globalStores.get(slot) ?? semantics.bottom;
+			},
+			site(functionId: CoreFunctionId, instruction: CoreInstructionId) {
+				return sites.get(functionId)?.get(instruction);
+			},
+			outgoing(functionId: CoreFunctionId) {
+				return outgoing.get(functionId) ?? [];
+			},
+		});
 	}
 
 	solveSummaries<Local, Aggregate, Targets extends CoreProgramFlowTargetIndex>(
