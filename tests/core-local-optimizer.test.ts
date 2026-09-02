@@ -103,6 +103,43 @@ describe("CoreLocalOptimizer", () => {
 		expect(fn.isInstructionLive(definition)).toBe(true);
 	});
 
+	it("folds a dirty block and immediately removes its dead condition producer", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const taken = builder.createBlock();
+		const skipped = builder.createBlock();
+		const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: taken, arguments: [] },
+			alternate: { block: skipped, arguments: [] },
+		});
+		const [one] = builder.appendInstruction(taken, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [zero] = builder.appendInstruction(skipped, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		builder.setTerminator(taken, { kind: "return", value: one! });
+		builder.setTerminator(skipped, { kind: "return", value: zero! });
+		const fn = program.function(builder.finish(entry).function);
+		const conditionInstruction = [...fn.bodyInstructionIds(entry)][0]!;
+
+		const result = new CoreLocalOptimizer(program, fn.id).run();
+
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry))).toEqual({
+			kind: "jump",
+			edge: { block: taken, arguments: [] },
+		});
+		expect(fn.isInstructionLive(conditionInstruction)).toBe(false);
+		expect(result.statistics.blockQueuePops).toBe(1);
+		expect(result.statistics.editSessions).toBe(1);
+	});
+
 	it("reports work-budget exhaustion without opening another edit session", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

@@ -2,7 +2,10 @@ import { CoreEditor } from "./core-editor.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
+	CoreEdge,
+	CoreFactId,
 	CoreFunctionId,
+	CoreImmediate,
 	CoreInstructionId,
 	CoreOpcodeId,
 	CoreValueId,
@@ -96,6 +99,11 @@ export interface CoreLocalInstructionRule {
 	run(optimizer: CoreLocalOptimizer, instruction: CoreInstructionId): boolean;
 }
 
+export interface CoreLocalBlockRule {
+	readonly name: string;
+	run(optimizer: CoreLocalOptimizer, block: CoreBlockId): boolean;
+}
+
 export interface CoreLocalOptimizerOptions {
 	readonly maxWorkItems?: number;
 	readonly maxEdits?: number;
@@ -111,12 +119,27 @@ const COPY_PROPAGATION_RULE: CoreLocalInstructionRule = {
 	},
 };
 
+const CONTROL_FOLDING_RULE: CoreLocalBlockRule = {
+	name: "local-control-folding",
+	run(optimizer, block) {
+		return optimizer.foldControl(block);
+	},
+};
+
+type LocalConstant =
+	| { readonly kind: "undefined" }
+	| { readonly kind: "null" }
+	| { readonly kind: "boolean"; readonly value: boolean }
+	| { readonly kind: "number"; readonly value: number }
+	| { readonly kind: "string"; readonly index: number };
+
 export class CoreLocalOptimizer {
 	readonly #program: CoreProgram;
 	readonly #fn: CoreFunctionStore;
 	readonly #instructionQueue: SparseNumericQueue;
 	readonly #blockQueue: SparseNumericQueue;
 	readonly #rules: ReadonlyArray<CoreLocalInstructionRule>;
+	readonly #blockRules: ReadonlyArray<CoreLocalBlockRule>;
 	readonly #dispatch: Uint32Array;
 	readonly #maxWorkItems: number;
 	readonly #maxEdits: number;
@@ -156,6 +179,7 @@ export class CoreLocalOptimizer {
 				: [{ ...COPY_PROPAGATION_RULE, opcodes: [this.#moveOpcode] }]),
 			...(options.additionalRules ?? []),
 		];
+		this.#blockRules = [CONTROL_FOLDING_RULE];
 		if (this.#rules.length > 31) {
 			throw new Error("Core local optimizer supports at most 31 opcode rules");
 		}
@@ -179,35 +203,21 @@ export class CoreLocalOptimizer {
 			for (let id = 0; id < this.#fn.instructionCapacity; id++) {
 				this.#enqueueInstruction(coreInstructionId(id));
 			}
+			for (let id = 0; id < this.#fn.blockCapacity; id++) {
+				this.#enqueueBlock(id as CoreBlockId);
+			}
 		} else {
 			for (const changes of initialChanges) this.#submit(changes);
 		}
 
-		while (this.#instructionQueuePops < this.#maxWorkItems) {
-			const queued = this.#instructionQueue.pop();
-			if (queued === undefined) break;
-			this.#instructionQueuePops++;
-			const instruction = coreInstructionId(queued);
-			if (this.#fn.kernel.instructionLive(instruction) === 0) continue;
-			const opcode = this.#fn.kernel.instructionOpcode(instruction);
-			if (opcode < 0) continue;
-			let mask = this.#dispatch[opcode] ?? 0;
-			for (let ruleIndex = 0; ruleIndex < this.#rules.length; ruleIndex++) {
-				const bit = 1 << ruleIndex;
-				if ((mask & bit) === 0) continue;
-				this.#rulesConsidered++;
-				if (this.#rules[ruleIndex]!.run(this, instruction)) {
-					this.#rulesApplied++;
-					mask = 0;
-					break;
-				}
-			}
-			if (
-				(mask & DEAD_CODE_RULE) !== 0 &&
-				this.#fn.kernel.instructionLive(instruction) !== 0
-			) {
-				this.#rulesConsidered++;
-				if (this.#removeDeadInstruction(instruction)) this.#rulesApplied++;
+		while (this.#instructionQueuePops + this.#blockQueuePops < this.#maxWorkItems) {
+			const queuedInstruction = this.#instructionQueue.pop();
+			if (queuedInstruction !== undefined) {
+				this.#drainInstruction(coreInstructionId(queuedInstruction));
+			} else {
+				const queuedBlock = this.#blockQueue.pop();
+				if (queuedBlock === undefined) break;
+				this.#drainBlock(queuedBlock as CoreBlockId);
 			}
 			if ((this.#editor?.pendingEdits ?? 0) >= this.#maxEdits) {
 				this.#editBudgetExhausted = true;
@@ -215,8 +225,8 @@ export class CoreLocalOptimizer {
 			}
 		}
 		if (
-			this.#instructionQueuePops >= this.#maxWorkItems &&
-			!this.#instructionQueue.empty
+			this.#instructionQueuePops + this.#blockQueuePops >= this.#maxWorkItems &&
+			(!this.#instructionQueue.empty || !this.#blockQueue.empty)
 		) {
 			this.#workBudgetExhausted = true;
 		}
@@ -261,6 +271,110 @@ export class CoreLocalOptimizer {
 		editor.removeInstruction(instruction);
 		this.#wakeValueDefinition(input);
 		return true;
+	}
+
+	foldControl(block: CoreBlockId): boolean {
+		if (this.#fn.kernel.blockLive(block) === 0) return false;
+		const terminator = this.#fn.blockTerminator(block);
+		const kind = this.#fn.instructionKind(terminator);
+		let selected: CoreEdge | undefined;
+		let removedFact: CoreFactId | undefined;
+		let condition: CoreValueId | undefined;
+		if (kind === "branch") {
+			condition = this.#instructionOperand(terminator, 0);
+			if (condition === undefined) return false;
+			const consequent = this.#copyTerminatorEdge(terminator, 0);
+			const alternate = this.#copyTerminatorEdge(terminator, 1);
+			const constant = this.#constantForValue(condition);
+			if (constant?.kind === "boolean") {
+				selected = constant.value ? consequent : alternate;
+			} else if (this.#sameEdge(consequent, alternate)) {
+				selected = consequent;
+			}
+		} else if (kind === "switch") {
+			condition = this.#instructionOperand(terminator, 0);
+			if (condition === undefined) return false;
+			const constant = this.#constantForValue(condition);
+			if (constant !== undefined) {
+				const edgeStart = this.#fn.kernel.terminatorEdgeStart(terminator);
+				const edgeCount = this.#fn.kernel.terminatorEdgeCount(terminator);
+				for (let offset = 0; offset < edgeCount - 1; offset++) {
+					const value = this.#fn.kernel.terminatorEdgeCaseValue(edgeStart + offset);
+					if (value !== undefined && this.#immediateEqualsConstant(value, constant)) {
+						selected = this.#copyTerminatorEdge(terminator, offset);
+						break;
+					}
+				}
+				selected ??= this.#copyTerminatorEdge(terminator, edgeCount - 1);
+			}
+		} else if (kind === "guard") {
+			const success = this.#copyTerminatorEdge(terminator, 0);
+			const fallback = this.#copyTerminatorEdge(terminator, 1);
+			if (!this.#sameEdge(success, fallback)) return false;
+			const factId = this.#fn.kernel.terminatorFact(terminator);
+			if (factId === undefined) return false;
+			const fact = this.#fn.fact(factId);
+			const exclusivelyGuardsTerminator = fact.obligations.every(
+				(obligation) =>
+					obligation.kind === "guard" && obligation.instruction === terminator,
+			);
+			let usedByRefinement = false;
+			for (let id = 0; id < this.#fn.instructionCapacity; id++) {
+				const instruction = coreInstructionId(id);
+				if (
+					this.#fn.kernel.instructionLive(instruction) !== 0 &&
+					this.#fn.kernel.instructionOpcode(instruction) >= 0 &&
+					this.#fn.instructionEffectRefinement(instruction)?.proof === factId
+				) {
+					usedByRefinement = true;
+					break;
+				}
+			}
+			if (exclusivelyGuardsTerminator && !usedByRefinement) {
+				selected = success;
+				removedFact = factId;
+			}
+		}
+		if (selected === undefined) return false;
+		if (condition !== undefined) this.#wakeValueDefinition(condition);
+		const editor = this.#edit();
+		editor.replaceTerminator(block, { kind: "jump", edge: selected });
+		if (removedFact !== undefined) editor.removeFact(removedFact);
+		return true;
+	}
+
+	#drainInstruction(instruction: CoreInstructionId): void {
+		this.#instructionQueuePops++;
+		if (this.#fn.kernel.instructionLive(instruction) === 0) return;
+		const opcode = this.#fn.kernel.instructionOpcode(instruction);
+		if (opcode < 0) return;
+		let mask = this.#dispatch[opcode] ?? 0;
+		for (let ruleIndex = 0; ruleIndex < this.#rules.length; ruleIndex++) {
+			const bit = 1 << ruleIndex;
+			if ((mask & bit) === 0) continue;
+			this.#rulesConsidered++;
+			if (this.#rules[ruleIndex]!.run(this, instruction)) {
+				this.#rulesApplied++;
+				mask = 0;
+				break;
+			}
+		}
+		if (
+			(mask & DEAD_CODE_RULE) !== 0 &&
+			this.#fn.kernel.instructionLive(instruction) !== 0
+		) {
+			this.#rulesConsidered++;
+			if (this.#removeDeadInstruction(instruction)) this.#rulesApplied++;
+		}
+	}
+
+	#drainBlock(block: CoreBlockId): void {
+		this.#blockQueuePops++;
+		if (this.#fn.kernel.blockLive(block) === 0) return;
+		for (const rule of this.#blockRules) {
+			this.#rulesConsidered++;
+			if (rule.run(this, block)) this.#rulesApplied++;
+		}
 	}
 
 	#removeDeadInstruction(instruction: CoreInstructionId): boolean {
@@ -320,7 +434,12 @@ export class CoreLocalOptimizer {
 			use = this.#fn.kernel.useNext(use)
 		) {
 			if (this.#fn.kernel.useLive(use) !== 0) {
-				this.#enqueueInstruction(this.#fn.kernel.useInstruction(use));
+				const instruction = this.#fn.kernel.useInstruction(use);
+				if (this.#fn.kernel.instructionOpcode(instruction) < 0) {
+					this.#enqueueBlock(this.#fn.instructionBlock(instruction));
+				} else {
+					this.#enqueueInstruction(instruction);
+				}
 			}
 		}
 	}
@@ -340,6 +459,14 @@ export class CoreLocalOptimizer {
 		}
 	}
 
+	#enqueueBlock(block: CoreBlockId): void {
+		if (this.#fn.kernel.blockLive(block) === 0) return;
+		const kind = this.#fn.instructionKind(this.#fn.blockTerminator(block));
+		if (kind === "branch" || kind === "switch" || kind === "guard") {
+			this.#blockQueue.push(block);
+		}
+	}
+
 	#submit(changes: CoreChangeSet): void {
 		if (changes.function !== this.#fn.id) {
 			throw new Error("Core local optimizer received changes for another function");
@@ -353,8 +480,13 @@ export class CoreLocalOptimizer {
 			this.#wakeValueDefinition(value);
 			this.#wakeValueUsers(value);
 		}
-		for (const block of changes.blocks) this.#enqueueBlockInstructions(block);
+		for (const block of changes.blocks) {
+			this.#enqueueBlock(block);
+			this.#enqueueBlockInstructions(block);
+		}
 		for (const edge of changes.edges) {
+			this.#enqueueBlock(edge.source);
+			this.#enqueueBlock(edge.target);
 			this.#enqueueBlockInstructions(edge.source);
 			this.#enqueueBlockInstructions(edge.target);
 		}
@@ -369,6 +501,92 @@ export class CoreLocalOptimizer {
 		) {
 			this.#enqueueInstruction(coreInstructionId(instruction));
 		}
+	}
+
+	#instructionOperand(
+		instruction: CoreInstructionId,
+		index: number,
+	): CoreValueId | undefined {
+		const count = this.#fn.kernel.instructionOperandCount(instruction);
+		if (index < 0 || index >= count) return undefined;
+		return this.#fn.kernel.operandAt(
+			this.#fn.kernel.instructionOperandStart(instruction) + index,
+		);
+	}
+
+	#copyTerminatorEdge(instruction: CoreInstructionId, offset: number): CoreEdge {
+		const edgeStart = this.#fn.kernel.terminatorEdgeStart(instruction);
+		const edgeCount = this.#fn.kernel.terminatorEdgeCount(instruction);
+		if (offset < 0 || offset >= edgeCount) {
+			throw new Error(`Malformed Core ${this.#fn.instructionKind(instruction)} edges`);
+		}
+		const row = edgeStart + offset;
+		const argumentStart = this.#fn.kernel.terminatorEdgeArgumentStart(row);
+		const argumentCount = this.#fn.kernel.terminatorEdgeArgumentCount(row);
+		return {
+			block: this.#fn.kernel.terminatorEdgeBlock(row),
+			arguments: Array.from({ length: argumentCount }, (_, index) =>
+				this.#fn.kernel.operandAt(argumentStart + index),
+			),
+		};
+	}
+
+	#constantForValue(value: CoreValueId): LocalConstant | undefined {
+		if (this.#fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const instruction = coreInstructionId(this.#fn.kernel.valueDefinitionOwner(value));
+		if (
+			this.#fn.kernel.instructionLive(instruction) === 0 ||
+			this.#fn.kernel.instructionOpcode(instruction) < 0
+		) {
+			return undefined;
+		}
+		const attributes = this.#fn.instructionAttributes(instruction);
+		switch (this.#fn.instructionOpcodeName(instruction)) {
+			case "createUndefined":
+				return { kind: "undefined" };
+			case "createNull":
+				return { kind: "null" };
+			case "createBoolean":
+				return typeof attributes.value === "boolean"
+					? { kind: "boolean", value: attributes.value }
+					: undefined;
+			case "createNumber":
+			case "createF64":
+				return typeof attributes.value === "number"
+					? { kind: "number", value: attributes.value }
+					: undefined;
+			case "createString":
+				return typeof attributes.stringIndex === "number"
+					? { kind: "string", index: attributes.stringIndex }
+					: undefined;
+			default:
+				return undefined;
+		}
+	}
+
+	#immediateEqualsConstant(immediate: CoreImmediate, constant: LocalConstant): boolean {
+		if (immediate.kind !== constant.kind) return false;
+		switch (immediate.kind) {
+			case "undefined":
+			case "null":
+				return true;
+			case "boolean":
+			case "number":
+				return immediate.value === (constant as { readonly value: unknown }).value;
+			case "string":
+				return immediate.index === (constant as { readonly index: number }).index;
+		}
+	}
+
+	#sameEdge(left: CoreEdge | undefined, right: CoreEdge | undefined): boolean {
+		return (
+			left === right ||
+			(left !== undefined &&
+				right !== undefined &&
+				left.block === right.block &&
+				left.arguments.length === right.arguments.length &&
+				left.arguments.every((value, index) => value === right.arguments[index]))
+		);
 	}
 
 	#edit(): CoreEditor {

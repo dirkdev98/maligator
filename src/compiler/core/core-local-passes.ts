@@ -39,8 +39,6 @@ import type {
 	CoreAttributeValue,
 	CoreBlockId,
 	CoreEdge,
-	CoreFactId,
-	CoreImmediate,
 	CoreInstructionAttributes,
 	CoreInstructionId,
 	CoreRepresentation,
@@ -371,23 +369,6 @@ function valueHasUses(fn: CoreFunctionStore, value: CoreValueId): boolean {
 		if (handlerContainsValue(fn, block, value)) return true;
 	}
 	return false;
-}
-
-function immediateEqualsConstant(
-	immediate: CoreImmediate,
-	constant: LocalConstant,
-): boolean {
-	if (immediate.kind !== constant.kind) return false;
-	switch (immediate.kind) {
-		case "undefined":
-		case "null":
-			return true;
-		case "boolean":
-		case "number":
-			return immediate.value === (constant as { readonly value: unknown }).value;
-		case "string":
-			return immediate.index === (constant as { readonly index: number }).index;
-	}
 }
 
 function constantOpcode(constant: LocalConstant): {
@@ -1675,79 +1656,6 @@ const rewriteNumericIdentities: CorePass = {
 	},
 };
 
-const foldControlFlow: CorePass = {
-	name: "local-control-folding",
-	stage: "canonicalize",
-	scope: "block",
-	requiredAnalyses: [],
-	wakesOn: ["body", "cfg"],
-	preserves: [],
-	changes: { ...LOCAL_CHANGES, cfg: true },
-	budget: LOCAL_BUDGET,
-	run({ program, item }) {
-		if (item.scope !== "block") return undefined;
-		const fn = program.function(item.function);
-		if (!fn.isBlockLive(item.block)) return undefined;
-		const terminator = fn.blockTerminator(item.block);
-		const kind = fn.instructionKind(terminator);
-		let selected: CoreEdge | undefined;
-		let removedFact: CoreFactId | undefined;
-		if (kind === "branch") {
-			const conditionValue = instructionOperand(fn, terminator, 0);
-			if (conditionValue === undefined) return undefined;
-			const consequent = copyTerminatorEdge(fn, terminator, 0);
-			const alternate = copyTerminatorEdge(fn, terminator, 1);
-			const condition = constantForValue(fn, conditionValue);
-			if (condition?.kind === "boolean") {
-				selected = condition.value ? consequent : alternate;
-			} else if (sameEdge(consequent, alternate)) {
-				selected = consequent;
-			}
-		} else if (kind === "switch") {
-			const discriminantValue = instructionOperand(fn, terminator, 0);
-			if (discriminantValue === undefined) return undefined;
-			const discriminant = constantForValue(fn, discriminantValue);
-			if (discriminant !== undefined) {
-				const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
-				const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
-				for (let offset = 0; offset < edgeCount - 1; offset++) {
-					const value = fn.kernel.terminatorEdgeCaseValue(edgeStart + offset);
-					if (value !== undefined && immediateEqualsConstant(value, discriminant)) {
-						selected = copyTerminatorEdge(fn, terminator, offset);
-						break;
-					}
-				}
-				selected ??= copyTerminatorEdge(fn, terminator, edgeCount - 1);
-			}
-		} else if (kind === "guard") {
-			const success = copyTerminatorEdge(fn, terminator, 0);
-			const fallback = copyTerminatorEdge(fn, terminator, 1);
-			if (!sameEdge(success, fallback)) return undefined;
-			const factId = fn.kernel.terminatorFact(terminator);
-			if (factId === undefined) return undefined;
-			const fact = fn.fact(factId);
-			const exclusivelyGuardsTerminator = fact.obligations.every(
-				(obligation) =>
-					obligation.kind === "guard" && obligation.instruction === terminator,
-			);
-			const usedByRefinement = [...fn.instructionIds()].some(
-				(instruction) =>
-					fn.instructionKind(instruction) === "operation" &&
-					fn.instructionEffectRefinement(instruction)?.proof === factId,
-			);
-			if (exclusivelyGuardsTerminator && !usedByRefinement) {
-				selected = success;
-				removedFact = factId;
-			}
-		}
-		if (selected === undefined) return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		editor.replaceTerminator(item.block, { kind: "jump", edge: selected });
-		if (removedFact !== undefined) editor.removeFact(removedFact);
-		return editor.commit();
-	},
-};
-
 const foldRedundantTdzChecks: CorePass = {
 	name: "redundant-tdz-check-folding",
 	stage: "canonicalize",
@@ -2209,17 +2117,6 @@ const eliminateForwardingBlocks: CorePass = {
 	},
 };
 
-function sameEdge(left: CoreEdge | undefined, right: CoreEdge | undefined): boolean {
-	return (
-		left === right ||
-		(left !== undefined &&
-			right !== undefined &&
-			left.block === right.block &&
-			left.arguments.length === right.arguments.length &&
-			left.arguments.every((value, index) => value === right.arguments[index]))
-	);
-}
-
 const mergeLinearBlocks: CorePass = {
 	name: "linear-block-merging",
 	stage: "canonicalize",
@@ -2593,7 +2490,6 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	foldTypeofComparisons,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,
-	foldControlFlow,
 	localValueNumbering,
 	canonicalizeBlockParameters,
 	simplifyBlockParameters,
