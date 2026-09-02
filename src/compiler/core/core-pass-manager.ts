@@ -19,13 +19,13 @@ interface QueuedPassWork {
 	readonly kind: "pass";
 	readonly pass: CorePass;
 	readonly item: CorePassWorkItem;
-	readonly key: string;
+	readonly key: number;
 }
 
 interface QueuedLocalWork {
 	readonly kind: "local";
 	readonly function: CoreFunctionId;
-	readonly key: string;
+	readonly key: number;
 }
 
 interface PendingLocalWork {
@@ -47,17 +47,6 @@ export interface CorePassManagerOptions {
 		readonly id: string;
 		readonly functions: ReadonlyArray<number>;
 	}>;
-}
-
-function workKey(pass: CorePass, item: CorePassWorkItem): string {
-	switch (item.scope) {
-		case "function":
-			return `${pass.name}:function:${item.function}`;
-		case "scc":
-			return `${pass.name}:scc:${item.id}`;
-		case "program":
-			return `${pass.name}:program`;
-	}
 }
 
 function intersects(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
@@ -118,19 +107,40 @@ export class CorePassManager {
 	): void {
 		for (const pass of passes) this.#validatePass(stage, pass);
 		const startedAt = this.#report.collectsCounters ? Date.now() : 0;
+		const passIndices = new WeakMap<CorePass, number>();
+		for (let index = 0; index < passes.length; index++) {
+			passIndices.set(passes[index]!, index);
+		}
+		const functionStride = Math.max(1, this.#program.functionCapacity);
+		const sccStride = Math.max(1, this.#sccs.length);
+		const sccBase = passes.length * functionStride;
+		const programBase = sccBase + passes.length * sccStride;
+		const localBase = programBase + passes.length;
+		const passWorkKey = (pass: CorePass, item: CorePassWorkItem): number => {
+			const passIndex = passIndices.get(pass);
+			if (passIndex === undefined) throw new Error("Unknown Core pass queue owner");
+			switch (item.scope) {
+				case "function":
+					return passIndex * functionStride + item.function;
+				case "scc":
+					return sccBase + passIndex * sccStride + item.index;
+				case "program":
+					return programBase + passIndex;
+			}
+		};
 		const queue: Array<QueuedPassWork | QueuedLocalWork | undefined> = [];
 		let queueIndex = 0;
-		const queued = new Set<string>();
+		const queued = new Set<number>();
 		const runs =
 			this.#optionalMaxRunsPerWorkItem === Number.MAX_SAFE_INTEGER
 				? undefined
-				: new Map<string, number>();
-		const profileExhausted = new Set<string>();
-		const consumption = new Map<string, PassConsumption>();
+				: new Map<number, number>();
+		const profileExhausted = new Set<number>();
+		const consumption = new Map<CorePass, PassConsumption>();
 		const pendingLocal = new Map<CoreFunctionId, PendingLocalWork>();
 		const enqueue = (pass: CorePass, item: CorePassWorkItem): void => {
 			if (!this.#accepts(pass, item)) return;
-			const key = workKey(pass, item);
+			const key = passWorkKey(pass, item);
 			if (queued.has(key)) return;
 			if (
 				pass.budget.exhaustion === "stop" &&
@@ -159,7 +169,7 @@ export class CorePassManager {
 			if (changes === undefined) pending.full = true;
 			else pending.changes.push(changes);
 			pendingLocal.set(functionId, pending);
-			const key = `local:function:${functionId}`;
+			const key = localBase + functionId;
 			if (queued.has(key)) return;
 			queued.add(key);
 			queue.push({ kind: "local", function: functionId, key });
@@ -208,7 +218,7 @@ export class CorePassManager {
 				continue;
 			}
 			if (runs !== undefined) runs.set(work.key, (runs.get(work.key) ?? 0) + 1);
-			const used = consumption.get(work.pass.name) ?? {
+			const used = consumption.get(work.pass) ?? {
 				workItems: 0,
 				edits: 0,
 				exhausted: false,
@@ -219,7 +229,7 @@ export class CorePassManager {
 				used.edits >= work.pass.budget.maxEdits
 			) {
 				this.#exhaust(work.pass, used);
-				consumption.set(work.pass.name, used);
+				consumption.set(work.pass, used);
 				continue;
 			}
 			const passStartedAt = this.#report.collectsDetails ? Date.now() : 0;
@@ -237,7 +247,7 @@ export class CorePassManager {
 			const edits = changes?.edits ?? 0;
 			used.workItems++;
 			used.edits += edits;
-			consumption.set(work.pass.name, used);
+			consumption.set(work.pass, used);
 			this.#report.recordPassRun(work.pass.name, 1, edits > 0, edits, elapsedMs);
 			this.#report.recordBudget(1, edits);
 			if (changes === undefined || edits === 0) continue;
@@ -267,9 +277,11 @@ export class CorePassManager {
 				}
 				break;
 			case "scc":
-				for (const scc of this.#sccs) {
+				for (let index = 0; index < this.#sccs.length; index++) {
+					const scc = this.#sccs[index]!;
 					enqueue(pass, {
 						scope: "scc",
+						index,
 						id: scc.id,
 						functions: scc.functions as never,
 					});
@@ -291,10 +303,12 @@ export class CorePassManager {
 				enqueue(pass, { scope: "function", function: changes.function });
 				break;
 			case "scc":
-				for (const scc of this.#sccs) {
+				for (let index = 0; index < this.#sccs.length; index++) {
+					const scc = this.#sccs[index]!;
 					if (!scc.functions.includes(changes.function)) continue;
 					enqueue(pass, {
 						scope: "scc",
+						index,
 						id: scc.id,
 						functions: scc.functions as never,
 					});

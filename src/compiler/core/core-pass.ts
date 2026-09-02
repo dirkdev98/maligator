@@ -29,6 +29,7 @@ export type CorePassWorkItem =
 	| { readonly scope: "function"; readonly function: CoreFunctionId }
 	| {
 			readonly scope: "scc";
+			readonly index: number;
 			readonly id: string;
 			readonly functions: ReadonlyArray<CoreFunctionId>;
 	  }

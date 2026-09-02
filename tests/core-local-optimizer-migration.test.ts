@@ -139,4 +139,13 @@ describe("Core local optimizer migration matrix", () => {
 
 		expect(source).not.toMatch(/readonly scope: "(?:instruction|block)"/);
 	});
+
+	it("uses numeric identities for optimizer queue membership", () => {
+		const source = readFileSync(
+			new URL("../src/compiler/core/core-pass-manager.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(source).not.toMatch(/Set<string>|Map<string>|local:function|key: string/);
+	});
 });
