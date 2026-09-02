@@ -5,7 +5,6 @@ import {
 	coreFactImplies,
 	normalizeCoreFact,
 } from "./core-ir-fact-implication.ts";
-import { coreOpcodeSet } from "./core-ir-opcodes.ts";
 import {
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
 	CORE_OWN_DATA_CELL_FACT,
@@ -306,8 +305,7 @@ const foldSubsumedGuards: CorePass = {
 const refinePrimitiveEffects: CorePass = {
 	name: "primitive-effect-refinement",
 	stage: "proofs",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("unary", "binary"),
+	scope: "function",
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "facts", "representations"],
 	preserves: [],
@@ -315,82 +313,84 @@ const refinePrimitiveEffects: CorePass = {
 	budget: PROOF_BUDGET,
 	run(context) {
 		const { program, item } = context;
-		if (item.scope !== "instruction") return undefined;
+		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation"
-		)
-			return undefined;
-		const opcode = fn.instructionOpcodeName(item.instruction);
-		if (opcode !== "unary" && opcode !== "binary") return undefined;
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		const operandStart = fn.kernel.instructionOperandStart(item.instruction);
-		const operandCount = fn.kernel.instructionOperandCount(item.instruction);
-		const masks: Array<number> = [];
-		for (let index = 0; index < operandCount; index++)
-			masks.push(kinds.kindMask(fn.kernel.operandAt(operandStart + index)));
-		const effects = corePrimitiveOperatorEffectRefinement(fn, item.instruction, masks);
-		const baseline = fn.registry.byId(fn.instructionOpcode(item.instruction)).effects;
-		const existing = fn.instructionEffectRefinement(item.instruction);
-		if (effects === undefined || effectSummariesEqual(effects, baseline)) {
+		let editor: CoreEditor | undefined;
+		const instructionCapacity = fn.instructionCapacity;
+		for (let id = 0; id < instructionCapacity; id++) {
+			const instruction = coreInstructionId(id);
 			if (
-				existing === undefined ||
-				fn.fact(existing.proof).kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT
+				!fn.isInstructionLive(instruction) ||
+				fn.instructionKind(instruction) !== "operation"
 			)
-				return undefined;
-			const editor = CoreEditor.open(program, item.function);
-			editor.replaceInstruction(
-				item.instruction,
-				opcode,
-				materializeInstructionOperands(fn, item.instruction),
-				{
-					attributes: fn.instructionAttributes(item.instruction),
-					sourcePosition: fn.instructionSourcePosition(item.instruction),
-				},
-			);
-			editor.removeFact(existing.proof);
-			return editor.commit();
-		}
-		if (existing !== undefined) {
-			const fact = fn.fact(existing.proof);
-			if (fact.kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT) return undefined;
+				continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode !== "unary" && opcode !== "binary") continue;
+			const operandStart = fn.kernel.instructionOperandStart(instruction);
+			const operandCount = fn.kernel.instructionOperandCount(instruction);
+			const masks: Array<number> = [];
+			for (let index = 0; index < operandCount; index++)
+				masks.push(kinds.kindMask(fn.kernel.operandAt(operandStart + index)));
+			const effects = corePrimitiveOperatorEffectRefinement(fn, instruction, masks);
+			const baseline = fn.registry.byId(fn.instructionOpcode(instruction)).effects;
+			const existing = fn.instructionEffectRefinement(instruction);
+			if (effects === undefined || effectSummariesEqual(effects, baseline)) {
+				if (
+					existing === undefined ||
+					fn.fact(existing.proof).kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT
+				)
+					continue;
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceInstruction(
+					instruction,
+					opcode,
+					materializeInstructionOperands(fn, instruction),
+					{
+						attributes: fn.instructionAttributes(instruction),
+						sourcePosition: fn.instructionSourcePosition(instruction),
+					},
+				);
+				editor.removeFact(existing.proof);
+				continue;
+			}
 			const digest = `primitive-operator:${opcode}:${masks.join(",")}`;
-			if (
-				fact.validity.kind === "summary" &&
-				fact.validity.digest === digest &&
-				effectSummariesEqual(existing.effects, effects)
-			)
-				return undefined;
-			const editor = CoreEditor.open(program, item.function);
-			editor.replaceFact(existing.proof, {
+			if (existing !== undefined) {
+				const fact = fn.fact(existing.proof);
+				if (fact.kind !== CORE_PRIMITIVE_OPERATOR_EFFECT_FACT) continue;
+				if (
+					fact.validity.kind === "summary" &&
+					fact.validity.digest === digest &&
+					effectSummariesEqual(existing.effects, effects)
+				)
+					continue;
+				editor ??= CoreEditor.open(program, item.function);
+				editor.replaceFact(existing.proof, {
+					kind: CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
+					value: Object.freeze([...masks]),
+					claims: [{ kind: "effect", instruction, effects }],
+					validity: { kind: "summary", digest },
+					obligations: [],
+					origin: "local-value-kind-analysis",
+				});
+				editor.setInstructionEffectRefinement(instruction, {
+					effects,
+					proof: existing.proof,
+				});
+				continue;
+			}
+			editor ??= CoreEditor.open(program, item.function);
+			const proof = editor.addFact({
 				kind: CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 				value: Object.freeze([...masks]),
-				claims: [{ kind: "effect", instruction: item.instruction, effects }],
+				claims: [{ kind: "effect", instruction, effects }],
 				validity: { kind: "summary", digest },
 				obligations: [],
 				origin: "local-value-kind-analysis",
 			});
-			editor.setInstructionEffectRefinement(item.instruction, {
-				effects,
-				proof: existing.proof,
-			});
-			return editor.commit();
+			editor.setInstructionEffectRefinement(instruction, { effects, proof });
 		}
-		const editor = CoreEditor.open(program, item.function);
-		const proof = editor.addFact({
-			kind: CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
-			value: Object.freeze([...masks]),
-			claims: [{ kind: "effect", instruction: item.instruction, effects }],
-			validity: {
-				kind: "summary",
-				digest: `primitive-operator:${opcode}:${masks.join(",")}`,
-			},
-			obligations: [],
-			origin: "local-value-kind-analysis",
-		});
-		editor.setInstructionEffectRefinement(item.instruction, { effects, proof });
-		return editor.commit();
+		return editor?.commit();
 	},
 };
 
