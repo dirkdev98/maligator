@@ -73,6 +73,12 @@ export interface CoreCompilerWorkCounters {
 	readonly localRulesConsidered: number;
 	readonly localRulesApplied: number;
 	readonly functionScans: number;
+	readonly programFlowJournalEntries: number;
+	readonly programFlowDirtyFunctions: number;
+	readonly programFlowTargetWakeups: number;
+	readonly programFlowSummaryWakeups: number;
+	readonly programFlowValueKindWakeups: number;
+	readonly programFlowReachabilityWakeups: number;
 	readonly explicitCallEdges: number;
 	readonly wildcardCallSources: number;
 	readonly wildcardCallSites: number;
@@ -194,6 +200,12 @@ const COUNTER_KEYS = [
 	"localRulesConsidered",
 	"localRulesApplied",
 	"functionScans",
+	"programFlowJournalEntries",
+	"programFlowDirtyFunctions",
+	"programFlowTargetWakeups",
+	"programFlowSummaryWakeups",
+	"programFlowValueKindWakeups",
+	"programFlowReachabilityWakeups",
 	"explicitCallEdges",
 	"wildcardCallSources",
 	"wildcardCallSites",

@@ -84,7 +84,7 @@ export class CoreAnalysisManager {
 		this.#program = program;
 		this.#context = context;
 		this.#report = report;
-		this.#programFlow = new CoreProgramFlowEngine(program);
+		this.#programFlow = new CoreProgramFlowEngine(program, report);
 	}
 
 	get<Result>(

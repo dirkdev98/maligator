@@ -1,4 +1,5 @@
 import type { CoreFunctionId } from "./core-ir.ts";
+import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import {
 	CORE_PROGRAM_FLOW_BODY,
 	CORE_PROGRAM_FLOW_CALLS,
@@ -75,6 +76,7 @@ export function coreProgramFlowDimensionsForDomains(
 
 export class CoreProgramFlowEngine {
 	readonly #program: CoreProgram;
+	readonly #report: CoreOptimizationReportBuilder | undefined;
 	#cursor = 0;
 	#revision = 0;
 	#epoch = 0;
@@ -83,8 +85,9 @@ export class CoreProgramFlowEngine {
 	#dimensions = new Uint16Array(0);
 	readonly #dirtyFunctions: Array<CoreFunctionId> = [];
 
-	constructor(program: CoreProgram) {
+	constructor(program: CoreProgram, report?: CoreOptimizationReportBuilder) {
 		this.#program = program;
+		this.#report = report;
 	}
 
 	get revision(): number {
@@ -98,6 +101,7 @@ export class CoreProgramFlowEngine {
 	refresh(): this {
 		const revision = this.#program.programFlowRevision;
 		if (revision === this.#revision) return this;
+		this.#report?.increment("programFlowJournalEntries", revision - this.#cursor);
 		this.#ensureCapacity(this.#program.functionCapacity);
 		this.#epoch++;
 		if (this.#epoch === 0xffff_ffff) {
@@ -120,6 +124,22 @@ export class CoreProgramFlowEngine {
 		}
 		this.#cursor = revision;
 		this.#revision = revision;
+		this.#report?.increment("programFlowDirtyFunctions", this.#dirtyFunctions.length);
+		for (const functionId of this.#dirtyFunctions) {
+			const dimensions = this.#dimensions[functionId]!;
+			if ((dimensions & CORE_PROGRAM_FLOW_TARGETS) !== 0) {
+				this.#report?.increment("programFlowTargetWakeups");
+			}
+			if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) !== 0) {
+				this.#report?.increment("programFlowSummaryWakeups");
+			}
+			if ((dimensions & CORE_PROGRAM_FLOW_RETURN_KIND) !== 0) {
+				this.#report?.increment("programFlowValueKindWakeups");
+			}
+			if ((dimensions & CORE_PROGRAM_FLOW_REACHABILITY) !== 0) {
+				this.#report?.increment("programFlowReachabilityWakeups");
+			}
+		}
 		return this;
 	}
 

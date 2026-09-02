@@ -6,6 +6,7 @@ import {
 	CoreProgramFlowEngine,
 	coreProgramFlowDimensionsForDomains,
 } from "../src/compiler/core/core-program-flow.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_FLOW_MEMORY } from "../src/compiler/core/core-store.ts";
 import {
 	analysisProgram,
@@ -17,7 +18,8 @@ describe("Core program flow", () => {
 		const program = analysisProgram();
 		const first = appendLeaf(program);
 		appendLeaf(program);
-		const flow = new CoreProgramFlowEngine(program).refresh();
+		const report = new CoreOptimizationReportBuilder(program, "counters");
+		const flow = new CoreProgramFlowEngine(program, report).refresh();
 
 		expect(flow.dirtyFunctionCount).toBe(2);
 		const firstEdit = CoreEditor.open(program, first.function);
@@ -30,6 +32,16 @@ describe("Core program flow", () => {
 
 		expect(flow.dirtyFunctionCount).toBe(1);
 		expect(flow.dirtyFunctionAt(0)).toBe(first.function);
+		expect(
+			report.finish(program, { directEntries: [], specializations: [] }).counters,
+		).toMatchObject({
+			programFlowJournalEntries: 4,
+			programFlowDirtyFunctions: 3,
+			programFlowTargetWakeups: 3,
+			programFlowSummaryWakeups: 3,
+			programFlowValueKindWakeups: 3,
+			programFlowReachabilityWakeups: 3,
+		});
 	});
 
 	it("does not wake value kinds for an effect-only change", () => {
