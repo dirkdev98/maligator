@@ -109,31 +109,49 @@ function buildEdges(
 		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
 		for (let offset = 0; offset < edgeCount; offset++) {
 			const edge = edgeStart + offset;
+			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+			let argumentVersion = fn.version("body");
+			let argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
+				fn.kernel.operandAt(argumentStart + index),
+			);
 			successors[block]!.push({
 				from: block,
 				to: fn.kernel.terminatorEdgeBlock(edge),
 				kind: "ordinary",
 				get arguments() {
-					const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
-					const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
-					return Array.from({ length: argumentCount }, (_, index) =>
-						fn.kernel.operandAt(argumentStart + index),
-					);
+					const version = fn.version("body");
+					if (version !== argumentVersion) {
+						argumentVersion = version;
+						argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
+							fn.kernel.operandAt(argumentStart + index),
+						);
+					}
+					return argumentsCache;
 				},
 			});
 		}
 		const handler = includeExceptions ? fn.kernel.blockHandlerBlock(block) : undefined;
 		if (handler !== undefined && blockHasExceptionalExit(fn, block)) {
+			const start = fn.kernel.blockHandlerArgumentStart(block);
+			const count = fn.kernel.blockHandlerArgumentCount(block);
+			let argumentVersion = fn.version("body");
+			let argumentsCache = Array.from({ length: count }, (_, index) =>
+				fn.kernel.handlerArgumentAt(start + index),
+			);
 			successors[block]!.push({
 				from: block,
 				to: handler,
 				kind: "exceptional",
 				get arguments() {
-					const start = fn.kernel.blockHandlerArgumentStart(block);
-					const count = fn.kernel.blockHandlerArgumentCount(block);
-					return Array.from({ length: count }, (_, index) =>
-						fn.kernel.handlerArgumentAt(start + index),
-					);
+					const version = fn.version("body");
+					if (version !== argumentVersion) {
+						argumentVersion = version;
+						argumentsCache = Array.from({ length: count }, (_, index) =>
+							fn.kernel.handlerArgumentAt(start + index),
+						);
+					}
+					return argumentsCache;
 				},
 			});
 		}
