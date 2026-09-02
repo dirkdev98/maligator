@@ -268,6 +268,65 @@ export interface CoreProgramFlowTopology {
 	readonly sccsReused: number;
 }
 
+export type CoreProgramFlowSccEnqueue = (
+	scc: number | undefined,
+	dimensions: CoreProgramFlowDimensionMask,
+) => boolean;
+
+export type CoreProgramFlowSccTransfer = (
+	scc: number,
+	dimensions: CoreProgramFlowDimensionMask,
+	enqueue: CoreProgramFlowSccEnqueue,
+) => void;
+
+export interface CoreProgramFlowSccSeed {
+	readonly scc: number | undefined;
+	readonly dimensions: CoreProgramFlowDimensionMask;
+}
+
+export interface CoreProgramFlowSccWorkStatistics {
+	readonly pops: number;
+	readonly wakeups: number;
+}
+
+export interface CoreProgramFlowSccSolver {
+	solveSccs(
+		topology: CoreProgramFlowTopology,
+		seeds: Iterable<CoreProgramFlowSccSeed>,
+		transfer: CoreProgramFlowSccTransfer,
+	): CoreProgramFlowSccWorkStatistics;
+}
+
+export function solveCoreProgramFlowSccs(
+	topology: CoreProgramFlowTopology,
+	seeds: Iterable<CoreProgramFlowSccSeed>,
+	transfer: CoreProgramFlowSccTransfer,
+): CoreProgramFlowSccWorkStatistics {
+	const dimensions = new Uint16Array(topology.sccs.length);
+	const queued = new Uint8Array(topology.sccs.length);
+	const queue: Array<number> = [];
+	let wakeups = 0;
+	const enqueue: CoreProgramFlowSccEnqueue = (scc, mask) => {
+		if (scc === undefined || mask === 0) return false;
+		dimensions[scc] = dimensions[scc]! | mask;
+		if (queued[scc] !== 0) return false;
+		queued[scc] = 1;
+		queue.push(scc);
+		wakeups++;
+		return true;
+	};
+	for (const seed of seeds) enqueue(seed.scc, seed.dimensions);
+	let cursor = 0;
+	while (cursor < queue.length) {
+		const scc = queue[cursor++]!;
+		queued[scc] = 0;
+		const mask = dimensions[scc]!;
+		dimensions[scc] = 0;
+		transfer(scc, mask, enqueue);
+	}
+	return Object.freeze({ pops: cursor, wakeups });
+}
+
 export function buildCoreProgramFlowTopology(
 	graph: CoreCallGraph,
 	previous?: CoreProgramFlowTopology,
@@ -581,6 +640,17 @@ export class CoreProgramFlowEngine {
 		this.#report?.increment("sccNodes", next.nodesAnalyzed);
 		this.#report?.increment("sccEdges", next.edgeVisits);
 		return next;
+	}
+
+	solveSccs(
+		topology: CoreProgramFlowTopology,
+		seeds: Iterable<CoreProgramFlowSccSeed>,
+		transfer: CoreProgramFlowSccTransfer,
+	): CoreProgramFlowSccWorkStatistics {
+		const statistics = solveCoreProgramFlowSccs(topology, seeds, transfer);
+		this.#report?.increment("programFlowSccPops", statistics.pops);
+		this.#report?.increment("programFlowSccWakeups", statistics.wakeups);
+		return statistics;
 	}
 
 	#invalidateLocalTransfers(): void {

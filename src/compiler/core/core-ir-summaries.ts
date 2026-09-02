@@ -35,8 +35,16 @@ import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreFunctionId, CoreRepresentation, CoreValueId } from "./core-ir.ts";
-import { buildCoreProgramFlowTopology } from "./core-program-flow.ts";
-import type { CoreProgramFlowScc, CoreProgramFlowTopology } from "./core-program-flow.ts";
+import {
+	CORE_PROGRAM_FLOW_SUMMARIES,
+	buildCoreProgramFlowTopology,
+	solveCoreProgramFlowSccs,
+} from "./core-program-flow.ts";
+import type {
+	CoreProgramFlowScc,
+	CoreProgramFlowSccSolver,
+	CoreProgramFlowTopology,
+} from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "call-effect-summary";
@@ -799,6 +807,7 @@ export function analyzeProgramSummaries(
 	targets: CoreCallGraphIndex,
 	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
 	topology: CoreProgramFlowTopology,
+	scheduler: CoreProgramFlowSccSolver = { solveSccs: solveCoreProgramFlowSccs },
 	previous?: CoreProgramSummaryState,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 ): CoreProgramSummaryState {
@@ -878,23 +887,19 @@ export function analyzeProgramSummaries(
 	) {
 		anyScriptSummary = summarizeAnyScriptCallees(current, maximumWildcardArgumentCount);
 	}
-	const queue: Array<number> = [];
-	const queued = new Set<number>();
-	const enqueue = (scc: number | undefined): boolean => {
-		if (scc === undefined || queued.has(scc)) return false;
-		queued.add(scc);
-		queue.push(scc);
-		return true;
+	const initialSccs = new Set<number>();
+	const seed = (scc: number | undefined): void => {
+		if (scc !== undefined) initialSccs.add(scc);
 	};
 	if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
-		for (const index of sccs.keys()) enqueue(index);
+		for (const index of sccs.keys()) seed(index);
 	} else {
-		for (const functionId of changedFunctions) enqueue(owner.get(functionId));
+		for (const functionId of changedFunctions) seed(owner.get(functionId));
 		for (const functionId of targets.changedCallers) {
-			enqueue(owner.get(functionId));
+			seed(owner.get(functionId));
 		}
 		if (targets.graph.changedNodes.has(CORE_ANY_SCRIPT_AGGREGATE)) {
-			enqueue(owner.get(CORE_ANY_SCRIPT_AGGREGATE));
+			seed(owner.get(CORE_ANY_SCRIPT_AGGREGATE));
 		}
 		for (const functionId of new Set([
 			...previous.rootReasons.keys(),
@@ -906,7 +911,7 @@ export function analyzeProgramSummaries(
 				prior.length !== next.length ||
 				prior.some((reason, index) => reason !== next[index])
 			) {
-				enqueue(owner.get(functionId));
+				seed(owner.get(functionId));
 			}
 		}
 	}
@@ -916,10 +921,14 @@ export function analyzeProgramSummaries(
 	let exactReverseCallerVisits = 0;
 	let wildcardReverseCallerVisits = 0;
 	const affectedCallers = new Set<CoreFunctionId>();
-	let queueCursor = 0;
-	while (queueCursor < queue.length) {
-		const sccIndex = queue[queueCursor++]!;
-		queued.delete(sccIndex);
+	scheduler.solveSccs(
+		topology,
+		[...initialSccs].map((scc) => ({
+			scc,
+			dimensions: CORE_PROGRAM_FLOW_SUMMARIES,
+		})),
+		(sccIndex, dimensions, enqueue) => {
+			if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) === 0) return;
 		const scc = sccs[sccIndex]!;
 		const aggregateBefore = anyScriptSummary;
 		for (const functionId of scc.functions) {
@@ -998,12 +1007,16 @@ export function analyzeProgramSummaries(
 				exactReverseCallerVisits++;
 				const callerScc = owner.get(caller);
 				if (callerScc === sccIndex) continue;
-				if (enqueue(callerScc)) callerWakeups++;
+				if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
 				affectedCallers.add(caller);
 			}
 			if (targets.graph.hasAggregate()) {
 				const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
-				if (aggregateScc !== sccIndex && enqueue(aggregateScc)) callerWakeups++;
+				if (
+					aggregateScc !== sccIndex &&
+					enqueue(aggregateScc, CORE_PROGRAM_FLOW_SUMMARIES)
+				)
+					callerWakeups++;
 			}
 		}
 		if (
@@ -1014,11 +1027,12 @@ export function analyzeProgramSummaries(
 				wildcardReverseCallerVisits++;
 				const callerScc = owner.get(caller);
 				if (callerScc === sccIndex) continue;
-				if (enqueue(callerScc)) callerWakeups++;
+				if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
 				affectedCallers.add(caller);
 			}
 		}
-	}
+		},
+	);
 	for (const functionId of program.functionIds()) {
 		if (current.has(functionId)) continue;
 		current.set(

@@ -92,6 +92,7 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 						targets,
 						exceptionalControl,
 						programFlow.topology(targets.graph),
+						programFlow,
 						prior?.summaries,
 						summaryDirty,
 					);

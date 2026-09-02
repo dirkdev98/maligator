@@ -83,6 +83,8 @@ export interface CoreCompilerWorkCounters {
 	readonly programFlowSummaryWakeups: number;
 	readonly programFlowValueKindWakeups: number;
 	readonly programFlowReachabilityWakeups: number;
+	readonly programFlowSccPops: number;
+	readonly programFlowSccWakeups: number;
 	readonly explicitCallEdges: number;
 	readonly wildcardCallSources: number;
 	readonly wildcardCallSites: number;
@@ -222,6 +224,8 @@ const COUNTER_KEYS = [
 	"programFlowSummaryWakeups",
 	"programFlowValueKindWakeups",
 	"programFlowReachabilityWakeups",
+	"programFlowSccPops",
+	"programFlowSccWakeups",
 	"explicitCallEdges",
 	"wildcardCallSources",
 	"wildcardCallSites",
