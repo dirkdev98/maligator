@@ -310,9 +310,10 @@ function memoryVersions(
 	provenance: CoreProvenance,
 ): CoreMemoryVersions {
 	const resolution = resolutionFor(provenance);
-	const accessesByInstruction = new Array<ReadonlyArray<CoreMemoryAccess> | undefined>(
-		fn.instructionCapacity,
-	);
+	const accessesByInstruction = new Map<
+		CoreInstructionId,
+		ReadonlyArray<CoreMemoryAccess>
+	>();
 	const locationTable = new CoreMemoryLocationTable(CORE_EFFECT_DOMAINS.length);
 	const exactReads = new Map<CoreMemoryFamily, Set<CoreMemoryLocationId>>();
 	const exactLocations = new Map<CoreMemoryLocationId, CoreExactMemoryLocation>();
@@ -321,7 +322,7 @@ function memoryVersions(
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const accesses = coreMemoryAccesses(fn, instruction, resolution);
 		accessCount += accesses.length;
-		accessesByInstruction[instruction] = accesses;
+		if (accesses.length > 0) accessesByInstruction.set(instruction, accesses);
 		for (const access of accesses) {
 			if (access.mode !== "read" || !coreMemoryLocationIsExact(access.location)) continue;
 			const locationId = locationTable.id(access.location);
@@ -352,36 +353,59 @@ function memoryVersions(
 	}
 	const domainSlot = new Map(CORE_EFFECT_DOMAINS.map((domain, slot) => [domain, slot]));
 	const slotCount = partitions.length;
-	const entryBase = 1;
-	const phiBase = entryBase + fn.blockCapacity * slotCount;
-	const writeBase = phiBase + fn.blockCapacity * slotCount;
-	const exceptionBase = writeBase + fn.instructionCapacity * slotCount;
-	const entryIdentity = (block: CoreBlockId, slot: number): number =>
-		entryBase + block * slotCount + slot;
+	let nextVersion = 1;
+	const internVersion = (
+		table: Map<number, Map<number, number>>,
+		owner: number,
+		slot: number,
+	): number => {
+		let versions = table.get(owner);
+		if (versions === undefined) {
+			versions = new Map();
+			table.set(owner, versions);
+		}
+		const existing = versions.get(slot);
+		if (existing !== undefined) return existing;
+		const created = nextVersion++;
+		versions.set(slot, created);
+		return created;
+	};
+	const entryVersions = new Map<number, number>();
+	const entryIdentity = (slot: number): number => {
+		const existing = entryVersions.get(slot);
+		if (existing !== undefined) return existing;
+		const created = nextVersion++;
+		entryVersions.set(slot, created);
+		return created;
+	};
+	const phiVersions = new Map<number, Map<number, number>>();
+	const writeVersions = new Map<number, Map<number, number>>();
+	const exceptionVersions = new Map<number, Map<number, number>>();
 	const phiIdentity = (block: CoreBlockId, slot: number): number =>
-		phiBase + block * slotCount + slot;
+		internVersion(phiVersions, block, slot);
 	const writeIdentity = (instruction: CoreInstructionId, slot: number): number =>
-		writeBase + instruction * slotCount + slot;
+		internVersion(writeVersions, instruction, slot);
 	const exceptionIdentity = (block: CoreBlockId, slot: number): number =>
-		exceptionBase + block * slotCount + slot;
-	const readStateStart = new Int32Array(fn.instructionCapacity);
-	readStateStart.fill(-1);
-	const readStateCount = new Uint32Array(fn.instructionCapacity);
+		internVersion(exceptionVersions, block, slot);
+	interface ReadStateRow {
+		readonly start: number;
+		readonly count: number;
+	}
+	const readStateRows = new Map<CoreInstructionId, ReadStateRow>();
 	const readStateSlots: Array<number> = [];
 	const readStateVersions: Array<number> = [];
-	const pendingReadVersions = new Array<Map<number, number> | undefined>(
-		fn.instructionCapacity,
-	);
+	const pendingReadVersions = new Map<CoreInstructionId, Map<number, number>>();
 	const valueByVersion = new Map<number, CoreValueId>();
 	const readersBySlot = Array.from(
 		{ length: slotCount },
 		() => new Array<CoreInstructionId>(),
 	);
-	const layoutByInstruction = new Array<CoreProvenance["layouts"][number] | undefined>(
-		fn.instructionCapacity,
-	);
+	const layoutByInstruction = new Map<
+		CoreInstructionId,
+		CoreProvenance["layouts"][number]
+	>();
 	for (const layout of provenance.layouts)
-		layoutByInstruction[layout.instruction] = layout;
+		layoutByInstruction.set(layout.instruction, layout);
 	const domainsForFamily = (family: CoreMemoryFamily): ReadonlyArray<CoreEffectDomain> =>
 		CORE_MEMORY_FAMILY_DOMAINS[family];
 	const slotsKilledByDomain = new Map<CoreEffectDomain, ReadonlyArray<number>>();
@@ -408,9 +432,7 @@ function memoryVersions(
 		readonly reads: ReadonlySet<number>;
 		readonly definitions: ReadonlyMap<number, number>;
 	}
-	const eventsByBlock = new Array<ReadonlyArray<SparseMemoryEvent> | undefined>(
-		fn.blockCapacity,
-	);
+	const eventsByBlock = new Map<CoreBlockId, ReadonlyArray<SparseMemoryEvent>>();
 	const definitionBlocksBySlot = Array.from(
 		{ length: slotCount },
 		() => new Set<CoreBlockId>(),
@@ -427,7 +449,7 @@ function memoryVersions(
 		instruction: CoreInstructionId,
 		definitions: Map<number, number>,
 	): void => {
-		const layout = layoutByInstruction[instruction];
+		const layout = layoutByInstruction.get(instruction);
 		if (layout?.kind !== "named-slots") return;
 		for (const [index, key] of layout.keys.entries()) {
 			const location = locationTable.id({
@@ -448,7 +470,7 @@ function memoryVersions(
 		const definedInBlock = new Set<number>();
 		for (const instruction of fn.instructionIds(block)) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
-			const accesses = accessesByInstruction[instruction] ?? [];
+			const accesses = accessesByInstruction.get(instruction) ?? [];
 			const reads = new Set<number>();
 			for (const access of accesses) {
 				if (access.mode !== "read") continue;
@@ -510,22 +532,22 @@ function memoryVersions(
 				}),
 			);
 		}
-		eventsByBlock[block] = Object.freeze(events);
+		if (events.length > 0) eventsByBlock.set(block, Object.freeze(events));
 	}
-	const dominatorChildren = Array.from(
-		{ length: fn.blockCapacity },
-		() => new Array<CoreBlockId>(),
-	);
+	const dominatorChildren = new Map<CoreBlockId, Array<CoreBlockId>>();
 	for (const block of cfg.reversePostorder) {
 		const parent = cfg.immediateDominators[block];
-		if (parent !== null && parent !== undefined) dominatorChildren[parent]!.push(block);
+		if (parent === null || parent === undefined) continue;
+		const children = dominatorChildren.get(parent) ?? [];
+		children.push(block);
+		dominatorChildren.set(parent, children);
 	}
 	const dominanceOrder: Array<CoreBlockId> = [];
 	const dominancePending = [fn.entry];
 	while (dominancePending.length > 0) {
 		const block = dominancePending.pop()!;
 		dominanceOrder.push(block);
-		const children = dominatorChildren[block]!;
+		const children = dominatorChildren.get(block) ?? [];
 		for (let index = children.length - 1; index >= 0; index--)
 			dominancePending.push(children[index]!);
 	}
@@ -536,9 +558,9 @@ function memoryVersions(
 		slot: number,
 		version: number,
 	): void => {
-		const versions = pendingReadVersions[instruction] ?? new Map();
+		const versions = pendingReadVersions.get(instruction) ?? new Map<number, number>();
 		versions.set(slot, version);
-		pendingReadVersions[instruction] = versions;
+		pendingReadVersions.set(instruction, versions);
 	};
 	const hasSinglePredecessorFlow = cfg.reversePostorder.every((block) => {
 		if (block === fn.entry) return true;
@@ -574,12 +596,12 @@ function memoryVersions(
 				readonly previous: number | undefined;
 			}> = [];
 			const changed = new Set<number>();
-			for (const event of eventsByBlock[frame.block] ?? []) {
+			for (const event of eventsByBlock.get(frame.block) ?? []) {
 				for (const slot of event.reads)
 					recordReadVersion(
 						event.instruction,
 						slot,
-						versions.get(slot) ?? entryIdentity(fn.entry, slot),
+						versions.get(slot) ?? entryIdentity(slot),
 					);
 				for (const [slot, version] of event.definitions) {
 					if (!changed.has(slot)) {
@@ -591,34 +613,31 @@ function memoryVersions(
 			}
 			transfers++;
 			pending.push({ kind: "exit", changes });
-			const children = dominatorChildren[frame.block]!;
+			const children = dominatorChildren.get(frame.block) ?? [];
 			for (let index = children.length - 1; index >= 0; index--)
 				pending.push({ kind: "enter", block: children[index]! });
 		}
 	} else {
-		const dominancePosition = new Int32Array(fn.blockCapacity);
-		dominancePosition.fill(-1);
+		const dominancePosition = new Map<CoreBlockId, number>();
 		for (const [position, block] of dominanceOrder.entries())
-			dominancePosition[block] = position;
-		const dominanceFrontiers = Array.from(
-			{ length: fn.blockCapacity },
-			() => new Set<CoreBlockId>(),
-		);
+			dominancePosition.set(block, position);
+		const dominanceFrontiers = new Map<CoreBlockId, Set<CoreBlockId>>();
+		for (const block of dominanceOrder) dominanceFrontiers.set(block, new Set());
 		for (let index = dominanceOrder.length - 1; index >= 0; index--) {
 			const block = dominanceOrder[index]!;
 			for (const edge of cfg.successors[block] ?? []) {
 				if (cfg.immediateDominators[edge.to] !== block)
-					dominanceFrontiers[block]!.add(edge.to);
+					dominanceFrontiers.get(block)!.add(edge.to);
 			}
-			for (const child of dominatorChildren[block]!) {
-				for (const frontier of dominanceFrontiers[child]!) {
+			for (const child of dominatorChildren.get(block) ?? []) {
+				for (const frontier of dominanceFrontiers.get(child) ?? []) {
 					if (cfg.immediateDominators[frontier] !== block)
-						dominanceFrontiers[block]!.add(frontier);
+						dominanceFrontiers.get(block)!.add(frontier);
 				}
 			}
 		}
-		const hasExceptionalEdges = cfg.successors.some((edges) =>
-			edges.some(({ kind }) => kind === "exceptional"),
+		const hasExceptionalEdges = cfg.reversePostorder.some((block) =>
+			(cfg.successors[block] ?? []).some(({ kind }) => kind === "exceptional"),
 		);
 		for (let slot = 0; slot < slotCount; slot++) {
 			const readBlocks = readBlocksBySlot[slot]!;
@@ -626,7 +645,7 @@ function memoryVersions(
 			const definitions = definitionBlocksBySlot[slot]!;
 			if (definitions.size === 0 && !hasExceptionalEdges) {
 				for (const instruction of readersBySlot[slot]!)
-					recordReadVersion(instruction, slot, entryIdentity(fn.entry, slot));
+					recordReadVersion(instruction, slot, entryIdentity(slot));
 				transfers += readBlocks.size;
 				continue;
 			}
@@ -650,7 +669,7 @@ function memoryVersions(
 				}
 			}
 			for (let next = 0; next < phiPending.length; next++) {
-				for (const frontier of dominanceFrontiers[phiPending[next]!]!) {
+				for (const frontier of dominanceFrontiers.get(phiPending[next]!) ?? []) {
 					if (!liveIn.has(frontier) || phiBlocks.has(frontier)) continue;
 					phiBlocks.add(frontier);
 					if (!definitions.has(frontier)) phiPending.push(frontier);
@@ -667,15 +686,17 @@ function memoryVersions(
 				for (const edge of cfg.predecessors[block] ?? []) relevantBlocks.add(edge.from);
 			}
 			const orderedBlocks = [...relevantBlocks]
-				.filter((block) => dominancePosition[block]! >= 0)
-				.sort((left, right) => dominancePosition[left]! - dominancePosition[right]!);
+				.filter((block) => dominancePosition.has(block))
+				.sort(
+					(left, right) => dominancePosition.get(left)! - dominancePosition.get(right)!,
+				);
 			const active: Array<{ readonly block: CoreBlockId; readonly version: number }> = [];
 			for (const block of orderedBlocks) {
 				while (active.length > 0 && !cfg.dominates(active.at(-1)!.block, block))
 					active.pop();
-				let version = active.at(-1)?.version ?? entryIdentity(fn.entry, slot);
+				let version = active.at(-1)?.version ?? entryIdentity(slot);
 				if (phiBlocks.has(block)) version = phiIdentity(block, slot);
-				for (const event of eventsByBlock[block] ?? []) {
+				for (const event of eventsByBlock.get(block) ?? []) {
 					if (event.reads.has(slot)) {
 						recordReadVersion(event.instruction, slot, version);
 					}
@@ -731,11 +752,12 @@ function memoryVersions(
 		aliases.set(phi, replacement);
 		trivialPhiPending.push(...(dependentPhis.get(phi) ?? []));
 	}
-	for (const instruction of fn.instructionIds()) {
-		const versions = pendingReadVersions[instruction];
-		if (versions === undefined || versions.size === 0) continue;
-		readStateStart[instruction] = readStateSlots.length;
-		readStateCount[instruction] = versions.size;
+	for (const [instruction, versions] of pendingReadVersions) {
+		if (versions.size === 0) continue;
+		readStateRows.set(instruction, {
+			start: readStateSlots.length,
+			count: versions.size,
+		});
 		for (const [slot, version] of versions) {
 			readStateSlots.push(slot);
 			readStateVersions.push(resolveVersion(version));
@@ -748,10 +770,10 @@ function memoryVersions(
 		instruction: CoreInstructionId,
 		slot: number,
 	): number | undefined => {
-		const start = readStateStart[instruction]!;
-		if (start < 0) return undefined;
-		const end = start + readStateCount[instruction]!;
-		for (let index = start; index < end; index++) {
+		const row = readStateRows.get(instruction);
+		if (row === undefined) return undefined;
+		const end = row.start + row.count;
+		for (let index = row.start; index < end; index++) {
 			if (readStateSlots[index] === slot) return readStateVersions[index];
 		}
 		return undefined;
@@ -770,11 +792,11 @@ function memoryVersions(
 			blockUpdates,
 		}),
 		readKey(instruction) {
-			const start = readStateStart[instruction]!;
-			if (start < 0) return undefined;
-			const end = start + readStateCount[instruction]!;
+			const row = readStateRows.get(instruction);
+			if (row === undefined) return undefined;
+			const end = row.start + row.count;
 			const versions = new Set<number>();
-			for (let index = start; index < end; index++)
+			for (let index = row.start; index < end; index++)
 				versions.add(readStateVersions[index]!);
 			return versions.size === 0
 				? undefined
