@@ -9,7 +9,14 @@ import type { CoreFunctionReachabilityState } from "./core-ir-reachability.ts";
 import { analyzeProgramSummaries } from "./core-ir-summaries.ts";
 import { solveCoreProgramValueKinds } from "./core-ir-value-kinds.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
-import { CORE_PROGRAM_FLOW_ALL_DIMENSIONS } from "./core-program-flow.ts";
+import {
+	CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
+	CORE_PROGRAM_FLOW_ENGINE_CONSUMER,
+	CORE_PROGRAM_FLOW_REACHABILITY,
+	CORE_PROGRAM_FLOW_RETURN_KIND,
+	CORE_PROGRAM_FLOW_SUMMARIES,
+	CORE_PROGRAM_FLOW_TARGETS,
+} from "./core-program-flow.ts";
 
 export interface CoreProgramFlowState {
 	readonly targets: ReturnType<typeof analyzeCoreCallGraph>;
@@ -17,8 +24,6 @@ export interface CoreProgramFlowState {
 	readonly valueKinds: ReturnType<typeof solveCoreProgramValueKinds>;
 	readonly reachability: CoreFunctionReachabilityState;
 }
-
-const CORE_PROGRAM_FLOW_ENGINE_CONSUMER = 4;
 
 export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowState> = {
 	key: "program-flow",
@@ -43,55 +48,94 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 			CORE_PROGRAM_FLOW_ENGINE_CONSUMER,
 			CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
 		);
-		const dirtyFunctions: Array<CoreFunctionId> = [];
+		const dirtyFunctions = new Array<CoreFunctionId>();
 		if (prior !== undefined) {
 			for (let index = 0; index < epoch.dirtyFunctionCount; index++)
 				dirtyFunctions.push(epoch.dirtyFunctionAt(index));
 		}
-		const targets = analyzeCoreCallGraph(
-			program,
-			context.facts.closure.sourceClosure.kind === "known",
-			prior?.targets,
-			(functionId) =>
-				get(CORE_CONTROL_FLOW_ANALYSIS, {
-					scope: "function",
-					function: functionId,
-				}),
-			context,
-			dirtyFunctions,
-			(functionId) => programFlow.local(functionId),
-		);
+		const dirtyFor = (dimensions: number): Array<CoreFunctionId> =>
+			dirtyFunctions.filter(
+				(functionId) => (epoch.dirtyDimensions(functionId) & dimensions) !== 0,
+			);
+		const unjournaledInvalidation = prior !== undefined && epoch.dirtyFunctionCount === 0;
+		const targetDirty = dirtyFor(CORE_PROGRAM_FLOW_TARGETS);
+		const targets =
+			prior !== undefined && !unjournaledInvalidation && targetDirty.length === 0
+				? prior.targets
+				: analyzeCoreCallGraph(
+						program,
+						context.facts.closure.sourceClosure.kind === "known",
+						prior?.targets,
+						(functionId) =>
+							get(CORE_CONTROL_FLOW_ANALYSIS, {
+								scope: "function",
+								function: functionId,
+							}),
+						context,
+						targetDirty,
+						(functionId) => programFlow.local(functionId),
+					);
 		const exceptionalControl = (functionId: CoreFunctionId) =>
 			get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
 				scope: "function" as const,
 				function: functionId,
 			});
-		const summaries = analyzeProgramSummaries(
-			program,
-			context,
-			targets,
-			exceptionalControl,
-			programFlow.topology(targets.graph),
-			prior?.summaries,
-			dirtyFunctions,
+		const summaryDirty = dirtyFor(CORE_PROGRAM_FLOW_SUMMARIES);
+		const targetsChanged = targets !== prior?.targets;
+		const summaries =
+			prior !== undefined &&
+			!unjournaledInvalidation &&
+			summaryDirty.length === 0 &&
+			!targetsChanged
+				? prior.summaries
+				: analyzeProgramSummaries(
+						program,
+						context,
+						targets,
+						exceptionalControl,
+						programFlow.topology(targets.graph),
+						prior?.summaries,
+						summaryDirty,
+					);
+		const externallyReachableChanges = new Set(
+			[...summaries.changedFunctions].filter(
+				(functionId) =>
+					prior?.summaries.summary(functionId)?.externallyReachable !==
+					summaries.summary(functionId)?.externallyReachable,
+			),
 		);
-		const valueKinds = solveCoreProgramValueKinds(
-			program,
-			targets,
-			(functionId) => summaries.summary(functionId)?.externallyReachable === true,
-			exceptionalControl,
-			prior?.valueKinds,
-			dirtyFunctions,
-			summaries.changedFunctions,
-		);
-		const reachability = analyzeCoreFunctionReachability(
-			program,
-			targets,
-			context,
-			prior?.reachability,
-			dirtyFunctions,
-			(functionId) => programFlow.local(functionId),
-		);
+		const valueKindDirty = dirtyFor(CORE_PROGRAM_FLOW_RETURN_KIND);
+		const valueKinds =
+			prior !== undefined &&
+			!unjournaledInvalidation &&
+			valueKindDirty.length === 0 &&
+			!targetsChanged &&
+			externallyReachableChanges.size === 0
+				? prior.valueKinds
+				: solveCoreProgramValueKinds(
+						program,
+						targets,
+						(functionId) => summaries.summary(functionId)?.externallyReachable === true,
+						exceptionalControl,
+						prior?.valueKinds,
+						valueKindDirty,
+						externallyReachableChanges,
+					);
+		const reachabilityDirty = dirtyFor(CORE_PROGRAM_FLOW_REACHABILITY);
+		const reachability =
+			prior !== undefined &&
+			!unjournaledInvalidation &&
+			reachabilityDirty.length === 0 &&
+			!targetsChanged
+				? prior.reachability
+				: analyzeCoreFunctionReachability(
+						program,
+						targets,
+						context,
+						prior?.reachability,
+						reachabilityDirty,
+						(functionId) => programFlow.local(functionId),
+					);
 		return Object.freeze({ targets, summaries, valueKinds, reachability });
 	},
 };

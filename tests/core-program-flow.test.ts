@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROGRAM_FLOW_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import {
 	CORE_PROGRAM_FLOW_EFFECTS,
 	CORE_PROGRAM_FLOW_RETURN_KIND,
@@ -17,6 +20,7 @@ import {
 	analysisProgram,
 	appendCaller,
 	appendLeaf,
+	programAnalysisContext,
 } from "./helpers/core-program-analysis.ts";
 
 describe("Core program flow", () => {
@@ -59,6 +63,35 @@ describe("Core program flow", () => {
 
 		expect(dimensions & CORE_PROGRAM_FLOW_EFFECTS).toBe(CORE_PROGRAM_FLOW_EFFECTS);
 		expect(dimensions & CORE_PROGRAM_FLOW_RETURN_KIND).toBe(0);
+	});
+
+	it("does not rebuild value kinds for an effect-only edit", () => {
+		const program = analysisProgram();
+		const leaf = appendLeaf(program);
+		const report = new CoreOptimizationReportBuilder(program, "counters");
+		const manager = new CoreAnalysisManager(program, programAnalysisContext(), report);
+		const first = manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		const editor = CoreEditor.open(program, leaf.function);
+		const proof = editor.addFact({
+			kind: "effect-only",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "effect-only" },
+			obligations: [],
+			origin: "test",
+		});
+		editor.setInstructionEffectRefinement(leaf.valueInstruction, {
+			effects: CORE_NO_EFFECTS,
+			proof,
+		});
+		editor.commit();
+
+		const second = manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+
+		expect(second.targets).toBe(first.targets);
+		expect(second.valueKinds).toBe(first.valueKinds);
+		expect(second.reachability).toBe(first.reachability);
+		expect(second.summaries).not.toBe(first.summaries);
 	});
 
 	it("shares numeric local transfers across consumers and stable functions", () => {

@@ -44,6 +44,7 @@ export const CORE_PROGRAM_FLOW_TARGET_CONSUMER = 0;
 export const CORE_PROGRAM_FLOW_SUMMARY_CONSUMER = 1;
 export const CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER = 2;
 export const CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER = 3;
+export const CORE_PROGRAM_FLOW_ENGINE_CONSUMER = 4;
 
 export const CORE_PROGRAM_FLOW_SUMMARIES =
 	CORE_PROGRAM_FLOW_EFFECTS |
@@ -420,8 +421,7 @@ export function coreProgramFlowDimensionsForDomains(
 			(CORE_PROGRAM_FLOW_BODY |
 				CORE_PROGRAM_FLOW_CFG |
 				CORE_PROGRAM_FLOW_EXCEPTION |
-				CORE_PROGRAM_FLOW_CALLS |
-				CORE_PROGRAM_FLOW_FACTS)) !==
+				CORE_PROGRAM_FLOW_CALLS)) !==
 		0
 	)
 		dimensions |= CORE_PROGRAM_FLOW_ALL_DIMENSIONS;
@@ -431,6 +431,9 @@ export function coreProgramFlowDimensionsForDomains(
 			CORE_PROGRAM_FLOW_ESCAPE |
 			CORE_PROGRAM_FLOW_CONTAINMENT |
 			CORE_PROGRAM_FLOW_RETURN_PROVENANCE;
+	}
+	if ((domains & CORE_PROGRAM_FLOW_FACTS) !== 0) {
+		dimensions |= CORE_PROGRAM_FLOW_SUMMARIES;
 	}
 	if ((domains & CORE_PROGRAM_FLOW_REPRESENTATIONS) !== 0) {
 		dimensions |= CORE_PROGRAM_FLOW_RETURN_KIND | CORE_PROGRAM_FLOW_RETURN_REPRESENTATION;
@@ -561,6 +564,22 @@ export class CoreProgramFlowEngine {
 			this.#report?.increment("programFlowValueKindWakeups", count);
 		} else if (consumer === CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER) {
 			this.#report?.increment("programFlowReachabilityWakeups", count);
+		} else if (consumer === CORE_PROGRAM_FLOW_ENGINE_CONSUMER) {
+			let targetWakeups = 0;
+			let summaryWakeups = 0;
+			let valueKindWakeups = 0;
+			let reachabilityWakeups = 0;
+			for (let index = 0; index < count; index++) {
+				const dimensions = epoch.dirtyDimensions(epoch.dirtyFunctionAt(index));
+				if ((dimensions & CORE_PROGRAM_FLOW_TARGETS) !== 0) targetWakeups++;
+				if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) !== 0) summaryWakeups++;
+				if ((dimensions & CORE_PROGRAM_FLOW_RETURN_KIND) !== 0) valueKindWakeups++;
+				if ((dimensions & CORE_PROGRAM_FLOW_REACHABILITY) !== 0) reachabilityWakeups++;
+			}
+			this.#report?.increment("programFlowTargetWakeups", targetWakeups);
+			this.#report?.increment("programFlowSummaryWakeups", summaryWakeups);
+			this.#report?.increment("programFlowValueKindWakeups", valueKindWakeups);
+			this.#report?.increment("programFlowReachabilityWakeups", reachabilityWakeups);
 		}
 		return epoch;
 	}
