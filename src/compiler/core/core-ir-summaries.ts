@@ -276,9 +276,13 @@ function analyzeLocalSummary(
 			}
 		}
 	}
-	const dependents = Array.from({ length: fn.valueCapacity }, () => new Array<number>());
+	const dependents = new Array<Array<number> | undefined>(fn.valueCapacity);
 	for (const [index, transfer] of transfers.entries()) {
-		for (const input of transfer.inputs) dependents[input]!.push(index);
+		for (const input of transfer.inputs) {
+			const users = dependents[input] ?? [];
+			users.push(index);
+			dependents[input] = users;
+		}
 	}
 	const queue = transfers.map((_, index) => index);
 	const queued = new Uint8Array(transfers.length);
@@ -289,7 +293,7 @@ function analyzeLocalSummary(
 		queued[index] = 0;
 		const transfer = transfers[index]!;
 		if (!raiseOrigin(origins, transfer.output, transfer.evaluate())) continue;
-		for (const dependent of dependents[transfer.output]!) {
+		for (const dependent of dependents[transfer.output] ?? []) {
 			if (queued[dependent] !== 0) continue;
 			queued[dependent] = 1;
 			queue.push(dependent);
