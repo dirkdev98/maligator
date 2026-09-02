@@ -1,0 +1,563 @@
+{
+	"schemaVersion": 1,
+	"generatedAt": "2026-09-02T11:42:24.609Z",
+	"source": {
+		"branch": "main",
+		"commit": "bbafb4149fc6a8165512e05d71317bbaef3b60ea",
+		"dirty": false,
+		"dirtyDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	},
+	"compiler": {
+		"name": "maligator",
+		"version": "0.1.0-alpha.22",
+		"private": true,
+		"description": "Ahead-of-time JavaScript compiler and native runtime",
+		"homepage": "https://github.com/dirkdev98/maligator#readme",
+		"bugs": {
+			"url": "https://github.com/dirkdev98/maligator/issues"
+		},
+		"license": "MIT",
+		"repository": {
+			"type": "git",
+			"url": "git+https://github.com/dirkdev98/maligator.git"
+		},
+		"bin": {
+			"maligator": "./src/index.ts"
+		},
+		"type": "module",
+		"exports": {
+			".": {
+				"types": "./src/public-api.d.ts",
+				"import": "./src/build.ts"
+			}
+		},
+		"scripts": {
+			"bench": "node ./scripts/bench.ts",
+			"bench:compiler-scale": "node ./scripts/bench-compiler-scale.ts",
+			"bench:core-call-graph": "node ./scripts/bench-core-call-graph.ts",
+			"bench:dx": "node ./scripts/dx-performance.ts",
+			"bench:profile-overhead": "node ./scripts/profile-overhead.ts",
+			"bench:self-compile-profile": "node ./scripts/profile-self-compile.ts",
+			"env:check": "node ./scripts/agent-environment.ts",
+			"explore:outputs": "node ./scripts/output-explorer.ts",
+			"format": "node ./scripts/quality.ts format",
+			"generate:bytecode-operations": "node ./scripts/generate-bytecode-operations.ts",
+			"lint": "node ./scripts/quality.ts lint",
+			"lint:ci": "node ./scripts/quality.ts lint-ci",
+			"release:build": "node ./scripts/release.ts build",
+			"release:create-github": "node ./scripts/release.ts create-github",
+			"release:pack": "node ./scripts/release.ts pack",
+			"release:publish": "node ./scripts/release.ts publish",
+			"release:smoke": "node ./scripts/release.ts smoke",
+			"release:verify-tag": "node ./scripts/release.ts verify-tag",
+			"selfhost:cli": "node ./scripts/selfhost-cli-check.ts",
+			"selfhost:frontend": "node ./scripts/selfhost-frontend-check.ts",
+			"selfhost:native": "node ./scripts/selfhost-native-build-check.ts",
+			"site:build": "node ./scripts/site-build.ts",
+			"site:update": "node ./scripts/site-data.ts",
+			"test": "node ./scripts/vitest.ts",
+			"test262": "node ./scripts/test262.ts --canonical",
+			"test262:gc:broad": "node ./scripts/test262.ts --canonical --backend wire --mode gc-stress --manifest tests/test-suite-test262-smoke.txt --manifest tests/test-suite-test262-check.txt --check --policy complete",
+			"test262:prepare": "node ./scripts/test262-prepare.ts",
+			"test262:regressions": "node ./scripts/test262.ts --canonical --backend wire --manifest tests/test-suite-test262-smoke.txt --manifest tests/test-suite-test262-check.txt --check --policy complete",
+			"test262:report": "node ./scripts/test262.ts --canonical --check --policy complete",
+			"test:check": "node ./scripts/test-suite.ts check",
+			"test:full": "node ./scripts/test-suite.ts full",
+			"test:full:report": "node ./scripts/test-suite.ts full --policy complete",
+			"test:help": "node ./scripts/test-suite.ts --help",
+			"test:leak": "MAL_LEAKCHECK=1 node ./scripts/vitest.ts run --project native tests/native/leak.test.ts",
+			"test:native": "node ./scripts/vitest.ts run --project native",
+			"test:rust": "node ./scripts/test-rust.ts",
+			"test:sanitize": "node ./scripts/test-sanitize.ts",
+			"test:smoke": "node ./scripts/test-suite.ts smoke",
+			"test:unit": "node ./scripts/vitest.ts --project unit",
+			"test:unit:full-only": "node ./scripts/vitest.ts --maligator-unit-full-only --project unit --testTimeout=60000",
+			"test:wpt": "node ./scripts/wpt.ts",
+			"test:wpt:matrix-report": "node ./scripts/wpt.ts --canonical --mode normal --mode gc-stress --backend compiled --backend interpreted --policy complete",
+			"test:wpt:report": "node ./scripts/wpt.ts --canonical --mode normal --backend compiled --policy complete",
+			"type-check": "node ./scripts/quality.ts type-check",
+			"update": "npx npm-check --update --save-exact",
+			"version:alpha": "node ./scripts/release.ts version-alpha"
+		},
+		"dependencies": {
+			"meriyah": "7.3.2"
+		},
+		"devDependencies": {
+			"@lightbase/eslint-config": "4.3.2",
+			"@vitest/coverage-v8": "4.1.7",
+			"drizzle-orm": "1.0.0-rc.4",
+			"express": "5.2.1",
+			"oxfmt": "0.52.0",
+			"postgres": "3.4.9",
+			"supports-color": "7.2.0",
+			"typescript": "6.0.3",
+			"valibot": "1.4.2",
+			"vitest": "4.1.7",
+			"yaml": "2.9.0"
+		},
+		"engines": {
+			"node": ">=24.0.0"
+		}
+	},
+	"runtime": {
+		"node": "v26.7.0",
+		"v8": "14.6.202.34-node.28",
+		"platform": "darwin",
+		"arch": "arm64",
+		"release": "25.5.0",
+		"cpu": "Apple M3 Pro",
+		"logicalCpus": 11,
+		"totalMemory": 19327352832
+	},
+	"configuration": {
+		"optimizerMode": "full",
+		"verification": "boundary",
+		"instrumentation": "counters",
+		"selfCompileConfig": {
+			"assets": {},
+			"modules": {
+				"aliases": {}
+			},
+			"engine": {
+				"primordials": "locked",
+				"eval": false,
+				"realms": false,
+				"regexp": true,
+				"temporal": false,
+				"intl": {
+					"enabled": false,
+					"features": [],
+					"languages": []
+				}
+			},
+			"surface": {
+				"webPlatform": false,
+				"node": true,
+				"maligator": true
+			}
+		},
+		"selfCompileConfigDigest": "1481b3f9ee77df1910b637bf934f6c05b32d2766e9a7cd3716224725477db50d",
+		"heapSamplingIntervalBytes": 32768
+	},
+	"artifacts": {
+		"manifest": "bench/compiler-scale-manifest.json",
+		"manifestDigest": "6640a1c91cf5f2863737ff5b9111d73363e09a3108a3dada3a19f8484e05ed0e",
+		"driver": "scripts/bench-compiler-scale.ts",
+		"driverDigest": "2e72f67f3a56853e0bf84ae1db1a289c666361cc269967814f2729cc7b9e13bb",
+		"packageLockDigest": "3e6fc05c139eb1587af6c246c6bde2735dd0adcb8ae8fba5aa0615d0327644f7"
+	},
+	"results": [
+		{
+			"tier": 10,
+			"id": "optimize-optimize",
+			"description": "Core optimizer orchestration: src/compiler/core/optimize.ts",
+			"sourceDigest": "fa959d68afd2502615e78d62eeaf591548553c0b76a8a3107da319a10da12716",
+			"protocol": {
+				"warmDefinition": "one untimed compile then recorded samples in one Node process",
+				"coldDefinition": "fresh stripped source tree and fresh Node process"
+			},
+			"warm": {
+				"samples": [
+					{
+						"instrumentation": "counters",
+						"wallMs": 21927.000667,
+						"phases": {
+							"graphMs": 97.97904199999903,
+							"semanticMs": 98.00491699999839,
+							"constructCoreMs": 1066.1974169999994,
+							"optimizeCoreMs": 18757.407291000003,
+							"coreToExecutionMs": 772.9575409999961,
+							"executionToImageMs": 554.5987079999977,
+							"emitMs": 532.3332089999967,
+							"serializeMs": 47.11291599999822
+						},
+						"optimizer": {
+							"input": {
+								"functions": 1711,
+								"blocks": 60371,
+								"instructions": 176269,
+								"values": 671780,
+								"facts": 0,
+								"planCandidates": 0
+							},
+							"output": {
+								"functions": 1711,
+								"blocks": 31906,
+								"instructions": 103323,
+								"values": 71384,
+								"facts": 5494,
+								"planCandidates": 272
+							},
+							"stages": [
+								{
+									"stage": "canonicalize",
+									"elapsedMs": 6304
+								},
+								{
+									"stage": "control-flow",
+									"elapsedMs": 3851
+								},
+								{
+									"stage": "proofs",
+									"elapsedMs": 713
+								},
+								{
+									"stage": "memory",
+									"elapsedMs": 3406
+								},
+								{
+									"stage": "finalize",
+									"elapsedMs": 91
+								},
+								{
+									"stage": "interprocedural",
+									"elapsedMs": 1572
+								},
+								{
+									"stage": "program",
+									"elapsedMs": 14
+								},
+								{
+									"stage": "specialization",
+									"elapsedMs": 2973
+								}
+							],
+							"counters": {
+								"analysisQueries": 375067,
+								"analysisRecomputations": 53058,
+								"localRulesConsidered": 484221,
+								"localRulesApplied": 39688,
+								"functionScans": 11058,
+								"explicitCallEdges": 1589,
+								"wildcardCallSources": 1039,
+								"wildcardCallSites": 6354,
+								"opaqueCallSites": 8314,
+								"aggregateDependencies": 1711,
+								"storedCallGraphRows": 1305,
+								"storedCallGraphEntries": 7639,
+								"wildcardAggregateRecomputations": 8,
+								"exactReverseCallerVisits": 5920,
+								"wildcardReverseCallerVisits": 3111,
+								"callTargetMs": 307,
+								"summaryMs": 278,
+								"reachabilityMs": 14,
+								"valueKindMs": 99,
+								"sccNodes": 3424,
+								"sccEdges": 8619,
+								"sccTransfers": 3271,
+								"localFactRebuilds": 19420,
+								"provenanceRebuilds": 4967,
+								"memoryAccesses": 87173,
+								"memoryLocations": 26912,
+								"memoryStateEntries": 4944231,
+								"memoryPhis": 269133,
+								"specializationFunctionsScanned": 1711,
+								"specializationCandidatesDiscovered": 3442,
+								"specializationCandidatesSelected": 272,
+								"liveUseVisits": 5174977,
+								"deadUseSkips": 0,
+								"abandonedOperandStorage": 740419,
+								"abandonedParameterStorage": 1080534
+							},
+							"program": {
+								"functionsAnalyzed": 957,
+								"functionsReused": 754,
+								"summaryFunctionsAnalyzed": 67,
+								"reachabilityFunctionsScanned": 1711,
+								"callSites": 8982,
+								"exactCallEdges": 1589,
+								"wildcardCallers": 1039,
+								"wildcardCallSites": 6354,
+								"opaqueCallSites": 8314,
+								"aggregateDependencies": 1711,
+								"storedGraphRows": 1305,
+								"storedGraphEntries": 7639,
+								"sccs": 553,
+								"sccNodesAnalyzed": 0,
+								"sccEdgeVisits": 0,
+								"sccTransfers": 1342,
+								"summaryChanges": 0,
+								"callerWakeups": 0,
+								"affectedCallers": 0,
+								"deadFunctions": 0
+							},
+							"transforms": {
+								"considered": 11393,
+								"applied": 8999,
+								"declined": 2394,
+								"appliedByKind": {},
+								"declinedByReason": {},
+								"generatedCodeConsumed": 1024,
+								"compilerWorkConsumed": 12048,
+								"instructionsIntroduced": 1024,
+								"blocksIntroduced": 528,
+								"callGraphFunctionsAnalyzed": 3020,
+								"summaryFunctionsAnalyzed": 2905,
+								"sccNodesAnalyzed": 3424,
+								"sccEdgeVisits": 8619,
+								"sccTransfers": 3271,
+								"callerWakeups": 0,
+								"valueKindFunctionEvaluations": 3422,
+								"valueKindFolds": 0,
+								"wildcardAggregateRecomputations": 8,
+								"exactReverseCallerVisits": 5920,
+								"wildcardReverseCallerVisits": 3111
+							},
+							"discovery": {
+								"candidates": 0,
+								"byKind": {},
+								"stackObjects": 188,
+								"denseArrays": 0,
+								"numericFusions": 944,
+								"largestFanOut": 52
+							},
+							"plan": {
+								"discovered": 5838,
+								"selected": 272,
+								"declined": 5566,
+								"discoveredByKind": {},
+								"selectedByKind": {},
+								"declinedByReason": {},
+								"generatedCodeConsumed": 4096,
+								"compilerWorkConsumed": 13867,
+								"verificationMs": 465
+							},
+							"queue": {
+								"pushes": 484221,
+								"pops": 484221,
+								"maximumDepth": 130758
+							},
+							"budget": {
+								"workItems": 484221,
+								"edits": 964763,
+								"exhaustedPasses": []
+							}
+						},
+						"memory": {
+							"heapUsedBefore": 1569940248,
+							"heapUsedAfter": 1324677792,
+							"peakManagedHeap": 1569939056,
+							"rssAfter": 1627635712,
+							"peakRss": 1992916992
+						},
+						"output": {
+							"units": 4,
+							"codeUnits": 24913294,
+							"digest": "77e56efd7a0e354db649c729a76e63d36d3880c11af1695c5b5296577ee66a88",
+							"observableChecksum": "3e5a25ea1a8227dd006ad97a003f243223cbb21daca0caba4d89cc49c8fdbc7a"
+						}
+					}
+				],
+				"byMode": {
+					"counters": {
+						"count": 1,
+						"medianWallMs": 21927.000667,
+						"medianOptimizeCoreMs": 18757.407291000003,
+						"minimumWallMs": 21927.000667,
+						"maximumWallMs": 21927.000667
+					}
+				}
+			},
+			"cold": {
+				"samples": [
+					{
+						"instrumentation": "counters",
+						"wallMs": 23743.993042,
+						"phases": {
+							"graphMs": 73.826167,
+							"semanticMs": 103.135875,
+							"constructCoreMs": 1319.866125,
+							"optimizeCoreMs": 20100.5445,
+							"coreToExecutionMs": 813.1799580000006,
+							"executionToImageMs": 613.065083999998,
+							"emitMs": 654.9793750000026,
+							"serializeMs": 64.60558300000048
+						},
+						"optimizer": {
+							"input": {
+								"functions": 1711,
+								"blocks": 60371,
+								"instructions": 176269,
+								"values": 671780,
+								"facts": 0,
+								"planCandidates": 0
+							},
+							"output": {
+								"functions": 1711,
+								"blocks": 31906,
+								"instructions": 103323,
+								"values": 71384,
+								"facts": 5494,
+								"planCandidates": 272
+							},
+							"stages": [
+								{
+									"stage": "canonicalize",
+									"elapsedMs": 6637
+								},
+								{
+									"stage": "control-flow",
+									"elapsedMs": 4130
+								},
+								{
+									"stage": "proofs",
+									"elapsedMs": 771
+								},
+								{
+									"stage": "memory",
+									"elapsedMs": 3848
+								},
+								{
+									"stage": "finalize",
+									"elapsedMs": 107
+								},
+								{
+									"stage": "interprocedural",
+									"elapsedMs": 1955
+								},
+								{
+									"stage": "program",
+									"elapsedMs": 20
+								},
+								{
+									"stage": "specialization",
+									"elapsedMs": 2831
+								}
+							],
+							"counters": {
+								"analysisQueries": 375067,
+								"analysisRecomputations": 53058,
+								"localRulesConsidered": 484221,
+								"localRulesApplied": 39688,
+								"functionScans": 11058,
+								"explicitCallEdges": 1589,
+								"wildcardCallSources": 1039,
+								"wildcardCallSites": 6354,
+								"opaqueCallSites": 8314,
+								"aggregateDependencies": 1711,
+								"storedCallGraphRows": 1305,
+								"storedCallGraphEntries": 7639,
+								"wildcardAggregateRecomputations": 8,
+								"exactReverseCallerVisits": 5920,
+								"wildcardReverseCallerVisits": 3111,
+								"callTargetMs": 380,
+								"summaryMs": 366,
+								"reachabilityMs": 20,
+								"valueKindMs": 116,
+								"sccNodes": 3424,
+								"sccEdges": 8619,
+								"sccTransfers": 3271,
+								"localFactRebuilds": 19420,
+								"provenanceRebuilds": 4967,
+								"memoryAccesses": 87173,
+								"memoryLocations": 26912,
+								"memoryStateEntries": 4944231,
+								"memoryPhis": 269133,
+								"specializationFunctionsScanned": 1711,
+								"specializationCandidatesDiscovered": 3442,
+								"specializationCandidatesSelected": 272,
+								"liveUseVisits": 5174977,
+								"deadUseSkips": 0,
+								"abandonedOperandStorage": 740419,
+								"abandonedParameterStorage": 1080534
+							},
+							"program": {
+								"functionsAnalyzed": 957,
+								"functionsReused": 754,
+								"summaryFunctionsAnalyzed": 67,
+								"reachabilityFunctionsScanned": 1711,
+								"callSites": 8982,
+								"exactCallEdges": 1589,
+								"wildcardCallers": 1039,
+								"wildcardCallSites": 6354,
+								"opaqueCallSites": 8314,
+								"aggregateDependencies": 1711,
+								"storedGraphRows": 1305,
+								"storedGraphEntries": 7639,
+								"sccs": 553,
+								"sccNodesAnalyzed": 0,
+								"sccEdgeVisits": 0,
+								"sccTransfers": 1342,
+								"summaryChanges": 0,
+								"callerWakeups": 0,
+								"affectedCallers": 0,
+								"deadFunctions": 0
+							},
+							"transforms": {
+								"considered": 11393,
+								"applied": 8999,
+								"declined": 2394,
+								"appliedByKind": {},
+								"declinedByReason": {},
+								"generatedCodeConsumed": 1024,
+								"compilerWorkConsumed": 12048,
+								"instructionsIntroduced": 1024,
+								"blocksIntroduced": 528,
+								"callGraphFunctionsAnalyzed": 3020,
+								"summaryFunctionsAnalyzed": 2905,
+								"sccNodesAnalyzed": 3424,
+								"sccEdgeVisits": 8619,
+								"sccTransfers": 3271,
+								"callerWakeups": 0,
+								"valueKindFunctionEvaluations": 3422,
+								"valueKindFolds": 0,
+								"wildcardAggregateRecomputations": 8,
+								"exactReverseCallerVisits": 5920,
+								"wildcardReverseCallerVisits": 3111
+							},
+							"discovery": {
+								"candidates": 0,
+								"byKind": {},
+								"stackObjects": 188,
+								"denseArrays": 0,
+								"numericFusions": 944,
+								"largestFanOut": 52
+							},
+							"plan": {
+								"discovered": 5838,
+								"selected": 272,
+								"declined": 5566,
+								"discoveredByKind": {},
+								"selectedByKind": {},
+								"declinedByReason": {},
+								"generatedCodeConsumed": 4096,
+								"compilerWorkConsumed": 13867,
+								"verificationMs": 490
+							},
+							"queue": {
+								"pushes": 484221,
+								"pops": 484221,
+								"maximumDepth": 130758
+							},
+							"budget": {
+								"workItems": 484221,
+								"edits": 964763,
+								"exhaustedPasses": []
+							}
+						},
+						"memory": {
+							"heapUsedBefore": 17475528,
+							"heapUsedAfter": 772297760,
+							"peakManagedHeap": 772296680,
+							"rssAfter": 1501790208,
+							"peakRss": 1501790208
+						},
+						"output": {
+							"units": 4,
+							"codeUnits": 24913294,
+							"digest": "77e56efd7a0e354db649c729a76e63d36d3880c11af1695c5b5296577ee66a88",
+							"observableChecksum": "3e5a25ea1a8227dd006ad97a003f243223cbb21daca0caba4d89cc49c8fdbc7a"
+						}
+					}
+				],
+				"summary": {
+					"count": 1,
+					"medianWallMs": 23743.993042,
+					"medianOptimizeCoreMs": 20100.5445,
+					"minimumWallMs": 23743.993042,
+					"maximumWallMs": 23743.993042
+				}
+			}
+		}
+	]
+}
