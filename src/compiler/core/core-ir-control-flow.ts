@@ -584,10 +584,10 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 		instructionDominatesBlock = (dominator, block) =>
 			splitDominates(exitNode(dominator), entryNode(block));
 	}
-	const uniqueEntryEdges = new Map<string, boolean>();
+	const uniqueEntryEdges = new Map<CoreBlockId, Map<CoreBlockId, boolean>>();
 	const edgeUniquelyEnters = (from: CoreBlockId, to: CoreBlockId): boolean => {
-		const key = `${from}\0${to}`;
-		const cached = uniqueEntryEdges.get(key);
+		const fromEdges = uniqueEntryEdges.get(from);
+		const cached = fromEdges?.get(to);
 		if (cached !== undefined) return cached;
 		const unique =
 			reachable.has(from) &&
@@ -596,7 +596,9 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 				(edge) =>
 					edge.from === from || !reachable.has(edge.from) || dominates(to, edge.from),
 			);
-		uniqueEntryEdges.set(key, unique);
+		const cache = fromEdges ?? new Map<CoreBlockId, boolean>();
+		cache.set(to, unique);
+		uniqueEntryEdges.set(from, cache);
 		return unique;
 	};
 	const loopProducts = naturalLoops(

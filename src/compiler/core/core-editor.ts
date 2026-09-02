@@ -225,14 +225,10 @@ function sortedIds<Id extends number>(ids: ReadonlySet<Id>): Array<Id> {
 	return [...ids].sort((left, right) => left - right);
 }
 
-function edgeKey(edge: CoreChangedEdge): string {
-	return `${edge.kind}:${edge.source}:${edge.target}`;
-}
-
 function sortedEdges(
-	edges: ReadonlyMap<string, CoreChangedEdge>,
+	edges: ReadonlyArray<CoreChangedEdge>,
 ): Array<CoreChangedEdge> {
-	return [...edges.values()]
+	return [...edges]
 		.sort(
 			(left, right) =>
 				left.source - right.source ||
@@ -294,7 +290,7 @@ export class CoreEditor {
 	readonly #instructions = new Set<CoreInstructionId>();
 	readonly #values = new Set<CoreValueId>();
 	readonly #facts = new Set<CoreFactId>();
-	readonly #edges = new Map<string, CoreChangedEdge>();
+	readonly #edges: Array<CoreChangedEdge> = [];
 	readonly #calls = new Set<CoreInstructionId>();
 	#edits = 0;
 	#committed = false;
@@ -1146,7 +1142,16 @@ export class CoreEditor {
 	}
 
 	#touchEdge(edge: CoreChangedEdge): void {
-		this.#edges.set(edgeKey(edge), edge);
+		if (
+			this.#edges.some(
+				(known) =>
+					known.kind === edge.kind &&
+					known.source === edge.source &&
+					known.target === edge.target,
+			)
+		)
+			return;
+		this.#edges.push(edge);
 	}
 
 	#assertLiveBlock(block: CoreBlockId): void {
