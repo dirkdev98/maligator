@@ -496,6 +496,13 @@ describe("Core store", () => {
 		expect(inserted.instruction).toBe(3);
 		expect(fn.isInstructionLive(originalConstant!)).toBe(false);
 		expect([...fn.instructionIds(entry)]).toEqual([1, 3, 2]);
+		expect(new Set(fn.valueIds())).toEqual(
+			new Set(
+				Array.from({ length: fn.valueCapacity }, (_, value) => value as never).filter(
+					(value) => fn.isValueLive(value),
+				),
+			),
+		);
 	});
 
 	it("moves an operation without changing its instruction or result identity", () => {

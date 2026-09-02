@@ -725,6 +725,15 @@ export class CoreFunctionStore {
 		}
 	}
 
+	*valueIds(): Iterable<CoreValueId> {
+		for (const block of this.blockIds()) {
+			for (const { value } of this.blockParameters(block)) yield value;
+		}
+		for (const instruction of this.instructionIds()) {
+			for (const value of this.instructionResults(instruction)) yield value;
+		}
+	}
+
 	*bodyInstructionIds(block: CoreBlockId): Iterable<CoreInstructionId> {
 		for (const instruction of this.instructionIds(block)) {
 			if (this.instructionKind(instruction) === "operation") yield instruction;

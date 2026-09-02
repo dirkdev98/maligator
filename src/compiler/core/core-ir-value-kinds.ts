@@ -24,7 +24,6 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
@@ -297,9 +296,7 @@ export function analyzeCoreValueKinds(
 		}
 	}
 	const exactInt32 = new Uint8Array(fn.valueCapacity);
-	for (let index = 0; index < fn.valueCapacity; index++) {
-		const value = coreValueId(index);
-		if (!fn.isValueLive(value)) continue;
+	for (const value of fn.valueIds()) {
 		if (fn.valueRepresentation(value) === "i32") exactInt32[value] = 1;
 		const definition = fn.valueDefinition(value);
 		if (
