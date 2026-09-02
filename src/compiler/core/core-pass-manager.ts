@@ -97,6 +97,7 @@ export class CorePassManager {
 		passes: ReadonlyArray<CorePass>,
 		initialChanges?: ReadonlyArray<CoreChangeSet>,
 		reportedStage: CoreOptimizationStage = stage,
+		seedLocalFromInitialChanges = true,
 	): ReadonlyArray<CoreChangeSet> {
 		for (const pass of passes) this.#validatePass(stage, pass);
 		const startedAt = this.#report.collectsCounters ? Date.now() : 0;
@@ -169,8 +170,8 @@ export class CorePassManager {
 			queue.push(key);
 			this.#report.recordQueuePush(queue.length - queueIndex);
 		};
-		const enqueueChanges = (changes: CoreChangeSet): void => {
-			enqueueLocal(changes.function, changes);
+		const enqueueChanges = (changes: CoreChangeSet, enqueueLocalWork = true): void => {
+			if (enqueueLocalWork) enqueueLocal(changes.function, changes);
 			for (let passIndex = 0; passIndex < passes.length; passIndex++) {
 				const pass = passes[passIndex]!;
 				if (!wakesForChanges(pass, changes)) continue;
@@ -214,7 +215,9 @@ export class CorePassManager {
 				this.#localSeeded = true;
 			}
 		} else {
-			for (const changes of initialChanges) enqueueChanges(changes);
+			for (const changes of initialChanges) {
+				enqueueChanges(changes, seedLocalFromInitialChanges);
+			}
 		}
 		while (queueIndex < queue.length) {
 			const key = queue[queueIndex++]!;

@@ -143,6 +143,33 @@ describe("Core optimizer infrastructure", () => {
 		expect(runs).toEqual([1]);
 	});
 
+	it("does not reseed fused local work for an already-consumed change batch", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const report = new CoreOptimizationReportBuilder(program, "full");
+		const analyses = new CoreAnalysisManager(program, context(), report);
+		const editor = CoreEditor.open(program, functions[0]!.id);
+		editor.setValueRepresentation(functions[0]!.value, "f64");
+		const changes = editor.commit();
+		const runs: Array<number> = [];
+
+		new CorePassManager(program, context(), analyses, report, {
+			localOptimization: true,
+		}).runStage(
+			"canonicalize",
+			[noOpPass("late", runs)],
+			[changes],
+			"finalize",
+			false,
+		);
+
+		expect(runs).toEqual([1]);
+		expect(
+			report
+				.finish(program, { directEntries: [], specializations: [] })
+				.passes.map(({ pass }) => pass),
+		).toEqual(["late"]);
+	});
+
 	it("does not rerun an existing pass when a no-op pass is registered", () => {
 		const run = (withExtraPass: boolean): Array<number> => {
 			const { program } = programWithTwoFunctions();

@@ -129,6 +129,7 @@ export function optimizeCore(
 			CORE_LATE_CANONICALIZATION_PASSES,
 			lateCanonicalizationChanges,
 			"finalize",
+			false,
 		);
 	}
 	const crossCallStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
