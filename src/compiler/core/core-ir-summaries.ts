@@ -564,6 +564,51 @@ function summaryKey(summary: FunctionEffectSummary): string {
 	return JSON.stringify(summary);
 }
 
+interface CoreAnyScriptCallSummary {
+	readonly effects: EffectSummary;
+	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
+	readonly parameterContainment: ReadonlyArray<ValueContainmentFact>;
+	readonly receiverEscape: ValueEscapeFact;
+	readonly receiverContainment: ValueContainmentFact;
+}
+
+function summarizeAnyScriptCallees(
+	current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+	parameterCount: number,
+): CoreAnyScriptCallSummary {
+	let effects = NO_EFFECT_SUMMARY;
+	const parameterEscape = Array<ValueEscapeFact>(parameterCount).fill("none");
+	const parameterContainment =
+		Array<ValueContainmentFact>(parameterCount).fill("preserved");
+	let receiverEscape: ValueEscapeFact = "none";
+	let receiverContainment: ValueContainmentFact = "preserved";
+	for (const summary of current.values()) {
+		effects = joinEffectSummaries(effects, summary.effects);
+		for (let index = 0; index < parameterCount; index++) {
+			parameterEscape[index] = joinValueEscape(
+				parameterEscape[index]!,
+				summary.parameterEscape[index] ?? summary.restParameterEscape,
+			);
+			parameterContainment[index] = joinValueContainment(
+				parameterContainment[index]!,
+				summary.parameterContainment[index] ?? summary.restParameterContainment,
+			);
+		}
+		receiverEscape = joinValueEscape(receiverEscape, summary.receiverEscape);
+		receiverContainment = joinValueContainment(
+			receiverContainment,
+			summary.receiverContainment,
+		);
+	}
+	return {
+		effects,
+		parameterEscape,
+		parameterContainment,
+		receiverEscape,
+		receiverContainment,
+	};
+}
+
 function deriveSummary(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
@@ -597,8 +642,8 @@ function deriveSummary(
 		);
 	};
 	const callSites = includeCalls ? targets.outgoing(functionId) : [];
+	let anyScriptSummary: CoreAnyScriptCallSummary | undefined;
 	for (const site of callSites) {
-		const callees = callTargets(program, site);
 		if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
 			effects = joinEffectSummaries(effects, EVERY_EFFECT_SUMMARY);
 			for (const argument of site.arguments ?? []) {
@@ -607,6 +652,30 @@ function deriveSummary(
 			noteCallFact(site.receiver, "retained", "unknown");
 			continue;
 		}
+		if (site.targets.anyScript) {
+			anyScriptSummary ??= summarizeAnyScriptCallees(
+				current,
+				callSites.reduce(
+					(largest, call) => Math.max(largest, call.arguments?.length ?? 0),
+					0,
+				),
+			);
+			effects = joinEffectSummaries(effects, anyScriptSummary.effects);
+			for (const [index, argument] of (site.arguments ?? []).entries()) {
+				noteCallFact(
+					argument,
+					anyScriptSummary.parameterEscape[index]!,
+					anyScriptSummary.parameterContainment[index]!,
+				);
+			}
+			noteCallFact(
+				site.receiver,
+				anyScriptSummary.receiverEscape,
+				anyScriptSummary.receiverContainment,
+			);
+			continue;
+		}
+		const callees = callTargets(program, site);
 		for (const callee of callees) {
 			const calleeSummary = current.get(callee);
 			if (calleeSummary === undefined) {
