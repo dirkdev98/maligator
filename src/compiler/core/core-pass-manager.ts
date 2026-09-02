@@ -11,7 +11,7 @@ import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import { CoreLocalOptimizer, CoreLocalRuleRegistry } from "./core-local-optimizer.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
-import { corePassContext } from "./core-pass.ts";
+import { CorePassContextDriver } from "./core-pass.ts";
 import type { CoreOptimizationStage, CorePass, CorePassWorkItem } from "./core-pass.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
@@ -63,6 +63,7 @@ export class CorePassManager {
 	readonly #localOptimization: boolean;
 	readonly #localRules: CoreLocalRuleRegistry | undefined;
 	readonly #features: CoreFunctionFeatureIndex;
+	readonly #passContexts = new WeakMap<CorePass, CorePassContextDriver>();
 	#localSeeded = false;
 	readonly #sccs: ReadonlyArray<{
 		readonly id: string;
@@ -233,15 +234,18 @@ export class CorePassManager {
 				continue;
 			}
 			const passStartedAt = this.#report.collectsDetails ? Date.now() : 0;
-			const changes = work.pass.run(
-				corePassContext(
+			let passContext = this.#passContexts.get(work.pass);
+			if (passContext === undefined) {
+				passContext = new CorePassContextDriver(
 					this.#program,
 					this.#context,
 					this.#analyses,
 					work.pass,
-					work.item,
-					work.pass.budget.maxEdits - used.edits,
-				),
+				);
+				this.#passContexts.set(work.pass, passContext);
+			}
+			const changes = work.pass.run(
+				passContext.prepare(work.item, work.pass.budget.maxEdits - used.edits),
 			);
 			const elapsedMs = this.#report.collectsDetails ? Date.now() - passStartedAt : 0;
 			const edits = changes?.edits ?? 0;

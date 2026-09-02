@@ -87,33 +87,56 @@ export function coreAnalysisRequestForPass(
 	return { scope: "function", function: item.function };
 }
 
-export function corePassContext(
-	program: CoreProgram,
-	compilationContext: CoreCompilationContext,
-	analyses: CoreAnalysisManager,
-	pass: CorePass,
-	item: CorePassWorkItem,
-	remainingEdits: number,
-): CorePassContext {
-	const allowedAnalyses = pass.requiredAnalyses;
-	return {
-		program,
-		compilationContext,
-		item,
-		remainingEdits,
-		analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result {
-			let declared = false;
-			for (const allowed of allowedAnalyses) {
-				if (allowed.key !== definition.key) continue;
-				declared = true;
-				break;
-			}
-			if (!declared) {
-				throw new Error(
-					`Core pass ${pass.name} queried undeclared analysis ${definition.key}`,
-				);
-			}
-			return analyses.get(definition, coreAnalysisRequestForPass(definition, item));
-		},
-	};
+export class CorePassContextDriver implements CorePassContext {
+	readonly program: CoreProgram;
+	readonly compilationContext: CoreCompilationContext;
+	readonly #analyses: CoreAnalysisManager;
+	readonly #pass: CorePass;
+	#item: CorePassWorkItem | undefined;
+	#remainingEdits = 0;
+
+	constructor(
+		program: CoreProgram,
+		compilationContext: CoreCompilationContext,
+		analyses: CoreAnalysisManager,
+		pass: CorePass,
+	) {
+		this.program = program;
+		this.compilationContext = compilationContext;
+		this.#analyses = analyses;
+		this.#pass = pass;
+	}
+
+	get item(): CorePassWorkItem {
+		if (this.#item === undefined) throw new Error("Core pass context has no work item");
+		return this.#item;
+	}
+
+	get remainingEdits(): number {
+		return this.#remainingEdits;
+	}
+
+	prepare(item: CorePassWorkItem, remainingEdits: number): CorePassContext {
+		this.#item = item;
+		this.#remainingEdits = remainingEdits;
+		return this;
+	}
+
+	analysis<Result>(definition: CoreAnalysisDefinition<Result>): Result {
+		let declared = false;
+		for (const allowed of this.#pass.requiredAnalyses) {
+			if (allowed.key !== definition.key) continue;
+			declared = true;
+			break;
+		}
+		if (!declared) {
+			throw new Error(
+				`Core pass ${this.#pass.name} queried undeclared analysis ${definition.key}`,
+			);
+		}
+		return this.#analyses.get(
+			definition,
+			coreAnalysisRequestForPass(definition, this.item),
+		);
+	}
 }
