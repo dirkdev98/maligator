@@ -29,6 +29,12 @@ const DELETED_ALIASES = new Set([
 	"post-memory-unreachable-block-removal",
 ]);
 
+const MIGRATED_NAMES = new Set([
+	"local-copy-propagation",
+	"local-dead-instruction-elimination",
+	"post-representation-dead-instruction-removal",
+]);
+
 const RUNTIME_REGISTRIES: ReadonlyArray<readonly [string, ReadonlyArray<CorePass>]> = [
 	["CORE_LOCAL_CANONICALIZATION_PASSES", CORE_LOCAL_CANONICALIZATION_PASSES],
 	["CORE_LOCAL_FINALIZATION_PASSES", CORE_LOCAL_FINALIZATION_PASSES],
@@ -78,20 +84,28 @@ describe("Core local optimizer migration matrix", () => {
 		const rows = migrationRows();
 		const matrixByName = new Map(rows.map((row) => [row.name, row]));
 
-		expect(runtimeEntries).toHaveLength(48);
+		expect(runtimeEntries).toHaveLength(45);
 		expect(runtimeByName.size).toBe(runtimeEntries.length);
 		expect(rows).toHaveLength(48);
 		expect(matrixByName.size).toBe(rows.length);
-		expect([...matrixByName.keys()].sort()).toEqual([...runtimeByName.keys()].sort());
+		expect([...runtimeByName.keys()].sort()).toEqual(
+			[...matrixByName.keys()].filter((name) => !MIGRATED_NAMES.has(name)).sort(),
+		);
 
 		for (const row of rows) {
-			expect(row.registry).toBe(runtimeByName.get(row.name));
+			if (!MIGRATED_NAMES.has(row.name)) {
+				expect(row.registry).toBe(runtimeByName.get(row.name));
+			}
 			expect(MIGRATION_OWNERS.has(row.owner)).toBe(true);
 			expect(row.owner).not.toMatch(/temporary|legacy/);
 		}
+		expect(matrixByName.get("local-copy-propagation")?.owner).toBe("local opcode rule");
+		expect(matrixByName.get("local-dead-instruction-elimination")?.owner).toBe(
+			"deleted as redundant",
+		);
 	});
 
-	it("deletes all five finalization aliases", () => {
+	it("records all five finalization aliases for deletion", () => {
 		const rows = migrationRows();
 		const aliases = rows.filter(({ name }) => DELETED_ALIASES.has(name));
 
@@ -101,5 +115,14 @@ describe("Core local optimizer migration matrix", () => {
 			expect(alias.owner).toBe("deleted as redundant");
 			expect(alias.note).toMatch(/^Alias of /);
 		}
+	});
+
+	it("keeps the analysis-free local engine outside analysis and loop modules", () => {
+		const source = readFileSync(
+			new URL("../src/compiler/core/core-local-optimizer.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(source).not.toMatch(/core-analysis-manager|core-ir-loops/);
 	});
 });

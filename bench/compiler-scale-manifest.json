@@ -121,6 +121,7 @@
 				"src/compiler/core/core-ir-value-kinds.ts",
 				"src/compiler/core/core-ir-verifier.ts",
 				"src/compiler/core/core-ir.ts",
+				"src/compiler/core/core-local-optimizer.ts",
 				"src/compiler/core/core-local-passes.ts",
 				"src/compiler/core/core-memory-passes.ts",
 				"src/compiler/core/core-optimization-plan-certificate.ts",

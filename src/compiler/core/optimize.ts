@@ -106,6 +106,7 @@ export function optimizeCore(
 		{
 			verification: options.verification,
 			optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+			localOptimization: true,
 		},
 	);
 	for (const stage of OPTIMIZATION_STAGES) {

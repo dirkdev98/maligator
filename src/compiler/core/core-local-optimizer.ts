@@ -1,0 +1,395 @@
+import { CoreEditor } from "./core-editor.ts";
+import { coreInstructionId } from "./core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreOpcodeId,
+	CoreValueId,
+} from "./core-ir.ts";
+import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
+
+const DEAD_CODE_RULE = 0x8000_0000;
+
+class SparseNumericQueue {
+	#items: Int32Array;
+	#membership: Uint32Array;
+	#head = 0;
+	#tail = 0;
+	#epoch = 1;
+	#pushes = 0;
+	#maximumDepth = 0;
+
+	constructor(capacity: number) {
+		this.#items = new Int32Array(Math.max(16, capacity));
+		this.#membership = new Uint32Array(Math.max(16, capacity));
+	}
+
+	get pushes(): number {
+		return this.#pushes;
+	}
+
+	get maximumDepth(): number {
+		return this.#maximumDepth;
+	}
+
+	get empty(): boolean {
+		return this.#head === this.#tail;
+	}
+
+	push(value: number): boolean {
+		this.#growMembership(value + 1);
+		if (this.#membership[value] === this.#epoch) return false;
+		this.#membership[value] = this.#epoch;
+		this.#growItems(this.#tail + 1);
+		this.#items[this.#tail++] = value;
+		this.#pushes++;
+		this.#maximumDepth = Math.max(this.#maximumDepth, this.#tail - this.#head);
+		return true;
+	}
+
+	pop(): number | undefined {
+		if (this.#head === this.#tail) return undefined;
+		const value = this.#items[this.#head++]!;
+		this.#membership[value] = 0;
+		return value;
+	}
+
+	#growItems(required: number): void {
+		if (required <= this.#items.length) return;
+		const next = new Int32Array(Math.max(required, this.#items.length * 2));
+		next.set(this.#items);
+		this.#items = next;
+	}
+
+	#growMembership(required: number): void {
+		if (required <= this.#membership.length) return;
+		const next = new Uint32Array(Math.max(required, this.#membership.length * 2));
+		next.set(this.#membership);
+		this.#membership = next;
+	}
+}
+
+export interface CoreLocalOptimizerStatistics {
+	readonly instructionQueuePushes: number;
+	readonly instructionQueuePops: number;
+	readonly instructionQueueMaximumDepth: number;
+	readonly blockQueuePushes: number;
+	readonly blockQueuePops: number;
+	readonly blockQueueMaximumDepth: number;
+	readonly rulesConsidered: number;
+	readonly rulesApplied: number;
+	readonly edits: number;
+	readonly editSessions: number;
+	readonly workBudgetExhausted: boolean;
+	readonly editBudgetExhausted: boolean;
+}
+
+export interface CoreLocalOptimizerResult {
+	readonly changes: CoreChangeSet | undefined;
+	readonly statistics: CoreLocalOptimizerStatistics;
+}
+
+export interface CoreLocalInstructionRule {
+	readonly name: string;
+	readonly opcodes: ReadonlyArray<CoreOpcodeId>;
+	run(optimizer: CoreLocalOptimizer, instruction: CoreInstructionId): boolean;
+}
+
+export interface CoreLocalOptimizerOptions {
+	readonly maxWorkItems?: number;
+	readonly maxEdits?: number;
+	readonly budgetExhaustion?: "stop" | "error";
+	readonly additionalRules?: ReadonlyArray<CoreLocalInstructionRule>;
+}
+
+const COPY_PROPAGATION_RULE: CoreLocalInstructionRule = {
+	name: "local-copy-propagation",
+	opcodes: [],
+	run(optimizer, instruction) {
+		return optimizer.propagateCopy(instruction);
+	},
+};
+
+export class CoreLocalOptimizer {
+	readonly #program: CoreProgram;
+	readonly #fn: CoreFunctionStore;
+	readonly #instructionQueue: SparseNumericQueue;
+	readonly #blockQueue: SparseNumericQueue;
+	readonly #rules: ReadonlyArray<CoreLocalInstructionRule>;
+	readonly #dispatch: Uint32Array;
+	readonly #maxWorkItems: number;
+	readonly #maxEdits: number;
+	readonly #budgetExhaustion: "stop" | "error";
+	readonly #moveOpcode: CoreOpcodeId | undefined;
+	#editor: CoreEditor | undefined;
+	#handlerUseCounts: Uint32Array | undefined;
+	#instructionQueuePops = 0;
+	#blockQueuePops = 0;
+	#rulesConsidered = 0;
+	#rulesApplied = 0;
+	#workBudgetExhausted = false;
+	#editBudgetExhausted = false;
+
+	constructor(
+		program: CoreProgram,
+		functionId: CoreFunctionId,
+		options: CoreLocalOptimizerOptions = {},
+	) {
+		this.#program = program;
+		this.#fn = program.function(functionId);
+		this.#instructionQueue = new SparseNumericQueue(this.#fn.instructionCapacity);
+		this.#blockQueue = new SparseNumericQueue(this.#fn.blockCapacity);
+		this.#maxWorkItems = options.maxWorkItems ?? 2_000_000;
+		this.#maxEdits = options.maxEdits ?? 1_000_000;
+		this.#budgetExhaustion = options.budgetExhaustion ?? "stop";
+		if (!Number.isSafeInteger(this.#maxWorkItems) || this.#maxWorkItems < 1) {
+			throw new Error("Core local optimizer work budget must be a positive integer");
+		}
+		if (!Number.isSafeInteger(this.#maxEdits) || this.#maxEdits < 0) {
+			throw new Error("Core local optimizer edit budget must be a non-negative integer");
+		}
+		this.#moveOpcode = program.registry.get("move")?.id;
+		this.#rules = [
+			...(this.#moveOpcode === undefined
+				? []
+				: [{ ...COPY_PROPAGATION_RULE, opcodes: [this.#moveOpcode] }]),
+			...(options.additionalRules ?? []),
+		];
+		if (this.#rules.length > 31) {
+			throw new Error("Core local optimizer supports at most 31 opcode rules");
+		}
+		this.#dispatch = new Uint32Array(program.registry.entries().length);
+		for (let ruleIndex = 0; ruleIndex < this.#rules.length; ruleIndex++) {
+			const bit = 1 << ruleIndex;
+			for (const opcode of this.#rules[ruleIndex]!.opcodes) {
+				this.#dispatch[opcode] = (this.#dispatch[opcode] ?? 0) | bit;
+			}
+		}
+		for (const descriptor of program.registry.entries()) {
+			if (descriptor.discardable || descriptor.opcode === "unary") {
+				this.#dispatch[descriptor.id] =
+					(this.#dispatch[descriptor.id] ?? 0) | DEAD_CODE_RULE;
+			}
+		}
+	}
+
+	run(initialChanges?: ReadonlyArray<CoreChangeSet>): CoreLocalOptimizerResult {
+		if (initialChanges === undefined) {
+			for (let id = 0; id < this.#fn.instructionCapacity; id++) {
+				this.#enqueueInstruction(coreInstructionId(id));
+			}
+		} else {
+			for (const changes of initialChanges) this.#submit(changes);
+		}
+
+		while (this.#instructionQueuePops < this.#maxWorkItems) {
+			const queued = this.#instructionQueue.pop();
+			if (queued === undefined) break;
+			this.#instructionQueuePops++;
+			const instruction = coreInstructionId(queued);
+			if (this.#fn.kernel.instructionLive(instruction) === 0) continue;
+			const opcode = this.#fn.kernel.instructionOpcode(instruction);
+			if (opcode < 0) continue;
+			let mask = this.#dispatch[opcode] ?? 0;
+			for (let ruleIndex = 0; ruleIndex < this.#rules.length; ruleIndex++) {
+				const bit = 1 << ruleIndex;
+				if ((mask & bit) === 0) continue;
+				this.#rulesConsidered++;
+				if (this.#rules[ruleIndex]!.run(this, instruction)) {
+					this.#rulesApplied++;
+					mask = 0;
+					break;
+				}
+			}
+			if (
+				(mask & DEAD_CODE_RULE) !== 0 &&
+				this.#fn.kernel.instructionLive(instruction) !== 0
+			) {
+				this.#rulesConsidered++;
+				if (this.#removeDeadInstruction(instruction)) this.#rulesApplied++;
+			}
+			if ((this.#editor?.pendingEdits ?? 0) >= this.#maxEdits) {
+				this.#editBudgetExhausted = true;
+				break;
+			}
+		}
+		if (
+			this.#instructionQueuePops >= this.#maxWorkItems &&
+			!this.#instructionQueue.empty
+		) {
+			this.#workBudgetExhausted = true;
+		}
+		if (
+			this.#budgetExhaustion === "error" &&
+			(this.#workBudgetExhausted || this.#editBudgetExhausted)
+		) {
+			throw new Error("Required Core local optimizer exhausted its budget");
+		}
+
+		const changes = this.#editor?.commit();
+		return Object.freeze({ changes, statistics: this.#statistics(changes?.edits ?? 0) });
+	}
+
+	propagateCopy(instruction: CoreInstructionId): boolean {
+		if (
+			this.#fn.kernel.instructionLive(instruction) === 0 ||
+			this.#moveOpcode === undefined ||
+			this.#fn.kernel.instructionOpcode(instruction) !== this.#moveOpcode ||
+			this.#fn.kernel.instructionOperandCount(instruction) !== 1 ||
+			this.#fn.kernel.instructionResultCount(instruction) !== 1
+		) {
+			return false;
+		}
+		const input = this.#fn.kernel.operandAt(
+			this.#fn.kernel.instructionOperandStart(instruction),
+		);
+		const result = this.#fn.kernel.resultAt(
+			this.#fn.kernel.instructionResultStart(instruction),
+		);
+		if (this.#fn.valueRepresentation(result) !== this.#fn.valueRepresentation(input)) {
+			return false;
+		}
+		this.#wakeValueUsers(result);
+		const editor = this.#edit();
+		editor.replaceValueUses(result, input);
+		if (this.#handlerUseCounts !== undefined && input !== result) {
+			this.#handlerUseCounts[input] =
+				(this.#handlerUseCounts[input] ?? 0) + (this.#handlerUseCounts[result] ?? 0);
+			this.#handlerUseCounts[result] = 0;
+		}
+		editor.removeInstruction(instruction);
+		this.#wakeValueDefinition(input);
+		return true;
+	}
+
+	#removeDeadInstruction(instruction: CoreInstructionId): boolean {
+		const descriptor = this.#program.registry.byId(
+			this.#fn.instructionOpcode(instruction),
+		);
+		if (
+			!descriptor.discardable &&
+			!(
+				descriptor.opcode === "unary" &&
+				this.#fn.instructionAttributes(instruction).operator === "typeof"
+			)
+		) {
+			return false;
+		}
+		const resultStart = this.#fn.kernel.instructionResultStart(instruction);
+		const resultCount = this.#fn.kernel.instructionResultCount(instruction);
+		for (let index = 0; index < resultCount; index++) {
+			if (this.#valueHasUses(this.#fn.kernel.resultAt(resultStart + index))) {
+				return false;
+			}
+		}
+		const operandStart = this.#fn.kernel.instructionOperandStart(instruction);
+		const operandCount = this.#fn.kernel.instructionOperandCount(instruction);
+		for (let index = 0; index < operandCount; index++) {
+			this.#wakeValueDefinition(this.#fn.kernel.operandAt(operandStart + index));
+		}
+		this.#edit().removeInstruction(instruction);
+		return true;
+	}
+
+	#valueHasUses(value: CoreValueId): boolean {
+		if (this.#fn.kernel.valueUseCount(value) > 0) return true;
+		this.#handlerUseCounts ??= this.#buildHandlerUseCounts();
+		return (this.#handlerUseCounts[value] ?? 0) > 0;
+	}
+
+	#buildHandlerUseCounts(): Uint32Array {
+		const counts = new Uint32Array(this.#fn.valueCapacity);
+		for (let id = 0; id < this.#fn.blockCapacity; id++) {
+			const block = id as CoreBlockId;
+			if (this.#fn.kernel.blockLive(block) === 0) continue;
+			const start = this.#fn.kernel.blockHandlerArgumentStart(block);
+			const count = this.#fn.kernel.blockHandlerArgumentCount(block);
+			for (let index = 0; index < count; index++) {
+				const value = this.#fn.kernel.handlerArgumentAt(start + index);
+				counts[value] = (counts[value] ?? 0) + 1;
+			}
+		}
+		return counts;
+	}
+
+	#wakeValueUsers(value: CoreValueId): void {
+		for (
+			let use = this.#fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = this.#fn.kernel.useNext(use)
+		) {
+			if (this.#fn.kernel.useLive(use) !== 0) {
+				this.#enqueueInstruction(this.#fn.kernel.useInstruction(use));
+			}
+		}
+	}
+
+	#wakeValueDefinition(value: CoreValueId): void {
+		if (this.#fn.kernel.valueDefinitionKind(value) !== 1) return;
+		this.#enqueueInstruction(
+			coreInstructionId(this.#fn.kernel.valueDefinitionOwner(value)),
+		);
+	}
+
+	#enqueueInstruction(instruction: CoreInstructionId): void {
+		if (this.#fn.kernel.instructionLive(instruction) === 0) return;
+		const opcode = this.#fn.kernel.instructionOpcode(instruction);
+		if (opcode >= 0 && this.#dispatch[opcode] !== 0) {
+			this.#instructionQueue.push(instruction);
+		}
+	}
+
+	#submit(changes: CoreChangeSet): void {
+		if (changes.function !== this.#fn.id) {
+			throw new Error("Core local optimizer received changes for another function");
+		}
+		for (const instruction of changes.instructions) {
+			this.#enqueueInstruction(instruction);
+		}
+		for (const instruction of changes.calls) this.#enqueueInstruction(instruction);
+		for (const value of changes.values) {
+			if (this.#fn.kernel.valueLive(value) === 0) continue;
+			this.#wakeValueDefinition(value);
+			this.#wakeValueUsers(value);
+		}
+		for (const block of changes.blocks) this.#enqueueBlockInstructions(block);
+		for (const edge of changes.edges) {
+			this.#enqueueBlockInstructions(edge.source);
+			this.#enqueueBlockInstructions(edge.target);
+		}
+	}
+
+	#enqueueBlockInstructions(block: CoreBlockId): void {
+		if (this.#fn.kernel.blockLive(block) === 0) return;
+		for (
+			let instruction = this.#fn.kernel.blockFirstInstruction(block);
+			instruction >= 0;
+			instruction = this.#fn.kernel.instructionNext(coreInstructionId(instruction))
+		) {
+			this.#enqueueInstruction(coreInstructionId(instruction));
+		}
+	}
+
+	#edit(): CoreEditor {
+		this.#editor ??= CoreEditor.open(this.#program, this.#fn.id);
+		return this.#editor;
+	}
+
+	#statistics(edits: number): CoreLocalOptimizerStatistics {
+		return Object.freeze({
+			instructionQueuePushes: this.#instructionQueue.pushes,
+			instructionQueuePops: this.#instructionQueuePops,
+			instructionQueueMaximumDepth: this.#instructionQueue.maximumDepth,
+			blockQueuePushes: this.#blockQueue.pushes,
+			blockQueuePops: this.#blockQueuePops,
+			blockQueueMaximumDepth: this.#blockQueue.maximumDepth,
+			rulesConsidered: this.#rulesConsidered,
+			rulesApplied: this.#rulesApplied,
+			edits,
+			editSessions: this.#editor === undefined ? 0 : 1,
+			workBudgetExhausted: this.#workBudgetExhausted,
+			editBudgetExhausted: this.#editBudgetExhausted,
+		});
+	}
+}

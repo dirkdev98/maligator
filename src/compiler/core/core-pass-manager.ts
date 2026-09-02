@@ -3,15 +3,29 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import type { CoreFunctionId } from "./core-ir.ts";
+import { CoreLocalOptimizer } from "./core-local-optimizer.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import { corePassContext } from "./core-pass.ts";
 import type { CoreOptimizationStage, CorePass, CorePassWorkItem } from "./core-pass.ts";
 import type { CoreChangeSet, CoreProgram } from "./core-store.ts";
 
 interface QueuedPassWork {
+	readonly kind: "pass";
 	readonly pass: CorePass;
 	readonly item: CorePassWorkItem;
 	readonly key: string;
+}
+
+interface QueuedLocalWork {
+	readonly kind: "local";
+	readonly function: CoreFunctionId;
+	readonly key: string;
+}
+
+interface PendingLocalWork {
+	full: boolean;
+	readonly changes: Array<CoreChangeSet>;
 }
 
 interface PassConsumption {
@@ -23,6 +37,7 @@ interface PassConsumption {
 export interface CorePassManagerOptions {
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
+	readonly localOptimization?: boolean;
 	readonly sccs?: ReadonlyArray<{
 		readonly id: string;
 		readonly functions: ReadonlyArray<number>;
@@ -55,6 +70,8 @@ export class CorePassManager {
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #verification: CoreVerificationProfile;
 	readonly #optionalMaxRunsPerWorkItem: number;
+	readonly #localOptimization: boolean;
+	#localSeeded = false;
 	readonly #sccs: ReadonlyArray<{
 		readonly id: string;
 		readonly functions: ReadonlyArray<number>;
@@ -74,6 +91,7 @@ export class CorePassManager {
 		this.#verification = options.verification ?? "boundary";
 		this.#optionalMaxRunsPerWorkItem =
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
+		this.#localOptimization = options.localOptimization ?? false;
 		if (
 			!Number.isSafeInteger(this.#optionalMaxRunsPerWorkItem) ||
 			this.#optionalMaxRunsPerWorkItem < 1
@@ -90,7 +108,7 @@ export class CorePassManager {
 	): void {
 		for (const pass of passes) this.#validatePass(stage, pass);
 		const startedAt = this.#report.collectsCounters ? Date.now() : 0;
-		const queue: Array<QueuedPassWork | undefined> = [];
+		const queue: Array<QueuedPassWork | QueuedLocalWork | undefined> = [];
 		let queueIndex = 0;
 		const queued = new Set<string>();
 		const runs =
@@ -99,6 +117,7 @@ export class CorePassManager {
 				: new Map<string, number>();
 		const profileExhausted = new Set<string>();
 		const consumption = new Map<string, PassConsumption>();
+		const pendingLocal = new Map<CoreFunctionId, PendingLocalWork>();
 		const enqueue = (pass: CorePass, item: CorePassWorkItem): void => {
 			if (!this.#accepts(pass, item)) return;
 			const key = workKey(pass, item);
@@ -114,10 +133,23 @@ export class CorePassManager {
 				return;
 			}
 			queued.add(key);
-			queue.push({ pass, item, key });
+			queue.push({ kind: "pass", pass, item, key });
+			this.#report.recordQueuePush(queue.length - queueIndex);
+		};
+		const enqueueLocal = (functionId: CoreFunctionId, changes?: CoreChangeSet): void => {
+			if (!this.#localOptimization) return;
+			const pending = pendingLocal.get(functionId) ?? { full: false, changes: [] };
+			if (changes === undefined) pending.full = true;
+			else pending.changes.push(changes);
+			pendingLocal.set(functionId, pending);
+			const key = `local:function:${functionId}`;
+			if (queued.has(key)) return;
+			queued.add(key);
+			queue.push({ kind: "local", function: functionId, key });
 			this.#report.recordQueuePush(queue.length - queueIndex);
 		};
 		const enqueueChanges = (changes: CoreChangeSet): void => {
+			enqueueLocal(changes.function, changes);
 			const wakeKinds = [...changes.domains, ...changes.programDomains];
 			for (const pass of passes) {
 				if (!intersects(pass.wakesOn, wakeKinds)) continue;
@@ -126,6 +158,10 @@ export class CorePassManager {
 		};
 		if (initialChanges === undefined) {
 			for (const pass of passes) this.#enqueueInitialWork(pass, enqueue);
+			if (stage === "canonicalize" && !this.#localSeeded) {
+				for (const functionId of this.#program.functionIds()) enqueueLocal(functionId);
+				this.#localSeeded = true;
+			}
 		} else {
 			for (const changes of initialChanges) enqueueChanges(changes);
 		}
@@ -133,8 +169,28 @@ export class CorePassManager {
 			const work = queue[queueIndex]!;
 			queue[queueIndex++] = undefined;
 			queued.delete(work.key);
-			if (runs !== undefined) runs.set(work.key, (runs.get(work.key) ?? 0) + 1);
 			this.#report.recordQueuePop();
+			if (work.kind === "local") {
+				const pending = pendingLocal.get(work.function);
+				pendingLocal.delete(work.function);
+				if (pending === undefined) continue;
+				const result = new CoreLocalOptimizer(this.#program, work.function).run(
+					pending.full ? undefined : pending.changes,
+				);
+				this.#report.recordLocalOptimizerWork("fused-local-optimizer", result.statistics);
+				const changes = result.changes;
+				if (changes === undefined || changes.edits === 0) continue;
+				if (this.#verification === "per-pass") {
+					verifyCoreChangeSet(this.#program, changes, {
+						stage,
+						pass: "fused-local-optimizer",
+						functionIndex: changes.function,
+					});
+				}
+				enqueueChanges(changes);
+				continue;
+			}
+			if (runs !== undefined) runs.set(work.key, (runs.get(work.key) ?? 0) + 1);
 			const used = consumption.get(work.pass.name) ?? {
 				workItems: 0,
 				edits: 0,

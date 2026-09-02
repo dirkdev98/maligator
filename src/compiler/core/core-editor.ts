@@ -299,6 +299,10 @@ export class CoreEditor {
 	#edits = 0;
 	#committed = false;
 
+	get pendingEdits(): number {
+		return this.#edits;
+	}
+
 	private constructor(
 		mutation: CoreStoreMutation,
 		program: CoreProgram,

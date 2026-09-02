@@ -1675,37 +1675,6 @@ const rewriteNumericIdentities: CorePass = {
 	},
 };
 
-const propagateMoves: CorePass = {
-	name: "local-copy-propagation",
-	stage: "canonicalize",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("move"),
-	requiredAnalyses: [],
-	wakesOn: ["body"],
-	preserves: [],
-	changes: LOCAL_CHANGES,
-	budget: LOCAL_BUDGET,
-	run({ program, item }) {
-		if (item.scope !== "instruction") return undefined;
-		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation" ||
-			fn.instructionOpcodeName(item.instruction) !== "move"
-		)
-			return undefined;
-		const result = instructionResult(fn, item.instruction, 0);
-		const input = instructionOperand(fn, item.instruction, 0);
-		if (result === undefined || input === undefined) return undefined;
-		if (fn.valueRepresentation(result) !== fn.valueRepresentation(input))
-			return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		editor.replaceValueUses(result, input);
-		editor.removeInstruction(item.instruction);
-		return editor.commit();
-	},
-};
-
 const foldControlFlow: CorePass = {
 	name: "local-control-folding",
 	stage: "canonicalize",
@@ -1775,55 +1744,6 @@ const foldControlFlow: CorePass = {
 		const editor = CoreEditor.open(program, item.function);
 		editor.replaceTerminator(item.block, { kind: "jump", edge: selected });
 		if (removedFact !== undefined) editor.removeFact(removedFact);
-		return editor.commit();
-	},
-};
-
-const removeDeadInstructions: CorePass = {
-	name: "local-dead-instruction-elimination",
-	stage: "canonicalize",
-	scope: "function",
-	requiredAnalyses: [],
-	wakesOn: ["body"],
-	preserves: [],
-	changes: LOCAL_CHANGES,
-	budget: LOCAL_BUDGET,
-	run({ program, item }) {
-		if (item.scope !== "function") return undefined;
-		const fn = program.function(item.function);
-		const removable = (instruction: CoreInstructionId): boolean => {
-			if (
-				!fn.isInstructionLive(instruction) ||
-				fn.instructionKind(instruction) !== "operation"
-			)
-				return false;
-			const descriptor = program.registry.byId(fn.instructionOpcode(instruction));
-			const attributes = fn.instructionAttributes(instruction);
-			if (
-				!descriptor.discardable &&
-				!(descriptor.opcode === "unary" && attributes.operator === "typeof")
-			)
-				return false;
-			return !instructionResultsHaveUses(fn, instruction);
-		};
-		const pending = [...fn.instructionIds()].filter(removable);
-		if (pending.length === 0) return undefined;
-		const queued = new Set(pending);
-		const editor = CoreEditor.open(program, item.function);
-		while (pending.length > 0) {
-			const instruction = pending.pop()!;
-			queued.delete(instruction);
-			if (!removable(instruction)) continue;
-			const operands = copyInstructionOperands(fn, instruction);
-			editor.removeInstruction(instruction);
-			for (const operand of operands) {
-				const definition = definingInstruction(fn, operand);
-				if (definition === undefined || queued.has(definition) || !removable(definition))
-					continue;
-				queued.add(definition);
-				pending.push(definition);
-			}
-		}
 		return editor.commit();
 	},
 };
@@ -2673,10 +2593,8 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	foldTypeofComparisons,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,
-	propagateMoves,
 	foldControlFlow,
 	localValueNumbering,
-	removeDeadInstructions,
 	canonicalizeBlockParameters,
 	simplifyBlockParameters,
 	eliminateForwardingBlocks,
@@ -2696,11 +2614,6 @@ export const CORE_LOCAL_FINALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	{
 		...foldPrimitiveCoercions,
 		name: "post-representation-primitive-coercion-folding",
-		stage: "finalize",
-	},
-	{
-		...removeDeadInstructions,
-		name: "post-representation-dead-instruction-removal",
 		stage: "finalize",
 	},
 	{

@@ -2,6 +2,7 @@ import type {
 	CoreOptimizationPlan,
 	CoreOptimizationPlanStatistics,
 } from "./core-ir-regions.ts";
+import type { CoreLocalOptimizerStatistics } from "./core-local-optimizer.ts";
 import type { CoreProgram } from "./core-store.ts";
 
 export type CoreInstrumentationMode = "off" | "counters" | "full";
@@ -420,6 +421,37 @@ export class CoreOptimizationReportBuilder {
 		if (changed) report.changedItems++;
 		report.edits += edits;
 		report.elapsedMs += elapsedMs;
+		this.#passes.set(pass, report);
+	}
+
+	recordLocalOptimizerWork(pass: string, statistics: CoreLocalOptimizerStatistics): void {
+		if (!this.collectsCounters) return;
+		this.increment("localRulesConsidered", statistics.rulesConsidered);
+		this.increment("localRulesApplied", statistics.rulesApplied);
+		this.#queuePushes += statistics.instructionQueuePushes + statistics.blockQueuePushes;
+		this.#queuePops += statistics.instructionQueuePops + statistics.blockQueuePops;
+		this.#queueMaximumDepth = Math.max(
+			this.#queueMaximumDepth,
+			statistics.instructionQueueMaximumDepth,
+			statistics.blockQueueMaximumDepth,
+		);
+		this.#budgetWorkItems += statistics.instructionQueuePops + statistics.blockQueuePops;
+		this.#budgetEdits += statistics.edits;
+		if (statistics.workBudgetExhausted || statistics.editBudgetExhausted) {
+			this.#exhaustedPasses?.add(pass);
+		}
+		if (this.#passes === undefined) return;
+		const report = this.#passes.get(pass) ?? {
+			runs: 0,
+			workItems: 0,
+			changedItems: 0,
+			edits: 0,
+			elapsedMs: 0,
+		};
+		report.runs++;
+		report.workItems += statistics.rulesConsidered;
+		report.changedItems += statistics.rulesApplied;
+		report.edits += statistics.edits;
 		this.#passes.set(pass, report);
 	}
 
