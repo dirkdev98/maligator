@@ -17,6 +17,7 @@ import {
 	coreMemoryLocationIsExact,
 	coreMemoryPartition,
 } from "./core-ir-memory.ts";
+import type { CoreMemoryPartition } from "./core-ir-memory.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { CORE_LOCAL_PROVENANCE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreProvenance } from "./core-ir-provenance.ts";
@@ -26,12 +27,13 @@ import type {
 	CoreBlockId,
 	CoreEdge,
 	CoreInstructionId,
+	CoreMemoryFamily,
 	CoreRepresentation,
 	CoreTerminatorInput,
 	CoreTerminatorPayload,
 	CoreValueId,
 } from "./core-ir.ts";
-import { CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
+import { CORE_MEMORY_FAMILIES, CORE_MEMORY_FAMILY_DOMAINS } from "./core-ir.ts";
 import type { CorePass, CorePassBudget } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -233,28 +235,26 @@ const canonicalizeNaturalLoops: CorePass = {
 	},
 };
 
-function loopWriteMayAliasRead(
+interface CoreLoopWriteSummary {
+	readonly opaque: ReadonlySet<CoreMemoryFamily>;
+	readonly inexact: ReadonlySet<CoreMemoryFamily>;
+	readonly partitions: ReadonlyMap<CoreMemoryFamily, ReadonlySet<CoreMemoryPartition>>;
+}
+
+function summarizeLoopWrites(
 	fn: CoreFunctionStore,
 	loopBlocks: ReadonlySet<CoreBlockId>,
-	readInstruction: CoreInstructionId,
-): boolean {
-	const reads = coreMemoryAccesses(fn, readInstruction).filter(
-		(access) => access.mode === "read",
-	);
-	if (reads.length === 0)
-		return coreInstructionEffects(fn, readInstruction).reads.length > 0;
-	if (reads.some(({ location }) => !coreMemoryLocationIsExact(location))) return true;
+): CoreLoopWriteSummary {
+	const opaque = new Set<CoreMemoryFamily>();
+	const inexact = new Set<CoreMemoryFamily>();
+	const partitions = new Map<CoreMemoryFamily, Set<CoreMemoryPartition>>();
 	for (const block of loopBlocks) {
 		for (const instruction of fn.bodyInstructionIds(block)) {
-			if (instruction === readInstruction) continue;
 			const effects = coreInstructionEffects(fn, instruction);
 			const writes = coreMemoryAccesses(fn, instruction).filter(
 				(access) => access.mode === "write",
 			);
-			for (const read of reads) {
-				const readLocation = read.location;
-				if (!coreMemoryLocationIsExact(readLocation)) return true;
-				const family = coreMemoryLocationFamily(readLocation);
+			for (const family of CORE_MEMORY_FAMILIES) {
 				const familyWrites = writes.filter(
 					(write) => coreMemoryLocationFamily(write.location) === family,
 				);
@@ -263,17 +263,41 @@ function loopWriteMayAliasRead(
 						CORE_MEMORY_FAMILY_DOMAINS[family].includes(domain),
 					) &&
 					familyWrites.length === 0
-				)
-					return true;
+				) {
+					opaque.add(family);
+				}
 				for (const write of familyWrites) {
-					const writeLocation = write.location;
-					if (
-						!coreMemoryLocationIsExact(writeLocation) ||
-						coreMemoryPartition(writeLocation) === coreMemoryPartition(readLocation)
-					)
-						return true;
+					if (!coreMemoryLocationIsExact(write.location)) {
+						inexact.add(family);
+						continue;
+					}
+					const familyPartitions = partitions.get(family) ?? new Set();
+					familyPartitions.add(coreMemoryPartition(write.location));
+					partitions.set(family, familyPartitions);
 				}
 			}
+		}
+	}
+	return { opaque, inexact, partitions };
+}
+
+function loopWriteMayAliasRead(
+	fn: CoreFunctionStore,
+	writes: CoreLoopWriteSummary,
+	readInstruction: CoreInstructionId,
+): boolean {
+	const reads = coreMemoryAccesses(fn, readInstruction).filter(
+		(access) => access.mode === "read",
+	);
+	if (reads.length === 0)
+		return coreInstructionEffects(fn, readInstruction).reads.length > 0;
+	if (reads.some(({ location }) => !coreMemoryLocationIsExact(location))) return true;
+	for (const read of reads) {
+		if (!coreMemoryLocationIsExact(read.location)) return true;
+		const family = coreMemoryLocationFamily(read.location);
+		if (writes.opaque.has(family) || writes.inexact.has(family)) return true;
+		if (writes.partitions.get(family)?.has(coreMemoryPartition(read.location))) {
+			return true;
 		}
 	}
 	return false;
@@ -321,6 +345,7 @@ const hoistLoopInvariants: CorePass = {
 		const selected = new Set<CoreInstructionId>();
 		for (const loop of [...cfg.loops].sort((left, right) => right.depth - left.depth)) {
 			if (!loop.canonical || loop.preheader === undefined) continue;
+			const loopWrites = summarizeLoopWrites(fn, loop.blocks);
 			for (const block of loop.blocks) {
 				for (const instruction of [...fn.bodyInstructionIds(block)]) {
 					if (selected.has(instruction)) continue;
@@ -346,7 +371,7 @@ const hoistLoopInvariants: CorePass = {
 								? loop.blocks.has(fn.instructionBlock(definition.instruction))
 								: loop.blocks.has(definition.block);
 						}) ||
-						(!containedArrayLength && loopWriteMayAliasRead(fn, loop.blocks, instruction))
+						(!containedArrayLength && loopWriteMayAliasRead(fn, loopWrites, instruction))
 					)
 						continue;
 					moves.push({ instruction, preheader: loop.preheader });
