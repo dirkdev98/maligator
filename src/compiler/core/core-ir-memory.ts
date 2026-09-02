@@ -112,6 +112,16 @@ function integerAttribute(
 	return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
 }
 
+function operandAt(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	operand: number,
+): CoreValueId | undefined {
+	return operand < fn.kernel.instructionOperandCount(instruction)
+		? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + operand)
+		: undefined;
+}
+
 function declaredKey(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -122,7 +132,7 @@ function declaredKey(
 		return index === undefined ? undefined : { kind: "string-constant", index };
 	}
 	if (access.keyOperand !== undefined) {
-		const value = fn.instructionOperands(instruction)[access.keyOperand];
+		const value = operandAt(fn, instruction, access.keyOperand);
 		return value === undefined ? undefined : { kind: "operand", value };
 	}
 	return undefined;
@@ -150,7 +160,7 @@ function exactLocation(
 	switch (access.family) {
 		case "object-slot": {
 			if (resolution === undefined || access.baseOperand === undefined) return undefined;
-			const base = fn.instructionOperands(instruction)[access.baseOperand];
+			const base = operandAt(fn, instruction, access.baseOperand);
 			const key = declaredKey(fn, instruction, access);
 			if (base === undefined || key === undefined) return undefined;
 			const resolved = resolution.ownCell(base, key, access.mode);
@@ -192,17 +202,23 @@ export function coreMemoryAccesses(
 	resolution?: CoreMemoryResolution,
 ): ReadonlyArray<CoreMemoryAccess> {
 	if (fn.instructionKind(instruction) !== "operation") return [];
-	const operands = fn.instructionOperands(instruction);
-	const outputs = fn.instructionResults(instruction);
 	const accesses: Array<CoreMemoryAccess> = [];
 	for (const access of fn.registry.byId(fn.instructionOpcode(instruction)).accesses ??
 		[]) {
 		if (!accessIsEffective(fn, instruction, access)) continue;
 		const base =
-			access.baseOperand === undefined ? undefined : operands[access.baseOperand];
+			access.baseOperand === undefined
+				? undefined
+				: operandAt(fn, instruction, access.baseOperand);
 		const key = declaredKey(fn, instruction, access);
 		const value =
-			access.valueOperand === undefined ? undefined : operands[access.valueOperand];
+			access.valueOperand === undefined
+				? undefined
+				: operandAt(fn, instruction, access.valueOperand);
+		const result =
+			access.mode === "read" && fn.kernel.instructionResultCount(instruction) === 1
+				? fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction))
+				: undefined;
 		const memoryAccess: CoreMemoryAccess = {
 			mode: access.mode,
 			location: exactLocation(fn, instruction, access, resolution) ?? {
@@ -212,7 +228,7 @@ export function coreMemoryAccesses(
 			...(base === undefined ? {} : { base }),
 			...(key === undefined ? {} : { key }),
 			...(value === undefined ? {} : { value }),
-			...(access.mode === "read" && outputs.length === 1 ? { result: outputs[0]! } : {}),
+			...(result === undefined ? {} : { result }),
 		};
 		accesses.push(Object.freeze(memoryAccess));
 	}

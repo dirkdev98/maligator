@@ -51,29 +51,37 @@ export function analyzeCoreInterproceduralValueFlow(
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const transfer = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer;
 		if (transfer === undefined) continue;
-		const operands = fn.instructionOperands(instruction);
-		const callee = operands[transfer.calleeOperand];
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		const operand = (index: number): CoreValueId | undefined =>
+			index < operandCount ? fn.kernel.operandAt(operandStart + index) : undefined;
+		const callee = operand(transfer.calleeOperand);
 		if (callee === undefined) continue;
 		const receiver =
 			transfer.receiverOperand === undefined
 				? undefined
-				: operands[transfer.receiverOperand];
+				: operand(transfer.receiverOperand);
 		if (transfer.invocation === "construct") constructs++;
 		if (transfer.arguments.kind === "positional") {
 			positionalCalls++;
+			const firstOperand = transfer.arguments.firstOperand;
 			calls.push(
 				Object.freeze({
 					caller: fn.id,
 					instruction,
 					callee,
 					...(receiver === undefined ? {} : { receiver }),
-					arguments: Object.freeze(operands.slice(transfer.arguments.firstOperand)),
+					arguments: Object.freeze(
+						Array.from({ length: operandCount - firstOperand }, (_, index) =>
+							fn.kernel.operandAt(operandStart + firstOperand + index),
+						),
+					),
 					transfer,
 				}),
 			);
 		} else {
 			aggregateCalls++;
-			const aggregateArguments = operands[transfer.arguments.operand];
+			const aggregateArguments = operand(transfer.arguments.operand);
 			calls.push(
 				Object.freeze({
 					caller: fn.id,

@@ -280,10 +280,16 @@ function localRequirements(
 	const requirements = new Map<CoreValueId, CoreRepresentation>();
 	for (const instruction of instructions) {
 		if (!fn.isInstructionLive(instruction)) continue;
-		for (const value of [
-			...fn.instructionOperands(instruction),
-			...fn.instructionResults(instruction),
-		]) {
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		for (let offset = 0; offset < operandCount; offset++) {
+			const value = fn.kernel.operandAt(operandStart + offset);
+			requirements.set(value, fn.valueRepresentation(value));
+		}
+		const resultStart = fn.kernel.instructionResultStart(instruction);
+		const resultCount = fn.kernel.instructionResultCount(instruction);
+		for (let offset = 0; offset < resultCount; offset++) {
+			const value = fn.kernel.resultAt(resultStart + offset);
 			requirements.set(value, fn.valueRepresentation(value));
 		}
 	}

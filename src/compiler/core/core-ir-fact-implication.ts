@@ -11,6 +11,7 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 /** Keep finite alternatives useful to guard chains and bounded dispatch. */
@@ -346,10 +347,10 @@ function guardSuccess(
 ): { readonly from: CoreBlockId; readonly to: CoreBlockId } | undefined {
 	if (!fn.isInstructionLive(instruction) || fn.instructionKind(instruction) !== "guard")
 		return undefined;
-	const payload = fn.terminatorPayload(instruction);
-	return payload.kind === "guard"
-		? { from: fn.instructionBlock(instruction), to: payload.success.block }
-		: undefined;
+	return {
+		from: fn.instructionBlock(instruction),
+		to: fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(instruction)),
+	};
 }
 
 export function analyzeCoreFactAvailability(
@@ -388,13 +389,15 @@ export function analyzeCoreFactAvailability(
 		instruction: CoreInstructionId,
 	): boolean => {
 		const block = fn.instructionBlock(instruction);
-		const definition = fn.valueDefinition(subject);
-		if (definition.kind === "block-parameter") {
-			return definition.block === block || cfg.dominates(definition.block, block);
+		const owner = fn.kernel.valueDefinitionOwner(subject);
+		if (fn.kernel.valueDefinitionKind(subject) === 0) {
+			const definitionBlock = coreBlockId(owner);
+			return definitionBlock === block || cfg.dominates(definitionBlock, block);
 		}
-		const definitionBlock = fn.instructionBlock(definition.instruction);
+		const definitionInstruction = coreInstructionId(owner);
+		const definitionBlock = fn.instructionBlock(definitionInstruction);
 		return definitionBlock === block
-			? instructionOrder[definition.instruction]! < instructionOrder[instruction]!
+			? instructionOrder[definitionInstruction]! < instructionOrder[instruction]!
 			: cfg.instructionDominatesBlock(definitionBlock, block);
 	};
 	const subjectsAvailableAtInstruction = (
@@ -416,10 +419,13 @@ export function analyzeCoreFactAvailability(
 		return result;
 	};
 	const valueAvailableAtBlock = (subject: CoreValueId, block: CoreBlockId): boolean => {
-		const definition = fn.valueDefinition(subject);
-		return definition.kind === "block-parameter"
-			? definition.block === block || cfg.dominates(definition.block, block)
-			: cfg.instructionDominatesBlock(fn.instructionBlock(definition.instruction), block);
+		const owner = fn.kernel.valueDefinitionOwner(subject);
+		return fn.kernel.valueDefinitionKind(subject) === 0
+			? owner === block || cfg.dominates(coreBlockId(owner), block)
+			: cfg.instructionDominatesBlock(
+					fn.instructionBlock(coreInstructionId(owner)),
+					block,
+				);
 	};
 	const subjectsAvailableAtBlock = (fact: CoreFact, block: CoreBlockId): boolean =>
 		fact.claims.every(

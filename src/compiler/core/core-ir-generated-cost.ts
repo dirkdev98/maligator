@@ -70,17 +70,19 @@ function generatedCodeCost(
 		}
 		if (opcode === "guardFunctionIndex") guards++;
 		if (BOXING_OPCODES.has(opcode)) boxingOperations++;
-		const operands = fn.instructionOperands(instruction);
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
 		if (effects.mayGc) {
 			safepoints++;
 			const seen = new Set<number>();
-			for (const value of operands) {
+			for (let offset = 0; offset < operandCount; offset++) {
+				const value = fn.kernel.operandAt(operandStart + offset);
 				if (!seen.has(value) && fn.valueRepresentation(value) === "boxed") rootSlots++;
 				seen.add(value);
 			}
 		}
 		loopFrequency = Math.max(loopFrequency, siteFrequency);
-		inputOperands += operands.length;
+		inputOperands += operandCount;
 	}
 	const instructions = sites.length;
 	const duplicatedInstructions = overhead.duplicatedInstructions ?? 0;

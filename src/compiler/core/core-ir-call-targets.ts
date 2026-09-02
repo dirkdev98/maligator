@@ -16,6 +16,7 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALLEE_TARGET_CAP = 4;
@@ -205,6 +206,16 @@ function functionPropertyKey(functionId: CoreFunctionId, stringIndex: number): s
 	return `function-property:${functionId}:${stringIndex}`;
 }
 
+function instructionOperand(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	operand: number,
+): CoreValueId | undefined {
+	return operand < fn.kernel.instructionOperandCount(instruction)
+		? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + operand)
+		: undefined;
+}
+
 function directCreatedFunction(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
@@ -212,15 +223,15 @@ function directCreatedFunction(
 ): CoreFunctionId | undefined {
 	if (seen.has(value)) return undefined;
 	seen.add(value);
-	const definition = fn.valueDefinition(value);
-	if (definition.kind !== "instruction") return undefined;
-	const opcode = fn.instructionOpcodeName(definition.instruction);
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	const opcode = fn.instructionOpcodeName(definition);
 	if (opcode === "move") {
-		const input = fn.instructionOperands(definition.instruction)[0];
+		const input = instructionOperand(fn, definition, 0);
 		return input === undefined ? undefined : directCreatedFunction(fn, input, seen);
 	}
 	if (opcode !== "createFunction") return undefined;
-	const target = fn.instructionAttributes(definition.instruction).functionIndex;
+	const target = fn.instructionAttributes(definition).functionIndex;
 	return typeof target === "number" && Number.isSafeInteger(target) && target >= 0
 		? (target as CoreFunctionId)
 		: undefined;
@@ -230,13 +241,10 @@ function directStringIndex(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
 ): number | undefined {
-	const definition = fn.valueDefinition(value);
-	if (
-		definition.kind !== "instruction" ||
-		fn.instructionOpcodeName(definition.instruction) !== "createString"
-	)
-		return undefined;
-	const index = fn.instructionAttributes(definition.instruction).stringIndex;
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (fn.instructionOpcodeName(definition) !== "createString") return undefined;
+	const index = fn.instructionAttributes(definition).stringIndex;
 	return typeof index === "number" && Number.isSafeInteger(index) && index >= 0
 		? index
 		: undefined;
@@ -250,7 +258,9 @@ function collectKnownFunctionProperties(
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		if (fn.instructionOpcodeName(instruction) !== "defineProperty") continue;
-		const [receiver, key, value] = fn.instructionOperands(instruction);
+		const receiver = instructionOperand(fn, instruction, 0);
+		const key = instructionOperand(fn, instruction, 1);
+		const value = instructionOperand(fn, instruction, 2);
 		if (receiver === undefined || key === undefined || value === undefined) continue;
 		const receiverFunction = directCreatedFunction(fn, receiver);
 		const stringIndex = directStringIndex(fn, key);
@@ -346,7 +356,12 @@ function analyzeFunctionTargets(
 		const joined = joinCoreCalleeTargets(current, incoming);
 		if (coreCalleeTargetsEqual(current, joined)) return false;
 		values[value] = joined;
-		for (const { instruction } of fn.uses(value)) {
+		for (
+			let use = fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			const instruction = fn.kernel.useInstruction(use);
 			const block = fn.instructionBlock(instruction);
 			if (fn.instructionKind(instruction) === "operation") {
 				enqueue(block);
@@ -356,25 +371,29 @@ function analyzeFunctionTargets(
 		}
 		return true;
 	};
-	for (const parameter of fn.parameters) raise(parameter, CORE_CALLEE_TARGETS_OPAQUE);
+	for (let index = 0; index < fn.parameterCount; index++) {
+		raise(fn.kernel.functionParameter(index), CORE_CALLEE_TARGETS_OPAQUE);
+	}
 	for (const block of cfg.reversePostorder) enqueue(block);
 	for (let cursor = 0; cursor < queue.length; cursor++) {
 		const block = queue[cursor]!;
 		queued[block] = 0;
-		const parameters = fn.blockParameters(block);
+		const parameterStart = fn.kernel.blockParameterStart(block);
+		const parameterCount = fn.kernel.blockParameterCount(block);
 		for (const edge of cfg.predecessors[block] ?? []) {
 			if (edge.kind !== "ordinary") continue;
-			for (const [index, parameter] of parameters.entries()) {
+			for (let index = 0; index < parameterCount; index++) {
 				const argument = edge.arguments[index];
 				if (argument !== undefined) {
-					raise(parameter.value, values[argument]!);
+					raise(fn.kernel.blockParameterValue(parameterStart + index), values[argument]!);
 				}
 			}
 		}
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
-			const results = fn.instructionResults(instruction);
-			if (results.length === 0) continue;
+			const resultStart = fn.kernel.instructionResultStart(instruction);
+			const resultCount = fn.kernel.instructionResultCount(instruction);
+			if (resultCount === 0) continue;
 			let resultTargets = CORE_CALLEE_TARGETS_OPEN;
 			if (opcode === "createFunction" || opcode === "guardFunctionIndex") {
 				const target = fn.instructionAttributes(instruction).functionIndex;
@@ -388,7 +407,7 @@ function analyzeFunctionTargets(
 			} else if (opcode === "loadCallee") {
 				resultTargets = coreCalleeTargetsFunction(fn.id);
 			} else if (opcode === "move") {
-				const operand = fn.instructionOperands(instruction)[0];
+				const operand = instructionOperand(fn, instruction, 0);
 				resultTargets =
 					operand === undefined ? CORE_CALLEE_TARGETS_OPEN : values[operand]!;
 			} else if (opcode === "loadGlobal" || opcode === "loadCaptured") {
@@ -398,7 +417,7 @@ function analyzeFunctionTargets(
 						? CORE_CALLEE_TARGETS_OPEN
 						: (cells.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM);
 			} else if (opcode === "loadPropertyStatic") {
-				const receiver = fn.instructionOperands(instruction)[0];
+				const receiver = instructionOperand(fn, instruction, 0);
 				const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 				let knownTargets = CORE_CALLEE_TARGETS_BOTTOM;
 				resultTargets = CORE_CALLEE_TARGETS_OPEN;
@@ -427,15 +446,20 @@ function analyzeFunctionTargets(
 			} else if (DEFINITELY_NON_CALLABLE_RESULTS.has(opcode)) {
 				resultTargets = CORE_CALLEE_TARGETS_BOTTOM;
 			}
-			for (const result of results) raise(result, resultTargets);
+			for (let offset = 0; offset < resultCount; offset++) {
+				raise(fn.kernel.resultAt(resultStart + offset), resultTargets);
+			}
 		}
 	}
 
 	let returnTargets = CORE_CALLEE_TARGETS_BOTTOM;
 	for (const block of cfg.reachable) {
-		const terminator = fn.terminatorPayload(fn.blockTerminator(block));
-		if (terminator.kind === "return") {
-			returnTargets = joinCoreCalleeTargets(returnTargets, values[terminator.value]!);
+		const terminator = fn.blockTerminator(block);
+		if (fn.instructionKind(terminator) === "return") {
+			returnTargets = joinCoreCalleeTargets(
+				returnTargets,
+				values[fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator))]!,
+			);
 		}
 	}
 	const flow = analyzeCoreInterproceduralValueFlow(fn);
@@ -458,7 +482,7 @@ function analyzeFunctionTargets(
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (opcode === "loadPropertyStatic") {
-			const receiver = fn.instructionOperands(instruction)[0];
+			const receiver = instructionOperand(fn, instruction, 0);
 			const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 			if (receiver !== undefined && typeof stringIndex === "number") {
 				for (const receiverFunction of values[receiver]?.functions ?? []) {
@@ -476,7 +500,7 @@ function analyzeFunctionTargets(
 			cellInputs.set(key, cells.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM);
 			continue;
 		}
-		const value = fn.instructionOperands(instruction)[0];
+		const value = instructionOperand(fn, instruction, 0);
 		if (value === undefined) continue;
 		const written = values[value] ?? CORE_CALLEE_TARGETS_OPEN;
 		cellWrites.set(

@@ -650,23 +650,31 @@ export function coreCanonicalValueRoots(
 			fn.instructionOpcodeName(instruction) !== "move"
 		)
 			continue;
-		const inputs = fn.instructionOperands(instruction);
-		const outputs = fn.instructionResults(instruction);
-		if (inputs.length !== 1 || outputs.length !== 1) continue;
-		dependencies[outputs[0]!] = inputs;
-		nodes.push(outputs[0]!);
+		if (
+			fn.kernel.instructionOperandCount(instruction) !== 1 ||
+			fn.kernel.instructionResultCount(instruction) !== 1
+		)
+			continue;
+		const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+		const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		dependencies[output] = [input];
+		nodes.push(output);
 	}
 	for (const block of fn.blockIds()) {
 		const incoming = cfg.predecessors[block] ?? [];
 		if (incoming.length === 0) continue;
-		for (const [index, parameter] of fn.blockParameters(block).entries()) {
-			if (parameter.role === "exception") continue;
+		const parameterStart = fn.kernel.blockParameterStart(block);
+		const parameterCount = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			const row = parameterStart + index;
+			if (fn.kernel.blockParameterRole(row) === 1) continue;
+			const parameter = fn.kernel.blockParameterValue(row);
 			const sources = incoming.map(
 				(edge) => edge.arguments[edge.kind === "exceptional" ? index - 1 : index],
 			);
 			if (sources.some((value) => value === undefined)) continue;
-			dependencies[parameter.value] = sources as ReadonlyArray<CoreValueId>;
-			nodes.push(parameter.value);
+			dependencies[parameter] = sources as ReadonlyArray<CoreValueId>;
+			nodes.push(parameter);
 		}
 	}
 	if (nodes.length === 0) return new SparseCanonicalValueRoots();

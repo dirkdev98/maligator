@@ -12,6 +12,7 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE = "exactTypedArrayKind";
@@ -133,24 +134,24 @@ export function analyzeCoreValueClasses(
 				fn.instructionOpcodeName(instruction) !== "construct"
 			)
 				continue;
-			const callee = fn.instructionOperands(instruction)[0];
-			const output = fn.instructionResults(instruction)[0];
-			if (callee === undefined || output === undefined) continue;
-			const calleeRoot = roots.get(callee) ?? callee;
-			const definition = fn.valueDefinition(calleeRoot);
 			if (
-				definition.kind !== "instruction" ||
-				fn.instructionKind(definition.instruction) !== "operation" ||
-				fn.instructionOpcodeName(definition.instruction) !== "loadIntrinsic"
+				fn.kernel.instructionOperandCount(instruction) === 0 ||
+				fn.kernel.instructionResultCount(instruction) === 0
+			)
+				continue;
+			const callee = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+			const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			const calleeRoot = roots.get(callee) ?? callee;
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(calleeRoot));
+			if (
+				fn.kernel.valueDefinitionKind(calleeRoot) !== 1 ||
+				fn.instructionKind(definition) !== "operation" ||
+				fn.instructionOpcodeName(definition) !== "loadIntrinsic"
 			)
 				continue;
 			const brand =
-				coreNumericTypedArrayKind(
-					fn.instructionAttributes(definition.instruction).intrinsic,
-				) ??
-				coreExactCollectionBrand(
-					fn.instructionAttributes(definition.instruction).intrinsic,
-				);
+				coreNumericTypedArrayKind(fn.instructionAttributes(definition).intrinsic) ??
+				coreExactCollectionBrand(fn.instructionAttributes(definition).intrinsic);
 			if (brand !== undefined) {
 				brands[roots.get(output) ?? output] = brand;
 				seeded++;
@@ -164,7 +165,10 @@ export function analyzeCoreValueClasses(
 			coreNumericTypedArrayKind(attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]) ??
 			coreExactCollectionBrand(attributes[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE]);
 		if (brand === undefined) continue;
-		for (const output of fn.instructionResults(instruction)) {
+		const resultStart = fn.kernel.instructionResultStart(instruction);
+		const resultCount = fn.kernel.instructionResultCount(instruction);
+		for (let offset = 0; offset < resultCount; offset++) {
+			const output = fn.kernel.resultAt(resultStart + offset);
 			brands[roots.get(output) ?? output] = brand;
 			seeded++;
 		}
@@ -181,22 +185,34 @@ export function analyzeCoreValueClasses(
 		const valueRoot = roots.get(value) ?? value;
 		const brand = brands[valueRoot];
 		if (brand === undefined) continue;
-		for (const use of fn.uses(value)) {
-			if (fn.instructionKind(use.instruction) !== "operation") {
+		for (
+			let use = fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			const instruction = fn.kernel.useInstruction(use);
+			if (fn.instructionKind(instruction) !== "operation") {
 				unsafe[valueRoot] = 1;
 				continue;
 			}
-			const opcode = fn.instructionOpcodeName(use.instruction);
+			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode === "move" || opcode === "rootUse") continue;
-			if (opcode === "callBuiltin" && use.operand === 0) {
-				const operation = fn.instructionAttributes(use.instruction).operation;
+			if (opcode === "callBuiltin" && fn.kernel.useOperand(use) === 0) {
+				const operation = fn.instructionAttributes(instruction).operation;
 				const expected = coreCollectionReceiverBrandForOperation(operation);
 				if (expected === brand) {
+					let retainedResult = false;
+					const resultStart = fn.kernel.instructionResultStart(instruction);
+					const resultCount = fn.kernel.instructionResultCount(instruction);
+					for (let index = 0; index < resultCount; index++) {
+						if (fn.valueUseCount(fn.kernel.resultAt(resultStart + index)) > 0) {
+							retainedResult = true;
+							break;
+						}
+					}
 					if (
 						(operation === "Map.prototype.set" || operation === "Set.prototype.add") &&
-						fn
-							.instructionResults(use.instruction)
-							.some((output) => fn.valueUseCount(output) > 0)
+						retainedResult
 					) {
 						unsafe[valueRoot] = 1;
 					}
