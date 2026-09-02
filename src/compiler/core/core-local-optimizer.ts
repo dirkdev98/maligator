@@ -184,18 +184,82 @@ const VALUE_NUMBERING_RULE: CoreLocalBlockRule = {
 	},
 };
 
-function stableAttribute(value: CoreAttributeValue): string {
-	if (Array.isArray(value)) return `[${value.map(stableAttribute).join(",")}]`;
-	if (value !== null && typeof value === "object") {
-		return `{${Object.entries(value)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([key, entry]) => `${key}:${stableAttribute(entry)}`)
-			.join(",")}}`;
+const NUMBER_HASH_VIEW = new DataView(new ArrayBuffer(8));
+
+function mixHash(hash: number, value: number): number {
+	return Math.imul(hash ^ value, 0x0100_0193) >>> 0;
+}
+
+function hashString(hash: number, value: string): number {
+	let result = mixHash(hash, value.length);
+	for (let index = 0; index < value.length; index++) {
+		result = mixHash(result, value.charCodeAt(index));
 	}
+	return result;
+}
+
+function isAttributeArray(
+	value: CoreAttributeValue,
+): value is ReadonlyArray<CoreAttributeValue> {
+	return Array.isArray(value);
+}
+
+function hashAttribute(hash: number, value: CoreAttributeValue): number {
+	if (value === undefined) return mixHash(hash, 1);
+	if (value === null) return mixHash(hash, 2);
+	if (typeof value === "boolean") return mixHash(hash, value ? 4 : 3);
 	if (typeof value === "number") {
-		return `number:${Object.is(value, -0) ? "-0" : String(value)}`;
+		NUMBER_HASH_VIEW.setFloat64(0, value);
+		return mixHash(
+			mixHash(mixHash(hash, 5), NUMBER_HASH_VIEW.getUint32(0)),
+			NUMBER_HASH_VIEW.getUint32(4),
+		);
 	}
-	return JSON.stringify(value);
+	if (typeof value === "string") return hashString(mixHash(hash, 6), value);
+	if (isAttributeArray(value)) {
+		let result = mixHash(mixHash(hash, 7), value.length);
+		for (const entry of value) result = hashAttribute(result, entry);
+		return result;
+	}
+	const object = value;
+	const keys = Object.keys(object).sort();
+	let result = mixHash(mixHash(hash, 8), keys.length);
+	for (const key of keys) {
+		result = hashAttribute(hashString(result, key), object[key]);
+	}
+	return result;
+}
+
+function attributesEqual(left: CoreAttributeValue, right: CoreAttributeValue): boolean {
+	if (Object.is(left, right)) return true;
+	if (isAttributeArray(left)) {
+		return (
+			isAttributeArray(right) &&
+			left.length === right.length &&
+			left.every((entry, index) => attributesEqual(entry, right[index]))
+		);
+	}
+	if (
+		left === null ||
+		right === null ||
+		typeof left !== "object" ||
+		typeof right !== "object" ||
+		isAttributeArray(right)
+	) {
+		return false;
+	}
+	const leftObject = left;
+	const rightObject = right;
+	const leftKeys = Object.keys(leftObject).sort();
+	const rightKeys = Object.keys(rightObject).sort();
+	return (
+		leftKeys.length === rightKeys.length &&
+		leftKeys.every(
+			(key, index) =>
+				key === rightKeys[index] &&
+				attributesEqual(leftObject[key], rightObject[key]),
+		)
+	);
 }
 
 type LocalConstant =
@@ -632,7 +696,10 @@ export class CoreLocalOptimizer {
 
 	eliminateLocalDuplicates(block: CoreBlockId): boolean {
 		if (this.#fn.kernel.blockLive(block) === 0) return false;
-		const available = new Map<string, CoreValueId>();
+		const available = new Map<
+			number,
+			CoreInstructionId | Array<CoreInstructionId>
+		>();
 		const replacements: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly replacement: CoreValueId;
@@ -656,20 +723,31 @@ export class CoreLocalOptimizer {
 			}
 			const operandStart = this.#fn.kernel.instructionOperandStart(instruction);
 			const operandCount = this.#fn.kernel.instructionOperandCount(instruction);
-			let operandKey = "";
+			let hash = mixHash(0x811c_9dc5, descriptor.id);
 			for (let index = 0; index < operandCount; index++) {
-				if (index > 0) operandKey += ",";
-				operandKey += this.#fn.kernel.operandAt(operandStart + index);
+				hash = mixHash(hash, this.#fn.kernel.operandAt(operandStart + index));
 			}
-			const key = `${descriptor.id}|${operandKey}|${stableAttribute(
-				this.#fn.instructionAttributes(instruction),
-			)}`;
-			const result = this.#fn.kernel.resultAt(
-				this.#fn.kernel.instructionResultStart(instruction),
-			);
-			const existing = available.get(key);
-			if (existing === undefined) available.set(key, result);
-			else replacements.push({ instruction, replacement: existing });
+			hash = hashAttribute(hash, this.#fn.instructionAttributes(instruction));
+			const bucket = available.get(hash);
+			const existing = Array.isArray(bucket)
+				? bucket.find((candidate) => this.#sameValueNumber(candidate, instruction))
+				: bucket !== undefined && this.#sameValueNumber(bucket, instruction)
+					? bucket
+					: undefined;
+			if (existing !== undefined) {
+				replacements.push({
+					instruction,
+					replacement: this.#fn.kernel.resultAt(
+						this.#fn.kernel.instructionResultStart(existing),
+					),
+				});
+			} else if (bucket === undefined) {
+				available.set(hash, instruction);
+			} else if (Array.isArray(bucket)) {
+				bucket.push(instruction);
+			} else {
+				available.set(hash, [bucket, instruction]);
+			}
 		}
 		if (replacements.length === 0) return false;
 		const editor = this.#edit();
@@ -686,6 +764,33 @@ export class CoreLocalOptimizer {
 				this.#wakeValueDefinition(this.#fn.kernel.operandAt(operandStart + index));
 			}
 			editor.removeInstruction(instruction);
+		}
+		return true;
+	}
+
+	#sameValueNumber(left: CoreInstructionId, right: CoreInstructionId): boolean {
+		if (
+			this.#fn.kernel.instructionOpcode(left) !==
+				this.#fn.kernel.instructionOpcode(right) ||
+			this.#fn.kernel.instructionOperandCount(left) !==
+				this.#fn.kernel.instructionOperandCount(right) ||
+			!attributesEqual(
+				this.#fn.instructionAttributes(left),
+				this.#fn.instructionAttributes(right),
+			)
+		) {
+			return false;
+		}
+		const leftStart = this.#fn.kernel.instructionOperandStart(left);
+		const rightStart = this.#fn.kernel.instructionOperandStart(right);
+		const count = this.#fn.kernel.instructionOperandCount(left);
+		for (let index = 0; index < count; index++) {
+			if (
+				this.#fn.kernel.operandAt(leftStart + index) !==
+				this.#fn.kernel.operandAt(rightStart + index)
+			) {
+				return false;
+			}
 		}
 		return true;
 	}

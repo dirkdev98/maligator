@@ -129,6 +129,7 @@ describe("Core local optimizer migration matrix", () => {
 		);
 
 		expect(source).not.toMatch(/core-analysis-manager|core-ir-loops/);
+		expect(source).not.toMatch(/JSON\.stringify|Map<string>/);
 	});
 
 	it("has no registered instruction- or block-scoped optimizer passes", () => {

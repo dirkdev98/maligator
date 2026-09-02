@@ -146,11 +146,11 @@ describe("CoreLocalOptimizer", () => {
 		const entry = builder.createBlock([{ representation: "f64" }]);
 		const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [first] = builder.appendInstruction(entry, "mathUnaryNumber", [input], {
-			attributes: { operation: "Math.sin" },
+			attributes: { operation: "Math.sin", metadata: { left: 1, right: 2 } },
 			outputRepresentations: ["f64"],
 		});
 		const [second] = builder.appendInstruction(entry, "mathUnaryNumber", [input], {
-			attributes: { operation: "Math.sin" },
+			attributes: { metadata: { right: 2, left: 1 }, operation: "Math.sin" },
 			outputRepresentations: ["f64"],
 		});
 		const [combined] = builder.appendInstruction(
