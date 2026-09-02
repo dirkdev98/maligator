@@ -1,7 +1,6 @@
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
-import type { CoreControlEdge } from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
 	CORE_FACT_ALTERNATIVE_LIMIT,
@@ -12,13 +11,10 @@ import type {
 	CoreAttributeValue,
 	CoreBlockId,
 	CoreChangeSet,
-	CoreEdge,
 	CoreFact,
-	CoreFactId,
 	CoreFunctionId,
 	CoreInstructionEffects,
 	CoreInstructionId,
-	CoreValueDefinition,
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreBlockId, coreFactId, coreInstructionId, coreValueId } from "./core-ir.ts";
@@ -176,7 +172,7 @@ function verifyMetadata(fn: CoreFunctionStore, program: CoreProgram): void {
 	}
 	const mapped = new Set<number>();
 	for (const slot of metadata.mappedArgumentSlots) {
-		if (!Number.isSafeInteger(slot) || slot < 0 || slot >= fn.parameters.length) {
+		if (!Number.isSafeInteger(slot) || slot < 0 || slot >= fn.parameterCount) {
 			fail(`invalid mapped argument slot ${slot}`);
 		}
 		if (mapped.has(slot)) fail(`duplicate mapped argument slot ${slot}`);
@@ -194,21 +190,24 @@ function verifyBlockRows(fn: CoreFunctionStore): Set<CoreInstructionId> {
 	const linked = new Set<CoreInstructionId>();
 	for (let rawBlock = 0; rawBlock < fn.blockCapacity; rawBlock++) {
 		const block = coreBlockId(rawBlock);
-		const row = fn.blockLayout(rawBlock);
+		const parameterStart = fn.kernel.blockParameterStart(block);
+		const parameterCount = fn.kernel.blockParameterCount(block);
 		checkRange(
 			`block b${block} parameter`,
-			row.parameterStart,
-			row.parameterCount,
+			parameterStart,
+			parameterCount,
 			fn.blockParameterCapacity,
 		);
-		if (!row.live) {
-			if (row.firstInstruction >= 0 || row.lastInstruction >= 0) {
+		const firstInstruction = fn.kernel.blockFirstInstruction(block);
+		const lastInstruction = fn.kernel.blockLastInstruction(block);
+		if (fn.kernel.blockLive(block) === 0) {
+			if (firstInstruction >= 0 || lastInstruction >= 0) {
 				fail(`deleted block b${block} retains linked instructions`);
 			}
 			continue;
 		}
 		let previous = -1;
-		let current = row.firstInstruction;
+		let current = firstInstruction;
 		let terminators = 0;
 		while (current >= 0) {
 			if (current >= fn.instructionCapacity) {
@@ -219,27 +218,26 @@ function verifyBlockRows(fn: CoreFunctionStore): Set<CoreInstructionId> {
 				fail(`instruction @${instruction} appears twice in block order`);
 			}
 			linked.add(instruction);
-			const instructionRow = fn.instructionLayout(current);
-			if (!instructionRow.live)
+			if (fn.kernel.instructionLive(instruction) === 0)
 				fail(`block b${block} links deleted instruction @${current}`);
-			if (instructionRow.block !== block) {
-				fail(
-					`instruction @${current} belongs to b${instructionRow.block}, not b${block}`,
-				);
+			const instructionBlock = fn.kernel.instructionBlock(instruction);
+			if (instructionBlock !== block) {
+				fail(`instruction @${current} belongs to b${instructionBlock}, not b${block}`);
 			}
-			if (instructionRow.previous !== previous) {
+			if (fn.kernel.instructionPrevious(instruction) !== previous) {
 				fail(`instruction @${current} has broken previous link`);
 			}
 			const kind = fn.instructionKind(instruction);
 			if (kind !== "operation") terminators++;
-			if (kind !== "operation" && instructionRow.next >= 0) {
+			const next = fn.kernel.instructionNext(instruction);
+			if (kind !== "operation" && next >= 0) {
 				fail(`terminator @${current} is not last in b${block}`);
 			}
 			previous = current;
-			current = instructionRow.next;
+			current = next;
 		}
-		if (previous !== row.lastInstruction) fail(`block b${block} has broken last link`);
-		if (row.firstInstruction < 0 || terminators !== 1) {
+		if (previous !== lastInstruction) fail(`block b${block} has broken last link`);
+		if (firstInstruction < 0 || terminators !== 1) {
 			fail(`block b${block} must contain exactly one terminator`);
 		}
 	}
@@ -249,8 +247,7 @@ function verifyBlockRows(fn: CoreFunctionStore): Set<CoreInstructionId> {
 		rawInstruction++
 	) {
 		const instruction = coreInstructionId(rawInstruction);
-		const row = fn.instructionLayout(rawInstruction);
-		if (row.live !== linked.has(instruction)) {
+		if ((fn.kernel.instructionLive(instruction) !== 0) !== linked.has(instruction)) {
 			fail(`instruction @${instruction} live state disagrees with block order`);
 		}
 	}
@@ -272,47 +269,57 @@ function verifyInstructionRows(
 		rawInstruction++
 	) {
 		const instruction = coreInstructionId(rawInstruction);
-		const row = fn.instructionLayout(rawInstruction);
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		const resultStart = fn.kernel.instructionResultStart(instruction);
+		const resultCount = fn.kernel.instructionResultCount(instruction);
 		checkRange(
 			`instruction @${instruction} operand`,
-			row.operandStart,
-			row.operandCount,
+			operandStart,
+			operandCount,
 			fn.operandCapacity,
 		);
 		checkRange(
 			`instruction @${instruction} result`,
-			row.resultStart,
-			row.resultCount,
+			resultStart,
+			resultCount,
 			fn.resultCapacity,
 		);
-		if (row.sourcePosition < -1 || row.sourcePosition >= program.sourcePositions.length) {
-			fail(
-				`instruction @${instruction} has invalid source position ${row.sourcePosition}`,
-			);
+		const sourcePosition = fn.kernel.instructionSourcePosition(instruction);
+		if (sourcePosition < -1 || sourcePosition >= program.sourcePositions.length) {
+			fail(`instruction @${instruction} has invalid source position ${sourcePosition}`);
 		}
-		if (!row.live) {
-			for (let index = 0; index < row.resultCount; index++) {
-				const value = fn.resultRecord(row.resultStart + index);
+		if (fn.kernel.instructionLive(instruction) === 0) {
+			for (let index = 0; index < resultCount; index++) {
+				const value = fn.kernel.resultAt(resultStart + index);
 				if (fn.isValueLive(value)) {
 					fail(`deleted instruction @${instruction} retains live result %${value}`);
 				}
 			}
 			continue;
 		}
-		if (!fn.isBlockLive(coreBlockId(row.block))) {
-			fail(`instruction @${instruction} belongs to deleted block b${row.block}`);
+		const instructionBlock = fn.kernel.instructionBlock(instruction);
+		if (fn.kernel.blockLive(coreBlockId(instructionBlock)) === 0) {
+			fail(`instruction @${instruction} belongs to deleted block b${instructionBlock}`);
 		}
-		if (row.opcode >= 0) {
+		const opcode = fn.kernel.instructionOpcode(instruction);
+		if (opcode >= 0) {
+			if (
+				fn.kernel.terminatorEdgeCount(instruction) !== 0 ||
+				fn.kernel.terminatorFact(instruction) !== undefined
+			) {
+				fail(`operation @${instruction} carries terminator metadata`);
+			}
 			let descriptor;
 			try {
 				descriptor = program.registry.byId(fn.instructionOpcode(instruction));
 			} catch {
-				fail(`instruction @${instruction} has unknown opcode id ${row.opcode}`);
+				fail(`instruction @${instruction} has unknown opcode id ${opcode}`);
 			}
-			if (!arityAccepts(descriptor.inputs, row.operandCount)) {
+			if (!arityAccepts(descriptor.inputs, operandCount)) {
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid input arity`);
 			}
-			if (!arityAccepts(descriptor.outputs, row.resultCount)) {
+			if (!arityAccepts(descriptor.outputs, resultCount)) {
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid output arity`);
 			}
 			const attributes = fn.instructionAttributes(instruction);
@@ -337,77 +344,56 @@ function verifyInstructionRows(
 				}
 				verifyEffectRefinement(instruction, refinement.effects, descriptor.effects);
 			}
-		} else {
-			const payload = fn.terminatorPayload(instruction);
-			if (payload.kind !== fn.instructionKind(instruction)) {
-				fail(`terminator @${instruction} kind does not match its structural opcode`);
-			}
-		}
-		for (let operand = 0; operand < row.operandCount; operand++) {
-			const recordIndex = row.operandStart + operand;
+		} else fn.instructionKind(instruction);
+		for (let operand = 0; operand < operandCount; operand++) {
+			const recordIndex = operandStart + operand;
 			currentOperands.add(recordIndex);
-			const record = fn.operandRecord(recordIndex);
-			if (!fn.isValueLive(record.value)) {
+			const value = fn.kernel.operandAt(recordIndex);
+			const useId = fn.kernel.operandUseAt(recordIndex);
+			if (fn.kernel.valueLive(value) === 0) {
 				fail(
-					`instruction @${instruction} operand ${operand} references deleted value %${record.value}`,
+					`instruction @${instruction} operand ${operand} references deleted value %${value}`,
 				);
 			}
-			const use = fn.useLayout(record.use);
 			if (
-				!use.live ||
-				use.value !== record.value ||
-				use.instruction !== instruction ||
-				use.operand !== operand
+				fn.kernel.useLive(useId) === 0 ||
+				fn.kernel.useValue(useId) !== value ||
+				fn.kernel.useInstruction(useId) !== instruction ||
+				fn.kernel.useOperand(useId) !== operand
 			) {
 				fail(
 					`instruction @${instruction} operand ${operand} has an inconsistent use row`,
 				);
 			}
-			const uses = liveUses.get(record.value) ?? new Set<number>();
-			uses.add(record.use);
-			liveUses.set(record.value, uses);
+			const uses = liveUses.get(value) ?? new Set<number>();
+			uses.add(useId);
+			liveUses.set(value, uses);
 		}
-		for (let result = 0; result < row.resultCount; result++) {
-			const value = fn.resultRecord(row.resultStart + result);
-			if (!fn.isValueLive(value)) {
+		for (let result = 0; result < resultCount; result++) {
+			const value = fn.kernel.resultAt(resultStart + result);
+			if (fn.kernel.valueLive(value) === 0) {
 				fail(`instruction @${instruction} result ${result} is deleted`);
 			}
-			const definition = fn.valueDefinition(value);
 			if (
-				definition.kind !== "instruction" ||
-				definition.instruction !== instruction ||
-				definition.index !== result
+				fn.kernel.valueDefinitionKind(value) !== 1 ||
+				fn.kernel.valueDefinitionOwner(value) !== instruction ||
+				fn.kernel.valueDefinitionIndex(value) !== result
 			) {
 				fail(`instruction @${instruction} result ${result} has the wrong definition`);
 			}
 		}
 	}
 	for (let record = 0; record < fn.operandCapacity; record++) {
-		const useId = fn.operandRecord(record).use;
+		const useId = fn.kernel.operandUseAt(record);
 		if (useId < 0) {
 			if (currentOperands.has(record)) fail(`live operand row ${record} has no use`);
 			continue;
 		}
-		const use = fn.useLayout(useId);
-		if (use.live !== currentOperands.has(record)) {
+		if ((fn.kernel.useLive(useId) !== 0) !== currentOperands.has(record)) {
 			fail(`operand row ${record} has stale live-use state`);
 		}
 	}
 	return { currentOperands, liveUses };
-}
-
-function definitionsEqual(
-	left: CoreValueDefinition,
-	right: CoreValueDefinition,
-): boolean {
-	return left.kind === right.kind &&
-		left.kind === "block-parameter" &&
-		right.kind === "block-parameter"
-		? left.block === right.block && left.index === right.index
-		: left.kind === "instruction" &&
-				right.kind === "instruction" &&
-				left.instruction === right.instruction &&
-				left.index === right.index;
 }
 
 function verifyValueRows(
@@ -417,8 +403,7 @@ function verifyValueRows(
 	const useRowsInChains = new Set<number>();
 	for (let rawValue = 0; rawValue < fn.valueCapacity; rawValue++) {
 		const value = coreValueId(rawValue);
-		const row = fn.valueLayout(rawValue);
-		let current = row.firstUse;
+		let current = fn.kernel.valueFirstUse(value);
 		let liveCount = 0;
 		const chain = new Set<number>();
 		let previous = -1;
@@ -428,10 +413,11 @@ function verifyValueRows(
 			}
 			chain.add(current);
 			useRowsInChains.add(current);
-			const use = fn.useLayout(current);
-			if (use.value !== value) fail(`value %${value} use-list contains another value`);
-			if (!use.live) fail(`value %${value} use-list contains a dead use`);
-			if (use.previous !== previous) {
+			if (fn.kernel.useValue(current) !== value)
+				fail(`value %${value} use-list contains another value`);
+			if (fn.kernel.useLive(current) === 0)
+				fail(`value %${value} use-list contains a dead use`);
+			if (fn.kernel.usePrevious(current) !== previous) {
 				fail(`value %${value} has an inconsistent previous-use link`);
 			}
 			liveCount++;
@@ -439,91 +425,85 @@ function verifyValueRows(
 				fail(`value %${value} has a live use missing from operand storage`);
 			}
 			previous = current;
-			current = use.next;
+			current = fn.kernel.useNext(current);
 		}
 		if (
-			liveCount !== row.useCount ||
+			liveCount !== fn.kernel.valueUseCount(value) ||
 			liveCount !== (expectedUses.get(value)?.size ?? 0)
 		) {
 			fail(`value %${value} use count does not match its live uses`);
 		}
-		if (!row.live) {
+		if (fn.kernel.valueLive(value) === 0) {
 			if (liveCount !== 0) fail(`deleted value %${value} retains live uses`);
 			continue;
 		}
-		const publicDefinition = fn.valueDefinition(value);
-		const rowDefinition: CoreValueDefinition =
-			row.definitionKind === "block-parameter"
-				? {
-						kind: "block-parameter",
-						block: coreBlockId(row.definitionOwner),
-						index: row.definitionIndex,
-					}
-				: {
-						kind: "instruction",
-						instruction: coreInstructionId(row.definitionOwner),
-						index: row.definitionIndex,
-					};
-		if (!definitionsEqual(publicDefinition, rowDefinition)) {
-			fail(`value %${value} definition row is inconsistent`);
-		}
-		if (rowDefinition.kind === "block-parameter") {
-			if (!fn.isBlockLive(rowDefinition.block)) {
-				fail(`value %${value} is defined by deleted block b${rowDefinition.block}`);
-			}
-			const parameters = fn.blockParameters(rowDefinition.block);
-			if (parameters[rowDefinition.index]?.value !== value) {
-				fail(`value %${value} is not present at its block-parameter definition`);
-			}
-		} else {
-			if (!fn.isInstructionLive(rowDefinition.instruction)) {
-				fail(
-					`value %${value} is defined by deleted instruction @${rowDefinition.instruction}`,
-				);
+		const definitionKind = fn.kernel.valueDefinitionKind(value);
+		const definitionOwner = fn.kernel.valueDefinitionOwner(value);
+		const definitionIndex = fn.kernel.valueDefinitionIndex(value);
+		if (definitionKind === 0) {
+			const block = coreBlockId(definitionOwner);
+			if (fn.kernel.blockLive(block) === 0) {
+				fail(`value %${value} is defined by deleted block b${block}`);
 			}
 			if (
-				fn.instructionResults(rowDefinition.instruction)[rowDefinition.index] !== value
+				definitionIndex < 0 ||
+				definitionIndex >= fn.kernel.blockParameterCount(block) ||
+				fn.kernel.blockParameterValue(
+					fn.kernel.blockParameterStart(block) + definitionIndex,
+				) !== value
+			) {
+				fail(`value %${value} is not present at its block-parameter definition`);
+			}
+		} else if (definitionKind === 1) {
+			const instruction = coreInstructionId(definitionOwner);
+			if (fn.kernel.instructionLive(instruction) === 0) {
+				fail(`value %${value} is defined by deleted instruction @${instruction}`);
+			}
+			if (
+				definitionIndex < 0 ||
+				definitionIndex >= fn.kernel.instructionResultCount(instruction) ||
+				fn.kernel.resultAt(
+					fn.kernel.instructionResultStart(instruction) + definitionIndex,
+				) !== value
 			) {
 				fail(`value %${value} is not present at its instruction definition`);
 			}
-		}
+		} else fail(`value %${value} has invalid definition kind ${definitionKind}`);
 	}
 	for (let use = 0; use < fn.useCapacity; use++) {
-		const row = fn.useLayout(use);
-		if (row.live && !useRowsInChains.has(use)) {
+		if (fn.kernel.useLive(use) !== 0 && !useRowsInChains.has(use)) {
 			fail(`live use row ${use} is absent from its value chain`);
 		}
-		if (!row.live && (row.previous >= 0 || row.next >= 0)) {
+		if (
+			fn.kernel.useLive(use) === 0 &&
+			(fn.kernel.usePrevious(use) >= 0 || fn.kernel.useNext(use) >= 0)
+		) {
 			fail(`dead use row ${use} remains linked`);
 		}
 	}
 }
 
 function verifyBlockParameters(fn: CoreFunctionStore): void {
-	for (const block of fn.blockIds()) {
-		const row = fn.blockLayout(block);
-		const parameters = fn.blockParameters(block);
-		if (parameters.length !== row.parameterCount) {
-			fail(`block b${block} parameter reader disagrees with its row`);
-		}
-		for (const [index, parameter] of parameters.entries()) {
-			const record = row.parameterStart + index;
+	for (let rawBlock = 0; rawBlock < fn.blockCapacity; rawBlock++) {
+		const block = coreBlockId(rawBlock);
+		if (fn.kernel.blockLive(block) === 0) continue;
+		const start = fn.kernel.blockParameterStart(block);
+		const count = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < count; index++) {
+			const record = start + index;
+			const value = fn.kernel.blockParameterValue(record);
 			if (
-				fn.blockParameterValue(record) !== parameter.value ||
-				fn.blockParameterRole(record) !== parameter.role ||
-				fn.valueRepresentation(parameter.value) !== parameter.representation
-			) {
-				fail(`block b${block} parameter ${index} is inconsistent`);
-			}
-			const definition = fn.valueDefinition(parameter.value);
-			if (
-				definition.kind !== "block-parameter" ||
-				definition.block !== block ||
-				definition.index !== index
+				fn.kernel.valueDefinitionKind(value) !== 0 ||
+				fn.kernel.valueDefinitionOwner(value) !== block ||
+				fn.kernel.valueDefinitionIndex(value) !== index
 			) {
 				fail(`block b${block} parameter ${index} has the wrong definition`);
 			}
-			if (parameter.role === "exception" && index !== 0) {
+			const role = fn.kernel.blockParameterRole(record);
+			if (role !== 0 && role !== 1) {
+				fail(`block b${block} parameter ${index} has invalid role ${role}`);
+			}
+			if (role === 1 && index !== 0) {
 				fail(`block b${block} exception parameter is not first`);
 			}
 		}
@@ -533,55 +513,129 @@ function verifyBlockParameters(fn: CoreFunctionStore): void {
 function verifyEdge(
 	fn: CoreFunctionStore,
 	from: CoreBlockId,
-	edge: CoreEdge,
+	target: CoreBlockId,
+	argumentStart: number,
+	argumentCount: number,
 	kind: "ordinary" | "exceptional",
 ): void {
-	if (!fn.isBlockLive(edge.block)) {
-		fail(`block b${from} targets deleted or unknown block b${edge.block}`);
+	if (fn.kernel.blockLive(target) === 0) {
+		fail(`block b${from} targets deleted or unknown block b${target}`);
 	}
-	const parameters = fn.blockParameters(edge.block);
+	const parameterStart = fn.kernel.blockParameterStart(target);
+	const parameterCount = fn.kernel.blockParameterCount(target);
 	const offset = kind === "exceptional" ? 1 : 0;
-	if (kind === "ordinary" && parameters[0]?.role === "exception") {
-		fail(`ordinary edge b${from} -> b${edge.block} targets an exception entry`);
+	const firstRole =
+		parameterCount === 0 ? undefined : fn.kernel.blockParameterRole(parameterStart);
+	if (kind === "ordinary" && firstRole === 1) {
+		fail(`ordinary edge b${from} -> b${target} targets an exception entry`);
 	}
-	if (kind === "exceptional" && parameters[0]?.role !== "exception") {
-		fail(`exceptional edge b${from} -> b${edge.block} lacks an exception parameter`);
+	if (kind === "exceptional" && firstRole !== 1) {
+		fail(`exceptional edge b${from} -> b${target} lacks an exception parameter`);
 	}
-	if (edge.arguments.length !== parameters.length - offset) {
+	if (argumentCount !== parameterCount - offset) {
 		fail(
-			`${kind} edge b${from} -> b${edge.block} passes ${edge.arguments.length} values to ${parameters.length - offset} parameters`,
+			`${kind} edge b${from} -> b${target} passes ${argumentCount} values to ${parameterCount - offset} parameters`,
 		);
 	}
-	for (const [index, value] of edge.arguments.entries()) {
-		if (!fn.isValueLive(value)) {
-			fail(`${kind} edge b${from} -> b${edge.block} references deleted value %${value}`);
+	for (let index = 0; index < argumentCount; index++) {
+		const value =
+			kind === "ordinary"
+				? fn.kernel.operandAt(argumentStart + index)
+				: fn.kernel.handlerArgumentAt(argumentStart + index);
+		if (fn.kernel.valueLive(value) === 0) {
+			fail(`${kind} edge b${from} -> b${target} references deleted value %${value}`);
 		}
-		if (fn.valueRepresentation(value) !== parameters[index + offset]!.representation) {
-			fail(`${kind} edge b${from} -> b${edge.block} changes value representation`);
+		const parameter = fn.kernel.blockParameterValue(parameterStart + index + offset);
+		if (
+			fn.kernel.valueRepresentation(value) !== fn.kernel.valueRepresentation(parameter)
+		) {
+			fail(`${kind} edge b${from} -> b${target} changes value representation`);
 		}
 	}
 }
 
 function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreControlFlow {
 	for (const block of fn.blockIds()) {
-		const payload = fn.terminatorPayload(fn.blockTerminator(block));
-		for (const edge of coreTerminatorEdges(payload))
-			verifyEdge(fn, block, edge, "ordinary");
-		const handler = fn.blockHandler(block);
-		if (handler !== undefined) {
+		const instruction = fn.blockTerminator(block);
+		const kind = fn.instructionKind(instruction);
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+		const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
+		checkRange(
+			`terminator @${instruction} edge`,
+			edgeStart,
+			edgeCount,
+			fn.terminatorEdgeCapacity,
+		);
+		const requiredEdges =
+			kind === "jump"
+				? 1
+				: kind === "branch" || kind === "guard"
+					? 2
+					: kind === "switch"
+						? Math.max(1, edgeCount)
+						: 0;
+		if (edgeCount !== requiredEdges) {
+			fail(`terminator @${instruction} has invalid edge count ${edgeCount}`);
+		}
+		const leadingOperands =
+			kind === "branch" || kind === "guard" || kind === "switch" ? 1 : 0;
+		let cursor = operandStart + leadingOperands;
+		for (let offset = 0; offset < edgeCount; offset++) {
+			const edge = edgeStart + offset;
+			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+			if (argumentStart !== cursor) {
+				fail(`terminator @${instruction} has a non-contiguous edge argument range`);
+			}
+			const caseValue = fn.kernel.terminatorEdgeCaseValue(edge);
+			if ((kind === "switch" && offset < edgeCount - 1) !== (caseValue !== undefined)) {
+				fail(`terminator @${instruction} has inconsistent switch case metadata`);
+			}
 			verifyEdge(
 				fn,
 				block,
-				{ block: handler.block, arguments: handler.arguments },
+				fn.kernel.terminatorEdgeBlock(edge),
+				argumentStart,
+				argumentCount,
+				"ordinary",
+			);
+			cursor += argumentCount;
+		}
+		const requiredOperands =
+			kind === "return" || kind === "throw" ? 1 : cursor - operandStart;
+		if (operandCount !== requiredOperands) {
+			fail(`terminator @${instruction} has invalid operand count ${operandCount}`);
+		}
+		if (kind !== "guard" && fn.kernel.terminatorFact(instruction) !== undefined) {
+			fail(`terminator @${instruction} carries an unexpected guard fact`);
+		}
+		const handler = fn.kernel.blockHandlerBlock(block);
+		if (handler !== undefined) {
+			checkRange(
+				`block b${block} handler argument`,
+				fn.kernel.blockHandlerArgumentStart(block),
+				fn.kernel.blockHandlerArgumentCount(block),
+				fn.handlerArgumentCapacity,
+			);
+			verifyEdge(
+				fn,
+				block,
+				handler,
+				fn.kernel.blockHandlerArgumentStart(block),
+				fn.kernel.blockHandlerArgumentCount(block),
 				"exceptional",
 			);
+		} else if (fn.kernel.blockHandlerArgumentCount(block) !== 0) {
+			fail(`block b${block} has handler arguments without a handler`);
 		}
-		if (payload.kind === "guard") {
-			if (!fn.isFactLive(payload.fact)) {
-				fail(`guard in b${block} references deleted fact !${payload.fact}`);
+		if (kind === "guard") {
+			const factId = fn.kernel.terminatorFact(instruction);
+			if (factId === undefined || !fn.isFactLive(factId)) {
+				fail(`guard in b${block} references deleted fact !${String(factId)}`);
 			}
-			const fact = fn.fact(payload.fact);
-			const instruction = fn.blockTerminator(block);
+			const fact = fn.fact(factId);
 			if (
 				fact.validity.kind !== "guard" ||
 				fact.validity.instruction !== instruction ||
@@ -590,7 +644,7 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 						obligation.kind === "guard" && obligation.instruction === instruction,
 				)
 			) {
-				fail(`guard fact !${payload.fact} is not anchored to @${instruction}`);
+				fail(`guard fact !${factId} is not anchored to @${instruction}`);
 			}
 		}
 	}
@@ -609,7 +663,6 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 	}
 	verifyDominance(
 		fn,
-		cfg.successors,
 		cfg.reachable,
 		(dominator, block) => cfg.dominates(dominator, block),
 		(dominator, block) => cfg.instructionDominatesBlock(dominator, block),
@@ -619,7 +672,6 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 
 function verifyDominance(
 	fn: CoreFunctionStore,
-	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
 	reachable: ReadonlySet<CoreBlockId>,
 	dominates: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
 	instructionDominatesBlock: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
@@ -635,24 +687,29 @@ function verifyDominance(
 		instruction: CoreInstructionId,
 	): boolean => {
 		const useBlock = fn.instructionBlock(instruction);
-		const definition = fn.valueDefinition(value);
-		if (definition.kind === "block-parameter") {
-			return definition.block === useBlock || dominates(definition.block, useBlock);
+		const owner = fn.kernel.valueDefinitionOwner(value);
+		if (fn.kernel.valueDefinitionKind(value) === 0) {
+			const block = coreBlockId(owner);
+			return block === useBlock || dominates(block, useBlock);
 		}
-		const definitionBlock = fn.instructionBlock(definition.instruction);
+		const definitionInstruction = coreInstructionId(owner);
+		const definitionBlock = fn.instructionBlock(definitionInstruction);
 		return definitionBlock === useBlock
-			? instructionOrder[definition.instruction]! < instructionOrder[instruction]!
+			? instructionOrder[definitionInstruction]! < instructionOrder[instruction]!
 			: instructionDominatesBlock(definitionBlock, useBlock);
 	};
 	for (const instruction of fn.instructionIds()) {
 		if (!reachable.has(fn.instructionBlock(instruction))) continue;
-		for (const value of fn.instructionOperands(instruction)) {
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operandCount = fn.kernel.instructionOperandCount(instruction);
+		for (let offset = 0; offset < operandCount; offset++) {
+			const value = fn.kernel.operandAt(operandStart + offset);
 			if (!availableAtInstruction(value, instruction)) {
-				const definition = fn.valueDefinition(value);
+				const definitionOwner = fn.kernel.valueDefinitionOwner(value);
 				const owner =
-					definition.kind === "block-parameter"
-						? `b${definition.block} parameter ${definition.index}`
-						: `@${definition.instruction} in b${fn.instructionBlock(definition.instruction)}`;
+					fn.kernel.valueDefinitionKind(value) === 0
+						? `b${definitionOwner} parameter ${fn.kernel.valueDefinitionIndex(value)}`
+						: `@${definitionOwner} in b${fn.instructionBlock(coreInstructionId(definitionOwner))}`;
 				fail(
 					`value %${value} from ${owner} does not dominate its use at @${instruction} in b${fn.instructionBlock(instruction)}`,
 				);
@@ -661,25 +718,39 @@ function verifyDominance(
 	}
 	for (const block of fn.blockIds()) {
 		if (!reachable.has(block)) continue;
-		const handler = fn.blockHandler(block);
+		const handler = fn.kernel.blockHandlerBlock(block);
 		if (handler === undefined) continue;
-		for (const value of handler.arguments) {
-			const definition = fn.valueDefinition(value);
+		const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
+		const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
+		for (let offset = 0; offset < argumentCount; offset++) {
+			const value = fn.kernel.handlerArgumentAt(argumentStart + offset);
+			const owner = fn.kernel.valueDefinitionOwner(value);
 			const available =
-				definition.kind === "block-parameter"
-					? dominates(definition.block, block)
-					: instructionDominatesBlock(fn.instructionBlock(definition.instruction), block);
+				fn.kernel.valueDefinitionKind(value) === 0
+					? dominates(coreBlockId(owner), block)
+					: instructionDominatesBlock(
+							fn.instructionBlock(coreInstructionId(owner)),
+							block,
+						);
 			if (!available)
 				fail(`value %${value} is unavailable on b${block}'s exception edge`);
 		}
 	}
-	for (const outgoing of successors) {
-		for (const edge of outgoing) {
-			if (edge.kind !== "ordinary" || !reachable.has(edge.from)) continue;
-			for (const value of edge.arguments) {
-				const terminator = fn.blockTerminator(edge.from);
+	for (const block of fn.blockIds()) {
+		if (!reachable.has(block)) continue;
+		const terminator = fn.blockTerminator(block);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
+			const edge = edgeStart + edgeOffset;
+			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+			for (let offset = 0; offset < argumentCount; offset++) {
+				const value = fn.kernel.operandAt(argumentStart + offset);
 				if (!availableAtInstruction(value, terminator)) {
-					fail(`value %${value} is unavailable on edge b${edge.from} -> b${edge.to}`);
+					fail(
+						`value %${value} is unavailable on edge b${block} -> b${fn.kernel.terminatorEdgeBlock(edge)}`,
+					);
 				}
 			}
 		}
@@ -708,9 +779,7 @@ function verifyFactReference(fn: CoreFunctionStore, fact: CoreFact): void {
 		const instruction = fact.validity.instruction;
 		if (
 			fn.instructionKind(instruction) !== "guard" ||
-			fn.terminatorPayload(instruction).kind !== "guard" ||
-			(fn.terminatorPayload(instruction) as { readonly fact: CoreFactId }).fact !==
-				fact.id
+			fn.kernel.terminatorFact(instruction) !== fact.id
 		) {
 			fail(`fact !${fact.id} guard validity is not owned by @${instruction}`);
 		}
@@ -721,8 +790,7 @@ function verifyFactReference(fn: CoreFunctionStore, fact: CoreFact): void {
 			if (fn.instructionKind(obligation.instruction) !== "guard") {
 				fail(`fact !${fact.id} has an invalid guard obligation`);
 			}
-			const payload = fn.terminatorPayload(obligation.instruction);
-			if (payload.kind !== "guard" || payload.fact !== fact.id) {
+			if (fn.kernel.terminatorFact(obligation.instruction) !== fact.id) {
 				fail(`fact !${fact.id} has an invalid guard obligation`);
 			}
 		} else if (obligation.id.length === 0) {
@@ -824,10 +892,14 @@ function verifyFactUses(fn: CoreFunctionStore, cfg: CoreControlFlow): void {
 		const useBlock = fn.instructionBlock(instruction);
 		for (const obligation of guardObligations) {
 			const guardBlock = fn.instructionBlock(obligation.instruction);
-			const payload = fn.terminatorPayload(obligation.instruction);
+			const successEdge = fn.kernel.terminatorEdgeStart(obligation.instruction);
 			if (
-				payload.kind !== "guard" ||
-				!cfg.dominatesEdge(guardBlock, payload.success.block, useBlock)
+				fn.instructionKind(obligation.instruction) !== "guard" ||
+				!cfg.dominatesEdge(
+					guardBlock,
+					fn.kernel.terminatorEdgeBlock(successEdge),
+					useBlock,
+				)
 			) {
 				fail(
 					`guard @${obligation.instruction} for fact !${fact.id} does not dominate @${instruction} through its success edge`,
@@ -839,17 +911,19 @@ function verifyFactUses(fn: CoreFunctionStore, cfg: CoreControlFlow): void {
 
 function verifyFunctionParameters(fn: CoreFunctionStore): void {
 	if (!fn.isBlockLive(fn.entry)) fail(`function entry b${fn.entry} is deleted`);
-	const entryParameters = fn.blockParameters(fn.entry);
-	if (fn.parameters.length > entryParameters.length) {
+	const start = fn.kernel.blockParameterStart(fn.entry);
+	const count = fn.kernel.blockParameterCount(fn.entry);
+	if (fn.parameterCount > count) {
 		fail(`function parameter list exceeds entry block parameters`);
 	}
-	for (const [index, value] of fn.parameters.entries()) {
-		if (entryParameters[index]?.value !== value) {
+	for (let index = 0; index < fn.parameterCount; index++) {
+		const value = fn.kernel.functionParameter(index);
+		if (fn.kernel.blockParameterValue(start + index) !== value) {
 			fail(`function parameter ${index} is not entry parameter ${index}`);
 		}
 		if (
-			entryParameters[index].role !== "value" ||
-			entryParameters[index].representation !== "boxed"
+			fn.kernel.blockParameterRole(start + index) !== 0 ||
+			fn.kernel.valueRepresentation(value) !== 0
 		) {
 			fail(`function parameter ${index} is not a boxed value`);
 		}

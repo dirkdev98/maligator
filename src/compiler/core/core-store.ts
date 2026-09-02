@@ -384,7 +384,7 @@ export class CoreFunctionStore {
 	#isAsync: boolean;
 	#parameterCount: number;
 	#metadata: CoreFunctionMetadata;
-	#parameters: Array<CoreValueId> = [];
+	readonly #parameters: Array<CoreValueId> = [];
 	#entry: CoreBlockId | undefined;
 	#bodyEntry: CoreBlockId | undefined;
 	#activeEditor = false;
@@ -507,11 +507,14 @@ export class CoreFunctionStore {
 			instructionOperandCount: this.#instructionOperandCount,
 			instructionResultStart: this.#instructionResultStart,
 			instructionResultCount: this.#instructionResultCount,
+			instructionSourcePosition: this.#instructionSourcePosition,
 			instructionTerminatorEdgeStart: this.#instructionTerminatorEdgeStart,
 			instructionTerminatorEdgeCount: this.#instructionTerminatorEdgeCount,
 			instructionTerminatorFact: this.#instructionTerminatorFact,
 			operands: this.#operands,
+			operandUses: this.#operandUses,
 			results: this.#results,
+			functionParameters: this.#parameters,
 			terminatorEdgeBlock: this.#terminatorEdgeBlock,
 			terminatorEdgeArgumentStart: this.#terminatorEdgeArgumentStart,
 			terminatorEdgeArgumentCount: this.#terminatorEdgeArgumentCount,
@@ -596,6 +599,14 @@ export class CoreFunctionStore {
 
 	get resultCapacity(): number {
 		return this.#results.length;
+	}
+
+	get terminatorEdgeCapacity(): number {
+		return this.#terminatorEdgeBlock.length;
+	}
+
+	get handlerArgumentCapacity(): number {
+		return this.#handlerArguments.length;
 	}
 
 	get useCapacity(): number {
@@ -1480,12 +1491,13 @@ export class CoreFunctionStore {
 				`Core entry block has ${parameters.length} parameters for a ${this.#parameterCount}-parameter ABI`,
 			);
 		}
-		this.#parameters = parameters.slice(0, this.#parameterCount).map((parameter) => {
+		const values = parameters.slice(0, this.#parameterCount).map((parameter) => {
 			if (parameter.role !== "value" || parameter.representation !== "boxed") {
 				throw new Error("Core ABI parameters must be boxed value parameters");
 			}
 			return parameter.value;
 		});
+		this.#parameters.splice(0, this.#parameters.length, ...values);
 		this.#entry = entry;
 		this.#bodyEntry = bodyEntry;
 	}

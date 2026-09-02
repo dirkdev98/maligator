@@ -27,11 +27,14 @@ export interface CoreFunctionKernelColumns {
 	readonly instructionOperandCount: ReadonlyArray<number>;
 	readonly instructionResultStart: ReadonlyArray<number>;
 	readonly instructionResultCount: ReadonlyArray<number>;
+	readonly instructionSourcePosition: ReadonlyArray<number>;
 	readonly instructionTerminatorEdgeStart: ReadonlyArray<number>;
 	readonly instructionTerminatorEdgeCount: ReadonlyArray<number>;
 	readonly instructionTerminatorFact: ReadonlyArray<number>;
 	readonly operands: ReadonlyArray<CoreValueId>;
+	readonly operandUses: ReadonlyArray<number>;
 	readonly results: ReadonlyArray<CoreValueId>;
+	readonly functionParameters: ReadonlyArray<CoreValueId>;
 	readonly terminatorEdgeBlock: ReadonlyArray<CoreBlockId>;
 	readonly terminatorEdgeArgumentStart: ReadonlyArray<number>;
 	readonly terminatorEdgeArgumentCount: ReadonlyArray<number>;
@@ -135,6 +138,10 @@ export class CoreFunctionKernel {
 		return this.#columns.operands[index]!;
 	}
 
+	operandUseAt(index: number): number {
+		return this.#columns.operandUses[index] ?? -1;
+	}
+
 	instructionResultStart(instruction: CoreInstructionId): number {
 		return this.#columns.instructionResultStart[instruction] ?? 0;
 	}
@@ -145,6 +152,14 @@ export class CoreFunctionKernel {
 
 	resultAt(index: number): CoreValueId {
 		return this.#columns.results[index]!;
+	}
+
+	functionParameter(index: number): CoreValueId {
+		return this.#columns.functionParameters[index]!;
+	}
+
+	instructionSourcePosition(instruction: CoreInstructionId): number {
+		return this.#columns.instructionSourcePosition[instruction] ?? -1;
 	}
 
 	terminatorEdgeStart(instruction: CoreInstructionId): number {
