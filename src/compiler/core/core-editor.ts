@@ -225,9 +225,7 @@ function sortedIds<Id extends number>(ids: ReadonlySet<Id>): Array<Id> {
 	return [...ids].sort((left, right) => left - right);
 }
 
-function sortedEdges(
-	edges: ReadonlyArray<CoreChangedEdge>,
-): Array<CoreChangedEdge> {
+function sortedEdges(edges: ReadonlyArray<CoreChangedEdge>): Array<CoreChangedEdge> {
 	return [...edges]
 		.sort(
 			(left, right) =>
