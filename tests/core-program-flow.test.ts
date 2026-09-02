@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import { updateCoreCallGraph } from "../src/compiler/core/core-call-graph.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
@@ -84,6 +85,32 @@ describe("Core program flow", () => {
 
 		expect(dimensions & CORE_PROGRAM_FLOW_EFFECTS).toBe(CORE_PROGRAM_FLOW_EFFECTS);
 		expect(dimensions & CORE_PROGRAM_FLOW_RETURN_KIND).toBe(0);
+	});
+
+	it("coalesces dimension wakeups on the shared SCC worklist", () => {
+		const program = analysisProgram();
+		const first = appendLeaf(program);
+		const second = appendLeaf(program);
+		const engine = new CoreProgramFlowEngine(program);
+		const topology = engine.topology(
+			updateCoreCallGraph(undefined, [first.function, second.function], []),
+		);
+		const scc = topology.owner.get(first.function);
+		const transfers: Array<number> = [];
+
+		const statistics = engine.solveSccs(
+			topology,
+			[
+				{ scc, dimensions: CORE_PROGRAM_FLOW_EFFECTS },
+				{ scc, dimensions: CORE_PROGRAM_FLOW_RETURN_KIND },
+			],
+			(_scc, dimensions) => transfers.push(dimensions),
+		);
+
+		expect(transfers).toEqual([
+			CORE_PROGRAM_FLOW_EFFECTS | CORE_PROGRAM_FLOW_RETURN_KIND,
+		]);
+		expect(statistics).toEqual({ pops: 1, wakeups: 1 });
 	});
 
 	it("does not rebuild value kinds for an effect-only edit", () => {

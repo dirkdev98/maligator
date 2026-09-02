@@ -316,28 +316,89 @@ export interface CoreProgramFlowFunctionSolver {
 	): CoreProgramFlowFunctionWorkStatistics;
 }
 
+class CoreProgramFlowFunctionWorklist {
+	readonly #queue: Array<CoreFunctionId> = [];
+	readonly #queued = new Set<CoreFunctionId>();
+
+	solve(
+		seeds: Iterable<CoreFunctionId>,
+		transfer: CoreProgramFlowFunctionTransfer,
+	): CoreProgramFlowFunctionWorkStatistics {
+		this.#queue.length = 0;
+		this.#queued.clear();
+		let wakeups = 0;
+		const enqueue: CoreProgramFlowFunctionEnqueue = (functionId) => {
+			if (this.#queued.has(functionId)) return false;
+			this.#queued.add(functionId);
+			this.#queue.push(functionId);
+			wakeups++;
+			return true;
+		};
+		for (const seed of seeds) enqueue(seed);
+		let cursor = 0;
+		while (cursor < this.#queue.length) {
+			const functionId = this.#queue[cursor++]!;
+			this.#queued.delete(functionId);
+			transfer(functionId, enqueue);
+		}
+		return Object.freeze({ pops: cursor, wakeups });
+	}
+}
+
+class CoreProgramFlowSccWorklist {
+	#dimensions = new Uint16Array(0);
+	#queued = new Uint8Array(0);
+	readonly #queue: Array<number> = [];
+
+	solve(
+		topology: CoreProgramFlowTopology,
+		seeds: Iterable<CoreProgramFlowSccSeed>,
+		transfer: CoreProgramFlowSccTransfer,
+	): CoreProgramFlowSccWorkStatistics {
+		for (const scc of this.#queue) {
+			this.#dimensions[scc] = 0;
+			this.#queued[scc] = 0;
+		}
+		this.#queue.length = 0;
+		this.#ensureCapacity(topology.sccs.length);
+		let wakeups = 0;
+		const enqueue: CoreProgramFlowSccEnqueue = (scc, mask) => {
+			if (scc === undefined || mask === 0) return false;
+			this.#dimensions[scc] = this.#dimensions[scc]! | mask;
+			if (this.#queued[scc] !== 0) return false;
+			this.#queued[scc] = 1;
+			this.#queue.push(scc);
+			wakeups++;
+			return true;
+		};
+		for (const seed of seeds) enqueue(seed.scc, seed.dimensions);
+		let cursor = 0;
+		while (cursor < this.#queue.length) {
+			const scc = this.#queue[cursor++]!;
+			this.#queued[scc] = 0;
+			const mask = this.#dimensions[scc]!;
+			this.#dimensions[scc] = 0;
+			transfer(scc, mask, enqueue);
+		}
+		return Object.freeze({ pops: cursor, wakeups });
+	}
+
+	#ensureCapacity(capacity: number): void {
+		if (this.#dimensions.length >= capacity) return;
+		const dimensions = new Uint16Array(capacity);
+		dimensions.set(this.#dimensions);
+		this.#dimensions = dimensions;
+		const queued = new Uint8Array(capacity);
+		queued.set(this.#queued);
+		this.#queued = queued;
+	}
+}
+
 export function solveCoreProgramFlowFunctions(
 	seeds: Iterable<CoreFunctionId>,
 	transfer: CoreProgramFlowFunctionTransfer,
 ): CoreProgramFlowFunctionWorkStatistics {
-	const queue: Array<CoreFunctionId> = [];
-	const queued = new Set<CoreFunctionId>();
-	let wakeups = 0;
-	const enqueue: CoreProgramFlowFunctionEnqueue = (functionId) => {
-		if (queued.has(functionId)) return false;
-		queued.add(functionId);
-		queue.push(functionId);
-		wakeups++;
-		return true;
-	};
-	for (const seed of seeds) enqueue(seed);
-	let cursor = 0;
-	while (cursor < queue.length) {
-		const functionId = queue[cursor++]!;
-		queued.delete(functionId);
-		transfer(functionId, enqueue);
-	}
-	return Object.freeze({ pops: cursor, wakeups });
+	return new CoreProgramFlowFunctionWorklist().solve(seeds, transfer);
 }
 
 export function solveCoreProgramFlowSccs(
@@ -345,29 +406,7 @@ export function solveCoreProgramFlowSccs(
 	seeds: Iterable<CoreProgramFlowSccSeed>,
 	transfer: CoreProgramFlowSccTransfer,
 ): CoreProgramFlowSccWorkStatistics {
-	const dimensions = new Uint16Array(topology.sccs.length);
-	const queued = new Uint8Array(topology.sccs.length);
-	const queue: Array<number> = [];
-	let wakeups = 0;
-	const enqueue: CoreProgramFlowSccEnqueue = (scc, mask) => {
-		if (scc === undefined || mask === 0) return false;
-		dimensions[scc] = dimensions[scc]! | mask;
-		if (queued[scc] !== 0) return false;
-		queued[scc] = 1;
-		queue.push(scc);
-		wakeups++;
-		return true;
-	};
-	for (const seed of seeds) enqueue(seed.scc, seed.dimensions);
-	let cursor = 0;
-	while (cursor < queue.length) {
-		const scc = queue[cursor++]!;
-		queued[scc] = 0;
-		const mask = dimensions[scc]!;
-		dimensions[scc] = 0;
-		transfer(scc, mask, enqueue);
-	}
-	return Object.freeze({ pops: cursor, wakeups });
+	return new CoreProgramFlowSccWorklist().solve(topology, seeds, transfer);
 }
 
 export function buildCoreProgramFlowTopology(
@@ -619,6 +658,8 @@ export class CoreProgramFlowEngine {
 	readonly #report: CoreOptimizationReportBuilder | undefined;
 	readonly #epoch = new CoreProgramFlowEpoch();
 	readonly #localTransfers: Array<CoreProgramFlowLocalTransfers | undefined> = [];
+	readonly #functionWorklist = new CoreProgramFlowFunctionWorklist();
+	readonly #sccWorklist = new CoreProgramFlowSccWorklist();
 	#topology: CoreProgramFlowTopology | undefined;
 	#reportedRevision = 0;
 	#localRevision = 0;
@@ -690,7 +731,7 @@ export class CoreProgramFlowEngine {
 		seeds: Iterable<CoreProgramFlowSccSeed>,
 		transfer: CoreProgramFlowSccTransfer,
 	): CoreProgramFlowSccWorkStatistics {
-		const statistics = solveCoreProgramFlowSccs(topology, seeds, transfer);
+		const statistics = this.#sccWorklist.solve(topology, seeds, transfer);
 		this.#report?.increment("programFlowSccPops", statistics.pops);
 		this.#report?.increment("programFlowSccWakeups", statistics.wakeups);
 		return statistics;
@@ -700,7 +741,7 @@ export class CoreProgramFlowEngine {
 		seeds: Iterable<CoreFunctionId>,
 		transfer: CoreProgramFlowFunctionTransfer,
 	): CoreProgramFlowFunctionWorkStatistics {
-		const statistics = solveCoreProgramFlowFunctions(seeds, transfer);
+		const statistics = this.#functionWorklist.solve(seeds, transfer);
 		this.#report?.increment("programFlowFunctionPops", statistics.pops);
 		this.#report?.increment("programFlowFunctionWakeups", statistics.wakeups);
 		return statistics;
