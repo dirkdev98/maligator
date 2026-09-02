@@ -1088,7 +1088,7 @@ const foldPrimitiveCoercions: CorePass = {
 	name: "primitive-coercion-folding",
 	stage: "canonicalize",
 	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("requireCoercible", "toPropertyKey", "unary"),
+	instructionOpcodes: coreOpcodeSet("requireCoercible", "toPropertyKey"),
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	preserves: [],
@@ -1104,25 +1104,8 @@ const foldPrimitiveCoercions: CorePass = {
 		)
 			return undefined;
 		const opcode = fn.instructionOpcodeName(item.instruction);
-		if (opcode !== "requireCoercible" && opcode !== "toPropertyKey" && opcode !== "unary")
+		if (opcode !== "requireCoercible" && opcode !== "toPropertyKey")
 			return undefined;
-		if (opcode === "unary") {
-			const input = instructionOperand(fn, item.instruction, 0);
-			const result = instructionResult(fn, item.instruction, 0);
-			if (
-				fn.instructionAttributes(item.instruction).operator !== "tonumeric" ||
-				input === undefined ||
-				result === undefined ||
-				(fn.valueRepresentation(input) !== "f64" &&
-					fn.valueRepresentation(input) !== "i32") ||
-				fn.valueRepresentation(result) !== fn.valueRepresentation(input)
-			)
-				return undefined;
-			const editor = CoreEditor.open(program, item.function);
-			editor.replaceValueUses(result, input);
-			editor.removeInstruction(item.instruction);
-			return editor.commit();
-		}
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const coercible = (value: CoreValueId): boolean => {
 			const mask = kinds.kindMask(value);

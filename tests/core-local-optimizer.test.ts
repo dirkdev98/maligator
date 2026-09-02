@@ -229,6 +229,28 @@ describe("CoreLocalOptimizer", () => {
 		expect(result.statistics.rulesApplied).toBeGreaterThanOrEqual(7);
 	});
 
+	it("removes represented ToNumeric without requesting value-kind analysis", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "f64" }]);
+		const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [coerced] = builder.appendInstruction(entry, "unary", [input], {
+			attributes: { operator: "tonumeric" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(entry, { kind: "return", value: coerced! });
+		const fn = program.function(builder.finish(entry).function);
+		const coercion = [...fn.bodyInstructionIds(entry)][0]!;
+
+		new CoreLocalOptimizer(program, fn.id).run();
+
+		expect(fn.isInstructionLive(coercion)).toBe(false);
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry))).toEqual({
+			kind: "return",
+			value: input,
+		});
+	});
+
 	it("reports work-budget exhaustion without opening another edit session", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

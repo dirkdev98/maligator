@@ -146,6 +146,14 @@ const CONSTANT_FOLDING_RULE: CoreLocalInstructionRule = {
 	},
 };
 
+const REPRESENTED_TONUMERIC_RULE: CoreLocalInstructionRule = {
+	name: "represented-tonumeric-elision",
+	opcodes: [],
+	run(optimizer, instruction) {
+		return optimizer.eliminateRepresentedToNumeric(instruction);
+	},
+};
+
 const TYPEOF_COMPARISON_RULE: CoreLocalInstructionRule = {
 	name: "typeof-comparison-canonicalization",
 	opcodes: [],
@@ -221,6 +229,14 @@ export class CoreLocalRuleRegistry {
 					return id === undefined ? [] : [id];
 				}),
 			},
+			...(program.registry.get("unary") === undefined
+				? []
+				: [
+						{
+							...REPRESENTED_TONUMERIC_RULE,
+							opcodes: [program.registry.require("unary").id],
+						},
+					]),
 			...(program.registry.get("binary") === undefined
 				? []
 				: [
@@ -387,16 +403,35 @@ export class CoreLocalOptimizer {
 		if (this.#fn.valueRepresentation(result) !== this.#fn.valueRepresentation(input)) {
 			return false;
 		}
-		this.#wakeValueUsers(result);
-		const editor = this.#edit();
-		editor.replaceValueUses(result, input);
-		if (this.#handlerUseCounts !== undefined && input !== result) {
-			this.#handlerUseCounts[input] =
-				(this.#handlerUseCounts[input] ?? 0) + (this.#handlerUseCounts[result] ?? 0);
-			this.#handlerUseCounts[result] = 0;
+		this.#replaceInstructionWithValue(instruction, result, input);
+		return true;
+	}
+
+	eliminateRepresentedToNumeric(instruction: CoreInstructionId): boolean {
+		if (
+			this.#fn.kernel.instructionLive(instruction) === 0 ||
+			this.#fn.kernel.instructionOpcode(instruction) < 0 ||
+			this.#fn.instructionOpcodeName(instruction) !== "unary" ||
+			this.#fn.instructionAttributes(instruction).operator !== "tonumeric" ||
+			this.#fn.kernel.instructionOperandCount(instruction) !== 1 ||
+			this.#fn.kernel.instructionResultCount(instruction) !== 1
+		) {
+			return false;
 		}
-		editor.removeInstruction(instruction);
-		this.#wakeValueDefinition(input);
+		const input = this.#fn.kernel.operandAt(
+			this.#fn.kernel.instructionOperandStart(instruction),
+		);
+		const result = this.#fn.kernel.resultAt(
+			this.#fn.kernel.instructionResultStart(instruction),
+		);
+		const representation = this.#fn.valueRepresentation(input);
+		if (
+			(representation !== "f64" && representation !== "i32") ||
+			this.#fn.valueRepresentation(result) !== representation
+		) {
+			return false;
+		}
+		this.#replaceInstructionWithValue(instruction, result, input);
 		return true;
 	}
 
@@ -1110,6 +1145,24 @@ export class CoreLocalOptimizer {
 				left.arguments.length === right.arguments.length &&
 				left.arguments.every((value, index) => value === right.arguments[index]))
 		);
+	}
+
+	#replaceInstructionWithValue(
+		instruction: CoreInstructionId,
+		result: CoreValueId,
+		replacement: CoreValueId,
+	): void {
+		this.#wakeValueUsers(result);
+		const editor = this.#edit();
+		editor.replaceValueUses(result, replacement);
+		if (this.#handlerUseCounts !== undefined && replacement !== result) {
+			this.#handlerUseCounts[replacement] =
+				(this.#handlerUseCounts[replacement] ?? 0) +
+				(this.#handlerUseCounts[result] ?? 0);
+			this.#handlerUseCounts[result] = 0;
+		}
+		editor.removeInstruction(instruction);
+		this.#wakeValueDefinition(replacement);
 	}
 
 	#edit(): CoreEditor {
