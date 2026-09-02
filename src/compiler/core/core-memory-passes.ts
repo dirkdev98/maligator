@@ -837,12 +837,8 @@ function scalarizeRootedLayout(
 	)
 		return undefined;
 	const aliases = new Set<CoreValueId>();
-	for (let rawValue = 0; rawValue < fn.valueCapacity; rawValue++) {
-		const value = rawValue as CoreValueId;
-		if (
-			fn.isValueLive(value) &&
-			provenance.allocationOf(value)?.instruction === layout.instruction
-		) {
+	for (const value of fn.valueIds()) {
+		if (provenance.allocationOf(value)?.instruction === layout.instruction) {
 			aliases.add(value);
 		}
 	}
@@ -1444,13 +1440,8 @@ const scalarReplaceContainedAggregates: CorePass = {
 			let removable = true;
 			const stores: Array<CoreInstructionId> = [];
 			const uses = new Map<string, CoreUse>();
-			for (let rawValue = 0; rawValue < fn.valueCapacity; rawValue++) {
-				const value = rawValue as CoreValueId;
-				if (
-					!fn.isValueLive(value) ||
-					provenance.allocationOf(value)?.instruction !== layout.instruction
-				)
-					continue;
+			for (const value of fn.valueIds()) {
+				if (provenance.allocationOf(value)?.instruction !== layout.instruction) continue;
 				for (const use of fn.uses(value)) {
 					uses.set(`${use.instruction}:${use.operand}`, use);
 				}
