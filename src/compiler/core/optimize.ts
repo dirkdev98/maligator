@@ -9,8 +9,8 @@ import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import {
+	CORE_LATE_CANONICALIZATION_PASSES,
 	CORE_LOCAL_CANONICALIZATION_PASSES,
-	CORE_LOCAL_FINALIZATION_PASSES,
 } from "./core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
@@ -21,6 +21,7 @@ import type {
 import { CorePassManager } from "./core-pass-manager.ts";
 import type { CoreOptimizationStage } from "./core-pass.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
+import type { CoreChangeSet } from "./core-store.ts";
 import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 
 export type { CoreOptimizationPlan } from "./core-ir-regions.ts";
@@ -30,7 +31,6 @@ const OPTIMIZATION_STAGES: ReadonlyArray<CoreOptimizationStage> = [
 	"control-flow",
 	"proofs",
 	"memory",
-	"finalize",
 ];
 
 export interface OptimizeCoreOptions {
@@ -109,8 +109,9 @@ export function optimizeCore(
 			localOptimization: true,
 		},
 	);
+	const lateCanonicalizationChanges: Array<CoreChangeSet> = [];
 	for (const stage of OPTIMIZATION_STAGES) {
-		passes.runStage(
+		const changes = passes.runStage(
 			stage,
 			stage === "canonicalize"
 				? CORE_LOCAL_CANONICALIZATION_PASSES
@@ -118,9 +119,16 @@ export function optimizeCore(
 					? CORE_CONTROL_FLOW_PASSES
 					: stage === "proofs"
 						? CORE_PROOF_PASSES
-						: stage === "memory"
-							? CORE_MEMORY_PASSES
-							: CORE_LOCAL_FINALIZATION_PASSES,
+						: CORE_MEMORY_PASSES,
+		);
+		if (stage !== "canonicalize") lateCanonicalizationChanges.push(...changes);
+	}
+	if (lateCanonicalizationChanges.length > 0) {
+		passes.runStage(
+			"canonicalize",
+			CORE_LATE_CANONICALIZATION_PASSES,
+			lateCanonicalizationChanges,
+			"finalize",
 		);
 	}
 	const crossCallStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;

@@ -96,7 +96,8 @@ export class CorePassManager {
 		stage: CoreOptimizationStage,
 		passes: ReadonlyArray<CorePass>,
 		initialChanges?: ReadonlyArray<CoreChangeSet>,
-	): void {
+		reportedStage: CoreOptimizationStage = stage,
+	): ReadonlyArray<CoreChangeSet> {
 		for (const pass of passes) this.#validatePass(stage, pass);
 		const startedAt = this.#report.collectsCounters ? Date.now() : 0;
 		const functionStride = Math.max(1, this.#program.functionCapacity);
@@ -115,6 +116,7 @@ export class CorePassManager {
 		const profileExhausted = new Uint8Array(queueCapacity);
 		const consumption = new Array<PassConsumption | undefined>(passes.length);
 		const pendingLocal = new Map<CoreFunctionId, PendingLocalWork>();
+		const appliedChanges: Array<CoreChangeSet> = [];
 		const enqueuePass = (passIndex: number, key: number): void => {
 			const pass = passes[passIndex]!;
 			if (queued[key] !== 0) return;
@@ -229,6 +231,7 @@ export class CorePassManager {
 				this.#report.recordLocalOptimizerWork("fused-local-optimizer", result.statistics);
 				const changes = result.changes;
 				if (changes === undefined || changes.edits === 0) continue;
+				appliedChanges.push(changes);
 				if (this.#verification === "per-pass") {
 					verifyCoreChangeSet(this.#program, changes, {
 						stage,
@@ -299,6 +302,7 @@ export class CorePassManager {
 			this.#report.recordPassRun(pass.name, 1, edits > 0, edits, elapsedMs);
 			this.#report.recordBudget(1, edits);
 			if (changes === undefined || edits === 0) continue;
+			appliedChanges.push(changes);
 			this.#validateChanges(pass, changes);
 			if (this.#verification === "per-pass") {
 				verifyCoreChangeSet(this.#program, changes, {
@@ -310,8 +314,9 @@ export class CorePassManager {
 			enqueueChanges(changes);
 		}
 		if (this.#report.collectsCounters) {
-			this.#report.recordStage(stage, Date.now() - startedAt);
+			this.#report.recordStage(reportedStage, Date.now() - startedAt);
 		}
+		return appliedChanges;
 	}
 
 	#validatePass(stage: CoreOptimizationStage, pass: CorePass): void {

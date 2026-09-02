@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow-passes.ts";
 import {
 	CORE_LOCAL_CANONICALIZATION_PASSES,
-	CORE_LOCAL_FINALIZATION_PASSES,
 } from "../src/compiler/core/core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import type { CorePass } from "../src/compiler/core/core-pass.ts";
@@ -30,19 +29,18 @@ const DELETED_ALIASES = new Set([
 ]);
 
 const MIGRATED_NAMES = new Set([
+	...DELETED_ALIASES,
 	"local-copy-propagation",
 	"fold-static-property-keys",
 	"local-constant-folding",
 	"local-control-folding",
 	"local-dead-instruction-elimination",
 	"local-value-numbering",
-	"post-representation-dead-instruction-removal",
 	"typeof-comparison-canonicalization",
 ]);
 
 const RUNTIME_REGISTRIES: ReadonlyArray<readonly [string, ReadonlyArray<CorePass>]> = [
 	["CORE_LOCAL_CANONICALIZATION_PASSES", CORE_LOCAL_CANONICALIZATION_PASSES],
-	["CORE_LOCAL_FINALIZATION_PASSES", CORE_LOCAL_FINALIZATION_PASSES],
 	["CORE_PROOF_PASSES", CORE_PROOF_PASSES],
 	["CORE_CONTROL_FLOW_PASSES", CORE_CONTROL_FLOW_PASSES],
 	["CORE_MEMORY_PASSES", CORE_MEMORY_PASSES],
@@ -89,7 +87,7 @@ describe("Core local optimizer migration matrix", () => {
 		const rows = migrationRows();
 		const matrixByName = new Map(rows.map((row) => [row.name, row]));
 
-		expect(runtimeEntries).toHaveLength(40);
+		expect(runtimeEntries).toHaveLength(36);
 		expect(runtimeByName.size).toBe(runtimeEntries.length);
 		expect(rows).toHaveLength(48);
 		expect(matrixByName.size).toBe(rows.length);
@@ -120,6 +118,20 @@ describe("Core local optimizer migration matrix", () => {
 			expect(alias.owner).toBe("deleted as redundant");
 			expect(alias.note).toMatch(/^Alias of /);
 		}
+	});
+
+	it("deletes the finalization alias registry from production", () => {
+		const localPasses = readFileSync(
+			new URL("../src/compiler/core/core-local-passes.ts", import.meta.url),
+			"utf8",
+		);
+		const optimizer = readFileSync(
+			new URL("../src/compiler/core/optimize.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(localPasses).not.toMatch(/CORE_LOCAL_FINALIZATION_PASSES|name: "post-/);
+		expect(optimizer).not.toMatch(/CORE_LOCAL_FINALIZATION_PASSES/);
 	});
 
 	it("keeps the analysis-free local engine outside analysis and loop modules", () => {

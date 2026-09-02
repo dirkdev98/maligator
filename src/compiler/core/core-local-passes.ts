@@ -755,7 +755,7 @@ const rewriteExactBuiltinCalls: CorePass = {
 	stage: "canonicalize",
 	scope: "function",
 	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "facts"],
+	wakesOn: ["body", "cfg", "facts", "representations"],
 	changes: { ...LOCAL_CHANGES, representations: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1294,7 +1294,7 @@ const foldRedundantTdzChecks: CorePass = {
 		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
-	wakesOn: ["body", "cfg", "representations"],
+	wakesOn: ["body", "cfg", "memoryEffects", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1482,7 +1482,7 @@ const removeUnreachableBlocks: CorePass = {
 	stage: "canonicalize",
 	scope: "function",
 	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
-	wakesOn: ["cfg", "exceptionFlow"],
+	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -2050,25 +2050,9 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	foldRedundantTdzChecks,
 ];
 
-export const CORE_LOCAL_FINALIZATION_PASSES: ReadonlyArray<CorePass> = [
-	{
-		...rewriteExactBuiltinCalls,
-		name: "post-representation-exact-builtin-calls",
-		stage: "finalize",
-	},
-	{
-		...foldPrimitiveCoercions,
-		name: "post-representation-primitive-coercion-folding",
-		stage: "finalize",
-	},
-	{
-		...foldRedundantTdzChecks,
-		name: "post-memory-tdz-check-folding",
-		stage: "finalize",
-	},
-	{
-		...removeUnreachableBlocks,
-		name: "post-memory-unreachable-block-removal",
-		stage: "finalize",
-	},
+export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
+	rewriteExactBuiltinCalls,
+	foldPrimitiveCoercions,
+	foldRedundantTdzChecks,
+	removeUnreachableBlocks,
 ];
