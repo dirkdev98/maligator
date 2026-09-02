@@ -30,6 +30,73 @@ import type {
 } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
+function instructionOperandCount(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): number {
+	return fn.kernel.instructionOperandCount(instruction);
+}
+
+function instructionOperand(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	index: number,
+): CoreValueId | undefined {
+	if (index < 0 || index >= fn.kernel.instructionOperandCount(instruction)) {
+		return undefined;
+	}
+	return fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index);
+}
+
+function instructionResultCount(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): number {
+	return fn.kernel.instructionResultCount(instruction);
+}
+
+function instructionResult(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	index: number,
+): CoreValueId | undefined {
+	if (index < 0 || index >= fn.kernel.instructionResultCount(instruction)) {
+		return undefined;
+	}
+	return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction) + index);
+}
+
+function definingInstruction(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+): CoreInstructionId | undefined {
+	return fn.kernel.valueDefinitionKind(value) === 1
+		? (fn.kernel.valueDefinitionOwner(value) as CoreInstructionId)
+		: undefined;
+}
+
+function handlerBlock(
+	fn: CoreFunctionStore,
+	block: CoreBlockId,
+): CoreBlockId | undefined {
+	return fn.kernel.blockHandlerBlock(block);
+}
+
+function forEachValueUse(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	visit: (instruction: CoreInstructionId, operand: number) => void,
+): void {
+	const kernel = fn.kernel;
+	for (let use = kernel.valueFirstUse(value); use >= 0; ) {
+		const next = kernel.useNext(use);
+		if (kernel.useLive(use) === 1) {
+			visit(kernel.useInstruction(use), kernel.useOperand(use));
+		}
+		use = next;
+	}
+}
+
 export const CORE_OWN_DATA_CELL_FACT = "own-data-cell";
 export const CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT = "contained-aggregate-own-slot";
 export const CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE = "freshArrayLengthNumber";
@@ -132,14 +199,14 @@ function literalArrayIndex(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
 ): number | undefined {
-	const definition = fn.valueDefinition(value);
+	const definition = definingInstruction(fn, value);
 	if (
-		definition.kind !== "instruction" ||
-		fn.instructionKind(definition.instruction) !== "operation"
+		definition === undefined ||
+		fn.instructionKind(definition) !== "operation"
 	)
 		return undefined;
-	const opcode = fn.instructionOpcodeName(definition.instruction);
-	const immediate = fn.instructionAttributes(definition.instruction).value;
+	const opcode = fn.instructionOpcodeName(definition);
+	const immediate = fn.instructionAttributes(definition).value;
 	return (opcode === "createNumber" || opcode === "createF64") &&
 		typeof immediate === "number" &&
 		Number.isInteger(immediate) &&
@@ -198,7 +265,7 @@ function accessKey(
 			: undefined;
 	}
 	if (access.keyOperand !== undefined) {
-		const value = fn.instructionOperands(instruction)[access.keyOperand];
+		const value = instructionOperand(fn, instruction, access.keyOperand);
 		return value === undefined ? undefined : { kind: "operand", value };
 	}
 	return undefined;
@@ -210,7 +277,7 @@ function allocationLayout(
 ): CoreAllocationLayout | undefined {
 	const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
 	const allocation = descriptor.allocation;
-	const result = fn.instructionResults(instruction)[0];
+	const result = instructionResult(fn, instruction, 0);
 	if (allocation === undefined || result === undefined) return undefined;
 	const attributes = fn.instructionAttributes(instruction);
 	if (allocation.kind === "indexed") {
@@ -231,18 +298,22 @@ function allocationLayout(
 			candidate = fn.instructionNext(candidate)
 		) {
 			if (fn.instructionKind(candidate) !== "operation") break;
-			const operands = fn.instructionOperands(candidate);
-			const baseUses = operands.flatMap((operand, operandIndex) =>
-				operand === result ? [operandIndex] : [],
-			);
+			const operandCount = instructionOperandCount(fn, candidate);
+			const baseUses: Array<number> = [];
+			for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
+				if (instructionOperand(fn, candidate, operandIndex) === result) {
+					baseUses.push(operandIndex);
+				}
+			}
 			if (baseUses.length === 0) continue;
 			const opcode = fn.instructionOpcodeName(candidate);
 			if (opcode === "throwIfTdz" && baseUses.length === 1 && baseUses[0] === 0) continue;
 			if (opcode !== "defineProperty" || baseUses.length !== 1 || baseUses[0] !== 0)
 				break;
+			const indexOperand = instructionOperand(fn, candidate, 1);
 			const index =
-				operands[1] === undefined ? undefined : literalArrayIndex(fn, operands[1]);
-			const value = operands[2];
+				indexOperand === undefined ? undefined : literalArrayIndex(fn, indexOperand);
+			const value = instructionOperand(fn, candidate, 2);
 			if (index === undefined || index >= length || value === undefined) break;
 			if (!elements.has(index)) {
 				elements.set(index, { index, value, definition: candidate });
@@ -258,8 +329,16 @@ function allocationLayout(
 	}
 	const keys = numberArray(attributes[allocation.keysAttribute]);
 	if (keys === undefined || new Set(keys).size !== keys.length) return undefined;
-	const values = fn.instructionOperands(instruction).slice(allocation.firstValueOperand);
-	if (values.length !== keys.length) return undefined;
+	const valueCount = instructionOperandCount(fn, instruction) - allocation.firstValueOperand;
+	if (valueCount !== keys.length) return undefined;
+	const values = new Array<CoreValueId>(valueCount);
+	for (let index = 0; index < valueCount; index++) {
+		values[index] = instructionOperand(
+			fn,
+			instruction,
+			allocation.firstValueOperand + index,
+		)!;
+	}
 	return Object.freeze({
 		kind: "named-slots",
 		instruction,
@@ -360,16 +439,16 @@ function provenance(
 		const valueRoot = root(value);
 		const cached = keyCells[valueRoot];
 		if (cached !== undefined) return cached ?? undefined;
-		const definition = fn.valueDefinition(valueRoot);
+		const definition = definingInstruction(fn, valueRoot);
 		if (
-			definition.kind !== "instruction" ||
-			fn.instructionKind(definition.instruction) !== "operation"
+			definition === undefined ||
+			fn.instructionKind(definition) !== "operation"
 		) {
 			keyCells[valueRoot] = null;
 			return undefined;
 		}
-		const opcode = fn.instructionOpcodeName(definition.instruction);
-		const immediate = fn.instructionAttributes(definition.instruction);
+		const opcode = fn.instructionOpcodeName(definition);
+		const immediate = fn.instructionAttributes(definition);
 		let cell: CoreOwnCell | undefined;
 		if (opcode === "createString" && typeof immediate.stringIndex === "number") {
 			cell = cellForString(immediate.stringIndex);
@@ -404,23 +483,23 @@ function provenance(
 	for (const value of fn.valueIds()) {
 		const layout = allocationOf(value);
 		if (layout === undefined) continue;
-		for (const use of fn.uses(value)) {
-			if (fn.instructionKind(use.instruction) !== "operation") {
+		forEachValueUse(fn, value, (instruction, operand) => {
+			if (fn.instructionKind(instruction) !== "operation") {
 				escaped[layout.instruction] = 1;
-				continue;
+				return;
 			}
-			const opcode = fn.instructionOpcodeName(use.instruction);
+			const opcode = fn.instructionOpcodeName(instruction);
 			if (
 				opcode === "move" ||
 				opcode === "throwIfTdz" ||
 				opcode === "rootUse" ||
-				observesWithoutRetention(fn, use.instruction)
+				observesWithoutRetention(fn, instruction)
 			) {
-				continue;
+				return;
 			}
-			const access = baseAccessForOperand(fn, use.instruction, use.operand);
+			const access = baseAccessForOperand(fn, instruction, operand);
 			const key =
-				access === undefined ? undefined : accessKey(fn, use.instruction, access);
+				access === undefined ? undefined : accessKey(fn, instruction, access);
 			const cell = key === undefined ? undefined : cellForKey(key);
 			if (
 				access === undefined ||
@@ -429,7 +508,7 @@ function provenance(
 			) {
 				escaped[layout.instruction] = 1;
 			}
-		}
+		});
 	}
 	const escape = (allocation: CoreInstructionId): CoreAllocationEscape =>
 		escaped[allocation] === 0 ? "contained" : "escaped";
@@ -451,11 +530,11 @@ function provenance(
 	};
 	const cannotBeHeldWeakly = (value: CoreValueId): boolean => {
 		if (fn.valueRepresentation(value) !== "boxed") return true;
-		const definition = fn.valueDefinition(root(value));
+		const definition = definingInstruction(fn, root(value));
 		return (
-			definition.kind === "instruction" &&
-			fn.instructionKind(definition.instruction) === "operation" &&
-			fn.registry.byId(fn.instructionOpcode(definition.instruction))
+			definition !== undefined &&
+			fn.instructionKind(definition) === "operation" &&
+			fn.registry.byId(fn.instructionOpcode(definition))
 				.resultCannotBeHeldWeakly === true
 		);
 	};
@@ -527,11 +606,10 @@ export function coreContainedAggregateProvenance(
 				fn.instructionKind(instruction) !== "operation"
 			)
 				return undefined;
-			const operands = fn.instructionOperands(instruction);
 			for (const access of fn.registry.byId(fn.instructionOpcode(instruction)).accesses ??
 				[]) {
 				if (access.baseOperand === undefined) continue;
-				const base = operands[access.baseOperand];
+				const base = instructionOperand(fn, instruction, access.baseOperand);
 				const key = accessKey(fn, instruction, access);
 				if (base === undefined || key === undefined) continue;
 				const resolved = analysis.ownCell(base, key, access.mode);
@@ -838,12 +916,19 @@ function stackObjectCandidate(
 	const aliasesAllocation = (value: CoreValueId): boolean =>
 		(roots.get(value) ?? value) === allocationRoot;
 	for (const block of control.reachable) {
-		if (fn.blockHandler(block)?.arguments.some(aliasesAllocation) === true) {
-			return undefined;
+		const handlerArgumentStart = fn.kernel.blockHandlerArgumentStart(block);
+		const handlerArgumentCount = fn.kernel.blockHandlerArgumentCount(block);
+		for (let index = 0; index < handlerArgumentCount; index++) {
+			if (aliasesAllocation(fn.kernel.handlerArgumentAt(handlerArgumentStart + index))) {
+				return undefined;
+			}
 		}
 		const incoming = control.predecessors[block] ?? [];
-		for (const [index, parameter] of fn.blockParameters(block).entries()) {
-			if (aliasesAllocation(parameter.value)) continue;
+		const parameterStart = fn.kernel.blockParameterStart(block);
+		const parameterCount = fn.kernel.blockParameterCount(block);
+		for (let index = 0; index < parameterCount; index++) {
+			const parameter = fn.kernel.blockParameterValue(parameterStart + index);
+			if (aliasesAllocation(parameter)) continue;
 			if (
 				incoming.some((edge) => {
 					const argument =
@@ -872,7 +957,9 @@ function stackObjectCandidate(
 			continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const operator = fn.instructionAttributes(instruction).operator;
-		for (const [position, operand] of fn.instructionOperands(instruction).entries()) {
+		const operandCount = instructionOperandCount(fn, instruction);
+		for (let position = 0; position < operandCount; position++) {
+			const operand = instructionOperand(fn, instruction, position)!;
 			if (!aliasesAllocation(operand)) continue;
 			if (
 				(opcode === "move" && position === 0) ||
@@ -912,14 +999,16 @@ function stackObjectCandidate(
 	}> = [];
 	for (const block of control.reachable) {
 		const terminatorId = fn.blockTerminator(block);
-		const terminator = fn.terminatorPayload(terminatorId);
-		if (terminator.kind === "return" && aliasesAllocation(terminator.value)) {
+		const terminatorKind = fn.instructionKind(terminatorId);
+		const controlValue = instructionOperand(fn, terminatorId, 0);
+		if (terminatorKind === "return" && controlValue !== undefined && aliasesAllocation(controlValue)) {
 			materializations.push({ instruction: terminatorId, kind: "return" });
 		} else if (
-			(terminator.kind === "throw" && aliasesAllocation(terminator.value)) ||
-			((terminator.kind === "branch" || terminator.kind === "guard") &&
-				aliasesAllocation(terminator.condition)) ||
-			(terminator.kind === "switch" && aliasesAllocation(terminator.discriminant))
+			controlValue !== undefined &&
+			((terminatorKind === "throw" && aliasesAllocation(controlValue)) ||
+				((terminatorKind === "branch" || terminatorKind === "guard") &&
+					aliasesAllocation(controlValue)) ||
+				(terminatorKind === "switch" && aliasesAllocation(controlValue)))
 		) {
 			return undefined;
 		}
@@ -1030,33 +1119,32 @@ function provenNumericValue(
 	const cached = memo.get(root);
 	if (cached !== undefined) return cached;
 	memo.set(root, false);
-	const definition = fn.valueDefinition(root);
+	const definition = definingInstruction(fn, root);
 	if (
-		definition.kind !== "instruction" ||
-		fn.instructionKind(definition.instruction) !== "operation"
+		definition === undefined ||
+		fn.instructionKind(definition) !== "operation"
 	)
 		return false;
-	const opcode = fn.instructionOpcodeName(definition.instruction);
-	const operands = fn.instructionOperands(definition.instruction);
-	const operator = fn.instructionAttributes(definition.instruction).operator;
+	const opcode = fn.instructionOpcodeName(definition);
+	const operandCount = instructionOperandCount(fn, definition);
+	const operator = fn.instructionAttributes(definition).operator;
 	const proven =
 		opcode === "createNumber" ||
 		opcode === "createF64" ||
 		(opcode === "move" &&
-			operands.length === 1 &&
-			provenNumericValue(fn, operands[0]!, roots, numericRoots, memo)) ||
+			operandCount === 1 &&
+			provenNumericValue(fn, instructionOperand(fn, definition, 0)!, roots, numericRoots, memo)) ||
 		(opcode === "unary" &&
 			typeof operator === "string" &&
 			["+", "-", "~", "tonumeric"].includes(operator) &&
-			operands.length === 1 &&
-			provenNumericValue(fn, operands[0]!, roots, numericRoots, memo)) ||
+			operandCount === 1 &&
+			provenNumericValue(fn, instructionOperand(fn, definition, 0)!, roots, numericRoots, memo)) ||
 		(opcode === "binary" &&
 			typeof operator === "string" &&
 			FRESH_DENSE_NUMERIC_OPERATORS.has(operator) &&
-			operands.length === 2 &&
-			operands.every((operand) =>
-				provenNumericValue(fn, operand, roots, numericRoots, memo),
-			));
+			operandCount === 2 &&
+			provenNumericValue(fn, instructionOperand(fn, definition, 0)!, roots, numericRoots, memo) &&
+			provenNumericValue(fn, instructionOperand(fn, definition, 1)!, roots, numericRoots, memo));
 	memo.set(root, proven);
 	return proven;
 }
@@ -1066,15 +1154,15 @@ function exactIntegerValue(
 	value: CoreValueId,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 ): number | undefined {
-	const definition = fn.valueDefinition(roots.get(value) ?? value);
+	const definition = definingInstruction(fn, roots.get(value) ?? value);
 	if (
-		definition.kind !== "instruction" ||
-		fn.instructionKind(definition.instruction) !== "operation" ||
-		(fn.instructionOpcodeName(definition.instruction) !== "createNumber" &&
-			fn.instructionOpcodeName(definition.instruction) !== "createF64")
+		definition === undefined ||
+		fn.instructionKind(definition) !== "operation" ||
+		(fn.instructionOpcodeName(definition) !== "createNumber" &&
+			fn.instructionOpcodeName(definition) !== "createF64")
 	)
 		return undefined;
-	const immediate = fn.instructionAttributes(definition.instruction).value;
+	const immediate = fn.instructionAttributes(definition).value;
 	return typeof immediate === "number" && Number.isSafeInteger(immediate)
 		? immediate
 		: undefined;
@@ -1120,27 +1208,29 @@ function denseArrayCandidates(
 			!control.dominates(allocationBlock, loop.header)
 		)
 			continue;
-		const headerTerminator = fn.terminatorPayload(fn.blockTerminator(loop.header));
-		if (headerTerminator.kind !== "branch") continue;
-		const condition = fn.valueDefinition(
-			roots.get(headerTerminator.condition) ?? headerTerminator.condition,
-		);
+		const headerTerminator = fn.blockTerminator(loop.header);
+		if (fn.instructionKind(headerTerminator) !== "branch") continue;
+		const conditionValue = instructionOperand(fn, headerTerminator, 0)!;
+		const condition = definingInstruction(fn, roots.get(conditionValue) ?? conditionValue);
 		if (
-			condition.kind !== "instruction" ||
-			fn.instructionKind(condition.instruction) !== "operation" ||
-			fn.instructionOpcodeName(condition.instruction) !== "binary" ||
-			fn.instructionAttributes(condition.instruction).operator !== "<"
+			condition === undefined ||
+			fn.instructionKind(condition) !== "operation" ||
+			fn.instructionOpcodeName(condition) !== "binary" ||
+			fn.instructionAttributes(condition).operator !== "<"
 		)
 			continue;
-		const comparisonOperands = fn.instructionOperands(condition.instruction);
-		const counter = comparisonOperands[0];
-		const length =
-			comparisonOperands[1] === undefined
-				? undefined
-				: exactIntegerValue(fn, comparisonOperands[1], roots);
-		const parameters = fn.blockParameters(loop.header);
-		const counterParameter =
-			counter === undefined ? -1 : parameters.findIndex(({ value }) => value === counter);
+		const counter = instructionOperand(fn, condition, 0);
+		const lengthOperand = instructionOperand(fn, condition, 1);
+		const length = lengthOperand === undefined ? undefined : exactIntegerValue(fn, lengthOperand, roots);
+		const parameterStart = fn.kernel.blockParameterStart(loop.header);
+		const parameterCount = fn.kernel.blockParameterCount(loop.header);
+		let counterParameter = -1;
+		for (let index = 0; index < parameterCount; index++) {
+			if (fn.kernel.blockParameterValue(parameterStart + index) === counter) {
+				counterParameter = index;
+				break;
+			}
+		}
 		const latch = [...loop.latches][0]!;
 		const incoming = (control.predecessors[loop.header] ?? []).filter(
 			({ kind }) => kind === "ordinary",
@@ -1156,75 +1246,86 @@ function denseArrayCandidates(
 			initialEdge === undefined ||
 			updateEdge === undefined ||
 			exactIntegerValue(fn, initialEdge.arguments[counterParameter]!, roots) !== 0 ||
-			!loop.blocks.has(headerTerminator.consequent.block) ||
-			loop.blocks.has(headerTerminator.alternate.block)
+			!loop.blocks.has(fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator))) ||
+			loop.blocks.has(fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator) + 1))
 		)
 			continue;
 		const updateValue = updateEdge.arguments[counterParameter];
 		if (updateValue === undefined) continue;
-		const update = fn.valueDefinition(roots.get(updateValue) ?? updateValue);
+		const update = definingInstruction(fn, roots.get(updateValue) ?? updateValue);
 		if (
-			update.kind !== "instruction" ||
-			fn.instructionKind(update.instruction) !== "operation" ||
-			fn.instructionOpcodeName(update.instruction) !== "unary" ||
-			fn.instructionAttributes(update.instruction).operator !== "increment"
+			update === undefined ||
+			fn.instructionKind(update) !== "operation" ||
+			fn.instructionOpcodeName(update) !== "unary" ||
+			fn.instructionAttributes(update).operator !== "increment"
 		)
 			continue;
-		let incrementInput = fn.instructionOperands(update.instruction)[0];
+		let incrementInput = instructionOperand(fn, update, 0);
 		if (incrementInput === undefined) continue;
-		const numeric = fn.valueDefinition(roots.get(incrementInput) ?? incrementInput);
+		const numeric = definingInstruction(fn, roots.get(incrementInput) ?? incrementInput);
 		if (
-			numeric.kind === "instruction" &&
-			fn.instructionKind(numeric.instruction) === "operation" &&
-			fn.instructionOpcodeName(numeric.instruction) === "unary" &&
-			fn.instructionAttributes(numeric.instruction).operator === "tonumeric"
+			numeric !== undefined &&
+			fn.instructionKind(numeric) === "operation" &&
+			fn.instructionOpcodeName(numeric) === "unary" &&
+			fn.instructionAttributes(numeric).operator === "tonumeric"
 		) {
-			incrementInput = fn.instructionOperands(numeric.instruction)[0]!;
+			incrementInput = instructionOperand(fn, numeric, 0)!;
 		}
 		const counterRoot = roots.get(counter) ?? counter;
 		if ((roots.get(incrementInput) ?? incrementInput) !== counterRoot) continue;
 		const stores = [...loop.blocks].flatMap((block) =>
 			[...fn.bodyInstructionIds(block)].filter((instruction) => {
 				if (fn.instructionOpcodeName(instruction) !== "storeProperty") return false;
-				const operands = fn.instructionOperands(instruction);
 				return (
-					operands.length === 3 &&
-					aliasesAllocation(operands[0]!) &&
-					(roots.get(operands[1]!) ?? operands[1]!) === counterRoot
+					instructionOperandCount(fn, instruction) === 3 &&
+					aliasesAllocation(instructionOperand(fn, instruction, 0)!) &&
+					(roots.get(instructionOperand(fn, instruction, 1)!) ??
+						instructionOperand(fn, instruction, 1)!) === counterRoot
 				);
 			}),
 		);
 		if (stores.length !== 1) continue;
 		const store = stores[0]!;
-		const storeValue = fn.instructionOperands(store)[2]!;
+		const storeValue = instructionOperand(fn, store, 2)!;
 		if (!provenNumericValue(fn, storeValue, roots, new Set([counterRoot]))) continue;
 
 		let safe = true;
 		for (const block of control.reachable) {
 			for (const instruction of fn.bodyInstructionIds(block)) {
 				const opcode = fn.instructionOpcodeName(instruction);
-				for (const [position, operand] of fn.instructionOperands(instruction).entries()) {
+				const operandCount = instructionOperandCount(fn, instruction);
+				for (let position = 0; position < operandCount; position++) {
+					const operand = instructionOperand(fn, instruction, position)!;
 					if (!aliasesAllocation(operand)) continue;
 					if (
 						(opcode === "move" && position === 0) ||
 						(opcode === "throwIfTdz" && position === 0) ||
 						opcode === "rootUse" ||
 						(instruction === store && position === 0) ||
-						control.dominates(headerTerminator.alternate.block, block)
+						control.dominates(
+							fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator) + 1),
+							block,
+						)
 					) {
 						continue;
 					}
 					safe = false;
 				}
 			}
-			const terminator = fn.terminatorPayload(fn.blockTerminator(block));
+			const terminator = fn.blockTerminator(block);
+			const terminatorKind = fn.instructionKind(terminator);
+			const terminatorValue = instructionOperand(fn, terminator, 0);
 			if (
-				!control.dominates(headerTerminator.alternate.block, block) &&
-				((terminator.kind === "return" && aliasesAllocation(terminator.value)) ||
-					(terminator.kind === "throw" && aliasesAllocation(terminator.value)) ||
-					((terminator.kind === "branch" || terminator.kind === "guard") &&
-						aliasesAllocation(terminator.condition)) ||
-					(terminator.kind === "switch" && aliasesAllocation(terminator.discriminant)))
+				!control.dominates(
+					fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator) + 1),
+					block,
+				) &&
+				terminatorValue !== undefined &&
+				((terminatorKind === "return" && aliasesAllocation(terminatorValue)) ||
+					(terminatorKind === "throw" && aliasesAllocation(terminatorValue)) ||
+					((terminatorKind === "branch" || terminatorKind === "guard") &&
+						aliasesAllocation(terminatorValue)) ||
+					(terminatorKind === "switch" && aliasesAllocation(terminatorValue)))
 			) {
 				safe = false;
 			}
@@ -1296,7 +1397,9 @@ function localSpecializationIndex(
 	for (const block of fn.blockIds()) {
 		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
 			location.set(instruction, { block, index });
-			for (const [position, operand] of fn.instructionOperands(instruction).entries()) {
+			const operandCount = instructionOperandCount(fn, instruction);
+			for (let position = 0; position < operandCount; position++) {
+				const operand = instructionOperand(fn, instruction, position)!;
 				const value = root(operand);
 				const entries = uses.get(value) ?? [];
 				entries.push({ instruction, position });
@@ -1308,40 +1411,19 @@ function localSpecializationIndex(
 			block,
 			index: [...fn.bodyInstructionIds(block)].length,
 		});
-		const payload = fn.terminatorPayload(terminator);
-		for (const edge of [
-			...(payload.kind === "jump"
-				? [payload.edge]
-				: payload.kind === "branch"
-					? [payload.consequent, payload.alternate]
-					: payload.kind === "guard"
-						? [payload.success, payload.fallback]
-						: payload.kind === "switch"
-							? [...payload.cases.map(({ edge }) => edge), payload.default]
-							: []),
-		]) {
-			for (const value of edge.arguments) controlUses.add(root(value));
+		const terminatorOperandStart = fn.kernel.instructionOperandStart(terminator);
+		const terminatorOperandCount = fn.kernel.instructionOperandCount(terminator);
+		for (let index = 0; index < terminatorOperandCount; index++) {
+			controlUses.add(root(fn.kernel.operandAt(terminatorOperandStart + index)));
 		}
-		switch (payload.kind) {
-			case "branch":
-			case "guard":
-				controlUses.add(root(payload.condition));
-				break;
-			case "switch":
-				controlUses.add(root(payload.discriminant));
-				break;
-			case "return":
-			case "throw":
-				controlUses.add(root(payload.value));
-				break;
-			case "jump":
-			case "unreachable":
-				break;
-		}
-		const handler = fn.blockHandler(block);
+		const handler = handlerBlock(fn, block);
 		if (handler !== undefined) {
-			handlerTargets.add(handler.block);
-			for (const value of handler.arguments) controlUses.add(root(value));
+			handlerTargets.add(handler);
+			const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
+			const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
+			for (let index = 0; index < argumentCount; index++) {
+				controlUses.add(root(fn.kernel.handlerArgumentAt(argumentStart + index)));
+			}
 		}
 	}
 	const valuesByRoot = new Map<CoreValueId, ReadonlyArray<CoreValueId>>();
@@ -1370,10 +1452,9 @@ function specializationDefinition(
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	value: CoreValueId,
 ): CoreInstructionId | undefined {
-	const definition = fn.valueDefinition(roots.get(value) ?? value);
-	return definition.kind === "instruction" &&
-		fn.instructionKind(definition.instruction) === "operation"
-		? definition.instruction
+	const definition = definingInstruction(fn, roots.get(value) ?? value);
+	return definition !== undefined && fn.instructionKind(definition) === "operation"
+		? definition
 		: undefined;
 }
 
@@ -1432,19 +1513,19 @@ function exactPropertyCallCandidate(
 	if (
 		fn.instructionKind(call) !== "operation" ||
 		fn.instructionOpcodeName(call) !== "call" ||
-		fn.instructionResults(call).length !== 1 ||
-		fn.instructionOperands(call).length < 2 ||
+		instructionResultCount(fn, call) !== 1 ||
+		instructionOperandCount(fn, call) < 2 ||
 		!control.reachable.has(fn.instructionBlock(call))
 	) {
 		return undefined;
 	}
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	const operands = fn.instructionOperands(call);
-	const property = specializationDefinition(fn, roots, operands[0]!);
+	const property = specializationDefinition(fn, roots, instructionOperand(fn, call, 0)!);
 	if (
 		!staticPropertyNamed(program, fn, property, propertyName) ||
-		fn.instructionOperands(property).length !== 1 ||
-		root(fn.instructionOperands(property)[0]!) !== root(operands[1]!) ||
+		instructionOperandCount(fn, property) !== 1 ||
+		root(instructionOperand(fn, property, 0)!) !==
+			root(instructionOperand(fn, call, 1)!) ||
 		fn.instructionBlock(property) !== fn.instructionBlock(call) ||
 		!specializationInstructionDominates(control, index, property, call)
 	) {
@@ -1457,7 +1538,7 @@ function exactPropertyCallCandidate(
 	) {
 		return undefined;
 	}
-	const propertyResult = fn.instructionResults(property)[0];
+	const propertyResult = instructionResult(fn, property, 0);
 	if (propertyResult === undefined) return undefined;
 	const propertyUses = index.uses.get(root(propertyResult)) ?? [];
 	if (
@@ -1467,10 +1548,10 @@ function exactPropertyCallCandidate(
 	) {
 		return undefined;
 	}
-	const handler = fn.blockHandler(fn.instructionBlock(call));
+	const handler = handlerBlock(fn, fn.instructionBlock(call));
 	return {
 		property,
-		exceptionalBlocks: Object.freeze(handler === undefined ? [] : [handler.block]),
+		exceptionalBlocks: Object.freeze(handler === undefined ? [] : [handler]),
 	};
 }
 
@@ -1491,12 +1572,12 @@ function exactStringSplitCallCandidate(
 		fn.instructionKind(call) === "operation" &&
 		fn.instructionOpcodeName(call) === "callBuiltin" &&
 		fn.instructionAttributes(call).operation === "String.prototype.split" &&
-		fn.instructionResults(call).length === 1 &&
+		instructionResultCount(fn, call) === 1 &&
 		control.reachable.has(fn.instructionBlock(call))
 	) {
-		const handler = fn.blockHandler(fn.instructionBlock(call));
+		const handler = handlerBlock(fn, fn.instructionBlock(call));
 		return {
-			exceptionalBlocks: Object.freeze(handler === undefined ? [] : [handler.block]),
+			exceptionalBlocks: Object.freeze(handler === undefined ? [] : [handler]),
 		};
 	}
 	return exactPropertyCallCandidate(program, fn, control, roots, index, call, "split");
@@ -1515,8 +1596,8 @@ function stringCharCodeAtCandidates(
 	for (const call of fn.instructionIds()) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
-			(fn.instructionOperands(call).length !== 2 &&
-				fn.instructionOperands(call).length !== 3)
+			(instructionOperandCount(fn, call) !== 2 &&
+				instructionOperandCount(fn, call) !== 3)
 		) {
 			continue;
 		}
@@ -1530,9 +1611,8 @@ function stringCharCodeAtCandidates(
 			"charCodeAt",
 		);
 		if (matched === undefined) continue;
-		const operands = fn.instructionOperands(call);
-		const receiver = operands[1];
-		const position = operands[2];
+		const receiver = instructionOperand(fn, call, 1);
+		const position = instructionOperand(fn, call, 2);
 		let bounded: CoreStringCharCodeAtCandidate["bounded"];
 		if (receiver !== undefined && position !== undefined) {
 			for (const induction of loops.inductions) {
@@ -1544,8 +1624,8 @@ function stringCharCodeAtCandidates(
 					root(position) !== root(induction.value) ||
 					!induction.loop.blocks.has(fn.instructionBlock(call)) ||
 					!control.dominates(comparison.body, fn.instructionBlock(call)) ||
-					fn.blockHandler(induction.loop.header) !== undefined ||
-					fn.blockHandler(fn.instructionBlock(call)) !== undefined
+					handlerBlock(fn, induction.loop.header) !== undefined ||
+					handlerBlock(fn, fn.instructionBlock(call)) !== undefined
 				)
 					continue;
 				const incoming = (control.predecessors[comparison.body] ?? []).filter(
@@ -1557,8 +1637,8 @@ function stringCharCodeAtCandidates(
 				if (
 					length === undefined ||
 					!staticPropertyNamed(program, fn, length, "length") ||
-					fn.instructionOperands(length).length !== 1 ||
-					root(fn.instructionOperands(length)[0]!) !== root(receiver) ||
+					instructionOperandCount(fn, length) !== 1 ||
+					root(instructionOperand(fn, length, 0)!) !== root(receiver) ||
 					!specializationInstructionDominates(
 						control,
 						index,
@@ -1635,7 +1715,7 @@ function functionCallChainCandidates(
 		if (
 			fn.instructionKind(call) !== "operation" ||
 			fn.instructionOpcodeName(call) !== "call" ||
-			fn.instructionOperands(call).length < 2
+			instructionOperandCount(fn, call) < 2
 		)
 			continue;
 		const matched = exactPropertyCallCandidate(
@@ -1648,7 +1728,7 @@ function functionCallChainCandidates(
 			"call",
 		);
 		if (matched === undefined) continue;
-		const receiver = fn.instructionOperands(call)[1]!;
+		const receiver = instructionOperand(fn, call, 1)!;
 		const targetFunction = exactScriptFunctionTarget(program, fn, roots, receiver);
 		const instructions = Object.freeze([matched.property, call]);
 		candidates.push(
@@ -1730,24 +1810,26 @@ function stringSplitCursorCandidates(
 		const header = loop.header;
 		const body = comparison.body;
 		const headerTerminator = fn.blockTerminator(header);
-		const branch = fn.terminatorPayload(headerTerminator);
 		const latchTerminator = fn.blockTerminator(latch);
-		const latchJump = fn.terminatorPayload(latchTerminator);
 		const bodyTerminator = fn.blockTerminator(body);
-		const bodyExit = fn.terminatorPayload(bodyTerminator);
 		const compactBody = body === latch && loop.blocks.size === 2;
 		const explicitLatch =
 			body !== header &&
 			body !== latch &&
 			loop.blocks.size === 3 &&
-			bodyExit.kind === "jump" &&
-			bodyExit.edge.block === latch;
+			fn.instructionKind(bodyTerminator) === "jump" &&
+			fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(bodyTerminator)) ===
+				latch;
 		if (
-			branch.kind !== "branch" ||
-			branch.consequent.block !== body ||
-			branch.alternate.block !== comparison.exit ||
-			latchJump.kind !== "jump" ||
-			latchJump.edge.block !== header ||
+			fn.instructionKind(headerTerminator) !== "branch" ||
+			fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator)) !==
+				body ||
+			fn.kernel.terminatorEdgeBlock(
+				fn.kernel.terminatorEdgeStart(headerTerminator) + 1,
+			) !== comparison.exit ||
+			fn.instructionKind(latchTerminator) !== "jump" ||
+			fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(latchTerminator)) !==
+				header ||
 			(!compactBody && !explicitLatch) ||
 			comparison.instruction !== [...fn.bodyInstructionIds(header)].at(-1)
 		)
@@ -1756,11 +1838,11 @@ function stringSplitCursorCandidates(
 		if (
 			length === undefined ||
 			!staticPropertyNamed(program, fn, length, "length") ||
-			fn.instructionOperands(length).length !== 1 ||
+			instructionOperandCount(fn, length) !== 1 ||
 			length !== [...fn.bodyInstructionIds(header)].at(-2)
 		)
 			continue;
-		const splitResult = root(fn.instructionOperands(length)[0]!);
+		const splitResult = root(instructionOperand(fn, length, 0)!);
 		const call = specializationDefinition(fn, roots, splitResult);
 		if (
 			call === undefined ||
@@ -1784,9 +1866,9 @@ function stringSplitCursorCandidates(
 			trimProperty === undefined ||
 			trimCall === undefined ||
 			fn.instructionOpcodeName(element) !== "loadProperty" ||
-			fn.instructionOperands(element).length !== 2 ||
-			root(fn.instructionOperands(element)[0]!) !== splitResult ||
-			root(fn.instructionOperands(element)[1]!) !== root(induction.value)
+			instructionOperandCount(fn, element) !== 2 ||
+			root(instructionOperand(fn, element, 0)!) !== splitResult ||
+			root(instructionOperand(fn, element, 1)!) !== root(induction.value)
 		)
 			continue;
 		const trim = exactPropertyCallCandidate(
@@ -1798,13 +1880,13 @@ function stringSplitCursorCandidates(
 			trimCall,
 			"trim",
 		);
-		const elementResult = fn.instructionResults(element)[0];
+		const elementResult = instructionResult(fn, element, 0);
 		if (
 			trim === undefined ||
 			trim.exceptionalBlocks.length !== 0 ||
 			trim.property !== trimProperty ||
 			elementResult === undefined ||
-			root(fn.instructionOperands(trimCall)[1]!) !== root(elementResult)
+			root(instructionOperand(fn, trimCall, 1)!) !== root(elementResult)
 		)
 			continue;
 		const increment = induction.updateInstruction;
@@ -1815,7 +1897,7 @@ function stringSplitCursorCandidates(
 			increment !== [...fn.bodyInstructionIds(latch)].at(-1)
 		)
 			continue;
-		const incrementInput = fn.instructionOperands(increment)[0];
+		const incrementInput = instructionOperand(fn, increment, 0);
 		if (incrementInput === undefined) continue;
 		const inputDefinition = specializationDefinition(fn, roots, incrementInput);
 		const advance =
@@ -1824,10 +1906,10 @@ function stringSplitCursorCandidates(
 			fn.instructionAttributes(inputDefinition).operator === "tonumeric"
 				? inputDefinition
 				: increment;
-		const advanceInput = fn.instructionOperands(advance)[0];
+		const advanceInput = instructionOperand(fn, advance, 0);
 		if (advanceInput === undefined || root(advanceInput) !== root(induction.value))
 			continue;
-		const trimResult = fn.instructionResults(trimCall)[0];
+		const trimResult = instructionResult(fn, trimCall, 0);
 		if (trimResult === undefined) continue;
 		const primitiveStringLengths: Array<CoreInstructionId> = [];
 		let trimResultSafe = true;
@@ -1840,12 +1922,12 @@ function stringSplitCursorCandidates(
 				primitiveStringLengths.push(use.instruction);
 			} else trimResultSafe = false;
 		}
-		const comparisonResult = fn.instructionResults(comparison.instruction)[0];
+		const comparisonResult = instructionResult(fn, comparison.instruction, 0);
 		if (
 			!trimResultSafe ||
 			primitiveStringLengths.length > 64 ||
 			comparisonResult === undefined ||
-			root(branch.condition) !== root(comparisonResult) ||
+			root(instructionOperand(fn, headerTerminator, 0)!) !== root(comparisonResult) ||
 			!exactUses(splitResult, [
 				{ instruction: length, position: 0 },
 				{ instruction: element, position: 0 },
@@ -1859,7 +1941,7 @@ function stringSplitCursorCandidates(
 				{ instruction: trimProperty, position: 0 },
 				{ instruction: trimCall, position: 1 },
 			]) ||
-			!exactUses(fn.instructionResults(trimProperty)[0]!, [
+			!exactUses(instructionResult(fn, trimProperty, 0)!, [
 				{ instruction: trimCall, position: 0 },
 			])
 		)
@@ -1887,7 +1969,7 @@ function stringSplitCursorCandidates(
 		if (
 			[...ordinaryBlocks].some(
 				(block) =>
-					fn.blockHandler(block) !== undefined || index.handlerTargets.has(block),
+					handlerBlock(fn, block) !== undefined || index.handlerTargets.has(block),
 			)
 		)
 			continue;
@@ -1945,22 +2027,22 @@ function exactFreshCollectionReceiver(
 		: operation.startsWith("Set.prototype.")
 			? "Set"
 			: undefined;
-	const receiver = fn.instructionOperands(call)[1];
+	const receiver = instructionOperand(fn, call, 1);
 	if (expected === undefined || receiver === undefined) return undefined;
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	const definition = fn.valueDefinition(root(receiver));
+	const definition = definingInstruction(fn, root(receiver));
 	if (
-		definition.kind !== "instruction" ||
-		fn.instructionOpcodeName(definition.instruction) !== "construct"
+		definition === undefined ||
+		fn.instructionOpcodeName(definition) !== "construct"
 	)
 		return undefined;
-	const constructor = fn.instructionOperands(definition.instruction)[0];
+	const constructor = instructionOperand(fn, definition, 0);
 	if (constructor === undefined) return undefined;
-	const constructorDefinition = fn.valueDefinition(root(constructor));
+	const constructorDefinition = definingInstruction(fn, root(constructor));
 	if (
-		constructorDefinition.kind !== "instruction" ||
-		fn.instructionOpcodeName(constructorDefinition.instruction) !== "loadIntrinsic" ||
-		fn.instructionAttributes(constructorDefinition.instruction).intrinsic !== expected
+		constructorDefinition === undefined ||
+		fn.instructionOpcodeName(constructorDefinition) !== "loadIntrinsic" ||
+		fn.instructionAttributes(constructorDefinition).intrinsic !== expected
 	)
 		return undefined;
 	if (index.controlUses.has(root(receiver))) return undefined;
@@ -2044,12 +2126,12 @@ function freshArrayLengthCandidates(
 		if (
 			fn.instructionKind(load) !== "operation" ||
 			!staticPropertyNamed(program, fn, load, "length") ||
-			fn.instructionOperands(load).length !== 1 ||
-			fn.instructionResults(load).length !== 1 ||
+			instructionOperandCount(fn, load) !== 1 ||
+			instructionResultCount(fn, load) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(load))
 		)
 			continue;
-		const base = fn.instructionOperands(load)[0]!;
+		const base = instructionOperand(fn, load, 0)!;
 		const layout = provenanceAnalysis.allocationOf(base);
 		if (
 			layout?.kind !== "indexed" ||
@@ -2075,8 +2157,8 @@ function freshArrayLengthCandidates(
 		const exceptionalBlocks = Object.freeze([
 			...new Set(
 				instructions.flatMap((instruction) => {
-					const handler = fn.blockHandler(fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler.block];
+					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+					return handler === undefined ? [] : [handler];
 				}),
 			),
 		]);
@@ -2120,8 +2202,8 @@ function indexedLengthLoopCandidates(
 		if (
 			fn.instructionKind(load) !== "operation" ||
 			!staticPropertyNamed(program, fn, load, "length") ||
-			fn.instructionOperands(load).length !== 1 ||
-			fn.instructionResults(load).length !== 1 ||
+			instructionOperandCount(fn, load) !== 1 ||
+			instructionResultCount(fn, load) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(load))
 		)
 			continue;
@@ -2130,11 +2212,15 @@ function indexedLengthLoopCandidates(
 			.filter(({ blocks }) => blocks.has(block))
 			.sort((left, right) => left.blocks.size - right.blocks.size)[0];
 		if (loop === undefined) continue;
-		const output = fn.instructionResults(load)[0]!;
+		const output = instructionResult(fn, load, 0)!;
 		if (index.controlUses.has(roots.get(output) ?? output)) continue;
-		const uses = [...fn.uses(output)];
-		if (uses.length !== 1) continue;
-		const comparison = uses[0]!.instruction;
+		let useCount = 0;
+		let comparison: CoreInstructionId | undefined;
+		forEachValueUse(fn, output, (instruction) => {
+			useCount++;
+			if (useCount === 1) comparison = instruction;
+		});
+		if (useCount !== 1 || comparison === undefined) continue;
 		const operator = fn.instructionAttributes(comparison).operator;
 		if (
 			fn.instructionKind(comparison) !== "operation" ||
@@ -2144,15 +2230,14 @@ function indexedLengthLoopCandidates(
 			!INDEXED_LENGTH_LOOP_OPERATORS.has(operator)
 		)
 			continue;
-		const comparisonOperands = fn.instructionOperands(comparison);
 		const lengthPosition =
-			comparisonOperands[0] === output
+			instructionOperand(fn, comparison, 0) === output
 				? 1
-				: comparisonOperands[1] === output
+				: instructionOperand(fn, comparison, 1) === output
 					? 2
 					: undefined;
 		if (lengthPosition === undefined) continue;
-		const induction = comparisonOperands[lengthPosition === 1 ? 1 : 0];
+		const induction = instructionOperand(fn, comparison, lengthPosition === 1 ? 1 : 0);
 		if (
 			induction === undefined ||
 			(fn.valueRepresentation(induction) !== "i32" &&
@@ -2167,7 +2252,7 @@ function indexedLengthLoopCandidates(
 			loadLocation.index >= comparisonLocation.index
 		)
 			continue;
-		const receiver = fn.instructionOperands(load)[0]!;
+		const receiver = instructionOperand(fn, load, 0)!;
 		const elements: Array<{
 			readonly instruction: CoreInstructionId;
 			readonly kind: "load" | "store";
@@ -2186,8 +2271,8 @@ function indexedLengthLoopCandidates(
 							: undefined;
 				if (
 					kind === undefined ||
-					fn.instructionOperands(instruction)[0] !== receiver ||
-					fn.instructionOperands(instruction)[1] !== induction
+					instructionOperand(fn, instruction, 0) !== receiver ||
+					instructionOperand(fn, instruction, 1) !== induction
 				)
 					continue;
 				const location = index.location.get(instruction);
@@ -2210,8 +2295,8 @@ function indexedLengthLoopCandidates(
 		const exceptionalBlocks = Object.freeze([
 			...new Set(
 				instructions.flatMap((instruction) => {
-					const handler = fn.blockHandler(fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler.block];
+					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+					return handler === undefined ? [] : [handler];
 				}),
 			),
 		]);
@@ -2256,9 +2341,7 @@ function iteratorCursorKind(
 	readonly protocol: CorePlanIteratorCursorProtocol;
 } {
 	const root = roots.get(source) ?? source;
-	const definition = fn.valueDefinition(root);
-	const sourceInstruction =
-		definition.kind === "instruction" ? definition.instruction : undefined;
+	const sourceInstruction = definingInstruction(fn, root);
 	if (
 		fn.valueRepresentation(root) === "string" ||
 		(sourceInstruction !== undefined &&
@@ -2273,16 +2356,16 @@ function iteratorCursorKind(
 	const constructor =
 		sourceInstruction !== undefined &&
 		fn.instructionOpcodeName(sourceInstruction) === "construct"
-			? fn.instructionOperands(sourceInstruction)[0]
+			? instructionOperand(fn, sourceInstruction, 0)
 			: undefined;
 	const constructorDefinition =
 		constructor === undefined
 			? undefined
-			: fn.valueDefinition(roots.get(constructor) ?? constructor);
+			: definingInstruction(fn, roots.get(constructor) ?? constructor);
 	const intrinsic =
-		constructorDefinition?.kind === "instruction" &&
-		fn.instructionOpcodeName(constructorDefinition.instruction) === "loadIntrinsic"
-			? fn.instructionAttributes(constructorDefinition.instruction).intrinsic
+		constructorDefinition !== undefined &&
+		fn.instructionOpcodeName(constructorDefinition) === "loadIntrinsic"
+			? fn.instructionAttributes(constructorDefinition).intrinsic
 			: undefined;
 	if (
 		(typeof exactTypedArray === "string" &&
@@ -2318,7 +2401,7 @@ function iteratorCursorCandidates(
 			!control.reachable.has(fn.instructionBlock(instruction))
 		)
 			continue;
-		const iterator = fn.instructionOperands(instruction)[0];
+		const iterator = instructionOperand(fn, instruction, 0);
 		if (iterator === undefined) continue;
 		const steps = stepsByIterator.get(root(iterator)) ?? [];
 		steps.push(instruction);
@@ -2329,17 +2412,18 @@ function iteratorCursorCandidates(
 		if (
 			fn.instructionKind(initialize) !== "operation" ||
 			fn.instructionOpcodeName(initialize) !== "getIterator" ||
-			fn.instructionOperands(initialize).length !== 1 ||
-			fn.instructionResults(initialize).length !== 2 ||
+			instructionOperandCount(fn, initialize) !== 1 ||
+			instructionResultCount(fn, initialize) !== 2 ||
 			!control.reachable.has(fn.instructionBlock(initialize))
 		)
 			continue;
-		const [iterator, next] = fn.instructionResults(initialize);
-		const source = fn.instructionOperands(initialize)[0];
+		const iterator = instructionResult(fn, initialize, 0);
+		const next = instructionResult(fn, initialize, 1);
+		const source = instructionOperand(fn, initialize, 0);
 		if (iterator === undefined || next === undefined || source === undefined) continue;
 		const steps = Object.freeze(
 			(stepsByIterator.get(root(iterator)) ?? [])
-				.filter((step) => root(fn.instructionOperands(step)[1]!) === root(next))
+				.filter((step) => root(instructionOperand(fn, step, 1)!) === root(next))
 				.sort((left, right) => left - right),
 		);
 		if (steps.length === 0 || steps.length > 32) continue;
@@ -2348,8 +2432,8 @@ function iteratorCursorCandidates(
 		const exceptionalBlocks = Object.freeze([
 			...new Set(
 				instructions.flatMap((instruction) => {
-					const handler = fn.blockHandler(fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler.block];
+					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+					return handler === undefined ? [] : [handler];
 				}),
 			),
 		]);
@@ -2388,8 +2472,8 @@ function iteratorResultVirtualizationCandidates(
 		const exceptionalBlocks = Object.freeze([
 			...new Set(
 				shard.flatMap((instruction) => {
-					const handler = fn.blockHandler(fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler.block];
+					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+					return handler === undefined ? [] : [handler];
 				}),
 			),
 		]);
@@ -2422,19 +2506,23 @@ function iteratorEntryPairVirtualizationCandidates(
 		if (
 			fn.instructionKind(outerStep) !== "operation" ||
 			fn.instructionOpcodeName(outerStep) !== "iteratorStep" ||
-			fn.instructionResults(outerStep).length !== 2 ||
+			instructionResultCount(fn, outerStep) !== 2 ||
 			!control.reachable.has(fn.instructionBlock(outerStep))
 		)
 			continue;
-		const outerOperands = fn.instructionOperands(outerStep);
-		const cursorInitialize = specializationDefinition(fn, roots, outerOperands[0]!);
+		const cursorInitialize = specializationDefinition(
+			fn,
+			roots,
+			instructionOperand(fn, outerStep, 0)!,
+		);
 		if (
 			cursorInitialize === undefined ||
 			fn.instructionOpcodeName(cursorInitialize) !== "getIterator" ||
-			root(fn.instructionResults(cursorInitialize)[1]!) !== root(outerOperands[1]!)
+			root(instructionResult(fn, cursorInitialize, 1)!) !==
+				root(instructionOperand(fn, outerStep, 1)!)
 		)
 			continue;
-		const source = fn.instructionOperands(cursorInitialize)[0];
+		const source = instructionOperand(fn, cursorInitialize, 0);
 		const sourceDefinition =
 			source === undefined ? undefined : specializationDefinition(fn, roots, source);
 		const sourceAttributes =
@@ -2442,7 +2530,7 @@ function iteratorEntryPairVirtualizationCandidates(
 		const constructor =
 			sourceDefinition !== undefined &&
 			fn.instructionOpcodeName(sourceDefinition) === "construct"
-				? fn.instructionOperands(sourceDefinition)[0]
+				? instructionOperand(fn, sourceDefinition, 0)
 				: undefined;
 		const constructorDefinition =
 			constructor === undefined
@@ -2460,7 +2548,7 @@ function iteratorEntryPairVirtualizationCandidates(
 			intrinsic !== "Set"
 		)
 			continue;
-		const pair = fn.instructionResults(outerStep)[0]!;
+		const pair = instructionResult(fn, outerStep, 0)!;
 		const pairUses = index.uses.get(root(pair)) ?? [];
 		const innerInitialize =
 			pairUses.length === 1 &&
@@ -2470,13 +2558,14 @@ function iteratorEntryPairVirtualizationCandidates(
 				: undefined;
 		if (
 			innerInitialize === undefined ||
-			fn.instructionResults(innerInitialize).length !== 2 ||
+			instructionResultCount(fn, innerInitialize) !== 2 ||
 			!specializationInstructionDominates(control, index, outerStep, innerInitialize)
 		)
 			continue;
-		const [innerIteratorValue, innerNextValue] = fn.instructionResults(innerInitialize);
-		const innerIterator = root(innerIteratorValue!);
-		const innerNext = root(innerNextValue!);
+		const innerIteratorValue = instructionResult(fn, innerInitialize, 0)!;
+		const innerNextValue = instructionResult(fn, innerInitialize, 1)!;
+		const innerIterator = root(innerIteratorValue);
+		const innerNext = root(innerNextValue);
 		const iteratorUses = index.uses.get(innerIterator) ?? [];
 		const nextUses = index.uses.get(innerNext) ?? [];
 		const innerSteps = iteratorUses
@@ -2484,7 +2573,7 @@ function iteratorEntryPairVirtualizationCandidates(
 				({ instruction, position }) =>
 					position === 0 &&
 					fn.instructionOpcodeName(instruction) === "iteratorStep" &&
-					root(fn.instructionOperands(instruction)[1]!) === innerNext,
+					root(instructionOperand(fn, instruction, 1)!) === innerNext,
 			)
 			.map(({ instruction }) => instruction);
 		const innerCloses = iteratorUses
@@ -2519,8 +2608,8 @@ function iteratorEntryPairVirtualizationCandidates(
 		const innerBlock = fn.instructionBlock(innerInitialize);
 		const firstBlock = fn.instructionBlock(orderedSteps[0]);
 		const secondBlock = fn.instructionBlock(orderedSteps[1]);
-		const innerTerminator = fn.terminatorPayload(fn.blockTerminator(innerBlock));
-		const firstTerminator = fn.terminatorPayload(fn.blockTerminator(firstBlock));
+		const innerTerminator = fn.blockTerminator(innerBlock);
+		const firstTerminator = fn.blockTerminator(firstBlock);
 		const corridor = new Set([innerInitialize, ...orderedSteps]);
 		const corridorBlocks = new Set([innerBlock, firstBlock, secondBlock]);
 		if (
@@ -2530,10 +2619,13 @@ function iteratorEntryPairVirtualizationCandidates(
 				),
 			) ||
 			(innerBlock !== firstBlock &&
-				(innerTerminator.kind !== "jump" || innerTerminator.edge.block !== firstBlock)) ||
+				(fn.instructionKind(innerTerminator) !== "jump" ||
+					fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(innerTerminator)) !==
+						firstBlock)) ||
 			(firstBlock !== secondBlock &&
-				(firstTerminator.kind !== "jump" ||
-					firstTerminator.edge.block !== secondBlock)) ||
+				(fn.instructionKind(firstTerminator) !== "jump" ||
+					fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(firstTerminator)) !==
+						secondBlock)) ||
 			innerCloses.some(
 				(instruction) =>
 					[...fn.bodyInstructionIds(fn.instructionBlock(instruction))].length !== 1,
@@ -2550,8 +2642,8 @@ function iteratorEntryPairVirtualizationCandidates(
 		const exceptionalBlocks = Object.freeze([
 			...new Set(
 				instructions.flatMap((instruction) => {
-					const handler = fn.blockHandler(fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler.block];
+					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+					return handler === undefined ? [] : [handler];
 				}),
 			),
 		]);
@@ -2593,23 +2685,26 @@ function stringSplitProjectionCandidates(
 			(opcode !== "call" && opcode !== "callBuiltin") ||
 			(direct
 				? fn.instructionAttributes(call).operation !== "String.prototype.split" ||
-					fn.instructionOperands(call).length !== 2
-				: fn.instructionOperands(call).length !== 3) ||
-			fn.instructionResults(call).length !== 1 ||
+					instructionOperandCount(fn, call) !== 2
+				: instructionOperandCount(fn, call) !== 3) ||
+			instructionResultCount(fn, call) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(call))
 		)
 			continue;
-		const operands = fn.instructionOperands(call);
 		const property = direct
 			? undefined
-			: specializationDefinition(fn, roots, operands[0]!);
-		const receiver = operands[direct ? 0 : 1]!;
-		const separator = specializationDefinition(fn, roots, operands[direct ? 1 : 2]!);
+			: specializationDefinition(fn, roots, instructionOperand(fn, call, 0)!);
+		const receiver = instructionOperand(fn, call, direct ? 0 : 1)!;
+		const separator = specializationDefinition(
+			fn,
+			roots,
+			instructionOperand(fn, call, direct ? 1 : 2)!,
+		);
 		if (
 			(property !== undefined &&
 				(!staticPropertyNamed(program, fn, property, "split") ||
-					fn.instructionOperands(property).length !== 1 ||
-					root(fn.instructionOperands(property)[0]!) !== root(receiver) ||
+					instructionOperandCount(fn, property) !== 1 ||
+					root(instructionOperand(fn, property, 0)!) !== root(receiver) ||
 					!specializationInstructionDominates(control, index, property, call))) ||
 			separator === undefined ||
 			fn.instructionOpcodeName(separator) !== "createString" ||
@@ -2623,7 +2718,7 @@ function stringSplitProjectionCandidates(
 		)
 			continue;
 		if (property !== undefined) {
-			const propertyResult = fn.instructionResults(property)[0]!;
+			const propertyResult = instructionResult(fn, property, 0)!;
 			const propertyUses = index.uses.get(root(propertyResult)) ?? [];
 			if (
 				propertyUses.length !== 1 ||
@@ -2632,7 +2727,7 @@ function stringSplitProjectionCandidates(
 			)
 				continue;
 		}
-		const result = fn.instructionResults(call)[0]!;
+		const result = instructionResult(fn, call, 0)!;
 		const resultRoot = root(result);
 		if (index.controlUses.has(resultRoot)) continue;
 		const loads: Array<CoreStringSplitProjectionCandidate["loads"][number]> = [];
@@ -2662,13 +2757,13 @@ function stringSplitProjectionCandidates(
 			if (
 				opcode === "loadProperty" &&
 				use.position === 0 &&
-				fn.instructionOperands(consumer).length === 2 &&
+				instructionOperandCount(fn, consumer) === 2 &&
 				specializationInstructionDominates(control, index, call, consumer)
 			) {
 				const key = specializationDefinition(
 					fn,
 					roots,
-					fn.instructionOperands(consumer)[1]!,
+					instructionOperand(fn, consumer, 1)!,
 				);
 				const projected =
 					key === undefined ? undefined : fn.instructionAttributes(key).value;
@@ -2715,7 +2810,7 @@ function stringSplitProjectionCandidates(
 			new Set(instructions).size !== instructions.length ||
 			instructions.some((instruction) => {
 				const block = fn.instructionBlock(instruction);
-				return fn.blockHandler(block) !== undefined || index.handlerTargets.has(block);
+				return handlerBlock(fn, block) !== undefined || index.handlerTargets.has(block);
 			})
 		)
 			continue;
@@ -2753,17 +2848,25 @@ function stringSliceNumberCandidates(
 		if (
 			fn.instructionKind(sliceCall) !== "operation" ||
 			fn.instructionOpcodeName(sliceCall) !== "call" ||
-			fn.instructionOperands(sliceCall).length !== 3 ||
-			fn.instructionResults(sliceCall).length !== 1 ||
+			instructionOperandCount(fn, sliceCall) !== 3 ||
+			instructionResultCount(fn, sliceCall) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(sliceCall))
 		)
 			continue;
-		const operands = fn.instructionOperands(sliceCall);
-		const property = specializationDefinition(fn, roots, operands[0]!);
-		const start = specializationDefinition(fn, roots, operands[2]!);
+		const property = specializationDefinition(
+			fn,
+			roots,
+			instructionOperand(fn, sliceCall, 0)!,
+		);
+		const start = specializationDefinition(
+			fn,
+			roots,
+			instructionOperand(fn, sliceCall, 2)!,
+		);
 		if (
 			!staticPropertyNamed(program, fn, property, "slice") ||
-			root(fn.instructionOperands(property)[0]!) !== root(operands[1]!) ||
+			root(instructionOperand(fn, property, 0)!) !==
+				root(instructionOperand(fn, sliceCall, 1)!) ||
 			!specializationInstructionDominates(control, index, property, sliceCall) ||
 			start === undefined ||
 			(fn.instructionOpcodeName(start) !== "createNumber" &&
@@ -2773,8 +2876,8 @@ function stringSliceNumberCandidates(
 			continue;
 		const sliceStart = fn.instructionAttributes(start).value;
 		if (typeof sliceStart !== "number" || !Number.isFinite(sliceStart)) continue;
-		const propertyUses = index.uses.get(root(fn.instructionResults(property)[0]!)) ?? [];
-		const result = fn.instructionResults(sliceCall)[0]!;
+		const propertyUses = index.uses.get(root(instructionResult(fn, property, 0)!)) ?? [];
+		const result = instructionResult(fn, sliceCall, 0)!;
 		const sliceUses = (index.uses.get(root(result)) ?? []).filter(({ instruction }) => {
 			const opcode = fn.instructionOpcodeName(instruction);
 			return opcode !== "throwIfTdz" && opcode !== "rootUse";
@@ -2790,14 +2893,14 @@ function stringSliceNumberCandidates(
 		const numberCall = sliceUses[0].instruction;
 		if (
 			fn.instructionOpcodeName(numberCall) !== "call" ||
-			fn.instructionOperands(numberCall).length !== 3 ||
-			root(fn.instructionOperands(numberCall)[2]!) !== root(result)
+			instructionOperandCount(fn, numberCall) !== 3 ||
+			root(instructionOperand(fn, numberCall, 2)!) !== root(result)
 		)
 			continue;
 		const numberIntrinsic = specializationDefinition(
 			fn,
 			roots,
-			fn.instructionOperands(numberCall)[0]!,
+			instructionOperand(fn, numberCall, 0)!,
 		);
 		if (
 			numberIntrinsic === undefined ||
@@ -2820,8 +2923,8 @@ function stringSliceNumberCandidates(
 		const exceptionalBlocks = Object.freeze([
 			...new Set(
 				instructions.flatMap((instruction) => {
-					const handler = fn.blockHandler(fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler.block];
+					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+					return handler === undefined ? [] : [handler];
 				}),
 			),
 		]);
@@ -2870,37 +2973,37 @@ function regexpExecProjectionCandidates(
 				(opcode === "throwIfTdz" ||
 					opcode === "rootUse" ||
 					(opcode === "move" &&
-						fn.instructionResults(instruction)[0] !== undefined &&
-						root(fn.instructionResults(instruction)[0]!) === root(value)))
+						instructionResult(fn, instruction, 0) !== undefined &&
+						root(instructionResult(fn, instruction, 0)!) === root(value)))
 			);
 		});
 	for (const call of fn.instructionIds()) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
 			fn.instructionOpcodeName(call) !== "call" ||
-			fn.instructionOperands(call).length !== 3 ||
-			fn.instructionResults(call).length !== 1 ||
+			instructionOperandCount(fn, call) !== 3 ||
+			instructionResultCount(fn, call) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(call))
 		)
 			continue;
-		const operands = fn.instructionOperands(call);
-		const property = specializationDefinition(fn, roots, operands[0]!);
+		const property = specializationDefinition(fn, roots, instructionOperand(fn, call, 0)!);
 		if (
 			!staticPropertyNamed(program, fn, property, "exec") ||
-			fn.instructionOperands(property).length !== 1 ||
-			fn.instructionResults(property).length !== 1 ||
-			root(fn.instructionOperands(property)[0]!) !== root(operands[1]!) ||
+			instructionOperandCount(fn, property) !== 1 ||
+			instructionResultCount(fn, property) !== 1 ||
+			root(instructionOperand(fn, property, 0)!) !==
+				root(instructionOperand(fn, call, 1)!) ||
 			!specializationInstructionDominates(control, index, property, call)
 		)
 			continue;
-		const propertyUses = index.uses.get(root(fn.instructionResults(property)[0]!)) ?? [];
+		const propertyUses = index.uses.get(root(instructionResult(fn, property, 0)!)) ?? [];
 		if (
 			propertyUses.length !== 1 ||
 			propertyUses[0]?.instruction !== call ||
 			propertyUses[0].position !== 0
 		)
 			continue;
-		const result = fn.instructionResults(call)[0]!;
+		const result = instructionResult(fn, call, 0)!;
 		const resultRoot = root(result);
 		if (index.controlUses.has(resultRoot)) continue;
 		const nullChecks: Array<CoreRegExpExecProjectionCandidate["nullChecks"][number]> = [];
@@ -2927,7 +3030,7 @@ function regexpExecProjectionCandidates(
 				(fn.instructionAttributes(consumer).operator === "===" ||
 					fn.instructionAttributes(consumer).operator === "!==")
 			) {
-				const other = fn.instructionOperands(consumer)[use.position === 0 ? 1 : 0];
+				const other = instructionOperand(fn, consumer, use.position === 0 ? 1 : 0);
 				const nullValue =
 					other === undefined ? undefined : specializationDefinition(fn, roots, other);
 				if (
@@ -2942,14 +3045,14 @@ function regexpExecProjectionCandidates(
 			if (
 				opcode === "loadProperty" &&
 				use.position === 0 &&
-				fn.instructionOperands(consumer).length === 2 &&
-				fn.instructionResults(consumer).length === 1 &&
+				instructionOperandCount(fn, consumer) === 2 &&
+				instructionResultCount(fn, consumer) === 1 &&
 				specializationInstructionDominates(control, index, call, consumer)
 			) {
 				const key = specializationDefinition(
 					fn,
 					roots,
-					fn.instructionOperands(consumer)[1]!,
+					instructionOperand(fn, consumer, 1)!,
 				);
 				const captureIndex =
 					key === undefined ? undefined : fn.instructionAttributes(key).value;
@@ -2974,14 +3077,14 @@ function regexpExecProjectionCandidates(
 		if (!safe || loads.length === 0 || loads.length > 8) continue;
 
 		for (const load of loads) {
-			const capture = root(fn.instructionResults(load.instruction)[0]!);
+			const capture = root(instructionResult(fn, load.instruction, 0)!);
 			const captureUses = semanticUses(capture);
 			if (captureUses.length === 1) {
 				const consumer = captureUses[0]!.instruction;
 				if (
 					captureUses[0]!.position === 0 &&
 					staticPropertyNamed(program, fn, consumer, "length") &&
-					fn.instructionOperands(consumer).length === 1
+					instructionOperandCount(fn, consumer) === 1
 				) {
 					load.consumer = { kind: "length", property: consumer };
 					continue;
@@ -2989,12 +3092,12 @@ function regexpExecProjectionCandidates(
 				if (
 					fn.instructionOpcodeName(consumer) === "call" &&
 					captureUses[0]!.position === 2 &&
-					fn.instructionOperands(consumer).length === 3
+					instructionOperandCount(fn, consumer) === 3
 				) {
 					const intrinsic = specializationDefinition(
 						fn,
 						roots,
-						fn.instructionOperands(consumer)[0]!,
+						instructionOperand(fn, consumer, 0)!,
 					);
 					if (
 						intrinsic !== undefined &&
@@ -3022,13 +3125,13 @@ function regexpExecProjectionCandidates(
 				upperProperty !== undefined &&
 				upperCall !== undefined &&
 				fn.instructionOpcodeName(upperCall) === "call" &&
-				fn.instructionOperands(upperCall).length === 2 &&
-				root(fn.instructionOperands(upperCall)[0]!) ===
-					root(fn.instructionResults(upperProperty)[0]!) &&
-				(index.uses.get(root(fn.instructionResults(upperProperty)[0]!))?.length ?? 0) ===
+				instructionOperandCount(fn, upperCall) === 2 &&
+				root(instructionOperand(fn, upperCall, 0)!) ===
+					root(instructionResult(fn, upperProperty, 0)!) &&
+				(index.uses.get(root(instructionResult(fn, upperProperty, 0)!))?.length ?? 0) ===
 					1
 			) {
-				const upperResult = root(fn.instructionResults(upperCall)[0]!);
+				const upperResult = root(instructionResult(fn, upperCall, 0)!);
 				const upperUses = semanticUses(upperResult);
 				const lowerPropertyUse = upperUses.find(
 					({ instruction, position }) =>
@@ -3046,13 +3149,13 @@ function regexpExecProjectionCandidates(
 					lowerProperty !== undefined &&
 					lowerCall !== undefined &&
 					fn.instructionOpcodeName(lowerCall) === "call" &&
-					fn.instructionOperands(lowerCall).length === 2 &&
-					root(fn.instructionOperands(lowerCall)[0]!) ===
-						root(fn.instructionResults(lowerProperty)[0]!) &&
-					(index.uses.get(root(fn.instructionResults(lowerProperty)[0]!))?.length ??
+					instructionOperandCount(fn, lowerCall) === 2 &&
+					root(instructionOperand(fn, lowerCall, 0)!) ===
+						root(instructionResult(fn, lowerProperty, 0)!) &&
+					(index.uses.get(root(instructionResult(fn, lowerProperty, 0)!))?.length ??
 						0) === 1
 				) {
-					const lowerUses = semanticUses(fn.instructionResults(lowerCall)[0]!);
+					const lowerUses = semanticUses(instructionResult(fn, lowerCall, 0)!);
 					const lengthProperty = lowerUses[0]?.instruction;
 					if (
 						lowerUses.length === 1 &&
@@ -3086,16 +3189,16 @@ function regexpExecProjectionCandidates(
 				charProperty === undefined ||
 				charCall === undefined ||
 				fn.instructionOpcodeName(charCall) !== "call" ||
-				fn.instructionOperands(charCall).length !== 3 ||
-				root(fn.instructionOperands(charCall)[0]!) !==
-					root(fn.instructionResults(charProperty)[0]!) ||
-				(index.uses.get(root(fn.instructionResults(charProperty)[0]!))?.length ?? 0) !== 1
+				instructionOperandCount(fn, charCall) !== 3 ||
+				root(instructionOperand(fn, charCall, 0)!) !==
+					root(instructionResult(fn, charProperty, 0)!) ||
+				(index.uses.get(root(instructionResult(fn, charProperty, 0)!))?.length ?? 0) !== 1
 			)
 				continue;
 			const zero = specializationDefinition(
 				fn,
 				roots,
-				fn.instructionOperands(charCall)[2]!,
+				instructionOperand(fn, charCall, 2)!,
 			);
 			if (
 				zero !== undefined &&
@@ -3112,18 +3215,22 @@ function regexpExecProjectionCandidates(
 		}
 
 		let lockedLiteral: CoreRegExpExecProjectionCandidate["lockedLiteral"];
-		const construct = specializationDefinition(fn, roots, operands[1]!);
+		const construct = specializationDefinition(
+			fn,
+			roots,
+			instructionOperand(fn, call, 1)!,
+		);
 		if (
 			construct !== undefined &&
 			fn.instructionOpcodeName(construct) === "construct" &&
-			fn.instructionResults(construct).length === 1
+			instructionResultCount(fn, construct) === 1
 		) {
 			const receiverUses =
-				index.uses.get(root(fn.instructionResults(construct)[0]!)) ?? [];
+				index.uses.get(root(instructionResult(fn, construct, 0)!)) ?? [];
 			const constructorIntrinsic = specializationDefinition(
 				fn,
 				roots,
-				fn.instructionOperands(construct)[0]!,
+				instructionOperand(fn, construct, 0)!,
 			);
 			if (
 				receiverUses.length === 2 &&
@@ -3176,7 +3283,7 @@ function regexpExecProjectionCandidates(
 			instructions.length > 96 ||
 			instructions.some((instruction) => {
 				const block = fn.instructionBlock(instruction);
-				return fn.blockHandler(block) !== undefined || index.handlerTargets.has(block);
+				return handlerBlock(fn, block) !== undefined || index.handlerTargets.has(block);
 			})
 		)
 			continue;
@@ -3221,18 +3328,18 @@ function regexpIteratorProjectionCandidates(
 		const instructions = [...fn.bodyInstructionIds(block)];
 		const step = instructions.at(-1);
 		const doneBranch = fn.blockTerminator(block);
-		const branch = fn.terminatorPayload(doneBranch);
 		if (
 			step === undefined ||
 			fn.instructionOpcodeName(step) !== "iteratorStep" ||
-			fn.instructionOperands(step).length !== 2 ||
-			fn.instructionResults(step).length !== 2 ||
-			branch.kind !== "branch" ||
-			root(branch.condition) !== root(fn.instructionResults(step)[1]!) ||
-			branch.consequent.block === block
+			instructionOperandCount(fn, step) !== 2 ||
+			instructionResultCount(fn, step) !== 2 ||
+			fn.instructionKind(doneBranch) !== "branch" ||
+			root(instructionOperand(fn, doneBranch, 0)!) !==
+				root(instructionResult(fn, step, 1)!) ||
+			fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(doneBranch)) === block
 		)
 			continue;
-		const result = fn.instructionResults(step)[0]!;
+		const result = instructionResult(fn, step, 0)!;
 		const resultRoot = root(result);
 		if (index.controlUses.has(resultRoot)) continue;
 		const loads: Array<CoreRegExpIteratorProjectionCandidate["loads"][number]> = [];
@@ -3250,8 +3357,8 @@ function regexpIteratorProjectionCandidates(
 			if (
 				opcode !== "loadProperty" ||
 				use.position !== 0 ||
-				fn.instructionOperands(capture).length !== 2 ||
-				fn.instructionResults(capture).length !== 1 ||
+				instructionOperandCount(fn, capture) !== 2 ||
+				instructionResultCount(fn, capture) !== 1 ||
 				!specializationInstructionDominates(control, index, step, capture)
 			) {
 				safe = false;
@@ -3260,17 +3367,17 @@ function regexpIteratorProjectionCandidates(
 			const key = specializationDefinition(
 				fn,
 				roots,
-				fn.instructionOperands(capture)[1]!,
+				instructionOperand(fn, capture, 1)!,
 			);
 			const captureIndex =
 				key === undefined ? undefined : fn.instructionAttributes(key).value;
-			const captureUses = index.uses.get(root(fn.instructionResults(capture)[0]!)) ?? [];
+			const captureUses = index.uses.get(root(instructionResult(fn, capture, 0)!)) ?? [];
 			const numberUse = captureUses[0];
 			const numberCall = numberUse?.instruction;
 			const numberIntrinsic =
 				numberCall === undefined
 					? undefined
-					: specializationDefinition(fn, roots, fn.instructionOperands(numberCall)[0]!);
+					: specializationDefinition(fn, roots, instructionOperand(fn, numberCall, 0)!);
 			if (
 				key === undefined ||
 				fn.instructionOpcodeName(key) !== "createNumber" ||
@@ -3283,9 +3390,9 @@ function regexpIteratorProjectionCandidates(
 				numberUse?.position !== 2 ||
 				numberCall === undefined ||
 				fn.instructionOpcodeName(numberCall) !== "call" ||
-				fn.instructionOperands(numberCall).length !== 3 ||
-				root(fn.instructionOperands(numberCall)[2]!) !==
-					root(fn.instructionResults(capture)[0]!) ||
+				instructionOperandCount(fn, numberCall) !== 3 ||
+				root(instructionOperand(fn, numberCall, 2)!) !==
+					root(instructionResult(fn, capture, 0)!) ||
 				numberIntrinsic === undefined ||
 				fn.instructionOpcodeName(numberIntrinsic) !== "loadIntrinsic" ||
 				fn.instructionAttributes(numberIntrinsic).intrinsic !== "Number" ||
@@ -3326,8 +3433,8 @@ function regexpIteratorProjectionCandidates(
 		const exceptionalBlocks = Object.freeze([
 			...new Set(
 				claimedInstructions.flatMap((instruction) => {
-					const handler = fn.blockHandler(fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler.block];
+					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+					return handler === undefined ? [] : [handler];
 				}),
 			),
 		]);
@@ -3341,7 +3448,9 @@ function regexpIteratorProjectionCandidates(
 				root: step,
 				step,
 				doneBranch,
-				exitBlock: branch.consequent.block,
+				exitBlock: fn.kernel.terminatorEdgeBlock(
+					fn.kernel.terminatorEdgeStart(doneBranch),
+				),
 				resultValues: specializationResultValues(index, roots, result),
 				exceptionalBlocks,
 				loads: Object.freeze(loads),
@@ -3396,10 +3505,14 @@ function discoverCandidates(
 				dense.length === 0 &&
 				provenanceAnalysis.escape(layout.instruction) === "contained"
 			) {
+				const useInstructions: Array<CoreInstructionId> = [];
+				forEachValueUse(fn, layout.result, (instruction) => {
+					useInstructions.push(instruction);
+				});
 				const instructions = Object.freeze(
 					[
 						layout.instruction,
-						...[...fn.uses(layout.result)].map(({ instruction }) => instruction),
+						...useInstructions,
 					].filter((instruction, index, all) => all.indexOf(instruction) === index),
 				);
 				const candidate = Object.freeze({
@@ -3445,23 +3558,32 @@ function discoverCandidates(
 			)
 		)
 			continue;
-		const output = fn.instructionResults(instruction)[0];
+		const output = instructionResult(fn, instruction, 0);
 		if (
 			output === undefined ||
 			fn.valueRepresentation(output) !== "boxed" ||
 			index.controlUses.has(roots.get(output) ?? output)
 		)
 			continue;
-		const uses = [...fn.uses(output)];
-		if (uses.length !== 1) continue;
-		const user = uses[0]!.instruction;
+		let useCount = 0;
+		let user: CoreInstructionId | undefined;
+		forEachValueUse(fn, output, (instruction) => {
+			useCount++;
+			if (useCount === 1) user = instruction;
+		});
+		if (useCount !== 1 || user === undefined) continue;
 		const startLocation = index.location.get(instruction);
 		const finishLocation = index.location.get(user);
+		let matchingOperands = 0;
+		const userOperandCount = instructionOperandCount(fn, user);
+		for (let position = 0; position < userOperandCount; position++) {
+			if (instructionOperand(fn, user, position) === output) matchingOperands++;
+		}
 		if (
 			fn.instructionKind(user) !== "operation" ||
 			!numericOpcodes.has(fn.instructionOpcodeName(user)) ||
 			!control.reachable.has(fn.instructionBlock(user)) ||
-			fn.instructionOperands(user).filter((operand) => operand === output).length !== 1 ||
+			matchingOperands !== 1 ||
 			startLocation === undefined ||
 			finishLocation === undefined ||
 			startLocation.block !== finishLocation.block ||
