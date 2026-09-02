@@ -1,0 +1,148 @@
+{
+	"schemaVersion": 1,
+	"description": "Permanent Core optimizer complexity ladder",
+	"syntheticScales": [1, 3, 10],
+	"tiers": [
+		{
+			"tier": 1,
+			"id": "local-arithmetic",
+			"kind": "synthetic",
+			"description": "Single-function local arithmetic and constants"
+		},
+		{
+			"tier": 2,
+			"id": "straight-line",
+			"kind": "synthetic",
+			"description": "Large straight-line local IR"
+		},
+		{
+			"tier": 3,
+			"id": "cfg-heavy",
+			"kind": "synthetic",
+			"description": "Branch, phi and CFG-heavy functions"
+		},
+		{
+			"tier": 4,
+			"id": "nested-loops",
+			"kind": "synthetic",
+			"description": "Nested loops, LICM, PRE and representation selection"
+		},
+		{
+			"tier": 5,
+			"id": "memory-provenance",
+			"kind": "synthetic",
+			"description": "Allocation, provenance, alias and sparse-memory workloads"
+		},
+		{
+			"tier": 6,
+			"id": "exact-scc",
+			"kind": "synthetic",
+			"description": "Exact finite call graphs and recursive SCCs"
+		},
+		{
+			"tier": 7,
+			"id": "wildcard-opaque",
+			"kind": "synthetic",
+			"description": "Wildcard and opaque call graphs"
+		},
+		{
+			"tier": 8,
+			"id": "small-compiler-modules",
+			"kind": "real",
+			"description": "Small real compiler modules",
+			"entries": [
+				"src/compiler/core/core-transform-candidates.ts",
+				"src/compiler/core/core-pass-manager.ts",
+				"src/compiler/core/core-ir-shape-provenance.ts"
+			]
+		},
+		{
+			"tier": 9,
+			"id": "medium-compiler-modules",
+			"kind": "real",
+			"description": "Medium Core and compiler modules",
+			"entries": [
+				"src/compiler/core/core-ir-memory.ts",
+				"src/compiler/core/core-ir-summaries.ts",
+				"src/compiler/core/core-ir-value-kinds.ts"
+			]
+		},
+		{
+			"tier": 10,
+			"id": "optimize",
+			"kind": "real",
+			"description": "Core optimizer orchestration",
+			"entries": ["src/compiler/core/optimize.ts"]
+		},
+		{
+			"tier": 11,
+			"id": "compile-program",
+			"kind": "real",
+			"description": "Compiler program pipeline",
+			"entries": ["src/compiler/pipeline/compile-program.ts"]
+		},
+		{
+			"tier": 12,
+			"id": "complete-core-subtree",
+			"kind": "aggregate",
+			"description": "Complete compiler Core subtree",
+			"entries": [
+				"src/compiler/core/compiler-site-facts.ts",
+				"src/compiler/core/core-analysis-manager.ts",
+				"src/compiler/core/core-builder.ts",
+				"src/compiler/core/core-compilation.ts",
+				"src/compiler/core/core-control-flow-passes.ts",
+				"src/compiler/core/core-cross-call-transforms.ts",
+				"src/compiler/core/core-editor.ts",
+				"src/compiler/core/core-format.ts",
+				"src/compiler/core/core-frontend-construction.ts",
+				"src/compiler/core/core-frontend.ts",
+				"src/compiler/core/core-ir-call-targets.ts",
+				"src/compiler/core/core-ir-control-flow.ts",
+				"src/compiler/core/core-ir-exception-flow.ts",
+				"src/compiler/core/core-ir-fact-implication.ts",
+				"src/compiler/core/core-ir-generated-cost.ts",
+				"src/compiler/core/core-ir-interprocedural-flow.ts",
+				"src/compiler/core/core-ir-loops.ts",
+				"src/compiler/core/core-ir-memory.ts",
+				"src/compiler/core/core-ir-opcodes.ts",
+				"src/compiler/core/core-ir-provenance.ts",
+				"src/compiler/core/core-ir-reachability.ts",
+				"src/compiler/core/core-ir-region-selection.ts",
+				"src/compiler/core/core-ir-region-strategies.ts",
+				"src/compiler/core/core-ir-region-validity.ts",
+				"src/compiler/core/core-ir-regions.ts",
+				"src/compiler/core/core-ir-shape-provenance.ts",
+				"src/compiler/core/core-ir-summaries.ts",
+				"src/compiler/core/core-ir-value-classes.ts",
+				"src/compiler/core/core-ir-value-kinds.ts",
+				"src/compiler/core/core-ir-verifier.ts",
+				"src/compiler/core/core-ir.ts",
+				"src/compiler/core/core-local-passes.ts",
+				"src/compiler/core/core-memory-passes.ts",
+				"src/compiler/core/core-optimization-plan-certificate.ts",
+				"src/compiler/core/core-optimization-report.ts",
+				"src/compiler/core/core-pass-manager.ts",
+				"src/compiler/core/core-pass.ts",
+				"src/compiler/core/core-proof-passes.ts",
+				"src/compiler/core/core-store.ts",
+				"src/compiler/core/core-transform-candidates.ts",
+				"src/compiler/core/optimize.ts",
+				"src/compiler/core/semantic-lowering.ts"
+			]
+		},
+		{
+			"tier": 13,
+			"id": "node-self-compile",
+			"kind": "self-compile",
+			"description": "Full Node-hosted self-compile"
+		},
+		{
+			"tier": 14,
+			"id": "cold-test-check",
+			"kind": "command",
+			"description": "Full cold native test:check batch",
+			"command": ["npm", "run", "test:check"]
+		}
+	]
+}
