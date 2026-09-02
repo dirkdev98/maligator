@@ -148,6 +148,8 @@ describe("Core local optimizer migration matrix", () => {
 		);
 
 		expect(source).not.toMatch(/Set<string>|Map<string>|local:function|key: string/);
+		expect(source).toMatch(/const queued = new Uint8Array/);
+		expect(source).not.toMatch(/new Set<number>\(\)/);
 	});
 
 	it("reuses pass contexts across work items", () => {

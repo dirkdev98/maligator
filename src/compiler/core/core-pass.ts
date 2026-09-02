@@ -92,7 +92,7 @@ export class CorePassContextDriver implements CorePassContext {
 	readonly compilationContext: CoreCompilationContext;
 	readonly #analyses: CoreAnalysisManager;
 	readonly #pass: CorePass;
-	#item: CorePassWorkItem | undefined;
+	readonly #item: CorePassWorkItem;
 	#remainingEdits = 0;
 
 	constructor(
@@ -105,10 +105,15 @@ export class CorePassContextDriver implements CorePassContext {
 		this.compilationContext = compilationContext;
 		this.#analyses = analyses;
 		this.#pass = pass;
+		this.#item =
+			pass.scope === "function"
+				? { scope: "function", function: 0 as CoreFunctionId }
+				: pass.scope === "scc"
+					? { scope: "scc", index: 0, id: "", functions: [] }
+					: { scope: "program" };
 	}
 
 	get item(): CorePassWorkItem {
-		if (this.#item === undefined) throw new Error("Core pass context has no work item");
 		return this.#item;
 	}
 
@@ -116,8 +121,34 @@ export class CorePassContextDriver implements CorePassContext {
 		return this.#remainingEdits;
 	}
 
-	prepare(item: CorePassWorkItem, remainingEdits: number): CorePassContext {
-		this.#item = item;
+	prepareFunction(functionId: CoreFunctionId, remainingEdits: number): CorePassContext {
+		if (this.#item.scope !== "function") throw new Error("Expected function pass context");
+		(this.#item as { function: CoreFunctionId }).function = functionId;
+		this.#remainingEdits = remainingEdits;
+		return this;
+	}
+
+	prepareScc(
+		index: number,
+		id: string,
+		functions: ReadonlyArray<CoreFunctionId>,
+		remainingEdits: number,
+	): CorePassContext {
+		if (this.#item.scope !== "scc") throw new Error("Expected SCC pass context");
+		const item = this.#item as {
+			index: number;
+			id: string;
+			functions: ReadonlyArray<CoreFunctionId>;
+		};
+		item.index = index;
+		item.id = id;
+		item.functions = functions;
+		this.#remainingEdits = remainingEdits;
+		return this;
+	}
+
+	prepareProgram(remainingEdits: number): CorePassContext {
+		if (this.#item.scope !== "program") throw new Error("Expected program pass context");
 		this.#remainingEdits = remainingEdits;
 		return this;
 	}
