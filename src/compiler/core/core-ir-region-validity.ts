@@ -364,20 +364,38 @@ function verifyBlockOrders(
 
 function localCandidate(
 	program: SealedCoreProgram,
-	cache: Map<CoreFunctionId, ReadonlyMap<string, CoreLocalSpecializationCandidate>>,
+	cache: Map<
+		CoreFunctionId,
+		ReadonlyMap<number, ReadonlyArray<CoreLocalSpecializationCandidate>>
+	>,
 	functionId: CoreFunctionId,
 	key: string,
 ): CoreLocalSpecializationCandidate | undefined {
 	let candidates = cache.get(functionId);
 	if (candidates === undefined) {
-		candidates = new Map(
-			discoverCoreLocalSpecializationCandidates(program, functionId).candidates.map(
-				(candidate) => [candidate.key, candidate],
-			),
-		);
+		const indexed = new Map<number, Array<CoreLocalSpecializationCandidate>>();
+		for (const candidate of discoverCoreLocalSpecializationCandidates(program, functionId)
+			.candidates) {
+			const hash = numericStringHash(candidate.key);
+			const bucket = indexed.get(hash) ?? [];
+			bucket.push(candidate);
+			indexed.set(hash, bucket);
+		}
+		candidates = indexed;
 		cache.set(functionId, candidates);
 	}
-	return candidates.get(key);
+	return candidates
+		.get(numericStringHash(key))
+		?.find((candidate) => candidate.key === key);
+}
+
+function numericStringHash(value: string): number {
+	let hash = 2_166_136_261;
+	for (let index = 0; index < value.length; index++) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 16_777_619);
+	}
+	return hash >>> 0;
 }
 
 function validBuiltinPlanGuard(
@@ -608,7 +626,7 @@ function verifySpecialization(
 	program: SealedCoreProgram,
 	plan: CoreOptimizationPlan,
 	selection: CorePlanSpecialization,
-	ids: Set<string>,
+	ids: Array<string>,
 	claimedInstructions: Map<
 		CoreFunctionId,
 		Map<
@@ -619,11 +637,11 @@ function verifySpecialization(
 	blocks: CorePlanBlockProof,
 	localCandidates: Map<
 		CoreFunctionId,
-		ReadonlyMap<string, CoreLocalSpecializationCandidate>
+		ReadonlyMap<number, ReadonlyArray<CoreLocalSpecializationCandidate>>
 	>,
 ): void {
-	if (ids.has(selection.id)) fail(`duplicate specialization id ${selection.id}`);
-	ids.add(selection.id);
+	if (ids.includes(selection.id)) fail(`duplicate specialization id ${selection.id}`);
+	ids.push(selection.id);
 	if (!coreTargetSupportsSpecialization(selection.kind)) {
 		fail(`${selection.id} has no target implementation for ${selection.kind}`);
 	}
@@ -1751,7 +1769,7 @@ export function verifyCoreOptimizationPlan(
 		fail("live function mapping is not a sorted set of stable IDs");
 	}
 	const blockProofs = verifyBlockOrders(program, plan);
-	const ids = new Set<string>();
+	const ids: Array<string> = [];
 	const claimedInstructions = new Map<
 		CoreFunctionId,
 		Map<
@@ -1761,7 +1779,7 @@ export function verifyCoreOptimizationPlan(
 	>();
 	const localCandidates = new Map<
 		CoreFunctionId,
-		ReadonlyMap<string, CoreLocalSpecializationCandidate>
+		ReadonlyMap<number, ReadonlyArray<CoreLocalSpecializationCandidate>>
 	>();
 	const specializations = projectCoreSpecializationRecipes(plan.recipes);
 	for (const selection of specializations) {
@@ -1776,7 +1794,7 @@ export function verifyCoreOptimizationPlan(
 		);
 	}
 	const entriesByFunction = new Map<CoreFunctionId, number>();
-	const callSites = new Set<string>();
+	const callSites = new Map<CoreFunctionId, Set<CoreInstructionId>>();
 	for (const entry of plan.directEntries) {
 		if (!plan.liveFunctions.includes(entry.function)) {
 			fail(`direct entry targets dead function ${entry.function}`);
@@ -1839,8 +1857,11 @@ export function verifyCoreOptimizationPlan(
 		}
 		for (const site of entry.callSites) {
 			const key = `${site.caller}:${site.instruction}`;
-			if (callSites.has(key)) fail(`callsite ${key} selects multiple direct entries`);
-			callSites.add(key);
+			const callerSites = callSites.get(site.caller) ?? new Set<CoreInstructionId>();
+			if (callerSites.has(site.instruction))
+				fail(`callsite ${key} selects multiple direct entries`);
+			callerSites.add(site.instruction);
+			callSites.set(site.caller, callerSites);
 			if (!plan.liveFunctions.includes(site.caller))
 				fail(`direct entry callsite ${key} is dead`);
 			const caller = program.function(site.caller);

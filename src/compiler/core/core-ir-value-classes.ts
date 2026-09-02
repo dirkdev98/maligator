@@ -131,7 +131,7 @@ export function analyzeCoreValueClasses(
 	let seeded = 0;
 	if (context?.facts.world.primordialPolicy === "locked") {
 		const constructs =
-			index?.opcodes.get("construct") ??
+			index?.opcodes[fn.registry.require("construct").id] ??
 			operations.filter(
 				(instruction) => fn.instructionOpcodeName(instruction) === "construct",
 			);

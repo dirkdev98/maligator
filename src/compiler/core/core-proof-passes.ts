@@ -629,14 +629,15 @@ const materializeFlowScalars: CorePass = {
 			}
 			for (const instruction of fn.bodyInstructionIds(block)) {
 				if (!SCALAR_CONSUMERS.has(fn.instructionOpcodeName(instruction))) continue;
-				const byFamily = new Map<string, Array<CoreValueId>>();
+				const byFamily: Array<Array<CoreValueId> | undefined> = [];
 				const includeValue = (value: CoreValueId): void => {
 					const scalar = kinds.exactScalar(value);
 					if (scalar === undefined) return;
-					const family = scalar === "int32" || scalar === "number" ? "number" : scalar;
-					const values = byFamily.get(family) ?? [];
+					const family =
+						scalar === "int32" || scalar === "number" ? 0 : scalar === "boolean" ? 1 : 2;
+					const values = byFamily[family] ?? [];
 					values.push(value);
-					byFamily.set(family, values);
+					byFamily[family] = values;
 				};
 				const operandStart = fn.kernel.instructionOperandStart(instruction);
 				const operandCount = fn.kernel.instructionOperandCount(instruction);
@@ -646,7 +647,8 @@ const materializeFlowScalars: CorePass = {
 				const resultCount = fn.kernel.instructionResultCount(instruction);
 				for (let index = 0; index < resultCount; index++)
 					includeValue(fn.kernel.resultAt(resultStart + index));
-				for (const values of byFamily.values()) {
+				for (const values of byFamily) {
+					if (values === undefined) continue;
 					for (let index = 1; index < values.length; index++) {
 						connect(values[0]!, values[index]!);
 					}

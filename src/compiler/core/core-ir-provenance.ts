@@ -1448,9 +1448,17 @@ export interface CoreLocalFactIndex {
 	readonly controlUses: ReadonlySet<CoreValueId>;
 	readonly handlerTargets: ReadonlySet<CoreBlockId>;
 	readonly valuesByRoot: ReadonlyMap<CoreValueId, ReadonlyArray<CoreValueId>>;
-	readonly opcodes: ReadonlyMap<string, ReadonlyArray<CoreInstructionId>>;
+	readonly opcodes: ReadonlyArray<ReadonlyArray<CoreInstructionId>>;
 	readonly operations: ReadonlyArray<CoreInstructionId>;
 	readonly memoryOperations: ReadonlyArray<CoreInstructionId>;
+}
+
+function indexedOpcodeInstructions(
+	fn: CoreFunctionStore,
+	index: CoreLocalFactIndex,
+	opcode: string,
+): ReadonlyArray<CoreInstructionId> {
+	return index.opcodes[fn.registry.require(opcode).id] ?? [];
 }
 
 function decodeCoreString(program: CoreProgram, index: number): string | undefined {
@@ -1474,7 +1482,7 @@ export function buildCoreLocalFactIndex(
 	const controlUses = new Set<CoreValueId>();
 	const handlerTargets = new Set<CoreBlockId>();
 	const mutableValuesByRoot = new Map<CoreValueId, Array<CoreValueId>>();
-	const mutableOpcodes = new Map<string, Array<CoreInstructionId>>();
+	const mutableOpcodes: Array<Array<CoreInstructionId> | undefined> = [];
 	const operations: Array<CoreInstructionId> = [];
 	const memoryOperations: Array<CoreInstructionId> = [];
 	for (const value of fn.valueIds()) {
@@ -1487,11 +1495,11 @@ export function buildCoreLocalFactIndex(
 		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
 			location.set(instruction, { block, index });
 			if (fn.instructionKind(instruction) === "operation") {
-				const opcode = fn.instructionOpcodeName(instruction);
-				const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
-				const instructions = mutableOpcodes.get(opcode) ?? [];
+				const opcode = fn.instructionOpcode(instruction);
+				const descriptor = fn.registry.byId(opcode);
+				const instructions = mutableOpcodes[opcode] ?? [];
 				instructions.push(instruction);
-				mutableOpcodes.set(opcode, instructions);
+				mutableOpcodes[opcode] = instructions;
 				operations.push(instruction);
 				if (
 					(descriptor.accesses?.length ?? 0) > 0 ||
@@ -1537,9 +1545,7 @@ export function buildCoreLocalFactIndex(
 	for (const [value, aliases] of mutableValuesByRoot) {
 		valuesByRoot.set(value, Object.freeze(aliases));
 	}
-	const opcodes = new Map<string, ReadonlyArray<CoreInstructionId>>();
-	for (const [opcode, instructions] of mutableOpcodes)
-		opcodes.set(opcode, Object.freeze(instructions));
+	const opcodes = mutableOpcodes.map((instructions) => Object.freeze(instructions ?? []));
 	return Object.freeze({
 		statistics: Object.freeze({
 			instructionVisits: location.size,
@@ -1717,7 +1723,7 @@ function stringCharCodeAtCandidates(
 ): ReadonlyArray<CoreStringCharCodeAtCandidate> {
 	const candidates: Array<CoreStringCharCodeAtCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const call of index.opcodes.get("call") ?? []) {
+	for (const call of indexedOpcodeInstructions(fn, index, "call")) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
 			(instructionOperandCount(fn, call) !== 2 && instructionOperandCount(fn, call) !== 3)
@@ -1834,7 +1840,7 @@ function functionCallChainCandidates(
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreFunctionCallChainCandidate> {
 	const candidates: Array<CoreFunctionCallChainCandidate> = [];
-	for (const call of index.opcodes.get("call") ?? []) {
+	for (const call of indexedOpcodeInstructions(fn, index, "call")) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
 			fn.instructionOpcodeName(call) !== "call" ||
@@ -2187,7 +2193,7 @@ function builtinCollectionCallCandidates(
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreBuiltinCollectionCallCandidate> {
 	const candidates: Array<CoreBuiltinCollectionCallCandidate> = [];
-	for (const call of index.opcodes.get("call") ?? []) {
+	for (const call of indexedOpcodeInstructions(fn, index, "call")) {
 		if (fn.instructionKind(call) !== "operation") continue;
 		const operation = knownBuiltinOperation(fn, call);
 		if (operation === undefined || !COLLECTION_CALL_CHAIN_OPERATIONS.has(operation)) {
@@ -2242,7 +2248,7 @@ function freshArrayLengthCandidates(
 ): ReadonlyArray<CoreFreshArrayLengthCandidate> {
 	const candidates: Array<CoreFreshArrayLengthCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const load of index.opcodes.get("loadPropertyStatic") ?? []) {
+	for (const load of indexedOpcodeInstructions(fn, index, "loadPropertyStatic")) {
 		if (
 			fn.instructionKind(load) !== "operation" ||
 			!staticPropertyNamed(program, fn, load, "length") ||
@@ -2318,7 +2324,7 @@ function indexedLengthLoopCandidates(
 ): ReadonlyArray<CoreIndexedLengthLoopCandidate> {
 	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreIndexedLengthLoopCandidate> = [];
-	for (const load of index.opcodes.get("loadPropertyStatic") ?? []) {
+	for (const load of indexedOpcodeInstructions(fn, index, "loadPropertyStatic")) {
 		if (
 			fn.instructionKind(load) !== "operation" ||
 			!staticPropertyNamed(program, fn, load, "length") ||
@@ -2374,8 +2380,8 @@ function indexedLengthLoopCandidates(
 			readonly kind: "load" | "store";
 		}> = [];
 		const indexedAccesses = [
-			...(index.opcodes.get("loadProperty") ?? []),
-			...(index.opcodes.get("storeProperty") ?? []),
+			...indexedOpcodeInstructions(fn, index, "loadProperty"),
+			...indexedOpcodeInstructions(fn, index, "storeProperty"),
 		].sort((left, right) => {
 			const leftLocation = index.location.get(left)!;
 			const rightLocation = index.location.get(right)!;
@@ -2509,7 +2515,7 @@ function iteratorCursorCandidates(
 	if (fn.isGenerator || fn.isAsync) return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const stepsByIterator = new Map<CoreValueId, Array<CoreInstructionId>>();
-	for (const instruction of index.opcodes.get("iteratorStep") ?? []) {
+	for (const instruction of indexedOpcodeInstructions(fn, index, "iteratorStep")) {
 		if (!control.reachable.has(fn.instructionBlock(instruction))) continue;
 		const iterator = instructionOperand(fn, instruction, 0);
 		if (iterator === undefined) continue;
@@ -2518,7 +2524,7 @@ function iteratorCursorCandidates(
 		stepsByIterator.set(root(iterator), steps);
 	}
 	const candidates: Array<CoreIteratorCursorCandidate> = [];
-	for (const initialize of index.opcodes.get("getIterator") ?? []) {
+	for (const initialize of indexedOpcodeInstructions(fn, index, "getIterator")) {
 		if (
 			instructionOperandCount(fn, initialize) !== 1 ||
 			instructionResultCount(fn, initialize) !== 2 ||
@@ -2568,8 +2574,8 @@ function iteratorResultVirtualizationCandidates(
 	control: CoreControlFlow,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreIteratorResultVirtualizationCandidate> {
-	const steps = (index.opcodes.get("iteratorStep") ?? []).filter((instruction) =>
-		control.reachable.has(fn.instructionBlock(instruction)),
+	const steps = indexedOpcodeInstructions(fn, index, "iteratorStep").filter(
+		(instruction) => control.reachable.has(fn.instructionBlock(instruction)),
 	);
 	const candidates: Array<CoreIteratorResultVirtualizationCandidate> = [];
 	for (let offset = 0; offset < steps.length; offset += 64) {
@@ -2608,7 +2614,7 @@ function iteratorEntryPairVirtualizationCandidates(
 	if (fn.isGenerator || fn.isAsync) return [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const candidates: Array<CoreIteratorEntryPairVirtualizationCandidate> = [];
-	for (const outerStep of index.opcodes.get("iteratorStep") ?? []) {
+	for (const outerStep of indexedOpcodeInstructions(fn, index, "iteratorStep")) {
 		if (
 			fn.instructionKind(outerStep) !== "operation" ||
 			fn.instructionOpcodeName(outerStep) !== "iteratorStep" ||
@@ -2786,8 +2792,8 @@ function stringSplitProjectionCandidates(
 	const candidates: Array<CoreStringSplitProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	for (const call of [
-		...(index.opcodes.get("call") ?? []),
-		...(index.opcodes.get("callBuiltin") ?? []),
+		...indexedOpcodeInstructions(fn, index, "call"),
+		...indexedOpcodeInstructions(fn, index, "callBuiltin"),
 	]) {
 		if (fn.instructionKind(call) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(call);
@@ -2955,7 +2961,7 @@ function stringSliceNumberCandidates(
 ): ReadonlyArray<CoreStringSliceNumberCandidate> {
 	const candidates: Array<CoreStringSliceNumberCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const sliceCall of index.opcodes.get("call") ?? []) {
+	for (const sliceCall of indexedOpcodeInstructions(fn, index, "call")) {
 		if (
 			fn.instructionKind(sliceCall) !== "operation" ||
 			fn.instructionOpcodeName(sliceCall) !== "call" ||
@@ -3088,7 +3094,7 @@ function regexpExecProjectionCandidates(
 						root(instructionResult(fn, instruction, 0)!) === root(value)))
 			);
 		});
-	for (const call of index.opcodes.get("call") ?? []) {
+	for (const call of indexedOpcodeInstructions(fn, index, "call")) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
 			fn.instructionOpcodeName(call) !== "call" ||
@@ -3438,7 +3444,7 @@ function regexpIteratorProjectionCandidates(
 ): ReadonlyArray<CoreRegExpIteratorProjectionCandidate> {
 	const candidates: Array<CoreRegExpIteratorProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
-	for (const step of index.opcodes.get("iteratorStep") ?? []) {
+	for (const step of indexedOpcodeInstructions(fn, index, "iteratorStep")) {
 		const block = fn.instructionBlock(step);
 		if (!control.reachable.has(block)) continue;
 		const doneBranch = fn.blockTerminator(block);
@@ -3657,7 +3663,7 @@ function discoverCandidates(
 	]) {
 		candidates.set(candidate.key, candidate);
 	}
-	for (const instruction of index.opcodes.get("binary") ?? []) {
+	for (const instruction of indexedOpcodeInstructions(fn, index, "binary")) {
 		if (
 			!control.reachable.has(fn.instructionBlock(instruction)) ||
 			!coreTargetSupportsNumericFusionOperator(
