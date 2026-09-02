@@ -93,6 +93,9 @@ export interface CoreProgramSummaryStatistics {
 	readonly affectedCallers: number;
 	readonly sccNodesAnalyzed: number;
 	readonly sccsReused: number;
+	readonly aggregateRecomputations: number;
+	readonly exactReverseCallerVisits: number;
+	readonly wildcardReverseCallerVisits: number;
 }
 
 export interface CoreProgramSummaries {
@@ -112,6 +115,7 @@ interface CoreProgramSummaryState extends CoreProgramSummaries {
 	readonly published: ReadonlyMap<CoreFunctionId, CorePublishedFunctionSummary>;
 	readonly owner: ReadonlyMap<CoreCallGraphNode, number>;
 	readonly rootReasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>;
+	readonly anyScriptSummary: CoreAnyScriptCallSummary | undefined;
 }
 
 function localVersionKey(fn: CoreFunctionStore): string {
@@ -609,12 +613,21 @@ function summarizeAnyScriptCallees(
 	};
 }
 
+function sameAnyScriptSummary(
+	left: CoreAnyScriptCallSummary | undefined,
+	right: CoreAnyScriptCallSummary | undefined,
+): boolean {
+	if (left === undefined || right === undefined) return left === right;
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function deriveSummary(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 	local: CoreLocalFunctionSummary,
 	targets: CoreCallGraphIndex,
 	current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+	anyScriptSummary: CoreAnyScriptCallSummary | undefined,
 	summaryIds: ReadonlyMap<CoreFunctionId, string>,
 	reasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>,
 	includeCalls = true,
@@ -642,7 +655,6 @@ function deriveSummary(
 		);
 	};
 	const callSites = includeCalls ? targets.outgoing(functionId) : [];
-	let anyScriptSummary: CoreAnyScriptCallSummary | undefined;
 	for (const site of callSites) {
 		if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
 			effects = joinEffectSummaries(effects, EVERY_EFFECT_SUMMARY);
@@ -653,13 +665,9 @@ function deriveSummary(
 			continue;
 		}
 		if (site.targets.anyScript) {
-			anyScriptSummary ??= summarizeAnyScriptCallees(
-				current,
-				callSites.reduce(
-					(largest, call) => Math.max(largest, call.arguments?.length ?? 0),
-					0,
-				),
-			);
+			if (anyScriptSummary === undefined) {
+				throw new Error("Missing AnyScriptAggregate summary");
+			}
 			effects = joinEffectSummaries(effects, anyScriptSummary.effects);
 			for (const [index, argument] of (site.arguments ?? []).entries()) {
 				noteCallFact(
@@ -819,18 +827,40 @@ function analyzeProgramSummaries(
 				local.get(functionId)!,
 				targets,
 				current,
+				undefined,
 				summaryIds,
 				reasons,
 				false,
 			),
 		);
 	}
+	const maximumWildcardArgumentCount = [...program.functionIds()].reduce(
+		(largest, functionId) =>
+			Math.max(
+				largest,
+				...targets
+					.outgoing(functionId)
+					.filter((site) => site.targets.anyScript)
+					.map((site) => site.arguments?.length ?? 0),
+			),
+		0,
+	);
+	let anyScriptSummary = targets.graph.hasAggregate()
+		? previous?.anyScriptSummary
+		: undefined;
+	if (targets.graph.hasAggregate() && anyScriptSummary === undefined) {
+		anyScriptSummary = summarizeAnyScriptCallees(
+			current,
+			maximumWildcardArgumentCount,
+		);
+	}
 	const queue: Array<number> = [];
 	const queued = new Set<number>();
-	const enqueue = (scc: number | undefined): void => {
-		if (scc === undefined || queued.has(scc)) return;
+	const enqueue = (scc: number | undefined): boolean => {
+		if (scc === undefined || queued.has(scc)) return false;
 		queued.add(scc);
 		queue.push(scc);
+		return true;
 	};
 	if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
 		for (const index of sccs.keys()) enqueue(index);
@@ -838,6 +868,9 @@ function analyzeProgramSummaries(
 		for (const functionId of changedFunctions) enqueue(owner.get(functionId));
 		for (const functionId of targets.changedCallers) {
 			enqueue(owner.get(functionId));
+		}
+		if (targets.graph.changedNodes.has(CORE_ANY_SCRIPT_AGGREGATE)) {
+			enqueue(owner.get(CORE_ANY_SCRIPT_AGGREGATE));
 		}
 		for (const functionId of new Set([
 			...previous.rootReasons.keys(),
@@ -855,13 +888,16 @@ function analyzeProgramSummaries(
 	}
 	let sccTransfers = 0;
 	let callerWakeups = 0;
+	let aggregateRecomputations = 0;
+	let exactReverseCallerVisits = 0;
+	let wildcardReverseCallerVisits = 0;
 	const affectedCallers = new Set<CoreFunctionId>();
-	const changedPublished = new Set<CoreFunctionId>();
 	let queueCursor = 0;
 	while (queueCursor < queue.length) {
 		const sccIndex = queue[queueCursor++]!;
 		queued.delete(sccIndex);
 		const scc = sccs[sccIndex]!;
+		const aggregateBefore = anyScriptSummary;
 		for (const functionId of scc.functions) {
 			current.set(
 				functionId,
@@ -871,6 +907,7 @@ function analyzeProgramSummaries(
 					local.get(functionId)!,
 					targets,
 					current,
+					anyScriptSummary,
 					summaryIds,
 					reasons,
 					false,
@@ -878,18 +915,39 @@ function analyzeProgramSummaries(
 			);
 		}
 		const members = new Set(scc.functions);
-		const memberQueue = [...scc.functions];
-		const memberQueued = new Set(scc.functions);
+		const memberQueue: Array<CoreCallGraphNode> = [
+			...(scc.hasAnyScriptAggregate ? [CORE_ANY_SCRIPT_AGGREGATE] : []),
+			...scc.functions,
+		];
+		const memberQueued = new Set(memberQueue);
 		let memberCursor = 0;
 		while (memberCursor < memberQueue.length) {
-			const functionId = memberQueue[memberCursor++]!;
-			memberQueued.delete(functionId);
+			const node = memberQueue[memberCursor++]!;
+			memberQueued.delete(node);
+			if (node === CORE_ANY_SCRIPT_AGGREGATE) {
+				const nextAggregate = summarizeAnyScriptCallees(
+					current,
+					maximumWildcardArgumentCount,
+				);
+				aggregateRecomputations++;
+				if (sameAnyScriptSummary(anyScriptSummary, nextAggregate)) continue;
+				anyScriptSummary = nextAggregate;
+				for (const caller of targets.graph.wildcardCallers) {
+					wildcardReverseCallerVisits++;
+					if (!members.has(caller) || memberQueued.has(caller)) continue;
+					memberQueued.add(caller);
+					memberQueue.push(caller);
+				}
+				continue;
+			}
+			const functionId = node;
 			const next = deriveSummary(
 				program,
 				functionId,
 				local.get(functionId)!,
 				targets,
 				current,
+				anyScriptSummary,
 				summaryIds,
 				reasons,
 			);
@@ -897,22 +955,45 @@ function analyzeProgramSummaries(
 			current.set(functionId, next);
 			sccTransfers++;
 			if (prior !== undefined && summaryKey(prior) === summaryKey(next)) continue;
-			for (const caller of targets.callers(functionId)) {
+			for (const caller of targets.graph.exactCallers(functionId)) {
+				exactReverseCallerVisits++;
 				if (!members.has(caller) || memberQueued.has(caller)) continue;
 				memberQueued.add(caller);
 				memberQueue.push(caller);
+			}
+			if (
+				scc.hasAnyScriptAggregate &&
+				!memberQueued.has(CORE_ANY_SCRIPT_AGGREGATE)
+			) {
+				memberQueued.add(CORE_ANY_SCRIPT_AGGREGATE);
+				memberQueue.push(CORE_ANY_SCRIPT_AGGREGATE);
 			}
 		}
 		for (const functionId of scc.functions) {
 			const next = current.get(functionId)!;
 			const prior = previous?.published.get(functionId)?.summary;
 			if (prior !== undefined && summaryKey(prior) === summaryKey(next)) continue;
-			changedPublished.add(functionId);
-			for (const caller of targets.callers(functionId)) {
+			for (const caller of targets.graph.exactCallers(functionId)) {
+				exactReverseCallerVisits++;
 				const callerScc = owner.get(caller);
 				if (callerScc === sccIndex) continue;
-				enqueue(callerScc);
-				callerWakeups++;
+				if (enqueue(callerScc)) callerWakeups++;
+				affectedCallers.add(caller);
+			}
+			if (targets.graph.hasAggregate()) {
+				const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
+				if (aggregateScc !== sccIndex && enqueue(aggregateScc)) callerWakeups++;
+			}
+		}
+		if (
+			scc.hasAnyScriptAggregate &&
+			!sameAnyScriptSummary(aggregateBefore, anyScriptSummary)
+		) {
+			for (const caller of targets.graph.wildcardCallers) {
+				wildcardReverseCallerVisits++;
+				const callerScc = owner.get(caller);
+				if (callerScc === sccIndex) continue;
+				if (enqueue(callerScc)) callerWakeups++;
 				affectedCallers.add(caller);
 			}
 		}
@@ -927,17 +1008,20 @@ function analyzeProgramSummaries(
 				local.get(functionId)!,
 				targets,
 				current,
+				anyScriptSummary,
 				summaryIds,
 				reasons,
 			),
 		);
 	}
 	const published = new Map<CoreFunctionId, CorePublishedFunctionSummary>();
+	const changedPublished = new Set<CoreFunctionId>();
 	for (const [functionId, summary] of current) {
 		const prior = previous?.published.get(functionId);
 		if (prior !== undefined && summaryKey(prior.summary) === summaryKey(summary)) {
 			published.set(functionId, prior);
 		} else {
+			changedPublished.add(functionId);
 			published.set(
 				functionId,
 				Object.freeze({
@@ -963,6 +1047,9 @@ function analyzeProgramSummaries(
 		affectedCallers: affectedCallers.size,
 		sccNodesAnalyzed,
 		sccsReused,
+		aggregateRecomputations,
+		exactReverseCallerVisits,
+		wildcardReverseCallerVisits,
 	});
 	return Object.freeze({
 		sourceClosed: targets.sourceClosed,
@@ -972,6 +1059,7 @@ function analyzeProgramSummaries(
 		published,
 		owner,
 		rootReasons: reasons,
+		anyScriptSummary,
 		functionEffects,
 		moduleEffects: modules,
 		changedFunctions: changedPublished,
