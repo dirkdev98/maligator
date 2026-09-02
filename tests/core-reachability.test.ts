@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
-import { CORE_CALL_GRAPH_ANALYSIS } from "../src/compiler/core/core-ir-call-targets.ts";
-import {
-	CORE_FUNCTION_REACHABILITY_ANALYSIS,
-	analyzeCoreFunctionReachability,
-} from "../src/compiler/core/core-ir-reachability.ts";
-import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-ir-summaries.ts";
+import { analyzeCoreFunctionReachability } from "../src/compiler/core/core-ir-reachability.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import {
+	CORE_CALL_GRAPH_ANALYSIS,
+	CORE_FUNCTION_REACHABILITY_ANALYSIS,
+	CORE_PROGRAM_SUMMARIES_ANALYSIS,
+} from "../src/compiler/core/core-program-flow-analysis.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";

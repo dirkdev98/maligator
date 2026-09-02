@@ -19,7 +19,6 @@ import type { CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "./core-ir-summaries.ts";
 import type {
 	CoreFunctionId,
 	CoreInstructionEffects,
@@ -27,10 +26,6 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import {
-	CORE_PROGRAM_FLOW_RETURN_KIND,
-	CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER,
-} from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
@@ -1004,44 +999,6 @@ export function solveCoreProgramValueKinds(
 		},
 	});
 }
-
-export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgramValueKindState> =
-	{
-		key: "program-value-kinds",
-		scope: "program",
-		functionDependencies: ["body", "cfg", "calls", "representations"],
-		programDependencies: ["functions", "calls", "facts", "representations"],
-		contextIdentity(context) {
-			return context.facts.closure.sourceClosure.kind;
-		},
-		compute({ program, request, previous, get, programFlow }) {
-			if (request.scope !== "program") throw new Error("Expected program analysis");
-			const summaries = get(CORE_PROGRAM_SUMMARIES_ANALYSIS, request);
-			const flow = programFlow.refresh(
-				CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER,
-				CORE_PROGRAM_FLOW_RETURN_KIND,
-			);
-			const dirtyFunctions = new Array<CoreFunctionId>();
-			if (previous !== undefined) {
-				for (let index = 0; index < flow.dirtyFunctionCount; index++) {
-					dirtyFunctions.push(flow.dirtyFunctionAt(index));
-				}
-			}
-			return solveCoreProgramValueKinds(
-				program,
-				summaries.targets,
-				(functionId) => summaries.summary(functionId)?.externallyReachable === true,
-				(functionId) =>
-					get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
-						scope: "function",
-						function: functionId,
-					}),
-				previous as CoreProgramValueKindState | undefined,
-				dirtyFunctions,
-				summaries.changedFunctions,
-			);
-		},
-	};
 
 function exactPrimitiveTypeof(mask: number): string | undefined {
 	if (mask === COMPILER_VALUE_KIND_UNDEFINED) return "undefined";

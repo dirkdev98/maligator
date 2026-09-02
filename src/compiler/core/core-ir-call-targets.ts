@@ -1,12 +1,8 @@
-import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { updateCoreCallGraph } from "./core-call-graph.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreCapturedSlotKey, coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import {
-	CORE_CONTROL_FLOW_ANALYSIS,
-	buildCoreControlFlow,
-} from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLocalCallSite } from "./core-ir-interprocedural-flow.ts";
 import { analyzeCoreInterproceduralValueFlow } from "./core-ir-interprocedural-flow.ts";
@@ -17,11 +13,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import {
-	CORE_PROGRAM_FLOW_TARGET_CONSUMER,
-	CORE_PROGRAM_FLOW_TARGETS,
-	extractCoreProgramFlowLocalTransfers,
-} from "./core-program-flow.ts";
+import { extractCoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
 import type { CoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
@@ -980,42 +972,6 @@ export function analyzeCoreCallGraph(
 		},
 	});
 }
-
-export const CORE_CALL_GRAPH_ANALYSIS: CoreAnalysisDefinition<CoreCallGraphIndexState> = {
-	key: "call-graph",
-	scope: "program",
-	functionDependencies: ["body", "cfg", "calls"],
-	programDependencies: ["functions", "calls"],
-	contextIdentity(context) {
-		return context.facts.closure.sourceClosure.kind;
-	},
-	compute({ program, context, request, previous, get, programFlow }) {
-		if (request.scope !== "program") throw new Error("Expected program analysis request");
-		const flow = programFlow.refresh(
-			CORE_PROGRAM_FLOW_TARGET_CONSUMER,
-			CORE_PROGRAM_FLOW_TARGETS,
-		);
-		const dirtyFunctions = new Array<CoreFunctionId>();
-		if (previous !== undefined) {
-			for (let index = 0; index < flow.dirtyFunctionCount; index++) {
-				dirtyFunctions.push(flow.dirtyFunctionAt(index));
-			}
-		}
-		return analyzeCoreCallGraph(
-			program,
-			context.facts.closure.sourceClosure.kind === "known",
-			previous as CoreCallGraphIndexState | undefined,
-			(functionId) =>
-				get(CORE_CONTROL_FLOW_ANALYSIS, {
-					scope: "function",
-					function: functionId,
-				}),
-			context,
-			dirtyFunctions,
-			(functionId) => programFlow.local(functionId),
-		);
-	},
-};
 
 export function analyzeCoreCalleeTargets(program: CoreProgram): CoreCallGraphIndex {
 	return analyzeCoreCallGraph(program, false);

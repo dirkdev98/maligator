@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
-import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-ir-summaries.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import {
 	analysisProgram,
@@ -19,13 +19,18 @@ describe("incremental Core program summaries", () => {
 			new URL("../src/compiler/core/core-ir-summaries.ts", import.meta.url),
 			"utf8",
 		);
+		const flowSource = readFileSync(
+			new URL("../src/compiler/core/core-program-flow-analysis.ts", import.meta.url),
+			"utf8",
+		);
 
 		expect(source).not.toMatch(/JSON\.stringify/);
 		expect(source).not.toMatch(/versionKey:\s*string|localVersionKey/);
 		expect(source).toMatch(/function summariesEqual\(/);
-		expect(source).toMatch(/programFlow\.refresh/);
-		expect(source).toMatch(/flow\.dirtyFunctionAt/);
-		expect(source).toMatch(/programFlow\.topology/);
+		expect(source).not.toMatch(/CORE_PROGRAM_SUMMARIES_ANALYSIS|programFlow\.refresh/);
+		expect(flowSource).toMatch(/programFlow\.refresh/);
+		expect(flowSource).toMatch(/epoch\.dirtyFunctionAt/);
+		expect(flowSource).toMatch(/programFlow\.topology/);
 		expect(source).not.toMatch(/function callGraphSccs\(/);
 		expect(source).not.toMatch(/readonly evaluate|evaluate:\s*\(/);
 		expect(source).toMatch(/Uint8Array\.from\(transferKinds\)/);

@@ -13,13 +13,13 @@ import type {
 	CoreOptimizationPlan,
 	VerifiedCoreOptimizationPlan,
 } from "../src/compiler/core/core-ir-regions.ts";
-import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-ir-summaries.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
 	CoreInstructionId,
 } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";

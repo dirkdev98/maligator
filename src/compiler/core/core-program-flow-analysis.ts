@@ -11,7 +11,6 @@ import { solveCoreProgramValueKinds } from "./core-ir-value-kinds.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import {
 	CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
-	CORE_PROGRAM_FLOW_ENGINE_CONSUMER,
 	CORE_PROGRAM_FLOW_REACHABILITY,
 	CORE_PROGRAM_FLOW_RETURN_KIND,
 	CORE_PROGRAM_FLOW_SUMMARIES,
@@ -19,6 +18,7 @@ import {
 } from "./core-program-flow.ts";
 
 export interface CoreProgramFlowState {
+	readonly flowRevision: number;
 	readonly targets: ReturnType<typeof analyzeCoreCallGraph>;
 	readonly summaries: ReturnType<typeof analyzeProgramSummaries>;
 	readonly valueKinds: ReturnType<typeof solveCoreProgramValueKinds>;
@@ -44,10 +44,7 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 	compute({ program, context, request, previous, get, programFlow }) {
 		if (request.scope !== "program") throw new Error("Expected program analysis");
 		const prior = previous as CoreProgramFlowState | undefined;
-		const epoch = programFlow.refresh(
-			CORE_PROGRAM_FLOW_ENGINE_CONSUMER,
-			CORE_PROGRAM_FLOW_ALL_DIMENSIONS,
-		);
+		const epoch = programFlow.refresh(CORE_PROGRAM_FLOW_ALL_DIMENSIONS);
 		const dirtyFunctions = new Array<CoreFunctionId>();
 		if (prior !== undefined) {
 			for (let index = 0; index < epoch.dirtyFunctionCount; index++)
@@ -57,7 +54,8 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 			dirtyFunctions.filter(
 				(functionId) => (epoch.dirtyDimensions(functionId) & dimensions) !== 0,
 			);
-		const unjournaledInvalidation = prior !== undefined && epoch.dirtyFunctionCount === 0;
+		const unjournaledInvalidation =
+			prior !== undefined && epoch.revision === prior.flowRevision;
 		const targetDirty = dirtyFor(CORE_PROGRAM_FLOW_TARGETS);
 		const targets =
 			prior !== undefined && !unjournaledInvalidation && targetDirty.length === 0
@@ -136,6 +134,32 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 						reachabilityDirty,
 						(functionId) => programFlow.local(functionId),
 					);
-		return Object.freeze({ targets, summaries, valueKinds, reachability });
+		return Object.freeze({
+			flowRevision: epoch.revision,
+			targets,
+			summaries,
+			valueKinds,
+			reachability,
+		});
 	},
 };
+
+function programFlowView<Key extends keyof CoreProgramFlowState>(
+	key: Key,
+): CoreAnalysisDefinition<CoreProgramFlowState[Key]> {
+	return {
+		key: `program-flow-${key}`,
+		scope: "program",
+		functionDependencies: CORE_PROGRAM_FLOW_ANALYSIS.functionDependencies,
+		programDependencies: CORE_PROGRAM_FLOW_ANALYSIS.programDependencies,
+		contextIdentity: CORE_PROGRAM_FLOW_ANALYSIS.contextIdentity,
+		compute({ request, get }) {
+			return get(CORE_PROGRAM_FLOW_ANALYSIS, request)[key];
+		},
+	};
+}
+
+export const CORE_CALL_GRAPH_ANALYSIS = programFlowView("targets");
+export const CORE_PROGRAM_SUMMARIES_ANALYSIS = programFlowView("summaries");
+export const CORE_PROGRAM_VALUE_KIND_ANALYSIS = programFlowView("valueKinds");
+export const CORE_FUNCTION_REACHABILITY_ANALYSIS = programFlowView("reachability");

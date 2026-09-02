@@ -1,13 +1,9 @@
-import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { CORE_CALL_GRAPH_ANALYSIS } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import {
 	CORE_PROGRAM_FLOW_INLINE_SOURCE,
-	CORE_PROGRAM_FLOW_REACHABILITY,
-	CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER,
 	CORE_PROGRAM_FLOW_RUNTIME_IDENTITY,
 	extractCoreProgramFlowLocalTransfers,
 } from "./core-program-flow.ts";
@@ -419,38 +415,3 @@ export function analyzeCoreFunctionReachability(
 		}),
 	});
 }
-
-export const CORE_FUNCTION_REACHABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFunctionReachabilityState> =
-	{
-		key: "function-reachability",
-		scope: "program",
-		functionDependencies: ["body", "cfg", "calls"],
-		programDependencies: ["functions", "data", "calls"],
-		contextIdentity(context) {
-			return context.facts.closure.sourceClosure.kind;
-		},
-		compute({ program, context, request, previous, get, programFlow }) {
-			if (request.scope !== "program") {
-				throw new Error("Expected program analysis request");
-			}
-			const targets = get(CORE_CALL_GRAPH_ANALYSIS, request);
-			const flow = programFlow.refresh(
-				CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER,
-				CORE_PROGRAM_FLOW_REACHABILITY,
-			);
-			const dirtyFunctions = new Array<CoreFunctionId>();
-			if (previous !== undefined) {
-				for (let index = 0; index < flow.dirtyFunctionCount; index++) {
-					dirtyFunctions.push(flow.dirtyFunctionAt(index));
-				}
-			}
-			return analyzeCoreFunctionReachability(
-				program,
-				targets,
-				context,
-				previous as CoreFunctionReachabilityState | undefined,
-				dirtyFunctions,
-				(functionId) => programFlow.local(functionId),
-			);
-		},
-	};

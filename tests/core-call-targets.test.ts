@@ -7,7 +7,6 @@ import {
 	CORE_CALLEE_TARGETS_BOTTOM,
 	CORE_CALLEE_TARGETS_OPAQUE,
 	CORE_CALLEE_TARGET_CAP,
-	CORE_CALL_GRAPH_ANALYSIS,
 	coreCalleeTargetsAreOpen,
 	coreCalleeTargetsFunction,
 	coreCalleeTargetsIsBottom,
@@ -15,6 +14,7 @@ import {
 	joinCoreCalleeTargets,
 } from "../src/compiler/core/core-ir-call-targets.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_CALL_GRAPH_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import {
 	inspectCoreBlockParameters,
 	inspectCoreInstructionResults,

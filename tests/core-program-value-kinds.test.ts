@@ -4,8 +4,8 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
-import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-ir-value-kinds.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import type { CoreFunctionStore, CoreProgram } from "../src/compiler/core/core-store.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -31,12 +31,17 @@ it("uses program-flow dirtiness without serialized version or target keys", () =
 		new URL("../src/compiler/core/core-ir-value-kinds.ts", import.meta.url),
 		"utf8",
 	);
+	const flowSource = readFileSync(
+		new URL("../src/compiler/core/core-program-flow-analysis.ts", import.meta.url),
+		"utf8",
+	);
 
 	expect(source).not.toMatch(
 		/versionKeys|programValueKindVersionKey|programValueKindTargetsKey/,
 	);
-	expect(source).toMatch(/programFlow\.refresh/);
-	expect(source).toMatch(/flow\.dirtyFunctionAt/);
+	expect(source).not.toMatch(/CORE_PROGRAM_VALUE_KIND_ANALYSIS|programFlow\.refresh/);
+	expect(flowSource).toMatch(/programFlow\.refresh/);
+	expect(flowSource).toMatch(/epoch\.dirtyFunctionAt/);
 	expect(source).not.toMatch(
 		/interface KindTransfer\s*\{|readonly evaluate|evaluate:\s*\(/,
 	);

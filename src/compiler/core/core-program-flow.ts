@@ -8,10 +8,8 @@ import {
 	CORE_PROGRAM_FLOW_CALLS,
 	CORE_PROGRAM_FLOW_CFG,
 	CORE_PROGRAM_FLOW_EXCEPTION,
-	CORE_PROGRAM_FLOW_FACTS,
 	CORE_PROGRAM_FLOW_MEMORY,
 	CORE_PROGRAM_FLOW_REPRESENTATIONS,
-	CORE_PROGRAM_FLOW_SPECIALIZATION,
 } from "./core-store.ts";
 import type {
 	CoreFunctionStore,
@@ -39,12 +37,6 @@ const FUNCTION_INDEX_ATTRIBUTES = [
 	"directCallTargetFunctionIndex",
 	"directCallbackFunctionIndex",
 ] as const;
-
-export const CORE_PROGRAM_FLOW_TARGET_CONSUMER = 0;
-export const CORE_PROGRAM_FLOW_SUMMARY_CONSUMER = 1;
-export const CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER = 2;
-export const CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER = 3;
-export const CORE_PROGRAM_FLOW_ENGINE_CONSUMER = 4;
 
 export const CORE_PROGRAM_FLOW_SUMMARIES =
 	CORE_PROGRAM_FLOW_EFFECTS |
@@ -432,14 +424,8 @@ export function coreProgramFlowDimensionsForDomains(
 			CORE_PROGRAM_FLOW_CONTAINMENT |
 			CORE_PROGRAM_FLOW_RETURN_PROVENANCE;
 	}
-	if ((domains & CORE_PROGRAM_FLOW_FACTS) !== 0) {
-		dimensions |= CORE_PROGRAM_FLOW_SUMMARIES;
-	}
 	if ((domains & CORE_PROGRAM_FLOW_REPRESENTATIONS) !== 0) {
 		dimensions |= CORE_PROGRAM_FLOW_RETURN_KIND | CORE_PROGRAM_FLOW_RETURN_REPRESENTATION;
-	}
-	if ((domains & CORE_PROGRAM_FLOW_SPECIALIZATION) !== 0) {
-		dimensions |= CORE_PROGRAM_FLOW_RETURN_PROVENANCE;
 	}
 	return dimensions;
 }
@@ -529,7 +515,7 @@ export class CoreProgramFlowEpoch {
 export class CoreProgramFlowEngine {
 	readonly #program: CoreProgram;
 	readonly #report: CoreOptimizationReportBuilder | undefined;
-	readonly #consumers: Array<CoreProgramFlowEpoch | undefined> = [];
+	readonly #epoch = new CoreProgramFlowEpoch();
 	readonly #localTransfers: Array<CoreProgramFlowLocalTransfers | undefined> = [];
 	#topology: CoreProgramFlowTopology | undefined;
 	#reportedRevision = 0;
@@ -542,45 +528,31 @@ export class CoreProgramFlowEngine {
 		this.#report = report;
 	}
 
-	refresh(
-		consumer: number,
-		dimensions: CoreProgramFlowDimensionMask,
-	): CoreProgramFlowEpoch {
+	refresh(dimensions: CoreProgramFlowDimensionMask): CoreProgramFlowEpoch {
 		const revision = this.#program.programFlowRevision;
 		this.#report?.increment(
 			"programFlowJournalEntries",
 			revision - this.#reportedRevision,
 		);
 		this.#reportedRevision = revision;
-		const epoch = this.#consumers[consumer] ?? new CoreProgramFlowEpoch();
-		this.#consumers[consumer] = epoch;
+		const epoch = this.#epoch;
 		epoch.refresh(this.#program, dimensions, this.#report);
 		const count = epoch.dirtyFunctionCount;
-		if (consumer === CORE_PROGRAM_FLOW_TARGET_CONSUMER) {
-			this.#report?.increment("programFlowTargetWakeups", count);
-		} else if (consumer === CORE_PROGRAM_FLOW_SUMMARY_CONSUMER) {
-			this.#report?.increment("programFlowSummaryWakeups", count);
-		} else if (consumer === CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER) {
-			this.#report?.increment("programFlowValueKindWakeups", count);
-		} else if (consumer === CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER) {
-			this.#report?.increment("programFlowReachabilityWakeups", count);
-		} else if (consumer === CORE_PROGRAM_FLOW_ENGINE_CONSUMER) {
-			let targetWakeups = 0;
-			let summaryWakeups = 0;
-			let valueKindWakeups = 0;
-			let reachabilityWakeups = 0;
-			for (let index = 0; index < count; index++) {
-				const dimensions = epoch.dirtyDimensions(epoch.dirtyFunctionAt(index));
-				if ((dimensions & CORE_PROGRAM_FLOW_TARGETS) !== 0) targetWakeups++;
-				if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) !== 0) summaryWakeups++;
-				if ((dimensions & CORE_PROGRAM_FLOW_RETURN_KIND) !== 0) valueKindWakeups++;
-				if ((dimensions & CORE_PROGRAM_FLOW_REACHABILITY) !== 0) reachabilityWakeups++;
-			}
-			this.#report?.increment("programFlowTargetWakeups", targetWakeups);
-			this.#report?.increment("programFlowSummaryWakeups", summaryWakeups);
-			this.#report?.increment("programFlowValueKindWakeups", valueKindWakeups);
-			this.#report?.increment("programFlowReachabilityWakeups", reachabilityWakeups);
+		let targetWakeups = 0;
+		let summaryWakeups = 0;
+		let valueKindWakeups = 0;
+		let reachabilityWakeups = 0;
+		for (let index = 0; index < count; index++) {
+			const dirty = epoch.dirtyDimensions(epoch.dirtyFunctionAt(index));
+			if ((dirty & CORE_PROGRAM_FLOW_TARGETS) !== 0) targetWakeups++;
+			if ((dirty & CORE_PROGRAM_FLOW_SUMMARIES) !== 0) summaryWakeups++;
+			if ((dirty & CORE_PROGRAM_FLOW_RETURN_KIND) !== 0) valueKindWakeups++;
+			if ((dirty & CORE_PROGRAM_FLOW_REACHABILITY) !== 0) reachabilityWakeups++;
 		}
+		this.#report?.increment("programFlowTargetWakeups", targetWakeups);
+		this.#report?.increment("programFlowSummaryWakeups", summaryWakeups);
+		this.#report?.increment("programFlowValueKindWakeups", valueKindWakeups);
+		this.#report?.increment("programFlowReachabilityWakeups", reachabilityWakeups);
 		return epoch;
 	}
 

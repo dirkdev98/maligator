@@ -23,28 +23,19 @@ import type {
 	ValueContainmentFact,
 	ValueEscapeFact,
 } from "../shared/effect-summary.ts";
-import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
 import type { CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
-	CORE_CALL_GRAPH_ANALYSIS,
 	analyzeCoreCallGraph,
 	coreCalleeTargetsAreOpen,
 } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
-import {
-	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
-	buildCoreControlFlow,
-} from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreFunctionId, CoreRepresentation, CoreValueId } from "./core-ir.ts";
-import {
-	CORE_PROGRAM_FLOW_SUMMARIES,
-	CORE_PROGRAM_FLOW_SUMMARY_CONSUMER,
-	buildCoreProgramFlowTopology,
-} from "./core-program-flow.ts";
+import { buildCoreProgramFlowTopology } from "./core-program-flow.ts";
 import type { CoreProgramFlowScc, CoreProgramFlowTopology } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
@@ -1103,45 +1094,6 @@ export function analyzeProgramSummaries(
 		},
 	});
 }
-
-export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgramSummaryState> =
-	{
-		key: "program-summaries",
-		scope: "program",
-		functionDependencies: ["body", "cfg", "calls", "memoryEffects", "representations"],
-		programDependencies: ["functions", "calls"],
-		contextIdentity(context) {
-			return context.facts.closure.sourceClosure.kind;
-		},
-		compute({ program, context, request, previous, get, programFlow }) {
-			if (request.scope !== "program")
-				throw new Error("Expected program analysis request");
-			const targets = get(CORE_CALL_GRAPH_ANALYSIS, request);
-			const flow = programFlow.refresh(
-				CORE_PROGRAM_FLOW_SUMMARY_CONSUMER,
-				CORE_PROGRAM_FLOW_SUMMARIES,
-			);
-			const dirtyFunctions = new Array<CoreFunctionId>();
-			if (previous !== undefined) {
-				for (let index = 0; index < flow.dirtyFunctionCount; index++) {
-					dirtyFunctions.push(flow.dirtyFunctionAt(index));
-				}
-			}
-			return analyzeProgramSummaries(
-				program,
-				context,
-				targets,
-				(functionId) =>
-					get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
-						scope: "function",
-						function: functionId,
-					}),
-				programFlow.topology(targets.graph),
-				previous as CoreProgramSummaryState | undefined,
-				dirtyFunctions,
-			);
-		},
-	};
 
 export function analyzeCoreProgramSummaries(
 	program: CoreProgram,
