@@ -34,7 +34,7 @@ const TYPEOF_RESULTS: ReadonlySet<string> = new Set([
 
 class SparseNumericQueue {
 	#items: Int32Array;
-	readonly #membershipPages = new Map<number, Uint8Array>();
+	readonly #membershipPages: Array<Uint8Array | undefined> = [];
 	#head = 0;
 	#tail = 0;
 	#pushes = 0;
@@ -58,10 +58,10 @@ class SparseNumericQueue {
 
 	push(value: number): boolean {
 		const pageId = value >>> 10;
-		let page = this.#membershipPages.get(pageId);
+		let page = this.#membershipPages[pageId];
 		if (page === undefined) {
 			page = new Uint8Array(1 << 10);
-			this.#membershipPages.set(pageId, page);
+			this.#membershipPages[pageId] = page;
 		}
 		const offset = value & ((1 << 10) - 1);
 		if (page[offset] !== 0) return false;
@@ -76,7 +76,7 @@ class SparseNumericQueue {
 	pop(): number | undefined {
 		if (this.#head === this.#tail) return undefined;
 		const value = this.#items[this.#head++]!;
-		this.#membershipPages.get(value >>> 10)![value & ((1 << 10) - 1)] = 0;
+		this.#membershipPages[value >>> 10]![value & ((1 << 10) - 1)] = 0;
 		return value;
 	}
 
