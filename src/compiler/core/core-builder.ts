@@ -2,7 +2,6 @@ import { CoreEditor } from "./core-editor.ts";
 import type {
 	AppendCoreInstructionOptions,
 	CoreBlockId,
-	CoreBlockParameter,
 	CoreBlockParameterSpec,
 	CoreFact,
 	CoreFactId,
@@ -36,26 +35,6 @@ export class CoreFunctionBuilder {
 
 	createBlock(parameters: ReadonlyArray<CoreBlockParameterSpec> = []): CoreBlockId {
 		return this.editor.createBlock(parameters);
-	}
-
-	blockParameters(block: CoreBlockId): ReadonlyArray<CoreBlockParameter> {
-		if (this.editor.function.kernel.blockLive(block) === 0) {
-			throw new Error(`Unknown Core block ${block}`);
-		}
-		const start = this.editor.function.kernel.blockParameterStart(block);
-		const count = this.editor.function.kernel.blockParameterCount(block);
-		return Array.from({ length: count }, (_, index) => {
-			const row = start + index;
-			const value = this.editor.function.kernel.blockParameterValue(row);
-			return {
-				value,
-				representation: this.editor.function.valueRepresentation(value),
-				role:
-					this.editor.function.kernel.blockParameterRole(row) === 1
-						? "exception"
-						: "value",
-			};
-		});
 	}
 
 	blockParameterValue(block: CoreBlockId, index: number): CoreValueId {

@@ -200,10 +200,7 @@ function literalArrayIndex(
 	value: CoreValueId,
 ): number | undefined {
 	const definition = definingInstruction(fn, value);
-	if (
-		definition === undefined ||
-		fn.instructionKind(definition) !== "operation"
-	)
+	if (definition === undefined || fn.instructionKind(definition) !== "operation")
 		return undefined;
 	const opcode = fn.instructionOpcodeName(definition);
 	const immediate = fn.instructionAttributes(definition).value;
@@ -329,7 +326,8 @@ function allocationLayout(
 	}
 	const keys = numberArray(attributes[allocation.keysAttribute]);
 	if (keys === undefined || new Set(keys).size !== keys.length) return undefined;
-	const valueCount = instructionOperandCount(fn, instruction) - allocation.firstValueOperand;
+	const valueCount =
+		instructionOperandCount(fn, instruction) - allocation.firstValueOperand;
 	if (valueCount !== keys.length) return undefined;
 	const values = new Array<CoreValueId>(valueCount);
 	for (let index = 0; index < valueCount; index++) {
@@ -440,10 +438,7 @@ function provenance(
 		const cached = keyCells[valueRoot];
 		if (cached !== undefined) return cached ?? undefined;
 		const definition = definingInstruction(fn, valueRoot);
-		if (
-			definition === undefined ||
-			fn.instructionKind(definition) !== "operation"
-		) {
+		if (definition === undefined || fn.instructionKind(definition) !== "operation") {
 			keyCells[valueRoot] = null;
 			return undefined;
 		}
@@ -498,8 +493,7 @@ function provenance(
 				return;
 			}
 			const access = baseAccessForOperand(fn, instruction, operand);
-			const key =
-				access === undefined ? undefined : accessKey(fn, instruction, access);
+			const key = access === undefined ? undefined : accessKey(fn, instruction, access);
 			const cell = key === undefined ? undefined : cellForKey(key);
 			if (
 				access === undefined ||
@@ -534,8 +528,7 @@ function provenance(
 		return (
 			definition !== undefined &&
 			fn.instructionKind(definition) === "operation" &&
-			fn.registry.byId(fn.instructionOpcode(definition))
-				.resultCannotBeHeldWeakly === true
+			fn.registry.byId(fn.instructionOpcode(definition)).resultCannotBeHeldWeakly === true
 		);
 	};
 	const contained = layouts.filter(
@@ -1001,7 +994,11 @@ function stackObjectCandidate(
 		const terminatorId = fn.blockTerminator(block);
 		const terminatorKind = fn.instructionKind(terminatorId);
 		const controlValue = instructionOperand(fn, terminatorId, 0);
-		if (terminatorKind === "return" && controlValue !== undefined && aliasesAllocation(controlValue)) {
+		if (
+			terminatorKind === "return" &&
+			controlValue !== undefined &&
+			aliasesAllocation(controlValue)
+		) {
 			materializations.push({ instruction: terminatorId, kind: "return" });
 		} else if (
 			controlValue !== undefined &&
@@ -1120,10 +1117,7 @@ function provenNumericValue(
 	if (cached !== undefined) return cached;
 	memo.set(root, false);
 	const definition = definingInstruction(fn, root);
-	if (
-		definition === undefined ||
-		fn.instructionKind(definition) !== "operation"
-	)
+	if (definition === undefined || fn.instructionKind(definition) !== "operation")
 		return false;
 	const opcode = fn.instructionOpcodeName(definition);
 	const operandCount = instructionOperandCount(fn, definition);
@@ -1133,18 +1127,42 @@ function provenNumericValue(
 		opcode === "createF64" ||
 		(opcode === "move" &&
 			operandCount === 1 &&
-			provenNumericValue(fn, instructionOperand(fn, definition, 0)!, roots, numericRoots, memo)) ||
+			provenNumericValue(
+				fn,
+				instructionOperand(fn, definition, 0)!,
+				roots,
+				numericRoots,
+				memo,
+			)) ||
 		(opcode === "unary" &&
 			typeof operator === "string" &&
 			["+", "-", "~", "tonumeric"].includes(operator) &&
 			operandCount === 1 &&
-			provenNumericValue(fn, instructionOperand(fn, definition, 0)!, roots, numericRoots, memo)) ||
+			provenNumericValue(
+				fn,
+				instructionOperand(fn, definition, 0)!,
+				roots,
+				numericRoots,
+				memo,
+			)) ||
 		(opcode === "binary" &&
 			typeof operator === "string" &&
 			FRESH_DENSE_NUMERIC_OPERATORS.has(operator) &&
 			operandCount === 2 &&
-			provenNumericValue(fn, instructionOperand(fn, definition, 0)!, roots, numericRoots, memo) &&
-			provenNumericValue(fn, instructionOperand(fn, definition, 1)!, roots, numericRoots, memo));
+			provenNumericValue(
+				fn,
+				instructionOperand(fn, definition, 0)!,
+				roots,
+				numericRoots,
+				memo,
+			) &&
+			provenNumericValue(
+				fn,
+				instructionOperand(fn, definition, 1)!,
+				roots,
+				numericRoots,
+				memo,
+			));
 	memo.set(root, proven);
 	return proven;
 }
@@ -1211,7 +1229,10 @@ function denseArrayCandidates(
 		const headerTerminator = fn.blockTerminator(loop.header);
 		if (fn.instructionKind(headerTerminator) !== "branch") continue;
 		const conditionValue = instructionOperand(fn, headerTerminator, 0)!;
-		const condition = definingInstruction(fn, roots.get(conditionValue) ?? conditionValue);
+		const condition = definingInstruction(
+			fn,
+			roots.get(conditionValue) ?? conditionValue,
+		);
 		if (
 			condition === undefined ||
 			fn.instructionKind(condition) !== "operation" ||
@@ -1221,7 +1242,10 @@ function denseArrayCandidates(
 			continue;
 		const counter = instructionOperand(fn, condition, 0);
 		const lengthOperand = instructionOperand(fn, condition, 1);
-		const length = lengthOperand === undefined ? undefined : exactIntegerValue(fn, lengthOperand, roots);
+		const length =
+			lengthOperand === undefined
+				? undefined
+				: exactIntegerValue(fn, lengthOperand, roots);
 		const parameterStart = fn.kernel.blockParameterStart(loop.header);
 		const parameterCount = fn.kernel.blockParameterCount(loop.header);
 		let counterParameter = -1;
@@ -1246,8 +1270,14 @@ function denseArrayCandidates(
 			initialEdge === undefined ||
 			updateEdge === undefined ||
 			exactIntegerValue(fn, initialEdge.arguments[counterParameter]!, roots) !== 0 ||
-			!loop.blocks.has(fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator))) ||
-			loop.blocks.has(fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator) + 1))
+			!loop.blocks.has(
+				fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator)),
+			) ||
+			loop.blocks.has(
+				fn.kernel.terminatorEdgeBlock(
+					fn.kernel.terminatorEdgeStart(headerTerminator) + 1,
+				),
+			)
 		)
 			continue;
 		const updateValue = updateEdge.arguments[counterParameter];
@@ -1303,7 +1333,9 @@ function denseArrayCandidates(
 						opcode === "rootUse" ||
 						(instruction === store && position === 0) ||
 						control.dominates(
-							fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator) + 1),
+							fn.kernel.terminatorEdgeBlock(
+								fn.kernel.terminatorEdgeStart(headerTerminator) + 1,
+							),
 							block,
 						)
 					) {
@@ -1317,7 +1349,9 @@ function denseArrayCandidates(
 			const terminatorValue = instructionOperand(fn, terminator, 0);
 			if (
 				!control.dominates(
-					fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator) + 1),
+					fn.kernel.terminatorEdgeBlock(
+						fn.kernel.terminatorEdgeStart(headerTerminator) + 1,
+					),
 					block,
 				) &&
 				terminatorValue !== undefined &&
@@ -1596,8 +1630,7 @@ function stringCharCodeAtCandidates(
 	for (const call of fn.instructionIds()) {
 		if (
 			fn.instructionKind(call) !== "operation" ||
-			(instructionOperandCount(fn, call) !== 2 &&
-				instructionOperandCount(fn, call) !== 3)
+			(instructionOperandCount(fn, call) !== 2 && instructionOperandCount(fn, call) !== 3)
 		) {
 			continue;
 		}
@@ -2031,10 +2064,7 @@ function exactFreshCollectionReceiver(
 	if (expected === undefined || receiver === undefined) return undefined;
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const definition = definingInstruction(fn, root(receiver));
-	if (
-		definition === undefined ||
-		fn.instructionOpcodeName(definition) !== "construct"
-	)
+	if (definition === undefined || fn.instructionOpcodeName(definition) !== "construct")
 		return undefined;
 	const constructor = instructionOperand(fn, definition, 0);
 	if (constructor === undefined) return undefined;
@@ -2620,12 +2650,14 @@ function iteratorEntryPairVirtualizationCandidates(
 			) ||
 			(innerBlock !== firstBlock &&
 				(fn.instructionKind(innerTerminator) !== "jump" ||
-					fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(innerTerminator)) !==
-						firstBlock)) ||
+					fn.kernel.terminatorEdgeBlock(
+						fn.kernel.terminatorEdgeStart(innerTerminator),
+					) !== firstBlock)) ||
 			(firstBlock !== secondBlock &&
 				(fn.instructionKind(firstTerminator) !== "jump" ||
-					fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(firstTerminator)) !==
-						secondBlock)) ||
+					fn.kernel.terminatorEdgeBlock(
+						fn.kernel.terminatorEdgeStart(firstTerminator),
+					) !== secondBlock)) ||
 			innerCloses.some(
 				(instruction) =>
 					[...fn.bodyInstructionIds(fn.instructionBlock(instruction))].length !== 1,
@@ -2986,7 +3018,11 @@ function regexpExecProjectionCandidates(
 			!control.reachable.has(fn.instructionBlock(call))
 		)
 			continue;
-		const property = specializationDefinition(fn, roots, instructionOperand(fn, call, 0)!);
+		const property = specializationDefinition(
+			fn,
+			roots,
+			instructionOperand(fn, call, 0)!,
+		);
 		if (
 			!staticPropertyNamed(program, fn, property, "exec") ||
 			instructionOperandCount(fn, property) !== 1 ||
@@ -3510,10 +3546,9 @@ function discoverCandidates(
 					useInstructions.push(instruction);
 				});
 				const instructions = Object.freeze(
-					[
-						layout.instruction,
-						...useInstructions,
-					].filter((instruction, index, all) => all.indexOf(instruction) === index),
+					[layout.instruction, ...useInstructions].filter(
+						(instruction, index, all) => all.indexOf(instruction) === index,
+					),
 				);
 				const candidate = Object.freeze({
 					key: `dense-array:${fn.id}:${layout.instruction}:contained`,

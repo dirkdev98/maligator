@@ -20,6 +20,7 @@ import {
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
 describe("Core debug view", () => {
 	it("builds immutable snapshots without making them authoritative", () => {
@@ -34,13 +35,13 @@ describe("Core debug view", () => {
 		const program = new CoreProgram(registry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [result] = builder.appendInstruction(entry, "identity", [parameter]);
 		const handler = builder.createBlock([
 			{ representation: "boxed", role: "exception" },
 			{ representation: "boxed" },
 		]);
-		const handlerValue = builder.blockParameters(handler)[1]!.value;
+		const handlerValue = inspectCoreBlockParameters(builder, handler)[1]!.value;
 		builder.setHandler(entry, handler, [result!]);
 		builder.setTerminator(entry, { kind: "return", value: result! });
 		builder.setTerminator(handler, { kind: "return", value: handlerValue });

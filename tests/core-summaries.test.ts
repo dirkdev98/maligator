@@ -4,6 +4,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-ir-summaries.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import {
 	analysisProgram,
 	appendCaller,
@@ -221,7 +222,7 @@ describe("incremental Core program summaries", () => {
 		const program = analysisProgram();
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const join = builder.createBlock([{ representation: "boxed" }]);
 		let decision = entry;
 		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
@@ -249,7 +250,7 @@ describe("incremental Core program summaries", () => {
 			kind: "jump",
 			edge: { block: join, arguments: [lastCallee!] },
 		});
-		const callee = builder.blockParameters(join)[0]!.value;
+		const callee = inspectCoreBlockParameters(builder, join)[0]!.value;
 		const [receiver] = builder.appendInstruction(join, "createUndefined", []);
 		const [result] = builder.appendInstruction(join, "call", [callee, receiver!]);
 		builder.setTerminator(join, { kind: "return", value: result! });
@@ -302,7 +303,10 @@ describe("incremental Core program summaries", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const [condition, firstArgument, secondArgument] = builder.blockParameters(entry);
+		const [condition, firstArgument, secondArgument] = inspectCoreBlockParameters(
+			builder,
+			entry,
+		);
 		const join = builder.createBlock([{ representation: "boxed" }]);
 		let decision = entry;
 		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
@@ -330,7 +334,7 @@ describe("incremental Core program summaries", () => {
 			kind: "jump",
 			edge: { block: join, arguments: [lastCallee!] },
 		});
-		const callee = builder.blockParameters(join)[0]!.value;
+		const callee = inspectCoreBlockParameters(builder, join)[0]!.value;
 		const [receiver] = builder.appendInstruction(join, "createUndefined", []);
 		const [result] = builder.appendInstruction(join, "call", [
 			callee,

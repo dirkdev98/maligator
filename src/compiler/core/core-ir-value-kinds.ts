@@ -579,7 +579,7 @@ function solveCoreProgramValueKinds(
 	const functionIds = [...program.functionIds()];
 	const maximumParameterCount = functionIds.reduce(
 		(largest, functionId) =>
-			Math.max(largest, program.function(functionId).parameters.length),
+			Math.max(largest, program.function(functionId).parameterCount),
 		0,
 	);
 	const live = new Set(functionIds);
@@ -641,7 +641,7 @@ function solveCoreProgramValueKinds(
 		const seed = external.get(functionId) === true ? COMPILER_VALUE_KIND_TOP : 0;
 		return {
 			parameterKinds: Array.from(
-				{ length: fn.parameters.length },
+				{ length: fn.parameterCount },
 				(_, index) => seed | (aggregate?.parameterKinds[index] ?? 0),
 			),
 			receiverKind:
@@ -739,7 +739,7 @@ function solveCoreProgramValueKinds(
 		const calleeFn = program.function(callee);
 		const prior = summaries.get(callee)!;
 		const parameterKinds = [...prior.parameterKinds];
-		for (const index of calleeFn.parameters.keys()) {
+		for (let index = 0; index < calleeFn.parameterCount; index++) {
 			parameterKinds[index] =
 				parameterKinds[index]! | (incomingParameterKinds[index] ?? 0);
 		}

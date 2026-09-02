@@ -11,10 +11,8 @@ import {
 import type {
 	CoreAttributeValue,
 	CoreBlockId,
-	CoreBlockParameter,
 	CoreBlockParameterSpec,
 	CoreEffectRefinement,
-	CoreEdge,
 	CoreExceptionHandler,
 	CoreFact,
 	CoreFactId,
@@ -29,7 +27,6 @@ import type {
 	CoreOpcodeRegistry,
 	CoreRepresentation,
 	CoreTerminatorPayload,
-	CoreValueDefinition,
 	CoreValueId,
 } from "./core-ir.ts";
 
@@ -486,54 +483,59 @@ export class CoreFunctionStore {
 			...options.metadata,
 			mappedArgumentSlots: [...(options.metadata?.mappedArgumentSlots ?? [])],
 		});
-		this.kernel = new CoreFunctionKernel({
-			blockLive: this.#blockLive,
-			blockFirstInstruction: this.#blockFirstInstruction,
-			blockLastInstruction: this.#blockLastInstruction,
-			blockParameterStart: this.#blockParameterStart,
-			blockParameterCount: this.#blockParameterCount,
-			blockParameterValues: this.#blockParameterValues,
-			blockParameterRoles: this.#blockParameterRoles,
-			blockHandlerBlock: this.#blockHandlerBlock,
-			blockHandlerArgumentStart: this.#blockHandlerArgumentStart,
-			blockHandlerArgumentCount: this.#blockHandlerArgumentCount,
-			handlerArguments: this.#handlerArguments,
-			instructionLive: this.#instructionLive,
-			instructionOpcode: this.#instructionOpcode,
-			instructionBlock: this.#instructionBlock,
-			instructionPrevious: this.#instructionPrevious,
-			instructionNext: this.#instructionNext,
-			instructionOperandStart: this.#instructionOperandStart,
-			instructionOperandCount: this.#instructionOperandCount,
-			instructionResultStart: this.#instructionResultStart,
-			instructionResultCount: this.#instructionResultCount,
-			instructionSourcePosition: this.#instructionSourcePosition,
-			instructionEffectRefinementRef: this.#instructionEffectRefinementRef,
-			instructionTerminatorEdgeStart: this.#instructionTerminatorEdgeStart,
-			instructionTerminatorEdgeCount: this.#instructionTerminatorEdgeCount,
-			instructionTerminatorFact: this.#instructionTerminatorFact,
-			operands: this.#operands,
-			operandUses: this.#operandUses,
-			results: this.#results,
-			functionParameters: this.#parameters,
-			terminatorEdgeBlock: this.#terminatorEdgeBlock,
-			terminatorEdgeArgumentStart: this.#terminatorEdgeArgumentStart,
-			terminatorEdgeArgumentCount: this.#terminatorEdgeArgumentCount,
-			terminatorEdgeCaseValue: this.#terminatorEdgeCaseValue,
-			valueLive: this.#valueLive,
-			valueRepresentation: this.#valueRepresentation,
-			valueDefinitionKind: this.#valueDefinitionKind,
-			valueDefinitionOwner: this.#valueDefinitionOwner,
-			valueDefinitionIndex: this.#valueDefinitionIndex,
-			valueFirstUse: this.#valueFirstUse,
-			valueUseCount: this.#valueUseCount,
-			useLive: this.#useLive,
-			useValue: this.#useValue,
-			useInstruction: this.#useInstruction,
-			useOperand: this.#useOperand,
-			usePrevious: this.#usePrevious,
-			useNext: this.#useNext,
-		});
+		this.kernel = new CoreFunctionKernel(
+			{
+				blockLive: this.#blockLive,
+				blockFirstInstruction: this.#blockFirstInstruction,
+				blockLastInstruction: this.#blockLastInstruction,
+				blockParameterStart: this.#blockParameterStart,
+				blockParameterCount: this.#blockParameterCount,
+				blockParameterValues: this.#blockParameterValues,
+				blockParameterRoles: this.#blockParameterRoles,
+				blockHandlerBlock: this.#blockHandlerBlock,
+				blockHandlerArgumentStart: this.#blockHandlerArgumentStart,
+				blockHandlerArgumentCount: this.#blockHandlerArgumentCount,
+				handlerArguments: this.#handlerArguments,
+				instructionLive: this.#instructionLive,
+				instructionOpcode: this.#instructionOpcode,
+				instructionBlock: this.#instructionBlock,
+				instructionPrevious: this.#instructionPrevious,
+				instructionNext: this.#instructionNext,
+				instructionOperandStart: this.#instructionOperandStart,
+				instructionOperandCount: this.#instructionOperandCount,
+				instructionResultStart: this.#instructionResultStart,
+				instructionResultCount: this.#instructionResultCount,
+				instructionSourcePosition: this.#instructionSourcePosition,
+				instructionEffectRefinementRef: this.#instructionEffectRefinementRef,
+				instructionTerminatorEdgeStart: this.#instructionTerminatorEdgeStart,
+				instructionTerminatorEdgeCount: this.#instructionTerminatorEdgeCount,
+				instructionTerminatorFact: this.#instructionTerminatorFact,
+				operands: this.#operands,
+				operandUses: this.#operandUses,
+				results: this.#results,
+				functionParameters: this.#parameters,
+				terminatorEdgeBlock: this.#terminatorEdgeBlock,
+				terminatorEdgeArgumentStart: this.#terminatorEdgeArgumentStart,
+				terminatorEdgeArgumentCount: this.#terminatorEdgeArgumentCount,
+				terminatorEdgeCaseValue: this.#terminatorEdgeCaseValue,
+				valueLive: this.#valueLive,
+				valueRepresentation: this.#valueRepresentation,
+				valueDefinitionKind: this.#valueDefinitionKind,
+				valueDefinitionOwner: this.#valueDefinitionOwner,
+				valueDefinitionIndex: this.#valueDefinitionIndex,
+				valueFirstUse: this.#valueFirstUse,
+				valueUseCount: this.#valueUseCount,
+				useLive: this.#useLive,
+				useValue: this.#useValue,
+				useInstruction: this.#useInstruction,
+				useOperand: this.#useOperand,
+				usePrevious: this.#usePrevious,
+				useNext: this.#useNext,
+			},
+			() => {
+				if (this.#trackUseTraversal) this.#liveUseVisits++;
+			},
+		);
 	}
 
 	get isGenerator(): boolean {
@@ -554,10 +556,6 @@ export class CoreFunctionStore {
 
 	get finished(): boolean {
 		return this.#entry !== undefined;
-	}
-
-	get parameters(): ReadonlyArray<CoreValueId> {
-		return [...this.#parameters];
 	}
 
 	get entry(): CoreBlockId {
@@ -698,43 +696,11 @@ export class CoreFunctionStore {
 		return this.#facts[id] !== undefined;
 	}
 
-	blockLayout(id: number): CoreBlockLayout {
-		if (!Number.isSafeInteger(id) || id < 0 || id >= this.blockCapacity) {
-			throw new Error(`Unknown Core block row ${id}`);
-		}
-		return {
-			live: this.#blockLive[id] === 1,
-			firstInstruction: this.#blockFirstInstruction[id]!,
-			lastInstruction: this.#blockLastInstruction[id]!,
-			parameterStart: this.#blockParameterStart[id]!,
-			parameterCount: this.#blockParameterCount[id]!,
-		};
-	}
-
-	instructionLayout(id: number): CoreInstructionLayout {
-		if (!Number.isSafeInteger(id) || id < 0 || id >= this.instructionCapacity) {
-			throw new Error(`Unknown Core instruction row ${id}`);
-		}
-		return {
-			live: this.#instructionLive[id] === 1,
-			opcode: this.#instructionOpcode[id]!,
-			block: this.#instructionBlock[id]!,
-			previous: this.#instructionPrevious[id]!,
-			next: this.#instructionNext[id]!,
-			operandStart: this.#instructionOperandStart[id]!,
-			operandCount: this.#instructionOperandCount[id]!,
-			resultStart: this.#instructionResultStart[id]!,
-			resultCount: this.#instructionResultCount[id]!,
-			sourcePosition: this.#instructionSourcePosition[id]!,
-			effectRefinementRef: this.#instructionEffectRefinementRef[id]!,
-		};
-	}
-
-	effectRefinementLayout(id: number): CoreEffectRefinementLayout {
+	effectRefinementLive(id: number): boolean {
 		if (!Number.isSafeInteger(id) || id < 0 || id >= this.effectRefinementCapacity) {
 			throw new Error(`Unknown Core effect-refinement row ${id}`);
 		}
-		return { live: this.#effectRefinements[id] !== undefined };
+		return this.#effectRefinements[id] !== undefined;
 	}
 
 	effectRefinementRecord(id: number): CoreEffectRefinement {
@@ -743,35 +709,6 @@ export class CoreFunctionStore {
 			throw new Error(`Unknown Core effect-refinement ${id}`);
 		}
 		return refinement;
-	}
-
-	valueLayout(id: number): CoreValueLayout {
-		if (!Number.isSafeInteger(id) || id < 0 || id >= this.valueCapacity) {
-			throw new Error(`Unknown Core value row ${id}`);
-		}
-		return {
-			live: this.#valueLive[id] === 1,
-			definitionKind:
-				this.#valueDefinitionKind[id] === 0 ? "block-parameter" : "instruction",
-			definitionOwner: this.#valueDefinitionOwner[id]!,
-			definitionIndex: this.#valueDefinitionIndex[id]!,
-			firstUse: this.#valueFirstUse[id]!,
-			useCount: this.#valueUseCount[id]!,
-		};
-	}
-
-	useLayout(id: number): CoreUseLayout {
-		if (!Number.isSafeInteger(id) || id < 0 || id >= this.useCapacity) {
-			throw new Error(`Unknown Core use row ${id}`);
-		}
-		return {
-			live: this.#useLive[id] === 1,
-			value: this.#useValue[id]!,
-			instruction: this.#useInstruction[id]!,
-			operand: this.#useOperand[id]!,
-			previous: this.#usePrevious[id]!,
-			next: this.#useNext[id]!,
-		};
 	}
 
 	blockParameterValue(index: number): CoreValueId {
@@ -786,47 +723,10 @@ export class CoreFunctionStore {
 		return role;
 	}
 
-	operandRecord(index: number): { readonly value: CoreValueId; readonly use: number } {
-		const value = this.#operands[index];
-		const use = this.#operandUses[index];
-		if (value === undefined || use === undefined) {
-			throw new Error(`Unknown Core operand row ${index}`);
-		}
-		return { value, use };
-	}
-
 	resultRecord(index: number): CoreValueId {
 		const value = this.#results[index];
 		if (value === undefined) throw new Error(`Unknown Core result row ${index}`);
 		return value;
-	}
-
-	blockParameters(id: CoreBlockId): ReadonlyArray<CoreBlockParameter> {
-		this.#requireBlock(id);
-		const start = this.#blockParameterStart[id]!;
-		const count = this.#blockParameterCount[id]!;
-		return Array.from({ length: count }, (_, index) => {
-			const value = this.#blockParameterValues[start + index]!;
-			return {
-				value,
-				representation: this.valueRepresentation(value),
-				role: BLOCK_PARAMETER_ROLES[this.#blockParameterRoles[start + index]!]!,
-			};
-		});
-	}
-
-	blockHandler(id: CoreBlockId): CoreExceptionHandler | undefined {
-		this.#requireBlock(id);
-		const block = this.#blockHandlerBlock[id] ?? -1;
-		if (block < 0) return undefined;
-		const start = this.#blockHandlerArgumentStart[id]!;
-		return {
-			block: coreBlockId(block),
-			arguments: this.#handlerArguments.slice(
-				start,
-				start + this.#blockHandlerArgumentCount[id]!,
-			),
-		};
 	}
 
 	blockTerminator(id: CoreBlockId): CoreInstructionId {
@@ -875,18 +775,6 @@ export class CoreFunctionStore {
 		return this.registry.byId(this.instructionOpcode(id)).opcode;
 	}
 
-	instructionOperands(id: CoreInstructionId): ReadonlyArray<CoreValueId> {
-		this.#requireInstruction(id);
-		const start = this.#instructionOperandStart[id]!;
-		return this.#operands.slice(start, start + this.#instructionOperandCount[id]!);
-	}
-
-	instructionResults(id: CoreInstructionId): ReadonlyArray<CoreValueId> {
-		this.#requireInstruction(id);
-		const start = this.#instructionResultStart[id]!;
-		return this.#results.slice(start, start + this.#instructionResultCount[id]!);
-	}
-
 	instructionSourcePosition(id: CoreInstructionId): number | undefined {
 		this.#requireInstruction(id);
 		const position = this.#instructionSourcePosition[id]!;
@@ -913,111 +801,14 @@ export class CoreFunctionStore {
 		return this.#instructionPayload[id] ?? {};
 	}
 
-	terminatorPayload(id: CoreInstructionId): CoreTerminatorPayload {
-		const kind = this.instructionKind(id);
-		if (kind === "operation") {
-			throw new Error(`Core instruction ${id} is not a terminator`);
-		}
-		const operandStart = this.#instructionOperandStart[id]!;
-		const operandCount = this.#instructionOperandCount[id]!;
-		const edgeStart = this.#instructionTerminatorEdgeStart[id]!;
-		const edgeCount = this.#instructionTerminatorEdgeCount[id]!;
-		const operand = (offset: number): CoreValueId => {
-			if (offset < 0 || offset >= operandCount) {
-				throw new Error(`Malformed Core ${kind} operands`);
-			}
-			return this.#operands[operandStart + offset]!;
-		};
-		const edge = (offset: number): CoreEdge => {
-			if (offset < 0 || offset >= edgeCount) {
-				throw new Error(`Malformed Core ${kind} edges`);
-			}
-			const row = edgeStart + offset;
-			const argumentStart = this.#terminatorEdgeArgumentStart[row]!;
-			const argumentCount = this.#terminatorEdgeArgumentCount[row]!;
-			if (
-				argumentStart < operandStart ||
-				argumentStart + argumentCount > operandStart + operandCount
-			) {
-				throw new Error(`Malformed Core ${kind} edge arguments`);
-			}
-			return {
-				block: this.#terminatorEdgeBlock[row]!,
-				arguments: this.#operands.slice(argumentStart, argumentStart + argumentCount),
-			};
-		};
-		switch (kind) {
-			case "jump":
-				return { kind, edge: edge(0) };
-			case "branch":
-				return {
-					kind,
-					condition: operand(0),
-					consequent: edge(0),
-					alternate: edge(1),
-				};
-			case "guard": {
-				const fact = this.#instructionTerminatorFact[id]!;
-				if (fact < 0) throw new Error(`Malformed Core guard fact`);
-				return {
-					kind,
-					condition: operand(0),
-					fact: coreFactId(fact),
-					success: edge(0),
-					fallback: edge(1),
-				};
-			}
-			case "switch": {
-				const cases = Array.from({ length: edgeCount - 1 }, (_, offset) => {
-					const value = this.#terminatorEdgeCaseValue[edgeStart + offset];
-					if (value === undefined) {
-						throw new Error(`Malformed Core switch case ${offset}`);
-					}
-					return { value: { ...value }, edge: edge(offset) };
-				});
-				return {
-					kind,
-					discriminant: operand(0),
-					cases,
-					default: edge(edgeCount - 1),
-				};
-			}
-			case "return":
-			case "throw":
-				return { kind, value: operand(0) };
-			case "unreachable":
-				return { kind };
-		}
-	}
-
 	valueRepresentation(id: CoreValueId): CoreRepresentation {
 		this.#requireValue(id);
 		return REPRESENTATIONS[this.#valueRepresentation[id]!]!;
 	}
 
-	valueDefinition(id: CoreValueId): CoreValueDefinition {
-		this.#requireValue(id);
-		const owner = this.#valueDefinitionOwner[id]!;
-		const index = this.#valueDefinitionIndex[id]!;
-		return this.#valueDefinitionKind[id] === 0
-			? { kind: "block-parameter", block: coreBlockId(owner), index }
-			: { kind: "instruction", instruction: coreInstructionId(owner), index };
-	}
-
 	valueUseCount(id: CoreValueId): number {
 		this.#requireValue(id);
 		return this.#valueUseCount[id]!;
-	}
-
-	*uses(id: CoreValueId): Iterable<CoreUse> {
-		this.#requireValue(id);
-		for (let use = this.#valueFirstUse[id]!; use >= 0; use = this.#useNext[use]!) {
-			if (this.#trackUseTraversal) this.#liveUseVisits++;
-			yield {
-				instruction: this.#useInstruction[use]!,
-				operand: this.#useOperand[use]!,
-			};
-		}
 	}
 
 	configureUseTraversalStatistics(enabled: boolean): void {
@@ -1382,7 +1173,11 @@ export class CoreFunctionStore {
 			const parameter = this.#blockParameterValues[parameterStart + index]!;
 			if (this.#valueUseCount[parameter] !== 0) {
 				const descriptions: Array<string> = [];
-				for (let use = this.#valueFirstUse[parameter]!; use >= 0; use = this.#useNext[use]!) {
+				for (
+					let use = this.#valueFirstUse[parameter]!;
+					use >= 0;
+					use = this.#useNext[use]!
+				) {
 					if (this.#trackUseTraversal) this.#liveUseVisits++;
 					const instruction = this.#useInstruction[use]!;
 					descriptions.push(

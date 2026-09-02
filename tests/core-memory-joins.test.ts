@@ -5,6 +5,11 @@ import type { CoreFunctionId } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreFunctionParameters,
+	inspectCoreTerminatorPayload,
+} from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 function loadCount(fn: CoreFunctionStore): number {
@@ -25,9 +30,10 @@ describe("Core memory joins", () => {
 				{ representation: "boxed" },
 				{ representation: "boxed" },
 			]);
-			const [original, replacement, condition] = builder
-				.blockParameters(entry)
-				.map(({ value }) => value);
+			const [original, replacement, condition] = inspectCoreBlockParameters(
+				builder,
+				entry,
+			).map(({ value }) => value);
 			const left = builder.createBlock();
 			const right = builder.createBlock();
 			const join = builder.createBlock();
@@ -68,10 +74,14 @@ describe("Core memory joins", () => {
 		expect(loadCount(optimized.function(clobbered))).toBe(1);
 		expect(
 			[...optimized.function(clean).blockIds()].map((block) =>
-				optimized
-					.function(clean)
-					.terminatorPayload(optimized.function(clean).blockTerminator(block)),
+				inspectCoreTerminatorPayload(
+					optimized.function(clean),
+					optimized.function(clean).blockTerminator(block),
+				),
 			),
-		).toContainEqual({ kind: "return", value: optimized.function(clean).parameters[0] });
+		).toContainEqual({
+			kind: "return",
+			value: inspectCoreFunctionParameters(optimized.function(clean))[0],
+		});
 	});
 });

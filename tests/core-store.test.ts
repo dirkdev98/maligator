@@ -16,6 +16,18 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import * as coreStore from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import {
+	inspectCoreBlockHandler,
+	inspectCoreBlockParameters,
+	inspectCoreEffectRefinementLayout,
+	inspectCoreFunctionParameters,
+	inspectCoreInstructionLayout,
+	inspectCoreInstructionOperands,
+	inspectCoreInstructionResults,
+	inspectCoreTerminatorPayload,
+	inspectCoreUses,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 
 function registry(): CoreOpcodeRegistry {
 	const registry = new CoreOpcodeRegistry();
@@ -46,7 +58,7 @@ function registry(): CoreOpcodeRegistry {
 function oneFunction(program = new CoreProgram(registry())) {
 	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 	const entry = builder.createBlock([{ representation: "boxed" }]);
-	const parameter = builder.blockParameters(entry)[0]!.value;
+	const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 	const [constant] = builder.appendInstruction(entry, "constant", [], {
 		outputRepresentations: ["i32"],
 	});
@@ -74,9 +86,9 @@ function terminatorFixture(kind: CoreTerminatorPayload["kind"]) {
 		{ representation: "boxed" },
 		{ representation: "boxed" },
 	]);
-	const [condition, first, second] = builder
-		.blockParameters(entry)
-		.map(({ value }) => value) as [CoreValueId, CoreValueId, CoreValueId];
+	const [condition, first, second] = inspectCoreBlockParameters(builder, entry).map(
+		({ value }) => value,
+	) as [CoreValueId, CoreValueId, CoreValueId];
 	let expected: CoreTerminatorPayload;
 
 	switch (kind) {
@@ -87,7 +99,7 @@ function terminatorFixture(kind: CoreTerminatorPayload["kind"]) {
 			]);
 			builder.setTerminator(target, {
 				kind: "return",
-				value: builder.blockParameters(target)[0]!.value,
+				value: inspectCoreBlockParameters(builder, target)[0]!.value,
 			});
 			expected = { kind, edge: { block: target, arguments: [first, second] } };
 			builder.setTerminator(entry, expected);
@@ -101,11 +113,11 @@ function terminatorFixture(kind: CoreTerminatorPayload["kind"]) {
 			]);
 			builder.setTerminator(consequent, {
 				kind: "return",
-				value: builder.blockParameters(consequent)[0]!.value,
+				value: inspectCoreBlockParameters(builder, consequent)[0]!.value,
 			});
 			builder.setTerminator(alternate, {
 				kind: "return",
-				value: builder.blockParameters(alternate)[0]!.value,
+				value: inspectCoreBlockParameters(builder, alternate)[0]!.value,
 			});
 			expected = {
 				kind,
@@ -124,11 +136,11 @@ function terminatorFixture(kind: CoreTerminatorPayload["kind"]) {
 			]);
 			builder.setTerminator(success, {
 				kind: "return",
-				value: builder.blockParameters(success)[0]!.value,
+				value: inspectCoreBlockParameters(builder, success)[0]!.value,
 			});
 			builder.setTerminator(fallback, {
 				kind: "return",
-				value: builder.blockParameters(fallback)[0]!.value,
+				value: inspectCoreBlockParameters(builder, fallback)[0]!.value,
 			});
 			const fact = builder.setGuardTerminator(entry, {
 				condition,
@@ -159,11 +171,11 @@ function terminatorFixture(kind: CoreTerminatorPayload["kind"]) {
 			const defaultBlock = builder.createBlock();
 			builder.setTerminator(firstCase, {
 				kind: "return",
-				value: builder.blockParameters(firstCase)[0]!.value,
+				value: inspectCoreBlockParameters(builder, firstCase)[0]!.value,
 			});
 			builder.setTerminator(secondCase, {
 				kind: "return",
-				value: builder.blockParameters(secondCase)[0]!.value,
+				value: inspectCoreBlockParameters(builder, secondCase)[0]!.value,
 			});
 			builder.setTerminator(defaultBlock, { kind: "unreachable" });
 			expected = {
@@ -337,8 +349,8 @@ describe("Core store", () => {
 		const operands = payloadOperands(expected);
 		const edges = payloadEdges(expected);
 
-		expect(fn.terminatorPayload(instruction)).toEqual(expected);
-		expect(fn.instructionOperands(instruction)).toEqual(operands);
+		expect(inspectCoreTerminatorPayload(fn, instruction)).toEqual(expected);
+		expect(inspectCoreInstructionOperands(fn, instruction)).toEqual(operands);
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
 		expect(fn.kernel.terminatorEdgeCount(instruction)).toBe(edges.length);
@@ -368,17 +380,24 @@ describe("Core store", () => {
 					candidate === value ? [{ instruction, operand }] : [],
 				)
 				.reverse();
-			expect([...fn.uses(value)]).toEqual(expectedUses);
+			expect([...inspectCoreUses(fn, value)]).toEqual(expectedUses);
 			expect(fn.valueUseCount(value)).toBe(expectedUses.length);
 		}
 
-		const operandSnapshot = fn.instructionOperands(instruction) as Array<CoreValueId>;
-		if (operandSnapshot.length > 0) operandSnapshot[0] = 99 as CoreValueId;
-		const payloadSnapshot = fn.terminatorPayload(instruction);
-		mutateTerminatorSnapshot(payloadSnapshot);
-		expect(fn.instructionOperands(instruction)).toEqual(operands);
-		expect(fn.terminatorPayload(instruction)).toEqual(expected);
-		expect(fn.terminatorPayload(instruction)).not.toBe(payloadSnapshot);
+		const operandSnapshot = inspectCoreInstructionOperands(
+			fn,
+			instruction,
+		) as Array<CoreValueId>;
+		if (operandSnapshot.length > 0) {
+			expect(() => {
+				operandSnapshot[0] = 99 as CoreValueId;
+			}).toThrow(TypeError);
+		}
+		const payloadSnapshot = inspectCoreTerminatorPayload(fn, instruction);
+		expect(() => mutateTerminatorSnapshot(payloadSnapshot)).toThrow(TypeError);
+		expect(inspectCoreInstructionOperands(fn, instruction)).toEqual(operands);
+		expect(inspectCoreTerminatorPayload(fn, instruction)).toEqual(expected);
+		expect(inspectCoreTerminatorPayload(fn, instruction)).not.toBe(payloadSnapshot);
 
 		program.seal();
 		expect(() => verifyCoreProgram(program)).not.toThrow();
@@ -388,10 +407,10 @@ describe("Core store", () => {
 		const { program, fn, entry, condition, first, second, instruction, expected } =
 			terminatorFixture("branch");
 		if (expected.kind !== "branch") throw new Error("expected branch fixture");
-		const initialLayout = fn.instructionLayout(instruction);
+		const initialLayout = inspectCoreInstructionLayout(fn, instruction);
 		const redirect = CoreEditor.open(program, fn.id);
 		const redirected = redirect.createBlock([{ representation: "boxed" }]);
-		const redirectedParameter = fn.blockParameters(redirected)[0]!.value;
+		const redirectedParameter = inspectCoreBlockParameters(fn, redirected)[0]!.value;
 		redirect.setTerminator(redirected, {
 			kind: "return",
 			value: redirectedParameter,
@@ -401,22 +420,22 @@ describe("Core store", () => {
 			arguments: [second],
 		});
 		const redirectChanges = redirect.commit();
-		const redirectedLayout = fn.instructionLayout(instruction);
+		const redirectedLayout = inspectCoreInstructionLayout(fn, instruction);
 
 		expect(fn.blockTerminator(entry)).toBe(instruction);
-		expect(fn.terminatorPayload(instruction)).toEqual({
+		expect(inspectCoreTerminatorPayload(fn, instruction)).toEqual({
 			...expected,
 			consequent: { block: redirected, arguments: [second] },
 		});
-		expect(fn.instructionOperands(instruction)).toEqual([
+		expect(inspectCoreInstructionOperands(fn, instruction)).toEqual([
 			condition,
 			second,
 			first,
 			second,
 		]);
-		expect([...fn.uses(condition)]).toEqual([{ instruction, operand: 0 }]);
-		expect([...fn.uses(first)]).toEqual([{ instruction, operand: 2 }]);
-		expect([...fn.uses(second)]).toEqual([
+		expect([...inspectCoreUses(fn, condition)]).toEqual([{ instruction, operand: 0 }]);
+		expect([...inspectCoreUses(fn, first)]).toEqual([{ instruction, operand: 2 }]);
+		expect([...inspectCoreUses(fn, second)]).toEqual([
 			{ instruction, operand: 3 },
 			{ instruction, operand: 1 },
 		]);
@@ -433,11 +452,14 @@ describe("Core store", () => {
 		const replaceChanges = replace.commit();
 
 		expect(fn.blockTerminator(entry)).toBe(instruction);
-		expect(fn.terminatorPayload(instruction)).toEqual({ kind: "throw", value: first });
-		expect(fn.instructionOperands(instruction)).toEqual([first]);
-		expect([...fn.uses(condition)]).toEqual([]);
-		expect([...fn.uses(first)]).toEqual([{ instruction, operand: 0 }]);
-		expect([...fn.uses(second)]).toEqual([]);
+		expect(inspectCoreTerminatorPayload(fn, instruction)).toEqual({
+			kind: "throw",
+			value: first,
+		});
+		expect(inspectCoreInstructionOperands(fn, instruction)).toEqual([first]);
+		expect([...inspectCoreUses(fn, condition)]).toEqual([]);
+		expect([...inspectCoreUses(fn, first)]).toEqual([{ instruction, operand: 0 }]);
+		expect([...inspectCoreUses(fn, second)]).toEqual([]);
 		expect(replaceChanges.edges).toEqual([
 			{ kind: "control-flow", source: entry, target: expected.alternate.block },
 			{ kind: "control-flow", source: entry, target: redirected },
@@ -454,19 +476,19 @@ describe("Core store", () => {
 		editor.replaceValueUses(first, second);
 		const changes = editor.commit();
 
-		expect(fn.terminatorPayload(instruction)).toEqual({
+		expect(inspectCoreTerminatorPayload(fn, instruction)).toEqual({
 			...expected,
 			consequent: { ...expected.consequent, arguments: [second] },
 			alternate: { ...expected.alternate, arguments: [second, second] },
 		});
-		expect(fn.instructionOperands(instruction)).toEqual([
+		expect(inspectCoreInstructionOperands(fn, instruction)).toEqual([
 			condition,
 			second,
 			second,
 			second,
 		]);
-		expect([...fn.uses(first)]).toEqual([]);
-		expect([...fn.uses(second)]).toEqual([
+		expect([...inspectCoreUses(fn, first)]).toEqual([]);
+		expect([...inspectCoreUses(fn, second)]).toEqual([
 			{ instruction, operand: 3 },
 			{ instruction, operand: 2 },
 			{ instruction, operand: 1 },
@@ -494,7 +516,7 @@ describe("Core store", () => {
 		);
 		const changes = editor.commit();
 
-		expect(fn.terminatorPayload(instruction)).toEqual({
+		expect(inspectCoreTerminatorPayload(fn, instruction)).toEqual({
 			...expected,
 			condition: first,
 			consequent: { ...expected.consequent, arguments: [second] },
@@ -515,12 +537,13 @@ describe("Core store", () => {
 		});
 		editor.commit();
 
-		expect(fn.terminatorPayload(instruction)).toEqual({
+		expect(inspectCoreTerminatorPayload(fn, instruction)).toEqual({
 			kind: "jump",
 			edge: { block: expected.edge.block, arguments: [] },
 		});
-		expect(fn.instructionOperands(instruction)).toEqual([]);
-		for (const value of expected.edge.arguments) expect([...fn.uses(value)]).toEqual([]);
+		expect(inspectCoreInstructionOperands(fn, instruction)).toEqual([]);
+		for (const value of expected.edge.arguments)
+			expect([...inspectCoreUses(fn, value)]).toEqual([]);
 		program.seal();
 		expect(() => verifyCoreProgram(program)).toThrow(
 			/ordinary edge b0 -> b1 passes 0 values to 2 parameters/,
@@ -531,7 +554,7 @@ describe("Core store", () => {
 		const { program, fn, entry, copied } = oneFunction();
 		const editor = CoreEditor.open(program, fn.id);
 		const [originalConstant, identity] = [...fn.bodyInstructionIds(entry)];
-		editor.replaceOperands(identity!, [fn.parameters[0]!]);
+		editor.replaceOperands(identity!, [inspectCoreFunctionParameters(fn)[0]!]);
 		editor.removeInstruction(originalConstant!);
 		const inserted = editor.insertInstruction(entry, fn.blockTerminator(entry), "sink", [
 			copied,
@@ -561,8 +584,8 @@ describe("Core store", () => {
 		expect([...fn.instructionIds(entry)]).toEqual([0, 2]);
 		expect([...fn.instructionIds(destination)]).toEqual([1, 3]);
 		expect(fn.instructionBlock(1 as never)).toBe(destination);
-		expect(fn.instructionResults(1 as never)).toEqual([copied]);
-		expect(fn.instructionOperands(1 as never)).toEqual([constant]);
+		expect(inspectCoreInstructionResults(fn, 1 as never)).toEqual([copied]);
+		expect(inspectCoreInstructionOperands(fn, 1 as never)).toEqual([constant]);
 		expect(changes.blocks).toEqual([entry, destination]);
 		expect(changes.instructions).toContain(1);
 		expect(changes.domains).toEqual(["body", "cfg", "specializationInputs"]);
@@ -571,24 +594,28 @@ describe("Core store", () => {
 	it("maintains exact definitions and uses when operand ranges are replaced", () => {
 		const { program, fn, constant, copied, parameter } = oneFunction();
 		const identity = [...fn.bodyInstructionIds(fn.entry)][1]!;
-		expect(fn.valueDefinition(constant)).toEqual({
+		expect(inspectCoreValueDefinition(fn, constant)).toEqual({
 			kind: "instruction",
 			instruction: 0,
 			index: 0,
 		});
-		expect(fn.valueDefinition(parameter)).toEqual({
+		expect(inspectCoreValueDefinition(fn, parameter)).toEqual({
 			kind: "block-parameter",
 			block: 0,
 			index: 0,
 		});
-		expect([...fn.uses(constant)]).toEqual([{ instruction: identity, operand: 0 }]);
-		expect([...fn.uses(copied)]).toEqual([{ instruction: 2, operand: 0 }]);
+		expect([...inspectCoreUses(fn, constant)]).toEqual([
+			{ instruction: identity, operand: 0 },
+		]);
+		expect([...inspectCoreUses(fn, copied)]).toEqual([{ instruction: 2, operand: 0 }]);
 
 		const editor = CoreEditor.open(program, fn.id);
 		editor.replaceOperands(identity, [parameter]);
 		editor.commit();
-		expect([...fn.uses(constant)]).toEqual([]);
-		expect([...fn.uses(parameter)]).toEqual([{ instruction: identity, operand: 0 }]);
+		expect([...inspectCoreUses(fn, constant)]).toEqual([]);
+		expect([...inspectCoreUses(fn, parameter)]).toEqual([
+			{ instruction: identity, operand: 0 },
+		]);
 		expect(fn.valueUseCount(constant)).toBe(0);
 		expect(fn.valueUseCount(parameter)).toBe(1);
 	});
@@ -632,7 +659,7 @@ describe("Core store", () => {
 			expect(uses).toBe(fn.kernel.valueUseCount(value));
 		}
 		fn.configureUseTraversalStatistics(true);
-		for (const value of fn.valueIds()) Array.from(fn.uses(value));
+		for (const value of fn.valueIds()) Array.from(inspectCoreUses(fn, value));
 		expect(fn.useTraversalStatistics().deadSkips).toBe(0);
 	});
 
@@ -646,7 +673,10 @@ describe("Core store", () => {
 		expect(fn.kernel.blockHandlerBlock(entry)).toBe(entry);
 		expect(fn.kernel.blockHandlerArgumentCount(entry)).toBe(1);
 		expect(fn.kernel.handlerArgumentAt(start)).toBe(parameter);
-		expect(fn.blockHandler(entry)).toEqual({ block: entry, arguments: [parameter] });
+		expect(inspectCoreBlockHandler(fn, entry)).toEqual({
+			block: entry,
+			arguments: [parameter],
+		});
 
 		const replace = CoreEditor.open(program, fn.id);
 		replace.setHandler(entry, entry, [constant]);
@@ -693,7 +723,7 @@ describe("Core store", () => {
 		const functionVersions = fn.versions;
 		const programVersions = program.versions;
 		const editor = CoreEditor.open(program, fn.id);
-		editor.replaceOperands(instruction, fn.instructionOperands(instruction));
+		editor.replaceOperands(instruction, inspectCoreInstructionOperands(fn, instruction));
 		editor.configureFunction({
 			isGenerator: fn.isGenerator,
 			isAsync: fn.isAsync,
@@ -751,7 +781,7 @@ describe("Core store", () => {
 		const program = new CoreProgram(registry());
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const firstFact = builder.addFact({
 			kind: "first-refinement",
 			value: true,
@@ -780,9 +810,11 @@ describe("Core store", () => {
 		const [stable, replaced] = [...fn.bodyInstructionIds(entry)];
 
 		expect(fn.effectRefinementCapacity).toBe(2);
-		expect(fn.instructionLayout(stable!).effectRefinementRef).toBe(0);
-		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(1);
-		expect(typeof fn.instructionLayout(stable!).effectRefinementRef).toBe("number");
+		expect(inspectCoreInstructionLayout(fn, stable!).effectRefinementRef).toBe(0);
+		expect(inspectCoreInstructionLayout(fn, replaced!).effectRefinementRef).toBe(1);
+		expect(typeof inspectCoreInstructionLayout(fn, stable!).effectRefinementRef).toBe(
+			"number",
+		);
 		expect(fn.effectRefinementRecord(0)).toEqual({
 			effects: CORE_NO_EFFECTS,
 			proof: firstFact,
@@ -795,8 +827,8 @@ describe("Core store", () => {
 		const replaceChanges = replace.commit();
 		expect(replaceChanges.facts).toEqual([firstFact, secondFact]);
 		expect(fn.effectRefinementCapacity).toBe(3);
-		expect(fn.effectRefinementLayout(1)).toEqual({ live: false });
-		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(2);
+		expect(inspectCoreEffectRefinementLayout(fn, 1)).toEqual({ live: false });
+		expect(inspectCoreInstructionLayout(fn, replaced!).effectRefinementRef).toBe(2);
 
 		const clear = CoreEditor.open(program, fn.id);
 		clear.clearInstructionEffectRefinement(replaced!);
@@ -807,8 +839,8 @@ describe("Core store", () => {
 			"specializationInputs",
 		]);
 		expect(clearChanges.facts).toEqual([secondFact]);
-		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(-1);
-		expect(fn.effectRefinementLayout(2)).toEqual({ live: false });
+		expect(inspectCoreInstructionLayout(fn, replaced!).effectRefinementRef).toBe(-1);
+		expect(inspectCoreEffectRefinementLayout(fn, 2)).toEqual({ live: false });
 
 		const restore = CoreEditor.open(program, fn.id);
 		restore.setInstructionEffectRefinement(replaced!, {
@@ -816,14 +848,14 @@ describe("Core store", () => {
 			proof: firstFact,
 		});
 		restore.commit();
-		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(3);
+		expect(inspectCoreInstructionLayout(fn, replaced!).effectRefinementRef).toBe(3);
 
 		const remove = CoreEditor.open(program, fn.id);
 		remove.removeInstruction(replaced!);
 		const removeChanges = remove.commit();
 		expect(removeChanges.facts).toEqual([firstFact]);
-		expect(fn.instructionLayout(replaced!).effectRefinementRef).toBe(-1);
-		expect(fn.effectRefinementLayout(3)).toEqual({ live: false });
+		expect(inspectCoreInstructionLayout(fn, replaced!).effectRefinementRef).toBe(-1);
+		expect(inspectCoreEffectRefinementLayout(fn, 3)).toEqual({ live: false });
 		expect(fn.effectRefinementCapacity).toBe(4);
 
 		program.seal();
@@ -832,7 +864,7 @@ describe("Core store", () => {
 			effects: CORE_NO_EFFECTS,
 			proof: firstFact,
 		});
-		expect(fn.instructionLayout(stable!).effectRefinementRef).toBe(0);
+		expect(inspectCoreInstructionLayout(fn, stable!).effectRefinementRef).toBe(0);
 		expect(() => CoreEditor.open(program, fn.id)).toThrow("sealed");
 	});
 
@@ -1032,9 +1064,9 @@ describe("Core store", () => {
 		const program = new CoreProgram(callRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const removed = builder.createBlock([{ representation: "i32" }]);
-		const removedParameter = builder.blockParameters(removed)[0]!.value;
+		const removedParameter = inspectCoreBlockParameters(builder, removed)[0]!.value;
 		const fact = builder.addFact({
 			kind: "test-effect",
 			value: true,
@@ -1111,17 +1143,21 @@ describe("Core store", () => {
 	it("does not expose mutable operand or result storage", () => {
 		const { fn, constant } = oneFunction();
 		const identity = [...fn.bodyInstructionIds(fn.entry)][1]!;
-		const operands = fn.instructionOperands(identity) as Array<CoreValueId>;
-		operands[0] = 99 as CoreValueId;
-		expect(fn.instructionOperands(identity)).toEqual([constant]);
+		const operands = inspectCoreInstructionOperands(fn, identity) as Array<CoreValueId>;
+		expect(() => {
+			operands[0] = 99 as CoreValueId;
+		}).toThrow(TypeError);
+		expect(inspectCoreInstructionOperands(fn, identity)).toEqual([constant]);
 	});
 
 	it("keeps every reader result outside the mutation boundary", () => {
 		const { program, fn } = oneFunction();
 		const identity = [...fn.bodyInstructionIds(fn.entry)][1]!;
-		const parameters = fn.parameters as Array<CoreValueId>;
-		parameters[0] = 99 as CoreValueId;
-		expect(fn.parameters).toEqual([0]);
+		const parameters = inspectCoreFunctionParameters(fn) as Array<CoreValueId>;
+		expect(() => {
+			parameters[0] = 99 as CoreValueId;
+		}).toThrow(TypeError);
+		expect(inspectCoreFunctionParameters(fn)).toEqual([0]);
 		expect(() => {
 			(fn.instructionAttributes(identity) as Record<string, unknown>).forged = true;
 		}).toThrow();

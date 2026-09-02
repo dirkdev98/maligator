@@ -10,6 +10,13 @@ import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	inspectCoreBlockHandler,
+	inspectCoreBlockParameters,
+	inspectCoreFunctionParameters,
+	inspectCoreTerminatorPayload,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
@@ -60,7 +67,9 @@ describe("Core memory and escape parity", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const [kept, other] = builder.blockParameters(entry).map(({ value }) => value);
+		const [kept, other] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		builder.appendInstruction(entry, "storeGlobal", [kept!], {
 			attributes: { index: 0 },
 		});
@@ -79,8 +88,10 @@ describe("Core memory and escape parity", () => {
 		const fn = optimize(program).function(finished.function);
 		expect(operationCount(fn, "loadGlobal")).toBe(0);
 		expect(
-			[...fn.blockIds()].map((block) => fn.terminatorPayload(fn.blockTerminator(block))),
-		).toContainEqual({ kind: "return", value: fn.parameters[0] });
+			[...fn.blockIds()].map((block) =>
+				inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)),
+			),
+		).toContainEqual({ kind: "return", value: inspectCoreFunctionParameters(fn)[0] });
 	});
 
 	it("forwards an exact captured store until an environment edit", () => {
@@ -88,7 +99,7 @@ describe("Core memory and escape parity", () => {
 		const build = (edited: boolean) => {
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const stored = builder.blockParameters(entry)[0]!.value;
+			const stored = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			builder.appendInstruction(entry, "storeCaptured", [stored], {
 				attributes: { functionIndex: 0, index: 2 },
 			});
@@ -110,10 +121,14 @@ describe("Core memory and escape parity", () => {
 		expect(operationCount(optimized.function(forwardable), "loadCaptured")).toBe(0);
 		expect(operationCount(optimized.function(invalidated), "loadCaptured")).toBe(1);
 		expect(
-			optimized
-				.function(forwardable)
-				.terminatorPayload(optimized.function(forwardable).blockTerminator(0 as never)),
-		).toEqual({ kind: "return", value: optimized.function(forwardable).parameters[0] });
+			inspectCoreTerminatorPayload(
+				optimized.function(forwardable),
+				optimized.function(forwardable).blockTerminator(0 as never),
+			),
+		).toEqual({
+			kind: "return",
+			value: inspectCoreFunctionParameters(optimized.function(forwardable))[0],
+		});
 	});
 
 	it("spends family precision only on exactly read slots", () => {
@@ -124,7 +139,7 @@ describe("Core memory and escape parity", () => {
 		const buildWriteHeavy = () => {
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const stored = builder.blockParameters(entry)[0]!.value;
+			const stored = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			for (let slot = 0; slot <= slotCount; slot++) {
 				builder.appendInstruction(entry, "storeGlobal", [stored], {
 					attributes: { index: slot },
@@ -139,7 +154,7 @@ describe("Core memory and escape parity", () => {
 		const buildReadHeavy = () => {
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			let carried = builder.blockParameters(entry)[0]!.value;
+			let carried = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			for (let slot = 0; slot < slotCount; slot++) {
 				builder.appendInstruction(entry, "storeGlobal", [carried], {
 					attributes: { index: slot },
@@ -168,7 +183,7 @@ describe("Core memory and escape parity", () => {
 				isGenerator: barrier === "suspend",
 			});
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const stored = builder.blockParameters(entry)[0]!.value;
+			const stored = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			if (barrier === "suspend") builder.appendInstruction(entry, "generatorStart", []);
 			builder.appendInstruction(entry, "storeGlobal", [stored], {
 				attributes: { index: 0 },
@@ -230,9 +245,10 @@ describe("Core memory and escape parity", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const [storeCondition, repeatCondition] = builder
-			.blockParameters(entry)
-			.map(({ value }) => value);
+		const [storeCondition, repeatCondition] = inspectCoreBlockParameters(
+			builder,
+			entry,
+		).map(({ value }) => value);
 		const header = builder.createBlock();
 		const store = builder.createBlock();
 		const skip = builder.createBlock();
@@ -295,7 +311,9 @@ describe("Core memory and escape parity", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const exit = builder.createBlock();
-		const [value, condition] = builder.blockParameters(entry).map(({ value }) => value);
+		const [value, condition] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		builder.appendInstruction(entry, "storeGlobal", [value!], {
 			attributes: { index: 0 },
 		});
@@ -342,7 +360,7 @@ describe("Core memory and escape parity", () => {
 		});
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [object] = builder.appendInstruction(entry, "createObjectShaped", [parameter], {
 			attributes: { keyStringIndices: [0] },
 		});
@@ -373,8 +391,10 @@ describe("Core memory and escape parity", () => {
 		expect(operationCount(fn, "loadPropertyStatic")).toBe(0);
 		expect(operationCount(fn, "storePropertyStatic")).toBe(0);
 		expect(
-			[...fn.blockIds()].map((block) => fn.terminatorPayload(fn.blockTerminator(block))),
-		).toContainEqual({ kind: "return", value: fn.parameters[0] });
+			[...fn.blockIds()].map((block) =>
+				inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)),
+			),
+		).toContainEqual({ kind: "return", value: inspectCoreFunctionParameters(fn)[0] });
 	});
 
 	it("converges deep branch-join scalar replacement without a round limit", () => {
@@ -385,7 +405,7 @@ describe("Core memory and escape parity", () => {
 		});
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [zero] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 0 },
 		});
@@ -445,7 +465,7 @@ describe("Core memory and escape parity", () => {
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const handler = builder.createBlock([{ role: "exception", representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [object] = builder.appendInstruction(entry, "createObjectShaped", [parameter], {
 			attributes: { keyStringIndices: [0] },
 		});
@@ -456,13 +476,13 @@ describe("Core memory and escape parity", () => {
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		builder.setTerminator(handler, {
 			kind: "throw",
-			value: builder.blockParameters(handler)[0]!.value,
+			value: inspectCoreBlockParameters(builder, handler)[0]!.value,
 		});
 		const finished = builder.finish(entry);
 
 		const fn = optimize(program).function(finished.function);
 		expect([...fn.blockIds()]).toHaveLength(1);
-		expect(fn.blockHandler([...fn.blockIds()][0]!)).toBeUndefined();
+		expect(inspectCoreBlockHandler(fn, [...fn.blockIds()][0]!)).toBeUndefined();
 		expect(operationCount(fn, "loadPropertyStatic")).toBe(0);
 	});
 
@@ -474,7 +494,9 @@ describe("Core memory and escape parity", () => {
 				{ representation: "boxed" },
 				{ representation: "boxed" },
 			]);
-			const [arm, repeat] = builder.blockParameters(entry).map(({ value }) => value);
+			const [arm, repeat] = inspectCoreBlockParameters(builder, entry).map(
+				({ value }) => value,
+			);
 			const header = builder.createBlock();
 			const left = builder.createBlock();
 			const right = builder.createBlock();
@@ -520,7 +542,7 @@ describe("Core memory and escape parity", () => {
 		const buildJoins = (write: boolean) => {
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const condition = builder.blockParameters(entry)[0]!.value;
+			const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			const [replacement] = builder.appendInstruction(entry, "createNumber", [], {
 				attributes: { value: 7 },
 			});
@@ -582,7 +604,9 @@ describe("Core memory and escape parity", () => {
 			{ representation: "boxed" },
 		]);
 		const handler = builder.createBlock([{ role: "exception", representation: "boxed" }]);
-		const [stored, callee] = builder.blockParameters(entry).map(({ value }) => value);
+		const [stored, callee] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		builder.appendInstruction(entry, "storeGlobal", [stored!], {
 			attributes: { index: 0 },
 		});
@@ -609,7 +633,9 @@ describe("Core memory and escape parity", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const [first, second] = builder.blockParameters(entry).map(({ value }) => value);
+		const [first, second] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		const [zero] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 0 },
 		});
@@ -750,12 +776,14 @@ describe("Core memory and escape parity", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const [held, callee] = builder.blockParameters(entry).map(({ value }) => value);
+		const [held, callee] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		const [object] = builder.appendInstruction(entry, "createObjectShaped", [held!], {
 			attributes: { keyStringIndices: [0] },
 		});
 		const body = builder.createBlock([{ representation: "boxed" }]);
-		const alias = builder.blockParameters(body)[0]!.value;
+		const alias = inspectCoreBlockParameters(builder, body)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: body, arguments: [object!] },
@@ -799,7 +827,7 @@ describe("Core memory and escape parity", () => {
 		const build = (occupant: "parameter" | "number") => {
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const held = builder.blockParameters(entry)[0]!.value;
+			const held = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			const [initial] =
 				occupant === "parameter"
 					? [held]
@@ -837,7 +865,7 @@ describe("Core memory and escape parity", () => {
 		});
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const held = builder.blockParameters(entry)[0]!.value;
+		const held = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [array] = builder.appendInstruction(entry, "createArray", [], {
 			attributes: { length: 1 },
 		});
@@ -871,7 +899,7 @@ describe("Core memory and escape parity", () => {
 		}`);
 		const operations = coreOperations(fn);
 		const createdObject = (value: CoreValueId): boolean => {
-			const definition = fn.valueDefinition(value);
+			const definition = inspectCoreValueDefinition(fn, value);
 			return (
 				definition.kind === "instruction" &&
 				fn.instructionOpcodeName(definition.instruction) === "createObjectShaped"
@@ -914,7 +942,7 @@ describe("Core memory and escape parity", () => {
 					opcode === "binary" &&
 					attributes.operator === "===" &&
 					inputs.some((value) => {
-						const definition = fn.valueDefinition(value);
+						const definition = inspectCoreValueDefinition(fn, value);
 						return (
 							definition.kind === "instruction" &&
 							fn.instructionOpcodeName(definition.instruction) === "createObjectShaped"

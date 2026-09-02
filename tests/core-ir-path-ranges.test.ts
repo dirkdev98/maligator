@@ -16,6 +16,11 @@ import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreTerminatorPayload,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 import { coreFunctionNamed } from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
@@ -33,7 +38,7 @@ function boundedInt32(polarity: "consequent" | "alternate"): BoundedFunction {
 	const lower = builder.createBlock();
 	const bounded = builder.createBlock();
 	const rejected = builder.createBlock();
-	const parameter = builder.blockParameters(entry)[0]!.value;
+	const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 	const [value] = builder.appendInstruction(entry, "unary", [parameter], {
 		attributes: { operator: "~" },
 		outputRepresentations: ["i32"],
@@ -120,7 +125,7 @@ describe("Core path-sensitive numeric ranges", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const join = builder.createBlock([{ representation: "i32" }]);
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition,
@@ -143,7 +148,7 @@ describe("Core path-sensitive numeric ranges", () => {
 			kind: "jump",
 			edge: { block: join, arguments: [second!] },
 		});
-		const value = builder.blockParameters(join)[0]!.value;
+		const value = inspectCoreBlockParameters(builder, join)[0]!.value;
 		const [limit] = builder.appendInstruction(join, "createF64", [], {
 			attributes: { value: 0x8000_0000 },
 			outputRepresentations: ["f64"],
@@ -168,12 +173,13 @@ describe("Core path-sensitive numeric ranges", () => {
 		).compilation.program.function(finished.function);
 		expect(binaryOperators(fn)).not.toContain("<");
 		const returnBlock = [...fn.blockIds()].find(
-			(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind === "return",
+			(block) =>
+				inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)).kind === "return",
 		);
 		expect(returnBlock).toBeDefined();
-		const returned = fn.terminatorPayload(fn.blockTerminator(returnBlock!));
+		const returned = inspectCoreTerminatorPayload(fn, fn.blockTerminator(returnBlock!));
 		if (returned.kind !== "return") throw new Error("expected return");
-		const definition = fn.valueDefinition(returned.value);
+		const definition = inspectCoreValueDefinition(fn, returned.value);
 		if (definition.kind !== "instruction") throw new Error("expected constant result");
 		expect(fn.instructionOpcodeName(definition.instruction)).toBe("createBoolean");
 		expect(fn.instructionAttributes(definition.instruction).value).toBe(true);
@@ -247,7 +253,7 @@ describe("Core path-sensitive numeric ranges", () => {
 		const consequent = builder.createBlock();
 		const alternate = builder.createBlock();
 		const join = builder.createBlock();
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [value] = builder.appendInstruction(entry, "unary", [parameter], {
 			attributes: { operator: "~" },
 			outputRepresentations: ["i32"],
@@ -308,7 +314,7 @@ describe("Core path-sensitive numeric ranges", () => {
 			const lower = builder.createBlock();
 			const bounded = builder.createBlock();
 			const rejected = builder.createBlock();
-			const parameter = builder.blockParameters(entry)[0]!.value;
+			const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			const value =
 				representation === "boxed"
 					? parameter
@@ -385,7 +391,7 @@ describe("Core path-sensitive numeric ranges", () => {
 		const handler = builder.createBlock([{ role: "exception" }]);
 		const bounded = builder.createBlock();
 		const rejected = builder.createBlock();
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [converted] = builder.appendInstruction(entry, "unary", [parameter], {
 			attributes: { operator: "~" },
 			outputRepresentations: ["i32"],
@@ -394,7 +400,7 @@ describe("Core path-sensitive numeric ranges", () => {
 			kind: "jump",
 			edge: { block: compare, arguments: [converted!] },
 		});
-		const value = builder.blockParameters(compare)[0]!.value;
+		const value = inspectCoreBlockParameters(builder, compare)[0]!.value;
 		const [zero] = builder.appendInstruction(compare, "createF64", [], {
 			attributes: { value: 0 },
 			outputRepresentations: ["i32"],

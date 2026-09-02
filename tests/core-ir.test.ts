@@ -26,6 +26,7 @@ import {
 	formatCoreFunction,
 } from "../src/compiler/core/core-ir.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
 function registry(): CoreOpcodeRegistry {
 	const registry = new CoreOpcodeRegistry();
@@ -94,7 +95,7 @@ describe("Core IR", () => {
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		expect(() =>
 			builder.appendInstruction(entry, "binary", [
-				builder.blockParameters(entry)[0]!.value,
+				inspectCoreBlockParameters(builder, entry)[0]!.value,
 			]),
 		).toThrow(/binary expects 2\.\.2 inputs/);
 	});
@@ -282,7 +283,7 @@ describe("Core IR", () => {
 		const consequent = builder.createBlock();
 		const alternate = builder.createBlock();
 		const merge = builder.createBlock([{ representation: "f64" }]);
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [left] = builder.appendInstruction(consequent, "constant", [], {
 			outputRepresentations: ["f64"],
 			attributes: { value: 1 },
@@ -307,7 +308,7 @@ describe("Core IR", () => {
 		});
 		builder.setTerminator(merge, {
 			kind: "return",
-			value: builder.blockParameters(merge)[0]!.value,
+			value: inspectCoreBlockParameters(builder, merge)[0]!.value,
 		});
 		const { function: functionId } = builder.finish(entry);
 		const fn = program.function(functionId);
@@ -317,7 +318,7 @@ describe("Core IR", () => {
 		expect(cfg.dominates(entry, merge)).toBe(true);
 		expect(cfg.dominates(consequent, merge)).toBe(false);
 		const canonical = coreCanonicalValueRoots(fn, cfg);
-		const mergeValue = builder.blockParameters(merge)[0]!.value;
+		const mergeValue = inspectCoreBlockParameters(builder, merge)[0]!.value;
 		expect(canonical.get(mergeValue)).toBe(mergeValue);
 		expect(canonical.get(mergeValue)).not.toBe(canonical.get(left!));
 		expect(canonical.get(mergeValue)).not.toBe(canonical.get(right!));
@@ -333,8 +334,8 @@ describe("Core IR", () => {
 		const header = builder.createBlock([{ representation: "boxed" }]);
 		const body = builder.createBlock();
 		const exit = builder.createBlock([{ representation: "boxed" }]);
-		const input = builder.blockParameters(entry)[0]!.value;
-		const loopValue = builder.blockParameters(header)[0]!.value;
+		const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const loopValue = inspectCoreBlockParameters(builder, header)[0]!.value;
 		const [moved] = builder.appendInstruction(body, "move", [loopValue]);
 		builder.setTerminator(entry, {
 			kind: "jump",
@@ -350,7 +351,7 @@ describe("Core IR", () => {
 			kind: "jump",
 			edge: { block: header, arguments: [moved!] },
 		});
-		const result = builder.blockParameters(exit)[0]!.value;
+		const result = inspectCoreBlockParameters(builder, exit)[0]!.value;
 		builder.setTerminator(exit, { kind: "return", value: result });
 		const { function: functionId } = builder.finish(entry);
 		const fn = program.function(functionId);
@@ -379,8 +380,12 @@ describe("Core IR", () => {
 		]);
 		const body = builder.createBlock();
 		const exit = builder.createBlock([{ representation: "boxed" }]);
-		const [condition, input] = builder.blockParameters(entry).map(({ value }) => value);
-		const [left, right] = builder.blockParameters(header).map(({ value }) => value);
+		const [condition, input] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
+		const [left, right] = inspectCoreBlockParameters(builder, header).map(
+			({ value }) => value,
+		);
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: header, arguments: [input!, input!] },
@@ -397,7 +402,7 @@ describe("Core IR", () => {
 		});
 		builder.setTerminator(exit, {
 			kind: "return",
-			value: builder.blockParameters(exit)[0]!.value,
+			value: inspectCoreBlockParameters(builder, exit)[0]!.value,
 		});
 		const { function: functionId } = builder.finish(entry);
 		const fn = program.function(functionId);
@@ -422,7 +427,7 @@ describe("Core IR", () => {
 		const [left] = builder.appendInstruction(leftBlock, "constant", []);
 		builder.setTerminator(entry, {
 			kind: "branch",
-			condition: builder.blockParameters(entry)[0]!.value,
+			condition: inspectCoreBlockParameters(builder, entry)[0]!.value,
 			consequent: { block: leftBlock, arguments: [] },
 			alternate: { block: rightBlock, arguments: [] },
 		});
@@ -436,7 +441,7 @@ describe("Core IR", () => {
 		});
 		builder.setTerminator(merge, {
 			kind: "return",
-			value: builder.blockParameters(merge)[0]!.value,
+			value: inspectCoreBlockParameters(builder, merge)[0]!.value,
 		});
 		const { function: functionId } = builder.finish(entry);
 
@@ -454,13 +459,13 @@ describe("Core IR", () => {
 			{ role: "exception", representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const input = builder.blockParameters(entry)[0]!.value;
+		const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [result] = builder.appendInstruction(entry, "call", [input]);
 		builder.setHandler(entry, handler, [input]);
 		builder.setTerminator(entry, { kind: "return", value: result! });
 		builder.setTerminator(handler, {
 			kind: "return",
-			value: builder.blockParameters(handler)[1]!.value,
+			value: inspectCoreBlockParameters(builder, handler)[1]!.value,
 		});
 		const { function: functionId } = builder.finish(entry);
 		const fn = program.function(functionId);
@@ -473,7 +478,9 @@ describe("Core IR", () => {
 			fn,
 			buildCoreControlFlow(program, functionId),
 		);
-		expect(canonical.get(builder.blockParameters(handler)[1]!.value)).toBe(input);
+		expect(canonical.get(inspectCoreBlockParameters(builder, handler)[1]!.value)).toBe(
+			input,
+		);
 
 		const invalidProgram = new CoreProgram(opcodes);
 		const invalid = new CoreFunctionBuilder(invalidProgram, { parameterCount: 1 });
@@ -485,7 +492,7 @@ describe("Core IR", () => {
 		const [late] = invalid.appendInstruction(
 			invalidEntry,
 			"call",
-			[invalid.blockParameters(invalidEntry)[0]!.value],
+			[inspectCoreBlockParameters(invalid, invalidEntry)[0]!.value],
 			{
 				outputCount: 1,
 			},
@@ -494,7 +501,7 @@ describe("Core IR", () => {
 		invalid.setTerminator(invalidEntry, { kind: "return", value: late! });
 		invalid.setTerminator(invalidHandler, {
 			kind: "return",
-			value: invalid.blockParameters(invalidHandler)[1]!.value,
+			value: inspectCoreBlockParameters(invalid, invalidHandler)[1]!.value,
 		});
 		const { function: invalidFunction } = invalid.finish(invalidEntry);
 		expect(() => verifyCoreFunction(invalidProgram, invalidFunction)).toThrow(
@@ -506,7 +513,7 @@ describe("Core IR", () => {
 		const directEntry = direct.createBlock([{ representation: "boxed" }]);
 		const directHandler = direct.createBlock([{ role: "exception" }]);
 		const [directLate] = direct.appendInstruction(directEntry, "call", [
-			direct.blockParameters(directEntry)[0]!.value,
+			inspectCoreBlockParameters(direct, directEntry)[0]!.value,
 		]);
 		direct.setHandler(directEntry, directHandler);
 		direct.setTerminator(directEntry, { kind: "return", value: directLate! });
@@ -530,7 +537,7 @@ describe("Core IR", () => {
 			{ role: "exception" },
 			{ representation: "boxed" },
 		]);
-		const exceptionalInput = exceptional.blockParameters(defining)[0]!.value;
+		const exceptionalInput = inspectCoreBlockParameters(exceptional, defining)[0]!.value;
 		const [exceptionalLate] = exceptional.appendInstruction(defining, "call", [
 			exceptionalInput,
 		]);
@@ -551,7 +558,7 @@ describe("Core IR", () => {
 		});
 		exceptional.setTerminator(protectedHandler, {
 			kind: "return",
-			value: exceptional.blockParameters(protectedHandler)[1]!.value,
+			value: inspectCoreBlockParameters(exceptional, protectedHandler)[1]!.value,
 		});
 		const { function: exceptionalFunction } = exceptional.finish(defining);
 		expect(() => verifyCoreFunction(exceptionalProgram, exceptionalFunction)).toThrow(
@@ -575,7 +582,7 @@ describe("Core IR", () => {
 		const [result] = builder.appendInstruction(
 			entry,
 			"call",
-			[builder.blockParameters(entry)[0]!.value],
+			[inspectCoreBlockParameters(builder, entry)[0]!.value],
 			{ effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact } },
 		);
 		builder.setTerminator(entry, { kind: "return", value: result! });
@@ -596,7 +603,9 @@ describe("Core IR", () => {
 		]);
 		const fast = builder.createBlock([{ representation: "boxed" }]);
 		const fallback = builder.createBlock([{ representation: "boxed" }]);
-		const [condition, input] = builder.blockParameters(entry).map(({ value }) => value);
+		const [condition, input] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		const fact = builder.setGuardTerminator(entry, {
 			condition: condition!,
 			success: { block: fast, arguments: [input!] },
@@ -612,13 +621,13 @@ describe("Core IR", () => {
 		const [result] = builder.appendInstruction(
 			fast,
 			"call",
-			[builder.blockParameters(fast)[0]!.value],
+			[inspectCoreBlockParameters(builder, fast)[0]!.value],
 			{ effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact } },
 		);
 		builder.setTerminator(fast, { kind: "return", value: result! });
 		builder.setTerminator(fallback, {
 			kind: "return",
-			value: builder.blockParameters(fallback)[0]!.value,
+			value: inspectCoreBlockParameters(builder, fallback)[0]!.value,
 		});
 
 		const { function: functionId } = builder.finish(entry);
@@ -636,7 +645,9 @@ describe("Core IR", () => {
 		]);
 		const success = builder.createBlock([{ representation: "boxed" }]);
 		const merge = builder.createBlock([{ representation: "boxed" }]);
-		const [condition, input] = builder.blockParameters(entry).map(({ value }) => value);
+		const [condition, input] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		const fact = builder.setGuardTerminator(entry, {
 			condition: condition!,
 			success: { block: success, arguments: [input!] },
@@ -647,13 +658,13 @@ describe("Core IR", () => {
 			kind: "jump",
 			edge: {
 				block: merge,
-				arguments: [builder.blockParameters(success)[0]!.value],
+				arguments: [inspectCoreBlockParameters(builder, success)[0]!.value],
 			},
 		});
 		const [result] = builder.appendInstruction(
 			merge,
 			"call",
-			[builder.blockParameters(merge)[0]!.value],
+			[inspectCoreBlockParameters(builder, merge)[0]!.value],
 			{ effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact } },
 		);
 		builder.setTerminator(merge, { kind: "return", value: result! });
@@ -675,9 +686,9 @@ describe("Core IR", () => {
 		const bypass = builder.createBlock();
 		const join = builder.createBlock();
 		const fallback = builder.createBlock();
-		const [selector, condition, input] = builder
-			.blockParameters(entry)
-			.map(({ value }) => value);
+		const [selector, condition, input] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition: selector!,
@@ -709,7 +720,7 @@ describe("Core IR", () => {
 			const program = new CoreProgram(opcodes);
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const value = builder.blockParameters(entry)[0]!.value;
+			const value = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			builder.addFact({
 				kind: "numeric-range",
 				value: null,

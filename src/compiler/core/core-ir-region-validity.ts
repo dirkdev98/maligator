@@ -325,13 +325,13 @@ function verifyBlockOrders(
 			);
 		}
 		const included = new Set(entry.blocks);
-			const expectedOmitted: Array<CoreBlockId> = [];
-			for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
-				const block = coreBlockId(blockIndex);
-				if (fn.kernel.blockLive(block) !== 0 && !included.has(block)) {
-					expectedOmitted.push(block);
-				}
+		const expectedOmitted: Array<CoreBlockId> = [];
+		for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+			const block = coreBlockId(blockIndex);
+			if (fn.kernel.blockLive(block) !== 0 && !included.has(block)) {
+				expectedOmitted.push(block);
 			}
+		}
 		if (
 			entry.omittedBlocks.length !== expectedOmitted.length ||
 			entry.omittedBlocks.some(
@@ -343,16 +343,16 @@ function verifyBlockOrders(
 			);
 		}
 		const instructionOrder = new Map<CoreInstructionId, number>();
-			let instructionIndex = 0;
-			for (const block of entry.blocks) {
-				const terminator = fn.blockTerminator(block);
-				for (
-					let cursor = fn.kernel.blockFirstInstruction(block);
-					cursor >= 0 && cursor !== terminator;
-					cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
-				) {
-					const instruction = coreInstructionId(cursor);
-					instructionOrder.set(instruction, instructionIndex++);
+		let instructionIndex = 0;
+		for (const block of entry.blocks) {
+			const terminator = fn.blockTerminator(block);
+			for (
+				let cursor = fn.kernel.blockFirstInstruction(block);
+				cursor >= 0 && cursor !== terminator;
+				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+			) {
+				const instruction = coreInstructionId(cursor);
+				instructionOrder.set(instruction, instructionIndex++);
 			}
 		}
 		proofs.set(entry.function, { included, instructionOrder });

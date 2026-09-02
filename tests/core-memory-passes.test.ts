@@ -27,6 +27,13 @@ import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreInstructionOperands,
+	inspectCoreInstructionResults,
+	inspectCoreTerminatorPayload,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 
 const context: CoreCompilationContext = {
 	facts: conservativeCompilerProgramFacts(),
@@ -101,9 +108,9 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		const finished = builder.finish(entry);
 		const fn = core.function(finished.function);
-		const loadDefinition = fn.valueDefinition(loaded!);
+		const loadDefinition = inspectCoreValueDefinition(fn, loaded!);
 		if (loadDefinition.kind !== "instruction") throw new Error("Expected load result");
-		const objectDefinition = fn.valueDefinition(object!);
+		const objectDefinition = inspectCoreValueDefinition(fn, object!);
 		if (objectDefinition.kind !== "instruction") {
 			throw new Error("Expected shaped-object result");
 		}
@@ -134,7 +141,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(analyses.get(CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS, request)).toBe(
 			firstProofs,
 		);
-		const oneDefinition = fn.valueDefinition(one!);
+		const oneDefinition = inspectCoreValueDefinition(fn, one!);
 		if (oneDefinition.kind !== "instruction") {
 			throw new Error("Expected numeric literal result");
 		}
@@ -199,8 +206,12 @@ describe("Core local memory, provenance, and escape optimization", () => {
 				fn.instructionOpcodeName(instruction) === "move",
 		);
 		expect(move).toBeDefined();
-		expect(fn.valueRepresentation(fn.instructionResults(move!)[0]!)).toBe("boxed");
-		expect(fn.valueRepresentation(fn.instructionOperands(move!)[0]!)).toBe("f64");
+		expect(fn.valueRepresentation(inspectCoreInstructionResults(fn, move!)[0]!)).toBe(
+			"boxed",
+		);
+		expect(fn.valueRepresentation(inspectCoreInstructionOperands(fn, move!)[0]!)).toBe(
+			"f64",
+		);
 	});
 
 	it("keeps a cell boxed when its exact value flows through a boxed block parameter", () => {
@@ -210,7 +221,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const merge = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition,
@@ -243,7 +254,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 
 		const optimized = optimizeCore({ program: core, context });
 		const fn = optimized.compilation.program.function(finished.function);
-		const returned = fn.terminatorPayload(fn.blockTerminator(merge));
+		const returned = inspectCoreTerminatorPayload(fn, fn.blockTerminator(merge));
 		expect(returned.kind).toBe("return");
 		if (returned.kind !== "return") throw new Error("Expected return terminator");
 		expect(fn.valueRepresentation(value)).toBe("boxed");
@@ -254,8 +265,8 @@ describe("Core local memory, provenance, and escape optimization", () => {
 				fn.instructionOpcodeName(instruction) !== "move"
 			)
 				continue;
-			const [source] = fn.instructionOperands(instruction);
-			const [result] = fn.instructionResults(instruction);
+			const [source] = inspectCoreInstructionOperands(fn, instruction);
+			const [result] = inspectCoreInstructionResults(fn, instruction);
 			expect(fn.valueRepresentation(result!)).not.toBe("f64");
 			expect(fn.valueRepresentation(source!)).toBe("boxed");
 		}
@@ -268,7 +279,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const merge = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [one] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 1 },
 		});
@@ -305,13 +316,13 @@ describe("Core local memory, provenance, and escape optimization", () => {
 					),
 			),
 		).toHaveLength(0);
-		const merged = fn.blockParameters(merge)[0]!.value;
-		expect(fn.terminatorPayload(fn.blockTerminator(merge))).toEqual({
+		const merged = inspectCoreBlockParameters(fn, merge)[0]!.value;
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(merge))).toEqual({
 			kind: "return",
 			value: merged,
 		});
 		const incoming = [...fn.blockIds()].flatMap((block) =>
-			coreTerminatorEdges(fn.terminatorPayload(fn.blockTerminator(block)))
+			coreTerminatorEdges(inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)))
 				.filter((edge) => edge.block === merge)
 				.map((edge) => edge.arguments[0]),
 		);
@@ -367,7 +378,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		const finished = builder.finish(entry);
 		const fn = core.function(finished.function);
-		const definition = fn.valueDefinition(loaded!);
+		const definition = inspectCoreValueDefinition(fn, loaded!);
 		if (definition.kind !== "instruction") throw new Error("Expected load result");
 		const provenance = analyzeCoreProvenance(core, finished.function);
 		expect(provenance.escape(provenance.layouts[0]!.instruction)).toBe("escaped");
@@ -387,7 +398,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const held = builder.blockParameters(entry)[0]!.value;
+		const held = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [object] = builder.appendInstruction(entry, "createObjectShaped", [held], {
 			attributes: { keyStringIndices: [0] },
 		});
@@ -514,7 +525,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		builder.setTerminator(entry, { kind: "return", value: loaded! });
 		const finished = builder.finish(entry);
 		const fn = core.function(finished.function);
-		const definition = fn.valueDefinition(loaded!);
+		const definition = inspectCoreValueDefinition(fn, loaded!);
 		if (definition.kind !== "instruction") throw new Error("Expected load result");
 		const report = new CoreOptimizationReportBuilder(core);
 		const analyses = new CoreAnalysisManager(core, context, report);

@@ -11,6 +11,7 @@ import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-ir-su
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
+import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import {
 	analysisProgram,
 	appendCaller,
@@ -51,7 +52,7 @@ function appendAnyScriptCaller(program: ReturnType<typeof analysisProgram>) {
 	const functionIndex = program.functionCapacity;
 	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 	const entry = builder.createBlock([{ representation: "boxed" }]);
-	const condition = builder.blockParameters(entry)[0]!.value;
+	const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 	const join = builder.createBlock([{ representation: "boxed" }]);
 	let decision = entry;
 	for (let offset = 1; offset <= 5; offset++) {
@@ -77,7 +78,7 @@ function appendAnyScriptCaller(program: ReturnType<typeof analysisProgram>) {
 		kind: "jump",
 		edge: { block: join, arguments: [fallback!] },
 	});
-	const callee = builder.blockParameters(join)[0]!.value;
+	const callee = inspectCoreBlockParameters(builder, join)[0]!.value;
 	const [receiver] = builder.appendInstruction(join, "createUndefined", []);
 	const [result] = builder.appendInstruction(join, "call", [callee, receiver!]);
 	builder.setTerminator(join, { kind: "return", value: result! });
@@ -105,7 +106,7 @@ function appendGlobalFunctionStore(
 function appendOpaqueGlobalStore(program: ReturnType<typeof analysisProgram>) {
 	const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 	const entry = builder.createBlock([{ representation: "boxed" }]);
-	const stored = builder.blockParameters(entry)[0]!.value;
+	const stored = inspectCoreBlockParameters(builder, entry)[0]!.value;
 	builder.appendInstruction(entry, "storeGlobal", [stored], {
 		outputCount: 0,
 		attributes: { index: 0 },

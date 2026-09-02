@@ -30,6 +30,10 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 import { coreFunctionNamed } from "./helpers/core-inspection.ts";
 
 const context: CoreCompilationContext = {
@@ -57,7 +61,9 @@ describe("Core local proofs and representations", () => {
 		const success = builder.createBlock();
 		const fallback = builder.createBlock();
 		const merge = builder.createBlock();
-		const [condition, subject] = builder.blockParameters(entry).map(({ value }) => value);
+		const [condition, subject] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		const fact = builder.setGuardTerminator(entry, {
 			condition: condition!,
 			success: { block: success, arguments: [] },
@@ -134,7 +140,7 @@ describe("Core local proofs and representations", () => {
 		builder.setTerminator(entry, { kind: "return", value: sum! });
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
-		const sumDefinition = fn.valueDefinition(sum!);
+		const sumDefinition = inspectCoreValueDefinition(fn, sum!);
 		if (sumDefinition.kind !== "instruction")
 			throw new Error("Expected instruction result");
 		const report = new CoreOptimizationReportBuilder(program);
@@ -200,7 +206,7 @@ describe("Core local proofs and representations", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [nullValue] = builder.appendInstruction(entry, "createNull", []);
 		const [firstComparison] = builder.appendInstruction(
 			entry,
@@ -232,7 +238,7 @@ describe("Core local proofs and representations", () => {
 		builder.setTerminator(entry, { kind: "return", value: secondComparison! });
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
-		const definition = fn.valueDefinition(secondComparison!);
+		const definition = inspectCoreValueDefinition(fn, secondComparison!);
 		if (definition.kind !== "instruction") throw new Error("expected instruction result");
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
@@ -264,7 +270,7 @@ describe("Core local proofs and representations", () => {
 		builder.setTerminator(entry, { kind: "return", value: result! });
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
-		const definition = fn.valueDefinition(result!);
+		const definition = inspectCoreValueDefinition(fn, result!);
 		if (definition.kind !== "instruction") throw new Error("Expected binary result");
 		const report = new CoreOptimizationReportBuilder(program);
 		const analyses = new CoreAnalysisManager(program, context, report);
@@ -295,7 +301,7 @@ describe("Core local proofs and representations", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const join = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [before] = builder.appendInstruction(entry, "loadGlobal", [], {
 			attributes: { index: 0 },
 		});
@@ -372,11 +378,10 @@ describe("Core local proofs and representations", () => {
 					const fn = coreFunctionNamed(program, "carry");
 					if (fn === undefined) throw new Error("Expected carry function");
 					const handler = [...fn.blockIds()].find(
-						(block) => fn.blockParameters(block)[0]?.role === "exception",
+						(block) => inspectCoreBlockParameters(fn, block)[0]?.role === "exception",
 					);
 					expect(handler).toBeDefined();
-					handlerRepresentations = fn
-						.blockParameters(handler!)
+					handlerRepresentations = inspectCoreBlockParameters(fn, handler!)
 						.slice(1)
 						.map(({ representation }) => representation);
 				},
@@ -408,11 +413,10 @@ describe("Core local proofs and representations", () => {
 						const fn = coreFunctionNamed(program, "carry");
 						if (fn === undefined) throw new Error("Expected carry function");
 						const handler = [...fn.blockIds()].find(
-							(block) => fn.blockParameters(block)[0]?.role === "exception",
+							(block) => inspectCoreBlockParameters(fn, block)[0]?.role === "exception",
 						);
 						expect(handler).toBeDefined();
-						handlerRepresentations = fn
-							.blockParameters(handler!)
+						handlerRepresentations = inspectCoreBlockParameters(fn, handler!)
 							.slice(1)
 							.map(({ representation: carried }) => carried);
 					},
@@ -427,7 +431,7 @@ describe("Core local proofs and representations", () => {
 		const functions = Array.from({ length: 2 }, () => {
 			const builder = new CoreFunctionBuilder(program);
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const value = builder.blockParameters(entry)[0]!.value;
+			const value = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			builder.setTerminator(entry, { kind: "return", value });
 			return { ...builder.finish(entry), value };
 		});

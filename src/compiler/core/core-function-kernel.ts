@@ -57,9 +57,11 @@ export interface CoreFunctionKernelColumns {
 
 export class CoreFunctionKernel {
 	readonly #columns: CoreFunctionKernelColumns;
+	readonly #onUseVisit: () => void;
 
-	constructor(columns: CoreFunctionKernelColumns) {
+	constructor(columns: CoreFunctionKernelColumns, onUseVisit: () => void = () => {}) {
 		this.#columns = columns;
+		this.#onUseVisit = onUseVisit;
 	}
 
 	blockLive(block: CoreBlockId): number {
@@ -245,6 +247,7 @@ export class CoreFunctionKernel {
 	}
 
 	useNext(use: number): number {
+		this.#onUseVisit();
 		return this.#columns.useNext[use] ?? -1;
 	}
 }

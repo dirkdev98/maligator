@@ -28,6 +28,11 @@ import { CORE_PROOF_PASSES } from "../src/compiler/core/core-proof-passes.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreTerminatorPayload,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 
 const context: CoreCompilationContext = {
 	facts: conservativeCompilerProgramFacts(),
@@ -57,7 +62,8 @@ function fn(program: CoreProgram, functionId: CoreFunctionId): CoreFunctionStore
 
 function guardBlocks(owner: CoreFunctionStore): ReadonlyArray<CoreBlockId> {
 	return [...owner.blockIds()].filter(
-		(block) => owner.terminatorPayload(owner.blockTerminator(block)).kind === "guard",
+		(block) =>
+			inspectCoreTerminatorPayload(owner, owner.blockTerminator(block)).kind === "guard",
 	);
 }
 
@@ -120,7 +126,7 @@ function replaceFactsWithEffectClaims(
 		remapped.set(factId, replacement);
 	}
 	for (const block of owner.blockIds()) {
-		const payload = owner.terminatorPayload(owner.blockTerminator(block));
+		const payload = inspectCoreTerminatorPayload(owner, owner.blockTerminator(block));
 		if (payload.kind !== "guard") continue;
 		const fact = remapped.get(payload.fact);
 		if (fact !== undefined) editor.replaceTerminator(block, { ...payload, fact });
@@ -186,7 +192,7 @@ describe("Core fact implication", () => {
 		const strongFallback = builder.createBlock();
 		const weakSuccess = builder.createBlock();
 		const weakFallback = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setGuardTerminator(entry, {
 			condition,
 			success: { block: strongSuccess, arguments: [] },
@@ -242,9 +248,10 @@ describe("Core fact implication", () => {
 		const strongFallback = builder.createBlock();
 		const weakSuccess = builder.createBlock();
 		const weakFallback = builder.createBlock();
-		const [branch, subject, strongCondition, weakCondition] = builder
-			.blockParameters(entry)
-			.map(({ value }) => value);
+		const [branch, subject, strongCondition, weakCondition] = inspectCoreBlockParameters(
+			builder,
+			entry,
+		).map(({ value }) => value);
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition: branch!,
@@ -288,12 +295,12 @@ describe("Core fact implication", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [result] = builder.appendInstruction(entry, "call", [parameter, parameter]);
 		builder.setTerminator(entry, { kind: "return", value: result! });
 		const finished = builder.finish(entry);
 		const owner = fn(program, finished.function);
-		const definition = owner.valueDefinition(result!);
+		const definition = inspectCoreValueDefinition(owner, result!);
 		if (definition.kind !== "instruction") throw new Error("expected call result");
 		const weakerEffects: CoreInstructionEffects = {
 			...CORE_NO_EFFECTS,
@@ -349,9 +356,8 @@ describe("Core fact implication", () => {
 		const strongFallback = builder.createBlock();
 		const weakSuccess = builder.createBlock();
 		const weakFallback = builder.createBlock();
-		const [selector, subject, strongCondition, weakCondition] = builder
-			.blockParameters(entry)
-			.map(({ value }) => value);
+		const [selector, subject, strongCondition, weakCondition] =
+			inspectCoreBlockParameters(builder, entry).map(({ value }) => value);
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition: selector!,
@@ -400,7 +406,9 @@ describe("Core fact implication", () => {
 		const body = builder.createBlock();
 		const headerFallback = builder.createBlock();
 		const bodyFallback = builder.createBlock();
-		const [subject, condition] = builder.blockParameters(entry).map(({ value }) => value);
+		const [subject, condition] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: header, arguments: [] },
@@ -450,9 +458,9 @@ describe("Core fact implication", () => {
 		const second = builder.createBlock();
 		const firstFallback = builder.createBlock();
 		const secondFallback = builder.createBlock();
-		const [selector, subject, condition] = builder
-			.blockParameters(entry)
-			.map(({ value }) => value);
+		const [selector, subject, condition] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition: selector!,
@@ -498,9 +506,9 @@ describe("Core fact implication", () => {
 			const body = builder.createBlock();
 			const outerFallback = builder.createBlock();
 			const innerFallback = builder.createBlock();
-			const [subject, condition] = builder
-				.blockParameters(entry)
-				.map(({ value }) => value);
+			const [subject, condition] = inspectCoreBlockParameters(builder, entry).map(
+				({ value }) => value,
+			);
 			const claims = [identityClaim(subject!, ["function:1"])];
 			let outer: CoreFactId;
 			let nested: CoreFactId;
@@ -530,7 +538,7 @@ describe("Core fact implication", () => {
 			setReturns(builder, [outerFallback, innerFallback], subject!);
 			const finished = builder.finish(entry);
 			const owner = fn(program, finished.function);
-			const definition = owner.valueDefinition(result!);
+			const definition = inspectCoreValueDefinition(owner, result!);
 			if (definition.kind !== "instruction") throw new Error("expected call result");
 			replaceFactsWithEffectClaims(
 				program,
@@ -570,9 +578,9 @@ describe("Core fact implication", () => {
 			const body = builder.createBlock();
 			const outerFallback = builder.createBlock();
 			const innerFallback = builder.createBlock();
-			const [subject, condition] = builder
-				.blockParameters(entry)
-				.map(({ value }) => value);
+			const [subject, condition] = inspectCoreBlockParameters(builder, entry).map(
+				({ value }) => value,
+			);
 			builder.setGuardTerminator(entry, {
 				condition: condition!,
 				success: { block: inner, arguments: [] },
@@ -620,7 +628,9 @@ describe("Core fact implication", () => {
 		const body = builder.createBlock();
 		const outerFallback = builder.createBlock();
 		const innerFallback = builder.createBlock();
-		const [subject, condition] = builder.blockParameters(entry).map(({ value }) => value);
+		const [subject, condition] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		builder.setGuardTerminator(entry, {
 			condition: condition!,
 			success: { block: inner, arguments: [] },
@@ -654,7 +664,7 @@ describe("Core fact implication", () => {
 			versions: owner.versions,
 			facts: facts(owner),
 			terminators: [...owner.blockIds()].map((block) =>
-				owner.terminatorPayload(owner.blockTerminator(block)),
+				inspectCoreTerminatorPayload(owner, owner.blockTerminator(block)),
 			),
 		});
 
@@ -664,7 +674,7 @@ describe("Core fact implication", () => {
 				versions: owner.versions,
 				facts: facts(owner),
 				terminators: [...owner.blockIds()].map((block) =>
-					owner.terminatorPayload(owner.blockTerminator(block)),
+					inspectCoreTerminatorPayload(owner, owner.blockTerminator(block)),
 				),
 			}),
 		).toBe(snapshot);
@@ -722,7 +732,7 @@ describe("Core fact implication", () => {
 			const body = builder.createBlock();
 			const outerFallback = builder.createBlock();
 			const innerFallback = builder.createBlock();
-			const condition = builder.blockParameters(entry)[0]!.value;
+			const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			builder.setGuardTerminator(entry, {
 				condition,
 				success: { block: inner, arguments: [] },
@@ -783,12 +793,12 @@ describe("Core fact implication", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{}]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [result] = builder.appendInstruction(entry, "call", [parameter, parameter]);
 		builder.setTerminator(entry, { kind: "return", value: result! });
 		const finished = builder.finish(entry);
 		const owner = fn(program, finished.function);
-		const definition = owner.valueDefinition(result!);
+		const definition = inspectCoreValueDefinition(owner, result!);
 		if (definition.kind !== "instruction") throw new Error("expected call result");
 		const editor = CoreEditor.open(program, finished.function);
 		const ownProof = editor.addFact({
@@ -843,9 +853,9 @@ describe("Core fact implication", () => {
 			const strongFallback = builder.createBlock();
 			const weakSuccess = builder.createBlock();
 			const weakFallback = builder.createBlock();
-			const [selector, condition] = builder
-				.blockParameters(entry)
-				.map(({ value }) => value);
+			const [selector, condition] = inspectCoreBlockParameters(builder, entry).map(
+				({ value }) => value,
+			);
 			const [subject] = builder.appendInstruction(
 				subjectOnSiblingPath ? left : mid,
 				"createBoolean",
@@ -900,7 +910,7 @@ describe("Core fact implication", () => {
 		const entry = builder.createBlock([{}]);
 		const success = builder.createBlock();
 		const fallback = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const fact = builder.setGuardTerminator(entry, {
 			condition,
 			success: { block: success, arguments: [] },

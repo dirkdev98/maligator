@@ -249,10 +249,8 @@ function recurrenceStep(
 		first !== undefined &&
 		numericIdentityRoot(fn, first, root, exactScalar) === root(parameter)
 	) {
-		if (attributes.operator === "increment")
-			return { instruction, step: 1 };
-		if (attributes.operator === "decrement")
-			return { instruction, step: -1 };
+		if (attributes.operator === "increment") return { instruction, step: 1 };
+		if (attributes.operator === "decrement") return { instruction, step: -1 };
 	}
 	if (
 		opcode !== "binary" ||
@@ -272,8 +270,7 @@ function recurrenceStep(
 	}
 	if (attributes.operator === "+" && root(second) === root(parameter)) {
 		const amount = exactNumber(fn, first, root);
-		if (amount !== undefined)
-			return { instruction, step: amount };
+		if (amount !== undefined) return { instruction, step: amount };
 	}
 	return undefined;
 }
@@ -300,7 +297,12 @@ function loopComparison(
 	const first = operand(fn, condition, 0);
 	const second = operand(fn, condition, 1);
 	let operator = comparison(fn.instructionAttributes(condition).operator);
-	if (operator === undefined || inputCount !== 2 || first === undefined || second === undefined)
+	if (
+		operator === undefined ||
+		inputCount !== 2 ||
+		first === undefined ||
+		second === undefined
+	)
 		return undefined;
 	let bound: CoreValueId;
 	if (numericIdentityRoot(fn, first, root, exactScalar) === root(parameter))
@@ -390,13 +392,7 @@ export function analyzeCoreLoopInductions(
 				? (value: CoreValueId): CoreExactScalarKind | undefined =>
 						root(value) === root(parameter) ? initialScalar : exactScalar?.(value)
 				: exactScalar;
-			const recurrence = recurrenceStep(
-				fn,
-				update,
-				parameter,
-				root,
-				recurrenceScalar,
-			);
+			const recurrence = recurrenceStep(fn, update, parameter, root, recurrenceScalar);
 			if (
 				recurrence === undefined ||
 				coreBlockId(fn.kernel.instructionBlock(recurrence.instruction)) !== latch ||
@@ -410,13 +406,7 @@ export function analyzeCoreLoopInductions(
 				(!bootstrap && numericRepresentation(update) !== representation)
 			)
 				continue;
-			const controlling = loopComparison(
-				fn,
-				loop,
-				parameter,
-				root,
-				recurrenceScalar,
-			);
+			const controlling = loopComparison(fn, loop, parameter, root, recurrenceScalar);
 			const range =
 				controlling?.boundLoopInvariant === true
 					? concreteRange(
@@ -467,7 +457,12 @@ export function analyzeCoreLoopInductions(
 		const first = operand(fn, definition, 0);
 		const second = operand(fn, definition, 1);
 		let operator = comparison(fn.instructionAttributes(definition).operator);
-		if (operator === undefined || inputCount !== 2 || first === undefined || second === undefined)
+		if (
+			operator === undefined ||
+			inputCount !== 2 ||
+			first === undefined ||
+			second === undefined
+		)
 			continue;
 		let subject = first;
 		let bound = exactNumber(fn, second, root);

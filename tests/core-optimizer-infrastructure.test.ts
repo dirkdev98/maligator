@@ -14,6 +14,10 @@ import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
 import type { CorePass } from "../src/compiler/core/core-pass.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreInstructionOperands,
+} from "./helpers/core-inspection.ts";
 
 function context(): CoreCompilationContext {
 	return {
@@ -51,7 +55,7 @@ function programWithTwoFunctions() {
 	const functions = Array.from({ length: 2 }, () => {
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [value] = builder.appendInstruction(entry, "identity", [parameter], {
 			outputRepresentations: ["i32"],
 		});
@@ -301,7 +305,7 @@ describe("Core optimizer infrastructure", () => {
 				editor.replaceInstruction(
 					producer,
 					"rewritten-identity",
-					fn.instructionOperands(producer),
+					inspectCoreInstructionOperands(fn, producer),
 				);
 				return editor.commit();
 			},
@@ -379,7 +383,10 @@ describe("Core optimizer infrastructure", () => {
 				edited = true;
 				const editor = CoreEditor.open(program, target.id);
 				const destination = editor.createBlock([{ representation: "boxed" }]);
-				const parameter = program.function(target.id).blockParameters(destination)[0]!;
+				const parameter = inspectCoreBlockParameters(
+					program.function(target.id),
+					destination,
+				)[0]!;
 				editor.removeInstruction(
 					program.function(target.id).blockTerminator(target.entry),
 				);

@@ -5,7 +5,11 @@ import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.t
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
-import type { CoreFunctionId, CoreValueId } from "../src/compiler/core/core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreValueId,
+} from "../src/compiler/core/core-ir.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
@@ -14,6 +18,13 @@ import { CoreProgram as MutableCoreProgram } from "../src/compiler/core/core-sto
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import {
+	inspectCoreBlockHandler,
+	inspectCoreBlockParameters,
+	inspectCoreInstructionOperands,
+	inspectCoreTerminatorPayload,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 interface Fixture {
@@ -31,9 +42,9 @@ function fixture(parameterCount = 0): {
 
 function parameters(
 	builder: CoreFunctionBuilder,
-	block: Parameters<CoreFunctionBuilder["blockParameters"]>[0],
+	block: CoreBlockId,
 ): ReadonlyArray<CoreValueId> {
-	return builder.blockParameters(block).map(({ value }) => value);
+	return inspectCoreBlockParameters(builder, block).map(({ value }) => value);
 }
 
 function optimized(source: Fixture): {
@@ -91,7 +102,7 @@ function functionWithForwardedArguments(): Fixture {
 describe("Core empty forwarding blocks", () => {
 	it("substitutes edge arguments through a forwarding block", () => {
 		const { program, fn } = optimized(functionWithForwardedArguments());
-		const terminator = fn.terminatorPayload(fn.blockTerminator(fn.entry));
+		const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(fn.entry));
 		expect(terminator.kind).toBe("branch");
 		if (terminator.kind !== "branch") throw new Error("expected a branch");
 		expect(terminator.consequent.block).toBe(terminator.alternate.block);
@@ -213,10 +224,12 @@ describe("Core empty forwarding blocks", () => {
 		});
 		const result = optimized({ program, function: builder.finish(entry).function });
 		const protectedBlock = blocks(result.fn).find(
-			(block) => result.fn.blockHandler(block) !== undefined,
+			(block) => inspectCoreBlockHandler(result.fn, block) !== undefined,
 		)!;
-		const handlerEntry = result.fn.blockHandler(protectedBlock)!.block;
-		expect(result.fn.blockParameters(handlerEntry)[0]?.role).toBe("exception");
+		const handlerEntry = inspectCoreBlockHandler(result.fn, protectedBlock)!.block;
+		expect(inspectCoreBlockParameters(result.fn, handlerEntry)[0]?.role).toBe(
+			"exception",
+		);
 		expect([...result.fn.bodyInstructionIds(handlerEntry)]).toHaveLength(0);
 	});
 
@@ -309,7 +322,8 @@ describe("Core empty forwarding blocks", () => {
 		const result = optimized({ program, function: builder.finish(entry).function });
 		const branches = blocks(result.fn).filter(
 			(block) =>
-				result.fn.terminatorPayload(result.fn.blockTerminator(block)).kind === "branch",
+				inspectCoreTerminatorPayload(result.fn, result.fn.blockTerminator(block)).kind ===
+				"branch",
 		);
 		expect(branches).toHaveLength(1);
 	});
@@ -372,7 +386,7 @@ describe("Core empty forwarding blocks", () => {
 		const result = optimized({ program, function: builder.finish(entry).function });
 		expect(blocks(result.fn)).toHaveLength(1);
 		expect(
-			result.fn.terminatorPayload(result.fn.blockTerminator(result.fn.entry)),
+			inspectCoreTerminatorPayload(result.fn, result.fn.blockTerminator(result.fn.entry)),
 		).toEqual({
 			kind: "return",
 			value,
@@ -422,7 +436,7 @@ describe("Core empty forwarding blocks", () => {
 
 		expect(blocks(result.fn)).toHaveLength(1);
 		expect(
-			result.fn.terminatorPayload(result.fn.blockTerminator(result.fn.entry)),
+			inspectCoreTerminatorPayload(result.fn, result.fn.blockTerminator(result.fn.entry)),
 		).toEqual({ kind: "return", value });
 		expect(result.fn.isValueLive(firstParameter)).toBe(false);
 		expect(result.fn.isValueLive(exitParameter)).toBe(false);
@@ -448,7 +462,7 @@ describe("Core empty forwarding blocks", () => {
 			(instruction) => result_.fn.instructionOpcodeName(instruction) === "call",
 		)!;
 		expect(blocks(result_.fn)).toHaveLength(1);
-		expect(result_.fn.instructionOperands(call)).toEqual([value, value]);
+		expect(inspectCoreInstructionOperands(result_.fn, call)).toEqual([value, value]);
 		expect(result_.fn.isValueLive(parameter)).toBe(false);
 	});
 
@@ -459,7 +473,7 @@ describe("Core empty forwarding blocks", () => {
 		const forwarding = blocks(fn).filter((block) => {
 			if (block === fn.entry || [...fn.bodyInstructionIds(block)].length !== 0)
 				return false;
-			const terminator = fn.terminatorPayload(fn.blockTerminator(block));
+			const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(block));
 			return (
 				terminator.kind === "jump" &&
 				(cfg.predecessors[block] ?? []).every(({ kind }) => kind === "ordinary")
@@ -501,7 +515,7 @@ describe("Core SSA and CFG cleanup", () => {
 		const result = optimized({ program, function: builder.finish(entry).function });
 		expect(blocks(result.fn)).toHaveLength(1);
 		expect(
-			result.fn.terminatorPayload(result.fn.blockTerminator(result.fn.entry)),
+			inspectCoreTerminatorPayload(result.fn, result.fn.blockTerminator(result.fn.entry)),
 		).toEqual({
 			kind: "return",
 			value,
@@ -540,7 +554,10 @@ describe("Core SSA and CFG cleanup", () => {
 		].find(
 			(instruction) => optimizedResult.fn.instructionOpcodeName(instruction) === "call",
 		)!;
-		expect(optimizedResult.fn.instructionOperands(call)).toEqual([first, second]);
+		expect(inspectCoreInstructionOperands(optimizedResult.fn, call)).toEqual([
+			first,
+			second,
+		]);
 		expect(optimizedResult.fn.isValueLive(firstParameter!)).toBe(false);
 		expect(optimizedResult.fn.isValueLive(secondParameter!)).toBe(false);
 	});
@@ -580,9 +597,9 @@ describe("Core SSA and CFG cleanup", () => {
 				result.fn.instructionKind(instruction) === "operation" &&
 				result.fn.instructionOpcodeName(instruction) === "call",
 		)!;
-		const [first, second] = result.fn.instructionOperands(call);
+		const [first, second] = inspectCoreInstructionOperands(result.fn, call);
 		expect(first).toBe(second);
-		expect(result.fn.valueDefinition(first!).kind).toBe("instruction");
+		expect(inspectCoreValueDefinition(result.fn, first!).kind).toBe("instruction");
 		expect(result.fn.isValueLive(parameter)).toBe(false);
 	});
 
@@ -607,7 +624,7 @@ describe("Core SSA and CFG cleanup", () => {
 		const result = optimized({ program, function: builder.finish(entry).function });
 		expect(blocks(result.fn)).toHaveLength(1);
 		expect(
-			result.fn.terminatorPayload(result.fn.blockTerminator(result.fn.entry)),
+			inspectCoreTerminatorPayload(result.fn, result.fn.blockTerminator(result.fn.entry)),
 		).toEqual({
 			kind: "return",
 			value: flag,
@@ -632,7 +649,7 @@ describe("Core SSA and CFG cleanup", () => {
 		});
 		const result = optimized({ program, function: builder.finish(entry).function });
 		expect(blocks(result.fn)).toHaveLength(1);
-		expect(result.fn.blockHandler(result.fn.entry)).toBeUndefined();
+		expect(inspectCoreBlockHandler(result.fn, result.fn.entry)).toBeUndefined();
 	});
 });
 
@@ -651,11 +668,11 @@ describe("Core to target boundary", () => {
 			.map((functionId) => constructed.program.function(functionId))
 			.find((fn) =>
 				blocks(fn).some((block) => {
-					const terminator = fn.terminatorPayload(fn.blockTerminator(block));
+					const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(block));
 					return (
 						block !== fn.entry &&
 						[...fn.bodyInstructionIds(block)].length === 0 &&
-						fn.blockHandler(block) === undefined &&
+						inspectCoreBlockHandler(fn, block) === undefined &&
 						terminator.kind === "jump"
 					);
 				}),

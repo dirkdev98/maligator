@@ -14,6 +14,7 @@ import {
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
 import { COMPILER_VALUE_KIND_STRING } from "../src/compiler/shared/compiler-value-kinds.ts";
+import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 import {
 	analysisProgram,
@@ -144,7 +145,7 @@ describe("whole-program Core value kinds", () => {
 		const program = analysisProgram();
 		const caller = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = caller.createBlock([{ representation: "boxed" }]);
-		const condition = caller.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(caller, entry)[0]!.value;
 		const join = caller.createBlock([{ representation: "boxed" }]);
 		let decision = entry;
 		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
@@ -177,7 +178,7 @@ describe("whole-program Core value kinds", () => {
 			attributes: { stringIndex: 0 },
 		});
 		const [result] = caller.appendInstruction(join, "call", [
-			caller.blockParameters(join)[0]!.value,
+			inspectCoreBlockParameters(caller, join)[0]!.value,
 			receiver!,
 			argument!,
 		]);
@@ -188,7 +189,7 @@ describe("whole-program Core value kinds", () => {
 			const leafEntry = leaf.createBlock([{ representation: "boxed" }]);
 			leaf.setTerminator(leafEntry, {
 				kind: "return",
-				value: leaf.blockParameters(leafEntry)[0]!.value,
+				value: inspectCoreBlockParameters(leaf, leafEntry)[0]!.value,
 			});
 			return leaf.finish(leafEntry).function;
 		});
@@ -209,7 +210,7 @@ describe("whole-program Core value kinds", () => {
 		const program = analysisProgram();
 		const wildcard = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = wildcard.createBlock([{ representation: "boxed" }]);
-		const condition = wildcard.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(wildcard, entry)[0]!.value;
 		const join = wildcard.createBlock([{ representation: "boxed" }]);
 		let decision = entry;
 		for (let functionIndex = 1; functionIndex < 5; functionIndex++) {
@@ -242,7 +243,7 @@ describe("whole-program Core value kinds", () => {
 			attributes: { stringIndex: 0 },
 		});
 		const [result] = wildcard.appendInstruction(join, "call", [
-			wildcard.blockParameters(join)[0]!.value,
+			inspectCoreBlockParameters(wildcard, join)[0]!.value,
 			receiver!,
 			argument!,
 		]);
@@ -258,7 +259,7 @@ describe("whole-program Core value kinds", () => {
 		const [isolatedValueInstruction] = isolatedBuilder.bodyInstructionIds(isolatedEntry);
 		isolatedBuilder.setTerminator(isolatedEntry, {
 			kind: "return",
-			value: isolatedBuilder.blockParameters(isolatedEntry)[0]!.value,
+			value: inspectCoreBlockParameters(isolatedBuilder, isolatedEntry)[0]!.value,
 		});
 		const isolated = isolatedBuilder.finish(isolatedEntry);
 		const manager = new CoreAnalysisManager(

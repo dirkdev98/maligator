@@ -23,6 +23,11 @@ import type {
 } from "../src/compiler/core/core-transform-candidates.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	inspectCoreBlockHandler,
+	inspectCoreBlockParameters,
+	inspectCoreTerminatorPayload,
+} from "./helpers/core-inspection.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 import {
 	analysisProgram,
@@ -319,15 +324,20 @@ describe("bounded Core cross-call transforms", () => {
 			({ opcode }) => opcode === "guardFunctionIndex",
 		)!;
 		expect(guard.attributes.functionIndex).toBe(handler.id);
-		const branch = outer.terminatorPayload(outer.blockTerminator(guard.block));
+		const branch = inspectCoreTerminatorPayload(
+			outer,
+			outer.blockTerminator(guard.block),
+		);
 		expect(branch.kind).toBe("branch");
 		if (branch.kind !== "branch") throw new Error("expected guarded inline branch");
 		expect(branch.condition).toBe(guard.outputs[0]);
 		expect(branch.alternate.block).toBe(calls[0]!.block);
-		const fastTerminator = outer.terminatorPayload(
+		const fastTerminator = inspectCoreTerminatorPayload(
+			outer,
 			outer.blockTerminator(branch.consequent.block),
 		);
-		const fallbackTerminator = outer.terminatorPayload(
+		const fallbackTerminator = inspectCoreTerminatorPayload(
+			outer,
 			outer.blockTerminator(branch.alternate.block),
 		);
 		expect(fastTerminator.kind).toBe("jump");
@@ -335,11 +345,11 @@ describe("bounded Core cross-call transforms", () => {
 		if (fastTerminator.kind !== "jump" || fallbackTerminator.kind !== "jump")
 			throw new Error("expected guarded inline join");
 		expect(fastTerminator.edge.block).toBe(fallbackTerminator.edge.block);
-		expect(outer.blockHandler(branch.consequent.block)?.block).toBe(
-			outer.blockHandler(branch.alternate.block)?.block,
+		expect(inspectCoreBlockHandler(outer, branch.consequent.block)?.block).toBe(
+			inspectCoreBlockHandler(outer, branch.alternate.block)?.block,
 		);
-		expect(outer.blockHandler(fastTerminator.edge.block)?.block).toBe(
-			outer.blockHandler(branch.alternate.block)?.block,
+		expect(inspectCoreBlockHandler(outer, fastTerminator.edge.block)?.block).toBe(
+			inspectCoreBlockHandler(outer, branch.alternate.block)?.block,
 		);
 		expect(
 			coreOperations(outer).some(
@@ -539,7 +549,7 @@ describe("bounded Core cross-call transforms", () => {
 			kind: "jump",
 			edge: { block: join, arguments: [second!] },
 		});
-		const callee = builder.blockParameters(join)[0]!.value;
+		const callee = inspectCoreBlockParameters(builder, join)[0]!.value;
 		const [receiver] = builder.appendInstruction(join, "createUndefined", []);
 		const [result] = builder.appendInstruction(join, "call", [callee, receiver!]);
 		builder.setTerminator(join, { kind: "return", value: result! });

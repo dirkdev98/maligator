@@ -9,6 +9,11 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import {
+	inspectCoreBlockHandler,
+	inspectCoreBlockParameters,
+	inspectCoreTerminatorPayload,
+} from "./helpers/core-inspection.ts";
 
 function compile(source: string) {
 	return lowerSemanticProgramToCore(
@@ -28,7 +33,7 @@ function operationNames(program: CoreProgram, functionId: CoreFunctionId): Array
 function terminators(program: CoreProgram, functionId: CoreFunctionId) {
 	const fn = program.function(functionId);
 	return [...fn.blockIds()].map((block) =>
-		fn.terminatorPayload(fn.blockTerminator(block)),
+		inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)),
 	);
 }
 
@@ -75,12 +80,14 @@ describe("Core construction", () => {
 		const fn = compilation.program.function(entry!);
 		const payloads = terminators(compilation.program, entry!);
 		expect(payloads.some(({ kind }) => kind === "branch")).toBe(true);
-		expect([...fn.blockIds()].some((block) => fn.blockParameters(block).length > 0)).toBe(
-			true,
-		);
+		expect(
+			[...fn.blockIds()].some(
+				(block) => inspectCoreBlockParameters(fn, block).length > 0,
+			),
+		).toBe(true);
 		expect(
 			[...fn.blockIds()].some((block) =>
-				targetBlocks(fn.terminatorPayload(fn.blockTerminator(block))).some(
+				targetBlocks(inspectCoreTerminatorPayload(fn, fn.blockTerminator(block))).some(
 					(target) => target < block,
 				),
 			),
@@ -110,7 +117,9 @@ describe("Core construction", () => {
 		expect(
 			functions.some((id) =>
 				[...compilation.program.function(id).blockIds()].some(
-					(block) => compilation.program.function(id).blockHandler(block) !== undefined,
+					(block) =>
+						inspectCoreBlockHandler(compilation.program.function(id), block) !==
+						undefined,
 				),
 			),
 		).toBe(true);
@@ -142,7 +151,7 @@ describe("Core construction", () => {
 		builder.setTerminator(fallback, { kind: "return", value: condition! });
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
-		const payload = fn.terminatorPayload(fn.blockTerminator(entry));
+		const payload = inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry));
 		expect(payload).toMatchObject({ kind: "guard", fact });
 		expect(fn.fact(fact).validity).toEqual({
 			kind: "guard",

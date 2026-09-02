@@ -15,6 +15,14 @@ import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-na
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
 import {
+	inspectCoreBlockHandler,
+	inspectCoreBlockParameters,
+	inspectCoreFunctionParameters,
+	inspectCoreInstructionOperands,
+	inspectCoreTerminatorPayload,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
+import {
 	coreFunctionNamed,
 	coreFunctions,
 	coreOperations,
@@ -65,7 +73,9 @@ describe("Core IR lowering", () => {
 			read({ value: 2 });
 		`);
 		const exceptional = coreFunctions(converted).flatMap((fn) =>
-			[...fn.blockIds()].filter((block) => fn.blockHandler(block) !== undefined),
+			[...fn.blockIds()].filter(
+				(block) => inspectCoreBlockHandler(fn, block) !== undefined,
+			),
 		);
 		expect(exceptional.length).toBeGreaterThan(0);
 
@@ -107,9 +117,11 @@ describe("Core IR lowering", () => {
 			preserve({ value: 2 }, () => { throw new Error("x"); });
 		`);
 		const fn = coreFunctionNamed(compilation.program, "preserve")!;
-		expect([...fn.blockIds()].some((block) => fn.blockHandler(block) !== undefined)).toBe(
-			true,
-		);
+		expect(
+			[...fn.blockIds()].some(
+				(block) => inspectCoreBlockHandler(fn, block) !== undefined,
+			),
+		).toBe(true);
 		const execution = lowerCoreCompilationToExecution(compilation);
 		const executionFunction =
 			execution.functions[execution.functionMap.coreToExecution[fn.id]!]!;
@@ -119,15 +131,14 @@ describe("Core IR lowering", () => {
 		const allocation = coreRegisterClasses(
 			fn,
 			true,
-			new Set(fn.parameters.keys()),
+			new Set(inspectCoreFunctionParameters(fn).keys()),
 			blockOrder,
 		);
 		const handlerRegisters = new Set(
 			[...fn.blockIds()].flatMap((block) => {
-				const handler = fn.blockHandler(block);
+				const handler = inspectCoreBlockHandler(fn, block);
 				if (handler === undefined) return [];
-				return fn
-					.blockParameters(handler.block)
+				return inspectCoreBlockParameters(fn, handler.block)
 					.slice(1)
 					.map(({ value }) => allocation.registers.get(value))
 					.filter((register): register is number => register !== undefined);
@@ -226,7 +237,7 @@ describe("Core IR lowering", () => {
 		)!;
 		const rooted = coreOperations(core).find(({ opcode }) => opcode === "rootUse")!
 			.inputs[0]!;
-		expect(core.valueDefinition(rooted).kind).toBe("block-parameter");
+		expect(inspectCoreValueDefinition(core, rooted).kind).toBe("block-parameter");
 
 		const target = lowerCoreCompilationToExecution(compilation);
 		const fn = target.functions[target.functionMap.coreToExecution[core.id]!]!;
@@ -265,7 +276,7 @@ describe("Core IR lowering", () => {
 		)!;
 		const rooted = coreOperations(core).find(({ opcode }) => opcode === "rootUse")!
 			.inputs[0]!;
-		expect(core.valueDefinition(rooted).kind).toBe("block-parameter");
+		expect(inspectCoreValueDefinition(core, rooted).kind).toBe("block-parameter");
 
 		const target = lowerCoreCompilationToExecution(compilation);
 		const fn = target.functions[target.functionMap.coreToExecution[core.id]!]!;
@@ -337,20 +348,22 @@ describe("Core IR lowering", () => {
 				}
 			`);
 		const core = coreFunctions(compilation.program).find((fn) =>
-			[...fn.blockIds()].some((block) => fn.blockHandler(block) !== undefined),
+			[...fn.blockIds()].some(
+				(block) => inspectCoreBlockHandler(fn, block) !== undefined,
+			),
 		)!;
 		const protectedBlock = [...core.blockIds()].find(
-			(block) => core.blockHandler(block) !== undefined,
+			(block) => inspectCoreBlockHandler(core, block) !== undefined,
 		)!;
-		const handler = core.blockHandler(protectedBlock)!;
-		const handlerParameters = core.blockParameters(handler.block);
+		const handler = inspectCoreBlockHandler(core, protectedBlock)!;
+		const handlerParameters = inspectCoreBlockParameters(core, handler.block);
 		const field = handlerParameters.at(-1)!.value;
 		expect(handlerParameters[0]?.role).toBe("exception");
 		expect(
 			[...core.bodyInstructionIds(handler.block)].some(
 				(instruction) =>
 					core.instructionOpcodeName(instruction) === "rootUse" &&
-					core.instructionOperands(instruction).includes(field),
+					inspectCoreInstructionOperands(core, instruction).includes(field),
 			),
 		).toBe(true);
 
@@ -383,7 +396,7 @@ describe("Core IR lowering", () => {
 		});
 		builder.setTerminator(entry, {
 			kind: "branch",
-			condition: builder.blockParameters(entry)[0]!.value,
+			condition: inspectCoreBlockParameters(builder, entry)[0]!.value,
 			consequent: { block: leftStart, arguments: [] },
 			alternate: { block: right, arguments: [] },
 		});
@@ -399,12 +412,12 @@ describe("Core IR lowering", () => {
 			kind: "jump",
 			edge: {
 				block: merge,
-				arguments: [builder.blockParameters(leftEnd)[0]!.value],
+				arguments: [inspectCoreBlockParameters(builder, leftEnd)[0]!.value],
 			},
 		});
 		builder.setTerminator(merge, {
 			kind: "return",
-			value: builder.blockParameters(merge)[0]!.value,
+			value: inspectCoreBlockParameters(builder, merge)[0]!.value,
 		});
 		const { function: functionId } = builder.finish(entry);
 		const fn = program.function(functionId);
@@ -654,14 +667,16 @@ describe("Core IR lowering", () => {
 		`);
 		const owner = coreFunctions(constructed.program).find((fn) =>
 			[...fn.blockIds()].some(
-				(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind === "branch",
+				(block) =>
+					inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)).kind === "branch",
 			),
 		)!;
 		const block = [...owner.blockIds()].find(
 			(candidate) =>
-				owner.terminatorPayload(owner.blockTerminator(candidate)).kind === "branch",
+				inspectCoreTerminatorPayload(owner, owner.blockTerminator(candidate)).kind ===
+				"branch",
 		)!;
-		const branch = owner.terminatorPayload(owner.blockTerminator(block));
+		const branch = inspectCoreTerminatorPayload(owner, owner.blockTerminator(block));
 		if (branch.kind !== "branch") throw new Error("missing branch fixture");
 		const editor = CoreEditor.open(constructed.program, owner.id);
 		editor.replaceTerminator(block, {

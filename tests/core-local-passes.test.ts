@@ -19,6 +19,14 @@ import {
 	programClosureCertificate,
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	inspectCoreBlockHandler,
+	inspectCoreBlockParameters,
+	inspectCoreInstructionOperands,
+	inspectCoreInstructionResults,
+	inspectCoreTerminatorPayload,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 import { coreFunctionNamed } from "./helpers/core-inspection.ts";
 
 const context: CoreCompilationContext = {
@@ -37,12 +45,13 @@ const context: CoreCompilationContext = {
 
 function returnedOperation(fn: CoreFunctionStore) {
 	const returnBlock = [...fn.blockIds()].find(
-		(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind === "return",
+		(block) =>
+			inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)).kind === "return",
 	);
 	expect(returnBlock).toBeDefined();
-	const terminator = fn.terminatorPayload(fn.blockTerminator(returnBlock!));
+	const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(returnBlock!));
 	if (terminator.kind !== "return") throw new Error("Expected return terminator");
-	const definition = fn.valueDefinition(terminator.value);
+	const definition = inspectCoreValueDefinition(fn, terminator.value);
 	expect(definition.kind).toBe("instruction");
 	if (definition.kind !== "instruction") throw new Error("Expected returned operation");
 	return definition.instruction;
@@ -76,7 +85,7 @@ describe("Core local canonicalization", () => {
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const target = builder.createBlock();
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: target, arguments: [] },
@@ -134,8 +143,12 @@ describe("Core local canonicalization", () => {
 			(instruction) => fn!.instructionAttributes(instruction).operator === "increment",
 		);
 		expect(increment).toBeDefined();
-		expect(fn!.valueRepresentation(fn!.instructionOperands(increment!)[0]!)).toBe("f64");
-		expect(fn!.valueRepresentation(fn!.instructionResults(increment!)[0]!)).toBe("f64");
+		expect(
+			fn!.valueRepresentation(inspectCoreInstructionOperands(fn!, increment!)[0]!),
+		).toBe("f64");
+		expect(
+			fn!.valueRepresentation(inspectCoreInstructionResults(fn!, increment!)[0]!),
+		).toBe("f64");
 	});
 
 	it("keeps positive and negative zero as distinct numbered constants", () => {
@@ -251,12 +264,12 @@ describe("Core local canonicalization", () => {
 			kind: "jump",
 			edge: {
 				block: exit,
-				arguments: [builder.blockParameters(forwarding)[0]!.value],
+				arguments: [inspectCoreBlockParameters(builder, forwarding)[0]!.value],
 			},
 		});
 		builder.setTerminator(exit, {
 			kind: "return",
-			value: builder.blockParameters(exit)[0]!.value,
+			value: inspectCoreBlockParameters(builder, exit)[0]!.value,
 		});
 		builder.finish(entry);
 
@@ -292,7 +305,7 @@ describe("Core local canonicalization", () => {
 			const join = builder.createBlock([{ representation: "boolean" }]);
 			const success = builder.createBlock();
 			const failure = builder.createBlock();
-			const condition = builder.blockParameters(entry)[0]!.value;
+			const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			builder.setTerminator(entry, {
 				kind: "branch",
 				condition,
@@ -317,7 +330,7 @@ describe("Core local canonicalization", () => {
 			});
 			builder.setTerminator(join, {
 				kind: "branch",
-				condition: builder.blockParameters(join)[0]!.value,
+				condition: inspectCoreBlockParameters(builder, join)[0]!.value,
 				consequent: { block: success, arguments: [] },
 				alternate: { block: failure, arguments: [] },
 			});
@@ -337,7 +350,8 @@ describe("Core local canonicalization", () => {
 			.compilation.program;
 		const branchCount = (fn: CoreFunctionStore) =>
 			[...fn.blockIds()].filter(
-				(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind === "branch",
+				(block) =>
+					inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)).kind === "branch",
 			).length;
 		expect(branchCount(optimized.function(same))).toBe(0);
 		expect(
@@ -616,7 +630,7 @@ describe("Core local canonicalization", () => {
 
 		const unsafeBuilder = new CoreFunctionBuilder(program);
 		const unsafeEntry = unsafeBuilder.createBlock([{ representation: "boxed" }]);
-		const unsafeValue = unsafeBuilder.blockParameters(unsafeEntry)[0]!.value;
+		const unsafeValue = inspectCoreBlockParameters(unsafeBuilder, unsafeEntry)[0]!.value;
 		unsafeBuilder.appendInstruction(unsafeEntry, "throwIfTdz", [unsafeValue]);
 		unsafeBuilder.setTerminator(unsafeEntry, { kind: "return", value: unsafeValue });
 		const unsafeFunction = unsafeBuilder.finish(unsafeEntry).function;
@@ -639,7 +653,7 @@ describe("Core local canonicalization", () => {
 		const build = (initialized: boolean) => {
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const parameter = builder.blockParameters(entry)[0]!.value;
+			const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			const [source] = initialized
 				? builder.appendInstruction(entry, "move", [parameter])
 				: builder.appendInstruction(entry, "createEmpty", []);
@@ -716,7 +730,7 @@ describe("Core local canonicalization", () => {
 			const left = builder.createBlock();
 			const right = builder.createBlock();
 			const join = builder.createBlock();
-			const condition = builder.blockParameters(entry)[0]!.value;
+			const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			const [base] = coercible
 				? builder.appendInstruction(entry, "createBoolean", [], {
 						attributes: { value: true },
@@ -802,9 +816,10 @@ describe("Core local canonicalization", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const [parent, argumentsArray] = derived
-			.blockParameters(derivedEntry)
-			.map(({ value }) => value);
+		const [parent, argumentsArray] = inspectCoreBlockParameters(
+			derived,
+			derivedEntry,
+		).map(({ value }) => value);
 		const [beforeThis] = derived.appendInstruction(derivedEntry, "loadThis", []);
 		derived.appendInstruction(derivedEntry, "constructSuper", [parent!, argumentsArray!]);
 		const [afterThis] = derived.appendInstruction(derivedEntry, "loadThis", []);
@@ -913,7 +928,7 @@ describe("Core local canonicalization", () => {
 		).toBe(false);
 		for (const instruction of exactOperations) {
 			if (!exact!.instructionOpcodeName(instruction).startsWith("math")) continue;
-			const [result] = exact!.instructionResults(instruction);
+			const [result] = inspectCoreInstructionResults(exact!, instruction);
 			expect(result).toBeDefined();
 			expect(exact!.valueRepresentation(result!)).toBe("f64");
 		}
@@ -960,7 +975,7 @@ describe("Core local canonicalization", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [returned] = builder.appendInstruction(entry, "createUndefined", []);
 		const left = builder.createBlock();
 		const right = builder.createBlock();
@@ -987,7 +1002,7 @@ describe("Core local canonicalization", () => {
 			kind: "jump",
 			edge: { block: join, arguments: [rightValue!] },
 		});
-		const joined = builder.blockParameters(join)[0]!.value;
+		const joined = inspectCoreBlockParameters(builder, join)[0]!.value;
 		builder.appendInstruction(join, "mathUnaryNumber", [joined], {
 			attributes: { operation: "Math.sin" },
 			outputRepresentations: ["f64"],
@@ -1007,7 +1022,7 @@ describe("Core local canonicalization", () => {
 		expect(fn.isValueLive(joined)).toBe(false);
 		for (const block of fn.blockIds()) {
 			for (const edge of coreTerminatorEdges(
-				fn.terminatorPayload(fn.blockTerminator(block)),
+				inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)),
 			)) {
 				expect(edge.arguments).toEqual([]);
 			}
@@ -1020,7 +1035,7 @@ describe("Core local canonicalization", () => {
 		});
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const object = builder.blockParameters(entry)[0]!.value;
+		const object = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [key] = builder.appendInstruction(entry, "createString", [], {
 			attributes: { stringIndex: 0 },
 		});
@@ -1060,17 +1075,17 @@ describe("Core local canonicalization", () => {
 		const outerHandler = builder.createBlock([
 			{ role: "exception", representation: "boxed" },
 		]);
-		const thrown = builder.blockParameters(entry)[0]!.value;
+		const thrown = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setHandler(entry, innerHandler);
 		builder.setTerminator(entry, { kind: "throw", value: thrown });
 		builder.setHandler(innerHandler, outerHandler);
 		builder.setTerminator(innerHandler, {
 			kind: "throw",
-			value: builder.blockParameters(innerHandler)[0]!.value,
+			value: inspectCoreBlockParameters(builder, innerHandler)[0]!.value,
 		});
 		builder.setTerminator(outerHandler, {
 			kind: "return",
-			value: builder.blockParameters(outerHandler)[0]!.value,
+			value: inspectCoreBlockParameters(builder, outerHandler)[0]!.value,
 		});
 		const function_ = builder.finish(entry).function;
 
@@ -1079,11 +1094,13 @@ describe("Core local canonicalization", () => {
 			{ verification: "per-pass" },
 		).compilation.program.function(function_);
 		expect(
-			[...fn.blockIds()].every((block) => fn.blockHandler(block) === undefined),
+			[...fn.blockIds()].every(
+				(block) => inspectCoreBlockHandler(fn, block) === undefined,
+			),
 		).toBe(true);
 		expect(
 			[...fn.blockIds()].map(
-				(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind,
+				(block) => inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)).kind,
 			),
 		).not.toContain("throw");
 	});
@@ -1097,7 +1114,7 @@ describe("Core local canonicalization", () => {
 		const sharedHandler = shared.createBlock([
 			{ role: "exception", representation: "boxed" },
 		]);
-		const sharedValue = shared.blockParameters(sharedEntry)[0]!.value;
+		const sharedValue = inspectCoreBlockParameters(shared, sharedEntry)[0]!.value;
 		shared.setTerminator(sharedEntry, {
 			kind: "branch",
 			condition: sharedValue,
@@ -1110,7 +1127,7 @@ describe("Core local canonicalization", () => {
 		}
 		shared.setTerminator(sharedHandler, {
 			kind: "return",
-			value: shared.blockParameters(sharedHandler)[0]!.value,
+			value: inspectCoreBlockParameters(shared, sharedHandler)[0]!.value,
 		});
 		const sharedFunction = shared.finish(sharedEntry).function;
 
@@ -1119,13 +1136,13 @@ describe("Core local canonicalization", () => {
 		const throwingHandler = throwing.createBlock([
 			{ role: "exception", representation: "boxed" },
 		]);
-		const callee = throwing.blockParameters(throwingEntry)[0]!.value;
+		const callee = inspectCoreBlockParameters(throwing, throwingEntry)[0]!.value;
 		throwing.appendInstruction(throwingEntry, "call", [callee, callee]);
 		throwing.setHandler(throwingEntry, throwingHandler);
 		throwing.setTerminator(throwingEntry, { kind: "throw", value: callee });
 		throwing.setTerminator(throwingHandler, {
 			kind: "return",
-			value: throwing.blockParameters(throwingHandler)[0]!.value,
+			value: inspectCoreBlockParameters(throwing, throwingHandler)[0]!.value,
 		});
 		const throwingFunction = throwing.finish(throwingEntry).function;
 
@@ -1134,19 +1151,21 @@ describe("Core local canonicalization", () => {
 		const sharedResult = optimized.function(sharedFunction);
 		expect(
 			[...sharedResult.blockIds()].every(
-				(block) => sharedResult.blockHandler(block) === undefined,
+				(block) => inspectCoreBlockHandler(sharedResult, block) === undefined,
 			),
 		).toBe(true);
 		expect(
 			[...sharedResult.blockIds()].map(
 				(block) =>
-					sharedResult.terminatorPayload(sharedResult.blockTerminator(block)).kind,
+					inspectCoreTerminatorPayload(sharedResult, sharedResult.blockTerminator(block))
+						.kind,
 			),
 		).not.toContain("throw");
 		const throwingResult = optimized.function(throwingFunction);
-		expect(throwingResult.blockHandler(throwingResult.entry)).toBeDefined();
+		expect(inspectCoreBlockHandler(throwingResult, throwingResult.entry)).toBeDefined();
 		expect(
-			throwingResult.terminatorPayload(
+			inspectCoreTerminatorPayload(
+				throwingResult,
 				throwingResult.blockTerminator(throwingResult.entry),
 			).kind,
 		).toBe("throw");
@@ -1164,11 +1183,13 @@ describe("Core local canonicalization", () => {
 		const fn = coreFunctionNamed(program, "local");
 		expect(fn).toBeDefined();
 		expect(
-			[...fn!.blockIds()].every((block) => fn!.blockHandler(block) === undefined),
+			[...fn!.blockIds()].every(
+				(block) => inspectCoreBlockHandler(fn!, block) === undefined,
+			),
 		).toBe(true);
 		expect(
 			[...fn!.blockIds()].map(
-				(block) => fn!.terminatorPayload(fn!.blockTerminator(block)).kind,
+				(block) => inspectCoreTerminatorPayload(fn!, fn!.blockTerminator(block)).kind,
 			),
 		).not.toContain("throw");
 	});
@@ -1178,7 +1199,7 @@ describe("Core local canonicalization", () => {
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boolean" }]);
 		const exit = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setGuardTerminator(entry, {
 			condition,
 			success: { block: exit, arguments: [] },
@@ -1201,7 +1222,7 @@ describe("Core local canonicalization", () => {
 		).compilation.program.function(function_);
 		expect(
 			[...fn.blockIds()].map(
-				(block) => fn.terminatorPayload(fn.blockTerminator(block)).kind,
+				(block) => inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)).kind,
 			),
 		).not.toContain("guard");
 		expect([...fn.factIds()]).toEqual([]);

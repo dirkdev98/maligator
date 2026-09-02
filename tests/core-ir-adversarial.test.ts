@@ -16,6 +16,11 @@ import type { CoreFunctionStore, CoreProgram } from "../src/compiler/core/core-s
 import { CoreProgram as MutableCoreProgram } from "../src/compiler/core/core-store.ts";
 import type { OptimizedCoreResult } from "../src/compiler/core/optimize.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
+import {
+	inspectCoreBlockHandler,
+	inspectCoreBlockParameters,
+	inspectCoreTerminatorPayload,
+} from "./helpers/core-inspection.ts";
 import { coreOperations } from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
@@ -36,24 +41,26 @@ function values(
 	builder: CoreFunctionBuilder,
 	block: CoreBlockId,
 ): ReadonlyArray<CoreValueId> {
-	return builder.blockParameters(block).map(({ value }) => value);
+	return inspectCoreBlockParameters(builder, block).map(({ value }) => value);
 }
 
 function expectConsistentEdges(fn: CoreFunctionStore): void {
 	for (const block of fn.blockIds()) {
 		for (const edge of coreTerminatorEdges(
-			fn.terminatorPayload(fn.blockTerminator(block)),
+			inspectCoreTerminatorPayload(fn, fn.blockTerminator(block)),
 		)) {
 			expect(fn.isBlockLive(edge.block)).toBe(true);
-			expect(edge.arguments).toHaveLength(fn.blockParameters(edge.block).length);
-			expect(fn.blockParameters(edge.block)[0]?.role).not.toBe("exception");
+			expect(edge.arguments).toHaveLength(
+				inspectCoreBlockParameters(fn, edge.block).length,
+			);
+			expect(inspectCoreBlockParameters(fn, edge.block)[0]?.role).not.toBe("exception");
 		}
-		const handlerEdge = fn.blockHandler(block);
+		const handlerEdge = inspectCoreBlockHandler(fn, block);
 		if (handlerEdge === undefined) continue;
 		expect(fn.isBlockLive(handlerEdge.block)).toBe(true);
-		expect(fn.blockParameters(handlerEdge.block)[0]?.role).toBe("exception");
+		expect(inspectCoreBlockParameters(fn, handlerEdge.block)[0]?.role).toBe("exception");
 		expect(handlerEdge.arguments.length + 1).toBe(
-			fn.blockParameters(handlerEdge.block).length,
+			inspectCoreBlockParameters(fn, handlerEdge.block).length,
 		);
 	}
 }
@@ -158,13 +165,13 @@ describe("adversarial Core graphs", () => {
 		const join = [...fn.blockIds()].find(
 			(block) => ordinaryPredecessorCount(optimized, fn, block) === 2,
 		)!;
-		expect(fn.blockParameters(join)).toEqual([
+		expect(inspectCoreBlockParameters(fn, join)).toEqual([
 			{ value: joined, representation: "f64", role: "value" },
 		]);
 		expect(fn.valueRepresentation(joined)).toBe("f64");
 		const incoming = [...fn.blockIds()]
 			.flatMap((block) =>
-				coreTerminatorEdges(fn.terminatorPayload(fn.blockTerminator(block))),
+				coreTerminatorEdges(inspectCoreTerminatorPayload(fn, fn.blockTerminator(block))),
 			)
 			.filter((edge) => edge.block === join);
 		expect(incoming.map(({ arguments: arguments_ }) => arguments_)).toEqual([
@@ -231,11 +238,11 @@ describe("adversarial Core graphs", () => {
 		const cfg = buildCoreControlFlow(optimized, finished.function);
 		expect(cfg.loops).toHaveLength(1);
 		expect(cfg.loops[0]).toMatchObject({ header, latches: new Set([body]) });
-		expect(fn.blockParameters(header)).toEqual([
+		expect(inspectCoreBlockParameters(fn, header)).toEqual([
 			{ value: carried, representation: "f64", role: "value" },
 		]);
 		expect(ordinaryPredecessorCount(optimized, fn, header)).toBe(2);
-		const bodyTerminator = fn.terminatorPayload(fn.blockTerminator(body));
+		const bodyTerminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(body));
 		expect(bodyTerminator).toMatchObject({
 			kind: "jump",
 			edge: { block: header, arguments: [next] },
@@ -302,22 +309,22 @@ describe("adversarial Core graphs", () => {
 		expect(cfg.dominates(second, first)).toBe(false);
 		expect(ordinaryPredecessorCount(optimized, fn, first)).toBe(2);
 		expect(ordinaryPredecessorCount(optimized, fn, second)).toBe(2);
-		expect(fn.blockParameters(first)).toEqual([]);
-		expect(fn.blockParameters(second)).toEqual([]);
-		expect(fn.blockParameters(exit)).toEqual([]);
-		expect(fn.terminatorPayload(fn.blockTerminator(first))).toMatchObject({
+		expect(inspectCoreBlockParameters(fn, first)).toEqual([]);
+		expect(inspectCoreBlockParameters(fn, second)).toEqual([]);
+		expect(inspectCoreBlockParameters(fn, exit)).toEqual([]);
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(first))).toMatchObject({
 			kind: "branch",
 			condition: outerLeft,
 			consequent: { block: second, arguments: [] },
 			alternate: { block: exit, arguments: [] },
 		});
-		expect(fn.terminatorPayload(fn.blockTerminator(second))).toMatchObject({
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(second))).toMatchObject({
 			kind: "branch",
 			condition: outerRight,
 			consequent: { block: first, arguments: [] },
 			alternate: { block: exit, arguments: [] },
 		});
-		expect(fn.terminatorPayload(fn.blockTerminator(exit))).toEqual({
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(exit))).toEqual({
 			kind: "return",
 			value: outerLeft,
 		});
@@ -398,12 +405,18 @@ describe("adversarial Core graphs", () => {
 		const optimized = optimizeVerified(program_, [finished.function]).compilation.program;
 		const fn = optimized.function(finished.function);
 		const cfg = buildCoreControlFlow(optimized, finished.function);
-		expect(fn.blockParameters(handler).map(({ role }) => role)).toEqual([
+		expect(inspectCoreBlockParameters(fn, handler).map(({ role }) => role)).toEqual([
 			"exception",
 			"value",
 		]);
-		expect(fn.blockHandler(entry)).toEqual({ block: handler, arguments: [input] });
-		expect(fn.blockHandler(body)).toEqual({ block: handler, arguments: [callee] });
+		expect(inspectCoreBlockHandler(fn, entry)).toEqual({
+			block: handler,
+			arguments: [input],
+		});
+		expect(inspectCoreBlockHandler(fn, body)).toEqual({
+			block: handler,
+			arguments: [callee],
+		});
 		expect(
 			cfg.predecessors[handler]!.filter(({ kind }) => kind === "exceptional"),
 		).toHaveLength(2);
@@ -523,15 +536,15 @@ describe("adversarial Core graphs", () => {
 		expect(
 			[...generatorFn.blockIds()].filter(
 				(block) =>
-					generatorFn.terminatorPayload(generatorFn.blockTerminator(block)).kind ===
-					"throw",
+					inspectCoreTerminatorPayload(generatorFn, generatorFn.blockTerminator(block))
+						.kind === "throw",
 			),
 		).toHaveLength(1);
 		expect(
 			[...generatorFn.blockIds()].filter(
 				(block) =>
-					generatorFn.terminatorPayload(generatorFn.blockTerminator(block)).kind ===
-					"return",
+					inspectCoreTerminatorPayload(generatorFn, generatorFn.blockTerminator(block))
+						.kind === "return",
 			),
 		).toHaveLength(2);
 		expect(opcodesOf(generatorFn)).toContain("generatorStart");
@@ -540,11 +553,15 @@ describe("adversarial Core graphs", () => {
 			({ opcode }) => opcode === "await",
 		)!;
 		expect(awaitInstruction.outputs).toEqual([settled, asyncMode]);
-		expect(asyncFn.terminatorPayload(asyncFn.blockTerminator(rejected))).toEqual({
+		expect(
+			inspectCoreTerminatorPayload(asyncFn, asyncFn.blockTerminator(rejected)),
+		).toEqual({
 			kind: "throw",
 			value: settled,
 		});
-		expect(asyncFn.terminatorPayload(asyncFn.blockTerminator(fulfilled))).toEqual({
+		expect(
+			inspectCoreTerminatorPayload(asyncFn, asyncFn.blockTerminator(fulfilled)),
+		).toEqual({
 			kind: "return",
 			value: settled,
 		});
@@ -595,7 +612,7 @@ describe("adversarial Core graphs", () => {
 		const finished = builder.finish(entry);
 		const optimized = optimizeVerified(program_, [finished.function]).compilation.program;
 		const fn = optimized.function(finished.function);
-		const terminator = fn.terminatorPayload(fn.blockTerminator(entry));
+		const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry));
 		expect(terminator).toMatchObject({
 			kind: "guard",
 			fact: provenFact,
@@ -777,7 +794,7 @@ describe("generated valid Core graph variations", () => {
 				expect(cfg.loops).toHaveLength(0);
 			} else {
 				expect(cfg.loops).toHaveLength(1);
-				expect(fn.blockParameters(cfg.loops[0]!.header)).toHaveLength(1);
+				expect(inspectCoreBlockParameters(fn, cfg.loops[0]!.header)).toHaveLength(1);
 				expect(
 					ordinaryPredecessorCount(result.compilation.program, fn, cfg.loops[0]!.header),
 				).toBe(2);

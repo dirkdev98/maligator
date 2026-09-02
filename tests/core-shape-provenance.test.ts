@@ -9,6 +9,7 @@ import {
 	coreShapeCaseCandidatesFromAttribute,
 } from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
 function program(): CoreProgram {
 	return new CoreProgram(coreOpcodeRegistry, {
@@ -78,7 +79,7 @@ describe("Core local shape provenance", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, { kind: "return", value: parameter });
 		const finished = builder.finish(entry);
 		expect(

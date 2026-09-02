@@ -994,7 +994,7 @@ function directEntryCandidates(
 		)
 			continue;
 		const parameterRepresentations = Object.freeze(
-			fn.parameters.map(() => "boxed" as const),
+			Array.from({ length: fn.parameterCount }, () => "boxed" as const),
 		);
 		const generatedCode = Math.max(8, [...fn.instructionIds()].length);
 		const compilerWork = generatedCode + fn.valueCapacity;

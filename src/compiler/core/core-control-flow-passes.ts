@@ -633,10 +633,7 @@ function translatedInputs(
 			continue;
 		}
 		const inputBlock = definitionBlock(fn, input);
-		if (
-			inputBlock === block ||
-			!cfg.instructionDominatesBlock(inputBlock, predecessor)
-		)
+		if (inputBlock === block || !cfg.instructionDominatesBlock(inputBlock, predecessor))
 			return undefined;
 		translated.push(input);
 	}
@@ -773,10 +770,7 @@ function proveComparison(
 
 function numberConstant(fn: CoreFunctionStore, value: CoreValueId): number | undefined {
 	const instruction = definitionInstruction(fn, value);
-	if (
-		instruction === undefined ||
-		fn.instructionKind(instruction) !== "operation"
-	)
+	if (instruction === undefined || fn.instructionKind(instruction) !== "operation")
 		return undefined;
 	const opcode = fn.instructionOpcodeName(instruction);
 	const attribute = fn.instructionAttributes(instruction).value;
@@ -1101,10 +1095,7 @@ const selectLoopScalarRepresentations: CorePass = {
 		}
 		for (const value of selected) {
 			const definition = definitionInstruction(fn, value);
-			if (
-				definition !== undefined &&
-				fn.instructionOpcodeName(definition) === "move"
-			) {
+			if (definition !== undefined && fn.instructionOpcodeName(definition) === "move") {
 				const source = instructionOperand(fn, definition, 0);
 				if (
 					source !== undefined &&

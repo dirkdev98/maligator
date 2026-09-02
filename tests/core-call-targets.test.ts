@@ -16,6 +16,10 @@ import {
 } from "../src/compiler/core/core-ir-call-targets.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import {
+	inspectCoreBlockParameters,
+	inspectCoreInstructionResults,
+} from "./helpers/core-inspection.ts";
+import {
 	analysisProgram,
 	appendCaller,
 	appendLeaf,
@@ -134,9 +138,10 @@ describe("incremental Core call graph", () => {
 		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 
 		const representation = CoreEditor.open(program, leaf.function);
-		const [value] = program
-			.function(leaf.function)
-			.instructionResults(leaf.valueInstruction);
+		const [value] = inspectCoreInstructionResults(
+			program.function(leaf.function),
+			leaf.valueInstruction,
+		);
 		expect(value).toBeDefined();
 		representation.setValueRepresentation(value!, "f64");
 		representation.commit();
@@ -167,7 +172,7 @@ describe("incremental Core call graph", () => {
 			kind: "jump",
 			edge: { block: header, arguments: [initial!] },
 		});
-		const callee = builder.blockParameters(header)[0]!.value;
+		const callee = inspectCoreBlockParameters(builder, header)[0]!.value;
 		const [receiver] = builder.appendInstruction(header, "createUndefined", []);
 		builder.appendInstruction(header, "call", [callee, receiver!]);
 		const [, call] = builder.bodyInstructionIds(header);

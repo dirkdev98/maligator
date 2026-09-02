@@ -23,6 +23,12 @@ import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreInstructionResults,
+	inspectCoreTerminatorPayload,
+	inspectCoreValueDefinition,
+} from "./helpers/core-inspection.ts";
 
 const context: CoreCompilationContext = {
 	facts: conservativeCompilerProgramFacts(),
@@ -39,7 +45,7 @@ const context: CoreCompilationContext = {
 };
 
 function definingInstruction(fn: CoreFunctionStore, value: CoreValueId) {
-	const definition = fn.valueDefinition(value);
+	const definition = inspectCoreValueDefinition(fn, value);
 	if (definition.kind !== "instruction") throw new Error("expected instruction value");
 	return definition.instruction;
 }
@@ -52,7 +58,7 @@ describe("Core control-flow analyses and passes", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const exit = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition,
@@ -86,7 +92,7 @@ describe("Core control-flow analyses and passes", () => {
 		builder.setTerminator(entry, { kind: "throw", value: thrown! });
 		builder.setTerminator(handler, {
 			kind: "return",
-			value: builder.blockParameters(handler)[0]!.value,
+			value: inspectCoreBlockParameters(builder, handler)[0]!.value,
 		});
 		const finished = builder.finish(entry);
 		const cfg = buildCoreControlFlow(program, finished.function);
@@ -104,7 +110,7 @@ describe("Core control-flow analyses and passes", () => {
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const handler = builder.createBlock([{ role: "exception" }]);
 		const join = builder.createBlock();
-		const callee = builder.blockParameters(entry)[0]!.value;
+		const callee = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.appendInstruction(entry, "call", [callee, callee]);
 		const [protectedValue] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 2 },
@@ -150,7 +156,7 @@ describe("Core control-flow analyses and passes", () => {
 			kind: "jump",
 			edge: { block: header, arguments: [zero!] },
 		});
-		const counter = builder.blockParameters(header)[0]!.value;
+		const counter = inspectCoreBlockParameters(builder, header)[0]!.value;
 		const [condition] = builder.appendInstruction(header, "binary", [counter, ten!], {
 			attributes: { operator: "<" },
 			outputRepresentations: ["boolean"],
@@ -161,7 +167,7 @@ describe("Core control-flow analyses and passes", () => {
 			consequent: { block: latch, arguments: [counter] },
 			alternate: { block: exit, arguments: [] },
 		});
-		const latchCounter = builder.blockParameters(latch)[0]!.value;
+		const latchCounter = inspectCoreBlockParameters(builder, latch)[0]!.value;
 		const [next] = builder.appendInstruction(latch, "unary", [latchCounter], {
 			attributes: { operator: "increment" },
 			outputRepresentations: ["f64"],
@@ -204,7 +210,7 @@ describe("Core control-flow analyses and passes", () => {
 				kind: "jump",
 				edge: { block: header, arguments: [seed!] },
 			});
-			const counter = builder.blockParameters(header)[0]!.value;
+			const counter = inspectCoreBlockParameters(builder, header)[0]!.value;
 			const [condition] = builder.appendInstruction(header, "binary", [counter, bound!], {
 				attributes: { operator: "<" },
 				outputRepresentations: ["boolean"],
@@ -225,7 +231,7 @@ describe("Core control-flow analyses and passes", () => {
 			});
 			builder.setTerminator(exit, {
 				kind: "return",
-				value: builder.blockParameters(exit)[0]!.value,
+				value: inspectCoreBlockParameters(builder, exit)[0]!.value,
 			});
 			return { function: builder.finish(entry).function, counter };
 		};
@@ -266,7 +272,7 @@ describe("Core control-flow analyses and passes", () => {
 			const left = builder.createBlock();
 			const right = builder.createBlock();
 			const join = builder.createBlock([{ representation: "f64" }]);
-			const condition = builder.blockParameters(entry)[0]!.value;
+			const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 			builder.setTerminator(entry, {
 				kind: "branch",
 				condition,
@@ -289,7 +295,7 @@ describe("Core control-flow analyses and passes", () => {
 				kind: "jump",
 				edge: { block: join, arguments: [rightValue!] },
 			});
-			const dynamic = builder.blockParameters(join)[0]!.value;
+			const dynamic = inspectCoreBlockParameters(builder, join)[0]!.value;
 			const constant =
 				constantValue === undefined
 					? dynamic
@@ -346,7 +352,7 @@ describe("Core control-flow analyses and passes", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const join = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition,
@@ -407,7 +413,7 @@ describe("Core control-flow analyses and passes", () => {
 		const header = builder.createBlock();
 		const body = builder.createBlock();
 		const exit = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: header, arguments: [] },
@@ -455,7 +461,7 @@ describe("Core control-flow analyses and passes", () => {
 		const header = builder.createBlock();
 		const body = builder.createBlock();
 		const exit = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: header, arguments: [] },
@@ -504,9 +510,10 @@ describe("Core control-flow analyses and passes", () => {
 			{ representation: "boolean" },
 			{ representation: "boolean" },
 		]);
-		const [path, iterate, latchCondition] = builder
-			.blockParameters(entry)
-			.map(({ value }) => value);
+		const [path, iterate, latchCondition] = inspectCoreBlockParameters(
+			builder,
+			entry,
+		).map(({ value }) => value);
 		const bypass = builder.createBlock();
 		const header = builder.createBlock();
 		const body = builder.createBlock();
@@ -560,7 +567,7 @@ describe("Core control-flow analyses and passes", () => {
 		const header = builder.createBlock();
 		const body = builder.createBlock();
 		const exit = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: header, arguments: [] },
@@ -612,7 +619,7 @@ describe("Core control-flow analyses and passes", () => {
 		const header = builder.createBlock();
 		const body = builder.createBlock();
 		const exit = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [array] = builder.appendInstruction(entry, "createArray", [], {
 			attributes: { length: 3 },
 		});
@@ -675,9 +682,10 @@ describe("Core control-flow analyses and passes", () => {
 		const right = builder.createBlock();
 		const merge = builder.createBlock();
 		const fallback = builder.createBlock();
-		const [first, second, condition, guardCondition] = builder
-			.blockParameters(entry)
-			.map(({ value }) => value);
+		const [first, second, condition, guardCondition] = inspectCoreBlockParameters(
+			builder,
+			entry,
+		).map(({ value }) => value);
 		builder.setTerminator(entry, {
 			kind: "branch",
 			condition: condition!,
@@ -708,7 +716,7 @@ describe("Core control-flow analyses and passes", () => {
 			{ mode: "full", verification: "per-pass", instrumentation: "full" },
 		);
 		const fn = optimized.compilation.program.function(finished.function);
-		expect(fn.blockParameters(merge)).toHaveLength(1);
+		expect(inspectCoreBlockParameters(fn, merge)).toHaveLength(1);
 		expect([...fn.bodyInstructionIds(merge)]).toEqual([]);
 		expect(
 			optimized.report.passes.find(
@@ -724,7 +732,7 @@ describe("Core control-flow analyses and passes", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const merge = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [operand] = builder.appendInstruction(entry, "createF64", [], {
 			attributes: { value: 0.5 },
 			outputRepresentations: ["f64"],
@@ -779,7 +787,7 @@ describe("Core control-flow analyses and passes", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const merge = builder.createBlock();
-		const condition = builder.blockParameters(entry)[0]!.value;
+		const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [operand] = builder.appendInstruction(entry, "createF64", [], {
 			attributes: { value: 0.5 },
 			outputRepresentations: ["f64"],
@@ -831,7 +839,9 @@ describe("Core control-flow analyses and passes", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const [input, condition] = builder.blockParameters(entry).map(({ value }) => value);
+		const [input, condition] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		const body = builder.createBlock();
 		const exit = builder.createBlock();
 		const [numeric] = builder.appendInstruction(entry, "move", [input!], {
@@ -868,10 +878,10 @@ describe("Core control-flow analyses and passes", () => {
 				fn.instructionOpcodeName(instruction) === "mathUnaryNumber",
 		);
 		expect(numbered).toHaveLength(1);
-		const result = fn.instructionResults(numbered[0]!)[0];
+		const result = inspectCoreInstructionResults(fn, numbered[0]!)[0];
 		expect(result).toBeDefined();
 		for (const block of fn.blockIds()) {
-			const terminator = fn.terminatorPayload(fn.blockTerminator(block));
+			const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(block));
 			if (terminator.kind === "return") expect(terminator.value).toBe(result);
 		}
 	});
@@ -883,9 +893,9 @@ describe("Core control-flow analyses and passes", () => {
 			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
-		const [continueLoop, chooseLatch] = builder
-			.blockParameters(entry)
-			.map(({ value }) => value);
+		const [continueLoop, chooseLatch] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
 		const header = builder.createBlock();
 		const body = builder.createBlock();
 		const leftLatch = builder.createBlock();
@@ -952,7 +962,7 @@ describe("Core control-flow analyses and passes", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(entry)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
 		const [copy] = builder.appendInstruction(entry, "move", [parameter]);
 		const target = builder.createBlock([{ representation: "boxed" }]);
 		builder.setTerminator(entry, {
@@ -961,7 +971,7 @@ describe("Core control-flow analyses and passes", () => {
 		});
 		builder.setTerminator(target, {
 			kind: "return",
-			value: builder.blockParameters(target)[0]!.value,
+			value: inspectCoreBlockParameters(builder, target)[0]!.value,
 		});
 		const finished = builder.finish(entry);
 		const report = new CoreOptimizationReportBuilder(program);
@@ -976,7 +986,10 @@ describe("Core control-flow analyses and passes", () => {
 				function: finished.function,
 			}),
 		).toBe(first);
-		const definition = program.function(finished.function).valueDefinition(copy!);
+		const definition = inspectCoreValueDefinition(
+			program.function(finished.function),
+			copy!,
+		);
 		if (definition.kind !== "instruction") throw new Error("Expected move result");
 		const editor = CoreEditor.open(program, finished.function);
 		editor.replaceValueUses(copy!, parameter);

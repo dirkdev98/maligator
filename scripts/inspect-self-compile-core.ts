@@ -153,7 +153,7 @@ try {
 			function: functionId,
 			name: functionName(compilation, functionId),
 			sourcePath: path.relative(sourceRoot, fn.metadata.sourcePath),
-			parameters: fn.parameters.length,
+			parameters: fn.parameterCount,
 			blocks: [...fn.blockIds()].length,
 			instructions: [...fn.instructionIds()].length,
 			versions: fn.versions,

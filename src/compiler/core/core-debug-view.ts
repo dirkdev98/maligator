@@ -11,6 +11,7 @@ import type {
 } from "./core-ir.ts";
 import type {
 	CoreBlockLayout,
+	CoreEffectRefinementLayout,
 	CoreFunctionStore,
 	CoreInstructionLayout,
 	CoreUse,
@@ -219,6 +220,13 @@ export function coreInstructionLayout(
 		sourcePosition: fn.kernel.instructionSourcePosition(id),
 		effectRefinementRef: fn.kernel.instructionEffectRefinementRef(id),
 	});
+}
+
+export function coreEffectRefinementLayout(
+	fn: CoreFunctionStore,
+	refinement: number,
+): CoreEffectRefinementLayout {
+	return Object.freeze({ live: fn.effectRefinementLive(refinement) });
 }
 
 export function coreValueLayout(fn: CoreFunctionStore, value: number): CoreValueLayout {

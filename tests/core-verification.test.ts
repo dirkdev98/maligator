@@ -16,6 +16,10 @@ import {
 import { CORE_NO_EFFECTS, coreFactId } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import {
+	inspectCoreBlockParameters,
+	inspectCoreInstructionResults,
+} from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 function validBranchProgram() {
@@ -65,7 +69,7 @@ describe("Core verification", () => {
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock();
 		const target = builder.createBlock([{ representation: "boxed" }]);
-		const parameter = builder.blockParameters(target)[0]!.value;
+		const parameter = inspectCoreBlockParameters(builder, target)[0]!.value;
 		builder.setTerminator(entry, {
 			kind: "jump",
 			edge: { block: target, arguments: [] },
@@ -226,7 +230,10 @@ describe("Core verification", () => {
 		const request = { scope: "function", function: fn.id } as const;
 		const first = analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request);
 		const representationEditor = CoreEditor.open(program, fn.id);
-		const condition = fn.instructionResults([...fn.bodyInstructionIds(entry)][0]!)[0]!;
+		const condition = inspectCoreInstructionResults(
+			fn,
+			[...fn.bodyInstructionIds(entry)][0]!,
+		)[0]!;
 		representationEditor.setValueRepresentation(condition, "boolean");
 		const representationChanges = representationEditor.commit();
 		verifyCoreChangeSet(program, representationChanges, { stage: "canonicalize" });
