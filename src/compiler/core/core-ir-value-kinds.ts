@@ -27,7 +27,10 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import { CORE_PROGRAM_FLOW_RETURN_KIND } from "./core-program-flow.ts";
+import {
+	CORE_PROGRAM_FLOW_RETURN_KIND,
+	CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER,
+} from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
@@ -934,15 +937,14 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 		compute({ program, request, previous, get, programFlow }) {
 			if (request.scope !== "program") throw new Error("Expected program analysis");
 			const summaries = get(CORE_PROGRAM_SUMMARIES_ANALYSIS, request);
+			const flow = programFlow.refresh(
+				CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER,
+				CORE_PROGRAM_FLOW_RETURN_KIND,
+			);
 			const dirtyFunctions = new Array<CoreFunctionId>();
 			if (previous !== undefined) {
-				for (let index = 0; index < programFlow.dirtyFunctionCount; index++) {
-					const functionId = programFlow.dirtyFunctionAt(index);
-					if (
-						(programFlow.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_RETURN_KIND) !== 0
-					) {
-						dirtyFunctions.push(functionId);
-					}
+				for (let index = 0; index < flow.dirtyFunctionCount; index++) {
+					dirtyFunctions.push(flow.dirtyFunctionAt(index));
 				}
 			}
 			return solveCoreProgramValueKinds(

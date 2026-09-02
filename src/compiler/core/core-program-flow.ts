@@ -26,6 +26,11 @@ export const CORE_PROGRAM_FLOW_RETURN_KIND = 1 << 5;
 export const CORE_PROGRAM_FLOW_RETURN_REPRESENTATION = 1 << 6;
 export const CORE_PROGRAM_FLOW_REACHABILITY = 1 << 7;
 
+export const CORE_PROGRAM_FLOW_TARGET_CONSUMER = 0;
+export const CORE_PROGRAM_FLOW_SUMMARY_CONSUMER = 1;
+export const CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER = 2;
+export const CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER = 3;
+
 export const CORE_PROGRAM_FLOW_SUMMARIES =
 	CORE_PROGRAM_FLOW_EFFECTS |
 	CORE_PROGRAM_FLOW_ESCAPE |
@@ -74,9 +79,7 @@ export function coreProgramFlowDimensionsForDomains(
 	return dimensions;
 }
 
-export class CoreProgramFlowEngine {
-	readonly #program: CoreProgram;
-	readonly #report: CoreOptimizationReportBuilder | undefined;
+export class CoreProgramFlowEpoch {
 	#cursor = 0;
 	#revision = 0;
 	#epoch = 0;
@@ -84,11 +87,6 @@ export class CoreProgramFlowEngine {
 	#domains = new Uint16Array(0);
 	#dimensions = new Uint16Array(0);
 	readonly #dirtyFunctions: Array<CoreFunctionId> = [];
-
-	constructor(program: CoreProgram, report?: CoreOptimizationReportBuilder) {
-		this.#program = program;
-		this.#report = report;
-	}
 
 	get revision(): number {
 		return this.#revision;
@@ -98,11 +96,14 @@ export class CoreProgramFlowEngine {
 		return this.#dirtyFunctions.length;
 	}
 
-	refresh(): this {
-		const revision = this.#program.programFlowRevision;
+	refresh(
+		program: CoreProgram,
+		dimensionMask: CoreProgramFlowDimensionMask,
+		report?: CoreOptimizationReportBuilder,
+	): this {
+		const revision = program.programFlowRevision;
 		if (revision === this.#revision) return this;
-		this.#report?.increment("programFlowJournalEntries", revision - this.#cursor);
-		this.#ensureCapacity(this.#program.functionCapacity);
+		this.#ensureCapacity(program.functionCapacity);
 		this.#epoch++;
 		if (this.#epoch === 0xffff_ffff) {
 			this.#membership.fill(0);
@@ -110,8 +111,10 @@ export class CoreProgramFlowEngine {
 		}
 		this.#dirtyFunctions.length = 0;
 		for (let cursor = this.#cursor; cursor < revision; cursor++) {
-			const functionId = this.#program.programFlowFunctionAt(cursor);
-			const domains = this.#program.programFlowDomainMaskAt(cursor);
+			const functionId = program.programFlowFunctionAt(cursor);
+			const domains = program.programFlowDomainMaskAt(cursor);
+			const dimensions = coreProgramFlowDimensionsForDomains(domains);
+			if ((dimensions & dimensionMask) === 0) continue;
 			if (this.#membership[functionId] !== this.#epoch) {
 				this.#membership[functionId] = this.#epoch;
 				this.#domains[functionId] = 0;
@@ -119,27 +122,11 @@ export class CoreProgramFlowEngine {
 				this.#dirtyFunctions.push(functionId);
 			}
 			this.#domains[functionId] = this.#domains[functionId]! | domains;
-			this.#dimensions[functionId] =
-				this.#dimensions[functionId]! | coreProgramFlowDimensionsForDomains(domains);
+			this.#dimensions[functionId] = this.#dimensions[functionId]! | dimensions;
 		}
 		this.#cursor = revision;
 		this.#revision = revision;
-		this.#report?.increment("programFlowDirtyFunctions", this.#dirtyFunctions.length);
-		for (const functionId of this.#dirtyFunctions) {
-			const dimensions = this.#dimensions[functionId]!;
-			if ((dimensions & CORE_PROGRAM_FLOW_TARGETS) !== 0) {
-				this.#report?.increment("programFlowTargetWakeups");
-			}
-			if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) !== 0) {
-				this.#report?.increment("programFlowSummaryWakeups");
-			}
-			if ((dimensions & CORE_PROGRAM_FLOW_RETURN_KIND) !== 0) {
-				this.#report?.increment("programFlowValueKindWakeups");
-			}
-			if ((dimensions & CORE_PROGRAM_FLOW_REACHABILITY) !== 0) {
-				this.#report?.increment("programFlowReachabilityWakeups");
-			}
-		}
+		report?.increment("programFlowDirtyFunctions", this.#dirtyFunctions.length);
 		return this;
 	}
 
@@ -170,5 +157,43 @@ export class CoreProgramFlowEngine {
 		const dimensions = new Uint16Array(capacity);
 		dimensions.set(this.#dimensions);
 		this.#dimensions = dimensions;
+	}
+}
+
+export class CoreProgramFlowEngine {
+	readonly #program: CoreProgram;
+	readonly #report: CoreOptimizationReportBuilder | undefined;
+	readonly #consumers: Array<CoreProgramFlowEpoch | undefined> = [];
+	#reportedRevision = 0;
+
+	constructor(program: CoreProgram, report?: CoreOptimizationReportBuilder) {
+		this.#program = program;
+		this.#report = report;
+	}
+
+	refresh(
+		consumer: number,
+		dimensions: CoreProgramFlowDimensionMask,
+	): CoreProgramFlowEpoch {
+		const revision = this.#program.programFlowRevision;
+		this.#report?.increment(
+			"programFlowJournalEntries",
+			revision - this.#reportedRevision,
+		);
+		this.#reportedRevision = revision;
+		const epoch = this.#consumers[consumer] ?? new CoreProgramFlowEpoch();
+		this.#consumers[consumer] = epoch;
+		epoch.refresh(this.#program, dimensions, this.#report);
+		const count = epoch.dirtyFunctionCount;
+		if (consumer === CORE_PROGRAM_FLOW_TARGET_CONSUMER) {
+			this.#report?.increment("programFlowTargetWakeups", count);
+		} else if (consumer === CORE_PROGRAM_FLOW_SUMMARY_CONSUMER) {
+			this.#report?.increment("programFlowSummaryWakeups", count);
+		} else if (consumer === CORE_PROGRAM_FLOW_VALUE_KIND_CONSUMER) {
+			this.#report?.increment("programFlowValueKindWakeups", count);
+		} else if (consumer === CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER) {
+			this.#report?.increment("programFlowReachabilityWakeups", count);
+		}
+		return epoch;
 	}
 }

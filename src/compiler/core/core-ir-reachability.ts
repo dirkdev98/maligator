@@ -4,7 +4,10 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CALL_GRAPH_ANALYSIS } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
-import { CORE_PROGRAM_FLOW_REACHABILITY } from "./core-program-flow.ts";
+import {
+	CORE_PROGRAM_FLOW_REACHABILITY,
+	CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER,
+} from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreFunctionReachabilityReason =
@@ -457,16 +460,14 @@ export const CORE_FUNCTION_REACHABILITY_ANALYSIS: CoreAnalysisDefinition<CoreFun
 				throw new Error("Expected program analysis request");
 			}
 			const targets = get(CORE_CALL_GRAPH_ANALYSIS, request);
+			const flow = programFlow.refresh(
+				CORE_PROGRAM_FLOW_REACHABILITY_CONSUMER,
+				CORE_PROGRAM_FLOW_REACHABILITY,
+			);
 			const dirtyFunctions = new Array<CoreFunctionId>();
 			if (previous !== undefined) {
-				for (let index = 0; index < programFlow.dirtyFunctionCount; index++) {
-					const functionId = programFlow.dirtyFunctionAt(index);
-					if (
-						(programFlow.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_REACHABILITY) !==
-						0
-					) {
-						dirtyFunctions.push(functionId);
-					}
+				for (let index = 0; index < flow.dirtyFunctionCount; index++) {
+					dirtyFunctions.push(flow.dirtyFunctionAt(index));
 				}
 			}
 			return analyzeCoreFunctionReachability(

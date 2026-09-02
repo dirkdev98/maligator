@@ -122,7 +122,7 @@ export class CoreAnalysisManager {
 				program: this.#program,
 				context: this.#context,
 				request,
-				programFlow: this.#programFlow.refresh(),
+				programFlow: this.#programFlow,
 				get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
 				...(cached === undefined ? {} : { previous: cached.value }),
 			});

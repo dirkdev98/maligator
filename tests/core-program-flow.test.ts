@@ -3,6 +3,8 @@ import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
 	CORE_PROGRAM_FLOW_EFFECTS,
 	CORE_PROGRAM_FLOW_RETURN_KIND,
+	CORE_PROGRAM_FLOW_TARGET_CONSUMER,
+	CORE_PROGRAM_FLOW_TARGETS,
 	CoreProgramFlowEngine,
 	coreProgramFlowDimensionsForDomains,
 } from "../src/compiler/core/core-program-flow.ts";
@@ -19,7 +21,11 @@ describe("Core program flow", () => {
 		const first = appendLeaf(program);
 		appendLeaf(program);
 		const report = new CoreOptimizationReportBuilder(program, "counters");
-		const flow = new CoreProgramFlowEngine(program, report).refresh();
+		const engine = new CoreProgramFlowEngine(program, report);
+		const flow = engine.refresh(
+			CORE_PROGRAM_FLOW_TARGET_CONSUMER,
+			CORE_PROGRAM_FLOW_TARGETS,
+		);
 
 		expect(flow.dirtyFunctionCount).toBe(2);
 		const firstEdit = CoreEditor.open(program, first.function);
@@ -28,7 +34,7 @@ describe("Core program flow", () => {
 		const secondEdit = CoreEditor.open(program, first.function);
 		secondEdit.configureFunction({ isGenerator: true });
 		secondEdit.commit();
-		flow.refresh();
+		engine.refresh(CORE_PROGRAM_FLOW_TARGET_CONSUMER, CORE_PROGRAM_FLOW_TARGETS);
 
 		expect(flow.dirtyFunctionCount).toBe(1);
 		expect(flow.dirtyFunctionAt(0)).toBe(first.function);
@@ -38,9 +44,9 @@ describe("Core program flow", () => {
 			programFlowJournalEntries: 4,
 			programFlowDirtyFunctions: 3,
 			programFlowTargetWakeups: 3,
-			programFlowSummaryWakeups: 3,
-			programFlowValueKindWakeups: 3,
-			programFlowReachabilityWakeups: 3,
+			programFlowSummaryWakeups: 0,
+			programFlowValueKindWakeups: 0,
+			programFlowReachabilityWakeups: 0,
 		});
 	});
 

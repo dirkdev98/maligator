@@ -40,7 +40,10 @@ import {
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreFunctionId, CoreRepresentation, CoreValueId } from "./core-ir.ts";
-import { CORE_PROGRAM_FLOW_SUMMARIES } from "./core-program-flow.ts";
+import {
+	CORE_PROGRAM_FLOW_SUMMARIES,
+	CORE_PROGRAM_FLOW_SUMMARY_CONSUMER,
+} from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "call-effect-summary";
@@ -1223,16 +1226,14 @@ export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgram
 			if (request.scope !== "program")
 				throw new Error("Expected program analysis request");
 			const targets = get(CORE_CALL_GRAPH_ANALYSIS, request);
+			const flow = programFlow.refresh(
+				CORE_PROGRAM_FLOW_SUMMARY_CONSUMER,
+				CORE_PROGRAM_FLOW_SUMMARIES,
+			);
 			const dirtyFunctions = new Array<CoreFunctionId>();
 			if (previous !== undefined) {
-				for (let index = 0; index < programFlow.dirtyFunctionCount; index++) {
-					const functionId = programFlow.dirtyFunctionAt(index);
-					if (
-						(programFlow.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_SUMMARIES) !==
-						0
-					) {
-						dirtyFunctions.push(functionId);
-					}
+				for (let index = 0; index < flow.dirtyFunctionCount; index++) {
+					dirtyFunctions.push(flow.dirtyFunctionAt(index));
 				}
 			}
 			return analyzeProgramSummaries(

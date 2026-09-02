@@ -33,7 +33,8 @@ it("uses program-flow dirtiness without serialized version or target keys", () =
 	);
 
 	expect(source).not.toMatch(/versionKeys|programValueKindVersionKey|programValueKindTargetsKey/);
-	expect(source).toMatch(/programFlow\.dirtyFunctionAt/);
+	expect(source).toMatch(/programFlow\.refresh/);
+	expect(source).toMatch(/flow\.dirtyFunctionAt/);
 });
 
 function observations(fn: CoreFunctionStore) {

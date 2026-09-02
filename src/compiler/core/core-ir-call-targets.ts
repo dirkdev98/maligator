@@ -18,7 +18,10 @@ import type {
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
-import { CORE_PROGRAM_FLOW_TARGETS } from "./core-program-flow.ts";
+import {
+	CORE_PROGRAM_FLOW_TARGET_CONSUMER,
+	CORE_PROGRAM_FLOW_TARGETS,
+} from "./core-program-flow.ts";
 
 export const CORE_CALLEE_TARGET_CAP = 4;
 
@@ -971,13 +974,14 @@ export const CORE_CALL_GRAPH_ANALYSIS: CoreAnalysisDefinition<CoreCallGraphIndex
 	},
 	compute({ program, context, request, previous, get, programFlow }) {
 		if (request.scope !== "program") throw new Error("Expected program analysis request");
+		const flow = programFlow.refresh(
+			CORE_PROGRAM_FLOW_TARGET_CONSUMER,
+			CORE_PROGRAM_FLOW_TARGETS,
+		);
 		const dirtyFunctions = new Array<CoreFunctionId>();
 		if (previous !== undefined) {
-			for (let index = 0; index < programFlow.dirtyFunctionCount; index++) {
-				const functionId = programFlow.dirtyFunctionAt(index);
-				if ((programFlow.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_TARGETS) !== 0) {
-					dirtyFunctions.push(functionId);
-				}
+			for (let index = 0; index < flow.dirtyFunctionCount; index++) {
+				dirtyFunctions.push(flow.dirtyFunctionAt(index));
 			}
 		}
 		return analyzeCoreCallGraph(

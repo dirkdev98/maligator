@@ -129,6 +129,7 @@
 				"src/compiler/core/core-optimization-report.ts",
 				"src/compiler/core/core-pass-manager.ts",
 				"src/compiler/core/core-pass.ts",
+				"src/compiler/core/core-program-flow.ts",
 				"src/compiler/core/core-proof-passes.ts",
 				"src/compiler/core/core-store.ts",
 				"src/compiler/core/core-transform-candidates.ts",
