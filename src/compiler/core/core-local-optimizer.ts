@@ -162,6 +162,27 @@ const CONTROL_FOLDING_RULE: CoreLocalBlockRule = {
 	},
 };
 
+const VALUE_NUMBERING_RULE: CoreLocalBlockRule = {
+	name: "local-value-numbering",
+	run(optimizer, block) {
+		return optimizer.eliminateLocalDuplicates(block);
+	},
+};
+
+function stableAttribute(value: CoreAttributeValue): string {
+	if (Array.isArray(value)) return `[${value.map(stableAttribute).join(",")}]`;
+	if (value !== null && typeof value === "object") {
+		return `{${Object.entries(value)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, entry]) => `${key}:${stableAttribute(entry)}`)
+			.join(",")}}`;
+	}
+	if (typeof value === "number") {
+		return `number:${Object.is(value, -0) ? "-0" : String(value)}`;
+	}
+	return JSON.stringify(value);
+}
+
 type LocalConstant =
 	| { readonly kind: "undefined" }
 	| { readonly kind: "null" }
@@ -237,7 +258,7 @@ export class CoreLocalOptimizer {
 			},
 			...(options.additionalRules ?? []),
 		];
-		this.#blockRules = [CONTROL_FOLDING_RULE];
+		this.#blockRules = [CONTROL_FOLDING_RULE, VALUE_NUMBERING_RULE];
 		if (this.#rules.length > 31) {
 			throw new Error("Core local optimizer supports at most 31 opcode rules");
 		}
@@ -526,6 +547,66 @@ export class CoreLocalOptimizer {
 		return true;
 	}
 
+	eliminateLocalDuplicates(block: CoreBlockId): boolean {
+		if (this.#fn.kernel.blockLive(block) === 0) return false;
+		const available = new Map<string, CoreValueId>();
+		const replacements: Array<{
+			readonly instruction: CoreInstructionId;
+			readonly replacement: CoreValueId;
+		}> = [];
+		for (const instruction of this.#fn.bodyInstructionIds(block)) {
+			const descriptor = this.#program.registry.byId(
+				this.#fn.instructionOpcode(instruction),
+			);
+			const effects = descriptor.effects;
+			if (
+				this.#fn.kernel.instructionResultCount(instruction) !== 1 ||
+				!descriptor.discardable ||
+				effects.reads.length > 0 ||
+				effects.writes.length > 0 ||
+				effects.mayThrow ||
+				effects.maySuspend ||
+				effects.mayGc ||
+				effects.callsUserCode
+			) {
+				continue;
+			}
+			const operandStart = this.#fn.kernel.instructionOperandStart(instruction);
+			const operandCount = this.#fn.kernel.instructionOperandCount(instruction);
+			let operandKey = "";
+			for (let index = 0; index < operandCount; index++) {
+				if (index > 0) operandKey += ",";
+				operandKey += this.#fn.kernel.operandAt(operandStart + index);
+			}
+			const key = `${descriptor.id}|${operandKey}|${stableAttribute(
+				this.#fn.instructionAttributes(instruction),
+			)}`;
+			const result = this.#fn.kernel.resultAt(
+				this.#fn.kernel.instructionResultStart(instruction),
+			);
+			const existing = available.get(key);
+			if (existing === undefined) available.set(key, result);
+			else replacements.push({ instruction, replacement: existing });
+		}
+		if (replacements.length === 0) return false;
+		const editor = this.#edit();
+		for (const { instruction, replacement } of replacements) {
+			if (this.#fn.kernel.instructionLive(instruction) === 0) continue;
+			const result = this.#fn.kernel.resultAt(
+				this.#fn.kernel.instructionResultStart(instruction),
+			);
+			const operandStart = this.#fn.kernel.instructionOperandStart(instruction);
+			const operandCount = this.#fn.kernel.instructionOperandCount(instruction);
+			this.#wakeValueUsers(result);
+			editor.replaceValueUses(result, replacement);
+			for (let index = 0; index < operandCount; index++) {
+				this.#wakeValueDefinition(this.#fn.kernel.operandAt(operandStart + index));
+			}
+			editor.removeInstruction(instruction);
+		}
+		return true;
+	}
+
 	#drainInstruction(instruction: CoreInstructionId): void {
 		this.#instructionQueuePops++;
 		if (this.#fn.kernel.instructionLive(instruction) === 0) return;
@@ -618,9 +699,8 @@ export class CoreLocalOptimizer {
 		) {
 			if (this.#fn.kernel.useLive(use) !== 0) {
 				const instruction = this.#fn.kernel.useInstruction(use);
-				if (this.#fn.kernel.instructionOpcode(instruction) < 0) {
-					this.#enqueueBlock(this.#fn.instructionBlock(instruction));
-				} else {
+				this.#enqueueBlock(this.#fn.instructionBlock(instruction));
+				if (this.#fn.kernel.instructionOpcode(instruction) >= 0) {
 					this.#enqueueInstruction(instruction);
 				}
 			}
@@ -644,10 +724,7 @@ export class CoreLocalOptimizer {
 
 	#enqueueBlock(block: CoreBlockId): void {
 		if (this.#fn.kernel.blockLive(block) === 0) return;
-		const kind = this.#fn.instructionKind(this.#fn.blockTerminator(block));
-		if (kind === "branch" || kind === "switch" || kind === "guard") {
-			this.#blockQueue.push(block);
-		}
+		this.#blockQueue.push(block);
 	}
 
 	#submit(changes: CoreChangeSet): void {
@@ -656,6 +733,9 @@ export class CoreLocalOptimizer {
 		}
 		for (const instruction of changes.instructions) {
 			this.#enqueueInstruction(instruction);
+			if (this.#fn.kernel.instructionLive(instruction) !== 0) {
+				this.#enqueueBlock(this.#fn.instructionBlock(instruction));
+			}
 		}
 		for (const instruction of changes.calls) this.#enqueueInstruction(instruction);
 		for (const value of changes.values) {

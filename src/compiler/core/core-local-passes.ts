@@ -1401,76 +1401,6 @@ const foldRedundantTdzChecks: CorePass = {
 	},
 };
 
-function stableAttribute(value: CoreAttributeValue): string {
-	if (Array.isArray(value)) return `[${value.map(stableAttribute).join(",")}]`;
-	if (value !== null && typeof value === "object") {
-		return `{${Object.entries(value)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([key, entry]) => `${key}:${stableAttribute(entry)}`)
-			.join(",")}}`;
-	}
-	if (typeof value === "number") {
-		return `number:${Object.is(value, -0) ? "-0" : String(value)}`;
-	}
-	return JSON.stringify(value);
-}
-
-const localValueNumbering: CorePass = {
-	name: "local-value-numbering",
-	stage: "canonicalize",
-	scope: "function",
-	requiredAnalyses: [],
-	wakesOn: ["body"],
-	preserves: [],
-	changes: LOCAL_CHANGES,
-	budget: LOCAL_BUDGET,
-	run({ program, item }) {
-		if (item.scope !== "function") return undefined;
-		const fn = program.function(item.function);
-		const replacements = new Map<CoreInstructionId, CoreValueId>();
-		for (const block of fn.blockIds()) {
-			const available = new Map<string, CoreValueId>();
-			for (const instruction of fn.bodyInstructionIds(block)) {
-				const descriptor = program.registry.byId(fn.instructionOpcode(instruction));
-				const effects = descriptor.effects;
-				if (
-					fn.kernel.instructionResultCount(instruction) !== 1 ||
-					!descriptor.discardable ||
-					effects.reads.length > 0 ||
-					effects.writes.length > 0 ||
-					effects.mayThrow ||
-					effects.maySuspend ||
-					effects.mayGc ||
-					effects.callsUserCode
-				)
-					continue;
-				const operandStart = fn.kernel.instructionOperandStart(instruction);
-				const operandCount = fn.kernel.instructionOperandCount(instruction);
-				let operandKey = "";
-				for (let index = 0; index < operandCount; index++) {
-					if (index > 0) operandKey += ",";
-					operandKey += fn.kernel.operandAt(operandStart + index);
-				}
-				const key = `${descriptor.opcode}|${operandKey}|${stableAttribute(fn.instructionAttributes(instruction))}`;
-				const existing = available.get(key);
-				if (existing === undefined)
-					available.set(key, instructionResult(fn, instruction, 0)!);
-				else replacements.set(instruction, existing);
-			}
-		}
-		if (replacements.size === 0) return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		for (const [instruction, replacement] of replacements) {
-			if (!fn.isInstructionLive(instruction)) continue;
-			const result = instructionResult(fn, instruction, 0);
-			if (result === undefined) continue;
-			editor.replaceValueUses(result, replacement);
-			editor.removeInstruction(instruction);
-		}
-		return editor.commit();
-	},
-};
-
 const lowerLocalExplicitThrows: CorePass = {
 	name: "local-explicit-throw-lowering",
 	stage: "canonicalize",
@@ -2129,7 +2059,6 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,
-	localValueNumbering,
 	canonicalizeBlockParameters,
 	simplifyBlockParameters,
 	eliminateForwardingBlocks,

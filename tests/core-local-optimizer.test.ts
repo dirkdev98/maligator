@@ -136,8 +136,49 @@ describe("CoreLocalOptimizer", () => {
 			edge: { block: taken, arguments: [] },
 		});
 		expect(fn.isInstructionLive(conditionInstruction)).toBe(false);
-		expect(result.statistics.blockQueuePops).toBe(1);
+		expect(result.statistics.blockQueuePops).toBe(3);
 		expect(result.statistics.editSessions).toBe(1);
+	});
+
+	it("eliminates equivalent local expressions before their consumer is drained", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "f64" }]);
+		const input = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [first] = builder.appendInstruction(entry, "mathUnaryNumber", [input], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		const [second] = builder.appendInstruction(entry, "mathUnaryNumber", [input], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		const [combined] = builder.appendInstruction(
+			entry,
+			"mathBinaryNumber",
+			[first!, second!],
+			{
+				attributes: { operation: "Math.max" },
+				outputRepresentations: ["f64"],
+			},
+		);
+		builder.setTerminator(entry, { kind: "return", value: combined! });
+		const fn = program.function(builder.finish(entry).function);
+		const instructions = [...fn.bodyInstructionIds(entry)];
+
+		const optimized = new CoreLocalOptimizer(program, fn.id).run();
+
+		expect(fn.isInstructionLive(instructions[1]!)).toBe(false);
+		const comparisonOperands = Array.from(
+			{ length: fn.kernel.instructionOperandCount(instructions[2]!) },
+			(_, index) =>
+				fn.kernel.operandAt(
+					fn.kernel.instructionOperandStart(instructions[2]!) + index,
+				),
+		);
+		expect(comparisonOperands).toEqual([first, first]);
+		expect(optimized.statistics.editSessions).toBe(1);
+		expect(optimized.statistics.rulesApplied).toBeGreaterThanOrEqual(1);
 	});
 
 	it("folds a constant producer-consumer chain before folding its branch", () => {
