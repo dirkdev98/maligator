@@ -372,11 +372,8 @@ describe("Core store", () => {
 			{ instruction, operand: 3 },
 			{ instruction, operand: 1 },
 		]);
-		expect(redirectedLayout.operandStart).toBeGreaterThan(initialLayout.operandStart);
-		for (let index = 0; index < initialLayout.operandCount; index++) {
-			const oldOperand = fn.operandRecord(initialLayout.operandStart + index);
-			expect(fn.useLayout(oldOperand.use).live).toBe(false);
-		}
+		expect(redirectedLayout.operandStart).toBe(initialLayout.operandStart);
+		expect(redirectedLayout.operandCount).toBe(initialLayout.operandCount);
 		expect(redirectChanges.edges).toEqual([
 			{ kind: "control-flow", source: entry, target: expected.consequent.block },
 			{ kind: "control-flow", source: entry, target: expected.alternate.block },
@@ -546,6 +543,49 @@ describe("Core store", () => {
 		expect([...fn.uses(parameter)]).toEqual([{ instruction: identity, operand: 0 }]);
 		expect(fn.valueUseCount(constant)).toBe(0);
 		expect(fn.valueUseCount(parameter)).toBe(1);
+	});
+
+	it("keeps scalar traversal and intrusive use storage bounded across rewrites", () => {
+		const { program, fn, entry, constant, parameter } = oneFunction();
+		const identity = [...fn.bodyInstructionIds(entry)][1]!;
+		const operandStart = fn.kernel.instructionOperandStart(identity);
+		const operandCapacity = fn.operandCapacity;
+		const useCapacity = fn.useCapacity;
+
+		for (let iteration = 0; iteration < 100; iteration++) {
+			const editor = CoreEditor.open(program, fn.id);
+			editor.replaceOperands(identity, [iteration % 2 === 0 ? parameter : constant]);
+			editor.commit();
+			verifyCoreProgram(program);
+		}
+
+		expect(fn.kernel.blockFirstInstruction(entry)).toBe(0);
+		expect(fn.kernel.instructionNext(0 as never)).toBe(identity);
+		expect(fn.kernel.instructionOperandStart(identity)).toBe(operandStart);
+		expect(fn.kernel.instructionOperandCount(identity)).toBe(1);
+		expect(fn.kernel.operandAt(operandStart)).toBe(constant);
+		expect(fn.operandCapacity).toBe(operandCapacity);
+		expect(fn.useCapacity).toBe(useCapacity);
+
+		for (const value of fn.valueIds()) {
+			let uses = 0;
+			let previous = -1;
+			for (
+				let use = fn.kernel.valueFirstUse(value);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				expect(fn.kernel.useLive(use)).toBe(1);
+				expect(fn.kernel.useValue(use)).toBe(value);
+				expect(fn.kernel.usePrevious(use)).toBe(previous);
+				previous = use;
+				uses++;
+			}
+			expect(uses).toBe(fn.kernel.valueUseCount(value));
+		}
+		fn.configureUseTraversalStatistics(true);
+		for (const value of fn.valueIds()) Array.from(fn.uses(value));
+		expect(fn.useTraversalStatistics().deadSkips).toBe(0);
 	});
 
 	it("publishes old and new operands plus retained results for in-place rewrites", () => {

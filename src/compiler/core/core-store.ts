@@ -1,4 +1,5 @@
 import { CoreEditor } from "./core-editor.ts";
+import { CoreFunctionKernel } from "./core-function-kernel.ts";
 import {
 	coreBlockId,
 	coreFactId,
@@ -142,6 +143,7 @@ export interface CoreUseLayout {
 	readonly value: CoreValueId;
 	readonly instruction: CoreInstructionId;
 	readonly operand: number;
+	readonly previous: number;
 	readonly next: number;
 }
 
@@ -555,6 +557,7 @@ export class CoreFunctionStore {
 	readonly #blockHandler: Array<CoreExceptionHandler | undefined> = [];
 	readonly #blockParameterValues: Array<CoreValueId> = [];
 	readonly #blockParameterRoles: Array<"value" | "exception"> = [];
+	readonly #blockParameterFreeBySize: Array<Array<number> | undefined> = [];
 
 	readonly #instructionLive: Array<number> = [];
 	readonly #instructionOpcode: Array<number> = [];
@@ -572,6 +575,7 @@ export class CoreFunctionStore {
 	> = [];
 	readonly #operands: Array<CoreValueId> = [];
 	readonly #operandUses: Array<number> = [];
+	readonly #operandFreeBySize: Array<Array<number> | undefined> = [];
 	readonly #results: Array<CoreValueId> = [];
 
 	readonly #valueLive: Array<number> = [];
@@ -586,7 +590,9 @@ export class CoreFunctionStore {
 	readonly #useValue: Array<CoreValueId> = [];
 	readonly #useInstruction: Array<CoreInstructionId> = [];
 	readonly #useOperand: Array<number> = [];
+	readonly #usePrevious: Array<number> = [];
 	readonly #useNext: Array<number> = [];
+	readonly #freeUses: Array<number> = [];
 	#liveUseVisits = 0;
 	#deadUseSkips = 0;
 	#trackUseTraversal = false;
@@ -595,6 +601,7 @@ export class CoreFunctionStore {
 	readonly #effectRefinements: Array<CoreEffectRefinement | undefined> = [];
 	#sealedBlocks: ReadonlyArray<CoreBlockId> | undefined;
 	#sealedInstructions: ReadonlyArray<CoreInstructionId> | undefined;
+	readonly kernel: CoreFunctionKernel;
 
 	constructor(
 		mutation: CoreStoreMutation,
@@ -616,6 +623,37 @@ export class CoreFunctionStore {
 			...defaultMetadata(this.#parameterCount),
 			...options.metadata,
 			mappedArgumentSlots: [...(options.metadata?.mappedArgumentSlots ?? [])],
+		});
+		this.kernel = new CoreFunctionKernel({
+			blockLive: this.#blockLive,
+			blockFirstInstruction: this.#blockFirstInstruction,
+			blockLastInstruction: this.#blockLastInstruction,
+			blockParameterStart: this.#blockParameterStart,
+			blockParameterCount: this.#blockParameterCount,
+			blockParameterValues: this.#blockParameterValues,
+			instructionLive: this.#instructionLive,
+			instructionOpcode: this.#instructionOpcode,
+			instructionBlock: this.#instructionBlock,
+			instructionPrevious: this.#instructionPrevious,
+			instructionNext: this.#instructionNext,
+			instructionOperandStart: this.#instructionOperandStart,
+			instructionOperandCount: this.#instructionOperandCount,
+			instructionResultStart: this.#instructionResultStart,
+			instructionResultCount: this.#instructionResultCount,
+			operands: this.#operands,
+			results: this.#results,
+			valueLive: this.#valueLive,
+			valueDefinitionKind: this.#valueDefinitionKind,
+			valueDefinitionOwner: this.#valueDefinitionOwner,
+			valueDefinitionIndex: this.#valueDefinitionIndex,
+			valueFirstUse: this.#valueFirstUse,
+			valueUseCount: this.#valueUseCount,
+			useLive: this.#useLive,
+			useValue: this.#useValue,
+			useInstruction: this.#useInstruction,
+			useOperand: this.#useOperand,
+			usePrevious: this.#usePrevious,
+			useNext: this.#useNext,
 		});
 	}
 
@@ -836,6 +874,7 @@ export class CoreFunctionStore {
 			value: this.#useValue[id]!,
 			instruction: this.#useInstruction[id]!,
 			operand: this.#useOperand[id]!,
+			previous: this.#usePrevious[id]!,
 			next: this.#useNext[id]!,
 		};
 	}
@@ -1005,10 +1044,6 @@ export class CoreFunctionStore {
 	*uses(id: CoreValueId): Iterable<CoreUse> {
 		this.#requireValue(id);
 		for (let use = this.#valueFirstUse[id]!; use >= 0; use = this.#useNext[use]!) {
-			if (this.#useLive[use] !== 1) {
-				if (this.#trackUseTraversal) this.#deadUseSkips++;
-				continue;
-			}
 			if (this.#trackUseTraversal) this.#liveUseVisits++;
 			yield {
 				instruction: this.#useInstruction[use]!,
@@ -1253,11 +1288,6 @@ export class CoreFunctionStore {
 	): void {
 		this.#assertEditing(mutation);
 		this.#requireInstruction(instruction);
-		const oldStart = this.#instructionOperandStart[instruction]!;
-		const oldCount = this.#instructionOperandCount[instruction]!;
-		for (let index = 0; index < oldCount; index++) {
-			this.#deactivateUse(this.#operandUses[oldStart + index]!);
-		}
 		this.#writeOperandRange(instruction, operands);
 	}
 
@@ -1275,6 +1305,9 @@ export class CoreFunctionStore {
 		for (let index = 0; index < this.#instructionOperandCount[instruction]!; index++) {
 			this.#deactivateUse(this.#operandUses[operandStart + index]!);
 		}
+		this.#releaseOperandRange(operandStart, this.#instructionOperandCount[instruction]!);
+		this.#instructionOperandStart[instruction] = 0;
+		this.#instructionOperandCount[instruction] = 0;
 		for (const result of this.instructionResults(instruction))
 			this.#valueLive[result] = 0;
 		this.#removeEffectRefinement(instruction);
@@ -1587,39 +1620,127 @@ export class CoreFunctionStore {
 		values: ReadonlyArray<CoreValueId>,
 		roles: ReadonlyArray<"value" | "exception">,
 	): void {
-		this.#blockParameterStart[block] = this.#blockParameterValues.length;
+		const oldStart = this.#blockParameterStart[block] ?? 0;
+		const oldCount = this.#blockParameterCount[block] ?? 0;
+		let start = oldStart;
+		if (oldCount !== values.length) {
+			this.#releaseBlockParameterRange(oldStart, oldCount);
+			start = this.#allocateBlockParameterRange(values.length);
+		}
+		this.#blockParameterStart[block] = start;
 		this.#blockParameterCount[block] = values.length;
-		this.#blockParameterValues.push(...values);
-		this.#blockParameterRoles.push(...roles);
+		for (let index = 0; index < values.length; index++) {
+			this.#blockParameterValues[start + index] = values[index]!;
+			this.#blockParameterRoles[start + index] = roles[index]!;
+		}
 	}
 
 	#writeOperandRange(
 		instruction: CoreInstructionId,
 		operands: ReadonlyArray<CoreValueId>,
 	): void {
-		const start = this.#operands.length;
+		const oldStart = this.#instructionOperandStart[instruction] ?? 0;
+		const oldCount = this.#instructionOperandCount[instruction] ?? 0;
+		if (oldCount === operands.length) {
+			let unchanged = true;
+			for (const [operand, value] of operands.entries()) {
+				this.#requireValue(value);
+				if (this.#operands[oldStart + operand] !== value) unchanged = false;
+			}
+			if (unchanged) return;
+			for (let index = 0; index < oldCount; index++) {
+				this.#deactivateUse(this.#operandUses[oldStart + index]!);
+			}
+			for (const [operand, value] of operands.entries()) {
+				const index = oldStart + operand;
+				this.#operands[index] = value;
+				this.#operandUses[index] = this.#allocateUse(value, instruction, operand);
+			}
+			return;
+		}
+		for (let index = 0; index < oldCount; index++) {
+			this.#deactivateUse(this.#operandUses[oldStart + index]!);
+		}
+		this.#releaseOperandRange(oldStart, oldCount);
+		const start = this.#allocateOperandRange(operands.length);
 		this.#instructionOperandStart[instruction] = start;
 		this.#instructionOperandCount[instruction] = operands.length;
 		for (const [operand, value] of operands.entries()) {
 			this.#requireValue(value);
-			this.#operands.push(value);
-			const use = this.#useLive.length;
-			this.#useLive.push(1);
-			this.#useValue.push(value);
-			this.#useInstruction.push(instruction);
-			this.#useOperand.push(operand);
-			this.#useNext.push(this.#valueFirstUse[value]!);
-			this.#valueFirstUse[value] = use;
-			this.#valueUseCount[value] = this.#valueUseCount[value]! + 1;
-			this.#operandUses.push(use);
+			this.#operands[start + operand] = value;
+			this.#operandUses[start + operand] = this.#allocateUse(value, instruction, operand);
 		}
+	}
+
+	#allocateUse(
+		value: CoreValueId,
+		instruction: CoreInstructionId,
+		operand: number,
+	): number {
+		const use = this.#freeUses.pop() ?? this.#useLive.length;
+		const next = this.#valueFirstUse[value]!;
+		this.#useLive[use] = 1;
+		this.#useValue[use] = value;
+		this.#useInstruction[use] = instruction;
+		this.#useOperand[use] = operand;
+		this.#usePrevious[use] = -1;
+		this.#useNext[use] = next;
+		if (next >= 0) this.#usePrevious[next] = use;
+		this.#valueFirstUse[value] = use;
+		this.#valueUseCount[value] = this.#valueUseCount[value]! + 1;
+		return use;
 	}
 
 	#deactivateUse(use: number): void {
 		if (this.#useLive[use] !== 1) return;
-		this.#useLive[use] = 0;
 		const value = this.#useValue[use]!;
+		const previous = this.#usePrevious[use]!;
+		const next = this.#useNext[use]!;
+		if (previous < 0) this.#valueFirstUse[value] = next;
+		else this.#useNext[previous] = next;
+		if (next >= 0) this.#usePrevious[next] = previous;
+		this.#useLive[use] = 0;
+		this.#usePrevious[use] = -1;
+		this.#useNext[use] = -1;
 		this.#valueUseCount[value] = this.#valueUseCount[value]! - 1;
+		this.#freeUses.push(use);
+	}
+
+	#allocateOperandRange(count: number): number {
+		if (count === 0) return 0;
+		const free = this.#operandFreeBySize[count]?.pop();
+		if (free !== undefined) return free;
+		const start = this.#operands.length;
+		this.#operands.length += count;
+		this.#operandUses.length += count;
+		return start;
+	}
+
+	#releaseOperandRange(start: number, count: number): void {
+		if (count === 0) return;
+		for (let index = 0; index < count; index++) {
+			this.#operandUses[start + index] = -1;
+		}
+		const free = this.#operandFreeBySize[count] ?? [];
+		free.push(start);
+		this.#operandFreeBySize[count] = free;
+	}
+
+	#allocateBlockParameterRange(count: number): number {
+		if (count === 0) return 0;
+		const free = this.#blockParameterFreeBySize[count]?.pop();
+		if (free !== undefined) return free;
+		const start = this.#blockParameterValues.length;
+		this.#blockParameterValues.length += count;
+		this.#blockParameterRoles.length += count;
+		return start;
+	}
+
+	#releaseBlockParameterRange(start: number, count: number): void {
+		if (count === 0) return;
+		const free = this.#blockParameterFreeBySize[count] ?? [];
+		free.push(start);
+		this.#blockParameterFreeBySize[count] = free;
 	}
 
 	#requireMutation(mutation: CoreStoreMutation): void {

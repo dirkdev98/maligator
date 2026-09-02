@@ -383,7 +383,12 @@ function verifyInstructionRows(
 		}
 	}
 	for (let record = 0; record < fn.operandCapacity; record++) {
-		const use = fn.useLayout(fn.operandRecord(record).use);
+		const useId = fn.operandRecord(record).use;
+		if (useId < 0) {
+			if (currentOperands.has(record)) fail(`live operand row ${record} has no use`);
+			continue;
+		}
+		const use = fn.useLayout(useId);
 		if (use.live !== currentOperands.has(record)) {
 			fail(`operand row ${record} has stale live-use state`);
 		}
@@ -416,6 +421,7 @@ function verifyValueRows(
 		let current = row.firstUse;
 		let liveCount = 0;
 		const chain = new Set<number>();
+		let previous = -1;
 		while (current >= 0) {
 			if (current >= fn.useCapacity || chain.has(current)) {
 				fail(`value %${value} has an invalid use-list chain`);
@@ -424,12 +430,15 @@ function verifyValueRows(
 			useRowsInChains.add(current);
 			const use = fn.useLayout(current);
 			if (use.value !== value) fail(`value %${value} use-list contains another value`);
-			if (use.live) {
-				liveCount++;
-				if (!expectedUses.get(value)?.has(current)) {
-					fail(`value %${value} has a live use missing from operand storage`);
-				}
+			if (!use.live) fail(`value %${value} use-list contains a dead use`);
+			if (use.previous !== previous) {
+				fail(`value %${value} has an inconsistent previous-use link`);
 			}
+			liveCount++;
+			if (!expectedUses.get(value)?.has(current)) {
+				fail(`value %${value} has a live use missing from operand storage`);
+			}
+			previous = current;
 			current = use.next;
 		}
 		if (
@@ -480,7 +489,13 @@ function verifyValueRows(
 		}
 	}
 	for (let use = 0; use < fn.useCapacity; use++) {
-		if (!useRowsInChains.has(use)) fail(`use row ${use} is absent from its value chain`);
+		const row = fn.useLayout(use);
+		if (row.live && !useRowsInChains.has(use)) {
+			fail(`live use row ${use} is absent from its value chain`);
+		}
+		if (!row.live && (row.previous >= 0 || row.next >= 0)) {
+			fail(`dead use row ${use} remains linked`);
+		}
 	}
 }
 
