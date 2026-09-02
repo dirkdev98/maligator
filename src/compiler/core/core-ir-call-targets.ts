@@ -13,8 +13,14 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import { extractCoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
-import type { CoreProgramFlowLocalTransfers } from "./core-program-flow.ts";
+import {
+	extractCoreProgramFlowLocalTransfers,
+	solveCoreProgramFlowFunctions,
+} from "./core-program-flow.ts";
+import type {
+	CoreProgramFlowFunctionSolver,
+	CoreProgramFlowLocalTransfers,
+} from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALLEE_TARGET_CAP = 4;
@@ -609,6 +615,9 @@ export function analyzeCoreCallGraph(
 	localTransfers: (functionId: CoreFunctionId) => CoreProgramFlowLocalTransfers = (
 		functionId,
 	) => extractCoreProgramFlowLocalTransfers(program, program.function(functionId)),
+	scheduler: CoreProgramFlowFunctionSolver = {
+		solveFunctions: solveCoreProgramFlowFunctions,
+	},
 ): CoreCallGraphIndexState {
 	const functionIds = [...program.functionIds()];
 	const functionSet = new Set(functionIds);
@@ -792,64 +801,58 @@ export function analyzeCoreCallGraph(
 	};
 	for (const slot of globalSlots) recomputeGlobalStore(slot);
 
-	const queue = [...affectedFunctions].sort((left, right) => left - right);
-	const queued = new Set(queue);
 	const analyzed = new Set<CoreFunctionId>();
-	const enqueue = (functionId: CoreFunctionId): void => {
-		if (queued.has(functionId)) return;
-		queued.add(functionId);
-		queue.push(functionId);
-	};
-	for (let cursor = 0; cursor < queue.length; cursor++) {
-		const functionId = queue[cursor]!;
-		queued.delete(functionId);
-		const previousLocal =
-			local.get(functionId) ??
-			(analyzed.has(functionId) ? undefined : previous?.local.get(functionId));
-		removeLocalContributions(functionId, previousLocal);
-		const next = analyzeFunctionTargets(
-			program,
-			program.function(functionId),
-			controlFlow(functionId),
-			cells,
-			trackedCells,
-			knownFunctionProperties,
-			localTransfers(functionId),
-		);
-		for (const [key, targets] of next.cellWrites) {
-			cellKeys.add(key);
-			const writers = new Map(cellWriters.get(key) ?? []);
-			writers.set(functionId, targets);
-			cellWriters.set(key, writers);
-		}
-		for (const [slot, targets] of next.globalWrites) {
-			globalSlots.add(slot);
-			const writers = new Map(globalStoreWriters.get(slot) ?? []);
-			writers.set(functionId, targets);
-			globalStoreWriters.set(slot, writers);
-		}
-		for (const key of next.propertyInputs.keys()) {
-			const readers = new Set(propertyReaders.get(key) ?? []);
-			readers.add(functionId);
-			propertyReaders.set(key, readers);
-		}
-		local.set(functionId, next);
-		analyzed.add(functionId);
-		const writeKeys = new Set([
-			...(previousLocal?.cellWrites.keys() ?? []),
-			...next.cellWrites.keys(),
-		]);
-		for (const key of writeKeys) {
-			if (!recomputeCell(key)) continue;
-			for (const reader of cellReaders.get(key) ?? []) enqueue(reader);
-		}
-		for (const slot of new Set([
-			...(previousLocal?.globalWrites.keys() ?? []),
-			...next.globalWrites.keys(),
-		])) {
-			recomputeGlobalStore(slot);
-		}
-	}
+	scheduler.solveFunctions(
+		[...affectedFunctions].sort((left, right) => left - right),
+		(functionId, enqueue) => {
+			const previousLocal =
+				local.get(functionId) ??
+				(analyzed.has(functionId) ? undefined : previous?.local.get(functionId));
+			removeLocalContributions(functionId, previousLocal);
+			const next = analyzeFunctionTargets(
+				program,
+				program.function(functionId),
+				controlFlow(functionId),
+				cells,
+				trackedCells,
+				knownFunctionProperties,
+				localTransfers(functionId),
+			);
+			for (const [key, targets] of next.cellWrites) {
+				cellKeys.add(key);
+				const writers = new Map(cellWriters.get(key) ?? []);
+				writers.set(functionId, targets);
+				cellWriters.set(key, writers);
+			}
+			for (const [slot, targets] of next.globalWrites) {
+				globalSlots.add(slot);
+				const writers = new Map(globalStoreWriters.get(slot) ?? []);
+				writers.set(functionId, targets);
+				globalStoreWriters.set(slot, writers);
+			}
+			for (const key of next.propertyInputs.keys()) {
+				const readers = new Set(propertyReaders.get(key) ?? []);
+				readers.add(functionId);
+				propertyReaders.set(key, readers);
+			}
+			local.set(functionId, next);
+			analyzed.add(functionId);
+			const writeKeys = new Set([
+				...(previousLocal?.cellWrites.keys() ?? []),
+				...next.cellWrites.keys(),
+			]);
+			for (const key of writeKeys) {
+				if (!recomputeCell(key)) continue;
+				for (const reader of cellReaders.get(key) ?? []) enqueue(reader);
+			}
+			for (const slot of new Set([
+				...(previousLocal?.globalWrites.keys() ?? []),
+				...next.globalWrites.keys(),
+			])) {
+				recomputeGlobalStore(slot);
+			}
+		},
+	);
 	const functionsAnalyzed = analyzed.size;
 	const functionsReused = local.size - functionsAnalyzed;
 	const sites = new Map(previous?.sites ?? []);

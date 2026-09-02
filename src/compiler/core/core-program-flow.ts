@@ -297,6 +297,49 @@ export interface CoreProgramFlowSccSolver {
 	): CoreProgramFlowSccWorkStatistics;
 }
 
+export type CoreProgramFlowFunctionEnqueue = (functionId: CoreFunctionId) => boolean;
+
+export type CoreProgramFlowFunctionTransfer = (
+	functionId: CoreFunctionId,
+	enqueue: CoreProgramFlowFunctionEnqueue,
+) => void;
+
+export interface CoreProgramFlowFunctionWorkStatistics {
+	readonly pops: number;
+	readonly wakeups: number;
+}
+
+export interface CoreProgramFlowFunctionSolver {
+	solveFunctions(
+		seeds: Iterable<CoreFunctionId>,
+		transfer: CoreProgramFlowFunctionTransfer,
+	): CoreProgramFlowFunctionWorkStatistics;
+}
+
+export function solveCoreProgramFlowFunctions(
+	seeds: Iterable<CoreFunctionId>,
+	transfer: CoreProgramFlowFunctionTransfer,
+): CoreProgramFlowFunctionWorkStatistics {
+	const queue: Array<CoreFunctionId> = [];
+	const queued = new Set<CoreFunctionId>();
+	let wakeups = 0;
+	const enqueue: CoreProgramFlowFunctionEnqueue = (functionId) => {
+		if (queued.has(functionId)) return false;
+		queued.add(functionId);
+		queue.push(functionId);
+		wakeups++;
+		return true;
+	};
+	for (const seed of seeds) enqueue(seed);
+	let cursor = 0;
+	while (cursor < queue.length) {
+		const functionId = queue[cursor++]!;
+		queued.delete(functionId);
+		transfer(functionId, enqueue);
+	}
+	return Object.freeze({ pops: cursor, wakeups });
+}
+
 export function solveCoreProgramFlowSccs(
 	topology: CoreProgramFlowTopology,
 	seeds: Iterable<CoreProgramFlowSccSeed>,
@@ -650,6 +693,16 @@ export class CoreProgramFlowEngine {
 		const statistics = solveCoreProgramFlowSccs(topology, seeds, transfer);
 		this.#report?.increment("programFlowSccPops", statistics.pops);
 		this.#report?.increment("programFlowSccWakeups", statistics.wakeups);
+		return statistics;
+	}
+
+	solveFunctions(
+		seeds: Iterable<CoreFunctionId>,
+		transfer: CoreProgramFlowFunctionTransfer,
+	): CoreProgramFlowFunctionWorkStatistics {
+		const statistics = solveCoreProgramFlowFunctions(seeds, transfer);
+		this.#report?.increment("programFlowFunctionPops", statistics.pops);
+		this.#report?.increment("programFlowFunctionWakeups", statistics.wakeups);
 		return statistics;
 	}
 

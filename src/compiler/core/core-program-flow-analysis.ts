@@ -72,6 +72,7 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 						context,
 						targetDirty,
 						(functionId) => programFlow.local(functionId),
+						programFlow,
 					);
 		const exceptionalControl = (functionId: CoreFunctionId) =>
 			get(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS, {
