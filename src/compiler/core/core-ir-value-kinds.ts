@@ -26,6 +26,11 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { CORE_PROGRAM_FLOW_RETURN_KIND } from "./core-program-flow.ts";
+import type {
+	CoreProgramFlowSccSolver,
+	CoreProgramFlowTopology,
+} from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
@@ -648,6 +653,8 @@ export function solveCoreProgramValueKinds(
 	targets: CoreCallGraphIndex,
 	externallyReachable: (functionId: CoreFunctionId) => boolean,
 	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
+	topology: CoreProgramFlowTopology,
+	scheduler: CoreProgramFlowSccSolver,
 	previous?: CoreProgramValueKindState,
 	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 	externallyChangedFunctions?: ReadonlySet<CoreFunctionId>,
@@ -680,22 +687,6 @@ export function solveCoreProgramValueKinds(
 		);
 		if (previous.targets.graph.hasAggregate() && !targets.graph.hasAggregate()) {
 			for (const functionId of functionIds) affected.add(functionId);
-		}
-	}
-	const affectedQueue = [...affected];
-	let affectedCursor = 0;
-	while (affectedCursor < affectedQueue.length) {
-		const functionId = affectedQueue[affectedCursor++]!;
-		for (const index of [targets, previous?.targets]) {
-			if (index === undefined) continue;
-			for (const neighbor of [
-				...index.graph.exactOutgoing(functionId),
-				...index.graph.exactCallers(functionId),
-			]) {
-				if (!live.has(neighbor) || affected.has(neighbor)) continue;
-				affected.add(neighbor);
-				affectedQueue.push(neighbor);
-			}
 		}
 	}
 	let anyScriptAggregate = targets.graph.hasAggregate()
@@ -746,232 +737,289 @@ export function solveCoreProgramValueKinds(
 			wildcardContributions.set(functionId, contribution);
 		}
 	}
-	const queue: Array<CoreCallGraphNode> = [
-		...affected,
-		...(aggregateInitiallyAffected && targets.graph.hasAggregate()
-			? [CORE_ANY_SCRIPT_AGGREGATE]
-			: []),
-	];
-	const queued = new Set<CoreCallGraphNode>(queue);
 	let callerWakeups = 0;
 	let calleeWakeups = 0;
-	const enqueue = (node: CoreCallGraphNode, caller: boolean): void => {
-		if ((node !== CORE_ANY_SCRIPT_AGGREGATE && !affected.has(node)) || queued.has(node))
-			return;
-		queued.add(node);
-		queue.push(node);
-		if (caller) callerWakeups++;
-		else calleeWakeups++;
-	};
-	const activate = (functionId: CoreFunctionId, caller: boolean): void => {
-		if (affected.has(functionId)) {
-			enqueue(functionId, caller);
-			return;
-		}
-		affected.add(functionId);
-		valueAnalyses.delete(functionId);
-		summaries.set(functionId, seededSummary(functionId, anyScriptAggregate));
-		enqueue(functionId, caller);
-	};
-	const activateExactComponent = (initial: CoreFunctionId, caller: boolean): void => {
-		if (affected.has(initial)) {
-			enqueue(initial, caller);
-			return;
-		}
-		const pending = [initial];
-		const seen = new Set<CoreFunctionId>();
-		for (let index = 0; index < pending.length; index++) {
-			const functionId = pending[index]!;
-			if (!live.has(functionId) || seen.has(functionId)) continue;
-			seen.add(functionId);
-			activate(functionId, caller);
-			for (const graphIndex of [targets, previous?.targets]) {
-				if (graphIndex === undefined) continue;
-				pending.push(...graphIndex.graph.exactOutgoing(functionId));
-				pending.push(...graphIndex.graph.exactCallers(functionId));
-			}
-		}
-	};
-	let cursor = 0;
 	let functionsEvaluated = 0;
 	let aggregateRecomputations = 0;
 	let exactReverseCallerVisits = 0;
 	let wildcardReverseCallerVisits = 0;
 	let aggregateFunctionVisits = 0;
-	const applyIncoming = (
-		callee: CoreFunctionId,
-		incomingParameterKinds: ReadonlyArray<CompilerValueKindMask>,
-		strictReceiverKind: CompilerValueKindMask,
-	): void => {
-		if (!live.has(callee)) return;
-		const calleeFn = program.function(callee);
-		const prior = summaries.get(callee)!;
-		const parameterKinds = [...prior.parameterKinds];
-		for (let index = 0; index < calleeFn.parameterCount; index++) {
-			parameterKinds[index] =
-				parameterKinds[index]! | (incomingParameterKinds[index] ?? 0);
-		}
-		const incomingReceiver = calleeFn.metadata.strict
-			? strictReceiverKind
-			: COMPILER_VALUE_KIND_OBJECT;
-		const receiverKind = prior.receiverKind | incomingReceiver;
-		if (
-			receiverKind === prior.receiverKind &&
-			parameterKinds.every((kind, index) => kind === prior.parameterKinds[index])
-		)
-			return;
-		summaries.set(callee, { ...prior, parameterKinds, receiverKind });
-		enqueue(callee, false);
-	};
-	while (cursor < queue.length) {
-		const node = queue[cursor++]!;
-		queued.delete(node);
-		if (node === CORE_ANY_SCRIPT_AGGREGATE) {
-			const parameterKinds = Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
-			let strictReceiverKind = 0;
-			for (const caller of targets.graph.wildcardCallers) {
-				const contribution = wildcardContributions.get(caller);
-				if (contribution === undefined) continue;
-				for (let index = 0; index < maximumParameterCount; index++) {
-					parameterKinds[index] =
-						parameterKinds[index]! | (contribution.parameterKinds[index] ?? 0);
-				}
-				strictReceiverKind |= contribution.strictReceiverKind;
-			}
-			let returnKind = 0;
-			for (const summary of summaries.values()) {
-				aggregateFunctionVisits++;
-				returnKind |= summary.returnKind;
-			}
-			const prior = anyScriptAggregate;
-			const next: CoreProgramValueKindAggregate = {
-				parameterKinds,
-				strictReceiverKind,
-				returnKind,
-			};
-			aggregateRecomputations++;
-			anyScriptAggregate = next;
-			if (prior?.returnKind !== returnKind) {
-				for (const caller of targets.graph.wildcardCallers) {
-					wildcardReverseCallerVisits++;
-					activateExactComponent(caller, true);
-				}
-			}
-			if (!sameWildcardContribution(prior, next)) {
-				for (const functionId of functionIds) activate(functionId, false);
-				for (const callee of functionIds) {
-					aggregateFunctionVisits++;
-					applyIncoming(callee, parameterKinds, strictReceiverKind);
-				}
-				enqueue(CORE_ANY_SCRIPT_AGGREGATE, false);
-			}
-			continue;
-		}
-		const functionId = node;
-		const fn = program.function(functionId);
-		const summary = summaries.get(functionId)!;
-		const sites = targets.outgoing(functionId);
-		const byInstruction = new Map(sites.map((site) => [site.instruction, site]));
-		const values = analyzeCoreValueKinds(fn, controlFlow(functionId), {
-			parameterMasks: summary.parameterKinds,
-			receiverMask: summary.receiverKind,
-			operationResultMask(instruction) {
-				const site = byInstruction.get(instruction);
-				if (site === undefined) return undefined;
-				if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
-					return COMPILER_VALUE_KIND_TOP;
-				}
-				if (site.targets.anyScript) {
-					return anyScriptAggregate?.returnKind ?? 0;
-				}
-				const callees = site.targets.functions;
-				if (callees.length === 0) return COMPILER_VALUE_KIND_TOP;
-				return callees.reduce(
-					(mask, callee) => mask | summaries.get(callee)!.returnKind,
-					0,
-				);
-			},
-		});
-		valueAnalyses.set(functionId, values);
-		functionsEvaluated++;
-		let returnKind = 0;
-		const cfg = controlFlow(functionId);
-		for (const block of cfg.reachable) {
-			const terminator = fn.blockTerminator(block);
-			if (fn.instructionKind(terminator) === "return") {
-				returnKind |= values.latticeMask(
-					fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-				);
-			}
-		}
-		if (returnKind !== summary.returnKind) {
-			summaries.set(functionId, { ...summary, returnKind });
-			for (const caller of targets.graph.exactCallers(functionId)) {
-				exactReverseCallerVisits++;
-				activateExactComponent(caller, true);
-			}
-			if (targets.graph.hasAggregate()) {
-				enqueue(CORE_ANY_SCRIPT_AGGREGATE, true);
-			}
-		}
-		const anyScriptParameterKinds =
-			Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
-		let anyScriptStrictReceiverKind = 0;
-		let hasAnyScriptSite = false;
-		for (const site of sites) {
-			if (site.targets.anyScript) {
-				hasAnyScriptSite = true;
-				for (let index = 0; index < maximumParameterCount; index++) {
-					const argument = site.arguments?.[index];
-					anyScriptParameterKinds[index] =
-						anyScriptParameterKinds[index]! |
-						(site.arguments === undefined
-							? COMPILER_VALUE_KIND_TOP
-							: argument === undefined
-								? COMPILER_VALUE_KIND_UNDEFINED
-								: values.latticeMask(argument));
-				}
-				anyScriptStrictReceiverKind |=
-					site.receiver === undefined
-						? COMPILER_VALUE_KIND_TOP
-						: values.latticeMask(site.receiver);
-				continue;
-			}
-			const incomingParameterKinds = Array<CompilerValueKindMask>(maximumParameterCount);
-			for (let index = 0; index < maximumParameterCount; index++) {
-				const argument = site.arguments?.[index];
-				incomingParameterKinds[index] =
-					site.arguments === undefined
-						? COMPILER_VALUE_KIND_TOP
-						: argument === undefined
-							? COMPILER_VALUE_KIND_UNDEFINED
-							: values.latticeMask(argument);
-			}
-			for (const callee of site.targets.functions) {
-				applyIncoming(
-					callee,
-					incomingParameterKinds,
-					site.receiver === undefined
-						? COMPILER_VALUE_KIND_TOP
-						: values.latticeMask(site.receiver),
-				);
-			}
-		}
-		if (hasAnyScriptSite) {
-			const contribution: CoreProgramValueKindWildcardContribution = {
-				parameterKinds: anyScriptParameterKinds,
-				strictReceiverKind: anyScriptStrictReceiverKind,
-			};
-			if (
-				!sameWildcardContribution(wildcardContributions.get(functionId), contribution)
-			) {
-				wildcardContributions.set(functionId, contribution);
-				enqueue(CORE_ANY_SCRIPT_AGGREGATE, false);
-			}
-		} else if (wildcardContributions.delete(functionId) && targets.graph.hasAggregate()) {
-			enqueue(CORE_ANY_SCRIPT_AGGREGATE, false);
+	const activeSccs = new Set<number>();
+	const initialSccs = new Set<number>();
+	const pendingFunctionSccs = new Set<number>();
+	const pendingAggregateSccs = new Set<number>();
+	for (const functionId of affected) {
+		const scc = topology.owner.get(functionId);
+		if (scc !== undefined) {
+			initialSccs.add(scc);
+			pendingFunctionSccs.add(scc);
 		}
 	}
+	if (aggregateInitiallyAffected && targets.graph.hasAggregate()) {
+		const scc = topology.owner.get(CORE_ANY_SCRIPT_AGGREGATE);
+		if (scc !== undefined) {
+			initialSccs.add(scc);
+			pendingAggregateSccs.add(scc);
+		}
+	}
+	scheduler.solveSccs(
+		topology,
+		[...initialSccs].map((scc) => ({
+			scc,
+			dimensions: CORE_PROGRAM_FLOW_RETURN_KIND,
+		})),
+		(sccIndex, dimensions, enqueueScc) => {
+			if ((dimensions & CORE_PROGRAM_FLOW_RETURN_KIND) === 0) return;
+			const runFunctions = pendingFunctionSccs.delete(sccIndex);
+			const runAggregate = pendingAggregateSccs.delete(sccIndex);
+			const activateScc = (scc: number): void => {
+				if (activeSccs.has(scc)) return;
+				activeSccs.add(scc);
+				const component = topology.sccs[scc]!;
+				for (const functionId of component.functions) {
+					affected.add(functionId);
+					valueAnalyses.delete(functionId);
+					summaries.set(functionId, seededSummary(functionId, anyScriptAggregate));
+				}
+				for (const functionId of component.functions) {
+					for (const graphIndex of [targets, previous?.targets]) {
+						if (graphIndex === undefined) continue;
+						for (const neighbor of [
+							...graphIndex.graph.exactOutgoing(functionId),
+							...graphIndex.graph.exactCallers(functionId),
+						]) {
+							if (!live.has(neighbor)) continue;
+							const neighborScc = topology.owner.get(neighbor);
+							if (
+								neighborScc !== undefined &&
+								neighborScc !== scc &&
+								!activeSccs.has(neighborScc)
+							) {
+								pendingFunctionSccs.add(neighborScc);
+								enqueueScc(neighborScc, CORE_PROGRAM_FLOW_RETURN_KIND);
+							}
+						}
+					}
+				}
+			};
+			if (runFunctions) activateScc(sccIndex);
+			const component = topology.sccs[sccIndex]!;
+			const queue: Array<CoreCallGraphNode> = [
+				...(runAggregate && component.hasAnyScriptAggregate
+					? [CORE_ANY_SCRIPT_AGGREGATE]
+					: []),
+				...(runFunctions ? component.functions : []),
+			];
+			const queued = new Set<CoreCallGraphNode>(queue);
+			const enqueueNode = (node: CoreCallGraphNode, caller: boolean): void => {
+				const scc = topology.owner.get(node);
+				if (scc === undefined) return;
+				if (node === CORE_ANY_SCRIPT_AGGREGATE) pendingAggregateSccs.add(scc);
+				else {
+					pendingFunctionSccs.add(scc);
+					activateScc(scc);
+				}
+				if (scc === sccIndex) {
+					if (queued.has(node)) return;
+					queued.add(node);
+					queue.push(node);
+					if (node === CORE_ANY_SCRIPT_AGGREGATE) pendingAggregateSccs.delete(scc);
+					else pendingFunctionSccs.delete(scc);
+				} else if (!enqueueScc(scc, CORE_PROGRAM_FLOW_RETURN_KIND)) {
+					return;
+				}
+				if (caller) callerWakeups++;
+				else calleeWakeups++;
+			};
+			const applyIncoming = (
+				callee: CoreFunctionId,
+				incomingParameterKinds: ReadonlyArray<CompilerValueKindMask>,
+				strictReceiverKind: CompilerValueKindMask,
+			): void => {
+				if (!live.has(callee)) return;
+				const calleeScc = topology.owner.get(callee);
+				if (calleeScc === undefined) return;
+				pendingFunctionSccs.add(calleeScc);
+				activateScc(calleeScc);
+				const calleeFn = program.function(callee);
+				const prior = summaries.get(callee)!;
+				const parameterKinds = [...prior.parameterKinds];
+				for (let index = 0; index < calleeFn.parameterCount; index++) {
+					parameterKinds[index] =
+						parameterKinds[index]! | (incomingParameterKinds[index] ?? 0);
+				}
+				const incomingReceiver = calleeFn.metadata.strict
+					? strictReceiverKind
+					: COMPILER_VALUE_KIND_OBJECT;
+				const receiverKind = prior.receiverKind | incomingReceiver;
+				if (
+					receiverKind === prior.receiverKind &&
+					parameterKinds.every((kind, index) => kind === prior.parameterKinds[index])
+				)
+					return;
+				summaries.set(callee, { ...prior, parameterKinds, receiverKind });
+				enqueueNode(callee, false);
+			};
+			let cursor = 0;
+			while (cursor < queue.length) {
+				const node = queue[cursor++]!;
+				queued.delete(node);
+				if (node === CORE_ANY_SCRIPT_AGGREGATE) {
+					const parameterKinds =
+						Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
+					let strictReceiverKind = 0;
+					for (const caller of targets.graph.wildcardCallers) {
+						const contribution = wildcardContributions.get(caller);
+						if (contribution === undefined) continue;
+						for (let index = 0; index < maximumParameterCount; index++) {
+							parameterKinds[index] =
+								parameterKinds[index]! | (contribution.parameterKinds[index] ?? 0);
+						}
+						strictReceiverKind |= contribution.strictReceiverKind;
+					}
+					let returnKind = 0;
+					for (const summary of summaries.values()) {
+						aggregateFunctionVisits++;
+						returnKind |= summary.returnKind;
+					}
+					const prior = anyScriptAggregate;
+					const next: CoreProgramValueKindAggregate = {
+						parameterKinds,
+						strictReceiverKind,
+						returnKind,
+					};
+					aggregateRecomputations++;
+					anyScriptAggregate = next;
+					if (prior?.returnKind !== returnKind) {
+						for (const caller of targets.graph.wildcardCallers) {
+							wildcardReverseCallerVisits++;
+							enqueueNode(caller, true);
+						}
+					}
+					if (!sameWildcardContribution(prior, next)) {
+						for (const functionId of functionIds) enqueueNode(functionId, false);
+						for (const callee of functionIds) {
+							aggregateFunctionVisits++;
+							applyIncoming(callee, parameterKinds, strictReceiverKind);
+						}
+						enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
+					}
+					continue;
+				}
+				const functionId = node;
+				const fn = program.function(functionId);
+				const summary = summaries.get(functionId)!;
+				const sites = targets.outgoing(functionId);
+				const byInstruction = new Map(sites.map((site) => [site.instruction, site]));
+				const values = analyzeCoreValueKinds(fn, controlFlow(functionId), {
+					parameterMasks: summary.parameterKinds,
+					receiverMask: summary.receiverKind,
+					operationResultMask(instruction) {
+						const site = byInstruction.get(instruction);
+						if (site === undefined) return undefined;
+						if (
+							site.targets.opaque ||
+							(!targets.sourceClosed && site.targets.anyScript)
+						) {
+							return COMPILER_VALUE_KIND_TOP;
+						}
+						if (site.targets.anyScript) {
+							return anyScriptAggregate?.returnKind ?? 0;
+						}
+						const callees = site.targets.functions;
+						if (callees.length === 0) return COMPILER_VALUE_KIND_TOP;
+						return callees.reduce(
+							(mask, callee) => mask | summaries.get(callee)!.returnKind,
+							0,
+						);
+					},
+				});
+				valueAnalyses.set(functionId, values);
+				functionsEvaluated++;
+				let returnKind = 0;
+				const cfg = controlFlow(functionId);
+				for (const block of cfg.reachable) {
+					const terminator = fn.blockTerminator(block);
+					if (fn.instructionKind(terminator) === "return") {
+						returnKind |= values.latticeMask(
+							fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+						);
+					}
+				}
+				if (returnKind !== summary.returnKind) {
+					summaries.set(functionId, { ...summary, returnKind });
+					for (const caller of targets.graph.exactCallers(functionId)) {
+						exactReverseCallerVisits++;
+						enqueueNode(caller, true);
+					}
+					if (targets.graph.hasAggregate()) {
+						enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, true);
+					}
+				}
+				const anyScriptParameterKinds =
+					Array<CompilerValueKindMask>(maximumParameterCount).fill(0);
+				let anyScriptStrictReceiverKind = 0;
+				let hasAnyScriptSite = false;
+				for (const site of sites) {
+					if (site.targets.anyScript) {
+						hasAnyScriptSite = true;
+						for (let index = 0; index < maximumParameterCount; index++) {
+							const argument = site.arguments?.[index];
+							anyScriptParameterKinds[index] =
+								anyScriptParameterKinds[index]! |
+								(site.arguments === undefined
+									? COMPILER_VALUE_KIND_TOP
+									: argument === undefined
+										? COMPILER_VALUE_KIND_UNDEFINED
+										: values.latticeMask(argument));
+						}
+						anyScriptStrictReceiverKind |=
+							site.receiver === undefined
+								? COMPILER_VALUE_KIND_TOP
+								: values.latticeMask(site.receiver);
+						continue;
+					}
+					const incomingParameterKinds =
+						Array<CompilerValueKindMask>(maximumParameterCount);
+					for (let index = 0; index < maximumParameterCount; index++) {
+						const argument = site.arguments?.[index];
+						incomingParameterKinds[index] =
+							site.arguments === undefined
+								? COMPILER_VALUE_KIND_TOP
+								: argument === undefined
+									? COMPILER_VALUE_KIND_UNDEFINED
+									: values.latticeMask(argument);
+					}
+					for (const callee of site.targets.functions) {
+						applyIncoming(
+							callee,
+							incomingParameterKinds,
+							site.receiver === undefined
+								? COMPILER_VALUE_KIND_TOP
+								: values.latticeMask(site.receiver),
+						);
+					}
+				}
+				if (hasAnyScriptSite) {
+					const contribution: CoreProgramValueKindWildcardContribution = {
+						parameterKinds: anyScriptParameterKinds,
+						strictReceiverKind: anyScriptStrictReceiverKind,
+					};
+					if (
+						!sameWildcardContribution(wildcardContributions.get(functionId), contribution)
+					) {
+						wildcardContributions.set(functionId, contribution);
+						enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
+					}
+				} else if (
+					wildcardContributions.delete(functionId) &&
+					targets.graph.hasAggregate()
+				) {
+					enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, false);
+				}
+			}
+		},
+	);
 	const changedFunctions = new Set(affected);
 	for (const functionId of functionIds) {
 		const frozen = freezeProgramValueKindSummary(summaries.get(functionId)!);

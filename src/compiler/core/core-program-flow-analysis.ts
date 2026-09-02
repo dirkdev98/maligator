@@ -116,6 +116,8 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 						targets,
 						(functionId) => summaries.summary(functionId)?.externallyReachable === true,
 						exceptionalControl,
+						programFlow.topology(targets.graph),
+						programFlow,
 						prior?.valueKinds,
 						valueKindDirty,
 						externallyReachableChanges,
