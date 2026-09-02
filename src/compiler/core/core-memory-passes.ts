@@ -2,7 +2,6 @@ import { CoreEditor } from "./core-editor.ts";
 import {
 	CORE_CONTROL_FLOW_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
-	coreTerminatorEdges,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
@@ -43,13 +42,9 @@ import type {
 	CoreTerminatorPayload,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CorePass, CorePassBudget } from "./core-pass.ts";
-import type {
-	CoreChangeSet,
-	CoreFunctionStore,
-	CoreProgram,
-	CoreUse,
-} from "./core-store.ts";
+import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const CONTAINED_FRESH_ARRAY_OPERATIONS = new Set([
 	"Array.prototype.push",
@@ -83,39 +78,101 @@ function isLengthString(program: CoreProgram, index: number): boolean {
 	);
 }
 
+function instructionOperandAt(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	offset: number,
+): CoreValueId | undefined {
+	if (offset < 0 || offset >= fn.kernel.instructionOperandCount(instruction))
+		return undefined;
+	return fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + offset);
+}
+
+function instructionResultAt(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	offset: number,
+): CoreValueId | undefined {
+	if (offset < 0 || offset >= fn.kernel.instructionResultCount(instruction))
+		return undefined;
+	return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction) + offset);
+}
+
+function materializeInstructionOperands(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): Array<CoreValueId> {
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const count = fn.kernel.instructionOperandCount(instruction);
+	const values: Array<CoreValueId> = [];
+	for (let index = 0; index < count; index++)
+		values.push(fn.kernel.operandAt(start + index));
+	return values;
+}
+
+function materializeEdge(fn: CoreFunctionStore, edge: number): CoreEdge {
+	const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+	const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+	const arguments_: Array<CoreValueId> = [];
+	for (let index = 0; index < argumentCount; index++)
+		arguments_.push(fn.kernel.operandAt(argumentStart + index));
+	return { block: fn.kernel.terminatorEdgeBlock(edge), arguments: arguments_ };
+}
+
 function replaceTerminatorEdges(
-	payload: CoreTerminatorPayload,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
 	replace: (edge: CoreEdge) => CoreEdge,
 ): CoreTerminatorPayload {
-	switch (payload.kind) {
+	const kind = fn.instructionKind(instruction);
+	const operandStart = fn.kernel.instructionOperandStart(instruction);
+	const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+	switch (kind) {
 		case "jump":
-			return { kind: "jump", edge: replace(payload.edge) };
+			return { kind, edge: replace(materializeEdge(fn, edgeStart)) };
 		case "branch":
 			return {
-				kind: "branch",
-				condition: payload.condition,
-				consequent: replace(payload.consequent),
-				alternate: replace(payload.alternate),
+				kind,
+				condition: fn.kernel.operandAt(operandStart),
+				consequent: replace(materializeEdge(fn, edgeStart)),
+				alternate: replace(materializeEdge(fn, edgeStart + 1)),
 			};
-		case "guard":
+		case "guard": {
+			const fact = fn.kernel.terminatorFact(instruction);
+			if (fact === undefined) throw new Error(`Core guard ${instruction} has no fact`);
 			return {
-				kind: "guard",
-				condition: payload.condition,
-				fact: payload.fact,
-				success: replace(payload.success),
-				fallback: replace(payload.fallback),
+				kind,
+				condition: fn.kernel.operandAt(operandStart),
+				fact,
+				success: replace(materializeEdge(fn, edgeStart)),
+				fallback: replace(materializeEdge(fn, edgeStart + 1)),
 			};
-		case "switch":
+		}
+		case "switch": {
+			const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
+			const cases: Array<
+				Extract<CoreTerminatorPayload, { kind: "switch" }>["cases"][number]
+			> = [];
+			for (let index = 0; index < edgeCount - 1; index++) {
+				const value = fn.kernel.terminatorEdgeCaseValue(edgeStart + index);
+				if (value === undefined)
+					throw new Error(`Core switch ${instruction} has no case`);
+				cases.push({ value, edge: replace(materializeEdge(fn, edgeStart + index)) });
+			}
 			return {
-				kind: "switch",
-				discriminant: payload.discriminant,
-				cases: payload.cases.map(({ value, edge }) => ({ value, edge: replace(edge) })),
-				default: replace(payload.default),
+				kind,
+				discriminant: fn.kernel.operandAt(operandStart),
+				cases,
+				default: replace(materializeEdge(fn, edgeStart + edgeCount - 1)),
 			};
+		}
 		case "return":
 		case "throw":
+			return { kind, value: fn.kernel.operandAt(operandStart) };
 		case "unreachable":
-			return payload;
+			return { kind };
+		case "operation":
+			throw new Error(`Core instruction ${instruction} is not a terminator`);
 	}
 }
 
@@ -140,7 +197,8 @@ const foldExactAllocationObservations: CorePass = {
 			return undefined;
 		const opcode = fn.instructionOpcodeName(item.instruction);
 		const operator = fn.instructionAttributes(item.instruction).operator;
-		const operands = fn.instructionOperands(item.instruction);
+		const leftOperand = instructionOperandAt(fn, item.instruction, 0);
+		const rightOperand = instructionOperandAt(fn, item.instruction, 1);
 		const provenance = context.analysis(CORE_LOCAL_PROVENANCE_ANALYSIS);
 		let replacement:
 			| {
@@ -155,8 +213,8 @@ const foldExactAllocationObservations: CorePass = {
 		if (
 			opcode === "unary" &&
 			operator === "typeof" &&
-			operands[0] !== undefined &&
-			provenance.allocationOf(operands[0]) !== undefined
+			leftOperand !== undefined &&
+			provenance.allocationOf(leftOperand) !== undefined
 		) {
 			const stringIndex = program.stringConstants.findIndex(
 				(units) =>
@@ -168,11 +226,11 @@ const foldExactAllocationObservations: CorePass = {
 		} else if (
 			opcode === "binary" &&
 			(operator === "===" || operator === "!==") &&
-			operands[0] !== undefined &&
-			operands[1] !== undefined
+			leftOperand !== undefined &&
+			rightOperand !== undefined
 		) {
-			const left = provenance.allocationOf(operands[0]);
-			const right = provenance.allocationOf(operands[1]);
+			const left = provenance.allocationOf(leftOperand);
+			const right = provenance.allocationOf(rightOperand);
 			if (left !== undefined && right !== undefined) {
 				const same = right.instruction === left.instruction;
 				replacement = {
@@ -216,10 +274,15 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 			);
 			for (const instruction of instructions.slice(allocationIndex + 1)) {
 				const opcode = fn.instructionOpcodeName(instruction);
-				const operands = fn.instructionOperands(instruction);
-				const aliases = operands.map(
-					(value) => provenance.allocationOf(value)?.instruction === layout.instruction,
-				);
+				const operandStart = fn.kernel.instructionOperandStart(instruction);
+				const operandCount = fn.kernel.instructionOperandCount(instruction);
+				const aliases: Array<boolean> = [];
+				for (let index = 0; index < operandCount; index++) {
+					aliases.push(
+						provenance.allocationOf(fn.kernel.operandAt(operandStart + index))
+							?.instruction === layout.instruction,
+					);
+				}
 				if (!aliases.some(Boolean)) continue;
 				const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 				const propertyAccess =
@@ -237,10 +300,11 @@ const forwardFreshOwnSlotPrefix: CorePass = {
 				if (!transparent) break;
 				if (!propertyAccess) continue;
 				if (opcode === "storePropertyStatic") {
-					if (operands[1] !== undefined) values.set(stringIndex, operands[1]);
+					const stored = instructionOperandAt(fn, instruction, 1);
+					if (stored !== undefined) values.set(stringIndex, stored);
 					continue;
 				}
-				const result = fn.instructionResults(instruction)[0];
+				const result = instructionResultAt(fn, instruction, 0);
 				const value = values.get(stringIndex);
 				if (result === undefined || value === undefined) break;
 				const editor = CoreEditor.open(program, item.function);
@@ -287,7 +351,7 @@ const annotateKnownOwnSlots: CorePass = {
 		if (coreKnownOwnSlotFromAttribute(attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]))
 			return undefined;
 		const stringIndex = attributes.stringIndex;
-		const base = fn.instructionOperands(item.instruction)[0];
+		const base = instructionOperandAt(fn, item.instruction, 0);
 		if (typeof stringIndex !== "number" || base === undefined) return undefined;
 		const shape = context.analysis(CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS).candidates(base);
 		if (shape.opaque || shape.origins.length === 0) return undefined;
@@ -308,7 +372,7 @@ const annotateKnownOwnSlots: CorePass = {
 		editor.replaceInstruction(
 			item.instruction,
 			opcode,
-			fn.instructionOperands(item.instruction),
+			materializeInstructionOperands(fn, item.instruction),
 			{
 				attributes: {
 					...attributes,
@@ -362,8 +426,7 @@ const refineContainedOwnSlotAccesses: CorePass = {
 					? "write"
 					: undefined;
 		if (mode === undefined) return undefined;
-		const operands = fn.instructionOperands(item.instruction);
-		const base = operands[0];
+		const base = instructionOperandAt(fn, item.instruction, 0);
 		if (base === undefined) return undefined;
 		const attributes = fn.instructionAttributes(item.instruction);
 		const stringIndex = attributes.stringIndex;
@@ -459,16 +522,21 @@ const refineContainedOwnSlotAccesses: CorePass = {
 			obligations: [],
 			origin: "local-shape-provenance",
 		});
-		editor.replaceInstruction(item.instruction, opcode, operands, {
-			attributes: {
-				...attributes,
-				...(namedExact === undefined
-					? {}
-					: { [CORE_EXACT_OWN_SLOT_ATTRIBUTE]: exact.slot }),
+		editor.replaceInstruction(
+			item.instruction,
+			opcode,
+			materializeInstructionOperands(fn, item.instruction),
+			{
+				attributes: {
+					...attributes,
+					...(namedExact === undefined
+						? {}
+						: { [CORE_EXACT_OWN_SLOT_ATTRIBUTE]: exact.slot }),
+				},
+				sourcePosition: fn.instructionSourcePosition(item.instruction),
+				effectRefinement: { effects, proof },
 			},
-			sourcePosition: fn.instructionSourcePosition(item.instruction),
-			effectRefinement: { effects, proof },
-		});
+		);
 		return editor.commit();
 	},
 };
@@ -507,13 +575,13 @@ const forwardExactMemoryLoads: CorePass = {
 					opcode !== "loadPropertyStaticShapeCase"
 				)
 					continue;
-				const [result] = fn.instructionResults(instruction);
+				const result = instructionResultAt(fn, instruction, 0);
 				const readKey = memory.readKey(instruction);
 				if (result === undefined || readKey === undefined) continue;
 				const key = [
 					opcode,
 					JSON.stringify(fn.instructionAttributes(instruction)),
-					fn.instructionOperands(instruction).join(","),
+					materializeInstructionOperands(fn, instruction).join(","),
 					readKey,
 					fn.valueRepresentation(result),
 				].join("\0");
@@ -567,7 +635,7 @@ const refineExactCollectionAccesses: CorePass = {
 		const operation = fn.instructionAttributes(item.instruction).operation;
 		if (typeof operation !== "string") return undefined;
 		const expected = coreCollectionReceiverBrandForOperation(operation);
-		const receiver = fn.instructionOperands(item.instruction)[0];
+		const receiver = instructionOperandAt(fn, item.instruction, 0);
 		const classes = context.analysis(CORE_LOCAL_VALUE_CLASS_ANALYSIS);
 		const exact =
 			receiver === undefined
@@ -591,7 +659,7 @@ const refineExactCollectionAccesses: CorePass = {
 		editor.replaceInstruction(
 			item.instruction,
 			"callBuiltin",
-			fn.instructionOperands(item.instruction),
+			materializeInstructionOperands(fn, item.instruction),
 			{
 				attributes: {
 					...fn.instructionAttributes(item.instruction),
@@ -639,8 +707,8 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 				fn.instructionOpcodeName(call) !== "call"
 			)
 				continue;
-			const operands = fn.instructionOperands(call);
-			const [callee, receiver] = operands;
+			const callee = instructionOperandAt(fn, call, 0);
+			const receiver = instructionOperandAt(fn, call, 1);
 			if (callee === undefined || receiver === undefined) continue;
 			const known = fn.instructionAttributes(call).knownBuiltinCall as unknown as
 				| KnownBuiltinCall
@@ -656,9 +724,8 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 				continue;
 			const exact = exactBuiltinCallDescriptor(operation);
 			if (exact?.receiverProof !== "fresh-array") continue;
-			const calleeDefinition = fn.valueDefinition(callee);
-			if (calleeDefinition.kind !== "instruction") continue;
-			const property = calleeDefinition.instruction;
+			if (fn.kernel.valueDefinitionKind(callee) !== 1) continue;
+			const property = coreInstructionId(fn.kernel.valueDefinitionOwner(callee));
 			if (
 				fn.instructionKind(property) !== "operation" ||
 				fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
@@ -666,23 +733,28 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 			)
 				continue;
 			const layout = provenance.allocationOf(receiver);
-			const propertyBase = fn.instructionOperands(property)[0];
+			const propertyBase = instructionOperandAt(fn, property, 0);
 			if (
 				layout?.kind !== "indexed" ||
 				propertyBase === undefined ||
 				provenance.allocationOf(propertyBase)?.instruction !== layout.instruction
 			)
 				continue;
-			const arguments_ = operands.slice(2);
+			const operandStart = fn.kernel.instructionOperandStart(call);
+			const operandCount = fn.kernel.instructionOperandCount(call);
+			const forwarded: Array<CoreValueId> = [];
+			const forwardedCount =
+				exact.forwardedArgumentLimit === undefined
+					? operandCount - 2
+					: Math.min(operandCount - 2, exact.forwardedArgumentLimit);
+			for (let index = 0; index < forwardedCount; index++)
+				forwarded.push(fn.kernel.operandAt(operandStart + 2 + index));
 			candidates.push({
 				call,
 				property,
 				allocation: layout.instruction,
 				receiver,
-				forwarded:
-					exact.forwardedArgumentLimit === undefined
-						? arguments_
-						: arguments_.slice(0, exact.forwardedArgumentLimit),
+				forwarded,
 				operation: operation as Candidate["operation"],
 				known,
 			});
@@ -698,9 +770,10 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 		)) {
 			let valid = true;
 			for (const instruction of fn.instructionIds()) {
-				for (const [operandIndex, operand] of fn
-					.instructionOperands(instruction)
-					.entries()) {
+				const operandStart = fn.kernel.instructionOperandStart(instruction);
+				const operandCount = fn.kernel.instructionOperandCount(instruction);
+				for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
+					const operand = fn.kernel.operandAt(operandStart + operandIndex);
 					if (provenance.allocationOf(operand)?.instruction !== allocation) continue;
 					const opcode =
 						fn.instructionKind(instruction) === "operation"
@@ -713,10 +786,12 @@ const rewriteContainedFreshArrayBuiltins: CorePass = {
 						(candidateCall?.allocation === allocation && operandIndex === 1) ||
 						((opcode === "loadProperty" || opcode === "storeProperty") &&
 							operandIndex === 0 &&
-							(fn.valueRepresentation(fn.instructionOperands(instruction)[1]!) ===
-								"f64" ||
-								fn.valueRepresentation(fn.instructionOperands(instruction)[1]!) ===
-									"i32")) ||
+							(() => {
+								const key = instructionOperandAt(fn, instruction, 1);
+								if (key === undefined) return false;
+								const representation = fn.valueRepresentation(key);
+								return representation === "f64" || representation === "i32";
+							})()) ||
 						(opcode === "loadPropertyStatic" &&
 							operandIndex === 0 &&
 							typeof fn.instructionAttributes(instruction).stringIndex === "number" &&
@@ -806,19 +881,22 @@ interface RootedScalarAccess {
 	readonly value: CoreValueId;
 }
 
-function controlValue(payload: CoreTerminatorPayload): CoreValueId | undefined {
-	switch (payload.kind) {
+function controlValue(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreValueId | undefined {
+	switch (fn.instructionKind(instruction)) {
 		case "branch":
 		case "guard":
-			return payload.condition;
 		case "switch":
-			return payload.discriminant;
 		case "return":
 		case "throw":
-			return payload.value;
+			return instructionOperandAt(fn, instruction, 0);
 		case "jump":
 		case "unreachable":
 			return undefined;
+		case "operation":
+			throw new Error(`Core instruction ${instruction} is not a terminator`);
 	}
 }
 
@@ -832,7 +910,7 @@ function scalarizeRootedLayout(
 	const allocationBlock = fn.instructionBlock(layout.instruction);
 	if (
 		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
-		fn.blockHandler(allocationBlock) !== undefined ||
+		fn.kernel.blockHandlerBlock(allocationBlock) !== undefined ||
 		control.loops.some(({ blocks }) => blocks.has(allocationBlock))
 	)
 		return undefined;
@@ -849,42 +927,54 @@ function scalarizeRootedLayout(
 	const loads: Array<RootedScalarAccess> = [];
 	let valid = true;
 	for (const block of control.reachable) {
-		const payload = fn.terminatorPayload(fn.blockTerminator(block));
-		const observed = controlValue(payload);
+		const terminator = fn.blockTerminator(block);
+		const observed = controlValue(fn, terminator);
 		if (observed !== undefined && aliases.has(observed)) {
 			valid = false;
 			break;
 		}
-		for (const edge of coreTerminatorEdges(payload)) {
-			const parameters = fn.blockParameters(edge.block);
-			if (
-				edge.arguments.some(
-					(argument, index) =>
-						aliases.has(argument) && !aliases.has(parameters[index]!.value),
-				)
-			) {
-				valid = false;
-				break;
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
+			const edge = edgeStart + edgeOffset;
+			const target = fn.kernel.terminatorEdgeBlock(edge);
+			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
+			const parameterStart = fn.kernel.blockParameterStart(target);
+			for (let index = 0; index < argumentCount; index++) {
+				if (
+					aliases.has(fn.kernel.operandAt(argumentStart + index)) &&
+					!aliases.has(fn.kernel.blockParameterValue(parameterStart + index))
+				) {
+					valid = false;
+					break;
+				}
 			}
+			if (!valid) break;
 		}
 		if (!valid) break;
-		const handler = fn.blockHandler(block);
-		if (handler !== undefined) {
-			const parameters = fn.blockParameters(handler.block);
-			if (
-				handler.arguments.some(
-					(argument, index) =>
-						aliases.has(argument) && !aliases.has(parameters[index + 1]!.value),
-				)
-			) {
-				valid = false;
-				break;
+		const handlerBlock = fn.kernel.blockHandlerBlock(block);
+		if (handlerBlock !== undefined) {
+			const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
+			const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
+			const parameterStart = fn.kernel.blockParameterStart(handlerBlock);
+			for (let index = 0; index < argumentCount; index++) {
+				if (
+					aliases.has(fn.kernel.handlerArgumentAt(argumentStart + index)) &&
+					!aliases.has(fn.kernel.blockParameterValue(parameterStart + 1 + index))
+				) {
+					valid = false;
+					break;
+				}
 			}
+			if (!valid) break;
 		}
 		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
 			const opcode = fn.instructionOpcodeName(instruction);
-			const operands = fn.instructionOperands(instruction);
-			for (const [position, operand] of operands.entries()) {
+			const operandStart = fn.kernel.instructionOperandStart(instruction);
+			const operandCount = fn.kernel.instructionOperandCount(instruction);
+			for (let position = 0; position < operandCount; position++) {
+				const operand = fn.kernel.operandAt(operandStart + position);
 				if (!aliases.has(operand)) continue;
 				if (
 					position === 0 &&
@@ -906,11 +996,13 @@ function scalarizeRootedLayout(
 						? stringIndex
 						: undefined;
 				const accessValue =
-					mode === "read" ? fn.instructionResults(instruction)[0] : operands[1];
+					mode === "read"
+						? instructionResultAt(fn, instruction, 0)
+						: instructionOperandAt(fn, instruction, 1);
 				if (
 					key === undefined ||
 					accessValue === undefined ||
-					fn.blockHandler(block) !== undefined ||
+					fn.kernel.blockHandlerBlock(block) !== undefined ||
 					(block === allocationBlock
 						? index <= allocationIndex
 						: !control.instructionDominatesBlock(allocationBlock, block))
@@ -1013,8 +1105,8 @@ function scalarizeRootedLayout(
 	const editor = CoreEditor.open(program, fn.id);
 	const handlerTargets = new Set(
 		[...control.reachable].flatMap((block) => {
-			const handler = fn.blockHandler(block);
-			return handler === undefined ? [] : [handler.block];
+			const handler = fn.kernel.blockHandlerBlock(block);
+			return handler === undefined ? [] : [handler];
 		}),
 	);
 	const fieldParameters = new Map<CoreBlockId, Map<number, CoreValueId>>();
@@ -1094,16 +1186,21 @@ function scalarizeRootedLayout(
 			if (index >= lastAccess && !liveIntoSuccessor) continue;
 			const effects = coreInstructionEffects(fn, instruction);
 			if (!effects.mayGc && !effects.maySuspend) continue;
-			const operands = fn.instructionOperands(instruction);
 			const values = [
 				...new Set(
-					[...current.values()]
-						.map(resolve)
-						.filter(
-							(value) =>
-								!provenance.cannotBeHeldWeakly(value) &&
-								(effects.maySuspend || !operands.includes(value)),
-						),
+					[...current.values()].map(resolve).filter(
+						(value) =>
+							!provenance.cannotBeHeldWeakly(value) &&
+							(effects.maySuspend ||
+								!(() => {
+									const operandStart = fn.kernel.instructionOperandStart(instruction);
+									const operandCount = fn.kernel.instructionOperandCount(instruction);
+									for (let index = 0; index < operandCount; index++) {
+										if (fn.kernel.operandAt(operandStart + index) === value) return true;
+									}
+									return false;
+								})()),
+					),
 				),
 			];
 			if (values.length > 0) rootsAfter.set(instruction, values);
@@ -1111,7 +1208,7 @@ function scalarizeRootedLayout(
 		exitFields.set(block, new Map(current));
 	}
 	for (const block of blocks) {
-		const payload = fn.terminatorPayload(fn.blockTerminator(block));
+		const terminator = fn.blockTerminator(block);
 		const exit = exitFields.get(block)!;
 		const edgeValues = new Map<string, CoreValueId>();
 		const edgeValue = (
@@ -1133,7 +1230,7 @@ function scalarizeRootedLayout(
 		};
 		editor.replaceTerminator(
 			block,
-			replaceTerminatorEdges(payload, (edge) => {
+			replaceTerminatorEdges(fn, terminator, (edge) => {
 				const parameters = fieldParameters.get(edge.block);
 				return parameters === undefined
 					? edge
@@ -1149,13 +1246,16 @@ function scalarizeRootedLayout(
 						};
 			}),
 		);
-		const handler = fn.blockHandler(block);
-		if (handler !== undefined && fieldParameters.has(handler.block)) {
+		const handlerBlock = fn.kernel.blockHandlerBlock(block);
+		if (handlerBlock !== undefined && fieldParameters.has(handlerBlock)) {
 			const entry = entryFields.get(block)!;
-			editor.setHandler(block, handler.block, [
-				...handler.arguments,
-				...layout.keys.map((key) => resolve(entry.get(key)!)),
-			]);
+			const arguments_: Array<CoreValueId> = [];
+			const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
+			const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
+			for (let index = 0; index < argumentCount; index++)
+				arguments_.push(fn.kernel.handlerArgumentAt(argumentStart + index));
+			for (const key of layout.keys) arguments_.push(resolve(entry.get(key)!));
+			editor.setHandler(block, handlerBlock, arguments_);
 		}
 	}
 
@@ -1263,10 +1363,10 @@ const refineStackObjectCellRepresentations: CorePass = {
 		): boolean => {
 			if (fn.valueRepresentation(value) === representation) return true;
 			if (seen.has(value)) return false;
-			const definition = fn.valueDefinition(value);
-			if (definition.kind !== "instruction") return false;
-			if (fn.instructionOpcodeName(definition.instruction) !== "move") return true;
-			const source = fn.instructionOperands(definition.instruction)[0];
+			if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			if (fn.instructionOpcodeName(definition) !== "move") return true;
+			const source = instructionOperandAt(fn, definition, 0);
 			return source === undefined
 				? false
 				: canRefine(source, representation, new Set([...seen, value]));
@@ -1295,24 +1395,30 @@ const refineStackObjectCellRepresentations: CorePass = {
 			const contents = new Array<CoreAggregateCellContent>(candidate.slotCount).fill(
 				"uninitialized",
 			);
-			for (const [slot, value] of fn
-				.instructionOperands(candidate.allocation)
-				.entries()) {
+			const allocationOperandStart = fn.kernel.instructionOperandStart(
+				candidate.allocation,
+			);
+			const allocationOperandCount = fn.kernel.instructionOperandCount(
+				candidate.allocation,
+			);
+			for (let slot = 0; slot < allocationOperandCount; slot++) {
 				if (slot >= contents.length) break;
+				const value = fn.kernel.operandAt(allocationOperandStart + slot);
 				contents[slot] = joinAggregateCellContent(contents[slot]!, cellContent(value));
 			}
 			for (const access of candidate.accesses) {
 				if (fn.instructionOpcodeName(access.instruction) !== "storePropertyStatic") {
 					continue;
 				}
-				const value = fn.instructionOperands(access.instruction)[1];
+				const value = instructionOperandAt(fn, access.instruction, 1);
 				if (value === undefined) continue;
 				contents[access.slot] = joinAggregateCellContent(
 					contents[access.slot]!,
 					cellContent(value),
 				);
 			}
-			for (const [, value] of fn.instructionOperands(candidate.allocation).entries()) {
+			for (let index = 0; index < allocationOperandCount; index++) {
+				const value = fn.kernel.operandAt(allocationOperandStart + index);
 				const content = cellContent(value);
 				if (
 					(content === "i32" || content === "f64" || content === "boolean") &&
@@ -1325,7 +1431,7 @@ const refineStackObjectCellRepresentations: CorePass = {
 				if (fn.instructionOpcodeName(access.instruction) !== "storePropertyStatic") {
 					continue;
 				}
-				const value = fn.instructionOperands(access.instruction)[1];
+				const value = instructionOperandAt(fn, access.instruction, 1);
 				const content = value === undefined ? undefined : cellContent(value);
 				if (
 					value !== undefined &&
@@ -1339,7 +1445,7 @@ const refineStackObjectCellRepresentations: CorePass = {
 				if (fn.instructionOpcodeName(access.instruction) !== "loadPropertyStatic") {
 					continue;
 				}
-				const result = fn.instructionResults(access.instruction)[0];
+				const result = instructionResultAt(fn, access.instruction, 0);
 				const content = contents[access.slot];
 				if (
 					result !== undefined &&
@@ -1396,8 +1502,8 @@ const scalarReplaceContainedAggregates: CorePass = {
 				!effectsPermitRemoval(fn, instruction)
 			)
 				continue;
-			const outputs = fn.instructionResults(instruction);
-			if (outputs.length !== 1) continue;
+			if (fn.kernel.instructionResultCount(instruction) !== 1) continue;
+			const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 			for (const access of coreMemoryAccesses(fn, instruction, {
 				ownCell(base, key, mode) {
 					const resolved = provenance.ownCell(base, key, mode);
@@ -1412,12 +1518,12 @@ const scalarReplaceContainedAggregates: CorePass = {
 					instruction,
 					coreMemoryPartition(access.location),
 				);
-				if (value === undefined || value === outputs[0]) continue;
+				if (value === undefined || value === output) continue;
 				const sourceRepresentation = fn.valueRepresentation(value);
-				const destinationRepresentation = fn.valueRepresentation(outputs[0]!);
+				const destinationRepresentation = fn.valueRepresentation(output);
 				if (sourceRepresentation === destinationRepresentation) {
 					replacements.set(instruction, {
-						result: outputs[0]!,
+						result: output,
 						value,
 						kind: "eliminate",
 					});
@@ -1427,7 +1533,7 @@ const scalarReplaceContainedAggregates: CorePass = {
 						sourceRepresentation === "i32" ||
 						sourceRepresentation === "boolean")
 				) {
-					replacements.set(instruction, { result: outputs[0]!, value, kind: "box" });
+					replacements.set(instruction, { result: output, value, kind: "box" });
 				}
 			}
 		}
@@ -1439,11 +1545,18 @@ const scalarReplaceContainedAggregates: CorePass = {
 			if (initialValues.some((value) => !cannotBeHeldWeakly(value))) continue;
 			let removable = true;
 			const stores: Array<CoreInstructionId> = [];
-			const uses = new Map<string, CoreUse>();
+			const uses = new Map<
+				string,
+				{ readonly instruction: CoreInstructionId; readonly operand: number }
+			>();
 			for (const value of fn.valueIds()) {
 				if (provenance.allocationOf(value)?.instruction !== layout.instruction) continue;
-				for (const use of fn.uses(value)) {
-					uses.set(`${use.instruction}:${use.operand}`, use);
+				let use = fn.kernel.valueFirstUse(value);
+				while (use >= 0) {
+					const instruction = fn.kernel.useInstruction(use);
+					const operand = fn.kernel.useOperand(use);
+					uses.set(`${instruction}:${operand}`, { instruction, operand });
+					use = fn.kernel.useNext(use);
 				}
 			}
 			for (const use of uses.values()) {
@@ -1536,10 +1649,16 @@ const scalarReplaceContainedAggregates: CorePass = {
 		}
 		for (const instruction of removableAllocations) {
 			if (!fn.isInstructionLive(instruction)) continue;
-			if (
-				fn.instructionResults(instruction).every((value) => fn.valueUseCount(value) === 0)
-			)
-				editor.removeInstruction(instruction);
+			let hasUses = false;
+			const resultStart = fn.kernel.instructionResultStart(instruction);
+			const resultCount = fn.kernel.instructionResultCount(instruction);
+			for (let index = 0; index < resultCount; index++) {
+				if (fn.valueUseCount(fn.kernel.resultAt(resultStart + index)) !== 0) {
+					hasUses = true;
+					break;
+				}
+			}
+			if (!hasUses) editor.removeInstruction(instruction);
 			else
 				editor.replaceInstruction(instruction, "createUndefined", [], {
 					sourcePosition: fn.instructionSourcePosition(instruction),
