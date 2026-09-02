@@ -16,6 +16,7 @@ import {
 import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
+import type { CoreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
 import { CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS } from "./core-ir-provenance.ts";
 import type {
 	CoreIteratorCursorCandidate,
@@ -310,6 +311,7 @@ function pendingLocalCandidate(
 	program: CoreProgram,
 	candidate: CoreLocalSpecializationCandidate,
 	cfg: CoreControlFlow,
+	costModel: CoreGeneratedCodeCostModel,
 	context: CoreCompilationContext | undefined,
 ): PendingSpecialization | undefined {
 	if (candidate.kind === "dense-array" && candidate.mode === "contained") {
@@ -427,7 +429,7 @@ function pendingLocalCandidate(
 			? []
 			: [lockedLiteral.constructorIntrinsic, lockedLiteral.construct]),
 	]);
-	const cost = coreGeneratedCodeCostModel(fn, cfg).forRegion(instructions, {
+	const cost = costModel.forRegion(instructions, {
 		genericTwins: 1,
 		...(candidate.kind === "stack-object" ||
 		candidate.kind === "string-split-projection" ||
@@ -1111,8 +1113,15 @@ export function buildCoreOptimizationPlan(
 			scope: "function",
 			function: functionId,
 		});
+		const costModel = coreGeneratedCodeCostModel(program.function(functionId), cfg);
 		for (const candidate of discovered.candidates) {
-			const planned = pendingLocalCandidate(program, candidate, cfg, options.context);
+			const planned = pendingLocalCandidate(
+				program,
+				candidate,
+				cfg,
+				costModel,
+				options.context,
+			);
 			if (planned !== undefined) pending.push(planned);
 		}
 	}
