@@ -1,4 +1,4 @@
-import { coreFactId } from "./core-ir.ts";
+import { coreBlockId, coreFactId } from "./core-ir.ts";
 import type {
 	AppendCoreInstructionOptions,
 	CoreBlockId,
@@ -596,8 +596,12 @@ export class CoreEditor {
 		if (effective.size === 0) return;
 		const replacement = (value: CoreValueId): CoreValueId =>
 			effective.get(value) ?? value;
-		const changed = new Map<CoreInstructionId, Array<CoreValueId>>();
-		const terminators = new Set<CoreInstructionId>();
+		const changed = new Array<Array<CoreValueId> | undefined>(
+			this.function.instructionCapacity,
+		);
+		const changedInstructions: Array<CoreInstructionId> = [];
+		const terminatorSeen = new Uint8Array(this.function.instructionCapacity);
+		const terminators: Array<CoreInstructionId> = [];
 		for (const value of effective.keys()) {
 			let use = this.function.kernel.valueFirstUse(value);
 			while (use >= 0) {
@@ -605,21 +609,26 @@ export class CoreEditor {
 				if (this.function.kernel.useLive(use) !== 0) {
 					const instruction = this.function.kernel.useInstruction(use);
 					if (this.function.kernel.instructionOpcode(instruction) < 0) {
-						terminators.add(instruction);
+						if (terminatorSeen[instruction] === 0) {
+							terminatorSeen[instruction] = 1;
+							terminators.push(instruction);
+						}
 					} else {
 						const operand = this.function.kernel.useOperand(use);
-						const operands =
-							changed.get(instruction) ?? this.#copyInstructionOperands(instruction);
+						let operands = changed[instruction];
+						if (operands === undefined) {
+							operands = this.#copyInstructionOperands(instruction);
+							changed[instruction] = operands;
+							changedInstructions.push(instruction);
+						}
 						operands[operand] = replacement(operands[operand]!);
-						changed.set(instruction, operands);
 					}
 				}
 				use = next;
 			}
 		}
-		for (const [instruction, operands] of changed) {
-			this.replaceOperands(instruction, operands);
-		}
+		for (const instruction of changedInstructions)
+			this.replaceOperands(instruction, changed[instruction]!);
 		for (const instruction of terminators) {
 			const kind = this.function.instructionKind(instruction);
 			const previousCondition =
@@ -651,7 +660,9 @@ export class CoreEditor {
 			}
 			this.#edits++;
 		}
-		for (const block of this.function.blockIds()) {
+		for (let blockIndex = 0; blockIndex < this.function.blockCapacity; blockIndex++) {
+			const block = coreBlockId(blockIndex);
+			if (!this.function.isBlockLive(block)) continue;
 			const handlerBlock = this.function.kernel.blockHandlerBlock(block);
 			if (handlerBlock === undefined) continue;
 			const argumentStart = this.function.kernel.blockHandlerArgumentStart(block);
