@@ -8,6 +8,11 @@ import type { ReturnRepresentation } from "../shared/effect-summary.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-cross-call-transforms.ts";
+import {
+	CORE_FUNCTION_HAS_ALLOCATIONS,
+	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
+	CoreFunctionFeatureIndex,
+} from "./core-function-features.ts";
 import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
@@ -1082,7 +1087,19 @@ export function buildCoreOptimizationPlan(
 ): CoreOptimizationPlan {
 	const live = new Set(liveFunctions);
 	const pending: Array<PendingCandidate> = [];
+	const candidateOpcodes: Array<number> = [];
+	for (const opcode of ["binary", "call", "callBuiltin", "getIterator", "iteratorStep"]) {
+		const descriptor = program.registry.get(opcode);
+		if (descriptor !== undefined) candidateOpcodes[descriptor.id] = 1;
+	}
+	const features = new CoreFunctionFeatureIndex(program, candidateOpcodes);
 	for (const functionId of liveFunctions) {
+		if (
+			(features.get(functionId) &
+				(CORE_FUNCTION_HAS_ALLOCATIONS | CORE_FUNCTION_HAS_CANDIDATE_OPCODES)) ===
+			0
+		)
+			continue;
 		const discovered = analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, {
 			scope: "function",
 			function: functionId,
