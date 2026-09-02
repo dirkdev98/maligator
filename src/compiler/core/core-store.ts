@@ -493,6 +493,7 @@ export class CoreFunctionStore {
 	readonly #effectRefinements: Array<CoreEffectRefinement | undefined> = [];
 	#sealedBlocks: ReadonlyArray<CoreBlockId> | undefined;
 	#sealedInstructions: ReadonlyArray<CoreInstructionId> | undefined;
+	#instructionSnapshot: ReadonlyArray<CoreInstructionId> | undefined;
 	readonly kernel: CoreFunctionKernel;
 
 	constructor(
@@ -671,12 +672,24 @@ export class CoreFunctionStore {
 		}
 	}
 
-	*instructionIds(block?: CoreBlockId): Iterable<CoreInstructionId> {
-		if (block === undefined) {
-			if (this.#sealedInstructions !== undefined) {
-				yield* this.#sealedInstructions;
-				return;
+	instructionIds(block?: CoreBlockId): Iterable<CoreInstructionId> {
+		if (block === undefined && this.#sealedInstructions !== undefined)
+			return this.#sealedInstructions;
+		if (block === undefined && !this.#activeEditor) {
+			if (this.#instructionSnapshot === undefined) {
+				const instructions: Array<CoreInstructionId> = [];
+				for (let id = 0; id < this.#instructionLive.length; id++) {
+					if (this.#instructionLive[id] === 1) instructions.push(coreInstructionId(id));
+				}
+				this.#instructionSnapshot = Object.freeze(instructions);
 			}
+			return this.#instructionSnapshot;
+		}
+		return this.#liveInstructionIds(block);
+	}
+
+	*#liveInstructionIds(block?: CoreBlockId): Iterable<CoreInstructionId> {
+		if (block === undefined) {
 			for (let id = 0; id < this.#instructionLive.length; id++) {
 				if (this.#instructionLive[id] === 1) yield coreInstructionId(id);
 			}
@@ -900,6 +913,7 @@ export class CoreFunctionStore {
 		}
 		if (this.#activeEditor)
 			throw new Error(`Core function ${this.id} already has an editor`);
+		this.#instructionSnapshot = undefined;
 		this.#activeEditor = true;
 	}
 
