@@ -183,14 +183,35 @@ function addKindTransfer(
 	kind: number,
 	output: CoreValueId,
 	constant: CompilerValueKindMask,
-	inputs: ReadonlyArray<CoreValueId> = [],
+	inputs?: ReadonlyArray<CoreValueId>,
 ): void {
 	buffer.kinds.push(kind);
 	buffer.outputs.push(output);
 	buffer.constants.push(constant);
 	buffer.inputStarts.push(buffer.inputs.length);
-	buffer.inputCounts.push(inputs.length);
-	for (const input of inputs) buffer.inputs.push(input);
+	buffer.inputCounts.push(inputs?.length ?? 0);
+	if (inputs !== undefined) {
+		for (const input of inputs) buffer.inputs.push(input);
+	}
+}
+
+function addOperationKindTransfer(
+	buffer: KindTransferBuffer,
+	kind: number,
+	output: CoreValueId,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): void {
+	const operandStart = fn.kernel.instructionOperandStart(instruction);
+	const operandCount = fn.kernel.instructionOperandCount(instruction);
+	buffer.kinds.push(kind);
+	buffer.outputs.push(output);
+	buffer.constants.push(0);
+	buffer.inputStarts.push(buffer.inputs.length);
+	buffer.inputCounts.push(operandCount);
+	for (let index = 0; index < operandCount; index++) {
+		buffer.inputs.push(fn.kernel.operandAt(operandStart + index));
+	}
 }
 
 function addOperationTransfer(
@@ -200,11 +221,7 @@ function addOperationTransfer(
 	output: CoreValueId,
 	inputs?: CoreValueKindInputs,
 ): void {
-	const operandStart = fn.kernel.instructionOperandStart(instruction);
 	const operandCount = fn.kernel.instructionOperandCount(instruction);
-	const operands = Array.from({ length: operandCount }, (_, index) =>
-		fn.kernel.operandAt(operandStart + index),
-	);
 	const staticKind = representationKind(fn, output) ?? staticOpcodeKind(fn, instruction);
 	if (staticKind !== undefined) {
 		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, staticKind);
@@ -221,11 +238,11 @@ function addOperationTransfer(
 		return;
 	}
 	const operator = fn.instructionAttributes(instruction).operator;
-	if (opcode === "move" && operands.length === 1) {
-		addKindTransfer(buffer, KIND_TRANSFER_COPY, output, 0, operands);
+	if (opcode === "move" && operandCount === 1) {
+		addOperationKindTransfer(buffer, KIND_TRANSFER_COPY, output, fn, instruction);
 		return;
 	}
-	if (opcode === "unary" && operands.length === 1 && typeof operator === "string") {
+	if (opcode === "unary" && operandCount === 1 && typeof operator === "string") {
 		const constant =
 			operator === "!"
 				? COMPILER_VALUE_KIND_BOOLEAN
@@ -237,13 +254,19 @@ function addOperationTransfer(
 		if (constant !== undefined) {
 			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, constant);
 		} else if (NUMERIC_UNARY_OPERATORS.has(operator)) {
-			addKindTransfer(buffer, KIND_TRANSFER_NUMERIC_UNARY, output, 0, operands);
+			addOperationKindTransfer(
+				buffer,
+				KIND_TRANSFER_NUMERIC_UNARY,
+				output,
+				fn,
+				instruction,
+			);
 		} else {
 			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_TOP);
 		}
 		return;
 	}
-	if (opcode === "binary" && operands.length === 2 && typeof operator === "string") {
+	if (opcode === "binary" && operandCount === 2 && typeof operator === "string") {
 		if (COMPARISON_OPERATORS.has(operator)) {
 			addKindTransfer(
 				buffer,
@@ -252,9 +275,9 @@ function addOperationTransfer(
 				COMPILER_VALUE_KIND_BOOLEAN,
 			);
 		} else if (operator === "+") {
-			addKindTransfer(buffer, KIND_TRANSFER_ADD, output, 0, operands);
+			addOperationKindTransfer(buffer, KIND_TRANSFER_ADD, output, fn, instruction);
 		} else if (NUMERIC_BINARY_OPERATORS.has(operator)) {
-			addKindTransfer(buffer, KIND_TRANSFER_BINARY, output, 0, operands);
+			addOperationKindTransfer(buffer, KIND_TRANSFER_BINARY, output, fn, instruction);
 		} else {
 			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_TOP);
 		}
@@ -364,7 +387,8 @@ export function analyzeCoreValueKinds(
 			queue.push(transfer);
 		}
 	};
-	const queue = Array.from({ length: transferOutputs.length }, (_, index) => index);
+	const queue = new Array<number>(transferOutputs.length);
+	for (let index = 0; index < queue.length; index++) queue[index] = index;
 	const queued = new Uint8Array(transferOutputs.length);
 	queued.fill(1);
 	let cursor = 0;
@@ -427,7 +451,8 @@ export function analyzeCoreValueKinds(
 		)
 			exactInt32[value] = 1;
 	}
-	const exactQueue = Array.from({ length: transferOutputs.length }, (_, index) => index);
+	const exactQueue = new Array<number>(transferOutputs.length);
+	for (let index = 0; index < exactQueue.length; index++) exactQueue[index] = index;
 	const exactQueued = new Uint8Array(transferOutputs.length);
 	exactQueued.fill(1);
 	let exactCursor = 0;
