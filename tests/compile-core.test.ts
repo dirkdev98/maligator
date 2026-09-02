@@ -131,7 +131,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(compilation.plan).toMatchObject({
 			liveFunctions: [...compilation.program.functionIds()],
 			directEntries: [],
-			specializations: [],
+			recipes: { count: 0 },
 		});
 		expect(compilation.plan.version.key).toMatch(/^p:/);
 		expect(compilation.plan.statistics).toMatchObject({ applied: 0, declined: 0 });

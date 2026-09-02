@@ -179,13 +179,16 @@ describe("symbolic Core call graph", () => {
 		}
 		expect(sources[0]).not.toMatch(/callers\(functionId/u);
 		expect(sources[0]).not.toMatch(/versionKey:\s*string|functionVersionKey/u);
-		expect(sources[0]).toMatch(/programFlow\.refresh/);
-		expect(sources[0]).toMatch(/flow\.dirtyFunctionAt/);
 		expect(sources[1]).not.toMatch(
 			/ReadonlyMap<CoreFunctionId, string>|functionVersionKey/u,
 		);
-		expect(sources[1]).toMatch(/programFlow\.refresh/);
-		expect(sources[1]).toMatch(/flow\.dirtyFunctionAt/);
+		const facade = readFileSync(
+			"src/compiler/core/core-program-flow-analysis.ts",
+			"utf8",
+		);
+		expect(facade).toMatch(/programFlow\.refresh/);
+		expect(facade).toMatch(/epoch\.dirtyFunctionAt/);
+		expect(facade).toMatch(/programFlow\.local/);
 		for (const path of [
 			"src/compiler/core/core-ir-call-targets.ts",
 			"src/compiler/core/core-ir-interprocedural-flow.ts",
@@ -194,7 +197,5 @@ describe("symbolic Core call graph", () => {
 			const source = readFileSync(path, "utf8");
 			expect(source).not.toMatch(/\.instructionIds\(/u);
 		}
-		expect(sources[0]).toMatch(/programFlow\.local/);
-		expect(sources[1]).toMatch(/programFlow\.local/);
 	});
 });
