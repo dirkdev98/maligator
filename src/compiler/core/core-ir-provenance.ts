@@ -401,9 +401,7 @@ function provenance(
 				(cell.kind === "element" && layout.elements.has(cell.index));
 
 	const escaped = new Uint8Array(fn.instructionCapacity);
-	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
-		const value = coreValueId(valueIndex);
-		if (!fn.isValueLive(value)) continue;
+	for (const value of fn.valueIds()) {
 		const layout = allocationOf(value);
 		if (layout === undefined) continue;
 		for (const use of fn.uses(value)) {
