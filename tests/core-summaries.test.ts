@@ -21,7 +21,9 @@ describe("incremental Core program summaries", () => {
 		);
 
 		expect(source).not.toMatch(/JSON\.stringify/);
+		expect(source).not.toMatch(/versionKey:\s*string|localVersionKey/);
 		expect(source).toMatch(/function summariesEqual\(/);
+		expect(source).toMatch(/programFlow\.dirtyFunctionAt/);
 	});
 
 	it("does not publish or wake a caller when an edited leaf is semantically unchanged", () => {

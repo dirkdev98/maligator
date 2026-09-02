@@ -40,6 +40,7 @@ import {
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreFunctionId, CoreRepresentation, CoreValueId } from "./core-ir.ts";
+import { CORE_PROGRAM_FLOW_SUMMARIES } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "call-effect-summary";
@@ -58,7 +59,11 @@ const ORIGIN_UNKNOWN: ValueOrigin = Object.freeze({ kind: "unknown" });
 
 interface CoreLocalFunctionSummary {
 	readonly function: CoreFunctionId;
-	readonly versionKey: string;
+	readonly bodyVersion: number;
+	readonly cfgVersion: number;
+	readonly callsVersion: number;
+	readonly memoryEffectsVersion: number;
+	readonly representationsVersion: number;
 	readonly sourcePath: string;
 	readonly summaryId: string;
 	readonly moduleId: string;
@@ -120,9 +125,18 @@ interface CoreProgramSummaryState extends CoreProgramSummaries {
 	readonly anyScriptSummary: CoreAnyScriptCallSummary | undefined;
 }
 
-function localVersionKey(fn: CoreFunctionStore): string {
-	const { body, cfg, calls, memoryEffects, representations } = fn.versions;
-	return `${body}:${cfg}:${calls}:${memoryEffects}:${representations}`;
+function localSummaryIsCurrent(
+	local: CoreLocalFunctionSummary | undefined,
+	fn: CoreFunctionStore,
+): boolean {
+	return (
+		local !== undefined &&
+		local.bodyVersion === fn.version("body") &&
+		local.cfgVersion === fn.version("cfg") &&
+		local.callsVersion === fn.version("calls") &&
+		local.memoryEffectsVersion === fn.version("memoryEffects") &&
+		local.representationsVersion === fn.version("representations")
+	);
 }
 
 const FRESH_RESULTS = new Set([
@@ -404,7 +418,11 @@ function analyzeLocalSummary(
 	}
 	return Object.freeze({
 		function: fn.id,
-		versionKey: localVersionKey(fn),
+		bodyVersion: fn.version("body"),
+		cfgVersion: fn.version("cfg"),
+		callsVersion: fn.version("calls"),
+		memoryEffectsVersion: fn.version("memoryEffects"),
+		representationsVersion: fn.version("representations"),
 		sourcePath: fn.metadata.sourcePath,
 		summaryId: functionSummaryId(fn.metadata.sourcePath, fn.id),
 		moduleId: moduleSummaryId(fn.metadata.sourcePath),
@@ -900,15 +918,20 @@ function analyzeProgramSummaries(
 	targets: CoreCallGraphIndex,
 	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
 	previous?: CoreProgramSummaryState,
+	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 ): CoreProgramSummaryState {
 	const local = new Map<CoreFunctionId, CoreLocalFunctionSummary>();
 	const changedFunctions = new Set<CoreFunctionId>();
+	const dirty = new Set(
+		previous === undefined ? program.functionIds() : (dirtyFunctions ?? program.functionIds()),
+	);
 	let functionsAnalyzed = 0;
 	let functionsReused = 0;
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		const prior = previous?.local.get(functionId);
-		if (prior?.versionKey === localVersionKey(fn)) {
+		if (!dirty.has(functionId) || localSummaryIsCurrent(prior, fn)) {
+			if (prior === undefined) throw new Error(`Missing local summary for ${functionId}`);
 			local.set(functionId, prior);
 			functionsReused++;
 		} else {
@@ -1196,10 +1219,22 @@ export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgram
 		contextIdentity(context) {
 			return context.facts.closure.sourceClosure.kind;
 		},
-		compute({ program, context, request, previous, get }) {
+		compute({ program, context, request, previous, get, programFlow }) {
 			if (request.scope !== "program")
 				throw new Error("Expected program analysis request");
 			const targets = get(CORE_CALL_GRAPH_ANALYSIS, request);
+			const dirtyFunctions = new Array<CoreFunctionId>();
+			if (previous !== undefined) {
+				for (let index = 0; index < programFlow.dirtyFunctionCount; index++) {
+					const functionId = programFlow.dirtyFunctionAt(index);
+					if (
+						(programFlow.dirtyDimensions(functionId) & CORE_PROGRAM_FLOW_SUMMARIES) !==
+						0
+					) {
+						dirtyFunctions.push(functionId);
+					}
+				}
+			}
 			return analyzeProgramSummaries(
 				program,
 				context,
@@ -1210,6 +1245,7 @@ export const CORE_PROGRAM_SUMMARIES_ANALYSIS: CoreAnalysisDefinition<CoreProgram
 						function: functionId,
 					}),
 				previous as CoreProgramSummaryState | undefined,
+				dirtyFunctions,
 			);
 		},
 	};
