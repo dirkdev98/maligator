@@ -4,6 +4,7 @@ import type {
 	CoreBlockId,
 	CoreEdge,
 	CoreFunctionId,
+	CoreInstructionId,
 	CoreTerminatorPayload,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -79,7 +80,13 @@ export function coreTerminatorEdges(
 
 function blockHasExceptionalExit(fn: CoreFunctionStore, block: CoreBlockId): boolean {
 	if (fn.instructionKind(fn.blockTerminator(block)) === "throw") return true;
-	for (const instruction of fn.bodyInstructionIds(block)) {
+	for (
+		let instructionIndex = fn.kernel.blockFirstInstruction(block);
+		instructionIndex >= 0;
+		instructionIndex = fn.kernel.instructionNext(instructionIndex as CoreInstructionId)
+	) {
+		const instruction = instructionIndex as CoreInstructionId;
+		if (fn.kernel.instructionOpcode(instruction) < 0) continue;
 		const effects =
 			fn.instructionEffectRefinement(instruction)?.effects ??
 			fn.registry.byId(fn.instructionOpcode(instruction)).effects;
@@ -95,15 +102,14 @@ function buildEdges(
 	readonly successors: Array<Array<CoreControlEdge>>;
 	readonly predecessors: Array<Array<CoreControlEdge>>;
 } {
-	const successors = Array.from(
-		{ length: fn.blockCapacity },
-		() => new Array<CoreControlEdge>(),
-	);
-	const predecessors = Array.from(
-		{ length: fn.blockCapacity },
-		() => new Array<CoreControlEdge>(),
-	);
-	for (const block of fn.blockIds()) {
+	const successors = new Array<Array<CoreControlEdge>>(fn.blockCapacity);
+	const predecessors = new Array<Array<CoreControlEdge>>(fn.blockCapacity);
+	const empty = Object.freeze([]) as unknown as Array<CoreControlEdge>;
+	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const block = coreBlockId(blockIndex);
+		if (fn.kernel.blockLive(block) === 0) continue;
+		successors[block] = empty;
+		predecessors[block] = empty;
 		const terminator = fn.blockTerminator(block);
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
 		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
@@ -115,7 +121,8 @@ function buildEdges(
 			let argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
 				fn.kernel.operandAt(argumentStart + index),
 			);
-			successors[block]!.push({
+			if (successors[block] === empty) successors[block] = [];
+			successors[block].push({
 				from: block,
 				to: fn.kernel.terminatorEdgeBlock(edge),
 				kind: "ordinary",
@@ -139,7 +146,8 @@ function buildEdges(
 			let argumentsCache = Array.from({ length: count }, (_, index) =>
 				fn.kernel.handlerArgumentAt(start + index),
 			);
-			successors[block]!.push({
+			if (successors[block] === empty) successors[block] = [];
+			successors[block].push({
 				from: block,
 				to: handler,
 				kind: "exceptional",
@@ -157,7 +165,11 @@ function buildEdges(
 		}
 	}
 	for (const outgoing of successors) {
-		for (const edge of outgoing) predecessors[edge.to]?.push(edge);
+		if (outgoing === undefined) continue;
+		for (const edge of outgoing) {
+			if (predecessors[edge.to] === empty) predecessors[edge.to] = [];
+			(predecessors[edge.to] ??= []).push(edge);
+		}
 	}
 	return { successors, predecessors };
 }
@@ -202,12 +214,11 @@ function immediateDominators(
 	const dominators = new Int32Array(predecessors.length);
 	dominators.fill(-1);
 	dominators[entry] = entry;
-	const successors = Array.from(
-		{ length: predecessors.length },
-		() => new Array<CoreBlockId>(),
-	);
-	for (const [block, incoming] of predecessors.entries()) {
-		for (const { from } of incoming) successors[from]!.push(coreBlockId(block));
+	const successors = new Array<Array<CoreBlockId>>(predecessors.length);
+	for (let block = 0; block < predecessors.length; block++) {
+		for (const { from } of predecessors[block] ?? []) {
+			(successors[from] ??= []).push(coreBlockId(block));
+		}
 	}
 	const intersect = (left: CoreBlockId, right: CoreBlockId): CoreBlockId => {
 		let first = left;
@@ -225,15 +236,15 @@ function immediateDominators(
 	while (cursor < queue.length) {
 		const block = queue[cursor++]!;
 		queued[block] = 0;
-		const incoming = (predecessors[block] ?? []).filter(
-			({ from }) => dominators[from]! >= 0,
-		);
-		if (incoming.length === 0) continue;
-		let next = incoming[0]!.from;
-		for (const edge of incoming.slice(1)) next = intersect(next, edge.from);
+		let next: CoreBlockId | undefined;
+		for (const edge of predecessors[block] ?? []) {
+			if (dominators[edge.from]! < 0) continue;
+			next = next === undefined ? edge.from : intersect(next, edge.from);
+		}
+		if (next === undefined) continue;
 		if (dominators[block] === next) continue;
 		dominators[block] = next;
-		for (const successor of successors[block]!) {
+		for (const successor of successors[block] ?? []) {
 			if (successor === entry || queued[successor] !== 0) continue;
 			queued[successor] = 1;
 			queue.push(successor);
@@ -534,12 +545,11 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 	) {
 		const entryNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2);
 		const exitNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2 + 1);
-		const splitSuccessors = Array.from(
-			{ length: fn.blockCapacity * 2 },
-			() => new Array<CoreControlEdge>(),
-		);
-		for (const block of fn.blockIds()) {
-			splitSuccessors[entryNode(block)]!.push({
+		const splitSuccessors = new Array<Array<CoreControlEdge>>(fn.blockCapacity * 2);
+		for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+			const block = coreBlockId(blockIndex);
+			if (fn.kernel.blockLive(block) === 0) continue;
+			(splitSuccessors[entryNode(block)] ??= []).push({
 				from: entryNode(block),
 				to: exitNode(block),
 				kind: "ordinary",
@@ -547,7 +557,7 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 			});
 			for (const edge of successors[block] ?? []) {
 				const from = edge.kind === "ordinary" ? exitNode(block) : entryNode(block);
-				splitSuccessors[from]!.push({
+				(splitSuccessors[from] ??= []).push({
 					from,
 					to: entryNode(edge.to),
 					kind: edge.kind,
@@ -555,9 +565,11 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 				});
 			}
 		}
-		const splitPredecessors = splitSuccessors.map(() => new Array<CoreControlEdge>());
-		for (const outgoing of splitSuccessors)
-			for (const edge of outgoing) splitPredecessors[edge.to]!.push(edge);
+		const splitPredecessors = new Array<Array<CoreControlEdge>>(splitSuccessors.length);
+		for (const outgoing of splitSuccessors) {
+			if (outgoing === undefined) continue;
+			for (const edge of outgoing) (splitPredecessors[edge.to] ??= []).push(edge);
+		}
 		const splitTraversal = traversal(entryNode(fn.entry), splitSuccessors);
 		const splitParents = immediateDominators(
 			entryNode(fn.entry),
