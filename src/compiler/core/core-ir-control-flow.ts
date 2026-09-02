@@ -716,10 +716,7 @@ export function coreCanonicalValueRoots(
 		}
 	}
 	const canonical = new Int32Array(fn.valueCapacity);
-	for (let index = 0; index < fn.valueCapacity; index++) {
-		const value = coreValueId(index);
-		if (fn.isValueLive(value)) canonical[value] = value;
-	}
+	for (const value of fn.valueIds()) canonical[value] = value;
 	for (let component = components.length - 1; component >= 0; component--) {
 		let externalRoot: number | undefined;
 		let singleRoot = true;
@@ -736,9 +733,7 @@ export function coreCanonicalValueRoots(
 		}
 	}
 	const roots = new SparseCanonicalValueRoots();
-	for (let index = 0; index < fn.valueCapacity; index++) {
-		const value = coreValueId(index);
-		if (!fn.isValueLive(value)) continue;
+	for (const value of fn.valueIds()) {
 		const root = coreValueId(canonical[value]!);
 		if (root !== value) roots.set(value, root);
 	}
