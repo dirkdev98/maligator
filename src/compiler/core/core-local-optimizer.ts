@@ -15,6 +15,16 @@ import type {
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 const DEAD_CODE_RULE = 0x8000_0000;
+const TYPEOF_RESULTS: ReadonlySet<string> = new Set([
+	"undefined",
+	"object",
+	"boolean",
+	"number",
+	"string",
+	"symbol",
+	"bigint",
+	"function",
+]);
 
 class SparseNumericQueue {
 	#items: Int32Array;
@@ -129,6 +139,14 @@ const CONSTANT_FOLDING_RULE: CoreLocalInstructionRule = {
 	},
 };
 
+const TYPEOF_COMPARISON_RULE: CoreLocalInstructionRule = {
+	name: "typeof-comparison-canonicalization",
+	opcodes: [],
+	run(optimizer, instruction) {
+		return optimizer.canonicalizeTypeofComparison(instruction);
+	},
+};
+
 const CONTROL_FOLDING_RULE: CoreLocalBlockRule = {
 	name: "local-control-folding",
 	run(optimizer, block) {
@@ -194,6 +212,14 @@ export class CoreLocalOptimizer {
 					return id === undefined ? [] : [id];
 				}),
 			},
+			...(program.registry.get("binary") === undefined
+				? []
+				: [
+						{
+							...TYPEOF_COMPARISON_RULE,
+							opcodes: [program.registry.require("binary").id],
+						},
+					]),
 			...(options.additionalRules ?? []),
 		];
 		this.#blockRules = [CONTROL_FOLDING_RULE];
@@ -315,6 +341,64 @@ export class CoreLocalOptimizer {
 			sourcePosition: this.#fn.instructionSourcePosition(instruction),
 		});
 		for (const operand of operands) this.#wakeValueDefinition(operand);
+		this.#wakeValueUsers(result);
+		this.#enqueueInstruction(instruction);
+		return true;
+	}
+
+	canonicalizeTypeofComparison(instruction: CoreInstructionId): boolean {
+		if (
+			this.#fn.kernel.instructionLive(instruction) === 0 ||
+			this.#fn.kernel.instructionOpcode(instruction) < 0 ||
+			this.#fn.instructionOpcodeName(instruction) !== "binary" ||
+			this.#fn.kernel.instructionOperandCount(instruction) !== 2 ||
+			this.#fn.kernel.instructionResultCount(instruction) !== 1 ||
+			this.#program.registry.get("typeofCompare") === undefined
+		) {
+			return false;
+		}
+		const operator = this.#fn.instructionAttributes(instruction).operator;
+		if (
+			operator !== "===" &&
+			operator !== "!==" &&
+			operator !== "==" &&
+			operator !== "!="
+		) {
+			return false;
+		}
+		const left = this.#instructionOperand(instruction, 0)!;
+		const right = this.#instructionOperand(instruction, 1)!;
+		const typeofInput = (value: CoreValueId): CoreValueId | undefined => {
+			if (this.#fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+			const definition = coreInstructionId(this.#fn.kernel.valueDefinitionOwner(value));
+			if (
+				this.#fn.kernel.instructionLive(definition) === 0 ||
+				this.#fn.kernel.instructionOpcode(definition) < 0 ||
+				this.#fn.instructionOpcodeName(definition) !== "unary" ||
+				this.#fn.instructionAttributes(definition).operator !== "typeof"
+			) {
+				return undefined;
+			}
+			return this.#instructionOperand(definition, 0);
+		};
+		const leftInput = typeofInput(left);
+		const rightInput = typeofInput(right);
+		const input = leftInput ?? rightInput;
+		const constant = this.#constantForValue(leftInput === undefined ? left : right);
+		if (input === undefined || constant?.kind !== "string") return false;
+		const expected = String.fromCharCode(
+			...(this.#program.stringConstants[constant.index] ?? []),
+		);
+		if (!TYPEOF_RESULTS.has(expected)) return false;
+		const result = this.#fn.kernel.resultAt(
+			this.#fn.kernel.instructionResultStart(instruction),
+		);
+		this.#edit().replaceInstruction(instruction, "typeofCompare", [input], {
+			attributes: { expected, negated: operator === "!==" || operator === "!=" },
+			sourcePosition: this.#fn.instructionSourcePosition(instruction),
+		});
+		this.#wakeValueDefinition(left);
+		this.#wakeValueDefinition(right);
 		this.#wakeValueUsers(result);
 		this.#enqueueInstruction(instruction);
 		return true;

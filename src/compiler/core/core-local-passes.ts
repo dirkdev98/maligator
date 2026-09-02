@@ -1061,17 +1061,6 @@ function typeofObservation(
 	return actual === undefined ? undefined : actual === expected;
 }
 
-const TYPEOF_RESULTS: ReadonlySet<string> = new Set([
-	"undefined",
-	"object",
-	"boolean",
-	"number",
-	"string",
-	"symbol",
-	"bigint",
-	"function",
-]);
-
 const foldValueKindObservations: CorePass = {
 	name: "value-kind-observation-folding",
 	stage: "canonicalize",
@@ -1133,65 +1122,6 @@ const foldValueKindObservations: CorePass = {
 				sourcePosition: fn.instructionSourcePosition(instruction),
 			});
 		}
-		return editor.commit();
-	},
-};
-
-const foldTypeofComparisons: CorePass = {
-	name: "typeof-comparison-canonicalization",
-	stage: "canonicalize",
-	scope: "instruction",
-	instructionOpcodes: coreOpcodeSet("binary"),
-	requiredAnalyses: [],
-	wakesOn: ["body"],
-	preserves: [],
-	changes: LOCAL_CHANGES,
-	budget: LOCAL_BUDGET,
-	run({ program, item }) {
-		if (item.scope !== "instruction") return undefined;
-		const fn = program.function(item.function);
-		if (
-			!fn.isInstructionLive(item.instruction) ||
-			fn.instructionKind(item.instruction) !== "operation" ||
-			fn.instructionOpcodeName(item.instruction) !== "binary"
-		)
-			return undefined;
-		const operator = fn.instructionAttributes(item.instruction).operator;
-		if (
-			operator !== "===" &&
-			operator !== "!==" &&
-			operator !== "==" &&
-			operator !== "!="
-		)
-			return undefined;
-		if (fn.kernel.instructionOperandCount(item.instruction) !== 2) return undefined;
-		const left = instructionOperand(fn, item.instruction, 0)!;
-		const right = instructionOperand(fn, item.instruction, 1)!;
-		const typeofInput = (value: CoreValueId): CoreValueId | undefined => {
-			const definition = definingInstruction(fn, value);
-			if (
-				definition === undefined ||
-				fn.instructionKind(definition) !== "operation" ||
-				fn.instructionOpcodeName(definition) !== "unary" ||
-				fn.instructionAttributes(definition).operator !== "typeof"
-			)
-				return undefined;
-			return instructionOperand(fn, definition, 0);
-		};
-		const leftInput = typeofInput(left);
-		const rightInput = typeofInput(right);
-		const input = leftInput ?? rightInput;
-		const constant = constantForValue(fn, leftInput === undefined ? left : right);
-		if (input === undefined || constant?.kind !== "string") return undefined;
-		const expected = String.fromCharCode(
-			...(program.stringConstants[constant.index] ?? []),
-		);
-		if (!TYPEOF_RESULTS.has(expected)) return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		editor.replaceInstruction(item.instruction, "typeofCompare", [input], {
-			attributes: { expected, negated: operator === "!==" || operator === "!=" },
-			sourcePosition: fn.instructionSourcePosition(item.instruction),
-		});
 		return editor.commit();
 	},
 };
@@ -2240,7 +2170,6 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	annotateTerminalYieldSites,
 	foldStaticPropertyKeys,
 	rewriteExactBuiltinCalls,
-	foldTypeofComparisons,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,
 	localValueNumbering,
