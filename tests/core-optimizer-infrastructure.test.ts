@@ -332,6 +332,21 @@ describe("Core optimizer infrastructure", () => {
 		).toThrow("explicit program dependency");
 	});
 
+	it("validates reused analysis definitions without masking scope or key conflicts", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses } = analysisHarness(program);
+		const analysis = cfgAnalysis([]);
+		const functionRequest = { scope: "function" as const, function: functions[0]!.id };
+		analyses.get(analysis, functionRequest);
+		analyses.get(analysis, functionRequest);
+		expect(() => analyses.get(analysis, { scope: "program" })).toThrow(
+			"requires function scope",
+		);
+		expect(() =>
+			analyses.get({ ...analysis, functionDependencies: ["body"] }, functionRequest),
+		).toThrow("conflicting dependencies");
+	});
+
 	it("reports queue and budget work without a global round counter", () => {
 		const { program } = programWithTwoFunctions();
 		const { analyses, report } = analysisHarness(program);

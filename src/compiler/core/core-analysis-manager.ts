@@ -66,6 +66,7 @@ export class CoreAnalysisManager {
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #cache = new Map<string, CachedAnalysis>();
 	readonly #registered = new Map<string, RegisteredAnalysis>();
+	readonly #validatedDefinitions = new WeakSet<CoreAnalysisDefinition<unknown>>();
 
 	constructor(
 		program: CoreProgram,
@@ -117,6 +118,7 @@ export class CoreAnalysisManager {
 				`Core analysis ${definition.key} requires ${definition.scope} scope, received ${request.scope}`,
 			);
 		}
+		if (this.#validatedDefinitions.has(definition)) return;
 		const functionDependencies = definition.functionDependencies ?? [];
 		const programDependencies = definition.programDependencies ?? [];
 		if (definition.scope === "program" && programDependencies.length === 0) {
@@ -134,6 +136,7 @@ export class CoreAnalysisManager {
 			throw new Error(`Core analysis key ${definition.key} has conflicting dependencies`);
 		}
 		this.#registered.set(definition.key, { signature });
+		this.#validatedDefinitions.add(definition);
 	}
 
 	#scopeKey(request: CoreAnalysisRequest): string {
