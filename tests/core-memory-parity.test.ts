@@ -132,7 +132,7 @@ describe("Core memory and escape parity", () => {
 		});
 	});
 
-	it("spends family precision only on exactly read slots", () => {
+	it("keeps exact precision for every accessed slot", () => {
 		const slotCount = 300;
 		const program = new CoreProgram(coreOpcodeRegistry, {
 			globalCount: slotCount + 1,
@@ -173,7 +173,7 @@ describe("Core memory and escape parity", () => {
 		const optimized = optimize(program);
 
 		expect(operationCount(optimized.function(writeHeavy), "loadGlobal")).toBe(0);
-		expect(operationCount(optimized.function(readHeavy), "loadGlobal")).toBe(slotCount);
+		expect(operationCount(optimized.function(readHeavy), "loadGlobal")).toBe(0);
 	});
 
 	it("stops slot forwarding at calls and suspension", () => {

@@ -300,8 +300,6 @@ interface PartitionInfo {
 	readonly protectedLocalHeap: boolean;
 }
 
-const MAX_EXACT_PARTITIONS_PER_FAMILY = 256;
-
 function resolutionFor(provenance: CoreProvenance): CoreMemoryResolution {
 	const resolution: CoreMemoryResolution = {
 		ownCell(base, key, mode) {
@@ -345,23 +343,20 @@ function memoryVersions(
 			exactLocations.set(locationId, access.location);
 		}
 	}
-	const acceptedExact = new Set<CoreMemoryLocationId>();
-	for (const locations of exactReads.values()) {
-		if (locations.size <= MAX_EXACT_PARTITIONS_PER_FAMILY) {
-			for (const location of locations) acceptedExact.add(location);
-		}
-	}
 	const partitions: Array<PartitionInfo> = CORE_EFFECT_DOMAINS.map(() => ({
 		protectedLocalHeap: false,
 	}));
 	const slotByLocation = new Map<CoreMemoryLocationId, number>();
-	for (const locationId of acceptedExact) {
-		const location = exactLocations.get(locationId)!;
-		slotByLocation.set(locationId, partitions.length);
-		partitions.push({
-			family: coreMemoryLocationFamily(location),
-			protectedLocalHeap: location.kind === "object-slot" || location.kind === "element",
-		});
+	for (const locations of exactReads.values()) {
+		for (const locationId of locations) {
+			const location = exactLocations.get(locationId)!;
+			slotByLocation.set(locationId, partitions.length);
+			partitions.push({
+				family: coreMemoryLocationFamily(location),
+				protectedLocalHeap:
+					location.kind === "object-slot" || location.kind === "element",
+			});
+		}
 	}
 	const domainSlot = new Map(CORE_EFFECT_DOMAINS.map((domain, slot) => [domain, slot]));
 	const locationSlotCount = partitions.length;
