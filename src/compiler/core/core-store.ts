@@ -508,6 +508,7 @@ export class CoreFunctionStore {
 			instructionResultStart: this.#instructionResultStart,
 			instructionResultCount: this.#instructionResultCount,
 			instructionSourcePosition: this.#instructionSourcePosition,
+			instructionEffectRefinementRef: this.#instructionEffectRefinementRef,
 			instructionTerminatorEdgeStart: this.#instructionTerminatorEdgeStart,
 			instructionTerminatorEdgeCount: this.#instructionTerminatorEdgeCount,
 			instructionTerminatorFact: this.#instructionTerminatorFact,

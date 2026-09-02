@@ -36,17 +36,16 @@ function formatTerminator(payload: CoreTerminatorPayload): string {
 }
 
 function formatFunction(fn: CoreFunctionStore): string {
-	const signature = fn.parameters.map(formatValue).join(", ");
+	const signature = coreFunctionParameters(fn).map(formatValue).join(", ");
 	const lines = [`core function ${fn.id}(${signature}) {`];
 	for (const block of fn.blockIds()) {
-		const parameters = fn
-			.blockParameters(block)
+		const parameters = coreBlockParameters(fn, block)
 			.map(
 				(parameter) =>
 					`${formatValue(parameter.value)}: ${parameter.representation}${parameter.role === "exception" ? " exception" : ""}`,
 			)
 			.join(", ");
-		const handler = fn.blockHandler(block);
+		const handler = coreBlockHandler(fn, block);
 		const formattedHandler =
 			handler === undefined
 				? ""
@@ -55,13 +54,13 @@ function formatFunction(fn: CoreFunctionStore): string {
 		for (const instruction of fn.instructionIds(block)) {
 			if (fn.instructionKind(instruction) !== "operation") {
 				lines.push(
-					`    @${instruction} ${formatTerminator(fn.terminatorPayload(instruction))}`,
+					`    @${instruction} ${formatTerminator(coreTerminatorPayload(fn, instruction))}`,
 				);
 				continue;
 			}
-			const outputs = fn.instructionResults(instruction).map(formatValue).join(", ");
+			const outputs = coreInstructionResults(fn, instruction).map(formatValue).join(", ");
 			const assignment = outputs.length === 0 ? "" : `${outputs} = `;
-			const inputs = fn.instructionOperands(instruction).map(formatValue).join(", ");
+			const inputs = coreInstructionOperands(fn, instruction).map(formatValue).join(", ");
 			const attributes = fn.instructionAttributes(instruction);
 			const formattedAttributes =
 				Object.keys(attributes).length === 0 ? "" : ` ${JSON.stringify(attributes)}`;
@@ -86,3 +85,11 @@ export function formatCoreProgram(program: CoreProgram): string {
 		.map((functionId) => formatCoreFunction(program, functionId))
 		.join("\n");
 }
+import {
+	coreBlockHandler,
+	coreBlockParameters,
+	coreFunctionParameters,
+	coreInstructionOperands,
+	coreInstructionResults,
+	coreTerminatorPayload,
+} from "./core-debug-view.ts";

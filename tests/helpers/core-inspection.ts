@@ -37,8 +37,8 @@ export function coreOperations(
 			id: instruction,
 			block,
 			opcode: fn.instructionOpcodeName(instruction),
-			inputs: fn.instructionOperands(instruction),
-			outputs: fn.instructionResults(instruction),
+			inputs: coreInstructionOperands(fn, instruction),
+			outputs: coreInstructionResults(fn, instruction),
 			attributes: fn.instructionAttributes(instruction),
 		})),
 	);
@@ -48,7 +48,7 @@ export function coreBlocks(fn: CoreFunctionStore): ReadonlyArray<CoreBlockInspec
 	return [...fn.blockIds()].map((block) => ({
 		id: block,
 		instructions: coreOperations(fn).filter((instruction) => instruction.block === block),
-		terminator: fn.terminatorPayload(fn.blockTerminator(block)),
+		terminator: coreTerminatorPayload(fn, fn.blockTerminator(block)),
 	}));
 }
 
@@ -63,3 +63,8 @@ export function coreFunctionNamed(
 			) === name,
 	);
 }
+import {
+	coreInstructionOperands,
+	coreInstructionResults,
+	coreTerminatorPayload,
+} from "../../src/compiler/core/core-debug-view.ts";

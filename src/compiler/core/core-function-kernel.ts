@@ -28,6 +28,7 @@ export interface CoreFunctionKernelColumns {
 	readonly instructionResultStart: ReadonlyArray<number>;
 	readonly instructionResultCount: ReadonlyArray<number>;
 	readonly instructionSourcePosition: ReadonlyArray<number>;
+	readonly instructionEffectRefinementRef: ReadonlyArray<number>;
 	readonly instructionTerminatorEdgeStart: ReadonlyArray<number>;
 	readonly instructionTerminatorEdgeCount: ReadonlyArray<number>;
 	readonly instructionTerminatorFact: ReadonlyArray<number>;
@@ -160,6 +161,10 @@ export class CoreFunctionKernel {
 
 	instructionSourcePosition(instruction: CoreInstructionId): number {
 		return this.#columns.instructionSourcePosition[instruction] ?? -1;
+	}
+
+	instructionEffectRefinementRef(instruction: CoreInstructionId): number {
+		return this.#columns.instructionEffectRefinementRef[instruction] ?? -1;
 	}
 
 	terminatorEdgeStart(instruction: CoreInstructionId): number {

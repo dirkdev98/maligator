@@ -94,6 +94,7 @@
 				"src/compiler/core/core-compilation.ts",
 				"src/compiler/core/core-control-flow-passes.ts",
 				"src/compiler/core/core-cross-call-transforms.ts",
+				"src/compiler/core/core-debug-view.ts",
 				"src/compiler/core/core-editor.ts",
 				"src/compiler/core/core-format.ts",
 				"src/compiler/core/core-frontend-construction.ts",
