@@ -380,6 +380,9 @@ function summarizeLoopWrites(
 		) {
 			const instruction = coreInstructionId(cursor);
 			const effects = coreInstructionEffects(fn, instruction);
+			if (effects.callsUserCode || effects.maySuspend) {
+				for (const family of CORE_MEMORY_FAMILIES) opaque.add(family);
+			}
 			const writes = coreMemoryAccesses(fn, instruction).filter(
 				(access) => access.mode === "write",
 			);

@@ -610,6 +610,46 @@ describe("Core control-flow analyses and passes", () => {
 		expect(fn.instructionBlock(definingInstruction(fn, stable!))).toBe(entry);
 	});
 
+	it("does not hoist memory reads across calls into unknown user code", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([
+			{ representation: "boolean" },
+			{ representation: "boxed" },
+		]);
+		const [condition, callee] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
+		const header = builder.createBlock();
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		const [loaded] = builder.appendInstruction(header, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.appendInstruction(body, "call", [callee!, callee!]);
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: loaded! });
+		const function_ = builder.finish(entry).function;
+		const fn = optimizeCore(
+			{ program, context },
+			{ verification: "per-pass" },
+		).compilation.program.function(function_);
+		expect(fn.instructionBlock(definingInstruction(fn, loaded!))).toBe(header);
+	});
+
 	it("hoists the stable length of a contained array", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, {
 			globalCount: 1,
