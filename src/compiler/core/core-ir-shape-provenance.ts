@@ -1,4 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	analyzeCoreProvenance,
@@ -18,7 +19,6 @@ import type { CoreProgram } from "./core-store.ts";
 
 export const CORE_SHAPE_ORIGIN_CAP = 4;
 export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
-export const CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE = "exactShapeOwnSlot";
 export const CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT = "exact-shape-own-slot-effects";
 export const CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE = "shapeCaseCandidates";
 export const CORE_SHAPE_CASE_SLOTS_ATTRIBUTE = "shapeCaseSlots";

@@ -1,5 +1,9 @@
 import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import {
+	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
+	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+} from "./core-internal-attributes.ts";
 import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
 import type { CoreLocalFactIndex } from "./core-ir-provenance.ts";
 import type {
@@ -11,8 +15,6 @@ import type {
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-export const CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE = "exactTypedArrayKind";
-export const CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE = "exactCollectionReceiver";
 export const CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT =
 	"exact-collection-builtin-effects";
 

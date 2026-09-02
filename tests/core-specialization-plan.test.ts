@@ -328,6 +328,10 @@ describe("late Core specialization plan", () => {
 		const source = readFileSync("src/compiler/target/lower-execution.ts", "utf8");
 
 		expect(source).not.toMatch(/CorePlanSpecialization|projectCoreSpecialization/u);
+		expect(source).not.toMatch(
+			/from "\.\.\/core\/core-(?:cross-call-transforms|ir-(?:provenance|shape-provenance|value-classes|value-kinds))\.ts"/u,
+		);
+		expect(source).toMatch(/from "\.\.\/core\/core-internal-attributes\.ts"/u);
 		expect(source).toMatch(/coreSpecializationRecipeKindAt/u);
 		expect(source).toMatch(/coreSpecializationRecipePayloadAt/u);
 	});

@@ -1,5 +1,9 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
+	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
+	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
+} from "./core-internal-attributes.ts";
+import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
@@ -92,9 +96,6 @@ function handlerBlock(
 
 export const CORE_OWN_DATA_CELL_FACT = "own-data-cell";
 export const CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT = "contained-aggregate-own-slot";
-export const CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE = "freshArrayLengthNumber";
-export const CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE =
-	"containedDenseArrayElementRead";
 
 export type CoreAccessKey =
 	| { readonly kind: "string-constant"; readonly index: number }

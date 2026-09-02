@@ -1,25 +1,21 @@
 import { coreCompilerSiteId } from "../core/compiler-site-facts.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
-import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../core/core-cross-call-transforms.ts";
 import {
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
+	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
+	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
+	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
+	CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE,
+	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
-} from "../core/core-ir-provenance.ts";
+	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
+} from "../core/core-internal-attributes.ts";
 import type {
 	CoreAllocatedRegion,
 	CoreDirectEntryPlan,
 	CorePlanRepresentation,
 } from "../core/core-ir-regions.ts";
-import { CORE_EXACT_SHAPE_OWN_SLOT_ATTRIBUTE } from "../core/core-ir-shape-provenance.ts";
-import {
-	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
-	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
-} from "../core/core-ir-value-classes.ts";
-import {
-	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
-	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
-	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
-} from "../core/core-ir-value-kinds.ts";
 import type {
 	CoreBlockId,
 	CoreAttributeValue,

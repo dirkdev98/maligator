@@ -16,6 +16,11 @@ import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { CORE_ANY_SCRIPT_AGGREGATE } from "./core-call-graph.ts";
 import type { CoreCallGraphNode } from "./core-call-graph.ts";
+import {
+	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
+	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
+	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
+} from "./core-internal-attributes.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -34,10 +39,6 @@ import type {
 } from "./core-program-flow.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-export const CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE =
-	"exactCallArgumentRepresentations";
-export const CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE = "exactBinaryInputKindMasks";
-export const CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE = "exactScalarAfterTdz";
 export const CORE_PRIMITIVE_OPERATOR_EFFECT_FACT = "primitive-operator-effects";
 
 export type CoreExactScalarKind = "int32" | "number" | "boolean" | "string";

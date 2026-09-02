@@ -1,5 +1,6 @@
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { coreCalleeTargetsAreOpen } from "./core-ir-call-targets.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { coreValueKindObservation } from "./core-ir-value-kinds.ts";
@@ -20,8 +21,6 @@ import type {
 	CoreTransformBudgetStatistics,
 	CoreTransformCandidate,
 } from "./core-transform-candidates.ts";
-
-export const CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE = "guardedInlineFallback";
 
 export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetStatistics {
 	readonly waves: number;

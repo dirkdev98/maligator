@@ -2,10 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
-import {
-	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
-	runCoreCrossCallTransforms,
-} from "../src/compiler/core/core-cross-call-transforms.ts";
+import { runCoreCrossCallTransforms } from "../src/compiler/core/core-cross-call-transforms.ts";
+import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";

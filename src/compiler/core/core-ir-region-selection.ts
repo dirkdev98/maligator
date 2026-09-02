@@ -11,12 +11,12 @@ import {
 } from "../shared/fact-implication.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-cross-call-transforms.ts";
 import {
 	CORE_FUNCTION_HAS_ALLOCATIONS,
 	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
+import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";

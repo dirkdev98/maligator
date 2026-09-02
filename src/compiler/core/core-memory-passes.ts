@@ -1,5 +1,6 @@
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_ALLOCATIONS } from "./core-function-features.ts";
+import { CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	CORE_CONTROL_FLOW_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
@@ -26,7 +27,6 @@ import {
 } from "./core-ir-shape-provenance.ts";
 import {
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
-	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	coreCollectionReceiverBrandForOperation,
 	coreExactCollectionBuiltinEffects,
 } from "./core-ir-value-classes.ts";
