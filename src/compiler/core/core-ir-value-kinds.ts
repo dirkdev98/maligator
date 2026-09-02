@@ -164,79 +164,100 @@ function staticOpcodeKind(
 	}
 }
 
-interface KindTransfer {
-	readonly output: CoreValueId;
-	readonly inputs: ReadonlyArray<CoreValueId>;
-	readonly evaluate: (masks: Uint16Array) => CompilerValueKindMask;
+const KIND_TRANSFER_CONSTANT = 0;
+const KIND_TRANSFER_JOIN = 1;
+const KIND_TRANSFER_COPY = 2;
+const KIND_TRANSFER_NUMERIC_UNARY = 3;
+const KIND_TRANSFER_BINARY = 4;
+const KIND_TRANSFER_ADD = 5;
+
+interface KindTransferBuffer {
+	readonly kinds: Array<number>;
+	readonly outputs: Array<CoreValueId>;
+	readonly constants: Array<CompilerValueKindMask>;
+	readonly inputStarts: Array<number>;
+	readonly inputCounts: Array<number>;
+	readonly inputs: Array<CoreValueId>;
 }
 
-function operationTransfer(
+function addKindTransfer(
+	buffer: KindTransferBuffer,
+	kind: number,
+	output: CoreValueId,
+	constant: CompilerValueKindMask,
+	inputs: ReadonlyArray<CoreValueId> = [],
+): void {
+	buffer.kinds.push(kind);
+	buffer.outputs.push(output);
+	buffer.constants.push(constant);
+	buffer.inputStarts.push(buffer.inputs.length);
+	buffer.inputCounts.push(inputs.length);
+	for (const input of inputs) buffer.inputs.push(input);
+}
+
+function addOperationTransfer(
+	buffer: KindTransferBuffer,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	output: CoreValueId,
 	inputs?: CoreValueKindInputs,
-): KindTransfer {
+): void {
 	const operandStart = fn.kernel.instructionOperandStart(instruction);
 	const operandCount = fn.kernel.instructionOperandCount(instruction);
 	const operands = Array.from({ length: operandCount }, (_, index) =>
 		fn.kernel.operandAt(operandStart + index),
 	);
 	const staticKind = representationKind(fn, output) ?? staticOpcodeKind(fn, instruction);
-	if (staticKind !== undefined) return { output, inputs: [], evaluate: () => staticKind };
+	if (staticKind !== undefined) {
+		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, staticKind);
+		return;
+	}
 	const opcode = fn.instructionOpcodeName(instruction);
 	if (opcode === "loadThis" && inputs?.receiverMask !== undefined) {
-		return { output, inputs: [], evaluate: () => inputs.receiverMask! };
+		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, inputs.receiverMask);
+		return;
 	}
 	const supplied = inputs?.operationResultMask?.(instruction, output);
-	if (supplied !== undefined) return { output, inputs: [], evaluate: () => supplied };
+	if (supplied !== undefined) {
+		addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, supplied);
+		return;
+	}
 	const operator = fn.instructionAttributes(instruction).operator;
 	if (opcode === "move" && operands.length === 1) {
-		return {
-			output,
-			inputs: operands,
-			evaluate: (masks) => masks[operands[0]!]!,
-		};
+		addKindTransfer(buffer, KIND_TRANSFER_COPY, output, 0, operands);
+		return;
 	}
 	if (opcode === "unary" && operands.length === 1 && typeof operator === "string") {
-		return {
-			output,
-			inputs: operands,
-			evaluate(masks) {
-				if (operator === "!") return COMPILER_VALUE_KIND_BOOLEAN;
-				if (operator === "typeof") return COMPILER_VALUE_KIND_STRING;
-				if (operator === "void") return COMPILER_VALUE_KIND_UNDEFINED;
-				return NUMERIC_UNARY_OPERATORS.has(operator) &&
-					compilerValueKindMaskIsSubset(masks[operands[0]!]!, COMPILER_VALUE_KIND_NUMBER)
-					? COMPILER_VALUE_KIND_NUMBER
-					: COMPILER_VALUE_KIND_TOP;
-			},
-		};
+		const constant =
+			operator === "!"
+				? COMPILER_VALUE_KIND_BOOLEAN
+				: operator === "typeof"
+					? COMPILER_VALUE_KIND_STRING
+					: operator === "void"
+						? COMPILER_VALUE_KIND_UNDEFINED
+						: undefined;
+		if (constant !== undefined) {
+			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, constant);
+		} else if (NUMERIC_UNARY_OPERATORS.has(operator)) {
+			addKindTransfer(buffer, KIND_TRANSFER_NUMERIC_UNARY, output, 0, operands);
+		} else {
+			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_TOP);
+		}
+		return;
 	}
 	if (opcode === "binary" && operands.length === 2 && typeof operator === "string") {
-		return {
-			output,
-			inputs: operands,
-			evaluate(masks) {
-				if (COMPARISON_OPERATORS.has(operator)) return COMPILER_VALUE_KIND_BOOLEAN;
-				const left = masks[operands[0]!]!;
-				const right = masks[operands[1]!]!;
-				if (left === 0 || right === 0) return 0;
-				if (
-					operator === "+" &&
-					compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) &&
-					compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING)
-				) {
-					return COMPILER_VALUE_KIND_STRING;
-				}
-				return NUMERIC_BINARY_OPERATORS.has(operator) &&
-					compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMBER) &&
-					compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMBER)
-					? COMPILER_VALUE_KIND_NUMBER
-					: COMPILER_VALUE_KIND_TOP;
-			},
-		};
+		if (COMPARISON_OPERATORS.has(operator)) {
+			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_BOOLEAN);
+		} else if (operator === "+") {
+			addKindTransfer(buffer, KIND_TRANSFER_ADD, output, 0, operands);
+		} else if (NUMERIC_BINARY_OPERATORS.has(operator)) {
+			addKindTransfer(buffer, KIND_TRANSFER_BINARY, output, 0, operands);
+		} else {
+			addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_TOP);
+		}
+		return;
 	}
-	return { output, inputs: [], evaluate: () => COMPILER_VALUE_KIND_TOP };
+	addKindTransfer(buffer, KIND_TRANSFER_CONSTANT, output, COMPILER_VALUE_KIND_TOP);
 }
 
 export function analyzeCoreValueKinds(
@@ -244,7 +265,14 @@ export function analyzeCoreValueKinds(
 	cfg: CoreControlFlow,
 	inputs?: CoreValueKindInputs,
 ): CoreValueKindAnalysis {
-	const transfers: Array<KindTransfer> = [];
+	const transfers: KindTransferBuffer = {
+		kinds: [],
+		outputs: [],
+		constants: [],
+		inputStarts: [],
+		inputCounts: [],
+		inputs: [],
+	};
 	const formalParameter = new Map<CoreValueId, number>();
 	for (let index = 0; index < fn.parameterCount; index++) {
 		formalParameter.set(fn.kernel.functionParameter(index), index);
@@ -269,50 +297,90 @@ export function analyzeCoreValueKinds(
 					(formal === undefined
 						? COMPILER_VALUE_KIND_TOP
 						: (inputs?.parameterMasks?.[formal] ?? COMPILER_VALUE_KIND_TOP));
-				transfers.push({ output: parameter, inputs: [], evaluate: () => kind });
+				addKindTransfer(transfers, KIND_TRANSFER_CONSTANT, parameter, kind);
 				continue;
 			}
-			const incomingValues = incoming.flatMap((edge) => {
+			const incomingValues: Array<CoreValueId> = [];
+			for (const edge of incoming) {
 				const value = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
-				return value === undefined ? [] : [value];
-			});
-			transfers.push({
-				output: parameter,
-				inputs: incomingValues,
-				evaluate: (masks) =>
-					incomingValues.reduce((mask, value) => mask | masks[value]!, 0),
-			});
+				if (value !== undefined) incomingValues.push(value);
+			}
+			addKindTransfer(transfers, KIND_TRANSFER_JOIN, parameter, 0, incomingValues);
 		}
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const resultStart = fn.kernel.instructionResultStart(instruction);
 			const resultCount = fn.kernel.instructionResultCount(instruction);
 			for (let index = 0; index < resultCount; index++) {
 				const output = fn.kernel.resultAt(resultStart + index);
-				transfers.push(operationTransfer(fn, instruction, output, inputs));
+				addOperationTransfer(transfers, fn, instruction, output, inputs);
 			}
 		}
 	}
 	const dependents = new Array<Array<number> | undefined>(fn.valueCapacity);
-	for (const [index, transfer] of transfers.entries()) {
-		for (const input of transfer.inputs) {
+	for (let index = 0; index < transfers.outputs.length; index++) {
+		const inputStart = transfers.inputStarts[index]!;
+		const inputCount = transfers.inputCounts[index]!;
+		for (let offset = 0; offset < inputCount; offset++) {
+			const input = transfers.inputs[inputStart + offset]!;
 			const users = dependents[input] ?? [];
 			users.push(index);
 			dependents[input] = users;
 		}
 	}
+	const transferKinds = Uint8Array.from(transfers.kinds);
+	const transferOutputs = Uint32Array.from(transfers.outputs);
+	const transferConstants = Uint16Array.from(transfers.constants);
+	const transferInputStarts = Uint32Array.from(transfers.inputStarts);
+	const transferInputCounts = Uint32Array.from(transfers.inputCounts);
+	const transferInputs = Uint32Array.from(transfers.inputs);
 	const masks = new Uint16Array(fn.valueCapacity);
-	const queue = transfers.map((_, index) => index);
-	const queued = new Uint8Array(transfers.length);
+	const queue = Array.from({ length: transferOutputs.length }, (_, index) => index);
+	const queued = new Uint8Array(transferOutputs.length);
 	queued.fill(1);
 	let cursor = 0;
 	while (cursor < queue.length) {
 		const index = queue[cursor++]!;
 		queued[index] = 0;
-		const transfer = transfers[index]!;
-		const next = masks[transfer.output]! | transfer.evaluate(masks);
-		if (next === masks[transfer.output]) continue;
-		masks[transfer.output] = next;
-		for (const dependent of dependents[transfer.output] ?? []) {
+		const kind = transferKinds[index]!;
+		const inputStart = transferInputStarts[index]!;
+		const inputCount = transferInputCounts[index]!;
+		let incoming = transferConstants[index]!;
+		if (kind === KIND_TRANSFER_JOIN) {
+			for (let offset = 0; offset < inputCount; offset++) {
+				incoming |= masks[transferInputs[inputStart + offset]!]!;
+			}
+		} else if (kind === KIND_TRANSFER_COPY) {
+			incoming = masks[transferInputs[inputStart]!]!;
+		} else if (kind === KIND_TRANSFER_NUMERIC_UNARY) {
+			incoming = compilerValueKindMaskIsSubset(
+				masks[transferInputs[inputStart]!]!,
+				COMPILER_VALUE_KIND_NUMBER,
+			)
+				? COMPILER_VALUE_KIND_NUMBER
+				: COMPILER_VALUE_KIND_TOP;
+		} else if (kind === KIND_TRANSFER_BINARY || kind === KIND_TRANSFER_ADD) {
+			const left = masks[transferInputs[inputStart]!]!;
+			const right = masks[transferInputs[inputStart + 1]!]!;
+			if (left === 0 || right === 0) incoming = 0;
+			else if (
+				kind === KIND_TRANSFER_ADD &&
+				compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) &&
+				compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING)
+			) {
+				incoming = COMPILER_VALUE_KIND_STRING;
+			} else {
+				incoming =
+					compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMBER) &&
+					compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMBER)
+						? COMPILER_VALUE_KIND_NUMBER
+						: COMPILER_VALUE_KIND_TOP;
+			}
+		}
+		const output = transferOutputs[index]! as CoreValueId;
+		const next = masks[output]! | incoming;
+		if (next === masks[output]) continue;
+		masks[output] = next;
+		for (const dependent of dependents[output] ?? []) {
 			if (queued[dependent] !== 0) continue;
 			queued[dependent] = 1;
 			queue.push(dependent);
@@ -331,31 +399,38 @@ export function analyzeCoreValueKinds(
 		)
 			exactInt32[value] = 1;
 	}
-	const exactQueue = transfers.map((_, index) => index);
-	const exactQueued = new Uint8Array(transfers.length);
+	const exactQueue = Array.from({ length: transferOutputs.length }, (_, index) => index);
+	const exactQueued = new Uint8Array(transferOutputs.length);
 	exactQueued.fill(1);
 	let exactCursor = 0;
 	while (exactCursor < exactQueue.length) {
 		const index = exactQueue[exactCursor++]!;
 		exactQueued[index] = 0;
-		const transfer = transfers[index]!;
+		const output = transferOutputs[index]! as CoreValueId;
+		const inputStart = transferInputStarts[index]!;
+		const inputCount = transferInputCounts[index]!;
+		let allInputsExact = inputCount > 0;
+		for (let offset = 0; offset < inputCount; offset++) {
+			if (exactInt32[transferInputs[inputStart + offset]!] !== 0) continue;
+			allInputsExact = false;
+			break;
+		}
 		if (
-			exactInt32[transfer.output] !== 0 ||
-			masks[transfer.output] !== COMPILER_VALUE_KIND_NUMBER ||
-			transfer.inputs.length === 0 ||
-			transfer.inputs.some((input) => exactInt32[input] === 0)
+			exactInt32[output] !== 0 ||
+			masks[output] !== COMPILER_VALUE_KIND_NUMBER ||
+			!allInputsExact
 		)
 			continue;
-		const definitionKind = fn.kernel.valueDefinitionKind(transfer.output);
+		const definitionKind = fn.kernel.valueDefinitionKind(output);
 		const forwardsInteger =
 			definitionKind === 0 ||
 			(definitionKind === 1 &&
 				fn.instructionOpcodeName(
-					coreInstructionId(fn.kernel.valueDefinitionOwner(transfer.output)),
+					coreInstructionId(fn.kernel.valueDefinitionOwner(output)),
 				) === "move");
 		if (!forwardsInteger) continue;
-		exactInt32[transfer.output] = 1;
-		for (const dependent of dependents[transfer.output] ?? []) {
+		exactInt32[output] = 1;
+		for (const dependent of dependents[output] ?? []) {
 			if (exactQueued[dependent] !== 0) continue;
 			exactQueued[dependent] = 1;
 			exactQueue.push(dependent);
