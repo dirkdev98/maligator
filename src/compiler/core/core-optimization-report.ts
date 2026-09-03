@@ -2,12 +2,6 @@ import type {
 	CoreOptimizationPlan,
 	CoreOptimizationPlanStatistics,
 } from "./core-ir-regions.ts";
-import type {
-	CoreBlockId,
-	CoreFactId,
-	CoreInstructionId,
-	CoreValueId,
-} from "./core-ir.ts";
 import type { CoreLocalOptimizerStatistics } from "./core-local-optimizer.ts";
 import type { CoreProgram } from "./core-store.ts";
 
@@ -332,12 +326,6 @@ const EMPTY_COUNTS: CoreOptimizationCounts = Object.freeze({
 	planCandidates: 0,
 });
 
-function iterableCount(values: Iterable<unknown>): number {
-	let count = 0;
-	for (const _value of values) count++;
-	return count;
-}
-
 function liveCounts(
 	program: CoreProgram,
 ): Omit<CoreOptimizationCounts, "planCandidates"> {
@@ -348,11 +336,11 @@ function liveCounts(
 	let facts = 0;
 	for (const functionId of program.functionIds()) {
 		functions++;
-		const fn = program.function(functionId);
-		blocks += iterableCount(fn.blockIds());
-		instructions += iterableCount(fn.instructionIds());
-		values += iterableCount(fn.valueIds());
-		facts += iterableCount(fn.factIds());
+		const counts = program.function(functionId).liveStorageCounts();
+		blocks += counts.blocks;
+		instructions += counts.instructions;
+		values += counts.values;
+		facts += counts.facts;
 	}
 	return { functions, blocks, instructions, values, facts };
 }
@@ -401,6 +389,7 @@ function coreOptimizationCheckpoint(
 	for (const functionId of program.functionIds()) {
 		functions++;
 		const fn = program.function(functionId);
+		const live = fn.liveStorageCounts();
 		blocksCapacity += fn.blockCapacity;
 		instructionsCapacity += fn.instructionCapacity;
 		valuesCapacity += fn.valueCapacity;
@@ -411,37 +400,17 @@ function coreOptimizationCheckpoint(
 		handlerArgumentsCapacity += fn.handlerArgumentCapacity;
 		factsCapacity += fn.factCapacity;
 		effectRefinementsCapacity += fn.effectRefinementCapacity;
-		for (let index = 0; index < fn.blockCapacity; index++) {
-			const block = index as CoreBlockId;
-			if (fn.kernel.blockLive(block) === 0) continue;
-			blocksLive++;
-			blockParametersLive += fn.kernel.blockParameterCount(block);
-			handlerArgumentsLive += fn.kernel.blockHandlerArgumentCount(block);
-		}
-		for (let index = 0; index < fn.instructionCapacity; index++) {
-			const instruction = index as CoreInstructionId;
-			if (fn.kernel.instructionLive(instruction) === 0) continue;
-			instructionsLive++;
-			operandsLive += fn.kernel.instructionOperandCount(instruction);
-			const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
-			const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
-			terminatorEdgesLive += edgeCount;
-			for (let edge = edgeStart; edge < edgeStart + edgeCount; edge++) {
-				terminatorArguments += fn.kernel.terminatorEdgeArgumentCount(edge);
-			}
-		}
-		for (let index = 0; index < fn.valueCapacity; index++) {
-			if (fn.kernel.valueLive(index as CoreValueId) !== 0) valuesLive++;
-		}
-		for (let index = 0; index < fn.useCapacity; index++) {
-			if (fn.kernel.useLive(index) !== 0) usesLive++;
-		}
-		for (let index = 0; index < fn.factCapacity; index++) {
-			if (fn.isFactLive(index as CoreFactId)) factsLive++;
-		}
-		for (let index = 0; index < fn.effectRefinementCapacity; index++) {
-			if (fn.effectRefinementLive(index)) effectRefinementsLive++;
-		}
+		blocksLive += live.blocks;
+		instructionsLive += live.instructions;
+		valuesLive += live.values;
+		usesLive += live.uses;
+		operandsLive += live.operands;
+		blockParametersLive += live.blockParameters;
+		terminatorEdgesLive += live.terminatorEdges;
+		terminatorArguments += live.terminatorArguments;
+		handlerArgumentsLive += live.handlerArguments;
+		factsLive += live.facts;
+		effectRefinementsLive += live.effectRefinements;
 	}
 	const count = (live: number, capacity: number): CoreLiveCapacityCounts =>
 		Object.freeze({ live, capacity });

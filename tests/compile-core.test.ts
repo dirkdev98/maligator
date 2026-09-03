@@ -1,11 +1,55 @@
 import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
+import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compileSemanticProgramToRuntimeImage } from "../src/compiler/pipeline/compile-runtime-core.ts";
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
+
+function scanLiveStorage(program: CoreProgram) {
+	const counts = {
+		blocks: 0,
+		instructions: 0,
+		values: 0,
+		uses: 0,
+		operands: 0,
+		blockParameters: 0,
+		terminatorEdges: 0,
+		terminatorArguments: 0,
+		handlerArguments: 0,
+		facts: 0,
+		effectRefinements: 0,
+	};
+	for (const functionId of program.functionIds()) {
+		const fn = program.function(functionId);
+		counts.blocks += [...fn.blockIds()].length;
+		counts.instructions += [...fn.instructionIds()].length;
+		counts.values += [...fn.valueIds()].length;
+		counts.facts += [...fn.factIds()].length;
+		for (const block of fn.blockIds()) {
+			counts.blockParameters += fn.kernel.blockParameterCount(block);
+			counts.handlerArguments += fn.kernel.blockHandlerArgumentCount(block);
+		}
+		for (const instruction of fn.instructionIds()) {
+			counts.operands += fn.kernel.instructionOperandCount(instruction);
+			const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+			const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
+			counts.terminatorEdges += edgeCount;
+			for (let edge = edgeStart; edge < edgeStart + edgeCount; edge++) {
+				counts.terminatorArguments += fn.kernel.terminatorEdgeArgumentCount(edge);
+			}
+		}
+		for (let use = 0; use < fn.useCapacity; use++) {
+			if (fn.kernel.useLive(use) !== 0) counts.uses++;
+		}
+		for (let refinement = 0; refinement < fn.effectRefinementCapacity; refinement++) {
+			if (fn.effectRefinementLive(refinement)) counts.effectRefinements++;
+		}
+	}
+	return counts;
+}
 
 describe("compileSemanticProgramToProgramImage", () => {
 	it("keeps instrumentation modes output-identical", () => {
@@ -178,6 +222,20 @@ describe("compileSemanticProgramToProgramImage", () => {
 			"before-sealing",
 			"after-sealing",
 		]);
+		const finalCheckpoint = report.checkpoints.at(-1)!;
+		expect({
+			blocks: finalCheckpoint.blocks.live,
+			instructions: finalCheckpoint.instructions.live,
+			values: finalCheckpoint.values.live,
+			uses: finalCheckpoint.uses.live,
+			operands: finalCheckpoint.operands.live,
+			blockParameters: finalCheckpoint.blockParameters.live,
+			terminatorEdges: finalCheckpoint.terminatorEdges.live,
+			terminatorArguments: finalCheckpoint.terminatorArguments,
+			handlerArguments: finalCheckpoint.handlerArguments.live,
+			facts: finalCheckpoint.facts.live,
+			effectRefinements: finalCheckpoint.effectRefinements.live,
+		}).toEqual(scanLiveStorage(compilation.program));
 
 		const execution = lowerCoreCompilationToExecutionProgram(compilation);
 		expect(execution.functionMap.executionToCore).toEqual(compilation.plan.liveFunctions);

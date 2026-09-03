@@ -132,6 +132,20 @@ export interface CoreUse {
 	readonly operand: number;
 }
 
+export interface CoreFunctionLiveStorageCounts {
+	readonly blocks: number;
+	readonly instructions: number;
+	readonly values: number;
+	readonly uses: number;
+	readonly operands: number;
+	readonly blockParameters: number;
+	readonly terminatorEdges: number;
+	readonly terminatorArguments: number;
+	readonly handlerArguments: number;
+	readonly facts: number;
+	readonly effectRefinements: number;
+}
+
 export interface CoreBlockLayout {
 	readonly live: boolean;
 	readonly firstInstruction: number;
@@ -495,6 +509,16 @@ export class CoreFunctionStore {
 	#liveUseVisits = 0;
 	#deadUseSkips = 0;
 	#trackUseTraversal = false;
+	#liveBlocks = 0;
+	#liveInstructions = 0;
+	#liveInstructionResults = 0;
+	#liveOperands = 0;
+	#liveBlockParameters = 0;
+	#liveTerminatorEdges = 0;
+	#liveTerminatorArguments = 0;
+	#liveHandlerArguments = 0;
+	#liveFacts = 0;
+	#liveEffectRefinements = 0;
 
 	readonly #facts: Array<CoreFact | undefined> = [];
 	readonly #effectRefinements: Array<CoreEffectRefinement | undefined> = [];
@@ -916,21 +940,25 @@ export class CoreFunctionStore {
 		readonly abandonedOperands: number;
 		readonly abandonedParameters: number;
 	} {
-		let liveOperands = 0;
-		for (let instruction = 0; instruction < this.#instructionLive.length; instruction++) {
-			if (this.#instructionLive[instruction] === 1) {
-				liveOperands += this.#instructionOperandCount[instruction]!;
-			}
-		}
-		let liveParameters = 0;
-		for (let block = 0; block < this.#blockLive.length; block++) {
-			if (this.#blockLive[block] === 1) {
-				liveParameters += this.#blockParameterCount[block]!;
-			}
-		}
 		return {
-			abandonedOperands: this.#operands.length - liveOperands,
-			abandonedParameters: this.#blockParameterValues.length - liveParameters,
+			abandonedOperands: this.#operands.length - this.#liveOperands,
+			abandonedParameters: this.#blockParameterValues.length - this.#liveBlockParameters,
+		};
+	}
+
+	liveStorageCounts(): CoreFunctionLiveStorageCounts {
+		return {
+			blocks: this.#liveBlocks,
+			instructions: this.#liveInstructions,
+			values: this.#liveBlockParameters + this.#liveInstructionResults,
+			uses: this.#liveOperands,
+			operands: this.#liveOperands,
+			blockParameters: this.#liveBlockParameters,
+			terminatorEdges: this.#liveTerminatorEdges,
+			terminatorArguments: this.#liveTerminatorArguments,
+			handlerArguments: this.#liveHandlerArguments,
+			facts: this.#liveFacts,
+			effectRefinements: this.#liveEffectRefinements,
 		};
 	}
 
@@ -970,6 +998,7 @@ export class CoreFunctionStore {
 		this.#assertEditing(mutation);
 		const block = coreBlockId(this.#blockLive.length);
 		this.#blockLive.push(1);
+		this.#liveBlocks++;
 		this.#blockFirstInstruction.push(-1);
 		this.#blockLastInstruction.push(-1);
 		this.#blockHandlerBlock.push(-1);
@@ -1244,22 +1273,28 @@ export class CoreFunctionStore {
 			}
 		}
 		const operandStart = this.#instructionOperandStart[instruction]!;
-		for (let index = 0; index < this.#instructionOperandCount[instruction]!; index++) {
+		const operandCount = this.#instructionOperandCount[instruction]!;
+		for (let index = 0; index < operandCount; index++) {
 			this.#deactivateUse(this.#operandUses[operandStart + index]!);
 		}
-		this.#releaseOperandRange(operandStart, this.#instructionOperandCount[instruction]!);
+		this.#releaseOperandRange(operandStart, operandCount);
+		this.#liveOperands -= operandCount;
 		this.#instructionOperandStart[instruction] = 0;
 		this.#instructionOperandCount[instruction] = 0;
-		this.#releaseTerminatorEdgeRange(
-			this.#instructionTerminatorEdgeStart[instruction]!,
-			this.#instructionTerminatorEdgeCount[instruction]!,
-		);
+		const edgeStart = this.#instructionTerminatorEdgeStart[instruction]!;
+		const edgeCount = this.#instructionTerminatorEdgeCount[instruction]!;
+		for (let edge = edgeStart; edge < edgeStart + edgeCount; edge++) {
+			this.#liveTerminatorArguments -= this.#terminatorEdgeArgumentCount[edge]!;
+		}
+		this.#liveTerminatorEdges -= edgeCount;
+		this.#releaseTerminatorEdgeRange(edgeStart, edgeCount);
 		this.#instructionTerminatorEdgeStart[instruction] = 0;
 		this.#instructionTerminatorEdgeCount[instruction] = 0;
 		this.#instructionTerminatorFact[instruction] = -1;
 		for (let index = 0; index < resultCount; index++) {
 			this.#valueLive[this.#results[resultStart + index]!] = 0;
 		}
+		this.#liveInstructionResults -= resultCount;
 		this.#removeEffectRefinement(instruction);
 		const block = this.#instructionBlock[instruction]!;
 		const previous = this.#instructionPrevious[instruction]!;
@@ -1269,6 +1304,7 @@ export class CoreFunctionStore {
 		if (next < 0) this.#blockLastInstruction[block] = previous;
 		else this.#instructionPrevious[next] = previous;
 		this.#instructionLive[instruction] = 0;
+		this.#liveInstructions--;
 		this.#instructionPrevious[instruction] = -1;
 		this.#instructionNext[instruction] = -1;
 	}
@@ -1362,12 +1398,15 @@ export class CoreFunctionStore {
 			this.#valueLive[parameter] = 0;
 		}
 		this.#blockLive[block] = 0;
+		this.#liveBlocks--;
 		this.#blockFirstInstruction[block] = -1;
 		this.#blockLastInstruction[block] = -1;
+		const handlerArgumentCount = this.#blockHandlerArgumentCount[block]!;
 		this.#releaseHandlerArgumentRange(
 			this.#blockHandlerArgumentStart[block]!,
-			this.#blockHandlerArgumentCount[block]!,
+			handlerArgumentCount,
 		);
+		this.#liveHandlerArguments -= handlerArgumentCount;
 		if (this.#blockHandlerBlock[block]! >= 0) this.#removeHandlerBlock(block);
 		this.#blockHandlerBlock[block] = -1;
 		this.#blockHandlerArgumentStart[block] = 0;
@@ -1401,6 +1440,7 @@ export class CoreFunctionStore {
 		const oldStart = this.#blockHandlerArgumentStart[block]!;
 		const oldCount = this.#blockHandlerArgumentCount[block]!;
 		const nextCount = handler?.arguments.length ?? 0;
+		this.#liveHandlerArguments += nextCount - oldCount;
 		let start = oldStart;
 		if (oldCount !== nextCount) {
 			this.#releaseHandlerArgumentRange(oldStart, oldCount);
@@ -1459,6 +1499,7 @@ export class CoreFunctionStore {
 		this.#assertEditing(mutation);
 		const id = coreFactId(this.#facts.length);
 		this.#facts.push(freezeFact(id, fact));
+		this.#liveFacts++;
 		return id;
 	}
 
@@ -1476,6 +1517,7 @@ export class CoreFunctionStore {
 		this.#assertEditing(mutation);
 		if (!this.isFactLive(fact)) throw new Error(`Unknown Core fact ${fact}`);
 		this.#facts[fact] = undefined;
+		this.#liveFacts--;
 	}
 
 	_configureFunction(mutation: CoreStoreMutation, options: CoreFunctionOptions): void {
@@ -1567,6 +1609,7 @@ export class CoreFunctionStore {
 				? this.#blockLastInstruction[block]!
 				: this.#instructionPrevious[beforeIndex]!;
 		this.#instructionLive.push(1);
+		this.#liveInstructions++;
 		this.#instructionOpcode.push(opcode);
 		this.#instructionBlock.push(block);
 		this.#instructionPrevious.push(previous);
@@ -1575,6 +1618,7 @@ export class CoreFunctionStore {
 		this.#instructionOperandCount.push(0);
 		this.#instructionResultStart.push(this.#results.length);
 		this.#instructionResultCount.push(outputRepresentations.length);
+		this.#liveInstructionResults += outputRepresentations.length;
 		this.#instructionSourcePosition.push(sourcePosition ?? -1);
 		this.#instructionEffectRefinementRef.push(
 			this.#appendEffectRefinement(effectRefinement),
@@ -1598,6 +1642,7 @@ export class CoreFunctionStore {
 		if (refinement === undefined) return -1;
 		const reference = this.#effectRefinements.length;
 		this.#effectRefinements.push(freezeRefinement(refinement));
+		this.#liveEffectRefinements++;
 		return reference;
 	}
 
@@ -1614,6 +1659,7 @@ export class CoreFunctionStore {
 		const reference = this.#instructionEffectRefinementRef[instruction]!;
 		if (reference < 0) return;
 		this.#effectRefinements[reference] = undefined;
+		this.#liveEffectRefinements--;
 		this.#instructionEffectRefinementRef[instruction] = -1;
 	}
 
@@ -1646,6 +1692,7 @@ export class CoreFunctionStore {
 	): void {
 		const oldStart = this.#blockParameterStart[block] ?? 0;
 		const oldCount = this.#blockParameterCount[block] ?? 0;
+		this.#liveBlockParameters += values.length - oldCount;
 		let start = oldStart;
 		if (oldCount !== values.length) {
 			this.#releaseBlockParameterRange(oldStart, oldCount);
@@ -1673,6 +1720,11 @@ export class CoreFunctionStore {
 						: 0;
 		const oldStart = this.#instructionTerminatorEdgeStart[instruction] ?? 0;
 		const oldCount = this.#instructionTerminatorEdgeCount[instruction] ?? 0;
+		let oldArgumentCount = 0;
+		for (let edge = oldStart; edge < oldStart + oldCount; edge++) {
+			oldArgumentCount += this.#terminatorEdgeArgumentCount[edge]!;
+		}
+		this.#liveTerminatorEdges += edgeCount - oldCount;
 		let start = oldStart;
 		if (oldCount !== edgeCount) {
 			this.#releaseTerminatorEdgeRange(oldStart, oldCount);
@@ -1693,18 +1745,20 @@ export class CoreFunctionStore {
 				? 1
 				: 0;
 		let edgeOffset = 0;
+		let argumentCount = 0;
 		const writeEdge = (
 			block: CoreBlockId,
-			argumentCount: number,
+			edgeArgumentCount: number,
 			caseValue?: CoreImmediate,
 		): void => {
 			const row = start + edgeOffset++;
 			this.#terminatorEdgeBlock[row] = block;
 			this.#terminatorEdgeArgumentStart[row] = operandStart + operandOffset;
-			this.#terminatorEdgeArgumentCount[row] = argumentCount;
+			this.#terminatorEdgeArgumentCount[row] = edgeArgumentCount;
 			this.#terminatorEdgeCaseValue[row] =
 				caseValue === undefined ? undefined : freezeImmediate(caseValue);
-			operandOffset += argumentCount;
+			operandOffset += edgeArgumentCount;
+			argumentCount += edgeArgumentCount;
 		};
 		switch (payload.kind) {
 			case "jump":
@@ -1732,6 +1786,7 @@ export class CoreFunctionStore {
 		if (edgeOffset !== edgeCount || operandOffset !== operandCount) {
 			throw new Error(`Malformed Core ${payload.kind} storage`);
 		}
+		this.#liveTerminatorArguments += argumentCount - oldArgumentCount;
 	}
 
 	#writeOperandRange(
@@ -1740,6 +1795,7 @@ export class CoreFunctionStore {
 	): void {
 		const oldStart = this.#instructionOperandStart[instruction] ?? 0;
 		const oldCount = this.#instructionOperandCount[instruction] ?? 0;
+		this.#liveOperands += operands.length - oldCount;
 		if (oldCount === operands.length) {
 			let unchanged = true;
 			for (const [operand, value] of operands.entries()) {
