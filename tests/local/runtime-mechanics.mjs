@@ -266,6 +266,47 @@ for (let index = 0; index < 256; index++) {
 }
 checks.push(metadataChurn === 768);
 
+const nestedForClosures = [];
+for (let index = 0; index < 4; index++) {
+	if (index >= 0) {
+		const captured = `for-${index}`;
+		nestedForClosures.push(() => captured);
+	}
+}
+const whileClosures = [];
+let whileIndex = 0;
+while (whileIndex < 4) {
+	const captured = `while-${whileIndex++}`;
+	whileClosures.push(() => captured);
+}
+const doWhileClosures = [];
+let doWhileIndex = 0;
+do {
+	const captured = `do-${doWhileIndex++}`;
+	doWhileClosures.push(() => captured);
+} while (doWhileIndex < 4);
+const forInClosures = [];
+for (const key in { first: true, second: true }) {
+	if (key.length > 0) {
+		const captured = key;
+		forInClosures.push(() => captured);
+	}
+}
+const forOfClosures = [];
+for (const value of [10, 20, 30]) {
+	if (value > 0) {
+		const captured = value;
+		forOfClosures.push(() => captured);
+	}
+}
+checks.push(
+	nestedForClosures.map((read) => read()).join(",") === "for-0,for-1,for-2,for-3",
+	whileClosures.map((read) => read()).join(",") === "while-0,while-1,while-2,while-3",
+	doWhileClosures.map((read) => read()).join(",") === "do-0,do-1,do-2,do-3",
+	forInClosures.map((read) => read()).join(",") === "first,second",
+	forOfClosures.map((read) => read()).join(",") === "10,20,30",
+);
+
 const shapedA = {};
 const shapedB = {};
 shapedA[["shared", "Key"].join("")] = 1;

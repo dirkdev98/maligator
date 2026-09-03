@@ -6275,6 +6275,14 @@ function compileWhileStatement(
 	statement: ESTree.WhileStatement,
 ) {
 	resetEvalCompletion(fn, block);
+	const perIter = setupPerIterationScope(program, fn, statement);
+	if (perIter) {
+		block.emitter.emit({
+			type: "envPush",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
 	const headerIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	block.emitter.emit({
 		type: "jump",
@@ -6286,6 +6294,8 @@ function compileWhileStatement(
 		breakJumps: [],
 		continueJumps: [],
 		labels: takePendingLabels(fn),
+		perIterationScopeId: perIter?.scopeId,
+		perIterationSlotCount: perIter?.slotCount,
 	};
 	(fn.loops ??= []).push(loop);
 
@@ -6297,10 +6307,24 @@ function compileWhileStatement(
 		fn,
 		normalizeStatementOrBlock(statement.body),
 	);
+	const bodyLastBlock = fn.blocks.at(-1)!;
+	let iterationEntryIdx = bodyIdx;
+	if (perIter) {
+		const iterationEntry: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		iterationEntryIdx = fn.blocks.push(iterationEntry) - 1;
+		iterationEntry.emitter.emit(
+			{
+				type: "envCopy",
+				scopeId: perIter.scopeId,
+				slotCount: perIter.slotCount,
+			},
+			{ type: "jump", blocks: [bodyIdx] },
+		);
+	}
 	headerCursor.block.emitter.emit({
 		type: "jumpIf",
 		registers: [condition],
-		blocks: [bodyIdx],
+		blocks: [iterationEntryIdx],
 	});
 	const exitJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
@@ -6310,12 +6334,15 @@ function compileWhileStatement(
 	headerCursor.block.emitter.emit(exitJump);
 
 	// Back edge from the body tail to the condition.
-	fn.blocks.at(-1)!.emitter.emit({
+	bodyLastBlock.emitter.emit({
 		type: "jump",
 		blocks: [headerIdx],
 	});
 
 	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	if (perIter) {
+		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
+	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
@@ -6337,11 +6364,21 @@ function compileDoWhileStatement(
 	statement: ESTree.DoWhileStatement,
 ) {
 	resetEvalCompletion(fn, block);
+	const perIter = setupPerIterationScope(program, fn, statement);
+	if (perIter) {
+		block.emitter.emit({
+			type: "envPush",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
 	const loop: SemanticControlContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
 		labels: takePendingLabels(fn),
+		perIterationScopeId: perIter?.scopeId,
+		perIterationSlotCount: perIter?.slotCount,
 	};
 	(fn.loops ??= []).push(loop);
 
@@ -6350,12 +6387,25 @@ function compileDoWhileStatement(
 		fn,
 		normalizeStatementOrBlock(statement.body),
 	);
+	const bodyLastBlock = fn.blocks.at(-1)!;
+	let iterationEntryIdx = bodyIdx;
+	if (perIter) {
+		const iterationEntry: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		iterationEntryIdx = fn.blocks.push(iterationEntry) - 1;
+		iterationEntry.emitter.emit(
+			{
+				type: "envCopy",
+				scopeId: perIter.scopeId,
+				slotCount: perIter.slotCount,
+			},
+			{ type: "jump", blocks: [bodyIdx] },
+		);
+	}
 	block.emitter.emit({
 		type: "jump",
-		blocks: [bodyIdx],
+		blocks: [iterationEntryIdx],
 	});
 
-	const bodyLastBlock = fn.blocks.at(-1)!;
 	const conditionIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	bodyLastBlock.emitter.emit({
 		type: "jump",
@@ -6367,7 +6417,7 @@ function compileDoWhileStatement(
 	conditionCursor.block.emitter.emit({
 		type: "jumpIf",
 		registers: [condition],
-		blocks: [bodyIdx],
+		blocks: [iterationEntryIdx],
 	});
 	const exitJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
@@ -6376,6 +6426,9 @@ function compileDoWhileStatement(
 	conditionCursor.block.emitter.emit(exitJump);
 
 	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	if (perIter) {
+		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
+	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
@@ -6387,8 +6440,8 @@ function compileDoWhileStatement(
 }
 
 /**
- * If a loop's lexical head or direct body bindings are captured by a closure, they
- * need a fresh environment each iteration so every closure observes its own binding.
+ * If a loop's lexical head or body bindings are captured by a closure, they need a
+ * fresh environment each iteration so every closure observes its own binding.
  * Move those bindings into a synthetic capture scope (a negative env id that never
  * collides with a function index); the loop lowering emits the ENV_PUSH/COPY/POP ops.
  * Returns null when no such binding is captured (the common case — zero overhead).
@@ -6396,18 +6449,26 @@ function compileDoWhileStatement(
 function setupPerIterationScope(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
-	loopNode: ESTree.ForStatement | ESTree.ForInStatement | ESTree.ForOfStatement,
+	loopNode:
+		| ESTree.ForStatement
+		| ESTree.ForInStatement
+		| ESTree.ForOfStatement
+		| ESTree.WhileStatement
+		| ESTree.DoWhileStatement,
 ): { scopeId: number; slotCount: number } | null {
 	const loopScope = fn.semanticFile.nodeToScope.get(loopNode);
-	if (!loopScope) {
-		return null;
+	const ownedScopes = new Set<Scope>();
+	if (loopScope?.node === loopNode) {
+		ownedScopes.add(loopScope);
 	}
-	const bodyScope =
-		loopNode.body.type === "BlockStatement"
-			? fn.semanticFile.nodeToScope.get(loopNode.body)
-			: undefined;
-	const captured = [...loopScope.bindings, ...(bodyScope?.bindings ?? [])].filter(
-		(binding) => binding.scopedTo === "captured",
+	traverseEstree(loopNode.body, (node) => {
+		if (FUNCTION_UNIT_NODE_TYPES.has(node.type)) return ESTREE_SKIP;
+		if (LOOP_STATEMENT_TYPES.has(node.type)) return ESTREE_SKIP;
+		const scope = fn.semanticFile.nodeToScope.get(node);
+		if (scope?.node === node) ownedScopes.add(scope);
+	});
+	const captured = [...ownedScopes].flatMap(({ bindings }) =>
+		bindings.filter((binding) => binding.scopedTo === "captured"),
 	);
 	if (captured.length === 0) {
 		return null;
@@ -6459,7 +6520,7 @@ function compileForStatementBody(
 	block: CoreFrontendBlock,
 	statement: ESTree.ForStatement,
 ) {
-	// Per-iteration env, if head or direct body bindings are captured. ENV_PUSH enters scope
+	// Per-iteration env, if head or body bindings are captured. ENV_PUSH enters scope
 	// L0 (so the init stores into it), ENV_COPY before the first test copies L0→L1,
 	// each update copies Li→Li+1 (the increment runs in the new env), and ENV_POP
 	// restores the enclosing env on exit. Set up before the init compiles so the
