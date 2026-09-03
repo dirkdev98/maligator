@@ -191,6 +191,60 @@ describe("Core control-flow analyses and passes", () => {
 		});
 	});
 
+	it("recognizes a unique preheader with duplicate edges from one latch", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([
+			{ representation: "boolean" },
+			{ representation: "boolean" },
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [continueLoop, chooseBackedge, left, right] = inspectCoreBlockParameters(
+			builder,
+			entry,
+		).map(({ value }) => value);
+		const header = builder.createBlock([{ representation: "boxed" }]);
+		const latch = builder.createBlock();
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [left!] },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: continueLoop!,
+			consequent: { block: latch, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(latch, {
+			kind: "branch",
+			condition: chooseBackedge!,
+			consequent: { block: header, arguments: [left!] },
+			alternate: { block: header, arguments: [right!] },
+		});
+		builder.setTerminator(exit, {
+			kind: "return",
+			value: inspectCoreBlockParameters(builder, header)[0]!.value,
+		});
+		const function_ = builder.finish(entry).function;
+		const before = buildCoreControlFlow(program, function_);
+		expect(before.loops).toHaveLength(1);
+		expect(before.loops[0]).toMatchObject({
+			header,
+			preheader: entry,
+			canonical: false,
+		});
+
+		const optimized = optimizeCore({ program, context }, { verification: "per-pass" })
+			.compilation.program;
+		const fn = optimized.function(function_);
+		const after = buildCoreControlFlow(optimized, function_);
+		expect(after.loops).toHaveLength(1);
+		expect(after.loops[0]).toMatchObject({ canonical: true });
+		expect(fn.blockCapacity).toBeLessThanOrEqual(5);
+	});
+
 	it("derives exact ranges only for safe additive block-argument inductions", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const build = (initial: number, representation: "f64" | "i32") => {

@@ -451,7 +451,6 @@ function naturalLoops(
 		const outsideSource = outside.length === 1 ? outside[0]!.from : undefined;
 		const preheader =
 			outsideSource !== undefined &&
-			ordinaryIncoming.length === outside.length + latches.size &&
 			jumpsTo(outsideSource, header) &&
 			(successors[outsideSource] ?? []).length === 1
 				? outsideSource
