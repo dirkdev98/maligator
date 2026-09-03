@@ -880,6 +880,7 @@ function verifySpecialization(
 					element.instruction !== candidate.elements[index]?.instruction ||
 					element.kind !== candidate.elements[index]?.kind,
 			) ||
+			fn.instructionNext(candidate.load) !== candidate.comparison ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||
 			!sameNumbers(selection.ordinaryBlocks, expectedBlocks) ||
 			!sameNumbers(selection.exceptionalBlocks, candidate.exceptionalBlocks) ||

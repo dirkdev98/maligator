@@ -415,6 +415,27 @@ describe("late plan migration gates", () => {
 		).toBe(false);
 	});
 
+	it("does not overlap indexed length plans with known own-slot loads", () => {
+		const compilation = optimize(
+			`globalThis.fill = function fill() {
+				const values = { length: 4 };
+				for (let index = 0; index < values.length; index++) {
+					values[index] = index;
+				}
+				return values[3];
+			};`,
+			"core-known-own-length.js",
+		);
+		expect(
+			projectCoreSpecializationRecipes(compilation.plan.recipes).some(
+				({ kind }) => kind === "indexed-length-loop",
+			),
+		).toBe(false);
+		expect(() =>
+			lowerExecutionToProgramImage(lowerCoreCompilationToExecution(compilation)),
+		).not.toThrow();
+	});
+
 	it.each([
 		["length on the left", "values.length > index", 1],
 		["non-strict inequality", "index != values.length", 2],

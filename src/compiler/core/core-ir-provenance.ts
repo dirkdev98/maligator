@@ -2364,9 +2364,12 @@ function indexedLengthLoopCandidates(
 	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreIndexedLengthLoopCandidate> = [];
 	for (const load of indexedOpcodeInstructions(fn, index, "loadPropertyStatic")) {
+		const loadAttributes = fn.instructionAttributes(load);
 		if (
 			fn.instructionKind(load) !== "operation" ||
 			!staticPropertyNamed(program, fn, load, "length") ||
+			loadAttributes.knownOwnSlot !== undefined ||
+			loadAttributes.exactOwnSlot !== undefined ||
 			instructionOperandCount(fn, load) !== 1 ||
 			instructionResultCount(fn, load) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(load))
@@ -2410,7 +2413,7 @@ function indexedLengthLoopCandidates(
 		if (
 			loadLocation === undefined ||
 			comparisonLocation === undefined ||
-			loadLocation.index >= comparisonLocation.index
+			loadLocation.index + 1 !== comparisonLocation.index
 		)
 			continue;
 		const receiver = instructionOperand(fn, load, 0)!;
