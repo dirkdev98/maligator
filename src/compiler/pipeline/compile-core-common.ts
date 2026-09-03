@@ -1,5 +1,6 @@
 import { attachCoreCompilerSiteFacts } from "../core/compiler-site-facts.ts";
 import type {
+	ConstructedCoreCompilation,
 	CoreCompilation,
 	CoreCompilationContext,
 } from "../core/core-compilation.ts";
@@ -61,6 +62,14 @@ export function optimizeSemanticProgramToCore(
 		},
 		runPhase,
 	});
+	return optimizeConstructedCore(core, options, runPhase);
+}
+
+export function optimizeConstructedCore(
+	core: ConstructedCoreCompilation,
+	options: CompileCoreOptions,
+	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
+): CoreCompilation {
 	const optimizedResult = runPhase("optimize core ir", () =>
 		optimizeCore(core, {
 			verification: options.coreVerification,

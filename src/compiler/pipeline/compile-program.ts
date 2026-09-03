@@ -1,5 +1,6 @@
+import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
 import type { ProgramImage } from "../target/program-image.ts";
-import { compileSemanticProgramToProgramImage } from "./compile-core.ts";
+import { compileConstructedCoreToProgramImage } from "./compile-core.ts";
 import type {
 	CompileEntrypointOptions,
 	CompileEntrypointPhase,
@@ -21,11 +22,26 @@ export function compileEntrypoint(
 ): ProgramImage {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileEntrypointPhase, run: () => T): T => run());
-	const { semantic, facts } = analyzeEntrypoint(entrypointPath, options, runPhase);
-	return compileSemanticProgramToProgramImage(semantic, {
+	let analysis: ReturnType<typeof analyzeEntrypoint> | undefined = analyzeEntrypoint(
+		entrypointPath,
+		options,
+		runPhase,
+	);
+	const facts = analysis.facts;
+	const core = lowerSemanticProgramToCore(analysis.semantic, {
 		facts,
-		coreInstrumentation: options.coreInstrumentation,
-		afterCoreOptimization: options.afterCoreOptimization,
 		runPhase,
 	});
+	// The module graph and AST must not share the Core optimizer's peak lifetime.
+	analysis = undefined;
+	return compileConstructedCoreToProgramImage(
+		core,
+		{
+			facts,
+			coreInstrumentation: options.coreInstrumentation,
+			afterCoreOptimization: options.afterCoreOptimization,
+			runPhase,
+		},
+		runPhase,
+	);
 }
