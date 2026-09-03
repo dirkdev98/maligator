@@ -1400,6 +1400,7 @@ const lowerLocalExplicitThrows: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
+		if (fn.handlerBlockCount === 0) return undefined;
 		const flows = context.analysis(CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS);
 		const first = flows.find(
 			(flow) => fn.instructionKind(fn.blockTerminator(flow.handler)) !== "guard",
