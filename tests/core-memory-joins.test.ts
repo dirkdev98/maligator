@@ -84,4 +84,59 @@ describe("Core memory joins", () => {
 			value: inspectCoreFunctionParameters(optimized.function(clean))[0],
 		});
 	});
+
+	it("does not forward a normal-path store across an exceptional join", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [object, key, original] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
+		const protectedBlock = builder.createBlock();
+		const normal = builder.createBlock();
+		const handler = builder.createBlock([{ representation: "boxed", role: "exception" }]);
+		const join = builder.createBlock();
+		builder.appendInstruction(entry, "storeGlobal", [original!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: protectedBlock, arguments: [] },
+		});
+		const [replacement] = builder.appendInstruction(protectedBlock, "loadProperty", [
+			object!,
+			key!,
+		]);
+		builder.setHandler(protectedBlock, handler, []);
+		builder.setTerminator(protectedBlock, {
+			kind: "jump",
+			edge: { block: normal, arguments: [] },
+		});
+		builder.appendInstruction(normal, "storeGlobal", [replacement!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(normal, {
+			kind: "jump",
+			edge: { block: join, arguments: [] },
+		});
+		builder.setTerminator(handler, {
+			kind: "jump",
+			edge: { block: join, arguments: [] },
+		});
+		const [loaded] = builder.appendInstruction(join, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(join, { kind: "return", value: loaded! });
+		const functionId = builder.finish(entry).function;
+
+		const optimized = optimizeCore(
+			{ program, context: programAnalysisContext() },
+			{ verification: "per-pass" },
+		).compilation.program;
+		expect(loadCount(optimized.function(functionId))).toBe(1);
+	});
 });

@@ -1,6 +1,6 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
-	CORE_CONTROL_FLOW_ANALYSIS,
+	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
 } from "./core-ir-control-flow.ts";
@@ -938,7 +938,7 @@ export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMem
 			const bundle = get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
 			return memoryVersions(
 				program.function(request.function),
-				get(CORE_CONTROL_FLOW_ANALYSIS, request),
+				get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, request),
 				bundle.provenance,
 				bundle.index.memoryOperations,
 			);

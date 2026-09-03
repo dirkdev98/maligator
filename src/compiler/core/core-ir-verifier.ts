@@ -172,9 +172,10 @@ function verifyMetadata(fn: CoreFunctionStore, program: CoreProgram): void {
 	}
 	const mapped = new Set<number>();
 	for (const slot of metadata.mappedArgumentSlots) {
-		if (!Number.isSafeInteger(slot) || slot < 0 || slot >= fn.parameterCount) {
+		if (!Number.isSafeInteger(slot) || slot < -1 || slot >= metadata.capturedCount) {
 			fail(`invalid mapped argument slot ${slot}`);
 		}
+		if (slot === -1) continue;
 		if (mapped.has(slot)) fail(`duplicate mapped argument slot ${slot}`);
 		mapped.add(slot);
 	}

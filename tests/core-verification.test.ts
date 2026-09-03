@@ -64,6 +64,28 @@ describe("Core verification", () => {
 		expect(() => verifyCoreProgram(program, { stage: "pre-target" })).not.toThrow();
 	});
 
+	it("accepts unmapped sentinels in duplicate-parameter argument metadata", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const value = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		builder.setTerminator(entry, { kind: "return", value });
+		builder.configureFunction({
+			parameterCount: 2,
+			metadata: {
+				mappedArguments: true,
+				mappedArgumentSlots: [-1, 0],
+				capturedCount: 1,
+			},
+		});
+		builder.finish(entry);
+
+		expect(() => verifyCoreProgram(program, { stage: "construction" })).not.toThrow();
+	});
+
 	it("rejects an edge whose arguments do not match its block parameters", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
