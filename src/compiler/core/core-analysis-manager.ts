@@ -1,3 +1,4 @@
+import { CoreAnalysisScratchPool } from "./core-analysis-scratch.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
@@ -26,6 +27,7 @@ export interface CoreAnalysisComputation {
 	readonly request: CoreAnalysisRequest;
 	readonly previous?: unknown;
 	readonly programFlow: CoreProgramFlowEngine;
+	readonly scratch: CoreAnalysisScratchPool;
 	readonly get: <Result>(
 		definition: CoreAnalysisDefinition<Result>,
 		request: CoreAnalysisRequest,
@@ -81,6 +83,7 @@ export class CoreAnalysisManager {
 	readonly #context: CoreCompilationContext;
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #programFlow: CoreProgramFlowEngine;
+	readonly #scratch: CoreAnalysisScratchPool;
 	readonly #cache = new WeakMap<CoreAnalysisDefinition<unknown>, DefinitionCache>();
 	readonly #contextIdentities = new WeakMap<CoreAnalysisDefinition<unknown>, unknown>();
 	readonly #registered = new Map<string, RegisteredAnalysis>();
@@ -93,12 +96,14 @@ export class CoreAnalysisManager {
 		program: CoreProgram,
 		context: CoreCompilationContext,
 		report: CoreOptimizationReportBuilder,
+		scratch = new CoreAnalysisScratchPool(),
 	) {
 		this.#program = program;
 		this.#generation = program.generation;
 		this.#context = context;
 		this.#report = report;
 		this.#programFlow = new CoreProgramFlowEngine(program, report);
+		this.#scratch = scratch;
 	}
 
 	get<Result>(
@@ -142,6 +147,7 @@ export class CoreAnalysisManager {
 				context: this.#context,
 				request,
 				programFlow: this.#programFlow,
+				scratch: this.#scratch,
 				get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
 				...(cached === undefined ? {} : { previous: cached.value }),
 			});

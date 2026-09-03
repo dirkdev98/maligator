@@ -201,6 +201,7 @@ export function optimizeCore(
 		compilation.program,
 		compilation.context,
 		reportBuilder,
+		functionResources.scratch,
 	);
 	reportBuilder.recordCheckpoint("before-program-flow", compilation.program);
 	const initialFlow = measurePhase("program-flow", () =>

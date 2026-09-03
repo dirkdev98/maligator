@@ -1,4 +1,5 @@
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { CoreAnalysisScratchPool } from "./core-analysis-scratch.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import type { CoreEditor } from "./core-editor.ts";
@@ -45,6 +46,7 @@ export class CoreFunctionOptimizationResources {
 	readonly localRules: CoreLocalRuleRegistry;
 	readonly featureIndex: CoreFunctionFeatureIndex;
 	readonly specializationFeatureIndex: CoreFunctionFeatureIndex;
+	readonly scratch: CoreAnalysisScratchPool;
 	readonly #primaryFunctions = new Set<CoreFunctionId>();
 	readonly #crossCallFunctions = new Map<number, Set<CoreFunctionId>>();
 
@@ -52,6 +54,7 @@ export class CoreFunctionOptimizationResources {
 		this.localRules = new CoreLocalRuleRegistry(program);
 		this.featureIndex = new CoreFunctionFeatureIndex(program, this.localRules.dispatch);
 		this.specializationFeatureIndex = coreLocalSpecializationFeatureIndex(program);
+		this.scratch = new CoreAnalysisScratchPool();
 	}
 
 	claimPrimary(functionId: CoreFunctionId): void {
@@ -100,7 +103,7 @@ export class CoreFunctionOptimizationSession {
 		this.functionId = functionId;
 		this.#program = program;
 		this.#context = context;
-		this.#analyses = new CoreAnalysisManager(program, context, report);
+		this.#analyses = new CoreAnalysisManager(program, context, report, resources.scratch);
 		this.#specializationFeatureIndex = resources.specializationFeatureIndex;
 		this.#localRules = resources.localRules;
 		this.#report = report;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CoreAnalysisDefinition } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreAnalysisScratchPool } from "../src/compiler/core/core-analysis-scratch.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
@@ -108,6 +109,28 @@ function noOpPass(name: string, runs: Array<number>): CorePass {
 }
 
 describe("Core optimizer infrastructure", () => {
+	it("reuses bounded scratch without aliasing active leases", () => {
+		const scratch = new CoreAnalysisScratchPool(64);
+		const first = scratch.leaseInt32(4);
+		const concurrent = scratch.leaseInt32(4);
+		expect(concurrent.values).not.toBe(first.values);
+
+		first.release();
+		concurrent.release();
+		const reused = scratch.leaseInt32(3);
+		expect([first.values, concurrent.values]).toContain(reused.values);
+		reused.release();
+
+		const oversized = scratch.leaseInt32(32);
+		oversized.release();
+		expect(scratch.statistics()).toEqual({
+			retainedBytes: 32,
+			int32Buffers: 2,
+			uint8Buffers: 0,
+		});
+		expect(() => reused.release()).toThrow("already released");
+	});
+
 	it("journals function edits as compact program-flow changes", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const revision = program.programFlowRevision;

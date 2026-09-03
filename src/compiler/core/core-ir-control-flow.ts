@@ -1,4 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { CoreAnalysisScratchPool } from "./core-analysis-scratch.ts";
 import { coreBlockId, coreValueId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
@@ -236,52 +237,64 @@ function immediateDominators(
 	entry: CoreBlockId,
 	reversePostorder: ReadonlyArray<CoreBlockId>,
 	predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	scratch: CoreAnalysisScratchPool,
 ): Array<CoreBlockId | null> {
-	const order = new Int32Array(predecessors.length);
-	order.fill(-1);
-	for (const [index, block] of reversePostorder.entries()) order[block] = index;
-	const dominators = new Int32Array(predecessors.length);
-	dominators.fill(-1);
-	dominators[entry] = entry;
-	const successors = new Array<Array<CoreBlockId>>(predecessors.length);
-	for (let block = 0; block < predecessors.length; block++) {
-		for (const { from } of predecessors[block] ?? []) {
-			(successors[from] ??= []).push(coreBlockId(block));
+	const length = predecessors.length;
+	const orderLease = scratch.leaseInt32(length);
+	const dominatorLease = scratch.leaseInt32(length);
+	const queuedLease = scratch.leaseUint8(length);
+	const order = orderLease.values;
+	const dominators = dominatorLease.values;
+	const queued = queuedLease.values;
+	try {
+		order.fill(-1, 0, length);
+		for (const [index, block] of reversePostorder.entries()) order[block] = index;
+		dominators.fill(-1, 0, length);
+		dominators[entry] = entry;
+		const successors = new Array<Array<CoreBlockId>>(length);
+		for (let block = 0; block < length; block++) {
+			for (const { from } of predecessors[block] ?? []) {
+				(successors[from] ??= []).push(coreBlockId(block));
+			}
 		}
+		const intersect = (left: CoreBlockId, right: CoreBlockId): CoreBlockId => {
+			let first = left;
+			let second = right;
+			while (first !== second) {
+				while (order[first]! > order[second]!) first = coreBlockId(dominators[first]!);
+				while (order[second]! > order[first]!) second = coreBlockId(dominators[second]!);
+			}
+			return first;
+		};
+		const queue = reversePostorder.slice(1);
+		queued.fill(0, 0, length);
+		for (const block of queue) queued[block] = 1;
+		let cursor = 0;
+		while (cursor < queue.length) {
+			const block = queue[cursor++]!;
+			queued[block] = 0;
+			let next: CoreBlockId | undefined;
+			for (const edge of predecessors[block] ?? []) {
+				if (dominators[edge.from]! < 0) continue;
+				next = next === undefined ? edge.from : intersect(next, edge.from);
+			}
+			if (next === undefined) continue;
+			if (dominators[block] === next) continue;
+			dominators[block] = next;
+			for (const successor of successors[block] ?? []) {
+				if (successor === entry || queued[successor] !== 0) continue;
+				queued[successor] = 1;
+				queue.push(successor);
+			}
+		}
+		return Array.from(dominators.subarray(0, length), (parent, block) =>
+			parent < 0 || block === entry ? null : coreBlockId(parent),
+		);
+	} finally {
+		queuedLease.release();
+		dominatorLease.release();
+		orderLease.release();
 	}
-	const intersect = (left: CoreBlockId, right: CoreBlockId): CoreBlockId => {
-		let first = left;
-		let second = right;
-		while (first !== second) {
-			while (order[first]! > order[second]!) first = coreBlockId(dominators[first]!);
-			while (order[second]! > order[first]!) second = coreBlockId(dominators[second]!);
-		}
-		return first;
-	};
-	const queue = reversePostorder.slice(1);
-	const queued = new Uint8Array(predecessors.length);
-	for (const block of queue) queued[block] = 1;
-	let cursor = 0;
-	while (cursor < queue.length) {
-		const block = queue[cursor++]!;
-		queued[block] = 0;
-		let next: CoreBlockId | undefined;
-		for (const edge of predecessors[block] ?? []) {
-			if (dominators[edge.from]! < 0) continue;
-			next = next === undefined ? edge.from : intersect(next, edge.from);
-		}
-		if (next === undefined) continue;
-		if (dominators[block] === next) continue;
-		dominators[block] = next;
-		for (const successor of successors[block] ?? []) {
-			if (successor === entry || queued[successor] !== 0) continue;
-			queued[successor] = 1;
-			queue.push(successor);
-		}
-	}
-	return Array.from(dominators, (parent, block) =>
-		parent < 0 || block === entry ? null : coreBlockId(parent),
-	);
 }
 
 function dominatorPredicate(
@@ -565,9 +578,10 @@ function buildFromStructural(
 	fn: CoreFunctionStore,
 	structural: CoreStructuralControlFlow,
 	includeExceptions: boolean,
+	scratch: CoreAnalysisScratchPool,
 ): CoreControlFlow {
 	const { successors, predecessors, reachable, reversePostorder } = structural;
-	const parents = immediateDominators(fn.entry, reversePostorder, predecessors);
+	const parents = immediateDominators(fn.entry, reversePostorder, predecessors, scratch);
 	const dominates = dominatorPredicate(fn.entry, reachable, parents);
 	let instructionDominatesBlock = dominates;
 	if (
@@ -606,6 +620,7 @@ function buildFromStructural(
 			entryNode(fn.entry),
 			splitTraversal.reversePostorder,
 			splitPredecessors,
+			scratch,
 		);
 		const splitDominates = dominatorPredicate(
 			entryNode(fn.entry),
@@ -689,7 +704,10 @@ function withoutExceptionalEdges(
 	});
 }
 
-function buildControlFlowBundle(fn: CoreFunctionStore): CoreControlFlowBundle {
+function buildControlFlowBundle(
+	fn: CoreFunctionStore,
+	scratch: CoreAnalysisScratchPool,
+): CoreControlFlowBundle {
 	const includesExceptions = fn.handlerBlockCount > 0;
 	const structural = buildStructural(fn, includesExceptions);
 	let ordinary: CoreControlFlow | undefined;
@@ -701,12 +719,13 @@ function buildControlFlowBundle(fn: CoreFunctionStore): CoreControlFlowBundle {
 				fn,
 				includesExceptions ? withoutExceptionalEdges(fn, structural) : structural,
 				false,
+				scratch,
 			);
 			return ordinary;
 		},
 		exceptional() {
 			if (!includesExceptions) return this.ordinary();
-			exceptional ??= buildFromStructural(fn, structural, true);
+			exceptional ??= buildFromStructural(fn, structural, true, scratch);
 			return exceptional;
 		},
 	});
@@ -718,7 +737,7 @@ export function buildCoreControlFlow(
 	options: BuildCoreControlFlowOptions = {},
 ): CoreControlFlow {
 	const fn = program.function(functionId);
-	const bundle = buildControlFlowBundle(fn);
+	const bundle = buildControlFlowBundle(fn, new CoreAnalysisScratchPool());
 	return options.exceptions === false ? bundle.ordinary() : bundle.exceptional();
 }
 
@@ -727,9 +746,9 @@ export const CORE_CONTROL_FLOW_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreContr
 		key: "control-flow-bundle",
 		scope: "function",
 		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
-		compute({ program, request }) {
+		compute({ program, request, scratch }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
-			return buildControlFlowBundle(program.function(request.function));
+			return buildControlFlowBundle(program.function(request.function), scratch);
 		},
 	};
 
