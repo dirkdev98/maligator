@@ -55,6 +55,16 @@ export interface CoreControlFlow {
 	dominatesEdge(from: CoreBlockId, to: CoreBlockId, block: CoreBlockId): boolean;
 }
 
+export interface CoreStructuralControlFlow {
+	readonly function: CoreFunctionId;
+	readonly cfgVersion: number;
+	readonly exceptionFlowVersion: number;
+	readonly successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
+	readonly predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
+	readonly reachable: ReadonlySet<CoreBlockId>;
+	readonly reversePostorder: ReadonlyArray<CoreBlockId>;
+}
+
 export interface BuildCoreControlFlowOptions {
 	readonly exceptions?: boolean;
 }
@@ -197,6 +207,23 @@ function traversal(
 		pending.pop();
 	}
 	return { reachable, reversePostorder: postorder.reverse() };
+}
+
+function buildStructural(
+	fn: CoreFunctionStore,
+	includeExceptions: boolean,
+): CoreStructuralControlFlow {
+	const { successors, predecessors } = buildEdges(fn, includeExceptions);
+	const { reachable, reversePostorder } = traversal(fn.entry, successors);
+	return Object.freeze({
+		function: fn.id,
+		cfgVersion: fn.versions.cfg,
+		exceptionFlowVersion: includeExceptions ? fn.versions.exceptionFlow : 0,
+		successors: Object.freeze(successors.map((edges) => Object.freeze(edges))),
+		predecessors: Object.freeze(predecessors.map((edges) => Object.freeze(edges))),
+		reachable: Object.freeze(reachable),
+		reversePostorder: Object.freeze(reversePostorder),
+	});
 }
 
 function immediateDominators(
@@ -529,8 +556,8 @@ function naturalLoops(
 }
 
 function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFlow {
-	const { successors, predecessors } = buildEdges(fn, includeExceptions);
-	const { reachable, reversePostorder } = traversal(fn.entry, successors);
+	const structural = buildStructural(fn, includeExceptions);
+	const { successors, predecessors, reachable, reversePostorder } = structural;
 	const parents = immediateDominators(fn.entry, reversePostorder, predecessors);
 	const dominates = dominatorPredicate(fn.entry, reachable, parents);
 	let instructionDominatesBlock = dominates;
@@ -643,6 +670,18 @@ export const CORE_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow>
 		return build(program.function(request.function), false);
 	},
 };
+
+export const CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreStructuralControlFlow> =
+	{
+		key: "structural-control-flow",
+		scope: "function",
+		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
+		compute({ program, request }) {
+			if (request.scope !== "function") throw new Error("Expected function analysis");
+			const fn = program.function(request.function);
+			return buildStructural(fn, fn.handlerBlockCount > 0);
+		},
+	};
 
 export const CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> =
 	{

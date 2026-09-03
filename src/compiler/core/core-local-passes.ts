@@ -28,6 +28,7 @@ import { CoreEditor } from "./core-editor.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
+	CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
@@ -1483,7 +1484,7 @@ const removeUnreachableBlocks: CorePass = {
 	name: "unreachable-block-removal",
 	stage: "canonicalize",
 	scope: "function",
-	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
+	requiredAnalyses: [CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
@@ -1491,7 +1492,7 @@ const removeUnreachableBlocks: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const control = context.analysis(CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS);
 		const reachable = new Set(control.reachable);
 		const pendingRoots = fn.bodyEntry === undefined ? [] : [fn.bodyEntry];
 		while (pendingRoots.length > 0) {
@@ -1549,7 +1550,7 @@ const eliminateForwardingBlocks: CorePass = {
 	name: "forwarding-block-elimination",
 	stage: "canonicalize",
 	scope: "function",
-	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
+	requiredAnalyses: [CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body", "exceptionFlow"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
@@ -1557,7 +1558,7 @@ const eliminateForwardingBlocks: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const control = context.analysis(CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS);
 		const candidates = new Array<{
 			readonly block: CoreBlockId;
 			readonly incoming: ReadonlyArray<CoreControlEdge>;
@@ -1680,7 +1681,7 @@ const mergeLinearBlocks: CorePass = {
 	name: "linear-block-merging",
 	stage: "canonicalize",
 	scope: "function",
-	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
+	requiredAnalyses: [CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body", "exceptionFlow"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
@@ -1688,14 +1689,7 @@ const mergeLinearBlocks: CorePass = {
 		const { program, item, remainingEdits } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
-		const protectedLoopBlocks = new Set(
-			control.loops.flatMap((loop) => [
-				loop.header,
-				...loop.latches,
-				...loop.exits.filter(({ dedicated }) => dedicated).map(({ to }) => to),
-			]),
-		);
+		const control = context.analysis(CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS);
 		let selected: Array<{
 			readonly predecessor: CoreBlockId;
 			readonly target: CoreBlockId;
@@ -1714,8 +1708,6 @@ const mergeLinearBlocks: CorePass = {
 				target === predecessor ||
 				target === fn.entry ||
 				target === fn.bodyEntry ||
-				protectedLoopBlocks.has(predecessor) ||
-				protectedLoopBlocks.has(target) ||
 				!fn.isBlockLive(target) ||
 				!sameHandler(fn, predecessor, target)
 			)
@@ -1818,7 +1810,7 @@ const simplifyBlockParameters: CorePass = {
 	name: "block-parameter-simplification",
 	stage: "canonicalize",
 	scope: "function",
-	requiredAnalyses: [CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS],
+	requiredAnalyses: [CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
 	budget: LOCAL_BUDGET,
@@ -1826,7 +1818,7 @@ const simplifyBlockParameters: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS);
+		const control = context.analysis(CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS);
 		let editor: CoreEditor | undefined;
 		for (const block of fn.blockIds()) {
 			const incoming = control.predecessors[block] ?? [];
@@ -2060,6 +2052,17 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [
 	foldValueKindObservations,
 	lowerLocalExplicitThrows,
 	foldRedundantTdzChecks,
+];
+
+export const CORE_CONSTRUCTION_ANNOTATION_PASSES: ReadonlyArray<CorePass> = [
+	annotateTerminalYieldSites,
+];
+
+export const CORE_CONSTRUCTION_NORMALIZATION_PASSES: ReadonlyArray<CorePass> = [
+	simplifyBlockParameters,
+	eliminateForwardingBlocks,
+	mergeLinearBlocks,
+	removeUnreachableBlocks,
 ];
 
 export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CorePass> = [

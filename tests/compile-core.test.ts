@@ -90,7 +90,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		});
 		expect(Object.values(off.report.counters).every((value) => value === 0)).toBe(true);
 		expect(phases.report.instrumentation).toBe("phases");
-		expect(phases.report.phases.length).toBe(15);
+		expect(phases.report.phases.length).toBe(17);
 		expect(phases.report.checkpoints.length).toBe(8);
 		expect(phases.report.passes).toEqual([]);
 		expect(phases.report.analyses).toEqual([]);
@@ -203,6 +203,8 @@ describe("compileSemanticProgramToProgramImage", () => {
 			"initial-local-optimization",
 			"structural-cfg-optimization",
 			"dense-generation-barrier",
+			"post-barrier-local-optimization",
+			"advanced-cfg-optimization",
 			"proof-and-representation-optimization",
 			"memory-and-provenance-optimization",
 			"late-local-cleanup",

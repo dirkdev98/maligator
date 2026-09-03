@@ -7,6 +7,8 @@ import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import {
+	CORE_CONSTRUCTION_ANNOTATION_PASSES,
+	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
 	CORE_LATE_CANONICALIZATION_PASSES,
 	CORE_LOCAL_CANONICALIZATION_PASSES,
 } from "./core-local-passes.ts";
@@ -18,20 +20,12 @@ import type {
 	CoreOptimizationReport,
 } from "./core-optimization-report.ts";
 import { CorePassManager } from "./core-pass-manager.ts";
-import type { CoreOptimizationStage } from "./core-pass.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
 import type { CoreChangeSet } from "./core-store.ts";
 import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 
 export type { CoreOptimizationPlan } from "./core-ir-regions.ts";
-
-const OPTIMIZATION_STAGES: ReadonlyArray<CoreOptimizationStage> = [
-	"canonicalize",
-	"control-flow",
-	"proofs",
-	"memory",
-];
 
 export interface OptimizeCoreOptions {
 	readonly verification?: CoreVerificationProfile;
@@ -108,12 +102,67 @@ export function optimizeCore(
 			compilation.program.function(functionId).configureUseTraversalStatistics(true);
 		}
 	}
-	let analyses = new CoreAnalysisManager(
+	measurePhase("construction-cleanup", () => undefined);
+	{
+		const analyses = new CoreAnalysisManager(
+			compilation.program,
+			compilation.context,
+			reportBuilder,
+		);
+		const annotationPasses = new CorePassManager(
+			compilation.program,
+			compilation.context,
+			analyses,
+			reportBuilder,
+			{
+				verification: options.verification,
+				optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+				localOptimization: false,
+			},
+		);
+		measurePhase("initial-local-optimization", () =>
+			annotationPasses.runStage("canonicalize", CORE_CONSTRUCTION_ANNOTATION_PASSES),
+		);
+		const normalizationPasses = new CorePassManager(
+			compilation.program,
+			compilation.context,
+			analyses,
+			reportBuilder,
+			{
+				verification: options.verification,
+				optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+				localOptimization: true,
+			},
+		);
+		measurePhase("structural-cfg-optimization", () =>
+			normalizationPasses.runStage(
+				"canonicalize",
+				CORE_CONSTRUCTION_NORMALIZATION_PASSES,
+			),
+		);
+	}
+	reportBuilder.recordCheckpoint(
+		"after-initial-local-structural-optimization",
+		compilation.program,
+	);
+	measurePhase("dense-generation-barrier", () =>
+		compilation.program.finalizeConstructionGeneration(),
+	);
+	reportBuilder.recordCheckpoint(
+		"after-construction-generation-finalization",
+		compilation.program,
+	);
+	if (reportBuilder.collectsCounters) {
+		for (const functionId of compilation.program.functionIds()) {
+			compilation.program.function(functionId).configureUseTraversalStatistics(true);
+		}
+	}
+	const analyses = new CoreAnalysisManager(
 		compilation.program,
 		compilation.context,
 		reportBuilder,
 	);
-	let passes = new CorePassManager(
+	const passes = new CorePassManager(
 		compilation.program,
 		compilation.context,
 		analyses,
@@ -124,70 +173,24 @@ export function optimizeCore(
 			localOptimization: true,
 		},
 	);
+	measurePhase("post-barrier-local-optimization", () =>
+		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES),
+	);
 	const lateCanonicalizationChanges: Array<CoreChangeSet> = [];
-	measurePhase("construction-cleanup", () => undefined);
-	for (const stage of OPTIMIZATION_STAGES) {
-		const phase: CoreOptimizationPhase =
-			stage === "canonicalize"
-				? "initial-local-optimization"
-				: stage === "control-flow"
-					? "structural-cfg-optimization"
-					: stage === "proofs"
-						? "proof-and-representation-optimization"
-						: "memory-and-provenance-optimization";
-		const changes = measurePhase(phase, () =>
-			passes.runStage(
-				stage,
-				stage === "canonicalize"
-					? CORE_LOCAL_CANONICALIZATION_PASSES
-					: stage === "control-flow"
-						? CORE_CONTROL_FLOW_PASSES
-						: stage === "proofs"
-							? CORE_PROOF_PASSES
-							: CORE_MEMORY_PASSES,
-			),
-		);
-		if (stage === "proofs" || stage === "memory") {
-			lateCanonicalizationChanges.push(...changes);
-		}
-		if (stage === "control-flow") {
-			reportBuilder.recordCheckpoint(
-				"after-initial-local-structural-optimization",
-				compilation.program,
-			);
-			measurePhase("dense-generation-barrier", () =>
-				compilation.program.finalizeConstructionGeneration(),
-			);
-			reportBuilder.recordCheckpoint(
-				"after-construction-generation-finalization",
-				compilation.program,
-			);
-			if (reportBuilder.collectsCounters) {
-				for (const functionId of compilation.program.functionIds()) {
-					compilation.program.function(functionId).configureUseTraversalStatistics(true);
-				}
-			}
-			analyses = new CoreAnalysisManager(
-				compilation.program,
-				compilation.context,
-				reportBuilder,
-			);
-			passes = new CorePassManager(
-				compilation.program,
-				compilation.context,
-				analyses,
-				reportBuilder,
-				{
-					verification: options.verification,
-					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-					localOptimization: true,
-				},
-			);
-		}
-		if (stage === "proofs") {
-			reportBuilder.recordCheckpoint("before-memory-and-provenance", compilation.program);
-		}
-	}
+	measurePhase("advanced-cfg-optimization", () =>
+		passes.runStage("control-flow", CORE_CONTROL_FLOW_PASSES),
+	);
+	lateCanonicalizationChanges.push(
+		...measurePhase("proof-and-representation-optimization", () =>
+			passes.runStage("proofs", CORE_PROOF_PASSES),
+		),
+	);
+	reportBuilder.recordCheckpoint("before-memory-and-provenance", compilation.program);
+	lateCanonicalizationChanges.push(
+		...measurePhase("memory-and-provenance-optimization", () =>
+			passes.runStage("memory", CORE_MEMORY_PASSES),
+		),
+	);
 	if (lateCanonicalizationChanges.length > 0) {
 		measurePhase("late-local-cleanup", () =>
 			passes.runStage(
