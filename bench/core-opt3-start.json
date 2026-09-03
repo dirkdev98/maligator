@@ -63562,19 +63562,14 @@
 				"phases": {
 					"medianRatio": 0.9849946727020236,
 					"sampleRatios": [
-						0.9793672558559021,
-						1.0329089373052256,
-						1.0057059840772373,
-						0.9567899455613619,
-						0.9849946727020236
+						0.9793672558559021, 1.0329089373052256, 1.0057059840772373,
+						0.9567899455613619, 0.9849946727020236
 					],
 					"passesGate": true
 				},
 				"counters": {
 					"medianRatio": 1.0412966722031858,
-					"sampleRatios": [
-						1.0412966722031858
-					],
+					"sampleRatios": [1.0412966722031858],
 					"passesGate": true
 				}
 			}
@@ -63583,11 +63578,7 @@
 			"tier": 14,
 			"id": "cold-test-check",
 			"gate": {
-				"command": [
-					"npm",
-					"run",
-					"test:check"
-				],
+				"command": ["npm", "run", "test:check"],
 				"wallMs": 144772.695458,
 				"status": 0,
 				"stdoutDigest": "37b2af3aa0d6f352e8e8d256e8e633908141be71170d93105cf7aab595b365b8",
