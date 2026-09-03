@@ -37,6 +37,14 @@ Peak RSS	3,592,765,440 bytes
 
 Slice 0 must reproduce and replace this reference with a clean measurement at the actual implementation HEAD.
 
+The first reproduced Slice 0 compiler capture at source `61e09d3a` constructed
+1,683,030 values and sealed 178,509 live output values: a 9.428× construction
+amplification. Keep that ratio visible beside the raw counts in every replacement
+baseline. It is a primary Slice 1 target, because lowering spare capacity without
+reducing the number of values constructed would leave the dominant excess intact.
+This capture remains diagnostic until it is repeated after later semantic fixes at
+the clean implementation HEAD.
+
 Preserve the completed architecture
 
 Do not reimplement or replace these accepted components without direct profile evidence that they are a current hotspot:
