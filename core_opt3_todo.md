@@ -52,6 +52,18 @@ Slice 1 failure is peak RSS: the five-run warm median is 3,381,886,976 bytes, or
 `bench/core-opt3-slice1.json`; do not mark Slice 1 complete until the RSS and output
 runtime gates also pass.
 
+The clean Slice 2 compiler capture at `3d65a293` constructed 494,690 values and
+sealed 178,559 live output values: a 2.770× construction amplification. Its five-run
+warm median is 16,494.304 ms, or 73.8% of Slice 0, and warm `optimizeCore` is
+10,215.804 ms, or 69.3%. The dense barrier takes 299 ms, or 1.81% of warm wall time,
+and leaves every live store at exactly its live capacity with zero abandoned operand,
+parameter, edge and handler storage. Generated code is 100.28% of Slice 0 and warm
+and cold output digests and observable checksums agree. The remaining Slice 2 failure
+is memory: warm peak managed heap is 2,561,361,432 bytes, or 101.1% of Slice 0, and
+warm peak RSS is 3,316,121,600 bytes, or 91.1%. The canonical repeated capture is
+`bench/core-opt3-slice2.json`; the function-major lifetime work in Slice 3 must address
+these failed memory gates before Slice 2 can be marked complete.
+
 Preserve the completed architecture
 
 Do not reimplement or replace these accepted components without direct profile evidence that they are a current hotspot:
