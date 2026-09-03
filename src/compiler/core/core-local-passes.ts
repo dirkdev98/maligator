@@ -1192,6 +1192,7 @@ const rewriteNumericIdentities: CorePass = {
 	name: "numeric-algebraic-simplification",
 	stage: "canonicalize",
 	scope: "function",
+	requiredFunctionOpcodesAny: ["binary"],
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,
