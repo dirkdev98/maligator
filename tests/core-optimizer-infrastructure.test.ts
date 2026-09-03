@@ -15,6 +15,7 @@ import {
 	CoreOpcodeRegistry,
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
+import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
 import type { CorePass } from "../src/compiler/core/core-pass.ts";
@@ -376,6 +377,24 @@ describe("Core optimizer infrastructure", () => {
 		]);
 
 		expect(analyzed).toEqual([loopFunction]);
+	});
+
+	it("does not build memory versions for memory-free functions", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		const forwarding = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "forward-exact-memory-loads",
+		)!;
+
+		new CorePassManager(program, context(), analyses, report, {
+			functionIds: [functions[0]!.id],
+		}).runStage("memory", [forwarding]);
+
+		expect(
+			report
+				.finish(program, { directEntries: [], specializations: [] })
+				.analyses.find(({ analysis }) => analysis === "local-memory-versions"),
+		).toBeUndefined();
 	});
 
 	it("skips function passes without a matching candidate opcode", () => {

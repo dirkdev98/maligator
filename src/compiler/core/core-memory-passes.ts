@@ -1,5 +1,8 @@
 import { CoreEditor } from "./core-editor.ts";
-import { CORE_FUNCTION_HAS_ALLOCATIONS } from "./core-function-features.ts";
+import {
+	CORE_FUNCTION_HAS_ALLOCATIONS,
+	CORE_FUNCTION_HAS_MEMORY_ACCESSES,
+} from "./core-function-features.ts";
 import { CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	CORE_CONTROL_FLOW_ANALYSIS,
@@ -570,6 +573,7 @@ const forwardExactMemoryLoads: CorePass = {
 	name: "forward-exact-memory-loads",
 	stage: "memory",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 	requiredAnalyses: [CORE_CONTROL_FLOW_ANALYSIS, CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS],
 	wakesOn: ["body", "cfg", "memoryEffects"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
