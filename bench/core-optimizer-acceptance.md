@@ -1,10 +1,10 @@
 # Core optimizer scalability acceptance
 
-Date: 2026-09-03  
-Measured commit: `a8835ad852c9d31d84c15f0c345c0fe02abf537b`  
-Reference host: Apple M3 Pro (11 logical CPUs), macOS 25.5.0, Node `v26.7.0`  
-Configuration: locked primordials, Node and Maligator surfaces, eval/realms/Web Platform disabled  
-Verification: unconditional Core boundaries; per-pass verification disabled for timings
+- Date: 2026-09-03
+- Measured commit: `a8835ad852c9d31d84c15f0c345c0fe02abf537b`
+- Reference host: Apple M3 Pro (11 logical CPUs), macOS 25.5.0, Node `v26.7.0`
+- Configuration: locked primordials, Node and Maligator surfaces, eval/realms/Web Platform disabled
+- Verification: unconditional Core boundaries; per-pass verification disabled for timings
 
 ## Verdict
 
