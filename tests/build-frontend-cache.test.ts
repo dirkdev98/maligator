@@ -86,7 +86,8 @@ describe("normal build frontend cache", () => {
 
 		expect(compiled.optimizationReport).toMatchObject({
 			instrumentation: "off",
-			stages: [],
+			phases: [],
+			checkpoints: [],
 			passes: [],
 			analyses: [],
 		});
@@ -113,7 +114,7 @@ describe("normal build frontend cache", () => {
 		});
 
 		expect(compiled.optimizationReport?.instrumentation).toBe("full");
-		expect(compiled.optimizationReport?.stages.length).toBeGreaterThan(0);
+		expect(compiled.optimizationReport?.phases.length).toBeGreaterThan(0);
 		expect(compiled.optimizationReport?.passes.length).toBeGreaterThan(0);
 	});
 

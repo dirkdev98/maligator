@@ -1090,6 +1090,7 @@ function claim(
 export interface BuildCoreOptimizationPlanOptions {
 	readonly budgets?: CoreTransformBudgetLimits;
 	readonly context?: CoreCompilationContext;
+	readonly onPhase?: (phase: "discovery" | "selection", elapsedMs: number) => void;
 	readonly onLocalCandidates?: (
 		functionId: CoreFunctionId,
 		candidates: ReadonlyArray<CoreLocalSpecializationCandidate>,
@@ -1103,6 +1104,7 @@ export function buildCoreOptimizationPlan(
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
 	options: BuildCoreOptimizationPlanOptions = {},
 ): CoreOptimizationPlan {
+	const discoveryStartedAt = options.onPhase === undefined ? 0 : Date.now();
 	const live = new Set(liveFunctions);
 	const pending: Array<PendingCandidate> = [];
 	const candidateOpcodes: Array<number> = [];
@@ -1142,6 +1144,8 @@ export function buildCoreOptimizationPlan(
 	}
 	pending.push(...guardedCallCandidates(program, summaries, liveFunctions));
 	pending.push(...directEntryCandidates(program, summaries, live));
+	options.onPhase?.("discovery", Date.now() - discoveryStartedAt);
+	const selectionStartedAt = options.onPhase === undefined ? 0 : Date.now();
 
 	const service = new CoreTransformCandidateService(
 		options.budgets ?? DEFAULT_CORE_SPECIALIZATION_BUDGETS,
@@ -1219,7 +1223,7 @@ export function buildCoreOptimizationPlan(
 			left.anchors[0]! - right.anchors[0]! ||
 			left.id.localeCompare(right.id),
 	);
-	return Object.freeze({
+	const plan = Object.freeze({
 		version: corePlanVersionStamp(program),
 		liveFunctions: Object.freeze([...liveFunctions]),
 		blockOrders: Object.freeze(
@@ -1245,6 +1249,8 @@ export function buildCoreOptimizationPlan(
 		recipes: buildCoreSpecializationRecipeTable(specializations),
 		statistics,
 	});
+	options.onPhase?.("selection", Date.now() - selectionStartedAt);
+	return plan;
 }
 
 export function withCorePlanVerificationTime(

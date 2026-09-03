@@ -111,7 +111,7 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 
 	expect(sites.length).toBeGreaterThan(0);
 	const report = optimization(definition).coreOptimizationReport;
-	expect(report.stages.length).toBeGreaterThan(0);
+	expect(report.phases.length).toBeGreaterThan(0);
 	expect(report.passes.every(({ runs, workItems }) => runs > 0 && workItems > 0)).toBe(
 		true,
 	);
@@ -156,7 +156,7 @@ test("profile optimizer data enters only the explicit prepared-profile sidecar",
 		);
 		expect(definition.diagnostics).not.toHaveProperty("coreOptimizationReport");
 		expect(definition.diagnostics).not.toHaveProperty("coreOptimizationPlan");
-		expect(prepared.coreOptimizationReport?.stages.length).toBeGreaterThan(0);
+		expect(prepared.coreOptimizationReport?.phases.length).toBeGreaterThan(0);
 		expect(prepared.coreOptimizationPlan?.version.key).toMatch(/^p:/);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });

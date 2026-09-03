@@ -14,6 +14,7 @@ import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import type {
 	CoreInstrumentationMode,
+	CoreOptimizationPhase,
 	CoreOptimizationReport,
 } from "./core-optimization-report.ts";
 import { CorePassManager } from "./core-pass-manager.ts";
@@ -78,20 +79,35 @@ export function optimizeCore(
 		CORE_OPTIMIZER_WORK_PROFILES[
 			options.mode ?? compilation.context.facts.compilationMode
 		];
-	verifyCoreProgram(
-		compilation.program,
-		{ stage: "pre-optimization" },
-		compilation.context,
-	);
-	if (instrumentation !== "off") {
-		for (const functionId of compilation.program.functionIds()) {
-			compilation.program.function(functionId).configureUseTraversalStatistics(true);
-		}
-	}
 	const reportBuilder = new CoreOptimizationReportBuilder(
 		compilation.program,
 		instrumentation,
 	);
+	const measurePhase = <Result>(
+		phase: CoreOptimizationPhase,
+		run: () => Result,
+	): Result => {
+		if (!reportBuilder.collectsPhases) return run();
+		const startedAt = Date.now();
+		try {
+			return run();
+		} finally {
+			reportBuilder.recordPhase(phase, Date.now() - startedAt);
+		}
+	};
+	reportBuilder.recordCheckpoint("after-core-construction", compilation.program);
+	measurePhase("pre-optimization-verification", () =>
+		verifyCoreProgram(
+			compilation.program,
+			{ stage: "pre-optimization" },
+			compilation.context,
+		),
+	);
+	if (reportBuilder.collectsCounters) {
+		for (const functionId of compilation.program.functionIds()) {
+			compilation.program.function(functionId).configureUseTraversalStatistics(true);
+		}
+	}
 	const analyses = new CoreAnalysisManager(
 		compilation.program,
 		compilation.context,
@@ -109,40 +125,67 @@ export function optimizeCore(
 		},
 	);
 	const lateCanonicalizationChanges: Array<CoreChangeSet> = [];
+	measurePhase("construction-cleanup", () => undefined);
 	for (const stage of OPTIMIZATION_STAGES) {
-		const changes = passes.runStage(
-			stage,
+		const phase: CoreOptimizationPhase =
 			stage === "canonicalize"
-				? CORE_LOCAL_CANONICALIZATION_PASSES
+				? "initial-local-optimization"
 				: stage === "control-flow"
-					? CORE_CONTROL_FLOW_PASSES
+					? "structural-cfg-optimization"
 					: stage === "proofs"
-						? CORE_PROOF_PASSES
-						: CORE_MEMORY_PASSES,
+						? "proof-and-representation-optimization"
+						: "memory-and-provenance-optimization";
+		const changes = measurePhase(phase, () =>
+			passes.runStage(
+				stage,
+				stage === "canonicalize"
+					? CORE_LOCAL_CANONICALIZATION_PASSES
+					: stage === "control-flow"
+						? CORE_CONTROL_FLOW_PASSES
+						: stage === "proofs"
+							? CORE_PROOF_PASSES
+							: CORE_MEMORY_PASSES,
+			),
 		);
 		if (stage !== "canonicalize") lateCanonicalizationChanges.push(...changes);
+		if (stage === "control-flow") {
+			reportBuilder.recordCheckpoint(
+				"after-initial-local-structural-optimization",
+				compilation.program,
+			);
+		}
+		if (stage === "proofs") {
+			reportBuilder.recordCheckpoint("before-memory-and-provenance", compilation.program);
+		}
 	}
 	if (lateCanonicalizationChanges.length > 0) {
-		passes.runStage(
-			"canonicalize",
-			CORE_LATE_CANONICALIZATION_PASSES,
-			lateCanonicalizationChanges,
-			"finalize",
-			false,
+		measurePhase("late-local-cleanup", () =>
+			passes.runStage(
+				"canonicalize",
+				CORE_LATE_CANONICALIZATION_PASSES,
+				lateCanonicalizationChanges,
+				"finalize",
+				false,
+			),
 		);
+	} else {
+		measurePhase("late-local-cleanup", () => undefined);
 	}
-	const crossCallStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
-	const crossCall = runCoreCrossCallTransforms(
-		compilation.program,
-		analyses,
-		passes,
-		profile.crossCallBudgets,
+	reportBuilder.recordCheckpoint("before-program-flow", compilation.program);
+	const initialFlow = measurePhase("program-flow", () =>
+		analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),
+	);
+	const crossCall = measurePhase("cross-call-transforms", () =>
+		runCoreCrossCallTransforms(
+			compilation.program,
+			analyses,
+			passes,
+			profile.crossCallBudgets,
+			initialFlow,
+		),
 	);
 	reportBuilder.recordTransformWork(crossCall.statistics);
-	if (reportBuilder.collectsCounters) {
-		reportBuilder.recordStage("interprocedural", Date.now() - crossCallStartedAt);
-	}
-	const programStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
+	reportBuilder.recordCheckpoint("after-cross-call-transforms", compilation.program);
 	const summaries = crossCall.summaries;
 	const reachability = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 		scope: "program",
@@ -152,10 +195,6 @@ export function optimizeCore(
 		summaries.statistics,
 		reachability.statistics,
 	);
-	if (reportBuilder.collectsCounters) {
-		reportBuilder.recordStage("program", Date.now() - programStartedAt);
-	}
-	const planStartedAt = reportBuilder.collectsCounters ? Date.now() : 0;
 	const plan = buildCoreOptimizationPlan(
 		compilation.program,
 		analyses,
@@ -164,26 +203,41 @@ export function optimizeCore(
 		{
 			context: compilation.context,
 			budgets: profile.specializationBudgets,
+			...(reportBuilder.collectsPhases
+				? {
+						onPhase(phase: "discovery" | "selection", elapsedMs: number) {
+							reportBuilder.recordPhase(
+								phase === "discovery"
+									? "specialization-discovery"
+									: "specialization-selection",
+								elapsedMs,
+							);
+						},
+					}
+				: {}),
 			onLocalCandidates(_functionId, candidates) {
 				reportBuilder.increment("specializationFunctionsScanned");
 				reportBuilder.recordCandidateDiscovery(candidates);
 			},
 		},
 	);
-	const program = compilation.program.seal();
-	const verifiedPlan = verifyCoreOptimizationPlan(program, plan);
+	reportBuilder.recordCheckpoint("before-sealing", compilation.program);
+	const program = measurePhase("sealing", () => compilation.program.seal());
+	reportBuilder.recordCheckpoint("after-sealing", program);
+	const verifiedPlan = measurePhase("plan-verification", () =>
+		verifyCoreOptimizationPlan(program, plan),
+	);
 	reportBuilder.recordPlanWork(verifiedPlan.statistics);
-	if (reportBuilder.collectsCounters) {
-		reportBuilder.recordStage("specialization", Date.now() - planStartedAt);
-	}
-	verifyCoreProgram(program, { stage: "pre-target" }, compilation.context);
+	measurePhase("final-core-verification", () =>
+		verifyCoreProgram(program, { stage: "pre-target" }, compilation.context),
+	);
 	const optimized = Object.freeze({
 		program,
 		context: compilation.context,
 		plan: verifiedPlan,
 	});
 	const report = reportBuilder.finish(program, verifiedPlan);
-	if (instrumentation !== "off") {
+	if (reportBuilder.collectsCounters) {
 		for (const functionId of compilation.program.functionIds()) {
 			compilation.program.function(functionId).configureUseTraversalStatistics(false);
 		}

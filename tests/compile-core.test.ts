@@ -13,7 +13,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			function add(left, right) { return left + right; }
 			globalThis.answer = add(40, 2);
 		`;
-		const compile = (coreInstrumentation: "off" | "counters" | "full") => {
+		const compile = (coreInstrumentation: "off" | "phases" | "counters" | "full") => {
 			let report: CoreOptimizationReport | undefined;
 			const image = compileSemanticProgramToProgramImage(
 				analyzeSourceAndRunSemanticAnalysis(source, "instrumentation.js"),
@@ -29,21 +29,33 @@ describe("compileSemanticProgramToProgramImage", () => {
 		};
 
 		const off = compile("off");
+		const phases = compile("phases");
 		const counters = compile("counters");
 		const full = compile("full");
 
+		expect(phases.image).toEqual(off.image);
 		expect(counters.image).toEqual(off.image);
 		expect(full.image).toEqual(off.image);
 		expect(off.report).toMatchObject({
 			instrumentation: "off",
-			stages: [],
+			phases: [],
+			checkpoints: [],
 			passes: [],
 			analyses: [],
 			input: { functions: 0 },
 		});
 		expect(Object.values(off.report.counters).every((value) => value === 0)).toBe(true);
+		expect(phases.report.instrumentation).toBe("phases");
+		expect(phases.report.phases.length).toBe(14);
+		expect(phases.report.checkpoints.length).toBe(7);
+		expect(phases.report.passes).toEqual([]);
+		expect(phases.report.analyses).toEqual([]);
+		expect(Object.values(phases.report.counters).every((value) => value === 0)).toBe(
+			true,
+		);
 		expect(counters.report.instrumentation).toBe("counters");
-		expect(counters.report.stages.length).toBeGreaterThan(0);
+		expect(counters.report.phases).toEqual([]);
+		expect(counters.report.checkpoints.length).toBe(7);
 		expect(counters.report.passes).toEqual([]);
 		expect(counters.report.analyses).toEqual([]);
 		expect(counters.report.counters.localRulesConsidered).toBeGreaterThan(0);
@@ -112,7 +124,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		const result = optimizeCore(lowerSemanticProgramToCore(semantic));
 
 		expect(result.report.instrumentation).toBe("off");
-		expect(result.report.stages).toEqual([]);
+		expect(result.report.phases).toEqual([]);
 	});
 
 	it("seals the constructed store in place and records dense function relocation", () => {
@@ -134,19 +146,37 @@ describe("compileSemanticProgramToProgramImage", () => {
 			recipes: { count: 0 },
 		});
 		expect(compilation.plan.version.key).toMatch(/^p:/);
-		expect(compilation.plan.statistics).toMatchObject({ applied: 0, declined: 0 });
+		expect(compilation.plan.statistics).toMatchObject({
+			applied: 0,
+			declined: 0,
+		});
 		expect(report.output.functions).toBe(report.input.functions);
 		expect(report.output.instructions).toBeLessThanOrEqual(report.input.instructions);
 		expect(report.output.planCandidates).toBe(0);
-		expect(report.stages.map(({ stage }) => stage)).toEqual([
-			"canonicalize",
-			"control-flow",
-			"proofs",
-			"memory",
-			"finalize",
-			"interprocedural",
-			"program",
-			"specialization",
+		expect(report.phases.map(({ phase }) => phase)).toEqual([
+			"pre-optimization-verification",
+			"construction-cleanup",
+			"initial-local-optimization",
+			"structural-cfg-optimization",
+			"proof-and-representation-optimization",
+			"memory-and-provenance-optimization",
+			"late-local-cleanup",
+			"program-flow",
+			"cross-call-transforms",
+			"specialization-discovery",
+			"specialization-selection",
+			"sealing",
+			"plan-verification",
+			"final-core-verification",
+		]);
+		expect(report.checkpoints.map(({ checkpoint }) => checkpoint)).toEqual([
+			"after-core-construction",
+			"after-initial-local-structural-optimization",
+			"before-memory-and-provenance",
+			"before-program-flow",
+			"after-cross-call-transforms",
+			"before-sealing",
+			"after-sealing",
 		]);
 
 		const execution = lowerCoreCompilationToExecutionProgram(compilation);

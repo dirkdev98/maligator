@@ -14,6 +14,7 @@ import type {
 } from "./core-ir.ts";
 import type { CorePassManager } from "./core-pass-manager.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
+import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { CoreTransformCandidateService } from "./core-transform-candidates.ts";
 import type {
@@ -727,12 +728,14 @@ export function runCoreCrossCallTransforms(
 	analyses: CoreAnalysisManager,
 	passes: CorePassManager,
 	limits?: CoreTransformBudgetLimits,
+	initialFlow?: CoreProgramFlowState,
 ): {
 	readonly summaries: CoreProgramSummaries;
 	readonly statistics: CoreCrossCallTransformStatistics;
 } {
 	const service = new CoreTransformCandidateService(limits);
-	let flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+	let flow =
+		initialFlow ?? analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
 	let summaries = flow.summaries;
 	let callGraphFunctionsAnalyzed = summaries.targets.statistics.functionsAnalyzed;
 	let summaryFunctionsAnalyzed = summaries.statistics.functionsAnalyzed;

@@ -2,10 +2,16 @@ import type {
 	CoreOptimizationPlan,
 	CoreOptimizationPlanStatistics,
 } from "./core-ir-regions.ts";
+import type {
+	CoreBlockId,
+	CoreFactId,
+	CoreInstructionId,
+	CoreValueId,
+} from "./core-ir.ts";
 import type { CoreLocalOptimizerStatistics } from "./core-local-optimizer.ts";
 import type { CoreProgram } from "./core-store.ts";
 
-export type CoreInstrumentationMode = "off" | "counters" | "full";
+export type CoreInstrumentationMode = "off" | "phases" | "counters" | "full";
 
 export interface CoreOptimizationCounts {
 	readonly functions: number;
@@ -16,9 +22,37 @@ export interface CoreOptimizationCounts {
 	readonly planCandidates: number;
 }
 
-export interface CoreOptimizationStageReport {
-	readonly stage: string;
+export interface CoreOptimizationPhaseReport {
+	readonly phase: string;
 	readonly elapsedMs: number;
+}
+
+export interface CoreLiveCapacityCounts {
+	readonly live: number;
+	readonly capacity: number;
+}
+
+export interface CoreOptimizationCheckpoint {
+	readonly checkpoint: string;
+	readonly functions: CoreLiveCapacityCounts;
+	readonly blocks: CoreLiveCapacityCounts;
+	readonly instructions: CoreLiveCapacityCounts;
+	readonly values: CoreLiveCapacityCounts;
+	readonly uses: CoreLiveCapacityCounts;
+	readonly operands: CoreLiveCapacityCounts;
+	readonly blockParameters: CoreLiveCapacityCounts;
+	readonly terminatorEdges: CoreLiveCapacityCounts;
+	readonly terminatorArguments: number;
+	readonly handlerArguments: CoreLiveCapacityCounts;
+	readonly facts: CoreLiveCapacityCounts;
+	readonly effectRefinements: CoreLiveCapacityCounts;
+	readonly abandonedStorage: {
+		readonly operands: number;
+		readonly blockParameters: number;
+		readonly terminatorEdges: number;
+		readonly handlerArguments: number;
+		readonly effectRefinements: number;
+	};
 }
 
 export interface CorePassWorkReport {
@@ -55,7 +89,8 @@ export interface CoreOptimizationReport {
 	readonly instrumentation: CoreInstrumentationMode;
 	readonly input: CoreOptimizationCounts;
 	readonly output: CoreOptimizationCounts;
-	readonly stages: ReadonlyArray<CoreOptimizationStageReport>;
+	readonly phases: ReadonlyArray<CoreOptimizationPhaseReport>;
+	readonly checkpoints: ReadonlyArray<CoreOptimizationCheckpoint>;
 	readonly passes: ReadonlyArray<CorePassWorkReport>;
 	readonly analyses: ReadonlyArray<CoreAnalysisWorkReport>;
 	readonly discovery: CoreCandidateDiscoveryReport;
@@ -269,17 +304,24 @@ const COUNTER_KEYS = [
 type CoreCompilerWorkCounter = (typeof COUNTER_KEYS)[number];
 
 const COUNTER_INDEX = new Map(COUNTER_KEYS.map((key, index) => [key, index] as const));
-const STAGE_KEYS = [
-	"canonicalize",
-	"control-flow",
-	"proofs",
-	"memory",
-	"finalize",
-	"interprocedural",
-	"program",
-	"specialization",
+const PHASE_KEYS = [
+	"pre-optimization-verification",
+	"construction-cleanup",
+	"initial-local-optimization",
+	"structural-cfg-optimization",
+	"proof-and-representation-optimization",
+	"memory-and-provenance-optimization",
+	"late-local-cleanup",
+	"program-flow",
+	"cross-call-transforms",
+	"specialization-discovery",
+	"specialization-selection",
+	"plan-verification",
+	"final-core-verification",
+	"sealing",
 ] as const;
-const STAGE_INDEX = new Map(STAGE_KEYS.map((key, index) => [key, index] as const));
+export type CoreOptimizationPhase = (typeof PHASE_KEYS)[number];
+const PHASE_INDEX = new Map(PHASE_KEYS.map((key, index) => [key, index] as const));
 
 const EMPTY_COUNTS: CoreOptimizationCounts = Object.freeze({
 	functions: 0,
@@ -330,12 +372,112 @@ export function coreOptimizationCounts(
 	};
 }
 
+function coreOptimizationCheckpoint(
+	program: CoreProgram,
+	checkpoint: string,
+): CoreOptimizationCheckpoint {
+	let functions = 0;
+	let blocksLive = 0;
+	let blocksCapacity = 0;
+	let instructionsLive = 0;
+	let instructionsCapacity = 0;
+	let valuesLive = 0;
+	let valuesCapacity = 0;
+	let usesLive = 0;
+	let usesCapacity = 0;
+	let operandsLive = 0;
+	let operandsCapacity = 0;
+	let blockParametersLive = 0;
+	let blockParametersCapacity = 0;
+	let terminatorEdgesLive = 0;
+	let terminatorEdgesCapacity = 0;
+	let terminatorArguments = 0;
+	let handlerArgumentsLive = 0;
+	let handlerArgumentsCapacity = 0;
+	let factsLive = 0;
+	let factsCapacity = 0;
+	let effectRefinementsLive = 0;
+	let effectRefinementsCapacity = 0;
+	for (const functionId of program.functionIds()) {
+		functions++;
+		const fn = program.function(functionId);
+		blocksCapacity += fn.blockCapacity;
+		instructionsCapacity += fn.instructionCapacity;
+		valuesCapacity += fn.valueCapacity;
+		usesCapacity += fn.useCapacity;
+		operandsCapacity += fn.operandCapacity;
+		blockParametersCapacity += fn.blockParameterCapacity;
+		terminatorEdgesCapacity += fn.terminatorEdgeCapacity;
+		handlerArgumentsCapacity += fn.handlerArgumentCapacity;
+		factsCapacity += fn.factCapacity;
+		effectRefinementsCapacity += fn.effectRefinementCapacity;
+		for (let index = 0; index < fn.blockCapacity; index++) {
+			const block = index as CoreBlockId;
+			if (fn.kernel.blockLive(block) === 0) continue;
+			blocksLive++;
+			blockParametersLive += fn.kernel.blockParameterCount(block);
+			handlerArgumentsLive += fn.kernel.blockHandlerArgumentCount(block);
+		}
+		for (let index = 0; index < fn.instructionCapacity; index++) {
+			const instruction = index as CoreInstructionId;
+			if (fn.kernel.instructionLive(instruction) === 0) continue;
+			instructionsLive++;
+			operandsLive += fn.kernel.instructionOperandCount(instruction);
+			const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+			const edgeCount = fn.kernel.terminatorEdgeCount(instruction);
+			terminatorEdgesLive += edgeCount;
+			for (let edge = edgeStart; edge < edgeStart + edgeCount; edge++) {
+				terminatorArguments += fn.kernel.terminatorEdgeArgumentCount(edge);
+			}
+		}
+		for (let index = 0; index < fn.valueCapacity; index++) {
+			if (fn.kernel.valueLive(index as CoreValueId) !== 0) valuesLive++;
+		}
+		for (let index = 0; index < fn.useCapacity; index++) {
+			if (fn.kernel.useLive(index) !== 0) usesLive++;
+		}
+		for (let index = 0; index < fn.factCapacity; index++) {
+			if (fn.isFactLive(index as CoreFactId)) factsLive++;
+		}
+		for (let index = 0; index < fn.effectRefinementCapacity; index++) {
+			if (fn.effectRefinementLive(index)) effectRefinementsLive++;
+		}
+	}
+	const count = (live: number, capacity: number): CoreLiveCapacityCounts =>
+		Object.freeze({ live, capacity });
+	return Object.freeze({
+		checkpoint,
+		functions: count(functions, program.functionCapacity),
+		blocks: count(blocksLive, blocksCapacity),
+		instructions: count(instructionsLive, instructionsCapacity),
+		values: count(valuesLive, valuesCapacity),
+		uses: count(usesLive, usesCapacity),
+		operands: count(operandsLive, operandsCapacity),
+		blockParameters: count(blockParametersLive, blockParametersCapacity),
+		terminatorEdges: count(terminatorEdgesLive, terminatorEdgesCapacity),
+		terminatorArguments,
+		handlerArguments: count(handlerArgumentsLive, handlerArgumentsCapacity),
+		facts: count(factsLive, factsCapacity),
+		effectRefinements: count(effectRefinementsLive, effectRefinementsCapacity),
+		abandonedStorage: Object.freeze({
+			operands: operandsCapacity - operandsLive,
+			blockParameters: blockParametersCapacity - blockParametersLive,
+			terminatorEdges: terminatorEdgesCapacity - terminatorEdgesLive,
+			handlerArguments: handlerArgumentsCapacity - handlerArgumentsLive,
+			effectRefinements: effectRefinementsCapacity - effectRefinementsLive,
+		}),
+	});
+}
+
+let EMPTY_CORE_OPTIMIZATION_REPORT: CoreOptimizationReport | undefined;
+
 export class CoreOptimizationReportBuilder {
 	readonly instrumentation: CoreInstrumentationMode;
-	readonly input: CoreOptimizationCounts;
-	readonly #stageTimes = new Float64Array(STAGE_KEYS.length);
-	readonly #stageSeen = new Uint8Array(STAGE_KEYS.length);
-	readonly #detailedStages: Array<CoreOptimizationStageReport> | undefined;
+	#input: CoreOptimizationCounts = EMPTY_COUNTS;
+	readonly #phaseTimes = new Float64Array(PHASE_KEYS.length);
+	readonly #phaseSeen = new Uint8Array(PHASE_KEYS.length);
+	readonly #detailedPhases: Array<CoreOptimizationPhaseReport> | undefined;
+	readonly #checkpoints: Array<CoreOptimizationCheckpoint> | undefined;
 	readonly #passes: Map<string, MutablePassWorkReport> | undefined;
 	readonly #analyses: Map<string, MutableAnalysisWorkReport> | undefined;
 	readonly #exhaustedPasses: Set<string> | undefined;
@@ -410,21 +552,22 @@ export class CoreOptimizationReportBuilder {
 		verificationMs: 0,
 	});
 
-	constructor(program: CoreProgram, instrumentation: CoreInstrumentationMode = "full") {
+	constructor(_program: CoreProgram, instrumentation: CoreInstrumentationMode = "full") {
 		this.instrumentation = instrumentation;
-		this.input =
-			instrumentation === "off"
-				? EMPTY_COUNTS
-				: Object.freeze(coreOptimizationCounts(program));
 		this.#passes = instrumentation === "full" ? new Map() : undefined;
 		this.#analyses = instrumentation === "full" ? new Map() : undefined;
 		this.#exhaustedPasses = instrumentation === "full" ? new Set() : undefined;
 		this.#discoveredCandidatesByKind = instrumentation === "full" ? new Map() : undefined;
-		this.#detailedStages = instrumentation === "full" ? [] : undefined;
+		this.#detailedPhases = instrumentation === "full" ? [] : undefined;
+		this.#checkpoints = instrumentation === "off" ? undefined : [];
 	}
 
 	get collectsCounters(): boolean {
-		return this.instrumentation !== "off";
+		return this.instrumentation === "counters" || this.instrumentation === "full";
+	}
+
+	get collectsPhases(): boolean {
+		return this.instrumentation === "phases" || this.instrumentation === "full";
 	}
 
 	get collectsDetails(): boolean {
@@ -437,13 +580,28 @@ export class CoreOptimizationReportBuilder {
 		this.#counters[index] = this.#counters[index]! + value;
 	}
 
-	recordStage(stage: string, elapsedMs: number): void {
-		if (!this.collectsCounters) return;
-		const index = STAGE_INDEX.get(stage as (typeof STAGE_KEYS)[number]);
-		if (index === undefined) throw new Error(`Unknown Core optimization stage ${stage}`);
-		this.#stageTimes[index] = this.#stageTimes[index]! + elapsedMs;
-		this.#stageSeen[index] = 1;
-		this.#detailedStages?.push(Object.freeze({ stage, elapsedMs }));
+	recordPhase(phase: CoreOptimizationPhase, elapsedMs: number): void {
+		if (!this.collectsPhases) return;
+		const index = PHASE_INDEX.get(phase)!;
+		this.#phaseTimes[index] = this.#phaseTimes[index]! + elapsedMs;
+		this.#phaseSeen[index] = 1;
+		this.#detailedPhases?.push(Object.freeze({ phase, elapsedMs }));
+	}
+
+	recordCheckpoint(checkpoint: string, program: CoreProgram): void {
+		if (this.#checkpoints === undefined) return;
+		const report = coreOptimizationCheckpoint(program, checkpoint);
+		this.#checkpoints.push(report);
+		if (this.#checkpoints.length === 1) {
+			this.#input = Object.freeze({
+				functions: report.functions.live,
+				blocks: report.blocks.live,
+				instructions: report.instructions.live,
+				values: report.values.live,
+				facts: report.facts.live,
+				planCandidates: 0,
+			});
+		}
 	}
 
 	recordPassRun(
@@ -548,15 +706,8 @@ export class CoreOptimizationReportBuilder {
 		this.#analyses.set(analysis, report);
 	}
 
-	timesAnalysis(analysis: string): boolean {
-		return (
-			this.collectsCounters &&
-			(this.collectsDetails ||
-				analysis === "call-graph" ||
-				analysis === "program-summaries" ||
-				analysis === "function-reachability" ||
-				analysis === "program-value-kinds")
-		);
+	timesAnalysis(_analysis: string): boolean {
+		return this.collectsDetails;
 	}
 
 	recordAnalysisResult(analysis: string, value: unknown): void {
@@ -761,21 +912,23 @@ export class CoreOptimizationReportBuilder {
 		if (!this.collectsCounters) return;
 		let liveUses = 0;
 		let deadUses = 0;
-		let abandonedOperands = 0;
-		let abandonedParameters = 0;
 		for (const functionId of program.functionIds()) {
 			const fn = program.function(functionId);
 			const useTraversal = fn.useTraversalStatistics();
 			liveUses += useTraversal.liveVisits;
 			deadUses += useTraversal.deadSkips;
-			const storage = fn.storageStatistics();
-			abandonedOperands += storage.abandonedOperands;
-			abandonedParameters += storage.abandonedParameters;
 		}
 		this.increment("liveUseVisits", liveUses);
 		this.increment("deadUseSkips", deadUses);
-		this.increment("abandonedOperandStorage", abandonedOperands);
-		this.increment("abandonedParameterStorage", abandonedParameters);
+		const finalCheckpoint = this.#checkpoints?.at(-1);
+		this.increment(
+			"abandonedOperandStorage",
+			finalCheckpoint?.abandonedStorage.operands ?? 0,
+		);
+		this.increment(
+			"abandonedParameterStorage",
+			finalCheckpoint?.abandonedStorage.blockParameters ?? 0,
+		);
 	}
 
 	finish(
@@ -785,6 +938,40 @@ export class CoreOptimizationReportBuilder {
 			readonly specializations?: ReadonlyArray<unknown>;
 		},
 	): CoreOptimizationReport {
+		if (this.instrumentation === "off") {
+			EMPTY_CORE_OPTIMIZATION_REPORT ??= Object.freeze({
+				instrumentation: "off",
+				input: EMPTY_COUNTS,
+				output: EMPTY_COUNTS,
+				phases: Object.freeze([]),
+				checkpoints: Object.freeze([]),
+				passes: Object.freeze([]),
+				analyses: Object.freeze([]),
+				discovery: Object.freeze({
+					candidates: 0,
+					byKind: Object.freeze({}),
+					stackObjects: 0,
+					denseArrays: 0,
+					numericFusions: 0,
+					largestFanOut: 0,
+				}),
+				program: this.#programWork,
+				transforms: this.#transformWork,
+				plan: this.#planWork,
+				queue: Object.freeze({ pushes: 0, pops: 0, maximumDepth: 0 }),
+				budget: Object.freeze({
+					workItems: 0,
+					edits: 0,
+					exhaustedPasses: Object.freeze([]),
+				}),
+				counters: Object.freeze(
+					Object.fromEntries(
+						COUNTER_KEYS.map((key) => [key, 0]),
+					) as unknown as CoreCompilerWorkCounters,
+				),
+			});
+			return EMPTY_CORE_OPTIMIZATION_REPORT;
+		}
 		this.#recordStorageWork(program);
 		const passes = this.#passes;
 		const analyses = this.#analyses;
@@ -796,21 +983,33 @@ export class CoreOptimizationReportBuilder {
 		);
 		return Object.freeze({
 			instrumentation: this.instrumentation,
-			input: this.input,
-			output:
-				this.instrumentation === "off"
-					? EMPTY_COUNTS
-					: Object.freeze(coreOptimizationCounts(program, plan)),
-			stages:
-				this.#detailedStages === undefined
+			input: this.#input,
+			output: Object.freeze({
+				functions: this.#checkpoints?.at(-1)?.functions.live ?? 0,
+				blocks: this.#checkpoints?.at(-1)?.blocks.live ?? 0,
+				instructions: this.#checkpoints?.at(-1)?.instructions.live ?? 0,
+				values: this.#checkpoints?.at(-1)?.values.live ?? 0,
+				facts: this.#checkpoints?.at(-1)?.facts.live ?? 0,
+				planCandidates:
+					plan.directEntries.length +
+					(plan.recipes?.count ?? plan.specializations?.length ?? 0),
+			}),
+			phases:
+				this.#detailedPhases === undefined
 					? Object.freeze(
-							STAGE_KEYS.flatMap((stage, index) =>
-								this.#stageSeen[index] === 0
+							PHASE_KEYS.flatMap((phase, index) =>
+								this.#phaseSeen[index] === 0
 									? []
-									: [Object.freeze({ stage, elapsedMs: this.#stageTimes[index]! })],
+									: [
+											Object.freeze({
+												phase,
+												elapsedMs: this.#phaseTimes[index]!,
+											}),
+										],
 							),
 						)
-					: Object.freeze([...this.#detailedStages]),
+					: Object.freeze([...this.#detailedPhases]),
+			checkpoints: Object.freeze([...(this.#checkpoints ?? [])]),
 			passes: Object.freeze(
 				[...(passes?.entries() ?? [])].map(([pass, report]) =>
 					Object.freeze({ pass, ...report }),
@@ -879,9 +1078,9 @@ export function formatCoreOptimizationReport(
 		{ label: "Core optimizer input", value: countsLine(report.input) },
 		{ label: "Core optimizer output", value: countsLine(report.output) },
 		{
-			label: "Core optimizer stages",
-			value: report.stages
-				.map(({ stage, elapsedMs }) => `${stage} ${elapsedMs.toFixed(1)}ms`)
+			label: "Core optimizer phases",
+			value: report.phases
+				.map(({ phase, elapsedMs }) => `${phase} ${elapsedMs.toFixed(1)}ms`)
 				.join(", "),
 		},
 		{ label: "Core optimizer passes", value: passes },

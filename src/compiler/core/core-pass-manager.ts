@@ -133,11 +133,10 @@ export class CorePassManager {
 		stage: CoreOptimizationStage,
 		passes: ReadonlyArray<CorePass>,
 		initialChanges?: ReadonlyArray<CoreChangeSet>,
-		reportedStage: CoreOptimizationStage = stage,
+		_reportedStage: CoreOptimizationStage = stage,
 		seedLocalFromInitialChanges = true,
 	): ReadonlyArray<CoreChangeSet> {
 		for (const pass of passes) this.#validatePass(stage, pass);
-		const startedAt = this.#report.collectsCounters ? Date.now() : 0;
 		const functionStride = Math.max(1, this.#program.functionCapacity);
 		const sccStride = Math.max(1, this.#sccs.length);
 		const sccBase = passes.length * functionStride;
@@ -358,9 +357,6 @@ export class CorePassManager {
 				});
 			}
 			enqueueChanges(changes);
-		}
-		if (this.#report.collectsCounters) {
-			this.#report.recordStage(reportedStage, Date.now() - startedAt);
 		}
 		return appliedChanges;
 	}

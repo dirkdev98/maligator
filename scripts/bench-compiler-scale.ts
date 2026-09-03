@@ -99,7 +99,8 @@ interface CompilerScaleSample {
 		CoreOptimizationReport,
 		| "input"
 		| "output"
-		| "stages"
+		| "phases"
+		| "checkpoints"
 		| "passes"
 		| "analyses"
 		| "counters"
@@ -154,8 +155,8 @@ tier 14 requires --include-test-check.
   --tier N[,N...]              select one or more tiers
   --warm-runs N                override warmed samples per case
   --cold-runs N                override cold samples per case
-  --instrumentation MODE       off, counters or full (default: counters)
-  --compare-instrumentation    compare off versus counters on every selected tier
+  --instrumentation MODE       off, phases, counters or full (default: counters)
+  --compare-instrumentation    compare off, phases and counters on every selected tier
   --no-profile                 omit the separate V8 allocation/GC sample
   --include-test-check         include tier 14 (npm run test:check)
   --quick                      one warm and one cold sample per case
@@ -220,8 +221,13 @@ function parseOptions(
 			coldRuns = positiveInteger(args[++index], option);
 		} else if (option === "--instrumentation") {
 			const value = args[++index];
-			if (value !== "off" && value !== "counters" && value !== "full") {
-				throw new Error("--instrumentation requires off, counters or full");
+			if (
+				value !== "off" &&
+				value !== "phases" &&
+				value !== "counters" &&
+				value !== "full"
+			) {
+				throw new Error("--instrumentation requires off, phases, counters or full");
 			}
 			instrumentation = value;
 		} else if (option === "--compare-instrumentation") {
@@ -677,7 +683,8 @@ async function compileSample(
 		optimizer: {
 			input: report.input,
 			output: report.output,
-			stages: report.stages,
+			phases: report.phases,
+			checkpoints: report.checkpoints,
 			passes: report.passes,
 			analyses: report.analyses,
 			counters: report.counters,
@@ -920,8 +927,8 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 				const sequence: Array<CoreInstrumentationMode> = [];
 				if (compare) {
 					for (let index = 0; index < warmRuns; index++) {
-						if (index % 2 === 0) sequence.push("off", "counters");
-						else sequence.push("counters", "off");
+						if (index % 2 === 0) sequence.push("off", "phases", "counters");
+						else sequence.push("counters", "phases", "off");
 					}
 				} else {
 					sequence.push(
@@ -976,12 +983,13 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					...(profile === undefined ? [] : [profile]),
 				]);
 				const warmByMode = Object.fromEntries(
-					(["off", "counters", "full"] as const).flatMap((mode) => {
+					(["off", "phases", "counters", "full"] as const).flatMap((mode) => {
 						const samples = warmed.filter((sample) => sample.instrumentation === mode);
 						return samples.length === 0 ? [] : [[mode, sampleSummary(samples)]];
 					}),
 				);
 				const offMedian = warmByMode.off?.medianWallMs;
+				const phasesMedian = warmByMode.phases?.medianWallMs;
 				const countersMedian = warmByMode.counters?.medianWallMs;
 				results.push({
 					tier: tier.tier,
@@ -996,14 +1004,24 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					warm: { samples: warmed, byMode: warmByMode },
 					cold: { samples: cold, summary: sampleSummary(cold) },
 					...(profile === undefined ? {} : { profile }),
-					...(offMedian === undefined || countersMedian === undefined
-						? {}
-						: {
-								counterOverhead: {
-									medianRatio: countersMedian / offMedian,
-									passesOnePercentGate: countersMedian / offMedian < 1.01,
-								},
-							}),
+					instrumentationOverhead: {
+						...(offMedian === undefined || phasesMedian === undefined
+							? {}
+							: {
+									phases: {
+										medianRatio: phasesMedian / offMedian,
+										passesGate: phasesMedian / offMedian <= 1.01,
+									},
+								}),
+						...(offMedian === undefined || countersMedian === undefined
+							? {}
+							: {
+									counters: {
+										medianRatio: countersMedian / offMedian,
+										passesGate: countersMedian / offMedian <= 1.08,
+									},
+								}),
+					},
 				});
 				completed.add(resultKey);
 				saveCheckpoint();
