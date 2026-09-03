@@ -7,6 +7,7 @@ import {
 	CORE_FUNCTION_HAS_BRANCHES,
 	CORE_FUNCTION_HAS_CALLS,
 	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
+	CORE_FUNCTION_HAS_EDGE_ARGUMENTS,
 	CORE_FUNCTION_HAS_EXCEPTIONS,
 	CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 	CoreFunctionFeatureIndex,
@@ -54,7 +55,8 @@ describe("Core function features", () => {
 				CORE_FUNCTION_HAS_MEMORY_ACCESSES |
 				CORE_FUNCTION_HAS_ALLOCATIONS |
 				CORE_FUNCTION_HAS_CALLS |
-				CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
+				CORE_FUNCTION_HAS_CANDIDATE_OPCODES |
+				CORE_FUNCTION_HAS_EDGE_ARGUMENTS,
 		);
 	});
 
@@ -133,5 +135,6 @@ describe("Core function features", () => {
 		const fn = program.function(builder.finish(entry).function);
 
 		expect(scanCoreFunctionFeatures(fn) & CORE_FUNCTION_HAS_BACKEDGES).toBe(0);
+		expect(scanCoreFunctionFeatures(fn) & CORE_FUNCTION_HAS_EDGE_ARGUMENTS).toBe(0);
 	});
 });

@@ -9,6 +9,7 @@ export const CORE_FUNCTION_HAS_MEMORY_ACCESSES = 1 << 3;
 export const CORE_FUNCTION_HAS_ALLOCATIONS = 1 << 4;
 export const CORE_FUNCTION_HAS_CALLS = 1 << 5;
 export const CORE_FUNCTION_HAS_CANDIDATE_OPCODES = 1 << 6;
+export const CORE_FUNCTION_HAS_EDGE_ARGUMENTS = 1 << 7;
 export const CORE_FUNCTION_FEATURE_MASK =
 	CORE_FUNCTION_HAS_BRANCHES |
 	CORE_FUNCTION_HAS_EXCEPTIONS |
@@ -16,7 +17,8 @@ export const CORE_FUNCTION_FEATURE_MASK =
 	CORE_FUNCTION_HAS_MEMORY_ACCESSES |
 	CORE_FUNCTION_HAS_ALLOCATIONS |
 	CORE_FUNCTION_HAS_CALLS |
-	CORE_FUNCTION_HAS_CANDIDATE_OPCODES;
+	CORE_FUNCTION_HAS_CANDIDATE_OPCODES |
+	CORE_FUNCTION_HAS_EDGE_ARGUMENTS;
 
 export type CoreFunctionFeatureBits = number;
 
@@ -76,6 +78,14 @@ function scanFeatures(
 		}
 		const terminator = fn.blockTerminator(block);
 		const kind = fn.instructionKind(terminator);
+		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
+		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		for (let index = 0; index < edgeCount; index++) {
+			if (fn.kernel.terminatorEdgeArgumentCount(edgeStart + index) > 0) {
+				bits |= CORE_FUNCTION_HAS_EDGE_ARGUMENTS;
+				break;
+			}
+		}
 		if (kind === "branch" || kind === "switch" || kind === "guard") {
 			bits |= CORE_FUNCTION_HAS_BRANCHES;
 		}

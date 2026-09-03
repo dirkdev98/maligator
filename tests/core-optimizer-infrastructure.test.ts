@@ -15,6 +15,7 @@ import {
 	CoreOpcodeRegistry,
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
+import { CORE_CONSTRUCTION_NORMALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
 import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CorePassManager } from "../src/compiler/core/core-pass-manager.ts";
@@ -394,6 +395,24 @@ describe("Core optimizer infrastructure", () => {
 			report
 				.finish(program, { directEntries: [], specializations: [] })
 				.analyses.find(({ analysis }) => analysis === "local-memory-versions"),
+		).toBeUndefined();
+	});
+
+	it("does not build control flow without incoming block arguments", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		const simplification = CORE_CONSTRUCTION_NORMALIZATION_PASSES.find(
+			({ name }) => name === "block-parameter-simplification",
+		)!;
+
+		new CorePassManager(program, context(), analyses, report, {
+			functionIds: [functions[0]!.id],
+		}).runStage("canonicalize", [simplification]);
+
+		expect(
+			report
+				.finish(program, { directEntries: [], specializations: [] })
+				.analyses.find(({ analysis }) => analysis === "structural-control-flow"),
 		).toBeUndefined();
 	});
 

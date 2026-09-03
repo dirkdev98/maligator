@@ -25,6 +25,7 @@ import {
 	normalizeFactRequirements,
 } from "../shared/fact-implication.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
@@ -1810,6 +1811,7 @@ const simplifyBlockParameters: CorePass = {
 	name: "block-parameter-simplification",
 	stage: "canonicalize",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_EDGE_ARGUMENTS,
 	requiredAnalyses: [CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS],
 	wakesOn: ["cfg", "body"],
 	changes: { ...LOCAL_CHANGES, cfg: true },
@@ -1942,6 +1944,7 @@ const canonicalizeBlockParameters: CorePass = {
 	name: "canonical-block-parameter-elimination",
 	stage: "canonicalize",
 	scope: "function",
+	requiredFunctionFeatures: CORE_FUNCTION_HAS_EDGE_ARGUMENTS,
 	requiredAnalyses: [
 		CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 		CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
