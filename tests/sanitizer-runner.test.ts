@@ -15,6 +15,7 @@ describe("sanitizer runner", () => {
 		expect(scaledNativeRunTimeoutMs(20000, {})).toBe(20000);
 		expect(scaledNativeRunTimeoutMs(20000, { MAL_UBSAN: "1" })).toBe(60000);
 		expect(scaledNativeRunTimeoutMs(20000, { MAL_ASAN: "1" })).toBe(60000);
+		expect(scaledNativeRunTimeoutMs(20000, { MAL_GC_STRESS: "1" })).toBe(60000);
 	});
 
 	it("uses UBSan on Darwin where ASan deadlocks during loader initialization", () => {
