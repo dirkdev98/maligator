@@ -827,6 +827,23 @@ function sampleSummary(samples: ReadonlyArray<CompilerScaleSample>) {
 	};
 }
 
+function instrumentationRatio(
+	reference: ReadonlyArray<CompilerScaleSample>,
+	measured: ReadonlyArray<CompilerScaleSample>,
+): { readonly medianRatio: number; readonly sampleRatios: ReadonlyArray<number> } {
+	if (reference.length === 0 || measured.length === 0) {
+		throw new Error("instrumentation ratio requires both sample sets");
+	}
+	const sampleRatios =
+		reference.length === measured.length
+			? measured.map((sample, index) => sample.wallMs / reference[index]!.wallMs)
+			: [
+					median(measured.map(({ wallMs }) => wallMs)) /
+						median(reference.map(({ wallMs }) => wallMs)),
+				];
+	return { medianRatio: median(sampleRatios), sampleRatios };
+}
+
 function commandOutput(command: ReadonlyArray<string>) {
 	const [executable, ...args] = command;
 	if (executable === undefined) throw new Error("empty command tier");
@@ -1080,9 +1097,21 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 						return samples.length === 0 ? [] : [[mode, sampleSummary(samples)]];
 					}),
 				);
-				const offMedian = warmByMode.off?.medianWallMs;
-				const phasesMedian = warmByMode.phases?.medianWallMs;
-				const countersMedian = warmByMode.counters?.medianWallMs;
+				const offSamples = warmed.filter((sample) => sample.instrumentation === "off");
+				const phasesSamples = warmed.filter(
+					(sample) => sample.instrumentation === "phases",
+				);
+				const countersSamples = warmed.filter(
+					(sample) => sample.instrumentation === "counters",
+				);
+				const phasesRatio =
+					offSamples.length === 0 || phasesSamples.length === 0
+						? undefined
+						: instrumentationRatio(offSamples, phasesSamples);
+				const countersRatio =
+					offSamples.length === 0 || countersSamples.length === 0
+						? undefined
+						: instrumentationRatio(offSamples, countersSamples);
 				results.push({
 					tier: tier.tier,
 					id: benchmarkCase.id,
@@ -1097,20 +1126,20 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					cold: { samples: cold, summary: sampleSummary(cold) },
 					...(profile === undefined ? {} : { profile }),
 					instrumentationOverhead: {
-						...(offMedian === undefined || phasesMedian === undefined
+						...(phasesRatio === undefined
 							? {}
 							: {
 									phases: {
-										medianRatio: phasesMedian / offMedian,
-										passesGate: phasesMedian / offMedian <= 1.01,
+										...phasesRatio,
+										passesGate: phasesRatio.medianRatio <= 1.01,
 									},
 								}),
-						...(offMedian === undefined || countersMedian === undefined
+						...(countersRatio === undefined
 							? {}
 							: {
 									counters: {
-										medianRatio: countersMedian / offMedian,
-										passesGate: countersMedian / offMedian <= 1.08,
+										...countersRatio,
+										passesGate: countersRatio.medianRatio <= 1.08,
 									},
 								}),
 					},
