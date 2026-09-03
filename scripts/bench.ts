@@ -12,6 +12,7 @@
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -100,7 +101,7 @@ interface JavascriptModeMetrics extends JavascriptReferenceMetrics {
 	ratio: number;
 	balancedRatio: number;
 	binaryBytes: number;
-	nativeBuild?: NativeOutputBuildMetrics;
+	nativeBuild: NativeOutputBuildMetrics;
 	collections: number;
 	allocatedMb: number;
 	peakLiveKb: number;
@@ -139,10 +140,12 @@ interface HttpMetrics {
 	bare: HttpComparisonMetrics & {
 		binaryBytes: number;
 		nativeBuild: NativeOutputBuildMetrics;
+		runtime: NativeRuntimeMetrics;
 	};
 	express: {
 		binaryBytes: number;
 		nativeBuild: NativeOutputBuildMetrics;
+		runtime: NativeRuntimeMetrics;
 		workloads: Record<string, HttpComparisonMetrics>;
 	};
 }
@@ -172,6 +175,10 @@ interface SelfCompileMetrics {
 	arch: string;
 	nodeVersion: string;
 	nativeBuild: NativeOutputBuildMetrics;
+	runtime: {
+		readonly maligator: NativeRuntimeMetrics;
+		readonly nodePeakRssBytes: number;
+	};
 	cold: {
 		readonly node: SelfCompileSample;
 		readonly maligator: SelfCompileSample;
@@ -198,6 +205,14 @@ interface NativeOutputBuildMetrics {
 	readonly linkMs: number;
 	readonly stripMs: number;
 	readonly peakRssBytes: number;
+}
+
+interface NativeRuntimeMetrics {
+	readonly collections: number;
+	readonly allocatedBytes: number;
+	readonly peakLiveBytes: number;
+	readonly maxPauseMs: number;
+	readonly rssBytes: number;
 }
 
 interface BenchmarkSnapshot {
@@ -323,6 +338,10 @@ function nativeBuildRecorder(): {
 					.reduce((total, event) => total + event.durationMs, 0);
 			const generated = events.find((event) => event.phase === "write generated C");
 			const objects = events.find((event) => event.phase === "generated C objects");
+			const peakRssBytes = peakRssBySubject.get(subject);
+			if (peakRssBytes === undefined) {
+				throw new Error(`native build RSS was not measured for ${subject}`);
+			}
 			return Object.freeze({
 				phasesMs: Object.freeze(
 					Object.fromEntries(events.map((event) => [event.phase, phase(event.phase)])),
@@ -334,7 +353,7 @@ function nativeBuildRecorder(): {
 				cCompilationMs: phase("generated C objects"),
 				linkMs: phase("link"),
 				stripMs: phase("strip"),
-				peakRssBytes: peakRssBySubject.get(subject) ?? 0,
+				peakRssBytes,
 			});
 		},
 	};
@@ -348,9 +367,11 @@ function parseGcStat(stderr: string, field: string): number {
 	return Number(match[1]);
 }
 
-function parseMaxRss(stderr: string): number | undefined {
-	const match = stderr.match(/([0-9]+)\s+maximum resident set size/);
-	return match === null ? undefined : Number(match[1]);
+function parsePeakRssBytes(stderr: string): number | undefined {
+	const mac = stderr.match(/([0-9]+)\s+maximum resident set size/);
+	if (mac !== null) return Number(mac[1]);
+	const linux = stderr.match(/Maximum resident set size \(kbytes\):\s*([0-9]+)/);
+	return linux === null ? undefined : Number(linux[1]) * 1024;
 }
 
 function parseJavascriptOutput(stdout: string, label: string): JavascriptOutput {
@@ -483,7 +504,7 @@ function javascriptRssMb(binary: string): number | undefined {
 	);
 	if (result.status !== 0)
 		throw new Error(`RSS probe failed for ${binary}: ${result.stderr}`);
-	const bytes = parseMaxRss(result.stderr);
+	const bytes = parsePeakRssBytes(result.stderr);
 	return bytes === undefined ? undefined : bytes / (1024 * 1024);
 }
 
@@ -595,9 +616,7 @@ function benchJavascript(
 				phaseNames.map((name) => summary.phaseMs[name]! / node.phaseMs[name]!),
 			),
 			binaryBytes: fileBytes(executable),
-			...(backend === "compiled"
-				? { nativeBuild: nativeBuild.metrics(`bench-javascript-${world}-compiled`) }
-				: {}),
+			nativeBuild: nativeBuild.metrics(`bench-javascript-${world}-${backend}`),
 			...javascriptGcMetrics(binary, mode),
 			...(rssMb === undefined ? {} : { rssMb }),
 		};
@@ -674,6 +693,63 @@ function runSelfCompile(
 		digest: digestSelfCompileOutput(output),
 		phases: summary.phases,
 		optimizer: summary.optimizer,
+	};
+}
+
+function runSelfCompileResourceSample(
+	command: string,
+	args: ReadonlyArray<string>,
+	output: string,
+	gcStatistics: boolean,
+): { readonly run: SelfCompileRun; readonly stderr: string; readonly rssBytes: number } {
+	const timeFlag = process.platform === "darwin" ? "-l" : "-v";
+	const startedAt = process.hrtime.bigint();
+	const result = spawnSync("/usr/bin/time", [timeFlag, command, ...args, output], {
+		env: {
+			...process.env,
+			MAL_CORE_INSTRUMENTATION: "off",
+			...(gcStatistics ? { MAL_GC_STATS: "1" } : {}),
+		},
+		encoding: "utf8",
+		maxBuffer: 4 * 1024 * 1024,
+		timeout: 900_000,
+	});
+	const wallMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+	if (result.error !== undefined) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(
+			`self-compile resource probe failed (${String(result.status)}): ${result.stderr}`,
+		);
+	}
+	const summary = JSON.parse(result.stdout.trim()) as {
+		units: number;
+		codeUnits: number;
+		phases: SelfCompilePhases;
+		optimizer: CoreOptimizationReport;
+	};
+	const rssBytes = parsePeakRssBytes(result.stderr);
+	if (rssBytes === undefined) throw new Error("self-compile resource probe omitted RSS");
+	return {
+		run: {
+			wallMs,
+			units: summary.units,
+			codeUnits: summary.codeUnits,
+			digest: digestSelfCompileOutput(output),
+			phases: summary.phases,
+			optimizer: summary.optimizer,
+		},
+		stderr: result.stderr,
+		rssBytes,
+	};
+}
+
+function nativeRuntimeMetrics(stderr: string, rssBytes: number): NativeRuntimeMetrics {
+	return {
+		collections: parseGcStat(stderr, "collections"),
+		allocatedBytes: parseGcStat(stderr, "allocated_bytes"),
+		peakLiveBytes: parseGcStat(stderr, "peak_live_bytes"),
+		maxPauseMs: parseGcStat(stderr, "max_pause_ms"),
+		rssBytes,
 	};
 }
 
@@ -804,6 +880,20 @@ function benchSelfCompile(
 		) {
 			throw new Error("self-compile phase sample did not enable phase instrumentation");
 		}
+		progress.detail("self-compile runtime resource samples");
+		const resourceMaligator = runSelfCompileResourceSample(
+			binary,
+			[target],
+			path.join(root, "resource-maligator"),
+			true,
+		);
+		const resourceNode = runSelfCompileResourceSample(
+			process.execPath,
+			[fixture, target],
+			path.join(root, "resource-node"),
+			false,
+		);
+		assertComparableSelfCompile(resourceNode.run, resourceMaligator.run);
 		return {
 			world: "closed",
 			maligatorMs: median(maligatorRuns.map(({ wallMs }) => wallMs)),
@@ -818,6 +908,13 @@ function benchSelfCompile(
 			arch: process.arch,
 			nodeVersion: process.version,
 			nativeBuild: nativeBuild.metrics("bench-self-compile"),
+			runtime: {
+				maligator: nativeRuntimeMetrics(
+					resourceMaligator.stderr,
+					resourceMaligator.rssBytes,
+				),
+				nodePeakRssBytes: resourceNode.rssBytes,
+			},
 			cold: {
 				node: selfCompileSample(coldNode),
 				maligator: selfCompileSample(coldMaligator),
@@ -919,12 +1016,64 @@ function workloadArgs(
 	return args;
 }
 
-function benchHttp(
+interface MeasuredRuntimeProcess {
+	readonly process: ReturnType<typeof spawn>;
+	readonly stderr: Array<Buffer>;
+}
+
+function startMeasuredRuntimeProcess(
+	command: string,
+	args: ReadonlyArray<string>,
+	environment: NodeJS.ProcessEnv,
+): MeasuredRuntimeProcess {
+	const child = spawn(command, [...args], {
+		env: {
+			...environment,
+			MAL_BENCH_CONTROL: "1",
+			MAL_GC_CONTROL: "1",
+			MAL_GC_STATS: "1",
+		},
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const stderr: Array<Buffer> = [];
+	child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+	return { process: child, stderr };
+}
+
+function processRssBytes(child: ReturnType<typeof spawn>): number {
+	if (child.pid === undefined) throw new Error("runtime process has no pid");
+	const value = execFileSync("ps", ["-o", "rss=", "-p", String(child.pid)], {
+		encoding: "utf8",
+	}).trim();
+	const kilobytes = Number(value);
+	if (!Number.isSafeInteger(kilobytes) || kilobytes <= 0) {
+		throw new Error(`runtime process ${child.pid} omitted RSS`);
+	}
+	return kilobytes * 1024;
+}
+
+async function terminateProcess(child: ReturnType<typeof spawn>): Promise<void> {
+	if (child.exitCode !== null || child.signalCode !== null) return;
+	child.kill("SIGTERM");
+	await once(child, "exit");
+}
+
+async function stopMeasuredRuntimeProcess(
+	measured: MeasuredRuntimeProcess,
+	statsUrl: string,
+): Promise<NativeRuntimeMetrics> {
+	execFileSync("curl", ["-s", "-X", "POST", "-o", "/dev/null", statsUrl]);
+	const rssBytes = processRssBytes(measured.process);
+	await terminateProcess(measured.process);
+	return nativeRuntimeMetrics(Buffer.concat(measured.stderr).toString(), rssBytes);
+}
+
+async function benchHttp(
 	runs: number,
 	durationSeconds: number,
 	concurrency: number,
 	nativeCacheDirectory?: string,
-): HttpMetrics {
+): Promise<HttpMetrics> {
 	if (!ohaAvailable()) throw new Error("HTTP benchmark requires `oha`");
 	const nativeBuild = nativeBuildRecorder();
 	const bareBinary = buildNativeBinary({
@@ -947,80 +1096,93 @@ function benchHttp(
 		measureNativeBuildResources: true,
 		onNativeCommandResource: nativeBuild.observeResource,
 	});
-	const bareMal = spawn(bareBinary, [], { stdio: ["ignore", "ignore", "inherit"] });
+	const bareMal = startMeasuredRuntimeProcess(bareBinary, [], process.env);
 	const bareNode = spawn(process.execPath, ["bench/http/server_node.js"], {
 		stdio: ["ignore", "ignore", "inherit"],
 	});
+	let bare: HttpComparisonMetrics;
+	let bareRuntime: NativeRuntimeMetrics;
 	try {
 		waitReachable("http://127.0.0.1:3111/");
 		waitReachable("http://127.0.0.1:3112/");
 		ohaRun("http://127.0.0.1:3111/", "2s", concurrency);
 		ohaRun("http://127.0.0.1:3112/", "2s", concurrency);
-		const bare = compareHttpSamples(
+		bare = compareHttpSamples(
 			"http://127.0.0.1:3111/",
 			"http://127.0.0.1:3112/",
 			formatOhaDuration(durationSeconds),
 			concurrency,
 			runs,
 		);
-		const expressMal = spawn(expressBinary, [], {
-			env: { ...process.env, PORT: "3113" },
-			stdio: ["ignore", "ignore", "inherit"],
-		});
-		const expressNode = spawn(process.execPath, ["bench/http/express-server.cjs"], {
-			env: { ...process.env, PORT: "3114" },
-			stdio: ["ignore", "ignore", "inherit"],
-		});
-		const temporary = mkdtempSync(path.join(os.tmpdir(), "mal-bench-http-"));
-		try {
-			waitReachable("http://127.0.0.1:3113/middleware");
-			waitReachable("http://127.0.0.1:3114/middleware");
-			ohaRun("http://127.0.0.1:3113/middleware", "2s", concurrency);
-			ohaRun("http://127.0.0.1:3114/middleware", "2s", concurrency);
-			const workloads: Record<string, HttpComparisonMetrics> = {};
-			for (const workload of planExpressHttpWorkload(durationSeconds)) {
-				const malUrls = path.join(temporary, `${workload.name}-mal.txt`);
-				const nodeUrls = path.join(temporary, `${workload.name}-node.txt`);
-				writeFileSync(
-					malUrls,
-					`${workload.paths.map((value) => `http://127.0.0.1:3113${value}`).join("\n")}\n`,
-				);
-				writeFileSync(
-					nodeUrls,
-					`${workload.paths.map((value) => `http://127.0.0.1:3114${value}`).join("\n")}\n`,
-				);
-				workloads[workload.name] = compareHttpSamples(
-					malUrls,
-					nodeUrls,
-					formatOhaDuration(workload.durationSeconds),
-					concurrency,
-					runs,
-					["--urls-from-file", ...workloadArgs(workload)],
-				);
-			}
-			return {
-				world: "closed",
+	} finally {
+		bareRuntime = await stopMeasuredRuntimeProcess(
+			bareMal,
+			"http://127.0.0.1:3111/__maligator_gc_stats",
+		);
+		await terminateProcess(bareNode);
+	}
+
+	const expressMal = startMeasuredRuntimeProcess(expressBinary, [], {
+		...process.env,
+		PORT: "3113",
+	});
+	const expressNode = spawn(process.execPath, ["bench/http/express-server.cjs"], {
+		env: { ...process.env, PORT: "3114" },
+		stdio: ["ignore", "ignore", "inherit"],
+	});
+	const temporary = mkdtempSync(path.join(os.tmpdir(), "mal-bench-http-"));
+	let workloads: Record<string, HttpComparisonMetrics>;
+	let expressRuntime: NativeRuntimeMetrics;
+	try {
+		waitReachable("http://127.0.0.1:3113/middleware");
+		waitReachable("http://127.0.0.1:3114/middleware");
+		ohaRun("http://127.0.0.1:3113/middleware", "2s", concurrency);
+		ohaRun("http://127.0.0.1:3114/middleware", "2s", concurrency);
+		workloads = {};
+		for (const workload of planExpressHttpWorkload(durationSeconds)) {
+			const malUrls = path.join(temporary, `${workload.name}-mal.txt`);
+			const nodeUrls = path.join(temporary, `${workload.name}-node.txt`);
+			writeFileSync(
+				malUrls,
+				`${workload.paths.map((value) => `http://127.0.0.1:3113${value}`).join("\n")}\n`,
+			);
+			writeFileSync(
+				nodeUrls,
+				`${workload.paths.map((value) => `http://127.0.0.1:3114${value}`).join("\n")}\n`,
+			);
+			workloads[workload.name] = compareHttpSamples(
+				malUrls,
+				nodeUrls,
+				formatOhaDuration(workload.durationSeconds),
+				concurrency,
 				runs,
-				bare: {
-					...bare,
-					binaryBytes: fileBytes(bareBinary),
-					nativeBuild: nativeBuild.metrics("bench-http-bare-closed"),
-				},
-				express: {
-					binaryBytes: fileBytes(expressBinary),
-					nativeBuild: nativeBuild.metrics("bench-http-express-closed"),
-					workloads,
-				},
-			};
-		} finally {
-			expressMal.kill("SIGTERM");
-			expressNode.kill("SIGTERM");
-			rmSync(temporary, { recursive: true, force: true });
+				["--urls-from-file", ...workloadArgs(workload)],
+			);
 		}
 	} finally {
-		bareMal.kill("SIGTERM");
-		bareNode.kill("SIGTERM");
+		expressRuntime = await stopMeasuredRuntimeProcess(
+			expressMal,
+			"http://127.0.0.1:3113/__maligator_gc_stats",
+		);
+		await terminateProcess(expressNode);
+		rmSync(temporary, { recursive: true, force: true });
 	}
+	return {
+		world: "closed",
+		runs,
+		bare: {
+			...bare,
+			binaryBytes: fileBytes(bareBinary),
+			nativeBuild: nativeBuild.metrics("bench-http-bare-closed"),
+			runtime: bareRuntime,
+		},
+		express: {
+			binaryBytes: fileBytes(expressBinary),
+			nativeBuild: nativeBuild.metrics("bench-http-express-closed"),
+			runtime: expressRuntime,
+			workloads,
+		},
+	};
 }
 
 function delta(current: number, previous: number | undefined): string {
@@ -1281,7 +1443,7 @@ if (savedBaseline !== undefined && savedBaseline.schema !== BENCHMARK_SCHEMA) {
 const baseline = savedBaseline as BenchmarkSnapshot | undefined;
 
 const entry: BenchmarkSnapshot = { schema: BENCHMARK_SCHEMA, source: benchmarkSource() };
-const implementations: Record<string, () => void> = {
+const implementations: Record<string, () => void | Promise<void>> = {
 	javascript: () => {
 		entry.javascript = benchJavascript(
 			options.runs,
@@ -1289,8 +1451,8 @@ const implementations: Record<string, () => void> = {
 			options.nativeCacheDirectory,
 		);
 	},
-	http: () => {
-		entry.http = benchHttp(
+	http: async () => {
+		entry.http = await benchHttp(
 			options.runs,
 			options.httpSeconds,
 			50,
@@ -1306,7 +1468,7 @@ progress.start(`${requestedLanes.length} families · ${options.runs} samples`);
 for (const [index, lane] of requestedLanes.entries()) {
 	progress.stage(index + 1, requestedLanes.length, lane);
 	try {
-		implementations[lane]!();
+		await implementations[lane]!();
 		progress.stagePassed(index + 1, requestedLanes.length, lane);
 	} catch (error) {
 		progress.stageFailed(index + 1, requestedLanes.length, lane);

@@ -1030,10 +1030,11 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 				const sequence: Array<CoreInstrumentationMode> = [];
 				if (exactOpt3SelfCompile) {
 					for (let index = 0; index < warmRuns; index++) {
-						if (index % 2 === 0) sequence.push("off", "phases");
+						if (index === Math.floor(warmRuns / 2)) {
+							sequence.push("off", "counters", "phases");
+						} else if (index % 2 === 0) sequence.push("off", "phases");
 						else sequence.push("phases", "off");
 					}
-					sequence.push("counters");
 				} else if (compare) {
 					for (let index = 0; index < warmRuns; index++) {
 						if (index % 2 === 0) sequence.push("off", "phases", "counters");
@@ -1108,10 +1109,14 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					offSamples.length === 0 || phasesSamples.length === 0
 						? undefined
 						: instrumentationRatio(offSamples, phasesSamples);
+				const countersReference =
+					exactOpt3SelfCompile && countersSamples.length === 1
+						? [offSamples[Math.floor(offSamples.length / 2)]!]
+						: offSamples;
 				const countersRatio =
 					offSamples.length === 0 || countersSamples.length === 0
 						? undefined
-						: instrumentationRatio(offSamples, countersSamples);
+						: instrumentationRatio(countersReference, countersSamples);
 				results.push({
 					tier: tier.tier,
 					id: benchmarkCase.id,
