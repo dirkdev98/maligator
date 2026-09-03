@@ -64,6 +64,18 @@ warm peak RSS is 3,316,121,600 bytes, or 91.1%. The canonical repeated capture i
 `bench/core-opt3-slice2.json`; the function-major lifetime work in Slice 3 must address
 these failed memory gates before Slice 2 can be marked complete.
 
+The clean Slice 3 checkpoint at `2b54268b` constructed 496,336 values and sealed
+179,419 live output values: a 2.766× construction amplification. Its five-run warm
+off median is 14,977.201 ms, or 67.01% of Slice 0, so the total-time gate passes.
+Warm `optimizeCore` is 8,885.216 ms, or 60.31%, which misses the 60% gate by
+46.168 ms. The five warm off samples have a 1,939,754,488-byte peak-managed-heap
+median, or 76.56% of Slice 0, and a 2,900,410,368-byte peak RSS, or 79.69%; both
+memory gates remain open. The full sample recorded 126,655 analysis recomputations,
+20.97% above the Slice 0 full sample rather than the required 40% reduction.
+Generated code is 101.04% of Slice 0, and all warm, cold, counter and profile samples
+agree on their generated-output digest and observable checksum. The canonical
+capture is `bench/core-opt3-slice3.json`; Slice 3 is not complete.
+
 Preserve the completed architecture
 
 Do not reimplement or replace these accepted components without direct profile evidence that they are a current hotspot:
