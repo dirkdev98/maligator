@@ -41,6 +41,17 @@ the raw counts in every replacement baseline. It is a primary Slice 1 target,
 because lowering spare capacity without reducing the number of values constructed
 would leave the dominant excess intact.
 
+The clean Slice 1 compiler capture at `6dbf1c32` constructed 492,494 values and
+sealed 176,991 live output values: a 2.783× construction amplification. The five-run
+warm median is 17,728.224 ms, or 79.3% of Slice 0, and the warm construction median
+is 1,757.240 ms, or 60.4%. It materialized 237,961 block parameters, 16.6% of the
+Slice 0 construction count, and emitted 315,977 edge arguments without copying any
+definition snapshot entries. Generated code is 99.57% of Slice 0. The remaining
+Slice 1 failure is peak RSS: the five-run warm median is 3,381,886,976 bytes, or
+92.9% of Slice 0, above the required 85%. The canonical capture is
+`bench/core-opt3-slice1.json`; do not mark Slice 1 complete until the RSS and output
+runtime gates also pass.
+
 Preserve the completed architecture
 
 Do not reimplement or replace these accepted components without direct profile evidence that they are a current hotspot:
