@@ -65,6 +65,12 @@ export interface CoreStructuralControlFlow {
 	readonly reversePostorder: ReadonlyArray<CoreBlockId>;
 }
 
+export interface CoreControlFlowBundle {
+	readonly structural: CoreStructuralControlFlow;
+	ordinary(): CoreControlFlow;
+	exceptional(): CoreControlFlow;
+}
+
 export interface BuildCoreControlFlowOptions {
 	readonly exceptions?: boolean;
 }
@@ -555,8 +561,11 @@ function naturalLoops(
 	return { loops, hasNonNaturalRetreatingEdge };
 }
 
-function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFlow {
-	const structural = buildStructural(fn, includeExceptions);
+function buildFromStructural(
+	fn: CoreFunctionStore,
+	structural: CoreStructuralControlFlow,
+	includeExceptions: boolean,
+): CoreControlFlow {
 	const { successors, predecessors, reachable, reversePostorder } = structural;
 	const parents = immediateDominators(fn.entry, reversePostorder, predecessors);
 	const dominates = dominatorPredicate(fn.entry, reachable, parents);
@@ -638,8 +647,8 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 		function: fn.id,
 		cfgVersion: fn.versions.cfg,
 		exceptionFlowVersion: includeExceptions ? fn.versions.exceptionFlow : 0,
-		successors: Object.freeze(successors.map((edges) => Object.freeze(edges))),
-		predecessors: Object.freeze(predecessors.map((edges) => Object.freeze(edges))),
+		successors,
+		predecessors,
 		reachable: Object.freeze(reachable),
 		reversePostorder: Object.freeze(reversePostorder),
 		immediateDominators: Object.freeze(parents),
@@ -652,22 +661,85 @@ function build(fn: CoreFunctionStore, includeExceptions: boolean): CoreControlFl
 	});
 }
 
+function withoutExceptionalEdges(
+	fn: CoreFunctionStore,
+	structural: CoreStructuralControlFlow,
+): CoreStructuralControlFlow {
+	const successors = Object.freeze(
+		structural.successors.map((edges) => {
+			const ordinary = edges.filter(({ kind }) => kind === "ordinary");
+			return ordinary.length === edges.length ? edges : Object.freeze(ordinary);
+		}),
+	);
+	const predecessors = Object.freeze(
+		structural.predecessors.map((edges) => {
+			const ordinary = edges.filter(({ kind }) => kind === "ordinary");
+			return ordinary.length === edges.length ? edges : Object.freeze(ordinary);
+		}),
+	);
+	const { reachable, reversePostorder } = traversal(fn.entry, successors);
+	return Object.freeze({
+		function: fn.id,
+		cfgVersion: fn.versions.cfg,
+		exceptionFlowVersion: 0,
+		successors,
+		predecessors,
+		reachable: Object.freeze(reachable),
+		reversePostorder: Object.freeze(reversePostorder),
+	});
+}
+
+function buildControlFlowBundle(fn: CoreFunctionStore): CoreControlFlowBundle {
+	const includesExceptions = fn.handlerBlockCount > 0;
+	const structural = buildStructural(fn, includesExceptions);
+	let ordinary: CoreControlFlow | undefined;
+	let exceptional: CoreControlFlow | undefined;
+	return Object.freeze({
+		structural,
+		ordinary() {
+			ordinary ??= buildFromStructural(
+				fn,
+				includesExceptions ? withoutExceptionalEdges(fn, structural) : structural,
+				false,
+			);
+			return ordinary;
+		},
+		exceptional() {
+			if (!includesExceptions) return this.ordinary();
+			exceptional ??= buildFromStructural(fn, structural, true);
+			return exceptional;
+		},
+	});
+}
+
 export function buildCoreControlFlow(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 	options: BuildCoreControlFlowOptions = {},
 ): CoreControlFlow {
 	const fn = program.function(functionId);
-	return build(fn, options.exceptions !== false && fn.handlerBlockCount > 0);
+	const bundle = buildControlFlowBundle(fn);
+	return options.exceptions === false ? bundle.ordinary() : bundle.exceptional();
 }
+
+export const CORE_CONTROL_FLOW_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreControlFlowBundle> =
+	{
+		key: "control-flow-bundle",
+		scope: "function",
+		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
+		compute({ program, request }) {
+			if (request.scope !== "function") throw new Error("Expected function analysis");
+			return buildControlFlowBundle(program.function(request.function));
+		},
+	};
 
 export const CORE_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreControlFlow> = {
 	key: "control-flow",
 	scope: "function",
 	functionDependencies: ["cfg"],
-	compute({ program, request }) {
+	compute({ request, get }) {
 		if (request.scope !== "function") throw new Error("Expected function analysis");
-		return build(program.function(request.function), false);
+		return get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).ordinary();
 	},
 };
 
@@ -676,10 +748,9 @@ export const CORE_STRUCTURAL_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreS
 		key: "structural-control-flow",
 		scope: "function",
 		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
-		compute({ program, request }) {
+		compute({ request, get }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
-			const fn = program.function(request.function);
-			return buildStructural(fn, fn.handlerBlockCount > 0);
+			return get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).structural;
 		},
 	};
 
@@ -688,12 +759,9 @@ export const CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreCo
 		key: "exception-control-flow",
 		scope: "function",
 		functionDependencies: ["cfg", "exceptionFlow", "memoryEffects"],
-		compute({ program, request, get }) {
+		compute({ request, get }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
-			const fn = program.function(request.function);
-			return fn.handlerBlockCount === 0
-				? get(CORE_CONTROL_FLOW_ANALYSIS, request)
-				: build(fn, true);
+			return get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
 		},
 	};
 

@@ -5,6 +5,7 @@ import type { CoreCompilationContext } from "../src/compiler/core/core-compilati
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import {
 	CORE_CONTROL_FLOW_ANALYSIS,
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS,
 	CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS,
 	buildCoreControlFlow,
@@ -103,6 +104,41 @@ describe("Core control-flow analyses and passes", () => {
 		expect(
 			analyzeCoreLocalExceptionFlows(program.function(finished.function), cfg),
 		).toMatchObject([{ source: entry, handler, thrownValue: thrown }]);
+	});
+
+	it("shares structural edge storage across ordinary and exceptional CFG views", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const normal = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }]);
+		const callee = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		builder.appendInstruction(entry, "call", [callee, callee]);
+		builder.setHandler(entry, handler);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: normal, arguments: [] },
+		});
+		builder.setTerminator(normal, { kind: "return", value: callee });
+		builder.setTerminator(handler, {
+			kind: "return",
+			value: inspectCoreBlockParameters(builder, handler)[0]!.value,
+		});
+		const functionId = builder.finish(entry).function;
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const request = { scope: "function" as const, function: functionId };
+		const bundle = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request);
+		const ordinary = analyses.get(CORE_CONTROL_FLOW_ANALYSIS, request);
+		const exceptional = analyses.get(CORE_EXCEPTION_CONTROL_FLOW_ANALYSIS, request);
+
+		expect(exceptional.successors).toBe(bundle.structural.successors);
+		expect(exceptional.successors[entry]![0]).toBe(ordinary.successors[entry]![0]);
+		expect(exceptional.successors[entry]![1]).toMatchObject({
+			from: entry,
+			to: handler,
+			kind: "exceptional",
+		});
 	});
 
 	it("does not reuse a protected-block value after an exceptional join", () => {
@@ -1147,7 +1183,8 @@ describe("Core control-flow analyses and passes", () => {
 		expect(second.predecessors[target]![0]!.arguments).toEqual([parameter]);
 		const result = report.finish(program, { directEntries: [], specializations: [] });
 		expect(result.analyses).toMatchObject([
-			{ analysis: "control-flow", queries: 2, hits: 1, recomputations: 1 },
+			{ analysis: "control-flow-bundle", queries: 2, hits: 1, recomputations: 1 },
+			{ analysis: "control-flow", queries: 1, hits: 0, recomputations: 1 },
 			{ analysis: "exception-control-flow", queries: 3, hits: 2, recomputations: 1 },
 		]);
 	});
