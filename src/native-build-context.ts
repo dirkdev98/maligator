@@ -33,7 +33,9 @@ export interface NativeBuildPhaseEvent {
 		| "strip"
 		| "publish binary";
 	durationMs: number;
+	subject?: string;
 	units?: number;
+	bytes?: number;
 	cache?: "hit" | "miss";
 	path?: string;
 }

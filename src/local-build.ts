@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
@@ -268,6 +269,8 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	context.onBuildPhase?.({
 		phase: "write generated C",
 		durationMs: performance.now() - phaseStartedAt,
+		units: sources.length,
+		bytes: sources.reduce((total, source) => total + Buffer.byteLength(source), 0),
 	});
 	const compileArguments = applicationCompileArguments(context);
 	phaseStartedAt = performance.now();
@@ -297,6 +300,10 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		phase: "generated C objects",
 		durationMs: performance.now() - phaseStartedAt,
 		units: objects.length + 1,
+		bytes: [...objects, mainObject].reduce(
+			(total, object) => total + statSync(object.path).size,
+			0,
+		),
 	});
 	const linkKey = artifactActionKey(LINKED_BINARY_PRODUCER, {
 		compileArguments: compileArguments.map((argument) =>

@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import type { NativeBuildPhaseEvent } from "../src/native-build-context.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
@@ -94,6 +95,7 @@ interface JavascriptModeMetrics extends JavascriptReferenceMetrics {
 	ratio: number;
 	balancedRatio: number;
 	binaryBytes: number;
+	nativeBuild?: NativeOutputBuildMetrics;
 	collections: number;
 	allocatedMb: number;
 	peakLiveKb: number;
@@ -129,9 +131,13 @@ interface HttpComparisonMetrics {
 interface HttpMetrics {
 	world: "closed";
 	runs: number;
-	bare: HttpComparisonMetrics & { binaryBytes: number };
+	bare: HttpComparisonMetrics & {
+		binaryBytes: number;
+		nativeBuild: NativeOutputBuildMetrics;
+	};
 	express: {
 		binaryBytes: number;
+		nativeBuild: NativeOutputBuildMetrics;
 		workloads: Record<string, HttpComparisonMetrics>;
 	};
 }
@@ -160,6 +166,18 @@ interface SelfCompileMetrics {
 	platform: string;
 	arch: string;
 	nodeVersion: string;
+	nativeBuild: NativeOutputBuildMetrics;
+}
+
+interface NativeOutputBuildMetrics {
+	readonly phasesMs: Readonly<Record<string, number>>;
+	readonly totalMs: number;
+	readonly translationUnits: number;
+	readonly generatedCBytes: number;
+	readonly objectBytes: number;
+	readonly cCompilationMs: number;
+	readonly linkMs: number;
+	readonly stripMs: number;
 }
 
 interface BenchmarkSnapshot {
@@ -204,6 +222,42 @@ function geometricMean(values: ReadonlyArray<number>): number {
 
 function fileBytes(file: string): number {
 	return statSync(file).size;
+}
+
+function nativeBuildRecorder(): {
+	readonly observe: (event: NativeBuildPhaseEvent) => void;
+	readonly metrics: (subject: string) => NativeOutputBuildMetrics;
+} {
+	const bySubject = new Map<string, Array<NativeBuildPhaseEvent>>();
+	return {
+		observe(event) {
+			if (event.subject === undefined) return;
+			const events = bySubject.get(event.subject) ?? [];
+			events.push(event);
+			bySubject.set(event.subject, events);
+		},
+		metrics(subject) {
+			const events = bySubject.get(subject) ?? [];
+			const phase = (name: NativeBuildPhaseEvent["phase"]): number =>
+				events
+					.filter((event) => event.phase === name)
+					.reduce((total, event) => total + event.durationMs, 0);
+			const generated = events.find((event) => event.phase === "write generated C");
+			const objects = events.find((event) => event.phase === "generated C objects");
+			return Object.freeze({
+				phasesMs: Object.freeze(
+					Object.fromEntries(events.map((event) => [event.phase, phase(event.phase)])),
+				),
+				totalMs: events.reduce((total, event) => total + event.durationMs, 0),
+				translationUnits: generated?.units ?? 0,
+				generatedCBytes: generated?.bytes ?? 0,
+				objectBytes: objects?.bytes ?? 0,
+				cCompilationMs: phase("generated C objects"),
+				linkMs: phase("link"),
+				stripMs: phase("strip"),
+			});
+		},
+	};
 }
 
 function parseGcStat(stderr: string, field: string): number {
@@ -356,7 +410,9 @@ function javascriptRssMb(binary: string): number | undefined {
 function benchJavascript(
 	runs: number,
 	selectedModes: ReadonlyArray<JavascriptMode>,
+	nativeCacheDirectory?: string,
 ): JavascriptMetrics {
+	const nativeBuild = nativeBuildRecorder();
 	const binaries: Partial<Record<JavascriptMode, string>> = {};
 	let nativeBuildContext:
 		| ReturnType<typeof buildBackendPairFromOneProgramImage>["context"]
@@ -367,6 +423,8 @@ function benchJavascript(
 			name: "bench-javascript-closed",
 			config: CLOSED_CONFIG,
 			production: true,
+			cacheDirectory: nativeCacheDirectory,
+			onNativeBuildPhase: nativeBuild.observe,
 		});
 		binaries["closed-compiled"] = closed.compiled;
 		binaries["closed-interpreted"] = closed.interpreted;
@@ -378,6 +436,8 @@ function benchJavascript(
 			name: "bench-javascript-open",
 			config: OPEN_CONFIG,
 			production: true,
+			cacheDirectory: nativeCacheDirectory,
+			onNativeBuildPhase: nativeBuild.observe,
 		});
 		binaries["open-compiled"] = open.compiled;
 		binaries["open-interpreted"] = open.interpreted;
@@ -451,6 +511,9 @@ function benchJavascript(
 				phaseNames.map((name) => summary.phaseMs[name]! / node.phaseMs[name]!),
 			),
 			binaryBytes: fileBytes(executable),
+			...(backend === "compiled"
+				? { nativeBuild: nativeBuild.metrics(`bench-javascript-${world}-compiled`) }
+				: {}),
 			...javascriptGcMetrics(binary, mode),
 			...(rssMb === undefined ? {} : { rssMb }),
 		};
@@ -552,12 +615,18 @@ function medianPhases(values: ReadonlyArray<SelfCompilePhases>): SelfCompilePhas
 	};
 }
 
-function benchSelfCompile(runs: number): SelfCompileMetrics {
+function benchSelfCompile(
+	runs: number,
+	nativeCacheDirectory?: string,
+): SelfCompileMetrics {
+	const nativeBuild = nativeBuildRecorder();
 	const fixture = path.resolve("bench/self-compile.mts");
 	const binary = buildNativeBinary({
 		fixture,
 		name: "bench-self-compile",
 		config: SELF_COMPILE_CONFIG,
+		cacheDirectory: nativeCacheDirectory,
+		onNativeBuildPhase: nativeBuild.observe,
 	});
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-"));
 	const maligatorRuns: Array<SelfCompileRun> = [];
@@ -597,6 +666,7 @@ function benchSelfCompile(runs: number): SelfCompileMetrics {
 			platform: process.platform,
 			arch: process.arch,
 			nodeVersion: process.version,
+			nativeBuild: nativeBuild.metrics("bench-self-compile"),
 		};
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -687,19 +757,25 @@ function benchHttp(
 	runs: number,
 	durationSeconds: number,
 	concurrency: number,
+	nativeCacheDirectory?: string,
 ): HttpMetrics {
 	if (!ohaAvailable()) throw new Error("HTTP benchmark requires `oha`");
+	const nativeBuild = nativeBuildRecorder();
 	const bareBinary = buildNativeBinary({
 		fixture: "bench/http/server_mal.js",
 		name: "bench-http-bare-closed",
 		mainFile: HOST_MAIN,
 		config: CLOSED_HTTP_CONFIG,
+		cacheDirectory: nativeCacheDirectory,
+		onNativeBuildPhase: nativeBuild.observe,
 	});
 	const expressBinary = buildNativeBinary({
 		fixture: "bench/http/express-server.cjs",
 		name: "bench-http-express-closed",
 		mainFile: HOST_MAIN,
 		config: CLOSED_EXPRESS_CONFIG,
+		cacheDirectory: nativeCacheDirectory,
+		onNativeBuildPhase: nativeBuild.observe,
 	});
 	const bareMal = spawn(bareBinary, [], { stdio: ["ignore", "ignore", "inherit"] });
 	const bareNode = spawn(process.execPath, ["bench/http/server_node.js"], {
@@ -755,8 +831,16 @@ function benchHttp(
 			return {
 				world: "closed",
 				runs,
-				bare: { ...bare, binaryBytes: fileBytes(bareBinary) },
-				express: { binaryBytes: fileBytes(expressBinary), workloads },
+				bare: {
+					...bare,
+					binaryBytes: fileBytes(bareBinary),
+					nativeBuild: nativeBuild.metrics("bench-http-bare-closed"),
+				},
+				express: {
+					binaryBytes: fileBytes(expressBinary),
+					nativeBuild: nativeBuild.metrics("bench-http-express-closed"),
+					workloads,
+				},
 			};
 		} finally {
 			expressMal.kill("SIGTERM");
@@ -870,6 +954,8 @@ Options:
   --compare REF       Run paired base/head comparisons against REF
   --max-pairs N       Cap adaptive paired comparison samples
   --json-out PATH     Write the measured snapshot as JSON
+  --native-cache-dir PATH
+                      Isolate native artifacts for build-cost measurements
   --update            Update selected sections in bench/baseline.json
   -h, --help          Show this help and exit
 `;
@@ -883,6 +969,7 @@ interface Options {
 	compareRef?: string;
 	maxPairs?: number;
 	jsonOut?: string;
+	nativeCacheDirectory?: string;
 	mode?: JavascriptMode;
 	lanes: Array<string>;
 }
@@ -935,6 +1022,9 @@ function parseOptions(args: Array<string>): Options | undefined {
 			index++;
 		} else if (arg === "--json-out") {
 			options.jsonOut = requiredValue(args, index, arg);
+			index++;
+		} else if (arg === "--native-cache-dir") {
+			options.nativeCacheDirectory = path.resolve(requiredValue(args, index, arg));
 			index++;
 		} else if (arg === "--mode") {
 			const mode = requiredValue(args, index, arg);
@@ -1026,13 +1116,19 @@ const implementations: Record<string, () => void> = {
 		entry.javascript = benchJavascript(
 			options.runs,
 			options.mode === undefined ? JAVASCRIPT_MODES : [options.mode],
+			options.nativeCacheDirectory,
 		);
 	},
 	http: () => {
-		entry.http = benchHttp(options.runs, options.httpSeconds, 50);
+		entry.http = benchHttp(
+			options.runs,
+			options.httpSeconds,
+			50,
+			options.nativeCacheDirectory,
+		);
 	},
 	"self-compile": () => {
-		entry.selfCompile = benchSelfCompile(options.runs);
+		entry.selfCompile = benchSelfCompile(options.runs, options.nativeCacheDirectory);
 	},
 };
 

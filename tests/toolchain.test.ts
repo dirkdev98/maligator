@@ -493,8 +493,13 @@ exit 7
 		});
 		expect(report.toolchain).toBeDefined();
 		const toolchain = report.toolchain!;
-		const phases: Array<{ phase: string; durationMs: number; cache?: "hit" | "miss" }> =
-			[];
+		const phases: Array<{
+			phase: string;
+			durationMs: number;
+			units?: number;
+			bytes?: number;
+			cache?: "hit" | "miss";
+		}> = [];
 		const commands: Array<{ tool: string; args: ReadonlyArray<string> }> = [];
 		const binaryEvents: Array<{ hit: boolean; path: string }> = [];
 		const context = resolveNativeBuildContext({
@@ -545,6 +550,13 @@ exit 7
 			"publish binary",
 		]);
 		expect(phases.every((phase) => phase.durationMs >= 0)).toBe(true);
+		expect(phases.find((phase) => phase.phase === "write generated C")).toMatchObject({
+			units: 2,
+			bytes: Buffer.byteLength("int value;") + Buffer.byteLength("int other_value;"),
+		});
+		expect(
+			phases.find((phase) => phase.phase === "generated C objects")?.bytes,
+		).toBeGreaterThan(0);
 		expect(commands.some((command) => command.tool === toolchain.tools.cargo.path)).toBe(
 			true,
 		);

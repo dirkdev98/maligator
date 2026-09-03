@@ -44,7 +44,11 @@ import { cacheFrontendWire } from "./frontend-cache.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
-import type { NativeBuildContext } from "./native-build-context.ts";
+import type {
+	BuildCacheEvent,
+	NativeBuildContext,
+	NativeBuildPhaseEvent,
+} from "./native-build-context.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 import { recordTestTelemetry } from "./test-telemetry.ts";
 
@@ -169,6 +173,12 @@ export interface BuildOptions {
 	environment?: NodeJS.ProcessEnv;
 	/** Observe persistent frontend-cache reuse in focused harness tests. */
 	onFrontendCacheEvent?: (event: { cache: "hit" | "miss"; entrypoint: string }) => void;
+	/** Override the native artifact root for isolated build-cost measurements. */
+	cacheDirectory?: string;
+	/** Observe native artifact reuse without suppressing harness telemetry. */
+	onNativeCacheEvent?: (event: BuildCacheEvent) => void;
+	/** Observe native build phase time, unit, and byte attribution. */
+	onNativeBuildPhase?: (event: NativeBuildPhaseEvent) => void;
 }
 
 export interface BuildNativeBinaryResult extends LocalBuildResult {
@@ -308,7 +318,7 @@ function linkProgramImage(
 	const cSource = options.translationUnits
 		? emitProgramTranslationUnits(image, emitOptions)
 		: emitProgramImage(image, emitOptions);
-	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config);
+	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config, name);
 	return buildLocalBinary({
 		context,
 		name,
@@ -332,6 +342,7 @@ function linkProgramImage(
 function resolveHarnessNativeContext(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
+	subject: string,
 ): { context: NativeBuildContext; cacheSuffix: string } {
 	const baseDerivation = buildDerivationFromConfig(config);
 	const derivation = options.profileEnabled
@@ -348,11 +359,12 @@ function resolveHarnessNativeContext(
 		: baseDerivation;
 	return {
 		context: resolveNativeBuildContext({
+			cacheDirectory: options.cacheDirectory,
 			features: derivation.features,
 			environment: options.environment,
 			compilerBake: options.compilerBake ?? defaultCompilerBake(),
 			production: options.production,
-			onCacheEvent: (event) =>
+			onCacheEvent: (event) => {
 				recordTestTelemetry({
 					phase: `${event.artifact} cache`,
 					label: options.fixture,
@@ -360,8 +372,10 @@ function resolveHarnessNativeContext(
 					durationMs: 0,
 					cache: event.hit ? "hit" : "miss",
 					config: derivation.cacheSuffix || "default",
-				}),
-			onBuildPhase: (event) =>
+				});
+				options.onNativeCacheEvent?.(event);
+			},
+			onBuildPhase: (event) => {
 				recordTestTelemetry({
 					phase: event.phase,
 					label: options.fixture,
@@ -370,7 +384,9 @@ function resolveHarnessNativeContext(
 					cache: event.cache,
 					units: event.units,
 					config: derivation.cacheSuffix || "default",
-				}),
+				});
+				options.onNativeBuildPhase?.({ ...event, subject });
+			},
 		}),
 		cacheSuffix: derivation.cacheSuffix,
 	};
@@ -397,7 +413,7 @@ function registerWireExecution(
 			"serialized interpreter pairs require the standard or ordinary host driver",
 		);
 	}
-	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config);
+	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config, name);
 	const runner = buildDevelopmentRunner(context, false, cacheSuffix);
 	const wirePath = cacheFrontendWire(serializeRuntimeImage(image.runtime));
 	const target = `maligator-wire:${name}:${registeredWireExecutions.size}`;
