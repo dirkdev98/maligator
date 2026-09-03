@@ -18,7 +18,11 @@ import {
 	CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS,
 	CORE_OWN_DATA_CELL_FACT,
 } from "./core-ir-provenance.ts";
-import type { CoreNamedAllocationLayout, CoreProvenance } from "./core-ir-provenance.ts";
+import type {
+	CoreLocalFactIndex,
+	CoreNamedAllocationLayout,
+	CoreProvenance,
+} from "./core-ir-provenance.ts";
 import {
 	CORE_EXACT_OWN_SLOT_ATTRIBUTE,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
@@ -920,6 +924,12 @@ function scalarizeRootedLayout(
 	layout: CoreNamedAllocationLayout,
 	provenance: CoreProvenance,
 	control: CoreControlFlow,
+	aliases: ReadonlySet<CoreValueId>,
+	operationUses: ReadonlyArray<{
+		readonly instruction: CoreInstructionId;
+		readonly position: number;
+	}>,
+	index: CoreLocalFactIndex,
 ): CoreChangeSet | undefined {
 	const allocationBlock = fn.instructionBlock(layout.instruction);
 	if (
@@ -928,12 +938,6 @@ function scalarizeRootedLayout(
 		control.loops.some(({ blocks }) => blocks.has(allocationBlock))
 	)
 		return undefined;
-	const aliases = new Set<CoreValueId>();
-	for (const value of fn.valueIds()) {
-		if (provenance.allocationOf(value)?.instruction === layout.instruction) {
-			aliases.add(value);
-		}
-	}
 	const allocationInstructions = [...fn.bodyInstructionIds(allocationBlock)];
 	const allocationIndex = allocationInstructions.indexOf(layout.instruction);
 	if (allocationIndex < 0) return undefined;
@@ -983,58 +987,53 @@ function scalarizeRootedLayout(
 			}
 			if (!valid) break;
 		}
-		for (const [index, instruction] of [...fn.bodyInstructionIds(block)].entries()) {
-			const opcode = fn.instructionOpcodeName(instruction);
-			const operandStart = fn.kernel.instructionOperandStart(instruction);
-			const operandCount = fn.kernel.instructionOperandCount(instruction);
-			for (let position = 0; position < operandCount; position++) {
-				const operand = fn.kernel.operandAt(operandStart + position);
-				if (!aliases.has(operand)) continue;
-				if (
-					position === 0 &&
-					(opcode === "move" || opcode === "throwIfTdz" || opcode === "rootUse")
-				)
-					continue;
-				const stringIndex = fn.instructionAttributes(instruction).stringIndex;
-				const mode =
-					opcode === "loadPropertyStatic"
-						? "read"
-						: opcode === "storePropertyStatic"
-							? "write"
-							: undefined;
-				const key =
-					position === 0 &&
-					mode !== undefined &&
-					typeof stringIndex === "number" &&
-					layout.keys.includes(stringIndex)
-						? stringIndex
-						: undefined;
-				const accessValue =
-					mode === "read"
-						? instructionResultAt(fn, instruction, 0)
-						: instructionOperandAt(fn, instruction, 1);
-				if (
-					key === undefined ||
-					accessValue === undefined ||
-					fn.kernel.blockHandlerBlock(block) !== undefined ||
-					(block === allocationBlock
-						? index <= allocationIndex
-						: !control.instructionDominatesBlock(allocationBlock, block))
-				) {
-					valid = false;
-					break;
-				}
-				(mode === "read" ? loads : stores).push({
-					instruction,
-					block,
-					index,
-					key,
-					value: accessValue,
-				});
-			}
-			if (!valid) break;
+	}
+	if (!valid) return undefined;
+	for (const { instruction, position } of operationUses) {
+		const location = index.location.get(instruction);
+		if (location === undefined || !control.reachable.has(location.block)) continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (
+			position === 0 &&
+			(opcode === "move" || opcode === "throwIfTdz" || opcode === "rootUse")
+		)
+			continue;
+		const stringIndex = fn.instructionAttributes(instruction).stringIndex;
+		const mode =
+			opcode === "loadPropertyStatic"
+				? "read"
+				: opcode === "storePropertyStatic"
+					? "write"
+					: undefined;
+		const key =
+			position === 0 &&
+			mode !== undefined &&
+			typeof stringIndex === "number" &&
+			layout.keys.includes(stringIndex)
+				? stringIndex
+				: undefined;
+		const accessValue =
+			mode === "read"
+				? instructionResultAt(fn, instruction, 0)
+				: instructionOperandAt(fn, instruction, 1);
+		if (
+			key === undefined ||
+			accessValue === undefined ||
+			fn.kernel.blockHandlerBlock(location.block) !== undefined ||
+			(location.block === allocationBlock
+				? location.index <= allocationIndex
+				: !control.instructionDominatesBlock(allocationBlock, location.block))
+		) {
+			valid = false;
+			break;
 		}
-		if (!valid) break;
+		(mode === "read" ? loads : stores).push({
+			instruction,
+			block: location.block,
+			index: location.index,
+			key,
+			value: accessValue,
+		});
 	}
 	if (!valid || stores.length === 0) return undefined;
 	if (new Set(stores.map(({ instruction }) => instruction)).size !== stores.length)
@@ -1322,11 +1321,25 @@ const scalarizeRootedContainedObjects: CorePass = {
 		const { program, item } = context;
 		if (item.scope !== "function") return undefined;
 		const fn = program.function(item.function);
-		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
+		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
+		const provenance = facts.provenance;
 		const control = context.analysis(CORE_EXCEPTIONAL_CONTROL_FLOW_ANALYSIS);
 		for (const layout of provenance.layouts) {
 			if (layout.kind !== "named-slots") continue;
-			const changes = scalarizeRootedLayout(program, fn, layout, provenance, control);
+			if (provenance.allocationOf(layout.result) !== layout) continue;
+			const root = facts.roots.get(layout.result) ?? layout.result;
+			const aliases = facts.index.valuesByRoot.get(root);
+			if (aliases === undefined) continue;
+			const changes = scalarizeRootedLayout(
+				program,
+				fn,
+				layout,
+				provenance,
+				control,
+				new Set(aliases),
+				facts.index.uses.get(root) ?? [],
+				facts.index,
+			);
 			if (changes !== undefined) return changes;
 		}
 		return undefined;
