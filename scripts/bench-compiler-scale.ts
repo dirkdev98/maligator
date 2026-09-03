@@ -873,6 +873,7 @@ function commandOutput(command: ReadonlyArray<string>) {
 function syntheticScalingSummary(
 	manifest: CompilerScaleManifest,
 	results: ReadonlyArray<unknown>,
+	selectedTiers: ReadonlySet<number>,
 ): ReadonlyArray<unknown> {
 	type Result = {
 		readonly id: string;
@@ -887,7 +888,7 @@ function syntheticScalingSummary(
 		}),
 	);
 	return manifest.tiers
-		.filter((tier) => tier.kind === "synthetic")
+		.filter((tier) => tier.kind === "synthetic" && selectedTiers.has(tier.tier))
 		.map((tier) => {
 			const samples = manifest.syntheticScales.map((scale) => {
 				const result = byId.get(`${tier.id}-${scale}x`);
@@ -1203,7 +1204,7 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					readFileSync(path.join(REPOSITORY_ROOT, "package-lock.json")),
 				),
 			},
-			syntheticScaling: syntheticScalingSummary(manifest, results),
+			syntheticScaling: syntheticScalingSummary(manifest, results, options.tiers),
 			results,
 		};
 		writeJsonAtomic(options.output, baseline);
