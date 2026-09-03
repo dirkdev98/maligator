@@ -694,18 +694,34 @@ function buildControlFlowBundle(
 	fn: CoreFunctionStore,
 	scratch: CoreAnalysisScratchPool,
 ): CoreControlFlowBundle {
-	const ordinaryStructural = buildStructural(fn);
+	let ordinaryStructural: CoreStructuralControlFlow | undefined;
 	let ordinary: CoreControlFlow | undefined;
 	let structural: CoreStructuralControlFlow | undefined;
 	let exceptional: CoreControlFlow | undefined;
+	let ordinaryCfgVersion = -1;
 	let structuralExceptionFlowVersion = -1;
 	let structuralMemoryEffectsVersion = -1;
+	const currentOrdinaryStructural = (): CoreStructuralControlFlow => {
+		const cfgVersion = fn.versions.cfg;
+		if (ordinaryStructural === undefined || ordinaryCfgVersion !== cfgVersion) {
+			ordinaryStructural = buildStructural(fn);
+			ordinary = undefined;
+			structural = undefined;
+			exceptional = undefined;
+			ordinaryCfgVersion = cfgVersion;
+			structuralExceptionFlowVersion = -1;
+			structuralMemoryEffectsVersion = -1;
+		}
+		return ordinaryStructural;
+	};
 	const ordinaryFlow = (): CoreControlFlow => {
-		ordinary ??= buildFromStructural(fn, ordinaryStructural, false, scratch);
+		const currentStructural = currentOrdinaryStructural();
+		ordinary ??= buildFromStructural(fn, currentStructural, false, scratch);
 		return ordinary;
 	};
 	const exceptionalStructural = (): CoreStructuralControlFlow => {
-		if (fn.handlerBlockCount === 0) return ordinaryStructural;
+		const currentOrdinary = currentOrdinaryStructural();
+		if (fn.handlerBlockCount === 0) return currentOrdinary;
 		const exceptionFlowVersion = fn.versions.exceptionFlow;
 		const memoryEffectsVersion = fn.versions.memoryEffects;
 		if (
@@ -713,7 +729,7 @@ function buildControlFlowBundle(
 			structuralExceptionFlowVersion !== exceptionFlowVersion ||
 			structuralMemoryEffectsVersion !== memoryEffectsVersion
 		) {
-			structural = buildExceptionalStructural(fn, ordinaryStructural);
+			structural = buildExceptionalStructural(fn, currentOrdinary);
 			exceptional = undefined;
 			structuralExceptionFlowVersion = exceptionFlowVersion;
 			structuralMemoryEffectsVersion = memoryEffectsVersion;
@@ -748,7 +764,8 @@ export const CORE_CONTROL_FLOW_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreContr
 	{
 		key: "control-flow-bundle",
 		scope: "function",
-		functionDependencies: ["cfg"],
+		// The stable session bundle invalidates its lazy views by function revision.
+		functionDependencies: [],
 		compute({ program, request, scratch }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			return buildControlFlowBundle(program.function(request.function), scratch);

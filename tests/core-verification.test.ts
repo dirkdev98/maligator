@@ -250,7 +250,8 @@ describe("Core verification", () => {
 			new CoreOptimizationReportBuilder(program),
 		);
 		const request = { scope: "function", function: fn.id } as const;
-		const first = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).ordinary();
+		const bundle = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request);
+		const first = bundle.ordinary();
 		const representationEditor = CoreEditor.open(program, fn.id);
 		const condition = inspectCoreInstructionResults(
 			fn,
@@ -259,9 +260,8 @@ describe("Core verification", () => {
 		representationEditor.setValueRepresentation(condition, "boolean");
 		const representationChanges = representationEditor.commit();
 		verifyCoreChangeSet(program, representationChanges, { stage: "canonicalize" });
-		expect(analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).ordinary()).toBe(
-			first,
-		);
+		expect(analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request)).toBe(bundle);
+		expect(bundle.ordinary()).toBe(first);
 
 		const cfgEditor = CoreEditor.open(program, fn.id);
 		cfgEditor.removeInstruction(fn.blockTerminator(entry));
@@ -273,9 +273,8 @@ describe("Core verification", () => {
 		});
 		const cfgChanges = cfgEditor.commit();
 		verifyCoreChangeSet(program, cfgChanges, { stage: "control-flow" });
-		expect(analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).ordinary()).not.toBe(
-			first,
-		);
+		expect(analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request)).toBe(bundle);
+		expect(bundle.ordinary()).not.toBe(first);
 	});
 
 	it("formats the store through read-only lookup and iteration", () => {
