@@ -854,7 +854,6 @@ function commandOutput(command: ReadonlyArray<string>) {
 		cwd: REPOSITORY_ROOT,
 		encoding: "utf8",
 		maxBuffer: 64 * 1024 * 1024,
-		timeout: 1_800_000,
 	});
 	if (result.error !== undefined) throw result.error;
 	if (result.status !== 0) {
