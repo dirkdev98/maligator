@@ -66,6 +66,12 @@ app.get("/redirect-target", (_request, response) => {
 app.use("/assets", express.static(`${__dirname}/public`));
 
 if (process.env.MAL_BENCH_CONTROL === "1") {
+	if (typeof globalThis.__mal_print_gc_stats === "function") {
+		app.post("/__maligator_gc_stats", (_request, response) => {
+			globalThis.__mal_print_gc_stats();
+			response.end();
+		});
+	}
 	if (typeof globalThis.__mal_reset_perf_stats === "function") {
 		app.post("/__maligator_perf_reset", (_request, response) => {
 			globalThis.__mal_reset_perf_stats();

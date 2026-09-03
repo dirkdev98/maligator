@@ -329,7 +329,7 @@ void mal_gc_satb_record(MalValue old_value) {
 #endif
 }
 
-static void mal_gc_print_stats(void) {
+void mal_gc_print_stats_now(void) {
     MalGcState *g = g_gc_stats_state;
     if (g == nullptr) {
         return;
@@ -418,6 +418,10 @@ static void mal_gc_print_stats(void) {
     }
 }
 
+static void mal_gc_print_stats_at_exit(void) {
+    mal_gc_print_stats_now();
+}
+
 /* Auto-collection heap-growth policy: the first collection fires once this many
  * bytes have been allocated; after each one the next trigger is set past the
  * surviving set by at least this floor (so a small live set cannot thrash). */
@@ -474,7 +478,7 @@ void mal_gc_init(MalVm *vm) {
 
     if (getenv("MAL_GC_STATS") != nullptr) {
         g->stats_enabled = true;
-        atexit(mal_gc_print_stats);
+        atexit(mal_gc_print_stats_at_exit);
     }
 
 #if MAL_GC_GENERATIONAL
