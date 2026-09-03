@@ -1301,6 +1301,15 @@ function denseArrayCandidates(
 			continue;
 		const headerTerminator = fn.blockTerminator(loop.header);
 		if (fn.instructionKind(headerTerminator) !== "branch") continue;
+		const headerEdgeStart = fn.kernel.terminatorEdgeStart(headerTerminator);
+		const bodyBlock = fn.kernel.terminatorEdgeBlock(headerEdgeStart);
+		const exitBlock = fn.kernel.terminatorEdgeBlock(headerEdgeStart + 1);
+		if (
+			loop.exits.length !== 1 ||
+			loop.exits[0]!.from !== loop.header ||
+			loop.exits[0]!.to !== exitBlock
+		)
+			continue;
 		const conditionValue = instructionOperand(fn, headerTerminator, 0)!;
 		const condition = definingInstruction(
 			fn,
@@ -1343,14 +1352,8 @@ function denseArrayCandidates(
 			initialEdge === undefined ||
 			updateEdge === undefined ||
 			exactIntegerValue(fn, initialEdge.arguments[counterParameter]!, roots) !== 0 ||
-			!loop.blocks.has(
-				fn.kernel.terminatorEdgeBlock(fn.kernel.terminatorEdgeStart(headerTerminator)),
-			) ||
-			loop.blocks.has(
-				fn.kernel.terminatorEdgeBlock(
-					fn.kernel.terminatorEdgeStart(headerTerminator) + 1,
-				),
-			)
+			!loop.blocks.has(bodyBlock) ||
+			loop.blocks.has(exitBlock)
 		)
 			continue;
 		const updateValue = updateEdge.arguments[counterParameter];
@@ -1405,12 +1408,7 @@ function denseArrayCandidates(
 						(opcode === "throwIfTdz" && position === 0) ||
 						opcode === "rootUse" ||
 						(instruction === store && position === 0) ||
-						control.dominates(
-							fn.kernel.terminatorEdgeBlock(
-								fn.kernel.terminatorEdgeStart(headerTerminator) + 1,
-							),
-							block,
-						)
+						control.dominates(exitBlock, block)
 					) {
 						continue;
 					}
@@ -1421,12 +1419,7 @@ function denseArrayCandidates(
 			const terminatorKind = fn.instructionKind(terminator);
 			const terminatorValue = instructionOperand(fn, terminator, 0);
 			if (
-				!control.dominates(
-					fn.kernel.terminatorEdgeBlock(
-						fn.kernel.terminatorEdgeStart(headerTerminator) + 1,
-					),
-					block,
-				) &&
+				!control.dominates(exitBlock, block) &&
 				terminatorValue !== undefined &&
 				((terminatorKind === "return" && aliasesAllocation(terminatorValue)) ||
 					(terminatorKind === "throw" && aliasesAllocation(terminatorValue)) ||
