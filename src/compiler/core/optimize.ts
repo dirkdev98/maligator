@@ -1,7 +1,11 @@
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
-import { CORE_CONTROL_FLOW_PASSES } from "./core-control-flow-passes.ts";
 import { runCoreCrossCallTransforms } from "./core-cross-call-transforms.ts";
+import {
+	CoreFunctionOptimizationResources,
+	CoreFunctionOptimizationSession,
+} from "./core-function-optimization-session.ts";
+import type { CoreFunctionOptimizationPhaseRunner } from "./core-function-optimization-session.ts";
 import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
@@ -9,10 +13,7 @@ import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import {
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
-	CORE_LATE_CANONICALIZATION_PASSES,
-	CORE_LOCAL_CANONICALIZATION_PASSES,
 } from "./core-local-passes.ts";
-import { CORE_MEMORY_PASSES } from "./core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import type {
 	CoreInstrumentationMode,
@@ -21,8 +22,6 @@ import type {
 } from "./core-optimization-report.ts";
 import { CorePassManager } from "./core-pass-manager.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
-import { CORE_PROOF_PASSES } from "./core-proof-passes.ts";
-import type { CoreChangeSet } from "./core-store.ts";
 import type { CoreTransformBudgetLimits } from "./core-transform-candidates.ts";
 
 export type { CoreOptimizationPlan } from "./core-ir-regions.ts";
@@ -157,6 +156,43 @@ export function optimizeCore(
 			compilation.program.function(functionId).configureUseTraversalStatistics(true);
 		}
 	}
+	const functionResources = new CoreFunctionOptimizationResources(compilation.program);
+	const functionPhaseTimes = new Map<CoreOptimizationPhase, number>();
+	const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {
+		if (!reportBuilder.collectsPhases) return run();
+		const startedAt = Date.now();
+		try {
+			return run();
+		} finally {
+			functionPhaseTimes.set(
+				phase,
+				(functionPhaseTimes.get(phase) ?? 0) + Date.now() - startedAt,
+			);
+		}
+	};
+	for (const functionId of compilation.program.functionIds()) {
+		new CoreFunctionOptimizationSession(
+			compilation.program,
+			compilation.context,
+			reportBuilder,
+			functionResources,
+			functionId,
+			{
+				verification: options.verification,
+				optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+			},
+		).optimizePrimary(runFunctionPhase);
+	}
+	for (const phase of [
+		"post-barrier-local-optimization",
+		"advanced-cfg-optimization",
+		"proof-and-representation-optimization",
+		"memory-and-provenance-optimization",
+		"late-local-cleanup",
+	] as const) {
+		reportBuilder.recordPhase(phase, functionPhaseTimes.get(phase) ?? 0);
+	}
+	reportBuilder.recordCheckpoint("before-memory-and-provenance", compilation.program);
 	const analyses = new CoreAnalysisManager(
 		compilation.program,
 		compilation.context,
@@ -171,39 +207,10 @@ export function optimizeCore(
 			verification: options.verification,
 			optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
 			localOptimization: true,
+			featureIndex: functionResources.featureIndex,
+			localRules: functionResources.localRules,
 		},
 	);
-	measurePhase("post-barrier-local-optimization", () =>
-		passes.runStage("canonicalize", CORE_LOCAL_CANONICALIZATION_PASSES),
-	);
-	const lateCanonicalizationChanges: Array<CoreChangeSet> = [];
-	measurePhase("advanced-cfg-optimization", () =>
-		passes.runStage("control-flow", CORE_CONTROL_FLOW_PASSES),
-	);
-	lateCanonicalizationChanges.push(
-		...measurePhase("proof-and-representation-optimization", () =>
-			passes.runStage("proofs", CORE_PROOF_PASSES),
-		),
-	);
-	reportBuilder.recordCheckpoint("before-memory-and-provenance", compilation.program);
-	lateCanonicalizationChanges.push(
-		...measurePhase("memory-and-provenance-optimization", () =>
-			passes.runStage("memory", CORE_MEMORY_PASSES),
-		),
-	);
-	if (lateCanonicalizationChanges.length > 0) {
-		measurePhase("late-local-cleanup", () =>
-			passes.runStage(
-				"canonicalize",
-				CORE_LATE_CANONICALIZATION_PASSES,
-				lateCanonicalizationChanges,
-				"finalize",
-				false,
-			),
-		);
-	} else {
-		measurePhase("late-local-cleanup", () => undefined);
-	}
 	reportBuilder.recordCheckpoint("before-program-flow", compilation.program);
 	const initialFlow = measurePhase("program-flow", () =>
 		analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),

@@ -35,6 +35,9 @@ export interface CorePassManagerOptions {
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
 	readonly localOptimization?: boolean;
+	readonly functionIds?: ReadonlyArray<CoreFunctionId>;
+	readonly featureIndex?: CoreFunctionFeatureIndex;
+	readonly localRules?: CoreLocalRuleRegistry;
 	readonly sccs?: ReadonlyArray<{
 		readonly id: string;
 		readonly functions: ReadonlyArray<number>;
@@ -59,9 +62,11 @@ export class CorePassManager {
 	readonly #localOptimization: boolean;
 	readonly #localRules: CoreLocalRuleRegistry | undefined;
 	readonly #features: CoreFunctionFeatureIndex;
+	readonly #functionIds: ReadonlyArray<CoreFunctionId> | undefined;
+	readonly #functionSlots: ReadonlyMap<CoreFunctionId, number> | undefined;
 	readonly #passOpcodeIds = new WeakMap<CorePass, ReadonlyArray<CoreOpcodeId>>();
 	readonly #passContexts = new WeakMap<CorePass, CorePassContextDriver>();
-	#localSeeded = false;
+	readonly #localSeeded = new Set<CoreFunctionId>();
 	readonly #sccs: ReadonlyArray<{
 		readonly id: string;
 		readonly functions: ReadonlyArray<number>;
@@ -83,9 +88,19 @@ export class CorePassManager {
 			options.optionalMaxRunsPerWorkItem ?? Number.MAX_SAFE_INTEGER;
 		this.#localOptimization = options.localOptimization ?? false;
 		this.#localRules = this.#localOptimization
-			? new CoreLocalRuleRegistry(program)
+			? (options.localRules ?? new CoreLocalRuleRegistry(program))
 			: undefined;
-		this.#features = new CoreFunctionFeatureIndex(program, this.#localRules?.dispatch);
+		this.#features =
+			options.featureIndex ??
+			new CoreFunctionFeatureIndex(program, this.#localRules?.dispatch);
+		if (options.functionIds !== undefined) {
+			const functionIds = [...new Set(options.functionIds)];
+			for (const functionId of functionIds) program.function(functionId);
+			this.#functionIds = Object.freeze(functionIds);
+			this.#functionSlots = new Map(
+				functionIds.map((functionId, index) => [functionId, index] as const),
+			);
+		}
 		if (
 			!Number.isSafeInteger(this.#optionalMaxRunsPerWorkItem) ||
 			this.#optionalMaxRunsPerWorkItem < 1
@@ -137,7 +152,10 @@ export class CorePassManager {
 		seedLocalFromInitialChanges = true,
 	): ReadonlyArray<CoreChangeSet> {
 		for (const pass of passes) this.#validatePass(stage, pass);
-		const functionStride = Math.max(1, this.#program.functionCapacity);
+		const functionStride = Math.max(
+			1,
+			this.#functionIds?.length ?? this.#program.functionCapacity,
+		);
 		const sccStride = Math.max(1, this.#sccs.length);
 		const sccBase = passes.length * functionStride;
 		const programBase = sccBase + passes.length * sccStride;
@@ -173,6 +191,9 @@ export class CorePassManager {
 			this.#report.recordQueuePush(queue.length - queueIndex);
 		};
 		const enqueueFunction = (passIndex: number, functionId: CoreFunctionId): void => {
+			const functionSlot = this.#functionSlots?.get(functionId) ?? functionId;
+			if (this.#functionSlots !== undefined && !this.#functionSlots.has(functionId))
+				return;
 			const pass = passes[passIndex]!;
 			if (
 				pass.requiredFunctionFeatures !== undefined &&
@@ -185,7 +206,7 @@ export class CorePassManager {
 				!this.#features.hasAnyOpcode(functionId, this.#opcodeIds(pass))
 			)
 				return;
-			enqueuePass(passIndex, passIndex * functionStride + functionId);
+			enqueuePass(passIndex, passIndex * functionStride + functionSlot);
 		};
 		const enqueueScc = (passIndex: number, sccIndex: number): void => {
 			enqueuePass(passIndex, sccBase + passIndex * sccStride + sccIndex);
@@ -206,7 +227,10 @@ export class CorePassManager {
 			if (changes === undefined) pending.full = true;
 			else pending.changes.push(changes);
 			pendingLocal.set(functionId, pending);
-			const key = localBase + functionId;
+			const functionSlot = this.#functionSlots?.get(functionId) ?? functionId;
+			if (this.#functionSlots !== undefined && !this.#functionSlots.has(functionId))
+				return;
+			const key = localBase + functionSlot;
 			if (queued[key] !== 0) return;
 			queued[key] = 1;
 			queue.push(key);
@@ -238,7 +262,7 @@ export class CorePassManager {
 			for (let passIndex = 0; passIndex < passes.length; passIndex++) {
 				switch (passes[passIndex]!.scope) {
 					case "function":
-						for (const functionId of this.#program.functionIds()) {
+						for (const functionId of this.#functionIds ?? this.#program.functionIds()) {
 							enqueueFunction(passIndex, functionId);
 						}
 						break;
@@ -252,9 +276,12 @@ export class CorePassManager {
 						break;
 				}
 			}
-			if (stage === "canonicalize" && !this.#localSeeded) {
-				for (const functionId of this.#program.functionIds()) enqueueLocal(functionId);
-				this.#localSeeded = true;
+			if (stage === "canonicalize") {
+				for (const functionId of this.#functionIds ?? this.#program.functionIds()) {
+					if (this.#localSeeded.has(functionId)) continue;
+					enqueueLocal(functionId);
+					this.#localSeeded.add(functionId);
+				}
 			}
 		} else {
 			for (const changes of initialChanges) {
@@ -266,7 +293,9 @@ export class CorePassManager {
 			queued[key] = 0;
 			this.#report.recordQueuePop();
 			if (key >= localBase) {
-				const functionId = (key - localBase) as CoreFunctionId;
+				const functionSlot = key - localBase;
+				const functionId =
+					this.#functionIds?.[functionSlot] ?? (functionSlot as CoreFunctionId);
 				const pending = pendingLocal.get(functionId);
 				pendingLocal.delete(functionId);
 				if (pending === undefined) continue;
@@ -325,7 +354,8 @@ export class CorePassManager {
 				key < sccBase
 					? pass.run(
 							passContext.prepareFunction(
-								(key % functionStride) as CoreFunctionId,
+								this.#functionIds?.[key % functionStride] ??
+									((key % functionStride) as CoreFunctionId),
 								remainingEdits,
 							),
 						)

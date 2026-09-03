@@ -6,6 +6,10 @@ import type { CoreCompilationContext } from "../src/compiler/core/core-compilati
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_FUNCTION_HAS_BACKEDGES } from "../src/compiler/core/core-function-features.ts";
 import {
+	CoreFunctionOptimizationResources,
+	CoreFunctionOptimizationSession,
+} from "../src/compiler/core/core-function-optimization-session.ts";
+import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
 	coreArity,
@@ -210,6 +214,45 @@ describe("Core optimizer infrastructure", () => {
 		const manager = new CorePassManager(program, context(), analyses, report);
 		manager.runStage("canonicalize", [noOpPass("local", runs)], [changes]);
 		expect(runs).toEqual([1]);
+	});
+
+	it("scopes primary function work to one session target", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { analyses, report } = analysisHarness(program);
+		const runs: Array<number> = [];
+		new CorePassManager(program, context(), analyses, report, {
+			functionIds: [functions[1]!.id],
+		}).runStage("canonicalize", [noOpPass("session-local", runs)]);
+
+		expect(runs[functions[0]!.id]).toBeUndefined();
+		expect(runs[functions[1]!.id]).toBe(1);
+		expect(
+			report.finish(program, { directEntries: [], specializations: [] }).queue,
+		).toEqual({ pushes: 1, pops: 1, maximumDepth: 1 });
+	});
+
+	it("opens at most one primary session for a function", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const report = new CoreOptimizationReportBuilder(program);
+		const resources = new CoreFunctionOptimizationResources(program);
+		new CoreFunctionOptimizationSession(
+			program,
+			context(),
+			report,
+			resources,
+			functions[0]!.id,
+		);
+
+		expect(
+			() =>
+				new CoreFunctionOptimizationSession(
+					program,
+					context(),
+					report,
+					resources,
+					functions[0]!.id,
+				),
+		).toThrow("already has a primary session");
 	});
 
 	it("does not reseed fused local work for an already-consumed change batch", () => {
